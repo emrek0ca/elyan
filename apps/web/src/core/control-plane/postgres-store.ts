@@ -14,6 +14,7 @@ import type {
   ControlPlaneLedgerEntry,
   ControlPlaneNotification,
   ControlPlaneIntegration,
+  ControlPlaneLearningEvent,
   ControlPlaneState,
   ControlPlaneSubscription,
   ControlPlaneUser,
@@ -39,6 +40,7 @@ const NOTIFICATIONS_TABLE = 'elyan_notifications';
 const DEVICE_LINKS_TABLE = 'elyan_device_links';
 const DEVICES_TABLE = 'elyan_devices';
 const INTEGRATIONS_TABLE = 'elyan_integrations';
+const LEARNING_EVENTS_TABLE = 'learning_events';
 const CONTROL_PLANE_ADVISORY_LOCK_KEY = 'elyan_control_plane_state';
 const CONTROL_PLANE_STATEMENT_TIMEOUT = '30s';
 const CONTROL_PLANE_LOCK_TIMEOUT = '5s';
@@ -116,6 +118,19 @@ async function applyTransactionGuards(client: PoolClient) {
 
 async function acquireControlPlaneLock(client: PoolClient) {
   await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [CONTROL_PLANE_ADVISORY_LOCK_KEY]);
+}
+
+export async function runClientQueriesSequentially<T>(
+  client: Pick<PoolClient, 'query'>,
+  queries: Array<() => Promise<T>>
+) {
+  const results: T[] = [];
+
+  for (const query of queries) {
+    results.push(await query());
+  }
+
+  return results;
 }
 
 export class PostgresControlPlaneStateStore {
@@ -251,13 +266,14 @@ export class PostgresControlPlaneStateStore {
       usersResult,
       ledgerResult,
       evaluationSignalsResult,
+      learningEventsResult,
       bindingsResult,
       notificationsResult,
       devicesResult,
       deviceLinksResult,
       integrationsResult,
-    ] = await Promise.all([
-      client.query(`
+    ] = await runClientQueriesSequentially(client, [
+      () => client.query(`
         SELECT
           account_id,
           owner_user_id,
@@ -273,7 +289,7 @@ export class PostgresControlPlaneStateStore {
           updated_at
         FROM ${ACCOUNTS_TABLE}
       `),
-      client.query(`
+      () => client.query(`
         SELECT
           account_id,
           plan_id,
@@ -295,7 +311,7 @@ export class PostgresControlPlaneStateStore {
           processed_webhook_event_refs
         FROM ${SUBSCRIPTIONS_TABLE}
       `),
-      client.query(`
+      () => client.query(`
         SELECT
           user_id,
           account_id,
@@ -311,7 +327,7 @@ export class PostgresControlPlaneStateStore {
           last_login_at
         FROM ${USERS_TABLE}
       `),
-      client.query(`
+      () => client.query(`
         SELECT
           entry_id,
           account_id,
@@ -327,7 +343,7 @@ export class PostgresControlPlaneStateStore {
         FROM ${LEDGER_TABLE}
         ORDER BY created_at ASC, entry_id ASC
       `),
-      client.query(`
+      () => client.query(`
         SELECT
           signal_id,
           account_id,
@@ -337,7 +353,33 @@ export class PostgresControlPlaneStateStore {
         FROM ${EVALUATION_SIGNALS_TABLE}
         ORDER BY created_at ASC, signal_id ASC
       `),
-      client.query(`
+      () => client.query(`
+        SELECT
+          event_id,
+          account_id,
+          request_id,
+          source,
+          input,
+          intent,
+          plan,
+          reasoning_steps,
+          reasoning_trace,
+          output,
+          better_output,
+          success,
+          failure_reason,
+          latency_ms,
+          score,
+          accepted,
+          model_id,
+          model_provider,
+          metadata,
+          created_at,
+          updated_at
+        FROM ${LEARNING_EVENTS_TABLE}
+        ORDER BY created_at ASC, event_id ASC
+      `),
+      () => client.query(`
         SELECT
           provider,
           plan_id,
@@ -354,7 +396,7 @@ export class PostgresControlPlaneStateStore {
           last_sync_error
         FROM ${BILLING_BINDINGS_TABLE}
       `),
-      client.query(`
+      () => client.query(`
         SELECT
           notification_id,
           account_id,
@@ -367,7 +409,7 @@ export class PostgresControlPlaneStateStore {
         FROM ${NOTIFICATIONS_TABLE}
         ORDER BY created_at ASC, notification_id ASC
       `),
-      client.query(`
+      () => client.query(`
         SELECT
           device_id,
           account_id,
@@ -384,7 +426,7 @@ export class PostgresControlPlaneStateStore {
           updated_at
         FROM ${DEVICES_TABLE}
       `),
-      client.query(`
+      () => client.query(`
         SELECT
           link_code,
           account_id,
@@ -398,7 +440,7 @@ export class PostgresControlPlaneStateStore {
           device_token
         FROM ${DEVICE_LINKS_TABLE}
       `),
-      client.query(`
+      () => client.query(`
         SELECT
           integration_id,
           account_id,
@@ -547,6 +589,45 @@ export class PostgresControlPlaneStateStore {
       });
     });
 
+    const learningEvents = learningEventsResult.rows.map((row): ControlPlaneLearningEvent => {
+      const rawReasoningTrace = Array.isArray(row.reasoning_trace)
+        ? row.reasoning_trace
+        : Array.isArray(row.reasoning_steps)
+          ? row.reasoning_steps
+          : [];
+      const reasoningSteps = rawReasoningTrace.filter(
+        (entry: unknown): entry is string => typeof entry === 'string' && entry.trim().length > 0
+      );
+      const metadata =
+        row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+          ? (row.metadata as Record<string, unknown>)
+          : {};
+
+      return {
+        eventId: String(row.event_id),
+        accountId: String(row.account_id),
+        requestId: String(row.request_id),
+        source: String(row.source),
+        input: String(row.input),
+        intent: String(row.intent) as ControlPlaneLearningEvent['intent'],
+        plan: String(row.plan),
+        reasoningSteps,
+        reasoningTrace: reasoningSteps,
+        output: String(row.output ?? ''),
+        betterOutput: String(row.better_output ?? ''),
+        success: Boolean(row.success),
+        failureReason: formatNullableText(row.failure_reason),
+        latencyMs: Number(row.latency_ms ?? 0),
+        score: Number(row.score ?? 0),
+        accepted: Boolean(row.accepted),
+        modelId: formatNullableText(row.model_id),
+        modelProvider: formatNullableText(row.model_provider),
+        createdAt: new Date(String(row.created_at)).toISOString(),
+        updatedAt: new Date(String(row.updated_at)).toISOString(),
+        metadata,
+      };
+    });
+
     const plans = Object.fromEntries(
       bindingsResult.rows.map((row) => [
         String(row.plan_id),
@@ -674,6 +755,7 @@ export class PostgresControlPlaneStateStore {
       devices,
       deviceLinks,
       evaluationSignals,
+      learningEvents,
     });
   }
 
@@ -912,6 +994,61 @@ export class PostgresControlPlaneStateStore {
             notes: signal.notes,
           }),
           signal.createdAt,
+        ]
+      );
+    }
+
+    await client.query(`DELETE FROM ${LEARNING_EVENTS_TABLE}`);
+    for (const event of state.learningEvents) {
+      await client.query(
+        `
+          INSERT INTO ${LEARNING_EVENTS_TABLE} (
+            event_id,
+            account_id,
+            request_id,
+            source,
+            input,
+            intent,
+            plan,
+            reasoning_steps,
+            reasoning_trace,
+            output,
+            better_output,
+            success,
+            failure_reason,
+            latency_ms,
+            score,
+            accepted,
+            model_id,
+            model_provider,
+            metadata,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15::numeric, $16, $17, $18, $19::jsonb, $20::timestamptz, $21::timestamptz)
+        `,
+        [
+          event.eventId,
+          event.accountId,
+          event.requestId,
+          event.source,
+          event.input,
+          event.intent,
+          event.plan,
+          stringify(event.reasoningSteps ?? []),
+          stringify(event.reasoningSteps ?? []),
+          event.output,
+          event.betterOutput ?? '',
+          event.success,
+          event.failureReason ?? null,
+          event.latencyMs,
+          event.score,
+          event.accepted,
+          event.modelId ?? null,
+          event.modelProvider ?? null,
+          stringify(event.metadata ?? {}),
+          event.createdAt,
+          event.updatedAt,
         ]
       );
     }

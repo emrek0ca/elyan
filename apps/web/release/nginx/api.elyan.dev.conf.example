@@ -20,7 +20,7 @@ server {
   ssl_protocols TLSv1.2 TLSv1.3;
   ssl_prefer_server_ciphers off;
 
-  location / {
+  location ^~ /api/ {
     proxy_pass http://127.0.0.1:3010;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -32,5 +32,10 @@ server {
     proxy_read_timeout 120s;
     proxy_send_timeout 120s;
     proxy_connect_timeout 30s;
+  }
+
+  location / {
+    add_header Content-Type application/json always;
+    return 404 '{"ok":false,"error":"api_host_only","message":"api.elyan.dev only serves the shared control-plane API. Use https://elyan.dev for the hosted website and local Elyan for the runtime UI."}';
   }
 }

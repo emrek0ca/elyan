@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockControlPlaneService = {
   getAccount: vi.fn(),
   getInteractionContext: vi.fn(),
+  recordUsageBundle: vi.fn(),
   recordInteraction: vi.fn(),
+  recordLearningEvent: vi.fn(),
   recordEvaluationSignal: vi.fn(),
 };
 
@@ -87,43 +89,112 @@ vi.mock('@/core/orchestration', () => ({
 }));
 
 describe('interaction orchestrator local-only behavior', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it(
     'records local interaction memory without writing hosted improvement signals',
     async () => {
-    mockControlPlaneService.getAccount.mockResolvedValue({
-      entitlements: {
-        hostedAccess: false,
-        hostedUsageAccounting: false,
-        hostedImprovementSignals: false,
-      },
-    });
-    mockControlPlaneService.getInteractionContext.mockResolvedValue({
-      contextBlocks: [],
-    });
-    mockControlPlaneService.recordInteraction.mockResolvedValue({
-      thread: { threadId: 'web:thread-1' },
-      memoryItem: { memoryId: 'mem_1' },
-      learningDraft: undefined,
-      messages: [],
-    });
-    mockRunStore.create.mockResolvedValue({
-      id: 'run_1',
-      mode: 'auto',
-    });
+      mockControlPlaneService.getAccount.mockResolvedValue({
+        entitlements: {
+          hostedAccess: false,
+          hostedUsageAccounting: false,
+          hostedImprovementSignals: false,
+        },
+      });
+      mockControlPlaneService.getInteractionContext.mockResolvedValue({
+        contextBlocks: [],
+      });
+      mockControlPlaneService.recordInteraction.mockResolvedValue({
+        thread: { threadId: 'web:thread-1' },
+        memoryItem: { memoryId: 'mem_1' },
+        learningDraft: undefined,
+        messages: [],
+      });
+      mockRunStore.create.mockResolvedValue({
+        id: 'run_1',
+        mode: 'auto',
+      });
 
-    const { executeInteractionText } = await import('@/core/interaction/orchestrator');
-    const result = await executeInteractionText({
-      source: 'web',
-      text: 'Remember that I prefer concise answers.',
-      controlPlaneSession: {
-        sub: 'usr_1',
-        accountId: 'acct_1',
-      },
-    });
+      const { executeInteractionText } = await import('@/core/interaction/orchestrator');
+      const result = await executeInteractionText({
+        source: 'web',
+        text: 'Remember that I prefer concise answers.',
+        controlPlaneSession: {
+          sub: 'usr_1',
+          accountId: 'acct_1',
+        },
+      });
 
-    expect(result.text).toBe('Local answer');
-    expect(mockControlPlaneService.recordInteraction).toHaveBeenCalledTimes(1);
-    expect(mockControlPlaneService.recordEvaluationSignal).not.toHaveBeenCalled();
+      expect(result.text).toBe('Local answer');
+      expect(mockControlPlaneService.recordUsageBundle).not.toHaveBeenCalled();
+      expect(mockControlPlaneService.recordInteraction).toHaveBeenCalledTimes(1);
+      expect(mockControlPlaneService.recordEvaluationSignal).not.toHaveBeenCalled();
+    },
+    30_000
+  );
+
+  it(
+    'charges hosted token usage before required hosted execution',
+    async () => {
+      mockControlPlaneService.getAccount.mockResolvedValue({
+        entitlements: {
+          hostedAccess: true,
+          hostedUsageAccounting: true,
+          hostedImprovementSignals: true,
+        },
+        displayName: 'Hosted Account',
+        ownerType: 'individual',
+        status: 'active',
+        subscription: {
+          planId: 'cloud_assisted',
+          status: 'active',
+        },
+      });
+      mockControlPlaneService.getInteractionContext.mockResolvedValue({
+        contextBlocks: [],
+      });
+      mockControlPlaneService.recordUsageBundle.mockResolvedValue({
+        quotes: [],
+        ledgerEntries: [],
+      });
+      mockControlPlaneService.recordInteraction.mockResolvedValue({
+        thread: { threadId: 'web:thread-1' },
+        memoryItem: { memoryId: 'mem_1' },
+        learningDraft: undefined,
+        messages: [],
+      });
+      mockControlPlaneService.recordLearningEvent.mockResolvedValue({
+        eventId: 'evt_1',
+      });
+      mockRunStore.create.mockResolvedValue({
+        id: 'run_1',
+        mode: 'auto',
+      });
+
+      const { executeInteractionText } = await import('@/core/interaction/orchestrator');
+      const result = await executeInteractionText({
+        source: 'web',
+        text: 'Use hosted intelligence for this answer.',
+        controlPlaneSession: {
+          sub: 'usr_1',
+          accountId: 'acct_1',
+        },
+        requireHostedSession: true,
+      });
+
+      expect(result.text).toBe('Local answer');
+      expect(mockControlPlaneService.recordUsageBundle).toHaveBeenCalledTimes(1);
+      expect(mockControlPlaneService.recordUsageBundle).toHaveBeenCalledWith(
+        'acct_1',
+        expect.arrayContaining([
+          expect.objectContaining({
+            domain: 'inference',
+            source: 'hosted_web',
+          }),
+        ])
+      );
     },
     30_000
   );

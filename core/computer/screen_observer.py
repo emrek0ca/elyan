@@ -8,15 +8,38 @@ Change detection: pixel-difference proxy for SSIM.
   alert if score > 0.05
 """
 from __future__ import annotations
-import asyncio, base64, json, tempfile, time
+
+import asyncio
+import base64
+import json
+import tempfile
+import os
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 from utils.logger import get_logger
 
 logger = get_logger("screen_observer")
-_OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+
+
+def _resolve_ollama_endpoint() -> str:
+    base = str(os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434").strip().rstrip("/")
+    return base if base.endswith("/api/generate") else f"{base}/api/generate"
+
+
 _VISION_MODEL = "qwen2.5-vl:7b"
 _CHANGE_THRESHOLD = 0.05
+
+
+def _extract_json_object(raw: str) -> dict[str, Any] | None:
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            payload = json.loads(raw[start:end])
+            return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+    return None
 
 
 class ScreenObserver:
@@ -67,7 +90,7 @@ class ScreenObserver:
         try:
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.post(_OLLAMA_URL, json=payload) as resp:
+                async with s.post(_resolve_ollama_endpoint(), json=payload) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         return str(data.get("response", "")).strip()
@@ -86,15 +109,9 @@ class ScreenObserver:
             "Bulamazsan {\"confidence\": 0.0} döndür."
         )
         raw = await self.describe(frame, prompt)
-        try:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                obj = json.loads(raw[start:end])
-                if obj.get("confidence", 0) > 0.3:
-                    return obj
-        except Exception:
-            pass
+        obj = _extract_json_object(raw)
+        if obj and obj.get("confidence", 0) > 0.3:
+            return obj
         return None
 
     # ── Change Detection ──────────────────────────────────────────────────────
@@ -119,16 +136,19 @@ class ScreenObserver:
     ) -> None:
         """Continuous screen watch — calls callback(frame, description) on change."""
         self._watching = True
-        while self._watching:
-            try:
-                frame = await self.capture()
-                if frame and self._change_score(self._last_frame or b"", frame) > _CHANGE_THRESHOLD:
-                    self._last_frame = frame
-                    desc = await self.describe(frame)
-                    await callback(frame, desc)
-            except Exception as exc:
-                logger.debug(f"watch iteration error: {exc}")
-            await asyncio.sleep(interval_s)
+        try:
+            while self._watching:
+                try:
+                    frame = await self.capture()
+                    if frame and self._change_score(self._last_frame or b"", frame) > _CHANGE_THRESHOLD:
+                        self._last_frame = frame
+                        desc = await self.describe(frame)
+                        await callback(frame, desc)
+                except Exception as exc:
+                    logger.debug(f"watch iteration error: {exc}")
+                await asyncio.sleep(interval_s)
+        finally:
+            self._watching = False
 
     def stop_watch(self) -> None:
         self._watching = False

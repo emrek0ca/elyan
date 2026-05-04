@@ -22,14 +22,16 @@ aliases:
 
 - P0 yüzeyi temiz: boş email auth guard'ı var, eski onboarding kopyası silinmiş, `.env.example` güncel, Vite production build geçiyor.
 - Onboarding içinde model kurulum adımı mevcut: local lane ve cloud fallback ayrı okunuyor, cloud provider key kaydı yapılabiliyor, önerilen Ollama modeli onboarding içinden tetiklenebiliyor ve local pull başlatıldığında ekran otomatik polling ile kendini yeniliyor.
+- Wake-word ve realtime actuator artık varsayılan boot akışında açık değil; opt-in env ile açılıyor. Bu, ilk kurulumda ekran/mikrofon sürprizlerini önlüyor.
 - Türkiye connector'ları artık desktop integrations yüzeyinde ayrı bir "Türkiye Operasyonları" bölümü olarak görünüyor; ürünün ana yönü UI seviyesinde görünür hale geldi.
 - Türkiye connector'ları için ilk gerçek dikey dilim açık: desktop üzerinden config kaydı, KVKK consent işaretleme, `health_check` ve `test_credentials` quick action'ları çalışıyor.
-- Türkiye connector ayarları artık sadece `elyan_config` fallback'ine bağlı değil; connector repository metadata'sına da yazılıyor. Bu, audit ve kalıcılık açısından daha doğru yön.
+- Türkiye connector ayarları artık connector repository metadata'sına kalıcı olarak yazılıyor; `elyan_config` yalnızca migrasyon/fallback katmanı olarak kalıyor.
+- Canlı VPS reality sabit: deploy root `/srv/elyan`, current symlink `/srv/elyan/current`, systemd service `elyan`, app bind `127.0.0.1:3010`, public domain `api.elyan.dev`. Yeni deploy mimarisi kurulmuyor.
 - Çalışma ağacı kirli; devam eden desktop UI değişiklikleri var. Var olan kullanıcı değişikliklerine temas etmeden ilerlemek gerekiyor.
 
 ## Next Priorities
 
-1. Türkiye connector ayarları için repo metadata yaklaşımını ayrı, explicit bir settings repository/table yapısına dönüştürmek.
+1. Türkiye connector ayarları için repo metadata hattını UI ve CLI tarafında tek settings yüzeyine bağlamak.
 2. P2 güvenlik maddelerini repo gerçekliğiyle tekrar doğrulamak.
 3. Onboarding model adımında gerçek progress yüzdesi veya stream logu varsa bunu UI'ya bağlamak.
 

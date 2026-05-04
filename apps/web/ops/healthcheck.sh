@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-BASE_URL="${ELYAN_BASE_URL:-http://127.0.0.1:${PORT:-3000}}"
+BASE_URL="${ELYAN_HEALTHCHECK_BASE_URL:-http://127.0.0.1:${PORT:-3000}}"
 HEALTH_URL="${ELYAN_HEALTH_URL:-$BASE_URL/api/healthz}"
 CONTROL_PLANE_HEALTH_URL="${ELYAN_CONTROL_PLANE_HEALTH_URL:-$BASE_URL/api/control-plane/health}"
 MODELS_URL="${ELYAN_MODELS_URL:-$BASE_URL/api/models}"

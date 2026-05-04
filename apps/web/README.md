@@ -1,20 +1,7 @@
 # Elyan Web
 
 This workspace hosts the Next.js public site and hosted control plane for `elyan.dev`.
-
-The real v1 product surface is intentionally small:
-
-- local chat runtime
-- local health and readiness
-- capability discovery
-- dashboard
-- CLI
-- optional search
-- optional MCP
-- optional channels
-- optional hosted control-plane integration
-
-Everything else is secondary.
+The local runtime lives at the repository root; this package only owns the hosted surface.
 
 ## Development
 

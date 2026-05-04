@@ -7,11 +7,27 @@ function createPlanDefinition(plan: ControlPlanePlan): ControlPlanePlan {
 export const controlPlanePlanCatalog: ControlPlanePlan[] = [
   createPlanDefinition({
     id: 'local_byok',
+    tier: 'FREE',
     title: 'Local / BYOK',
     summary: 'Private local runtime with user-owned keys and no hosted credit requirement.',
     audience: 'Privacy-first individuals who want the local agent runtime only.',
     monthlyPriceTRY: '0.00',
     monthlyIncludedCredits: '0.00',
+    tokenLimits: {
+      monthlyIncludedTokens: 0,
+      maxTokensPerRequest: 0,
+    },
+    modelAccess: {
+      localModels: true,
+      hostedModels: false,
+      advancedModels: false,
+    },
+    featureAccess: {
+      hostedChat: false,
+      research: false,
+      integrations: false,
+      teamRuns: false,
+    },
     entitlements: {
       hostedAccess: false,
       hostedUsageAccounting: false,
@@ -43,11 +59,27 @@ export const controlPlanePlanCatalog: ControlPlanePlan[] = [
   }),
   createPlanDefinition({
     id: 'cloud_assisted',
+    tier: 'PRO',
     title: 'Cloud-Assisted',
     summary: 'Managed hosted access with included credits and a simple upgrade path from local-first usage.',
     audience: 'Users who want elyan.dev access and managed hosted credits.',
     monthlyPriceTRY: '399.00',
     monthlyIncludedCredits: '1000.00',
+    tokenLimits: {
+      monthlyIncludedTokens: 100000,
+      maxTokensPerRequest: 4000,
+    },
+    modelAccess: {
+      localModels: true,
+      hostedModels: true,
+      advancedModels: false,
+    },
+    featureAccess: {
+      hostedChat: true,
+      research: true,
+      integrations: true,
+      teamRuns: false,
+    },
     entitlements: {
       hostedAccess: true,
       hostedUsageAccounting: true,
@@ -79,11 +111,27 @@ export const controlPlanePlanCatalog: ControlPlanePlan[] = [
   }),
   createPlanDefinition({
     id: 'pro_builder',
+    tier: 'PRO',
     title: 'Pro / Builder',
     summary: 'Higher-hosted-credit plan for power users and heavier multi-LLM workflows.',
     audience: 'Power users, builders, and heavier hosted usage.',
     monthlyPriceTRY: '999.00',
     monthlyIncludedCredits: '5000.00',
+    tokenLimits: {
+      monthlyIncludedTokens: 500000,
+      maxTokensPerRequest: 8000,
+    },
+    modelAccess: {
+      localModels: true,
+      hostedModels: true,
+      advancedModels: true,
+    },
+    featureAccess: {
+      hostedChat: true,
+      research: true,
+      integrations: true,
+      teamRuns: false,
+    },
     entitlements: {
       hostedAccess: true,
       hostedUsageAccounting: true,
@@ -115,11 +163,27 @@ export const controlPlanePlanCatalog: ControlPlanePlan[] = [
   }),
   createPlanDefinition({
     id: 'team_business',
+    tier: 'TEAM',
     title: 'Team / Business',
     summary: 'Team-ready hosted plan with governance, shared billing, and higher limits.',
     audience: 'Small teams and business deployments.',
     monthlyPriceTRY: '2499.00',
     monthlyIncludedCredits: '10000.00',
+    tokenLimits: {
+      monthlyIncludedTokens: 1000000,
+      maxTokensPerRequest: 12000,
+    },
+    modelAccess: {
+      localModels: true,
+      hostedModels: true,
+      advancedModels: true,
+    },
+    featureAccess: {
+      hostedChat: true,
+      research: true,
+      integrations: true,
+      teamRuns: true,
+    },
     entitlements: {
       hostedAccess: true,
       hostedUsageAccounting: true,

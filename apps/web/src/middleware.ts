@@ -13,10 +13,6 @@ const allowedApiOrigins = getAllowedApiOrigins();
 
 function isProtectedPage(pathname: string) {
   return (
-    pathname === '/chat' ||
-    pathname.startsWith('/chat/') ||
-    pathname === '/manage' ||
-    pathname.startsWith('/manage/') ||
     pathname === '/panel' ||
     pathname.startsWith('/panel/')
   );
@@ -29,6 +25,7 @@ function isProtectedApi(pathname: string) {
     pathname === '/api/control-plane/auth/me' ||
     pathname === '/api/control-plane/billing/iyzico/initialize' ||
     pathname === '/api/control-plane/devices/link/start' ||
+    pathname === '/api/devices/link/start' ||
     pathname.startsWith('/api/control-plane/accounts/') ||
     pathname.startsWith('/api/control-plane/notifications/')
   );
@@ -118,5 +115,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/api/:path*'],
+  matcher: ['/api/:path*', '/panel/:path*'],
 };

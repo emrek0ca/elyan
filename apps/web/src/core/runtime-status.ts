@@ -1,4 +1,6 @@
 import { buildCapabilityDirectorySnapshot } from '@/core/capabilities/directory';
+import { buildOperatorStatusSnapshot } from '@/core/operator/status';
+import { buildRuntimeRegistrySnapshot } from '@/core/runtime-registry';
 import {
   getBlueBubblesStatus,
   getTelegramStatus,
@@ -84,9 +86,17 @@ export async function readRuntimeStatusSnapshot() {
   const searchProbe = runtimeSettings.routing.searchEnabled
     ? await probeJsonEndpoint(`${runtimeEnv.SEARXNG_URL.replace(/\/$/, '')}/healthz`)
     : { ok: true, status: 'disabled' as const };
-  const [models, capabilities, controlPlaneHealth, workspace, team] = await Promise.all([
-    registry.listAvailableModels(),
+  let models: Awaited<ReturnType<typeof registry.listAvailableModels>> = [];
+  let modelError: string | undefined;
+  try {
+    models = await registry.listAvailableModels();
+  } catch (error) {
+    modelError = error instanceof Error ? error.message : 'Failed to list available models';
+  }
+
+  const [capabilities, operator, controlPlaneHealth, workspace, team] = await Promise.all([
     buildCapabilityDirectorySnapshot(true),
+    buildOperatorStatusSnapshot(),
     readControlPlaneHealthSnapshot(),
     buildWorkspaceStatusSnapshot(runtimeSettings),
     readTeamRuntimeStatus(),
@@ -97,6 +107,12 @@ export async function readRuntimeStatusSnapshot() {
   const hostedBillingConfigured =
     controlPlaneHealth.runtime?.billingConfigured ?? controlPlaneHealth.billingConfigured ?? false;
   const optimization = buildOptimizationStatusSnapshot(capabilities);
+  const registrySnapshot = buildRuntimeRegistrySnapshot({
+    models,
+    capabilities,
+    operator,
+    modelError,
+  });
   const [telegramProbe, whatsappCloudProbe, whatsappBaileysProbe, blueBubblesProbe] = await Promise.all([
     runtimeSettings.channels.telegram.enabled ? probeTelegramBot().catch((error) => ({ ok: false, configured: false, status: error instanceof Error ? error.message : 'probe_failed' })) : Promise.resolve(null),
     runtimeSettings.channels.whatsappCloud.enabled ? probeWhatsappCloudConfig().catch((error) => ({ ok: false, configured: false, status: error instanceof Error ? error.message : 'probe_failed' })) : Promise.resolve(null),
@@ -130,6 +146,7 @@ export async function readRuntimeStatusSnapshot() {
         workspaceConfigured: workspace.summary.configuredSourceCount > 0,
       },
       models,
+      modelError,
       capabilities,
       channels: {
         telegram: {
@@ -187,6 +204,8 @@ export async function readRuntimeStatusSnapshot() {
         settings: runtimeSettings.team,
         status: team,
       },
+      operator,
+      registry: registrySnapshot,
       localAgent: readLocalAgentStatus(),
       mcp: {
         servers: runtimeSettings.mcp.servers,

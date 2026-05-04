@@ -7828,5 +7828,5473 @@
     ],
     "created_at": 1775433514.137142,
     "updated_at": 1775433514.570197
+  },
+  "task_c26a69d6db": {
+    "task_id": "task_c26a69d6db",
+    "objective": "masaüstünde ne var",
+    "context": {
+      "user_input": "masaüstünde ne var",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {},
+      "action": "clarify",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "masaüstünde ne var"
+      }
+    ],
+    "artifacts": [],
+    "learning": {
+      "objective": "masaüstünde ne var",
+      "state": "partial",
+      "domain": "general",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "partial"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 1.05,
+      "retry_count": 4,
+      "lesson": "Partial completion means scope or evidence is missing.",
+      "next_action": "Fill missing evidence and rerun verification",
+      "domain_hint": "",
+      "confidence": 0.46,
+      "summary": "partial: masaüstünde ne var"
+    },
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769022.0954618,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769022.108129,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769022.114186,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769023.143232,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 1
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1775769023.149806,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "clarify",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1775769022.0954602,
+    "updated_at": 1775769023.149806
+  },
+  "task_9ea5140b01": {
+    "task_id": "task_9ea5140b01",
+    "objective": "masaüstündeki dosyaları sil",
+    "context": {
+      "user_input": "masaüstündeki dosyaları sil",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {},
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "learning": {
+      "objective": "masaüstündeki dosyaları sil",
+      "state": "completed",
+      "domain": "file",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "completed"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 0.05,
+      "retry_count": 4,
+      "lesson": "Completed without artifacts; capture proof next time.",
+      "next_action": "Add evidence capture before completion",
+      "domain_hint": "",
+      "confidence": 0.6,
+      "summary": "completed: masaüstündeki dosyaları sil"
+    },
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769062.4804428,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769062.493218,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769062.50002,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769062.5291781,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1775769062.535149,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1775769062.4804401,
+    "updated_at": 1775769062.535149
+  },
+  "task_2680c134d8": {
+    "task_id": "task_2680c134d8",
+    "objective": "karmaşık görevi tamamla",
+    "context": {
+      "user_input": "karmaşık görevi tamamla",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {
+        "goal": "karmaşık görevi tamamla",
+        "name": "karmaşık-görevi-tamamla",
+        "steps": [
+          {
+            "kind": "screen",
+            "name": "inspect_screen",
+            "instruction": "ekrana bak",
+            "mode": "inspect",
+            "verify": {}
+          }
+        ],
+        "constraints": [],
+        "dependencies": [],
+        "evidence": [],
+        "exit_criteria": [
+          "Artifact veya doğrulama kanıtı oluşturulmalı."
+        ],
+        "approvals": [],
+        "parallel_steps": [],
+        "rationale": "safe_inspect_fallback",
+        "planning_trace": {
+          "request": "karmaşık görevi tamamla",
+          "planning_request": "karmaşık görevi tamamla",
+          "matched_rules": [
+            "safe_inspect_fallback"
+          ],
+          "assumptions": [],
+          "missing_inputs": [],
+          "extracted": {
+            "app_name": "",
+            "app_sequence": [],
+            "browser_app": "",
+            "url": "",
+            "urls": [],
+            "typed_text": "",
+            "named_field_values": [],
+            "field_label": "",
+            "selector": "",
+            "button_label": "",
+            "button_sequence": [],
+            "research_topic": "karmaşık görevi tamamla"
+          },
+          "bounded": true,
+          "safe_mode": "deterministic"
+        },
+        "context": {
+          "request_class": "direct_action",
+          "domain": "general",
+          "capability": {
+            "capability_id": "general_assistance_workflow",
+            "domain": "general",
+            "request_class": "direct_action",
+            "confidence": 0.3,
+            "objective": "solve_user_task_reliably",
+            "workflow_id": "general_assistance_workflow",
+            "primary_action": "chat",
+            "preferred_tools": [
+              "create_plan",
+              "execute_plan"
+            ],
+            "output_artifacts": [
+              "result"
+            ],
+            "quality_checklist": [
+              "correctness",
+              "clarity"
+            ],
+            "learning_tags": [
+              "general"
+            ],
+            "complexity_tier": "low",
+            "suggested_job_type": "communication",
+            "multi_agent_recommended": false,
+            "orchestration_mode": "single_agent",
+            "workflow_profile_applicable": false,
+            "requires_design_phase": false,
+            "requires_worktree": false,
+            "content_kind": "task",
+            "output_formats": [
+              "docx"
+            ],
+            "style_profile": "executive",
+            "source_policy": "trusted",
+            "quality_contract": [
+              "correctness",
+              "clarity"
+            ],
+            "memory_scope": "profile_only",
+            "preview": "görev | çıktılar: docx | stil: executive | kalite: correctness, clarity | netleştirme gerekebilir | alan: general",
+            "request_contract": {},
+            "latency_level": "real_time",
+            "requires_real_time": true,
+            "integration_type": "desktop",
+            "required_scopes": [],
+            "auth_strategy": "none",
+            "fallback_policy": "native",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "pyautogui",
+              "mss",
+              "numpy",
+              "opencv-python",
+              "Pillow"
+            ],
+            "approval_level": 0,
+            "model_role": "router",
+            "selected_model": {
+              "type": "ollama",
+              "provider": "ollama",
+              "model": "llama3.2:3b",
+              "apiKey": null,
+              "endpoint": "http://localhost:11434",
+              "status": "configured"
+            },
+            "workflow_bundle": {
+              "bundle_id": "general",
+              "name": "general",
+              "objective": "solve_user_task_reliably",
+              "integration_type": "desktop",
+              "provider": "general",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "karmaşık görevi tamamla",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "karmaşık görevi tamamla",
+                    "action": "operate",
+                    "provider": "general"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [],
+              "multi_agent_recommended": false,
+              "approval_level": 0,
+              "fallback_policy": "native",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "heuristic",
+              "tags": [],
+              "metadata": {
+                "step_count": 1,
+                "parallel_groups": 0
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "metadata": {
+              "approval_tools": [],
+              "blocked_tools": [],
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "screen_state"
+              },
+              "integration": {
+                "capability_id": "general",
+                "name": "general",
+                "provider": "general",
+                "objective": "solve_user_task_reliably",
+                "integration_type": "desktop",
+                "required_scopes": [],
+                "auth_strategy": "none",
+                "fallback_policy": "native",
+                "supported_platforms": [
+                  "windows",
+                  "darwin",
+                  "linux"
+                ],
+                "dependencies": [
+                  "pyautogui",
+                  "mss",
+                  "numpy",
+                  "opencv-python",
+                  "Pillow"
+                ],
+                "python_dependencies": [],
+                "os_dependencies": [],
+                "post_install": [],
+                "approval_level": 0,
+                "real_time": true,
+                "multi_agent_recommended": false,
+                "workflow_bundle": {
+                  "bundle_id": "general",
+                  "name": "general",
+                  "objective": "solve_user_task_reliably",
+                  "integration_type": "desktop",
+                  "provider": "general",
+                  "roles": [
+                    "builder"
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "step_1",
+                      "title": "karmaşık görevi tamamla",
+                      "action": "operate",
+                      "role": "builder",
+                      "depends_on": [],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "karmaşık görevi tamamla",
+                        "action": "operate",
+                        "provider": "general"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:real_time"
+                      ]
+                    }
+                  ],
+                  "serial_steps": [],
+                  "parallel_groups": [],
+                  "multi_agent_recommended": false,
+                  "approval_level": 0,
+                  "fallback_policy": "native",
+                  "evidence_contract": {
+                    "requires_artifact": false,
+                    "requires_verification": true,
+                    "preferred_signal": "state"
+                  },
+                  "output_artifacts": [
+                    "state_snapshot"
+                  ],
+                  "dependencies": [],
+                  "source": "heuristic",
+                  "tags": [],
+                  "metadata": {
+                    "step_count": 1,
+                    "parallel_groups": 0
+                  },
+                  "estimated_latency_level": "real_time"
+                },
+                "connector_name": "general",
+                "auth_required": false,
+                "fallback_target": "native",
+                "transport_preference": "realtime",
+                "latency_level": "real_time",
+                "trust_level": "trusted",
+                "manifest": {
+                  "name": "general",
+                  "provider": "general",
+                  "version": "1.0.0",
+                  "description": "görev | çıktılar: docx | stil: executive | kalite: correctness, clarity | netleştirme gerekebilir | alan: general",
+                  "integration_type": "desktop",
+                  "required_scopes": [],
+                  "auth_strategy": "none",
+                  "fallback_policy": "native",
+                  "supported_platforms": [
+                    "windows",
+                    "darwin",
+                    "linux"
+                  ],
+                  "dependencies": [
+                    "pyautogui",
+                    "mss",
+                    "numpy",
+                    "opencv-python",
+                    "Pillow"
+                  ],
+                  "python_dependencies": [],
+                  "os_dependencies": [],
+                  "post_install": [],
+                  "trust_level": "trusted",
+                  "hashes": {},
+                  "approval_level": 0,
+                  "real_time": true,
+                  "source": "builtin",
+                  "connector_name": "general",
+                  "browser_urls": [],
+                  "api_base_urls": [],
+                  "desktop_apps": [],
+                  "workflow_bundle": {
+                    "bundle_id": "general",
+                    "name": "general",
+                    "objective": "solve_user_task_reliably",
+                    "integration_type": "desktop",
+                    "provider": "general",
+                    "roles": [
+                      "builder"
+                    ],
+                    "steps": [
+                      {
+                        "step_id": "step_1",
+                        "title": "karmaşık görevi tamamla",
+                        "action": "operate",
+                        "role": "builder",
+                        "depends_on": [],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "karmaşık görevi tamamla",
+                          "action": "operate",
+                          "provider": "general"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:real_time"
+                        ]
+                      }
+                    ],
+                    "serial_steps": [],
+                    "parallel_groups": [],
+                    "multi_agent_recommended": false,
+                    "approval_level": 0,
+                    "fallback_policy": "native",
+                    "evidence_contract": {
+                      "requires_artifact": false,
+                      "requires_verification": true,
+                      "preferred_signal": "state"
+                    },
+                    "output_artifacts": [
+                      "state_snapshot"
+                    ],
+                    "dependencies": [],
+                    "source": "heuristic",
+                    "tags": [],
+                    "metadata": {
+                      "step_count": 1,
+                      "parallel_groups": 0
+                    },
+                    "estimated_latency_level": "real_time"
+                  },
+                  "metadata": {
+                    "route_domain": "general",
+                    "workflow_id": "general_assistance_workflow",
+                    "multi_agent_recommended": false,
+                    "auth_resolution": {}
+                  }
+                },
+                "notes": [
+                  "route_domain:general",
+                  "provider:general",
+                  "fallback:native"
+                ],
+                "metadata": {
+                  "text": "karmaşık görevi tamamla",
+                  "skill_category": "",
+                  "workflow": {},
+                  "route": {},
+                  "multi_agent_recommended": false,
+                  "auth_resolution": {}
+                }
+              }
+            },
+            "updated_at": 1775769062.812108
+          },
+          "skill": {
+            "skill_id": "system",
+            "name": "system",
+            "version": "1.2.0",
+            "description": "Sistem kontrolü, ekran görüntüsü, uygulama ve süreç bilgileri",
+            "category": "core",
+            "source": "builtin",
+            "integration_type": "desktop",
+            "required_scopes": [],
+            "auth_strategy": "none",
+            "fallback_policy": "native",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "pyautogui",
+              "mss",
+              "numpy",
+              "opencv-python",
+              "Pillow"
+            ],
+            "required_tools": [
+              "get_system_info",
+              "take_screenshot",
+              "open_app",
+              "close_app",
+              "get_process_info"
+            ],
+            "optional_tools": [],
+            "commands": [
+              "sysinfo",
+              "screenshot",
+              "open_app",
+              "close_app",
+              "process"
+            ],
+            "approval_tools": [],
+            "blocked_tools": [],
+            "evidence_contract": {
+              "requires_artifact": false,
+              "requires_verification": true,
+              "preferred_signal": "screen_state"
+            },
+            "latency_level": "real_time",
+            "auto_intent": false,
+            "enabled": true,
+            "runtime_ready": true,
+            "workflow_id": "",
+            "trigger_markers": [],
+            "steps": [],
+            "output_artifacts": [],
+            "quality_checklist": [],
+            "approval_level": 0,
+            "sandbox_config": {
+              "image": "alpine:3.19",
+              "language": "shell",
+              "command": "",
+              "memory_limit": "512m",
+              "cpu_limit": 0.5,
+              "pids_limit": 64,
+              "network": false,
+              "read_only": true,
+              "user": "nobody",
+              "working_dir": "/workspace",
+              "env": {},
+              "volumes": {},
+              "tmpfs": [
+                "/tmp"
+              ],
+              "cap_drop": [
+                "ALL"
+              ],
+              "security_opt": [
+                "no-new-privileges"
+              ],
+              "timeout": 30,
+              "metadata": {
+                "skill_name": "system",
+                "integration_type": "desktop"
+              }
+            },
+            "real_time": true,
+            "tool_policy": {},
+            "output_contract": {},
+            "workflow_bundle": {
+              "bundle_id": "general",
+              "name": "general",
+              "objective": "solve_user_task_reliably",
+              "integration_type": "desktop",
+              "provider": "general",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "karmaşık görevi tamamla",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "karmaşık görevi tamamla",
+                    "action": "operate",
+                    "provider": "general"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [],
+              "multi_agent_recommended": false,
+              "approval_level": 0,
+              "fallback_policy": "native",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "heuristic",
+              "tags": [],
+              "metadata": {
+                "step_count": 1,
+                "parallel_groups": 0
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "metadata": {
+              "request_class": "direct_action",
+              "latency_level": "real_time",
+              "workflow_enabled": true,
+              "workflow_runtime_ready": true,
+              "integration": {
+                "capability_id": "general",
+                "name": "general",
+                "provider": "general",
+                "objective": "solve_user_task_reliably",
+                "integration_type": "desktop",
+                "required_scopes": [],
+                "auth_strategy": "none",
+                "fallback_policy": "native",
+                "supported_platforms": [
+                  "windows",
+                  "darwin",
+                  "linux"
+                ],
+                "dependencies": [
+                  "pyautogui",
+                  "mss",
+                  "numpy",
+                  "opencv-python",
+                  "Pillow"
+                ],
+                "python_dependencies": [],
+                "os_dependencies": [],
+                "post_install": [],
+                "approval_level": 0,
+                "real_time": true,
+                "multi_agent_recommended": false,
+                "workflow_bundle": {
+                  "bundle_id": "general",
+                  "name": "general",
+                  "objective": "solve_user_task_reliably",
+                  "integration_type": "desktop",
+                  "provider": "general",
+                  "roles": [
+                    "builder"
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "step_1",
+                      "title": "karmaşık görevi tamamla",
+                      "action": "operate",
+                      "role": "builder",
+                      "depends_on": [],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "karmaşık görevi tamamla",
+                        "action": "operate",
+                        "provider": "general"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:real_time"
+                      ]
+                    }
+                  ],
+                  "serial_steps": [],
+                  "parallel_groups": [],
+                  "multi_agent_recommended": false,
+                  "approval_level": 0,
+                  "fallback_policy": "native",
+                  "evidence_contract": {
+                    "requires_artifact": false,
+                    "requires_verification": true,
+                    "preferred_signal": "state"
+                  },
+                  "output_artifacts": [
+                    "state_snapshot"
+                  ],
+                  "dependencies": [],
+                  "source": "heuristic",
+                  "tags": [],
+                  "metadata": {
+                    "step_count": 1,
+                    "parallel_groups": 0
+                  },
+                  "estimated_latency_level": "real_time"
+                },
+                "connector_name": "general",
+                "auth_required": false,
+                "fallback_target": "native",
+                "transport_preference": "realtime",
+                "latency_level": "real_time",
+                "trust_level": "trusted",
+                "manifest": {
+                  "name": "general",
+                  "provider": "general",
+                  "version": "1.0.0",
+                  "description": "görev | çıktılar: docx | stil: executive | kalite: correctness, clarity | netleştirme gerekebilir | alan: general",
+                  "integration_type": "desktop",
+                  "required_scopes": [],
+                  "auth_strategy": "none",
+                  "fallback_policy": "native",
+                  "supported_platforms": [
+                    "windows",
+                    "darwin",
+                    "linux"
+                  ],
+                  "dependencies": [
+                    "pyautogui",
+                    "mss",
+                    "numpy",
+                    "opencv-python",
+                    "Pillow"
+                  ],
+                  "python_dependencies": [],
+                  "os_dependencies": [],
+                  "post_install": [],
+                  "trust_level": "trusted",
+                  "hashes": {},
+                  "approval_level": 0,
+                  "real_time": true,
+                  "source": "builtin",
+                  "connector_name": "general",
+                  "browser_urls": [],
+                  "api_base_urls": [],
+                  "desktop_apps": [],
+                  "workflow_bundle": {
+                    "bundle_id": "general",
+                    "name": "general",
+                    "objective": "solve_user_task_reliably",
+                    "integration_type": "desktop",
+                    "provider": "general",
+                    "roles": [
+                      "builder"
+                    ],
+                    "steps": [
+                      {
+                        "step_id": "step_1",
+                        "title": "karmaşık görevi tamamla",
+                        "action": "operate",
+                        "role": "builder",
+                        "depends_on": [],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "karmaşık görevi tamamla",
+                          "action": "operate",
+                          "provider": "general"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:real_time"
+                        ]
+                      }
+                    ],
+                    "serial_steps": [],
+                    "parallel_groups": [],
+                    "multi_agent_recommended": false,
+                    "approval_level": 0,
+                    "fallback_policy": "native",
+                    "evidence_contract": {
+                      "requires_artifact": false,
+                      "requires_verification": true,
+                      "preferred_signal": "state"
+                    },
+                    "output_artifacts": [
+                      "state_snapshot"
+                    ],
+                    "dependencies": [],
+                    "source": "heuristic",
+                    "tags": [],
+                    "metadata": {
+                      "step_count": 1,
+                      "parallel_groups": 0
+                    },
+                    "estimated_latency_level": "real_time"
+                  },
+                  "metadata": {
+                    "route_domain": "general",
+                    "workflow_id": "general_assistance_workflow",
+                    "multi_agent_recommended": false,
+                    "auth_resolution": {}
+                  }
+                },
+                "notes": [
+                  "route_domain:general",
+                  "provider:general",
+                  "fallback:native"
+                ],
+                "metadata": {
+                  "text": "karmaşık görevi tamamla",
+                  "skill_category": "",
+                  "workflow": {},
+                  "route": {},
+                  "multi_agent_recommended": false,
+                  "auth_resolution": {}
+                }
+              },
+              "sandbox_config": {
+                "image": "alpine:3.19",
+                "language": "shell",
+                "command": "",
+                "memory_limit": "512m",
+                "cpu_limit": 0.5,
+                "pids_limit": 64,
+                "network": false,
+                "read_only": true,
+                "user": "nobody",
+                "working_dir": "/workspace",
+                "env": {},
+                "volumes": {},
+                "tmpfs": [
+                  "/tmp"
+                ],
+                "cap_drop": [
+                  "ALL"
+                ],
+                "security_opt": [
+                  "no-new-privileges"
+                ],
+                "timeout": 30,
+                "metadata": {
+                  "skill_name": "system",
+                  "integration_type": "desktop"
+                }
+              }
+            },
+            "updated_at": 1775769062.7999518
+          },
+          "integration": {
+            "capability_id": "general",
+            "name": "general",
+            "provider": "general",
+            "objective": "solve_user_task_reliably",
+            "integration_type": "desktop",
+            "required_scopes": [],
+            "auth_strategy": "none",
+            "fallback_policy": "native",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "pyautogui",
+              "mss",
+              "numpy",
+              "opencv-python",
+              "Pillow"
+            ],
+            "python_dependencies": [],
+            "os_dependencies": [],
+            "post_install": [],
+            "approval_level": 0,
+            "real_time": true,
+            "multi_agent_recommended": false,
+            "workflow_bundle": {
+              "bundle_id": "general",
+              "name": "general",
+              "objective": "solve_user_task_reliably",
+              "integration_type": "desktop",
+              "provider": "general",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "karmaşık görevi tamamla",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "karmaşık görevi tamamla",
+                    "action": "operate",
+                    "provider": "general"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [],
+              "multi_agent_recommended": false,
+              "approval_level": 0,
+              "fallback_policy": "native",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "heuristic",
+              "tags": [],
+              "metadata": {
+                "step_count": 1,
+                "parallel_groups": 0
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "connector_name": "general",
+            "auth_required": false,
+            "fallback_target": "native",
+            "transport_preference": "realtime",
+            "latency_level": "real_time",
+            "trust_level": "trusted",
+            "manifest": {
+              "name": "general",
+              "provider": "general",
+              "version": "1.0.0",
+              "description": "görev | çıktılar: docx | stil: executive | kalite: correctness, clarity | netleştirme gerekebilir | alan: general",
+              "integration_type": "desktop",
+              "required_scopes": [],
+              "auth_strategy": "none",
+              "fallback_policy": "native",
+              "supported_platforms": [
+                "windows",
+                "darwin",
+                "linux"
+              ],
+              "dependencies": [
+                "pyautogui",
+                "mss",
+                "numpy",
+                "opencv-python",
+                "Pillow"
+              ],
+              "python_dependencies": [],
+              "os_dependencies": [],
+              "post_install": [],
+              "trust_level": "trusted",
+              "hashes": {},
+              "approval_level": 0,
+              "real_time": true,
+              "source": "builtin",
+              "connector_name": "general",
+              "browser_urls": [],
+              "api_base_urls": [],
+              "desktop_apps": [],
+              "workflow_bundle": {
+                "bundle_id": "general",
+                "name": "general",
+                "objective": "solve_user_task_reliably",
+                "integration_type": "desktop",
+                "provider": "general",
+                "roles": [
+                  "builder"
+                ],
+                "steps": [
+                  {
+                    "step_id": "step_1",
+                    "title": "karmaşık görevi tamamla",
+                    "action": "operate",
+                    "role": "builder",
+                    "depends_on": [],
+                    "parallelizable": true,
+                    "requires_approval": false,
+                    "parameters": {
+                      "text": "karmaşık görevi tamamla",
+                      "action": "operate",
+                      "provider": "general"
+                    },
+                    "evidence": {
+                      "requires_artifact": false,
+                      "preferred_signal": "state"
+                    },
+                    "notes": [
+                      "latency:real_time"
+                    ]
+                  }
+                ],
+                "serial_steps": [],
+                "parallel_groups": [],
+                "multi_agent_recommended": false,
+                "approval_level": 0,
+                "fallback_policy": "native",
+                "evidence_contract": {
+                  "requires_artifact": false,
+                  "requires_verification": true,
+                  "preferred_signal": "state"
+                },
+                "output_artifacts": [
+                  "state_snapshot"
+                ],
+                "dependencies": [],
+                "source": "heuristic",
+                "tags": [],
+                "metadata": {
+                  "step_count": 1,
+                  "parallel_groups": 0
+                },
+                "estimated_latency_level": "real_time"
+              },
+              "metadata": {
+                "route_domain": "general",
+                "workflow_id": "general_assistance_workflow",
+                "multi_agent_recommended": false,
+                "auth_resolution": {}
+              }
+            },
+            "notes": [
+              "route_domain:general",
+              "provider:general",
+              "fallback:native"
+            ],
+            "metadata": {
+              "text": "karmaşık görevi tamamla",
+              "skill_category": "",
+              "workflow": {},
+              "route": {},
+              "multi_agent_recommended": false,
+              "auth_resolution": {}
+            }
+          },
+          "operator_trace": {}
+        }
+      },
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "learning": {
+      "objective": "karmaşık görevi tamamla",
+      "state": "completed",
+      "domain": "browser",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "completed"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 0.06,
+      "retry_count": 4,
+      "lesson": "Completed without artifacts; capture proof next time.",
+      "next_action": "Add evidence capture before completion",
+      "domain_hint": "Capture screenshot and trace before closing",
+      "confidence": 0.6,
+      "summary": "completed: karmaşık görevi tamamla"
+    },
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769062.821894,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769062.837356,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769062.8465412,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769062.876381,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1775769062.8837178,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1775769062.821892,
+    "updated_at": 1775769062.8837178
+  },
+  "task_5579efa5f8": {
+    "task_id": "task_5579efa5f8",
+    "objective": "masaüstünü listele",
+    "context": {
+      "user_input": "masaüstünü listele",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {},
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "learning": {
+      "objective": "masaüstünü listele",
+      "state": "completed",
+      "domain": "general",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "completed"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 0.06,
+      "retry_count": 4,
+      "lesson": "Completed without artifacts; capture proof next time.",
+      "next_action": "Add evidence capture before completion",
+      "domain_hint": "",
+      "confidence": 0.6,
+      "summary": "completed: masaüstünü listele"
+    },
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769062.94802,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769062.9640052,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769062.97105,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769062.996973,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1775769063.003886,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1775769062.9480162,
+    "updated_at": 1775769063.003886
+  },
+  "task_9db26b702a": {
+    "task_id": "task_9db26b702a",
+    "objective": "dosyaları kontrol et",
+    "context": {
+      "user_input": "dosyaları kontrol et",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {
+        "goal": "dosyaları kontrol et",
+        "name": "dosyaları-kontrol-et",
+        "steps": [
+          {
+            "kind": "screen",
+            "name": "inspect_screen",
+            "instruction": "ekrana bak",
+            "mode": "inspect",
+            "verify": {}
+          }
+        ],
+        "constraints": [],
+        "dependencies": [],
+        "evidence": [],
+        "exit_criteria": [
+          "Artifact veya doğrulama kanıtı oluşturulmalı."
+        ],
+        "approvals": [],
+        "parallel_steps": [],
+        "rationale": "safe_inspect_fallback",
+        "planning_trace": {
+          "request": "dosyaları kontrol et",
+          "planning_request": "dosyaları kontrol et",
+          "matched_rules": [
+            "safe_inspect_fallback"
+          ],
+          "assumptions": [],
+          "missing_inputs": [],
+          "extracted": {
+            "app_name": "",
+            "app_sequence": [],
+            "browser_app": "",
+            "url": "",
+            "urls": [],
+            "typed_text": "",
+            "named_field_values": [],
+            "field_label": "",
+            "selector": "",
+            "button_label": "",
+            "button_sequence": [],
+            "research_topic": "dosyaları kontrol et"
+          },
+          "bounded": true,
+          "safe_mode": "deterministic"
+        },
+        "context": {
+          "request_class": "direct_action",
+          "domain": "general",
+          "capability": {
+            "capability_id": "general_assistance_workflow",
+            "domain": "general",
+            "request_class": "direct_action",
+            "confidence": 0.3,
+            "objective": "solve_user_task_reliably",
+            "workflow_id": "general_assistance_workflow",
+            "primary_action": "chat",
+            "preferred_tools": [
+              "create_plan",
+              "execute_plan"
+            ],
+            "output_artifacts": [
+              "result"
+            ],
+            "quality_checklist": [
+              "correctness",
+              "clarity"
+            ],
+            "learning_tags": [
+              "general"
+            ],
+            "complexity_tier": "low",
+            "suggested_job_type": "communication",
+            "multi_agent_recommended": false,
+            "orchestration_mode": "single_agent",
+            "workflow_profile_applicable": false,
+            "requires_design_phase": false,
+            "requires_worktree": false,
+            "content_kind": "task",
+            "output_formats": [
+              "docx"
+            ],
+            "style_profile": "executive",
+            "source_policy": "trusted",
+            "quality_contract": [
+              "correctness",
+              "clarity"
+            ],
+            "memory_scope": "profile_only",
+            "preview": "görev | çıktılar: docx | stil: executive | kalite: correctness, clarity | netleştirme gerekebilir | alan: general",
+            "request_contract": {},
+            "latency_level": "real_time",
+            "requires_real_time": true,
+            "integration_type": "desktop",
+            "required_scopes": [],
+            "auth_strategy": "none",
+            "fallback_policy": "native",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "pyautogui",
+              "mss",
+              "numpy",
+              "opencv-python",
+              "Pillow"
+            ],
+            "approval_level": 0,
+            "model_role": "router",
+            "selected_model": {
+              "type": "ollama",
+              "provider": "ollama",
+              "model": "llama3.2:3b",
+              "apiKey": null,
+              "endpoint": "http://localhost:11434",
+              "status": "configured"
+            },
+            "workflow_bundle": {
+              "bundle_id": "general",
+              "name": "general",
+              "objective": "solve_user_task_reliably",
+              "integration_type": "desktop",
+              "provider": "general",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "dosyaları kontrol et",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "dosyaları kontrol et",
+                    "action": "operate",
+                    "provider": "general"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [],
+              "multi_agent_recommended": false,
+              "approval_level": 0,
+              "fallback_policy": "native",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "heuristic",
+              "tags": [],
+              "metadata": {
+                "step_count": 1,
+                "parallel_groups": 0
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "metadata": {
+              "approval_tools": [],
+              "blocked_tools": [],
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "screen_state"
+              },
+              "integration": {
+                "capability_id": "general",
+                "name": "general",
+                "provider": "general",
+                "objective": "solve_user_task_reliably",
+                "integration_type": "desktop",
+                "required_scopes": [],
+                "auth_strategy": "none",
+                "fallback_policy": "native",
+                "supported_platforms": [
+                  "windows",
+                  "darwin",
+                  "linux"
+                ],
+                "dependencies": [
+                  "pyautogui",
+                  "mss",
+                  "numpy",
+                  "opencv-python",
+                  "Pillow"
+                ],
+                "python_dependencies": [],
+                "os_dependencies": [],
+                "post_install": [],
+                "approval_level": 0,
+                "real_time": true,
+                "multi_agent_recommended": false,
+                "workflow_bundle": {
+                  "bundle_id": "general",
+                  "name": "general",
+                  "objective": "solve_user_task_reliably",
+                  "integration_type": "desktop",
+                  "provider": "general",
+                  "roles": [
+                    "builder"
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "step_1",
+                      "title": "dosyaları kontrol et",
+                      "action": "operate",
+                      "role": "builder",
+                      "depends_on": [],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "dosyaları kontrol et",
+                        "action": "operate",
+                        "provider": "general"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:real_time"
+                      ]
+                    }
+                  ],
+                  "serial_steps": [],
+                  "parallel_groups": [],
+                  "multi_agent_recommended": false,
+                  "approval_level": 0,
+                  "fallback_policy": "native",
+                  "evidence_contract": {
+                    "requires_artifact": false,
+                    "requires_verification": true,
+                    "preferred_signal": "state"
+                  },
+                  "output_artifacts": [
+                    "state_snapshot"
+                  ],
+                  "dependencies": [],
+                  "source": "heuristic",
+                  "tags": [],
+                  "metadata": {
+                    "step_count": 1,
+                    "parallel_groups": 0
+                  },
+                  "estimated_latency_level": "real_time"
+                },
+                "connector_name": "general",
+                "auth_required": false,
+                "fallback_target": "native",
+                "transport_preference": "realtime",
+                "latency_level": "real_time",
+                "trust_level": "trusted",
+                "manifest": {
+                  "name": "general",
+                  "provider": "general",
+                  "version": "1.0.0",
+                  "description": "görev | çıktılar: docx | stil: executive | kalite: correctness, clarity | netleştirme gerekebilir | alan: general",
+                  "integration_type": "desktop",
+                  "required_scopes": [],
+                  "auth_strategy": "none",
+                  "fallback_policy": "native",
+                  "supported_platforms": [
+                    "windows",
+                    "darwin",
+                    "linux"
+                  ],
+                  "dependencies": [
+                    "pyautogui",
+                    "mss",
+                    "numpy",
+                    "opencv-python",
+                    "Pillow"
+                  ],
+                  "python_dependencies": [],
+                  "os_dependencies": [],
+                  "post_install": [],
+                  "trust_level": "trusted",
+                  "hashes": {},
+                  "approval_level": 0,
+                  "real_time": true,
+                  "source": "builtin",
+                  "connector_name": "general",
+                  "browser_urls": [],
+                  "api_base_urls": [],
+                  "desktop_apps": [],
+                  "workflow_bundle": {
+                    "bundle_id": "general",
+                    "name": "general",
+                    "objective": "solve_user_task_reliably",
+                    "integration_type": "desktop",
+                    "provider": "general",
+                    "roles": [
+                      "builder"
+                    ],
+                    "steps": [
+                      {
+                        "step_id": "step_1",
+                        "title": "dosyaları kontrol et",
+                        "action": "operate",
+                        "role": "builder",
+                        "depends_on": [],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "dosyaları kontrol et",
+                          "action": "operate",
+                          "provider": "general"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:real_time"
+                        ]
+                      }
+                    ],
+                    "serial_steps": [],
+                    "parallel_groups": [],
+                    "multi_agent_recommended": false,
+                    "approval_level": 0,
+                    "fallback_policy": "native",
+                    "evidence_contract": {
+                      "requires_artifact": false,
+                      "requires_verification": true,
+                      "preferred_signal": "state"
+                    },
+                    "output_artifacts": [
+                      "state_snapshot"
+                    ],
+                    "dependencies": [],
+                    "source": "heuristic",
+                    "tags": [],
+                    "metadata": {
+                      "step_count": 1,
+                      "parallel_groups": 0
+                    },
+                    "estimated_latency_level": "real_time"
+                  },
+                  "metadata": {
+                    "route_domain": "general",
+                    "workflow_id": "general_assistance_workflow",
+                    "multi_agent_recommended": false,
+                    "auth_resolution": {}
+                  }
+                },
+                "notes": [
+                  "route_domain:general",
+                  "provider:general",
+                  "fallback:native"
+                ],
+                "metadata": {
+                  "text": "dosyaları kontrol et",
+                  "skill_category": "",
+                  "workflow": {},
+                  "route": {},
+                  "multi_agent_recommended": false,
+                  "auth_resolution": {}
+                }
+              }
+            },
+            "updated_at": 1775769063.050775
+          },
+          "skill": {
+            "skill_id": "system",
+            "name": "system",
+            "version": "1.2.0",
+            "description": "Sistem kontrolü, ekran görüntüsü, uygulama ve süreç bilgileri",
+            "category": "core",
+            "source": "builtin",
+            "integration_type": "desktop",
+            "required_scopes": [],
+            "auth_strategy": "none",
+            "fallback_policy": "native",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "pyautogui",
+              "mss",
+              "numpy",
+              "opencv-python",
+              "Pillow"
+            ],
+            "required_tools": [
+              "get_system_info",
+              "take_screenshot",
+              "open_app",
+              "close_app",
+              "get_process_info"
+            ],
+            "optional_tools": [],
+            "commands": [
+              "sysinfo",
+              "screenshot",
+              "open_app",
+              "close_app",
+              "process"
+            ],
+            "approval_tools": [],
+            "blocked_tools": [],
+            "evidence_contract": {
+              "requires_artifact": false,
+              "requires_verification": true,
+              "preferred_signal": "screen_state"
+            },
+            "latency_level": "real_time",
+            "auto_intent": false,
+            "enabled": true,
+            "runtime_ready": true,
+            "workflow_id": "",
+            "trigger_markers": [],
+            "steps": [],
+            "output_artifacts": [],
+            "quality_checklist": [],
+            "approval_level": 0,
+            "sandbox_config": {
+              "image": "alpine:3.19",
+              "language": "shell",
+              "command": "",
+              "memory_limit": "512m",
+              "cpu_limit": 0.5,
+              "pids_limit": 64,
+              "network": false,
+              "read_only": true,
+              "user": "nobody",
+              "working_dir": "/workspace",
+              "env": {},
+              "volumes": {},
+              "tmpfs": [
+                "/tmp"
+              ],
+              "cap_drop": [
+                "ALL"
+              ],
+              "security_opt": [
+                "no-new-privileges"
+              ],
+              "timeout": 30,
+              "metadata": {
+                "skill_name": "system",
+                "integration_type": "desktop"
+              }
+            },
+            "real_time": true,
+            "tool_policy": {},
+            "output_contract": {},
+            "workflow_bundle": {
+              "bundle_id": "general",
+              "name": "general",
+              "objective": "solve_user_task_reliably",
+              "integration_type": "desktop",
+              "provider": "general",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "dosyaları kontrol et",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "dosyaları kontrol et",
+                    "action": "operate",
+                    "provider": "general"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [],
+              "multi_agent_recommended": false,
+              "approval_level": 0,
+              "fallback_policy": "native",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "heuristic",
+              "tags": [],
+              "metadata": {
+                "step_count": 1,
+                "parallel_groups": 0
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "metadata": {
+              "request_class": "direct_action",
+              "latency_level": "real_time",
+              "workflow_enabled": true,
+              "workflow_runtime_ready": true,
+              "integration": {
+                "capability_id": "general",
+                "name": "general",
+                "provider": "general",
+                "objective": "solve_user_task_reliably",
+                "integration_type": "desktop",
+                "required_scopes": [],
+                "auth_strategy": "none",
+                "fallback_policy": "native",
+                "supported_platforms": [
+                  "windows",
+                  "darwin",
+                  "linux"
+                ],
+                "dependencies": [
+                  "pyautogui",
+                  "mss",
+                  "numpy",
+                  "opencv-python",
+                  "Pillow"
+                ],
+                "python_dependencies": [],
+                "os_dependencies": [],
+                "post_install": [],
+                "approval_level": 0,
+                "real_time": true,
+                "multi_agent_recommended": false,
+                "workflow_bundle": {
+                  "bundle_id": "general",
+                  "name": "general",
+                  "objective": "solve_user_task_reliably",
+                  "integration_type": "desktop",
+                  "provider": "general",
+                  "roles": [
+                    "builder"
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "step_1",
+                      "title": "dosyaları kontrol et",
+                      "action": "operate",
+                      "role": "builder",
+                      "depends_on": [],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "dosyaları kontrol et",
+                        "action": "operate",
+                        "provider": "general"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:real_time"
+                      ]
+                    }
+                  ],
+                  "serial_steps": [],
+                  "parallel_groups": [],
+                  "multi_agent_recommended": false,
+                  "approval_level": 0,
+                  "fallback_policy": "native",
+                  "evidence_contract": {
+                    "requires_artifact": false,
+                    "requires_verification": true,
+                    "preferred_signal": "state"
+                  },
+                  "output_artifacts": [
+                    "state_snapshot"
+                  ],
+                  "dependencies": [],
+                  "source": "heuristic",
+                  "tags": [],
+                  "metadata": {
+                    "step_count": 1,
+                    "parallel_groups": 0
+                  },
+                  "estimated_latency_level": "real_time"
+                },
+                "connector_name": "general",
+                "auth_required": false,
+                "fallback_target": "native",
+                "transport_preference": "realtime",
+                "latency_level": "real_time",
+                "trust_level": "trusted",
+                "manifest": {
+                  "name": "general",
+                  "provider": "general",
+                  "version": "1.0.0",
+                  "description": "görev | çıktılar: docx | stil: executive | kalite: correctness, clarity | netleştirme gerekebilir | alan: general",
+                  "integration_type": "desktop",
+                  "required_scopes": [],
+                  "auth_strategy": "none",
+                  "fallback_policy": "native",
+                  "supported_platforms": [
+                    "windows",
+                    "darwin",
+                    "linux"
+                  ],
+                  "dependencies": [
+                    "pyautogui",
+                    "mss",
+                    "numpy",
+                    "opencv-python",
+                    "Pillow"
+                  ],
+                  "python_dependencies": [],
+                  "os_dependencies": [],
+                  "post_install": [],
+                  "trust_level": "trusted",
+                  "hashes": {},
+                  "approval_level": 0,
+                  "real_time": true,
+                  "source": "builtin",
+                  "connector_name": "general",
+                  "browser_urls": [],
+                  "api_base_urls": [],
+                  "desktop_apps": [],
+                  "workflow_bundle": {
+                    "bundle_id": "general",
+                    "name": "general",
+                    "objective": "solve_user_task_reliably",
+                    "integration_type": "desktop",
+                    "provider": "general",
+                    "roles": [
+                      "builder"
+                    ],
+                    "steps": [
+                      {
+                        "step_id": "step_1",
+                        "title": "dosyaları kontrol et",
+                        "action": "operate",
+                        "role": "builder",
+                        "depends_on": [],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "dosyaları kontrol et",
+                          "action": "operate",
+                          "provider": "general"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:real_time"
+                        ]
+                      }
+                    ],
+                    "serial_steps": [],
+                    "parallel_groups": [],
+                    "multi_agent_recommended": false,
+                    "approval_level": 0,
+                    "fallback_policy": "native",
+                    "evidence_contract": {
+                      "requires_artifact": false,
+                      "requires_verification": true,
+                      "preferred_signal": "state"
+                    },
+                    "output_artifacts": [
+                      "state_snapshot"
+                    ],
+                    "dependencies": [],
+                    "source": "heuristic",
+                    "tags": [],
+                    "metadata": {
+                      "step_count": 1,
+                      "parallel_groups": 0
+                    },
+                    "estimated_latency_level": "real_time"
+                  },
+                  "metadata": {
+                    "route_domain": "general",
+                    "workflow_id": "general_assistance_workflow",
+                    "multi_agent_recommended": false,
+                    "auth_resolution": {}
+                  }
+                },
+                "notes": [
+                  "route_domain:general",
+                  "provider:general",
+                  "fallback:native"
+                ],
+                "metadata": {
+                  "text": "dosyaları kontrol et",
+                  "skill_category": "",
+                  "workflow": {},
+                  "route": {},
+                  "multi_agent_recommended": false,
+                  "auth_resolution": {}
+                }
+              },
+              "sandbox_config": {
+                "image": "alpine:3.19",
+                "language": "shell",
+                "command": "",
+                "memory_limit": "512m",
+                "cpu_limit": 0.5,
+                "pids_limit": 64,
+                "network": false,
+                "read_only": true,
+                "user": "nobody",
+                "working_dir": "/workspace",
+                "env": {},
+                "volumes": {},
+                "tmpfs": [
+                  "/tmp"
+                ],
+                "cap_drop": [
+                  "ALL"
+                ],
+                "security_opt": [
+                  "no-new-privileges"
+                ],
+                "timeout": 30,
+                "metadata": {
+                  "skill_name": "system",
+                  "integration_type": "desktop"
+                }
+              }
+            },
+            "updated_at": 1775769063.039685
+          },
+          "integration": {
+            "capability_id": "general",
+            "name": "general",
+            "provider": "general",
+            "objective": "solve_user_task_reliably",
+            "integration_type": "desktop",
+            "required_scopes": [],
+            "auth_strategy": "none",
+            "fallback_policy": "native",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "pyautogui",
+              "mss",
+              "numpy",
+              "opencv-python",
+              "Pillow"
+            ],
+            "python_dependencies": [],
+            "os_dependencies": [],
+            "post_install": [],
+            "approval_level": 0,
+            "real_time": true,
+            "multi_agent_recommended": false,
+            "workflow_bundle": {
+              "bundle_id": "general",
+              "name": "general",
+              "objective": "solve_user_task_reliably",
+              "integration_type": "desktop",
+              "provider": "general",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "dosyaları kontrol et",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "dosyaları kontrol et",
+                    "action": "operate",
+                    "provider": "general"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [],
+              "multi_agent_recommended": false,
+              "approval_level": 0,
+              "fallback_policy": "native",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "heuristic",
+              "tags": [],
+              "metadata": {
+                "step_count": 1,
+                "parallel_groups": 0
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "connector_name": "general",
+            "auth_required": false,
+            "fallback_target": "native",
+            "transport_preference": "realtime",
+            "latency_level": "real_time",
+            "trust_level": "trusted",
+            "manifest": {
+              "name": "general",
+              "provider": "general",
+              "version": "1.0.0",
+              "description": "görev | çıktılar: docx | stil: executive | kalite: correctness, clarity | netleştirme gerekebilir | alan: general",
+              "integration_type": "desktop",
+              "required_scopes": [],
+              "auth_strategy": "none",
+              "fallback_policy": "native",
+              "supported_platforms": [
+                "windows",
+                "darwin",
+                "linux"
+              ],
+              "dependencies": [
+                "pyautogui",
+                "mss",
+                "numpy",
+                "opencv-python",
+                "Pillow"
+              ],
+              "python_dependencies": [],
+              "os_dependencies": [],
+              "post_install": [],
+              "trust_level": "trusted",
+              "hashes": {},
+              "approval_level": 0,
+              "real_time": true,
+              "source": "builtin",
+              "connector_name": "general",
+              "browser_urls": [],
+              "api_base_urls": [],
+              "desktop_apps": [],
+              "workflow_bundle": {
+                "bundle_id": "general",
+                "name": "general",
+                "objective": "solve_user_task_reliably",
+                "integration_type": "desktop",
+                "provider": "general",
+                "roles": [
+                  "builder"
+                ],
+                "steps": [
+                  {
+                    "step_id": "step_1",
+                    "title": "dosyaları kontrol et",
+                    "action": "operate",
+                    "role": "builder",
+                    "depends_on": [],
+                    "parallelizable": true,
+                    "requires_approval": false,
+                    "parameters": {
+                      "text": "dosyaları kontrol et",
+                      "action": "operate",
+                      "provider": "general"
+                    },
+                    "evidence": {
+                      "requires_artifact": false,
+                      "preferred_signal": "state"
+                    },
+                    "notes": [
+                      "latency:real_time"
+                    ]
+                  }
+                ],
+                "serial_steps": [],
+                "parallel_groups": [],
+                "multi_agent_recommended": false,
+                "approval_level": 0,
+                "fallback_policy": "native",
+                "evidence_contract": {
+                  "requires_artifact": false,
+                  "requires_verification": true,
+                  "preferred_signal": "state"
+                },
+                "output_artifacts": [
+                  "state_snapshot"
+                ],
+                "dependencies": [],
+                "source": "heuristic",
+                "tags": [],
+                "metadata": {
+                  "step_count": 1,
+                  "parallel_groups": 0
+                },
+                "estimated_latency_level": "real_time"
+              },
+              "metadata": {
+                "route_domain": "general",
+                "workflow_id": "general_assistance_workflow",
+                "multi_agent_recommended": false,
+                "auth_resolution": {}
+              }
+            },
+            "notes": [
+              "route_domain:general",
+              "provider:general",
+              "fallback:native"
+            ],
+            "metadata": {
+              "text": "dosyaları kontrol et",
+              "skill_category": "",
+              "workflow": {},
+              "route": {},
+              "multi_agent_recommended": false,
+              "auth_resolution": {}
+            }
+          },
+          "operator_trace": {}
+        }
+      },
+      "action": "",
+      "job_type": "communication",
+      "capability_domain": "general",
+      "workflow_id": "",
+      "hybrid_model": {}
+    },
+    "subtasks": [],
+    "artifacts": [],
+    "learning": {
+      "objective": "dosyaları kontrol et",
+      "state": "completed",
+      "domain": "browser",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "completed"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 0.07,
+      "retry_count": 4,
+      "lesson": "Completed without artifacts; capture proof next time.",
+      "next_action": "Add evidence capture before completion",
+      "domain_hint": "Capture screenshot and trace before closing",
+      "confidence": 0.6,
+      "summary": "completed: dosyaları kontrol et"
+    },
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769063.061308,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769063.0780458,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769063.0876422,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769063.119073,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1775769063.127115,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "",
+          "job_type": "communication"
+        }
+      }
+    ],
+    "created_at": 1775769063.061306,
+    "updated_at": 1775769063.127115
+  },
+  "task_8faef5ee4a": {
+    "task_id": "task_8faef5ee4a",
+    "objective": "google aç ve sonra ekran görüntüsü al",
+    "context": {
+      "user_input": "google aç ve sonra ekran görüntüsü al",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {
+        "goal": "google aç ve sonra ekran görüntüsü al",
+        "name": "google-aç-ve-sonra-ekran-görüntüsü-al",
+        "steps": [
+          {
+            "kind": "screen",
+            "name": "inspect_screen",
+            "instruction": "ekrana bak",
+            "mode": "inspect",
+            "verify": {}
+          }
+        ],
+        "constraints": [],
+        "dependencies": [],
+        "evidence": [],
+        "exit_criteria": [
+          "Artifact veya doğrulama kanıtı oluşturulmalı."
+        ],
+        "approvals": [],
+        "parallel_steps": [],
+        "rationale": "safe_inspect_fallback",
+        "planning_trace": {
+          "request": "google aç ve sonra ekran görüntüsü al",
+          "planning_request": "google aç ve sonra ekran görüntüsü al",
+          "matched_rules": [
+            "safe_inspect_fallback"
+          ],
+          "assumptions": [],
+          "missing_inputs": [],
+          "extracted": {
+            "app_name": "",
+            "app_sequence": [],
+            "browser_app": "",
+            "url": "",
+            "urls": [],
+            "typed_text": "",
+            "named_field_values": [],
+            "field_label": "",
+            "selector": "",
+            "button_label": "",
+            "button_sequence": [],
+            "research_topic": "google aç ve sonra ekran görüntüsü al"
+          },
+          "bounded": true,
+          "safe_mode": "deterministic"
+        },
+        "context": {
+          "request_class": "direct_action",
+          "domain": "google",
+          "capability": {
+            "capability_id": "google_api_workflow",
+            "domain": "google",
+            "request_class": "direct_action",
+            "confidence": 0.47,
+            "objective": "integrate_google_services",
+            "workflow_id": "google_api_workflow",
+            "primary_action": "http_request",
+            "preferred_tools": [
+              "http_request",
+              "write_file",
+              "read_file"
+            ],
+            "output_artifacts": [
+              "api_spec",
+              "integration_trace"
+            ],
+            "quality_checklist": [
+              "scope_accuracy",
+              "auth_safety",
+              "traceability"
+            ],
+            "learning_tags": [
+              "google",
+              "oauth",
+              "api"
+            ],
+            "complexity_tier": "low",
+            "suggested_job_type": "api_integration",
+            "multi_agent_recommended": false,
+            "orchestration_mode": "single_agent",
+            "workflow_profile_applicable": false,
+            "requires_design_phase": false,
+            "requires_worktree": false,
+            "content_kind": "api_integration",
+            "output_formats": [
+              "docx"
+            ],
+            "style_profile": "executive",
+            "source_policy": "trusted",
+            "quality_contract": [
+              "scope_accuracy",
+              "auth_safety",
+              "traceability"
+            ],
+            "memory_scope": "task_routed",
+            "preview": "api integration | çıktılar: docx | stil: executive | kalite: scope_accuracy, auth_safety, traceability | netleştirme gerekebilir | alan: google",
+            "request_contract": {},
+            "latency_level": "real_time",
+            "requires_real_time": true,
+            "integration_type": "api",
+            "required_scopes": [
+              "google.read"
+            ],
+            "auth_strategy": "browser_session",
+            "fallback_policy": "web",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "playwright",
+              "httpx",
+              "beautifulsoup4"
+            ],
+            "approval_level": 0,
+            "model_role": "router",
+            "selected_model": {
+              "type": "ollama",
+              "provider": "ollama",
+              "model": "llama3.2:3b",
+              "apiKey": null,
+              "endpoint": "http://localhost:11434",
+              "status": "configured"
+            },
+            "workflow_bundle": {
+              "bundle_id": "browser",
+              "name": "browser",
+              "objective": "integrate_google_services",
+              "integration_type": "api",
+              "provider": "google",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "google aç",
+                  "action": "open",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "google aç",
+                    "action": "open",
+                    "provider": "google",
+                    "goal": "google aç"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:fast"
+                  ]
+                },
+                {
+                  "step_id": "step_2",
+                  "title": "sonra ekran görüntüsü al",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [
+                    "step_1"
+                  ],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "sonra ekran görüntüsü al",
+                    "action": "operate",
+                    "provider": "google"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:standard"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [
+                [
+                  "step_1",
+                  "step_2"
+                ]
+              ],
+              "multi_agent_recommended": true,
+              "approval_level": 0,
+              "fallback_policy": "web",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "builtin",
+              "tags": [
+                "navigate",
+                "screenshot",
+                "extract"
+              ],
+              "metadata": {
+                "step_count": 2,
+                "parallel_groups": 1
+              },
+              "estimated_latency_level": "fast"
+            },
+            "metadata": {
+              "approval_tools": [],
+              "blocked_tools": [],
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "screen_state"
+              },
+              "integration": {
+                "capability_id": "browser",
+                "name": "browser",
+                "provider": "google",
+                "objective": "integrate_google_services",
+                "integration_type": "api",
+                "required_scopes": [
+                  "google.read"
+                ],
+                "auth_strategy": "browser_session",
+                "fallback_policy": "web",
+                "supported_platforms": [
+                  "windows",
+                  "darwin",
+                  "linux"
+                ],
+                "dependencies": [
+                  "playwright",
+                  "httpx",
+                  "beautifulsoup4"
+                ],
+                "python_dependencies": [
+                  "playwright",
+                  "httpx",
+                  "beautifulsoup4"
+                ],
+                "os_dependencies": [],
+                "post_install": [
+                  "playwright install chromium"
+                ],
+                "approval_level": 0,
+                "real_time": true,
+                "multi_agent_recommended": true,
+                "workflow_bundle": {
+                  "bundle_id": "browser",
+                  "name": "browser",
+                  "objective": "integrate_google_services",
+                  "integration_type": "api",
+                  "provider": "google",
+                  "roles": [
+                    "builder"
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "step_1",
+                      "title": "google aç",
+                      "action": "open",
+                      "role": "builder",
+                      "depends_on": [],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "google aç",
+                        "action": "open",
+                        "provider": "google",
+                        "goal": "google aç"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:fast"
+                      ]
+                    },
+                    {
+                      "step_id": "step_2",
+                      "title": "sonra ekran görüntüsü al",
+                      "action": "operate",
+                      "role": "builder",
+                      "depends_on": [
+                        "step_1"
+                      ],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "sonra ekran görüntüsü al",
+                        "action": "operate",
+                        "provider": "google"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:standard"
+                      ]
+                    }
+                  ],
+                  "serial_steps": [],
+                  "parallel_groups": [
+                    [
+                      "step_1",
+                      "step_2"
+                    ]
+                  ],
+                  "multi_agent_recommended": true,
+                  "approval_level": 0,
+                  "fallback_policy": "web",
+                  "evidence_contract": {
+                    "requires_artifact": false,
+                    "requires_verification": true,
+                    "preferred_signal": "state"
+                  },
+                  "output_artifacts": [
+                    "state_snapshot"
+                  ],
+                  "dependencies": [],
+                  "source": "builtin",
+                  "tags": [
+                    "navigate",
+                    "screenshot",
+                    "extract"
+                  ],
+                  "metadata": {
+                    "step_count": 2,
+                    "parallel_groups": 1
+                  },
+                  "estimated_latency_level": "fast"
+                },
+                "connector_name": "google",
+                "auth_required": true,
+                "fallback_target": "web",
+                "transport_preference": "realtime",
+                "latency_level": "real_time",
+                "trust_level": "trusted",
+                "manifest": {
+                  "name": "browser",
+                  "provider": "google",
+                  "version": "1.1.0",
+                  "description": "Tarayıcı otomasyonu ve web navigasyon",
+                  "integration_type": "api",
+                  "required_scopes": [
+                    "google.read"
+                  ],
+                  "auth_strategy": "browser_session",
+                  "fallback_policy": "web",
+                  "supported_platforms": [
+                    "windows",
+                    "darwin",
+                    "linux"
+                  ],
+                  "dependencies": [
+                    "playwright",
+                    "httpx",
+                    "beautifulsoup4"
+                  ],
+                  "python_dependencies": [
+                    "playwright",
+                    "httpx",
+                    "beautifulsoup4"
+                  ],
+                  "os_dependencies": [],
+                  "post_install": [
+                    "playwright install chromium"
+                  ],
+                  "trust_level": "trusted",
+                  "hashes": {},
+                  "approval_level": 0,
+                  "real_time": true,
+                  "source": "builtin",
+                  "connector_name": "google",
+                  "browser_urls": [],
+                  "api_base_urls": [
+                    "https://gmail.googleapis.com",
+                    "https://www.googleapis.com"
+                  ],
+                  "desktop_apps": [],
+                  "workflow_bundle": {
+                    "bundle_id": "browser",
+                    "name": "browser",
+                    "objective": "integrate_google_services",
+                    "integration_type": "api",
+                    "provider": "google",
+                    "roles": [
+                      "builder"
+                    ],
+                    "steps": [
+                      {
+                        "step_id": "step_1",
+                        "title": "google aç",
+                        "action": "open",
+                        "role": "builder",
+                        "depends_on": [],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "google aç",
+                          "action": "open",
+                          "provider": "google",
+                          "goal": "google aç"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:fast"
+                        ]
+                      },
+                      {
+                        "step_id": "step_2",
+                        "title": "sonra ekran görüntüsü al",
+                        "action": "operate",
+                        "role": "builder",
+                        "depends_on": [
+                          "step_1"
+                        ],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "sonra ekran görüntüsü al",
+                          "action": "operate",
+                          "provider": "google"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:standard"
+                        ]
+                      }
+                    ],
+                    "serial_steps": [],
+                    "parallel_groups": [
+                      [
+                        "step_1",
+                        "step_2"
+                      ]
+                    ],
+                    "multi_agent_recommended": true,
+                    "approval_level": 0,
+                    "fallback_policy": "web",
+                    "evidence_contract": {
+                      "requires_artifact": false,
+                      "requires_verification": true,
+                      "preferred_signal": "state"
+                    },
+                    "output_artifacts": [
+                      "state_snapshot"
+                    ],
+                    "dependencies": [],
+                    "source": "builtin",
+                    "tags": [
+                      "navigate",
+                      "screenshot",
+                      "extract"
+                    ],
+                    "metadata": {
+                      "step_count": 2,
+                      "parallel_groups": 1
+                    },
+                    "estimated_latency_level": "fast"
+                  },
+                  "metadata": {
+                    "route_domain": "google",
+                    "workflow_id": "google_api_workflow",
+                    "multi_agent_recommended": true,
+                    "auth_resolution": {}
+                  }
+                },
+                "notes": [
+                  "route_domain:google",
+                  "provider:google",
+                  "fallback:web"
+                ],
+                "metadata": {
+                  "text": "google aç ve sonra ekran görüntüsü al",
+                  "skill_category": "automation",
+                  "workflow": {},
+                  "route": {},
+                  "multi_agent_recommended": true,
+                  "auth_resolution": {}
+                }
+              }
+            },
+            "updated_at": 1775769064.598026
+          },
+          "skill": {
+            "skill_id": "browser",
+            "name": "browser",
+            "version": "1.1.0",
+            "description": "Tarayıcı otomasyonu ve web navigasyon",
+            "category": "automation",
+            "source": "builtin",
+            "integration_type": "api",
+            "required_scopes": [
+              "google.read"
+            ],
+            "auth_strategy": "browser_session",
+            "fallback_policy": "web",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "playwright",
+              "httpx",
+              "beautifulsoup4"
+            ],
+            "required_tools": [
+              "open_url",
+              "take_screenshot",
+              "extract_text"
+            ],
+            "optional_tools": [],
+            "commands": [
+              "navigate",
+              "screenshot",
+              "extract"
+            ],
+            "approval_tools": [],
+            "blocked_tools": [],
+            "evidence_contract": {
+              "requires_artifact": false,
+              "requires_verification": true,
+              "preferred_signal": "screen_state"
+            },
+            "latency_level": "real_time",
+            "auto_intent": false,
+            "enabled": true,
+            "runtime_ready": true,
+            "workflow_id": "",
+            "trigger_markers": [],
+            "steps": [],
+            "output_artifacts": [],
+            "quality_checklist": [],
+            "approval_level": 0,
+            "sandbox_config": {
+              "image": "alpine:3.19",
+              "language": "shell",
+              "command": "",
+              "memory_limit": "512m",
+              "cpu_limit": 0.5,
+              "pids_limit": 64,
+              "network": false,
+              "read_only": true,
+              "user": "nobody",
+              "working_dir": "/workspace",
+              "env": {},
+              "volumes": {},
+              "tmpfs": [
+                "/tmp"
+              ],
+              "cap_drop": [
+                "ALL"
+              ],
+              "security_opt": [
+                "no-new-privileges"
+              ],
+              "timeout": 30,
+              "metadata": {
+                "skill_name": "browser",
+                "integration_type": "browser"
+              }
+            },
+            "real_time": true,
+            "tool_policy": {},
+            "output_contract": {},
+            "workflow_bundle": {
+              "bundle_id": "browser",
+              "name": "browser",
+              "objective": "integrate_google_services",
+              "integration_type": "api",
+              "provider": "google",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "google aç",
+                  "action": "open",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "google aç",
+                    "action": "open",
+                    "provider": "google",
+                    "goal": "google aç"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:fast"
+                  ]
+                },
+                {
+                  "step_id": "step_2",
+                  "title": "sonra ekran görüntüsü al",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [
+                    "step_1"
+                  ],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "sonra ekran görüntüsü al",
+                    "action": "operate",
+                    "provider": "google"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:standard"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [
+                [
+                  "step_1",
+                  "step_2"
+                ]
+              ],
+              "multi_agent_recommended": true,
+              "approval_level": 0,
+              "fallback_policy": "web",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "builtin",
+              "tags": [
+                "navigate",
+                "screenshot",
+                "extract"
+              ],
+              "metadata": {
+                "step_count": 2,
+                "parallel_groups": 1
+              },
+              "estimated_latency_level": "fast"
+            },
+            "metadata": {
+              "request_class": "direct_action",
+              "latency_level": "real_time",
+              "workflow_enabled": true,
+              "workflow_runtime_ready": true,
+              "integration": {
+                "capability_id": "browser",
+                "name": "browser",
+                "provider": "google",
+                "objective": "integrate_google_services",
+                "integration_type": "api",
+                "required_scopes": [
+                  "google.read"
+                ],
+                "auth_strategy": "browser_session",
+                "fallback_policy": "web",
+                "supported_platforms": [
+                  "windows",
+                  "darwin",
+                  "linux"
+                ],
+                "dependencies": [
+                  "playwright",
+                  "httpx",
+                  "beautifulsoup4"
+                ],
+                "python_dependencies": [
+                  "playwright",
+                  "httpx",
+                  "beautifulsoup4"
+                ],
+                "os_dependencies": [],
+                "post_install": [
+                  "playwright install chromium"
+                ],
+                "approval_level": 0,
+                "real_time": true,
+                "multi_agent_recommended": true,
+                "workflow_bundle": {
+                  "bundle_id": "browser",
+                  "name": "browser",
+                  "objective": "integrate_google_services",
+                  "integration_type": "api",
+                  "provider": "google",
+                  "roles": [
+                    "builder"
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "step_1",
+                      "title": "google aç",
+                      "action": "open",
+                      "role": "builder",
+                      "depends_on": [],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "google aç",
+                        "action": "open",
+                        "provider": "google",
+                        "goal": "google aç"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:fast"
+                      ]
+                    },
+                    {
+                      "step_id": "step_2",
+                      "title": "sonra ekran görüntüsü al",
+                      "action": "operate",
+                      "role": "builder",
+                      "depends_on": [
+                        "step_1"
+                      ],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "sonra ekran görüntüsü al",
+                        "action": "operate",
+                        "provider": "google"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:standard"
+                      ]
+                    }
+                  ],
+                  "serial_steps": [],
+                  "parallel_groups": [
+                    [
+                      "step_1",
+                      "step_2"
+                    ]
+                  ],
+                  "multi_agent_recommended": true,
+                  "approval_level": 0,
+                  "fallback_policy": "web",
+                  "evidence_contract": {
+                    "requires_artifact": false,
+                    "requires_verification": true,
+                    "preferred_signal": "state"
+                  },
+                  "output_artifacts": [
+                    "state_snapshot"
+                  ],
+                  "dependencies": [],
+                  "source": "builtin",
+                  "tags": [
+                    "navigate",
+                    "screenshot",
+                    "extract"
+                  ],
+                  "metadata": {
+                    "step_count": 2,
+                    "parallel_groups": 1
+                  },
+                  "estimated_latency_level": "fast"
+                },
+                "connector_name": "google",
+                "auth_required": true,
+                "fallback_target": "web",
+                "transport_preference": "realtime",
+                "latency_level": "real_time",
+                "trust_level": "trusted",
+                "manifest": {
+                  "name": "browser",
+                  "provider": "google",
+                  "version": "1.1.0",
+                  "description": "Tarayıcı otomasyonu ve web navigasyon",
+                  "integration_type": "api",
+                  "required_scopes": [
+                    "google.read"
+                  ],
+                  "auth_strategy": "browser_session",
+                  "fallback_policy": "web",
+                  "supported_platforms": [
+                    "windows",
+                    "darwin",
+                    "linux"
+                  ],
+                  "dependencies": [
+                    "playwright",
+                    "httpx",
+                    "beautifulsoup4"
+                  ],
+                  "python_dependencies": [
+                    "playwright",
+                    "httpx",
+                    "beautifulsoup4"
+                  ],
+                  "os_dependencies": [],
+                  "post_install": [
+                    "playwright install chromium"
+                  ],
+                  "trust_level": "trusted",
+                  "hashes": {},
+                  "approval_level": 0,
+                  "real_time": true,
+                  "source": "builtin",
+                  "connector_name": "google",
+                  "browser_urls": [],
+                  "api_base_urls": [
+                    "https://gmail.googleapis.com",
+                    "https://www.googleapis.com"
+                  ],
+                  "desktop_apps": [],
+                  "workflow_bundle": {
+                    "bundle_id": "browser",
+                    "name": "browser",
+                    "objective": "integrate_google_services",
+                    "integration_type": "api",
+                    "provider": "google",
+                    "roles": [
+                      "builder"
+                    ],
+                    "steps": [
+                      {
+                        "step_id": "step_1",
+                        "title": "google aç",
+                        "action": "open",
+                        "role": "builder",
+                        "depends_on": [],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "google aç",
+                          "action": "open",
+                          "provider": "google",
+                          "goal": "google aç"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:fast"
+                        ]
+                      },
+                      {
+                        "step_id": "step_2",
+                        "title": "sonra ekran görüntüsü al",
+                        "action": "operate",
+                        "role": "builder",
+                        "depends_on": [
+                          "step_1"
+                        ],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "sonra ekran görüntüsü al",
+                          "action": "operate",
+                          "provider": "google"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:standard"
+                        ]
+                      }
+                    ],
+                    "serial_steps": [],
+                    "parallel_groups": [
+                      [
+                        "step_1",
+                        "step_2"
+                      ]
+                    ],
+                    "multi_agent_recommended": true,
+                    "approval_level": 0,
+                    "fallback_policy": "web",
+                    "evidence_contract": {
+                      "requires_artifact": false,
+                      "requires_verification": true,
+                      "preferred_signal": "state"
+                    },
+                    "output_artifacts": [
+                      "state_snapshot"
+                    ],
+                    "dependencies": [],
+                    "source": "builtin",
+                    "tags": [
+                      "navigate",
+                      "screenshot",
+                      "extract"
+                    ],
+                    "metadata": {
+                      "step_count": 2,
+                      "parallel_groups": 1
+                    },
+                    "estimated_latency_level": "fast"
+                  },
+                  "metadata": {
+                    "route_domain": "google",
+                    "workflow_id": "google_api_workflow",
+                    "multi_agent_recommended": true,
+                    "auth_resolution": {}
+                  }
+                },
+                "notes": [
+                  "route_domain:google",
+                  "provider:google",
+                  "fallback:web"
+                ],
+                "metadata": {
+                  "text": "google aç ve sonra ekran görüntüsü al",
+                  "skill_category": "automation",
+                  "workflow": {},
+                  "route": {},
+                  "multi_agent_recommended": true,
+                  "auth_resolution": {}
+                }
+              },
+              "sandbox_config": {
+                "image": "alpine:3.19",
+                "language": "shell",
+                "command": "",
+                "memory_limit": "512m",
+                "cpu_limit": 0.5,
+                "pids_limit": 64,
+                "network": false,
+                "read_only": true,
+                "user": "nobody",
+                "working_dir": "/workspace",
+                "env": {},
+                "volumes": {},
+                "tmpfs": [
+                  "/tmp"
+                ],
+                "cap_drop": [
+                  "ALL"
+                ],
+                "security_opt": [
+                  "no-new-privileges"
+                ],
+                "timeout": 30,
+                "metadata": {
+                  "skill_name": "browser",
+                  "integration_type": "browser"
+                }
+              }
+            },
+            "updated_at": 1775769064.586845
+          },
+          "integration": {
+            "capability_id": "browser",
+            "name": "browser",
+            "provider": "google",
+            "objective": "integrate_google_services",
+            "integration_type": "api",
+            "required_scopes": [
+              "google.read"
+            ],
+            "auth_strategy": "browser_session",
+            "fallback_policy": "web",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "playwright",
+              "httpx",
+              "beautifulsoup4"
+            ],
+            "python_dependencies": [
+              "playwright",
+              "httpx",
+              "beautifulsoup4"
+            ],
+            "os_dependencies": [],
+            "post_install": [
+              "playwright install chromium"
+            ],
+            "approval_level": 0,
+            "real_time": true,
+            "multi_agent_recommended": true,
+            "workflow_bundle": {
+              "bundle_id": "browser",
+              "name": "browser",
+              "objective": "integrate_google_services",
+              "integration_type": "api",
+              "provider": "google",
+              "roles": [
+                "builder"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "google aç",
+                  "action": "open",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "google aç",
+                    "action": "open",
+                    "provider": "google",
+                    "goal": "google aç"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:fast"
+                  ]
+                },
+                {
+                  "step_id": "step_2",
+                  "title": "sonra ekran görüntüsü al",
+                  "action": "operate",
+                  "role": "builder",
+                  "depends_on": [
+                    "step_1"
+                  ],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "sonra ekran görüntüsü al",
+                    "action": "operate",
+                    "provider": "google"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:standard"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [
+                [
+                  "step_1",
+                  "step_2"
+                ]
+              ],
+              "multi_agent_recommended": true,
+              "approval_level": 0,
+              "fallback_policy": "web",
+              "evidence_contract": {
+                "requires_artifact": false,
+                "requires_verification": true,
+                "preferred_signal": "state"
+              },
+              "output_artifacts": [
+                "state_snapshot"
+              ],
+              "dependencies": [],
+              "source": "builtin",
+              "tags": [
+                "navigate",
+                "screenshot",
+                "extract"
+              ],
+              "metadata": {
+                "step_count": 2,
+                "parallel_groups": 1
+              },
+              "estimated_latency_level": "fast"
+            },
+            "connector_name": "google",
+            "auth_required": true,
+            "fallback_target": "web",
+            "transport_preference": "realtime",
+            "latency_level": "real_time",
+            "trust_level": "trusted",
+            "manifest": {
+              "name": "browser",
+              "provider": "google",
+              "version": "1.1.0",
+              "description": "Tarayıcı otomasyonu ve web navigasyon",
+              "integration_type": "api",
+              "required_scopes": [
+                "google.read"
+              ],
+              "auth_strategy": "browser_session",
+              "fallback_policy": "web",
+              "supported_platforms": [
+                "windows",
+                "darwin",
+                "linux"
+              ],
+              "dependencies": [
+                "playwright",
+                "httpx",
+                "beautifulsoup4"
+              ],
+              "python_dependencies": [
+                "playwright",
+                "httpx",
+                "beautifulsoup4"
+              ],
+              "os_dependencies": [],
+              "post_install": [
+                "playwright install chromium"
+              ],
+              "trust_level": "trusted",
+              "hashes": {},
+              "approval_level": 0,
+              "real_time": true,
+              "source": "builtin",
+              "connector_name": "google",
+              "browser_urls": [],
+              "api_base_urls": [
+                "https://gmail.googleapis.com",
+                "https://www.googleapis.com"
+              ],
+              "desktop_apps": [],
+              "workflow_bundle": {
+                "bundle_id": "browser",
+                "name": "browser",
+                "objective": "integrate_google_services",
+                "integration_type": "api",
+                "provider": "google",
+                "roles": [
+                  "builder"
+                ],
+                "steps": [
+                  {
+                    "step_id": "step_1",
+                    "title": "google aç",
+                    "action": "open",
+                    "role": "builder",
+                    "depends_on": [],
+                    "parallelizable": true,
+                    "requires_approval": false,
+                    "parameters": {
+                      "text": "google aç",
+                      "action": "open",
+                      "provider": "google",
+                      "goal": "google aç"
+                    },
+                    "evidence": {
+                      "requires_artifact": false,
+                      "preferred_signal": "state"
+                    },
+                    "notes": [
+                      "latency:fast"
+                    ]
+                  },
+                  {
+                    "step_id": "step_2",
+                    "title": "sonra ekran görüntüsü al",
+                    "action": "operate",
+                    "role": "builder",
+                    "depends_on": [
+                      "step_1"
+                    ],
+                    "parallelizable": true,
+                    "requires_approval": false,
+                    "parameters": {
+                      "text": "sonra ekran görüntüsü al",
+                      "action": "operate",
+                      "provider": "google"
+                    },
+                    "evidence": {
+                      "requires_artifact": false,
+                      "preferred_signal": "state"
+                    },
+                    "notes": [
+                      "latency:standard"
+                    ]
+                  }
+                ],
+                "serial_steps": [],
+                "parallel_groups": [
+                  [
+                    "step_1",
+                    "step_2"
+                  ]
+                ],
+                "multi_agent_recommended": true,
+                "approval_level": 0,
+                "fallback_policy": "web",
+                "evidence_contract": {
+                  "requires_artifact": false,
+                  "requires_verification": true,
+                  "preferred_signal": "state"
+                },
+                "output_artifacts": [
+                  "state_snapshot"
+                ],
+                "dependencies": [],
+                "source": "builtin",
+                "tags": [
+                  "navigate",
+                  "screenshot",
+                  "extract"
+                ],
+                "metadata": {
+                  "step_count": 2,
+                  "parallel_groups": 1
+                },
+                "estimated_latency_level": "fast"
+              },
+              "metadata": {
+                "route_domain": "google",
+                "workflow_id": "google_api_workflow",
+                "multi_agent_recommended": true,
+                "auth_resolution": {}
+              }
+            },
+            "notes": [
+              "route_domain:google",
+              "provider:google",
+              "fallback:web"
+            ],
+            "metadata": {
+              "text": "google aç ve sonra ekran görüntüsü al",
+              "skill_category": "automation",
+              "workflow": {},
+              "route": {},
+              "multi_agent_recommended": true,
+              "auth_resolution": {}
+            }
+          },
+          "operator_trace": {}
+        }
+      },
+      "action": "clarify",
+      "job_type": "browser_task",
+      "capability_domain": "google",
+      "workflow_id": "google_api_workflow",
+      "hybrid_model": {
+        "role": "reasoning",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": false,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "open_app",
+        "description": "google aç"
+      },
+      {
+        "id": "subtask_2",
+        "action": "take_screenshot",
+        "description": "ve ekran görüntüsü al"
+      }
+    ],
+    "artifacts": [],
+    "learning": {
+      "objective": "google aç ve sonra ekran görüntüsü al",
+      "state": "completed",
+      "domain": "browser",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "completed"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 15.42,
+      "retry_count": 4,
+      "lesson": "Completed without artifacts; capture proof next time.",
+      "next_action": "Add evidence capture before completion",
+      "domain_hint": "Capture screenshot and trace before closing",
+      "confidence": 0.6,
+      "summary": "completed: google aç ve sonra ekran görüntüsü al"
+    },
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769064.6121979,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769064.6322439,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769064.644116,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769080.022262,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1775769080.03214,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "clarify",
+          "job_type": "browser_task"
+        }
+      }
+    ],
+    "created_at": 1775769064.6121962,
+    "updated_at": 1775769080.03214
+  },
+  "task_efa888d82f": {
+    "task_id": "task_efa888d82f",
+    "objective": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+    "context": {
+      "user_input": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {
+        "goal": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+        "name": "word-dosyası-oluştur-ve-içine-köpek-araştırmasını-yaz",
+        "steps": [
+          {
+            "kind": "system",
+            "name": "research_document_delivery",
+            "tool": "research_document_delivery",
+            "params": {
+              "topic": "word dosyası ve içine köpek araştırmasını yaz",
+              "language": "tr"
+            },
+            "verify": {
+              "artifact_count_min": 2,
+              "artifacts_exist": true,
+              "artifacts_non_empty": true
+            },
+            "repair_policy": {
+              "max_retries": 1
+            }
+          }
+        ],
+        "constraints": [],
+        "dependencies": [],
+        "evidence": [],
+        "exit_criteria": [
+          "Artifact veya doğrulama kanıtı oluşturulmalı."
+        ],
+        "approvals": [],
+        "parallel_steps": [],
+        "rationale": "research_document_flow",
+        "planning_trace": {
+          "request": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+          "planning_request": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+          "matched_rules": [
+            "research_document_flow"
+          ],
+          "assumptions": [],
+          "missing_inputs": [],
+          "extracted": {
+            "app_name": "",
+            "app_sequence": [],
+            "browser_app": "",
+            "url": "",
+            "urls": [],
+            "typed_text": "",
+            "named_field_values": [],
+            "field_label": "",
+            "selector": "",
+            "button_label": "",
+            "button_sequence": [],
+            "research_topic": "word dosyası ve içine köpek araştırmasını yaz"
+          },
+          "bounded": true,
+          "safe_mode": "deterministic"
+        },
+        "context": {
+          "request_class": "direct_action",
+          "domain": "research",
+          "capability": {
+            "capability_id": "research_workflow",
+            "domain": "research",
+            "request_class": "direct_action",
+            "confidence": 0.47,
+            "objective": "produce_reliable_multi_source_research",
+            "workflow_id": "research_workflow",
+            "primary_action": "research_document_delivery",
+            "preferred_tools": [
+              "research_document_delivery",
+              "advanced_research",
+              "evaluate_source",
+              "synthesize_findings"
+            ],
+            "output_artifacts": [
+              "research_document_bundle",
+              "source_list",
+              "recommendations"
+            ],
+            "quality_checklist": [
+              "source_quality",
+              "coverage",
+              "traceability",
+              "actionability"
+            ],
+            "learning_tags": [
+              "research",
+              "analysis",
+              "evidence"
+            ],
+            "complexity_tier": "low",
+            "suggested_job_type": "research_report",
+            "multi_agent_recommended": false,
+            "orchestration_mode": "single_agent",
+            "workflow_profile_applicable": false,
+            "requires_design_phase": false,
+            "requires_worktree": false,
+            "content_kind": "research_delivery",
+            "output_formats": [
+              "docx"
+            ],
+            "style_profile": "executive",
+            "source_policy": "trusted",
+            "quality_contract": [
+              "source_quality",
+              "coverage",
+              "traceability",
+              "actionability"
+            ],
+            "memory_scope": "task_routed",
+            "preview": "kaynaklı araştırma belgesi | çıktılar: docx | stil: executive | kalite: source_quality, coverage, traceability | netleştirme gerekebilir | alan: research",
+            "request_contract": {},
+            "latency_level": "slow",
+            "requires_real_time": false,
+            "integration_type": "browser",
+            "required_scopes": [],
+            "auth_strategy": "browser_session",
+            "fallback_policy": "web",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "httpx",
+              "beautifulsoup4",
+              "aiohttp"
+            ],
+            "approval_level": 0,
+            "model_role": "router",
+            "selected_model": {
+              "type": "ollama",
+              "provider": "ollama",
+              "model": "llama3.2:3b",
+              "apiKey": null,
+              "endpoint": "http://localhost:11434",
+              "status": "configured"
+            },
+            "workflow_bundle": {
+              "bundle_id": "research",
+              "name": "research",
+              "objective": "produce_reliable_multi_source_research",
+              "integration_type": "browser",
+              "provider": "desktop",
+              "roles": [
+                "builder",
+                "researcher"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "word dosyası oluştur",
+                  "action": "write",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "word dosyası oluştur",
+                    "action": "write",
+                    "provider": "desktop",
+                    "goal": "word dosyası oluştur"
+                  },
+                  "evidence": {
+                    "requires_artifact": true,
+                    "preferred_signal": "artifact"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                },
+                {
+                  "step_id": "step_2",
+                  "title": "içine köpek araştırmasını yaz",
+                  "action": "research",
+                  "role": "researcher",
+                  "depends_on": [
+                    "step_1"
+                  ],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "içine köpek araştırmasını yaz",
+                    "action": "research",
+                    "provider": "desktop"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [
+                [
+                  "step_1",
+                  "step_2"
+                ]
+              ],
+              "multi_agent_recommended": true,
+              "approval_level": 0,
+              "fallback_policy": "web",
+              "evidence_contract": {
+                "requires_artifact": true,
+                "requires_verification": true,
+                "preferred_signal": "artifact"
+              },
+              "output_artifacts": [
+                "artifact_or_receipt",
+                "source_manifest"
+              ],
+              "dependencies": [],
+              "source": "builtin",
+              "tags": [
+                "search",
+                "deep_research",
+                "summarize"
+              ],
+              "metadata": {
+                "step_count": 2,
+                "parallel_groups": 1
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "metadata": {
+              "approval_tools": [],
+              "blocked_tools": [],
+              "evidence_contract": {
+                "requires_artifact": true,
+                "requires_verification": true,
+                "preferred_signal": "source_manifest"
+              },
+              "integration": {
+                "capability_id": "research",
+                "name": "research",
+                "provider": "desktop",
+                "objective": "produce_reliable_multi_source_research",
+                "integration_type": "browser",
+                "required_scopes": [],
+                "auth_strategy": "browser_session",
+                "fallback_policy": "web",
+                "supported_platforms": [
+                  "windows",
+                  "darwin",
+                  "linux"
+                ],
+                "dependencies": [
+                  "httpx",
+                  "beautifulsoup4",
+                  "aiohttp"
+                ],
+                "python_dependencies": [
+                  "aiohttp",
+                  "beautifulsoup4"
+                ],
+                "os_dependencies": [],
+                "post_install": [],
+                "approval_level": 0,
+                "real_time": true,
+                "multi_agent_recommended": true,
+                "workflow_bundle": {
+                  "bundle_id": "research",
+                  "name": "research",
+                  "objective": "produce_reliable_multi_source_research",
+                  "integration_type": "browser",
+                  "provider": "desktop",
+                  "roles": [
+                    "builder",
+                    "researcher"
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "step_1",
+                      "title": "word dosyası oluştur",
+                      "action": "write",
+                      "role": "builder",
+                      "depends_on": [],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "word dosyası oluştur",
+                        "action": "write",
+                        "provider": "desktop",
+                        "goal": "word dosyası oluştur"
+                      },
+                      "evidence": {
+                        "requires_artifact": true,
+                        "preferred_signal": "artifact"
+                      },
+                      "notes": [
+                        "latency:real_time"
+                      ]
+                    },
+                    {
+                      "step_id": "step_2",
+                      "title": "içine köpek araştırmasını yaz",
+                      "action": "research",
+                      "role": "researcher",
+                      "depends_on": [
+                        "step_1"
+                      ],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "içine köpek araştırmasını yaz",
+                        "action": "research",
+                        "provider": "desktop"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:real_time"
+                      ]
+                    }
+                  ],
+                  "serial_steps": [],
+                  "parallel_groups": [
+                    [
+                      "step_1",
+                      "step_2"
+                    ]
+                  ],
+                  "multi_agent_recommended": true,
+                  "approval_level": 0,
+                  "fallback_policy": "web",
+                  "evidence_contract": {
+                    "requires_artifact": true,
+                    "requires_verification": true,
+                    "preferred_signal": "artifact"
+                  },
+                  "output_artifacts": [
+                    "artifact_or_receipt",
+                    "source_manifest"
+                  ],
+                  "dependencies": [],
+                  "source": "builtin",
+                  "tags": [
+                    "search",
+                    "deep_research",
+                    "summarize"
+                  ],
+                  "metadata": {
+                    "step_count": 2,
+                    "parallel_groups": 1
+                  },
+                  "estimated_latency_level": "real_time"
+                },
+                "connector_name": "desktop",
+                "auth_required": true,
+                "fallback_target": "web",
+                "transport_preference": "realtime",
+                "latency_level": "slow",
+                "trust_level": "trusted",
+                "manifest": {
+                  "name": "research",
+                  "provider": "desktop",
+                  "version": "1.3.0",
+                  "description": "Web araştırma, derin araştırma ve özetleme",
+                  "integration_type": "browser",
+                  "required_scopes": [],
+                  "auth_strategy": "browser_session",
+                  "fallback_policy": "web",
+                  "supported_platforms": [
+                    "windows",
+                    "darwin",
+                    "linux"
+                  ],
+                  "dependencies": [
+                    "httpx",
+                    "beautifulsoup4",
+                    "aiohttp"
+                  ],
+                  "python_dependencies": [
+                    "aiohttp",
+                    "beautifulsoup4"
+                  ],
+                  "os_dependencies": [],
+                  "post_install": [],
+                  "trust_level": "trusted",
+                  "hashes": {},
+                  "approval_level": 0,
+                  "real_time": true,
+                  "source": "builtin",
+                  "connector_name": "desktop",
+                  "browser_urls": [
+                    "https://www.google.com",
+                    "https://example.com"
+                  ],
+                  "api_base_urls": [],
+                  "desktop_apps": [],
+                  "workflow_bundle": {
+                    "bundle_id": "research",
+                    "name": "research",
+                    "objective": "produce_reliable_multi_source_research",
+                    "integration_type": "browser",
+                    "provider": "desktop",
+                    "roles": [
+                      "builder",
+                      "researcher"
+                    ],
+                    "steps": [
+                      {
+                        "step_id": "step_1",
+                        "title": "word dosyası oluştur",
+                        "action": "write",
+                        "role": "builder",
+                        "depends_on": [],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "word dosyası oluştur",
+                          "action": "write",
+                          "provider": "desktop",
+                          "goal": "word dosyası oluştur"
+                        },
+                        "evidence": {
+                          "requires_artifact": true,
+                          "preferred_signal": "artifact"
+                        },
+                        "notes": [
+                          "latency:real_time"
+                        ]
+                      },
+                      {
+                        "step_id": "step_2",
+                        "title": "içine köpek araştırmasını yaz",
+                        "action": "research",
+                        "role": "researcher",
+                        "depends_on": [
+                          "step_1"
+                        ],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "içine köpek araştırmasını yaz",
+                          "action": "research",
+                          "provider": "desktop"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:real_time"
+                        ]
+                      }
+                    ],
+                    "serial_steps": [],
+                    "parallel_groups": [
+                      [
+                        "step_1",
+                        "step_2"
+                      ]
+                    ],
+                    "multi_agent_recommended": true,
+                    "approval_level": 0,
+                    "fallback_policy": "web",
+                    "evidence_contract": {
+                      "requires_artifact": true,
+                      "requires_verification": true,
+                      "preferred_signal": "artifact"
+                    },
+                    "output_artifacts": [
+                      "artifact_or_receipt",
+                      "source_manifest"
+                    ],
+                    "dependencies": [],
+                    "source": "builtin",
+                    "tags": [
+                      "search",
+                      "deep_research",
+                      "summarize"
+                    ],
+                    "metadata": {
+                      "step_count": 2,
+                      "parallel_groups": 1
+                    },
+                    "estimated_latency_level": "real_time"
+                  },
+                  "metadata": {
+                    "route_domain": "research",
+                    "workflow_id": "research_workflow",
+                    "multi_agent_recommended": true,
+                    "auth_resolution": {}
+                  }
+                },
+                "notes": [
+                  "route_domain:research",
+                  "provider:desktop",
+                  "fallback:web"
+                ],
+                "metadata": {
+                  "text": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+                  "skill_category": "analysis",
+                  "workflow": {},
+                  "route": {},
+                  "multi_agent_recommended": true,
+                  "auth_resolution": {}
+                }
+              }
+            },
+            "updated_at": 1775769081.4537458
+          },
+          "skill": {
+            "skill_id": "research",
+            "name": "research",
+            "version": "1.3.0",
+            "description": "Web araştırma, derin araştırma ve özetleme",
+            "category": "analysis",
+            "source": "builtin",
+            "integration_type": "browser",
+            "required_scopes": [],
+            "auth_strategy": "browser_session",
+            "fallback_policy": "web",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "httpx",
+              "beautifulsoup4",
+              "aiohttp"
+            ],
+            "required_tools": [
+              "web_search",
+              "fetch_page",
+              "advanced_research"
+            ],
+            "optional_tools": [],
+            "commands": [
+              "search",
+              "deep_research",
+              "summarize"
+            ],
+            "approval_tools": [],
+            "blocked_tools": [],
+            "evidence_contract": {
+              "requires_artifact": true,
+              "requires_verification": true,
+              "preferred_signal": "source_manifest"
+            },
+            "latency_level": "slow",
+            "auto_intent": false,
+            "enabled": true,
+            "runtime_ready": true,
+            "workflow_id": "",
+            "trigger_markers": [],
+            "steps": [],
+            "output_artifacts": [],
+            "quality_checklist": [],
+            "approval_level": 0,
+            "sandbox_config": {
+              "image": "alpine:3.19",
+              "language": "shell",
+              "command": "",
+              "memory_limit": "512m",
+              "cpu_limit": 0.5,
+              "pids_limit": 64,
+              "network": false,
+              "read_only": true,
+              "user": "nobody",
+              "working_dir": "/workspace",
+              "env": {},
+              "volumes": {},
+              "tmpfs": [
+                "/tmp"
+              ],
+              "cap_drop": [
+                "ALL"
+              ],
+              "security_opt": [
+                "no-new-privileges"
+              ],
+              "timeout": 30,
+              "metadata": {
+                "skill_name": "research",
+                "integration_type": "browser"
+              }
+            },
+            "real_time": true,
+            "tool_policy": {},
+            "output_contract": {},
+            "workflow_bundle": {
+              "bundle_id": "research",
+              "name": "research",
+              "objective": "produce_reliable_multi_source_research",
+              "integration_type": "browser",
+              "provider": "desktop",
+              "roles": [
+                "builder",
+                "researcher"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "word dosyası oluştur",
+                  "action": "write",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "word dosyası oluştur",
+                    "action": "write",
+                    "provider": "desktop",
+                    "goal": "word dosyası oluştur"
+                  },
+                  "evidence": {
+                    "requires_artifact": true,
+                    "preferred_signal": "artifact"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                },
+                {
+                  "step_id": "step_2",
+                  "title": "içine köpek araştırmasını yaz",
+                  "action": "research",
+                  "role": "researcher",
+                  "depends_on": [
+                    "step_1"
+                  ],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "içine köpek araştırmasını yaz",
+                    "action": "research",
+                    "provider": "desktop"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [
+                [
+                  "step_1",
+                  "step_2"
+                ]
+              ],
+              "multi_agent_recommended": true,
+              "approval_level": 0,
+              "fallback_policy": "web",
+              "evidence_contract": {
+                "requires_artifact": true,
+                "requires_verification": true,
+                "preferred_signal": "artifact"
+              },
+              "output_artifacts": [
+                "artifact_or_receipt",
+                "source_manifest"
+              ],
+              "dependencies": [],
+              "source": "builtin",
+              "tags": [
+                "search",
+                "deep_research",
+                "summarize"
+              ],
+              "metadata": {
+                "step_count": 2,
+                "parallel_groups": 1
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "metadata": {
+              "request_class": "direct_action",
+              "latency_level": "slow",
+              "workflow_enabled": true,
+              "workflow_runtime_ready": true,
+              "integration": {
+                "capability_id": "research",
+                "name": "research",
+                "provider": "desktop",
+                "objective": "produce_reliable_multi_source_research",
+                "integration_type": "browser",
+                "required_scopes": [],
+                "auth_strategy": "browser_session",
+                "fallback_policy": "web",
+                "supported_platforms": [
+                  "windows",
+                  "darwin",
+                  "linux"
+                ],
+                "dependencies": [
+                  "httpx",
+                  "beautifulsoup4",
+                  "aiohttp"
+                ],
+                "python_dependencies": [
+                  "aiohttp",
+                  "beautifulsoup4"
+                ],
+                "os_dependencies": [],
+                "post_install": [],
+                "approval_level": 0,
+                "real_time": true,
+                "multi_agent_recommended": true,
+                "workflow_bundle": {
+                  "bundle_id": "research",
+                  "name": "research",
+                  "objective": "produce_reliable_multi_source_research",
+                  "integration_type": "browser",
+                  "provider": "desktop",
+                  "roles": [
+                    "builder",
+                    "researcher"
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "step_1",
+                      "title": "word dosyası oluştur",
+                      "action": "write",
+                      "role": "builder",
+                      "depends_on": [],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "word dosyası oluştur",
+                        "action": "write",
+                        "provider": "desktop",
+                        "goal": "word dosyası oluştur"
+                      },
+                      "evidence": {
+                        "requires_artifact": true,
+                        "preferred_signal": "artifact"
+                      },
+                      "notes": [
+                        "latency:real_time"
+                      ]
+                    },
+                    {
+                      "step_id": "step_2",
+                      "title": "içine köpek araştırmasını yaz",
+                      "action": "research",
+                      "role": "researcher",
+                      "depends_on": [
+                        "step_1"
+                      ],
+                      "parallelizable": true,
+                      "requires_approval": false,
+                      "parameters": {
+                        "text": "içine köpek araştırmasını yaz",
+                        "action": "research",
+                        "provider": "desktop"
+                      },
+                      "evidence": {
+                        "requires_artifact": false,
+                        "preferred_signal": "state"
+                      },
+                      "notes": [
+                        "latency:real_time"
+                      ]
+                    }
+                  ],
+                  "serial_steps": [],
+                  "parallel_groups": [
+                    [
+                      "step_1",
+                      "step_2"
+                    ]
+                  ],
+                  "multi_agent_recommended": true,
+                  "approval_level": 0,
+                  "fallback_policy": "web",
+                  "evidence_contract": {
+                    "requires_artifact": true,
+                    "requires_verification": true,
+                    "preferred_signal": "artifact"
+                  },
+                  "output_artifacts": [
+                    "artifact_or_receipt",
+                    "source_manifest"
+                  ],
+                  "dependencies": [],
+                  "source": "builtin",
+                  "tags": [
+                    "search",
+                    "deep_research",
+                    "summarize"
+                  ],
+                  "metadata": {
+                    "step_count": 2,
+                    "parallel_groups": 1
+                  },
+                  "estimated_latency_level": "real_time"
+                },
+                "connector_name": "desktop",
+                "auth_required": true,
+                "fallback_target": "web",
+                "transport_preference": "realtime",
+                "latency_level": "slow",
+                "trust_level": "trusted",
+                "manifest": {
+                  "name": "research",
+                  "provider": "desktop",
+                  "version": "1.3.0",
+                  "description": "Web araştırma, derin araştırma ve özetleme",
+                  "integration_type": "browser",
+                  "required_scopes": [],
+                  "auth_strategy": "browser_session",
+                  "fallback_policy": "web",
+                  "supported_platforms": [
+                    "windows",
+                    "darwin",
+                    "linux"
+                  ],
+                  "dependencies": [
+                    "httpx",
+                    "beautifulsoup4",
+                    "aiohttp"
+                  ],
+                  "python_dependencies": [
+                    "aiohttp",
+                    "beautifulsoup4"
+                  ],
+                  "os_dependencies": [],
+                  "post_install": [],
+                  "trust_level": "trusted",
+                  "hashes": {},
+                  "approval_level": 0,
+                  "real_time": true,
+                  "source": "builtin",
+                  "connector_name": "desktop",
+                  "browser_urls": [
+                    "https://www.google.com",
+                    "https://example.com"
+                  ],
+                  "api_base_urls": [],
+                  "desktop_apps": [],
+                  "workflow_bundle": {
+                    "bundle_id": "research",
+                    "name": "research",
+                    "objective": "produce_reliable_multi_source_research",
+                    "integration_type": "browser",
+                    "provider": "desktop",
+                    "roles": [
+                      "builder",
+                      "researcher"
+                    ],
+                    "steps": [
+                      {
+                        "step_id": "step_1",
+                        "title": "word dosyası oluştur",
+                        "action": "write",
+                        "role": "builder",
+                        "depends_on": [],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "word dosyası oluştur",
+                          "action": "write",
+                          "provider": "desktop",
+                          "goal": "word dosyası oluştur"
+                        },
+                        "evidence": {
+                          "requires_artifact": true,
+                          "preferred_signal": "artifact"
+                        },
+                        "notes": [
+                          "latency:real_time"
+                        ]
+                      },
+                      {
+                        "step_id": "step_2",
+                        "title": "içine köpek araştırmasını yaz",
+                        "action": "research",
+                        "role": "researcher",
+                        "depends_on": [
+                          "step_1"
+                        ],
+                        "parallelizable": true,
+                        "requires_approval": false,
+                        "parameters": {
+                          "text": "içine köpek araştırmasını yaz",
+                          "action": "research",
+                          "provider": "desktop"
+                        },
+                        "evidence": {
+                          "requires_artifact": false,
+                          "preferred_signal": "state"
+                        },
+                        "notes": [
+                          "latency:real_time"
+                        ]
+                      }
+                    ],
+                    "serial_steps": [],
+                    "parallel_groups": [
+                      [
+                        "step_1",
+                        "step_2"
+                      ]
+                    ],
+                    "multi_agent_recommended": true,
+                    "approval_level": 0,
+                    "fallback_policy": "web",
+                    "evidence_contract": {
+                      "requires_artifact": true,
+                      "requires_verification": true,
+                      "preferred_signal": "artifact"
+                    },
+                    "output_artifacts": [
+                      "artifact_or_receipt",
+                      "source_manifest"
+                    ],
+                    "dependencies": [],
+                    "source": "builtin",
+                    "tags": [
+                      "search",
+                      "deep_research",
+                      "summarize"
+                    ],
+                    "metadata": {
+                      "step_count": 2,
+                      "parallel_groups": 1
+                    },
+                    "estimated_latency_level": "real_time"
+                  },
+                  "metadata": {
+                    "route_domain": "research",
+                    "workflow_id": "research_workflow",
+                    "multi_agent_recommended": true,
+                    "auth_resolution": {}
+                  }
+                },
+                "notes": [
+                  "route_domain:research",
+                  "provider:desktop",
+                  "fallback:web"
+                ],
+                "metadata": {
+                  "text": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+                  "skill_category": "analysis",
+                  "workflow": {},
+                  "route": {},
+                  "multi_agent_recommended": true,
+                  "auth_resolution": {}
+                }
+              },
+              "sandbox_config": {
+                "image": "alpine:3.19",
+                "language": "shell",
+                "command": "",
+                "memory_limit": "512m",
+                "cpu_limit": 0.5,
+                "pids_limit": 64,
+                "network": false,
+                "read_only": true,
+                "user": "nobody",
+                "working_dir": "/workspace",
+                "env": {},
+                "volumes": {},
+                "tmpfs": [
+                  "/tmp"
+                ],
+                "cap_drop": [
+                  "ALL"
+                ],
+                "security_opt": [
+                  "no-new-privileges"
+                ],
+                "timeout": 30,
+                "metadata": {
+                  "skill_name": "research",
+                  "integration_type": "browser"
+                }
+              }
+            },
+            "updated_at": 1775769081.442334
+          },
+          "integration": {
+            "capability_id": "research",
+            "name": "research",
+            "provider": "desktop",
+            "objective": "produce_reliable_multi_source_research",
+            "integration_type": "browser",
+            "required_scopes": [],
+            "auth_strategy": "browser_session",
+            "fallback_policy": "web",
+            "supported_platforms": [
+              "windows",
+              "darwin",
+              "linux"
+            ],
+            "dependencies": [
+              "httpx",
+              "beautifulsoup4",
+              "aiohttp"
+            ],
+            "python_dependencies": [
+              "aiohttp",
+              "beautifulsoup4"
+            ],
+            "os_dependencies": [],
+            "post_install": [],
+            "approval_level": 0,
+            "real_time": true,
+            "multi_agent_recommended": true,
+            "workflow_bundle": {
+              "bundle_id": "research",
+              "name": "research",
+              "objective": "produce_reliable_multi_source_research",
+              "integration_type": "browser",
+              "provider": "desktop",
+              "roles": [
+                "builder",
+                "researcher"
+              ],
+              "steps": [
+                {
+                  "step_id": "step_1",
+                  "title": "word dosyası oluştur",
+                  "action": "write",
+                  "role": "builder",
+                  "depends_on": [],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "word dosyası oluştur",
+                    "action": "write",
+                    "provider": "desktop",
+                    "goal": "word dosyası oluştur"
+                  },
+                  "evidence": {
+                    "requires_artifact": true,
+                    "preferred_signal": "artifact"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                },
+                {
+                  "step_id": "step_2",
+                  "title": "içine köpek araştırmasını yaz",
+                  "action": "research",
+                  "role": "researcher",
+                  "depends_on": [
+                    "step_1"
+                  ],
+                  "parallelizable": true,
+                  "requires_approval": false,
+                  "parameters": {
+                    "text": "içine köpek araştırmasını yaz",
+                    "action": "research",
+                    "provider": "desktop"
+                  },
+                  "evidence": {
+                    "requires_artifact": false,
+                    "preferred_signal": "state"
+                  },
+                  "notes": [
+                    "latency:real_time"
+                  ]
+                }
+              ],
+              "serial_steps": [],
+              "parallel_groups": [
+                [
+                  "step_1",
+                  "step_2"
+                ]
+              ],
+              "multi_agent_recommended": true,
+              "approval_level": 0,
+              "fallback_policy": "web",
+              "evidence_contract": {
+                "requires_artifact": true,
+                "requires_verification": true,
+                "preferred_signal": "artifact"
+              },
+              "output_artifacts": [
+                "artifact_or_receipt",
+                "source_manifest"
+              ],
+              "dependencies": [],
+              "source": "builtin",
+              "tags": [
+                "search",
+                "deep_research",
+                "summarize"
+              ],
+              "metadata": {
+                "step_count": 2,
+                "parallel_groups": 1
+              },
+              "estimated_latency_level": "real_time"
+            },
+            "connector_name": "desktop",
+            "auth_required": true,
+            "fallback_target": "web",
+            "transport_preference": "realtime",
+            "latency_level": "slow",
+            "trust_level": "trusted",
+            "manifest": {
+              "name": "research",
+              "provider": "desktop",
+              "version": "1.3.0",
+              "description": "Web araştırma, derin araştırma ve özetleme",
+              "integration_type": "browser",
+              "required_scopes": [],
+              "auth_strategy": "browser_session",
+              "fallback_policy": "web",
+              "supported_platforms": [
+                "windows",
+                "darwin",
+                "linux"
+              ],
+              "dependencies": [
+                "httpx",
+                "beautifulsoup4",
+                "aiohttp"
+              ],
+              "python_dependencies": [
+                "aiohttp",
+                "beautifulsoup4"
+              ],
+              "os_dependencies": [],
+              "post_install": [],
+              "trust_level": "trusted",
+              "hashes": {},
+              "approval_level": 0,
+              "real_time": true,
+              "source": "builtin",
+              "connector_name": "desktop",
+              "browser_urls": [
+                "https://www.google.com",
+                "https://example.com"
+              ],
+              "api_base_urls": [],
+              "desktop_apps": [],
+              "workflow_bundle": {
+                "bundle_id": "research",
+                "name": "research",
+                "objective": "produce_reliable_multi_source_research",
+                "integration_type": "browser",
+                "provider": "desktop",
+                "roles": [
+                  "builder",
+                  "researcher"
+                ],
+                "steps": [
+                  {
+                    "step_id": "step_1",
+                    "title": "word dosyası oluştur",
+                    "action": "write",
+                    "role": "builder",
+                    "depends_on": [],
+                    "parallelizable": true,
+                    "requires_approval": false,
+                    "parameters": {
+                      "text": "word dosyası oluştur",
+                      "action": "write",
+                      "provider": "desktop",
+                      "goal": "word dosyası oluştur"
+                    },
+                    "evidence": {
+                      "requires_artifact": true,
+                      "preferred_signal": "artifact"
+                    },
+                    "notes": [
+                      "latency:real_time"
+                    ]
+                  },
+                  {
+                    "step_id": "step_2",
+                    "title": "içine köpek araştırmasını yaz",
+                    "action": "research",
+                    "role": "researcher",
+                    "depends_on": [
+                      "step_1"
+                    ],
+                    "parallelizable": true,
+                    "requires_approval": false,
+                    "parameters": {
+                      "text": "içine köpek araştırmasını yaz",
+                      "action": "research",
+                      "provider": "desktop"
+                    },
+                    "evidence": {
+                      "requires_artifact": false,
+                      "preferred_signal": "state"
+                    },
+                    "notes": [
+                      "latency:real_time"
+                    ]
+                  }
+                ],
+                "serial_steps": [],
+                "parallel_groups": [
+                  [
+                    "step_1",
+                    "step_2"
+                  ]
+                ],
+                "multi_agent_recommended": true,
+                "approval_level": 0,
+                "fallback_policy": "web",
+                "evidence_contract": {
+                  "requires_artifact": true,
+                  "requires_verification": true,
+                  "preferred_signal": "artifact"
+                },
+                "output_artifacts": [
+                  "artifact_or_receipt",
+                  "source_manifest"
+                ],
+                "dependencies": [],
+                "source": "builtin",
+                "tags": [
+                  "search",
+                  "deep_research",
+                  "summarize"
+                ],
+                "metadata": {
+                  "step_count": 2,
+                  "parallel_groups": 1
+                },
+                "estimated_latency_level": "real_time"
+              },
+              "metadata": {
+                "route_domain": "research",
+                "workflow_id": "research_workflow",
+                "multi_agent_recommended": true,
+                "auth_resolution": {}
+              }
+            },
+            "notes": [
+              "route_domain:research",
+              "provider:desktop",
+              "fallback:web"
+            ],
+            "metadata": {
+              "text": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+              "skill_category": "analysis",
+              "workflow": {},
+              "route": {},
+              "multi_agent_recommended": true,
+              "auth_resolution": {}
+            }
+          },
+          "operator_trace": {}
+        }
+      },
+      "action": "clarify",
+      "job_type": "file_operations",
+      "capability_domain": "research",
+      "workflow_id": "research_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "word dosyası oluştur"
+      },
+      {
+        "id": "subtask_2",
+        "action": "write_file",
+        "description": "içine köpek araştırmasını yaz"
+      }
+    ],
+    "artifacts": [],
+    "learning": {
+      "objective": "word dosyası oluştur ve içine köpek araştırmasını yaz",
+      "state": "completed",
+      "domain": "browser",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "completed"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 0.21,
+      "retry_count": 4,
+      "lesson": "Completed without artifacts; capture proof next time.",
+      "next_action": "Add evidence capture before completion",
+      "domain_hint": "Capture screenshot and trace before closing",
+      "confidence": 0.6,
+      "summary": "completed: word dosyası oluştur ve içine köpek araştırmasını yaz"
+    },
+    "state": "completed",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769081.473825,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769081.496153,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769081.5093381,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769081.677651,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 0
+        }
+      },
+      {
+        "state": "completed",
+        "ts": 1775769081.688118,
+        "note": "response_ready",
+        "metadata": {
+          "status": "success",
+          "action": "clarify",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1775769081.4738219,
+    "updated_at": 1775769081.688118
+  },
+  "task_2200ebece8": {
+    "task_id": "task_2200ebece8",
+    "objective": "masaüstünde ne var",
+    "context": {
+      "user_input": "masaüstünde ne var",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {},
+      "action": "clarify",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "masaüstünde ne var"
+      }
+    ],
+    "artifacts": [],
+    "learning": {
+      "objective": "masaüstünde ne var",
+      "state": "partial",
+      "domain": "general",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "partial"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 1.59,
+      "retry_count": 4,
+      "lesson": "Partial completion means scope or evidence is missing.",
+      "next_action": "Fill missing evidence and rerun verification",
+      "domain_hint": "",
+      "confidence": 0.46,
+      "summary": "partial: masaüstünde ne var"
+    },
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769105.11825,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769105.1433249,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769105.157258,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769106.699195,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 1
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1775769106.709347,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "clarify",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1775769105.1182442,
+    "updated_at": 1775769106.709347
+  },
+  "task_e993916457": {
+    "task_id": "task_e993916457",
+    "objective": "masaüstünde ne var",
+    "context": {
+      "user_input": "masaüstünde ne var",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {},
+      "action": "clarify",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "masaüstünde ne var"
+      }
+    ],
+    "artifacts": [],
+    "learning": {
+      "objective": "masaüstünde ne var",
+      "state": "partial",
+      "domain": "general",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "partial"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 0.87,
+      "retry_count": 4,
+      "lesson": "Partial completion means scope or evidence is missing.",
+      "next_action": "Fill missing evidence and rerun verification",
+      "domain_hint": "",
+      "confidence": 0.46,
+      "summary": "partial: masaüstünde ne var"
+    },
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775769195.976646,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775769195.996771,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775769196.006857,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775769196.834604,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 1
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1775769196.8448992,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "clarify",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1775769195.976643,
+    "updated_at": 1775769196.8448992
+  },
+  "task_2f9ee15647": {
+    "task_id": "task_2f9ee15647",
+    "objective": "masaüstünde ne var",
+    "context": {
+      "user_input": "masaüstünde ne var",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {},
+      "action": "clarify",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "masaüstünde ne var"
+      }
+    ],
+    "artifacts": [],
+    "learning": {
+      "objective": "masaüstünde ne var",
+      "state": "partial",
+      "domain": "general",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "partial"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 1.42,
+      "retry_count": 4,
+      "lesson": "Partial completion means scope or evidence is missing.",
+      "next_action": "Fill missing evidence and rerun verification",
+      "domain_hint": "",
+      "confidence": 0.46,
+      "summary": "partial: masaüstünde ne var"
+    },
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775815320.165285,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775815320.1854908,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775815320.195296,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775815321.5778828,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 1
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1775815321.5878332,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "clarify",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1775815320.165281,
+    "updated_at": 1775815321.5878332
+  },
+  "task_0b82e22fd9": {
+    "task_id": "task_0b82e22fd9",
+    "objective": "masaüstünde ne var",
+    "context": {
+      "user_input": "masaüstünde ne var",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {},
+      "action": "clarify",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "masaüstünde ne var"
+      }
+    ],
+    "artifacts": [],
+    "learning": {
+      "objective": "masaüstünde ne var",
+      "state": "partial",
+      "domain": "general",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "partial"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 1.76,
+      "retry_count": 4,
+      "lesson": "Partial completion means scope or evidence is missing.",
+      "next_action": "Fill missing evidence and rerun verification",
+      "domain_hint": "",
+      "confidence": 0.46,
+      "summary": "partial: masaüstünde ne var"
+    },
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775816895.7382689,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775816895.758423,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775816895.768683,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775816897.486047,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 1
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1775816897.496268,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "clarify",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1775816895.738267,
+    "updated_at": 1775816897.496268
+  },
+  "task_e40608fcdc": {
+    "task_id": "task_e40608fcdc",
+    "objective": "masaüstünde ne var",
+    "context": {
+      "user_input": "masaüstünde ne var",
+      "channel": "cli",
+      "user_id": "local",
+      "attachments": [],
+      "task_card": {},
+      "action": "clarify",
+      "job_type": "file_operations",
+      "capability_domain": "file_ops",
+      "workflow_id": "file_operations_workflow",
+      "hybrid_model": {
+        "role": "inference",
+        "routing_role": "router",
+        "critic_role": "critic",
+        "tool_first": false,
+        "prefer_local": true,
+        "tier": "balanced"
+      }
+    },
+    "subtasks": [
+      {
+        "id": "subtask_1",
+        "action": "chat",
+        "description": "masaüstünde ne var"
+      }
+    ],
+    "artifacts": [],
+    "learning": {
+      "objective": "masaüstünde ne var",
+      "state": "partial",
+      "domain": "general",
+      "history_states": [
+        "pending",
+        "planning",
+        "executing",
+        "verifying",
+        "partial"
+      ],
+      "transition_count": 5,
+      "artifact_count": 0,
+      "artifact_types": {},
+      "duration_seconds": 1.52,
+      "retry_count": 4,
+      "lesson": "Partial completion means scope or evidence is missing.",
+      "next_action": "Fill missing evidence and rerun verification",
+      "domain_hint": "",
+      "confidence": 0.46,
+      "summary": "partial: masaüstünde ne var"
+    },
+    "state": "partial",
+    "history": [
+      {
+        "state": "pending",
+        "ts": 1775816914.686935,
+        "note": "task_created"
+      },
+      {
+        "state": "planning",
+        "ts": 1775816914.70862,
+        "note": "pipeline_context_ready"
+      },
+      {
+        "state": "executing",
+        "ts": 1775816914.719734,
+        "note": "pipeline_started"
+      },
+      {
+        "state": "verifying",
+        "ts": 1775816916.19362,
+        "note": "evidence_registered",
+        "metadata": {
+          "artifact_count": 0,
+          "error_count": 1
+        }
+      },
+      {
+        "state": "partial",
+        "ts": 1775816916.20448,
+        "note": "response_ready",
+        "metadata": {
+          "status": "partial",
+          "action": "clarify",
+          "job_type": "file_operations"
+        }
+      }
+    ],
+    "created_at": 1775816914.686933,
+    "updated_at": 1775816916.20448
   }
 }

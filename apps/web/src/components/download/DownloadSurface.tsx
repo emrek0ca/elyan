@@ -94,7 +94,7 @@ export function DownloadSurface({ release }: DownloadSurfaceProps) {
         </div>
         <div className="download-command">
           <span>Guided setup</span>
-          <code>elyan setup --zero-cost</code>
+          <code>elyan setup</code>
         </div>
       </section>
 
@@ -124,7 +124,7 @@ export function DownloadSurface({ release }: DownloadSurfaceProps) {
         <article className="site-card">
           <h2>After install</h2>
           <div className="panel-list">
-            <PanelRow label="Prepare local runtime" value={<code>elyan setup --zero-cost</code>} />
+            <PanelRow label="Prepare local runtime" value={<code>elyan setup</code>} />
             <PanelRow label="Start app" value={<code>npm run dev</code>} />
             <PanelRow label="Check health" value={<code>elyan status</code>} />
             <PanelRow label="Link account" value={<code>elyan login --base-url https://api.elyan.dev</code>} />

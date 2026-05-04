@@ -34,13 +34,20 @@
       "it?": 3,
       "hello": 30,
       "genel": 3,
-      "konu": 3
+      "konu": 3,
+      "masaüstünde": 7,
+      "var": 7,
+      "not": 1
     },
     "successful_actions": {
       "set_wallpaper": 4,
-      "chat": 36
+      "chat": 36,
+      "write_file": 1,
+      "list_files": 1
     },
-    "failed_actions": {},
+    "failed_actions": {
+      "clarify": 6
+    },
     "response_length_bias": "short",
     "conversation_profile": {
       "tone": "natural_concise",
@@ -58,7 +65,7 @@
       "people": []
     },
     "sensitive_personal_memory": {},
-    "updated_at": 1775433514
+    "updated_at": 1775817164
   },
   "test": {
     "preferred_language": "auto",

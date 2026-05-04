@@ -44,6 +44,7 @@ export function createDefaultControlPlaneState(): ControlPlaneState {
     devices: {},
     deviceLinks: {},
     evaluationSignals: [],
+    learningEvents: [],
   };
 }
 
@@ -100,5 +101,6 @@ export function migrateControlPlaneState(rawState: unknown): ControlPlaneState {
     devices: 'devices' in parsed ? parsed.devices : {},
     deviceLinks: 'deviceLinks' in parsed ? parsed.deviceLinks : {},
     evaluationSignals: 'evaluationSignals' in parsed ? parsed.evaluationSignals : [],
+    learningEvents: 'learningEvents' in parsed ? parsed.learningEvents : [],
   });
 }

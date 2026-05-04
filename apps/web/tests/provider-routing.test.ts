@@ -12,6 +12,40 @@ describe('Provider routing', () => {
     expect(resolvePreferredModelIdFromAvailableModels(models, undefined, 'local_first')).toBe('ollama:llama3.2');
   });
 
+  it('avoids slow reasoning-tagged local models for shallow direct answers', () => {
+    expect(
+      resolvePreferredModelIdFromAvailableModels(
+        [
+          { id: 'ollama:deepseek-r1:8b', name: 'deepseek-r1:8b', provider: 'ollama', type: 'local' },
+          { id: 'ollama:llama3:8b', name: 'llama3:8b', provider: 'ollama', type: 'local' },
+          { id: 'ollama:qwen2.5:7b-instruct-q5_K_M', name: 'qwen2.5:7b-instruct-q5_K_M', provider: 'ollama', type: 'local' },
+        ],
+        {
+          routingMode: 'local_first',
+          taskIntent: 'direct_answer',
+          reasoningDepth: 'shallow',
+        }
+      )
+    ).toBe('ollama:llama3:8b');
+  });
+
+  it('overrides a slow preferred local model on shallow direct answers', () => {
+    expect(
+      resolvePreferredModelIdFromAvailableModels(
+        [
+          { id: 'ollama:deepseek-r1:8b', name: 'deepseek-r1:8b', provider: 'ollama', type: 'local' },
+          { id: 'ollama:llama3:8b', name: 'llama3:8b', provider: 'ollama', type: 'local' },
+        ],
+        {
+          preferredModelId: 'ollama:deepseek-r1:8b',
+          routingMode: 'local_first',
+          taskIntent: 'direct_answer',
+          reasoningDepth: 'shallow',
+        }
+      )
+    ).toBe('ollama:llama3:8b');
+  });
+
   it('prefers cloud models when cloud-preferred routing is requested', () => {
     expect(resolvePreferredModelIdFromAvailableModels(models, undefined, 'cloud_preferred')).toBe('openai:gpt-4o');
   });

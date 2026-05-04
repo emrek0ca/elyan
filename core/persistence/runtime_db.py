@@ -266,6 +266,24 @@ billing_events_table = Table(
 )
 Index("ix_billing_events_workspace_created", billing_events_table.c.workspace_id, billing_events_table.c.created_at)
 
+workspace_notifications_table = Table(
+    "workspace_notifications",
+    WORKSPACE_METADATA,
+    Column("notification_id", String(96), primary_key=True),
+    Column("workspace_id", String(128), nullable=False),
+    Column("kind", String(64), nullable=False, default="announcement"),
+    Column("title", String(256), nullable=False, default=""),
+    Column("body", Text, nullable=False, default=""),
+    Column("status", String(32), nullable=False, default="unseen"),
+    Column("source", String(64), nullable=False, default="control_plane"),
+    Column("metadata_json", Text, nullable=False, default="{}"),
+    Column("created_at", Float, nullable=False, default=_now),
+    Column("seen_at", Float, nullable=False, default=0.0),
+    Column("updated_at", Float, nullable=False, default=_now),
+)
+Index("ix_workspace_notifications_workspace_created", workspace_notifications_table.c.workspace_id, workspace_notifications_table.c.created_at)
+Index("ix_workspace_notifications_workspace_status_created", workspace_notifications_table.c.workspace_id, workspace_notifications_table.c.status, workspace_notifications_table.c.created_at)
+
 billing_checkout_sessions_table = Table(
     "billing_checkout_sessions",
     LOCAL_METADATA,
@@ -2114,6 +2132,98 @@ class BillingRepository:
                 payload={"workspace_id": workspace_id, "provider": row["provider"], "status": row["status"], "reference_id": row["reference_id"]},
             )
         return self._db._decode_billing_event_row(row)
+
+    def record_notification(self, notification_payload: dict[str, Any]) -> dict[str, Any]:
+        notification_id = str(notification_payload.get("notification_id") or f"note_{uuid.uuid4().hex[:12]}")
+        workspace_id = str(notification_payload.get("workspace_id") or "local-workspace")
+        row = {
+            "notification_id": notification_id,
+            "workspace_id": workspace_id,
+            "kind": str(notification_payload.get("kind") or "announcement"),
+            "title": str(notification_payload.get("title") or "").strip(),
+            "body": str(notification_payload.get("body") or "").strip(),
+            "status": str(notification_payload.get("status") or "unseen").strip() or "unseen",
+            "source": str(notification_payload.get("source") or "control_plane").strip() or "control_plane",
+            "metadata_json": _json_dumps(dict(notification_payload.get("metadata") or {})),
+            "created_at": float(notification_payload.get("created_at") or _now()),
+            "seen_at": float(notification_payload.get("seen_at") or 0.0),
+            "updated_at": float(notification_payload.get("updated_at") or _now()),
+        }
+        with self._db.local_engine.begin() as conn:
+            existing = conn.execute(
+                select(workspace_notifications_table.c.notification_id).where(
+                    workspace_notifications_table.c.notification_id == notification_id
+                )
+            ).first()
+            if existing:
+                conn.execute(
+                    workspace_notifications_table.update()
+                    .where(workspace_notifications_table.c.notification_id == notification_id)
+                    .values(**row)
+                )
+            else:
+                conn.execute(workspace_notifications_table.insert().values(**row))
+            self._db.outbox.enqueue(
+                conn,
+                workspace_id=workspace_id,
+                aggregate_type="notification",
+                aggregate_id=notification_id,
+                event_type=f"workspace.notification.{row['status']}",
+                payload={
+                    "workspace_id": workspace_id,
+                    "notification_id": notification_id,
+                    "kind": row["kind"],
+                    "status": row["status"],
+                    "title": row["title"],
+                },
+            )
+        return self._db._decode_workspace_notification_row(row)
+
+    def list_notifications(self, workspace_id: str, *, limit: int = 50, status: str = "") -> list[dict[str, Any]]:
+        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        with self._db.local_engine.begin() as conn:
+            stmt = select(workspace_notifications_table).where(workspace_notifications_table.c.workspace_id == workspace_key)
+            if status:
+                stmt = stmt.where(workspace_notifications_table.c.status == str(status or "").strip())
+            rows = conn.execute(
+                stmt.order_by(workspace_notifications_table.c.created_at.desc()).limit(max(1, int(limit or 50)))
+            ).mappings().all()
+        return [self._db._decode_workspace_notification_row(row) for row in rows]
+
+    def get_notification(self, notification_id: str) -> dict[str, Any] | None:
+        normalized = str(notification_id or "").strip()
+        if not normalized:
+            return None
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_notifications_table).where(workspace_notifications_table.c.notification_id == normalized)
+            ).mappings().first()
+        return self._db._decode_workspace_notification_row(row) if row else None
+
+    def mark_notification_seen(self, notification_id: str) -> dict[str, Any] | None:
+        normalized = str(notification_id or "").strip()
+        if not normalized:
+            return None
+        now = _now()
+        with self._db.local_engine.begin() as conn:
+            row = conn.execute(
+                select(workspace_notifications_table).where(workspace_notifications_table.c.notification_id == normalized)
+            ).mappings().first()
+            if row is None:
+                return None
+            updated_values = {
+                "status": "seen",
+                "seen_at": now,
+                "updated_at": now,
+            }
+            conn.execute(
+                workspace_notifications_table.update()
+                .where(workspace_notifications_table.c.notification_id == normalized)
+                .values(**updated_values)
+            )
+            updated = dict(row)
+            updated.update(updated_values)
+        return self._db._decode_workspace_notification_row(updated)
 
     def list_billing_events(self, workspace_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
         with self._db.local_engine.begin() as conn:
@@ -4183,6 +4293,54 @@ class LocalAuthRepository:
                 pass
         return decoded
 
+    def register_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        display_name: str = "",
+        workspace_id: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_email = self._normalize_email(email)
+        if not normalized_email:
+            raise ValueError("email required")
+        if not str(password or ""):
+            raise ValueError("password required")
+        explicit_workspace = str(workspace_id or "").strip()
+        with self._db.local_engine.begin() as conn:
+            stmt = select(local_users_table).where(local_users_table.c.email == normalized_email)
+            if explicit_workspace:
+                stmt = stmt.where(local_users_table.c.workspace_id == explicit_workspace)
+            existing = conn.execute(stmt).mappings().first()
+            if existing:
+                return None
+        payload = self.upsert_user(
+            email=normalized_email,
+            password=password,
+            display_name=display_name,
+            workspace_id=explicit_workspace,
+            status="active",
+            metadata={**dict(metadata or {}), "workspace_role": "owner", "auth_surface": "public_register"},
+        )
+        if payload:
+            self._db.access.ensure_workspace(
+                payload["workspace_id"],
+                display_name=str(display_name or normalized_email.split("@")[0] or payload["workspace_id"]),
+            )
+            self._db.access.ensure_membership(
+                workspace_id=payload["workspace_id"],
+                actor_id=payload["user_id"],
+                role="owner",
+                status="active",
+            )
+            self._db.access.assign_seat(
+                workspace_id=payload["workspace_id"],
+                actor_id=payload["user_id"],
+                assigned_by=payload["user_id"],
+            )
+        return payload
+
     def bootstrap_owner(
         self,
         *,
@@ -5920,7 +6078,12 @@ class RunIndexRepository:
 
 class WorkspaceSyncAdapter:
     def __init__(self, database_url: str = "") -> None:
-        self.database_url = str(database_url or os.getenv("ELYAN_WORKSPACE_DATABASE_URL", "") or "").strip()
+        self.database_url = str(
+            database_url
+            or os.getenv("ELYAN_WORKSPACE_DATABASE_URL", "")
+            or os.getenv("DATABASE_URL", "")
+            or ""
+        ).strip()
         self.enabled = bool(self.database_url)
         self.engine: Engine | None = None
         if not self.enabled:
@@ -6143,6 +6306,33 @@ class WorkspaceSyncAdapter:
                     )
                 else:
                     conn.execute(workspace_usage_ledger_table.insert().values(**usage_values))
+            elif aggregate_type == "notification":
+                notification_values = {
+                    "notification_id": str(payload.get("notification_id") or event_payload.get("aggregate_id") or ""),
+                    "workspace_id": workspace_id,
+                    "kind": str(payload.get("kind") or "announcement"),
+                    "title": str(payload.get("title") or ""),
+                    "body": str(payload.get("body") or ""),
+                    "status": str(payload.get("status") or "unseen"),
+                    "source": str(payload.get("source") or "control_plane"),
+                    "metadata_json": _json_dumps(dict(payload.get("metadata") or {})),
+                    "created_at": float(payload.get("created_at") or event_payload.get("created_at") or _now()),
+                    "seen_at": float(payload.get("seen_at") or 0.0),
+                    "updated_at": _now(),
+                }
+                existing_notification = conn.execute(
+                    select(workspace_notifications_table.c.notification_id).where(
+                        workspace_notifications_table.c.notification_id == notification_values["notification_id"]
+                    )
+                ).first()
+                if existing_notification:
+                    conn.execute(
+                        workspace_notifications_table.update()
+                        .where(workspace_notifications_table.c.notification_id == notification_values["notification_id"])
+                        .values(**notification_values)
+                    )
+                else:
+                    conn.execute(workspace_notifications_table.insert().values(**notification_values))
             elif aggregate_type == "connector_account":
                 account_values = {
                     "account_id": str(payload.get("account_id") or event_payload.get("aggregate_id") or ""),
@@ -6476,6 +6666,24 @@ class RuntimeDatabase:
             "reference_id": str(row.get("reference_id") or ""),
             "payload": _json_loads(row.get("payload_json"), {}),
             "created_at": float(row.get("created_at") or 0.0),
+        }
+
+    @staticmethod
+    def _decode_workspace_notification_row(row: dict[str, Any] | None) -> dict[str, Any]:
+        if not row:
+            return {}
+        return {
+            "notification_id": str(row.get("notification_id") or ""),
+            "workspace_id": str(row.get("workspace_id") or "local-workspace"),
+            "kind": str(row.get("kind") or "announcement"),
+            "title": str(row.get("title") or ""),
+            "body": str(row.get("body") or ""),
+            "status": str(row.get("status") or "unseen"),
+            "source": str(row.get("source") or "control_plane"),
+            "metadata": _json_loads(row.get("metadata_json"), {}),
+            "created_at": float(row.get("created_at") or 0.0),
+            "seen_at": float(row.get("seen_at") or 0.0),
+            "updated_at": float(row.get("updated_at") or 0.0),
         }
 
     @staticmethod

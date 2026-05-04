@@ -1,8 +1,10 @@
 import { randomUUID } from 'crypto';
 import { generateText } from 'ai';
 import { registry } from '@/core/providers';
-import { citationEngine, reranker, scraper, searchClient } from '@/core/search';
-import type { SearxNGResult, ScrapedContent } from '@/types/search';
+import { citationEngine } from '@/core/search';
+import { runSelectiveWebRetrieval } from '@/core/retrieval';
+import { filterContextBlocks } from '@/core/retrieval/context';
+import { resolveBrainPreferredModelId } from '@/core/ml/model-routing';
 import { buildTeamPlan } from './planner';
 import { synthesizeTeamRun } from './synthesizer';
 import { teamRunStore, type TeamRunStore } from './store';
@@ -15,6 +17,7 @@ import type {
   TeamRunInput,
   TeamRunResult,
   TeamTask,
+  TeamVerification,
 } from './types';
 
 type TeamModelResolver = (input: {
@@ -24,32 +27,109 @@ type TeamModelResolver = (input: {
   reasoningDepth: TeamRunInput['sourcePlan']['reasoningDepth'];
 }) => Promise<{ modelId: string; providerId: string }>;
 
-function dedupeResults<T extends { url: string }>(results: T[]): T[] {
-  const seen = new Set<string>();
-  const deduped: T[] = [];
-
-  for (const result of results) {
-    if (seen.has(result.url)) {
-      continue;
-    }
-
-    seen.add(result.url);
-    deduped.push(result);
-  }
-
-  return deduped;
-}
-
-function dedupeSources(sources: ScrapedContent[]) {
-  return dedupeResults(sources);
-}
-
 function artifactKindForTask(task: TeamTask): TeamArtifact['kind'] {
   if (task.kind === 'analysis') {
     return 'note';
   }
 
   return task.kind;
+}
+
+function isVerificationContentStructured(content: string) {
+  return /^(pass|fail)\b/i.test(content.trim());
+}
+
+function summarizeVerificationContent(content: string) {
+  return content
+    .trim()
+    .replace(/^(pass|fail)\b[:\s-]*/i, '')
+    .trim();
+}
+
+function normalizeVerificationResult(args: {
+  content?: string;
+  artifactId?: string;
+  error?: unknown;
+}): TeamVerification {
+  const rawContent = args.content?.trim() ?? '';
+
+  if (args.error) {
+    const errorMessage = args.error instanceof Error ? args.error.message : 'unknown verification failure';
+    return {
+      passed: false,
+      summary: errorMessage || 'Verification task failed.',
+      state: 'error',
+      artifactId: args.artifactId,
+      rawContent: rawContent || undefined,
+    };
+  }
+
+  if (!rawContent) {
+    return {
+      passed: false,
+      summary: 'Verification task did not produce a structured result.',
+      state: 'missing_artifact',
+      artifactId: args.artifactId,
+    };
+  }
+
+  if (!isVerificationContentStructured(rawContent)) {
+    return {
+      passed: false,
+      summary: 'Verification output was not structured.',
+      state: 'unstructured',
+      artifactId: args.artifactId,
+      rawContent,
+    };
+  }
+
+  const passed = /^pass\b/i.test(rawContent);
+  const summary = summarizeVerificationContent(rawContent) || (passed ? 'Verification passed.' : 'Verification failed.');
+
+  return {
+    passed,
+    summary,
+    state: passed ? 'passed' : 'failed',
+    artifactId: args.artifactId,
+    rawContent,
+  };
+}
+
+function buildVerificationArtifact(args: {
+  runId: string;
+  task: TeamTask;
+  agent: TeamAgent;
+  content?: string;
+  error?: unknown;
+}) {
+  const createdAt = new Date().toISOString();
+  const artifactId = randomUUID();
+  const verification = normalizeVerificationResult({
+    content: args.content,
+    artifactId,
+    error: args.error,
+  });
+
+  const content = verification.passed
+    ? `PASS ${verification.summary}`
+    : `FAIL ${verification.summary}`;
+
+  const artifact: TeamArtifact = {
+    id: artifactId,
+    runId: args.runId,
+    taskId: args.task.id,
+    agentId: args.agent.id,
+    kind: 'verification',
+    title: args.task.title,
+    content,
+    metadata: {
+      role: args.agent.role,
+      verification,
+    },
+    createdAt,
+  };
+
+  return { artifact, verification, createdAt };
 }
 
 function getReadyTasks(tasks: TeamTask[], completed: Set<string>, running: Set<string>, failed: Set<string>) {
@@ -69,7 +149,11 @@ function buildTaskPrompt(input: TeamAgentExecutionInput) {
   const messages = input.messages
     .map((message) => `${message.type} from ${message.fromAgentId}: ${message.content}`)
     .join('\n');
-  const context = input.contextBlocks.filter(Boolean).join('\n\n');
+  const context = filterContextBlocks(input.contextBlocks, {
+    maxTokens: 1_200,
+    maxBlocks: 6,
+    minScore: 0.15,
+  }).join('\n\n');
 
   return [
     `User request:\n${input.query}`,
@@ -92,6 +176,8 @@ async function defaultAgentExecutor(input: TeamAgentExecutionInput): Promise<str
     system: input.agent.systemPrompt,
     prompt: buildTaskPrompt(input),
     temperature: input.task.kind === 'verification' ? 0 : 0.15,
+    maxOutputTokens: input.maxOutputTokens,
+    abortSignal: input.abortSignal,
   });
 
   return result.text.trim();
@@ -102,8 +188,9 @@ export class TeamRunner {
     private readonly store: TeamRunStore = teamRunStore,
     private readonly executeAgent: TeamAgentExecutor = defaultAgentExecutor,
     private readonly resolveModel: TeamModelResolver = async (selection) => {
+      const brainPreferredModelId = await resolveBrainPreferredModelId();
       const modelId = await registry.resolvePreferredModelId({
-        preferredModelId: selection.requestedModelId,
+        preferredModelId: brainPreferredModelId ?? selection.requestedModelId,
         routingMode: selection.routingMode,
         taskIntent: selection.taskIntent,
         reasoningDepth: selection.reasoningDepth,
@@ -133,6 +220,16 @@ export class TeamRunner {
     const failed = new Set<string>();
     const sources = await this.collectSources(input);
     const sourceContext = sources.length > 0 ? citationEngine.buildContext(sources) : '';
+    const deadlineAt = Date.now() + (input.maxExecutionMs ?? 90_000);
+    const assertActive = () => {
+      if (input.abortSignal?.aborted) {
+        throw input.abortSignal.reason instanceof Error ? input.abortSignal.reason : new Error('Team run aborted by request guard.');
+      }
+
+      if (Date.now() > deadlineAt) {
+        throw new Error('Team run exceeded the request execution deadline.');
+      }
+    };
 
     await this.store.createRun(teamPlan);
     await this.store.appendEvent({
@@ -147,6 +244,7 @@ export class TeamRunner {
     });
 
     while (completed.size + failed.size < teamPlan.tasks.length) {
+      assertActive();
       const ready = getReadyTasks(teamPlan.tasks, completed, running, failed);
 
       if (ready.length === 0) {
@@ -172,6 +270,7 @@ export class TeamRunner {
           })
         )
       );
+      assertActive();
 
       if (failed.size > 0) {
         break;
@@ -213,20 +312,21 @@ export class TeamRunner {
   }
 
   private async collectSources(input: TeamRunInput) {
-    if (!input.searchEnabled || input.sourcePlan.retrieval.rounds === 0 || !(await searchClient.isAvailable())) {
-      return [];
-    }
-
-    const searchResults = await searchClient.search(input.query, {
-      language: input.sourcePlan.retrieval.language,
+    const retrieval = await runSelectiveWebRetrieval({
+      query: input.query,
+      plan: {
+        routingMode: input.sourcePlan.routingMode,
+        reasoningDepth: input.sourcePlan.reasoningDepth,
+        taskIntent: input.sourcePlan.taskIntent,
+        executionPolicy: {
+          shouldRetrieve: input.searchEnabled && input.sourcePlan.retrieval.rounds > 0,
+        },
+        retrieval: input.sourcePlan.retrieval,
+      },
+      searchEnabled: input.searchEnabled,
     });
-    const ranked = reranker.rerank(input.query, dedupeResults(searchResults as SearxNGResult[]), input.sourcePlan.retrieval.rerankTopK);
-    const scraped = await scraper.scrapeUrls(
-      ranked.slice(0, input.sourcePlan.retrieval.maxUrls).map((result) => result.url),
-      input.sourcePlan.retrieval.maxUrls
-    );
 
-    return dedupeSources(scraped);
+    return retrieval.sources;
   }
 
   private agentForTask(agents: TeamAgent[], task: TeamTask) {
@@ -280,28 +380,45 @@ export class TeamRunner {
         contextBlocks: input.contextAugments ?? [],
         artifacts: [...artifacts],
         messages: [...messages],
+        abortSignal: input.abortSignal,
+        maxOutputTokens: input.maxOutputTokens,
       });
       const createdAt = new Date().toISOString();
-      const artifact: TeamArtifact = {
-        id: randomUUID(),
-        runId: teamPlan.runId,
-        taskId: task.id,
-        agentId: agent.id,
-        kind: artifactKindForTask(task),
-        title: task.title,
-        content,
-        metadata: {
-          role: agent.role,
-        },
-        createdAt,
-      };
+      const verificationArtifact =
+        task.kind === 'verification'
+          ? buildVerificationArtifact({
+              runId: teamPlan.runId,
+              task,
+              agent,
+              content,
+            })
+          : null;
+      const artifact =
+        verificationArtifact?.artifact ??
+        {
+          id: randomUUID(),
+          runId: teamPlan.runId,
+          taskId: task.id,
+          agentId: agent.id,
+          kind: artifactKindForTask(task),
+          title: task.title,
+          content,
+          metadata: {
+            role: agent.role,
+          },
+          createdAt,
+        };
+      const verification = verificationArtifact?.verification ?? null;
       const message: TeamMessage = {
         id: randomUUID(),
         runId: teamPlan.runId,
         fromAgentId: agent.id,
         taskId: task.id,
         type: task.kind === 'verification' ? 'verification' : 'task_result',
-        content,
+        content:
+          task.kind === 'verification' && verification
+            ? `${verification.passed ? 'PASS' : 'FAIL'} ${verification.summary}`
+            : content,
         createdAt,
       };
 
@@ -335,10 +452,68 @@ export class TeamRunner {
         createdAt,
         taskId: task.id,
         agentId: agent.id,
-        data: {},
+        data: task.kind === 'verification' && verification
+          ? {
+              verification,
+            }
+          : {},
       });
     } catch (error) {
       failed.add(task.id);
+      if (task.kind === 'verification') {
+        const fallback = buildVerificationArtifact({
+          runId: teamPlan.runId,
+          task,
+          agent,
+          error,
+        });
+        artifacts.push(fallback.artifact);
+        const message: TeamMessage = {
+          id: randomUUID(),
+          runId: teamPlan.runId,
+          fromAgentId: agent.id,
+          taskId: task.id,
+          type: 'verification',
+          content: `FAIL ${fallback.verification.summary}`,
+          createdAt: fallback.createdAt,
+        };
+        messages.push(message);
+        await this.store.appendEvent({
+          id: randomUUID(),
+          runId: teamPlan.runId,
+          type: 'artifact_recorded',
+          createdAt: fallback.createdAt,
+          taskId: task.id,
+          agentId: agent.id,
+          artifact: fallback.artifact,
+          data: {
+            verification: fallback.verification,
+          },
+        });
+        await this.store.appendEvent({
+          id: randomUUID(),
+          runId: teamPlan.runId,
+          type: 'message_recorded',
+          createdAt: fallback.createdAt,
+          taskId: task.id,
+          agentId: agent.id,
+          message,
+          data: {
+            verification: fallback.verification,
+          },
+        });
+        await this.store.appendEvent({
+          id: randomUUID(),
+          runId: teamPlan.runId,
+          type: 'verification_completed',
+          createdAt: fallback.createdAt,
+          taskId: task.id,
+          agentId: agent.id,
+          data: {
+            verification: fallback.verification,
+          },
+        });
+      }
       await this.store.appendEvent({
         id: randomUUID(),
         runId: teamPlan.runId,

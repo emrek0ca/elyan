@@ -21,20 +21,17 @@ const secondaryItems = [
 export function SidebarRail() {
   const linkClassName = ({ isActive }: { isActive: boolean }) =>
     cn(
-      "flex items-center gap-3 rounded-[16px] border px-3 py-3 text-[12px] font-medium transition-all duration-150 ease-premium",
+      "flex items-center gap-3 rounded-[10px] border px-3 py-3 text-[12px] font-medium transition-all duration-150 ease-premium",
       isActive
-        ? "border-[var(--glass-border-strong)] bg-[color-mix(in_srgb,var(--accent-soft)_76%,white)] text-[var(--accent-primary)] shadow-[0_10px_24px_var(--accent-glow)]"
+        ? "border-[var(--glass-border-strong)] bg-[var(--accent-soft)] text-[var(--accent-primary)]"
         : "border-transparent text-[var(--text-secondary)] hover:border-[var(--glass-border)] hover:bg-[var(--glass-elevated)] hover:text-[var(--text-primary)]",
     );
 
   return (
-    <aside className="w-[224px] border-r border-[var(--glass-border)] bg-[var(--glass-panel)] px-4 py-5 backdrop-blur-[20px]">
+    <aside className="w-[208px] border-r border-[var(--glass-border)] bg-[var(--glass-panel)] px-4 py-5">
       <div className="mb-6 flex items-center gap-3 px-2">
         <ElyanMark size="sm" alt="Elyan" />
-        <div>
-          <div className="text-[12px] font-medium text-[var(--text-primary)]">Elyan</div>
-          <div className="text-[11px] text-[var(--text-tertiary)]">local operator</div>
-        </div>
+        <div className="text-[12px] font-medium text-[var(--text-primary)]">Elyan</div>
       </div>
 
       <nav className="space-y-2">
@@ -53,7 +50,6 @@ export function SidebarRail() {
       </nav>
 
       <div className="mt-6 border-t border-[var(--glass-border)] pt-4">
-        <div className="px-2 pb-2 text-[10px] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">Advanced</div>
         <nav className="space-y-2">
           {secondaryItems.map(({ to, label, icon: Icon }) => (
             <NavLink

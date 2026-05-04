@@ -1,5 +1,5 @@
-import { HostedPanel } from '@/components/panel/HostedPanel';
+import { redirect } from 'next/navigation';
 
 export default function PanelBillingPage() {
-  return <HostedPanel section="billing" />;
+  redirect('https://elyan.dev/panel/billing');
 }

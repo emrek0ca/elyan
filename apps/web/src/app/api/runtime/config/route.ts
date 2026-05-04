@@ -26,13 +26,17 @@ const runtimeSettingsPatchSchema = z.object({
           webhookPath: z.string().trim().min(1).optional(),
           botUsername: z.string().trim().min(1).optional().nullable(),
           webhookSecret: z.string().trim().min(1).optional().nullable(),
-          allowedChatIds: z.array(z.string().trim().min(1)).optional(),
+          allowedChatIds: z.array(z.string()).optional(),
         })
         .optional(),
       whatsappCloud: z
         .object({
           enabled: z.boolean().optional(),
           webhookPath: z.string().trim().min(1).optional(),
+          phoneNumberId: z.string().trim().min(1).optional().nullable(),
+          accessToken: z.string().trim().min(1).optional().nullable(),
+          verifyToken: z.string().trim().min(1).optional().nullable(),
+          appSecret: z.string().trim().min(1).optional().nullable(),
         })
         .optional(),
       whatsappBaileys: z
@@ -46,6 +50,9 @@ const runtimeSettingsPatchSchema = z.object({
           enabled: z.boolean().optional(),
           mode: z.enum(['bluebubbles']).optional(),
           webhookPath: z.string().trim().min(1).optional(),
+          serverUrl: z.string().trim().min(1).optional().nullable(),
+          guid: z.string().trim().min(1).optional().nullable(),
+          webhookSecret: z.string().trim().min(1).optional().nullable(),
         })
         .optional(),
     })
@@ -99,6 +106,58 @@ const runtimeConfigPatchSchema = z.object({
   settings: runtimeSettingsPatchSchema.optional(),
   secrets: z.record(z.string().trim().min(1), z.string().nullable()).optional(),
 });
+
+function normalizeOptionalString(value: string | null | undefined) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeChannelPatch(
+  channels: NonNullable<z.infer<typeof runtimeConfigPatchSchema>['settings']>['channels']
+) {
+  if (!channels) {
+    return undefined;
+  }
+
+  return {
+    telegram: channels.telegram
+      ? {
+          ...channels.telegram,
+          botUsername: normalizeOptionalString(channels.telegram.botUsername),
+          webhookSecret: normalizeOptionalString(channels.telegram.webhookSecret),
+          allowedChatIds: channels.telegram.allowedChatIds
+            ?.map((item) => item.trim())
+            .filter((item) => item.length > 0),
+        }
+      : undefined,
+    whatsappCloud: channels.whatsappCloud
+      ? {
+          ...channels.whatsappCloud,
+          webhookPath: normalizeOptionalString(channels.whatsappCloud.webhookPath) ?? channels.whatsappCloud.webhookPath,
+          phoneNumberId: normalizeOptionalString(channels.whatsappCloud.phoneNumberId),
+          accessToken: normalizeOptionalString(channels.whatsappCloud.accessToken),
+          verifyToken: normalizeOptionalString(channels.whatsappCloud.verifyToken),
+          appSecret: normalizeOptionalString(channels.whatsappCloud.appSecret),
+        }
+      : undefined,
+    whatsappBaileys: channels.whatsappBaileys
+      ? {
+          ...channels.whatsappBaileys,
+          sessionPath: normalizeOptionalString(channels.whatsappBaileys.sessionPath) ?? channels.whatsappBaileys.sessionPath,
+        }
+      : undefined,
+    imessage: channels.imessage
+      ? {
+          ...channels.imessage,
+          mode: channels.imessage.mode,
+          webhookPath: normalizeOptionalString(channels.imessage.webhookPath) ?? channels.imessage.webhookPath,
+          serverUrl: normalizeOptionalString(channels.imessage.serverUrl),
+          guid: normalizeOptionalString(channels.imessage.guid),
+          webhookSecret: normalizeOptionalString(channels.imessage.webhookSecret),
+        }
+      : undefined,
+  };
+}
 
 function summarizeSecrets() {
   const secretKeys = [
@@ -158,14 +217,14 @@ export async function PATCH(request: NextRequest) {
 
     if (settings.routing) {
       patch.routing = {
-        preferredModelId: settings.routing.preferredModelId ?? undefined,
+        preferredModelId: normalizeOptionalString(settings.routing.preferredModelId),
         routingMode: settings.routing.routingMode,
         searchEnabled: settings.routing.searchEnabled,
       };
     }
 
     if (settings.channels) {
-      patch.channels = settings.channels as RuntimeSettingsPatch['channels'];
+      patch.channels = normalizeChannelPatch(settings.channels) as RuntimeSettingsPatch['channels'];
     }
 
     if (settings.voice) {

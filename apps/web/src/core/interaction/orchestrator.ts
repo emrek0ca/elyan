@@ -1,20 +1,31 @@
 import { randomUUID } from 'crypto';
-import { execFileSync } from 'child_process';
 import type { LanguageModelUsage } from 'ai';
 import { answerEngine } from '@/core/agents/answer-engine';
 import { getControlPlaneService, isControlPlaneSessionConfigured } from '@/core/control-plane';
 import { ControlPlaneAuthenticationError, ControlPlaneInsufficientCreditsError, ControlPlaneUsageLimitError } from '@/core/control-plane/errors';
 import type { ControlPlaneSessionToken } from '@/core/control-plane/session';
 import { buildExecutionSurfaceSnapshot, buildOrchestrationPlan } from '@/core/orchestration';
+import { buildReasoningPlanSummary, buildReasoningTrace } from '@/core/reasoning';
 import { readRuntimeSettingsSync } from '@/core/runtime-settings';
 import { registry } from '@/core/providers';
 import { teamRunner } from '@/core/teams';
 import { getOperatorRunStore, recordOperatorRunArtifact, type OperatorRun } from '@/core/operator/runs';
+import { buildQualityAssessment, resolveTeacherModel, type MlDatasetCandidate } from '@/core/ml';
 import type { SearchMode } from '@/types/search';
 import type { ExecutionSurfaceSnapshot, OrchestrationPlan } from '@/core/orchestration';
 import { classifyInteractionIntent } from './intent';
 import { type OperatorSource } from '@/core/operator/types';
 import { estimateHostedUsageDraft } from '@/core/control-plane/pricing';
+import { captureRepositorySnapshot } from '@/core/orchestration/repo-inspection';
+import {
+  applyRequestGuardToPlan,
+  assertRequestWithinGuard,
+  createRequestGuardRuntime,
+  RequestGuardError,
+  resolveRequestGuard,
+  withRequestGuard,
+  type RequestGuard,
+} from './request-guard';
 
 export type InteractionResponseKind = 'text' | 'stream';
 type ControlPlaneServiceInstance = ReturnType<typeof getControlPlaneService>;
@@ -60,6 +71,8 @@ type PreparedInteraction = {
   operatorRun?: OperatorRun;
   startedAt: number;
   queryLength: number;
+  requestGuard: RequestGuard;
+  requireHostedSession: boolean;
 };
 
 function createEmptyLanguageModelUsage(): LanguageModelUsage {
@@ -119,6 +132,14 @@ function normalizeError(error: unknown) {
       code: 'hosted_credits_exhausted',
       message: error.message,
       status: 402,
+    };
+  }
+
+  if (error instanceof RequestGuardError) {
+    return {
+      code: error.code,
+      message: error.message,
+      status: error.statusCode,
     };
   }
 
@@ -193,17 +214,18 @@ async function prepareInteraction(request: InteractionRequest): Promise<Prepared
   const classification = classifyInteractionIntent(request.text, request.mode);
   const mode = classification.resolvedMode;
   const surface = buildExecutionSurfaceSnapshot();
-  const plan = buildOrchestrationPlan(request.text, mode, surface);
+  const basePlan = buildOrchestrationPlan(request.text, mode, surface);
+  const requestGuard = resolveRequestGuard(basePlan, request.text);
+  const plan = applyRequestGuardToPlan(basePlan, requestGuard);
+  assertRequestWithinGuard(request.text, plan, requestGuard);
   const operatorRun = await getOperatorRunStore().create({
     source: request.source,
     text: request.text,
     mode: plan.taskIntent === 'research' || plan.taskIntent === 'comparison' || mode === 'research' ? 'research' : 'auto',
     title: request.text.slice(0, 80),
   });
-  const selectedModelId =
-    request.modelId?.trim() ||
-    runtimeSettings.routing.preferredModelId?.trim() ||
-    (await pickSelectedModelId(plan, request.modelId));
+  const requestedModelId = request.modelId?.trim() || runtimeSettings.routing.preferredModelId?.trim();
+  const selectedModelId = await pickSelectedModelId(plan, requestedModelId);
 
   let memoryContext: string[] = [];
   let hostedAccountId: string | undefined;
@@ -234,6 +256,8 @@ async function prepareInteraction(request: InteractionRequest): Promise<Prepared
     operatorRun,
     startedAt: Date.now(),
     queryLength: request.text.length,
+    requestGuard,
+    requireHostedSession: request.requireHostedSession === true,
   };
 }
 
@@ -242,10 +266,125 @@ async function maybeRecordHostedUsage(prepared: PreparedInteraction) {
     return;
   }
 
+  if (
+    !prepared.requireHostedSession &&
+    !prepared.hostedAccount.entitlements.hostedAccess &&
+    !prepared.hostedAccount.entitlements.hostedUsageAccounting
+  ) {
+    return;
+  }
+
   const controlPlane = getControlPlaneService();
-  if (prepared.hostedAccount.entitlements.hostedAccess && prepared.hostedAccount.entitlements.hostedUsageAccounting) {
-    const usageDraft = estimateHostedUsageDraft(prepared.plan, prepared.requestId);
-    await controlPlane.recordUsageBundle(prepared.hostedAccountId, usageDraft);
+  const usageDraft = estimateHostedUsageDraft(prepared.plan, prepared.requestId);
+  await controlPlane.recordUsageBundle(prepared.hostedAccountId, usageDraft);
+}
+
+async function recordLearningEvent(
+  prepared: PreparedInteraction,
+  request: InteractionRequest,
+  output: {
+    text: string;
+    sources: Array<{ url: string; title: string }>;
+    failureReason?: string;
+    success: boolean;
+    modelId?: string;
+    modelProvider?: string;
+  }
+) {
+  if (!prepared.hostedAccountId) {
+    return;
+  }
+
+  const controlPlane = getControlPlaneService();
+  const latencyMs = Date.now() - prepared.startedAt;
+  const sourceCount = output.sources.length;
+  const citationCount = (output.text.match(/\[(\d+)\]/g) ?? []).length;
+  const reasoningSteps = buildReasoningTrace({
+    input: request.text,
+    intent: prepared.classification.intent,
+    plan: prepared.plan,
+    reasoningSteps: [
+      `input: ${request.text.slice(0, 240)}`,
+      `intent: ${prepared.classification.intent}`,
+      `plan: ${buildReasoningPlanSummary(prepared.plan, prepared.classification.intent)}`,
+    ],
+    action: sourceCount > 0 ? `tool output grounded by ${sourceCount} source(s)` : 'direct answer',
+    observation: sourceCount > 0 ? `${sourceCount} source(s) observed` : 'no live sources observed',
+    refinement: output.failureReason ?? (output.success ? 'retain grounded answer' : 'retry with fallback'),
+    output: output.text,
+    success: output.success,
+    failureReason: output.failureReason,
+    latencyMs,
+    citationCount,
+    toolCallCount: sourceCount,
+  });
+  const teacherModel = await resolveTeacherModel().catch(() => null);
+  const candidate: MlDatasetCandidate = {
+    account_id: prepared.hostedAccountId ?? 'local',
+    account_display_name: prepared.hostedAccount?.displayName ?? 'local',
+    owner_type: prepared.hostedAccount?.ownerType ?? 'individual',
+    account_status: prepared.hostedAccount?.status ?? 'active',
+    plan_id: prepared.hostedAccount?.subscription?.planId ?? 'local_byok',
+    subscription_status: prepared.hostedAccount?.subscription?.status ?? 'trialing',
+    request_id: prepared.requestId,
+    source: request.source === 'web' ? 'request' : 'request',
+    instruction: request.text,
+    input: request.text,
+    output: output.text,
+    plan: buildReasoningPlanSummary(prepared.plan, prepared.classification.intent),
+    reasoning_trace: reasoningSteps,
+    success: output.success,
+    failure_reason: output.failureReason,
+    quality: output.success ? 'good' : 'poor',
+    latency_ms: latencyMs,
+    metadata: {
+      intent: prepared.classification.intent,
+      routing_mode: prepared.plan.routingMode,
+      reasoning_depth: prepared.plan.reasoningDepth,
+      request_id: prepared.requestId,
+      source_count: sourceCount,
+      citation_count: citationCount,
+      model_id: output.modelId ?? prepared.selectedModelId,
+      model_provider: output.modelProvider,
+      taskIntent: prepared.plan.taskIntent,
+    },
+  };
+  const quality = await buildQualityAssessment(candidate, teacherModel);
+
+  try {
+    await controlPlane.recordLearningEvent(prepared.hostedAccountId, {
+      requestId: prepared.requestId,
+      source: request.source,
+      input: request.text,
+      intent: prepared.classification.intent,
+      plan: buildReasoningPlanSummary(prepared.plan, prepared.classification.intent),
+      reasoningSteps,
+      output: output.text,
+      betterOutput: quality.better_output,
+      success: output.success,
+      failureReason: output.failureReason,
+      latencyMs,
+      score: quality.score,
+      accepted: quality.accepted,
+      modelId: output.modelId ?? prepared.selectedModelId,
+      modelProvider: output.modelProvider,
+      metadata: {
+        requestId: prepared.requestId,
+        queryLength: prepared.queryLength,
+        sourceCount,
+        citationCount,
+        taskIntent: prepared.plan.taskIntent,
+        reasoningDepth: prepared.plan.reasoningDepth,
+        routingMode: prepared.plan.routingMode,
+        teacherStrategy: quality.teacher_strategy,
+        evaluatorNotes: quality.evaluator_notes,
+        discardReason: quality.discard_reason,
+        accepted: quality.accepted,
+        score: quality.score,
+      },
+    });
+  } catch (error) {
+    console.warn('Elyan learning event capture failed', error);
   }
 }
 
@@ -289,6 +428,14 @@ async function recordInteractionOutput(
   } catch (error) {
     console.warn('Elyan interaction memory capture failed', error);
   }
+
+  await recordLearningEvent(prepared, request, {
+    text: output.text,
+    sources: output.sources,
+    success: true,
+    modelId: output.modelId ?? prepared.selectedModelId,
+    modelProvider: output.modelProvider,
+  });
 }
 
 async function recordOperatorRunOutput(
@@ -306,7 +453,7 @@ async function recordOperatorRunOutput(
   const sourceLines = output.sources.length > 0
     ? output.sources.map((source, index) => `[${index + 1}] ${source.title} - ${source.url}`).join('\n')
     : 'No verified sources were available for this run.';
-  const modeMetadata =
+  const modeMetadata: Record<string, unknown> =
     mode === 'research'
       ? {
           sourceCount: output.sources.length,
@@ -318,7 +465,6 @@ async function recordOperatorRunOutput(
         ? {
             taskIntent: prepared.plan.taskIntent,
             mode: prepared.mode,
-            ...captureRepositorySnapshot(),
           }
         : {
             taskIntent: prepared.plan.taskIntent,
@@ -328,6 +474,12 @@ async function recordOperatorRunOutput(
           };
   const kind = mode === 'research' ? 'research' : 'summary';
   const title = mode === 'research' ? 'Research result' : mode === 'code' ? 'Code result' : 'Operator result';
+
+  if (mode === 'code') {
+    const repositorySnapshot = await captureRepositorySnapshot();
+    Object.assign(modeMetadata, repositorySnapshot);
+  }
+
   const bodyParts =
     mode === 'research'
       ? [
@@ -367,36 +519,6 @@ async function recordOperatorRunOutput(
   });
 }
 
-function captureRepositorySnapshot() {
-  try {
-    const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const status = execFileSync('git', ['status', '--short'], {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const changedFiles = status ? status.split(/\r?\n/).length : 0;
-
-    return {
-      repoInspected: true,
-      repoBranch: branch,
-      repoDirtyFileCount: changedFiles,
-      repoDirtySummary: status || 'clean',
-      checksPassed: false,
-    };
-  } catch (error) {
-    return {
-      repoInspected: false,
-      repoInspectionError: error instanceof Error ? error.message : 'Repository snapshot unavailable',
-      checksPassed: false,
-    };
-  }
-}
-
 function describeRepositorySnapshot(metadata: Record<string, unknown>) {
   if (metadata.repoInspected !== true) {
     return `Inspection unavailable: ${String(metadata.repoInspectionError ?? 'repo snapshot could not be collected.')}`;
@@ -405,75 +527,99 @@ function describeRepositorySnapshot(metadata: Record<string, unknown>) {
   const branch = String(metadata.repoBranch ?? 'unknown');
   const dirtyCount = Number(metadata.repoDirtyFileCount ?? 0);
   const summary = String(metadata.repoDirtySummary ?? 'clean');
+  const entrypoints = Array.isArray(metadata.repoEntrypoints) ? metadata.repoEntrypoints.filter((item) => typeof item === 'string') : [];
+  const patchSummary = String(metadata.repoPatchSummary ?? '').trim();
+  const tsFiles = Number(metadata.repoTypeScriptFileCount ?? 0);
 
-  return [
+  const lines = [
     `Branch: ${branch}`,
     `Changed files: ${dirtyCount}`,
     `Status: ${summary}`,
+    `TypeScript files: ${tsFiles}`,
     'Verification evidence still required before the run can complete.',
-  ].join('\n');
+  ];
+
+  if (entrypoints.length > 0) {
+    lines.push(`Entrypoints: ${entrypoints.slice(0, 5).join(', ')}`);
+  }
+
+  if (patchSummary) {
+    lines.push(`Patch: ${patchSummary}`);
+  }
+
+  return lines.join('\n');
 }
 
 export async function executeInteractionText(request: InteractionRequest): Promise<InteractionTextResponse> {
   const prepared = await prepareInteraction(request);
+  const guardRuntime = createRequestGuardRuntime(prepared.requestGuard);
   const account = prepared.hostedAccount;
   const runtimeSettings = readRuntimeSettingsSync();
 
-  if (request.requireHostedSession && isControlPlaneSessionConfigured() && !prepared.controlPlaneSession?.accountId) {
-    throw new ControlPlaneAuthenticationError('Control-plane session is required for the main chat surface');
-  }
+  try {
+    guardRuntime.assertActive();
 
-  if (prepared.hostedAccountId && account) {
-    await maybeRecordHostedUsage(prepared);
-  }
+    if (request.requireHostedSession && isControlPlaneSessionConfigured() && !prepared.controlPlaneSession?.accountId) {
+      throw new ControlPlaneAuthenticationError('Control-plane session is required for the main chat surface');
+    }
 
-  if (prepared.plan.executionMode === 'team' && runtimeSettings.team.enabled && runtimeSettings.team.defaultMode !== 'single') {
-    const team = await teamRunner.run({
-      query: request.text,
-      mode: prepared.mode,
-      requestedModelId: request.modelId ?? runtimeSettings.routing.preferredModelId,
-      sourcePlan: prepared.plan,
-      maxConcurrentAgents: runtimeSettings.team.maxConcurrentAgents,
-      maxTasksPerRun: runtimeSettings.team.maxTasksPerRun,
-      allowCloudEscalation: runtimeSettings.team.allowCloudEscalation,
-      contextAugments: prepared.memoryContext,
-      searchEnabled: runtimeSettings.routing.searchEnabled,
-    });
+    if (prepared.hostedAccountId && account) {
+      await withRequestGuard(guardRuntime, maybeRecordHostedUsage(prepared));
+    }
 
-    await recordInteractionOutput(prepared, request, {
-      text: team.text,
-      sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
-      totalUsage: createEmptyLanguageModelUsage(),
-      modelProvider: team.modelProvider,
-      modelId: team.modelId,
-    });
-    await recordOperatorRunOutput(prepared, {
-      text: team.text,
-      sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
-    });
+    if (prepared.plan.executionMode === 'team' && runtimeSettings.team.enabled && runtimeSettings.team.defaultMode !== 'single') {
+      const team = await withRequestGuard(guardRuntime, teamRunner.run({
+        query: request.text,
+        mode: prepared.mode,
+        requestedModelId: prepared.selectedModelId,
+        sourcePlan: prepared.plan,
+        maxConcurrentAgents: Math.min(runtimeSettings.team.maxConcurrentAgents, prepared.plan.teamPolicy.maxConcurrentAgents),
+        maxTasksPerRun: Math.min(runtimeSettings.team.maxTasksPerRun, prepared.plan.teamPolicy.maxTasksPerRun),
+        allowCloudEscalation: runtimeSettings.team.allowCloudEscalation,
+        contextAugments: prepared.memoryContext,
+        searchEnabled: runtimeSettings.routing.searchEnabled,
+        abortSignal: guardRuntime.signal,
+        maxOutputTokens: prepared.requestGuard.maxOutputTokens,
+        maxExecutionMs: prepared.requestGuard.maxExecutionMs,
+      }));
 
-    return {
-      text: team.text,
-      sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
+      await recordInteractionOutput(prepared, request, {
+        text: team.text,
+        sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
+        totalUsage: createEmptyLanguageModelUsage(),
+        modelProvider: team.modelProvider,
+        modelId: team.modelId,
+      });
+      await recordOperatorRunOutput(prepared, {
+        text: team.text,
+        sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
+      });
+
+      return {
+        text: team.text,
+        sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
+        plan: prepared.plan,
+        surface: prepared.surface,
+        modelId: team.modelId,
+        classification: prepared.classification,
+        runId: prepared.operatorRun?.id,
+      };
+    }
+
+    const { text, sources, plan } = await withRequestGuard(guardRuntime, answerEngine.executeText(request.text, prepared.selectedModelId, prepared.mode, {
       plan: prepared.plan,
       surface: prepared.surface,
-      modelId: team.modelId,
-      classification: prepared.classification,
-      runId: prepared.operatorRun?.id,
-    };
-  }
-
-  const { text, sources, plan } = await answerEngine.executeText(request.text, prepared.selectedModelId, prepared.mode, {
-    plan: prepared.plan,
-    surface: prepared.surface,
-    searchEnabled: runtimeSettings.routing.searchEnabled,
-    contextAugments: prepared.memoryContext,
+      accountId: prepared.hostedAccountId,
+      searchEnabled: runtimeSettings.routing.searchEnabled,
+      contextAugments: prepared.memoryContext,
+      abortSignal: guardRuntime.signal,
+      maxOutputTokens: prepared.requestGuard.maxOutputTokens,
       onFinish: async (event, context) => {
         await recordInteractionOutput(prepared, request, {
-        text: event.text,
-        sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
-        totalUsage: event.totalUsage,
-        modelProvider: context.providerId,
+          text: event.text,
+          sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
+          totalUsage: event.totalUsage,
+          modelProvider: context.providerId,
           modelId: prepared.selectedModelId,
         });
         await recordOperatorRunOutput(prepared, {
@@ -481,99 +627,152 @@ export async function executeInteractionText(request: InteractionRequest): Promi
           sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
         });
       },
-  });
+    }));
 
-  return {
-    text,
-    sources: sources.map((source) => ({ url: source.url, title: source.title })),
-    plan,
-    surface: prepared.surface,
-    modelId: prepared.selectedModelId,
-    classification: prepared.classification,
-    runId: prepared.operatorRun?.id,
-  };
+    return {
+      text,
+      sources: sources.map((source) => ({ url: source.url, title: source.title })),
+      plan,
+      surface: prepared.surface,
+      modelId: prepared.selectedModelId,
+      classification: prepared.classification,
+      runId: prepared.operatorRun?.id,
+    };
+  } catch (error) {
+    await recordLearningEvent(prepared, request, {
+      text: '',
+      sources: [],
+      success: false,
+      failureReason: normalizeError(error).message,
+      modelId: prepared.selectedModelId,
+    });
+    throw error;
+  } finally {
+    guardRuntime.clear();
+  }
 }
 
 export async function executeInteractionStream(request: InteractionRequest) {
   const prepared = await prepareInteraction(request);
+  const guardRuntime = createRequestGuardRuntime(prepared.requestGuard);
   const account = prepared.hostedAccount;
   const runtimeSettings = readRuntimeSettingsSync();
 
-  if (request.requireHostedSession && isControlPlaneSessionConfigured() && !prepared.controlPlaneSession?.accountId) {
-    throw new ControlPlaneAuthenticationError('Control-plane session is required for the main chat surface');
-  }
+  try {
+    guardRuntime.assertActive();
 
-  if (prepared.hostedAccountId && account) {
-    await maybeRecordHostedUsage(prepared);
-  }
+    if (request.requireHostedSession && isControlPlaneSessionConfigured() && !prepared.controlPlaneSession?.accountId) {
+      throw new ControlPlaneAuthenticationError('Control-plane session is required for the main chat surface');
+    }
 
-  if (prepared.plan.executionMode === 'team' && runtimeSettings.team.enabled && runtimeSettings.team.defaultMode !== 'single') {
-    const { createUIMessageStream, createUIMessageStreamResponse } = await import('ai');
-    const stream = createUIMessageStream({
-      execute: async ({ writer }) => {
-        const team = await teamRunner.run({
-          query: request.text,
-          mode: prepared.mode,
-          requestedModelId: request.modelId ?? runtimeSettings.routing.preferredModelId,
-          sourcePlan: prepared.plan,
-          maxConcurrentAgents: runtimeSettings.team.maxConcurrentAgents,
-          maxTasksPerRun: runtimeSettings.team.maxTasksPerRun,
-          allowCloudEscalation: runtimeSettings.team.allowCloudEscalation,
-          contextAugments: prepared.memoryContext,
-          searchEnabled: runtimeSettings.routing.searchEnabled,
-        });
-        const textId = `team-${prepared.requestId}`;
+    if (prepared.hostedAccountId && account) {
+      await withRequestGuard(guardRuntime, maybeRecordHostedUsage(prepared));
+    }
 
-        writer.write({ type: 'start' });
-        writer.write({ type: 'text-start', id: textId });
-        writer.write({ type: 'text-delta', id: textId, delta: team.text });
-        writer.write({ type: 'text-end', id: textId });
-        writer.write({
-          type: 'finish',
-          finishReason: team.summary.verifier.passed ? 'stop' : 'other',
-        });
+    if (prepared.plan.executionMode === 'team' && runtimeSettings.team.enabled && runtimeSettings.team.defaultMode !== 'single') {
+      const { createUIMessageStream, createUIMessageStreamResponse } = await import('ai');
+      const stream = createUIMessageStream({
+        execute: async ({ writer }) => {
+          const team = await withRequestGuard(guardRuntime, teamRunner.run({
+            query: request.text,
+            mode: prepared.mode,
+            requestedModelId: prepared.selectedModelId,
+            sourcePlan: prepared.plan,
+            maxConcurrentAgents: Math.min(runtimeSettings.team.maxConcurrentAgents, prepared.plan.teamPolicy.maxConcurrentAgents),
+            maxTasksPerRun: Math.min(runtimeSettings.team.maxTasksPerRun, prepared.plan.teamPolicy.maxTasksPerRun),
+            allowCloudEscalation: runtimeSettings.team.allowCloudEscalation,
+            contextAugments: prepared.memoryContext,
+            searchEnabled: runtimeSettings.routing.searchEnabled,
+            abortSignal: guardRuntime.signal,
+            maxOutputTokens: prepared.requestGuard.maxOutputTokens,
+            maxExecutionMs: prepared.requestGuard.maxExecutionMs,
+          }));
+          const textId = `team-${prepared.requestId}`;
 
-        await recordInteractionOutput(prepared, request, {
-          text: team.text,
-          sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
-          totalUsage: createEmptyLanguageModelUsage(),
-          modelProvider: team.modelProvider,
-          modelId: team.modelId,
-        });
-        await recordOperatorRunOutput(prepared, {
-          text: team.text,
-          sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
-        });
-      },
-    });
+          writer.write({ type: 'start' });
+          writer.write({ type: 'text-start', id: textId });
+          writer.write({ type: 'text-delta', id: textId, delta: team.text });
+          writer.write({ type: 'text-end', id: textId });
+          writer.write({
+            type: 'finish',
+            finishReason: team.summary.verifier.passed ? 'stop' : 'other',
+          });
 
-    return createUIMessageStreamResponse({ stream });
-  }
+          await recordInteractionOutput(prepared, request, {
+            text: team.text,
+            sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
+            totalUsage: createEmptyLanguageModelUsage(),
+            modelProvider: team.modelProvider,
+            modelId: team.modelId,
+          });
+          await recordOperatorRunOutput(prepared, {
+            text: team.text,
+            sources: team.sources.map((source) => ({ url: source.url, title: source.title })),
+          });
+          guardRuntime.clear();
+        },
+      });
 
-  const { stream } = await answerEngine.execute(request.text, prepared.selectedModelId, prepared.mode, {
-    plan: prepared.plan,
-    surface: prepared.surface,
-    searchEnabled: runtimeSettings.routing.searchEnabled,
-    contextAugments: prepared.memoryContext,
+      return createUIMessageStreamResponse({ stream });
+    }
+
+    const { stream } = await answerEngine.execute(request.text, prepared.selectedModelId, prepared.mode, {
+      plan: prepared.plan,
+      surface: prepared.surface,
+      accountId: prepared.hostedAccountId,
+      searchEnabled: runtimeSettings.routing.searchEnabled,
+      contextAugments: prepared.memoryContext,
+      abortSignal: guardRuntime.signal,
+      maxOutputTokens: prepared.requestGuard.maxOutputTokens,
       onFinish: async (event, context) => {
         await recordInteractionOutput(prepared, request, {
-        text: event.text,
-        sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
-        totalUsage: event.totalUsage,
-        modelProvider: context.providerId,
+          text: event.text,
+          sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
+          totalUsage: event.totalUsage,
+          modelProvider: context.providerId,
           modelId: prepared.selectedModelId,
         });
         await recordOperatorRunOutput(prepared, {
           text: event.text,
           sources: context.sources.map((source) => ({ url: source.url, title: source.title })),
         });
-    },
-    onError: async (error) => {
-      console.warn('Elyan interaction stream error', error);
-    },
-  });
+        guardRuntime.clear();
+      },
+      onError: async (error) => {
+        await recordLearningEvent(prepared, request, {
+          text: '',
+          sources: [],
+          success: false,
+          failureReason: normalizeError(error).message,
+          modelId: prepared.selectedModelId,
+        });
+        console.warn('Elyan interaction stream error', error);
+        guardRuntime.clear();
+      },
+      onAbort: async () => {
+        await recordLearningEvent(prepared, request, {
+          text: '',
+          sources: [],
+          success: false,
+          failureReason: 'Request was aborted by the execution guard.',
+          modelId: prepared.selectedModelId,
+        });
+        guardRuntime.clear();
+      },
+    });
 
-  return stream;
+    return stream;
+  } catch (error) {
+    guardRuntime.clear();
+    await recordLearningEvent(prepared, request, {
+      text: '',
+      sources: [],
+      success: false,
+      failureReason: normalizeError(error).message,
+      modelId: prepared.selectedModelId,
+    });
+    throw error;
+  }
 }
 
 export function normalizeInteractionError(error: unknown) {

@@ -75,6 +75,7 @@ TOP_LEVEL_COMMANDS = [
     "workflow",
     "ux",
     "approve",
+    "approvals",
     "runs",
 ]
 
@@ -865,18 +866,22 @@ def main(argv: list[str] | None = None):
     p.add_argument("--multimodal", nargs="*", help="Multimodal inputs (images, audio, docs)")
     p.add_argument("--yes", action="store_true")
 
-    # ── approve ──────────────────────────────────────────────────────────
-    p = sub.add_parser("approve", help="Approval System — Beklemeye alan onayları yönet")
-    sub_approve = p.add_subparsers(dest="subcommand", help="Subcommand")
+    # ── approve / approvals ──────────────────────────────────────────────
+    def _add_approval_parser(name: str) -> None:
+        parser = sub.add_parser(name, help="Approval System — Beklemeye alan onayları yönet")
+        sub_approve = parser.add_subparsers(dest="subcommand", help="Subcommand")
 
-    p_pending = sub_approve.add_parser("pending", help="Beklemede olan onayları listele")
-    p_pending.add_argument("--output", "-o", choices=["json", "table"], help="Output formatı")
+        p_pending = sub_approve.add_parser("pending", help="Beklemede olan onayları listele")
+        p_pending.add_argument("--output", "-o", choices=["json", "table"], help="Output formatı")
 
-    p_approve = sub_approve.add_parser("approve", help="Onay isteğini onayla")
-    p_approve.add_argument("request_id", help="Approval request ID")
+        p_approve = sub_approve.add_parser("approve", help="Onay isteğini onayla")
+        p_approve.add_argument("request_id", help="Approval request ID")
 
-    p_deny = sub_approve.add_parser("deny", help="Onay isteğini reddet")
-    p_deny.add_argument("request_id", help="Approval request ID")
+        p_deny = sub_approve.add_parser("deny", help="Onay isteğini reddet")
+        p_deny.add_argument("request_id", help="Approval request ID")
+
+    _add_approval_parser("approve")
+    _add_approval_parser("approvals")
 
     # ── runs ─────────────────────────────────────────────────────────────
     p = sub.add_parser("runs", help="Run Inspector — Çalıştırma geçmişini görüntüle")
@@ -1376,7 +1381,7 @@ def main(argv: list[str] | None = None):
             filter_term=getattr(args, "filter", None),
         )
 
-    elif args.command == "approve":
+    elif args.command in {"approve", "approvals"}:
         from cli.commands import approve
         try:
             if args.subcommand == "pending":

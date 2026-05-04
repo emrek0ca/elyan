@@ -4,6 +4,14 @@ from cli.commands import desktop, gateway
 from cli.commands.guide import render_install_to_ui_guide
 
 
+def _gateway_is_online(port: int) -> bool:
+    status = gateway._fetch_gateway_status(port)
+    if not status.get("ok"):
+        return False
+    data = status.get("data", {})
+    return isinstance(data, dict) and str(data.get("status") or "").strip().lower() == "online"
+
+
 def run(args) -> int:
     port = getattr(args, "port", None)
     no_browser = bool(getattr(args, "no_browser", False))
@@ -19,11 +27,8 @@ def run(args) -> int:
         gateway.start_gateway(daemon=True, port=port)
 
     gateway_port = int(port or gateway.DEFAULT_PORT)
-    runtime = gateway._fetch_gateway_launch_health(gateway_port)
-    if not runtime.get("ok") and gateway._wait_until_gateway_ready(gateway_port, timeout_s=4.0):
-        runtime = gateway._fetch_gateway_launch_health(gateway_port)
-    if not runtime.get("ok"):
-        print(f"❌  Launch başarısız: {runtime.get('error', 'gateway hazır değil')}")
+    if not _gateway_is_online(gateway_port) and not gateway._wait_until_gateway_ready(gateway_port, timeout_s=15.0):
+        print("❌  Launch başarısız: gateway online olmadı")
         return 1
 
     render_install_to_ui_guide(setup_ready=True, gateway_running=True, prefix="  ")

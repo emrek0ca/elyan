@@ -18,9 +18,15 @@ import { getIyzicoBillingClient, buildIyzicoPlanBinding, type IyzicoSubscription
 import { buildControlPlaneConnectionSnapshot, buildControlPlaneRuntimeSnapshot } from './runtime';
 import { buildControlPlaneEvaluationSummary } from './evaluation';
 import { buildAccountPolicySnapshot, buildHostedConnectionRegistry } from './governance';
-import { buildControlPlaneDatabaseHealthSnapshot, getControlPlanePoolStats } from './database';
+import { buildControlPlaneDatabaseHealthSnapshot, getControlPlanePool, getControlPlanePoolStats } from './database';
+import { readCanonicalSharedTruthSnapshot } from './migrations';
+import { buildMemoryContext } from '@/core/memory';
+import { ingestRetrievalText, searchRetrievalDocumentsHybrid } from '@/core/retrieval';
+import { filterContextBlocks } from '@/core/retrieval/context';
 import { FileControlPlaneStateStore, type ControlPlaneStateStore } from './store';
 import { PostgresControlPlaneStateStore } from './postgres-store';
+import { evaluateReasoningOutcome } from '@/core/reasoning';
+import type { OrchestrationPlan } from '@/core/orchestration';
 import {
   advanceUsageSnapshot,
   createUsageSnapshot,
@@ -60,6 +66,7 @@ import type {
   ControlPlaneHostedSession,
   ControlPlaneLedgerEntry,
   ControlPlaneLearningDraft,
+  ControlPlaneLearningEvent,
   ControlPlaneMemoryItem,
   ControlPlaneNotification,
   ControlPlaneIntegration,
@@ -449,6 +456,25 @@ type InteractionRecordInput = {
   citationCount?: number;
 };
 
+type LearningEventRecordInput = {
+  requestId: string;
+  source: string;
+  input: string;
+  intent: ControlPlaneInteractionIntent;
+  plan: string;
+  reasoningSteps?: string[];
+  output?: string;
+  betterOutput?: string;
+  success: boolean;
+  failureReason?: string;
+  latencyMs: number;
+  score?: number;
+  accepted?: boolean;
+  modelId?: string;
+  modelProvider?: string;
+  metadata?: Record<string, unknown>;
+};
+
 type PreparedUsageCharge = {
   input: ControlPlaneUsageInput;
   rate: Decimal;
@@ -565,12 +591,14 @@ function buildAccountView(state: ControlPlaneState, account: ControlPlaneAccount
   recentNotifications: ControlPlaneNotification[];
   recentDevices: ControlPlaneHostedDevice[];
   recentLearningDrafts: ControlPlaneLearningDraft[];
+  learningEventCount: number;
   policySnapshot: ReturnType<typeof buildAccountPolicySnapshot>;
   connectionRegistry: ReturnType<typeof buildHostedConnectionRegistry>;
 } {
   const accountEvaluationSignals = state.evaluationSignals.filter(
     (signal) => signal.accountId === account.accountId
   );
+  const accountLearningEvents = state.learningEvents.filter((event) => event.accountId === account.accountId);
   const recentEvaluationSignals = accountEvaluationSignals.slice(-10).reverse();
   const plan = getControlPlanePlan(account.subscription.planId);
   const usageSnapshot = normalizeUsageSnapshot(account.usageSnapshot, plan, account.balanceCredits);
@@ -620,6 +648,7 @@ function buildAccountView(state: ControlPlaneState, account: ControlPlaneAccount
     recentNotifications,
     recentDevices: connectedDevices,
     recentLearningDrafts: interactionState.learningDrafts.slice(-5).reverse(),
+    learningEventCount: accountLearningEvents.length,
     policySnapshot: buildAccountPolicySnapshot(account, plan),
     connectionRegistry: buildHostedConnectionRegistry({
       account,
@@ -637,6 +666,7 @@ function buildHostedAccountView(accountView: ReturnType<typeof buildAccountView>
     recentNotifications: _recentNotifications,
     recentDevices: _recentDevices,
     recentLearningDrafts: _recentLearningDrafts,
+    learningEventCount: _learningEventCount,
     policySnapshot: _policySnapshot,
     connectionRegistry: _connectionRegistry,
     ...hostedAccount
@@ -648,6 +678,7 @@ function buildHostedAccountView(accountView: ReturnType<typeof buildAccountView>
   void _recentNotifications;
   void _recentDevices;
   void _recentLearningDrafts;
+  void _learningEventCount;
   void _policySnapshot;
   void _connectionRegistry;
 
@@ -672,6 +703,7 @@ function buildHostedProfile(state: ControlPlaneState, account: ControlPlaneAccou
     hostedAccess: account.entitlements.hostedAccess,
     hostedUsageAccounting: account.entitlements.hostedUsageAccounting,
     balanceCredits: account.balanceCredits,
+    tokenBalance: account.balanceCredits,
     deviceCount: deviceSummary.total,
     activeDeviceCount: deviceSummary.active,
   };
@@ -783,6 +815,133 @@ function createEvaluationSignal(
   };
 }
 
+function createLearningEvent(
+  accountId: string,
+  input: LearningEventRecordInput & { eventId?: string; createdAt?: string }
+): ControlPlaneLearningEvent {
+  const reasoningSteps =
+    input.reasoningSteps ??
+    [
+      `input: ${input.input.slice(0, 240)}`,
+      `intent: ${input.intent}`,
+      `plan: ${input.plan}`,
+      `action: ${input.metadata?.actionSummary ? String(input.metadata.actionSummary) : 'no tool action'}`,
+      `observe: ${input.metadata?.observationSummary ? String(input.metadata.observationSummary) : 'request completed'}`,
+      `refine: ${input.failureReason ?? 'retain grounded answer'}`,
+      `output: ${(input.output ?? '').slice(0, 240)}`,
+    ];
+  const planStub = {
+    stages: ['intent', 'routing', 'retrieval', 'tooling', 'synthesis', 'citation', 'evaluation'],
+    searchRounds: 0,
+    maxUrls: 0,
+    temperature: 0,
+    reasoningDepth: 'standard',
+    taskIntent: input.intent,
+    intentConfidence: 'medium',
+    uncertainty: 'medium',
+    routingMode: 'local_first',
+    expandSearchQueries: false,
+    retrieval: {
+      rounds: 0,
+      maxUrls: 0,
+      rerankTopK: 0,
+      language: 'en',
+      expandSearchQueries: false,
+    },
+    capabilityPolicy: [],
+    evaluation: {
+      collectRetrievalSignals: false,
+      collectToolSignals: false,
+      captureUsageSignals: false,
+      promoteLearnings: true,
+    },
+    usageBudget: {
+      inference: 0,
+      retrieval: 0,
+      integrations: 0,
+      evaluation: 0,
+    },
+    executionMode: 'single',
+    teamPolicy: {
+      enabledByDefault: false,
+      reasons: [],
+      maxConcurrentAgents: 0,
+      maxTasksPerRun: 0,
+      allowCloudEscalation: false,
+      modelRoutingMode: 'local_only',
+      riskBoundary: 'read_only',
+      requiredRoles: [],
+    },
+    surface: 'shared-vps',
+    mode: 'speed',
+    executionPolicy: {
+      preferredOrder: [],
+      primary: {
+        kind: 'direct_answer',
+        source: 'none',
+        reason: 'learning event',
+        requiresConfirmation: false,
+      },
+      candidates: [],
+      shouldRetrieve: false,
+      shouldDiscoverMcp: false,
+      shouldEscalateModel: false,
+      requiresConfirmation: false,
+      decisionSummary: 'learning event',
+      notes: [],
+    },
+    skillPolicy: {
+      selectedSkillId: 'learning_event',
+      selectedSkillTitle: 'Learning event',
+      selectedSkillVersion: '1',
+      resultShape: 'answer',
+      policyBoundary: 'workspace',
+      preferredCapabilityIds: [],
+      requiresConfirmation: false,
+      decisionSummary: 'learning event',
+      notes: [],
+      candidates: [],
+      stages: [],
+      selectedTechniques: [],
+    },
+  } as OrchestrationPlan;
+  const evaluation = evaluateReasoningOutcome({
+    input: input.input,
+    intent: input.intent,
+    plan: planStub,
+    output: input.output ?? '',
+    success: input.success,
+    failureReason: input.failureReason,
+    latencyMs: input.latencyMs,
+    citationCount: Number(input.metadata?.citationCount ?? 0),
+    toolCallCount: Number(input.metadata?.toolCallCount ?? 0),
+  });
+
+  return {
+    eventId: input.eventId ?? createId('lgn'),
+    accountId,
+    requestId: input.requestId,
+    source: input.source,
+    input: input.input,
+    intent: input.intent,
+    plan: input.plan,
+    reasoningSteps,
+    reasoningTrace: reasoningSteps,
+    output: input.output ?? '',
+    betterOutput: input.betterOutput ?? '',
+    success: input.success,
+    failureReason: input.failureReason,
+    latencyMs: input.latencyMs,
+    score: typeof input.score === 'number' ? input.score : evaluation.score,
+    accepted: typeof input.accepted === 'boolean' ? input.accepted : (typeof input.score === 'number' ? input.score >= 0.6 : evaluation.score >= 0.6),
+    modelId: input.modelId,
+    modelProvider: input.modelProvider,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    updatedAt: input.createdAt ?? new Date().toISOString(),
+    metadata: input.metadata ?? {},
+  };
+}
+
 export class ControlPlaneService {
   private pending = Promise.resolve();
 
@@ -828,8 +987,17 @@ export class ControlPlaneService {
       deviceLinks: Object.keys(state.deviceLinks).length,
       ledgerEntries: state.ledger.length,
       evaluationSignals: state.evaluationSignals.length,
+      learningEvents: state.learningEvents.length,
     };
     const database = buildControlPlaneDatabaseHealthSnapshot(this.store.kind, getControlPlanePoolStats());
+    const truth =
+      this.store.kind === 'postgres'
+        ? await readCanonicalSharedTruthSnapshot(getControlPlanePool())
+        : {
+            expected: [],
+            present: [],
+            missing: [],
+          };
 
     return {
       ok: true,
@@ -847,8 +1015,10 @@ export class ControlPlaneService {
       deviceCount: counts.devices,
       deviceLinkCount: counts.deviceLinks,
       ledgerEntryCount: counts.ledgerEntries,
+      learningEventCount: counts.learningEvents,
       counts,
       database,
+      truth,
       syncSummary: {
         subscriptions: subscriptionSummary,
         devices: deviceSummary,
@@ -901,6 +1071,7 @@ export class ControlPlaneService {
       hostedAccess: account.entitlements.hostedAccess,
       hostedUsageAccounting: account.entitlements.hostedUsageAccounting,
       balanceCredits: account.balanceCredits,
+      tokenBalance: account.balanceCredits,
       deviceCount: deviceSummary.total,
       activeDeviceCount: deviceSummary.active,
     };
@@ -1266,6 +1437,63 @@ export class ControlPlaneService {
     });
   }
 
+  async recordLearningEvent(accountId: string, input: LearningEventRecordInput) {
+    return this.withState(async (state) => {
+      const account = state.accounts[accountId];
+
+      if (!account) {
+        throw new ControlPlaneNotFoundError('Account', accountId);
+      }
+
+      this.assertHostedImprovementAllowed(account);
+
+      const existing = state.learningEvents.find(
+        (event) => event.accountId === accountId && event.requestId === input.requestId
+      );
+
+      if (existing) {
+        return existing;
+      }
+
+      const event = createLearningEvent(accountId, input);
+      state.learningEvents.push(event);
+      await this.store.write(state);
+
+      void ingestRetrievalText({
+        accountId,
+        sourceKind: 'learning',
+        sourceName: 'learning_event',
+      title: `${event.intent} learning signal`,
+      content: [
+        `input: ${event.input}`,
+        `intent: ${event.intent}`,
+        `plan: ${event.plan}`,
+        `reasoning: ${(event.reasoningSteps ?? []).join(' | ')}`,
+        `output: ${event.output}`,
+        `better_output: ${event.betterOutput ?? ''}`,
+        `success: ${event.success}`,
+        `accepted: ${event.accepted}`,
+        event.failureReason ? `failure: ${event.failureReason}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      metadata: {
+        request_id: event.requestId,
+        score: event.score,
+        accepted: event.accepted,
+        latency_ms: event.latencyMs,
+        model_id: event.modelId,
+        model_provider: event.modelProvider,
+        source: event.source,
+      },
+      }).catch((error: unknown) => {
+        console.warn('Failed to mirror learning event into retrieval store', error);
+      });
+
+      return event;
+    });
+  }
+
   async getInteractionContext(accountId: string, input: InteractionContextInput) {
     const state = await this.readState();
     const account = state.accounts[accountId];
@@ -1301,20 +1529,32 @@ export class ControlPlaneService {
       .filter((item) => !item.pinned && !item.promoted)
       .slice(-4)
       .reverse();
+    const semanticDocuments = await searchRetrievalDocumentsHybrid(input.query, {
+      accountId,
+      sourceKinds: ['bootstrap', 'web', 'learning'],
+      limit: 4,
+    });
+    const memory = buildMemoryContext({
+      thread: threadId
+        ? interactionState.threads.find((thread) => thread.threadId === threadId)
+        : matchingThreads[0],
+      messages: interactionState.messages,
+      memoryItems: [...pinnedMemory, ...recentMemory],
+      learningDrafts: interactionState.learningDrafts,
+      semanticDocuments,
+    });
 
-    const contextBlocks = [
-      pinnedMemory.length > 0
-        ? `Pinned memory:\n${pinnedMemory.map((item) => `- ${item.title}: ${item.summary}`).join('\n')}`
-        : '',
-      matchingThreads.length > 0
-        ? `Relevant threads:\n${matchingThreads
-            .map((thread) => `- ${thread.title} [${thread.intent}] ${thread.summary}`)
-            .join('\n')}`
-        : '',
-      recentMemory.length > 0
-        ? `Recent memory:\n${recentMemory.map((item) => `- ${item.title}: ${item.summary}`).join('\n')}`
-        : '',
-    ].filter(Boolean);
+    const contextBlocks = filterContextBlocks(
+      [
+        matchingThreads.length > 0
+          ? `Relevant threads:\n${matchingThreads
+              .map((thread) => `- ${thread.title} [${thread.intent}] ${thread.summary}`)
+              .join('\n')}`
+          : '',
+        ...memory.contextBlocks,
+      ],
+      { maxTokens: 1_800, maxBlocks: 8, minScore: 0.15 }
+    );
 
     return {
       threadId,

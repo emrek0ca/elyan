@@ -101,9 +101,49 @@ describe('Team runtime', () => {
     const summary = JSON.parse(await readFile(join(runDir, 'summary.json'), 'utf8')) as { verifier: { passed: boolean } };
 
     expect(result.summary.verifier.passed).toBe(true);
+    expect(result.summary.verifier.state).toBe('passed');
+    expect(result.text).not.toContain('Verification failed: Verification task did not produce an artifact.');
     expect(events).toContain('run_completed');
     expect(artifacts.length).toBe(result.teamPlan.tasks.length);
     expect(summary.verifier.passed).toBe(true);
+  });
+
+  it('records a structured failure artifact when verification output is unstructured', async () => {
+    const store = await createStore();
+    const sourcePlan = buildOrchestrationPlan(
+      'Research the implementation, produce a reviewed answer, and verify it.',
+      'research'
+    );
+    const runner = new TeamRunner(
+      store,
+      async ({ task }) => (task.kind === 'verification' ? 'This does not start with pass or fail.' : `${task.title} artifact`),
+      async () => ({ modelId: 'ollama:test-local', providerId: 'ollama' })
+    );
+
+    const result = await runner.run({
+      query: 'Research the implementation, produce a reviewed answer, and verify it.',
+      mode: 'research',
+      sourcePlan,
+      maxConcurrentAgents: 2,
+      maxTasksPerRun: 6,
+      allowCloudEscalation: false,
+      searchEnabled: false,
+    });
+
+    const verificationArtifact = result.artifacts.find((artifact) => artifact.kind === 'verification');
+
+    expect(result.summary.status).toBe('failed');
+    expect(result.summary.verifier.passed).toBe(false);
+    expect(result.summary.verifier.state).toBe('unstructured');
+    expect(result.text).toContain('Team run is a draft because final verification was unstructured.');
+    expect(result.text).not.toContain('Verification failed:');
+    expect(result.text).not.toContain('Verification task did not produce an artifact.');
+    expect(verificationArtifact?.metadata).toMatchObject({
+      verification: {
+        passed: false,
+        state: 'unstructured',
+      },
+    });
   });
 
   it('blocks confirmation-required task execution', async () => {
@@ -129,6 +169,6 @@ describe('Team runtime', () => {
     });
 
     expect(result.summary.status).toBe('failed');
-    expect(result.text).toContain('Verification failed');
+    expect(result.text).toContain('Team run is a draft because final verification was not produced.');
   });
 });

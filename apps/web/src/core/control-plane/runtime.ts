@@ -33,6 +33,10 @@ export type ControlPlaneConnectionSnapshot = {
 };
 
 export function resolveConfiguredControlPlaneStorage(): 'file' | 'postgres' {
+  if (process.env.NODE_ENV === 'production') {
+    return 'postgres';
+  }
+
   return env.DATABASE_URL ? 'postgres' : 'file';
 }
 

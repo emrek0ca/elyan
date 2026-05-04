@@ -4,12 +4,16 @@ import type { ControlPlanePlan, ControlPlaneUsageInput } from './types';
 
 export type ControlPlanePlanPricingView = {
   id: ControlPlanePlan['id'];
+  tier: ControlPlanePlan['tier'];
   title: ControlPlanePlan['title'];
   summary: ControlPlanePlan['summary'];
   audience: ControlPlanePlan['audience'];
   billingSurface: 'local' | 'hosted';
   monthlyPriceTRY: string;
   monthlyIncludedCredits: string;
+  tokenLimits: ControlPlanePlan['tokenLimits'];
+  modelAccess: ControlPlanePlan['modelAccess'];
+  featureAccess: ControlPlanePlan['featureAccess'];
   usageBuckets: ControlPlanePlan['rateCard'];
   rateLimits: ControlPlanePlan['rateLimits'];
   dailyLimits: ControlPlanePlan['dailyLimits'];
@@ -24,12 +28,16 @@ export function buildPlanPricingView(plan: ControlPlanePlan): ControlPlanePlanPr
 
   return {
     id: plan.id,
+    tier: plan.tier,
     title: plan.title,
     summary: plan.summary,
     audience: plan.audience,
     billingSurface,
     monthlyPriceTRY: plan.monthlyPriceTRY,
     monthlyIncludedCredits: plan.monthlyIncludedCredits,
+    tokenLimits: plan.tokenLimits,
+    modelAccess: plan.modelAccess,
+    featureAccess: plan.featureAccess,
     usageBuckets: plan.rateCard,
     rateLimits: plan.rateLimits,
     dailyLimits: plan.dailyLimits,

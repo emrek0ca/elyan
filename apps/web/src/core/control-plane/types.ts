@@ -215,6 +215,32 @@ export const controlPlaneLearningDraftSchema = z.object({
 
 export type ControlPlaneLearningDraft = z.infer<typeof controlPlaneLearningDraftSchema>;
 
+export const controlPlaneLearningEventSchema = z.object({
+  eventId: z.string().min(1),
+  accountId: z.string().min(1),
+  requestId: z.string().min(1),
+  source: z.string().min(1),
+  input: z.string().min(1),
+  intent: controlPlaneInteractionIntentSchema,
+  plan: z.string().min(1),
+  reasoningSteps: z.array(z.string().min(1)).default([]),
+  reasoningTrace: z.array(z.string().min(1)).default([]),
+  output: z.string(),
+  betterOutput: z.string().default(''),
+  success: z.boolean(),
+  failureReason: z.string().min(1).optional(),
+  latencyMs: z.number().int().nonnegative(),
+  score: z.number().min(0).max(1),
+  accepted: z.boolean().default(false),
+  modelId: z.string().min(1).optional(),
+  modelProvider: z.string().min(1).optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type ControlPlaneLearningEvent = z.infer<typeof controlPlaneLearningEventSchema>;
+
 export const controlPlaneInteractionStateSchema = z.object({
   threads: z.array(controlPlaneConversationThreadSchema).default([]),
   messages: z.array(controlPlaneConversationMessageSchema).default([]),
@@ -254,13 +280,45 @@ export const controlPlaneDailyLimitSchema = z.object({
 
 export type ControlPlaneDailyLimit = z.infer<typeof controlPlaneDailyLimitSchema>;
 
+export const controlPlanePlanTierSchema = z.enum(['FREE', 'PRO', 'TEAM']);
+
+export type ControlPlanePlanTier = z.infer<typeof controlPlanePlanTierSchema>;
+
+export const controlPlanePlanTokenLimitsSchema = z.object({
+  monthlyIncludedTokens: z.number().int().nonnegative(),
+  maxTokensPerRequest: z.number().int().nonnegative(),
+});
+
+export type ControlPlanePlanTokenLimits = z.infer<typeof controlPlanePlanTokenLimitsSchema>;
+
+export const controlPlanePlanModelAccessSchema = z.object({
+  localModels: z.boolean(),
+  hostedModels: z.boolean(),
+  advancedModels: z.boolean(),
+});
+
+export type ControlPlanePlanModelAccess = z.infer<typeof controlPlanePlanModelAccessSchema>;
+
+export const controlPlanePlanFeatureAccessSchema = z.object({
+  hostedChat: z.boolean(),
+  research: z.boolean(),
+  integrations: z.boolean(),
+  teamRuns: z.boolean(),
+});
+
+export type ControlPlanePlanFeatureAccess = z.infer<typeof controlPlanePlanFeatureAccessSchema>;
+
 export const controlPlanePlanSchema = z.object({
   id: controlPlanePlanIdSchema,
+  tier: controlPlanePlanTierSchema,
   title: z.string(),
   summary: z.string(),
   audience: z.string(),
   monthlyPriceTRY: z.string(),
   monthlyIncludedCredits: z.string(),
+  tokenLimits: controlPlanePlanTokenLimitsSchema,
+  modelAccess: controlPlanePlanModelAccessSchema,
+  featureAccess: controlPlanePlanFeatureAccessSchema,
   entitlements: controlPlaneEntitlementsSchema,
   rateCard: controlPlaneRateCardSchema,
   rateLimits: controlPlaneRateLimitSchema,
@@ -642,6 +700,7 @@ export const controlPlaneStateV6Schema = z.object({
   devices: z.record(z.string(), controlPlaneDeviceSchema).default({}),
   deviceLinks: z.record(z.string(), controlPlaneDeviceLinkSchema).default({}),
   evaluationSignals: z.array(controlPlaneEvaluationSignalSchema).default([]),
+  learningEvents: z.array(controlPlaneLearningEventSchema).default([]),
 });
 
 export const controlPlaneStateSchema = z.union([
@@ -663,6 +722,7 @@ export type ControlPlaneState = {
   devices: Record<string, ControlPlaneDevice>;
   deviceLinks: Record<string, ControlPlaneDeviceLink>;
   evaluationSignals: ControlPlaneEvaluationSignal[];
+  learningEvents: ControlPlaneLearningEvent[];
 };
 
 export const controlPlaneAccountUpsertSchema = z.object({
@@ -727,6 +787,7 @@ export const controlPlaneHostedSessionSchema = z.object({
   hostedAccess: z.boolean(),
   hostedUsageAccounting: z.boolean(),
   balanceCredits: z.string(),
+  tokenBalance: z.string(),
   deviceCount: z.number().int().nonnegative(),
   activeDeviceCount: z.number().int().nonnegative(),
 });

@@ -31,10 +31,33 @@ export function isHostedAuthConfigured() {
   return Boolean(env.NEXTAUTH_SECRET && env.DATABASE_URL);
 }
 
+function resolveCookieDomain() {
+  if (!env.NEXTAUTH_URL) {
+    return undefined;
+  }
+
+  try {
+    const hostname = new URL(env.NEXTAUTH_URL).hostname.toLowerCase();
+    if (hostname.endsWith('.elyan.dev')) {
+      return '.elyan.dev';
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
 export function getControlPlaneAuthOptions(): NextAuthOptions {
   requireAuthConfiguration();
   const secureCookies = Boolean(env.NEXTAUTH_URL?.startsWith('https://'));
   const sameSite = secureCookies ? 'none' : 'lax';
+  const cookieDomain = resolveCookieDomain();
+  const csrfCookieName = secureCookies
+    ? cookieDomain
+      ? '__Secure-next-auth.csrf-token'
+      : '__Host-next-auth.csrf-token'
+    : 'next-auth.csrf-token';
 
   return {
     adapter: PostgresAdapter(getControlPlanePool(env.DATABASE_URL)) as NextAuthOptions['adapter'],
@@ -77,15 +100,17 @@ export function getControlPlaneAuthOptions(): NextAuthOptions {
           sameSite,
           path: '/',
           secure: secureCookies,
+          domain: cookieDomain,
         },
       },
       csrfToken: {
-        name: secureCookies ? '__Host-next-auth.csrf-token' : 'next-auth.csrf-token',
+        name: csrfCookieName,
         options: {
           httpOnly: true,
           sameSite,
           path: '/',
           secure: secureCookies,
+          domain: cookieDomain,
         },
       },
       callbackUrl: {
@@ -94,6 +119,7 @@ export function getControlPlaneAuthOptions(): NextAuthOptions {
           sameSite,
           path: '/',
           secure: secureCookies,
+          domain: cookieDomain,
         },
       },
     },

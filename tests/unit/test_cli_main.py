@@ -131,6 +131,21 @@ def test_main_routes_launch_command(monkeypatch):
     assert captured["ops"] is True
 
 
+def test_main_routes_approvals_alias(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
+
+    def fake_pending(output=None):
+        captured["output"] = output
+
+    monkeypatch.setattr("cli.commands.approve.pending", fake_pending, raising=False)
+
+    code = cli_main.main(["approvals", "pending", "--output", "json"])
+
+    assert code == 0
+    assert captured["output"] == "json"
+
+
 def test_main_routes_desktop_command(monkeypatch, capsys):
     monkeypatch.setattr("cli.onboard.ensure_first_run_setup", lambda command="", non_interactive=False: True)
     calls = {}

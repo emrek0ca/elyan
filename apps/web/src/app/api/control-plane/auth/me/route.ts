@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
         error: 'Hosted identity is disabled in local mode',
         code: 'hosted_identity_unavailable',
       },
-      { status: 503 }
+      { status: 401 }
     );
   }
 
@@ -27,8 +27,14 @@ export async function GET(request: NextRequest) {
       ...response,
     });
   } catch (error: unknown) {
-    const status = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode: number }).statusCode) || 500 : 500;
     const message = error instanceof Error ? error.message : 'control-plane session request failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    return NextResponse.json(
+      {
+        ok: false,
+        error: message,
+        code: 'control_plane_session_required',
+      },
+      { status: 401 }
+    );
   }
 }

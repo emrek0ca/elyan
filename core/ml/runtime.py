@@ -42,6 +42,18 @@ class ModelRuntime:
             "bitsandbytes": _module_available("bitsandbytes"),
         }
 
+    def _dependency_snapshot(self, modules: dict[str, bool]) -> dict[str, bool]:
+        return {
+            "torch": bool(modules.get("torch")),
+            "sentence_transformers": bool(modules.get("sentence_transformers")),
+            "transformers": bool(modules.get("transformers")),
+            "peft": bool(modules.get("peft")),
+            "trl": bool(modules.get("trl")),
+            "faiss": bool(modules.get("faiss")),
+            "lancedb": bool(modules.get("lancedb")),
+            "bitsandbytes": bool(modules.get("bitsandbytes")),
+        }
+
     def _config(self) -> dict[str, Any]:
         return dict(elyan_config.get("ml", {}) or {})
 
@@ -68,6 +80,11 @@ class ModelRuntime:
             metadata={
                 "sentence_transformers_available": bool(environment.get("sentence_transformers_available")),
                 "torch_available": bool(environment.get("torch_available")),
+                "dependency_status": {
+                    "torch": bool(environment.get("torch_available")),
+                    "sentence_transformers": bool(environment.get("sentence_transformers_available")),
+                },
+                "fallback_mode": "deterministic" if fallback else "native",
             },
         )
 
@@ -75,6 +92,7 @@ class ModelRuntime:
         environment = self._base_environment()
         modules = environment.get("modules", {}) if isinstance(environment.get("modules"), dict) else {}
         device = str(environment.get("device") or "cpu_fallback")
+        dependency_status = self._dependency_snapshot(modules)
         if kind == "embedding":
             return self._embedding_capability(environment)
 
@@ -87,7 +105,11 @@ class ModelRuntime:
                 device=device,
                 fallback=not available,
                 reason="" if available else "missing_torch_or_peft",
-                metadata={"requires": ["torch", "peft"]},
+                metadata={
+                    "requires": ["torch", "peft"],
+                    "dependency_status": {key: dependency_status[key] for key in ("torch", "peft")},
+                    "fallback_mode": "heuristic" if not available else "native",
+                },
             )
 
         if kind == "reward_model":
@@ -99,7 +121,11 @@ class ModelRuntime:
                 device=device,
                 fallback=not available,
                 reason="" if available else "missing_transformers_or_trl",
-                metadata={"requires": ["transformers", "trl"]},
+                metadata={
+                    "requires": ["transformers", "trl"],
+                    "dependency_status": {key: dependency_status[key] for key in ("transformers", "trl")},
+                    "fallback_mode": "heuristic" if not available else "native",
+                },
             )
 
         if kind == "reranker":
@@ -111,6 +137,13 @@ class ModelRuntime:
                 device=device,
                 fallback=not available,
                 reason="" if available else "lexical_only",
+                metadata={
+                    "dependency_status": {
+                        "sentence_transformers": bool(modules.get("sentence_transformers")),
+                        "transformers": bool(modules.get("transformers")),
+                    },
+                    "fallback_mode": "lexical" if not available else "semantic",
+                },
             )
 
         if kind == "intent_encoder":
@@ -122,6 +155,10 @@ class ModelRuntime:
                 device=device,
                 fallback=not available,
                 reason="" if available else "heuristic_only",
+                metadata={
+                    "dependency_status": {"transformers": bool(modules.get("transformers"))},
+                    "fallback_mode": "heuristic" if not available else "native",
+                },
             )
 
         return ModelCapabilitySnapshot(
@@ -150,6 +187,7 @@ class ModelRuntime:
             "backends": dict(ml_cfg.get("backends") or {}),
             "environment": environment,
             "capabilities": capabilities,
+            "dependencies": self._dependency_snapshot(environment["modules"] if isinstance(environment.get("modules"), dict) else {}),
             "updated_at": time.time(),
         }
 

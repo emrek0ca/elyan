@@ -1,27 +1,27 @@
 export const lightTheme = {
   bg: {
-    canvas: "#F6F7F9",
-    shell: "#FBFCFE",
+    canvas: "#F7F3EA",
+    shell: "#FBF8F1",
     surface: "#FFFFFF",
-    surfaceAlt: "#F9FAFC",
-    surfaceRaised: "#FCFDFE",
-    overlay: "rgba(246,247,249,0.78)",
+    surfaceAlt: "#F8F4EC",
+    surfaceRaised: "#FFFDF8",
+    overlay: "rgba(247,243,234,0.76)",
   },
   text: {
-    primary: "#0F141C",
-    secondary: "#596273",
-    tertiary: "#8A95A8",
-    inverse: "#F6F7F9",
+    primary: "#16181D",
+    secondary: "#60646F",
+    tertiary: "#969083",
+    inverse: "#FBF8F1",
   },
   border: {
-    subtle: "#E7EBF1",
-    strong: "#D9E1EC",
-    focus: "#C7D4FF",
+    subtle: "#E5DCCF",
+    strong: "#D6CAB9",
+    focus: "#B8C4FF",
   },
   accent: {
-    primary: "#5B7CFF",
-    soft: "#ECF1FF",
-    glow: "rgba(91,124,255,0.16)",
+    primary: "#3654D6",
+    soft: "rgba(54,84,214,0.08)",
+    glow: "rgba(54,84,214,0.12)",
     contrast: "#FFFFFF",
   },
   state: {
@@ -31,9 +31,8 @@ export const lightTheme = {
     info: "#4E7BFF",
   },
   shadow: {
-    panel: "0 10px 30px rgba(16,24,40,0.05)",
-    elevated: "0 24px 60px rgba(16,24,40,0.07)",
-    hero: "0 28px 64px rgba(16,24,40,0.10)",
+    panel: "0 8px 22px rgba(36,31,24,0.045)",
+    elevated: "0 16px 40px rgba(36,31,24,0.06)",
+    hero: "0 24px 64px rgba(36,31,24,0.08)",
   },
 } as const;
-

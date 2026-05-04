@@ -34,3 +34,23 @@ def test_ensure_ollama_uses_starter_model_and_handles_timeout(tmp_path, monkeypa
     assert result["pulls"][0]["timed_out"] is True
     assert calls[0][0] == ("ollama", "pull", "llama3.2:3b")
     assert calls[0][1] == manager.ollama_pull_timeout_s
+
+
+def test_realtime_actuator_service_is_skipped_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ELYAN_ENABLE_REALTIME_ACTUATOR", raising=False)
+    manager = DependencyManager(workspace=tmp_path)
+
+    called = {"install": 0}
+
+    def fake_install(*args, **kwargs):
+        called["install"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(manager, "_install_launchd_service", fake_install)
+
+    result = manager.install_realtime_actuator_service()
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert called["install"] == 0

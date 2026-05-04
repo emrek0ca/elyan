@@ -5,5 +5,8 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
-  return handleChatRequest(request, { requireHostedSession: false });
+  return handleChatRequest(request, {
+    requireHostedSession: false,
+    learningMode: 'authenticated_optional',
+  });
 }

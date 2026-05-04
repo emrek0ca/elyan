@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
 export default function PanelNotificationsPage() {
-  redirect('/panel');
+  redirect('https://elyan.dev/panel/notifications');
 }

@@ -68,12 +68,15 @@ export function buildControlPlaneDatabaseHealthSnapshot(
   stats = getControlPlanePoolStats()
 ): ControlPlaneDatabaseHealthSnapshot {
   if (storage === 'file') {
+    const production = process.env.NODE_ENV === 'production';
     return {
       storage,
       mode: 'file_backed',
       configured: false,
-      ready: true,
-      detail: 'File-backed state store is active. PostgreSQL is optional for hosted mode.',
+      ready: !production,
+      detail: production
+        ? 'File-backed state store is disabled in production. Set DATABASE_URL and run migrations.'
+        : 'File-backed state store is active for local development and tests.',
     };
   }
 

@@ -37,12 +37,57 @@ class _Agent:
         return self.response
 
 
+@pytest.mark.asyncio
+async def test_loopback_pages_do_not_serve_hosted_site_surfaces():
+    srv = gateway_server.ElyanGatewayServer.__new__(gateway_server.ElyanGatewayServer)
+
+    home = await gateway_server.ElyanGatewayServer.handle_public_home_page(srv, _Req({}))
+    pricing = await gateway_server.ElyanGatewayServer.handle_public_pricing_page(srv, _Req({}))
+    download = await gateway_server.ElyanGatewayServer.handle_public_download_page(srv, _Req({}))
+    docs = await gateway_server.ElyanGatewayServer.handle_public_docs_page(srv, _Req({}))
+
+    assert home.status == 200
+    assert "local Elyan runtime API" in home.text
+    assert pricing.status == 404
+    assert download.status == 404
+    assert docs.status == 404
+    assert "https://elyan.dev" in pricing.text
+
+
 class _StatusRouter:
     def get_adapter_status(self):
         return {"telegram": "connected", "slack": "degraded"}
 
     def get_adapter_health(self):
         return {"telegram": {"ok": True}, "slack": {"ok": False}}
+
+
+class _FakeConnectorRepository:
+    def __init__(self):
+        self.accounts: dict[tuple[str, str, str], dict] = {}
+        self.upserts: list[dict] = []
+
+    def get_account(self, provider: str, account_alias: str = "default", workspace_id: str = "local-workspace") -> dict | None:
+        key = (str(provider).strip().lower(), str(account_alias or "default"), str(workspace_id or "local-workspace"))
+        return self.accounts.get(key)
+
+    def upsert_account(self, account_payload: dict) -> None:
+        payload = dict(account_payload or {})
+        self.upserts.append(payload)
+        provider = str(payload.get("provider") or "").strip().lower()
+        alias = str(payload.get("account_alias") or "default").strip() or "default"
+        workspace_id = str(payload.get("workspace_id") or "local-workspace")
+        self.accounts[(provider, alias, workspace_id)] = {
+            "provider": provider,
+            "account_alias": alias,
+            "workspace_id": workspace_id,
+            "metadata": dict(payload.get("metadata") or {}),
+        }
+
+
+class _FakeRuntimeDatabase:
+    def __init__(self):
+        self.connectors = _FakeConnectorRepository()
 
 
 def _install_fake_llm_setup(monkeypatch, *, lane_ready: bool = True, probe_model: str = "llama3.2:3b"):
@@ -67,6 +112,54 @@ def _install_fake_llm_setup(monkeypatch, *, lane_ready: bool = True, probe_model
 
     fake_llm_setup.get_llm_setup = lambda: _FakeSetup()
     monkeypatch.setitem(sys.modules, "core.llm_setup", fake_llm_setup)
+
+
+def test_turkey_connector_settings_prefer_repo_metadata(monkeypatch):
+    fake_db = _FakeRuntimeDatabase()
+    fake_db.connectors.accounts[("e_fatura", "default", "local-workspace")] = {
+        "provider": "e_fatura",
+        "account_alias": "default",
+        "workspace_id": "local-workspace",
+        "metadata": {
+            "turkey_connector_settings": {
+                "workspace_id": "local-workspace",
+                "user_id": "local-user",
+                "connector": "e_fatura",
+                "consent_granted": True,
+                "config": {"region": "tr"},
+                "credentials": {"token": "from-repo"},
+            }
+        },
+    }
+
+    saved_config: dict[str, object] = {}
+
+    class _FakeConfig:
+        def get(self, key, default=None):
+            return {"legacy": True} if key == "turkey_connectors.e_fatura" else default
+
+        def set(self, key, value):
+            saved_config[key] = value
+
+    monkeypatch.setattr("core.persistence.runtime_db.get_runtime_database", lambda: fake_db)
+    monkeypatch.setattr(gateway_server, "elyan_config", _FakeConfig())
+
+    settings = gateway_server.ElyanGatewayServer._get_turkey_connector_settings("e_fatura")
+    assert settings["credentials"]["token"] == "from-repo"
+    assert settings["consent_granted"] is True
+
+    saved = gateway_server.ElyanGatewayServer._save_turkey_connector_settings(
+        "e_fatura",
+        workspace_id="workspace-1",
+        user_id="user-1",
+        credentials={"token": "fresh"},
+        config={"region": "tr"},
+        consent_granted=True,
+    )
+
+    assert saved["credentials"]["token"] == "fresh"
+    assert fake_db.connectors.upserts[-1]["metadata"]["turkey_connector_settings"]["credentials"]["token"] == "fresh"
+    assert saved_config["turkey_connectors.e_fatura"]["credentials"]["token"] == "fresh"
 
 
 class _StatusCron:
@@ -1995,6 +2088,7 @@ async def test_handle_product_health_exposes_release_ready_summary(monkeypatch):
     assert payload["ok"] is True
     assert payload["status"] == "ready"
     assert captured["request"] is not None
+    assert "admin_token" not in payload
 
 
 @pytest.mark.asyncio

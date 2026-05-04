@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isHostedAuthConfigured } from '@/core/control-plane/auth';
 
 const mockSession = {
   sub: 'usr_1',
@@ -165,6 +166,7 @@ afterEach(() => {
 describe('control-plane canonical profile routes', () => {
   it('returns the same canonical profile from auth/me', async () => {
     mockService.getHostedProfile.mockResolvedValue(profile);
+    vi.mocked(isHostedAuthConfigured).mockReturnValue(true);
 
     const { GET } = await import('@/app/api/control-plane/auth/me/route');
     const request = new NextRequest('http://127.0.0.1:3000/api/control-plane/auth/me', { method: 'GET' });
@@ -179,6 +181,20 @@ describe('control-plane canonical profile routes', () => {
     expect(payload.account.deviceSummary.total).toBe(1);
     expect(payload.account.interactionState).toBeUndefined();
     expect(mockService.getHostedProfile).toHaveBeenCalledWith('acct_1');
+  });
+
+  it('returns 401 from auth/me when hosted auth is unavailable', async () => {
+    vi.mocked(isHostedAuthConfigured).mockReturnValue(false);
+
+    const { GET } = await import('@/app/api/control-plane/auth/me/route');
+    const request = new NextRequest('http://127.0.0.1:3000/api/control-plane/auth/me', { method: 'GET' });
+
+    const response = await GET(request);
+    const payload = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(payload.ok).toBe(false);
+    expect(payload.code).toBe('hosted_identity_unavailable');
   });
 
   it('returns the same canonical profile from the panel route', async () => {

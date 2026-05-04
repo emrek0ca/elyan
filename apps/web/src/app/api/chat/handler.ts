@@ -5,6 +5,13 @@ import { ControlPlaneAuthenticationError } from '@/core/control-plane/errors';
 import { executeInteractionStream, normalizeInteractionError } from '@/core/interaction/orchestrator';
 import { z } from 'zod';
 
+type ChatLearningMode = 'disabled' | 'authenticated_optional';
+
+type ChatHandlerOptions = {
+  requireHostedSession: boolean;
+  learningMode?: ChatLearningMode;
+};
+
 const chatMessageSchema = z.object({
   role: z.string().min(1),
   content: z.string().trim().min(1),
@@ -20,6 +27,7 @@ const chatRequestSchema = z.object({
 function invalidChatRequest(code: string, message: string, issues?: Record<string, string[] | undefined>) {
   return NextResponse.json(
     {
+      ok: false,
       error: message,
       code,
       ...(issues ? { issues } : {}),
@@ -51,7 +59,7 @@ async function readChatRequestBody(request: NextRequest) {
   }
 }
 
-export async function handleChatRequest(request: NextRequest, options: { requireHostedSession: boolean }) {
+export async function handleChatRequest(request: NextRequest, options: ChatHandlerOptions) {
   try {
     const bodyResult = await readChatRequestBody(request);
     if (!bodyResult.ok) {
@@ -72,8 +80,14 @@ export async function handleChatRequest(request: NextRequest, options: { require
     const latestUserMessage =
       [...messages].reverse().find((message) => message.role === 'user')?.content ?? messages[messages.length - 1].content;
     const requestId = request.headers.get('x-request-id')?.trim() || randomUUID();
-    const controlPlaneSession =
-      options.requireHostedSession && isControlPlaneSessionConfigured() ? await getControlPlaneSessionToken(request) : null;
+    const shouldHydrateSession =
+      isControlPlaneSessionConfigured() &&
+      (options.requireHostedSession || options.learningMode === 'authenticated_optional');
+    let controlPlaneSession = shouldHydrateSession ? await getControlPlaneSessionToken(request) : null;
+
+    if (!controlPlaneSession?.accountId && options.learningMode === 'authenticated_optional') {
+      controlPlaneSession = null;
+    }
 
     if (options.requireHostedSession && isControlPlaneSessionConfigured() && !controlPlaneSession?.accountId) {
       throw new ControlPlaneAuthenticationError('Control-plane session is required for the main chat surface');
@@ -88,12 +102,16 @@ export async function handleChatRequest(request: NextRequest, options: { require
       requestId,
       controlPlaneSession,
       requireHostedSession: options.requireHostedSession,
+      metadata: {
+        learningMode: controlPlaneSession?.accountId ? 'authenticated' : 'anonymous_disabled',
+      },
     });
   } catch (error: unknown) {
     console.error('Chat endpoint error:', error);
     const normalized = normalizeInteractionError(error);
     return NextResponse.json(
       {
+        ok: false,
         error: normalized.message,
         code: normalized.code,
       },

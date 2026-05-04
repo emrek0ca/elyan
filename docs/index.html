@@ -1,173 +1,213 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Elyan AI Operator - Investor Deck</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Elyan documentation. Local-first setup, optional hosted account, and the public boundary for elyan.dev." />
+  <title>Elyan Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/public.css" />
   <style>
-    :root{
-      --bg:#070b16;
-      --panel:rgba(11,18,36,.82);
-      --line:rgba(148,163,184,.18);
-      --text:#eef2ff;
-      --muted:#94a3b8;
-      --accent:#7dd3fc;
-      --accent-2:#34d399;
-      --warn:#fbbf24;
-      --r:20px;
-      --shadow:0 24px 80px rgba(0,0,0,.35);
-    }
-    *{box-sizing:border-box}
-    html,body{margin:0;min-height:100%;background:
-      radial-gradient(circle at top left,rgba(125,211,252,.14),transparent 28%),
-      radial-gradient(circle at top right,rgba(52,211,153,.14),transparent 24%),
-      linear-gradient(180deg,#050816 0%,#070b16 100%);
-      color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    a{color:inherit}
-    .wrap{max-width:1240px;margin:0 auto;padding:28px 20px 60px}
-    .hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr);gap:18px;align-items:end;margin-bottom:20px}
-    .eyebrow{color:var(--accent);text-transform:uppercase;letter-spacing:.18em;font-size:11px;font-weight:700}
-    h1{margin:10px 0 12px;font-size:clamp(40px,6vw,68px);line-height:.94;letter-spacing:-.05em}
-    .sub{max-width:760px;color:var(--muted);font-size:15px;line-height:1.7}
-    .pill-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
-    .pill{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.03);font-size:12px;color:#cbd5e1}
-    .cta{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
-    .btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 16px;border-radius:14px;text-decoration:none;font-weight:700;border:1px solid transparent}
-    .btn.primary{background:linear-gradient(135deg,#38bdf8,#22c55e);color:#04111f}
-    .btn.secondary{background:rgba(255,255,255,.03);border-color:var(--line);color:var(--text)}
-    .deck{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-    .slide{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px;box-shadow:var(--shadow)}
-    .slide h2{margin:0 0 10px;font-size:18px}
-    .slide p,.slide li{color:#dbeafe;line-height:1.65;font-size:14px}
-    .slide ul{margin:0;padding-left:18px;display:grid;gap:8px}
-    .wide{grid-column:1/-1}
-    .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-    .metric{padding:16px;border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
-    .metric span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.14em}
-    .metric strong{display:block;margin-top:8px;font-size:22px}
-    .timeline{display:grid;gap:10px}
-    .step{display:grid;grid-template-columns:72px minmax(0,1fr);gap:14px;align-items:flex-start;padding:14px;border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
-    .num{display:flex;align-items:center;justify-content:center;min-height:44px;border-radius:14px;background:rgba(125,211,252,.12);color:var(--accent);font-weight:800}
-    .foot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:18px;color:var(--muted);font-size:12px}
-    .kbd{padding:3px 8px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:#cbd5e1}
-    @media (max-width: 920px){
-      .hero,.deck,.metric-grid{grid-template-columns:1fr}
-      .cta{justify-content:flex-start}
+    .docs-layout{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px;align-items:start;padding-top:26px}
+    .docs-nav{position:sticky;top:18px}
+    .docs-nav .card{padding:16px}
+    .docs-nav a{display:block;padding:10px 12px;border-radius:12px;color:var(--soft);font-size:13px}
+    .docs-nav a:hover,.docs-nav a.is-active{background:rgba(13,79,60,.08);color:var(--text)}
+    .docs-content{display:grid;gap:18px}
+    .docs-section{padding:22px;border-radius:var(--radius);border:1px solid var(--line);background:rgba(255,250,242,.76);box-shadow:var(--shadow)}
+    .docs-section h2{font-size:28px;margin-bottom:10px}
+    .docs-section h3{font-size:20px;margin:18px 0 8px}
+    .docs-section p,.docs-section li{color:var(--muted)}
+    .docs-section ul{margin:12px 0 0;padding-left:18px}
+    .docs-section li{margin:7px 0}
+    .anchor{scroll-margin-top:24px}
+    .note{padding:14px 16px;border-radius:16px;border:1px solid rgba(13,79,60,.18);background:rgba(13,79,60,.05);color:#23443a}
+    @media (max-width: 960px){
+      .docs-layout{grid-template-columns:1fr}
+      .docs-nav{position:relative;top:auto}
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <section class="hero">
-      <div>
-        <div class="eyebrow">Elyan AI Operator</div>
-        <h1>Your Computer's New Brain.</h1>
-        <div class="sub">
-          Local-first AI operator that turns natural language into real desktop, browser, file, and integration actions
-          with sandboxing, approvals, trace, and evidence.
-        </div>
-        <div class="pill-row">
-          <span class="pill">Zero-permission default</span>
-          <span class="pill">Docker sandbox</span>
-          <span class="pill">Evidence-first</span>
-          <span class="pill">Local-first</span>
-        </div>
+  <div class="page">
+    <div class="wrap">
+      <header class="nav">
+        <a class="brand" href="/" aria-label="Elyan home">
+          <div class="mark">E</div>
+          <div>
+            <strong>Elyan Docs</strong>
+            <span>Canonical product truth for local and hosted surfaces</span>
+          </div>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="/"><span>Home</span></a>
+          <a href="/pricing">Pricing</a>
+          <a href="/auth">Account</a>
+          <a href="/panel">Panel</a>
+        </nav>
+      </header>
+
+      <div class="docs-layout">
+        <aside class="docs-nav">
+          <div class="card">
+            <div class="label">Contents</div>
+            <a href="#getting-started">Getting Started</a>
+            <a href="#install">Install</a>
+            <a href="#local-setup">Local Setup</a>
+            <a href="#optional-search">Optional Search</a>
+            <a href="#optional-mcp">Optional MCP</a>
+            <a href="#dashboard-cli">Dashboard + CLI</a>
+            <a href="#hosted-account">Hosted Account / Billing</a>
+            <a href="#privacy-boundaries">Privacy / Boundaries</a>
+            <a href="#faq">FAQ</a>
+          </div>
+        </aside>
+
+        <main class="docs-content">
+          <section class="docs-section anchor" id="getting-started">
+            <div class="kicker">Getting Started</div>
+            <h2>Start local. Keep private data local.</h2>
+            <p>Elyan is a local-first personal agent runtime. The website exists to explain the product, guide installation, and provide the hosted account surface for credits, billing, and entitlements.</p>
+            <div class="note" style="margin-top:14px">The default assumption is simple: private context stays on the user's machine. Hosted features are narrow and explicit.</div>
+          </section>
+
+          <section class="docs-section anchor" id="install">
+            <div class="kicker">Install</div>
+            <h2>Use the real install path.</h2>
+            <p>Elyan is installable on the user's own machine. The hosted website never becomes the default runtime.</p>
+            <div class="mono" style="margin-top:14px">brew install --formula https://raw.githubusercontent.com/emrek0ca/elyan/main/Formula/elyan.rb
+npm install -g github:emrek0ca/elyan
+elyan start --port 18789
+elyan desktop</div>
+          </section>
+
+          <section class="docs-section anchor" id="local-setup">
+            <div class="kicker">Local Setup</div>
+            <h2>Ollama-first by default.</h2>
+            <ul>
+              <li>Run a local model lane with Ollama when possible.</li>
+              <li>Keep local files, local runtime state, and local actions on-device.</li>
+              <li>Cloud assistance is optional and explicit, never assumed.</li>
+            </ul>
+            <div class="mono" style="margin-top:14px">brew install ollama
+ollama serve
+ollama pull llama3.2:3b</div>
+          </section>
+
+          <section class="docs-section anchor" id="optional-search">
+            <div class="kicker">Optional Search</div>
+            <h2>Search is optional, not the product.</h2>
+            <p>Search can be enabled when the user explicitly wants it. It supports the local runtime, but does not replace it.</p>
+            <ul>
+              <li>Use search only when needed.</li>
+              <li>Do not centralize personal memory into search by default.</li>
+              <li>Keep configuration narrow and reversible.</li>
+            </ul>
+          </section>
+
+          <section class="docs-section anchor" id="optional-mcp">
+            <div class="kicker">Optional MCP</div>
+            <h2>Use MCP for explicit integrations.</h2>
+            <p>Elyan can connect to narrow integrations through MCP when they are part of the user's workflow. It is an extension path, not the core boundary.</p>
+            <ul>
+              <li>Integrations are opt-in.</li>
+              <li>Shared control-plane state does not equal private context.</li>
+              <li>Keep connectors and permissions explicit.</li>
+            </ul>
+          </section>
+
+          <section class="docs-section anchor" id="dashboard-cli">
+            <div class="kicker">Dashboard + CLI</div>
+            <h2>Desktop for the runtime. CLI for operators.</h2>
+            <p>The local runtime is primarily a desktop product, with the CLI and dashboard surfaces used to inspect status, install, and operate the system.</p>
+            <div class="grid-2" style="margin-top:14px">
+              <div class="card">
+                <div class="label">CLI</div>
+                <p>Use the CLI for install, startup, health checks, and local operator workflows.</p>
+              </div>
+              <div class="card">
+                <div class="label">Dashboard</div>
+                <p>Use the panel for hosted account state, not as a fake local memory brain.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="docs-section anchor" id="hosted-account">
+            <div class="kicker">Hosted Account / Billing</div>
+            <h2>elyan.dev is the account surface.</h2>
+            <p>The hosted panel shows account, plan, entitlements, credits, usage, billing state, and notifications. It does not pretend to know private machine state unless that state is explicitly synced.</p>
+            <ul>
+              <li>Register and login on elyan.dev.</li>
+              <li>See hosted credits and usage history.</li>
+              <li>Open billing or portal actions when the integration is actually available.</li>
+              <li>View product notices and account messages from the control plane.</li>
+            </ul>
+          </section>
+
+          <section class="docs-section anchor" id="privacy-boundaries">
+            <div class="kicker">Privacy / Boundaries</div>
+            <h2>The boundary is a product requirement.</h2>
+            <div class="split" style="margin-top:14px">
+              <div class="card">
+                <div class="label">Local</div>
+                <p>Private memory, files, local tools, local actions, and user-private runtime state.</p>
+              </div>
+              <div class="card">
+                <div class="label">Hosted</div>
+                <p>Accounts, billing, entitlements, credits, usage, notifications, and install metadata.</p>
+              </div>
+            </div>
+            <p style="margin-top:12px">Hosted state is narrow. It exists to support the product, not to absorb the user's private brain.</p>
+          </section>
+
+          <section class="docs-section anchor" id="faq">
+            <div class="kicker">FAQ</div>
+            <h2>Short answers.</h2>
+            <h3>Is Elyan a SaaS brain?</h3>
+            <p>No. The local runtime is the product. Hosted is only the shared layer for account and billing state.</p>
+            <h3>Does private context sync to the cloud by default?</h3>
+            <p>No. Private context stays local unless the user explicitly enables a narrow sync path.</p>
+            <h3>Where do I manage billing?</h3>
+            <p>In the hosted panel after login. If billing integration is unavailable, the UI says so plainly.</p>
+          </section>
+
+          <footer class="footer">
+            <div>Canonical docs for Elyan. Use these pages as the product truth source for the public site.</div>
+            <div><a href="/auth">Account</a> · <a href="/panel">Panel</a> · <a href="/">Home</a></div>
+          </footer>
+        </main>
       </div>
-      <div class="cta">
-        <a class="btn primary" href="./README.md">Read Docs</a>
-        <a class="btn secondary" href="../ui/web/dashboard.html">Open Dashboard</a>
-        <a class="btn secondary" href="./pitch-deck.md">Pitch Outline</a>
-      </div>
-    </section>
-
-    <section class="slide wide">
-      <div class="metric-grid">
-        <div class="metric"><span>Install</span><strong>30s</strong></div>
-        <div class="metric"><span>Default mode</span><strong>Local</strong></div>
-        <div class="metric"><span>Safety</span><strong>Approved</strong></div>
-        <div class="metric"><span>Output</span><strong>Trace + Evidence</strong></div>
-      </div>
-    </section>
-
-    <section class="deck">
-      <article class="slide">
-        <h2>1. Problem</h2>
-        <ul>
-          <li>Work still lives across browser, desktop, email, docs, and chat.</li>
-          <li>Current assistants are chat-first and brittle on real actions.</li>
-          <li>Teams need something that can act and prove what happened.</li>
-        </ul>
-      </article>
-
-      <article class="slide">
-        <h2>2. Solution</h2>
-        <ul>
-          <li>Natural language in, real computer work out.</li>
-          <li>Planner, skill registry, integrations, and actuator in one loop.</li>
-          <li>Every destructive action passes approval and sandbox gates.</li>
-        </ul>
-      </article>
-
-      <article class="slide">
-        <h2>3. Demo Flow</h2>
-        <div class="timeline">
-          <div class="step"><div class="num">01</div><div><strong>Install</strong><p><span class="kbd">curl -fsSL https://get.elyan.ai | bash</span></p></div></div>
-          <div class="step"><div class="num">02</div><div><strong>Ask</strong><p>Give a browser, desktop, email, or research task.</p></div></div>
-          <div class="step"><div class="num">03</div><div><strong>Verify</strong><p>Open the trace page and show evidence gallery.</p></div></div>
-        </div>
-      </article>
-
-      <article class="slide">
-        <h2>4. Product Surface</h2>
-        <ul>
-          <li>CLI for operators.</li>
-          <li>Dashboard for mission control.</li>
-          <li>Messaging adapters for remote control.</li>
-          <li>Skill Store for extensibility.</li>
-        </ul>
-      </article>
-
-      <article class="slide wide">
-        <h2>5. Why It Wins</h2>
-        <div class="metric-grid">
-          <div class="metric"><span>Action</span><strong>Real</strong></div>
-          <div class="metric"><span>Trust</span><strong>Traceable</strong></div>
-          <div class="metric"><span>Execution</span><strong>Sandboxed</strong></div>
-          <div class="metric"><span>Experience</span><strong>Operator-first</strong></div>
-        </div>
-      </article>
-
-      <article class="slide">
-        <h2>6. Market</h2>
-        <ul>
-          <li>Knowledge workers.</li>
-          <li>Ops and support teams.</li>
-          <li>Growth, research, and admin workflows.</li>
-        </ul>
-      </article>
-
-      <article class="slide">
-        <h2>7. Business</h2>
-        <ul>
-          <li>Free local tier.</li>
-          <li>Cloud fallback for convenience.</li>
-          <li>Enterprise sandbox, policy, and audit controls.</li>
-        </ul>
-      </article>
-
-      <article class="slide wide">
-        <h2>8. Ask</h2>
-        <p>
-          Elyan is positioned to become the default local operator layer for the desktop.
-          The next step is distribution, enterprise hardening, and a public skill ecosystem.
-        </p>
-      </article>
-    </section>
-
-    <div class="foot">
-      <div>Investor deck and docs for Elyan AI Operator.</div>
-      <div>Trace viewer: <span class="kbd">/trace/{task_id}</span></div>
     </div>
   </div>
+
+  <script>
+    const pathname = window.location.pathname.replace(/\/+$/, "");
+    const slug = pathname.startsWith("/docs/") ? pathname.slice(6) : "";
+    const mapping = {
+      "": "getting-started",
+      "getting-started": "getting-started",
+      "install": "install",
+      "local-runtime": "local-setup",
+      "hosted-account": "hosted-account",
+      "privacy": "privacy-boundaries",
+      "privacy-boundaries": "privacy-boundaries",
+      "dashboard": "dashboard-cli",
+      "dashboard-cli": "dashboard-cli",
+      "getting-started/installation": "install"
+    };
+    const targetId = mapping[slug] || window.location.hash.replace("#", "") || "getting-started";
+    const target = document.getElementById(targetId);
+    if (target) {
+      requestAnimationFrame(() => target.scrollIntoView({ block: "start" }));
+    }
+    const links = Array.from(document.querySelectorAll(".docs-nav a"));
+    for (const link of links) {
+      if (link.getAttribute("href") === `#${targetId}`) {
+        link.classList.add("is-active");
+      }
+    }
+  </script>
 </body>
 </html>

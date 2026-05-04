@@ -17,6 +17,10 @@ def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _background_realtime_enabled() -> bool:
+    return _truthy(os.environ.get("ELYAN_ENABLE_REALTIME_ACTUATOR"))
+
+
 def _float_env(name: str, default: float) -> float:
     try:
         return float(os.environ.get(name, default))
@@ -412,6 +416,13 @@ class DependencyManager:
         }
 
     def install_realtime_actuator_service(self) -> dict[str, Any]:
+        if not _background_realtime_enabled():
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "RealTimeActuator servisi varsayılan olarak kapalı.",
+            }
+
         if self.dry_run:
             return {"ok": False, "message": "RealTimeActuator servisi atlandı (dry-run)."}
 
@@ -553,9 +564,10 @@ WantedBy=default.target
             ("docker", "Docker doğrulanıyor", self.ensure_docker),
             ("screenpipe", "Screenpipe hazırlanıyor", self.ensure_screenpipe),
             ("ollama", "Ollama ve başlangıç modeli hazırlanıyor", self.ensure_ollama),
-            ("realtime_actuator", "Arka plan servisi kuruluyor", self.install_realtime_actuator_service),
             ("skills", "Başlangıç becerileri etkinleştiriliyor", self.enable_initial_skills),
         ]
+        if _background_realtime_enabled():
+            ordered_steps.insert(3, ("realtime_actuator", "Arka plan servisi kuruluyor", self.install_realtime_actuator_service))
 
         total = len(ordered_steps) + 1
         for index, (name, label, runner) in enumerate(ordered_steps, start=1):

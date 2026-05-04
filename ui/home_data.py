@@ -364,6 +364,14 @@ class MockHomeDataService:
                     "internet_reach": {"status": "healthy", "ready": True, "current_lane": "verified_lane", "verification_state": "verified", "average_latency_bucket": "steady"},
                     "document_ingest": {"status": "healthy", "liteparse_enabled": True, "verification_state": "verified", "vision_ocr_backend": "auto"},
                     "speed_runtime": {"status": "healthy", "current_lane": "turbo_lane", "verification_state": "standard", "average_latency_bucket": "fast", "fallback_active": False},
+                    "model_runtime": {
+                        "enabled": True,
+                        "execution_mode": "local_first",
+                        "device_policy": "cpu",
+                        "capabilities": {
+                            "embedding": {"available": True, "backend": "local_hashing"},
+                        },
+                    },
                 },
             },
         )
