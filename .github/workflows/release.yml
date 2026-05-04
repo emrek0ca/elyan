@@ -134,7 +134,7 @@ jobs:
 
       - name: Deploy release on VPS
         if: steps.vps_deploy.outputs.enabled == 'true'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.ELYAN_VPS_HOST }}
           username: ${{ secrets.ELYAN_VPS_USER }}
