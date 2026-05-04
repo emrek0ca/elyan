@@ -1,0 +1,68 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: elyan-app
+    init: true
+    stop_grace_period: 30s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - elyan_control_plane_data:/app/storage/control-plane
+    environment:
+      - SEARXNG_URL=http://searxng:8080
+      - OLLAMA_URL=http://host.docker.internal:11434
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      searxng:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/healthz').then((r) => { if (!r.ok) process.exit(1); return r.json(); }).then((body) => { if (!body || body.ok !== true) process.exit(1); }).catch(() => process.exit(1));" ]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - elyan-network
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: elyan-searxng
+    init: true
+    stop_grace_period: 20s
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz" ]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - elyan-network
+
+volumes:
+  elyan_control_plane_data:
+    name: elyan_control_plane_data
+
+networks:
+  elyan-network:
+    name: elyan-network
+    driver: bridge
