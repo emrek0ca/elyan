@@ -95,5 +95,5 @@ pytest-asyncio>=0.23.0
 jsonschema>=4.20.0                      # JSON validation for learning engine
 markdown>=3.5.0                         # Safe markdown to HTML conversion
 mistune>=3.0.0                          # Markdown parser (alternative)
-prometheus-client>=0.18.0                # Prometheus metrics
+prometheus-client>=0.25.0                # Prometheus metrics
 pyyaml>=6.0                             # Configuration files
