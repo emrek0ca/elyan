@@ -182,7 +182,18 @@ export class PostgresControlPlaneStateStore {
 
   private async ensureBootstrap() {
     if (!this.bootstrapPromise) {
-      this.bootstrapPromise = this.bootstrap();
+      const bootstrapPromise = this.bootstrap();
+      const wrappedBootstrapPromise = bootstrapPromise.then(
+        () => undefined,
+        (error) => {
+          if (this.bootstrapPromise === wrappedBootstrapPromise) {
+            this.bootstrapPromise = null;
+          }
+
+          throw error;
+        }
+      );
+      this.bootstrapPromise = wrappedBootstrapPromise;
     }
 
     await this.bootstrapPromise;
