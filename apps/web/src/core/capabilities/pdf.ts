@@ -1,5 +1,8 @@
 import { z } from 'zod';
+import { CapabilityDisabledError } from './errors';
 import type { CapabilityDefinition, CapabilityExecutionContext } from './types';
+
+type PdfJsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 
 function ensurePromiseWithResolvers() {
   const promiseConstructor = Promise as PromiseConstructor & {
@@ -35,6 +38,33 @@ const pdfExtractOutputSchema = z.object({
   text: z.string(),
   totalPages: z.number().int().positive(),
 });
+
+function isPdfJsRuntimeSupported() {
+  return typeof window !== 'undefined' && typeof Uint8Array !== 'undefined';
+}
+
+async function loadPdfJs(): Promise<PdfJsModule> {
+  if (!isPdfJsRuntimeSupported()) {
+    throw new CapabilityDisabledError('pdf_extract', 'PDF extraction is unavailable in this runtime');
+  }
+
+  return import('pdfjs-dist/legacy/build/pdf.mjs');
+}
+
+function decodeBase64(base64: string) {
+  if (typeof Buffer !== 'undefined') {
+    return Uint8Array.from(Buffer.from(base64, 'base64'));
+  }
+
+  const binary = window.atob(base64);
+  const data = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    data[index] = binary.charCodeAt(index);
+  }
+
+  return data;
+}
 
 function flattenTextItems(items: Array<{ str?: string }>): string {
   return items

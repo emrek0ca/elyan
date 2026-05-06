@@ -52,6 +52,23 @@ function resolveCookieDomain() {
   return undefined;
 }
 
+function resolveCookieDomain() {
+  if (!env.NEXTAUTH_URL) {
+    return undefined;
+  }
+
+  try {
+    const hostname = new URL(env.NEXTAUTH_URL).hostname.toLowerCase();
+    if (hostname.endsWith('.elyan.dev')) {
+      return '.elyan.dev';
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
 export function getControlPlaneAuthOptions(): NextAuthOptions {
   requireAuthConfiguration();
   const secureCookies = Boolean(env.NEXTAUTH_URL?.startsWith('https://'));

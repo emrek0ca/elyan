@@ -1,0 +1,42 @@
+Security Policy
+
+Elyan is published as an open-source local-first agent with a narrow hosted control plane. Security issues are handled privately first.
+
+Supported versions
+
+- The current v1.x line is supported.
+- Security fixes are applied to the active release branch and backported when practical.
+
+How to report a vulnerability
+
+Use a private GitHub Security Advisory if available, or email support@elyan.dev.
+
+Include:
+
+- the affected surface
+- the version or commit you tested
+- reproduction steps
+- relevant logs or request/response details
+- whether the issue affects local runtime, hosted control plane, or release artifacts
+
+What we treat as security-sensitive
+
+- authentication or session bypass
+- token, key, or secret leakage
+- VPS deployment details, server inventory, deploy paths, operational runbooks, IP addresses, hostnames, and non-public infrastructure notes
+- billing or entitlement bypass
+- SSRF, RCE, or arbitrary file access
+- unauthorized device linking or sync
+- webhook signature bypass
+- cross-origin or cache exposure of private control-plane data
+
+Disclosure expectation
+
+Please do not publish the report publicly until a fix or coordinated disclosure window is agreed.
+
+Operational data policy
+
+- Do not commit VPS runbooks, private server notes, credentials, private keys, `.env` files, shell history, database dumps, or host-specific deployment details.
+- Keep only sanitized examples in the repository, such as `.env.example` and `release/systemd/elyan.env.example`.
+- Before every release, `npm run security:check` must pass. The release gate also runs this check.
+- If operational data is pushed publicly, assume exposed credentials are compromised. Rotate affected credentials first, then remove the material from the repository and decide whether history rewrite is required.

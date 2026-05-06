@@ -222,6 +222,16 @@ export class TeamRunner {
     const failed = new Set<string>();
     const sources = await this.collectSources(input);
     const sourceContext = sources.length > 0 ? citationEngine.buildContext(sources) : '';
+    const deadlineAt = Date.now() + (input.maxExecutionMs ?? 90_000);
+    const assertActive = () => {
+      if (input.abortSignal?.aborted) {
+        throw input.abortSignal.reason instanceof Error ? input.abortSignal.reason : new Error('Team run aborted by request guard.');
+      }
+
+      if (Date.now() > deadlineAt) {
+        throw new Error('Team run exceeded the request execution deadline.');
+      }
+    };
 
     await this.store.createRun(teamPlan);
     await this.store.appendEvent({
@@ -265,6 +275,7 @@ export class TeamRunner {
           })
         )
       );
+      assertActive();
 
       if (failed.size > 0) {
         break;

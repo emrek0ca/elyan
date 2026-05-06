@@ -313,13 +313,45 @@ export const controlPlaneDailyLimitSchema = z.object({
 
 export type ControlPlaneDailyLimit = z.infer<typeof controlPlaneDailyLimitSchema>;
 
+export const controlPlanePlanTierSchema = z.enum(['FREE', 'PRO', 'TEAM']);
+
+export type ControlPlanePlanTier = z.infer<typeof controlPlanePlanTierSchema>;
+
+export const controlPlanePlanTokenLimitsSchema = z.object({
+  monthlyIncludedTokens: z.number().int().nonnegative(),
+  maxTokensPerRequest: z.number().int().nonnegative(),
+});
+
+export type ControlPlanePlanTokenLimits = z.infer<typeof controlPlanePlanTokenLimitsSchema>;
+
+export const controlPlanePlanModelAccessSchema = z.object({
+  localModels: z.boolean(),
+  hostedModels: z.boolean(),
+  advancedModels: z.boolean(),
+});
+
+export type ControlPlanePlanModelAccess = z.infer<typeof controlPlanePlanModelAccessSchema>;
+
+export const controlPlanePlanFeatureAccessSchema = z.object({
+  hostedChat: z.boolean(),
+  research: z.boolean(),
+  integrations: z.boolean(),
+  teamRuns: z.boolean(),
+});
+
+export type ControlPlanePlanFeatureAccess = z.infer<typeof controlPlanePlanFeatureAccessSchema>;
+
 export const controlPlanePlanSchema = z.object({
   id: controlPlanePlanIdSchema,
+  tier: controlPlanePlanTierSchema,
   title: z.string(),
   summary: z.string(),
   audience: z.string(),
   monthlyPriceTRY: z.string(),
   monthlyIncludedCredits: z.string(),
+  tokenLimits: controlPlanePlanTokenLimitsSchema,
+  modelAccess: controlPlanePlanModelAccessSchema,
+  featureAccess: controlPlanePlanFeatureAccessSchema,
   entitlements: controlPlaneEntitlementsSchema,
   rateCard: controlPlaneRateCardSchema,
   rateLimits: controlPlaneRateLimitSchema,
@@ -794,6 +826,7 @@ export const controlPlaneHostedSessionSchema = z.object({
   hostedAccess: z.boolean(),
   hostedUsageAccounting: z.boolean(),
   balanceCredits: z.string(),
+  tokenBalance: z.string(),
   deviceCount: z.number().int().nonnegative(),
   activeDeviceCount: z.number().int().nonnegative(),
 });

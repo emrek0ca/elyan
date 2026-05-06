@@ -9,6 +9,7 @@ import { buildRuntimeRegistryHealthSnapshot } from '@/core/runtime-registry';
 import { getRuntimeVersionInfo } from '@/core/runtime-version';
 
 export async function GET() {
+  const elyanMode = readRuntimeEnvValue('ELYAN_MODE') ?? process.env.ELYAN_MODE ?? 'development';
   const result = await readRuntimeStatusSnapshot();
   const version = getRuntimeVersionInfo();
 
@@ -21,6 +22,7 @@ export async function GET() {
         releaseTag: version.releaseTag,
         buildSha: version.buildSha,
         mode: process.env.NODE_ENV ?? 'development',
+        elyanMode,
         runtime: 'local-first',
         ready: false,
         error: 'Environment configuration is invalid.',
@@ -52,6 +54,7 @@ export async function GET() {
     releaseTag: version.releaseTag,
     buildSha: version.buildSha,
     mode: process.env.NODE_ENV ?? 'development',
+    elyanMode,
     runtime: 'local-first',
     ready,
     checks: {

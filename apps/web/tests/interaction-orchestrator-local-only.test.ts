@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockControlPlaneService = {
   getAccount: vi.fn(),
   getInteractionContext: vi.fn(),
+  recordUsageBundle: vi.fn(),
   recordInteraction: vi.fn(),
+  recordLearningEvent: vi.fn(),
   recordEvaluationSignal: vi.fn(),
 };
 
@@ -118,6 +120,10 @@ vi.mock('@/core/orchestration', () => ({
 }));
 
 describe('interaction orchestrator local-only behavior', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it(
     'records local interaction memory without writing hosted improvement signals',
     async () => {

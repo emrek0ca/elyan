@@ -163,6 +163,14 @@ function normalizeError(error: unknown) {
     };
   }
 
+  if (error instanceof RequestGuardError) {
+    return {
+      code: error.code,
+      message: error.message,
+      status: error.statusCode,
+    };
+  }
+
   if (message.includes('hosted usage is disabled')) {
     return {
       code: 'hosted_usage_disabled',
@@ -1256,10 +1264,125 @@ async function maybeRecordHostedUsage(prepared: PreparedInteraction) {
     return;
   }
 
+  if (
+    !prepared.requireHostedSession &&
+    !prepared.hostedAccount.entitlements.hostedAccess &&
+    !prepared.hostedAccount.entitlements.hostedUsageAccounting
+  ) {
+    return;
+  }
+
   const controlPlane = getControlPlaneService();
-  if (prepared.hostedAccount.entitlements.hostedAccess && prepared.hostedAccount.entitlements.hostedUsageAccounting) {
-    const usageDraft = estimateHostedUsageDraft(prepared.plan, prepared.requestId);
-    await controlPlane.recordUsageBundle(prepared.hostedAccountId, usageDraft);
+  const usageDraft = estimateHostedUsageDraft(prepared.plan, prepared.requestId);
+  await controlPlane.recordUsageBundle(prepared.hostedAccountId, usageDraft);
+}
+
+async function recordLearningEvent(
+  prepared: PreparedInteraction,
+  request: InteractionRequest,
+  output: {
+    text: string;
+    sources: Array<{ url: string; title: string }>;
+    failureReason?: string;
+    success: boolean;
+    modelId?: string;
+    modelProvider?: string;
+  }
+) {
+  if (!prepared.hostedAccountId) {
+    return;
+  }
+
+  const controlPlane = getControlPlaneService();
+  const latencyMs = Date.now() - prepared.startedAt;
+  const sourceCount = output.sources.length;
+  const citationCount = (output.text.match(/\[(\d+)\]/g) ?? []).length;
+  const reasoningSteps = buildReasoningTrace({
+    input: request.text,
+    intent: prepared.classification.intent,
+    plan: prepared.plan,
+    reasoningSteps: [
+      `input: ${request.text.slice(0, 240)}`,
+      `intent: ${prepared.classification.intent}`,
+      `plan: ${buildReasoningPlanSummary(prepared.plan, prepared.classification.intent)}`,
+    ],
+    action: sourceCount > 0 ? `tool output grounded by ${sourceCount} source(s)` : 'direct answer',
+    observation: sourceCount > 0 ? `${sourceCount} source(s) observed` : 'no live sources observed',
+    refinement: output.failureReason ?? (output.success ? 'retain grounded answer' : 'retry with fallback'),
+    output: output.text,
+    success: output.success,
+    failureReason: output.failureReason,
+    latencyMs,
+    citationCount,
+    toolCallCount: sourceCount,
+  });
+  const teacherModel = await resolveTeacherModel().catch(() => null);
+  const candidate: MlDatasetCandidate = {
+    account_id: prepared.hostedAccountId ?? 'local',
+    account_display_name: prepared.hostedAccount?.displayName ?? 'local',
+    owner_type: prepared.hostedAccount?.ownerType ?? 'individual',
+    account_status: prepared.hostedAccount?.status ?? 'active',
+    plan_id: prepared.hostedAccount?.subscription?.planId ?? 'local_byok',
+    subscription_status: prepared.hostedAccount?.subscription?.status ?? 'trialing',
+    request_id: prepared.requestId,
+    source: request.source === 'web' ? 'request' : 'request',
+    instruction: request.text,
+    input: request.text,
+    output: output.text,
+    plan: buildReasoningPlanSummary(prepared.plan, prepared.classification.intent),
+    reasoning_trace: reasoningSteps,
+    success: output.success,
+    failure_reason: output.failureReason,
+    quality: output.success ? 'good' : 'poor',
+    latency_ms: latencyMs,
+    metadata: {
+      intent: prepared.classification.intent,
+      routing_mode: prepared.plan.routingMode,
+      reasoning_depth: prepared.plan.reasoningDepth,
+      request_id: prepared.requestId,
+      source_count: sourceCount,
+      citation_count: citationCount,
+      model_id: output.modelId ?? prepared.selectedModelId,
+      model_provider: output.modelProvider,
+      taskIntent: prepared.plan.taskIntent,
+    },
+  };
+  const quality = await buildQualityAssessment(candidate, teacherModel);
+
+  try {
+    await controlPlane.recordLearningEvent(prepared.hostedAccountId, {
+      requestId: prepared.requestId,
+      source: request.source,
+      input: request.text,
+      intent: prepared.classification.intent,
+      plan: buildReasoningPlanSummary(prepared.plan, prepared.classification.intent),
+      reasoningSteps,
+      output: output.text,
+      betterOutput: quality.better_output,
+      success: output.success,
+      failureReason: output.failureReason,
+      latencyMs,
+      score: quality.score,
+      accepted: quality.accepted,
+      modelId: output.modelId ?? prepared.selectedModelId,
+      modelProvider: output.modelProvider,
+      metadata: {
+        requestId: prepared.requestId,
+        queryLength: prepared.queryLength,
+        sourceCount,
+        citationCount,
+        taskIntent: prepared.plan.taskIntent,
+        reasoningDepth: prepared.plan.reasoningDepth,
+        routingMode: prepared.plan.routingMode,
+        teacherStrategy: quality.teacher_strategy,
+        evaluatorNotes: quality.evaluator_notes,
+        discardReason: quality.discard_reason,
+        accepted: quality.accepted,
+        score: quality.score,
+      },
+    });
+  } catch (error) {
+    console.warn('Elyan learning event capture failed', error);
   }
 }
 
@@ -1599,6 +1722,7 @@ function describeRepositorySnapshot(metadata: Record<string, unknown>) {
 
 export async function executeInteractionText(request: InteractionRequest): Promise<InteractionTextResponse> {
   const prepared = await prepareInteraction(request);
+  const guardRuntime = createRequestGuardRuntime(prepared.requestGuard);
   const account = prepared.hostedAccount;
   const runtimeSettings = readRuntimeSettingsSync();
   const contextAugments = await loadLearningContextAugments(prepared);
@@ -1793,6 +1917,7 @@ export async function executeInteractionText(request: InteractionRequest): Promi
 
 export async function executeInteractionStream(request: InteractionRequest) {
   const prepared = await prepareInteraction(request);
+  const guardRuntime = createRequestGuardRuntime(prepared.requestGuard);
   const account = prepared.hostedAccount;
   const runtimeSettings = readRuntimeSettingsSync();
   const contextAugments = await loadLearningContextAugments(prepared);

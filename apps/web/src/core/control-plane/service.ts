@@ -745,6 +745,7 @@ function buildHostedProfile(state: ControlPlaneState, account: ControlPlaneAccou
     hostedAccess: account.entitlements.hostedAccess,
     hostedUsageAccounting: account.entitlements.hostedUsageAccounting,
     balanceCredits: account.balanceCredits,
+    tokenBalance: account.balanceCredits,
     deviceCount: deviceSummary.total,
     activeDeviceCount: deviceSummary.active,
   };
@@ -1128,6 +1129,7 @@ export class ControlPlaneService {
       hostedAccess: account.entitlements.hostedAccess,
       hostedUsageAccounting: account.entitlements.hostedUsageAccounting,
       balanceCredits: account.balanceCredits,
+      tokenBalance: account.balanceCredits,
       deviceCount: deviceSummary.total,
       activeDeviceCount: deviceSummary.active,
     };
