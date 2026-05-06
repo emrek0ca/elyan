@@ -189,6 +189,8 @@ export type TeamRunInput = TeamPlannerInput & {
   contextAugments?: string[];
   searchEnabled: boolean;
   signal?: AbortSignal;
+  abortSignal?: AbortSignal;
+  maxExecutionMs?: number;
 };
 
 export type TeamRunResult = {

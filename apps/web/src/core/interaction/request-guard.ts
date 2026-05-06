@@ -2,7 +2,7 @@ import { env } from '@/lib/env';
 import type { OrchestrationPlan } from '@/core/orchestration';
 
 export type RequestGuard = {
-  mode: 'development' | 'production';
+  mode: 'development' | 'production' | 'competition';
   maxExecutionMs: number;
   maxSteps: number;
   maxInputTokens: number;
