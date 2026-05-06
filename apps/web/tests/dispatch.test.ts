@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -163,6 +163,15 @@ async function loadDispatchModuleWithSeededTask(task: DispatchTask) {
     tmpDir,
     mod,
   };
+}
+
+async function pathExists(filePath: string) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForTask(
@@ -347,6 +356,7 @@ describe('dispatch service', () => {
 
     const stored = await getDispatchTask(task.id);
     expect(stored?.status).toBe('failed');
+    expect(await pathExists(path.join(tmpDir, 'tasks', task.id))).toBe(false);
     expect(executeInteractionTextMock).not.toHaveBeenCalled();
   });
 
@@ -439,14 +449,28 @@ describe('dispatch service', () => {
     const loaded = await loadDispatchModuleWithSeededTask(task);
     tmpDir = loaded.tmpDir;
     const { getDispatchTask } = loaded.mod;
+    const { getDispatchRuntimeCoordinator } = await import('@/core/dispatch/runtime');
+    const runtime = getDispatchRuntimeCoordinator();
+    const lifecycleSpy = vi.spyOn(runtime, 'recordLifecycleEvent');
 
     const failed = await waitForTask(getDispatchTask, task.id, 'failed');
 
     expect(failed?.error).toContain('failing closed');
+    expect(await pathExists(path.join(tmpDir, 'tasks', task.id))).toBe(false);
+    expect(
+      lifecycleSpy.mock.calls.some(
+        ([eventTaskId, event]) =>
+          eventTaskId === task.id &&
+          event.kind === 'recovery' &&
+          event.status === 'failed' &&
+          typeof event.note === 'string' &&
+          event.note.includes('Recovered task was executing')
+      )
+    ).toBe(true);
     expect(executeInteractionTextMock).not.toHaveBeenCalled();
   });
 
-  it('recovers exporting tasks from persisted results without rerunning execution', async () => {
+  it('fails closed on recovered exporting tasks without replaying execution', async () => {
     const task = {
       id: 'dispatch_recovered_exporting',
       version: 1,
@@ -485,11 +509,24 @@ describe('dispatch service', () => {
     const loaded = await loadDispatchModuleWithSeededTask(task);
     tmpDir = loaded.tmpDir;
     const { getDispatchTask } = loaded.mod;
+    const { getDispatchRuntimeCoordinator } = await import('@/core/dispatch/runtime');
+    const runtime = getDispatchRuntimeCoordinator();
+    const lifecycleSpy = vi.spyOn(runtime, 'recordLifecycleEvent');
 
-    const completed = await waitForTask(getDispatchTask, task.id, 'completed');
+    const failed = await waitForTask(getDispatchTask, task.id, 'failed');
 
-    expect(completed?.result?.text).toBe('Recovered result body');
-    expect(completed?.artifacts.length).toBeGreaterThanOrEqual(2);
+    expect(failed?.error).toContain('failing closed');
+    expect(await pathExists(path.join(tmpDir, 'tasks', task.id))).toBe(false);
+    expect(
+      lifecycleSpy.mock.calls.some(
+        ([eventTaskId, event]) =>
+          eventTaskId === task.id &&
+          event.kind === 'recovery' &&
+          event.status === 'failed' &&
+          typeof event.note === 'string' &&
+          event.note.includes('Recovered task was exporting')
+      )
+    ).toBe(true);
     expect(executeInteractionTextMock).not.toHaveBeenCalled();
   });
 

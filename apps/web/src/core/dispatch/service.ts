@@ -17,7 +17,6 @@ import {
 import { buildDispatchStatusSnapshot } from './status';
 import { inferDispatchProgress, mapDispatchSourceToOperatorSource } from './types';
 import { getDispatchRuntimeCoordinator, persistTaskWorkspaceArtifacts } from './runtime';
-import { cleanupTaskWorkspaceArtifacts } from './runtime/artifacts';
 
 function nowIso() {
   return new Date().toISOString();
@@ -295,7 +294,6 @@ export class DispatchService {
     }
 
     const now = nowIso();
-    this.runtime.setRecoveryState(taskId, 'fresh');
     const nextTask: DispatchTask = {
       ...current,
       status: 'failed',
@@ -310,8 +308,19 @@ export class DispatchService {
     await this.store.write(nextTask);
     await this.runtime.cancelTask(taskId);
     const workspacePaths = await this.runtime.ensureTaskWorkspace(nextTask);
-    await cleanupTaskWorkspaceArtifacts(taskId).catch(() => undefined);
     await this.runtime.writeRuntimeState(taskId, buildRuntimeState(nextTask, workspacePaths, this.runtime.getRecoveryState(taskId)));
+    await this.runtime.recordLifecycleEvent(taskId, {
+      kind: 'lifecycle',
+      status: nextTask.status,
+      progress: nextTask.progress,
+      note: nextTask.error,
+      data: {
+        cancellationRequestedAt: nextTask.cancellationRequestedAt,
+        cancelledAt: nextTask.cancelledAt,
+        recoveryState: this.runtime.getRecoveryState(taskId),
+      },
+    });
+    await this.runtime.cleanupTaskWorkspace(taskId).catch(() => undefined);
     return nextTask;
   }
 
@@ -363,7 +372,8 @@ export class DispatchService {
       return;
     }
 
-    return this.runtime.withTaskWorkspace(taskId, async (workspacePaths) => {
+    let cleanupTerminalWorkspace = false;
+    await this.runtime.withTaskWorkspace(taskId, async (workspacePaths) => {
       const refreshedCurrent = (await this.store.get(taskId)) ?? current;
       if (!isProcessableTask(refreshedCurrent)) {
         return;
@@ -371,25 +381,22 @@ export class DispatchService {
 
       const recoveryState = this.runtime.getRecoveryState(taskId);
       if (refreshedCurrent.status === 'executing' && recoveryState === 'recovered') {
-        await this.failTask(
+        cleanupTerminalWorkspace = await this.failTask(
           refreshedCurrent,
           'Recovered task was executing during restart; failing closed to avoid duplicate side effects.',
-          workspacePaths
+          workspacePaths,
+          { cleanupWorkspace: true, traceKind: 'recovery' }
         );
         return;
       }
 
       if (refreshedCurrent.status === 'exporting') {
-        if (!refreshedCurrent.result) {
-          await this.failTask(
-            refreshedCurrent,
-            'Recovered exporting task had no persisted result; failing closed to avoid duplicate execution.',
-            workspacePaths
-          );
-          return;
-        }
-
-        await this.completeRecoveredExport(refreshedCurrent, workspacePaths);
+        cleanupTerminalWorkspace = await this.failTask(
+          refreshedCurrent,
+          'Recovered task was exporting during restart; failing closed to avoid duplicate side effects.',
+          workspacePaths,
+          { cleanupWorkspace: true, traceKind: 'recovery' }
+        );
         return;
       }
 
@@ -409,6 +416,15 @@ export class DispatchService {
       };
       await this.store.write(planningTask);
       await this.runtime.writeRuntimeState(taskId, buildRuntimeState(planningTask, workspacePaths, this.runtime.getRecoveryState(taskId)));
+      await this.runtime.recordLifecycleEvent(taskId, {
+        kind: 'lifecycle',
+        status: planningTask.status,
+        progress: planningTask.progress,
+        note: 'Planning remote execution path.',
+        data: {
+          recoveryState: this.runtime.getRecoveryState(taskId),
+        },
+      });
 
       const surface = buildExecutionSurfaceSnapshot();
       const classification = classifyInteractionIntent(refreshedCurrent.text, refreshedCurrent.mode);
@@ -456,6 +472,16 @@ export class DispatchService {
         await this.store.write(waitingTask);
         await this.runtime.persistApprovalCheckpoint(waitingTask, approvalReason);
         await this.runtime.writeRuntimeState(taskId, buildRuntimeState(waitingTask, workspacePaths, this.runtime.getRecoveryState(taskId)));
+        await this.runtime.recordLifecycleEvent(taskId, {
+          kind: 'checkpoint',
+          status: waitingTask.status,
+          progress: waitingTask.progress,
+          note: approvalReason,
+          data: {
+            approvalState: waitingTask.approval.state,
+            recoveryState: this.runtime.getRecoveryState(taskId),
+          },
+        });
         return;
       }
 
@@ -493,9 +519,21 @@ export class DispatchService {
       };
       await this.store.write(executingTask);
       await this.runtime.writeRuntimeState(taskId, buildRuntimeState(executingTask, workspacePaths, this.runtime.getRecoveryState(taskId)));
+      await this.runtime.recordLifecycleEvent(taskId, {
+        kind: 'lifecycle',
+        status: executingTask.status,
+        progress: executingTask.progress,
+        note: 'Task is executing in the bounded local runtime.',
+        data: {
+          recoveryState: this.runtime.getRecoveryState(taskId),
+        },
+      });
 
       if (executingTask.cancellationRequestedAt) {
-        await this.failTask(executingTask, 'Task cancelled before execution began.', workspacePaths);
+        cleanupTerminalWorkspace = await this.failTask(executingTask, 'Task cancelled before execution began.', workspacePaths, {
+          cleanupWorkspace: true,
+          traceKind: 'lifecycle',
+        });
         return;
       }
 
@@ -533,7 +571,10 @@ export class DispatchService {
         });
 
         if ((await this.store.get(taskId))?.cancellationRequestedAt) {
-          await this.failTask(executingTask, 'Task cancelled during execution.', workspacePaths);
+          cleanupTerminalWorkspace = await this.failTask(executingTask, 'Task cancelled during execution.', workspacePaths, {
+            cleanupWorkspace: true,
+            traceKind: 'lifecycle',
+          });
           return;
         }
 
@@ -574,6 +615,15 @@ export class DispatchService {
         };
         await this.store.write(exportingTask);
         await this.runtime.writeRuntimeState(taskId, buildRuntimeState(exportingTask, workspacePaths, this.runtime.getRecoveryState(taskId)));
+        await this.runtime.recordLifecycleEvent(taskId, {
+          kind: 'lifecycle',
+          status: exportingTask.status,
+          progress: exportingTask.progress,
+          note: 'Execution completed. Exporting artifacts.',
+          data: {
+            recoveryState: this.runtime.getRecoveryState(taskId),
+          },
+        });
 
         const workspaceArtifacts = await persistTaskWorkspaceArtifacts({
           task: exportingTask,
@@ -601,83 +651,34 @@ export class DispatchService {
         };
         await this.store.write(completedTask);
         await this.runtime.writeRuntimeState(taskId, buildRuntimeState(completedTask, workspacePaths, this.runtime.getRecoveryState(taskId)));
+        await this.runtime.recordLifecycleEvent(taskId, {
+          kind: 'lifecycle',
+          status: completedTask.status,
+          progress: completedTask.progress,
+          note: 'Task completed and artifacts persisted.',
+          data: {
+            recoveryState: this.runtime.getRecoveryState(taskId),
+          },
+        });
       } catch (error) {
+        const cancellationRequested = Boolean((await this.store.get(taskId))?.cancellationRequestedAt);
         const message = executionContext.signal.aborted
           ? 'Task cancelled during execution.'
           : error instanceof Error
             ? error.message
             : 'Dispatch execution failed.';
-        await this.failTask(executingTask, message, workspacePaths);
+        cleanupTerminalWorkspace = await this.failTask(executingTask, message, workspacePaths, {
+          cleanupWorkspace: cancellationRequested,
+          traceKind: 'lifecycle',
+        });
       } finally {
         this.runtime.releaseExecutionContext(taskId);
       }
     });
-  }
 
-  private async completeRecoveredExport(
-    task: DispatchTask,
-    workspacePaths: {
-      root: string;
-      browserSessionPath: string;
-      runtimeTracePath: string;
-      observabilityTracePath: string;
-      approvalPath: string;
+    if (cleanupTerminalWorkspace) {
+      await this.runtime.cleanupTaskWorkspace(taskId).catch(() => undefined);
     }
-  ) {
-    const dispatchResponse =
-      task.metadata['dispatchResponse'] && typeof task.metadata['dispatchResponse'] === 'object'
-        ? (task.metadata['dispatchResponse'] as {
-            classification?: { intent?: string; confidence?: string };
-            plan?: { taskIntent?: string; routingMode?: string; reasoningDepth?: string };
-          })
-        : {};
-    const response = {
-      text: task.result?.text ?? '',
-      sources: task.result?.sources ?? [],
-      plan: {
-        taskIntent: dispatchResponse.plan?.taskIntent ?? task.taskIntent ?? 'direct_answer',
-        routingMode: dispatchResponse.plan?.routingMode ?? 'local_first',
-        reasoningDepth: dispatchResponse.plan?.reasoningDepth ?? 'standard',
-      },
-      classification: {
-        intent: dispatchResponse.classification?.intent ?? task.taskIntent ?? 'direct_answer',
-        confidence: dispatchResponse.classification?.confidence ?? 'unknown',
-      },
-      modelId: task.result?.modelId ?? task.modelId ?? 'unknown',
-      modelProvider: task.result?.modelProvider ?? task.modelProvider,
-      runId: task.result?.runId ?? task.runId,
-    };
-
-    await this.runtime.recordLifecycleEvent(task.id, {
-      kind: 'recovery',
-      status: task.status,
-      progress: task.progress,
-      note: 'Recovered task from exporting checkpoint without rerunning execution.',
-    });
-
-    const operatorRun = response.runId ? await getOperatorRunStore().get(response.runId) : null;
-    const workspaceArtifacts = await persistTaskWorkspaceArtifacts({
-      task,
-      response,
-      operatorRun,
-      requestedArtifacts: task.requestedArtifacts,
-    });
-    if (workspaceArtifacts.observabilityTrace) {
-      await this.runtime.persistObservabilityTrace(task.id, workspaceArtifacts.observabilityTrace);
-    }
-
-    const now = nowIso();
-    const completedTask: DispatchTask = {
-      ...task,
-      status: 'completed',
-      progress: 'exporting',
-      completedAt: now,
-      updatedAt: now,
-      artifacts: mergeArtifacts(task.artifacts, workspaceArtifacts.artifacts),
-      notes: [...task.notes, 'Recovered export completed and artifacts persisted.'],
-    };
-    await this.store.write(completedTask);
-    await this.runtime.writeRuntimeState(task.id, buildRuntimeState(completedTask, workspacePaths, this.runtime.getRecoveryState(task.id)));
   }
 
   private async failTask(
@@ -689,6 +690,10 @@ export class DispatchService {
       runtimeTracePath: string;
       observabilityTracePath: string;
       approvalPath: string;
+    },
+    options?: {
+      cleanupWorkspace?: boolean;
+      traceKind?: 'lifecycle' | 'recovery';
     }
   ) {
     const now = nowIso();
@@ -703,11 +708,19 @@ export class DispatchService {
     };
     await this.store.write(failedTask);
     if (workspacePaths) {
+      await this.runtime.recordLifecycleEvent(task.id, {
+        kind: options?.traceKind ?? 'lifecycle',
+        status: failedTask.status,
+        progress: failedTask.progress,
+        note: error,
+        data: {
+          cleanupWorkspace: options?.cleanupWorkspace ?? false,
+          recoveryState: this.runtime.getRecoveryState(task.id),
+        },
+      });
       await this.runtime.writeRuntimeState(task.id, buildRuntimeState(failedTask, workspacePaths, this.runtime.getRecoveryState(task.id)));
-      if (task.cancellationRequestedAt || /cancel/i.test(error)) {
-        await cleanupTaskWorkspaceArtifacts(task.id).catch(() => undefined);
-      }
     }
+    return options?.cleanupWorkspace ?? false;
   }
 }
 

@@ -1,5 +1,5 @@
 import { createWriteStream } from 'fs';
-import { readFile, readdir, rm, writeFile } from 'fs/promises';
+import { readFile, rm, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import path from 'path';
 import ExcelJS from 'exceljs';
@@ -257,14 +257,8 @@ async function verifyArtifactIntegrity(filePath: string, expectedChecksum: strin
 
 export async function cleanupTaskWorkspaceArtifacts(taskId: string) {
   const runtimePaths = resolveTaskWorkspacePaths(taskId);
-  await ensureTaskWorkspace(runtimePaths);
-  const files = await readdir(runtimePaths.artifactsDir).catch(() => []);
-  await Promise.all(
-    files.map(async (file) => {
-      const filePath = path.join(runtimePaths.artifactsDir, file);
-      await rm(filePath, { force: true, recursive: true }).catch(() => undefined);
-    })
-  );
+  // Terminal cleanup removes the full workspace so canceled or recovered tasks do not leave residual state behind.
+  await rm(runtimePaths.root, { force: true, recursive: true });
 }
 
 export async function persistTaskWorkspaceArtifacts(input: {

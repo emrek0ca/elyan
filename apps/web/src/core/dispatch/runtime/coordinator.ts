@@ -11,6 +11,7 @@ import {
   withTaskWorkspaceLock,
   writeJsonAtomic,
 } from './workspace';
+import { cleanupTaskWorkspaceArtifacts } from './artifacts';
 
 export type DispatchRuntimeContext = {
   taskId: string;
@@ -222,6 +223,12 @@ export class DispatchRuntimeCoordinator {
       kind: 'lifecycle',
       note: 'Task cancellation requested.',
     });
+  }
+
+  async cleanupTaskWorkspace(taskId: string) {
+    this.releaseExecutionContext(taskId);
+    await cleanupTaskWorkspaceArtifacts(taskId);
+    this.recoveryStates.delete(taskId);
   }
 }
 
