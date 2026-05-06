@@ -1,8 +1,12 @@
 import { generateText, streamText, type OnFinishEvent } from 'ai';
 import { registry } from '@/core/providers';
-import { citationEngine, reranker, scraper, searchClient } from '@/core/search';
-import { SearchMode, SearxNGResult, type ScrapedContent } from '@/types/search';
+import { citationEngine } from '@/core/search';
+import { SearchMode, type ScrapedContent } from '@/types/search';
+import { resolveBrainPreferredModelId } from '@/core/ml/model-routing';
 import { resolveAnswerPrompt } from './answer-prompts';
+import { runResearchLoop } from '@/core/retrieval';
+import { filterContextBlocks } from '@/core/retrieval/context';
+import { loadLearningRoutingHints } from '@/core/control-plane/learning/signal-extractor';
 import {
   buildExecutionSurfaceSnapshot,
   buildOrchestrationPlan,
@@ -12,6 +16,8 @@ import {
   type ExecutionTarget,
   type OrchestrationPlan,
 } from '@/core/orchestration';
+import type { CapabilityRuntimeContext } from '@/core/capabilities/types';
+import type { RunTraceRecorder } from '@/core/observability/run-trace';
 
 type PreparedAnswer = {
   model: Parameters<typeof streamText>[0]['model'];
@@ -20,6 +26,7 @@ type PreparedAnswer = {
   plan: OrchestrationPlan;
   surface: ExecutionSurfaceSnapshot;
   sources: ScrapedContent[];
+  retrievalContextBlocks: string[];
   systemPrompt: string;
   query: string;
   searchAvailable: boolean;
@@ -34,6 +41,7 @@ export type AnswerFinishContext = {
   plan: OrchestrationPlan;
   surface: ExecutionSurfaceSnapshot;
   sources: ScrapedContent[];
+  retrievalContextBlocks: string[];
   searchAvailable: boolean;
   operatorNotes: string[];
   operatorTarget?: ExecutionTarget;
@@ -43,26 +51,22 @@ type AnswerExecutionOptions = {
   plan?: OrchestrationPlan;
   surface?: ExecutionSurfaceSnapshot;
   searchEnabled?: boolean;
+  accountId?: string;
+  spaceId?: string;
+  operatorRunId?: string;
   contextAugments?: string[];
+  runtimeContext?: CapabilityRuntimeContext;
+  trace?: RunTraceRecorder;
+  signal?: AbortSignal;
   onFinish?: (event: OnFinishEvent, context: AnswerFinishContext) => PromiseLike<void> | void;
   onError?: (error: unknown, context: AnswerFinishContext) => PromiseLike<void> | void;
   onAbort?: (context: AnswerFinishContext) => PromiseLike<void> | void;
 };
 
-function dedupeResults<T extends { url: string }>(results: T[]): T[] {
-  const seen = new Set<string>();
-  const deduped: T[] = [];
-
-  for (const result of results) {
-    if (seen.has(result.url)) {
-      continue;
-    }
-
-    seen.add(result.url);
-    deduped.push(result);
+function chatDebug(message: string, payload: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'production') {
+    console.debug(message, payload);
   }
-
-  return deduped;
 }
 
 function dedupeSources(sources: ScrapedContent[]): ScrapedContent[] {
@@ -96,17 +100,23 @@ export class AnswerEngine {
       plan: prepared.plan,
       surface: prepared.surface,
       sources: prepared.sources,
+      retrievalContextBlocks: prepared.retrievalContextBlocks,
       searchAvailable: prepared.searchAvailable,
       operatorNotes: prepared.operatorNotes,
       operatorTarget: prepared.operatorTarget,
     };
     try {
-      const augmentedContext = options?.contextAugments?.filter(Boolean).join('\n\n') ?? '';
+      const augmentedContext = filterContextBlocks(options?.contextAugments ?? [], {
+        maxTokens: 1_200,
+        maxBlocks: 6,
+        minScore: 0.15,
+      }).join('\n\n');
       const result = await streamText({
         model: prepared.model,
         system: augmentedContext ? `${augmentedContext}\n\n${prepared.systemPrompt}` : prepared.systemPrompt,
         prompt: query,
         temperature: prepared.sources.length > 0 ? prepared.plan.temperature : 0,
+        abortSignal: options?.signal,
         onFinish: options?.onFinish
           ? async (event) => {
               try {
@@ -168,17 +178,23 @@ export class AnswerEngine {
       plan: prepared.plan,
       surface: prepared.surface,
       sources: prepared.sources,
+      retrievalContextBlocks: prepared.retrievalContextBlocks,
       searchAvailable: prepared.searchAvailable,
       operatorNotes: prepared.operatorNotes,
       operatorTarget: prepared.operatorTarget,
     };
     try {
-      const augmentedContext = options?.contextAugments?.filter(Boolean).join('\n\n') ?? '';
+      const augmentedContext = filterContextBlocks(options?.contextAugments ?? [], {
+        maxTokens: 1_200,
+        maxBlocks: 6,
+        minScore: 0.15,
+      }).join('\n\n');
       const result = await generateText({
         model: prepared.model,
         system: augmentedContext ? `${augmentedContext}\n\n${prepared.systemPrompt}` : prepared.systemPrompt,
         prompt: query,
         temperature: prepared.sources.length > 0 ? prepared.plan.temperature : 0,
+        abortSignal: options?.signal,
         onFinish: options?.onFinish
           ? async (event) => {
               try {
@@ -214,62 +230,86 @@ export class AnswerEngine {
     mode: SearchMode,
     options?: AnswerExecutionOptions
   ): Promise<PreparedAnswer> {
+    chatDebug('[chat] answer prepare', {
+      queryLength: query.length,
+      requestedModelId: modelId,
+      mode,
+    });
+
     const baseSurface = options?.surface ?? buildExecutionSurfaceSnapshot();
     let plan = options?.plan ?? buildOrchestrationPlan(query, mode, baseSurface);
     let surface = baseSurface;
+    const spaceId = options?.spaceId ?? options?.accountId;
 
     if (plan.executionPolicy.shouldDiscoverMcp) {
       surface = await refreshExecutionSurfaceWithLiveMcp(baseSurface);
       plan = buildOrchestrationPlan(query, mode, surface);
     }
 
-    const operatorOutcome = await runOperatorPreflight(query, plan.executionPolicy, surface);
+    const operatorOutcome = await runOperatorPreflight(
+      query,
+      plan.executionPolicy,
+      surface,
+      options?.runtimeContext,
+      options?.trace,
+      options?.signal
+    );
+    const learningRouting = await loadLearningRoutingHints({
+      taskType: plan.taskIntent,
+      modelId,
+      spaceId,
+    });
+    const brainPreferredModelId = await resolveBrainPreferredModelId();
     const resolvedModelId = await registry.resolvePreferredModelId({
-      preferredModelId: modelId,
-      routingMode: plan.routingMode,
+      preferredModelId: learningRouting.preferredModelId ?? brainPreferredModelId ?? modelId,
+      routingMode: learningRouting.routingMode ?? plan.routingMode,
       taskIntent: plan.taskIntent,
       reasoningDepth: plan.reasoningDepth,
     });
     const { provider, model } = registry.resolveModel(resolvedModelId);
+    chatDebug('[chat] answer model selected', {
+      resolvedModelId,
+      providerId: provider.id,
+    });
 
-    const searchAvailable =
-      plan.executionPolicy.shouldRetrieve &&
-      (options?.searchEnabled ?? true) &&
-      (await searchClient.isAvailable());
-    const searchQueries = searchAvailable && plan.retrieval.expandSearchQueries
-      ? await this.generateResearchQueries(query, model)
-      : [query];
-    const limitedSearchQueries = searchQueries.slice(0, plan.retrieval.rounds);
+    const retrieval = await runResearchLoop({
+      query,
+      accountId: options?.accountId,
+      spaceId,
+      plan,
+      searchEnabled: options?.searchEnabled ?? true,
+      operatorRunId: options?.operatorRunId,
+      trace: options?.trace,
+      signal: options?.signal,
+    });
 
-    const searchResultsNested = searchAvailable
-      ? await Promise.allSettled(
-          limitedSearchQueries.map((searchQuery) =>
-            searchClient.search(searchQuery, {
-              language: plan.retrieval.language,
-            })
-          )
-        )
-      : [];
-
-    const fulfilledResults = searchResultsNested
-      .filter((result): result is PromiseFulfilledResult<SearxNGResult[]> => result.status === 'fulfilled')
-      .flatMap((result) => result.value);
-
-    const rankedResults = reranker.rerank(query, dedupeResults(fulfilledResults), plan.retrieval.rerankTopK);
-    const scrapedContent = await scraper.scrapeUrls(
-      rankedResults.slice(0, plan.retrieval.maxUrls).map((result) => result.url),
-      plan.retrieval.maxUrls
-    );
-
-    const sources = dedupeSources([...operatorOutcome.sources, ...scrapedContent]);
+    const sources = dedupeSources([...operatorOutcome.sources, ...retrieval.sources]);
     const hasSources = sources.length > 0;
-    const operatorContext = operatorOutcome.contextBlocks.length > 0 ? operatorOutcome.contextBlocks.join('\n\n') : '';
+    const operatorContext = filterContextBlocks(operatorOutcome.contextBlocks, {
+      maxTokens: 1_000,
+      maxBlocks: 4,
+      minScore: 0.15,
+    }).join('\n\n');
+    const retrievalContext = filterContextBlocks(retrieval.contextBlocks, {
+      maxTokens: 1_200,
+      maxBlocks: 6,
+      minScore: 0.15,
+    }).join('\n\n');
     const context = hasSources
       ? citationEngine.buildContext(sources)
       : 'No reliable sources were retrieved.';
-    const systemPrompt = resolveAnswerPrompt(mode, [operatorContext, context].filter(Boolean).join('\n\n'), hasSources, {
-      plan,
-      operatorNotes: operatorOutcome.notes,
+    const systemPrompt = resolveAnswerPrompt(
+      mode,
+      [operatorContext, retrievalContext, context].filter(Boolean).join('\n\n'),
+      hasSources,
+      {
+        plan,
+        operatorNotes: operatorOutcome.notes,
+      }
+    );
+    chatDebug('[chat] answer prepared', {
+      resolvedModelId,
+      sourceCount: sources.length,
     });
 
     return {
@@ -279,34 +319,15 @@ export class AnswerEngine {
       plan,
       surface,
       sources,
+      retrievalContextBlocks: retrieval.contextBlocks,
       systemPrompt,
       query,
-      searchAvailable,
+      searchAvailable: retrieval.searchAvailable,
       operatorNotes: operatorOutcome.notes,
       operatorTarget: operatorOutcome.target,
     };
   }
 
-  private async generateResearchQueries(query: string, model: Parameters<typeof streamText>[0]['model']) {
-    try {
-      const response = await generateText({
-        model,
-        system:
-          'Generate 2 short search queries that complement the user query. Return one query per line and nothing else.',
-        prompt: query,
-      });
-
-      const extraQueries = response.text
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .slice(0, 2);
-
-      return [query, ...extraQueries];
-    } catch {
-      return [query];
-    }
-  }
 }
 
 export const answerEngine = new AnswerEngine();

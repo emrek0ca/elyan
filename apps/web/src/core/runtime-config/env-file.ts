@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { parse } from 'dotenv';
 import { getGlobalEnvPath as resolveGlobalEnvPath, resolveGlobalConfigDir } from '@/lib/runtime-paths';
+import { normalizeEnvValue, sanitizeEnvSource } from '@/lib/env-values';
 
 const globalConfigDir = resolveGlobalConfigDir();
 const globalEnvPath = resolveGlobalEnvPath();
@@ -24,18 +25,25 @@ export function readRuntimeEnvFile() {
     return {};
   }
 
-  return parse(readFileSync(globalEnvPath, 'utf8'));
+  const parsed = parse(readFileSync(globalEnvPath, 'utf8'));
+
+  return Object.fromEntries(
+    Object.entries(parsed).flatMap(([key, value]) => {
+      const normalized = normalizeEnvValue(value);
+      return normalized ? [[key, normalized]] : [];
+    })
+  );
 }
 
 export function readRuntimeEnvValue(key: string) {
-  return readRuntimeEnvFile()[key] ?? process.env[key];
+  return normalizeEnvValue(readRuntimeEnvFile()[key]) ?? normalizeEnvValue(process.env[key]);
 }
 
 export function readMergedRuntimeEnv() {
-  return {
+  return sanitizeEnvSource({
     ...process.env,
     ...readRuntimeEnvFile(),
-  };
+  });
 }
 
 export function setRuntimeEnvValue(key: string, value: string) {

@@ -154,7 +154,7 @@ export function SearchBar({ onSearch, isLoading, defaultMode = 'speed', disabled
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Ask a web question, compare options, or inspect a URL..."
+          placeholder="Ask Elyan..."
           className="search-input"
           aria-describedby="elyan-search-hint"
           disabled={isLoading || disabled}
@@ -213,7 +213,7 @@ export function SearchBar({ onSearch, isLoading, defaultMode = 'speed', disabled
           })}
         </div>
         <p id="elyan-search-hint" className="mode-switch__hint">
-          Speed for direct answers. Research for broader synthesis with citations. Voice uses browser speech recognition when available.
+          Fast answer or quiet research. No extra steps.
         </p>
       </div>
     </div>

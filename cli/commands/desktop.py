@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pwd
 import shutil
 import subprocess
 import time
@@ -12,17 +13,29 @@ def _project_root() -> Path:
     return here.parents[2]
 
 
+def _login_home_dir() -> Path:
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir).expanduser().resolve()
+    except Exception:
+        return Path.home().expanduser().resolve()
+
+
 def _spawn(cmd: list[str], *, cwd: Path, detached: bool, project_root: Path) -> int:
     gateway_port = str(os.environ.get("ELYAN_PORT", "18789") or "18789")
     existing_pythonpath = str(os.environ.get("PYTHONPATH", "") or "").strip()
     project_pythonpath = str(project_root)
     pythonpath = project_pythonpath if not existing_pythonpath else f"{project_pythonpath}{os.pathsep}{existing_pythonpath}"
+    login_home = _login_home_dir()
+    rustup_home = str(os.environ.get("RUSTUP_HOME") or (login_home / ".rustup"))
+    cargo_home = str(os.environ.get("CARGO_HOME") or (login_home / ".cargo"))
     env = {
         **os.environ,
         "ELYAN_PROJECT_DIR": str(project_root),
         "ELYAN_PORT": gateway_port,
         "VITE_ELYAN_API_BASE_URL": os.environ.get("VITE_ELYAN_API_BASE_URL", f"http://127.0.0.1:{gateway_port}"),
         "PYTHONPATH": pythonpath,
+        "RUSTUP_HOME": rustup_home,
+        "CARGO_HOME": cargo_home,
     }
     if detached:
         kwargs: dict[str, object] = {
@@ -38,12 +51,21 @@ def _spawn(cmd: list[str], *, cwd: Path, detached: bool, project_root: Path) -> 
     return subprocess.call(cmd, cwd=str(cwd), env=env)
 
 
+def _gateway_is_online(port: int) -> bool:
+    from cli.commands import gateway
+
+    status = gateway._fetch_gateway_status(port)
+    if not status.get("ok"):
+        return False
+    data = status.get("data", {})
+    return isinstance(data, dict) and str(data.get("status") or "").strip().lower() == "online"
+
+
 def _ensure_gateway_ready(project_root: Path) -> None:
     from cli.commands import gateway
 
     port = int(os.environ.get("ELYAN_PORT", "18789") or "18789")
-    status = gateway._fetch_gateway_launch_health(port)
-    if status.get("ok"):
+    if _gateway_is_online(port):
         return
 
     print("⚙️  Runtime hazırlanıyor. Gateway arka planda başlatılıyor...")
@@ -51,8 +73,7 @@ def _ensure_gateway_ready(project_root: Path) -> None:
 
     deadline = time.time() + 20.0
     while time.time() < deadline:
-        probe = gateway._fetch_gateway_launch_health(port)
-        if probe.get("ok"):
+        if _gateway_is_online(port):
             print(f"✅ Runtime hazır · http://127.0.0.1:{port}")
             return
         time.sleep(0.5)

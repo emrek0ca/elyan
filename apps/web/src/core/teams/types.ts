@@ -46,6 +46,21 @@ export const teamEventTypeSchema = z.enum([
 ]);
 
 export const teamArtifactKindSchema = z.enum(['note', 'research', 'execution', 'review', 'verification', 'memory']);
+export const teamVerificationStateSchema = z.enum([
+  'passed',
+  'failed',
+  'missing_artifact',
+  'unstructured',
+  'error',
+]);
+
+export const teamVerificationSchema = z.object({
+  passed: z.boolean(),
+  summary: z.string().min(1),
+  state: teamVerificationStateSchema.default('passed'),
+  artifactId: z.string().min(1).optional(),
+  rawContent: z.string().optional(),
+});
 
 export const teamAgentSchema = z.object({
   id: z.string().min(1),
@@ -136,6 +151,8 @@ export const teamRunSummarySchema = z.object({
   verifier: z.object({
     passed: z.boolean(),
     summary: z.string(),
+    state: teamVerificationStateSchema.default('passed'),
+    artifactId: z.string().min(1).optional(),
   }),
   finalText: z.string(),
   artifactCount: z.number().int().nonnegative(),
@@ -148,6 +165,8 @@ export type TeamTaskStatus = z.infer<typeof teamTaskStatusSchema>;
 export type TeamMessageType = z.infer<typeof teamMessageTypeSchema>;
 export type TeamEventType = z.infer<typeof teamEventTypeSchema>;
 export type TeamArtifactKind = z.infer<typeof teamArtifactKindSchema>;
+export type TeamVerificationState = z.infer<typeof teamVerificationStateSchema>;
+export type TeamVerification = z.infer<typeof teamVerificationSchema>;
 export type TeamAgent = z.infer<typeof teamAgentSchema>;
 export type TeamTask = z.infer<typeof teamTaskSchema>;
 export type TeamPlan = z.infer<typeof teamPlanSchema>;
@@ -169,6 +188,7 @@ export type TeamPlannerInput = {
 export type TeamRunInput = TeamPlannerInput & {
   contextAugments?: string[];
   searchEnabled: boolean;
+  signal?: AbortSignal;
 };
 
 export type TeamRunResult = {
@@ -193,6 +213,7 @@ export type TeamAgentExecutionInput = {
   contextBlocks: string[];
   artifacts: TeamArtifact[];
   messages: TeamMessage[];
+  signal?: AbortSignal;
 };
 
 export type TeamAgentExecutor = (input: TeamAgentExecutionInput) => Promise<string>;

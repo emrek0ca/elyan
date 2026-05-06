@@ -20,12 +20,12 @@ function createTempDir() {
 }
 
 describe('elyan setup CLI', () => {
-  it('prepares zero-cost local settings without hosted account linking', () => {
+  it('prepares local-first settings without hosted account linking', () => {
     const cwd = createTempDir();
     const home = createTempDir();
     const output = execFileSync(
       process.execPath,
-      [cliPath, 'setup', '--zero-cost', '--model', 'llama3.2', '--probe-timeout-ms', '25'],
+      [cliPath, 'setup', '--model', 'llama3.2', '--probe-timeout-ms', '25'],
       {
         cwd,
         env: {
@@ -43,10 +43,10 @@ describe('elyan setup CLI', () => {
     const envFile = readFileSync(join(home, '.elyan', '.env'), 'utf8');
 
     expect(output).toContain('Elyan setup');
-    expect(output).toContain('local_only via ollama:llama3.2');
-    expect(settings.routing.routingMode).toBe('local_only');
-    expect(settings.routing.preferredModelId).toBe('ollama:llama3.2');
-    expect(settings.routing.searchEnabled).toBe(false);
+    expect(output).toContain('local_first');
+    expect(settings.routing.routingMode).toBe('local_first');
+    expect(settings.routing.preferredModelId).toBeUndefined();
+    expect(settings.routing.searchEnabled).toBe(true);
     expect(envFile).toContain('OLLAMA_URL=http://127.0.0.1:11434');
   });
 

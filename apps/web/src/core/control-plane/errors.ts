@@ -77,10 +77,11 @@ export class ControlPlaneUsageLimitError extends ControlPlaneError {
   constructor(
     message: string,
     public readonly details?: {
-      limitType?: 'daily_requests_limit' | 'daily_tool_action_calls_limit';
+      limitType?: 'daily_requests_limit' | 'daily_tool_action_calls_limit' | 'daily_tokens_limit' | 'per_request_token_limit' | 'run_cost_cap';
       resetAt?: string;
       remainingRequests?: number;
       remainingHostedToolActionCalls?: number;
+      remainingTokens?: number;
       monthlyCreditsRemaining?: string;
       planId?: string;
     }

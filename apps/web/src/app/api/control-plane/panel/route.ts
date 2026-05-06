@@ -1,6 +1,11 @@
+/**
+ * Hosted panel aggregation endpoint for dashboard UI and local probes.
+ * Layer: control-plane API. Critical entrypoint for authenticated account, device, and billing state.
+ */
 import { NextRequest, NextResponse } from 'next/server';
 import { buildControlPlanePanelResponse, getControlPlaneService } from '@/core/control-plane';
 import { requireControlPlaneSession } from '@/core/control-plane/session';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -19,11 +24,11 @@ export async function GET(request: NextRequest) {
       ...buildControlPlanePanelResponse(profile, devices),
     });
   } catch (error: unknown) {
-    const status =
-      error && typeof error === 'object' && 'statusCode' in error
-        ? Number((error as { statusCode: number }).statusCode) || 500
-        : 500;
-    const message = error instanceof Error ? error.message : 'control-plane panel request failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 500,
+      code: 'control_plane_panel_failed',
+      message: 'control-plane panel request failed',
+    });
+    return createApiErrorResponse(normalized);
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertControlPlaneMigrationsApplied,
+  canonicalSharedTruthRelations,
   getControlPlaneMigrationVersions,
 } from '@/core/control-plane/migrations';
 import { ControlPlaneConfigurationError } from '@/core/control-plane/errors';
@@ -37,6 +38,34 @@ function createPool(appliedVersions: number[] = [], hasTable = true) {
 describe('control-plane migrations', () => {
   it('expects the schema migration gate to be populated', () => {
     expect(getControlPlaneMigrationVersions().length).toBeGreaterThan(0);
+  });
+
+  it('declares the canonical shared truth relations without private runtime state', () => {
+    expect(canonicalSharedTruthRelations).toEqual(
+      expect.arrayContaining([
+        'users',
+        'accounts',
+        'sessions',
+        'verification_token',
+        'subscriptions',
+        'entitlements',
+        'token_ledger',
+        'usage_counters',
+        'usage_events',
+        'billing_profiles',
+        'notifications',
+        'device_link_requests',
+        'devices',
+        'release_cache',
+        'learning_events',
+        'model_artifacts',
+        'retrieval_documents',
+        'schema_migrations',
+      ])
+    );
+    expect(canonicalSharedTruthRelations).not.toEqual(
+      expect.arrayContaining(['local_memory', 'local_files', 'runtime_internal_state', 'private_context'])
+    );
   });
 
   it('fails closed when schema_migrations is missing', async () => {

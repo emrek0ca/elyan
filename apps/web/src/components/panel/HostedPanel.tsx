@@ -92,7 +92,7 @@ export function HostedPanel({ section }: { section: PanelSection }) {
   if (!payload) {
     return (
       <div className="panel-page panel-page__empty">
-        <h1>Hosted panel unavailable</h1>
+        <h1>Hosted unavailable</h1>
         <p>{error ?? 'Sign in to access hosted account state.'}</p>
         <Link href="/auth" className="site-cta">
           Login
@@ -110,11 +110,9 @@ export function HostedPanel({ section }: { section: PanelSection }) {
     <div className="panel-page">
       <section className="panel-page__hero">
         <div>
-          <div className="site-kicker">Hosted panel</div>
+          <div className="site-kicker">Hosted</div>
           <h1 className="site-title">{payload.account.displayName}</h1>
-          <p className="site-lead">
-            Hosted account, billing, sync, and linked devices. The local Elyan runtime stays on the user machine.
-          </p>
+          <p className="site-lead">Account, billing, devices.</p>
         </div>
 
         <div className="panel-page__meta">
@@ -178,7 +176,7 @@ export function HostedPanel({ section }: { section: PanelSection }) {
           </article>
 
           <article className="site-card">
-            <h2>Hosted boundary</h2>
+            <h2>Local</h2>
             <div className="panel-actions">
               <Link href="/download" className="site-cta">
                 Install locally
@@ -187,7 +185,7 @@ export function HostedPanel({ section }: { section: PanelSection }) {
                 Read docs
               </Link>
             </div>
-            <p className="panel-copy">Hosted account data covers billing, credits, sync, and device linking. Local execution stays on the machine.</p>
+            <p className="panel-copy">Local execution stays on this machine.</p>
           </article>
 
           <article className="site-card" id={buildControlPlaneAnchorId('panel', 'integrations')} tabIndex={-1}>
@@ -232,14 +230,14 @@ export function HostedPanel({ section }: { section: PanelSection }) {
                   </div>
                 ))
               ) : (
-                <p className="panel-copy">No OAuth-linked apps yet.</p>
+                <p className="panel-copy">No linked apps.</p>
               )}
             </div>
           </article>
 
           <article className="site-card" id={buildControlPlaneAnchorId('panel', 'devices')} tabIndex={-1}>
             <h2>Devices</h2>
-            <p className="panel-copy">Link the local CLI when you want this hosted account to track device state and release readiness.</p>
+            <p className="panel-copy">No device required for local mode.</p>
             <div className="panel-list">
               <PanelRow label="Linked devices" value={String(payload.devices.length)} />
               <PanelRow label="Active devices" value={String(deviceSummary.active)} />
@@ -420,7 +418,7 @@ export function HostedPanel({ section }: { section: PanelSection }) {
             <p className="panel-copy">Install Elyan locally, run guided setup, then login from the CLI to register this machine.</p>
             <div className="panel-list">
               <PanelRow label="Install" value={<code>/download</code>} />
-              <PanelRow label="Setup" value={<code>elyan setup --zero-cost</code>} />
+              <PanelRow label="Setup" value={<code>elyan setup</code>} />
               <PanelRow label="Link" value={<code>elyan login --base-url https://api.elyan.dev</code>} />
               <PanelRow label="Verify" value={<code>elyan whoami</code>} />
             </div>

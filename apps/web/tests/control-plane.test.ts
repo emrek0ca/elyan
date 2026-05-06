@@ -297,6 +297,64 @@ describe('ControlPlaneService', () => {
     expect(reopenedAccount.recentEvaluationSignals[0]?.requestId).toBe('req_eval_1');
   });
 
+  it('records hosted learning events for dataset generation', async () => {
+    const service = await createService();
+    const created = await service.registerIdentity({
+      email: 'learning@example.com',
+      password: 'very-strong-password',
+      displayName: 'Learning Owner',
+      ownerType: 'individual',
+      planId: 'cloud_assisted',
+    });
+
+    await service.upsertAccount(created.account.accountId, {
+      displayName: created.account.displayName,
+      ownerType: created.account.ownerType,
+      planId: 'cloud_assisted',
+      ownerUserId: created.user.userId,
+      billingCustomerRef: 'cust_learning',
+    });
+
+    await service.applyIyzicoWebhook(
+      {
+        customerReferenceCode: 'cust_learning',
+        subscriptionReferenceCode: 'sub_learning',
+        orderReferenceCode: 'ord_learning',
+        iyziReferenceCode: 'ref_learning',
+        iyziEventType: 'subscription.order.success',
+        iyziEventTime: Date.now(),
+      },
+      undefined,
+      { bypassSignatureValidation: true }
+    );
+
+    const event = await service.recordLearningEvent(created.account.accountId, {
+      requestId: 'req_learning_1',
+      source: 'web',
+      input: 'How do I make this response better?',
+      intent: 'direct_answer',
+      plan: 'intent=direct_answer; routing=local_first; depth=standard',
+      reasoningSteps: ['input: How do I make this response better?', 'intent: direct_answer'],
+      output: 'Rewrite the answer with clearer steps.',
+      success: true,
+      latencyMs: 120,
+      modelId: 'gpt-4.1',
+      modelProvider: 'openai',
+      metadata: {
+        citationCount: 1,
+        toolCallCount: 0,
+      },
+    });
+
+    expect(event.requestId).toBe('req_learning_1');
+    expect(event.score).toBeGreaterThan(0);
+    expect(event.accepted).toBe(true);
+    expect(event.betterOutput).toEqual(expect.any(String));
+
+    const account = await service.getAccount(created.account.accountId);
+    expect(account.learningEventCount).toBe(1);
+  });
+
   it('tracks device link, bootstrap, push, rotate, and unlink transitions without private context leakage', async () => {
     const service = await createService();
     const registration = await service.registerIdentity({

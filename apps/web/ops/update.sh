@@ -35,13 +35,13 @@ git fetch origin "$BRANCH"
 git pull --ff-only origin "$BRANCH"
 
 echo "Installing production dependencies..."
-npm ci
+pnpm install --frozen-lockfile
 
 echo "Applying hosted PostgreSQL migrations..."
-npm run db:migrate
+pnpm --filter @elyan/web db:migrate
 
 echo "Building the Elyan runtime..."
-npm run build
+pnpm --filter @elyan/web build
 
 echo "Restarting Elyan service: $SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"

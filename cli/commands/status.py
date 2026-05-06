@@ -83,6 +83,18 @@ def _autopilot_snapshot() -> dict[str, Any]:
         }
 
 
+def _operator_snapshot() -> dict[str, Any]:
+    try:
+        from core.operator_status import get_operator_status_sync
+
+        return get_operator_status_sync()
+    except Exception:
+        return {
+            "status": "degraded",
+            "summary": {},
+        }
+
+
 def _subscription_snapshot() -> dict[str, Any]:
     try:
         from core.billing.workspace_billing import get_workspace_billing_store
@@ -208,6 +220,7 @@ def _build_status_payload(deep: bool = False) -> dict[str, Any]:
     active_cron, total_cron = _count_active_cron_jobs(config.get("cron", []))
     gateway = _gateway_snapshot()
     autopilot = _autopilot_snapshot()
+    operator = _operator_snapshot()
     subscription = _subscription_snapshot()
     skills = _skill_summary()
 
@@ -255,6 +268,7 @@ def _build_status_payload(deep: bool = False) -> dict[str, Any]:
             "total": total_cron,
         },
         "autopilot": autopilot,
+        "operator": operator,
         "skills": skills,
         "subscription": subscription,
         "platforms": platforms_payload,
@@ -286,6 +300,7 @@ def run(args):
     total_cron = payload["cron"]["total"]
     autopilot_state = payload["autopilot"]["state"]
     last_tick = payload["autopilot"]["last_tick_reason"]
+    operator = payload["operator"]
     skills = payload["skills"]
     subscription = payload["subscription"]
 
@@ -305,6 +320,15 @@ def run(args):
     print(f"  Kanallar:    {active_channels}/{total_channels} aktif · {connected_channels} canlı")
     print(f"  Cron:        {active_jobs}/{total_cron} aktif gorev")
     print(f"  Autopilot:   {autopilot_state} (tick: {last_tick})")
+    print(f"  Operator:    {operator.get('status', 'unknown')}")
+    operator_summary = operator.get("summary", {}) if isinstance(operator, dict) else {}
+    model_runtime = operator_summary.get("model_runtime", {}) if isinstance(operator_summary, dict) else {}
+    speed_runtime = operator_summary.get("speed_runtime", {}) if isinstance(operator_summary, dict) else {}
+    if isinstance(model_runtime, dict) and model_runtime:
+        current_lane = str(speed_runtime.get("current_lane") or "-")
+        execution_mode = str(model_runtime.get("execution_mode") or "-")
+        torch_available = model_runtime.get("environment", {}).get("torch_available")
+        print(f"    ML:          {execution_mode} · lane {current_lane} · torch {'yes' if torch_available else 'no'}")
     print(f"  Skills:      {skills['enabled']}/{skills['installed']} aktif")
     if skills["issues"]:
         print(f"    Issues:    {skills['issues']} skill attention istiyor")

@@ -38,7 +38,7 @@ const targets = [
 describe('download surface helpers', () => {
   it('keeps exact install cards for supported v1.3 platforms', () => {
     expect(downloadPlatformCards.map((card) => card.key)).toEqual(['macos', 'linux', 'windows']);
-    expect(downloadPlatformCards.every((card) => card.setupCommand === 'elyan setup --zero-cost')).toBe(true);
+    expect(downloadPlatformCards.every((card) => card.setupCommand === 'elyan setup')).toBe(true);
   });
 
   it('filters release targets by platform without inventing unavailable assets', () => {

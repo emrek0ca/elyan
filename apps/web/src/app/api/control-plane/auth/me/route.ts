@@ -1,21 +1,23 @@
+/**
+ * Authenticated hosted session lookup.
+ * Layer: control-plane API. Critical for session checks and panel/account hydration.
+ */
 import { NextRequest, NextResponse } from 'next/server';
 import { buildControlPlaneProfileResponse, getControlPlaneService } from '@/core/control-plane';
 import { isHostedAuthConfigured } from '@/core/control-plane/auth';
 import { requireControlPlaneSession } from '@/core/control-plane/session';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
   if (!isHostedAuthConfigured()) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: 'Hosted identity is disabled in local mode',
-        code: 'hosted_identity_unavailable',
-      },
-      { status: 503 }
-    );
+    return createApiErrorResponse({
+      status: 401,
+      code: 'hosted_identity_unavailable',
+      message: 'Hosted identity is disabled in local mode',
+    });
   }
 
   try {
@@ -27,8 +29,11 @@ export async function GET(request: NextRequest) {
       ...response,
     });
   } catch (error: unknown) {
-    const status = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode: number }).statusCode) || 500 : 500;
-    const message = error instanceof Error ? error.message : 'control-plane session request failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 401,
+      code: 'control_plane_session_required',
+      message: 'Control-plane session is required',
+    });
+    return createApiErrorResponse(normalized);
   }
 }

@@ -182,9 +182,9 @@ function presentChatError(error: Error | null | undefined) {
   const message = error?.message ?? 'The current request could not be completed.';
   const normalized = message.toLowerCase();
 
-  if (normalized.includes('no model is available')) {
+  if (normalized.includes('no model is available') || normalized.includes('no model provider configured')) {
     return {
-      title: 'No model is available',
+      title: 'No model provider configured',
       detail: message,
       hint: 'Set OLLAMA_URL or one cloud API key, then reload and re-check /api/healthz.',
     };

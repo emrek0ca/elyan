@@ -6,7 +6,7 @@ import {
   getPrivateSurfaceHeaders,
   isAllowedApiOrigin,
 } from '@/lib/security';
-import { middleware } from '@/middleware';
+import { config, middleware } from '@/middleware';
 
 describe('security helpers', () => {
   it('keeps the default origin allowlist explicit and deduplicated', () => {
@@ -62,5 +62,14 @@ describe('api middleware hardening', () => {
     expect(response.status).toBe(403);
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
     expect(response.headers.get('x-frame-options')).toBe('DENY');
+  });
+
+  it('routes hosted panel pages through middleware without protecting local runtime pages', async () => {
+    expect(config.matcher).toContain('/panel/:path*');
+    expect(config.matcher).not.toContain('/manage/:path*');
+    const manageRequest = new NextRequest('http://127.0.0.1:3000/manage');
+    const manageResponse = await middleware(manageRequest);
+
+    expect(manageResponse.status).toBe(200);
   });
 });

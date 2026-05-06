@@ -1,3 +1,7 @@
+/**
+ * Shape adapters for hosted profile and panel API responses.
+ * Layer: control-plane API support. Critical for stable response formatting, but contains no business logic.
+ */
 import {
   type ControlPlaneHostedDevice,
   type ControlPlaneHostedProfile,

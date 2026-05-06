@@ -5,6 +5,7 @@ import {
   getIntegrationProviderConfig,
   isIntegrationProviderConfigured,
 } from '@/core/control-plane/integration-provider';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -37,11 +38,11 @@ export async function GET(request: NextRequest) {
       providers,
     });
   } catch (error: unknown) {
-    const status =
-      error && typeof error === 'object' && 'statusCode' in error
-        ? Number((error as { statusCode: number }).statusCode) || 500
-        : 500;
-    const message = error instanceof Error ? error.message : 'control-plane integration request failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 500,
+      code: 'control_plane_integration_failed',
+      message: 'control-plane integration request failed',
+    });
+    return createApiErrorResponse(normalized);
   }
 }

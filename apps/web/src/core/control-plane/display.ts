@@ -1,3 +1,7 @@
+/**
+ * Presentation helpers for hosted state and navigation anchors.
+ * Layer: control-plane UI support. Support code only; used by panels and management surfaces.
+ */
 export type ControlPlaneBadgeTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
 
 export type ControlPlaneStatePresentation = {

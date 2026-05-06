@@ -1,6 +1,11 @@
+/**
+ * NextAuth route handler for hosted control-plane authentication.
+ * Layer: auth API. Critical entrypoint for login, session cookies, and CSRF-backed credentials flow.
+ */
 import NextAuth from 'next-auth';
 import { NextResponse } from 'next/server';
 import { getControlPlaneAuthOptions, isHostedAuthConfigured } from '@/core/control-plane/auth';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -31,9 +36,12 @@ async function guardedAuthHandler(...args: Parameters<AuthHandler>) {
 
     return getAuthHandler()(...args);
   } catch (error) {
-    const status = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode: number }).statusCode) || 500 : 500;
-    const message = error instanceof Error ? error.message : 'hosted auth is unavailable';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 500,
+      code: 'hosted_auth_unavailable',
+      message: 'hosted auth is unavailable',
+    });
+    return createApiErrorResponse(normalized);
   }
 }
 

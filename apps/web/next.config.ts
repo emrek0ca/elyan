@@ -1,12 +1,14 @@
 import type { NextConfig } from 'next';
+import path from 'path';
 import { getBaseSecurityHeaders, getPrivateSurfaceHeaders } from './src/lib/security';
 
 const baseSecurityHeaders = getBaseSecurityHeaders();
 const privateSecurityHeaders = [...baseSecurityHeaders, ...getPrivateSurfaceHeaders()];
 
 const nextConfig: NextConfig = {
-  // Produces .next/standalone for the direct local Node runtime and optional packaging.
-  output: 'standalone',
+  turbopack: {
+    root: path.resolve(__dirname),
+  },
   outputFileTracingExcludes: {
     '/**': ['storage/**/*'],
   },

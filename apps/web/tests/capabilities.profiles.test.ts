@@ -42,8 +42,8 @@ describe('Capability profile guides', () => {
     );
     expect(code?.libraries).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: 'ts-morph', status: 'planned' }),
-        expect.objectContaining({ name: 'simple-git', status: 'planned' }),
+        expect.objectContaining({ name: 'ts-morph', status: 'active' }),
+        expect.objectContaining({ name: 'simple-git', status: 'active' }),
       ])
     );
     expect(process?.libraries).toEqual(

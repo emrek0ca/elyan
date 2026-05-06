@@ -14,6 +14,13 @@ describe('Health endpoint', () => {
     });
     expect(typeof body.ready).toBe('boolean');
     expect(body.checks).toBeDefined();
+    expect(body.checks.registry).toBeDefined();
+    expect(body.checks.registry.sections).toBeDefined();
+    expect(body.checks.registry.sections.runs).toBeDefined();
+    expect(body.checks.registry.sections.approvals).toBeDefined();
+    expect(body.checks.registry.sections.ml).toBeDefined();
+    expect(body.registry).toBeDefined();
+    expect(body.registry.ml || body.registry.models).toBeDefined();
     expect(Array.isArray(body.nextSteps)).toBe(true);
     expect(body.workspace).toBeDefined();
   });

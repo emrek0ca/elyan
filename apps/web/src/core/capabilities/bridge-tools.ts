@@ -23,10 +23,10 @@ import {
   renderChartMarkup,
 } from './chart';
 import {
+  executeOptimizationSolve,
   optimizationSolveInputSchema,
   optimizationSolveOutputSchema,
 } from './optimization';
-import { runOptimization } from '@/core/optimization';
 
 export type BridgeToolId =
   | 'math_exact'
@@ -132,7 +132,7 @@ const bridgeToolDefinitions: BridgeToolDefinition[] = [
     timeoutMs: 3_000,
     inputSchema: optimizationSolveInputSchema,
     outputSchema: optimizationSolveOutputSchema,
-    run: (input) => runOptimization(input as z.output<typeof optimizationSolveInputSchema>),
+    run: (input) => executeOptimizationSolve(input as z.output<typeof optimizationSolveInputSchema>),
   },
 ];
 

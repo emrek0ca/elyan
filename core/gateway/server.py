@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import inspect
+import html
 import time
 import json
 import os
@@ -275,6 +276,28 @@ _USER_SESSION_PREFIXES = (
     "/api/v1/runs/",
     "/api/v1/connectors/",
     "/api/v1/approvals/",
+)
+_PUBLIC_HOSTED_SESSION_PATHS = {
+    "/api/v1/public/auth/me",
+    "/api/v1/public/auth/logout",
+    "/api/v1/billing/workspace",
+    "/api/v1/billing/usage",
+    "/api/v1/billing/entitlements",
+    "/api/v1/billing/plans",
+    "/api/v1/billing/credits",
+    "/api/v1/billing/ledger",
+    "/api/v1/billing/events",
+    "/api/v1/billing/profile",
+    "/api/v1/billing/reconcile-usage",
+    "/api/v1/billing/checkout-session",
+    "/api/v1/billing/portal-session",
+    "/api/v1/billing/checkout/init",
+    "/api/v1/billing/token-packs/purchase",
+    "/api/v1/notifications",
+}
+_PUBLIC_HOSTED_SESSION_PREFIXES = (
+    "/api/v1/notifications/",
+    "/api/v1/billing/checkouts/",
 )
 
 
@@ -2161,7 +2184,8 @@ class ElyanGatewayServer:
         return True, ""
 
     def _require_user_session(self, request, *, allow_cookie: bool = True) -> tuple[bool, str, dict[str, Any]]:
-        if not _is_loopback_request(request):
+        path = str(getattr(request, "path", "") or "")
+        if path not in _PUBLIC_HOSTED_SESSION_PATHS and not any(path.startswith(prefix) for prefix in _PUBLIC_HOSTED_SESSION_PREFIXES) and not _is_loopback_request(request):
             return False, "user session is restricted to localhost", {}
         remote_ip = _request_remote_host(request)
         if _is_auth_rate_limited(remote_ip, bucket="session"):
@@ -2282,6 +2306,13 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/v1/auth/login', self.handle_v1_auth_login)
         self.app.router.add_post('/api/v1/auth/logout', self.handle_v1_auth_logout)
         self.app.router.add_get('/api/v1/auth/me', self.handle_v1_auth_me)
+        self.app.router.add_post('/api/v1/public/auth/register', self.handle_v1_public_auth_register)
+        self.app.router.add_post('/api/v1/public/auth/login', self.handle_v1_public_auth_login)
+        self.app.router.add_post('/api/v1/public/auth/logout', self.handle_v1_public_auth_logout)
+        self.app.router.add_get('/api/v1/public/auth/me', self.handle_v1_public_auth_me)
+        self.app.router.add_get('/api/v1/notifications', self.handle_v1_notifications)
+        self.app.router.add_post('/api/v1/notifications', self.handle_v1_notifications)
+        self.app.router.add_post('/api/v1/notifications/{notification_id}/seen', self.handle_v1_notification_seen)
         self.app.router.add_get('/api/v1/admin/workspaces', self.handle_v1_admin_workspaces)
         self.app.router.add_post('/api/v1/admin/workspaces', self.handle_v1_admin_workspace_create)
         self.app.router.add_get('/api/v1/admin/workspaces/{workspace_id}', self.handle_v1_admin_workspace_detail)
@@ -2404,9 +2435,18 @@ class ElyanGatewayServer:
         self.app.router.add_post('/api/llm/setup/ollama-delete', self.handle_llm_setup_ollama_delete)
         self.app.router.add_get('/api/llm/setup/recommend', self.handle_llm_setup_recommend)
 
-        # ── Dashboard & Web UI (deprecated: desktop-first) ───────────────────
-        self.app.router.add_get('/', self.handle_dashboard_page)
-        self.app.router.add_get('/dashboard', self.handle_dashboard_page)
+        # ── Public site ──────────────────────────────────────────────────────
+        self.app.router.add_get('/', self.handle_public_home_page)
+        self.app.router.add_get('/pricing', self.handle_public_pricing_page)
+        self.app.router.add_get('/auth', self.handle_public_auth_page)
+        self.app.router.add_get('/download', self.handle_public_download_page)
+        self.app.router.add_get('/panel', self.handle_public_panel_page)
+        self.app.router.add_get('/panel{tail:.*}', self.handle_public_panel_page)
+        self.app.router.add_get('/docs', self.handle_public_docs_page)
+        self.app.router.add_get('/docs{tail:.*}', self.handle_public_docs_page)
+
+        # ── Legacy dashboard aliases ────────────────────────────────────────
+        self.app.router.add_get('/dashboard', self.handle_public_panel_page)
         self.app.router.add_get('/trace/{task_id}', self.handle_trace_page)
         self.app.router.add_get('/assets/{filename}', self.handle_brand_asset)
         self.app.router.add_get('/healthz', self.handle_product_health)
@@ -3402,6 +3442,219 @@ class ElyanGatewayServer:
             }
         )
         return response
+
+    async def handle_v1_public_auth_register(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
+        email = str(data.get("email") or "").strip().lower()
+        password = str(data.get("password") or "")
+        display_name = str(data.get("display_name") or data.get("displayName") or "").strip()
+        workspace_id = str(data.get("workspace_id") or data.get("workspaceId") or "").strip()
+        if not email:
+            return _json_error("email required", status=400)
+        if not password:
+            return _json_error("password required", status=400)
+        runtime_db = get_runtime_database()
+        try:
+            user = runtime_db.auth.register_user(
+                email=email,
+                password=password,
+                display_name=display_name or email.split("@", 1)[0],
+                workspace_id=workspace_id,
+                metadata={"auth_surface": "public_register"},
+            )
+        except ValueError as exc:
+            return _json_error(str(exc), status=400)
+        if not user:
+            return _json_error("account already exists", status=409)
+        session, session_token = runtime_db.auth_sessions.create_session(
+            user=user,
+            metadata={
+                "client": "web",
+                "login_source": "public_register",
+            },
+        )
+        session = self._ensure_conversation_session_context(session)
+        resolved_role = runtime_db.access.get_actor_role(
+            workspace_id=str(user.get("workspace_id") or workspace_id or "local-workspace"),
+            actor_id=str(user.get("user_id") or ""),
+        )
+        response = _json_ok(
+            {
+                "workspace_id": str(user.get("workspace_id") or workspace_id or "local-workspace"),
+                "session_token": session_token,
+                "csrf_token": "",
+                "user": {
+                    "user_id": str(user.get("user_id") or ""),
+                    "email": str(user.get("email") or email),
+                    "display_name": str(user.get("display_name") or display_name or ""),
+                    "status": str(user.get("status") or "active"),
+                    "role": str(user.get("role") or resolved_role or session.get("role") or "owner"),
+                },
+                "session": {
+                    "session_id": str(session.get("session_id") or ""),
+                    "conversation_session_id": str(session.get("conversation_session_id") or ""),
+                    "expires_at": float(session.get("expires_at") or 0.0),
+                },
+            }
+        )
+        response.headers["X-Elyan-Session-Token"] = session_token
+        _set_session_cookie(response, "elyan_user_session", session_token, httponly=True)
+        csrf_token = self._set_csrf_cookie(response)
+        response.text = json.dumps({**json.loads(response.text), "csrf_token": csrf_token})
+        return response
+
+    async def handle_v1_public_auth_login(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
+        email = str(data.get("email") or "").strip().lower()
+        password = str(data.get("password") or "")
+        workspace_id = str(data.get("workspace_id") or data.get("workspaceId") or "").strip()
+        if not email:
+            return _json_error("email required", status=400)
+        if not password:
+            return _json_error("password required", status=400)
+        runtime_db = get_runtime_database()
+        user = runtime_db.auth.authenticate_user(
+            email=email,
+            password=password,
+            workspace_id=workspace_id,
+        )
+        if not user:
+            return _json_error("invalid credentials", status=401)
+        session, session_token = runtime_db.auth_sessions.create_session(
+            user=user,
+            metadata={
+                "client": "web",
+                "login_source": "public_login",
+            },
+        )
+        session = self._ensure_conversation_session_context(session)
+        resolved_role = runtime_db.access.get_actor_role(
+            workspace_id=str(user.get("workspace_id") or workspace_id or "local-workspace"),
+            actor_id=str(user.get("user_id") or ""),
+        )
+        response = _json_ok(
+            {
+                "workspace_id": str(user.get("workspace_id") or workspace_id or "local-workspace"),
+                "session_token": session_token,
+                "csrf_token": "",
+                "user": {
+                    "user_id": str(user.get("user_id") or ""),
+                    "email": str(user.get("email") or email),
+                    "display_name": str(user.get("display_name") or ""),
+                    "status": str(user.get("status") or "active"),
+                    "role": str(user.get("role") or resolved_role or session.get("role") or "member"),
+                },
+                "session": {
+                    "session_id": str(session.get("session_id") or ""),
+                    "conversation_session_id": str(session.get("conversation_session_id") or ""),
+                    "expires_at": float(session.get("expires_at") or 0.0),
+                },
+            }
+        )
+        response.headers["X-Elyan-Session-Token"] = session_token
+        _set_session_cookie(response, "elyan_user_session", session_token, httponly=True)
+        csrf_token = self._set_csrf_cookie(response)
+        response.text = json.dumps({**json.loads(response.text), "csrf_token": csrf_token})
+        return response
+
+    async def handle_v1_public_auth_logout(self, request):
+        session_token = str(
+            request.headers.get("X-Elyan-Session-Token", "")
+            or request.cookies.get("elyan_user_session", "")
+            or ""
+        ).strip()
+        if session_token:
+            get_runtime_database().auth_sessions.revoke_session(session_token)
+        response = _json_ok()
+        _clear_session_cookie(response, "elyan_user_session")
+        self._clear_csrf_cookie(response)
+        return response
+
+    async def handle_v1_public_auth_me(self, request):
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return _json_error(error, status=403)
+        return _json_ok(
+            {
+                "workspace_id": str(session.get("workspace_id") or "local-workspace"),
+                "csrf_token": str(request.cookies.get("elyan_csrf_token", "") or ""),
+                "user": {
+                    "user_id": str(session.get("user_id") or ""),
+                    "email": str(session.get("email") or ""),
+                    "display_name": str(session.get("display_name") or ""),
+                    "status": str(session.get("status") or "active"),
+                    "role": str(session.get("role") or "member"),
+                },
+                "session": {
+                    "session_id": str(session.get("session_id") or ""),
+                    "conversation_session_id": str(session.get("conversation_session_id") or ""),
+                    "expires_at": float(session.get("expires_at") or 0.0),
+                },
+            }
+        )
+
+    async def handle_v1_notifications(self, request):
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return _json_error(error, status=403)
+        workspace_id = str(session.get("workspace_id") or "local-workspace")
+        store = self._workspace_billing()
+        if request.method == "GET":
+            try:
+                limit = int(request.rel_url.query.get("limit", 20))
+            except Exception:
+                limit = 20
+            status_filter = str(request.rel_url.query.get("status") or "").strip()
+            notifications = store.list_notifications(workspace_id, limit=limit, status=status_filter)
+            unread = int(sum(1 for item in notifications if str(item.get("status") or "").strip() != "seen"))
+            return _json_ok({
+                "workspace_id": workspace_id,
+                "notifications": notifications,
+                "unread_count": unread,
+            })
+        try:
+            data = await request.json()
+        except Exception:
+            return _json_error("invalid json", status=400)
+        allowed, error = self._require_billing_write_role(request, data)
+        if not allowed:
+            return _json_error(error, status=403)
+        try:
+            notification = store.post_notification(
+                workspace_id=str(data.get("workspace_id") or workspace_id),
+                title=str(data.get("title") or "").strip(),
+                body=str(data.get("body") or "").strip(),
+                kind=str(data.get("kind") or "announcement").strip() or "announcement",
+                source=str(data.get("source") or "control_plane").strip() or "control_plane",
+                status=str(data.get("status") or "unseen").strip() or "unseen",
+                metadata=dict(data.get("metadata") or {}),
+            )
+        except Exception as exc:
+            return _json_error(str(exc), status=400)
+        return _json_ok({"notification": notification})
+
+    async def handle_v1_notification_seen(self, request):
+        allowed, error, session = self._require_user_session(request, allow_cookie=True)
+        if not allowed:
+            return _json_error(error, status=403)
+        notification_id = str(request.match_info.get("notification_id") or "").strip()
+        if not notification_id:
+            return _json_error("notification_id required", status=400)
+        store = self._workspace_billing()
+        existing = store.list_notifications(str(session.get("workspace_id") or "local-workspace"), limit=200)
+        notification = next((item for item in existing if str(item.get("notification_id") or "") == notification_id), None)
+        if not notification:
+            return _json_error("notification not found", status=404)
+        if str(notification.get("workspace_id") or "") != str(session.get("workspace_id") or ""):
+            return _json_error("workspace_access_denied", status=403)
+        notification = store.mark_notification_seen(notification_id)
+        return _json_ok({"notification": notification})
 
     async def handle_v1_admin_workspaces(self, request):
         return await self._workspace_admin_controller().handle_list_workspaces(request)
@@ -5052,19 +5305,74 @@ class ElyanGatewayServer:
             return web.Response(text="Inspector UI not found", status=404)
         return web.FileResponse(p)
 
-    # ── Page handlers ─────────────────────────────────────────────────────────
-    async def handle_dashboard_page(self, request):
+    def _public_site_file(self, filename: str) -> Path:
+        base = Path(__file__).resolve().parent.parent.parent
+        return (base / "site" / filename).resolve()
+
+    async def _serve_public_html(self, filename: str, *, fallback_title: str) -> web.Response:
+        path = self._public_site_file(filename)
+        if path.exists():
+            return web.FileResponse(path)
         return web.Response(
             text=(
-                "<html><body style='font-family:-apple-system,Segoe UI,sans-serif;padding:24px;'>"
-                "<h2>Elyan Desktop-First Runtime</h2>"
-                "<p>Web dashboard kaldırıldı.</p>"
-                "<p>Desktop uygulamayı açmak için terminalde <code>elyan desktop</code> çalıştırın.</p>"
+                "<!doctype html><html><head><meta charset='utf-8'>"
+                f"<title>{fallback_title}</title>"
+                "<meta name='viewport' content='width=device-width, initial-scale=1'></head>"
+                "<body style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;'>"
+                f"<h1>{fallback_title}</h1>"
+                "<p>Public site asset missing.</p>"
                 "</body></html>"
             ),
             content_type="text/html",
-            status=410,
+            status=404,
         )
+
+    # ── Page handlers ─────────────────────────────────────────────────────────
+    def _local_runtime_boundary_response(self, *, title: str = "Elyan Local Runtime", status: int = 200) -> web.Response:
+        body = (
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            f"<title>{html.escape(title)}</title>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<style>"
+            "body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;margin:0;background:#101418;color:#f6f7f8}"
+            "main{max-width:900px;margin:0 auto;padding:48px 24px}"
+            "h1{font-size:32px;margin:0 0 12px}p{line-height:1.6;color:#cbd2d9}"
+            "code{background:#1d252d;border:1px solid #303a45;border-radius:6px;padding:2px 6px}"
+            "ul{line-height:1.9;color:#dbe2e8}.panel{border:1px solid #303a45;border-radius:8px;padding:20px;background:#151b22}"
+            "a{color:#8ec5ff}"
+            "</style></head><body><main>"
+            f"<h1>{html.escape(title)}</h1>"
+            "<div class='panel'>"
+            "<p>This loopback server is the local Elyan runtime API, not the hosted elyan.dev website.</p>"
+            "<ul>"
+            "<li>Use <code>elyan desktop</code> for the local operator UI.</li>"
+            "<li>Use <code>/healthz</code>, <code>/api/status</code>, <code>/api/v1/runs</code>, and <code>/ops</code> for local runtime inspection.</li>"
+            "<li>Use <a href='https://elyan.dev'>https://elyan.dev</a> for docs, pricing, signup, downloads, billing, and hosted account state.</li>"
+            "</ul>"
+            "</div></main></body></html>"
+        )
+        return web.Response(text=body, content_type="text/html", status=status)
+
+    async def handle_dashboard_page(self, request):
+        return web.HTTPFound(location="/panel")
+
+    async def handle_public_home_page(self, request):
+        return self._local_runtime_boundary_response()
+
+    async def handle_public_pricing_page(self, request):
+        return self._local_runtime_boundary_response(title="Hosted pricing lives on elyan.dev", status=404)
+
+    async def handle_public_auth_page(self, request):
+        return self._local_runtime_boundary_response(title="Hosted auth lives on elyan.dev", status=404)
+
+    async def handle_public_download_page(self, request):
+        return self._local_runtime_boundary_response(title="Hosted downloads live on elyan.dev", status=404)
+
+    async def handle_public_panel_page(self, request):
+        return self._local_runtime_boundary_response(title="Local operator UI lives in Elyan Desktop")
+
+    async def handle_public_docs_page(self, request):
+        return self._local_runtime_boundary_response(title="Hosted docs live on elyan.dev", status=404)
 
     async def handle_trace_page(self, request):
         task_id = str(request.match_info.get("task_id", "") or "").strip()
@@ -6535,11 +6843,6 @@ class ElyanGatewayServer:
                 "readiness": readiness,
                 "system_dependencies": system_dependencies,
             }
-        # Non-Tauri (browser/dev) mode: expose admin token to loopback callers so
-        # AppProviders.tsx can call apiClient.setAdminToken() without Rust involvement.
-        if _is_loopback_request(request):
-            payload["admin_token"] = _ensure_admin_access_token()
-
         # Elyan subsystem status (non-blocking)
         elyan_status: dict = {}
         try:

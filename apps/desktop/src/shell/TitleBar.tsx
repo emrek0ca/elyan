@@ -39,11 +39,11 @@ export function TitleBar() {
       <button
         type="button"
         onClick={() => openCommandPalette()}
-        className="hidden min-w-[280px] items-center gap-3 rounded-[16px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-2 text-left text-[13px] text-[var(--text-tertiary)] transition hover:border-[var(--glass-border-strong)] hover:bg-[var(--bg-surface)] xl:flex"
+        className="hidden min-w-[260px] items-center gap-3 rounded-[10px] border border-[var(--glass-border)] bg-[var(--glass-elevated)] px-4 py-2 text-left text-[13px] text-[var(--text-tertiary)] transition hover:border-[var(--glass-border-strong)] hover:bg-[var(--bg-surface)] xl:flex"
       >
         <Search className="h-3.5 w-3.5" />
-        <span className="flex-1">Ara veya komut yaz…</span>
-        <kbd className="rounded-[8px] border border-[var(--glass-border)] px-1.5 py-0.5 text-[10px]">⌘K</kbd>
+        <span className="flex-1">Ara</span>
+        <kbd className="rounded-[6px] border border-[var(--glass-border)] px-1.5 py-0.5 text-[10px]">⌘K</kbd>
       </button>
 
       <div className="flex items-center gap-2">

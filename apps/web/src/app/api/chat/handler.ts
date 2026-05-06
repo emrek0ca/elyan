@@ -1,9 +1,21 @@
+/**
+ * Shared chat request handler for preview and main chat routes.
+ * Layer: chat API support. Critical orchestration adapter, but it contains no route wiring itself.
+ */
 import { randomUUID } from 'crypto';
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getControlPlaneSessionToken, isControlPlaneSessionConfigured } from '@/core/control-plane';
 import { ControlPlaneAuthenticationError } from '@/core/control-plane/errors';
 import { executeInteractionStream, normalizeInteractionError } from '@/core/interaction/orchestrator';
+import { createApiErrorResponse } from '@/core/http/api-errors';
 import { z } from 'zod';
+
+type ChatLearningMode = 'disabled' | 'authenticated_optional';
+
+type ChatHandlerOptions = {
+  requireHostedSession: boolean;
+  learningMode?: ChatLearningMode;
+};
 
 const chatMessageSchema = z.object({
   role: z.string().min(1),
@@ -18,14 +30,12 @@ const chatRequestSchema = z.object({
 });
 
 function invalidChatRequest(code: string, message: string, issues?: Record<string, string[] | undefined>) {
-  return NextResponse.json(
-    {
-      error: message,
-      code,
-      ...(issues ? { issues } : {}),
-    },
-    { status: 400 }
-  );
+  return createApiErrorResponse({
+    status: 400,
+    code,
+    message,
+    ...(issues ? { issues } : {}),
+  });
 }
 
 async function readChatRequestBody(request: NextRequest) {
@@ -51,7 +61,7 @@ async function readChatRequestBody(request: NextRequest) {
   }
 }
 
-export async function handleChatRequest(request: NextRequest, options: { requireHostedSession: boolean }) {
+export async function handleChatRequest(request: NextRequest, options: ChatHandlerOptions) {
   try {
     const bodyResult = await readChatRequestBody(request);
     if (!bodyResult.ok) {
@@ -72,12 +82,32 @@ export async function handleChatRequest(request: NextRequest, options: { require
     const latestUserMessage =
       [...messages].reverse().find((message) => message.role === 'user')?.content ?? messages[messages.length - 1].content;
     const requestId = request.headers.get('x-request-id')?.trim() || randomUUID();
-    const controlPlaneSession =
-      options.requireHostedSession && isControlPlaneSessionConfigured() ? await getControlPlaneSessionToken(request) : null;
+    console.debug('[chat] request parsed', {
+      requestId,
+      surface: options.requireHostedSession ? 'main' : 'preview',
+      messageCount: messages.length,
+      mode: mode ?? 'default',
+      hasModelId: !!modelId,
+      hasConversationId: !!conversationId,
+    });
+    const shouldHydrateSession =
+      isControlPlaneSessionConfigured() &&
+      (options.requireHostedSession || options.learningMode === 'authenticated_optional');
+    let controlPlaneSession = shouldHydrateSession ? await getControlPlaneSessionToken(request) : null;
+
+    if (!controlPlaneSession?.accountId && options.learningMode === 'authenticated_optional') {
+      controlPlaneSession = null;
+    }
 
     if (options.requireHostedSession && isControlPlaneSessionConfigured() && !controlPlaneSession?.accountId) {
       throw new ControlPlaneAuthenticationError('Control-plane session is required for the main chat surface');
     }
+
+    console.debug('[chat] dispatching interaction stream', {
+      requestId,
+      surface: options.requireHostedSession ? 'main' : 'preview',
+      hostedSession: !!controlPlaneSession?.accountId,
+    });
 
     return executeInteractionStream({
       source: 'web',
@@ -88,16 +118,17 @@ export async function handleChatRequest(request: NextRequest, options: { require
       requestId,
       controlPlaneSession,
       requireHostedSession: options.requireHostedSession,
+      metadata: {
+        learningMode: controlPlaneSession?.accountId ? 'authenticated' : 'anonymous_disabled',
+      },
     });
   } catch (error: unknown) {
-    console.error('Chat endpoint error:', error);
+    console.error('[chat] endpoint error', error);
     const normalized = normalizeInteractionError(error);
-    return NextResponse.json(
-      {
-        error: normalized.message,
-        code: normalized.code,
-      },
-      { status: normalized.status }
-    );
+    return createApiErrorResponse({
+      status: normalized.status,
+      code: normalized.code,
+      message: normalized.message,
+    });
   }
 }

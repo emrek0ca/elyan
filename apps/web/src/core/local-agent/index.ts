@@ -1,20 +1,23 @@
-import { execFile } from 'child_process';
 import { mkdir, readdir, readFile, rename, writeFile } from 'fs/promises';
 import path from 'path';
-import { promisify } from 'util';
 import { readRuntimeSettingsSync } from '@/core/runtime-settings';
 import { createLocalAgentRunId, writeLocalAgentEvidence } from './evidence';
 import { evaluateLocalAgentAction } from './policy';
 import { localAgentActionSchema, type LocalAgentAction, type LocalAgentExecutionResult } from './types';
-
-const execFileAsync = promisify(execFile);
+import type { CapabilityExecutionContext } from '@/core/capabilities/types';
+import { executeBoundedTerminalCommand } from '@/core/dispatch/runtime/terminal-runtime';
 
 export * from './types';
 export * from './policy';
 export * from './evidence';
 
-function resolveActionPath(inputPath: string) {
-  return path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(process.cwd(), inputPath);
+function resolveActionPath(inputPath: string, workspacePath?: string) {
+  if (path.isAbsolute(inputPath)) {
+    return path.resolve(inputPath);
+  }
+
+  const basePath = workspacePath ? path.resolve(workspacePath) : process.cwd();
+  return path.resolve(basePath, inputPath);
 }
 
 async function atomicWriteText(filePath: string, content: string) {
@@ -24,52 +27,64 @@ async function atomicWriteText(filePath: string, content: string) {
   await rename(tempPath, filePath);
 }
 
-async function executeAllowedAction(action: LocalAgentAction) {
+async function executeAllowedAction(action: LocalAgentAction, runtime?: CapabilityExecutionContext['runtime'], signal?: AbortSignal) {
   switch (action.type) {
     case 'filesystem.list': {
-      const entries = await readdir(resolveActionPath(action.path), { withFileTypes: true });
+      const entries = await readdir(resolveActionPath(action.path, runtime?.workspacePath), { withFileTypes: true });
       return entries.map((entry) => ({ name: entry.name, type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other' }));
     }
     case 'filesystem.read_text':
-      return { content: await readFile(resolveActionPath(action.path), 'utf8') };
+      return { content: await readFile(resolveActionPath(action.path, runtime?.workspacePath), 'utf8') };
     case 'filesystem.write_text':
     case 'filesystem.patch_text':
-      await atomicWriteText(resolveActionPath(action.path), action.content);
+      await atomicWriteText(resolveActionPath(action.path, runtime?.workspacePath), action.content);
       return { written: true };
     case 'filesystem.move':
     case 'filesystem.restore':
-      await mkdir(path.dirname(resolveActionPath(action.targetPath)), { recursive: true });
-      await rename(resolveActionPath(action.path), resolveActionPath(action.targetPath));
-      return { moved: true, targetPath: resolveActionPath(action.targetPath) };
+      await mkdir(path.dirname(resolveActionPath(action.targetPath, runtime?.workspacePath)), { recursive: true });
+      await rename(
+        resolveActionPath(action.path, runtime?.workspacePath),
+        resolveActionPath(action.targetPath, runtime?.workspacePath)
+      );
+      return { moved: true, targetPath: resolveActionPath(action.targetPath, runtime?.workspacePath) };
     case 'filesystem.trash': {
-      const source = resolveActionPath(action.path);
-      const trashDir = path.resolve(process.cwd(), 'storage', 'trash');
+      const source = resolveActionPath(action.path, runtime?.workspacePath);
+      const trashDir = runtime?.workspacePath
+        ? path.join(runtime.workspacePath, '.trash')
+        : path.resolve(process.cwd(), 'storage', 'trash');
       await mkdir(trashDir, { recursive: true });
       const targetPath = path.join(trashDir, `${Date.now()}-${path.basename(source)}`);
       await rename(source, targetPath);
       return { trashed: true, targetPath };
     }
     case 'terminal.exec': {
-      const result = await execFileAsync(action.command, action.args, {
-        cwd: resolveActionPath(action.cwd),
-        timeout: action.timeoutMs,
-        maxBuffer: 1024 * 1024,
-        shell: false,
+      const result = await executeBoundedTerminalCommand({
+        cwd: resolveActionPath(action.cwd, runtime?.workspacePath),
+        command: action.command,
+        args: action.args,
+        timeoutMs: action.timeoutMs,
+        interactive: action.interactive ?? false,
+        runtime,
+        signal,
       });
       return {
         stdout: result.stdout,
         stderr: result.stderr,
-        exitCode: 0,
+        exitCode: result.exitCode,
+        commandLine: result.commandLine,
       };
     }
   }
 }
 
-export async function executeLocalAgentAction(input: unknown): Promise<LocalAgentExecutionResult> {
+export async function executeLocalAgentAction(
+  input: unknown,
+  options?: { runtime?: CapabilityExecutionContext['runtime']; signal?: AbortSignal }
+): Promise<LocalAgentExecutionResult> {
   const action = localAgentActionSchema.parse(input);
   const settings = readRuntimeSettingsSync();
   const runId = action.runId ?? createLocalAgentRunId();
-  const decision = evaluateLocalAgentAction(action, settings.localAgent);
+  const decision = evaluateLocalAgentAction(action, settings.localAgent, options?.runtime);
 
   if (!decision.allowed) {
     await writeLocalAgentEvidence({
@@ -98,7 +113,7 @@ export async function executeLocalAgentAction(input: unknown): Promise<LocalAgen
   });
 
   try {
-    const output = await executeAllowedAction(action);
+    const output = await executeAllowedAction(action, options?.runtime, options?.signal);
     await writeLocalAgentEvidence({
       runId,
       evidenceDir: settings.localAgent.evidenceDir,

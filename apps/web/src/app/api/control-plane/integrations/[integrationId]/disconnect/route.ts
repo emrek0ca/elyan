@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getControlPlaneService } from '@/core/control-plane';
 import { requireControlPlaneSession } from '@/core/control-plane/session';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -30,11 +31,11 @@ export async function POST(
 
     return NextResponse.json({ ok: true, integration: result });
   } catch (error: unknown) {
-    const status =
-      error && typeof error === 'object' && 'statusCode' in error
-        ? Number((error as { statusCode: number }).statusCode) || 500
-        : 500;
-    const message = error instanceof Error ? error.message : 'integration disconnect failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 500,
+      code: 'integration_disconnect_failed',
+      message: 'integration disconnect failed',
+    });
+    return createApiErrorResponse(normalized);
   }
 }

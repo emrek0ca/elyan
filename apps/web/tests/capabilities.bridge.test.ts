@@ -45,7 +45,7 @@ describe('Bridge capabilities', () => {
       expect(snapshot.summary.libraryCount).toBeGreaterThan(0);
       expect(snapshot.libraryStrategies.some((strategy) => strategy.category === 'research')).toBe(true);
       expect(snapshot.libraryStrategies.some((strategy) =>
-        strategy.libraries.some((library) => library.name === 'ts-morph' && library.status === 'planned')
+        strategy.libraries.some((library) => library.name === 'ts-morph' && library.status === 'active')
       )).toBe(true);
       expect(snapshot.capabilities.some((capability) => capability.id === 'browser_automation' && capability.library === 'playwright')).toBe(true);
       expect(snapshot.domains.find((domain) => domain.category === 'documents')?.libraries).toEqual(

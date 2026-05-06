@@ -49,8 +49,8 @@ function Bubble({ msg }: { msg: Message }) {
 
   if (isSystem) {
     return (
-      <div className="flex justify-center py-1">
-        <span className="rounded-full bg-[var(--glass-elevated)] px-3 py-1 text-[11px] text-[var(--text-tertiary)]">
+      <div className="flex justify-center py-2">
+        <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-[11px] text-[var(--accent-primary)]">
           {msg.text}
         </span>
       </div>
@@ -58,25 +58,25 @@ function Bubble({ msg }: { msg: Message }) {
   }
 
   return (
-    <div className={cn("flex gap-2.5 py-1", isUser && "flex-row-reverse")}>
+    <div className={cn("flex animate-[elyan-fade-in_160ms_ease-out] gap-2.5 py-1.5", isUser && "flex-row-reverse")}>
       {/* Avatar */}
       <div className={cn(
-        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-inverse)]",
+        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[var(--text-secondary)]",
         isUser
-          ? "bg-[var(--accent-primary)]"
-          : "bg-[color-mix(in_srgb,var(--accent-secondary)_40%,var(--glass-elevated))]",
+          ? "border-[var(--accent-soft)] bg-[var(--accent-soft)] text-[var(--accent-primary)]"
+          : "border-[var(--glass-border)] bg-white",
       )}>
         {isUser ? <User size={13} /> : <Bot size={13} />}
       </div>
 
       {/* Bubble */}
       <div className={cn(
-        "max-w-[82%] rounded-[16px] px-4 py-2.5",
+        "max-w-[82%] rounded-[20px] px-4 py-3 transition-[background,transform,opacity] duration-150",
         isUser
-          ? "bg-[var(--accent-primary)] text-[var(--text-inverse)]"
+          ? "bg-[var(--accent-soft)] text-[var(--text-primary)]"
           : msg.requiresApproval
             ? "border border-amber-400/40 bg-[color-mix(in_srgb,var(--color-warning-soft)_30%,var(--glass-elevated))]"
-            : "bg-[var(--glass-elevated)]",
+            : "border border-[var(--glass-border)] bg-white",
       )}>
         {msg.requiresApproval && (
           <div className="mb-2 flex items-center gap-1.5 text-amber-400">
@@ -86,7 +86,7 @@ function Bubble({ msg }: { msg: Message }) {
         )}
         <p className={cn(
           "whitespace-pre-wrap break-words text-[13px] leading-relaxed",
-          isUser ? "text-[var(--text-inverse)]" : "text-[var(--text-primary)]",
+          "text-[var(--text-primary)]",
         )}>
           {msg.text}
           {msg.streaming && (
@@ -95,7 +95,7 @@ function Bubble({ msg }: { msg: Message }) {
         </p>
         <div className={cn(
           "mt-1 text-right text-[10px]",
-          isUser ? "text-[color-mix(in_srgb,var(--text-inverse)_60%,transparent)]" : "text-[var(--text-tertiary)]",
+          "text-[var(--text-tertiary)]",
         )}>
           {new Date(msg.ts).toLocaleTimeString("tr", { hour: "2-digit", minute: "2-digit" })}
         </div>
@@ -255,15 +255,15 @@ export function ChatView({ className }: { className?: string }) {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <Surface tone="card" className={cn("flex flex-col", className)} style={{ minHeight: 0 }}>
+    <Surface tone="card" className={cn("flex flex-col overflow-hidden", className)} style={{ minHeight: 0 }}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--glass-border)] px-4 py-3">
+      <div className="flex items-center justify-between border-b border-[var(--glass-border)] bg-white/80 px-4 py-3">
         <div className="flex items-center gap-2">
           <Bot size={15} className="text-[var(--accent-primary)]" />
           <span className="text-[13px] font-semibold text-[var(--text-primary)]">Elyan</span>
           {streaming && (
-            <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--accent-primary)] animate-pulse">
-              yazıyor…
+            <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--accent-primary)]">
+              çalışıyor
             </span>
           )}
         </div>
@@ -292,7 +292,7 @@ export function ChatView({ className }: { className?: string }) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5" style={{ maxHeight: "380px" }}>
+      <div className="flex-1 space-y-1.5 overflow-y-auto bg-[#fbfefd] px-4 py-4" style={{ maxHeight: "420px" }}>
         {messages.map(msg => <Bubble key={msg.id} msg={msg} />)}
         <div ref={bottomRef} />
       </div>
@@ -317,12 +317,12 @@ export function ChatView({ className }: { className?: string }) {
 
       {/* Quick actions */}
       {messages.length <= 1 && !streaming && (
-        <div className="flex flex-wrap gap-2 border-t border-[var(--glass-border)] px-4 py-2.5">
+        <div className="flex flex-wrap gap-2 border-t border-[var(--glass-border)] bg-white px-4 py-3">
           {QUICK_ACTIONS.map(action => (
             <button
               key={action}
               onClick={() => void send(action)}
-              className="rounded-full border border-[var(--glass-border)] px-3 py-1 text-[11px] text-[var(--text-secondary)] hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)] transition-colors"
+              className="rounded-full border border-[var(--glass-border)] bg-white px-3 py-1.5 text-[11px] text-[var(--text-secondary)] transition duration-150 hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)] active:scale-95"
             >
               {action}
             </button>
@@ -331,21 +331,21 @@ export function ChatView({ className }: { className?: string }) {
       )}
 
       {/* Input */}
-      <div className="border-t border-[var(--glass-border)] px-3 py-3">
+      <div className="border-t border-[var(--glass-border)] bg-white px-3 py-3">
         <div className="flex items-end gap-2">
           <textarea
             ref={inputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Komut ver veya sor… (Enter gönderer, Shift+Enter yeni satır)"
+            placeholder="Ne yapalım?"
             rows={1}
             disabled={streaming}
             className={cn(
-              "flex-1 resize-none rounded-[14px] border border-[var(--glass-border)]",
-              "bg-[var(--glass-elevated)] px-3.5 py-2.5 text-[13px] text-[var(--text-primary)]",
-              "placeholder:text-[var(--text-tertiary)] focus:border-[var(--accent-primary)] focus:outline-none",
-              "disabled:opacity-50 transition-colors",
+              "flex-1 resize-none rounded-[18px] border border-[var(--glass-border)]",
+              "bg-[#fbfefd] px-4 py-3 text-[14px] text-[var(--text-primary)]",
+              "placeholder:text-[var(--text-tertiary)] focus:border-[var(--accent-primary)] focus:bg-white focus:outline-none focus:ring-4 focus:ring-[var(--accent-soft)]",
+              "disabled:opacity-50 transition duration-150",
             )}
             style={{ maxHeight: "120px", overflowY: "auto" }}
           />
@@ -353,9 +353,9 @@ export function ChatView({ className }: { className?: string }) {
             onClick={() => void send(input)}
             disabled={!input.trim() || streaming}
             className={cn(
-              "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-all",
+              "flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition duration-150 active:scale-95",
               input.trim() && !streaming
-                ? "bg-[var(--accent-primary)] text-[var(--text-inverse)] hover:opacity-90"
+                ? "bg-[var(--accent-primary)] text-white hover:opacity-90"
                 : "border border-[var(--glass-border)] text-[var(--text-tertiary)] opacity-50",
             )}
           >

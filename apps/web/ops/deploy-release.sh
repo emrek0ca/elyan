@@ -52,9 +52,9 @@ if [ -L "$CURRENT_LINK" ]; then
 fi
 
 cd "$RELEASE_DIR"
-npm ci
-npm run db:migrate
-npm run build
+pnpm install --frozen-lockfile
+pnpm --filter @elyan/web db:migrate
+pnpm --filter @elyan/web build
 
 ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
 systemctl restart "$SERVICE_NAME"

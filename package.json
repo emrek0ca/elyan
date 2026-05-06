@@ -2,12 +2,14 @@
   "name": "@emrek0ca/elyan",
   "version": "20.1.0",
   "private": false,
+  "packageManager": "pnpm@10.33.2",
   "description": "GitHub-installable Elyan CLI bootstrap wrapper",
   "license": "MIT",
   "scripts": {
     "build:runtime": "sh -c 'PY=.venv/bin/python; [ -x \"$PY\" ] || PY=python3; \"$PY\" scripts/verify_public_site.py'",
     "build:desktop": "pnpm --filter @elyan/desktop build",
     "build:web": "pnpm --filter @elyan/web build",
+    "verify:local-control-plane": "pnpm --filter @elyan/web verify:local-control-plane",
     "typecheck:desktop": "pnpm --filter @elyan/desktop exec tsc -b",
     "typecheck:web": "pnpm --filter @elyan/web typecheck",
     "test:runtime": "sh -c 'PY=.venv/bin/python; [ -x \"$PY\" ] || PY=python3; \"$PY\" -m pytest tests/test_elyan_phase2.py tests/test_faz7_memory.py tests/voice/ tests/unit/ -q --tb=short'",
@@ -17,6 +19,10 @@
     "build": "pnpm run build:runtime && pnpm run build:desktop && pnpm run build:web",
     "lint": "sh -c 'PY=.venv/bin/python; [ -x \"$PY\" ] || PY=python3; \"$PY\" -m compileall core cli config security tools utils elyan main.py elyan_entrypoint.py scripts'",
     "lint:runtime": "sh -c 'PY=.venv/bin/python; [ -x \"$PY\" ] || PY=python3; \"$PY\" -m compileall core cli config security tools utils elyan main.py elyan_entrypoint.py scripts'"
+  },
+  "scriptDescriptions": {
+    "build:web": "Build the hosted control-plane frontend/backend workspace.",
+    "verify:local-control-plane": "Run the hosted control-plane verification probe through the web workspace."
   },
   "bin": {
     "elyan": "bin/elyan.cjs"

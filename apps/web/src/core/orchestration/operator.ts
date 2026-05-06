@@ -1,5 +1,8 @@
 import { capabilityRegistry } from '@/core/capabilities';
+import type { CapabilityRuntimeContext } from '@/core/capabilities/types';
 import { readMcpServerConfigs, McpToolRegistry } from '@/core/mcp';
+import { classifyFailure } from '@/core/observability/failure-classifier';
+import type { RunTraceRecorder } from '@/core/observability/run-trace';
 import { isOptimizationQuery, isResourceAllocationOptimizationQuery } from '@/core/optimization/signals';
 import { type ScrapedContent } from '@/types/search';
 import { type ExecutionPolicy, type ExecutionTarget } from './types';
@@ -115,6 +118,10 @@ function resolveBridgeToolId(query: string, target?: ExecutionTarget) {
   return 'math_exact';
 }
 
+function isExplicitOptimizationDemoRequest(query: string) {
+  return /\b(demo|example|sample|örnek)\b/i.test(query);
+}
+
 function resolveOptimizationDemo(query: string) {
   return isResourceAllocationOptimizationQuery(query)
     ? 'resource-allocation'
@@ -131,6 +138,83 @@ function resolveTargetUrl(query: string, target?: ExecutionTarget) {
 
 function isBrowserAutomationConfirmed(target: ExecutionTarget) {
   return target.kind !== 'browser_automation' || !target.requiresConfirmation;
+}
+
+async function withPreflightCapabilityTrace<T>(
+  trace: RunTraceRecorder | undefined,
+  input: {
+    capabilityId: string;
+    tool?: string;
+    modelId?: string;
+    recoveryState?: CapabilityRuntimeContext['recoveryState'];
+    artifactRefs?: string[];
+    details?: Record<string, unknown>;
+  },
+  executor: () => Promise<T>
+) {
+  const startedAt = Date.now();
+  trace?.recordCapabilityStarted({
+    step: 0,
+    capabilityId: input.capabilityId,
+    modelId: input.modelId ?? input.capabilityId,
+    tool: input.tool ?? input.capabilityId,
+    retryCount: 0,
+    artifactRefs: input.artifactRefs ?? [],
+    recoveryState: input.recoveryState,
+    details: {
+      ...(input.details ?? {}),
+      stage: 'preflight',
+    },
+  });
+
+  try {
+    const result = await executor();
+    trace?.recordCapabilityCompleted({
+      step: 0,
+      capabilityId: input.capabilityId,
+      modelId: input.modelId ?? input.capabilityId,
+      tool: input.tool ?? input.capabilityId,
+      latencyMs: Date.now() - startedAt,
+      success: true,
+      status: 'success',
+      retryCount: 0,
+      artifactRefs: input.artifactRefs ?? [],
+      recoveryState: input.recoveryState,
+      details: {
+        ...(input.details ?? {}),
+        stage: 'preflight',
+      },
+    });
+    return result;
+  } catch (error) {
+    const failure = classifyFailure({
+      error,
+      failureReason: error instanceof Error ? error.message : 'Preflight capability failed.',
+      verdict: 'failure',
+      tool: input.capabilityId,
+      modelId: input.modelId,
+    });
+    const cancelled = error instanceof Error && /abort|cancel/i.test(error.message);
+    trace?.recordCapabilityCompleted({
+      step: 0,
+      capabilityId: input.capabilityId,
+      modelId: input.modelId ?? input.capabilityId,
+      tool: input.tool ?? input.capabilityId,
+      latencyMs: Date.now() - startedAt,
+      success: false,
+      status: cancelled ? 'cancelled' : failure?.errorType === 'TIMEOUT' ? 'failure' : 'failure',
+      retryCount: 0,
+      errorType: failure?.errorType,
+      artifactRefs: input.artifactRefs ?? [],
+      recoveryState: input.recoveryState,
+      details: {
+        ...(input.details ?? {}),
+        stage: 'preflight',
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+    throw error;
+  }
 }
 
 function extractJsonObject(query: string) {
@@ -222,7 +306,10 @@ function expandResourceTemplate(template: string, query: string) {
 export async function runOperatorPreflight(
   query: string,
   policy: ExecutionPolicy,
-  surface: ExecutionSurfaceSnapshot
+  surface: ExecutionSurfaceSnapshot,
+  runtimeContext?: CapabilityRuntimeContext,
+  trace?: RunTraceRecorder,
+  signal?: AbortSignal
 ): Promise<OperatorOutcome> {
   void surface;
   const outcome: OperatorOutcome = {
@@ -247,12 +334,21 @@ export async function runOperatorPreflight(
         return outcome;
       }
 
-      const result = await capabilityRegistry.execute('tool_bridge', {
-        toolId: bridgeToolId,
-        input: {
-          expression,
+      const result = await capabilityRegistry.execute(
+        'tool_bridge',
+        {
+          toolId: bridgeToolId,
+          input: {
+            expression,
+          },
         },
-      });
+        {
+          runtime: runtimeContext,
+          signal,
+          trace,
+          artifactRefs: [`local://tool_bridge/${bridgeToolId}`],
+        }
+      );
 
       const serialized = stringifyValue(result);
       outcome.sources.push(
@@ -271,10 +367,19 @@ export async function runOperatorPreflight(
         return outcome;
       }
 
-      const result = await capabilityRegistry.execute('tool_bridge', {
-        toolId: bridgeToolId,
-        input: parsed,
-      });
+      const result = await capabilityRegistry.execute(
+        'tool_bridge',
+        {
+          toolId: bridgeToolId,
+          input: parsed,
+        },
+        {
+          runtime: runtimeContext,
+          signal,
+          trace,
+          artifactRefs: [`local://tool_bridge/${bridgeToolId}`],
+        }
+      );
 
       const serialized = stringifyValue(result);
       outcome.sources.push(
@@ -285,13 +390,35 @@ export async function runOperatorPreflight(
     }
 
     if (bridgeToolId === 'optimization_solve') {
-      const result = await capabilityRegistry.execute('tool_bridge', {
-        toolId: bridgeToolId,
-        input: {
-          action: 'run_demo',
-          demo: resolveOptimizationDemo(query),
+      const structuredProblem = extractJsonObject(query);
+      const input = structuredProblem
+        ? {
+            action: 'solve',
+            query,
+            problem: structuredProblem,
+          }
+        : isExplicitOptimizationDemoRequest(query)
+          ? {
+              action: 'run_demo',
+              demo: resolveOptimizationDemo(query),
+            }
+          : {
+              action: 'solve',
+              query,
+            };
+      const result = (await capabilityRegistry.execute(
+        'tool_bridge',
+        {
+          toolId: bridgeToolId,
+          input,
         },
-      }) as { result?: { markdownReport?: string } };
+        {
+          runtime: runtimeContext,
+          signal,
+          trace,
+          artifactRefs: [`local://tool_bridge/${bridgeToolId}`],
+        }
+      )) as { result?: { markdownReport?: string } };
 
       const report = result.result?.markdownReport ?? stringifyValue(result);
       outcome.sources.push(
@@ -321,10 +448,19 @@ export async function runOperatorPreflight(
       return outcome;
     }
 
-    const snapshot = await capabilityRegistry.execute('web_read_dynamic', {
-      url,
-      settleMs: 250,
-    }) as {
+    const snapshot = (await capabilityRegistry.execute(
+      'web_read_dynamic',
+      {
+        url,
+        settleMs: 250,
+      },
+      {
+        runtime: runtimeContext,
+        signal,
+        trace,
+        artifactRefs: [url],
+      }
+    )) as {
       url: string;
       title: string;
       text: string;
@@ -351,12 +487,21 @@ export async function runOperatorPreflight(
       return outcome;
     }
 
-    const crawlResult = await capabilityRegistry.execute('web_crawl', {
-      startUrls: [url],
-      maxPages: 8,
-      maxDepth: 1,
-      sameDomainOnly: true,
-    }) as {
+    const crawlResult = (await capabilityRegistry.execute(
+      'web_crawl',
+      {
+        startUrls: [url],
+        maxPages: 8,
+        maxDepth: 1,
+        sameDomainOnly: true,
+      },
+      {
+        runtime: runtimeContext,
+        signal,
+        trace,
+        artifactRefs: [url],
+      }
+    )) as {
       pages: Array<{ url: string; title: string; text: string; depth: number }>;
       errors: Array<{ url: string; message: string }>;
     };
@@ -375,7 +520,21 @@ export async function runOperatorPreflight(
 
     try {
       if (policy.primary.kind === 'mcp_resource') {
-        const resource = await registry.readResource(policy.primary.id ?? '');
+        const resource = await withPreflightCapabilityTrace(
+          trace,
+          {
+            capabilityId: `mcp_resource:${policy.primary.id ?? 'unknown'}`,
+            tool: policy.primary.id ?? 'mcp_resource',
+            modelId: policy.primary.id ?? 'mcp_resource',
+            recoveryState: runtimeContext?.recoveryState,
+            artifactRefs: [`mcp://resource/${policy.primary.id ?? 'unknown'}`],
+            details: {
+              title: policy.primary.title ?? 'MCP resource',
+              query,
+            },
+          },
+          async () => registry.readResource(policy.primary.id ?? '')
+        );
         const content = stringifyValue(resource);
         outcome.sources.push(
           toScrapedContent(
@@ -388,7 +547,21 @@ export async function runOperatorPreflight(
         return outcome;
       }
 
-      const prompt = await registry.getPrompt(policy.primary.id ?? '', extractPromptArguments(query));
+      const prompt = await withPreflightCapabilityTrace(
+        trace,
+        {
+          capabilityId: `mcp_prompt:${policy.primary.id ?? 'unknown'}`,
+          tool: policy.primary.id ?? 'mcp_prompt',
+          modelId: policy.primary.id ?? 'mcp_prompt',
+          recoveryState: runtimeContext?.recoveryState,
+          artifactRefs: [`mcp://prompt/${policy.primary.id ?? 'unknown'}`],
+          details: {
+            title: policy.primary.title ?? 'MCP prompt',
+            query,
+          },
+        },
+        async () => registry.getPrompt(policy.primary.id ?? '', extractPromptArguments(query))
+      );
       const content = stringifyValue(prompt);
       outcome.sources.push(
         toScrapedContent(`mcp://prompt/${policy.primary.id}`, policy.primary.title ?? 'MCP prompt', content)
@@ -417,7 +590,21 @@ export async function runOperatorPreflight(
 
     try {
       const input = extractJsonObject(query) ?? {};
-      const result = await registry.invokeTool(toolId, input);
+      const result = await withPreflightCapabilityTrace(
+        trace,
+        {
+          capabilityId: `mcp_tool:${toolId}`,
+          tool: toolId,
+          modelId: toolId,
+          recoveryState: runtimeContext?.recoveryState,
+          artifactRefs: [`mcp://tool/${toolId}`],
+          details: {
+            title: policy.primary.title ?? toolId,
+            query,
+          },
+        },
+        async () => registry.invokeTool(toolId, input)
+      );
       const content = stringifyValue(result);
       outcome.sources.push(
         toScrapedContent(`mcp://tool/${toolId}`, policy.primary.title ?? toolId, content)
@@ -448,7 +635,21 @@ export async function runOperatorPreflight(
     const registry = new McpToolRegistry(serverConfigs);
 
     try {
-      const resource = await registry.readResource(resolved.uri);
+      const resource = await withPreflightCapabilityTrace(
+        trace,
+        {
+          capabilityId: `mcp_resource_template:${resolved.uri}`,
+          tool: resolved.uri,
+          modelId: resolved.uri,
+          recoveryState: runtimeContext?.recoveryState,
+          artifactRefs: [`mcp://resource-template/${resolved.uri}`],
+          details: {
+            title: policy.primary.title ?? 'MCP resource template',
+            query,
+          },
+        },
+        async () => registry.readResource(resolved.uri)
+      );
       const content = stringifyValue(resource);
       outcome.sources.push(
         toScrapedContent(

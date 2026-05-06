@@ -19,6 +19,17 @@ export type CapabilityVerificationMode = 'schema' | 'snapshot' | 'roundtrip' | '
 export type CapabilityRollbackMode = 'none' | 'restore' | 'rebuild' | 'reversible' | 'manual';
 export type CapabilitySource = 'local_module' | 'local_bridge_tool' | 'mcp_surface' | 'browser_surface' | 'direct';
 
+export type CapabilityRuntimeContext = {
+  taskId?: string;
+  workspacePath?: string;
+  browserSessionPath?: string;
+  terminalSessionPath?: string;
+  approvalCheckpointPath?: string;
+  tracePath?: string;
+  executionScope?: 'local' | 'dispatch' | 'operator';
+  recoveryState?: 'fresh' | 'resumed' | 'recovered';
+};
+
 export type CapabilityOperationalProfile = {
   category: CapabilityCategory;
   riskLevel: CapabilityRiskLevel;
@@ -42,6 +53,7 @@ export type CapabilityAuditEntry = {
 
 export type CapabilityExecutionContext = {
   signal: AbortSignal;
+  runtime?: CapabilityRuntimeContext;
 };
 
 export type CapabilityDefinition<

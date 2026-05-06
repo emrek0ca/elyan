@@ -1,3 +1,7 @@
+/**
+ * Hosted control-plane migration runner.
+ * Layer: database + control-plane. Critical bootstrap script for initializing PostgreSQL schema.
+ */
 import { getControlPlanePool } from '@/core/control-plane/database';
 import { applyControlPlaneMigrations } from '@/core/control-plane/migrations';
 import { env } from '@/lib/env';

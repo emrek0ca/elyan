@@ -1,20 +1,7 @@
 # Elyan Web
 
 This workspace hosts the Next.js public site and hosted control plane for `elyan.dev`.
-
-The real v1 product surface is intentionally small:
-
-- local chat runtime
-- local health and readiness
-- capability discovery
-- dashboard
-- CLI
-- optional search
-- optional MCP
-- optional channels
-- optional hosted control-plane integration
-
-Everything else is secondary.
+The local runtime lives at the repository root; this package only owns the hosted surface.
 
 ## Development
 
@@ -30,7 +17,7 @@ pnpm install
 pnpm dev
 ```
 
-3. Build and run the standalone server:
+3. Build and run the app directly:
 
 ```bash
 pnpm build
@@ -47,6 +34,23 @@ pnpm test
 
 - `http://localhost:3000/api/healthz`
 - `http://localhost:3000/manage`
+
+## Local Control Plane
+
+- Local backend port: `3013`
+- Local PostgreSQL must be running and reachable through `DATABASE_URL`
+- `pgvector` must be installed in the active PostgreSQL server
+- Required hosted env for local backend startup: `DATABASE_URL`, `NEXTAUTH_URL`, `NEXTAUTH_SECRET`
+- Run migrations with `pnpm db:migrate`
+- Verify the full hosted flow with `pnpm verify:local-control-plane`
+- Restart the backend process after changing `DATABASE_URL`, `NEXTAUTH_*`, or running migrations; stale server processes will keep old env and schema state
+- `elyan-dev` should point to `http://127.0.0.1:3013` during local development
+
+## Boundary
+
+- `kodlar/elyan` is the local runtime/app layer: private user context, local tools, and local-first behavior stay there.
+- `elyan-backend` is the control-plane layer: auth, account state, billing, devices, usage, learning metadata, and hosted API state live here.
+- Private local context must never cross into the control-plane by default.
 
 ## Commands
 

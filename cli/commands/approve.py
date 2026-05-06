@@ -2,25 +2,40 @@
 Approval System CLI Command
 
 Manage pending approvals from CLI:
-- elyan pending             → List pending approvals
-- elyan approve <id>        → Approve request
-- elyan deny <id>           → Deny request
+- elyan approve pending      → List pending approvals
+- elyan approve approve <id> → Approve request
+- elyan approve deny <id>    → Deny request
+- elyan approvals pending    → Alias for listing pending approvals
 """
 
 import typer
 import requests
 import json
+import os
 from typing import Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from datetime import datetime, timedelta
 from config import get_gateway_api_base_url
+from config.elyan_config import elyan_config
 
 console = Console()
 app = typer.Typer(help="Approval system commands")
 
 BASE_URL = get_gateway_api_base_url()
+
+
+def _admin_headers() -> dict[str, str]:
+    admin_token = str(
+        os.environ.get("ELYAN_ADMIN_TOKEN", "")
+        or elyan_config.get("gateway.admin.token", "")
+        or ""
+    ).strip()
+    headers = {"Content-Type": "application/json"}
+    if admin_token:
+        headers["X-Elyan-Admin-Token"] = admin_token
+    return headers
 
 
 def format_age(created_at: float) -> str:
@@ -45,7 +60,7 @@ def pending(
 ) -> None:
     """List all pending approvals."""
     try:
-        response = requests.get(f"{BASE_URL}/approvals/pending", timeout=5)
+        response = requests.get(f"{BASE_URL}/approvals/pending", headers=_admin_headers(), timeout=5)
         response.raise_for_status()
         data = response.json()
 
@@ -116,6 +131,7 @@ def approve(
         response = requests.post(
             f"{BASE_URL}/approvals/resolve",
             json=payload,
+            headers=_admin_headers(),
             timeout=5
         )
         response.raise_for_status()
@@ -149,6 +165,7 @@ def deny(
         response = requests.post(
             f"{BASE_URL}/approvals/resolve",
             json=payload,
+            headers=_admin_headers(),
             timeout=5
         )
         response.raise_for_status()

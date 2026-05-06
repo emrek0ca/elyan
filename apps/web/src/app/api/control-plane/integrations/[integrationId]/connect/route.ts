@@ -6,6 +6,7 @@ import { buildIntegrationAuthorizationContext, isIntegrationProviderConfigured }
 import { requireControlPlaneSession } from '@/core/control-plane/session';
 import { env } from '@/lib/env';
 import { encryptIntegrationSecret } from '@/core/control-plane/integration-provider';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -88,11 +89,11 @@ export async function GET(
     });
     return response;
   } catch (error: unknown) {
-    const status =
-      error && typeof error === 'object' && 'statusCode' in error
-        ? Number((error as { statusCode: number }).statusCode) || 500
-        : 500;
-    const message = error instanceof Error ? error.message : 'integration connect start failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 500,
+      code: 'integration_connect_start_failed',
+      message: 'integration connect start failed',
+    });
+    return createApiErrorResponse(normalized);
   }
 }

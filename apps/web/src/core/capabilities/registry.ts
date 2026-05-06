@@ -8,6 +8,8 @@ import type {
   CapabilityRegistration,
 } from './types';
 import { defaultCapabilityCatalog } from './catalog';
+import { classifyFailure } from '@/core/observability/failure-classifier';
+import type { RunTraceRecorder } from '@/core/observability/run-trace';
 
 function normalizeDisabledIds(values?: string[]): Set<string> {
   return new Set((values ?? []).map((value) => value.trim()).filter(Boolean));
@@ -87,6 +89,52 @@ async function runWithTimeout<T>(
   });
 }
 
+function extractArtifactRefs(value: unknown): string[] {
+  const refs = new Set<string>();
+
+  const add = (candidate: unknown) => {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      refs.add(candidate.trim());
+    }
+  };
+
+  const visit = (candidate: unknown) => {
+    if (!candidate) {
+      return;
+    }
+
+    if (Array.isArray(candidate)) {
+      candidate.forEach(visit);
+      return;
+    }
+
+    if (typeof candidate === 'object') {
+      const record = candidate as Record<string, unknown>;
+      add(record.id);
+      add(record.url);
+      add(record.href);
+      add(record.uri);
+      add(record.filePath);
+      add(record.path);
+      add(record.sourceUrl);
+      add(record.downloadPath);
+      add(record.outputPath);
+      if (record.artifactRefs) {
+        visit(record.artifactRefs);
+      }
+      if (record.sources) {
+        visit(record.sources);
+      }
+      if (record.pages) {
+        visit(record.pages);
+      }
+    }
+  };
+
+  visit(value);
+  return [...refs].slice(0, 12);
+}
+
 function describeError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -153,8 +201,34 @@ export class CapabilityRegistry {
     return this.auditTrail.list();
   }
 
-  async execute(capabilityId: string, rawInput: unknown, options?: { signal?: AbortSignal }) {
+  async execute(
+    capabilityId: string,
+    rawInput: unknown,
+    options?: {
+      signal?: AbortSignal;
+      runtime?: CapabilityExecutionContext['runtime'];
+      trace?: RunTraceRecorder;
+      artifactRefs?: string[];
+    }
+  ) {
     const definition = this.get(capabilityId);
+    const traceContext = options?.trace;
+    const traceDetails = {
+      capabilityId: definition.id,
+      capabilityTitle: definition.title,
+      recoveryState: options?.runtime?.recoveryState,
+      taskId: options?.runtime?.taskId,
+    };
+
+    traceContext?.recordCapabilityStarted({
+      step: 0,
+      capabilityId: definition.id,
+      modelId: definition.id,
+      tool: definition.id,
+      retryCount: 0,
+      recoveryState: options?.runtime?.recoveryState,
+      details: traceDetails,
+    });
 
     if (!definition.enabled) {
       const startedAt = new Date();
@@ -170,6 +244,23 @@ export class CapabilityRegistry {
         errorMessage: 'disabled by registry configuration',
       });
 
+      traceContext?.recordCapabilityCompleted({
+        step: 0,
+        capabilityId: definition.id,
+        modelId: definition.id,
+        tool: definition.id,
+        latencyMs: 0,
+        success: false,
+        status: 'blocked',
+        retryCount: 0,
+        artifactRefs: [],
+        recoveryState: options?.runtime?.recoveryState,
+        details: {
+          ...traceDetails,
+          status: 'disabled',
+        },
+      });
+
       throw new CapabilityDisabledError(definition.id, 'disabled by registry configuration');
     }
 
@@ -182,11 +273,17 @@ export class CapabilityRegistry {
         definition.id,
         definition.timeoutMs,
         signal,
-        Promise.resolve(definition.run(parsedInput, { signal } as CapabilityExecutionContext))
+        Promise.resolve(
+          definition.run(parsedInput, {
+            signal,
+            runtime: options?.runtime,
+          } as CapabilityExecutionContext)
+        )
       );
 
       const parsedOutput = definition.outputSchema.parse(result);
       const finishedAt = new Date();
+      const artifactRefs = options?.artifactRefs ?? extractArtifactRefs(parsedOutput);
 
       this.auditTrail.record({
         capabilityId: definition.id,
@@ -197,10 +294,34 @@ export class CapabilityRegistry {
         durationMs: finishedAt.getTime() - startedAt.getTime(),
       });
 
+      traceContext?.recordCapabilityCompleted({
+        step: 0,
+        capabilityId: definition.id,
+        modelId: definition.id,
+        tool: definition.id,
+        latencyMs: finishedAt.getTime() - startedAt.getTime(),
+        success: true,
+        status: 'success',
+        retryCount: 0,
+        artifactRefs,
+        recoveryState: options?.runtime?.recoveryState,
+        details: {
+          ...traceDetails,
+          artifactCount: artifactRefs.length,
+          status: 'success',
+        },
+      });
+
       return parsedOutput;
     } catch (error) {
       const finishedAt = new Date();
       const status = error instanceof CapabilityTimeoutError ? 'timeout' : 'error';
+      const errorType = classifyFailure({
+        error,
+        failureReason: describeError(error),
+        verdict: 'failure',
+        tool: definition.id,
+      })?.errorType;
 
       this.auditTrail.record({
         capabilityId: definition.id,
@@ -210,6 +331,25 @@ export class CapabilityRegistry {
         finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
         errorMessage: describeError(error),
+      });
+
+      traceContext?.recordCapabilityCompleted({
+        step: 0,
+        capabilityId: definition.id,
+        modelId: definition.id,
+        tool: definition.id,
+        latencyMs: finishedAt.getTime() - startedAt.getTime(),
+        success: false,
+        status: options?.signal?.aborted ? 'cancelled' : status === 'timeout' ? 'failure' : 'failure',
+        retryCount: 0,
+        errorType,
+        artifactRefs: [],
+        recoveryState: options?.runtime?.recoveryState,
+        details: {
+          ...traceDetails,
+          status,
+          error: describeError(error),
+        },
       });
 
       throw error;

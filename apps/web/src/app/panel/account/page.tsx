@@ -1,5 +1,5 @@
-import { HostedPanel } from '@/components/panel/HostedPanel';
+import { redirect } from 'next/navigation';
 
 export default function PanelAccountPage() {
-  return <HostedPanel section="account" />;
+  redirect('https://elyan.dev/panel/account');
 }

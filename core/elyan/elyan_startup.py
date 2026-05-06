@@ -16,7 +16,8 @@ Başlatılan servisler (sırayla):
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Optional
+import os
+from typing import Any, Callable, Optional
 
 from utils.logger import get_logger
 
@@ -30,6 +31,10 @@ _broadcast: BroadcastFn = None
 
 # ── Morning brief task handle (for clean shutdown) ────────────────────────────
 _morning_brief_task: Optional[asyncio.Task] = None
+
+
+def _env_truthy(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def set_broadcast(fn: BroadcastFn) -> None:
@@ -177,6 +182,10 @@ async def _start_wake_word(notify_fn: BroadcastFn) -> None:
         logger.warning(f"WakeWordDetector start failed (non-critical): {exc}")
 
 
+def _wake_word_autostart_enabled() -> bool:
+    return _env_truthy("ELYAN_ENABLE_WAKE_WORD")
+
+
 def _init_memory() -> None:
     """Pre-initialize memory DBs so first request is instant."""
     try:
@@ -206,16 +215,19 @@ async def start_elyan_services(broadcast: BroadcastFn = None) -> None:
     """Start all Elyan background services concurrently."""
     set_broadcast(broadcast)
     _init_memory()   # sync — fast DB open
+    tasks: list[asyncio.Future[Any] | asyncio.Task[Any]] = [
+        asyncio.create_task(_start_ollama_discovery()),
+        asyncio.create_task(_start_system_monitor(broadcast)),
+        asyncio.create_task(_start_scheduler()),
+        asyncio.create_task(_start_context_tracker()),
+        asyncio.create_task(_start_morning_brief()),
+    ]
+    if _wake_word_autostart_enabled():
+        tasks.append(asyncio.create_task(_start_wake_word(broadcast)))
+    else:
+        logger.info("WakeWordDetector autostart skipped (ELYAN_ENABLE_WAKE_WORD disabled)")
 
-    results = await asyncio.gather(
-        _start_ollama_discovery(),
-        _start_system_monitor(broadcast),
-        _start_scheduler(),
-        _start_context_tracker(),
-        _start_wake_word(broadcast),
-        _start_morning_brief(),
-        return_exceptions=True,
-    )
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     failed = [r for r in results if isinstance(r, BaseException)]
     if failed:

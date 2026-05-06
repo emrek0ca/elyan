@@ -68,7 +68,7 @@ export class SearxNGClient {
 
     try {
       response = await fetch(`${this.baseUrl}/search?${params}`, {
-        signal: AbortSignal.timeout(5_000),
+        signal: options?.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000),
       });
     } catch {
       availabilityCache.set(this.baseUrl.replace(/\/$/, ''), { ok: false, checkedAt: Date.now() });

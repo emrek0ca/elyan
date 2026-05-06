@@ -65,6 +65,23 @@ function compareErrors(left: CrawledError, right: CrawledError) {
   return compareStrings(left.url, right.url) || compareStrings(left.message, right.message);
 }
 
+function canonicalizeCrawledUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname === '') {
+      parsed.pathname = '/';
+    }
+
+    if (parsed.pathname === '/' && !parsed.search && !parsed.hash && !url.endsWith('/')) {
+      return `${parsed.origin}/`;
+    }
+
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function dedupeByKey<T>(items: T[], keySelector: (item: T) => string): T[] {
   const seen = new Set<string>();
   const deduped: T[] = [];
@@ -85,13 +102,14 @@ function dedupeByKey<T>(items: T[], keySelector: (item: T) => string): T[] {
 export async function crawlUrls(input: z.output<typeof webCrawlInputSchema>) {
   const pages: Array<z.output<typeof webCrawlOutputSchema>['pages'][number]> = [];
   const errors: Array<z.output<typeof webCrawlOutputSchema>['errors'][number]> = [];
+  const { Configuration } = await import('@crawlee/core');
   const { CheerioCrawler } = await import('@crawlee/cheerio');
 
   const crawler = new CheerioCrawler({
     maxRequestsPerCrawl: input.maxPages,
     async requestHandler({ $, request, enqueueLinks }) {
       const depth = Number(request.userData.depth ?? 0);
-      const url = request.loadedUrl ?? request.url;
+      const url = canonicalizeCrawledUrl(request.loadedUrl ?? request.url);
       const title = $('title').text().trim();
       const text = extractCheerioText($);
 
@@ -124,7 +142,7 @@ export async function crawlUrls(input: z.output<typeof webCrawlInputSchema>) {
         message: error instanceof Error ? error.message : 'crawl failed',
       });
     },
-  });
+  }, new Configuration({ persistStorage: false }));
 
   try {
     await crawler.run(

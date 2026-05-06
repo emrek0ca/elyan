@@ -6,6 +6,7 @@ from elyan.bootstrap.manager import BootstrapManager
 
 
 def test_bootstrap_manager_install_and_status(tmp_path, monkeypatch):
+    monkeypatch.setattr("elyan.bootstrap.manager.BOOTSTRAP_BUNDLE_DIR", tmp_path / "backups")
     manager = BootstrapManager(state_path=tmp_path / "bootstrap_state.json")
     monkeypatch.setattr("elyan.bootstrap.onboard.is_setup_complete", lambda: False)
     monkeypatch.setattr("elyan.bootstrap.onboard.start_onboarding", lambda **kwargs: True)
@@ -20,6 +21,7 @@ def test_bootstrap_manager_install_and_status(tmp_path, monkeypatch):
 
 
 def test_bootstrap_manager_export_bundle_writes_file(tmp_path, monkeypatch):
+    monkeypatch.setattr("elyan.bootstrap.manager.BOOTSTRAP_BUNDLE_DIR", tmp_path / "backups")
     manager = BootstrapManager(state_path=tmp_path / "bootstrap_state.json")
     monkeypatch.setattr("elyan.bootstrap.manager.vault.export_bundle", lambda output_path=None: {"version": 1, "secrets": {}})
     monkeypatch.setattr("elyan.bootstrap.manager.get_knowledge_base", lambda: type("KB", (), {"list_experiences": lambda self: []})())

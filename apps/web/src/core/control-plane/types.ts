@@ -128,6 +128,15 @@ export const controlPlaneEvaluationSignalSchema = controlPlaneEvaluationSignalDr
 
 export type ControlPlaneEvaluationSignal = z.infer<typeof controlPlaneEvaluationSignalSchema>;
 
+export const controlPlaneLearningArtifactTypeSchema = z.enum([
+  'brain_model',
+  'prompt_hint',
+  'routing_hint',
+  'tool_usage_pattern',
+]);
+
+export type ControlPlaneLearningArtifactType = z.infer<typeof controlPlaneLearningArtifactTypeSchema>;
+
 export const controlPlaneConversationRoleSchema = z.enum(['user', 'assistant', 'system']);
 
 export type ControlPlaneConversationRole = z.infer<typeof controlPlaneConversationRoleSchema>;
@@ -214,6 +223,56 @@ export const controlPlaneLearningDraftSchema = z.object({
 });
 
 export type ControlPlaneLearningDraft = z.infer<typeof controlPlaneLearningDraftSchema>;
+
+export const controlPlaneLearningEventSchema = z.object({
+  eventId: z.string().min(1),
+  accountId: z.string().min(1),
+  spaceId: z.string().min(1).optional(),
+  requestId: z.string().min(1),
+  source: z.string().min(1),
+  input: z.string().min(1),
+  intent: controlPlaneInteractionIntentSchema,
+  taskType: controlPlaneTaskIntentSchema,
+  plan: z.string().min(1),
+  reasoningSteps: z.array(z.string().min(1)).default([]),
+  reasoningTrace: z.array(z.string().min(1)).default([]),
+  output: z.string(),
+  betterOutput: z.string().default(''),
+  success: z.boolean(),
+  failureReason: z.string().min(1).optional(),
+  feedback: z.record(z.string(), z.unknown()).default({}),
+  latencyMs: z.number().int().nonnegative(),
+  score: z.number().min(0).max(1),
+  accepted: z.boolean().default(false),
+  modelId: z.string().min(1).optional(),
+  modelProvider: z.string().min(1).optional(),
+  isSafeForLearning: z.boolean().default(false),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export type ControlPlaneLearningEvent = z.infer<typeof controlPlaneLearningEventSchema>;
+
+export const controlPlaneModelArtifactSchema = z.object({
+  modelVersion: z.string().min(1),
+  baseModel: z.string().min(1),
+  spaceId: z.string().min(1).optional(),
+  datasetSize: z.number().int().nonnegative(),
+  loss: z.number().optional(),
+  score: z.number().min(0).max(1).optional(),
+  active: z.boolean(),
+  artifactPath: z.string().min(1),
+  artifactType: controlPlaneLearningArtifactTypeSchema,
+  sourceEventIds: z.array(z.string().min(1)).default([]),
+  confidenceScore: z.number().min(0).max(1),
+  isSafeForLearning: z.boolean().default(false),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type ControlPlaneModelArtifact = z.infer<typeof controlPlaneModelArtifactSchema>;
 
 export const controlPlaneInteractionStateSchema = z.object({
   threads: z.array(controlPlaneConversationThreadSchema).default([]),
@@ -344,6 +403,9 @@ export const controlPlaneUsageSnapshotSchema = z.object({
   dailyHostedToolActionCalls: z.number().int().nonnegative(),
   dailyHostedToolActionCallsLimit: z.number().int().nonnegative(),
   remainingHostedToolActionCalls: z.number().int().nonnegative(),
+  dailyTokens: z.number().int().nonnegative(),
+  dailyTokensLimit: z.number().int().nonnegative(),
+  remainingTokens: z.number().int().nonnegative(),
   monthlyCreditsRemaining: z.string(),
   monthlyCreditsBurned: z.string(),
   state: controlPlaneUsageSnapshotStateSchema,
@@ -642,6 +704,7 @@ export const controlPlaneStateV6Schema = z.object({
   devices: z.record(z.string(), controlPlaneDeviceSchema).default({}),
   deviceLinks: z.record(z.string(), controlPlaneDeviceLinkSchema).default({}),
   evaluationSignals: z.array(controlPlaneEvaluationSignalSchema).default([]),
+  learningEvents: z.array(controlPlaneLearningEventSchema).default([]),
 });
 
 export const controlPlaneStateSchema = z.union([
@@ -663,6 +726,7 @@ export type ControlPlaneState = {
   devices: Record<string, ControlPlaneDevice>;
   deviceLinks: Record<string, ControlPlaneDeviceLink>;
   evaluationSignals: ControlPlaneEvaluationSignal[];
+  learningEvents: ControlPlaneLearningEvent[];
 };
 
 export const controlPlaneAccountUpsertSchema = z.object({
@@ -688,6 +752,7 @@ export type ControlPlaneIdentityRegisterInput = z.infer<typeof controlPlaneIdent
 export const controlPlaneUsageInputSchema = z.object({
   domain: controlPlaneUsageDomainSchema,
   units: z.number().positive(),
+  tokens: z.number().int().nonnegative().optional(),
   source: controlPlaneLedgerSourceSchema.default('hosted_api'),
   requestId: z.string().trim().min(1).optional(),
   note: z.string().trim().min(1).optional(),
@@ -708,7 +773,9 @@ export const controlPlaneUsageQuoteSchema = z.object({
   resetAt: z.string().optional(),
   remainingRequests: z.number().int().nonnegative().optional(),
   remainingHostedToolActionCalls: z.number().int().nonnegative().optional(),
+  remainingTokens: z.number().int().nonnegative().optional(),
   monthlyCreditsRemaining: z.string().optional(),
+  requestTokens: z.number().int().nonnegative().optional(),
 });
 
 export type ControlPlaneUsageQuote = z.infer<typeof controlPlaneUsageQuoteSchema>;

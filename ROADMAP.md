@@ -200,11 +200,13 @@ class SandboxRuntime:
 - Timeout: 60s default, 300s max
 - Human-in-the-loop: agent takıldığında kullanıcıdan yardım isteyebilir
 
-### B-4: Voice Assistant — JARVIS Modu (Ay 7-9)
+### B-4: Voice Assistant — JARVIS Modu (Ay 7-9, opt-in)
 
 ```
 Mikrofon → Wake Word ("Hey Elyan") → STT (Whisper) → Intent → Execute → TTS → Hoparlör
 ```
+
+Bu hat varsayılan boot akışında açık değildir. Yalnızca `ELYAN_ENABLE_WAKE_WORD=1` ile etkinleştirilir.
 
 | Bileşen | Teknoloji | Dosya |
 |---------|-----------|-------|
@@ -435,7 +437,7 @@ PersonalContextEngine genişletilir:
 - Plugin hot-load + health check
 
 ### Phase 10 — Voice Assistant
-- Wake word detection (Porcupine/OpenWakeWord)
+- Wake word detection (Porcupine/OpenWakeWord, opt-in)
 - Voice pipeline integration
 - Browser controller (Playwright)
 - Voice-to-intent routing
@@ -496,7 +498,7 @@ Her değişiklik sonrası:
 cd apps/desktop && PATH="/opt/homebrew/bin:$PATH" node node_modules/.bin/tsc --noEmit
 
 # 3. Backend + healthz
-.venv/bin/python main.py start --port 18789 &
+elyan launch &
 sleep 6
 curl -s http://127.0.0.1:18789/healthz | python3 -m json.tool | grep admin_token
 

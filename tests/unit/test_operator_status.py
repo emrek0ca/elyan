@@ -35,3 +35,5 @@ async def test_operator_status_aggregates_mobile_computer_and_internet(monkeypat
     assert payload["status"] == "healthy"
     assert payload["summary"]["document_ingest"]["liteparse_enabled"] is True
     assert "speed_runtime" in payload["summary"]
+    assert "model_runtime" in payload["summary"]
+    assert payload["summary"]["model_runtime"]["capabilities"]["embedding"]["available"] is True

@@ -5,8 +5,45 @@ function hasModel(models: ModelInfo[], modelId: string) {
   return models.some((model) => model.id === modelId);
 }
 
-function findLocalModel(models: ModelInfo[]) {
-  return models.find((model) => model.type === 'local');
+function getLocalModelRank(model: ModelInfo, selection: ModelRoutingSelection) {
+  const identity = `${model.id} ${model.name}`.toLowerCase();
+  const isDeepReasoningWork = selection.reasoningDepth === 'deep';
+  let rank = 0;
+
+  if (/\b(deepseek|r1|reasoning)\b/.test(identity)) {
+    rank += isDeepReasoningWork ? 0 : 100;
+  }
+
+  if (/\b(llama3|llama-3)\b/.test(identity)) {
+    rank -= 20;
+  }
+
+  if (/\b(qwen2\.5|qwen)\b/.test(identity)) {
+    rank -= 10;
+  }
+
+  if (
+    /\b(coder|code)\b/.test(identity) &&
+    selection.taskIntent !== 'procedural' &&
+    selection.taskIntent !== 'personal_workflow'
+  ) {
+    rank += 10;
+  }
+
+  if (/\b(latest)\b/.test(identity)) {
+    rank += 2;
+  }
+
+  return rank;
+}
+
+function findLocalModel(models: ModelInfo[], selection: ModelRoutingSelection) {
+  return models
+    .filter((model) => model.type === 'local')
+    .sort((left, right) => {
+      const rankDelta = getLocalModelRank(left, selection) - getLocalModelRank(right, selection);
+      return rankDelta || left.name.localeCompare(right.name);
+    })[0];
 }
 
 function findCloudModel(models: ModelInfo[]) {
@@ -41,6 +78,10 @@ export function resolvePreferredModelIdFromAvailableModels(
   preferredModelIdOrSelection?: string | ModelRoutingSelection,
   routingMode: ModelRoutingMode = 'local_first'
 ): string {
+  if (availableModels.length === 0) {
+    throw new Error('No model provider configured');
+  }
+
   const selection =
     typeof preferredModelIdOrSelection === 'string' || preferredModelIdOrSelection === undefined
       ? {
@@ -50,13 +91,28 @@ export function resolvePreferredModelIdFromAvailableModels(
       : preferredModelIdOrSelection;
 
   const trimmedPreferredModelId = selection.preferredModelId?.trim();
-  if (trimmedPreferredModelId && hasModel(availableModels, trimmedPreferredModelId)) {
-    return trimmedPreferredModelId;
-  }
-
   const resolvedRoutingMode = selection.routingMode ?? routingMode;
-  const localModel = findLocalModel(availableModels);
+  const localModel = findLocalModel(availableModels, selection);
   const cloudModel = findCloudModel(availableModels);
+
+  if (trimmedPreferredModelId && hasModel(availableModels, trimmedPreferredModelId)) {
+    const preferredModel = availableModels.find((model) => model.id === trimmedPreferredModelId);
+    const preferredIsLocal = preferredModel?.type === 'local';
+    const preferredIsReasoningTagged =
+      preferredModel && /\b(deepseek|r1|reasoning)\b/i.test(`${preferredModel.id} ${preferredModel.name}`);
+    const shouldOverridePreferredLocal =
+      preferredIsLocal &&
+      selection.reasoningDepth !== 'deep' &&
+      selection.taskIntent !== 'research' &&
+      selection.taskIntent !== 'comparison' &&
+      localModel !== undefined &&
+      localModel.id !== trimmedPreferredModelId &&
+      (preferredIsReasoningTagged || localModel.id !== preferredModel?.id);
+
+    if (!shouldOverridePreferredLocal) {
+      return trimmedPreferredModelId;
+    }
+  }
 
   if (resolvedRoutingMode === 'local_only') {
     if (localModel) {

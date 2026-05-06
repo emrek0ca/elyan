@@ -42,6 +42,7 @@ export const localAgentActionSchema = z.discriminatedUnion('type', [
     command: z.string().trim().min(1),
     args: z.array(z.string()).default([]),
     timeoutMs: z.number().int().positive().max(120_000).default(30_000),
+    interactive: z.boolean().default(false),
     runId: z.string().trim().min(1).optional(),
     approved: z.boolean().optional(),
   }),

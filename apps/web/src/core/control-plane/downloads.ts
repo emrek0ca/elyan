@@ -16,21 +16,21 @@ export const downloadPlatformCards: DownloadPlatformCard[] = [
     title: 'macOS',
     detail: 'Apple Silicon and Intel builds for local desktop installs.',
     installCommand: 'curl -L -O https://github.com/emrek0ca/elyan/releases/latest/download/elyan-macos-arm64.zip',
-    setupCommand: 'elyan setup --zero-cost',
+    setupCommand: 'elyan setup',
   },
   {
     key: 'linux',
     title: 'Linux',
     detail: '64-bit Linux archive for servers, workstations, and VPS nodes.',
     installCommand: 'curl -L https://github.com/emrek0ca/elyan/releases/latest/download/elyan-linux-x64.tar.gz | tar -xz',
-    setupCommand: 'elyan setup --zero-cost',
+    setupCommand: 'elyan setup',
   },
   {
     key: 'windows',
     title: 'Windows',
     detail: '64-bit Windows archive for native local installs.',
     installCommand: 'iwr https://github.com/emrek0ca/elyan/releases/latest/download/elyan-windows-x64.zip -OutFile elyan-windows-x64.zip',
-    setupCommand: 'elyan setup --zero-cost',
+    setupCommand: 'elyan setup',
   },
 ];
 

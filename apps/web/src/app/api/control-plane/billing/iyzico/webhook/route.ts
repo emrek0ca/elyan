@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getControlPlaneService } from '@/core/control-plane';
 import { getIyzicoBillingClient, iyzicoSubscriptionWebhookSchema } from '@/core/control-plane/iyzico';
 import { ControlPlaneAuthenticationError } from '@/core/control-plane/errors';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -31,8 +32,11 @@ export async function POST(request: NextRequest) {
     const result = await getControlPlaneService().applyIyzicoWebhook(payload, signature);
     return NextResponse.json({ ok: true, ...result });
   } catch (error: unknown) {
-    const status = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode: number }).statusCode) || 500 : 500;
-    const message = error instanceof Error ? error.message : 'iyzico webhook handling failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 500,
+      code: 'iyzico_webhook_failed',
+      message: 'iyzico webhook handling failed',
+    });
+    return createApiErrorResponse(normalized);
   }
 }

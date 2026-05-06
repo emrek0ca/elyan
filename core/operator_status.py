@@ -7,6 +7,7 @@ from config.settings_manager import SettingsPanel
 from core.accuracy_speed_runtime import get_accuracy_speed_runtime
 from core.computer_use_integration import get_computer_use_integration
 from core.internet import get_internet_reach_runtime
+from core.ml import get_model_runtime
 from elyan.channels.mobile_dispatch import MobileDispatchBridge
 
 
@@ -16,6 +17,14 @@ async def get_operator_status() -> dict[str, Any]:
     computer_use = await get_computer_use_integration().get_health_status()
     internet = get_internet_reach_runtime().get_health_status()
     speed = get_accuracy_speed_runtime().get_status()
+    try:
+        model_runtime = get_model_runtime().snapshot()
+    except Exception as exc:
+        model_runtime = {
+            "enabled": False,
+            "status": "error",
+            "error": str(exc),
+        }
     document_ingest = {
         "status": "healthy" if bool(settings.get("liteparse_enabled", True)) else "degraded",
         "liteparse_enabled": bool(settings.get("liteparse_enabled", True)),
@@ -31,9 +40,13 @@ async def get_operator_status() -> dict[str, Any]:
         "internet_reach": internet,
         "document_ingest": document_ingest,
         "speed_runtime": speed,
+        "model_runtime": model_runtime,
     }
     overall = "healthy"
-    if any(str((section or {}).get("status") or "").lower() in {"degraded", "unavailable", "failed"} for section in (computer_use, internet, document_ingest)):
+    if any(
+        str((section or {}).get("status") or "").lower() in {"degraded", "unavailable", "failed", "error"}
+        for section in (computer_use, internet, document_ingest, model_runtime)
+    ):
         overall = "degraded"
     return {"status": overall, "summary": summary}
 
@@ -50,6 +63,7 @@ def get_operator_status_sync() -> dict[str, Any]:
             "computer_use": {"status": "unknown"},
             "internet_reach": {"status": "unknown"},
             "document_ingest": {"status": "unknown"},
+            "model_runtime": {"status": "unknown"},
         },
     }
 

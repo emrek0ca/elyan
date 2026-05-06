@@ -8,8 +8,8 @@ def test_ensure_gateway_ready_skips_start_when_healthy(monkeypatch):
 
     class _Gateway:
         @staticmethod
-        def _fetch_gateway_launch_health(port):
-            return {"ok": True, "data": {"ok": True, "port": port, "readiness": {"launch_ready": True, "launch_blockers": []}}}
+        def _fetch_gateway_status(port):
+            return {"ok": True, "data": {"status": "online", "port": port}}
 
         @staticmethod
         def start_gateway(daemon=False, port=None):
@@ -28,9 +28,9 @@ def test_ensure_gateway_ready_starts_gateway_when_unhealthy(monkeypatch):
 
     class _Gateway:
         @staticmethod
-        def _fetch_gateway_launch_health(port):
+        def _fetch_gateway_status(port):
             state["count"] += 1
-            return {"ok": state["count"] >= 3, "data": {"ok": state["count"] >= 3, "port": port, "readiness": {"launch_ready": state["count"] >= 3, "launch_blockers": []}}}
+            return {"ok": state["count"] >= 3, "data": {"status": "online" if state["count"] >= 3 else "starting", "port": port}}
 
         @staticmethod
         def start_gateway(daemon=False, port=None):
@@ -93,3 +93,31 @@ def test_open_desktop_fails_when_canonical_shell_missing(monkeypatch, tmp_path):
 
     assert result == 1
     assert calls["spawn"] is None
+
+
+def test_spawn_uses_login_home_rust_toolchain_when_home_is_overridden(monkeypatch, tmp_path):
+    root = tmp_path
+    login_home = tmp_path / "login-home"
+    login_home.mkdir()
+
+    captured = {}
+
+    def fake_call(cmd, cwd=None, env=None):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return 0
+
+    monkeypatch.setattr(desktop, "_login_home_dir", lambda: login_home)
+    monkeypatch.setattr(desktop.subprocess, "call", fake_call)
+    monkeypatch.setenv("HOME", str(tmp_path / "tmp-home"))
+    monkeypatch.delenv("RUSTUP_HOME", raising=False)
+    monkeypatch.delenv("CARGO_HOME", raising=False)
+
+    result = desktop._spawn(["npm", "run", "tauri:dev"], cwd=root, detached=False, project_root=root)
+
+    assert result == 0
+    assert captured["cmd"] == ["npm", "run", "tauri:dev"]
+    assert captured["cwd"] == str(root)
+    assert captured["env"]["RUSTUP_HOME"] == str(login_home / ".rustup")
+    assert captured["env"]["CARGO_HOME"] == str(login_home / ".cargo")

@@ -1,4 +1,3 @@
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { z } from 'zod';
 import type { CapabilityDefinition, CapabilityExecutionContext } from './types';
 
@@ -55,13 +54,19 @@ export const pdfExtractCapability: CapabilityDefinition<
   description: 'Extracts text from PDFs with PDF.js.',
   library: 'pdfjs-dist',
   enabled: true,
-  timeoutMs: 1000,
+  timeoutMs: 5000,
   inputSchema: pdfExtractInputSchema,
   outputSchema: pdfExtractOutputSchema,
   run: async (input: z.output<typeof pdfExtractInputSchema>, _context: CapabilityExecutionContext) => {
     void _context;
 
     ensurePromiseWithResolvers();
+
+    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+
+    if (typeof getDocument !== 'function') {
+      throw new Error('PDF extraction is unavailable in this runtime.');
+    }
 
     const data = Uint8Array.from(Buffer.from(input.base64, 'base64'));
     const loadingTask = getDocument({

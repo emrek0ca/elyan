@@ -3,22 +3,22 @@ import { ScrapedContent } from '@/types/search';
 import { extractCheerioText } from './content-utils';
 
 export class WebScraper {
-  async scrapeUrls(urls: string[], limit: number = 5): Promise<ScrapedContent[]> {
+  async scrapeUrls(urls: string[], limit: number = 5, signal?: AbortSignal): Promise<ScrapedContent[]> {
     const results = await Promise.allSettled(
-      urls.slice(0, limit).map(url => this.scrapeUrl(url))
+      urls.slice(0, limit).map((url) => this.scrapeUrl(url, signal))
     );
     return results
       .filter((r): r is PromiseFulfilledResult<ScrapedContent> => r.status === 'fulfilled')
       .map(r => r.value);
   }
 
-  private async scrapeUrl(url: string): Promise<ScrapedContent> {
+  private async scrapeUrl(url: string, signal?: AbortSignal): Promise<ScrapedContent> {
     let response: Response;
 
     try {
       response = await fetch(url, {
         headers: { 'User-Agent': 'Elyan/1.0 (Research Assistant)' },
-        signal: AbortSignal.timeout(10_000),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown network failure';

@@ -1,3 +1,7 @@
+/**
+ * Hosted control-plane readiness probe.
+ * Layer: control-plane diagnostics. Critical for env, schema, auth, and billing visibility.
+ */
 import { NextResponse } from 'next/server';
 import { readControlPlaneHealthSnapshot } from '@/core/control-plane';
 

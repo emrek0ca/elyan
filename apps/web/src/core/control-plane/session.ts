@@ -1,3 +1,7 @@
+/**
+ * Control-plane session parsing and authorization helpers.
+ * Layer: auth + control-plane. Critical for session cookies, account scoping, and route guards.
+ */
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 import { env } from '@/lib/env';
@@ -19,20 +23,20 @@ export type ControlPlaneSessionToken = {
 };
 
 function requireSessionConfiguration() {
-  if (!env.NEXTAUTH_SECRET || !env.DATABASE_URL) {
+  if ((!env.NEXTAUTH_SECRET && !env.AUTH_SECRET) || !env.DATABASE_URL) {
     throw new ControlPlaneConfigurationError(
-      'NEXTAUTH_SECRET and DATABASE_URL are required for hosted control-plane routes'
+      'NEXTAUTH_SECRET or AUTH_SECRET and DATABASE_URL are required for hosted control-plane routes'
     );
   }
 }
 
 export function isControlPlaneSessionConfigured() {
-  return Boolean(env.NEXTAUTH_SECRET && env.DATABASE_URL);
+  return Boolean((env.NEXTAUTH_SECRET || env.AUTH_SECRET) && env.DATABASE_URL);
 }
 
 export async function getControlPlaneSessionToken(request: NextRequest) {
   requireSessionConfiguration();
-  const token = await getToken({ req: request, secret: env.NEXTAUTH_SECRET });
+  const token = await getToken({ req: request, secret: env.NEXTAUTH_SECRET ?? env.AUTH_SECRET });
   if (!token?.sub && !token?.email) {
     return null;
   }

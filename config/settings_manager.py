@@ -508,6 +508,7 @@ class SettingsPanel:
             env_updates = {
                 "LLM_TYPE": _llm_type,
                 "OLLAMA_HOST": self._settings.get("ollama_host", "http://localhost:11434"),
+                "OLLAMA_URL": self._settings.get("ollama_host", "http://localhost:11434"),
                 "MODEL_NAME": self._settings.get("llm_model", "llama-3.3-70b-versatile"),
                 "ALLOWED_USER_IDS": ",".join(self._settings.get("allowed_user_ids", []) if isinstance(self._settings.get("allowed_user_ids"), list) else [str(self._settings.get("allowed_user_ids"))]),
                 "FULL_DISK_ACCESS": "true" if bool(self._settings.get("full_disk_access", True)) else "false",

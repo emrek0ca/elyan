@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getControlPlaneService } from '@/core/control-plane';
 import { requireControlPlaneSession } from '@/core/control-plane/session';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -19,11 +20,11 @@ export async function PATCH(
 
     return NextResponse.json({ ok: true, notification });
   } catch (error: unknown) {
-    const status =
-      error && typeof error === 'object' && 'statusCode' in error
-        ? Number((error as { statusCode: number }).statusCode) || 500
-        : 500;
-    const message = error instanceof Error ? error.message : 'notification update failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 500,
+      code: 'notification_update_failed',
+      message: 'notification update failed',
+    });
+    return createApiErrorResponse(normalized);
   }
 }

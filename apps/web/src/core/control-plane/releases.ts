@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import packageJson from '../../../package.json';
+import { env } from '@/lib/env';
+import { getControlPlanePool } from './database';
 import {
   controlPlaneReleaseAssetSchema,
   controlPlaneReleaseSnapshotSchema,
@@ -14,6 +16,8 @@ const requiredAssets = [
   'elyan-linux-x64.tar.gz',
   'elyan-windows-x64.zip',
 ] as const;
+
+const RELEASE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 type ReleaseTargetDefinition = {
   name: (typeof requiredAssets)[number];
@@ -139,6 +143,80 @@ function comparePublishedAt(left: string | null | undefined, right: string | nul
   return leftTime - rightTime;
 }
 
+function isReleaseCacheFresh(refreshedAt?: string | null, expiresAt?: string | null) {
+  if (expiresAt) {
+    return Date.parse(expiresAt) > Date.now();
+  }
+
+  if (!refreshedAt) {
+    return false;
+  }
+
+  return Date.now() - Date.parse(refreshedAt) < RELEASE_CACHE_TTL_MS;
+}
+
+async function readCachedReleaseSnapshot(repository: string): Promise<ControlPlaneReleaseSnapshot | null> {
+  if (!env.DATABASE_URL) {
+    return null;
+  }
+
+  try {
+    const pool = getControlPlanePool(env.DATABASE_URL);
+    const result = await pool.query<{
+      payload: unknown;
+      refreshed_at: string | null;
+      expires_at: string | null;
+    }>(
+      `
+        SELECT payload, refreshed_at, expires_at
+        FROM release_cache
+        WHERE repository = $1
+        LIMIT 1
+      `,
+      [repository]
+    );
+
+    const row = result.rows[0];
+    if (!row || !isReleaseCacheFresh(row.refreshed_at, row.expires_at)) {
+      return null;
+    }
+
+    return controlPlaneReleaseSnapshotSchema.parse(row.payload);
+  } catch {
+    return null;
+  }
+}
+
+async function writeCachedReleaseSnapshot(repository: string, snapshot: ControlPlaneReleaseSnapshot) {
+  if (!env.DATABASE_URL) {
+    return;
+  }
+
+  try {
+    const pool = getControlPlanePool(env.DATABASE_URL);
+    await pool.query(
+      `
+        INSERT INTO release_cache (
+          repository,
+          tag_name,
+          payload,
+          refreshed_at,
+          expires_at
+        )
+        VALUES ($1, $2, $3::jsonb, NOW(), NOW() + INTERVAL '24 hours')
+        ON CONFLICT (repository) DO UPDATE SET
+          tag_name = EXCLUDED.tag_name,
+          payload = EXCLUDED.payload,
+          refreshed_at = EXCLUDED.refreshed_at,
+          expires_at = EXCLUDED.expires_at
+      `,
+      [repository, snapshot.tagName, JSON.stringify(snapshot)]
+    );
+  } catch {
+    return;
+  }
+}
+
 function selectLatestPublishableRelease(
   releases: Array<z.infer<typeof githubReleaseSchema>>
 ): z.infer<typeof githubReleaseSchema> | null {
@@ -166,6 +244,11 @@ function selectLatestPublishableRelease(
 
 export async function getLatestElyanReleaseSnapshot(): Promise<ControlPlaneReleaseSnapshot | null> {
   const repository = getRepositorySlug();
+  const cached = await readCachedReleaseSnapshot(repository);
+  if (cached) {
+    return cached;
+  }
+
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'Elyan-Control-Plane',
@@ -201,7 +284,7 @@ export async function getLatestElyanReleaseSnapshot(): Promise<ControlPlaneRelea
     .map((asset) => buildReleaseTarget(asset))
     .filter((asset): asset is ControlPlaneReleaseTarget => Boolean(asset));
 
-  return controlPlaneReleaseSnapshotSchema.parse({
+  const snapshot = controlPlaneReleaseSnapshotSchema.parse({
     repository,
     tagName: publishable.tag_name,
     name: publishable.name ?? publishable.tag_name,
@@ -213,6 +296,10 @@ export async function getLatestElyanReleaseSnapshot(): Promise<ControlPlaneRelea
     requiredAssets: [...requiredAssets],
     complete: true,
   });
+
+  await writeCachedReleaseSnapshot(repository, snapshot);
+
+  return snapshot;
 }
 
 export async function getLatestElyanReleaseResponse() {

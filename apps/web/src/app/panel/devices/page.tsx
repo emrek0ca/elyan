@@ -1,5 +1,5 @@
-import { HostedPanel } from '@/components/panel/HostedPanel';
+import { redirect } from 'next/navigation';
 
 export default function PanelDevicesPage() {
-  return <HostedPanel section="devices" />;
+  redirect('https://elyan.dev/panel/sync');
 }

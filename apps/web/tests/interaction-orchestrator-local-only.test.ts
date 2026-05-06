@@ -11,6 +11,26 @@ const mockRunStore = {
   create: vi.fn(),
 };
 
+const mockDecideExecution = vi.fn(async () => ({
+  mode: 'research' as const,
+  modelId: 'decision-model',
+  modelPerformance: 0.92,
+  tools: {
+    allowWebSearch: false,
+    allowConnectors: true,
+    allowLocalTools: false,
+    allowBrowser: false,
+    preferredTools: ['connectors'],
+  },
+  steps: {
+    complexity: 'medium' as const,
+    stepBudget: 2,
+    retryLimit: 1,
+  },
+  reasoning: ['mock decision'],
+  artifactCount: 1,
+}));
+
 const mockedPlan = {
   taskIntent: 'direct_answer',
   executionMode: 'single',
@@ -26,6 +46,13 @@ const mockedPlan = {
     notes: [],
     primary: { kind: 'direct_answer' },
   },
+  retrieval: {
+    rounds: 0,
+    maxUrls: 0,
+    rerankTopK: 0,
+    language: 'en',
+    expandSearchQueries: false,
+  },
   surface: { local: { capabilities: [], bridgeTools: [] }, mcp: { servers: [], tools: [], resources: [], resourceTemplates: [], prompts: [] } },
 };
 
@@ -36,18 +63,22 @@ vi.mock('@/core/control-plane', () => ({
 
 vi.mock('@/core/providers', () => ({
   registry: {
-    resolvePreferredModelId: vi.fn(() => 'local-test-model'),
+    resolvePreferredModelId: vi.fn((selection: { preferredModelId?: string }) => selection.preferredModelId ?? 'local-test-model'),
     resolveModel: vi.fn(() => ({
       provider: { id: 'local-provider' },
     })),
   },
 }));
 
+vi.mock('@/core/decision/engine', () => ({
+  decideExecution: mockDecideExecution,
+}));
+
 vi.mock('@/core/runtime-settings', () => ({
   readRuntimeSettingsSync: vi.fn(() => ({
     routing: {
       preferredModelId: undefined,
-      searchEnabled: false,
+      searchEnabled: true,
     },
     team: {
       enabled: false,
@@ -90,40 +121,44 @@ describe('interaction orchestrator local-only behavior', () => {
   it(
     'records local interaction memory without writing hosted improvement signals',
     async () => {
-    mockControlPlaneService.getAccount.mockResolvedValue({
-      entitlements: {
-        hostedAccess: false,
-        hostedUsageAccounting: false,
-        hostedImprovementSignals: false,
-      },
-    });
-    mockControlPlaneService.getInteractionContext.mockResolvedValue({
-      contextBlocks: [],
-    });
-    mockControlPlaneService.recordInteraction.mockResolvedValue({
-      thread: { threadId: 'web:thread-1' },
-      memoryItem: { memoryId: 'mem_1' },
-      learningDraft: undefined,
-      messages: [],
-    });
-    mockRunStore.create.mockResolvedValue({
-      id: 'run_1',
-      mode: 'auto',
-    });
+      mockControlPlaneService.getAccount.mockResolvedValue({
+        entitlements: {
+          hostedAccess: false,
+          hostedUsageAccounting: false,
+          hostedImprovementSignals: false,
+        },
+      });
+      mockControlPlaneService.getInteractionContext.mockResolvedValue({
+        contextBlocks: [],
+      });
+      mockControlPlaneService.recordInteraction.mockResolvedValue({
+        thread: { threadId: 'web:thread-1' },
+        memoryItem: { memoryId: 'mem_1' },
+        learningDraft: undefined,
+        messages: [],
+      });
+      mockRunStore.create.mockResolvedValue({
+        id: 'run_1',
+        mode: 'auto',
+      });
 
-    const { executeInteractionText } = await import('@/core/interaction/orchestrator');
-    const result = await executeInteractionText({
-      source: 'web',
-      text: 'Remember that I prefer concise answers.',
-      controlPlaneSession: {
-        sub: 'usr_1',
-        accountId: 'acct_1',
-      },
-    });
+      const { executeInteractionText } = await import('@/core/interaction/orchestrator');
+      const result = await executeInteractionText({
+        source: 'web',
+        text: 'Remember that I prefer concise answers.',
+        controlPlaneSession: {
+          sub: 'usr_1',
+          accountId: 'acct_1',
+        },
+      });
 
-    expect(result.text).toBe('Local answer');
-    expect(mockControlPlaneService.recordInteraction).toHaveBeenCalledTimes(1);
-    expect(mockControlPlaneService.recordEvaluationSignal).not.toHaveBeenCalled();
+      expect(result.text).toBe('Local answer');
+      expect(mockDecideExecution).toHaveBeenCalledTimes(1);
+      expect(mockDecideExecution.mock.invocationCallOrder[0]).toBeLessThan(mockRunStore.create.mock.invocationCallOrder[0]);
+      expect(result.modelId).toBe('decision-model');
+      expect(mockControlPlaneService.recordInteraction).toHaveBeenCalledTimes(1);
+      expect(mockControlPlaneService.recordEvaluationSignal).not.toHaveBeenCalled();
+      expect(mockRunStore.create).toHaveBeenCalled();
     },
     30_000
   );

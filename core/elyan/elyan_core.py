@@ -20,6 +20,7 @@ Design principles:
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import urllib.request
@@ -33,7 +34,21 @@ logger = get_logger("elyan_core")
 
 # ── Ollama helper ─────────────────────────────────────────────────────────────
 
-_OLLAMA_URL = "http://localhost:11434/api/generate"
+
+def _ollama_base_url() -> str:
+    return str(os.getenv("OLLAMA_URL") or os.getenv("OLLAMA_HOST") or "http://localhost:11434").strip().rstrip("/")
+
+
+def _resolve_ollama_endpoint() -> str:
+    base = _ollama_base_url()
+    return base if base.endswith("/api/generate") else f"{base}/api/generate"
+
+
+def _resolve_ollama_tags_endpoint() -> str:
+    base = _ollama_base_url()
+    return base if base.endswith("/api/tags") else f"{base}/api/tags"
+
+
 _OLLAMA_MODEL: str | None = None   # cached after first successful call
 
 _SYSTEM_PROMPT = (
@@ -48,9 +63,7 @@ def _get_ollama_model() -> str:
     global _OLLAMA_MODEL
     if _OLLAMA_MODEL is None:
         try:
-            with urllib.request.urlopen(
-                "http://localhost:11434/api/tags", timeout=2
-            ) as r:
+            with urllib.request.urlopen(_resolve_ollama_tags_endpoint(), timeout=2) as r:
                 tags = json.loads(r.read())
             models = [m["name"] for m in tags.get("models", [])]
             _OLLAMA_MODEL = models[0] if models else "llama3.2:3b"
@@ -71,7 +84,7 @@ async def _ollama_chat(text: str, max_tokens: int = 400) -> str:
             "options": {"num_predict": max_tokens, "temperature": 0.7},
         }).encode()
         req = urllib.request.Request(
-            _OLLAMA_URL,
+            _resolve_ollama_endpoint(),
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -99,7 +112,6 @@ async def _ollama_stream(
     Başarısızlıkta '' döner ve on_chunk çağrılmaz.
     """
     import asyncio
-    import socket
 
     def _stream_sync() -> list[str]:
         """Blocking stream reader — executor'da çalışır."""
@@ -111,7 +123,7 @@ async def _ollama_stream(
             "options": {"num_predict": max_tokens, "temperature": 0.7},
         }).encode()
         req = urllib.request.Request(
-            _OLLAMA_URL,
+            _resolve_ollama_endpoint(),
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -143,8 +155,8 @@ async def _ollama_stream(
             result = on_chunk(chunk)
             if asyncio.iscoroutine(result):
                 await result
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Ollama chunk handler failed: {exc}")
 
     return full_text
 

@@ -1,9 +1,13 @@
 import path from 'path';
 import type { RuntimeLocalAgentSettings } from '@/core/runtime-settings';
+import type { CapabilityRuntimeContext } from '@/core/capabilities/types';
 import type { LocalAgentAction, LocalAgentApprovalLevel, LocalAgentDecision, LocalAgentRiskLevel } from './types';
 
 const terminalDestructivePattern = /\b(rm|sudo|chmod|chown|mkfs|dd|shutdown|reboot|killall|launchctl|systemctl|docker\s+system\s+prune)\b/i;
 const terminalWritePattern = /\b(mv|cp|mkdir|touch|npm\s+install|pnpm\s+install|yarn\s+add|brew\s+install|git\s+commit|git\s+push)\b/i;
+const terminalPublishPattern = /\b(npm|pnpm|yarn)\s+publish\b|\bgh\s+release\b|\bvercel\s+deploy\b|\bnetlify\s+deploy\b|\bflyctl\s+deploy\b/i;
+const terminalPaymentPattern = /\b(stripe|iyzico|paypal|checkout|payment|billing)\b/i;
+const terminalExternalPostPattern = /\b(curl|wget|http|node|python|python3|ruby)\b.*\b(-X\s+(POST|PUT|PATCH|DELETE)|--data|--form)\b/i;
 const terminalReadOnlyCommands = new Set([
   'pwd',
   'ls',
@@ -67,6 +71,9 @@ function baseRiskForAction(action: LocalAgentAction): LocalAgentRiskLevel {
 
   if (action.type === 'terminal.exec') {
     const commandLine = [action.command, ...action.args].join(' ');
+    if (terminalPublishPattern.test(commandLine) || terminalPaymentPattern.test(commandLine) || terminalExternalPostPattern.test(commandLine)) {
+      return 'system_critical';
+    }
     if (terminalDestructivePattern.test(commandLine)) {
       return 'destructive';
     }
@@ -106,7 +113,11 @@ function touchesProtectedPath(normalizedPath: string, settings: RuntimeLocalAgen
   });
 }
 
-export function evaluateLocalAgentAction(action: LocalAgentAction, settings: RuntimeLocalAgentSettings): LocalAgentDecision {
+export function evaluateLocalAgentAction(
+  action: LocalAgentAction,
+  settings: RuntimeLocalAgentSettings,
+  runtime?: CapabilityRuntimeContext
+): LocalAgentDecision {
   if (!settings.enabled) {
     return {
       allowed: false,
@@ -119,7 +130,9 @@ export function evaluateLocalAgentAction(action: LocalAgentAction, settings: Run
 
   const primaryPath = actionPath(action);
   const normalizedPath = normalizeConfiguredPath(primaryPath);
-  const allowedRoots = settings.allowedRoots.map(normalizeConfiguredPath);
+  const allowedRoots = runtime?.workspacePath
+    ? [normalizeConfiguredPath(runtime.workspacePath)]
+    : settings.allowedRoots.map(normalizeConfiguredPath);
   const insideAllowedRoot = allowedRoots.some((root) => isInside(normalizedPath, root));
 
   if (!insideAllowedRoot) {

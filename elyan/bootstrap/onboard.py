@@ -12,6 +12,7 @@ from typing import Any
 import click
 
 from config.elyan_config import elyan_config
+from cli.commands import channels as channel_cli
 from cli.commands.guide import render_install_to_ui_guide
 from core.model_catalog import default_model_for_provider, normalize_model_name
 from core.runtime_policy import get_runtime_policy_resolver
@@ -145,6 +146,81 @@ def _upsert_channel(channel_type: str, fields: dict[str, Any]) -> None:
     elyan_config.set("channels", channels)
 
 
+def _choose_channel(channel: str | None, *, headless: bool) -> str:
+    provided = str(channel or "").strip().lower()
+    if provided:
+        return provided
+
+    if headless:
+        return "webchat"
+
+    print("  • Kanal seçimi: telegram / whatsapp / imessage / webchat", flush=True)
+    choice = _safe_input("  Kanal [webchat]: ", "webchat").strip().lower()
+    return choice or "webchat"
+
+
+def _configure_telegram_channel() -> bool:
+    token = _safe_input("  Telegram bot token: ")
+    if not token:
+        print("  ⚠️ Telegram token boş bırakıldı.", flush=True)
+        return False
+
+    token_ref = channel_cli._store_secret("TELEGRAM_BOT_TOKEN", token)
+    _upsert_channel(
+        "telegram",
+        {
+            "token": token_ref,
+            "enabled": True,
+        },
+    )
+    return True
+
+
+def _configure_imessage_channel() -> bool:
+    server_url = _safe_input("  BlueBubbles server URL: ")
+    guid = _safe_input("  BlueBubbles GUID: ")
+    reply_url = _safe_input("  BlueBubbles reply URL: ")
+    webhook_secret = _safe_input("  Webhook secret: ")
+    if not server_url or not guid:
+        print("  ⚠️ iMessage için server URL ve GUID gerekli.", flush=True)
+        return False
+
+    webhook_ref = channel_cli._store_secret("BLUEBUBBLES_WEBHOOK_SECRET", webhook_secret) if webhook_secret else ""
+    _upsert_channel(
+        "imessage",
+        {
+            "server_url": server_url,
+            "guid": guid,
+            "reply_url": reply_url,
+            "webhook_secret": webhook_ref,
+            "enabled": True,
+        },
+    )
+    return True
+
+
+def _configure_selected_channel(channel: str, *, headless: bool) -> bool:
+    if channel == "telegram":
+        return _configure_telegram_channel()
+
+    if channel == "whatsapp":
+        if headless:
+            _upsert_channel("whatsapp", {"enabled": True})
+            return True
+
+        print("  • WhatsApp modu: bridge / cloud", flush=True)
+        mode = _safe_input("  Mod [bridge]: ", "bridge").strip().lower()
+        if mode in {"cloud", "api"}:
+            return bool(channel_cli.configure_whatsapp_cloud(channel_id="whatsapp"))
+        return bool(channel_cli.login_whatsapp(channel_id="whatsapp"))
+
+    if channel == "imessage":
+        return _configure_imessage_channel()
+
+    _upsert_channel("webchat", {"enabled": True})
+    return True
+
+
 def _ensure_full_autonomy_defaults() -> None:
     try:
         resolver = get_runtime_policy_resolver()
@@ -224,17 +300,15 @@ def onboard(
                 print("[DRY-RUN] DependencyManager.bootstrap_all() atlanıyor", flush=True)
 
         if not dry_run:
-            _run_elyan(["skills", "enable", "browser", "desktop", "calendar", "--quiet"])
+            _run_elyan(["skills", "enable", "browser", "desktop", "calendar"])
             if install_daemon:
                 _run_elyan(["service", "install"])
 
         if skip_dependencies and open_dashboard and not dry_run and not headless:
             _run_elyan(["dashboard", "--no-browser"])
 
-        if channel:
-            _upsert_channel(str(channel).strip().lower(), {})
-        else:
-            _upsert_channel("webchat", {})
+        selected_channel = _choose_channel(channel, headless=headless)
+        _configure_selected_channel(selected_channel, headless=headless)
 
         if not dry_run:
             mark_setup_complete(
@@ -242,7 +316,7 @@ def onboard(
                     "workspace": str(workspace_path),
                     "role": role,
                     "headless": bool(headless),
-                    "channel": str(channel or "webchat"),
+                    "channel": str(selected_channel or "webchat"),
                     "install_daemon": bool(install_daemon),
                 }
             )

@@ -29,6 +29,10 @@ def _now() -> float:
     return time.time()
 
 
+def _workspace_key(workspace_id: str | None) -> str:
+    return str(workspace_id or "local-workspace").strip() or "local-workspace"
+
+
 def _stable_id(prefix: str, *parts: str) -> str:
     joined = "::".join(str(part or "").strip() for part in parts)
     digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16]
@@ -268,7 +272,7 @@ class WorkspaceBillingStore:
             self._repository.upsert_workspace(record.to_dict())
 
     def _workspace(self, workspace_id: str) -> WorkspaceBillingRecord:
-        key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        key = _workspace_key(workspace_id)
         record = self._records.get(key)
         if record is None:
             record = WorkspaceBillingRecord(
@@ -349,7 +353,7 @@ class WorkspaceBillingStore:
         return numeric
 
     def _billing_profile_state(self, workspace_id: str) -> dict[str, Any]:
-        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        workspace_key = _workspace_key(workspace_id)
         self._workspace(workspace_key)
         stored = self._repository.get_billing_profile(workspace_key)
         normalized, missing = self._normalize_billing_profile_payload((stored or {}).get("profile") if isinstance(stored, dict) else {})
@@ -363,7 +367,7 @@ class WorkspaceBillingStore:
 
     @staticmethod
     def _actor_scope_key(workspace_id: str, actor_id: str) -> str:
-        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        workspace_key = _workspace_key(workspace_id)
         actor_key = str(actor_id or "").strip() or workspace_key
         return actor_key
 
@@ -400,7 +404,7 @@ class WorkspaceBillingStore:
     def _usage_context(self, workspace_id: str, metric: str, amount: int, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         details = dict(metadata or {})
         trace_context = get_trace_context()
-        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        workspace_key = _workspace_key(workspace_id)
         metric_key = str(metric or "unknown").strip().lower() or "unknown"
         if trace_context is not None:
             trace_workspace_id = str(getattr(trace_context, "workspace_id", "") or "").strip()
@@ -1232,7 +1236,7 @@ class WorkspaceBillingStore:
         return self._repository.list_known_workspace_ids()
 
     def backfill_workspace(self, workspace_id: str, *, scope: str = "backfill") -> dict[str, Any]:
-        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        workspace_key = _workspace_key(workspace_id)
         summary = self.get_workspace_summary(workspace_key)
         return {
             "workspace_id": workspace_key,
@@ -1282,7 +1286,7 @@ class WorkspaceBillingStore:
         return self._billing_profile_state(record.workspace_id)
 
     def get_checkout_session(self, workspace_id: str, reference_id: str, *, refresh: bool = True) -> dict[str, Any] | None:
-        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        workspace_key = _workspace_key(workspace_id)
         normalized_reference = str(reference_id or "").strip()
         if not normalized_reference:
             return None
@@ -1660,7 +1664,7 @@ class WorkspaceBillingStore:
         reference_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        workspace_key = _workspace_key(workspace_id)
         decision = self.authorize_credits(workspace_key, required_credits=required_credits)
         if not decision.get("allowed", False):
             raise RuntimeError("insufficient_credits")
@@ -1830,7 +1834,7 @@ class WorkspaceBillingStore:
         reference_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        workspace_key = _workspace_key(workspace_id)
         grant_credits = max(0, int(credits or 0))
         if grant_credits <= 0:
             return {
@@ -1916,7 +1920,7 @@ class WorkspaceBillingStore:
         actual_credits: int,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        workspace_key = str(workspace_id or "local-workspace").strip() or "local-workspace"
+        workspace_key = _workspace_key(workspace_id)
         usage = self.get_usage_entry(workspace_key, usage_id)
         if usage is None:
             raise KeyError("usage not found")
@@ -2127,6 +2131,7 @@ class WorkspaceBillingStore:
         current_plan = get_plan(entitlements["plan_id"])
         billing_profile = self.get_billing_profile(workspace_id)
         usage_summary = self.get_usage_summary(workspace_id, limit=50)
+        notifications = self.list_notifications(workspace_id, limit=8)
         active_checkout = None
         pending_reference_id = str(record.metadata.get("pending_reference_id") or "").strip()
         if pending_reference_id:
@@ -2159,6 +2164,8 @@ class WorkspaceBillingStore:
             "top_cost_sources": list(usage_summary.get("top_cost_sources") or []),
             "triggered_limits": list(usage_summary.get("triggered_limits") or []),
             "upgrade_hint": usage_summary.get("upgrade_hint"),
+            "notifications": notifications,
+            "unread_notifications": int(sum(1 for item in notifications if str(item.get("status") or "").strip() != "seen")),
             "recent_usage_summary": {
                 "requests": int((usage_summary.get("totals") or {}).get("requests") or 0),
                 "estimated_credits": int((usage_summary.get("totals") or {}).get("estimated_credits") or 0),
@@ -2363,6 +2370,35 @@ class WorkspaceBillingStore:
             "provider": str(record.metadata.get("provider") or self._provider.provider_name),
             "url": portal_url,
         }
+
+    def list_notifications(self, workspace_id: str, *, limit: int = 50, status: str = "") -> list[dict[str, Any]]:
+        return self._repository.list_notifications(workspace_id, limit=limit, status=status)
+
+    def mark_notification_seen(self, notification_id: str) -> dict[str, Any] | None:
+        return self._repository.mark_notification_seen(notification_id)
+
+    def post_notification(
+        self,
+        *,
+        workspace_id: str,
+        title: str,
+        body: str,
+        kind: str = "announcement",
+        source: str = "control_plane",
+        status: str = "unseen",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._repository.record_notification(
+            {
+                "workspace_id": workspace_id,
+                "title": title,
+                "body": body,
+                "kind": kind,
+                "source": source,
+                "status": status,
+                "metadata": dict(metadata or {}),
+            }
+        )
 
     def handle_webhook(
         self,

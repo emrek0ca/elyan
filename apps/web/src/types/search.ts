@@ -15,6 +15,7 @@ export interface SearchOptions {
   language?: string;
   timeRange?: string;
   pageNo?: number;
+  signal?: AbortSignal;
 }
 
 export interface ScrapedContent {

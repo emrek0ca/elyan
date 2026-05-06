@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getControlPlaneService } from '@/core/control-plane';
+import { createApiErrorResponse, normalizeApiError } from '@/core/http/api-errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -16,14 +17,21 @@ export async function GET(request: NextRequest) {
   try {
     const deviceToken = readDeviceToken(request);
     if (!deviceToken) {
-      return NextResponse.json({ ok: false, error: 'Device token is required' }, { status: 401 });
+      return createApiErrorResponse({
+        status: 401,
+        code: 'device_token_required',
+        message: 'Device token is required',
+      });
     }
 
     const result = await getControlPlaneService().bootstrapDevice(deviceToken);
     return NextResponse.json(result);
   } catch (error: unknown) {
-    const status = error && typeof error === 'object' && 'statusCode' in error ? Number((error as { statusCode: number }).statusCode) || 500 : 500;
-    const message = error instanceof Error ? error.message : 'device bootstrap failed';
-    return NextResponse.json({ ok: false, error: message }, { status });
+    const normalized = normalizeApiError(error, {
+      status: 500,
+      code: 'device_bootstrap_failed',
+      message: 'device bootstrap failed',
+    });
+    return createApiErrorResponse(normalized);
   }
 }

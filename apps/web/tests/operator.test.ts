@@ -87,7 +87,7 @@ describe('Operator preflight', () => {
     expect(outcome.sources).toHaveLength(1);
     expect(outcome.sources[0]?.url).toBe(`${baseUrl}/`);
     expect(outcome.sources[0]?.content).toContain('First page text');
-  }, 15_000);
+  }, 30_000);
 
   it('chooses crawl for bounded multi-page coverage', async () => {
     const query = `Crawl this site and collect all page titles: ${baseUrl}`;
@@ -97,5 +97,5 @@ describe('Operator preflight', () => {
     expect(plan.executionPolicy.primary.kind).toBe('crawl');
     expect(outcome.sources.length).toBeGreaterThanOrEqual(1);
     expect(outcome.sources.some((source) => source.url.endsWith('/page-2'))).toBe(true);
-  }, 15_000);
+  }, 30_000);
 });

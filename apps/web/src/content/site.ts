@@ -6,7 +6,7 @@ export const docSections = [
     body: [
       'Copy `.env.example` to `.env`.',
       'Run `npm install`.',
-      'Run `elyan setup --zero-cost` for local storage, runtime settings, and model readiness checks.',
+      'Run `elyan setup` for local storage, runtime settings, and model readiness checks.',
       'Start Ollama locally or set one cloud key.',
       'Run `npm run dev`.',
       'Check `/api/healthz` and `/api/capabilities`.',
@@ -18,7 +18,7 @@ export const docSections = [
     title: 'Install',
     summary: 'Real install paths for the local runtime.',
     body: [
-      'Local source checkout: `cp .env.example .env && npm install && elyan setup --zero-cost && npm run dev`.',
+      'Local source checkout: `cp .env.example .env && npm install && elyan setup && npm run dev`.',
       'Production-like local run: `npm run build && npm run start`.',
       'Global CLI path is supported when installed from npm or a local package.',
       'Hosted account linking is optional: use `elyan login --base-url https://api.elyan.dev` only when you want account, billing, sync, or device state.',

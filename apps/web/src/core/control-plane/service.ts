@@ -1,3 +1,7 @@
+/**
+ * Hosted control-plane domain service.
+ * Layer: control-plane. Critical orchestrator for auth, accounts, billing, devices, integrations, and panel state.
+ */
 import { randomUUID } from 'crypto';
 import Decimal from 'decimal.js';
 import { z } from 'zod';
@@ -18,9 +22,22 @@ import { getIyzicoBillingClient, buildIyzicoPlanBinding, type IyzicoSubscription
 import { buildControlPlaneConnectionSnapshot, buildControlPlaneRuntimeSnapshot } from './runtime';
 import { buildControlPlaneEvaluationSummary } from './evaluation';
 import { buildAccountPolicySnapshot, buildHostedConnectionRegistry } from './governance';
-import { buildControlPlaneDatabaseHealthSnapshot, getControlPlanePoolStats } from './database';
+import { buildControlPlaneDatabaseHealthSnapshot, getControlPlanePool, getControlPlanePoolStats } from './database';
+import { readCanonicalSharedTruthSnapshot } from './migrations';
+import { getRuntimeVersionInfo } from '@/core/runtime-version';
+import {
+  buildLearningArtifacts,
+  buildLearningRetrievalText,
+  deriveLearningSignal,
+  persistLearningArtifacts,
+} from './learning/signal-extractor';
+import { buildMemoryContext } from '@/core/memory';
+import { ingestRetrievalText, searchRetrievalDocumentsHybrid } from '@/core/retrieval';
+import { filterContextBlocks } from '@/core/retrieval/context';
 import { FileControlPlaneStateStore, type ControlPlaneStateStore } from './store';
 import { PostgresControlPlaneStateStore } from './postgres-store';
+import { evaluateReasoningOutcome } from '@/core/reasoning';
+import type { OrchestrationPlan } from '@/core/orchestration';
 import {
   advanceUsageSnapshot,
   createUsageSnapshot,
@@ -60,6 +77,8 @@ import type {
   ControlPlaneHostedSession,
   ControlPlaneLedgerEntry,
   ControlPlaneLearningDraft,
+  ControlPlaneLearningEvent,
+  ControlPlaneTaskIntent,
   ControlPlaneMemoryItem,
   ControlPlaneNotification,
   ControlPlaneIntegration,
@@ -75,6 +94,7 @@ import type {
   ControlPlaneIdentityRegisterInput,
   ControlPlaneUser,
 } from './types';
+import { controlPlaneTaskIntentSchema } from './types';
 import { buildInteractionThreadTitle, buildMemorySummary, deriveMemoryKind } from '@/core/interaction/intent';
 
 const CREDIT_SCALE = 2;
@@ -449,6 +469,54 @@ type InteractionRecordInput = {
   citationCount?: number;
 };
 
+type LearningEventRecordInput = {
+  requestId: string;
+  source: string;
+  input: string;
+  intent: ControlPlaneInteractionIntent;
+  taskType?: ControlPlaneTaskIntent;
+  spaceId?: string;
+  plan: string;
+  reasoningSteps?: string[];
+  output?: string;
+  betterOutput?: string;
+  success: boolean;
+  failureReason?: string;
+  feedback?: Record<string, unknown>;
+  latencyMs: number;
+  score?: number;
+  accepted?: boolean;
+  modelId?: string;
+  modelProvider?: string;
+  isSafeForLearning?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+function resolveLearningTaskType(input: Pick<LearningEventRecordInput, 'intent' | 'taskType' | 'metadata'>) {
+  if (input.taskType) {
+    return input.taskType;
+  }
+
+  const candidate =
+    (typeof input.metadata?.task_type === 'string' ? input.metadata.task_type : undefined) ??
+    (typeof input.metadata?.taskIntent === 'string' ? input.metadata.taskIntent : undefined) ??
+    input.intent;
+
+  const parsed = controlPlaneTaskIntentSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : 'direct_answer';
+}
+
+function resolveLearningSpaceId(accountId: string, input: Pick<LearningEventRecordInput, 'spaceId' | 'metadata'>) {
+  const metadataSpaceId =
+    typeof input.metadata?.space_id === 'string'
+      ? input.metadata.space_id
+      : typeof input.metadata?.spaceId === 'string'
+        ? input.metadata.spaceId
+        : undefined;
+
+  return input.spaceId?.trim() || metadataSpaceId?.trim() || accountId;
+}
+
 type PreparedUsageCharge = {
   input: ControlPlaneUsageInput;
   rate: Decimal;
@@ -565,12 +633,14 @@ function buildAccountView(state: ControlPlaneState, account: ControlPlaneAccount
   recentNotifications: ControlPlaneNotification[];
   recentDevices: ControlPlaneHostedDevice[];
   recentLearningDrafts: ControlPlaneLearningDraft[];
+  learningEventCount: number;
   policySnapshot: ReturnType<typeof buildAccountPolicySnapshot>;
   connectionRegistry: ReturnType<typeof buildHostedConnectionRegistry>;
 } {
   const accountEvaluationSignals = state.evaluationSignals.filter(
     (signal) => signal.accountId === account.accountId
   );
+  const accountLearningEvents = state.learningEvents.filter((event) => event.accountId === account.accountId);
   const recentEvaluationSignals = accountEvaluationSignals.slice(-10).reverse();
   const plan = getControlPlanePlan(account.subscription.planId);
   const usageSnapshot = normalizeUsageSnapshot(account.usageSnapshot, plan, account.balanceCredits);
@@ -620,6 +690,7 @@ function buildAccountView(state: ControlPlaneState, account: ControlPlaneAccount
     recentNotifications,
     recentDevices: connectedDevices,
     recentLearningDrafts: interactionState.learningDrafts.slice(-5).reverse(),
+    learningEventCount: accountLearningEvents.length,
     policySnapshot: buildAccountPolicySnapshot(account, plan),
     connectionRegistry: buildHostedConnectionRegistry({
       account,
@@ -637,6 +708,7 @@ function buildHostedAccountView(accountView: ReturnType<typeof buildAccountView>
     recentNotifications: _recentNotifications,
     recentDevices: _recentDevices,
     recentLearningDrafts: _recentLearningDrafts,
+    learningEventCount: _learningEventCount,
     policySnapshot: _policySnapshot,
     connectionRegistry: _connectionRegistry,
     ...hostedAccount
@@ -648,6 +720,7 @@ function buildHostedAccountView(accountView: ReturnType<typeof buildAccountView>
   void _recentNotifications;
   void _recentDevices;
   void _recentLearningDrafts;
+  void _learningEventCount;
   void _policySnapshot;
   void _connectionRegistry;
 
@@ -783,10 +856,144 @@ function createEvaluationSignal(
   };
 }
 
+function createLearningEvent(
+  accountId: string,
+  input: LearningEventRecordInput & { eventId?: string; createdAt?: string }
+): ControlPlaneLearningEvent {
+  const reasoningSteps =
+    input.reasoningSteps ??
+    [
+      `input: ${input.input.slice(0, 240)}`,
+      `intent: ${input.intent}`,
+      `plan: ${input.plan}`,
+      `action: ${input.metadata?.actionSummary ? String(input.metadata.actionSummary) : 'no tool action'}`,
+      `observe: ${input.metadata?.observationSummary ? String(input.metadata.observationSummary) : 'request completed'}`,
+      `refine: ${input.failureReason ?? 'retain grounded answer'}`,
+      `output: ${(input.output ?? '').slice(0, 240)}`,
+    ];
+  const planStub = {
+    stages: ['intent', 'routing', 'retrieval', 'tooling', 'synthesis', 'citation', 'evaluation'],
+    searchRounds: 0,
+    maxUrls: 0,
+    temperature: 0,
+    reasoningDepth: 'standard',
+    taskIntent: input.intent,
+    intentConfidence: 'medium',
+    uncertainty: 'medium',
+    routingMode: 'local_first',
+    expandSearchQueries: false,
+    retrieval: {
+      rounds: 0,
+      maxUrls: 0,
+      rerankTopK: 0,
+      language: 'en',
+      expandSearchQueries: false,
+    },
+    capabilityPolicy: [],
+    evaluation: {
+      collectRetrievalSignals: false,
+      collectToolSignals: false,
+      captureUsageSignals: false,
+      promoteLearnings: true,
+    },
+    usageBudget: {
+      inference: 0,
+      retrieval: 0,
+      integrations: 0,
+      evaluation: 0,
+    },
+    executionMode: 'single',
+    teamPolicy: {
+      enabledByDefault: false,
+      reasons: [],
+      maxConcurrentAgents: 0,
+      maxTasksPerRun: 0,
+      allowCloudEscalation: false,
+      modelRoutingMode: 'local_only',
+      riskBoundary: 'read_only',
+      requiredRoles: [],
+    },
+    surface: 'shared-vps',
+    mode: 'speed',
+    executionPolicy: {
+      preferredOrder: [],
+      primary: {
+        kind: 'direct_answer',
+        source: 'none',
+        reason: 'learning event',
+        requiresConfirmation: false,
+      },
+      candidates: [],
+      shouldRetrieve: false,
+      shouldDiscoverMcp: false,
+      shouldEscalateModel: false,
+      requiresConfirmation: false,
+      decisionSummary: 'learning event',
+      notes: [],
+    },
+    skillPolicy: {
+      selectedSkillId: 'learning_event',
+      selectedSkillTitle: 'Learning event',
+      selectedSkillVersion: '1',
+      resultShape: 'answer',
+      policyBoundary: 'workspace',
+      preferredCapabilityIds: [],
+      requiresConfirmation: false,
+      decisionSummary: 'learning event',
+      notes: [],
+      candidates: [],
+      stages: [],
+      selectedTechniques: [],
+    },
+  } as OrchestrationPlan;
+  const evaluation = evaluateReasoningOutcome({
+    input: input.input,
+    intent: input.intent,
+    plan: planStub,
+    output: input.output ?? '',
+    success: input.success,
+    failureReason: input.failureReason,
+    latencyMs: input.latencyMs,
+    citationCount: Number(input.metadata?.citationCount ?? 0),
+    toolCallCount: Number(input.metadata?.toolCallCount ?? 0),
+  });
+
+  return {
+    eventId: input.eventId ?? createId('lgn'),
+    accountId,
+    requestId: input.requestId,
+    source: input.source,
+    input: input.input,
+    intent: input.intent,
+    taskType: resolveLearningTaskType(input),
+    spaceId: resolveLearningSpaceId(accountId, input),
+    plan: input.plan,
+    reasoningSteps,
+    reasoningTrace: reasoningSteps,
+    output: input.output ?? '',
+    betterOutput: input.betterOutput ?? '',
+    success: input.success,
+    failureReason: input.failureReason,
+    feedback: input.feedback ?? {},
+    latencyMs: input.latencyMs,
+    score: typeof input.score === 'number' ? input.score : evaluation.score,
+    accepted: typeof input.accepted === 'boolean' ? input.accepted : (typeof input.score === 'number' ? input.score >= 0.6 : evaluation.score >= 0.6),
+    modelId: input.modelId,
+    modelProvider: input.modelProvider,
+    isSafeForLearning: input.isSafeForLearning ?? false,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    updatedAt: input.createdAt ?? new Date().toISOString(),
+    metadata: input.metadata ?? {},
+  };
+}
+
 export class ControlPlaneService {
   private pending = Promise.resolve();
 
-  constructor(private readonly store: ControlPlaneStateStore) {}
+  constructor(
+    private readonly store: ControlPlaneStateStore,
+    private readonly databaseUrl?: string
+  ) {}
 
   static create(
     statePath: string,
@@ -808,7 +1015,7 @@ export class ControlPlaneService {
         })
       : new FileControlPlaneStateStore(statePath);
 
-    return new ControlPlaneService(store);
+    return new ControlPlaneService(store, databaseUrl);
   }
 
   async listPlans() {
@@ -818,6 +1025,7 @@ export class ControlPlaneService {
   async health() {
     const state = await this.readState();
     const runtime = buildControlPlaneRuntimeSnapshot(this.store.kind);
+    const version = getRuntimeVersionInfo();
     const subscriptionSummary = countSubscriptionStates(state);
     const deviceSummary = countDeviceStates(state);
     const evaluationSummary = buildControlPlaneEvaluationSummary(state.evaluationSignals);
@@ -828,18 +1036,35 @@ export class ControlPlaneService {
       deviceLinks: Object.keys(state.deviceLinks).length,
       ledgerEntries: state.ledger.length,
       evaluationSignals: state.evaluationSignals.length,
+      learningEvents: state.learningEvents.length,
     };
-    const database = buildControlPlaneDatabaseHealthSnapshot(this.store.kind, getControlPlanePoolStats());
+    const database = await buildControlPlaneDatabaseHealthSnapshot(this.store.kind, getControlPlanePoolStats());
+    const truth =
+      this.store.kind === 'postgres'
+        ? await readCanonicalSharedTruthSnapshot(getControlPlanePool())
+        : {
+            expected: [],
+            present: [],
+            missing: [],
+          };
 
     return {
       ok: true,
       service: 'elyan-control-plane',
+      version: version.version,
+      releaseTag: version.releaseTag,
+      buildSha: version.buildSha,
       surface: runtime.surface,
       storage: runtime.storage,
+      activeDatabaseMode: runtime.activeDatabaseMode,
       databaseConfigured: runtime.databaseConfigured,
+      postgresReachable: database.postgresReachable,
+      migrationsApplied: database.migrationsApplied,
+      schemaReady: database.schemaReady,
       billingConfigured: runtime.billingConfigured,
       billingMode: runtime.billingMode,
       hostedReady: runtime.hostedReady,
+      missingEnvKeys: runtime.missingEnvKeys,
       readiness: runtime.readiness,
       stateVersion: state.version,
       accountCount: counts.accounts,
@@ -847,8 +1072,10 @@ export class ControlPlaneService {
       deviceCount: counts.devices,
       deviceLinkCount: counts.deviceLinks,
       ledgerEntryCount: counts.ledgerEntries,
+      learningEventCount: counts.learningEvents,
       counts,
       database,
+      truth,
       syncSummary: {
         subscriptions: subscriptionSummary,
         devices: deviceSummary,
@@ -1052,6 +1279,17 @@ export class ControlPlaneService {
   }
 
   async quoteUsage(accountId: string, input: ControlPlaneUsageInput): Promise<ControlPlaneUsageQuote> {
+    const bundle = await this.quoteUsageBundle(accountId, [input]);
+    const quote = bundle.quotes[0];
+
+    if (!quote) {
+      throw new ControlPlaneValidationError('Usage quote requires at least one charge');
+    }
+
+    return quote;
+  }
+
+  async quoteUsageBundle(accountId: string, inputs: ControlPlaneUsageInput[]) {
     const state = await this.readState();
     const account = state.accounts[accountId];
 
@@ -1059,32 +1297,59 @@ export class ControlPlaneService {
       throw new ControlPlaneNotFoundError('Account', accountId);
     }
 
-    this.assertHostedUsageAllowed(account);
-
-    const prepared = prepareUsageCharges(account, [input]);
-    const charge = prepared.charges[0];
-    const plan = getControlPlanePlan(account.subscription.planId);
-    const usageSnapshot = normalizeUsageSnapshot(account.usageSnapshot, plan, account.balanceCredits);
-    const denial = evaluateUsageConsumption(usageSnapshot, 1, 1, prepared.balanceBefore, prepared.balanceAfter);
-
-    if (!charge) {
-      throw new ControlPlaneValidationError('Usage quote requires at least one charge');
+    if (inputs.length === 0) {
+      throw new ControlPlaneValidationError('Usage bundle requires at least one usage input');
     }
 
+    this.assertHostedUsageAllowed(account);
+
+    const plan = getControlPlanePlan(account.subscription.planId);
+    const normalizedSnapshot = normalizeUsageSnapshot(account.usageSnapshot, plan, account.balanceCredits);
+    const prepared = prepareUsageCharges(account, inputs);
+    const requestTokens = inputs.reduce((total, input) => total + Math.max(0, Math.trunc(input.tokens ?? 0)), 0);
+    const allowance = evaluateUsageConsumption(
+      normalizedSnapshot,
+      1,
+      inputs.length,
+      requestTokens,
+      prepared.balanceBefore,
+      prepared.balanceAfter
+    );
+    const denial = describeUsageLimitDenial(allowance, plan);
+
+    const quotes = prepared.charges.map((charge) => {
+      const creditsDelta = formatCredits(charge.creditsDelta);
+
+      return {
+        accountId,
+        planId: account.subscription.planId,
+        domain: charge.input.domain,
+        units: charge.input.units,
+        creditsDelta,
+        balanceBefore: formatCredits(prepared.balanceBefore),
+        balanceAfter: formatCredits(prepared.allowed ? prepared.balanceAfter : prepared.balanceBefore),
+        allowed: prepared.allowed && allowance.allowed,
+        denialReason: allowance.denialReason ?? (prepared.allowed ? undefined : 'monthly_credits_exhausted'),
+        resetAt: allowance.resetAt,
+        remainingRequests: allowance.remainingRequests,
+        remainingHostedToolActionCalls: allowance.remainingHostedToolActionCalls,
+        remainingTokens: allowance.remainingTokens,
+        monthlyCreditsRemaining: allowance.monthlyCreditsRemaining,
+        requestTokens,
+      } satisfies ControlPlaneUsageQuote;
+    });
+
     return {
-      accountId,
-      planId: account.subscription.planId,
-      domain: input.domain,
-      units: input.units,
-      creditsDelta: formatCredits(charge.creditsDelta),
-      balanceBefore: formatCredits(prepared.balanceBefore),
-      balanceAfter: formatCredits(prepared.allowed ? prepared.balanceAfter : prepared.balanceBefore),
-      allowed: prepared.allowed && denial.allowed,
-      denialReason: denial.denialReason ?? (prepared.allowed ? undefined : 'monthly_credits_exhausted'),
-      resetAt: denial.resetAt,
-      remainingRequests: denial.remainingRequests,
-      remainingHostedToolActionCalls: denial.remainingHostedToolActionCalls,
-      monthlyCreditsRemaining: denial.monthlyCreditsRemaining,
+      account: buildAccountView(state, account),
+      quotes,
+      allowed: prepared.allowed && allowance.allowed,
+      denialReason: denial?.code ?? allowance.denialReason,
+      resetAt: allowance.resetAt,
+      remainingRequests: allowance.remainingRequests,
+      remainingHostedToolActionCalls: allowance.remainingHostedToolActionCalls,
+      remainingTokens: allowance.remainingTokens,
+      monthlyCreditsRemaining: allowance.monthlyCreditsRemaining,
+      requestTokens,
     };
   }
 
@@ -1115,11 +1380,13 @@ export class ControlPlaneService {
       const plan = getControlPlanePlan(account.subscription.planId);
       const normalizedSnapshot = normalizeUsageSnapshot(account.usageSnapshot, plan, account.balanceCredits);
       const prepared = prepareUsageCharges(account, inputs);
+      const requestTokens = inputs.reduce((total, input) => total + Math.max(0, Math.trunc(input.tokens ?? 0)), 0);
       const now = new Date().toISOString();
       const allowance = evaluateUsageConsumption(
         normalizedSnapshot,
         1,
         inputs.length,
+        requestTokens,
         prepared.balanceBefore,
         prepared.balanceAfter
       );
@@ -1168,10 +1435,13 @@ export class ControlPlaneService {
             limitType:
               allowance.denialReason === 'daily_tool_action_calls_limit'
                 ? 'daily_tool_action_calls_limit'
+                : allowance.denialReason === 'daily_tokens_limit'
+                  ? 'daily_tokens_limit'
                 : 'daily_requests_limit',
             resetAt: allowance.resetAt,
             remainingRequests: allowance.remainingRequests,
             remainingHostedToolActionCalls: allowance.remainingHostedToolActionCalls,
+            remainingTokens: allowance.remainingTokens,
             monthlyCreditsRemaining: allowance.monthlyCreditsRemaining,
             planId: account.subscription.planId,
           }
@@ -1203,7 +1473,7 @@ export class ControlPlaneService {
         ...account,
         balanceCredits: formatCredits(nextBalance),
         usageTotals: nextUsageTotals,
-        usageSnapshot: advanceUsageSnapshot(normalizedSnapshot, plan, nextBalance, 1, inputs.length, new Date(now)),
+        usageSnapshot: advanceUsageSnapshot(normalizedSnapshot, plan, nextBalance, 1, inputs.length, requestTokens, new Date(now)),
         updatedAt: now,
       };
 
@@ -1227,6 +1497,7 @@ export class ControlPlaneService {
           ),
           balanceAfter: formatCredits(runningBalance),
           allowed: true,
+          requestTokens,
         };
       });
 
@@ -1266,6 +1537,100 @@ export class ControlPlaneService {
     });
   }
 
+  async recordLearningEvent(accountId: string, input: LearningEventRecordInput) {
+    return this.withState(async (state) => {
+      const account = state.accounts[accountId];
+
+      if (!account) {
+        throw new ControlPlaneNotFoundError('Account', accountId);
+      }
+
+      this.assertHostedImprovementAllowed(account);
+
+      const existing = state.learningEvents.find(
+        (event) => event.accountId === accountId && event.requestId === input.requestId
+      );
+
+      if (existing) {
+        return existing;
+      }
+
+      const event = createLearningEvent(accountId, input);
+      state.learningEvents.push(event);
+      await this.store.write(state);
+
+      const signal = deriveLearningSignal({
+        accountId,
+        spaceId: event.spaceId,
+        eventId: event.eventId,
+        requestId: event.requestId,
+        source: event.source,
+        input: event.input,
+        output: event.output,
+        intent: event.intent,
+        taskType: event.taskType,
+        success: event.success,
+        failureReason: event.failureReason,
+        feedback: event.feedback,
+        latencyMs: event.latencyMs,
+        score: event.score,
+        accepted: event.accepted,
+        modelId: event.modelId,
+        modelProvider: event.modelProvider,
+        isSafeForLearning: event.isSafeForLearning,
+        metadata: {
+          ...event.metadata,
+          queryLength: event.metadata.queryLength,
+          source_count: event.metadata.sourceCount,
+          citation_count: event.metadata.citationCount,
+          reasoningDepth: event.metadata.reasoningDepth,
+          routingMode: event.metadata.routingMode,
+          teacherStrategy: event.metadata.teacherStrategy,
+          evaluatorNotes: event.metadata.evaluatorNotes,
+          discardReason: event.metadata.discardReason,
+        },
+        createdAt: event.createdAt,
+      });
+
+      if (signal.isSafeForLearning) {
+        const artifacts = buildLearningArtifacts(signal);
+        const persistResults = await Promise.allSettled([
+          persistLearningArtifacts(this.databaseUrl, artifacts),
+          ingestRetrievalText({
+            accountId,
+            spaceId: event.spaceId,
+            sourceKind: 'learning',
+            sourceName: 'learning_signal',
+            title: `${signal.taskType} learning signal`,
+            content: buildLearningRetrievalText(signal, artifacts),
+            metadata: {
+              request_id: event.requestId,
+              event_id: event.eventId,
+              space_id: event.spaceId,
+              task_type: signal.taskType,
+              success_score: signal.successScore,
+              prompt_effectiveness: signal.promptEffectiveness,
+              model_performance: signal.modelPerformance,
+              latency_ms: signal.latencyMs,
+              model_id: event.modelId,
+              model_provider: event.modelProvider,
+              source: event.source,
+              is_safe_for_learning: signal.isSafeForLearning,
+            },
+          }),
+        ]);
+
+        for (const result of persistResults) {
+          if (result.status === 'rejected') {
+            console.warn('Failed to persist hosted learning output', result.reason);
+          }
+        }
+      }
+
+      return event;
+    });
+  }
+
   async getInteractionContext(accountId: string, input: InteractionContextInput) {
     const state = await this.readState();
     const account = state.accounts[accountId];
@@ -1301,20 +1666,32 @@ export class ControlPlaneService {
       .filter((item) => !item.pinned && !item.promoted)
       .slice(-4)
       .reverse();
+    const semanticDocuments = await searchRetrievalDocumentsHybrid(input.query, {
+      accountId,
+      sourceKinds: ['bootstrap', 'web', 'learning'],
+      limit: 4,
+    });
+    const memory = buildMemoryContext({
+      thread: threadId
+        ? interactionState.threads.find((thread) => thread.threadId === threadId)
+        : matchingThreads[0],
+      messages: interactionState.messages,
+      memoryItems: [...pinnedMemory, ...recentMemory],
+      learningDrafts: interactionState.learningDrafts,
+      semanticDocuments,
+    });
 
-    const contextBlocks = [
-      pinnedMemory.length > 0
-        ? `Pinned memory:\n${pinnedMemory.map((item) => `- ${item.title}: ${item.summary}`).join('\n')}`
-        : '',
-      matchingThreads.length > 0
-        ? `Relevant threads:\n${matchingThreads
-            .map((thread) => `- ${thread.title} [${thread.intent}] ${thread.summary}`)
-            .join('\n')}`
-        : '',
-      recentMemory.length > 0
-        ? `Recent memory:\n${recentMemory.map((item) => `- ${item.title}: ${item.summary}`).join('\n')}`
-        : '',
-    ].filter(Boolean);
+    const contextBlocks = filterContextBlocks(
+      [
+        matchingThreads.length > 0
+          ? `Relevant threads:\n${matchingThreads
+              .map((thread) => `- ${thread.title} [${thread.intent}] ${thread.summary}`)
+              .join('\n')}`
+          : '',
+        ...memory.contextBlocks,
+      ],
+      { maxTokens: 1_800, maxBlocks: 8, minScore: 0.15 }
+    );
 
     return {
       threadId,

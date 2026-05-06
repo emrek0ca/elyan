@@ -1,0 +1,24 @@
+[Unit]
+Description=Elyan ML dataset and training worker
+After=network-online.target postgresql.service elyan.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=elyan
+Group=elyan
+EnvironmentFile=/srv/elyan/.env
+WorkingDirectory=/srv/elyan/current
+ExecStart=/usr/bin/npm run ml:worker
+Restart=always
+RestartSec=20
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/srv/elyan
+
+[Install]
+WantedBy=multi-user.target
