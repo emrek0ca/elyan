@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
 import type { FastifyPluginAsync } from "fastify";
 import { ZodError } from "zod";
 import type { RawData } from "ws";
-import { badRequest, unauthorized } from "../../lib/errors.js";
-import { extractBearerToken } from "../../lib/request-auth.js";
+import { devices, tasks } from "../../db/schema.js";
+import { badRequest, notFound, unauthorized } from "../../lib/errors.js";
+import { extractBearerToken, getUserAuth } from "../../lib/request-auth.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
 import { appendTaskArtifacts, updateTaskFromRuntime } from "../tasks/service.js";
 import { runtimeSocketMessageSchema } from "../runtime/schemas.js";
@@ -17,13 +19,38 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       return;
     }
 
-    const auth = request.auth;
+    const auth = getUserAuth(request);
     const query = (request.query as { taskId?: string; deviceId?: string } | undefined) ?? {};
+
+    if (query.taskId) {
+      const ownedTask = await app.db
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(and(eq(tasks.id, query.taskId), eq(tasks.userId, auth.sub)))
+        .limit(1);
+
+      if (!ownedTask[0]) {
+        throw notFound("Task stream not found");
+      }
+    }
+
+    if (query.deviceId) {
+      const ownedDevice = await app.db
+        .select({ id: devices.id })
+        .from(devices)
+        .where(and(eq(devices.id, query.deviceId), eq(devices.userId, auth.sub)))
+        .limit(1);
+
+      if (!ownedDevice[0]) {
+        throw notFound("Device stream not found");
+      }
+    }
+
     const channel = query.taskId
       ? `task:${query.taskId}`
       : query.deviceId
         ? `device:${query.deviceId}`
-        : `user:${auth?.sub}`;
+        : `user:${auth.sub}`;
 
     reply.hijack();
     reply.raw.writeHead(200, {

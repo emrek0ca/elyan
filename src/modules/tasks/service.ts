@@ -4,6 +4,8 @@ import type { AiProvider, ArtifactInput, TaskStatus } from "../../contracts/doma
 import { artifacts, devices, taskEvents, tasks } from "../../db/schema.js";
 import { conflict, notFound } from "../../lib/errors.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
+import { createAuditLog } from "../audit/service.js";
+import { activeTaskStatuses, resequenceDeviceQueue } from "./queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
 
 async function insertTaskEvent(
@@ -98,6 +100,11 @@ async function getTaskForRuntime(app: FastifyInstance, taskId: string, auth: Run
   return task;
 }
 
+async function getTaskById(app: FastifyInstance, taskId: string) {
+  const rows = await app.db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
+  return rows[0] ?? null;
+}
+
 function publishTaskEvent(app: FastifyInstance, task: typeof tasks.$inferSelect, topic: string, payload: unknown): void {
   app.services.eventBus.publish({
     topic,
@@ -117,6 +124,8 @@ export async function createTask(
     payload: Record<string, unknown>;
     requestedCapabilities: string[];
     preferredAiProvider?: AiProvider;
+    ipAddress?: string;
+    userAgent?: string;
   },
 ) {
   await getOwnedDesktopDevice(app, input.userId, input.targetDeviceId);
@@ -129,7 +138,7 @@ export async function createTask(
     .where(
       and(
         eq(tasks.targetDeviceId, input.targetDeviceId),
-        inArray(tasks.status, ["queued", "planning", "running", "waiting_approval"]),
+        inArray(tasks.status, activeTaskStatuses),
       ),
     );
 
@@ -148,24 +157,43 @@ export async function createTask(
     .returning();
 
   const task = rows[0];
+  await resequenceDeviceQueue(app, input.targetDeviceId);
+  const currentTask = (await getTaskById(app, task.id)) ?? task;
 
   await insertTaskEvent(app, {
-    taskId: task.id,
+    taskId: currentTask.id,
     status: "queued",
     message: "Task queued",
   });
 
-  publishTaskEvent(app, task, "task.queued", {
-    task,
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "task.create",
+    resourceType: "task",
+    resourceId: currentTask.id,
+    status: "success",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    payload: {
+      targetDeviceId: input.targetDeviceId,
+      requestedCapabilities: input.requestedCapabilities,
+      preferredAiProvider: input.preferredAiProvider ?? null,
+    },
   });
 
-  const dispatched = app.services.realtimeHub.sendToRuntime(task.targetDeviceId, {
+  publishTaskEvent(app, currentTask, "task.queued", {
+    task: currentTask,
+  });
+
+  const dispatched = app.services.realtimeHub.sendToRuntime(currentTask.targetDeviceId, {
     type: "task.dispatch",
-    task,
+    task: currentTask,
   });
 
   return {
-    task,
+    task: currentTask,
     dispatched,
   };
 }
@@ -212,7 +240,12 @@ export async function getTaskDetail(app: FastifyInstance, taskId: string, userId
   };
 }
 
-export async function cancelTask(app: FastifyInstance, taskId: string, userId: string) {
+export async function cancelTask(
+  app: FastifyInstance,
+  taskId: string,
+  userId: string,
+  context?: { ipAddress?: string; userAgent?: string },
+) {
   const task = await getTaskForUser(app, taskId, userId);
 
   if (isTerminalTaskStatus(task.status)) {
@@ -223,6 +256,7 @@ export async function cancelTask(app: FastifyInstance, taskId: string, userId: s
     .update(tasks)
     .set({
       status: "canceled",
+      queuePosition: 0,
       canceledAt: new Date(),
       updatedAt: new Date(),
     })
@@ -230,11 +264,27 @@ export async function cancelTask(app: FastifyInstance, taskId: string, userId: s
     .returning();
 
   const updatedTask = rows[0];
+  await resequenceDeviceQueue(app, updatedTask.targetDeviceId);
 
   await insertTaskEvent(app, {
     taskId: task.id,
     status: "canceled",
     message: "Task canceled by user",
+  });
+
+  await createAuditLog(app, {
+    userId,
+    actorType: "user",
+    actorId: userId,
+    action: "task.cancel",
+    resourceType: "task",
+    resourceId: updatedTask.id,
+    status: "success",
+    ipAddress: context?.ipAddress,
+    userAgent: context?.userAgent,
+    payload: {
+      previousStatus: task.status,
+    },
   });
 
   publishTaskEvent(app, updatedTask, "task.canceled", {
@@ -258,6 +308,8 @@ export async function resolveTaskApproval(
     userId: string;
     approved: boolean;
     notes?: string;
+    ipAddress?: string;
+    userAgent?: string;
   },
 ) {
   const task = await getTaskForUser(app, input.taskId, input.userId);
@@ -267,7 +319,10 @@ export async function resolveTaskApproval(
   }
 
   if (!input.approved) {
-    return cancelTask(app, task.id, task.userId);
+    return cancelTask(app, task.id, task.userId, {
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+    });
   }
 
   await insertTaskEvent(app, {
@@ -276,6 +331,22 @@ export async function resolveTaskApproval(
     message: "Approval granted by user",
     payload: {
       notes: input.notes,
+    },
+  });
+
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "task.approval.resolve",
+    resourceType: "task",
+    resourceId: task.id,
+    status: "success",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    payload: {
+      approved: true,
+      notes: input.notes ?? null,
     },
   });
 
@@ -331,15 +402,22 @@ export async function updateTaskFromRuntime(
 
   if (input.status === "completed") {
     updates.completedAt = new Date();
+    updates.queuePosition = 0;
+  }
+
+  if (input.status === "failed") {
+    updates.queuePosition = 0;
   }
 
   if (input.status === "canceled") {
     updates.canceledAt = new Date();
+    updates.queuePosition = 0;
   }
 
   const rows = await app.db.update(tasks).set(updates).where(eq(tasks.id, task.id)).returning();
   const updatedTask = rows[0];
   const storedArtifacts = await persistArtifacts(app, task.id, input.artifacts);
+  await resequenceDeviceQueue(app, updatedTask.targetDeviceId);
 
   await insertTaskEvent(app, {
     taskId: task.id,

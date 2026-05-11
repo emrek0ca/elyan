@@ -6,6 +6,7 @@ import { signRuntimeAccessToken } from "../../lib/auth-tokens.js";
 import { conflict, notFound, unauthorized } from "../../lib/errors.js";
 import { verifySecret } from "../../lib/auth-crypto.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
+import { activeTaskStatuses } from "../tasks/queue.js";
 
 export async function registerRuntime(
   app: FastifyInstance,
@@ -183,8 +184,42 @@ export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: Runti
       and(
         eq(tasks.userId, auth.sub),
         eq(tasks.targetDeviceId, auth.deviceId),
-        inArray(tasks.status, ["queued", "planning", "running", "waiting_approval"]),
+        inArray(tasks.status, activeTaskStatuses),
       ),
     )
-    .orderBy(tasks.createdAt);
+    .orderBy(tasks.queuePosition, tasks.createdAt);
+}
+
+export async function getRuntimeSessionSnapshot(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
+  const deviceRows = await app.db
+    .select({
+      id: devices.id,
+      label: devices.label,
+      platform: devices.platform,
+      runtimeVersion: devices.runtimeVersion,
+      lastSeenAt: devices.lastSeenAt,
+    })
+    .from(devices)
+    .where(eq(devices.id, auth.deviceId))
+    .limit(1);
+  const connectionRows = await app.db
+    .select({
+      id: runtimeConnections.id,
+      status: runtimeConnections.status,
+      socketSessionId: runtimeConnections.socketSessionId,
+      currentTaskId: runtimeConnections.currentTaskId,
+      capabilities: runtimeConnections.capabilities,
+      connectedAt: runtimeConnections.connectedAt,
+      lastHeartbeatAt: runtimeConnections.lastHeartbeatAt,
+    })
+    .from(runtimeConnections)
+    .where(and(eq(runtimeConnections.deviceId, auth.deviceId), isNull(runtimeConnections.disconnectedAt)))
+    .orderBy(runtimeConnections.connectedAt)
+    .limit(1);
+
+  return {
+    device: deviceRows[0] ?? null,
+    connection: connectionRows[0] ?? null,
+    tasks: await listAssignedRuntimeTasks(app, auth),
+  };
 }

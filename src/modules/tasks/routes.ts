@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { TaskStatus } from "../../contracts/domain.js";
+import { getRequestContext } from "../../lib/http.js";
 import { getUserAuth } from "../../lib/request-auth.js";
 import { approvalBodySchema, createTaskBodySchema, listTasksQuerySchema, taskParamsSchema } from "./schemas.js";
 import { cancelTask, createTask, getTaskDetail, listTasks, resolveTaskApproval } from "./service.js";
@@ -14,6 +15,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     const body = createTaskBodySchema.parse(request.body);
     const auth = getUserAuth(request);
+    const context = getRequestContext(request);
 
     return createTask(app, {
       userId: auth.sub,
@@ -22,6 +24,8 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       payload: body.payload,
       requestedCapabilities: body.requestedCapabilities,
       preferredAiProvider: body.preferredAiProvider,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
     });
   });
 
@@ -72,7 +76,11 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     const params = taskParamsSchema.parse(request.params);
     const auth = getUserAuth(request);
-    return cancelTask(app, params.taskId, auth.sub);
+    const context = getRequestContext(request);
+    return cancelTask(app, params.taskId, auth.sub, {
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
   });
 
   app.post("/:taskId/approval", async (request, reply) => {
@@ -85,12 +93,15 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const params = taskParamsSchema.parse(request.params);
     const body = approvalBodySchema.parse(request.body);
     const auth = getUserAuth(request);
+    const context = getRequestContext(request);
 
     return resolveTaskApproval(app, {
       taskId: params.taskId,
       userId: auth.sub,
       approved: body.approved,
       notes: body.notes,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
     });
   });
 };

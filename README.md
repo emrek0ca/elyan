@@ -49,3 +49,18 @@ Thin Fastify control-plane for Elyan's mobile -> backend -> desktop runtime flow
 - AI providers are advisory only
 - This backend intentionally stays thin and deterministic
 - Drizzle migration generation reads the compiled `dist/db/schema.js` to stay compatible with the NodeNext import layout
+
+## API Surfaces
+
+- `GET /healthz`, `GET /livez`, `GET /readyz`
+- `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `GET /v1/auth/me`
+- `POST /v1/pairing/sessions`, `GET /v1/pairing/sessions/:sessionId`, `POST /v1/pairing/sessions/:sessionId/claim`
+- `POST /v1/runtime/register`, `POST /v1/runtime/heartbeat`, `GET /v1/runtime/session`, `GET /v1/runtime/tasks/assigned`
+- `GET /v1/realtime/stream`, `GET /v1/realtime/runtime` (websocket)
+- `POST /v1/tasks`, `GET /v1/tasks`, `GET /v1/tasks/:taskId`, `POST /v1/tasks/:taskId/cancel`, `POST /v1/tasks/:taskId/approval`
+- `GET /v1/devices`, `POST /v1/devices/mobile/register`, `GET /v1/devices/:deviceId/backlog`
+- `GET /v1/mobile/bootstrap`
+- `GET /v1/ai/providers`, `PUT /v1/ai/credentials/:provider`, `POST /v1/ai/route-preview`, `GET /v1/ai/usage`
+- `GET /v1/integrations/providers`, `GET /v1/integrations/connections`, `POST /v1/integrations/oauth/:provider/start`, `GET /v1/integrations/oauth/:provider/callback`
+- `GET /v1/mcp/servers`, `POST /v1/mcp/servers`, `PATCH /v1/mcp/servers/:serverId`
+- `GET /v1/security/audit-logs`

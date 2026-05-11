@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { getRuntimeAuth } from "../../lib/request-auth.js";
 import { appendTaskArtifacts, updateTaskFromRuntime } from "../tasks/service.js";
 import { registerRuntimeBodySchema, runtimeHeartbeatBodySchema, runtimeTaskParamsSchema, runtimeTaskUpdateBodySchema } from "./schemas.js";
-import { disconnectRuntime, heartbeatRuntime, listAssignedRuntimeTasks, registerRuntime } from "./service.js";
+import { disconnectRuntime, getRuntimeSessionSnapshot, heartbeatRuntime, listAssignedRuntimeTasks, registerRuntime } from "./service.js";
 
 export const runtimeRoutes: FastifyPluginAsync = async (app) => {
   app.post("/register", async (request) => {
@@ -35,6 +35,17 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
     return {
       ok: true,
     };
+  });
+
+  app.get("/session", async (request, reply) => {
+    await app.authenticateRuntime(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const auth = getRuntimeAuth(request);
+    return getRuntimeSessionSnapshot(app, auth);
   });
 
   app.get("/tasks/assigned", async (request, reply) => {
