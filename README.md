@@ -48,3 +48,4 @@ Thin Fastify control-plane for Elyan's mobile -> backend -> desktop runtime flow
 - Real execution stays on the desktop runtime
 - AI providers are advisory only
 - This backend intentionally stays thin and deterministic
+- Drizzle migration generation reads the compiled `dist/db/schema.js` to stay compatible with the NodeNext import layout
