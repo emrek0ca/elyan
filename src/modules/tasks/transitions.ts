@@ -2,9 +2,10 @@ import type { TaskStatus } from "../../contracts/domain.js";
 import { conflict } from "../../lib/errors.js";
 
 const allowedTransitions: Record<TaskStatus, TaskStatus[]> = {
-  queued: ["running", "canceled"],
-  running: ["waiting_approval", "completed", "failed", "canceled"],
-  waiting_approval: ["running", "completed", "failed", "canceled"],
+  queued: ["planning", "running", "canceled"],
+  planning: ["running", "waiting_approval", "completed", "failed", "canceled"],
+  running: ["planning", "waiting_approval", "completed", "failed", "canceled"],
+  waiting_approval: ["planning", "running", "completed", "failed", "canceled"],
   completed: [],
   failed: [],
   canceled: [],

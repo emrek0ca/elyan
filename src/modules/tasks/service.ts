@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import type { ArtifactInput, TaskStatus } from "../../contracts/domain.js";
+import type { AiProvider, ArtifactInput, TaskStatus } from "../../contracts/domain.js";
 import { artifacts, devices, taskEvents, tasks } from "../../db/schema.js";
 import { conflict, notFound } from "../../lib/errors.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
@@ -116,7 +116,7 @@ export async function createTask(
     title: string;
     payload: Record<string, unknown>;
     requestedCapabilities: string[];
-    preferredAiProvider?: "openai" | "claude" | "ollama" | "groq";
+    preferredAiProvider?: AiProvider;
   },
 ) {
   await getOwnedDesktopDevice(app, input.userId, input.targetDeviceId);
@@ -129,7 +129,7 @@ export async function createTask(
     .where(
       and(
         eq(tasks.targetDeviceId, input.targetDeviceId),
-        inArray(tasks.status, ["queued", "running", "waiting_approval"]),
+        inArray(tasks.status, ["queued", "planning", "running", "waiting_approval"]),
       ),
     );
 

@@ -183,7 +183,7 @@ export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: Runti
       and(
         eq(tasks.userId, auth.sub),
         eq(tasks.targetDeviceId, auth.deviceId),
-        inArray(tasks.status, ["queued", "running", "waiting_approval"]),
+        inArray(tasks.status, ["queued", "planning", "running", "waiting_approval"]),
       ),
     )
     .orderBy(tasks.createdAt);
