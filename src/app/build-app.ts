@@ -21,6 +21,11 @@ import { runtimeRoutes } from "../modules/runtime/routes.js";
 import { taskRoutes } from "../modules/tasks/routes.js";
 import { realtimeRoutes } from "../modules/realtime/routes.js";
 import { aiRoutes } from "../modules/ai/routes.js";
+import { deviceRoutes } from "../modules/devices/routes.js";
+import { mobileRoutes } from "../modules/mobile/routes.js";
+import { securityRoutes } from "../modules/security/routes.js";
+import { integrationRoutes } from "../modules/integrations/routes.js";
+import { mcpRoutes } from "../modules/mcp/routes.js";
 
 export async function buildApp(envInput?: AppEnv) {
   const env = envInput ?? loadEnv();
@@ -111,6 +116,11 @@ export async function buildApp(envInput?: AppEnv) {
   await app.register(taskRoutes, { prefix: "/v1/tasks" });
   await app.register(realtimeRoutes, { prefix: "/v1/realtime" });
   await app.register(aiRoutes, { prefix: "/v1/ai" });
+  await app.register(deviceRoutes, { prefix: "/v1/devices" });
+  await app.register(mobileRoutes, { prefix: "/v1/mobile" });
+  await app.register(integrationRoutes, { prefix: "/v1/integrations" });
+  await app.register(mcpRoutes, { prefix: "/v1/mcp" });
+  await app.register(securityRoutes, { prefix: "/v1/security" });
   await app.register(errorHandlerPlugin);
 
   return app;
