@@ -1,0 +1,47 @@
+appId: ai.elyan.desktop
+productName: Elyan
+directories:
+  output: release
+icon: resources/icon.png
+files:
+  - dist/**
+  - package.json
+  - "!dist/**/*.map"
+  - "!dist/**/*.test.*"
+  - "!dist/**/*.spec.*"
+  - "!dist/**/__tests__/**"
+  - "!dist/**/test-results/**"
+  - "!dist/**/coverage/**"
+asarUnpack:
+  - native/window_tools/build/Release/*.node
+extraResources:
+  - from: resources/icon.png
+    to: logo.png
+  - from: resources/icon.png
+    to: icon.png
+  - from: resources/icon.ico
+    to: icon.ico
+  - from: resources/icon.icns
+    to: icon.icns
+  - from: build/runtime
+    to: runtime
+    filter:
+      - '**/*'
+  - from: native/window_tools/build/Release
+    to: native/window_tools
+    filter:
+      - '*.node'
+extraMetadata:
+  main: dist/main/index.js
+mac:
+  icon: resources/icon.icns
+  category: public.app-category.productivity
+  hardenedRuntime: false
+win:
+  icon: resources/icon.ico
+  target:
+    - nsis
+linux:
+  icon: resources/icon.png
+  target:
+    - AppImage

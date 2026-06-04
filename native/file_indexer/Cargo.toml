@@ -1,0 +1,10 @@
+[package]
+name = "elyan-file-indexer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha1 = "0.10"
+walkdir = "2.5"
