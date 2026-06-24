@@ -206,6 +206,70 @@ test("buildUserContextFromMemory derives preferred name and language from safe m
   assert.equal(context.userProfile?.preferredName, "Emre");
   assert.equal(context.userProfile?.preferredLanguage, "Türkçe");
   assert.equal(context.userProfile?.planCode, "solo");
+  assert.deepEqual(context.situationalHints, []);
+  assert.deepEqual(context.behavioralHints, []);
+  assert.deepEqual(context.environmentHints, []);
+});
+
+test("buildUserContextFromMemory promotes derived world-signal memory into situational and behavioral hints", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Bugün planımı buna göre ayarla.",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Bugün planımı buna göre ayarla.",
+    },
+    memory: [
+      {
+        id: "derived-energy",
+        type: "workflow",
+        key: "energy_rhythm",
+        value: "low energy window; prefer shorter, lower-friction steps",
+        confidence: 0.91,
+        scope: "user",
+        source: "system",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 80,
+        isPinned: false,
+        metadata: {
+          sourceCategory: "world_signal_derived",
+          derivedTraitCategory: "situational",
+        },
+      },
+      {
+        id: "derived-plan",
+        type: "workflow",
+        key: "preferred_planning_granularity",
+        value: "prefers compact time-boxed steps on busy days",
+        confidence: 0.89,
+        scope: "user",
+        source: "system",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 78,
+        isPinned: false,
+        metadata: {
+          sourceCategory: "world_signal_derived",
+          derivedTraitCategory: "behavioral",
+        },
+      },
+    ],
+  });
+
+  assert.ok(context.situationalHints.some((hint) => hint.includes("low energy window")));
+  assert.ok(context.behavioralHints.some((hint) => hint.includes("compact time-boxed")));
+  assert.equal(context.memorySnapshot?.derivedFacts.length, 2);
 });
 
 test("buildContextPacketsFromMetadata packages health signals without raw measurements", () => {
@@ -461,4 +525,38 @@ test("buildUserContextFromMemory exposes packet flags and health safety hint", (
   assert.equal(context.healthContextUsed, true);
   assert.deepEqual(context.packetKinds, ["health_context"]);
   assert.ok(context.safetyHints.some((hint) => hint.includes("short-lived wellbeing/readiness")));
+});
+
+test("buildUserContextFromMemory carries explicit user personalization prompt from settings metadata", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Bugun nasil ilerleyelim?",
+  });
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Bugun nasil ilerleyelim?",
+      metadata: {
+        userPersonalizationPrompt:
+          "Benimle dogal, samimi ve net Turkce konus. Gereksiz uzatma.",
+      },
+    },
+    memory: [],
+    profile: {
+      displayName: "Emre",
+    },
+  });
+
+  assert.equal(
+    context.personalizationPrompt,
+    "Benimle dogal, samimi ve net Turkce konus. Gereksiz uzatma.",
+  );
+  assert.ok(
+    context.personalizationHints.some((hint) =>
+      hint.includes("Explicit user personalization from settings"),
+    ),
+  );
 });

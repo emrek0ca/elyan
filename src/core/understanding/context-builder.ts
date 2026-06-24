@@ -6,6 +6,7 @@ import { buildContextPacketsFromMetadata, summarizeContextFreshness } from "./co
 import { buildMemoryProfileSnapshot } from "./memory-profile.js";
 import { filterRetrievedMemory } from "./personalization-policy.js";
 import { extractProjectHints } from "./project-context.js";
+import { buildDerivedHintBuckets, deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "./world-signal-derived.js";
 import type {
   ContextPacket,
   IntentClassification,
@@ -15,12 +16,45 @@ import type {
   UserProfileSnapshot,
   UserUnderstandingContext,
 } from "./types.js";
+import { listFreshWorldSignals } from "../../modules/mobile/service.js";
 
 const MAX_HINTS = 12;
 const MAX_CHARS = 4000;
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readStringValue(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readBooleanValue(record: Record<string, unknown> | null, key: string): boolean | null {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function readPersonalizationPrompt(metadata: Record<string, unknown> | undefined): string | null {
+  const root = readRecord(metadata);
+  const compactContext = readRecord(root?.compactContext);
+  const candidates = [
+    readStringValue(root, "userPersonalizationPrompt"),
+    readStringValue(compactContext, "userPersonalizationPrompt"),
+  ];
+  for (const candidate of candidates) {
+    const compact = compactText(candidate ?? "");
+    if (compact) {
+      return compact.slice(0, 200);
+    }
+  }
+  return null;
 }
 
 function tokenize(value: string): Set<string> {
@@ -194,6 +228,71 @@ function deriveTaskFrame(input: {
   };
 }
 
+function resolveMemoryEnabled(metadata: Record<string, unknown> | undefined): boolean {
+  const root = readRecord(metadata);
+  const compactContext = readRecord(root?.compactContext);
+  const direct = readBooleanValue(root, "memoryEnabled");
+  const nested = readBooleanValue(compactContext, "memoryEnabled");
+  return nested ?? direct ?? true;
+}
+
+function deriveContinuitySummary(metadata: Record<string, unknown> | undefined) {
+  const root = readRecord(metadata);
+  const compactContext = readRecord(root?.compactContext);
+  const chatContext = readRecord(root?.chatContext);
+  const rollingSummary = readRecord(compactContext?.rollingSummary ?? chatContext?.rollingSummary);
+  const openLoopsRaw = Array.isArray(rollingSummary?.openLoops) ? rollingSummary?.openLoops : [];
+  return {
+    userGoal: readStringValue(rollingSummary, "userGoal"),
+    assistantState: readStringValue(rollingSummary, "assistantState"),
+    openLoops: openLoopsRaw
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean)
+      .slice(0, 4),
+  };
+}
+
+function deriveClarificationDiagnostics(input: {
+  intent: IntentClassification;
+  message: string;
+  continuity: { userGoal: string | null; assistantState: string | null; openLoops: string[] };
+}): UserUnderstandingContext["clarificationDiagnostics"] {
+  const text = compactText(input.message).toLowerCase();
+  if (!input.intent.taskFrame.shouldClarify) {
+    return {
+      shouldClarify: false,
+      ambiguityKind: "none",
+      reason: "intent_confident_enough",
+    };
+  }
+  if (/^(bunu|şunu|sunu|this|that|it|buradaki|bundaki)\b/.test(text)) {
+    return {
+      shouldClarify: true,
+      ambiguityKind: "ambiguous_followup",
+      reason: "referential_followup_without_clear_target",
+    };
+  }
+  if (/^(düzelt|duzelt|fix|optimize|improve|rewrite|yenile)\b/.test(text)) {
+    return {
+      shouldClarify: true,
+      ambiguityKind: "missing_target",
+      reason: "action_requested_without_explicit_target",
+    };
+  }
+  if (input.continuity.openLoops.length > 0 && /(ama|however|instead|yalnız|yalniz|fakat)/.test(text)) {
+    return {
+      shouldClarify: true,
+      ambiguityKind: "conflicting_constraints",
+      reason: "followup_may_change_prior_constraint_or_goal",
+    };
+  }
+  return {
+    shouldClarify: true,
+    ambiguityKind: "insufficient_evidence",
+    reason: "low_confidence_or_short_prompt",
+  };
+}
+
 export function buildUserContextFromMemory(input: {
   userId: string;
   accountId: string;
@@ -216,6 +315,17 @@ export function buildUserContextFromMemory(input: {
   const styleHints: string[] = [];
   const technicalHints: string[] = [];
   const safetyHints: string[] = [];
+  const situationalHints: string[] = [];
+  const behavioralHints: string[] = [];
+  const environmentHints: string[] = [];
+  const continuitySummary = deriveContinuitySummary(input.task.metadata);
+  const clarificationDiagnostics = deriveClarificationDiagnostics({
+    intent: input.intent,
+    message: input.task.message,
+    continuity: continuitySummary,
+  });
+  const memoryEnabled = resolveMemoryEnabled(input.task.metadata);
+  const personalizationPrompt = readPersonalizationPrompt(input.task.metadata);
   const contextPackets = (input.contextPackets ?? []).slice(0, 8);
   const packetKinds = Array.from(new Set(contextPackets.map((packet) => packet.kind)));
   const healthContextUsed = packetKinds.includes("health_context");
@@ -240,12 +350,43 @@ export function buildUserContextFromMemory(input: {
     }
   }
 
+  const derivedHints = buildDerivedHintBuckets({
+    memory: filteredMemory.map((item) => ({
+      key: item.key,
+      value: item.value,
+      metadata:
+        typeof item === "object" && item != null && "metadata" in item
+          ? ((item as RetrievedMemory & { metadata?: Record<string, unknown> }).metadata ?? {})
+          : {},
+      staleness: item.staleness,
+    })),
+    requestText: input.task.message,
+  });
+
+  for (const hint of derivedHints.situationalHints) {
+    pushBounded(situationalHints, hint, state);
+  }
+  for (const hint of derivedHints.behavioralHints) {
+    pushBounded(behavioralHints, hint, state);
+  }
+  for (const hint of derivedHints.environmentHints) {
+    pushBounded(environmentHints, hint, state);
+  }
+
   if (input.intent.privacyRisk === "high" || input.intent.requiresLocalRuntime) {
     pushBounded(safetyHints, "Keep private local runtime data local unless the user explicitly allows sharing.", state);
   }
 
   if (input.intent.requiresCitation) {
     pushBounded(personalizationHints, "Prefer cited, source-grounded answers for this request.", state);
+  }
+
+  if (personalizationPrompt) {
+    pushBounded(
+      personalizationHints,
+      `Explicit user personalization from settings: ${personalizationPrompt}`,
+      state,
+    );
   }
 
   if (healthContextUsed) {
@@ -294,6 +435,14 @@ export function buildUserContextFromMemory(input: {
     styleHints,
     technicalHints,
     safetyHints,
+    situationalHints,
+    behavioralHints,
+    environmentHints,
+    continuitySummary,
+    clarificationDiagnostics,
+    memoryEnabled,
+    personalizationPrompt,
+    memoryRelevanceSummary: filteredMemory.slice(0, 4).map((item) => `${item.key}: ${item.value}`),
     contextPackets,
     healthContextUsed,
     packetKinds,
@@ -313,6 +462,7 @@ export async function buildUserContext(
   input: TaskUnderstandingInput & { intent: IntentClassification },
 ): Promise<UserUnderstandingContext> {
   const accountId = input.accountId ?? input.userId;
+  const memoryEnabled = resolveMemoryEnabled(input.metadata);
   const query = `${input.title ?? ""} ${input.message ?? ""} ${input.intent.primaryIntent}`;
   const queryTokens = tokenize(query);
   const now = new Date();
@@ -324,15 +474,23 @@ export async function buildUserContext(
       })
     : [];
   const [memorySearch, userProfile] = await Promise.all([
-    searchBrainMemory(app, {
-      userId: input.userId,
-      query,
-      limit: MAX_HINTS,
-    }).catch(() => ({
-      results: [],
-    })),
+    memoryEnabled
+      ? searchBrainMemory(app, {
+          userId: input.userId,
+          query,
+          limit: MAX_HINTS,
+        }).catch(() => ({
+          results: [],
+        }))
+      : Promise.resolve({ results: [] }),
     loadSafeUserProfile(app, input.userId),
   ]);
+  const freshWorldSignals = await listFreshWorldSignals(app, {
+    userId: input.userId,
+    sessionId: input.metadata?.sessionId && typeof input.metadata.sessionId === "string" ? input.metadata.sessionId : null,
+    limit: 12,
+    maxAgeHours: 72,
+  }).catch(() => []);
 
   const stableMemory = memorySearch.results.map((result) => ({
     id: result.id,
@@ -351,7 +509,7 @@ export async function buildUserContext(
   }));
 
   const fallbackRows =
-    stableMemory.length >= Math.min(4, MAX_HINTS)
+    !memoryEnabled || stableMemory.length >= Math.min(4, MAX_HINTS)
       ? []
       : await app.db
           .select({
@@ -374,10 +532,47 @@ export async function buildUserContext(
           .orderBy(desc(learningEvents.createdAt))
           .limit(40);
 
-  const memory = [...stableMemory, ...fallbackRows.map((row) => ({
-    ...row,
-    confidence: row.confidence / 100,
-  }))].sort((left, right) => scoreMemory(right, queryTokens) - scoreMemory(left, queryTokens)).slice(0, MAX_HINTS);
+  const worldDerivedMemory = !memoryEnabled
+    ? []
+    : deriveLearningSignalsFromWorldSignals(
+        freshWorldSignals.map((signal) =>
+          toDerivedSignalInput({
+            signalId: signal.signalId,
+            kind: signal.kind,
+            summary: signal.summary,
+            confidence: signal.confidence,
+            facts: signal.facts,
+            privacy: signal.privacy,
+            createdAt: signal.createdAt,
+          }),
+        ),
+      ).map((signal, index) => ({
+        id: `world-derived-${index}-${signal.key}`,
+        type: signal.type,
+        key: signal.key,
+        value: signal.value,
+        confidence: signal.confidence,
+        scope: signal.scope,
+        source: signal.source,
+        createdAt: new Date(),
+        staleness: "fresh" as const,
+        conflictStatus: "active" as const,
+        lastVerifiedAt: new Date(),
+        importanceScore: 72,
+        isPinned: false,
+        metadata: signal.metadata,
+      }));
+
+  const memory = [
+    ...stableMemory,
+    ...worldDerivedMemory,
+    ...fallbackRows.map((row) => ({
+      ...row,
+      confidence: row.confidence / 100,
+    })),
+  ]
+    .sort((left, right) => scoreMemory(right, queryTokens) - scoreMemory(left, queryTokens))
+    .slice(0, MAX_HINTS);
 
   return buildUserContextFromMemory({
     userId: input.userId,

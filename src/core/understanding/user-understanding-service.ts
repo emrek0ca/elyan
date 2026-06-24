@@ -6,6 +6,7 @@ import { buildUserContext } from "./context-builder.js";
 import { extractFeedbackSignals, extractPreferenceSignals } from "./preference-extractor.js";
 import { filterLearningSignals } from "./personalization-policy.js";
 import type {
+  ClarificationDiagnostics,
   FeedbackType,
   IntentClassification,
   LearningSignal,
@@ -39,6 +40,12 @@ const fallbackIntent: IntentClassification = {
   },
 };
 
+const fallbackClarificationDiagnostics: ClarificationDiagnostics = {
+  shouldClarify: true,
+  ambiguityKind: "insufficient_evidence",
+  reason: "understanding_disabled_or_failed",
+};
+
 export function emptyUnderstanding(input: TaskUnderstandingInput): UserUnderstandingResult {
   return {
     intent: fallbackIntent,
@@ -59,6 +66,18 @@ export function emptyUnderstanding(input: TaskUnderstandingInput): UserUnderstan
       styleHints: [],
       technicalHints: [],
       safetyHints: [],
+      situationalHints: [],
+      behavioralHints: [],
+      environmentHints: [],
+      continuitySummary: {
+        userGoal: null,
+        assistantState: null,
+        openLoops: [],
+      },
+      clarificationDiagnostics: fallbackClarificationDiagnostics,
+      memoryEnabled: true,
+      personalizationPrompt: null,
+      memoryRelevanceSummary: [],
       contextPackets: [],
       healthContextUsed: false,
       packetKinds: [],

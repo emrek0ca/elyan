@@ -126,6 +126,7 @@ type SharedBrainInferenceInput = {
     skipUsageValidation?: boolean;
     skipInvocationLogging?: boolean;
     skipReviewLogging?: boolean;
+    refinementPass?: boolean;
   };
 };
 
@@ -236,6 +237,18 @@ function readMetadataBoolean(record: Record<string, unknown> | null, key: string
 function readMetadataArray(record: Record<string, unknown> | null, key: string): unknown[] {
   const value = record?.[key];
   return Array.isArray(value) ? value : [];
+}
+
+function detectMemoryEnabled(
+  metadata: Record<string, unknown> | undefined,
+  context: UserUnderstandingContext | undefined,
+): boolean {
+  if (context) {
+    return context.memoryEnabled;
+  }
+  const root = readMetadataRecord(metadata);
+  const compactContext = readMetadataRecord(root?.compactContext);
+  return readMetadataBoolean(compactContext, "memoryEnabled") ?? readMetadataBoolean(root, "memoryEnabled") ?? true;
 }
 
 function sentenceCase(value: string): string {
@@ -709,6 +722,11 @@ function buildPreferencePromptBlock(context: UserUnderstandingContext | undefine
   };
 
   const preferenceFacts = context.memorySnapshot?.preferenceFacts ?? [];
+  if (context.personalizationPrompt) {
+    pushHint(
+      `Explicit personalization directive from user settings: ${context.personalizationPrompt}. Apply this to tone, pacing, formatting, and interaction style when relevant, but never let it override safety, privacy, honesty, routing truth, or factual accuracy.`,
+    );
+  }
   const preferredLanguageFact = preferenceFacts.find((item) => item.key === "preferred_language" || item.key === "language");
   if (preferredLanguageFact) {
     const languageValue = formatPreferencePromptValue(preferredLanguageFact.key, preferredLanguageFact.value);
@@ -728,6 +746,9 @@ function buildPreferencePromptBlock(context: UserUnderstandingContext | undefine
   }
 
   for (const hint of [...context.personalizationHints.slice(0, 2), ...context.styleHints.slice(0, 3), ...context.safetyHints.slice(0, 2)]) {
+    pushHint(hint);
+  }
+  for (const hint of [...context.behavioralHints.slice(0, 2), ...context.environmentHints.slice(0, 2)]) {
     pushHint(hint);
   }
 
@@ -799,11 +820,30 @@ function buildStructuredDataPromptBlock(input: SharedBrainInferenceInput): strin
       contextPacketCount: contextPackets.length,
       contextPacketKinds: context?.packetKinds ?? [],
       healthContextUsed: context?.healthContextUsed ?? false,
+      memoryEnabled: context?.memoryEnabled ?? true,
       route: input.routeDecision?.route ?? input.route ?? "shared_brain",
     },
+    continuity:
+      context
+        ? {
+            userGoal: context.continuitySummary?.userGoal ?? null,
+            assistantState: context.continuitySummary?.assistantState ?? null,
+            openLoops: context.continuitySummary?.openLoops ?? [],
+          }
+        : undefined,
+    clarificationDiagnostics: context?.clarificationDiagnostics,
     contextPackets:
       contextPackets.length > 0
         ? contextPackets.map((packet) => buildPromptSafeContextPacket(packet))
+        : undefined,
+    derivedHints:
+      context
+        ? {
+            situationalHints: (context.situationalHints ?? []).slice(0, 4),
+            behavioralHints: (context.behavioralHints ?? []).slice(0, 4),
+            environmentHints: (context.environmentHints ?? []).slice(0, 4),
+            memoryRelevanceSummary: (context.memoryRelevanceSummary ?? []).slice(0, 4),
+          }
         : undefined,
     contextFreshness: contextPackets.length > 0 ? context?.freshness : undefined,
     dataPolicy: {
@@ -912,6 +952,9 @@ function buildReasoningProtocolPromptBlock(input: {
   const projectHints = context?.projectHints ?? [];
   const technicalHints = context?.technicalHints ?? [];
   const safetyHints = context?.safetyHints ?? [];
+  const situationalHints = context?.situationalHints ?? [];
+  const behavioralHints = context?.behavioralHints ?? [];
+  const environmentHints = context?.environmentHints ?? [];
   const contextPackets = context?.contextPackets ?? [];
   const routeMode = input.routeDecision?.mode ?? input.route ?? "shared_brain";
   const routingHint = input.routeDecision?.selectedWorkload ?? input.workload;
@@ -939,6 +982,15 @@ function buildReasoningProtocolPromptBlock(input: {
   if (safetyHints.length > 0) {
     lines.push(`- safety context: ${safetyHints.slice(0, 2).join(" | ")}`);
   }
+  if (situationalHints.length > 0) {
+    lines.push(`- situational context: ${situationalHints.slice(0, 3).join(" | ")}`);
+  }
+  if (behavioralHints.length > 0) {
+    lines.push(`- behavioral context: ${behavioralHints.slice(0, 3).join(" | ")}`);
+  }
+  if (environmentHints.length > 0) {
+    lines.push(`- environment context: ${environmentHints.slice(0, 3).join(" | ")}`);
+  }
   if (contextPackets.length > 0) {
     lines.push(
       `- packaged user context: ${contextPackets
@@ -953,6 +1005,16 @@ function buildReasoningProtocolPromptBlock(input: {
   if (context?.healthContextUsed) {
     lines.push(
       "- health context policy: use health packets only to adjust empathy, pacing, and readiness assumptions; do not diagnose, prescribe, name raw measurements, or turn temporary health context into permanent identity.",
+    );
+  }
+  if (situationalHints.length > 0 || behavioralHints.length > 0) {
+    lines.push(
+      "- planning adaptation: if energy or schedule pressure hints are present, prefer tighter, lower-friction plans in busy or low-energy windows and larger focus blocks only when the hints support it.",
+    );
+  }
+  if (environmentHints.length > 0) {
+    lines.push(
+      "- explainability policy: use derived local context silently by default; mention it only when the answer directly depends on local context or the user asks how you decided.",
     );
   }
 
@@ -1054,6 +1116,7 @@ function buildStructuredSystemPrompt(basePrompt: string, input: SharedBrainInfer
     buildDataUnderstandingQualityPromptBlock(input),
     `Current date policy: the current server date is ${new Date().toISOString().slice(0, 10)}. For current events, prices, laws, releases, market data, or time-sensitive claims, use public web grounding when available and say when the evidence is weak or missing.`,
     "Core identity: You are Elyan. Speak warmly and professionally. Sound natural, not robotic.",
+    "Turkish conversation policy: when speaking Turkish, sound fluid, natural, and genuinely close. Prefer everyday polished Turkish over stiff corporate wording. Be friendly and sincere by default, but keep the answer useful and grounded.",
     buildUserIdentityPromptBlock(input.understandingContext),
     "Relational tone policy: make the user feel recognized through continuity, careful wording, and practical follow-through. You may sound caring, attentive, and close, but do not claim to have literal human feelings, consciousness, or private emotions. Express care through behavior: remember safe preferences, notice context, reduce friction, and stay honest.",
     "Identity disclosure policy: describe Elyan as a unified artificial-intelligence system that understands requests, plans work, uses safe memory when available, and helps the user complete tasks. Refer to the intelligence only as Elyan. Never name, compare, enumerate, or imply underlying model vendors, providers, model identifiers, gateway products, fallback implementations, or internal layers.",
@@ -1072,7 +1135,7 @@ function buildStructuredSystemPrompt(basePrompt: string, input: SharedBrainInfer
     languageHint,
     humorPolicy,
     mobilePolicy,
-    "Conversation policy: for greetings or casual small talk, respond warmly using the user's name when known and ask one concise help question if needed. Do not mention situational context unless the user asks for it. If the user asks 'who am I' or similar identity questions, answer from their verified profile data — name, plan, and any known preferences from memory.",
+    "Conversation policy: for greetings or casual small talk, respond warmly using the user's name when known and ask one concise help question if needed. Do not mention situational context unless the user asks for it. Never mention battery, network, device state, health, steps, notifications, or location during greetings or unrelated small talk. If the user asks 'who am I' or similar identity questions, answer from their verified profile data — name, plan, and any known preferences from memory.",
     "Quality policy: reduce over-explaining, reduce repetitive endings, prefer natural Turkish, and offer a short confirmation step only when uncertainty is real. If you are unsure, say so plainly instead of fabricating a confident answer.",
     preferenceBlock,
   ]
@@ -1094,6 +1157,19 @@ function buildCompactContextPromptBlock(input: SharedBrainInferenceInput): strin
   const recentMessages = readMetadataArray(compactContext, "recentMessages");
   const contextPackets = input.understandingContext?.contextPackets ?? [];
   const lines: string[] = [];
+  const continuitySummary = input.understandingContext?.continuitySummary;
+  const clarificationDiagnostics = input.understandingContext?.clarificationDiagnostics;
+  const memoryRelevanceSummary = input.understandingContext?.memoryRelevanceSummary ?? [];
+
+  if (continuitySummary?.userGoal && !lines.some((line) => line.includes("Current user goal:"))) {
+    lines.push(`- Current user goal: ${continuitySummary.userGoal}`);
+  }
+  if (continuitySummary?.assistantState && !lines.some((line) => line.includes("Last assistant state:"))) {
+    lines.push(`- Last assistant state: ${continuitySummary.assistantState}`);
+  }
+  if ((continuitySummary?.openLoops.length ?? 0) > 0 && !lines.some((line) => line.includes("Open follow-ups:"))) {
+    lines.push(`- Open follow-ups: ${continuitySummary!.openLoops.join(" | ")}`);
+  }
 
   if (rollingSummary) {
     const goal = readMetadataString(rollingSummary, "userGoal");
@@ -1188,6 +1264,16 @@ function buildCompactContextPromptBlock(input: SharedBrainInferenceInput): strin
     lines.push(
       `- Recent mobile window available: ${Math.min(recentMessages.length, 6)} message(s). Prefer the latest intent and avoid rehashing older turns.`,
     );
+  }
+
+  if (clarificationDiagnostics?.shouldClarify) {
+    lines.push(
+      `- Clarification diagnostic: ${clarificationDiagnostics.ambiguityKind} (${clarificationDiagnostics.reason}). Ask one short question only if the missing detail changes the outcome.`,
+    );
+  }
+
+  if (memoryRelevanceSummary.length > 0) {
+    lines.push(`- Relevant user memory shortlist: ${memoryRelevanceSummary.slice(0, 3).join(" | ")}`);
   }
 
   if (!lines.length) {
@@ -1571,6 +1657,8 @@ function buildDataQualityMetadata(input: {
   retrievalCount: number;
   webSourceCount: number;
   prompt: string;
+  memoryEnabled: boolean;
+  clarificationDecision?: "not_needed" | "asked" | "assumed_and_proceeded";
 }) {
   const attachmentChunkCount = input.attachmentContext?.chunks?.length ?? 0;
   const groundingLevel = input.attachmentContext?.used
@@ -1604,7 +1692,13 @@ function buildDataQualityMetadata(input: {
   return {
     qualityPolicyApplied: true,
     dataGroundingLevel: groundingLevel,
-    personalizationScope: input.memoryCount > 0 ? "current_user_memory_only" : "none",
+    personalizationScope: !input.memoryEnabled
+      ? "disabled_by_user"
+      : input.memoryCount > 0
+        ? "current_user_memory_only"
+        : "none",
+    memoryUsed: input.memoryEnabled && input.memoryCount > 0,
+    clarificationDecision: input.clarificationDecision ?? "not_needed",
     responseLanguage: detectPromptLanguage(input.prompt),
     evidenceSufficiency,
     dataConfidence,
@@ -1655,7 +1749,11 @@ function trimConversationForWorkload(
     maxTokens?: number;
   } = {},
 ): SharedBrainConversationMessage[] {
-  if (workload !== "mobile_chat_balanced" && workload !== "mobile_chat_fast") {
+  if (
+    workload !== "mobile_chat_balanced" &&
+    workload !== "mobile_chat_fast" &&
+    workload !== "mobile_chat_deep_refine"
+  ) {
     return messages;
   }
 
@@ -1753,6 +1851,46 @@ function shouldUseResponseCache(input: SharedBrainInferenceInput, workload: Shar
     return false;
   }
   return compactText(input.prompt).length > 0 && compactText(input.prompt).length <= 600;
+}
+
+function shouldRunDeepRefinement(input: {
+  workload: SharedBrainWorkload;
+  prompt: string;
+  evaluation: ReturnType<typeof evaluateBrainAnswer>;
+  context?: UserUnderstandingContext;
+  alreadyRefined?: boolean;
+}): boolean {
+  if (input.alreadyRefined) {
+    return false;
+  }
+  if (input.workload === "mobile_chat_deep_refine" || input.workload === "planning" || input.workload === "document_analysis") {
+    return false;
+  }
+  const failures = new Set(input.evaluation.failureTypes);
+  if (
+    failures.has("weak_reasoning_depth") ||
+    failures.has("overcompressed_answer") ||
+    failures.has("poor_coherence") ||
+    failures.has("missed_clarification") ||
+    failures.has("shallow_tradeoff_analysis") ||
+    failures.has("missed_personalization_opportunity") ||
+    failures.has("weak_continuity")
+  ) {
+    return true;
+  }
+  const normalized = compactText(input.prompt).toLocaleLowerCase("tr-TR");
+  if (
+    /\b(neden|nasıl|acikla|açıkla|karşılaştır|karsilastir|tradeoff|artı eksi|öner|recommend|değerlendir|degerlendir|plan)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return (
+    (input.context?.behavioralHints.length ?? 0) > 0 ||
+    (input.context?.situationalHints.length ?? 0) > 0 ||
+    (input.context?.continuitySummary?.openLoops.length ?? 0) > 0
+  ) && input.evaluation.outputQuality.usefulness < 0.72;
 }
 
 function createResponseCacheKey(
@@ -2180,6 +2318,8 @@ function getMaxTokensForWorkload(
   const maxTokensByWorkload =
     workload === "planning"
       ? 900
+      : workload === "mobile_chat_deep_refine"
+        ? 980
       : workload === "mobile_chat_balanced"
         ? 760
         : workload === "mobile_chat_fast"
@@ -2802,12 +2942,21 @@ export async function generateSharedBrainReply(
     memoryDegradedReason: memory.degradedReason,
     route: input.route,
   });
+  const memoryEnabled = detectMemoryEnabled(input.requestMetadata, input.understandingContext);
+  const clarificationDecision: "not_needed" | "asked" | "assumed_and_proceeded" =
+    input.understandingContext?.clarificationDiagnostics?.shouldClarify === true
+      ? "asked"
+      : selfCheck.needsClarification
+        ? "asked"
+        : "assumed_and_proceeded";
   const dataQualityMetadata = buildDataQualityMetadata({
     attachmentContext: input.attachmentContext,
     memoryCount: memory.results.length,
     retrievalCount: retrieval.results.length,
     webSourceCount,
     prompt: input.prompt,
+    memoryEnabled,
+    clarificationDecision,
   });
   const brainMode = deriveBrainMode({
     route: input.route,
@@ -3226,6 +3375,10 @@ export async function generateSharedBrainReply(
             cached: false,
             ...buildContextPacketMetadata(input.understandingContext),
             ...dataQualityMetadata,
+            memoryEnabled,
+            memoryRelevanceSummary: input.understandingContext?.memoryRelevanceSummary ?? [],
+            continuitySummary: input.understandingContext?.continuitySummary ?? null,
+            clarificationDiagnostics: input.understandingContext?.clarificationDiagnostics ?? null,
           },
         });
     }
@@ -3349,6 +3502,10 @@ export async function generateSharedBrainReply(
               : primaryCandidate?.provider ?? runtime.provider,
           fallbackFromModel: fallbackUsed ? baseModel : null,
           ...dataQualityMetadata,
+          memoryEnabled,
+          memoryRelevanceSummary: input.understandingContext?.memoryRelevanceSummary ?? [],
+          continuitySummary: input.understandingContext?.continuitySummary ?? null,
+          clarificationDiagnostics: input.understandingContext?.clarificationDiagnostics ?? null,
         },
       }).returning({
         id: aiProviderInvocations.id,
@@ -3466,6 +3623,10 @@ export async function generateSharedBrainReply(
       promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
       skillExecution: input.skillExecutionMetadata ?? null,
       ...dataQualityMetadata,
+      memoryEnabled,
+      memoryRelevanceSummary: input.understandingContext?.memoryRelevanceSummary ?? [],
+      continuitySummary: input.understandingContext?.continuitySummary ?? null,
+      clarificationDiagnostics: input.understandingContext?.clarificationDiagnostics ?? null,
       ...buildAttachmentContextMetadata(input.attachmentContext),
       ...(assistantMetadataBlocks.length > 0 ? { blocks: assistantMetadataBlocks } : {}),
     },
@@ -3736,6 +3897,8 @@ async function tryGenerateSkillReply(
         retrievalCount: 0,
         webSourceCount: 0,
         prompt: input.prompt,
+        memoryEnabled: input.understandingContext?.memoryEnabled ?? detectMemoryEnabled(input.requestMetadata, input.understandingContext),
+        clarificationDecision: input.understandingContext?.clarificationDiagnostics?.shouldClarify ? "asked" : "not_needed",
       }),
     },
     answerSource: "model",
@@ -3987,17 +4150,132 @@ export async function generateGovernedSharedBrainReply(
       typeof inference.metadata.retrievalSufficiency === "string"
         ? inference.metadata.retrievalSufficiency
         : null,
+    personalizationScope:
+      typeof inference.metadata.personalizationScope === "string"
+        ? inference.metadata.personalizationScope
+        : null,
+    memoryUsed: inference.metadata.memoryUsed === true,
+    clarificationDecision:
+      inference.metadata.clarificationDecision === "asked" ||
+      inference.metadata.clarificationDecision === "assumed_and_proceeded"
+        ? inference.metadata.clarificationDecision
+        : "not_needed",
+    continuitySignals: input.understandingContext
+      ? {
+          hasUserGoal: Boolean(input.understandingContext.continuitySummary?.userGoal),
+          hasAssistantState: Boolean(input.understandingContext.continuitySummary?.assistantState),
+          openLoopCount: input.understandingContext.continuitySummary?.openLoops.length ?? 0,
+        }
+      : null,
   });
+  let activeInference = inference;
+  let activeVisibleAnswer = visibleAnswer;
+  let activeEvaluation = evaluation;
+  let refinementApplied = false;
+  let reasoningPasses = 1;
+
+  if (
+    shouldRunDeepRefinement({
+      workload: (input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD) as SharedBrainWorkload,
+      prompt: input.prompt,
+      evaluation,
+      context: input.understandingContext,
+      alreadyRefined: input.internalEvaluation?.refinementPass,
+    })
+  ) {
+    const refinementPrompt = [
+      "Refine the draft answer below.",
+      "Goal: preserve the useful parts, improve reasoning depth, continuity, memory use, and clarification quality.",
+      "Rules: do not reveal hidden reasoning; keep the answer concise but complete; add tradeoffs or a recommendation when the user asked for judgment; ask one short clarification only if the outcome truly depends on missing detail.",
+      "",
+      "Original user request:",
+      input.prompt,
+      "",
+      "Draft answer:",
+      visibleAnswer,
+    ].join("\n");
+    const refinedInference = await generateSharedBrainReply(app, {
+      ...input,
+      prompt: refinementPrompt,
+      workload: "mobile_chat_deep_refine",
+      maxCompletionTokensOverride: Math.max(320, inference.completionTokens + 120),
+      timeoutMsOverride: Math.max(7_500, Math.min(9_500, getChatTimeoutMs("mobile_chat_deep_refine"))),
+      internalEvaluation: {
+        ...input.internalEvaluation,
+        refinementPass: true,
+        skipReviewLogging: true,
+      },
+    });
+    const refinedVisibleAnswer =
+      polishAssistantVisibleText(
+        sanitizeAssistantVisibleText(refinedInference.text, {
+          ...visibleTextSanitizerOptions,
+          fallback: visibleAnswer,
+        }),
+        visibleTextSanitizerOptions,
+      ) || activeVisibleAnswer;
+    const refinedEvaluation = evaluateBrainAnswer({
+      prompt: input.prompt,
+      modelAnswer: refinedVisibleAnswer,
+      answerSource: "model",
+      routeDecision,
+      boundaryOutcome: null,
+      toolUseRequired: routeToolUseRequired,
+      retrievalUsed:
+        String(refinedInference.metadata.retrievalMode ?? "") !== "lexical_fallback" ||
+        Number(refinedInference.metadata.memoryResultCount ?? 0) > 0 ||
+        refinedInference.metadata.webGroundingUsed === true ||
+        Number(refinedInference.metadata.webSourceCount ?? 0) > 0,
+      retrievalSufficiency:
+        typeof refinedInference.metadata.retrievalSufficiency === "string"
+          ? refinedInference.metadata.retrievalSufficiency
+          : null,
+      personalizationScope:
+        typeof refinedInference.metadata.personalizationScope === "string"
+          ? refinedInference.metadata.personalizationScope
+          : null,
+      memoryUsed: refinedInference.metadata.memoryUsed === true,
+      clarificationDecision:
+        refinedInference.metadata.clarificationDecision === "asked" ||
+        refinedInference.metadata.clarificationDecision === "assumed_and_proceeded"
+          ? refinedInference.metadata.clarificationDecision
+          : "not_needed",
+      continuitySignals: input.understandingContext
+        ? {
+            hasUserGoal: Boolean(input.understandingContext.continuitySummary?.userGoal),
+            hasAssistantState: Boolean(input.understandingContext.continuitySummary?.assistantState),
+            openLoopCount: input.understandingContext.continuitySummary?.openLoops.length ?? 0,
+          }
+        : null,
+    });
+    if (refinedEvaluation.overallScore >= activeEvaluation.overallScore) {
+      activeInference = refinedInference;
+      activeVisibleAnswer = refinedVisibleAnswer;
+      activeEvaluation = refinedEvaluation;
+      refinementApplied = true;
+      reasoningPasses = 2;
+    }
+  }
+  const postRefineFinalized =
+    activeInference === inference
+      ? finalized
+      : await finalizeIncompleteResponse(
+          app,
+          input,
+          activeInference.text,
+          "mobile_chat_deep_refine",
+          visibleTextSanitizerOptions,
+        );
   const displayText =
     polishAssistantVisibleText(
-      sanitizeAssistantVisibleText(evaluation.correctedAnswer ?? visibleAnswer, visibleTextSanitizerOptions) ||
-      sanitizeAssistantVisibleText(visibleAnswer, {
+      sanitizeAssistantVisibleText(activeEvaluation.correctedAnswer ?? postRefineFinalized.text ?? activeVisibleAnswer, visibleTextSanitizerOptions) ||
+      sanitizeAssistantVisibleText(postRefineFinalized.text ?? activeVisibleAnswer, {
         ...visibleTextSanitizerOptions,
-        fallback: visibleAnswer,
+        fallback: postRefineFinalized.text ?? activeVisibleAnswer,
       }),
       visibleTextSanitizerOptions,
     ) ||
-    sanitizeAssistantVisibleText(visibleAnswer, {
+    sanitizeAssistantVisibleText(postRefineFinalized.text ?? activeVisibleAnswer, {
       ...visibleTextSanitizerOptions,
       fallback: "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
     });
@@ -4009,43 +4287,47 @@ export async function generateGovernedSharedBrainReply(
       taskId: input.taskId,
       prompt: input.prompt,
       routeDecision,
-      modelResponse: inference.text,
-      evaluation,
+      modelResponse: activeInference.text,
+      evaluation: activeEvaluation,
       answerSource: "model",
       gateRuleIds: [],
       boundaryOutcome: null,
-      selectedProfile: String(inference.metadata.workload ?? input.workload ?? DEFAULT_WORKLOAD),
-      latencyMs: inference.latencyMs,
+      selectedProfile: String(activeInference.metadata.workload ?? input.workload ?? DEFAULT_WORKLOAD),
+      latencyMs: activeInference.latencyMs,
       toolCalls: [],
       responseMetadata: {
-        ...inference.metadata,
-        responseCompleteness: finalized.completeness,
-        repairAttempted: finalized.repairAttempted,
-        repairApplied: finalized.repairApplied,
+        ...activeInference.metadata,
+        responseCompleteness: postRefineFinalized.completeness,
+        repairAttempted: postRefineFinalized.repairAttempted,
+        repairApplied: postRefineFinalized.repairApplied,
         visibleAnswerLength: displayText.length,
+        reasoningPasses,
+        refinementApplied,
       },
     });
   }
 
   return {
-    ...inference,
+    ...activeInference,
     text: displayText,
     completionTokens: displayCompletionTokens,
-    totalTokens: inference.promptTokens + displayCompletionTokens,
+    totalTokens: activeInference.promptTokens + displayCompletionTokens,
     metadata: {
-      ...inference.metadata,
+      ...activeInference.metadata,
       answerSource: "model",
-      correctedAnswerApplied: evaluation.correctedAnswer ? true : false,
-      responseCompleteness: finalized.completeness,
-      repairAttempted: finalized.repairAttempted,
-      repairApplied: finalized.repairApplied,
+      correctedAnswerApplied: activeEvaluation.correctedAnswer ? true : false,
+      responseCompleteness: postRefineFinalized.completeness,
+      repairAttempted: postRefineFinalized.repairAttempted,
+      repairApplied: postRefineFinalized.repairApplied,
+      reasoningPasses,
+      refinementApplied,
       constitutionVersion: ELYAN_CONSTITUTION_VERSION,
       promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
     },
     answerSource: "model",
     gateRuleIds: [],
     boundaryOutcome: null,
-    failureType: evaluation.failureTypes.find((item) => item !== "none") ?? null,
-    evaluation,
+    failureType: activeEvaluation.failureTypes.find((item) => item !== "none") ?? null,
+    evaluation: activeEvaluation,
   };
 }

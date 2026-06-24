@@ -92,6 +92,17 @@ export type TaskFrame = {
   shouldClarify: boolean;
 };
 
+export type ClarificationDiagnostics = {
+  shouldClarify: boolean;
+  ambiguityKind:
+    | "none"
+    | "ambiguous_followup"
+    | "missing_target"
+    | "conflicting_constraints"
+    | "insufficient_evidence";
+  reason: string;
+};
+
 export type IntentClassification = {
   primaryIntent: UnderstandingIntent;
   secondaryIntents: UnderstandingIntent[];
@@ -133,6 +144,7 @@ export type RetrievedMemory = {
   lastVerifiedAt?: Date | null;
   importanceScore?: number;
   isPinned?: boolean;
+  metadata?: Record<string, unknown>;
 };
 
 export type MemoryProfileFact = {
@@ -150,6 +162,7 @@ export type MemoryProfileSnapshot = {
   identityFacts: MemoryProfileFact[];
   preferenceFacts: MemoryProfileFact[];
   projectFacts: MemoryProfileFact[];
+  derivedFacts: MemoryProfileFact[];
   recentEpisodes: MemoryProfileFact[];
   safetyNotes: string[];
   memoryCount: number;
@@ -176,6 +189,18 @@ export type UserUnderstandingContext = {
   styleHints: string[];
   technicalHints: string[];
   safetyHints: string[];
+  situationalHints: string[];
+  behavioralHints: string[];
+  environmentHints: string[];
+  continuitySummary: {
+    userGoal: string | null;
+    assistantState: string | null;
+    openLoops: string[];
+  };
+  clarificationDiagnostics: ClarificationDiagnostics;
+  memoryEnabled: boolean;
+  personalizationPrompt: string | null;
+  memoryRelevanceSummary: string[];
   contextPackets: ContextPacket[];
   healthContextUsed: boolean;
   packetKinds: ContextPacketKind[];
