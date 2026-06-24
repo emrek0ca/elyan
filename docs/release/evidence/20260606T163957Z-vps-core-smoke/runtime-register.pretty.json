@@ -1,0 +1,48 @@
+{
+  "runtime": {
+    "deviceId": "5e79c427-bcf1-411b-965a-a102abb90779",
+    "label": "V1 Smoke Desktop",
+    "platform": "macos",
+    "connectionId": "ccd5ffcd-f957-4d67-a3fd-14f0c46a6d79"
+  },
+  "capabilities": [
+    "runtime.status",
+    "browser.control",
+    "document.read"
+  ],
+  "capabilityStates": {
+    "browser.control": {
+      "available": true
+    },
+    "document.read": {
+      "available": true
+    },
+    "runtime.status": {
+      "available": true
+    }
+  },
+  "capabilitySummary": {
+    "total": 3,
+    "categories": {
+      "runtime": 1,
+      "task": 0,
+      "browser": 1,
+      "computer": 0,
+      "file": 0,
+      "document": 1,
+      "model": 0,
+      "quantum": 0,
+      "automation": 0,
+      "connector": 0,
+      "other": 0
+    }
+  },
+  "tokens": {
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJraW5kIjoicnVudGltZSIsInN1YiI6IjZmMzU0MmNmLTJmODItNDVlNS1hNTA0LTkyY2I0ZWZkNTA1MiIsImRldmljZUlkIjoiNWU3OWM0MjctYmNmMS00MTFiLTk2NWEtYTEwMmFiYjkwNzc5IiwiZGV2aWNlVHlwZSI6ImRlc2t0b3AiLCJjb25uZWN0aW9uSWQiOiJjY2Q1ZmZjZC1mOTU3LTRkNjctYTNmZC0xNGYwYzQ2YTZkNzkiLCJpYXQiOjE3ODA3NjQwMzIsImV4cCI6MTc4MDgwNzIzMn0.0vs-CiWCGGkZI2RA0TaDkAN8TsUYlBQp9hZCEV0lHEA",
+    "accessTokenTtl": "12h"
+  },
+  "realtime": {
+    "websocketPath": "/v1/realtime/runtime",
+    "ssePath": "/v1/realtime/stream"
+  }
+}

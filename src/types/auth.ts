@@ -12,6 +12,7 @@ export type RuntimeAuthTokenPayload = {
   sub: string;
   deviceId: string;
   deviceType: DeviceType;
+  connectionId: string;
 };
 
 export type AuthTokenPayload = UserAuthTokenPayload | RuntimeAuthTokenPayload;

@@ -1,0 +1,203 @@
+{
+  "tasks": [
+    {
+      "id": "4acc78ed-5063-4a41-8ec7-4f1a3b4d7e8b",
+      "title": "V1 Desktop Smoke Task",
+      "targetDeviceId": "5e79c427-bcf1-411b-965a-a102abb90779",
+      "queuePosition": 1,
+      "payload": {
+        "prompt": "Open the browser capability smoke path and return a short acknowledgement.",
+        "source": "mobile",
+        "metadata": {
+          "smoke": true,
+          "releaseTrack": "v1",
+          "routeDecision": {
+            "mode": "executable_task",
+            "route": "desktop_runtime",
+            "intent": "local_file_request",
+            "reason": "Kullanici acikca bir masaustu hedefi secti; gorev desktop runtime uzerinden fail-closed ilerlemeli.",
+            "confidence": 0.72,
+            "capabilities": [
+              "browser.control",
+              "document.read",
+              "document_read",
+              "browser_control"
+            ],
+            "privacyClass": "local_private",
+            "privacyLevel": "high",
+            "requiredRuntime": "desktop",
+            "failClosedReason": "desktop_runtime_selected_target",
+            "requiresApproval": true,
+            "selectedWorkload": "desktop_handoff",
+            "userFacingMessage": "Bu g\u00f6rev se\u00e7ili masa\u00fcst\u00fcnde \u00e7al\u0131\u015facak ve onay isteyebilir.",
+            "shouldAskClarification": false
+          },
+          "understanding": {
+            "intent": {
+              "reason": "matched_browser_rules",
+              "confidence": 0.8200000000000001,
+              "privacyRisk": "high",
+              "routingHints": {
+                "mode": "local_private",
+                "avoidCloud": true,
+                "requiresLocalRuntime": true,
+                "preferredCapabilities": [
+                  "browser",
+                  "tool_use",
+                  "local_runtime"
+                ]
+              },
+              "primaryIntent": "browser",
+              "requiresToolUse": true,
+              "requiresCitation": false,
+              "secondaryIntents": [
+                "computer"
+              ],
+              "requiresRetrieval": false,
+              "requiresLocalRuntime": true,
+              "requiresLongRunningTask": true
+            },
+            "context": {
+              "intent": "browser",
+              "userId": "6f3542cf-2f82-45e5-a504-92cb4efd5052",
+              "accountId": "6f3542cf-2f82-45e5-a504-92cb4efd5052",
+              "styleHints": [
+                "answer_length: concise"
+              ],
+              "safetyHints": [
+                "task_handoff_helpfulness: pending",
+                "Keep private local runtime data local unless the user explicitly allows sharing."
+              ],
+              "tokenBudget": {
+                "maxChars": 4000,
+                "maxHints": 12
+              },
+              "projectHints": [],
+              "technicalHints": [],
+              "retrievedMemory": [
+                {
+                  "id": "acec9853-e735-4b7d-b7f1-159a8e63728b",
+                  "key": "routing_outcome",
+                  "type": "bridge",
+                  "scope": "user",
+                  "value": "created",
+                  "source": "runtime",
+                  "createdAt": "2026-06-06T16:40:33.322Z",
+                  "confidence": 0.82
+                },
+                {
+                  "id": "664a9258-9142-4248-bdf0-2b1db90ecbf3",
+                  "key": "task_target",
+                  "type": "routing",
+                  "scope": "user",
+                  "value": "server_brain",
+                  "source": "runtime",
+                  "createdAt": "2026-06-06T16:40:33.322Z",
+                  "confidence": 0.78
+                },
+                {
+                  "id": "f46fac36-9960-47a9-99ed-aba9e0afba6b",
+                  "key": "bridge_readiness",
+                  "type": "bridge",
+                  "scope": "user",
+                  "value": "ready",
+                  "source": "system",
+                  "createdAt": "2026-06-06T16:40:33.322Z",
+                  "confidence": 0.76
+                },
+                {
+                  "id": "d6ab3f52-7799-420f-b180-09b7111c66c1",
+                  "key": "routing_mode",
+                  "type": "routing",
+                  "scope": "user",
+                  "value": "server_brain_first",
+                  "source": "runtime",
+                  "createdAt": "2026-06-06T16:40:33.322Z",
+                  "confidence": 0.74
+                },
+                {
+                  "id": "bd56ee74-1aef-4ec8-93e6-47460c87a7ad",
+                  "key": "answer_length",
+                  "type": "style",
+                  "scope": "user",
+                  "value": "concise",
+                  "source": "interaction",
+                  "createdAt": "2026-06-06T16:40:33.313Z",
+                  "confidence": 0.72
+                },
+                {
+                  "id": "4a8d6b1f-60d3-4317-81be-fd48f8ed4486",
+                  "key": "task_handoff_helpfulness",
+                  "type": "correction",
+                  "scope": "user",
+                  "value": "pending",
+                  "source": "runtime",
+                  "createdAt": "2026-06-06T16:40:33.322Z",
+                  "confidence": 0.7
+                }
+              ],
+              "personalizationHints": [
+                "routing_outcome: created",
+                "task_target: server_brain",
+                "bridge_readiness: ready",
+                "routing_mode: server_brain_first"
+              ]
+            },
+            "routingHints": {
+              "mode": "local_private",
+              "avoidCloud": true,
+              "requiresLocalRuntime": true,
+              "preferredCapabilities": [
+                "browser",
+                "tool_use",
+                "local_runtime"
+              ]
+            }
+          }
+        }
+      },
+      "requestedCapabilities": [
+        "browser.control",
+        "document.read",
+        "document_read",
+        "browser_control"
+      ],
+      "dispatchAttemptCount": 1,
+      "status": "queued",
+      "summary": null,
+      "error": null,
+      "approvalRequest": null,
+      "runtimeConnectionId": null,
+      "dispatchLeaseId": null,
+      "dispatchLeaseIssuedAt": null,
+      "dispatchLeaseExpiresAt": null,
+      "dispatchAckAt": null,
+      "createdAt": "2026-06-06T16:40:33.673Z",
+      "updatedAt": "2026-06-06T16:40:33.746Z",
+      "routeDecision": {
+        "route": "desktop_runtime",
+        "mode": "executable_task",
+        "intent": "local_file_request",
+        "confidence": 0.72,
+        "privacyClass": "local_private",
+        "privacyLevel": "high",
+        "requiresApproval": true,
+        "requiredRuntime": "desktop",
+        "shouldAskClarification": false,
+        "failClosedReason": "desktop_runtime_selected_target",
+        "selectedWorkload": "desktop_handoff",
+        "reason": "Kullanici acikca bir masaustu hedefi secti; gorev desktop runtime uzerinden fail-closed ilerlemeli.",
+        "capabilities": [
+          "browser.control",
+          "document.read",
+          "document_read",
+          "browser_control"
+        ]
+      },
+      "deliveryState": "queued",
+      "deliveryAttemptCount": 1,
+      "lastAckAt": null,
+      "lastDispatchAttemptAt": null
+    }
+  ]
+}

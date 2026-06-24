@@ -1,0 +1,46 @@
+{
+  "id": "document_qa",
+  "version": "1.0.0",
+  "active": true,
+  "name": "Document Q&A",
+  "displayName": "Soru-Cevap",
+  "displayDescription": "Eklenen belge veya görsel hakkında soruları yanıtlar.",
+  "slashCommand": "/soru-cevap",
+  "uiCategory": "document",
+  "requiresAttachment": true,
+  "supportedMimeTypes": ["application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  "manualSelectable": true,
+  "purpose": "Answer user questions using mobile-extracted document chunks.",
+  "summary": "Answers questions grounded in selected attachment chunks and returns cited chunk hashes.",
+  "instructions": "Answer only from the provided chunks. If the chunks are insufficient, say that the provided attachment data is insufficient. Return strict JSON only.",
+  "triggers": {
+    "phrases": ["ne yazıyor", "ne yaziyor", "burada ne", "bunda ne", "soru", "cevapla", "qa", "question"],
+    "intents": ["question_answering", "answer"],
+    "payloadTypes": ["application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+  },
+  "inputSchema": {
+    "type": "object",
+    "required": ["prompt", "chunks"],
+    "properties": {
+      "prompt": { "type": "string", "minLength": 1 },
+      "chunks": { "type": "array", "minItems": 1 }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["answer", "citedChunks", "confidence"],
+    "properties": {
+      "answer": { "type": "string", "minLength": 1 },
+      "citedChunks": { "type": "array", "items": { "type": "string" } },
+      "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+    }
+  },
+  "allowedTools": [],
+  "modelProfile": "long_context",
+  "maxInputTokens": 3200,
+  "maxOutputTokens": 560,
+  "timeoutMs": 8000,
+  "cachePolicy": { "enabled": true, "ttlMs": 180000 },
+  "validation": { "requireJson": true, "repairAttempts": 1, "rejectEmptyOutput": true, "minConfidence": 0.1 }
+}

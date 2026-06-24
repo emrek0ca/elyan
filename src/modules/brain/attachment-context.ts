@@ -1,0 +1,1311 @@
+import { createHash } from "node:crypto";
+import type { KnowledgeSourceType } from "../../contracts/domain.js";
+import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
+import type { ReliabilityStore } from "../../lib/reliability/redis.js";
+import { prepareKnowledgeDocument } from "./service.js";
+
+const DEFAULT_MAX_ATTACHMENTS = 3;
+const DEFAULT_MAX_CHUNKS = 20;
+const DEFAULT_MAX_CHARS = 24_000;
+const MAX_EXCERPT_CHARS = 1_200;
+const PREPARED_ATTACHMENT_CACHE_TTL_MS = 3_600_000;
+
+export type AttachmentContextCandidate = {
+  messageId?: string;
+  createdAt?: string;
+  prompt?: string;
+  metadata: Record<string, unknown>;
+};
+
+export type AttachmentContextSource = "request_attachments" | "session_recovery";
+
+export type ResolvedAttachmentContextDocument = {
+  documentId: string;
+  title: string;
+  mimeType: string | null;
+  summary: string;
+  source: "request" | "session";
+  chunkCount: number;
+  includedChunkCount: number;
+};
+
+export type ResolvedAttachmentContextChunk = {
+  documentId: string;
+  documentTitle: string;
+  mimeType: string | null;
+  chunkId: string;
+  chunkHash: string;
+  content: string;
+  pageNumber: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ResolvedAttachmentContext = {
+  used: boolean;
+  source: AttachmentContextSource;
+  promptBlock: string;
+  documentIds: string[];
+  documents: ResolvedAttachmentContextDocument[];
+  chunks: ResolvedAttachmentContextChunk[];
+  totalChars: number;
+  chunkCount: number;
+  needsClarification: boolean;
+  clarificationMessage?: string;
+  cacheHit?: boolean;
+};
+
+type CachedPreparedAttachmentCandidate = {
+  documentId: string;
+  title: string;
+  mimeType: string | null;
+  summary: string;
+  documentMetadata: Record<string, unknown>;
+  prepared: ReturnType<typeof prepareKnowledgeDocument>;
+};
+
+type CachedPreparedAttachmentRecord = {
+  prepared: ReturnType<typeof prepareKnowledgeDocument>;
+};
+
+type PreparedAttachmentCandidate = CachedPreparedAttachmentCandidate & {
+  key: string;
+  source: "request" | "session";
+  cacheHit: boolean;
+};
+
+type AttachmentContextStore = Pick<ReliabilityStore, "get" | "set">;
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readArray(record: Record<string, unknown> | null, key: string): unknown[] {
+  const value = record?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function readString(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function compactText(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function boundedText(value: string, maxChars = MAX_EXCERPT_CHARS): string {
+  const compact = compactText(value);
+  if (compact.length <= maxChars) {
+    return compact;
+  }
+  return `${compact.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function normalizeExcerptText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\r\n?/g, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function boundedExcerptText(value: string, maxChars = MAX_EXCERPT_CHARS): string {
+  const normalized = normalizeExcerptText(value);
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function stableChunkHash(input: {
+  documentId: string;
+  chunkId: string;
+  content: string;
+  pageNumber: number | null;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        documentId: input.documentId,
+        chunkId: input.chunkId,
+        pageNumber: input.pageNumber,
+        content: input.content,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function isAllowedKnowledgeSourceType(value: string | null): value is KnowledgeSourceType {
+  return (
+    value === "manual" ||
+    value === "task_artifact" ||
+    value === "external_url" ||
+    value === "dataset" ||
+    value === "feedback"
+  );
+}
+
+function normalizeSourceType(value: string | null): KnowledgeSourceType {
+  return isAllowedKnowledgeSourceType(value) ? value : "manual";
+}
+
+function hasAttachmentShape(record: Record<string, unknown> | null): boolean {
+  if (!record) {
+    return false;
+  }
+
+  return (
+    Array.isArray(record.attachments) ||
+    record.fastPreview != null ||
+    record.deepContext != null ||
+    record.document_analysis != null ||
+    record.documentAnalysis != null ||
+    record.compactDocument != null ||
+    record.documentEnvelope != null ||
+    record.envelope != null
+  );
+}
+
+export function extractAttachmentMetadataCarrier(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+  const record = readRecord(metadata);
+  if (!record) {
+    return null;
+  }
+
+  const carrier: Record<string, unknown> = {};
+  const attachments = readArray(record, "attachments")
+    .map((item) => readRecord(item))
+    .filter((item): item is Record<string, unknown> => item != null);
+  if (attachments.length > 0) {
+    carrier.attachments = attachments;
+    carrier.attachmentCount = attachments.length;
+  }
+
+  for (const key of [
+    "document_analysis",
+    "documentAnalysis",
+    "compactDocument",
+    "documentEnvelope",
+    "envelope",
+    "fastPreview",
+    "deepContext",
+    "processingState",
+    "derivedContent",
+    "sourceType",
+    "raw_file_uploaded",
+    "data_origin",
+    "privacy_level",
+    "attachmentCount",
+  ]) {
+    if (record[key] !== undefined) {
+      carrier[key] = record[key];
+    }
+  }
+
+  if (!hasAttachmentShape(carrier)) {
+    return null;
+  }
+
+  return normalizeLocalDerivedMetadata(carrier);
+}
+
+function extractAttachmentRecords(carrier: Record<string, unknown>): Record<string, unknown>[] {
+  const attachments = readArray(carrier, "attachments")
+    .map((item) => readRecord(item))
+    .filter((item): item is Record<string, unknown> => item != null);
+
+  // Only synthesize a record from top-level legacy fields when there is no
+  // explicit attachments[] array.  Synthesizing when attachments[] is already
+  // present causes the same physical document to appear as two candidates and
+  // triggers the "birden fazla belge görüyorum" clarification erroneously.
+  const synthesized: Record<string, unknown>[] = [];
+  if (
+    attachments.length === 0 &&
+    (readRecord(carrier.document_analysis) ||
+      readRecord(carrier.documentAnalysis) ||
+      readRecord(carrier.compactDocument) ||
+      readRecord(carrier.documentEnvelope) ||
+      readRecord(carrier.envelope))
+  ) {
+    synthesized.push({
+      ...carrier,
+      ...(readRecord(carrier.documentAnalysis) && carrier.document_analysis == null
+        ? { document_analysis: carrier.documentAnalysis }
+        : {}),
+      ...(readRecord(carrier.envelope) && carrier.documentEnvelope == null
+        ? { documentEnvelope: carrier.envelope }
+        : {}),
+    });
+  }
+
+  const seen = new Set<string>();
+  const combined = [...attachments, ...synthesized].filter((item) => {
+    const key = attachmentDedupKey(item);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  return combined;
+}
+
+function attachmentDedupKey(record: Record<string, unknown>): string {
+  const documentAnalysis = readRecord(record.document_analysis) ?? readRecord(record.documentAnalysis);
+  const compactDocument = readRecord(record.compactDocument);
+  const documentEnvelope = readRecord(record.documentEnvelope) ?? readRecord(record.envelope);
+  return [
+    readString(record, "documentId"),
+    readString(documentAnalysis, "documentId"),
+    readString(compactDocument, "documentId"),
+    readString(documentEnvelope, "id"),
+    readString(compactDocument, "sha256"),
+    readString(compactDocument, "content_hash"),
+    readString(record, "sha256"),
+    readString(record, "content_hash"),
+    readString(record, "fileName"),
+    readString(record, "name"),
+  ]
+    .filter(Boolean)
+    .join("|")
+    .toLowerCase() || JSON.stringify(record).slice(0, 120);
+}
+
+function blockToChunk(block: Record<string, unknown>) {
+  const text = readString(block, "text") ?? readString(block, "content") ?? "";
+  if (!text) {
+    return null;
+  }
+
+  const metadata = readRecord(block.metadata) ?? {};
+  return {
+    text,
+    pageNumber:
+      typeof block.page === "number"
+        ? block.page
+        : typeof block.pageNumber === "number"
+          ? block.pageNumber
+          : 0,
+    metadata: {
+      ...metadata,
+      ...(readString(block, "type") ? { kind: readString(block, "type") } : {}),
+    },
+  };
+}
+
+function describeMimeType(mimeType: string | null): string | null {
+  const normalized = String(mimeType ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "application/pdf") {
+    return "PDF";
+  }
+  if (normalized.includes("wordprocessingml") || normalized.includes("msword")) {
+    return "Word";
+  }
+  if (normalized.includes("spreadsheetml") || normalized.includes("excel")) {
+    return "Excel";
+  }
+  if (normalized.includes("presentationml") || normalized.includes("powerpoint")) {
+    return "Sunum";
+  }
+  if (normalized.startsWith("image/")) {
+    return "Görsel";
+  }
+  if (normalized === "text/markdown") {
+    return "Markdown";
+  }
+  if (normalized.startsWith("text/")) {
+    return "Metin";
+  }
+  return mimeType;
+}
+
+function readPositivePageNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = readNumber(record, key);
+  return value !== null && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function inferPageCount(candidate: CachedPreparedAttachmentCandidate): number | null {
+  const explicit =
+    readPositivePageNumber(candidate.documentMetadata, "pageCount") ??
+    readPositivePageNumber(candidate.documentMetadata, "page_count");
+  if (explicit) {
+    return explicit;
+  }
+
+  let maxPage = 0;
+  for (const chunk of candidate.prepared.chunks) {
+    const metadata = readRecord(chunk.metadata);
+    const pageEnd =
+      readPositivePageNumber(metadata, "pageEnd") ??
+      readPositivePageNumber(metadata, "page_end") ??
+      readPositivePageNumber(metadata, "pageNumber") ??
+      readPositivePageNumber(metadata, "page");
+    if (pageEnd && pageEnd > maxPage) {
+      maxPage = pageEnd;
+    }
+  }
+
+  return maxPage > 0 ? maxPage : null;
+}
+
+function inferExtractionMethod(candidate: CachedPreparedAttachmentCandidate): string | null {
+  const explicit =
+    readString(candidate.documentMetadata, "extractionMethod") ??
+    readString(candidate.documentMetadata, "extraction_method") ??
+    readString(candidate.documentMetadata, "analysisMode");
+  if (explicit) {
+    return explicit;
+  }
+
+  for (const chunk of candidate.prepared.chunks) {
+    const metadata = readRecord(chunk.metadata);
+    const value =
+      readString(metadata, "extractionMethod") ??
+      readString(metadata, "extraction_method") ??
+      readString(metadata, "analysisMode");
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function inferConfidence(candidate: CachedPreparedAttachmentCandidate): number | null {
+  const explicit = readNumber(candidate.documentMetadata, "confidence");
+  if (explicit !== null) {
+    return Math.max(0, Math.min(1, explicit));
+  }
+
+  let sum = 0;
+  let count = 0;
+  for (const chunk of candidate.prepared.chunks) {
+    const value = readNumber(readRecord(chunk.metadata), "confidence");
+    if (value === null) {
+      continue;
+    }
+    sum += Math.max(0, Math.min(1, value));
+    count += 1;
+  }
+
+  return count > 0 ? sum / count : null;
+}
+
+function formatConfidence(confidence: number | null): string | null {
+  if (confidence === null) {
+    return null;
+  }
+  return Math.max(0, Math.min(1, confidence)).toFixed(2);
+}
+
+function readChunkMetadataRecord(metadata: Record<string, unknown>): Record<string, unknown> | null {
+  return readRecord(metadata.chunkMetadata);
+}
+
+function readChunkMetadataString(metadata: Record<string, unknown>, key: string): string | null {
+  return readString(metadata, key) ?? readString(readChunkMetadataRecord(metadata), key);
+}
+
+function readChunkMetadataPageNumber(metadata: Record<string, unknown>, key: string): number | null {
+  return (
+    readPositivePageNumber(metadata, key) ??
+    readPositivePageNumber(readChunkMetadataRecord(metadata), key)
+  );
+}
+
+function resolveChunkPageRange(metadata: Record<string, unknown>, pageNumber: number | null) {
+  const pageStart =
+    readChunkMetadataPageNumber(metadata, "pageStart") ??
+    readChunkMetadataPageNumber(metadata, "page_start") ??
+    pageNumber;
+  const pageEnd =
+    readChunkMetadataPageNumber(metadata, "pageEnd") ??
+    readChunkMetadataPageNumber(metadata, "page_end") ??
+    pageStart;
+  if (!pageStart || !pageEnd) {
+    return null;
+  }
+  return {
+    pageStart,
+    pageEnd: pageEnd >= pageStart ? pageEnd : pageStart,
+  };
+}
+
+function formatChunkPageLabel(metadata: Record<string, unknown>, pageNumber: number | null): string | null {
+  const range = resolveChunkPageRange(metadata, pageNumber);
+  if (!range) {
+    return null;
+  }
+  return range.pageStart === range.pageEnd
+    ? `Sayfa ${range.pageStart}`
+    : `Sayfa ${range.pageStart}-${range.pageEnd}`;
+}
+
+function formatBlockKind(metadata: Record<string, unknown>): string | null {
+  const normalized = (
+    readString(metadata, "chunkKind") ??
+    readChunkMetadataString(metadata, "blockType") ??
+    readChunkMetadataString(metadata, "type") ??
+    readChunkMetadataString(metadata, "kind") ??
+    readString(metadata, "type") ??
+    readString(metadata, "kind")
+  )
+    ?.trim()
+    .toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "table_data" || normalized === "table") {
+    return "[tablo]";
+  }
+  if (normalized === "header") {
+    return "[başlık]";
+  }
+  return null;
+}
+
+function resolveAttachmentCacheHash(record: Record<string, unknown>): string | null {
+  const preferredRecord = selectPreferredAttachmentRecord(record);
+  const documentAnalysis =
+    readRecord(preferredRecord.document_analysis) ??
+    readRecord(preferredRecord.documentAnalysis);
+  const compactDocument = readRecord(preferredRecord.compactDocument);
+  const documentEnvelope =
+    readRecord(preferredRecord.documentEnvelope) ??
+    readRecord(preferredRecord.envelope);
+  const attachmentMetadata = readRecord(preferredRecord.metadata);
+
+  return (
+    readString(preferredRecord, "content_hash") ??
+    readString(compactDocument, "content_hash") ??
+    readString(attachmentMetadata, "content_hash") ??
+    readString(documentAnalysis, "content_hash") ??
+    readString(documentEnvelope, "content_hash") ??
+    readString(preferredRecord, "sha256") ??
+    readString(compactDocument, "sha256") ??
+    readString(attachmentMetadata, "sha256") ??
+    readString(documentAnalysis, "sha256") ??
+    readString(documentEnvelope, "sha256")
+  );
+}
+
+function buildEnvelopeFromPreview(record: Record<string, unknown>): Record<string, unknown> | null {
+  const fastPreview = readRecord(record.fastPreview);
+  if (!fastPreview) {
+    return null;
+  }
+
+  const chunks = readArray(fastPreview, "chunks")
+    .map((item) => readRecord(item))
+    .filter((item): item is Record<string, unknown> => item != null);
+  if (!chunks.length) {
+    return null;
+  }
+
+  const sourceHash =
+    readString(record, "sha256") ??
+    readString(record, "content_hash") ??
+    readString(readRecord(record.compactDocument), "sha256") ??
+    "local-derived";
+  const mimeType = readString(record, "mimeType") ?? "application/octet-stream";
+  return {
+    id: readString(record, "documentId") ?? undefined,
+    sourceHash,
+    mimeType,
+    blocks: chunks.map((chunk, index) => ({
+      id:
+        readString(chunk, "id") ??
+        `${readString(record, "documentId") ?? "attachment"}-preview-${index + 1}`,
+      type: "text",
+      text: readString(chunk, "text") ?? "",
+      page:
+        typeof chunk.pageNumber === "number"
+          ? chunk.pageNumber
+          : typeof chunk.page === "number"
+            ? chunk.page
+            : index + 1,
+      metadata: readRecord(chunk.metadata) ?? {},
+      sourceHash,
+      mimeType,
+    })),
+  };
+}
+
+function buildDocumentAnalysisFromPreview(record: Record<string, unknown>): Record<string, unknown> | null {
+  const fastPreview = readRecord(record.fastPreview);
+  if (!fastPreview) {
+    return null;
+  }
+
+  const metadata = readRecord(fastPreview.metadata) ?? {};
+  const textPreview =
+    readString(fastPreview, "textPreview") ??
+    readString(fastPreview, "summary") ??
+    readString(record, "summary") ??
+    "";
+  const chunks = readArray(fastPreview, "chunks");
+
+  return {
+    documentId: readString(record, "documentId") ?? undefined,
+    sourceType: readString(record, "sourceType") ?? "manual",
+    fileName: readString(record, "fileName") ?? readString(record, "name") ?? "Ek",
+    mimeType: readString(record, "mimeType") ?? "application/octet-stream",
+    sizeBytes: record.sizeBytes,
+    sha256: readString(record, "sha256") ?? undefined,
+    extractedText: textPreview,
+    textPreview,
+    textTruncated: fastPreview.textTruncated === true,
+    chunks,
+    metadata: {
+      ...metadata,
+      ...(readString(record, "processingState")
+        ? { processingState: readString(record, "processingState") }
+        : {}),
+    },
+    summary: readString(fastPreview, "summary") ?? undefined,
+    raw_file_uploaded: false,
+    data_origin: "local_derived",
+    privacy_level: "local_derived",
+  };
+}
+
+function selectPreferredAttachmentRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const deepContext = readRecord(record.deepContext);
+  if (deepContext) {
+    return {
+      ...record,
+      ...deepContext,
+      ...(readRecord(deepContext.documentAnalysis) && deepContext.document_analysis == null
+        ? { document_analysis: deepContext.documentAnalysis }
+        : {}),
+      ...(readRecord(deepContext.envelope) && deepContext.documentEnvelope == null
+        ? { documentEnvelope: deepContext.envelope }
+        : {}),
+    };
+  }
+
+  const fastPreview = readRecord(record.fastPreview);
+  if (!fastPreview) {
+    return record;
+  }
+
+  const synthesizedAnalysis = buildDocumentAnalysisFromPreview(record);
+  const synthesizedEnvelope = buildEnvelopeFromPreview(record);
+  return {
+    ...record,
+    ...(synthesizedAnalysis ? { document_analysis: synthesizedAnalysis } : {}),
+    ...(synthesizedEnvelope ? { documentEnvelope: synthesizedEnvelope } : {}),
+  };
+}
+
+function buildPreparedAttachmentCandidateFromPrepared(
+  record: Record<string, unknown>,
+  prepared: ReturnType<typeof prepareKnowledgeDocument>,
+): CachedPreparedAttachmentCandidate | null {
+  if (readString(record, "processingState")?.toLowerCase() === "failed") {
+    return null;
+  }
+  const preferredRecord = selectPreferredAttachmentRecord(record);
+  const documentAnalysis =
+    readRecord(preferredRecord.document_analysis) ??
+    readRecord(preferredRecord.documentAnalysis);
+  const compactDocument = readRecord(preferredRecord.compactDocument);
+  const documentEnvelope =
+    readRecord(preferredRecord.documentEnvelope) ??
+    readRecord(preferredRecord.envelope);
+  const envelopeMetadata = readRecord(documentEnvelope?.metadata);
+  const analysisMetadata = readRecord(documentAnalysis?.metadata);
+  const attachmentMetadata = readRecord(preferredRecord.metadata);
+  const sourceType = normalizeSourceType(
+    readString(preferredRecord, "sourceType") ??
+      readString(compactDocument, "sourceType") ??
+      readString(attachmentMetadata, "sourceType"),
+  );
+  const mergedMetadata = normalizeLocalDerivedMetadata({
+    ...(attachmentMetadata ?? {}),
+    ...(analysisMetadata ?? {}),
+    ...(envelopeMetadata ?? {}),
+    ...(compactDocument ?? {}),
+    sourceType,
+    processingState: readString(preferredRecord, "processingState") ?? undefined,
+    document_analysis: documentAnalysis ?? undefined,
+    compactDocument: compactDocument ?? undefined,
+    documentEnvelope: documentEnvelope ?? undefined,
+    mimeType:
+      readString(preferredRecord, "mimeType") ??
+      readString(compactDocument, "mimeType") ??
+      readString(attachmentMetadata, "mimeType") ??
+      undefined,
+    originalName:
+      readString(preferredRecord, "fileName") ??
+      readString(preferredRecord, "name") ??
+      readString(compactDocument, "fileName") ??
+      readString(attachmentMetadata, "originalName") ??
+      undefined,
+  });
+
+  const documentId =
+    readString(preferredRecord, "documentId") ??
+    readString(documentAnalysis, "documentId") ??
+    readString(compactDocument, "documentId") ??
+    readString(documentEnvelope, "id") ??
+    readString(preferredRecord, "sha256") ??
+    readString(preferredRecord, "content_hash") ??
+    readString(compactDocument, "sha256") ??
+    readString(compactDocument, "content_hash") ??
+    `attachment-${prepared.contentHash.slice(0, 12)}`;
+  const title =
+    readString(preferredRecord, "fileName") ??
+    readString(preferredRecord, "name") ??
+    readString(compactDocument, "fileName") ??
+    readString(attachmentMetadata, "originalName") ??
+    readString(preferredRecord, "title") ??
+    "Ek";
+  const mimeType =
+    readString(preferredRecord, "mimeType") ??
+    readString(compactDocument, "mimeType") ??
+    readString(attachmentMetadata, "mimeType");
+  const summary =
+    readString(preferredRecord, "summary") ??
+    readString(documentAnalysis, "summary") ??
+    prepared.summary;
+
+  return {
+    documentId,
+    title,
+    mimeType,
+    summary,
+    documentMetadata: mergedMetadata,
+    prepared,
+  };
+}
+
+function buildPreparedAttachmentCandidatePayload(
+  record: Record<string, unknown>,
+): CachedPreparedAttachmentCandidate | null {
+  if (readString(record, "processingState")?.toLowerCase() === "failed") {
+    return null;
+  }
+  const preferredRecord = selectPreferredAttachmentRecord(record);
+  const documentAnalysis =
+    readRecord(preferredRecord.document_analysis) ??
+    readRecord(preferredRecord.documentAnalysis);
+  const compactDocument = readRecord(preferredRecord.compactDocument);
+  const documentEnvelope =
+    readRecord(preferredRecord.documentEnvelope) ??
+    readRecord(preferredRecord.envelope);
+  const envelopeMetadata = readRecord(documentEnvelope?.metadata);
+  const analysisMetadata = readRecord(documentAnalysis?.metadata);
+  const attachmentMetadata = readRecord(preferredRecord.metadata);
+  const sourceType = normalizeSourceType(
+    readString(preferredRecord, "sourceType") ??
+      readString(compactDocument, "sourceType") ??
+      readString(attachmentMetadata, "sourceType"),
+  );
+  const mergedMetadata = normalizeLocalDerivedMetadata({
+    ...(attachmentMetadata ?? {}),
+    ...(analysisMetadata ?? {}),
+    ...(envelopeMetadata ?? {}),
+    ...(compactDocument ?? {}),
+    sourceType,
+    processingState: readString(preferredRecord, "processingState") ?? undefined,
+    document_analysis: documentAnalysis ?? undefined,
+    compactDocument: compactDocument ?? undefined,
+    documentEnvelope: documentEnvelope ?? undefined,
+    mimeType:
+      readString(preferredRecord, "mimeType") ??
+      readString(compactDocument, "mimeType") ??
+      readString(attachmentMetadata, "mimeType") ??
+      undefined,
+    originalName:
+      readString(preferredRecord, "fileName") ??
+      readString(preferredRecord, "name") ??
+      readString(compactDocument, "fileName") ??
+      readString(attachmentMetadata, "originalName") ??
+      undefined,
+  });
+  const explicitChunks = readArray(preferredRecord, "chunks") as Array<string | Record<string, unknown>>;
+  const analysisChunks = readArray(documentAnalysis, "chunks") as Array<string | Record<string, unknown>>;
+  const envelopeBlocks = readArray(documentEnvelope, "blocks")
+    .map((item) => readRecord(item))
+    .filter((item): item is Record<string, unknown> => item != null)
+    .map(blockToChunk)
+    .filter((item): item is { text: string; pageNumber: number; metadata: Record<string, unknown> } => item != null);
+  const prepared = (() => {
+    try {
+      return prepareKnowledgeDocument({
+        text:
+          readString(preferredRecord, "extractedText") ??
+          readString(preferredRecord, "textPreview") ??
+          readString(preferredRecord, "content") ??
+          readString(preferredRecord, "text") ??
+          readString(documentAnalysis, "extractedText") ??
+          readString(documentAnalysis, "textPreview") ??
+          readString(preferredRecord, "summary") ??
+          readString(documentAnalysis, "summary") ??
+          undefined,
+        chunks:
+          explicitChunks.length > 0
+            ? explicitChunks
+            : analysisChunks.length > 0
+              ? analysisChunks
+              : envelopeBlocks.length > 0
+                ? envelopeBlocks
+                : undefined,
+        metadata: mergedMetadata,
+        sourceType,
+      });
+    } catch {
+      return null;
+    }
+  })();
+
+  if (!prepared) {
+    return null;
+  }
+
+  return buildPreparedAttachmentCandidateFromPrepared(record, prepared);
+}
+
+function buildPreparedAttachmentCandidate(
+  record: Record<string, unknown>,
+  source: "request" | "session",
+): PreparedAttachmentCandidate | null {
+  const payload = buildPreparedAttachmentCandidatePayload(record);
+  if (!payload) {
+    return null;
+  }
+
+  return {
+    ...payload,
+    key: attachmentDedupKey(record),
+    source,
+    cacheHit: false,
+  };
+}
+
+function parseCachedPreparedAttachmentCandidate(
+  value: string,
+): CachedPreparedAttachmentRecord | null {
+  try {
+    const parsed = JSON.parse(value) as CachedPreparedAttachmentRecord | null;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    if (
+      !parsed.prepared ||
+      typeof parsed.prepared !== "object" ||
+      !Array.isArray(parsed.prepared.chunks)
+    ) {
+      return null;
+    }
+    return {
+      prepared: parsed.prepared,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function buildPreparedAttachmentCandidateWithCache(
+  store: AttachmentContextStore,
+  record: Record<string, unknown>,
+  source: "request" | "session",
+): Promise<PreparedAttachmentCandidate | null> {
+  const cacheHash = resolveAttachmentCacheHash(record);
+  if (!cacheHash) {
+    return buildPreparedAttachmentCandidate(record, source);
+  }
+
+  const cacheKey = `attachment_context:prepared:${cacheHash}`;
+  const cachedValue = await store.get(cacheKey);
+  if (cachedValue) {
+    const cachedCandidate = parseCachedPreparedAttachmentCandidate(cachedValue);
+    if (cachedCandidate) {
+      const payload = buildPreparedAttachmentCandidateFromPrepared(
+        record,
+        cachedCandidate.prepared,
+      );
+      if (!payload) {
+        return null;
+      }
+      return {
+        ...payload,
+        key: attachmentDedupKey(record),
+        source,
+        cacheHit: true,
+      };
+    }
+  }
+
+  const payload = buildPreparedAttachmentCandidatePayload(record);
+  if (!payload) {
+    return null;
+  }
+
+  await store
+    .set(
+      cacheKey,
+      JSON.stringify({
+        prepared: payload.prepared,
+      } satisfies CachedPreparedAttachmentRecord),
+      PREPARED_ATTACHMENT_CACHE_TTL_MS,
+    )
+    .catch(() => undefined);
+
+  return {
+    ...payload,
+    key: attachmentDedupKey(record),
+    source,
+    cacheHit: false,
+  };
+}
+
+function buildPreparedCandidates(
+  metadata: Record<string, unknown> | undefined,
+  source: "request" | "session",
+): PreparedAttachmentCandidate[] {
+  const carrier = extractAttachmentMetadataCarrier(metadata);
+  if (!carrier) {
+    return [];
+  }
+
+  return extractAttachmentRecords(carrier)
+    .map((record) => buildPreparedAttachmentCandidate(record, source))
+    .filter((item): item is PreparedAttachmentCandidate => item != null);
+}
+
+async function buildPreparedCandidatesWithCache(
+  store: AttachmentContextStore,
+  metadata: Record<string, unknown> | undefined,
+  source: "request" | "session",
+): Promise<PreparedAttachmentCandidate[]> {
+  const carrier = extractAttachmentMetadataCarrier(metadata);
+  if (!carrier) {
+    return [];
+  }
+
+  const prepared = await Promise.all(
+    extractAttachmentRecords(carrier).map((record) =>
+      buildPreparedAttachmentCandidateWithCache(store, record, source),
+    ),
+  );
+
+  return prepared.filter((item): item is PreparedAttachmentCandidate => item != null);
+}
+
+function isReferentialAttachmentPrompt(prompt: string): boolean {
+  const normalized = normalizeToken(prompt);
+  if (!normalized) {
+    return false;
+  }
+
+  return /\b(bu|bunu|buna|bundan|şu|sunu|same document|aynı belge|aynı dosya|bu belge|bu dosya|bu görsel|bu resim|bu pdf|sayfa|tablo)\b/u.test(
+    normalized,
+  );
+}
+
+function candidateAliases(candidate: PreparedAttachmentCandidate): string[] {
+  const aliases = new Set<string>();
+  const rawTitle = compactText(candidate.title);
+  if (rawTitle) {
+    aliases.add(normalizeToken(rawTitle));
+    aliases.add(normalizeToken(rawTitle.replace(/\.[a-z0-9]{2,5}$/i, "")));
+  }
+  aliases.add(normalizeToken(candidate.documentId));
+  return [...aliases].filter((value) => value.length >= 3);
+}
+
+function matchCandidatesByPrompt(
+  candidates: PreparedAttachmentCandidate[],
+  prompt: string,
+): PreparedAttachmentCandidate[] {
+  const normalizedPrompt = normalizeToken(prompt);
+  if (!normalizedPrompt) {
+    return [];
+  }
+
+  return candidates.filter((candidate) =>
+    candidateAliases(candidate).some(
+      (alias) => alias && normalizedPrompt.includes(alias),
+    ),
+  );
+}
+
+function buildClarificationMessage(candidates: PreparedAttachmentCandidate[]): string {
+  const labels = candidates
+    .slice(0, DEFAULT_MAX_ATTACHMENTS)
+    .map((candidate) => candidate.title)
+    .filter(Boolean)
+    .join(", ");
+  return labels
+    ? `Birden fazla belge veya görsel görüyorum. Hangisini kullanmamı istediğini belirt: ${labels}.`
+    : "Birden fazla belge veya görsel görüyorum. Hangisini kullanmamı istediğini belirtir misin?";
+}
+
+function buildPromptBlock(input: {
+  candidates: PreparedAttachmentCandidate[];
+  source: AttachmentContextSource;
+  maxChunks: number;
+  maxChars: number;
+}) {
+  const lines = [
+    "Attachment context (mobile-derived, readable, session-scoped):",
+    "Use only this attachment context for the attached-file question. If it is insufficient, say so plainly.",
+  ];
+  const documents: ResolvedAttachmentContextDocument[] = [];
+  const chunks: ResolvedAttachmentContextChunk[] = [];
+  const documentIds: string[] = [];
+  let totalChars = 0;
+  let chunkCount = 0;
+
+  for (const [index, candidate] of input.candidates.entries()) {
+    if (chunkCount >= input.maxChunks || totalChars >= input.maxChars) {
+      break;
+    }
+
+    const docLines: string[] = [];
+    const summary = boundedText(candidate.summary, 240);
+    const pageCount = inferPageCount(candidate);
+    const confidence = formatConfidence(inferConfidence(candidate));
+    const extractionMethod = inferExtractionMethod(candidate);
+    const headerSegments = [
+      `BELGE ${index + 1}: ${candidate.title}`,
+      describeMimeType(candidate.mimeType),
+      pageCount ? `${pageCount} sayfa` : null,
+      confidence ? `güven: ${confidence}` : null,
+      extractionMethod ? `yöntem: ${extractionMethod}` : null,
+    ].filter((value): value is string => Boolean(value));
+    const header = `[${headerSegments.join(" | ")}]`;
+    docLines.push(header);
+    if (summary) {
+      docLines.push(`Özet: ${summary}`);
+      totalChars += summary.length;
+    }
+
+    let includedChunkCount = 0;
+    for (const [chunkIndex, chunk] of candidate.prepared.chunks.entries()) {
+      if (chunkCount >= input.maxChunks || totalChars >= input.maxChars) {
+        break;
+      }
+
+      const excerpt = boundedExcerptText(chunk.content);
+      if (!excerpt) {
+        continue;
+      }
+
+      const nextChars = totalChars + excerpt.length;
+      if (includedChunkCount > 0 && nextChars > input.maxChars) {
+        break;
+      }
+
+      const pageNumber =
+        readChunkMetadataPageNumber(chunk.metadata, "pageNumber") ??
+        readChunkMetadataPageNumber(chunk.metadata, "page") ??
+        null;
+      const pageLabel = formatChunkPageLabel(chunk.metadata, pageNumber);
+      const blockKind = formatBlockKind(chunk.metadata);
+      docLines.push(
+        `${pageLabel ?? "İçerik"}: ${blockKind ? `${blockKind} ` : ""}${excerpt}`,
+      );
+      const chunkId =
+        typeof chunk.metadata.id === "string" && chunk.metadata.id.trim()
+          ? chunk.metadata.id.trim()
+          : `${candidate.documentId}:chunk:${chunkIndex + 1}`;
+      chunks.push({
+        documentId: candidate.documentId,
+        documentTitle: candidate.title,
+        mimeType: candidate.mimeType,
+        chunkId,
+        chunkHash: stableChunkHash({
+          documentId: candidate.documentId,
+          chunkId,
+          pageNumber,
+          content: excerpt,
+        }),
+        content: excerpt,
+        pageNumber,
+        metadata: chunk.metadata,
+      });
+      includedChunkCount += 1;
+      chunkCount += 1;
+      totalChars += excerpt.length;
+    }
+
+    lines.push(...docLines);
+    lines.push("");
+    documentIds.push(candidate.documentId);
+    documents.push({
+      documentId: candidate.documentId,
+      title: candidate.title,
+      mimeType: candidate.mimeType,
+      summary,
+      source: candidate.source,
+      chunkCount: candidate.prepared.chunks.length,
+      includedChunkCount,
+    });
+  }
+
+  return {
+    promptBlock: lines.join("\n").trim(),
+    documents,
+    chunks,
+    documentIds,
+    totalChars,
+    chunkCount,
+  };
+}
+
+function extractSessionCandidates(
+  sessionAttachmentCandidates: AttachmentContextCandidate[] | undefined,
+): PreparedAttachmentCandidate[] {
+  if (!sessionAttachmentCandidates?.length) {
+    return [];
+  }
+
+  const prepared: PreparedAttachmentCandidate[] = [];
+  const seen = new Set<string>();
+  for (const candidate of sessionAttachmentCandidates) {
+    for (const preparedCandidate of buildPreparedCandidates(candidate.metadata, "session")) {
+      if (seen.has(preparedCandidate.key)) {
+        continue;
+      }
+      seen.add(preparedCandidate.key);
+      prepared.push(preparedCandidate);
+    }
+  }
+  return prepared;
+}
+
+async function extractSessionCandidatesWithCache(
+  store: AttachmentContextStore,
+  sessionAttachmentCandidates: AttachmentContextCandidate[] | undefined,
+): Promise<PreparedAttachmentCandidate[]> {
+  if (!sessionAttachmentCandidates?.length) {
+    return [];
+  }
+
+  const prepared: PreparedAttachmentCandidate[] = [];
+  const seen = new Set<string>();
+  for (const candidate of sessionAttachmentCandidates) {
+    for (const preparedCandidate of await buildPreparedCandidatesWithCache(
+      store,
+      candidate.metadata,
+      "session",
+    )) {
+      if (seen.has(preparedCandidate.key)) {
+        continue;
+      }
+      seen.add(preparedCandidate.key);
+      prepared.push(preparedCandidate);
+    }
+  }
+  return prepared;
+}
+
+function resolveAttachmentContextFromCandidates(input: {
+  prompt: string;
+  requestCarrier: Record<string, unknown> | null;
+  requestCandidates: PreparedAttachmentCandidate[];
+  sessionCandidates: PreparedAttachmentCandidate[];
+  maxAttachments: number;
+  maxChunks: number;
+  maxChars: number;
+}): ResolvedAttachmentContext | null {
+  const source: AttachmentContextSource =
+    input.requestCandidates.length > 0 ? "request_attachments" : "session_recovery";
+  const baseCandidates =
+    input.requestCandidates.length > 0 ? input.requestCandidates : input.sessionCandidates;
+
+  if (baseCandidates.length === 0) {
+    if (input.requestCarrier) {
+      return {
+        used: false,
+        source: "request_attachments",
+        promptBlock: "",
+        documentIds: [],
+        documents: [],
+        chunks: [],
+        totalChars: 0,
+        chunkCount: 0,
+        needsClarification: true,
+        clarificationMessage:
+          "Eklenen belge veya görselden yeterli okunabilir veri çıkarılamadı. Lütfen dosyayı yeniden ekle veya işlenecek sayfayı belirt.",
+      };
+    }
+    return null;
+  }
+
+  let selectedCandidates = baseCandidates.slice(0, input.maxAttachments);
+  if (selectedCandidates.length > 1) {
+    const namedMatches = matchCandidatesByPrompt(selectedCandidates, input.prompt);
+    if (namedMatches.length === 1) {
+      selectedCandidates = [namedMatches[0]];
+    } else if (namedMatches.length > 1 || isReferentialAttachmentPrompt(input.prompt)) {
+      return {
+        used: false,
+        source,
+        promptBlock: "",
+        documentIds: selectedCandidates.map((candidate) => candidate.documentId),
+        documents: selectedCandidates.map((candidate) => ({
+          documentId: candidate.documentId,
+          title: candidate.title,
+          mimeType: candidate.mimeType,
+          summary: boundedText(candidate.summary, 180),
+          source: candidate.source,
+          chunkCount: candidate.prepared.chunks.length,
+          includedChunkCount: 0,
+        })),
+        chunks: [],
+        totalChars: 0,
+        chunkCount: 0,
+        needsClarification: true,
+        clarificationMessage: buildClarificationMessage(selectedCandidates),
+        cacheHit: selectedCandidates.some((candidate) => candidate.cacheHit),
+      };
+    }
+  }
+
+  const promptBlock = buildPromptBlock({
+    candidates: selectedCandidates,
+    source,
+    maxChunks: input.maxChunks,
+    maxChars: input.maxChars,
+  });
+  return {
+    used: promptBlock.documents.length > 0,
+    source,
+    promptBlock: promptBlock.promptBlock,
+    documentIds: promptBlock.documentIds,
+    documents: promptBlock.documents,
+    chunks: promptBlock.chunks,
+    totalChars: promptBlock.totalChars,
+    chunkCount: promptBlock.chunkCount,
+    needsClarification: false,
+    cacheHit: selectedCandidates.some((candidate) => candidate.cacheHit),
+  };
+}
+
+export function extractAttachmentCandidatesFromBrainContext(
+  value: unknown,
+): AttachmentContextCandidate[] {
+  const brainContext = readRecord(value);
+  const candidates = readArray(brainContext, "attachmentCandidates");
+  const resolved: AttachmentContextCandidate[] = [];
+
+  for (const rawCandidate of candidates) {
+    const candidate = readRecord(rawCandidate);
+    if (!candidate) {
+      continue;
+    }
+
+    const metadata = extractAttachmentMetadataCarrier(
+      readRecord(candidate.metadata) ?? undefined,
+    );
+    if (!metadata) {
+      continue;
+    }
+
+    resolved.push({
+      messageId: readString(candidate, "messageId") ?? undefined,
+      createdAt: readString(candidate, "createdAt") ?? undefined,
+      prompt: readString(candidate, "prompt") ?? undefined,
+      metadata,
+    });
+  }
+
+  return resolved;
+}
+
+export function resolveAttachmentContext(input: {
+  prompt: string;
+  metadata?: Record<string, unknown>;
+  sessionAttachmentCandidates?: AttachmentContextCandidate[];
+  maxAttachments?: number;
+  maxChunks?: number;
+  maxChars?: number;
+}): ResolvedAttachmentContext | null {
+  const maxAttachments = input.maxAttachments ?? DEFAULT_MAX_ATTACHMENTS;
+  const maxChunks = input.maxChunks ?? DEFAULT_MAX_CHUNKS;
+  const maxChars = input.maxChars ?? DEFAULT_MAX_CHARS;
+  const requestCarrier = extractAttachmentMetadataCarrier(input.metadata);
+  const requestCandidates = buildPreparedCandidates(input.metadata, "request");
+  const sessionCandidates = !requestCarrier
+    ? extractSessionCandidates(input.sessionAttachmentCandidates)
+    : [];
+  return resolveAttachmentContextFromCandidates({
+    prompt: input.prompt,
+    requestCarrier,
+    requestCandidates,
+    sessionCandidates,
+    maxAttachments,
+    maxChunks,
+    maxChars,
+  });
+}
+
+export async function resolveAttachmentContextWithCache(
+  store: AttachmentContextStore,
+  input: {
+    prompt: string;
+    metadata?: Record<string, unknown>;
+    sessionAttachmentCandidates?: AttachmentContextCandidate[];
+    maxAttachments?: number;
+    maxChunks?: number;
+    maxChars?: number;
+  },
+): Promise<ResolvedAttachmentContext | null> {
+  const maxAttachments = input.maxAttachments ?? DEFAULT_MAX_ATTACHMENTS;
+  const maxChunks = input.maxChunks ?? DEFAULT_MAX_CHUNKS;
+  const maxChars = input.maxChars ?? DEFAULT_MAX_CHARS;
+  const requestCarrier = extractAttachmentMetadataCarrier(input.metadata);
+  const requestCandidates = await buildPreparedCandidatesWithCache(
+    store,
+    input.metadata,
+    "request",
+  );
+  const sessionCandidates = !requestCarrier
+    ? await extractSessionCandidatesWithCache(store, input.sessionAttachmentCandidates)
+    : [];
+
+  return resolveAttachmentContextFromCandidates({
+    prompt: input.prompt,
+    requestCarrier,
+    requestCandidates,
+    sessionCandidates,
+    maxAttachments,
+    maxChunks,
+    maxChars,
+  });
+}

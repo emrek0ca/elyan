@@ -1,0 +1,16 @@
+{
+    "id": "206b60f3-fd12-4c98-ab3b-8d5cec6e7923",
+    "userId": "6c5b465d-4781-49cd-b8dc-7b1519a925ec",
+    "type": "mobile",
+    "externalDeviceId": "v1-smoke-mobile-20260606T163904Z",
+    "label": "V1 Smoke iPhone",
+    "platform": "ios",
+    "runtimeVersion": null,
+    "appVersion": "1.0.0",
+    "deviceKeyHash": null,
+    "isActive": true,
+    "pairedAt": "2026-06-06T16:39:22.898Z",
+    "lastSeenAt": "2026-06-06T16:39:22.898Z",
+    "createdAt": "2026-06-06T16:39:22.899Z",
+    "updatedAt": "2026-06-06T16:39:22.899Z"
+}

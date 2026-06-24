@@ -5,6 +5,7 @@ import type { AiProvider } from "../../contracts/domain.js";
 import { encryptJson } from "../../lib/crypto-seal.js";
 import { badRequest } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
+import { buildGroqModelCatalog } from "../brain/groq-models.js";
 import { supportedAiProviders } from "./provider-registry.js";
 import { resolveAiRoute } from "./routing.js";
 
@@ -21,23 +22,25 @@ export async function listAiProviderRegistryForUser(app: FastifyInstance, userId
     .where(eq(aiProviderCredentials.userId, userId));
 
   const configuredByProvider = new Map(credentialRows.map((row) => [row.provider, row]));
+  const groqCatalog = buildGroqModelCatalog(app.config);
 
   return supportedAiProviders.map((provider) => ({
     code: provider.code,
     displayName: provider.displayName,
     hosted: provider.hosted,
     workloads: provider.workloads,
-    models: provider.models,
+    models: provider.code === "groq" ? groqCatalog.models : provider.models,
     configured: configuredByProvider.has(provider.code),
     defaultModel:
-      configuredByProvider.get(provider.code)?.defaultModel ?? provider.defaultModelByWorkload.planning,
+      configuredByProvider.get(provider.code)?.defaultModel ??
+      (provider.code === "groq" ? groqCatalog.reasoningModel : provider.defaultModelByWorkload.planning),
     baseUrl: configuredByProvider.get(provider.code)?.baseUrl ?? null,
     label: configuredByProvider.get(provider.code)?.label ?? null,
   }));
 }
 
 export async function listAiProviderCredentials(app: FastifyInstance, userId: string) {
-  return app.db
+  const rows = await app.db
     .select({
       id: aiProviderCredentials.id,
       provider: aiProviderCredentials.provider,
@@ -50,6 +53,8 @@ export async function listAiProviderCredentials(app: FastifyInstance, userId: st
     .from(aiProviderCredentials)
     .where(eq(aiProviderCredentials.userId, userId))
     .orderBy(desc(aiProviderCredentials.updatedAt));
+
+  return rows.filter((row) => row.provider === "groq");
 }
 
 export async function upsertAiProviderCredential(
@@ -66,11 +71,11 @@ export async function upsertAiProviderCredential(
     userAgent?: string;
   },
 ) {
-  if (input.provider === "ollama") {
-    if (!input.baseUrl) {
-      throw badRequest("Ollama requires baseUrl");
-    }
-  } else if (!input.apiKey) {
+  if (input.provider !== "groq") {
+    throw badRequest("Only Groq is supported on the server control plane");
+  }
+
+  if (!input.apiKey) {
     throw badRequest(`${input.provider} requires apiKey`);
   }
 
@@ -142,6 +147,10 @@ export async function deleteAiProviderCredential(
     userAgent?: string;
   },
 ) {
+  if (input.provider !== "groq") {
+    throw badRequest("Only Groq is supported on the server control plane");
+  }
+
   const rows = await app.db
     .delete(aiProviderCredentials)
     .where(and(eq(aiProviderCredentials.userId, input.userId), eq(aiProviderCredentials.provider, input.provider)))

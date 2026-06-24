@@ -1,0 +1,391 @@
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
+import { learningEvents, subscriptions, users } from "../../db/schema.js";
+import { searchBrainMemory } from "../../modules/brain/memory.js";
+import { buildContextPacketsFromMetadata, summarizeContextFreshness } from "./context-packets.js";
+import { buildMemoryProfileSnapshot } from "./memory-profile.js";
+import { filterRetrievedMemory } from "./personalization-policy.js";
+import { extractProjectHints } from "./project-context.js";
+import type {
+  ContextPacket,
+  IntentClassification,
+  MemoryProfileSnapshot,
+  RetrievedMemory,
+  TaskUnderstandingInput,
+  UserProfileSnapshot,
+  UserUnderstandingContext,
+} from "./types.js";
+
+const MAX_HINTS = 12;
+const MAX_CHARS = 4000;
+
+function compactText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function tokenize(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9çğıöşü_\s.-]/gi, " ")
+      .split(/\s+/)
+      .filter((token) => token.length >= 3)
+      .slice(0, 80),
+  );
+}
+
+function scoreMemory(item: RetrievedMemory, queryTokens: Set<string>, now = Date.now()): number {
+  const text = `${item.type} ${item.key} ${item.value}`;
+  const itemTokens = tokenize(text);
+  let overlap = 0;
+
+  for (const token of queryTokens) {
+    if (itemTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  const referenceTime = item.lastVerifiedAt?.getTime() ?? item.createdAt.getTime();
+  const ageDays = Math.max(0, (now - referenceTime) / 86_400_000);
+  const recency = Math.max(0, 1 - ageDays / 120);
+  const stalenessPenalty =
+    item.staleness === "contested" ? -1 : item.staleness === "stale" ? -0.5 : 0.14;
+  const conflictPenalty =
+    item.conflictStatus === "contested" ? -0.72 : item.conflictStatus === "superseded" ? -1 : 0.08;
+  const pinBoost = item.isPinned ? 0.44 : 0;
+  const verifiedBoost = item.lastVerifiedAt ? Math.max(0.08, Math.min(0.28, 0.28 - ageDays / 360)) : 0;
+  return overlap * 1.8 + item.confidence + recency + stalenessPenalty + conflictPenalty + pinBoost + verifiedBoost;
+}
+
+function pushBounded(target: string[], value: string, state: { chars: number }) {
+  const compact = compactText(value);
+
+  if (!compact || target.includes(compact) || target.length >= MAX_HINTS || state.chars + compact.length > MAX_CHARS) {
+    return;
+  }
+
+  target.push(compact);
+  state.chars += compact.length;
+}
+
+function readFactValue(
+  snapshot: MemoryProfileSnapshot | undefined,
+  keys: string[],
+): string | null {
+  const facts = [...(snapshot?.identityFacts ?? []), ...(snapshot?.preferenceFacts ?? [])];
+
+  for (const key of keys) {
+    const match = facts.find((item) => item.key === key && compactText(item.value));
+    if (match) {
+      return compactText(match.value);
+    }
+  }
+
+  return null;
+}
+
+function buildUserProfileSnapshot(input: {
+  profile?: Partial<UserProfileSnapshot> | null;
+  memorySnapshot?: MemoryProfileSnapshot;
+}): UserProfileSnapshot | undefined {
+  const displayName = compactText(String(input.profile?.displayName ?? ""));
+  const preferredName =
+    readFactValue(input.memorySnapshot, ["preferred_name", "name"]) ??
+    compactText(String(input.profile?.preferredName ?? ""));
+  const preferredLanguage =
+    readFactValue(input.memorySnapshot, ["preferred_language", "language"]) ??
+    compactText(String(input.profile?.preferredLanguage ?? ""));
+  const planCode = compactText(String(input.profile?.planCode ?? "")).toLowerCase();
+  const subscriptionStatus = compactText(String(input.profile?.subscriptionStatus ?? "")).toLowerCase();
+
+  const snapshot: UserProfileSnapshot = {
+    displayName: displayName || null,
+    preferredName: preferredName || null,
+    planCode: planCode || null,
+    subscriptionStatus: subscriptionStatus || null,
+    preferredLanguage: preferredLanguage || null,
+  };
+
+  return Object.values(snapshot).some((value) => value != null) ? snapshot : undefined;
+}
+
+async function loadSafeUserProfile(
+  app: FastifyInstance,
+  userId: string,
+): Promise<Partial<UserProfileSnapshot> | null> {
+  try {
+    const rows = await app.db
+      .select({
+        displayName: users.displayName,
+        planCode: subscriptions.planCode,
+        subscriptionStatus: subscriptions.status,
+      })
+      .from(users)
+      .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      displayName: compactText(String(row.displayName ?? "")) || null,
+      planCode: compactText(String(row.planCode ?? "")).toLowerCase() || null,
+      subscriptionStatus: compactText(String(row.subscriptionStatus ?? "")).toLowerCase() || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractEcosystemHints(input: {
+  title?: string;
+  message?: string;
+  metadata?: Record<string, unknown>;
+}): string[] {
+  const text = `${input.title ?? ""} ${input.message ?? ""}`.toLowerCase();
+  const hints = new Set<string>();
+
+  if (/\belyan\b/i.test(text)) {
+    hints.add("elyan_ecosystem");
+  }
+  if (/\b(desktop|runtime|pairing|pair|local runtime|local_runtime)\b/i.test(text)) {
+    hints.add("desktop_runtime");
+  }
+  if (/\b(mobile|flutter|ios|android)\b/i.test(text)) {
+    hints.add("mobile_surface");
+  }
+  if (/\b(backend|server|api|control plane|control-plane|control_plane)\b/i.test(text)) {
+    hints.add("backend_control_plane");
+  }
+  if (/\b(fastify|drizzle|postgres|sql|api|backend|server)\b/i.test(text)) {
+    hints.add("backend_control_plane");
+  }
+  if (/\b(brain|memory|retrieval|rag|learning|understanding)\b/i.test(text)) {
+    hints.add("brain_understanding");
+  }
+  if (/\b(quota|billing|auth|subscription|credit|usage)\b/i.test(text)) {
+    hints.add("policy_and_quota");
+  }
+  if (typeof input.metadata?.projectName === "string" && input.metadata.projectName.trim()) {
+    hints.add(`project:${input.metadata.projectName.trim()}`);
+    if (input.metadata.projectName.trim().toLowerCase() === "elyan") {
+      hints.add("elyan_ecosystem");
+    }
+  }
+
+  return [...hints].slice(0, 6);
+}
+
+function deriveTaskFrame(input: {
+  intent: IntentClassification;
+  message: string;
+}): UserUnderstandingContext["taskFrame"] {
+  return {
+    goal: input.intent.taskFrame.goal,
+    likelyAnswerShape: input.intent.taskFrame.likelyAnswerShape,
+    reasoningMode: input.intent.taskFrame.reasoningMode,
+    shouldClarify:
+      input.intent.taskFrame.shouldClarify ||
+      /^(bunu|şunu|sunu|this|that|it)\b/i.test(input.message.trim()) ||
+      /^(düzelt|duzelt|fix it|improve this|optimize this)\b/i.test(input.message.trim()),
+  };
+}
+
+export function buildUserContextFromMemory(input: {
+  userId: string;
+  accountId: string;
+  intent: IntentClassification;
+  task: TaskUnderstandingInput;
+  memory: RetrievedMemory[];
+  profile?: Partial<UserProfileSnapshot> | null;
+  contextPackets?: ContextPacket[];
+}): UserUnderstandingContext {
+  const filteredMemory = filterRetrievedMemory(input.memory).slice(0, MAX_HINTS);
+  const memorySnapshot = buildMemoryProfileSnapshot(filteredMemory);
+  const userProfile = buildUserProfileSnapshot({
+    profile: input.profile,
+    memorySnapshot,
+  });
+  const state = { chars: 0 };
+  const ecosystemHints = extractEcosystemHints(input.task);
+  const personalizationHints: string[] = [];
+  const projectHints: string[] = [];
+  const styleHints: string[] = [];
+  const technicalHints: string[] = [];
+  const safetyHints: string[] = [];
+  const contextPackets = (input.contextPackets ?? []).slice(0, 8);
+  const packetKinds = Array.from(new Set(contextPackets.map((packet) => packet.kind)));
+  const healthContextUsed = packetKinds.includes("health_context");
+
+  for (const hint of extractProjectHints(input.task)) {
+    pushBounded(projectHints, hint, state);
+  }
+
+  for (const item of filteredMemory) {
+    const hint = `${item.key}: ${item.value}`;
+
+    if (item.type === "style") {
+      pushBounded(styleHints, hint, state);
+    } else if (item.type === "technical_stack") {
+      pushBounded(technicalHints, hint, state);
+    } else if (item.type === "project_context") {
+      pushBounded(projectHints, hint, state);
+    } else if (item.type === "correction") {
+      pushBounded(safetyHints, hint, state);
+    } else {
+      pushBounded(personalizationHints, hint, state);
+    }
+  }
+
+  if (input.intent.privacyRisk === "high" || input.intent.requiresLocalRuntime) {
+    pushBounded(safetyHints, "Keep private local runtime data local unless the user explicitly allows sharing.", state);
+  }
+
+  if (input.intent.requiresCitation) {
+    pushBounded(personalizationHints, "Prefer cited, source-grounded answers for this request.", state);
+  }
+
+  if (healthContextUsed) {
+    pushBounded(
+      safetyHints,
+      "Use health context only as short-lived wellbeing/readiness context; never diagnose, prescribe, or persist it as a permanent profile fact.",
+      state,
+    );
+  }
+
+  if (packetKinds.includes("calendar_context")) {
+    pushBounded(
+      safetyHints,
+      "Use calendar context only as a derived schedule/load signal; never quote event titles, attendees, notes, or private calendar bodies.",
+      state,
+    );
+  }
+
+  if (packetKinds.includes("notification_context")) {
+    pushBounded(
+      safetyHints,
+      "Use notification context only as attention/urgency context; never quote notification content or infer private relationships from it.",
+      state,
+    );
+  }
+
+  if (packetKinds.includes("device_context")) {
+    pushBounded(
+      safetyHints,
+      "Use device context to adapt pacing and reliability expectations; never expose device identifiers, local paths, or private diagnostics.",
+      state,
+    );
+  }
+
+  return {
+    userId: input.userId,
+    accountId: input.accountId,
+    intent: input.intent.primaryIntent,
+    taskFrame: deriveTaskFrame({
+      intent: input.intent,
+      message: input.task.message,
+    }),
+    ecosystemHints,
+    personalizationHints,
+    projectHints,
+    styleHints,
+    technicalHints,
+    safetyHints,
+    contextPackets,
+    healthContextUsed,
+    packetKinds,
+    freshness: summarizeContextFreshness(contextPackets),
+    retrievedMemory: filteredMemory,
+    memorySnapshot,
+    userProfile,
+    tokenBudget: {
+      maxHints: MAX_HINTS,
+      maxChars: MAX_CHARS,
+    },
+  };
+}
+
+export async function buildUserContext(
+  app: FastifyInstance,
+  input: TaskUnderstandingInput & { intent: IntentClassification },
+): Promise<UserUnderstandingContext> {
+  const accountId = input.accountId ?? input.userId;
+  const query = `${input.title ?? ""} ${input.message ?? ""} ${input.intent.primaryIntent}`;
+  const queryTokens = tokenize(query);
+  const now = new Date();
+  const contextPackets = app.config.ELYAN_WORLD_CONTEXT_PACKETS_ENABLED
+    ? buildContextPacketsFromMetadata(input.metadata, {
+        now,
+        requestText: input.message,
+        intent: input.intent.primaryIntent,
+      })
+    : [];
+  const [memorySearch, userProfile] = await Promise.all([
+    searchBrainMemory(app, {
+      userId: input.userId,
+      query,
+      limit: MAX_HINTS,
+    }).catch(() => ({
+      results: [],
+    })),
+    loadSafeUserProfile(app, input.userId),
+  ]);
+
+  const stableMemory = memorySearch.results.map((result) => ({
+    id: result.id,
+    type: result.memoryType,
+    key: result.title,
+    value: result.content,
+    confidence: result.confidence / 100,
+    scope: result.scope,
+    source: result.memorySource,
+    createdAt: new Date(result.updatedAt),
+    staleness: result.staleness,
+    conflictStatus: result.conflictStatus,
+    lastVerifiedAt: result.lastVerifiedAt ? new Date(result.lastVerifiedAt) : null,
+    importanceScore: result.importanceScore,
+    isPinned: result.isPinned,
+  }));
+
+  const fallbackRows =
+    stableMemory.length >= Math.min(4, MAX_HINTS)
+      ? []
+      : await app.db
+          .select({
+            id: learningEvents.id,
+            type: learningEvents.type,
+            key: learningEvents.key,
+            value: learningEvents.value,
+            confidence: learningEvents.confidence,
+            scope: learningEvents.scope,
+            source: learningEvents.source,
+            createdAt: learningEvents.createdAt,
+          })
+          .from(learningEvents)
+          .where(
+            and(
+              eq(learningEvents.userId, input.userId),
+              or(isNull(learningEvents.expiresAt), gt(learningEvents.expiresAt, now)),
+            ),
+          )
+          .orderBy(desc(learningEvents.createdAt))
+          .limit(40);
+
+  const memory = [...stableMemory, ...fallbackRows.map((row) => ({
+    ...row,
+    confidence: row.confidence / 100,
+  }))].sort((left, right) => scoreMemory(right, queryTokens) - scoreMemory(left, queryTokens)).slice(0, MAX_HINTS);
+
+  return buildUserContextFromMemory({
+    userId: input.userId,
+    accountId,
+    intent: input.intent,
+    task: input,
+    memory,
+    profile: userProfile,
+    contextPackets,
+  });
+}

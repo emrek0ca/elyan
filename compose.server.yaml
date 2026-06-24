@@ -1,0 +1,163 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: elyan_backend
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d elyan_backend"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    env_file:
+      - .env
+    volumes:
+      - ./secrets/apple-iap-private-key.p8:/run/secrets/apple-iap-private-key.p8:ro
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4000
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/elyan_backend
+      REDIS_URL: redis://redis:6379
+      RELIABILITY_REDIS_REQUIRED: "true"
+      RATE_LIMIT_REDIS_ENABLED: "true"
+      REALTIME_REDIS_FANOUT_ENABLED: "true"
+      REALTIME_REDIS_CHANNEL_PREFIX: elyan:realtime
+      REALTIME_EVENT_RETENTION_HOURS: 48
+      SSE_MAX_STREAMS_PER_USER: 4
+      SSE_REPLAY_LIMIT: 500
+      SSE_HEARTBEAT_MS: 15000
+      BRAIN_CIRCUIT_FAILURE_THRESHOLD: 3
+      BRAIN_CIRCUIT_OPEN_MS: 30000
+      TASK_DISPATCH_LOCK_TTL_MS: 120000
+      GROQ_BASE_URL: https://api.groq.com/openai/v1
+      GROQ_REASONING_MODEL: openai/gpt-oss-120b
+      GROQ_FAST_MODEL: openai/gpt-oss-20b
+      GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
+      ELYAN_SHARED_BRAIN_PROVIDER: groq
+      ELYAN_SHARED_BRAIN_BASE_URL: https://api.groq.com/openai/v1
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ""
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ""
+      ELYAN_SHARED_BRAIN_MODEL: openai/gpt-oss-120b
+      ELYAN_SHARED_BRAIN_FAST_MODEL: openai/gpt-oss-20b
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: openai/gpt-oss-120b
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: openai/gpt-oss-120b
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: 2h
+      ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: "true"
+    ports:
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/readyz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  training-worker:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/elyan_backend
+      REDIS_URL: redis://redis:6379
+      RELIABILITY_REDIS_REQUIRED: "true"
+      RATE_LIMIT_REDIS_ENABLED: "true"
+      REALTIME_REDIS_FANOUT_ENABLED: "true"
+      REALTIME_REDIS_CHANNEL_PREFIX: elyan:realtime
+      REALTIME_EVENT_RETENTION_HOURS: 48
+      SSE_MAX_STREAMS_PER_USER: 4
+      SSE_REPLAY_LIMIT: 500
+      SSE_HEARTBEAT_MS: 15000
+      BRAIN_CIRCUIT_FAILURE_THRESHOLD: 3
+      BRAIN_CIRCUIT_OPEN_MS: 30000
+      TASK_DISPATCH_LOCK_TTL_MS: 120000
+      GROQ_BASE_URL: https://api.groq.com/openai/v1
+      GROQ_REASONING_MODEL: openai/gpt-oss-120b
+      GROQ_FAST_MODEL: openai/gpt-oss-20b
+      GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
+      ELYAN_SHARED_BRAIN_PROVIDER: groq
+      ELYAN_SHARED_BRAIN_BASE_URL: https://api.groq.com/openai/v1
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ""
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ""
+      ELYAN_SHARED_BRAIN_MODEL: openai/gpt-oss-120b
+      ELYAN_SHARED_BRAIN_FAST_MODEL: openai/gpt-oss-20b
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: openai/gpt-oss-120b
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: openai/gpt-oss-120b
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: 2h
+      ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: "true"
+      NODE_TRAINING_WORKER_ENABLED: "false"
+    command: ["sh", "-lc", "echo 'node training worker disabled; ml-worker owns training job execution'; sleep infinity"]
+
+  ml-worker:
+    build:
+      context: ./ml-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/elyan_backend
+      ML_WORKER_HEARTBEAT_SECONDS: 15
+      ML_WORKER_MODE: runner
+      ML_WORKER_POLL_SECONDS: 5
+      ML_WORKER_JOB_TIMEOUT_SECONDS: 300
+      ML_WORKER_MAX_BATCH: 1
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, redis; r=redis.Redis.from_url(os.environ['REDIS_URL']); raise SystemExit(0 if r.ping() else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres_data:
+  redis_data:

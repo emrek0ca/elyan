@@ -1,0 +1,266 @@
+export type BillingPlanCode = "free" | "solo" | "pro";
+export type QualityProfile = "free_basic" | "solo_enhanced" | "pro_max";
+
+export type PlanBrainProfile = {
+  qualityProfile: QualityProfile;
+  tier: "standard" | "premium";
+  reasoningMultiplier: 1 | 3 | 5;
+  retrievalFanout: number;
+  memoryFanout: number;
+  maxTokenScale: number;
+};
+
+export type BillingPlan = {
+  code: BillingPlanCode;
+  label: string;
+  monthlyPrice: number;
+  currencyCode: "USD";
+  interval: "MONTHLY";
+  desktopLimit: number;
+  taskLimitMonthly: number;
+  aiCreditsMonthly: number;
+  dailyBudgetUnits: number;
+  weeklyBudgetUnits: number;
+  documentUploadLimit: number;
+  imageUploadLimit: number;
+  toolUnitsLimit: number;
+  byokRequired: boolean;
+  brainProfile: PlanBrainProfile;
+  recommended?: boolean;
+  visible: boolean;
+  features: string[];
+  providerProducts: {
+    apple?: {
+      productId: string;
+      subscriptionGroup: "elyan_plans";
+      duration: "P1M";
+    };
+    google?: {
+      productId: string;
+      basePlanId: "monthly";
+      offerId?: string;
+    };
+  };
+};
+
+function createBrainProfile(input: PlanBrainProfile): PlanBrainProfile {
+  return input;
+}
+
+export function canUseDesktopConnections(code?: string | null): boolean {
+  return normalizeBillingPlanCode(code) === "pro";
+}
+
+const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
+  free: {
+    code: "free",
+    label: "Free",
+    monthlyPrice: 0,
+    currencyCode: "USD",
+    interval: "MONTHLY",
+    desktopLimit: 0,
+    taskLimitMonthly: 50,
+    aiCreditsMonthly: 120,
+    dailyBudgetUnits: 4,
+    weeklyBudgetUnits: 72,
+    documentUploadLimit: 4,
+    imageUploadLimit: 4,
+    toolUnitsLimit: 3,
+    byokRequired: false,
+    brainProfile: createBrainProfile({
+      qualityProfile: "free_basic",
+      tier: "standard",
+      reasoningMultiplier: 1,
+      retrievalFanout: 2,
+      memoryFanout: 2,
+      maxTokenScale: 1,
+    }),
+    visible: true,
+    providerProducts: {},
+    features: [
+      "No desktop connection",
+      "120 tokens included",
+      "Best for trying Elyan mobile chat",
+    ],
+  },
+  solo: {
+    code: "solo",
+    label: "Solo",
+    monthlyPrice: 6.99,
+    currencyCode: "USD",
+    interval: "MONTHLY",
+    desktopLimit: 0,
+    taskLimitMonthly: 200,
+    aiCreditsMonthly: 600,
+    dailyBudgetUnits: 18,
+    weeklyBudgetUnits: 288,
+    documentUploadLimit: 14,
+    imageUploadLimit: 14,
+    toolUnitsLimit: 9,
+    byokRequired: false,
+    brainProfile: createBrainProfile({
+      qualityProfile: "solo_enhanced",
+      tier: "standard",
+      reasoningMultiplier: 3,
+      retrievalFanout: 4,
+      memoryFanout: 5,
+      maxTokenScale: 1.12,
+    }),
+    visible: true,
+    providerProducts: {
+      apple: {
+        productId: "com.elyan.elyanMobile.solo.monthly",
+        subscriptionGroup: "elyan_plans",
+        duration: "P1M",
+      },
+      google: {
+        productId: "com.elyan.elyanMobile.solo.monthly",
+        basePlanId: "monthly",
+      },
+    },
+    features: [
+      "No desktop connection",
+      "600 tokens included",
+      "Best for light daily use",
+    ],
+  },
+  pro: {
+    code: "pro",
+    label: "Pro",
+    monthlyPrice: 17.99,
+    currencyCode: "USD",
+    interval: "MONTHLY",
+    desktopLimit: 3,
+    taskLimitMonthly: 2_000,
+    aiCreditsMonthly: 2_000,
+    dailyBudgetUnits: 60,
+    weeklyBudgetUnits: 960,
+    documentUploadLimit: 48,
+    imageUploadLimit: 48,
+    toolUnitsLimit: 24,
+    byokRequired: false,
+    brainProfile: createBrainProfile({
+      qualityProfile: "pro_max",
+      tier: "premium",
+      reasoningMultiplier: 5,
+      retrievalFanout: 6,
+      memoryFanout: 8,
+      maxTokenScale: 1.35,
+    }),
+    recommended: true,
+    visible: true,
+    providerProducts: {
+      apple: {
+        productId: "com.elyan.elyanMobile.pro.monthly",
+        subscriptionGroup: "elyan_plans",
+        duration: "P1M",
+      },
+      google: {
+        productId: "com.elyan.elyanMobile.pro.monthly",
+        basePlanId: "monthly",
+      },
+    },
+    features: [
+      "3 desktops",
+      "2,000 tokens included",
+      "Priority queue and richer history",
+    ],
+  },
+};
+
+export function normalizeBillingPlanCode(code?: string | null): BillingPlanCode {
+  const normalized = String(code || "free").trim().toLowerCase();
+
+  if (normalized === "solo" || normalized === "pro" || normalized === "free") {
+    return normalized;
+  }
+
+  if (normalized === "team") {
+    return "pro";
+  }
+
+  return "free";
+}
+
+export function getBillingPlan(code?: string | null): BillingPlan {
+  const normalized = normalizeBillingPlanCode(code);
+  return BILLING_PLAN_CATALOG[normalized] ?? BILLING_PLAN_CATALOG.free;
+}
+
+export function listSellableBillingPlans(): BillingPlan[] {
+  return Object.values(BILLING_PLAN_CATALOG).filter((plan) => plan.visible);
+}
+
+export function getPlanBrainProfile(code?: string | null): PlanBrainProfile {
+  return getBillingPlan(code).brainProfile;
+}
+
+export function normalizePlanBrainProfile(input?: unknown): PlanBrainProfile {
+  const fallback = BILLING_PLAN_CATALOG.free.brainProfile;
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return fallback;
+  }
+
+  const record = input as Record<string, unknown>;
+  const qualityProfile =
+    record.qualityProfile === "pro_max"
+      ? "pro_max"
+      : record.qualityProfile === "solo_enhanced"
+        ? "solo_enhanced"
+        : "free_basic";
+  const tier = record.tier === "premium" ? "premium" : "standard";
+  const reasoningMultiplierRaw = Number(record.reasoningMultiplier);
+  const reasoningMultiplier =
+    reasoningMultiplierRaw >= 5 ? 5 : reasoningMultiplierRaw >= 3 ? 3 : 1;
+  const retrievalFanout = Math.max(
+    1,
+    Math.min(
+      10,
+      Math.round(
+        Number(record.retrievalFanout) ||
+          (qualityProfile === "pro_max" ? 6 : qualityProfile === "solo_enhanced" ? 4 : 2),
+      ),
+    ),
+  );
+  const memoryFanout = Math.max(
+    1,
+    Math.min(
+      12,
+      Math.round(
+        Number(record.memoryFanout) ||
+          (qualityProfile === "pro_max" ? 8 : qualityProfile === "solo_enhanced" ? 5 : 2),
+      ),
+    ),
+  );
+  const maxTokenScaleRaw = Number(record.maxTokenScale);
+  const maxTokenScale =
+    Number.isFinite(maxTokenScaleRaw) && maxTokenScaleRaw > 0
+      ? Math.min(2, Math.max(1, Number(maxTokenScaleRaw.toFixed(2))))
+      : qualityProfile === "pro_max"
+        ? 1.35
+        : qualityProfile === "solo_enhanced"
+          ? 1.12
+          : 1;
+
+  return createBrainProfile({
+    qualityProfile,
+    tier,
+    reasoningMultiplier: reasoningMultiplier === 5 ? 5 : reasoningMultiplier === 3 ? 3 : 1,
+    retrievalFanout,
+    memoryFanout,
+    maxTokenScale,
+  });
+}
+
+export function applyBillingPlanDefaults(code?: string | null): Pick<BillingPlan, "taskLimitMonthly" | "aiCreditsMonthly"> {
+  const plan = getBillingPlan(code);
+  return {
+    taskLimitMonthly: plan.taskLimitMonthly,
+    aiCreditsMonthly: plan.aiCreditsMonthly,
+  };
+}
+
+export function isSellablePlanCode(code?: string | null): code is Exclude<BillingPlanCode, "free"> {
+  const normalized = normalizeBillingPlanCode(code);
+  return normalized === "solo" || normalized === "pro";
+}

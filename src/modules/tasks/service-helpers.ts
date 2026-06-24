@@ -1,0 +1,770 @@
+import type { TaskStatus } from "../../contracts/domain.js";
+import { createIdempotencyFingerprint } from "../../lib/idempotency.js";
+import { AppError, unprocessableEntity } from "../../lib/errors.js";
+import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
+
+type IdempotentTaskRow = {
+  id: string;
+  idempotencyFingerprint: string | null;
+};
+
+export type MobileTaskFeedRow = {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  targetDeviceId: string;
+  queuePosition: number;
+  dispatchAttemptCount?: number | null;
+  runtimeConnectionId?: string | null;
+  dispatchLeaseId?: string | null;
+  dispatchLeaseIssuedAt?: Date | null;
+  dispatchLeaseExpiresAt?: Date | null;
+  dispatchAckAt?: Date | null;
+  requestedCapabilities?: unknown;
+  payload?: unknown;
+  result?: unknown;
+  summary?: string | null;
+  error?: string | null;
+  approvalRequest?: unknown;
+  createdAt: Date;
+  startedAt?: Date | null;
+  completedAt?: Date | null;
+  canceledAt?: Date | null;
+  updatedAt: Date;
+};
+
+export type OwnedDesktopTaskTarget = {
+  type: "mobile" | "desktop";
+  isActive: boolean;
+  canReceiveTasks: boolean;
+  isOnline: boolean;
+  targetStatus: string;
+  runtime: {
+    lastHeartbeatAt: Date | null;
+  };
+};
+
+export type SharedBrainConversationMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+export type TaskDeliveryState = "queued" | "dispatched" | "acked" | "recovering";
+export type TaskArtifactViewerHint = "text" | "markdown" | "pdf" | "image" | "document" | "structured" | "file";
+export type TaskArtifactContentFamily = "text" | "image" | "document" | "structured" | "binary";
+export type TaskArtifactRecord = {
+  id: string;
+  taskId: string;
+  kind: string;
+  name: string;
+  contentType: string;
+  storageKey?: string | null;
+  textContent?: string | null;
+  payload?: unknown;
+  bodyBlobId?: string | null;
+  contentHash?: string | null;
+  byteLength?: number | null;
+  contentEncoding?: string | null;
+  downloadable?: boolean | null;
+  viewerHint?: string | null;
+  downloadUrl?: string | null;
+  metadata?: unknown;
+  createdAt: Date;
+};
+export type ShapedTaskArtifact = TaskArtifactRecord & {
+  viewerHint: TaskArtifactViewerHint;
+  contentFamily: TaskArtifactContentFamily;
+  previewText: string | null;
+  downloadName: string;
+  downloadable: boolean;
+  downloadUrl: string | null;
+  contentHash: string | null;
+  byteLength: number | null;
+  contentEncoding: string | null;
+};
+
+const TASK_TITLE_MAX_LENGTH = 96;
+const TASK_TITLE_FALLBACK = "Yeni görev";
+
+function normalizeTaskTitle(raw: unknown): string {
+  const text = String(raw ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) {
+    return "";
+  }
+
+  if (text.length <= TASK_TITLE_MAX_LENGTH) {
+    return text;
+  }
+
+  return `${text.slice(0, TASK_TITLE_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+export function canonicalTaskTitle(input: { title?: unknown; prompt?: unknown }): string {
+  return normalizeTaskTitle(input.title) || normalizeTaskTitle(input.prompt) || TASK_TITLE_FALLBACK;
+}
+
+export function shapeTaskFeedItem(
+  task: MobileTaskFeedRow,
+  options?: {
+    selectedDesktopOnline?: boolean | null;
+  },
+) {
+  const quantum = extractTaskQuantumSnapshot(task);
+  const presentation = extractTaskPresentation(task.payload);
+  const routeDecision = extractTaskRouteDecision(task.payload);
+  const operator = extractTaskOperatorSummary(task.result);
+  const brain = extractTaskBrainMetadata(task.result);
+  const resultRecord =
+    task.result && typeof task.result === "object" && !Array.isArray(task.result)
+      ? (task.result as Record<string, unknown>)
+      : null;
+  const renderRecipe =
+    resultRecord?.renderRecipe && typeof resultRecord.renderRecipe === "object" && !Array.isArray(resultRecord.renderRecipe)
+      ? resultRecord.renderRecipe
+      : null;
+  return {
+    id: task.id,
+    title: canonicalTaskTitle({ title: task.title }),
+    status: task.status,
+    targetDeviceId: task.targetDeviceId,
+    chatSessionId: extractTaskChatSessionId(task.payload),
+    presentation,
+    queuePosition: task.queuePosition,
+    requestedCapabilities: Array.isArray(task.requestedCapabilities) ? task.requestedCapabilities : [],
+    runtimeConnectionId: task.runtimeConnectionId ?? null,
+    dispatchLeaseId: task.dispatchLeaseId ?? null,
+    dispatchLeaseExpiresAt: task.dispatchLeaseExpiresAt ?? null,
+    dispatchAckAt: task.dispatchAckAt ?? null,
+    lastAckAt: task.dispatchAckAt ?? null,
+    deliveryAttemptCount: task.dispatchAttemptCount ?? 0,
+    lastDispatchAttemptAt: task.dispatchLeaseIssuedAt ?? task.dispatchAckAt ?? null,
+    deliveryState: deriveTaskDeliveryState(task),
+    selectedDesktopOnline: options?.selectedDesktopOnline ?? null,
+    routeDecision,
+    ...(brain ? { brain } : {}),
+    ...(operator ? { operator } : {}),
+    ...(quantum ? { quantum } : {}),
+    ...(renderRecipe ? { renderRecipe } : {}),
+    summary: task.summary ?? null,
+    error: task.error ?? null,
+    approvalRequest: task.approvalRequest ?? null,
+    createdAt: task.createdAt,
+    startedAt: task.startedAt ?? null,
+    completedAt: task.completedAt ?? null,
+    canceledAt: task.canceledAt ?? null,
+    updatedAt: task.updatedAt,
+  };
+}
+
+export function shapeTaskArtifact<T extends TaskArtifactRecord>(artifact: T): T & ShapedTaskArtifact {
+  const viewerHint =
+    typeof artifact.viewerHint === "string" && artifact.viewerHint.trim()
+      ? (artifact.viewerHint.trim() as TaskArtifactViewerHint)
+      : inferArtifactViewerHint(artifact.kind, artifact.contentType);
+  const previewText = extractArtifactPreviewText(artifact);
+  return {
+    ...artifact,
+    downloadName: normalizeArtifactName(artifact.name) || artifact.id,
+    downloadable: Boolean(artifact.downloadable ?? artifact.storageKey ?? artifact.bodyBlobId),
+    downloadUrl: typeof artifact.downloadUrl === "string" && artifact.downloadUrl.trim() ? artifact.downloadUrl : null,
+    contentHash: typeof artifact.contentHash === "string" && artifact.contentHash.trim() ? artifact.contentHash : null,
+    byteLength: typeof artifact.byteLength === "number" && Number.isFinite(artifact.byteLength) ? artifact.byteLength : null,
+    contentEncoding:
+      typeof artifact.contentEncoding === "string" && artifact.contentEncoding.trim()
+        ? artifact.contentEncoding.trim()
+        : null,
+    viewerHint,
+    contentFamily: inferArtifactContentFamily(viewerHint),
+    previewText,
+  };
+}
+
+function inferArtifactViewerHint(kind: string, contentType: string): TaskArtifactViewerHint {
+  const normalizedKind = String(kind ?? "").trim().toLowerCase();
+  const mime = normalizeMimeType(contentType);
+
+  if (normalizedKind === "markdown" || mime === "text/markdown" || mime.endsWith("+markdown")) {
+    return "markdown";
+  }
+
+  if (normalizedKind === "screenshot" || mime.startsWith("image/")) {
+    return "image";
+  }
+
+  if (mime === "application/pdf") {
+    return "pdf";
+  }
+
+  if (
+    mime.includes("wordprocessingml") ||
+    mime.includes("msword") ||
+    mime.includes("officedocument") ||
+    mime.includes("opendocument.text") ||
+    mime === "application/rtf"
+  ) {
+    return "document";
+  }
+
+  if (
+    normalizedKind === "structured_output" ||
+    mime === "application/json" ||
+    mime.endsWith("+json") ||
+    mime === "application/xml" ||
+    mime.endsWith("+xml") ||
+    mime === "text/csv"
+  ) {
+    return "structured";
+  }
+
+  if (normalizedKind === "summary" || mime.startsWith("text/")) {
+    return "text";
+  }
+
+  return "file";
+}
+
+function inferArtifactContentFamily(viewerHint: TaskArtifactViewerHint): TaskArtifactContentFamily {
+  switch (viewerHint) {
+    case "image":
+      return "image";
+    case "pdf":
+    case "document":
+      return "document";
+    case "markdown":
+    case "text":
+      return "text";
+    case "structured":
+      return "structured";
+    case "file":
+    default:
+      return "binary";
+  }
+}
+
+function extractArtifactPreviewText(artifact: TaskArtifactRecord): string | null {
+  const textContent = normalizePreviewSource(artifact.textContent);
+  if (textContent) {
+    return compactPreviewText(textContent);
+  }
+
+  const payload = readRecord(artifact.payload);
+  const outputType = readString(payload, "output_type");
+  const format = readString(payload, "format");
+  const payloadPreview =
+    (outputType && format ? `${outputType} (${format})` : null) ??
+    readString(payload, "previewText") ??
+    readString(payload, "summary") ??
+    readString(payload, "textContent") ??
+    readString(payload, "text") ??
+    readString(payload, "content");
+  if (!payloadPreview) {
+    return null;
+  }
+
+  return compactPreviewText(payloadPreview);
+}
+
+function compactPreviewText(text: string, maxLength = 320): string {
+  const normalized = normalizePreviewSource(text);
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function normalizePreviewSource(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function normalizeMimeType(contentType: string): string {
+  return String(contentType ?? "")
+    .trim()
+    .toLowerCase()
+    .split(";")[0]
+    ?.trim() ?? "";
+}
+
+function normalizeArtifactName(name: string): string {
+  return String(name ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTaskBrainMetadata(value: unknown) {
+  const result = readRecord(value);
+  if (!result) {
+    return null;
+  }
+  const metadata = {
+    firstDeltaMs: readNumber(result, "firstDeltaMs"),
+    fallbackUsed: readBoolean(result, "fallbackUsed"),
+    groundingUsed: readBoolean(result, "groundingUsed"),
+    documentSourceCount: readNumber(result, "documentSourceCount"),
+    webGroundingUsed: readBoolean(result, "webGroundingUsed"),
+    webSourceCount: readNumber(result, "webSourceCount"),
+    attachmentContextUsed: readBoolean(result, "attachmentContextUsed"),
+    attachmentContextSource: readString(result, "attachmentContextSource"),
+    attachmentDocumentIds: readStringList(result, "attachmentDocumentIds"),
+    qualityPolicyApplied: readBoolean(result, "qualityPolicyApplied"),
+    dataGroundingLevel: readString(result, "dataGroundingLevel"),
+    personalizationScope: readString(result, "personalizationScope"),
+    responseLanguage: readString(result, "responseLanguage"),
+    evidenceSufficiency: readString(result, "evidenceSufficiency"),
+    dataConfidence: readString(result, "dataConfidence"),
+    dataQualityWarnings: readStringList(result, "dataQualityWarnings"),
+    responseBudgetState: readString(result, "responseBudgetState"),
+    responseBudgetReason: readString(result, "responseBudgetReason"),
+    contextPacketCount: readNumber(result, "contextPacketCount"),
+    contextPacketKinds: readStringList(result, "contextPacketKinds"),
+    healthContextUsed: readBoolean(result, "healthContextUsed"),
+  };
+  return Object.values(metadata).some((value) => (Array.isArray(value) ? value.length > 0 : value !== null))
+    ? metadata
+    : null;
+}
+
+const INTERNAL_INFERENCE_KEYS = new Set([
+  "provider",
+  "model",
+  "baseModel",
+  "configuredBaseModel",
+  "resolvedBaseModel",
+  "resolvedBaseModelSource",
+  "availableModels",
+  "fallbackModel",
+  "fallbackState",
+  "runtimeProvider",
+  "activeSharedModelProvider",
+  "attemptedModels",
+  "attemptedProviders",
+  "modelSource",
+]);
+
+export function sanitizePublicInferenceValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizePublicInferenceValue(item));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !INTERNAL_INFERENCE_KEYS.has(key))
+      .map(([key, nestedValue]) => [key, sanitizePublicInferenceValue(nestedValue)]),
+  );
+}
+
+function extractTaskOperatorSummary(value: unknown) {
+  const result = readRecord(value);
+  const operator = readRecord(result?.operator);
+  if (!operator) {
+    return null;
+  }
+  return {
+    runId: readString(operator, "runId"),
+    status: readString(operator, "status"),
+    currentStep: readNumber(operator, "currentStep"),
+    requiresApproval: readBoolean(operator, "requiresApproval"),
+    activeApp: readString(operator, "activeApp"),
+    activeWindow: readString(operator, "activeWindow"),
+    lastVerificationOk: readBoolean(operator, "lastVerificationOk"),
+    observationId: readString(operator, "observationId"),
+    stopReason: readString(operator, "stopReason"),
+  };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function readString(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function readStringList(record: Record<string, unknown> | null, key: string): string[] {
+  const value = record?.[key];
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+}
+
+function readNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function hasQuantumCapability(task: MobileTaskFeedRow): boolean {
+  const requested = Array.isArray(task.requestedCapabilities) ? task.requestedCapabilities : [];
+  return requested.some((capability) => String(capability ?? "").trim().toLowerCase().replace(/[\s_]+/g, ".").startsWith("quantum."));
+}
+
+function normalizeTaskQuantumSnapshot(value: unknown) {
+  const record = readRecord(value);
+  if (!record) {
+    return null;
+  }
+  const mode = readString(record, "mode") ?? "hybrid";
+  return {
+    mode,
+    ready: readBoolean(record, "ready") ?? undefined,
+    supportedProblemClasses: readStringList(record, "supportedProblemClasses"),
+    solver: readString(record, "solver") ?? undefined,
+    problemClass: readString(record, "problemClass") ?? undefined,
+    benchmarkStatus: readString(record, "benchmarkStatus") ?? undefined,
+    fallbackReason: readString(record, "fallbackReason") ?? undefined,
+    lastBenchmarkScore: readNumber(record, "lastBenchmarkScore") ?? undefined,
+  };
+}
+
+function extractTaskQuantumSnapshot(task: MobileTaskFeedRow) {
+  const payload = readRecord(task.payload);
+  const metadata = readRecord(payload?.metadata);
+  const result = readRecord(task.result);
+  const candidate =
+    normalizeTaskQuantumSnapshot(result?.quantum) ??
+    normalizeTaskQuantumSnapshot(payload?.quantum) ??
+    normalizeTaskQuantumSnapshot(metadata?.quantum);
+  if (candidate) {
+    return candidate;
+  }
+  if (!hasQuantumCapability(task)) {
+    return null;
+  }
+  return {
+    mode: "hybrid",
+    ready: task.status !== "failed",
+    supportedProblemClasses: ["qubo", "ising", "qaoa", "vqe"],
+    solver: "qiskit_simulator",
+    problemClass: "optimization",
+    benchmarkStatus: task.status === "completed" ? "completed" : task.status === "failed" ? "failed" : "pending",
+    fallbackReason: task.error ?? undefined,
+    lastBenchmarkScore: undefined,
+  };
+}
+
+export function extractTaskChatSessionId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const metadata = (payload as Record<string, unknown>).metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+
+  const chat = (metadata as Record<string, unknown>).chat;
+  if (!chat || typeof chat !== "object" || Array.isArray(chat)) {
+    return null;
+  }
+
+  const sessionId = (chat as Record<string, unknown>).sessionId;
+  return typeof sessionId === "string" && sessionId.trim().length > 0 ? sessionId.trim() : null;
+}
+
+export function extractTaskPresentation(payload: unknown): "chat" | "task" {
+  const metadata = readRecord(readRecord(payload)?.metadata);
+  const explicit = readString(metadata, "presentation");
+  if (explicit === "chat" || explicit === "task") {
+    return explicit;
+  }
+
+  const routeDecision = readRecord(metadata?.routeDecision) ?? readRecord(metadata?.routingDecision);
+  const route = readString(routeDecision, "route");
+  return route === "server_brain" ? "chat" : "task";
+}
+
+export function extractTaskRouteDecision(payload: unknown) {
+  const metadata = readRecord(readRecord(payload)?.metadata);
+  const routeDecision = readRecord(metadata?.routeDecision) ?? readRecord(metadata?.routingDecision);
+  if (!routeDecision) {
+    return null;
+  }
+  const taskRoute = readRecord(routeDecision.taskRoute);
+
+  return {
+    route: readString(routeDecision, "route"),
+    taskRoute: taskRoute
+      ? {
+          target: readString(taskRoute, "target"),
+          operationalRoute: readString(taskRoute, "operationalRoute"),
+          executionPlan: readStringList(taskRoute, "executionPlan"),
+          reason: readString(taskRoute, "reason"),
+          needsDesktop: readBoolean(taskRoute, "needsDesktop"),
+          needsPrivateDesktopData: readBoolean(taskRoute, "needsPrivateDesktopData"),
+          needsUserApproval: readBoolean(taskRoute, "needsUserApproval"),
+          requiredCapabilities: readStringList(taskRoute, "requiredCapabilities"),
+        }
+      : null,
+    mode: readString(routeDecision, "mode"),
+    intent: readString(routeDecision, "intent"),
+    confidence: readNumber(routeDecision, "confidence"),
+    privacyClass: readString(routeDecision, "privacyClass"),
+    privacyLevel: readString(routeDecision, "privacyLevel"),
+    requiresApproval: readBoolean(routeDecision, "requiresApproval"),
+    requiredRuntime: readString(routeDecision, "requiredRuntime"),
+    shouldAskClarification: readBoolean(routeDecision, "shouldAskClarification"),
+    failClosedReason: readString(routeDecision, "failClosedReason"),
+    selectedWorkload: readString(routeDecision, "selectedWorkload"),
+    reason: readString(routeDecision, "reason"),
+    capabilities: readStringList(routeDecision, "capabilities"),
+  };
+}
+
+export function deriveTaskDeliveryState(
+  task: Pick<
+    MobileTaskFeedRow,
+    "status" | "runtimeConnectionId" | "dispatchLeaseId" | "dispatchLeaseExpiresAt" | "dispatchAckAt"
+  >,
+): TaskDeliveryState {
+  if (task.dispatchLeaseId && task.dispatchLeaseExpiresAt) {
+    return "dispatched";
+  }
+  if (task.dispatchAckAt || task.status === "running" || task.status === "waiting_approval") {
+    return "acked";
+  }
+  if (task.runtimeConnectionId) {
+    return "recovering";
+  }
+  return "queued";
+}
+
+export function getPayloadMetadata(payload: Record<string, unknown>): Record<string, unknown> {
+  const metadata = payload.metadata;
+  return normalizeLocalDerivedMetadata(
+    metadata && typeof metadata === "object" && !Array.isArray(metadata) ? { ...metadata } : {},
+  );
+}
+
+export function getTaskPrompt(payload: Record<string, unknown>): string {
+  return typeof payload.prompt === "string" ? payload.prompt : "";
+}
+
+export function extractSharedBrainConversation(
+  payload: Record<string, unknown>,
+): SharedBrainConversationMessage[] | undefined {
+  const brainContext = payload.brainContext;
+  if (!brainContext || typeof brainContext !== "object" || Array.isArray(brainContext)) {
+    return undefined;
+  }
+
+  const conversation = (brainContext as Record<string, unknown>).conversation;
+  if (!Array.isArray(conversation)) {
+    return undefined;
+  }
+
+  return conversation
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const role = record.role;
+      const content = record.content;
+
+      if (
+        (role !== "system" && role !== "user" && role !== "assistant") ||
+        typeof content !== "string" ||
+        !content.trim()
+      ) {
+        return null;
+      }
+
+      return {
+        role: role as SharedBrainConversationMessage["role"],
+        content,
+      };
+    })
+    .filter((item): item is SharedBrainConversationMessage => item != null);
+}
+
+export function getSharedBrainFallbackMessage(error: unknown, fallback = "Elyan beyni şu anda yanıt veremiyor") {
+  if (error instanceof Error && error.message.trim()) {
+    const message = error.message.trim();
+    return looksLikeUnsafeBackendError(message) ? fallback : message;
+  }
+
+  return fallback;
+}
+
+function looksLikeUnsafeBackendError(message: string) {
+  const lowered = message.toLowerCase();
+  const rawTransportFailure =
+    lowered.includes("fetch failed") ||
+    lowered.includes("failed to fetch") ||
+    lowered.includes("connection refused") ||
+    lowered.includes("network error") ||
+    lowered.includes("socket hang up") ||
+    lowered.includes("timed out") ||
+    lowered.includes("timeout");
+  if (rawTransportFailure) {
+    return true;
+  }
+
+  const hasEndpoint =
+    lowered.includes("http://") ||
+    lowered.includes("https://") ||
+    lowered.includes("localhost") ||
+    lowered.includes("127.0.0.1") ||
+    /\b\d{1,3}(?:\.\d{1,3}){3}\b/.test(lowered);
+
+  if (!hasEndpoint) {
+    return false;
+  }
+
+  return (
+    lowered.includes("error") ||
+    lowered.includes("failed") ||
+    lowered.includes("provider") ||
+    lowered.includes("endpoint") ||
+    lowered.includes("host") ||
+    lowered.includes("socket") ||
+    lowered.includes("connection")
+  );
+}
+
+export function createTaskFingerprint(input: {
+  targetDeviceId: string;
+  title: string;
+  payload: Record<string, unknown>;
+  requestedCapabilities: string[];
+}) {
+  return createIdempotencyFingerprint({
+    targetDeviceId: input.targetDeviceId,
+    title: input.title,
+    payload: input.payload,
+    requestedCapabilities: input.requestedCapabilities,
+  });
+}
+
+export function resolveIdempotentTaskMatch<T extends IdempotentTaskRow>(
+  existingTask: T | null,
+  input: {
+    idempotencyKey?: string;
+    fingerprint?: string;
+  },
+) {
+  if (!input.idempotencyKey || !input.fingerprint || !existingTask) {
+    return null;
+  }
+
+  if (existingTask.idempotencyFingerprint !== input.fingerprint) {
+    throw new AppError(409, "idempotency_conflict", "Idempotency key is already bound to a different task payload", {
+      idempotencyKey: input.idempotencyKey,
+      existingTaskId: existingTask.id,
+    });
+  }
+
+  return existingTask;
+}
+
+export function assertOwnedDesktopTaskTarget(device: OwnedDesktopTaskTarget, targetDeviceId: string): void {
+  if (!device.isActive) {
+    throw new AppError(409, "device_inactive", "Target desktop runtime is inactive", {
+      targetDeviceId,
+      canReceiveTasks: device.canReceiveTasks,
+      isOnline: device.isOnline,
+      targetStatus: device.targetStatus,
+    });
+  }
+
+  if (device.targetStatus === "backend_unreachable") {
+    throw new AppError(
+      409,
+      "runtime_unreachable",
+      "Backend APP_BASE_URL is not reachable by external clients, so desktop tasks cannot be accepted safely",
+      {
+        targetDeviceId,
+        canReceiveTasks: device.canReceiveTasks,
+        isOnline: device.isOnline,
+        targetStatus: device.targetStatus,
+      },
+    );
+  }
+
+  if (device.targetStatus === "plan_restricted") {
+    throw new AppError(
+      409,
+      "desktop_plan_required",
+      "Desktop connection is available on Pro plan only",
+      {
+        targetDeviceId,
+        canReceiveTasks: device.canReceiveTasks,
+        isOnline: device.isOnline,
+        targetStatus: device.targetStatus,
+      },
+    );
+  }
+
+  if (device.targetStatus === "runtime_stale") {
+    throw new AppError(409, "runtime_unavailable", "Target desktop runtime heartbeat is stale", {
+      targetDeviceId,
+      canReceiveTasks: device.canReceiveTasks,
+      isOnline: device.isOnline,
+      targetStatus: device.targetStatus,
+      lastHeartbeatAt: device.runtime.lastHeartbeatAt,
+    });
+  }
+
+  if (!device.isOnline || !device.canReceiveTasks) {
+    throw new AppError(409, "device_offline", "Target desktop runtime is offline or has not registered", {
+      targetDeviceId,
+      canReceiveTasks: device.canReceiveTasks,
+      isOnline: device.isOnline,
+      targetStatus: device.targetStatus,
+      lastHeartbeatAt: device.runtime.lastHeartbeatAt,
+    });
+  }
+}
+
+export function createInvalidTargetDeviceError(targetDeviceId: string): AppError {
+  return unprocessableEntity("Target device is not a valid desktop runtime", {
+    targetDeviceId,
+    expectedTarget: "Use the desktop device `id` returned by /v1/mobile/bootstrap.devices",
+    expectedDeviceType: "desktop",
+    error: "invalid_target",
+  });
+}
+
+export function createRuntimeCapabilityMismatchError(input: {
+  targetDeviceId: string;
+  requestedCapabilities: string[];
+  availableCapabilities: string[];
+  missingCapabilities: string[];
+}): AppError {
+  return new AppError(409, "runtime_capability_mismatch", "Target desktop runtime does not support the requested capability set", {
+    targetDeviceId: input.targetDeviceId,
+    requestedCapabilities: input.requestedCapabilities,
+    availableCapabilities: input.availableCapabilities,
+    missingCapabilities: input.missingCapabilities,
+  });
+}
+
+export function createStaleRuntimeConnectionError(): AppError {
+  return new AppError(401, "unauthorized", "Runtime connection is stale or has been replaced");
+}
+
+export function createTaskRuntimeOwnershipConflictError(input: {
+  taskId: string;
+  activeConnectionId: string;
+  owningConnectionId: string;
+}): AppError {
+  return new AppError(409, "task_runtime_owner_conflict", "Task is owned by another active runtime connection", {
+    taskId: input.taskId,
+    activeConnectionId: input.activeConnectionId,
+    owningConnectionId: input.owningConnectionId,
+  });
+}

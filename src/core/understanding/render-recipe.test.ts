@@ -1,0 +1,131 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { buildLocalRenderRecipe } from "./render-recipe.js";
+
+test("buildLocalRenderRecipe returns null for plain chat", () => {
+  assert.equal(
+    buildLocalRenderRecipe({
+      prompt: "Merhaba Elyan",
+      responseText: "Merhaba!",
+    }),
+    null,
+  );
+});
+
+test("buildLocalRenderRecipe emits a document render recipe for PDF export prompts", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Metni PDF olarak ver",
+    responseText: "Başlık\n\nBirinci paragraf",
+    metadata: {
+      renderOn: "mobile",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.schema_version, "2026-06-mobile-render-recipe-v2");
+  assert.equal(recipe?.output_type, "document_render_recipe");
+  assert.equal(recipe?.format, "pdf");
+  assert.equal(recipe?.mime_type, "application/pdf");
+  assert.match(recipe?.file_name ?? "", /\.pdf$/);
+  assert.equal(recipe?.render_on, "mobile");
+  assert.equal(recipe?.layout.kind, "document_page");
+  assert.equal(recipe?.text_blocks[0]?.text, "Başlık");
+  assert.equal(recipe?.content_model.language, "tr");
+  assert.equal(recipe?.render_hints.renderer, "mobile_local");
+  assert.equal(recipe?.render_hints.allow_print, true);
+});
+
+test("buildLocalRenderRecipe emits a document render recipe for PDF yap prompts", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "PDF yap",
+    responseText: "Başlık\n\nBirinci paragraf",
+    metadata: {
+      renderOn: "mobile",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.output_type, "document_render_recipe");
+  assert.equal(recipe?.format, "pdf");
+  assert.equal(recipe?.render_on, "mobile");
+});
+
+test("buildLocalRenderRecipe emits an image render recipe when asked for visuals", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bunu görsel olarak PNG üret",
+    responseText: "Açıklama\n\n- Madde 1",
+    metadata: {
+      exportFormat: "png",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.output_type, "image_render_recipe");
+  assert.equal(recipe?.format, "png");
+  assert.equal(recipe?.mime_type, "image/png");
+  assert.equal(recipe?.layout.kind, "canvas");
+  assert.equal(recipe?.render_on, "mobile");
+  assert.equal(recipe?.render_hints.allow_print, false);
+});
+
+test("buildLocalRenderRecipe emits an image render recipe for visual production prompts", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Görsel üret",
+    responseText: "Açıklama\n\n- Madde 1",
+    metadata: {
+      exportFormat: "png",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.output_type, "image_render_recipe");
+  assert.equal(recipe?.format, "png");
+});
+
+test("buildLocalRenderRecipe preserves explicit SVG image export format", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bu içeriği SVG olarak ver",
+    responseText: "Başlık\n\nAkış diyagramı açıklaması",
+    metadata: {
+      documentExportMode: "mobile_local",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.output_type, "image_render_recipe");
+  assert.equal(recipe?.format, "svg");
+  assert.equal(recipe?.mime_type, "image/svg+xml");
+  assert.equal(recipe?.layout.kind, "canvas");
+  assert.equal(recipe?.render_hints.vector_safe, true);
+  assert.equal(recipe?.render_hints.fallback_format, "png");
+});
+
+test("buildLocalRenderRecipe preserves explicit JPG image export format", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bunu jpg görsel olarak hazırla",
+    responseText: "Görsel metni",
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.output_type, "image_render_recipe");
+  assert.equal(recipe?.format, "jpg");
+  assert.equal(recipe?.mime_type, "image/jpeg");
+});
+
+test("buildLocalRenderRecipe exposes structured blocks for mobile canvas rendering", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bunu PNG görsel olarak oluştur",
+    responseText: "Veri Akışı\n\n- Girdi alınır\n- Anlam çıkarılır\n- Çıktı üretilir",
+    metadata: {
+      documentExportMode: "mobile_local",
+      title: "Veri Akışı",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.file_name, "veri-akışı.png");
+  assert.equal(recipe?.content_model.title, "Veri Akışı");
+  assert.equal(recipe?.content_model.block_count, 4);
+  assert.equal(recipe?.text_blocks.filter((block) => block.type === "bullet").length, 3);
+  assert.equal(recipe?.metadata.render_intent, "raster_image_export");
+});

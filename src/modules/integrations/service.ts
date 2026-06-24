@@ -7,7 +7,7 @@ import {
   oauthStates,
 } from "../../db/schema.js";
 import type { ConnectionProvider } from "../../contracts/domain.js";
-import { encryptJson } from "../../lib/crypto-seal.js";
+import { decryptJson, encryptJson } from "../../lib/crypto-seal.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { createOpaqueCode } from "../../lib/auth-crypto.js";
 import { createPkcePair } from "../../lib/oauth-pkce.js";
@@ -39,6 +39,184 @@ function getExpiresAtFromTokenPayload(tokenPayload: Record<string, unknown>): Da
   }
 
   return new Date(Date.now() + expiresIn * 1_000);
+}
+
+type GoogleOAuthPayload = {
+  accessToken: string;
+  refreshToken: string | null;
+  tokenType: string;
+  scope: string | null;
+  raw: Record<string, unknown>;
+};
+
+function buildEmailMimeMessage(input: {
+  from: string;
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  replyTo?: string;
+  subject: string;
+  body: string;
+}) {
+  const lines = [
+    `From: ${input.from}`,
+    `To: ${input.to.join(", ")}`,
+  ];
+  if (input.cc?.length) {
+    lines.push(`Cc: ${input.cc.join(", ")}`);
+  }
+  if (input.bcc?.length) {
+    lines.push(`Bcc: ${input.bcc.join(", ")}`);
+  }
+  if (input.replyTo) {
+    lines.push(`Reply-To: ${input.replyTo}`);
+  }
+  lines.push("MIME-Version: 1.0");
+  lines.push('Content-Type: text/plain; charset="UTF-8"');
+  lines.push("Content-Transfer-Encoding: 8bit");
+  lines.push(`Subject: ${input.subject}`);
+  lines.push("");
+  lines.push(input.body);
+  return lines.join("\r\n");
+}
+
+async function loadGoogleOAuthConnection(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    connectionId?: string;
+  },
+) {
+  const connectionConditions = [eq(integrationConnections.userId, input.userId), eq(integrationConnections.provider, "google")];
+  if (input.connectionId) {
+    connectionConditions.push(eq(integrationConnections.id, input.connectionId));
+  }
+
+  const rows = await app.db
+    .select({
+      id: integrationConnections.id,
+      provider: integrationConnections.provider,
+      authType: integrationConnections.authType,
+      status: integrationConnections.status,
+      displayName: integrationConnections.displayName,
+      externalAccountId: integrationConnections.externalAccountId,
+      scopes: integrationConnections.scopes,
+      capabilities: integrationConnections.capabilities,
+      metadata: integrationConnections.metadata,
+      updatedAt: integrationConnections.updatedAt,
+    })
+    .from(integrationConnections)
+    .where(and(...connectionConditions))
+    .orderBy(desc(integrationConnections.updatedAt));
+
+  const connection = rows.find((row) => row.status === "connected" && Array.isArray(row.capabilities) && row.capabilities.includes("gmail"));
+  if (!connection) {
+    throw notFound("Connected Google Gmail integration not found");
+  }
+  return connection;
+}
+
+async function loadGoogleOAuthTokenPayload(app: FastifyInstance, connectionId: string) {
+  const rows = await app.db
+    .select({
+      id: integrationCredentials.id,
+      encryptedPayload: integrationCredentials.encryptedPayload,
+      expiresAt: integrationCredentials.expiresAt,
+    })
+    .from(integrationCredentials)
+    .where(eq(integrationCredentials.connectionId, connectionId))
+    .limit(1);
+
+  const credential = rows[0];
+  if (!credential) {
+    throw notFound("Integration credentials not found");
+  }
+
+  return {
+    credential,
+    tokenPayload: decryptJson<GoogleOAuthPayload>(app.config, credential.encryptedPayload),
+  };
+}
+
+async function refreshGoogleOAuthAccessToken(
+  app: FastifyInstance,
+  connectionId: string,
+  refreshToken: string,
+) {
+  const provider = getIntegrationProvider("google");
+  if (!provider?.oauth) {
+    throw badRequest("Google OAuth provider is not configured");
+  }
+  const clientId = app.config[provider.oauth.clientIdEnvKey];
+  const clientSecret = app.config[provider.oauth.clientSecretEnvKey];
+  if (!clientId || !clientSecret) {
+    throw badRequest("Google OAuth provider is not configured");
+  }
+
+  const response = await fetch(provider.oauth.tokenUrl, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+    }).toString(),
+  });
+  const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+  if (!response.ok || payload.error) {
+    throw badRequest("Google access token refresh failed", payload);
+  }
+
+  const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
+  if (!accessToken) {
+    throw badRequest("Google provider did not return an access token");
+  }
+
+  const encryptedPayload = encryptJson(app.config, {
+    accessToken,
+    refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : refreshToken,
+    tokenType: typeof payload.token_type === "string" ? payload.token_type : "Bearer",
+    scope: typeof payload.scope === "string" ? payload.scope : null,
+    raw: payload,
+  });
+
+  await app.db
+    .update(integrationCredentials)
+    .set({
+      encryptedPayload,
+      expiresAt: getExpiresAtFromTokenPayload(payload),
+      updatedAt: new Date(),
+    })
+    .where(eq(integrationCredentials.connectionId, connectionId));
+
+  return {
+    accessToken,
+    refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : refreshToken,
+  };
+}
+
+async function getGoogleMailAccessToken(app: FastifyInstance, connectionId: string) {
+  const { credential, tokenPayload } = await loadGoogleOAuthTokenPayload(app, connectionId);
+  if (credential.expiresAt && credential.expiresAt.getTime() <= Date.now()) {
+    if (!tokenPayload.refreshToken) {
+      throw badRequest("Google Gmail connection needs re-authentication");
+    }
+    return refreshGoogleOAuthAccessToken(app, connectionId, tokenPayload.refreshToken);
+  }
+  if (!tokenPayload.accessToken) {
+    if (!tokenPayload.refreshToken) {
+      throw badRequest("Google Gmail connection needs re-authentication");
+    }
+    return refreshGoogleOAuthAccessToken(app, connectionId, tokenPayload.refreshToken);
+  }
+  return {
+    accessToken: tokenPayload.accessToken,
+    refreshToken: tokenPayload.refreshToken,
+  };
 }
 
 async function parseJsonResponse(response: Response) {
@@ -80,25 +258,57 @@ async function exchangeOAuthCode(
     throw badRequest(`Provider ${provider} is not configured`);
   }
 
-  const form = new URLSearchParams({
+  const requestPayload: Record<string, string> = {
     grant_type: "authorization_code",
     code,
-    client_id: clientId,
-    client_secret: clientSecret,
     redirect_uri: getCallbackUrl(app, provider),
-  });
+  };
 
   if (entry.oauth.usePkce && codeVerifier) {
-    form.set("code_verifier", codeVerifier);
+    requestPayload.code_verifier = codeVerifier;
   }
 
-  const response = await fetch(entry.oauth.tokenUrl, {
+  const tokenRequestStyle = entry.oauth.tokenRequestStyle ?? "form";
+  const requestInit: RequestInit = {
     method: "POST",
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: form.toString(),
+  };
+
+  if (tokenRequestStyle === "json_basic") {
+    requestInit.headers = {
+      ...requestInit.headers,
+      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+      "Content-Type": "application/json",
+    };
+    requestInit.body = JSON.stringify(requestPayload);
+  } else if (tokenRequestStyle === "json") {
+    requestInit.headers = {
+      ...requestInit.headers,
+      "Content-Type": "application/json",
+    };
+    requestInit.body = JSON.stringify({
+      ...requestPayload,
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
+  } else {
+    const form = new URLSearchParams({
+      ...requestPayload,
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
+
+    requestInit.headers = {
+      ...requestInit.headers,
+      "Content-Type": "application/x-www-form-urlencoded",
+    };
+    requestInit.body = form.toString();
+  }
+
+  const response = await fetch(entry.oauth.tokenUrl, {
+    ...requestInit,
   });
   const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
 
@@ -492,4 +702,91 @@ export async function disconnectIntegration(
   });
 
   return connection;
+}
+
+export async function sendGmailMessage(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    connectionId?: string;
+    to: string[];
+    subject: string;
+    body: string;
+    cc?: string[];
+    bcc?: string[];
+    replyTo?: string;
+    ipAddress?: string;
+    userAgent?: string;
+    requestId?: string;
+  },
+) {
+  const connection = await loadGoogleOAuthConnection(app, {
+    userId: input.userId,
+    connectionId: input.connectionId,
+  });
+  const scopes = Array.isArray(connection.scopes) ? connection.scopes.map((value) => String(value ?? "").trim()) : [];
+  if (!scopes.includes("https://www.googleapis.com/auth/gmail.send")) {
+    throw badRequest("Google Gmail send scope is missing");
+  }
+
+  const token = await getGoogleMailAccessToken(app, connection.id);
+  const mimeMessage = buildEmailMimeMessage({
+    from: connection.displayName || "Elyan",
+    to: input.to,
+    cc: input.cc,
+    bcc: input.bcc,
+    replyTo: input.replyTo,
+    subject: input.subject,
+    body: input.body,
+  });
+
+  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token.accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      raw: Buffer.from(mimeMessage, "utf8").toString("base64url"),
+    }),
+  });
+  const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+  if (!response.ok || payload.error) {
+    throw badRequest("Gmail message send failed", payload);
+  }
+
+  const messageId = typeof payload.id === "string" ? payload.id : "";
+  const threadId = typeof payload.threadId === "string" ? payload.threadId : "";
+  const labelIds = Array.isArray(payload.labelIds)
+    ? payload.labelIds.map((value) => String(value ?? "").trim()).filter(Boolean)
+    : [];
+
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "integration.gmail.send",
+    resourceType: "integration_connection",
+    resourceId: connection.id,
+    status: "success",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    requestId: input.requestId,
+    payload: {
+      provider: "google",
+      to: input.to,
+      subject: input.subject,
+    },
+  });
+
+  return {
+    provider: "google",
+    connectionId: connection.id,
+    messageId,
+    threadId,
+    labelIds,
+    to: input.to,
+    subject: input.subject,
+  };
 }

@@ -1,0 +1,57 @@
+{
+  "task": {
+    "id": "4acc78ed-5063-4a41-8ec7-4f1a3b4d7e8b",
+    "title": "V1 Desktop Smoke Task",
+    "status": "queued",
+    "targetDeviceId": "5e79c427-bcf1-411b-965a-a102abb90779",
+    "chatSessionId": null,
+    "presentation": "task",
+    "queuePosition": 1,
+    "requestedCapabilities": [
+      "browser.control",
+      "document.read",
+      "document_read",
+      "browser_control"
+    ],
+    "runtimeConnectionId": null,
+    "dispatchLeaseId": null,
+    "dispatchLeaseExpiresAt": null,
+    "dispatchAckAt": null,
+    "lastAckAt": null,
+    "deliveryAttemptCount": 0,
+    "lastDispatchAttemptAt": null,
+    "deliveryState": "queued",
+    "selectedDesktopOnline": true,
+    "routeDecision": {
+      "route": "desktop_runtime",
+      "mode": "executable_task",
+      "intent": "local_file_request",
+      "confidence": 0.72,
+      "privacyClass": "local_private",
+      "privacyLevel": "high",
+      "requiresApproval": true,
+      "requiredRuntime": "desktop",
+      "shouldAskClarification": false,
+      "failClosedReason": "desktop_runtime_selected_target",
+      "selectedWorkload": "desktop_handoff",
+      "reason": "Kullanici acikca bir masaustu hedefi secti; gorev desktop runtime uzerinden fail-closed ilerlemeli.",
+      "capabilities": [
+        "browser.control",
+        "document.read",
+        "document_read",
+        "browser_control"
+      ]
+    },
+    "summary": null,
+    "error": null,
+    "approvalRequest": null,
+    "createdAt": "2026-06-06T16:40:33.673Z",
+    "startedAt": null,
+    "completedAt": null,
+    "canceledAt": null,
+    "updatedAt": "2026-06-06T16:40:33.685Z"
+  },
+  "dispatched": false,
+  "reused": false,
+  "selectedDesktopOnline": true
+}

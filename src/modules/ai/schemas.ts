@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { aiProviderSchema } from "../../contracts/domain.js";
+import { sharedBrainWorkloadValues } from "../brain/workloads.js";
 
 export const routePreviewBodySchema = z.object({
-  workload: z.enum(["intent", "planning", "fast_route"]),
+  workload: z.enum(sharedBrainWorkloadValues),
   preferredProvider: aiProviderSchema.optional(),
   preferredModel: z.string().min(1).max(160).optional(),
   allowHosted: z.boolean().optional(),

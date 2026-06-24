@@ -19,8 +19,36 @@ export class RealtimeHub {
     this.runtimeSockets.set(input.deviceId, input);
   }
 
-  public detachRuntime(deviceId: string): void {
+  public detachRuntime(deviceId: string, socket?: WebSocket): void {
+    const existing = this.runtimeSockets.get(deviceId);
+
+    if (!existing) {
+      return;
+    }
+
+    if (socket && existing.socket !== socket) {
+      return;
+    }
+
     this.runtimeSockets.delete(deviceId);
+  }
+
+  public closeRuntime(deviceId: string, code = 4001, reason = "replaced", socket?: WebSocket): void {
+    const existing = this.runtimeSockets.get(deviceId);
+
+    if (!existing) {
+      return;
+    }
+
+    if (socket && existing.socket !== socket) {
+      return;
+    }
+
+    this.runtimeSockets.delete(deviceId);
+
+    if (existing.socket.readyState === WebSocket.OPEN || existing.socket.readyState === WebSocket.CONNECTING) {
+      existing.socket.close(code, reason);
+    }
   }
 
   public isRuntimeConnected(deviceId: string): boolean {

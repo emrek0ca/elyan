@@ -14,6 +14,7 @@ export async function createAuditLog(
     status: AuditStatus;
     ipAddress?: string;
     userAgent?: string;
+    requestId?: string;
     payload?: Record<string, unknown>;
   },
 ): Promise<void> {
@@ -27,6 +28,7 @@ export async function createAuditLog(
     status: input.status,
     ipAddress: input.ipAddress,
     userAgent: input.userAgent,
+    requestId: input.requestId,
     payload: input.payload ?? {},
   });
 }

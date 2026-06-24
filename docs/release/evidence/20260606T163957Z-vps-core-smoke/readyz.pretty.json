@@ -1,0 +1,159 @@
+{
+  "status": "ok",
+  "ok": true,
+  "database": {
+    "status": "up",
+    "reachability": {
+      "connectionUrlScheme": "postgres",
+      "connectionUrlHost": "postgres",
+      "connectionUrlPort": 5432,
+      "localOnlyHost": false,
+      "warning": null
+    }
+  },
+  "dependencies": {
+    "billing": {
+      "provider": "iyzico",
+      "checkoutEnabled": false,
+      "storeVerificationEnabled": false,
+      "legacyCheckoutEnabled": false,
+      "availableProviders": [],
+      "status": "degraded",
+      "missingEnv": [
+        "APPLE_APP_STORE_ISSUER_ID",
+        "APPLE_APP_STORE_KEY_ID",
+        "APPLE_APP_STORE_PRIVATE_KEY",
+        "APPLE_APP_BUNDLE_ID",
+        "GOOGLE_PLAY_PACKAGE_NAME",
+        "GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL",
+        "GOOGLE_PLAY_PRIVATE_KEY",
+        "IYZICO_API_KEY",
+        "IYZICO_SECRET_KEY",
+        "IYZICO_MERCHANT_ID"
+      ]
+    }
+  },
+  "commercialReadiness": {
+    "billing": {
+      "provider": "iyzico",
+      "checkoutEnabled": false,
+      "storeVerificationEnabled": false,
+      "legacyCheckoutEnabled": false,
+      "availableProviders": [],
+      "status": "degraded",
+      "missingEnv": [
+        "APPLE_APP_STORE_ISSUER_ID",
+        "APPLE_APP_STORE_KEY_ID",
+        "APPLE_APP_STORE_PRIVATE_KEY",
+        "APPLE_APP_BUNDLE_ID",
+        "GOOGLE_PLAY_PACKAGE_NAME",
+        "GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL",
+        "GOOGLE_PLAY_PRIVATE_KEY",
+        "IYZICO_API_KEY",
+        "IYZICO_SECRET_KEY",
+        "IYZICO_MERCHANT_ID"
+      ]
+    }
+  },
+  "agent": {
+    "chatReady": true,
+    "serverBrainReady": true,
+    "runtimeDispatchReady": true,
+    "realtimeReady": true,
+    "databaseReady": true,
+    "redisReady": true,
+    "providerCircuitState": "closed",
+    "queueHealthy": true,
+    "activeRuntimeConnections": 0,
+    "staleRuntimeConnections": 0,
+    "desktopReadyCount": 0,
+    "desktopTaskReady": false,
+    "latestDesktopHeartbeatAgeSeconds": null,
+    "quantumReady": false,
+    "quantumDesktopReady": false,
+    "quantumCapabilitiesReady": false,
+    "quantumSupportedProblemClasses": [],
+    "quantumBlockingReasons": [
+      "desktop_runtime_unavailable",
+      "quantum_capabilities_unavailable"
+    ],
+    "neuralReady": true,
+    "trainingWorkerReady": true,
+    "embeddingReady": true,
+    "evaluationReady": true,
+    "quantumLearningReady": true,
+    "activeTrainingJobs": 0,
+    "latestEvaluationScore": 0.8189,
+    "latestQuantumBenchmarkScore": 0.83,
+    "lastChatLatencyMs": 40341,
+    "lastStreamingFirstDeltaMs": 35868,
+    "recentBrainTimeoutCount": 10,
+    "mlWorkerMode": "runner",
+    "mlWorkerLastJobAt": null,
+    "mlWorkerLastErrorCode": null,
+    "optionalLibraries": {
+      "numpy": true,
+      "scikitLearn": true,
+      "sentenceTransformers": false,
+      "torch": false
+    },
+    "runnerBacklog": 0,
+    "brainBlockingReasons": [],
+    "staleActiveTaskCount": 0,
+    "requestBudgetReady": true,
+    "blockingReasons": []
+  },
+  "mode": "control_plane",
+  "coreSurfaces": [
+    "ai",
+    "auth",
+    "billing",
+    "brain",
+    "chat",
+    "devices",
+    "mobile",
+    "pairing",
+    "realtime",
+    "runtime",
+    "tasks"
+  ],
+  "network": {
+    "advertisedBaseUrl": "https://api.elyan.dev",
+    "advertisedHost": "api.elyan.dev",
+    "listenHost": "0.0.0.0",
+    "port": 4000,
+    "externalClientsCanReachAdvertisedBaseUrl": true,
+    "warning": null
+  },
+  "realtime": {
+    "sseEnabled": true,
+    "websocketEnabled": true,
+    "heartbeatSeconds": 15
+  },
+  "retrieval": {
+    "mode": "lexical_fallback",
+    "embeddingCoverage": 0,
+    "pendingIndexJobs": 0,
+    "lastIndexedAt": null
+  },
+  "brainControl": {
+    "constitutionVersion": "2026-06-05.eval-first.v1",
+    "constitutionRuleCount": 7,
+    "boundaryGateReady": true,
+    "activeMobileDefaultProfile": "mobile_chat_fast",
+    "latestBenchmarkStatus": null,
+    "latestBenchmarkOverallScore": null,
+    "latestBenchmarkBoundaryScore": null,
+    "correctionDatasetReady": false,
+    "correctionDatasetId": null,
+    "latestLatencyWarning": "recent_timeouts_detected",
+    "mobileChatFastReady": true,
+    "latestFirstDeltaP50Ms": 35868,
+    "latestCompletionP50Ms": 40341,
+    "fallbackPressure": "elevated"
+  },
+  "mobile": {
+    "statusSummary": "ready",
+    "safeForExternalClients": true
+  }
+}

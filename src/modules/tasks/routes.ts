@@ -1,9 +1,24 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { TaskStatus } from "../../contracts/domain.js";
-import { getRequestContext } from "../../lib/http.js";
+import { getRequestContext, serializeZodError } from "../../lib/http.js";
+import { getIdempotencyKey } from "../../lib/idempotency.js";
 import { getUserAuth } from "../../lib/request-auth.js";
-import { approvalBodySchema, createTaskBodySchema, listTasksQuerySchema, taskParamsSchema } from "./schemas.js";
-import { cancelTask, createTask, getTaskDetail, listTasks, resolveTaskApproval } from "./service.js";
+import { approvalBodySchema, createTaskBodySchema, feedbackBodySchema, listTasksQuerySchema, taskParamsSchema } from "./schemas.js";
+import { cancelTask, createTask, getTaskDetail, listTasks, resolveTaskApproval, submitTaskFeedback } from "./service.js";
+
+function parseTaskParamsOrReply(request: FastifyRequest, reply: FastifyReply): { taskId: string } | null {
+  const parsed = taskParamsSchema.safeParse(request.params);
+  if (!parsed.success) {
+    reply.status(400).send({
+      error: "validation_error",
+      message: "Invalid task id",
+      details: serializeZodError(parsed.error),
+      requestId: request.id,
+    });
+    return null;
+  }
+  return parsed.data;
+}
 
 export const taskRoutes: FastifyPluginAsync = async (app) => {
   app.post("/", async (request, reply) => {
@@ -16,16 +31,19 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const body = createTaskBodySchema.parse(request.body);
     const auth = getUserAuth(request);
     const context = getRequestContext(request);
+    const idempotencyKey = getIdempotencyKey(request);
 
     return createTask(app, {
       userId: auth.sub,
       targetDeviceId: body.targetDeviceId,
+      requestedTargetDeviceId: body.targetDeviceId,
       title: body.title,
       payload: body.payload,
       requestedCapabilities: body.requestedCapabilities,
-      preferredAiProvider: body.preferredAiProvider,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
+      requestId: context.requestId,
+      idempotencyKey,
     });
   });
 
@@ -62,7 +80,10 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       return;
     }
 
-    const params = taskParamsSchema.parse(request.params);
+    const params = parseTaskParamsOrReply(request, reply);
+    if (!params) {
+      return;
+    }
     const auth = getUserAuth(request);
     return getTaskDetail(app, params.taskId, auth.sub);
   });
@@ -74,12 +95,16 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       return;
     }
 
-    const params = taskParamsSchema.parse(request.params);
+    const params = parseTaskParamsOrReply(request, reply);
+    if (!params) {
+      return;
+    }
     const auth = getUserAuth(request);
     const context = getRequestContext(request);
     return cancelTask(app, params.taskId, auth.sub, {
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
+      requestId: context.requestId,
     });
   });
 
@@ -90,7 +115,10 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       return;
     }
 
-    const params = taskParamsSchema.parse(request.params);
+    const params = parseTaskParamsOrReply(request, reply);
+    if (!params) {
+      return;
+    }
     const body = approvalBodySchema.parse(request.body);
     const auth = getUserAuth(request);
     const context = getRequestContext(request);
@@ -102,6 +130,35 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       notes: body.notes,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
+      requestId: context.requestId,
+    });
+  });
+
+  app.post("/:taskId/feedback", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const params = parseTaskParamsOrReply(request, reply);
+    if (!params) {
+      return;
+    }
+    const body = feedbackBodySchema.parse(request.body);
+    const auth = getUserAuth(request);
+    const context = getRequestContext(request);
+
+    return submitTaskFeedback(app, {
+      taskId: params.taskId,
+      userId: auth.sub,
+      feedbackType: body.type,
+      reasonTags: body.reasonTags,
+      correction: body.correction,
+      preferredAnswer: body.preferredAnswer,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      requestId: context.requestId,
     });
   });
 };

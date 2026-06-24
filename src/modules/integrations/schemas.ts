@@ -24,3 +24,13 @@ export const listConnectionsQuerySchema = z.object({
 export const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
 });
+
+export const sendGmailBodySchema = z.object({
+  connectionId: z.string().uuid().optional(),
+  to: z.array(z.string().email()).min(1).max(10),
+  subject: z.string().trim().min(1).max(300),
+  body: z.string().trim().min(1).max(20_000),
+  cc: z.array(z.string().email()).max(10).optional(),
+  bcc: z.array(z.string().email()).max(10).optional(),
+  replyTo: z.string().email().optional(),
+});

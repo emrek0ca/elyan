@@ -20,7 +20,7 @@ function decodeKey(raw: string): Buffer {
 }
 
 function getEncryptionKey(env: AppEnv): Buffer {
-  return decodeKey(env.TOKEN_ENCRYPTION_KEY);
+  return decodeKey(env.TOKEN_ENCRYPTION_KEY ?? "");
 }
 
 export function encryptJson(env: AppEnv, payload: Record<string, unknown>): string {

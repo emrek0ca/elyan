@@ -34,6 +34,7 @@ type ProviderCatalogEntry = {
     defaultScopes: string[];
     scopeSeparator?: string;
     usePkce?: boolean;
+    tokenRequestStyle?: "form" | "json" | "json_basic";
     extraAuthParams?: Record<string, string>;
   };
 };
@@ -54,6 +55,7 @@ export const integrationProviderCatalog: ProviderCatalogEntry[] = [
         "email",
         "profile",
         "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/calendar.readonly",
       ],
@@ -78,6 +80,7 @@ export const integrationProviderCatalog: ProviderCatalogEntry[] = [
       defaultScopes: [],
       scopeSeparator: " ",
       usePkce: false,
+      tokenRequestStyle: "json_basic",
     },
   },
   {
@@ -136,15 +139,9 @@ export const integrationProviderCatalog: ProviderCatalogEntry[] = [
       authUrl: "https://linear.app/oauth/authorize",
       tokenUrl: "https://api.linear.app/oauth/token",
       defaultScopes: ["read", "write"],
-      scopeSeparator: " ",
+      scopeSeparator: ",",
       usePkce: true,
     },
-  },
-  {
-    code: "telegram",
-    displayName: "Telegram",
-    authType: "none",
-    capabilities: ["telegram"],
   },
   {
     code: "dropbox",
@@ -165,21 +162,6 @@ export const integrationProviderCatalog: ProviderCatalogEntry[] = [
     },
   },
   {
-    code: "trello",
-    displayName: "Trello",
-    authType: "oauth2",
-    capabilities: ["trello"],
-    oauth: {
-      clientIdEnvKey: "TRELLO_CLIENT_ID",
-      clientSecretEnvKey: "TRELLO_CLIENT_SECRET",
-      authUrl: "https://trello.com/1/authorize",
-      tokenUrl: "https://trello.com/1/OAuthGetAccessToken",
-      defaultScopes: ["read", "write"],
-      scopeSeparator: ",",
-      usePkce: false,
-    },
-  },
-  {
     code: "jira",
     displayName: "Jira",
     authType: "oauth2",
@@ -192,8 +174,10 @@ export const integrationProviderCatalog: ProviderCatalogEntry[] = [
       defaultScopes: ["read:jira-user", "read:jira-work", "offline_access"],
       scopeSeparator: " ",
       usePkce: true,
+      tokenRequestStyle: "json",
       extraAuthParams: {
         audience: "api.atlassian.com",
+        prompt: "consent",
       },
     },
   },
@@ -210,49 +194,8 @@ export const integrationProviderCatalog: ProviderCatalogEntry[] = [
       defaultScopes: [],
       scopeSeparator: " ",
       usePkce: false,
+      tokenRequestStyle: "json",
     },
-  },
-  {
-    code: "webhooks",
-    displayName: "Webhooks",
-    authType: "webhook",
-    capabilities: ["webhooks"],
-  },
-  {
-    code: "custom_api",
-    displayName: "Custom API",
-    authType: "api_key",
-    capabilities: ["custom_api"],
-  },
-  {
-    code: "openai",
-    displayName: "OpenAI",
-    authType: "api_key",
-    capabilities: ["ai"],
-  },
-  {
-    code: "claude",
-    displayName: "Claude",
-    authType: "api_key",
-    capabilities: ["ai"],
-  },
-  {
-    code: "groq",
-    displayName: "Groq",
-    authType: "api_key",
-    capabilities: ["ai"],
-  },
-  {
-    code: "ollama",
-    displayName: "Ollama",
-    authType: "none",
-    capabilities: ["ai"],
-  },
-  {
-    code: "openrouter",
-    displayName: "OpenRouter",
-    authType: "api_key",
-    capabilities: ["ai"],
   },
 ];
 

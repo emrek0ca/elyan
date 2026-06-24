@@ -1,0 +1,9 @@
+redis>=5.0.0,<6
+psycopg[binary]>=3.2.0,<4
+numpy>=1.26,<3
+scikit-learn>=1.4,<2
+
+# Optional ML libraries are intentionally worker-only and lazy-detected.
+# They can be layered into a GPU profile without bloating the backend image:
+# torch
+# sentence-transformers

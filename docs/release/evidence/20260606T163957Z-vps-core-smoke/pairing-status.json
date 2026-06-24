@@ -1,0 +1,12 @@
+{
+  "sessionId": "c58590de-5a34-4637-bcf9-bc5edcd43c87",
+  "desktopDeviceId": "5e79c427-bcf1-411b-965a-a102abb90779",
+  "claimedByUserId": "6f3542cf-2f82-45e5-a504-92cb4efd5052",
+  "status": "claimed",
+  "claimedAt": "2026-06-06T16:40:31.614Z",
+  "expiresAt": "2026-06-06T16:50:30.965Z",
+  "runtimeAuth": {
+    "deviceId": "5e79c427-bcf1-411b-965a-a102abb90779",
+    "deviceSecret": "[redacted]"
+  }
+}

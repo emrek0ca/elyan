@@ -1,0 +1,261 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-soft: #f8fafc;
+  --line: #cfd6de;
+  --line-strong: #9aa7b4;
+  --text: #1f2937;
+  --muted: #5f6b78;
+  --accent: #1f5ea8;
+  --accent-strong: #184a83;
+  --accent-soft: #e8f0fb;
+  --danger: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Consolas, "SFMono-Regular", "Liberation Mono", "Courier New", monospace;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.shell {
+  width: min(1240px, calc(100vw - 40px));
+  margin: 28px auto 40px;
+  display: grid;
+  gap: 16px;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 18px 20px;
+}
+
+.ribbon {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  min-width: 0;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.ribbon-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  color: var(--accent-strong);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chip[data-tone="busy"] {
+  background: #fff7e6;
+  color: #8a5b00;
+}
+
+.chip[data-tone="ready"] {
+  background: #eaf4e8;
+  color: #1f6a36;
+}
+
+.chip[data-tone="error"] {
+  background: #fdecec;
+  color: var(--danger);
+}
+
+.workspace {
+  display: grid;
+  gap: 12px;
+}
+
+.workspace.hidden {
+  display: none;
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.field-grid label,
+.trainer-label {
+  display: grid;
+  gap: 5px;
+}
+
+.field-grid span,
+.trainer-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface-soft);
+  color: var(--text);
+  padding: 11px 12px;
+  outline: none;
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+textarea {
+  min-height: 300px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+button {
+  min-height: 34px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  padding: 0 12px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button-secondary {
+  color: var(--text);
+  background: #fff;
+}
+
+.button-secondary:hover:not(:disabled) {
+  background: #f3f6fa;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(280px, 360px);
+  gap: 16px;
+}
+
+.output pre,
+pre {
+  margin: 0;
+  padding: 14px;
+  min-height: 190px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  color: #0f172a;
+}
+
+.output .section-head {
+  margin-bottom: 12px;
+}
+
+.mini-chat pre {
+  min-height: 190px;
+  max-height: 290px;
+  overflow: auto;
+}
+
+.mini-chat textarea {
+  min-height: 108px;
+}
+
+@media (max-width: 1200px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .field-grid,
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ribbon {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ribbon-meta {
+    justify-content: flex-start;
+  }
+}

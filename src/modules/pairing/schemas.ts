@@ -4,6 +4,7 @@ export const createPairSessionBodySchema = z.object({
   deviceLabel: z.string().min(1).max(120),
   platform: z.string().min(1).max(120),
   runtimeVersion: z.string().min(1).max(80).optional(),
+  externalDeviceId: z.string().min(1).max(160).optional(),
 });
 
 export const pairSessionParamsSchema = z.object({

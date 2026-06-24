@@ -1,0 +1,6 @@
+retry: 3000
+
+event: ready
+data: {"channel":"user:6f3542cf-2f82-45e5-a504-92cb4efd5052","cursor":null,"replaySupported":true,"realtimeReady":true,"resumeCursorTtlSeconds":172800,"sessionHydrationMode":"realtime_then_authoritative_refresh","degradedReason":null,"timestamp":"2026-06-06T16:40:20.816Z"}
+
+curl: (28) Operation timed out after 10001 milliseconds with 301 bytes received

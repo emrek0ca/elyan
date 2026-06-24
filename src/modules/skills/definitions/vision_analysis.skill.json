@@ -1,0 +1,47 @@
+{
+  "id": "vision_analysis",
+  "version": "1.0.0",
+  "active": true,
+  "name": "Vision Analysis",
+  "displayName": "Görsel Analiz",
+  "displayDescription": "Eklenen görseli analiz eder, içindeki metni ve öğeleri tanımlar.",
+  "slashCommand": "/görüş",
+  "uiCategory": "image",
+  "requiresAttachment": true,
+  "supportedMimeTypes": ["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"],
+  "manualSelectable": true,
+  "purpose": "Analyze images to describe visual content, detect text, and identify key elements.",
+  "summary": "Provides a visual description of the attached image, including detected text and notable elements.",
+  "instructions": "Analyze only the provided image chunks. Describe what is visible: scene, objects, people, text, colors, layout. If text is visible, extract it faithfully. Return strict JSON only. Respond in Turkish unless the user clearly uses another language.",
+  "triggers": {
+    "phrases": ["görüş", "gorus", "görseli analiz et", "resme bak", "fotoğrafa bak", "fotografa bak", "ne görüyorsun", "ne goruyorsun", "görsel analiz"],
+    "intents": ["image_analysis", "vision", "ocr"],
+    "payloadTypes": ["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"]
+  },
+  "inputSchema": {
+    "type": "object",
+    "required": ["prompt", "chunks"],
+    "properties": {
+      "prompt": { "type": "string", "minLength": 1 },
+      "chunks": { "type": "array", "minItems": 1 }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["visualDescription", "confidence"],
+    "properties": {
+      "visualDescription": { "type": "string", "minLength": 1 },
+      "detectedText": { "type": "string" },
+      "keyElements": { "type": "array", "items": { "type": "string" } },
+      "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+    }
+  },
+  "allowedTools": [],
+  "modelProfile": "fast_reasoning",
+  "maxInputTokens": 1800,
+  "maxOutputTokens": 480,
+  "timeoutMs": 7000,
+  "cachePolicy": { "enabled": true, "ttlMs": 240000 },
+  "validation": { "requireJson": true, "repairAttempts": 1, "rejectEmptyOutput": true, "minConfidence": 0.4 }
+}

@@ -6,9 +6,19 @@ import { claimPairSessionBodySchema, createPairSessionBodySchema, pairSessionPar
 import { claimPairSession, createPairSession, getPairSessionStatus } from "./service.js";
 
 export const pairingRoutes: FastifyPluginAsync = async (app) => {
-  app.post("/sessions", async (request) => {
+  app.post("/sessions", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
     const body = createPairSessionBodySchema.parse(request.body);
-    return createPairSession(app, body);
+    const auth = getUserAuth(request);
+    return createPairSession(app, {
+      userId: auth.sub,
+      ...body,
+    });
   });
 
   app.get("/sessions/:sessionId", async (request) => {

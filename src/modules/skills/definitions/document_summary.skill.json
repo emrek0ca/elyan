@@ -1,0 +1,46 @@
+{
+  "id": "document_summary",
+  "version": "1.0.0",
+  "active": true,
+  "name": "Document Summary",
+  "displayName": "Özetle",
+  "displayDescription": "Eklenen belge veya görselden kısa özet çıkarır.",
+  "slashCommand": "/özetle",
+  "uiCategory": "document",
+  "requiresAttachment": true,
+  "supportedMimeTypes": ["application/pdf", "text/plain", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  "manualSelectable": true,
+  "purpose": "Summarize structured document text and chunks extracted on the mobile device.",
+  "summary": "Creates a concise summary and key points from selected attachment chunks.",
+  "instructions": "Use only the provided attachment chunks. Produce a faithful Turkish answer unless the user clearly uses another language. Do not claim to have read pages or content that are not included. Return strict JSON only.",
+  "triggers": {
+    "phrases": ["özetle", "ozetle", "özet", "summary", "summarize", "kısaca anlat", "kisaca anlat"],
+    "intents": ["summary", "summarize", "analyze"],
+    "payloadTypes": ["application/pdf", "text/plain", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+  },
+  "inputSchema": {
+    "type": "object",
+    "required": ["prompt", "chunks"],
+    "properties": {
+      "prompt": { "type": "string", "minLength": 1 },
+      "chunks": { "type": "array", "minItems": 1 }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["summary", "keyPoints", "confidence"],
+    "properties": {
+      "summary": { "type": "string", "minLength": 1 },
+      "keyPoints": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+      "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+    }
+  },
+  "allowedTools": [],
+  "modelProfile": "fast_reasoning",
+  "maxInputTokens": 2200,
+  "maxOutputTokens": 420,
+  "timeoutMs": 6500,
+  "cachePolicy": { "enabled": true, "ttlMs": 300000 },
+  "validation": { "requireJson": true, "repairAttempts": 1, "rejectEmptyOutput": true, "minConfidence": 0.5 }
+}

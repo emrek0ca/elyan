@@ -1,7 +1,8 @@
 import type { AiProvider } from "../../contracts/domain.js";
+import type { SharedBrainWorkload } from "../brain/workloads.js";
 import { supportedAiProviders } from "./provider-registry.js";
 
-export type AiWorkload = "intent" | "planning" | "fast_route";
+export type AiWorkload = SharedBrainWorkload;
 
 export function resolveAiRoute(input: {
   workload: AiWorkload;
@@ -10,43 +11,21 @@ export function resolveAiRoute(input: {
   allowHosted?: boolean;
   allowLocal?: boolean;
 }) {
-  const providers = supportedAiProviders.filter((provider) => {
-    if (input.preferredProvider && provider.code === input.preferredProvider) {
-      return true;
-    }
-
-    if (input.allowHosted === false && provider.hosted) {
-      return false;
-    }
-
-    if (input.allowLocal === false && !provider.hosted) {
-      return false;
-    }
-
-    return provider.workloads.includes(input.workload);
-  });
-
-  const primary =
-    providers.find((provider) => provider.code === input.preferredProvider) ??
-    providers.find((provider) => provider.workloads.includes(input.workload)) ??
-    supportedAiProviders.find((provider) => provider.code === "openrouter") ??
-    supportedAiProviders[0];
+  const primary = supportedAiProviders[0];
 
   const selectedModel =
     input.preferredModel && primary.models.includes(input.preferredModel)
       ? input.preferredModel
       : primary.defaultModelByWorkload[input.workload];
+  const fallbackModel =
+    primary.models.find((model) => model === "qwen/qwen3.6-27b" && model !== selectedModel) ??
+    primary.models.find((model) => model !== selectedModel) ??
+    null;
 
   return {
     provider: primary.code,
     model: selectedModel,
     timeoutMs: primary.timeoutMsByWorkload[input.workload],
-    fallbacks: supportedAiProviders
-      .filter((provider) => provider.code !== primary.code && provider.workloads.includes(input.workload))
-      .map((provider) => ({
-        provider: provider.code,
-        model: provider.defaultModelByWorkload[input.workload],
-        timeoutMs: provider.timeoutMsByWorkload[input.workload],
-      })),
+    fallbacks: fallbackModel ? [fallbackModel] : [],
   };
 }

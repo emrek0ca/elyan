@@ -1,15 +1,71 @@
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: elyan_backend
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d elyan_backend"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4000
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/elyan_backend
+      REDIS_URL: redis://redis:6379
+      REALTIME_REDIS_FANOUT_ENABLED: "true"
+      REALTIME_REDIS_CHANNEL_PREFIX: elyan:realtime
+      REALTIME_EVENT_RETENTION_HOURS: 48
+      SSE_MAX_STREAMS_PER_USER: 4
+      SSE_REPLAY_LIMIT: 500
+      SSE_HEARTBEAT_MS: 15000
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/readyz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
 volumes:
   postgres_data:
+  redis_data:

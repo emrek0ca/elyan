@@ -1,0 +1,56 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { buildGroqModelCatalog, resolveGroqFallbackModel } from "./groq-models.js";
+
+test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq models", () => {
+  const catalog = buildGroqModelCatalog({
+    GROQ_REASONING_MODEL: "openai/gpt-oss-120b",
+    GROQ_FAST_MODEL: "openai/gpt-oss-20b",
+    GROQ_FALLBACK_MODEL: "qwen/qwen3.6-27b",
+  });
+
+  assert.equal(catalog.reasoningModel, "openai/gpt-oss-120b");
+  assert.equal(catalog.fastModel, "openai/gpt-oss-20b");
+  assert.equal(catalog.fallbackModel, "qwen/qwen3.6-27b");
+  assert.deepEqual(catalog.defaultModelByWorkload, {
+    intent: "openai/gpt-oss-20b",
+    fast_route: "openai/gpt-oss-20b",
+    mobile_chat_fast: "openai/gpt-oss-120b",
+    mobile_chat_balanced: "openai/gpt-oss-120b",
+    document_analysis: "qwen/qwen3.6-27b",
+    planning: "openai/gpt-oss-120b",
+    desktop_handoff: "openai/gpt-oss-20b",
+  });
+  assert.deepEqual(catalog.models, [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.6-27b",
+  ]);
+});
+
+test("resolveGroqFallbackModel returns a distinct backup model when primary fails", () => {
+  const fallback = resolveGroqFallbackModel(
+    {
+      GROQ_REASONING_MODEL: "openai/gpt-oss-120b",
+      GROQ_FAST_MODEL: "openai/gpt-oss-20b",
+      GROQ_FALLBACK_MODEL: "qwen/qwen3.6-27b",
+    },
+    "openai/gpt-oss-120b",
+  );
+
+  assert.equal(fallback, "qwen/qwen3.6-27b");
+});
+
+test("resolveGroqFallbackModel prefers the fast Groq model for document analysis failover", () => {
+  const fallback = resolveGroqFallbackModel(
+    {
+      GROQ_REASONING_MODEL: "openai/gpt-oss-120b",
+      GROQ_FAST_MODEL: "openai/gpt-oss-20b",
+      GROQ_FALLBACK_MODEL: "qwen/qwen3.6-27b",
+    },
+    "qwen/qwen3.6-27b",
+    "document_analysis",
+  );
+
+  assert.equal(fallback, "openai/gpt-oss-20b");
+});

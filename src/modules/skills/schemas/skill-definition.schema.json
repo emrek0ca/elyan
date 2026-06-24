@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "active",
+    "name",
+    "displayName",
+    "displayDescription",
+    "slashCommand",
+    "uiCategory",
+    "requiresAttachment",
+    "supportedMimeTypes",
+    "manualSelectable",
+    "purpose",
+    "summary",
+    "instructions",
+    "triggers",
+    "inputSchema",
+    "outputSchema",
+    "allowedTools",
+    "modelProfile",
+    "maxInputTokens",
+    "maxOutputTokens",
+    "timeoutMs",
+    "cachePolicy",
+    "validation"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 2, "maxLength": 80, "pattern": "^[a-z0-9_]+$" },
+    "version": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "active": { "type": "boolean" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "displayDescription": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "slashCommand": { "type": "string", "minLength": 2, "maxLength": 40, "pattern": "^/[^\\s]+$" },
+    "uiCategory": { "type": "string", "enum": ["document", "image", "reasoning", "local"] },
+    "requiresAttachment": { "type": "boolean" },
+    "supportedMimeTypes": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 120 }, "maxItems": 30 },
+    "manualSelectable": { "type": "boolean" },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "instructions": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "triggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phrases", "intents", "payloadTypes"],
+      "properties": {
+        "phrases": { "type": "array", "items": { "type": "string" }, "maxItems": 60 },
+        "intents": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+        "payloadTypes": { "type": "array", "items": { "type": "string" }, "maxItems": 20 }
+      }
+    },
+    "inputSchema": { "type": "object" },
+    "outputSchema": { "type": "object" },
+    "allowedTools": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+    "modelProfile": {
+      "type": "string",
+      "enum": ["cheap_classification", "fast_reasoning", "long_context", "code_reasoning", "local_only"]
+    },
+    "maxInputTokens": { "type": "integer", "minimum": 128, "maximum": 12000 },
+    "maxOutputTokens": { "type": "integer", "minimum": 32, "maximum": 2000 },
+    "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 30000 },
+    "cachePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "ttlMs"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ttlMs": { "type": "integer", "minimum": 0, "maximum": 3600000 }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requireJson", "repairAttempts", "rejectEmptyOutput", "minConfidence"],
+      "properties": {
+        "requireJson": { "type": "boolean" },
+        "repairAttempts": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "rejectEmptyOutput": { "type": "boolean" },
+        "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

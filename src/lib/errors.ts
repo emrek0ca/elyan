@@ -16,6 +16,10 @@ export function badRequest(message: string, details?: unknown): AppError {
   return new AppError(400, "bad_request", message, details);
 }
 
+export function unprocessableEntity(message: string, details?: unknown): AppError {
+  return new AppError(422, "invalid_target", message, details);
+}
+
 export function unauthorized(message = "Unauthorized"): AppError {
   return new AppError(401, "unauthorized", message);
 }
@@ -30,4 +34,8 @@ export function notFound(message = "Not found"): AppError {
 
 export function conflict(message: string, details?: unknown): AppError {
   return new AppError(409, "conflict", message, details);
+}
+
+export function serviceUnavailable(message = "Service unavailable", details?: unknown): AppError {
+  return new AppError(503, "service_unavailable", message, details);
 }

@@ -1,0 +1,32 @@
+{
+  "ok": true,
+  "deviceId": "5e79c427-bcf1-411b-965a-a102abb90779",
+  "status": "online",
+  "capabilityStates": {
+    "browser.control": {
+      "available": true
+    },
+    "document.read": {
+      "available": true
+    },
+    "runtime.status": {
+      "available": true
+    }
+  },
+  "capabilitySummary": {
+    "total": 3,
+    "categories": {
+      "runtime": 1,
+      "task": 0,
+      "browser": 1,
+      "computer": 0,
+      "file": 0,
+      "document": 1,
+      "model": 0,
+      "quantum": 0,
+      "automation": 0,
+      "connector": 0,
+      "other": 0
+    }
+  }
+}

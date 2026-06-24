@@ -35,8 +35,17 @@ export const deviceRoutes: FastifyPluginAsync = async (app) => {
       label: body.label,
       platform: body.platform,
       appVersion: body.appVersion,
+      pushToken: body.pushToken ?? undefined,
+      pushProvider: body.pushProvider ?? undefined,
+      notificationAuthorizationStatus:
+        body.notificationAuthorizationStatus ?? undefined,
+      supportsLiveActivities: body.supportsLiveActivities,
+      supportsDynamicIsland: body.supportsDynamicIsland,
+      backgroundRefreshEnabled: body.backgroundRefreshEnabled,
+      buildMetadata: body.buildMetadata,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
+      requestId: context.requestId,
     });
   });
 

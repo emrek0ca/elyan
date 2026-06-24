@@ -1,0 +1,357 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { canUseDesktopConnections, getBillingPlan, normalizeBillingPlanCode } from "./catalog.js";
+import {
+  assertSharedBrainUsageBudgetAllowed,
+  buildTrialSubscriptionSeed,
+  createUpgradeOrByokRequiredError,
+  getBillingProviderForStorePlatform,
+  getCheckoutInitializationState,
+  normalizeStoreWebhookStatus,
+  resolveUsageAccessTruth,
+  resolveUsagePresentationTruth,
+  shapePublicUsageSnapshot,
+} from "./service.js";
+
+test("getCheckoutInitializationState stays pending for placeholder rows", () => {
+  const state = getCheckoutInitializationState({
+    paymentPageUrl: null,
+    providerToken: null,
+    providerPaymentId: null,
+    providerSubscriptionReferenceCode: null,
+    completedAt: null,
+    rawLastPayload: {},
+  } as never);
+
+  assert.equal(state, "pending");
+});
+
+test("getCheckoutInitializationState stays pending for in-flight initialization markers", () => {
+  const state = getCheckoutInitializationState({
+    paymentPageUrl: null,
+    providerToken: null,
+    providerPaymentId: null,
+    providerSubscriptionReferenceCode: null,
+    completedAt: null,
+    rawLastPayload: {
+      initializationState: "initializing",
+    },
+  } as never);
+
+  assert.equal(state, "pending");
+});
+
+test("getCheckoutInitializationState is ready once provider launch data exists", () => {
+  const state = getCheckoutInitializationState({
+    paymentPageUrl: "https://sandbox.iyzipay.com/checkout",
+    providerToken: null,
+    providerPaymentId: null,
+    providerSubscriptionReferenceCode: null,
+    completedAt: null,
+    rawLastPayload: {
+      initializationState: "failed",
+    },
+  } as never);
+
+  assert.equal(state, "ready");
+});
+
+test("getCheckoutInitializationState reports failed for fail-closed initialization markers", () => {
+  const state = getCheckoutInitializationState({
+    paymentPageUrl: null,
+    providerToken: null,
+    providerPaymentId: null,
+    providerSubscriptionReferenceCode: null,
+    completedAt: null,
+    rawLastPayload: {
+      initializationState: "failed",
+      errorCode: "service_unavailable",
+    },
+  } as never);
+
+  assert.equal(state, "failed");
+});
+
+test("getBillingProviderForStorePlatform routes native stores to the matching provider", () => {
+  assert.equal(getBillingProviderForStorePlatform("apple"), "apple_store");
+  assert.equal(getBillingProviderForStorePlatform("google"), "google_play");
+});
+
+test("normalizeStoreWebhookStatus keeps entitlement updates fail-closed for recovery states", () => {
+  assert.equal(normalizeStoreWebhookStatus("SUBSCRIPTION_STATE_ACTIVE"), "active");
+  assert.equal(normalizeStoreWebhookStatus("SUBSCRIPTION_STATE_IN_TRIAL"), "trialing");
+  assert.equal(normalizeStoreWebhookStatus("SUBSCRIPTION_STATE_ON_HOLD"), "past_due");
+  assert.equal(normalizeStoreWebhookStatus("SUBSCRIPTION_STATE_CANCELED"), "canceled");
+});
+
+test("resolveUsageAccessTruth keeps new free trials server-brain eligible until trial expiry", () => {
+  const futureTrialEndsAt = new Date(Date.now() + 60_000);
+  const truth = resolveUsageAccessTruth({
+    planCode: "free",
+    status: "trialing",
+    trialEndsAt: futureTrialEndsAt,
+  });
+
+  assert.equal(truth.mode, "trial");
+  assert.equal(truth.serverBrainAllowed, true);
+  assert.equal(truth.upgradeRequiredForServerBrain, false);
+  assert.equal(truth.trialActive, true);
+});
+
+test("resolveUsageAccessTruth falls back to bounded free server-brain access after free trial expiry", () => {
+  const truth = resolveUsageAccessTruth({
+    planCode: "free",
+    status: "trialing",
+    trialEndsAt: new Date(Date.now() - 60_000),
+  });
+
+  assert.equal(truth.mode, "free");
+  assert.equal(truth.serverBrainAllowed, true);
+  assert.equal(truth.upgradeRequiredForServerBrain, false);
+  assert.equal(truth.brainProfile.tier, "standard");
+  assert.equal(truth.brainProfile.retrievalFanout, 2);
+});
+
+test("resolveUsageAccessTruth exposes the premium brain profile for pro plans", () => {
+  const truth = resolveUsageAccessTruth({
+    planCode: "pro",
+    status: "active",
+    trialEndsAt: null,
+  });
+
+  assert.equal(truth.brainProfile.tier, "premium");
+  assert.equal(truth.brainProfile.reasoningMultiplier, 5);
+  assert.equal(truth.brainProfile.retrievalFanout, 6);
+  assert.equal(truth.brainProfile.memoryFanout, 8);
+});
+
+test("resolveUsageAccessTruth treats claimed pro trials as premium trial access", () => {
+  const truth = resolveUsageAccessTruth({
+    planCode: "pro",
+    status: "trialing",
+    trialEndsAt: new Date(Date.now() + 60_000),
+  });
+
+  assert.equal(truth.mode, "trial");
+  assert.equal(truth.serverBrainAllowed, true);
+  assert.equal(truth.trialActive, true);
+  assert.equal(truth.brainProfile.tier, "premium");
+  assert.equal(truth.brainProfile.reasoningMultiplier, 5);
+});
+
+test("resolveUsageAccessTruth blocks explicitly expired pro trials", () => {
+  const truth = resolveUsageAccessTruth({
+    planCode: "pro",
+    status: "trialing",
+    trialEndsAt: new Date(Date.now() - 60_000),
+  });
+
+  assert.equal(truth.serverBrainAllowed, false);
+  assert.equal(truth.upgradeRequiredForServerBrain, true);
+});
+
+test("resolveUsageAccessTruth keeps provider trialing paid plans active when no expiry was sent", () => {
+  const truth = resolveUsageAccessTruth({
+    planCode: "pro",
+    status: "trialing",
+    trialEndsAt: null,
+  });
+
+  assert.equal(truth.mode, "paid");
+  assert.equal(truth.serverBrainAllowed, true);
+  assert.equal(truth.brainProfile.tier, "premium");
+});
+
+test("buildTrialSubscriptionSeed creates a claimable welcome pro offer without auto-activating pro", () => {
+  const createdAt = new Date("2030-01-01T00:00:00.000Z");
+  const seed = buildTrialSubscriptionSeed(createdAt);
+
+  assert.equal(seed.planCode, "free");
+  assert.equal(seed.status, "free");
+  assert.equal(seed.taskLimitMonthly, 50);
+  assert.equal(seed.aiCreditsMonthly, 120);
+  assert.equal(seed.currentPeriodStartedAt, createdAt);
+  assert.equal(seed.trialEndsAt.getTime(), createdAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+  assert.equal(seed.periodEndsAt.getTime(), seed.trialEndsAt.getTime());
+});
+
+test("resolveUsagePresentationTruth keeps active free trials on trial semantics even when a plan label could differ", () => {
+  const presentation = resolveUsagePresentationTruth({
+    mode: "trial",
+    planCode: "pro",
+    status: "trialing",
+    brainProfile: {
+      qualityProfile: "free_basic",
+      tier: "standard",
+      reasoningMultiplier: 1,
+      retrievalFanout: 2,
+      memoryFanout: 3,
+      maxTokenScale: 1,
+    },
+    serverBrainAllowed: true,
+    localByokAllowed: true,
+    trialActive: true,
+    trialEndsAt: new Date(Date.now() + 60_000),
+    upgradeRequiredForServerBrain: false,
+  });
+
+  assert.equal(presentation.accessMode, "trial");
+  assert.equal(presentation.planLabelSource, "trial");
+});
+
+test("resolveUsagePresentationTruth keeps paid plans on subscription semantics", () => {
+  const presentation = resolveUsagePresentationTruth({
+    mode: "paid",
+    planCode: "pro",
+    status: "active",
+    brainProfile: {
+      qualityProfile: "pro_max",
+      tier: "premium",
+      reasoningMultiplier: 5,
+      retrievalFanout: 6,
+      memoryFanout: 8,
+      maxTokenScale: 1.3,
+    },
+    serverBrainAllowed: true,
+    localByokAllowed: true,
+    trialActive: false,
+    trialEndsAt: null,
+    upgradeRequiredForServerBrain: false,
+  });
+
+  assert.equal(presentation.accessMode, "paid");
+  assert.equal(presentation.planLabelSource, "subscription");
+});
+
+test("shapePublicUsageSnapshot keeps authoritative quota truth and adds pending hints separately", () => {
+  const periodEndsAt = new Date("2030-02-01T00:00:00.000Z");
+  const snapshot = shapePublicUsageSnapshot({
+    usage: {
+      tasksUsed: 3,
+      tasksRemaining: 9,
+      tokensUsed: 120,
+      tokensRemaining: 880,
+      dailyLimit: 12,
+      dailyUsed: 4,
+      dailyRemaining: 8,
+      weeklyLimit: 84,
+      weeklyUsed: 18,
+      weeklyRemaining: 66,
+      qualityProfile: "solo_enhanced",
+    },
+    subscription: {
+      planCode: "solo",
+      periodEndsAt,
+    },
+    pendingTokens: 2,
+  });
+
+  assert.equal(snapshot.tokensUsed, 120);
+  assert.equal(snapshot.tokensRemaining, 880);
+  assert.equal(snapshot.dailyRemaining, 8);
+  assert.equal(snapshot.weeklyRemaining, 66);
+  assert.equal(snapshot.pendingTokens, 2);
+  assert.equal(snapshot.tokenBalanceIncludesPending, true);
+  assert.equal(snapshot.planCode, "solo");
+  assert.equal(snapshot.periodEndsAt, periodEndsAt);
+});
+
+test("resolveUsageAccessTruth normalizes legacy team rows to pro", () => {
+  const truth = resolveUsageAccessTruth({
+    planCode: "team",
+    status: "active",
+    trialEndsAt: null,
+  });
+
+  assert.equal(truth.planCode, "pro");
+  assert.equal(truth.mode, "paid");
+  assert.equal(truth.brainProfile.tier, "premium");
+});
+
+test("billing catalog keeps desktop connections pro-only", () => {
+  const free = getBillingPlan("free");
+  const solo = getBillingPlan("solo");
+  const pro = getBillingPlan("pro");
+
+  assert.equal(free.desktopLimit, 0);
+  assert.equal(free.monthlyPrice, 0);
+  assert.equal(free.taskLimitMonthly, 50);
+  assert.equal(free.aiCreditsMonthly, 120);
+  assert.equal(free.byokRequired, false);
+  assert.equal(solo.desktopLimit, 0);
+  assert.equal(solo.monthlyPrice, 6.99);
+  assert.equal(
+    solo.providerProducts.apple?.productId,
+    "com.elyan.elyanMobile.solo.monthly",
+  );
+  assert.equal(
+    solo.providerProducts.google?.productId,
+    "com.elyan.elyanMobile.solo.monthly",
+  );
+  assert.equal(pro.desktopLimit > 0, true);
+  assert.equal(pro.monthlyPrice, 17.99);
+  assert.equal(
+    pro.providerProducts.apple?.productId,
+    "com.elyan.elyanMobile.pro.monthly",
+  );
+  assert.equal(
+    pro.providerProducts.google?.productId,
+    "com.elyan.elyanMobile.pro.monthly",
+  );
+  assert.equal(canUseDesktopConnections("free"), false);
+  assert.equal(canUseDesktopConnections("solo"), false);
+  assert.equal(canUseDesktopConnections("pro"), true);
+});
+
+test("resolveUsageAccessTruth keeps canceled Apple access until period end", () => {
+  const truth = resolveUsageAccessTruth(
+    {
+      planCode: "pro",
+      status: "canceled",
+      trialEndsAt: null,
+      periodEndsAt: new Date("2030-02-01T00:00:00.000Z"),
+    },
+    new Date("2030-01-15T00:00:00.000Z"),
+  );
+
+  assert.equal(truth.mode, "paid");
+  assert.equal(truth.serverBrainAllowed, true);
+});
+
+test("billing catalog collapses legacy team plan code to pro", () => {
+  const planCode = normalizeBillingPlanCode("team");
+  const plan = getBillingPlan("team");
+
+  assert.equal(planCode, "pro");
+  assert.equal(plan.code, "pro");
+  assert.equal(plan.brainProfile.reasoningMultiplier, 5);
+});
+
+test("assertSharedBrainUsageBudgetAllowed rejects exhausted bounded free credits", () => {
+  assert.throws(
+    () =>
+      assertSharedBrainUsageBudgetAllowed(
+        {
+          access: { mode: "free" },
+          remainingAiCredits: 0,
+          periodEndsAt: new Date("2030-02-01T00:00:00.000Z"),
+        },
+        1,
+      ),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "ai_credit_limit_reached");
+      return true;
+    },
+  );
+});
+
+test("createUpgradeOrByokRequiredError keeps the failure user-safe", () => {
+  const error = createUpgradeOrByokRequiredError();
+
+  assert.equal(error.statusCode, 409);
+  assert.equal(error.code, "upgrade_or_byok_required");
+  assert.equal(
+    error.message,
+    "Token hakkın doldu. Devam etmek için planını yükselt veya kendi yerel modelini kullan.",
+  );
+});

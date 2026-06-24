@@ -1,12 +1,20 @@
 import type { FastifyPluginAsync } from "fastify";
 import { getRequestContext } from "../../lib/http.js";
 import { getUserAuth } from "../../lib/request-auth.js";
-import { connectionParamsSchema, listConnectionsQuerySchema, oauthCallbackQuerySchema, oauthProviderParamsSchema, startOauthBodySchema } from "./schemas.js";
+import {
+  connectionParamsSchema,
+  listConnectionsQuerySchema,
+  oauthCallbackQuerySchema,
+  oauthProviderParamsSchema,
+  sendGmailBodySchema,
+  startOauthBodySchema,
+} from "./schemas.js";
 import {
   disconnectIntegration,
   handleOauthCallback,
   listIntegrationProviders,
   listUserIntegrationConnections,
+  sendGmailMessage,
   startOauthConnection,
 } from "./service.js";
 
@@ -92,6 +100,32 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
       connectionId: params.connectionId,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
+    });
+  });
+
+  app.post("/gmail/send", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const body = sendGmailBodySchema.parse(request.body);
+    const auth = getUserAuth(request);
+    const context = getRequestContext(request);
+
+    return sendGmailMessage(app, {
+      userId: auth.sub,
+      connectionId: body.connectionId,
+      to: body.to,
+      subject: body.subject,
+      body: body.body,
+      cc: body.cc,
+      bcc: body.bcc,
+      replyTo: body.replyTo,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      requestId: context.requestId,
     });
   });
 };

@@ -1,5 +1,46 @@
 import { z } from "zod";
 
+export type SharedBrainProvider =
+  | "ollama"
+  | "vllm"
+  | "llamacpp"
+  | "groq"
+  | "openai"
+  | "claude"
+  | "openrouter";
+
+const booleanFlag = (defaultValue: boolean) =>
+  z
+    .preprocess((value) => {
+      if (typeof value === "boolean") {
+        return value;
+      }
+
+      if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+
+        if (["true", "1", "yes", "on"].includes(normalized)) {
+          return true;
+        }
+
+        if (["false", "0", "no", "off"].includes(normalized)) {
+          return false;
+        }
+      }
+
+      return value;
+    }, z.boolean())
+    .default(defaultValue);
+
+const optionalBlankableUrl = () =>
+  z.preprocess((value) => {
+    if (typeof value === "string" && value.trim() === "") {
+      return undefined;
+    }
+
+    return value;
+  }, z.string().url().optional());
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().default("0.0.0.0"),
@@ -7,39 +48,322 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   APP_BASE_URL: z.string().url(),
   DATABASE_URL: z.string().min(1),
-  JWT_SECRET: z.string().min(16),
+  JWT_SECRET: z.string().min(32),
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL: z.string().default("30d"),
   RUNTIME_TOKEN_TTL: z.string().default("12h"),
   PAIRING_TTL_MINUTES: z.coerce.number().int().positive().default(10),
-  OAUTH_STATE_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   RUNTIME_SECRET_PEPPER: z.string().min(16),
-  TOKEN_ENCRYPTION_KEY: z.string().min(32),
   CORS_ORIGIN: z.string().default("*"),
+  REDIS_URL: z.string().url().optional(),
+  RELIABILITY_REDIS_REQUIRED: booleanFlag(false),
+  BLOB_STORAGE_BUCKET: z.string().optional(),
+  BLOB_STORAGE_REGION: z.string().optional(),
+  BLOB_STORAGE_ENDPOINT: z.string().url().optional(),
+  BLOB_STORAGE_ACCESS_KEY_ID: z.string().optional(),
+  BLOB_STORAGE_SECRET_ACCESS_KEY: z.string().optional(),
+  BLOB_STORAGE_FORCE_PATH_STYLE: booleanFlag(false),
+  BLOB_STORAGE_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+  BLOB_HMAC_SECRET: z.string().optional(),
+  RATE_LIMIT_REDIS_ENABLED: booleanFlag(false),
+  REALTIME_REDIS_FANOUT_ENABLED: booleanFlag(true),
+  REALTIME_REDIS_CHANNEL_PREFIX: z.string().trim().min(1).default("elyan:realtime"),
+  REALTIME_EVENT_RETENTION_HOURS: z.coerce.number().int().positive().default(48),
+  SSE_MAX_STREAMS_PER_USER: z.coerce.number().int().positive().default(4),
+  SSE_REPLAY_LIMIT: z.coerce.number().int().positive().max(2_000).default(500),
+  SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
+  BRAIN_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(3),
+  BRAIN_CIRCUIT_OPEN_MS: z.coerce.number().int().positive().default(30_000),
+  TASK_DISPATCH_LOCK_TTL_MS: z.coerce.number().int().positive().default(120_000),
+  REQUEST_BUDGET_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  AUTH_REQUEST_BUDGET_MAX: z.coerce.number().int().positive().default(10),
+  CHAT_REQUEST_BUDGET_MAX: z.coerce.number().int().positive().default(60),
+  TASK_REQUEST_BUDGET_MAX: z.coerce.number().int().positive().default(60),
   GOOGLE_CLIENT_ID: z.string().optional(),
-  GOOGLE_CLIENT_SECRET: z.string().optional(),
-  NOTION_CLIENT_ID: z.string().optional(),
-  NOTION_CLIENT_SECRET: z.string().optional(),
-  SLACK_CLIENT_ID: z.string().optional(),
-  SLACK_CLIENT_SECRET: z.string().optional(),
-  DISCORD_CLIENT_ID: z.string().optional(),
-  DISCORD_CLIENT_SECRET: z.string().optional(),
-  GITHUB_CLIENT_ID: z.string().optional(),
-  GITHUB_CLIENT_SECRET: z.string().optional(),
-  LINEAR_CLIENT_ID: z.string().optional(),
-  LINEAR_CLIENT_SECRET: z.string().optional(),
-  DROPBOX_CLIENT_ID: z.string().optional(),
-  DROPBOX_CLIENT_SECRET: z.string().optional(),
-  TRELLO_CLIENT_ID: z.string().optional(),
-  TRELLO_CLIENT_SECRET: z.string().optional(),
-  JIRA_CLIENT_ID: z.string().optional(),
-  JIRA_CLIENT_SECRET: z.string().optional(),
-  CLICKUP_CLIENT_ID: z.string().optional(),
-  CLICKUP_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_SERVER_CLIENT_ID: z.string().optional(),
+  GOOGLE_REVERSED_CLIENT_ID: z.string().optional(),
+  APPLE_CLIENT_ID: z.string().optional(),
+  APPLE_SERVICE_ID: z.string().optional(),
+  APPLE_TEAM_ID: z.string().optional(),
+  APPLE_IAP_SHARED_SECRET: z.string().optional(),
+  APPLE_APP_STORE_ISSUER_ID: z.string().optional(),
+  APPLE_APP_STORE_KEY_ID: z.string().optional(),
+  APPLE_APP_STORE_PRIVATE_KEY: z.string().optional(),
+  APPLE_APP_STORE_PRIVATE_KEY_PATH: z.string().optional(),
+  APPLE_APP_BUNDLE_ID: z.string().optional(),
+  APPLE_APP_ID: z.coerce.number().int().positive().optional(),
+  APPLE_SOLO_PRODUCT_ID: z.string().default("com.elyan.elyanMobile.solo.monthly"),
+  APPLE_PRO_PRODUCT_ID: z.string().default("com.elyan.elyanMobile.pro.monthly"),
+  APNS_KEY_ID: z.string().optional(),
+  APNS_PRIVATE_KEY: z.string().optional(),
+  APNS_PRIVATE_KEY_PATH: z.string().optional(),
+  APNS_ENVIRONMENT: z.enum(["sandbox", "production"]).default("sandbox"),
+  ANDROID_APP_LINK_PACKAGE_NAME: z.string().optional(),
+  ANDROID_SHA256_CERT_FINGERPRINTS: z.string().optional(),
+  GOOGLE_PLAY_PACKAGE_NAME: z.string().optional(),
+  GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL: z.string().optional(),
+  GOOGLE_PLAY_PRIVATE_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_BASE_URL: z.string().url().optional(),
+  GROQ_API_KEY: z.string().optional(),
+  GROQ_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
+  GROQ_REASONING_MODEL: z.string().default("openai/gpt-oss-120b"),
+  GROQ_FAST_MODEL: z.string().default("openai/gpt-oss-20b"),
+  GROQ_FALLBACK_MODEL: z.string().default("qwen/qwen3.6-27b"),
+  OPENROUTER_API_KEY: z.string().optional(),
+  OPENROUTER_BASE_URL: z.string().url().optional(),
+  IYZICO_API_KEY: z.string().optional(),
+  IYZICO_SECRET_KEY: z.string().optional(),
+  IYZICO_MERCHANT_ID: z.string().optional(),
+  TOKEN_ENCRYPTION_KEY: z.string().optional(),
+  IYZICO_BASE_URL: z.string().url().default("https://api.iyzipay.com"),
+  IYZICO_PUBLIC_BASE_URL: z.string().url().optional(),
+  IYZICO_LOCALE: z.enum(["tr", "en"]).default("tr"),
+  IYZICO_PRODUCT_NAME: z.string().default("Elyan Subscriptions"),
+  ELYAN_SHARED_BRAIN_PROVIDER: z.enum(["ollama", "vllm", "llamacpp", "groq", "openai", "claude", "openrouter"]).default("ollama"),
+  ELYAN_SHARED_BRAIN_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
+  ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: z.preprocess(
+    (value) => {
+      if (typeof value === "string" && value.trim() === "") {
+        return undefined;
+      }
+
+      return value;
+    },
+    z.enum(["ollama", "vllm", "llamacpp", "groq", "openai", "claude", "openrouter"]).optional(),
+  ),
+  ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: optionalBlankableUrl(),
+  ELYAN_SHARED_BRAIN_MODEL: z.string().default("llama3.2"),
+  ELYAN_SHARED_BRAIN_FAST_MODEL: z.string().default("qwen2.5-coder:3b"),
+  ELYAN_SHARED_BRAIN_BALANCED_MODEL: z.string().default("qwen2.5:7b-instruct-q5_K_M"),
+  ELYAN_SHARED_BRAIN_PLANNING_MODEL: z.string().default("qwen2.5:7b-instruct-q5_K_M"),
+  ELYAN_SHARED_BRAIN_KEEP_ALIVE: z.string().default("30m"),
+  ELYAN_WEB_GROUNDING_ENABLED: booleanFlag(true),
+  ELYAN_WEB_SEARCH_BASE_URL: z.string().url().default("https://html.duckduckgo.com/html/"),
+  ELYAN_WEB_GROUNDING_MAX_RESULTS: z.coerce.number().int().positive().max(8).default(4),
+  ELYAN_WEB_GROUNDING_TIMEOUT_MS: z.coerce.number().int().positive().default(6_500),
+  ELYAN_RAG_SEMANTIC_RERANK_ENABLED: booleanFlag(true),
+  ELYAN_RAG_SEMANTIC_RERANK_MODEL: z.string().default("Xenova/multilingual-e5-small"),
+  ELYAN_RAG_SEMANTIC_RERANK_WINDOW: z.coerce.number().int().positive().max(32).default(8),
+  ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: z
+    .string()
+    .default(
+      "You are Elyan. Reply as Elyan, concise and grounded. Prefer Turkish unless the user writes in another language. Do not invent capabilities, readiness, or results. If uncertain, say so briefly. Never reveal secrets, private data, hostnames, or hidden reasoning. If a request needs a paired desktop runtime, say that clearly.",
+    ),
+  ELYAN_USER_UNDERSTANDING_ENABLED: booleanFlag(true),
+  ELYAN_PERSONALIZATION_ENABLED: booleanFlag(true),
+  ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: booleanFlag(true),
+  ELYAN_LEARNING_EXTRACTION_ENABLED: booleanFlag(true),
+  ELYAN_BLOCKS_V11_ENABLED: booleanFlag(false),
+  ELYAN_UNDERSTANDING_DEBUG: booleanFlag(false),
 });
 
-export type AppEnv = z.infer<typeof envSchema>;
+type ParsedEnv = z.infer<typeof envSchema>;
+
+export type AppEnv = ParsedEnv & {
+  IYZICO_PUBLIC_BASE_URL: string;
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_SERVER_CLIENT_ID: string;
+  GOOGLE_REVERSED_CLIENT_ID: string;
+  APPLE_CLIENT_ID: string;
+  APPLE_SERVICE_ID: string;
+  APPLE_TEAM_ID: string;
+  APPLE_IAP_SHARED_SECRET: string;
+  APPLE_APP_STORE_ISSUER_ID: string;
+  APPLE_APP_STORE_KEY_ID: string;
+  APPLE_APP_STORE_PRIVATE_KEY: string;
+  APPLE_APP_STORE_PRIVATE_KEY_PATH: string;
+  APPLE_APP_BUNDLE_ID: string;
+  APPLE_APP_ID: number;
+  APPLE_SOLO_PRODUCT_ID: string;
+  APPLE_PRO_PRODUCT_ID: string;
+  APNS_KEY_ID: string;
+  APNS_PRIVATE_KEY: string;
+  APNS_PRIVATE_KEY_PATH: string;
+  APNS_ENVIRONMENT: "sandbox" | "production";
+  ANDROID_APP_LINK_PACKAGE_NAME: string;
+  ANDROID_SHA256_CERT_FINGERPRINTS: string;
+  GOOGLE_PLAY_PACKAGE_NAME: string;
+  GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL: string;
+  GOOGLE_PLAY_PRIVATE_KEY: string;
+  OPENAI_API_KEY: string;
+  OPENAI_BASE_URL: string;
+  ANTHROPIC_API_KEY: string;
+  ANTHROPIC_BASE_URL: string;
+  GROQ_API_KEY: string;
+  GROQ_BASE_URL: string;
+  GROQ_REASONING_MODEL: string;
+  GROQ_FAST_MODEL: string;
+  GROQ_FALLBACK_MODEL: string;
+  OPENROUTER_API_KEY: string;
+  OPENROUTER_BASE_URL: string;
+  TOKEN_ENCRYPTION_KEY?: string;
+  ELYAN_SHARED_BRAIN_PROVIDER: SharedBrainProvider;
+  REDIS_URL?: string;
+  RELIABILITY_REDIS_REQUIRED: boolean;
+  BLOB_STORAGE_BUCKET: string;
+  BLOB_STORAGE_REGION: string;
+  BLOB_STORAGE_ENDPOINT: string;
+  BLOB_STORAGE_ACCESS_KEY_ID: string;
+  BLOB_STORAGE_SECRET_ACCESS_KEY: string;
+  BLOB_STORAGE_FORCE_PATH_STYLE: boolean;
+  BLOB_STORAGE_SIGNED_URL_TTL_SECONDS: number;
+  BLOB_HMAC_SECRET: string;
+  RATE_LIMIT_REDIS_ENABLED: boolean;
+  REALTIME_REDIS_FANOUT_ENABLED: boolean;
+  REALTIME_REDIS_CHANNEL_PREFIX: string;
+  REALTIME_EVENT_RETENTION_HOURS: number;
+  SSE_MAX_STREAMS_PER_USER: number;
+  SSE_REPLAY_LIMIT: number;
+  SSE_HEARTBEAT_MS: number;
+  BRAIN_CIRCUIT_FAILURE_THRESHOLD: number;
+  BRAIN_CIRCUIT_OPEN_MS: number;
+  TASK_DISPATCH_LOCK_TTL_MS: number;
+  REQUEST_BUDGET_WINDOW_MS: number;
+  AUTH_REQUEST_BUDGET_MAX: number;
+  CHAT_REQUEST_BUDGET_MAX: number;
+  TASK_REQUEST_BUDGET_MAX: number;
+  ELYAN_SHARED_BRAIN_BASE_URL: string;
+  ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER?: SharedBrainProvider;
+  ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL?: string;
+  ELYAN_SHARED_BRAIN_MODEL: string;
+  ELYAN_SHARED_BRAIN_FAST_MODEL: string;
+  ELYAN_SHARED_BRAIN_BALANCED_MODEL: string;
+  ELYAN_SHARED_BRAIN_PLANNING_MODEL: string;
+  ELYAN_SHARED_BRAIN_KEEP_ALIVE: string;
+  ELYAN_WEB_GROUNDING_ENABLED: boolean;
+  ELYAN_WEB_SEARCH_BASE_URL: string;
+  ELYAN_WEB_GROUNDING_MAX_RESULTS: number;
+  ELYAN_WEB_GROUNDING_TIMEOUT_MS: number;
+  ELYAN_RAG_SEMANTIC_RERANK_ENABLED: boolean;
+  ELYAN_RAG_SEMANTIC_RERANK_MODEL: string;
+  ELYAN_RAG_SEMANTIC_RERANK_WINDOW: number;
+  ELYAN_BLOCKS_V11_ENABLED: boolean;
+  ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: boolean;
+  ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: string;
+};
+
+function isLocalOnlyHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+
+  return (
+    normalized === "localhost" ||
+    normalized === "0.0.0.0" ||
+    normalized === "::" ||
+    normalized === "::1" ||
+    normalized.startsWith("127.")
+  );
+}
+
+export function getDatabaseReachability(env: Pick<AppEnv, "DATABASE_URL">): {
+  connectionUrlScheme: string;
+  connectionUrlHost: string;
+  connectionUrlPort: number | null;
+  localOnlyHost: boolean;
+  warning: string | null;
+} {
+  const url = new URL(env.DATABASE_URL);
+  const localOnly = isLocalOnlyHostname(url.hostname);
+
+  return {
+    connectionUrlScheme: url.protocol.replace(/:$/, ""),
+    connectionUrlHost: url.hostname,
+    connectionUrlPort: url.port ? Number(url.port) : null,
+    localOnlyHost: localOnly,
+    warning: localOnly
+      ? "DATABASE_URL points at a local-only host. That is fine for a host-run backend, but a docker-compose backend container must use the postgres service hostname instead."
+      : null,
+  };
+}
+
+export function getBaseUrlReachability(env: Pick<AppEnv, "APP_BASE_URL" | "HOST" | "PORT">): {
+  advertisedBaseUrl: string;
+  advertisedHost: string;
+  listenHost: string;
+  port: number;
+  externalClientsCanReachAdvertisedBaseUrl: boolean;
+  warning: string | null;
+} {
+  const advertisedUrl = new URL(env.APP_BASE_URL);
+  const advertisedHost = advertisedUrl.hostname;
+  const localOnly = isLocalOnlyHostname(advertisedHost);
+
+  return {
+    advertisedBaseUrl: env.APP_BASE_URL,
+    advertisedHost,
+    listenHost: env.HOST,
+    port: env.PORT,
+    externalClientsCanReachAdvertisedBaseUrl: !localOnly,
+    warning: localOnly
+      ? "APP_BASE_URL uses a local-only host. Physical mobile devices and other machines cannot reach this backend through localhost or 127.x.x.x."
+      : null,
+  };
+}
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
-  return envSchema.parse(source);
+  const parsed = envSchema.parse(source);
+  return {
+    ...parsed,
+    GOOGLE_CLIENT_ID: parsed.GOOGLE_CLIENT_ID ?? "",
+    GOOGLE_SERVER_CLIENT_ID: parsed.GOOGLE_SERVER_CLIENT_ID ?? "",
+    GOOGLE_REVERSED_CLIENT_ID: parsed.GOOGLE_REVERSED_CLIENT_ID ?? "",
+    APPLE_CLIENT_ID: parsed.APPLE_CLIENT_ID ?? "",
+    APPLE_SERVICE_ID: parsed.APPLE_SERVICE_ID ?? "",
+    APPLE_TEAM_ID: parsed.APPLE_TEAM_ID ?? "",
+    APPLE_IAP_SHARED_SECRET: parsed.APPLE_IAP_SHARED_SECRET ?? "",
+    APPLE_APP_STORE_ISSUER_ID: parsed.APPLE_APP_STORE_ISSUER_ID ?? "",
+    APPLE_APP_STORE_KEY_ID: parsed.APPLE_APP_STORE_KEY_ID ?? "",
+    APPLE_APP_STORE_PRIVATE_KEY: parsed.APPLE_APP_STORE_PRIVATE_KEY ?? "",
+    APPLE_APP_STORE_PRIVATE_KEY_PATH: parsed.APPLE_APP_STORE_PRIVATE_KEY_PATH ?? "",
+    APPLE_APP_BUNDLE_ID: parsed.APPLE_APP_BUNDLE_ID ?? "",
+    APPLE_APP_ID: parsed.APPLE_APP_ID ?? 0,
+    APPLE_SOLO_PRODUCT_ID: parsed.APPLE_SOLO_PRODUCT_ID,
+    APPLE_PRO_PRODUCT_ID: parsed.APPLE_PRO_PRODUCT_ID,
+    APNS_KEY_ID: parsed.APNS_KEY_ID ?? "",
+    APNS_PRIVATE_KEY: parsed.APNS_PRIVATE_KEY ?? "",
+    APNS_PRIVATE_KEY_PATH: parsed.APNS_PRIVATE_KEY_PATH ?? "",
+    APNS_ENVIRONMENT: parsed.APNS_ENVIRONMENT,
+    ANDROID_APP_LINK_PACKAGE_NAME: parsed.ANDROID_APP_LINK_PACKAGE_NAME ?? "",
+    ANDROID_SHA256_CERT_FINGERPRINTS: parsed.ANDROID_SHA256_CERT_FINGERPRINTS ?? "",
+    GOOGLE_PLAY_PACKAGE_NAME: parsed.GOOGLE_PLAY_PACKAGE_NAME ?? "",
+    GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL: parsed.GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL ?? "",
+    GOOGLE_PLAY_PRIVATE_KEY: parsed.GOOGLE_PLAY_PRIVATE_KEY ?? "",
+    BLOB_STORAGE_BUCKET: parsed.BLOB_STORAGE_BUCKET ?? "",
+    BLOB_STORAGE_REGION: parsed.BLOB_STORAGE_REGION ?? "",
+    BLOB_STORAGE_ENDPOINT: parsed.BLOB_STORAGE_ENDPOINT ?? "",
+    BLOB_STORAGE_ACCESS_KEY_ID: parsed.BLOB_STORAGE_ACCESS_KEY_ID ?? "",
+    BLOB_STORAGE_SECRET_ACCESS_KEY: parsed.BLOB_STORAGE_SECRET_ACCESS_KEY ?? "",
+    BLOB_STORAGE_FORCE_PATH_STYLE: parsed.BLOB_STORAGE_FORCE_PATH_STYLE,
+    BLOB_STORAGE_SIGNED_URL_TTL_SECONDS: parsed.BLOB_STORAGE_SIGNED_URL_TTL_SECONDS,
+    BLOB_HMAC_SECRET: parsed.BLOB_HMAC_SECRET ?? "",
+    OPENAI_API_KEY: parsed.OPENAI_API_KEY ?? "",
+    OPENAI_BASE_URL: parsed.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
+    ANTHROPIC_API_KEY: parsed.ANTHROPIC_API_KEY ?? "",
+    ANTHROPIC_BASE_URL: parsed.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com/v1",
+    GROQ_API_KEY: parsed.GROQ_API_KEY ?? "",
+    GROQ_BASE_URL: parsed.GROQ_BASE_URL ?? "https://api.groq.com/openai/v1",
+    GROQ_REASONING_MODEL: parsed.GROQ_REASONING_MODEL,
+    GROQ_FAST_MODEL: parsed.GROQ_FAST_MODEL,
+    GROQ_FALLBACK_MODEL: parsed.GROQ_FALLBACK_MODEL,
+    OPENROUTER_API_KEY: parsed.OPENROUTER_API_KEY ?? "",
+    OPENROUTER_BASE_URL: parsed.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
+    TOKEN_ENCRYPTION_KEY: parsed.TOKEN_ENCRYPTION_KEY ?? "",
+    IYZICO_PUBLIC_BASE_URL: parsed.IYZICO_PUBLIC_BASE_URL ?? parsed.APP_BASE_URL,
+    ELYAN_SHARED_BRAIN_PROVIDER: parsed.ELYAN_SHARED_BRAIN_PROVIDER,
+    ELYAN_SHARED_BRAIN_BASE_URL: parsed.ELYAN_SHARED_BRAIN_BASE_URL,
+    ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: parsed.ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER,
+    ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: parsed.ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL,
+    ELYAN_SHARED_BRAIN_MODEL: parsed.ELYAN_SHARED_BRAIN_MODEL,
+    ELYAN_SHARED_BRAIN_FAST_MODEL: parsed.ELYAN_SHARED_BRAIN_FAST_MODEL,
+    ELYAN_SHARED_BRAIN_BALANCED_MODEL: parsed.ELYAN_SHARED_BRAIN_BALANCED_MODEL,
+    ELYAN_SHARED_BRAIN_PLANNING_MODEL: parsed.ELYAN_SHARED_BRAIN_PLANNING_MODEL,
+    ELYAN_SHARED_BRAIN_KEEP_ALIVE: parsed.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+    ELYAN_WEB_GROUNDING_ENABLED: parsed.ELYAN_WEB_GROUNDING_ENABLED,
+    ELYAN_WEB_SEARCH_BASE_URL: parsed.ELYAN_WEB_SEARCH_BASE_URL,
+    ELYAN_WEB_GROUNDING_MAX_RESULTS: parsed.ELYAN_WEB_GROUNDING_MAX_RESULTS,
+    ELYAN_WEB_GROUNDING_TIMEOUT_MS: parsed.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
+    ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: parsed.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
+  };
 }

@@ -3,10 +3,46 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { devices, runtimeConnections, tasks } from "../../db/schema.js";
 import { signRuntimeAccessToken } from "../../lib/auth-tokens.js";
-import { conflict, notFound, unauthorized } from "../../lib/errors.js";
+import { AppError, conflict, notFound, unauthorized } from "../../lib/errors.js";
 import { verifySecret } from "../../lib/auth-crypto.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
+import { assertDesktopPairingAllowed } from "../billing/service.js";
+import { normalizeRuntimeCapabilities, summarizeRuntimeCapabilities } from "./capabilities.js";
 import { activeTaskStatuses } from "../tasks/queue.js";
+import { deriveTaskDeliveryState, extractTaskRouteDecision } from "../tasks/service-helpers.js";
+import { getUserDevice } from "../devices/service.js";
+
+async function getRuntimeConnectionByAuth(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
+  const rows = await app.db
+    .select({
+      id: runtimeConnections.id,
+      status: runtimeConnections.status,
+      socketSessionId: runtimeConnections.socketSessionId,
+      currentTaskId: runtimeConnections.currentTaskId,
+      capabilities: runtimeConnections.capabilities,
+      capabilityStates: runtimeConnections.capabilityStates,
+      connectedAt: runtimeConnections.connectedAt,
+      lastHeartbeatAt: runtimeConnections.lastHeartbeatAt,
+    })
+    .from(runtimeConnections)
+    .where(
+      and(
+        eq(runtimeConnections.id, auth.connectionId),
+        eq(runtimeConnections.deviceId, auth.deviceId),
+        eq(runtimeConnections.userId, auth.sub),
+        isNull(runtimeConnections.disconnectedAt),
+      ),
+    )
+    .limit(1);
+
+  const connection = rows[0];
+
+  if (!connection) {
+    throw unauthorized("Runtime connection is stale or has been replaced");
+  }
+
+  return connection;
+}
 
 export async function registerRuntime(
   app: FastifyInstance,
@@ -15,8 +51,12 @@ export async function registerRuntime(
     deviceSecret: string;
     runtimeVersion?: string;
     capabilities: string[];
+    capabilityStates?: Record<string, unknown>;
   },
 ) {
+  const normalizedCapabilities = normalizeRuntimeCapabilities(input.capabilities);
+  const normalizedCapabilityStates =
+    input.capabilityStates && typeof input.capabilityStates === "object" ? input.capabilityStates : {};
   const rows = await app.db
     .select({
       id: devices.id,
@@ -37,7 +77,11 @@ export async function registerRuntime(
   }
 
   if (!device.userId || !device.deviceKeyHash) {
-    throw conflict("Desktop runtime has not completed pairing");
+    throw new AppError(
+      409,
+      "pairing_pending",
+      "Desktop runtime has not completed pairing",
+    );
   }
 
   const secretMatches = await verifySecret(input.deviceSecret, device.deviceKeyHash);
@@ -46,6 +90,8 @@ export async function registerRuntime(
     throw unauthorized("Device secret is invalid");
   }
 
+  await assertDesktopPairingAllowed(app, device.userId, device.id);
+
   await app.db
     .update(runtimeConnections)
     .set({
@@ -53,6 +99,8 @@ export async function registerRuntime(
       disconnectedAt: new Date(),
     })
     .where(and(eq(runtimeConnections.deviceId, device.id), isNull(runtimeConnections.disconnectedAt)));
+
+  app.services.realtimeHub.closeRuntime(device.id, 4001, "runtime_replaced");
 
   await app.db
     .update(devices)
@@ -65,19 +113,27 @@ export async function registerRuntime(
 
   const socketSessionId = randomUUID();
 
-  await app.db.insert(runtimeConnections).values({
-    deviceId: device.id,
-    userId: device.userId,
-    status: "online",
-    socketSessionId,
-    capabilities: input.capabilities,
-  });
+  const connectionRows = await app.db
+    .insert(runtimeConnections)
+    .values({
+      deviceId: device.id,
+      userId: device.userId,
+      status: "offline",
+      socketSessionId,
+      capabilities: normalizedCapabilities,
+      capabilityStates: normalizedCapabilityStates,
+    })
+    .returning({
+      id: runtimeConnections.id,
+    });
+  const connection = connectionRows[0];
 
   const tokenPayload: RuntimeAuthTokenPayload = {
     kind: "runtime",
     sub: device.userId,
     deviceId: device.id,
     deviceType: "desktop",
+    connectionId: connection.id,
   };
   const accessToken = await signRuntimeAccessToken(app, tokenPayload);
 
@@ -86,8 +142,11 @@ export async function registerRuntime(
       deviceId: device.id,
       label: device.label,
       platform: device.platform,
+      connectionId: connection.id,
     },
-    capabilities: input.capabilities,
+    capabilities: normalizedCapabilities,
+    capabilityStates: normalizedCapabilityStates,
+    capabilitySummary: summarizeRuntimeCapabilities(normalizedCapabilities),
     tokens: {
       accessToken,
       accessTokenTtl: app.config.RUNTIME_TOKEN_TTL,
@@ -104,6 +163,8 @@ export async function markRuntimeConnected(
   auth: RuntimeAuthTokenPayload,
   socketSessionId?: string,
 ): Promise<void> {
+  await getRuntimeConnectionByAuth(app, auth);
+
   await app.db
     .update(runtimeConnections)
     .set({
@@ -112,7 +173,7 @@ export async function markRuntimeConnected(
       lastHeartbeatAt: new Date(),
       disconnectedAt: null,
     })
-    .where(and(eq(runtimeConnections.deviceId, auth.deviceId), eq(runtimeConnections.userId, auth.sub)));
+    .where(eq(runtimeConnections.id, auth.connectionId));
 
   await app.db
     .update(devices)
@@ -129,17 +190,27 @@ export async function heartbeatRuntime(
   input: {
     status: "online" | "busy" | "idle";
     currentTaskId?: string;
+    capabilities?: string[];
+    capabilityStates?: Record<string, unknown>;
   },
 ) {
+  await getRuntimeConnectionByAuth(app, auth);
+  const normalizedCapabilities =
+    input.capabilities === undefined ? undefined : normalizeRuntimeCapabilities(input.capabilities);
+  const normalizedCapabilityStates =
+    input.capabilityStates && typeof input.capabilityStates === "object" ? input.capabilityStates : undefined;
+
   await app.db
     .update(runtimeConnections)
     .set({
       status: input.status,
       currentTaskId: input.currentTaskId,
+      ...(normalizedCapabilities ? { capabilities: normalizedCapabilities } : {}),
+      ...(normalizedCapabilityStates ? { capabilityStates: normalizedCapabilityStates } : {}),
       lastHeartbeatAt: new Date(),
       disconnectedAt: null,
     })
-    .where(and(eq(runtimeConnections.deviceId, auth.deviceId), eq(runtimeConnections.userId, auth.sub)));
+    .where(eq(runtimeConnections.id, auth.connectionId));
 
   await app.db
     .update(devices)
@@ -153,29 +224,46 @@ export async function heartbeatRuntime(
     ok: true,
     deviceId: auth.deviceId,
     status: input.status,
+    capabilityStates: normalizedCapabilityStates ?? {},
+    capabilitySummary: summarizeRuntimeCapabilities(normalizedCapabilities ?? []),
   };
 }
 
 export async function disconnectRuntime(app: FastifyInstance, auth: RuntimeAuthTokenPayload): Promise<void> {
+  await getRuntimeConnectionByAuth(app, auth);
+
   await app.db
     .update(runtimeConnections)
     .set({
       status: "offline",
       disconnectedAt: new Date(),
     })
-    .where(and(eq(runtimeConnections.deviceId, auth.deviceId), eq(runtimeConnections.userId, auth.sub)));
+    .where(eq(runtimeConnections.id, auth.connectionId));
+
+  app.services.realtimeHub.closeRuntime(auth.deviceId, 4000, "runtime_disconnect");
 }
 
 export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
-  return app.db
+  await getRuntimeConnectionByAuth(app, auth);
+
+  const rows = await app.db
     .select({
       id: tasks.id,
       title: tasks.title,
+      targetDeviceId: tasks.targetDeviceId,
+      queuePosition: tasks.queuePosition,
       payload: tasks.payload,
       requestedCapabilities: tasks.requestedCapabilities,
-      preferredAiProvider: tasks.preferredAiProvider,
+      dispatchAttemptCount: tasks.dispatchAttemptCount,
       status: tasks.status,
+      summary: tasks.summary,
+      error: tasks.error,
       approvalRequest: tasks.approvalRequest,
+      runtimeConnectionId: tasks.runtimeConnectionId,
+      dispatchLeaseId: tasks.dispatchLeaseId,
+      dispatchLeaseIssuedAt: tasks.dispatchLeaseIssuedAt,
+      dispatchLeaseExpiresAt: tasks.dispatchLeaseExpiresAt,
+      dispatchAckAt: tasks.dispatchAckAt,
       createdAt: tasks.createdAt,
       updatedAt: tasks.updatedAt,
     })
@@ -188,9 +276,33 @@ export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: Runti
       ),
     )
     .orderBy(tasks.queuePosition, tasks.createdAt);
+
+  const claimOwner = `runtime:${auth.connectionId}:poll`;
+  const claimable = [];
+  for (const row of rows) {
+    if (row.status !== "queued") {
+      claimable.push(row);
+      continue;
+    }
+    const acquired = await app.services.reliability.acquireTaskDispatchLock(row.id, claimOwner);
+    if (acquired) {
+      claimable.push(row);
+    }
+  }
+
+  return claimable.map((row) => ({
+    ...row,
+    routeDecision: extractTaskRouteDecision(row.payload),
+    deliveryState: deriveTaskDeliveryState(row),
+    deliveryAttemptCount: row.dispatchAttemptCount ?? 0,
+    lastAckAt: row.dispatchAckAt ?? null,
+    lastDispatchAttemptAt: row.dispatchLeaseIssuedAt ?? row.dispatchAckAt ?? null,
+  }));
 }
 
 export async function getRuntimeSessionSnapshot(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
+  const connection = await getRuntimeConnectionByAuth(app, auth);
+  const deviceTruth = await getUserDevice(app, auth.sub, auth.deviceId);
   const deviceRows = await app.db
     .select({
       id: devices.id,
@@ -202,24 +314,20 @@ export async function getRuntimeSessionSnapshot(app: FastifyInstance, auth: Runt
     .from(devices)
     .where(eq(devices.id, auth.deviceId))
     .limit(1);
-  const connectionRows = await app.db
-    .select({
-      id: runtimeConnections.id,
-      status: runtimeConnections.status,
-      socketSessionId: runtimeConnections.socketSessionId,
-      currentTaskId: runtimeConnections.currentTaskId,
-      capabilities: runtimeConnections.capabilities,
-      connectedAt: runtimeConnections.connectedAt,
-      lastHeartbeatAt: runtimeConnections.lastHeartbeatAt,
-    })
-    .from(runtimeConnections)
-    .where(and(eq(runtimeConnections.deviceId, auth.deviceId), isNull(runtimeConnections.disconnectedAt)))
-    .orderBy(runtimeConnections.connectedAt)
-    .limit(1);
-
   return {
     device: deviceRows[0] ?? null,
-    connection: connectionRows[0] ?? null,
+    readiness: deviceTruth
+      ? {
+          isOnline: deviceTruth.isOnline,
+          canReceiveTasks: deviceTruth.canReceiveTasks,
+          targetStatus: deviceTruth.targetStatus,
+          targetErrorCode: deviceTruth.targetErrorCode,
+          realtimeReady: deviceTruth.canReceiveTasks && deviceTruth.targetStatus === "ready",
+          runtime: deviceTruth.runtime,
+        }
+      : null,
+    connection,
+    capabilitySummary: summarizeRuntimeCapabilities(connection.capabilities),
     tasks: await listAssignedRuntimeTasks(app, auth),
   };
 }

@@ -1,8 +1,18 @@
 import { z } from "zod";
+import { hasRawBinaryUploadHint } from "../lib/derived-data.js";
 
 export const deviceTypeValues = ["mobile", "desktop"] as const;
-export const pairSessionStatusValues = ["pending", "claimed", "expired"] as const;
-export const runtimeConnectionStatusValues = ["online", "busy", "idle", "offline"] as const;
+export const pairSessionStatusValues = [
+  "pending",
+  "claimed",
+  "expired",
+] as const;
+export const runtimeConnectionStatusValues = [
+  "online",
+  "busy",
+  "idle",
+  "offline",
+] as const;
 export const taskStatusValues = [
   "queued",
   "planning",
@@ -19,11 +29,18 @@ export const artifactKindValues = [
   "screenshot",
   "structured_output",
 ] as const;
-export const subscriptionStatusValues = ["free", "trialing", "active", "past_due", "canceled"] as const;
-export const aiProviderValues = ["openai", "claude", "ollama", "groq", "openrouter"] as const;
+export const subscriptionStatusValues = [
+  "free",
+  "trialing",
+  "active",
+  "past_due",
+  "canceled",
+] as const;
+export const aiProviderValues = ["groq"] as const;
 export const userRoleValues = ["user", "admin"] as const;
 export const connectionProviderValues = [
   "google",
+  "apple",
   "notion",
   "slack",
   "discord",
@@ -42,19 +59,170 @@ export const connectionProviderValues = [
   "ollama",
   "openrouter",
 ] as const;
-export const integrationAuthTypeValues = ["oauth2", "api_key", "webhook", "none"] as const;
-export const integrationConnectionStatusValues = ["pending", "connected", "error", "revoked"] as const;
-export const oauthStateStatusValues = ["pending", "completed", "expired"] as const;
-export const mcpTransportValues = ["stdio", "remote", "oauth_remote", "streamable_http"] as const;
-export const mcpAuthTypeValues = ["none", "bearer", "oauth2", "api_key"] as const;
-export const mcpServerStatusValues = ["configured", "connected", "degraded", "revoked"] as const;
+export const integrationAuthTypeValues = [
+  "oauth2",
+  "api_key",
+  "webhook",
+  "none",
+] as const;
+export const integrationConnectionStatusValues = [
+  "pending",
+  "connected",
+  "error",
+  "revoked",
+] as const;
+export const oauthStateStatusValues = [
+  "pending",
+  "completed",
+  "expired",
+] as const;
+export const mcpTransportValues = [
+  "stdio",
+  "remote",
+  "oauth_remote",
+  "streamable_http",
+] as const;
+export const mcpAuthTypeValues = [
+  "none",
+  "bearer",
+  "oauth2",
+  "api_key",
+] as const;
+export const mcpServerStatusValues = [
+  "configured",
+  "connected",
+  "degraded",
+  "revoked",
+] as const;
 export const auditActorTypeValues = ["user", "runtime", "system"] as const;
 export const auditStatusValues = ["success", "failure"] as const;
-export const aiInvocationStatusValues = ["success", "timeout", "fallback", "error"] as const;
+export const aiInvocationStatusValues = [
+  "success",
+  "timeout",
+  "fallback",
+  "error",
+] as const;
+export const brainScopeValues = ["user", "shared"] as const;
+export const datasetSourceValues = [
+  "huggingface",
+  "task_feedback",
+  "manual_curation",
+  "document_import",
+] as const;
+export const datasetFormatValues = [
+  "chat_jsonl",
+  "instruction_jsonl",
+  "preference_jsonl",
+  "document_corpus",
+] as const;
+export const datasetStatusValues = [
+  "draft",
+  "ready",
+  "archived",
+  "failed",
+] as const;
+export const trainingJobKindValues = [
+  "sft",
+  "lora",
+  "dpo",
+  "retrieval_index",
+  "memory_extraction",
+  "memory_consolidation",
+  "memory_reconsolidation",
+  "memory_index",
+] as const;
+export const trainingJobStatusValues = [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "canceled",
+] as const;
+export const modelArtifactStatusValues = [
+  "draft",
+  "ready",
+  "archived",
+  "failed",
+] as const;
+export const knowledgeDocumentStatusValues = [
+  "processing",
+  "ready",
+  "failed",
+  "archived",
+] as const;
+export const knowledgeSourceTypeValues = [
+  "manual",
+  "task_artifact",
+  "external_url",
+  "dataset",
+  "feedback",
+] as const;
+export const chatSessionSourceValues = ["mobile", "desktop"] as const;
+export const chatSessionStatusValues = ["active", "archived"] as const;
+export const chatMessageRoleValues = ["user", "assistant", "system"] as const;
+export const chatMessageStatusValues = [
+  "queued",
+  "running",
+  "waiting_approval",
+  "completed",
+  "failed",
+  "canceled",
+] as const;
+export const elyanTaskTraceStatusValues = [
+  "running",
+  "completed",
+  "failed",
+  "waiting_approval",
+] as const;
+export const elyanAssistantBlockTypeValues = [
+  "text",
+  "summary",
+  "next_steps",
+  "status",
+  "task_trace",
+  "attachment_context",
+  "context_signal",
+  "web_search",
+  "code",
+  "table",
+  "chart",
+  "file",
+  "actionable",
+  "block_group",
+] as const;
+export const elyanAssistantBlockVisibilityValues = [
+  "user_visible",
+  "assistant_internal_by_default",
+] as const;
+export const elyanAssistantActionableKindValues = [
+  "approval_needed",
+  "choose_device",
+  "retry_option",
+  "open_history",
+  "restore_context",
+] as const;
+export const elyanTaskTraceStepStatusValues = [
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "skipped",
+] as const;
+export const elyanTaskTraceStepIdValues = [
+  "intent",
+  "route",
+  "plan",
+  "context",
+  "tool",
+  "verify",
+  "response",
+] as const;
 
 export const deviceTypeSchema = z.enum(deviceTypeValues);
 export const pairSessionStatusSchema = z.enum(pairSessionStatusValues);
-export const runtimeConnectionStatusSchema = z.enum(runtimeConnectionStatusValues);
+export const runtimeConnectionStatusSchema = z.enum(
+  runtimeConnectionStatusValues,
+);
 export const taskStatusSchema = z.enum(taskStatusValues);
 export const artifactKindSchema = z.enum(artifactKindValues);
 export const subscriptionStatusSchema = z.enum(subscriptionStatusValues);
@@ -62,7 +230,9 @@ export const aiProviderSchema = z.enum(aiProviderValues);
 export const userRoleSchema = z.enum(userRoleValues);
 export const connectionProviderSchema = z.enum(connectionProviderValues);
 export const integrationAuthTypeSchema = z.enum(integrationAuthTypeValues);
-export const integrationConnectionStatusSchema = z.enum(integrationConnectionStatusValues);
+export const integrationConnectionStatusSchema = z.enum(
+  integrationConnectionStatusValues,
+);
 export const oauthStateStatusSchema = z.enum(oauthStateStatusValues);
 export const mcpTransportSchema = z.enum(mcpTransportValues);
 export const mcpAuthTypeSchema = z.enum(mcpAuthTypeValues);
@@ -70,20 +240,311 @@ export const mcpServerStatusSchema = z.enum(mcpServerStatusValues);
 export const auditActorTypeSchema = z.enum(auditActorTypeValues);
 export const auditStatusSchema = z.enum(auditStatusValues);
 export const aiInvocationStatusSchema = z.enum(aiInvocationStatusValues);
+export const brainScopeSchema = z.enum(brainScopeValues);
+export const datasetSourceSchema = z.enum(datasetSourceValues);
+export const datasetFormatSchema = z.enum(datasetFormatValues);
+export const datasetStatusSchema = z.enum(datasetStatusValues);
+export const trainingJobKindSchema = z.enum(trainingJobKindValues);
+export const trainingJobStatusSchema = z.enum(trainingJobStatusValues);
+export const modelArtifactStatusSchema = z.enum(modelArtifactStatusValues);
+export const knowledgeDocumentStatusSchema = z.enum(
+  knowledgeDocumentStatusValues,
+);
+export const knowledgeSourceTypeSchema = z.enum(knowledgeSourceTypeValues);
+export const chatSessionSourceSchema = z.enum(chatSessionSourceValues);
+export const chatSessionStatusSchema = z.enum(chatSessionStatusValues);
+export const chatMessageRoleSchema = z.enum(chatMessageRoleValues);
+export const chatMessageStatusSchema = z.enum(chatMessageStatusValues);
+export const elyanTaskTraceStatusSchema = z.enum(elyanTaskTraceStatusValues);
+export const elyanAssistantBlockTypeSchema = z.enum(
+  elyanAssistantBlockTypeValues,
+);
+export const elyanAssistantBlockVisibilitySchema = z.enum(
+  elyanAssistantBlockVisibilityValues,
+);
+export const elyanAssistantActionableKindSchema = z.enum(
+  elyanAssistantActionableKindValues,
+);
+export const elyanTaskTraceStepStatusSchema = z.enum(
+  elyanTaskTraceStepStatusValues,
+);
+export const elyanTaskTraceStepIdSchema = z.enum(elyanTaskTraceStepIdValues);
 
-export const artifactInputSchema = z.object({
-  kind: artifactKindSchema,
-  name: z.string().min(1).max(255),
-  contentType: z.string().min(1).max(255),
-  storageKey: z.string().min(1).max(512).optional(),
-  textContent: z.string().optional(),
-  payload: z.record(z.any()).optional(),
+export const artifactInputSchema = z
+  .object({
+    kind: artifactKindSchema,
+    name: z.string().min(1).max(255),
+    contentType: z.string().min(1).max(255),
+    storageKey: z.string().min(1).max(512).optional(),
+    textContent: z.string().optional(),
+    payload: z.record(z.any()).optional(),
+    metadata: z.record(z.any()).optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (hasRawBinaryUploadHint(input.payload)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload"],
+        message:
+          "raw binary upload payload is not accepted; send structured output only",
+      });
+    }
+
+    if (hasRawBinaryUploadHint(input.metadata)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["metadata"],
+        message:
+          "raw binary upload payload is not accepted; send structured output only",
+      });
+    }
+  });
+
+export const documentBlockTypeValues = [
+  "text",
+  "table",
+  "image",
+  "heading",
+  "page",
+] as const;
+export const documentRedactionStateValues = [
+  "unredacted",
+  "redacted",
+  "partial",
+  "failed",
+] as const;
+export const brainResultActionValues = [
+  "export_pdf",
+  "create_summary_doc",
+  "generate_image",
+] as const;
+
+export const documentBlockTypeSchema = z.enum(documentBlockTypeValues);
+export const documentRedactionStateSchema = z.enum(
+  documentRedactionStateValues,
+);
+export const brainResultActionSchema = z.enum(brainResultActionValues);
+
+const documentBboxSchema = z.tuple([
+  z.number(),
+  z.number(),
+  z.number(),
+  z.number(),
+]);
+
+export const documentBlockSchema = z.object({
+  id: z.string().min(1).max(255),
+  type: documentBlockTypeSchema,
+  text: z.string().optional(),
+  rows: z.array(z.array(z.string())).optional(),
+  page: z.number().int().nonnegative().optional(),
+  bbox: documentBboxSchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  sourceHash: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(255).optional(),
+  language: z.string().min(1).max(32).optional(),
+  redactionState: documentRedactionStateSchema.optional(),
+  lineage: z.array(z.string().min(1).max(255)).optional(),
   metadata: z.record(z.any()).optional(),
 });
 
+export const documentEnvelopeSchema = z.object({
+  id: z.string().min(1).max(255).optional(),
+  sourceHash: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(255),
+  language: z.string().min(1).max(32).optional(),
+  page: z.number().int().nonnegative().optional(),
+  bbox: documentBboxSchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  redactionState: documentRedactionStateSchema.optional(),
+  lineage: z.array(z.string().min(1).max(255)).optional(),
+  blocks: z.array(documentBlockSchema).min(1),
+  metadata: z.record(z.any()).optional(),
+});
+
+export const brainCitationSchema = z.object({
+  blockId: z.string().min(1).max(255),
+  page: z.number().int().nonnegative().optional(),
+  text: z.string(),
+  sourceHash: z.string().min(1).max(255).optional(),
+});
+
+export const brainResultSchema = z.object({
+  answer: z.string(),
+  highlights: z.array(z.string()),
+  citations: z.array(brainCitationSchema),
+  extractedTables: z.array(z.unknown()).optional(),
+  actions: z.array(brainResultActionSchema).optional(),
+});
+export const elyanTaskTraceStepSchema = z.object({
+  id: elyanTaskTraceStepIdSchema,
+  label: z.string().min(1).max(120),
+  status: elyanTaskTraceStepStatusSchema,
+  detail: z.string().max(240).optional(),
+  startedAt: z.string().datetime().optional(),
+  completedAt: z.string().datetime().optional(),
+});
+export const elyanTaskTraceBlockSchema = z.object({
+  type: z.literal("task_trace"),
+  stableBlockId: z.string().min(1).max(255).optional(),
+  visibility: elyanAssistantBlockVisibilitySchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  priority: z.number().int().min(0).max(3).optional(),
+  cacheDigest: z.string().min(1).max(255).optional(),
+  renderHints: z.record(z.any()).optional(),
+  taskId: z.string().min(1).max(255),
+  status: elyanTaskTraceStatusSchema,
+  title: z.string().min(1).max(120),
+  phase: z.string().min(1).max(80).optional(),
+  summary: z.string().min(1).max(180).optional(),
+  progressLabel: z.string().min(1).max(80).optional(),
+  activeStepId: elyanTaskTraceStepIdSchema.optional(),
+  steps: z.array(elyanTaskTraceStepSchema).min(1),
+});
+const elyanAssistantBlockBaseSchema = z.object({
+  stableBlockId: z.string().min(1).max(255).optional(),
+  visibility: elyanAssistantBlockVisibilitySchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  priority: z.number().int().min(0).max(3).optional(),
+  cacheDigest: z.string().min(1).max(255).optional(),
+  renderHints: z.record(z.any()).optional(),
+});
+const elyanAssistantInfoItemSchema = z.object({
+  label: z.string().min(1).max(120),
+  value: z.string().min(1).max(240),
+  confidence: z.number().min(0).max(1).optional(),
+});
+export const elyanAssistantTextBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("text"),
+    markdown: z.string().min(1),
+  });
+export const elyanAssistantSummaryBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("summary"),
+    title: z.string().min(1).max(120).optional(),
+    summary: z.string().min(1).max(400),
+  });
+export const elyanAssistantNextStepsBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("next_steps"),
+    title: z.string().min(1).max(120).optional(),
+    items: z.array(z.string().min(1).max(240)).min(1).max(6),
+  });
+export const elyanAssistantStatusBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("status"),
+    status: z
+      .enum([
+        "running",
+        "waiting_approval",
+        "needs_desktop",
+        "completed",
+        "failed",
+        "retrying",
+        "degraded",
+      ])
+      .default("running"),
+    title: z.string().min(1).max(120),
+    detail: z.string().min(1).max(240).optional(),
+  });
+export const elyanAssistantInfoCardBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.enum(["attachment_context", "context_signal"]),
+    title: z.string().min(1).max(120),
+    items: z.array(elyanAssistantInfoItemSchema).min(1).max(8),
+  });
+export const elyanAssistantCodeBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("code"),
+    code: z.string().min(1).max(24_000),
+    language: z.string().min(1).max(40).optional(),
+    filename: z.string().min(1).max(180).optional(),
+    title: z.string().min(1).max(120).optional(),
+    collapsed: z.boolean().optional(),
+  });
+export const elyanAssistantTableBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("table"),
+    title: z.string().min(1).max(120).optional(),
+    columns: z.array(z.string().min(1).max(120)).min(1).max(12),
+    rows: z
+      .array(z.array(z.string().max(240)).min(1).max(12))
+      .min(1)
+      .max(80),
+    caption: z.string().min(1).max(240).optional(),
+  });
+export const elyanAssistantChartBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("chart"),
+    title: z.string().min(1).max(120).optional(),
+    chartType: z.enum(["bar", "line", "pie"]),
+    labels: z.array(z.string().min(1).max(120)).min(1).max(24),
+    values: z.array(z.number()).min(1).max(24),
+    caption: z.string().min(1).max(240).optional(),
+  });
+export const elyanAssistantFileBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("file"),
+    fileName: z.string().min(1).max(180),
+    mimeType: z.string().min(1).max(120).optional(),
+    sizeBytes: z.number().int().nonnegative().optional(),
+    documentId: z.string().min(1).max(255).optional(),
+    preview: z.string().min(1).max(400).optional(),
+  });
+export const elyanAssistantActionableBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("actionable"),
+    kind: elyanAssistantActionableKindSchema,
+    title: z.string().min(1).max(120),
+    detail: z.string().min(1).max(240).optional(),
+  });
+const elyanWebSearchResultSchema = z.object({
+  title: z.string().min(1).max(240),
+  url: z.string().min(1).max(512),
+  snippet: z.string().max(400).optional(),
+  sourceHost: z.string().max(120).optional(),
+  verificationState: z.enum(["verified", "partial", "unverified"]),
+});
+export const elyanAssistantWebSearchBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("web_search"),
+    query: z.string().min(1).max(320),
+    queries: z.array(z.string().min(1).max(320)).min(1).max(4),
+    confidence: z.enum(["high", "medium", "low"]),
+    retrievedAt: z.string().datetime().optional(),
+    results: z.array(elyanWebSearchResultSchema).min(1).max(8),
+  });
+export const elyanAssistantBlockGroupBlockSchema: z.ZodType<any> =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("block_group"),
+    title: z.string().min(1).max(120).optional(),
+    children: z
+      .array(z.lazy(() => elyanAssistantBlockSchema))
+      .min(1)
+      .max(12),
+  });
+export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
+  elyanAssistantTextBlockSchema,
+  elyanAssistantSummaryBlockSchema,
+  elyanAssistantNextStepsBlockSchema,
+  elyanAssistantStatusBlockSchema,
+  elyanTaskTraceBlockSchema,
+  elyanAssistantInfoCardBlockSchema,
+  elyanAssistantWebSearchBlockSchema,
+  elyanAssistantCodeBlockSchema,
+  elyanAssistantTableBlockSchema,
+  elyanAssistantChartBlockSchema,
+  elyanAssistantFileBlockSchema,
+  elyanAssistantActionableBlockSchema,
+  elyanAssistantBlockGroupBlockSchema,
+]);
+
 export type DeviceType = z.infer<typeof deviceTypeSchema>;
 export type PairSessionStatus = z.infer<typeof pairSessionStatusSchema>;
-export type RuntimeConnectionStatus = z.infer<typeof runtimeConnectionStatusSchema>;
+export type RuntimeConnectionStatus = z.infer<
+  typeof runtimeConnectionStatusSchema
+>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type ArtifactKind = z.infer<typeof artifactKindSchema>;
 export type SubscriptionStatus = z.infer<typeof subscriptionStatusSchema>;
@@ -91,7 +552,9 @@ export type AiProvider = z.infer<typeof aiProviderSchema>;
 export type UserRole = z.infer<typeof userRoleSchema>;
 export type ConnectionProvider = z.infer<typeof connectionProviderSchema>;
 export type IntegrationAuthType = z.infer<typeof integrationAuthTypeSchema>;
-export type IntegrationConnectionStatus = z.infer<typeof integrationConnectionStatusSchema>;
+export type IntegrationConnectionStatus = z.infer<
+  typeof integrationConnectionStatusSchema
+>;
 export type OauthStateStatus = z.infer<typeof oauthStateStatusSchema>;
 export type McpTransport = z.infer<typeof mcpTransportSchema>;
 export type McpAuthType = z.infer<typeof mcpAuthTypeSchema>;
@@ -99,4 +562,81 @@ export type McpServerStatus = z.infer<typeof mcpServerStatusSchema>;
 export type AuditActorType = z.infer<typeof auditActorTypeSchema>;
 export type AuditStatus = z.infer<typeof auditStatusSchema>;
 export type AiInvocationStatus = z.infer<typeof aiInvocationStatusSchema>;
+export type BrainScope = z.infer<typeof brainScopeSchema>;
+export type DatasetSource = z.infer<typeof datasetSourceSchema>;
+export type DatasetFormat = z.infer<typeof datasetFormatSchema>;
+export type DatasetStatus = z.infer<typeof datasetStatusSchema>;
+export type TrainingJobKind = z.infer<typeof trainingJobKindSchema>;
+export type TrainingJobStatus = z.infer<typeof trainingJobStatusSchema>;
+export type ModelArtifactStatus = z.infer<typeof modelArtifactStatusSchema>;
+export type KnowledgeDocumentStatus = z.infer<
+  typeof knowledgeDocumentStatusSchema
+>;
+export type KnowledgeSourceType = z.infer<typeof knowledgeSourceTypeSchema>;
+export type ChatSessionSource = z.infer<typeof chatSessionSourceSchema>;
+export type ChatSessionStatus = z.infer<typeof chatSessionStatusSchema>;
+export type ChatMessageRole = z.infer<typeof chatMessageRoleSchema>;
+export type ChatMessageStatus = z.infer<typeof chatMessageStatusSchema>;
+export type ElyanTaskTraceStatus = z.infer<typeof elyanTaskTraceStatusSchema>;
+export type ElyanAssistantBlockType = z.infer<
+  typeof elyanAssistantBlockTypeSchema
+>;
+export type ElyanAssistantBlockVisibility = z.infer<
+  typeof elyanAssistantBlockVisibilitySchema
+>;
+export type ElyanAssistantActionableKind = z.infer<
+  typeof elyanAssistantActionableKindSchema
+>;
+export type ElyanTaskTraceStepStatus = z.infer<
+  typeof elyanTaskTraceStepStatusSchema
+>;
+export type ElyanTaskTraceStepId = z.infer<typeof elyanTaskTraceStepIdSchema>;
 export type ArtifactInput = z.infer<typeof artifactInputSchema>;
+export type DocumentBlockType = z.infer<typeof documentBlockTypeSchema>;
+export type DocumentRedactionState = z.infer<
+  typeof documentRedactionStateSchema
+>;
+export type BrainResultAction = z.infer<typeof brainResultActionSchema>;
+export type DocumentBlock = z.infer<typeof documentBlockSchema>;
+export type DocumentEnvelope = z.infer<typeof documentEnvelopeSchema>;
+export type BrainCitation = z.infer<typeof brainCitationSchema>;
+export type BrainResult = z.infer<typeof brainResultSchema>;
+export type ElyanTaskTraceStep = z.infer<typeof elyanTaskTraceStepSchema>;
+export type ElyanTaskTraceBlock = z.infer<typeof elyanTaskTraceBlockSchema>;
+export type ElyanAssistantTextBlock = z.infer<
+  typeof elyanAssistantTextBlockSchema
+>;
+export type ElyanAssistantSummaryBlock = z.infer<
+  typeof elyanAssistantSummaryBlockSchema
+>;
+export type ElyanAssistantNextStepsBlock = z.infer<
+  typeof elyanAssistantNextStepsBlockSchema
+>;
+export type ElyanAssistantStatusBlock = z.infer<
+  typeof elyanAssistantStatusBlockSchema
+>;
+export type ElyanAssistantInfoCardBlock = z.infer<
+  typeof elyanAssistantInfoCardBlockSchema
+>;
+export type ElyanAssistantCodeBlock = z.infer<
+  typeof elyanAssistantCodeBlockSchema
+>;
+export type ElyanAssistantTableBlock = z.infer<
+  typeof elyanAssistantTableBlockSchema
+>;
+export type ElyanAssistantChartBlock = z.infer<
+  typeof elyanAssistantChartBlockSchema
+>;
+export type ElyanAssistantFileBlock = z.infer<
+  typeof elyanAssistantFileBlockSchema
+>;
+export type ElyanAssistantActionableBlock = z.infer<
+  typeof elyanAssistantActionableBlockSchema
+>;
+export type ElyanAssistantBlockGroupBlock = z.infer<
+  typeof elyanAssistantBlockGroupBlockSchema
+>;
+export type ElyanAssistantWebSearchBlock = z.infer<
+  typeof elyanAssistantWebSearchBlockSchema
+>;
+export type ElyanAssistantBlock = z.infer<typeof elyanAssistantBlockSchema>;

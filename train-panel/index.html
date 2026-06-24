@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Elyan Train</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="ribbon panel">
+        <div class="brand">
+          <h1>Elyan Train</h1>
+        </div>
+        <div class="ribbon-meta">
+          <span id="connection-chip" class="chip">Bağlantı bekleniyor</span>
+          <button id="toggle-settings" class="button button-secondary" type="button">Bağlantı</button>
+        </div>
+      </header>
+
+      <section id="settings-panel" class="panel workspace hidden">
+        <div class="field-grid">
+          <label>
+            <span>Backend URL</span>
+            <input id="backend-url" type="url" placeholder="https://api.elyan.dev" />
+          </label>
+          <label>
+            <span>Admin e-posta</span>
+            <input id="email" type="email" placeholder="admin@elyan.dev" />
+          </label>
+          <label>
+            <span>Şifre</span>
+            <input id="password" type="password" placeholder="••••••••" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="login-button" type="button">Giriş yap</button>
+          <button id="refresh-profile" class="button button-secondary" type="button">Durumu yenile</button>
+        </div>
+      </section>
+
+      <section class="panel workspace">
+        <div class="section-head">
+          <div>
+            <h2>Eğitim</h2>
+          </div>
+        </div>
+        <label class="trainer-label" for="training-text">Eğitilecek metin</label>
+        <textarea id="training-text" placeholder="Metni buraya yaz."></textarea>
+        <div class="actions">
+          <button id="train-button" type="button">Eğit</button>
+          <button id="clear-button" class="button button-secondary" type="button">Temizle</button>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="panel output">
+          <div class="section-head">
+            <div>
+              <h2>Profil</h2>
+            </div>
+          </div>
+          <pre id="profile-output">Henüz yüklenmedi.</pre>
+        </article>
+        <article class="panel output">
+          <div class="section-head">
+            <div>
+              <h2>Kanıt</h2>
+            </div>
+          </div>
+          <pre id="result-output">Henüz eğitim gönderilmedi.</pre>
+        </article>
+        <article class="panel output mini-chat">
+          <div class="section-head">
+            <div>
+              <h2>Chat</h2>
+            </div>
+          </div>
+          <pre id="chat-output">Henüz sohbet yok.</pre>
+          <label class="trainer-label" for="brain-chat-input">Mesaj</label>
+          <textarea id="brain-chat-input" placeholder="Elyan ile doğrudan sohbet et."></textarea>
+          <div class="actions">
+            <button id="brain-chat-send" type="button">Gönder</button>
+            <button id="brain-chat-clear" class="button button-secondary" type="button">Temizle</button>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

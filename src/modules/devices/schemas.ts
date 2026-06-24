@@ -5,6 +5,13 @@ export const registerMobileDeviceBodySchema = z.object({
   label: z.string().min(1).max(120),
   platform: z.string().min(1).max(120),
   appVersion: z.string().min(1).max(80).optional(),
+  pushToken: z.string().min(1).max(4096).optional().nullable(),
+  pushProvider: z.string().min(1).max(40).optional().nullable(),
+  notificationAuthorizationStatus: z.string().min(1).max(40).optional().nullable(),
+  supportsLiveActivities: z.boolean().optional(),
+  supportsDynamicIsland: z.boolean().optional(),
+  backgroundRefreshEnabled: z.boolean().optional(),
+  buildMetadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const deviceParamsSchema = z.object({

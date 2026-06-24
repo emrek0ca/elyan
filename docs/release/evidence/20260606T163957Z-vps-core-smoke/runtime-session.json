@@ -1,0 +1,100 @@
+{
+  "device": {
+    "id": "5e79c427-bcf1-411b-965a-a102abb90779",
+    "label": "V1 Smoke Desktop",
+    "platform": "macos",
+    "runtimeVersion": "1.0.0",
+    "lastSeenAt": "2026-06-06T16:40:32.673Z"
+  },
+  "readiness": {
+    "isOnline": true,
+    "canReceiveTasks": true,
+    "targetStatus": "ready",
+    "targetErrorCode": null,
+    "realtimeReady": true,
+    "runtime": {
+      "isConnected": true,
+      "status": "online",
+      "capabilities": [
+        "runtime.status",
+        "browser.control",
+        "document.read"
+      ],
+      "capabilityStates": {
+        "document.read": {
+          "available": true
+        },
+        "runtime.status": {
+          "available": true
+        },
+        "browser.control": {
+          "available": true
+        }
+      },
+      "capabilitySummary": {
+        "total": 3,
+        "categories": {
+          "runtime": 1,
+          "task": 0,
+          "browser": 1,
+          "computer": 0,
+          "file": 0,
+          "document": 1,
+          "model": 0,
+          "quantum": 0,
+          "automation": 0,
+          "connector": 0,
+          "other": 0
+        }
+      },
+      "currentTaskId": null,
+      "connectedAt": "2026-06-06T16:40:32.382Z",
+      "lastHeartbeatAt": "2026-06-06T16:40:32.670Z",
+      "stale": false,
+      "transportMode": "websocket",
+      "queuedTaskCount": 0,
+      "realtimeReady": true
+    }
+  },
+  "connection": {
+    "id": "ccd5ffcd-f957-4d67-a3fd-14f0c46a6d79",
+    "status": "online",
+    "socketSessionId": "414e1fc0-d1f3-4183-8ec9-43180795df35",
+    "currentTaskId": null,
+    "capabilities": [
+      "runtime.status",
+      "browser.control",
+      "document.read"
+    ],
+    "capabilityStates": {
+      "document.read": {
+        "available": true
+      },
+      "runtime.status": {
+        "available": true
+      },
+      "browser.control": {
+        "available": true
+      }
+    },
+    "connectedAt": "2026-06-06T16:40:32.382Z",
+    "lastHeartbeatAt": "2026-06-06T16:40:32.670Z"
+  },
+  "capabilitySummary": {
+    "total": 3,
+    "categories": {
+      "runtime": 1,
+      "task": 0,
+      "browser": 1,
+      "computer": 0,
+      "file": 0,
+      "document": 1,
+      "model": 0,
+      "quantum": 0,
+      "automation": 0,
+      "connector": 0,
+      "other": 0
+    }
+  },
+  "tasks": []
+}

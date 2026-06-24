@@ -1,0 +1,30 @@
+{
+  "user": {
+    "id": "6f3542cf-2f82-45e5-a504-92cb4efd5052",
+    "email": "v1-smoke-20260606t163957z@example.com",
+    "displayName": "V1 Smoke User",
+    "hasAvatar": false,
+    "avatarVersion": 0
+  },
+  "subscription": {
+    "planCode": "free",
+    "status": "trialing",
+    "aiCreditsMonthly": 0,
+    "taskLimitMonthly": 25,
+    "periodEndsAt": "2026-06-13T16:40:08.220Z",
+    "trialEndsAt": "2026-06-13T16:40:08.220Z",
+    "creditBalance": 0,
+    "creditGrantedThisPeriod": 0,
+    "creditPeriodEndsAt": "2026-06-13T16:40:08.220Z",
+    "billingProvider": "iyzico",
+    "subscriptionSource": null,
+    "manageSubscriptionHint": null,
+    "creditStatus": null
+  },
+  "tokens": {
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJraW5kIjoidXNlciIsInN1YiI6IjZmMzU0MmNmLTJmODItNDVlNS1hNTA0LTkyY2I0ZWZkNTA1MiIsInNlc3Npb25JZCI6IjU0ZWQxYjEyLTMwM2UtNGZlYy1hOWRmLTlhNmVmNDA1NTVhZCIsImVtYWlsIjoidjEtc21va2UtMjAyNjA2MDZ0MTYzOTU3ekBleGFtcGxlLmNvbSIsImlhdCI6MTc4MDc2NDAwOCwiZXhwIjoxNzgwNzY0OTA4fQ.D1WT57CEcWJWyvXtaz0uCAvYiFFBrOgPunti2UIs-Zw",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJraW5kIjoidXNlciIsInN1YiI6IjZmMzU0MmNmLTJmODItNDVlNS1hNTA0LTkyY2I0ZWZkNTA1MiIsInNlc3Npb25JZCI6IjU0ZWQxYjEyLTMwM2UtNGZlYy1hOWRmLTlhNmVmNDA1NTVhZCIsImVtYWlsIjoidjEtc21va2UtMjAyNjA2MDZ0MTYzOTU3ekBleGFtcGxlLmNvbSIsImlhdCI6MTc4MDc2NDAwOCwiZXhwIjoxNzgzMzU2MDA4fQ.JnnP_48RtsJiOG47j4kEFeOxYRQUngafnQV_DSyrn_k",
+    "accessTokenTtl": "15m",
+    "refreshTokenTtl": "30d"
+  }
+}
