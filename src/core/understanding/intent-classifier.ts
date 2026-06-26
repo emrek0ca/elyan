@@ -1,12 +1,16 @@
 import type { IntentClassification, RoutingHints, TaskUnderstandingInput, UnderstandingIntent } from "./types.js";
 import { hasTurkicLanguageSignals } from "./turkic-language.js";
+import { classifyIntentSemantic } from "./intent-semantic.js";
 
 const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = [
   {
     intent: "debugging",
+    // Turkish letters break JS `\b` (ç/ı/ş/ü… are not ASCII word chars), which
+    // makes `\bbug\b` falsely match "bug" inside "bugün". Unicode-letter
+    // lookarounds keep the token boundaries correct across Turkish text.
     patterns: [
-      /\b(error|exception|stack trace|crash|fails?|failing|bug|broken|debug|fix|regression)\b/i,
-      /\b(hata|bug|bozuk|patliyor|patlıyor|duzelt|düzelt|calismiyor|çalışmıyor)\b/i,
+      /(?<!\p{L})(error|exception|stack trace|crash|fails?|failing|bug|broken|debug|fix|regression)(?!\p{L})/iu,
+      /(?<!\p{L})(hata|bug|bozuk|patliyor|patlıyor|duzelt|düzelt|calismiyor|çalışmıyor)(?!\p{L})/iu,
     ],
   },
   {
@@ -52,15 +56,31 @@ const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = 
   },
   {
     intent: "automation",
-    patterns: [/\b(automate|automation|workflow|schedule|trigger|run task)\b/i, /\b(otomasyon|akış|akis|zamanla|tetikle)\b/i],
+    patterns: [
+      /\b(automate|automation|workflow|schedule|trigger|run task)\b/i,
+      /\b(otomasyon|akış|akis|zamanla|tetikle)\b/i,
+      /(?<!\p{L})(aç|kapat|indir|kaydet|yükle|yukle|çalıştır|calistir|kopyala|taşı|tasi|sil)(?!\p{L}).*(?<!\p{L})(dosya|uygulama|uygulama|safari|chrome|firefox|finder|klasör|klasor|terminal)(?!\p{L})/iu,
+      /(?<!\p{L})(dosya|uygulama|safari|chrome|firefox|finder|klasör|klasor|terminal)(?!\p{L}).*(?<!\p{L})(aç|kapat|indir|kaydet|yükle|yukle|çalıştır|calistir|kopyala|taşı|tasi|sil)(?!\p{L})/iu,
+    ],
   },
   {
     intent: "browser",
-    patterns: [/\b(browser|website|web page|crawl|scrape|click|navigate)\b/i, /\b(tarayıcı|site|web|gez|tikla|tıkla)\b/i],
+    patterns: [
+      /\b(browser|website|web page|crawl|scrape|click|navigate)\b/i,
+      /\b(tarayıcı|tarayici|site|web|gez|tikla|tıkla)\b/i,
+      /(?<!\p{L})(safari|chrome|firefox|edge|arc)\b/iu,
+      /(?<!\p{L})(aç|ac|git|gir|ziyaret et|araştır|arastir|bul)(?!\p{L}).*(?<!\p{L})(site|sayfa|web|link|url|http)(?!\p{L})/iu,
+      /(?<!\p{L})(site|sayfa|web|link|url|http)(?!\p{L}).*(?<!\p{L})(aç|ac|git|gir|ziyaret et|araştır|arastir|bul)(?!\p{L})/iu,
+    ],
   },
   {
     intent: "computer",
-    patterns: [/\b(computer|desktop|screenshot|hotkey|keyboard|mouse|window)\b/i, /\b(bilgisayar|masaustu|masaüstü|ekran görüntüsü|klavye|fare)\b/i],
+    patterns: [
+      /\b(computer|desktop|screenshot|hotkey|keyboard|mouse|window)\b/i,
+      /\b(bilgisayar|masaustu|masaüstü|ekran görüntüsü|ekran goruntusu|klavye|fare)\b/i,
+      /(?<!\p{L})(ekran görüntüsü al|ekran goruntusu al|screenshot al|video kaydet|ses kaydet)(?!\p{L})/iu,
+      /(?<!\p{L})(yerel|local)(?!\p{L}).*(?<!\p{L})(dosya|klasör|klasor|uygulama|program)(?!\p{L})/iu,
+    ],
   },
   {
     intent: "planning",
@@ -222,7 +242,21 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
       }
     }
 
-    const primaryIntent = matched[0] ?? (text.trim().length > 0 ? "chat" : "unknown");
+    // Semantic fallback: when no regex rule matched, a paraphrased prompt would
+    // otherwise collapse to "chat"/"unknown" and lose its real intent. Recover it
+    // from the nearest prototype embedding (cheap, synchronous, only on this path).
+    let semanticIntent: UnderstandingIntent | null = null;
+    let semanticScore = 0;
+    if (matched.length === 0 && text.trim().length > 0) {
+      const semantic = classifyIntentSemantic(text);
+      if (semantic) {
+        semanticIntent = semantic.intent;
+        semanticScore = semantic.score;
+      }
+    }
+
+    const primaryIntent =
+      matched[0] ?? semanticIntent ?? (text.trim().length > 0 ? "chat" : "unknown");
     const secondaryIntents = unique(matched.filter((intent) => intent !== primaryIntent));
     const requiresLocalRuntime =
       ["automation", "browser", "computer"].includes(primaryIntent) ||
@@ -241,7 +275,14 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
         : requiresRetrieval || requiresToolUse
           ? "medium"
           : "low";
-    const confidence = matched.length > 0 ? Math.min(0.95, 0.62 + matched.length * 0.1) : primaryIntent === "chat" ? 0.55 : 0.2;
+    const confidence =
+      matched.length > 0
+        ? Math.min(0.95, 0.62 + matched.length * 0.1)
+        : semanticIntent
+          ? Math.min(0.6, 0.4 + semanticScore)
+          : primaryIntent === "chat"
+            ? 0.55
+            : 0.2;
     const reasoningMode = calculateReasoningMode({
       primaryIntent,
       requiresRetrieval,
@@ -267,7 +308,12 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
       requiresLongRunningTask,
       privacyRisk,
       confidence,
-      reason: matched.length > 0 ? `matched_${primaryIntent}_rules` : "no_rule_match",
+      reason:
+        matched.length > 0
+          ? `matched_${primaryIntent}_rules`
+          : semanticIntent
+            ? `semantic_${primaryIntent}`
+            : "no_rule_match",
       taskFrame: {
         goal:
           primaryIntent === "research"

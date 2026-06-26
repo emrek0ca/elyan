@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { chatSessions, devices, tasks, users, worldSignals } from "../../db/schema.js";
+import { chatSessions, devices, learningEvents, tasks, users, worldSignals } from "../../db/schema.js";
 import { AppError } from "../../lib/errors.js";
 import { getBillingSummary, shapePublicUsageSnapshot } from "../billing/service.js";
 import { shapeSubscriptionTruth } from "../billing/subscription-truth.js";
@@ -8,6 +8,8 @@ import { getBrainProfile, shapePublicBrainProfile } from "../brain/service.js";
 import { listUserDevices } from "../devices/service.js";
 import { getTrialQuotaPolicy } from "../quota/service.js";
 import type { UploadWorldSignalsBody } from "./schemas.js";
+import { deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "../../core/understanding/world-signal-derived.js";
+import { filterLearningSignals } from "../../core/understanding/personalization-policy.js";
 
 const MAX_WORLD_SIGNAL_PAYLOAD_BYTES = 24 * 1024;
 const BLOCKED_SECRET_KEYS = new Set([
@@ -361,11 +363,9 @@ export async function ingestWorldSignals(
   const scopedSessionId =
     input.body.sessionId == null
       ? null
-      : (await resolveOwnedChatSession(app, input.userId, input.body.sessionId))
-          ?.id ?? null;
-  if (input.body.sessionId && scopedSessionId == null) {
-    throw new AppError(403, "session_mismatch", "Chat session scope is not valid for this user.");
-  }
+      : (await resolveOwnedChatSession(app, input.userId, input.body.sessionId))?.id ?? null;
+  // If the session doesn't exist yet (mobile may send signals before the session is created),
+  // store signals without session scope rather than rejecting them.
 
   const payloadBytes = Buffer.byteLength(JSON.stringify(input.body), "utf8");
   await app.db
@@ -391,6 +391,47 @@ export async function ingestWorldSignals(
     .onConflictDoNothing({
       target: [worldSignals.userId, worldSignals.signalId],
     });
+
+  const derivedLearningSignals = filterLearningSignals(
+    deriveLearningSignalsFromWorldSignals(
+      input.body.signals.map((signal) =>
+        toDerivedSignalInput({
+          signalId: signal.signalId,
+          kind: signal.kind,
+          summary: signal.summary,
+          confidence: signal.confidence,
+          facts: signal.facts,
+          privacy: signal.privacy,
+          createdAt: new Date(signal.createdAt),
+        }),
+      ),
+    ),
+  );
+
+  if (derivedLearningSignals.length > 0) {
+    await app.db.insert(learningEvents).values(
+      derivedLearningSignals.map((signal) => ({
+        userId: input.userId,
+        accountId: input.userId,
+        taskId: scopedSessionId ? null : null,
+        type: signal.type,
+        key: signal.key,
+        value: signal.value,
+        confidence: Math.round(signal.confidence * 100),
+        scope: signal.scope,
+        source: signal.source,
+        privacyLevel: "safe",
+        metadata: {
+          ...signal.metadata,
+          clientRequestId: input.body.clientRequestId,
+          sessionId: scopedSessionId,
+        },
+        expiresAt: signal.ttlDays
+          ? new Date(Date.now() + signal.ttlDays * 86_400_000)
+          : null,
+      })),
+    );
+  }
 
   app.log.info(
     buildWorldSignalLogContext({

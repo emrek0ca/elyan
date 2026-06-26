@@ -91,3 +91,18 @@ test("classifyIntent fails open for empty chat-like input", () => {
   assert.equal(result.primaryIntent, "unknown");
   assert.equal(result.requiresToolUse, false);
 });
+
+test("classifyIntent does not misclassify Turkish 'bugün' as debugging", () => {
+  const result = classifyIntent({ userId: "user_1", message: "nasılsın bugün" });
+  assert.equal(result.primaryIntent, "chat");
+});
+
+test("classifyIntent recovers intent semantically when no regex rule matches", () => {
+  // Lexically overlaps the planning seed phrases without hitting a planning regex.
+  const result = classifyIntent({
+    userId: "user_1",
+    message: "bunu adımlara böl ve bir yol planı çıkar",
+  });
+  assert.equal(result.primaryIntent, "planning");
+  assert.match(result.reason, /^(matched_planning_rules|semantic_planning)$/);
+});

@@ -112,6 +112,7 @@ const envSchema = z.object({
   GROQ_REASONING_MODEL: z.string().default("openai/gpt-oss-120b"),
   GROQ_FAST_MODEL: z.string().default("openai/gpt-oss-20b"),
   GROQ_FALLBACK_MODEL: z.string().default("qwen/qwen3.6-27b"),
+  GROQ_VISION_MODEL: z.string().default("meta-llama/llama-4-scout-17b-16e-instruct"),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().optional(),
   IYZICO_API_KEY: z.string().optional(),
@@ -197,6 +198,7 @@ export type AppEnv = ParsedEnv & {
   GROQ_REASONING_MODEL: string;
   GROQ_FAST_MODEL: string;
   GROQ_FALLBACK_MODEL: string;
+  GROQ_VISION_MODEL: string;
   OPENROUTER_API_KEY: string;
   OPENROUTER_BASE_URL: string;
   TOKEN_ENCRYPTION_KEY?: string;
@@ -347,6 +349,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GROQ_REASONING_MODEL: parsed.GROQ_REASONING_MODEL,
     GROQ_FAST_MODEL: parsed.GROQ_FAST_MODEL,
     GROQ_FALLBACK_MODEL: parsed.GROQ_FALLBACK_MODEL,
+    GROQ_VISION_MODEL: parsed.GROQ_VISION_MODEL,
     OPENROUTER_API_KEY: parsed.OPENROUTER_API_KEY ?? "",
     OPENROUTER_BASE_URL: parsed.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
     TOKEN_ENCRYPTION_KEY: parsed.TOKEN_ENCRYPTION_KEY ?? "",

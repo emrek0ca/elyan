@@ -4,16 +4,19 @@ type GroqModelConfigSource = {
   GROQ_REASONING_MODEL?: string | null;
   GROQ_FAST_MODEL?: string | null;
   GROQ_FALLBACK_MODEL?: string | null;
+  GROQ_VISION_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_FAST_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_BALANCED_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_PLANNING_MODEL?: string | null;
+  ELYAN_SHARED_BRAIN_VISION_MODEL?: string | null;
 };
 
 export type GroqModelCatalog = {
   reasoningModel: string;
   fastModel: string;
   fallbackModel: string;
+  visionModel: string;
   defaultModelByWorkload: Record<SharedBrainWorkload, string>;
   models: string[];
 };
@@ -40,21 +43,32 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
     compactText(config.ELYAN_SHARED_BRAIN_BALANCED_MODEL) ||
     compactText(config.ELYAN_SHARED_BRAIN_PLANNING_MODEL) ||
     "qwen/qwen3.6-27b";
+  const visionModel =
+    compactText(config.GROQ_VISION_MODEL) ||
+    compactText(config.ELYAN_SHARED_BRAIN_VISION_MODEL) ||
+    "meta-llama/llama-4-scout-17b-16e-instruct";
 
   return {
     reasoningModel,
     fastModel,
     fallbackModel,
+    visionModel,
     defaultModelByWorkload: {
       intent: fastModel,
       fast_route: fastModel,
-      mobile_chat_fast: reasoningModel,
+      // Fast chat must feel instant. The reasoning model spends seconds on a
+      // hidden reasoning pass before emitting any content (the "wait then
+      // dump" feel), so fast chat uses the lighter model for low
+      // time-to-first-token and smooth token-by-token streaming.
+      mobile_chat_fast: fastModel,
       mobile_chat_balanced: reasoningModel,
+      mobile_chat_deep_refine: reasoningModel,
       document_analysis: fallbackModel,
       planning: reasoningModel,
       desktop_handoff: fastModel,
+      vision_reasoning: visionModel,
     },
-    models: uniqueStrings([reasoningModel, fastModel, fallbackModel]),
+    models: uniqueStrings([reasoningModel, fastModel, fallbackModel, visionModel]),
   };
 }
 

@@ -17,14 +17,17 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
     fast_route: "openai/gpt-oss-20b",
     mobile_chat_fast: "openai/gpt-oss-120b",
     mobile_chat_balanced: "openai/gpt-oss-120b",
+    mobile_chat_deep_refine: "openai/gpt-oss-120b",
     document_analysis: "qwen/qwen3.6-27b",
     planning: "openai/gpt-oss-120b",
     desktop_handoff: "openai/gpt-oss-20b",
+    vision_reasoning: "meta-llama/llama-4-scout-17b-16e-instruct",
   });
   assert.deepEqual(catalog.models, [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
     "qwen/qwen3.6-27b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
   ]);
 });
 

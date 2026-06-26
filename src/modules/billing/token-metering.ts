@@ -10,6 +10,7 @@ export type TokenMeteringWorkload =
   | "fast_route"
   | "mobile_chat_fast"
   | "mobile_chat_balanced"
+  | "mobile_chat_deep_refine"
   | "document_analysis"
   | "planning"
   | "desktop_handoff";
@@ -63,6 +64,7 @@ function normalizeWorkload(value: string | null | undefined): TokenMeteringWorkl
     case "fast_route":
     case "mobile_chat_fast":
     case "mobile_chat_balanced":
+    case "mobile_chat_deep_refine":
     case "document_analysis":
     case "planning":
     case "desktop_handoff":
@@ -111,7 +113,11 @@ function shouldEscalateChatQuality(input: {
   prompt: string;
   requestedLongForm: boolean;
 }): boolean {
-  if (input.workload !== "mobile_chat_fast" && input.workload !== "mobile_chat_balanced") {
+  if (
+    input.workload !== "mobile_chat_fast" &&
+    input.workload !== "mobile_chat_balanced" &&
+    input.workload !== "mobile_chat_deep_refine"
+  ) {
     return false;
   }
   if (input.requestedLongForm) {
@@ -209,6 +215,14 @@ export function resolveAdaptiveInferenceBudget(input: {
         : isSoloProfile
           ? 1_400
           : 1_100
+      : workload === "mobile_chat_deep_refine"
+        ? isFreePlan
+          ? 540
+          : isProProfile
+            ? 1_900
+            : isSoloProfile
+              ? 1_500
+              : 840
       : workload === "mobile_chat_balanced"
         ? isFreePlan
           ? 480
@@ -250,8 +264,11 @@ export function resolveAdaptiveInferenceBudget(input: {
             ? Math.max(
                 baseMaxTokens,
                 Math.min(
-                  workload === "mobile_chat_fast" ? 480 : 760,
-                  Math.round(baseMaxTokens * (workload === "mobile_chat_fast" ? 1.8 : 1.55)),
+                  workload === "mobile_chat_fast" ? 480 : workload === "mobile_chat_deep_refine" ? 980 : 760,
+                  Math.round(
+                    baseMaxTokens *
+                      (workload === "mobile_chat_fast" ? 1.8 : workload === "mobile_chat_deep_refine" ? 1.7 : 1.55),
+                  ),
                 ),
               )
             : baseMaxTokens;
@@ -346,6 +363,8 @@ function workloadMultiplier(workload: TokenMeteringWorkload): number {
       return 0.72;
     case "mobile_chat_balanced":
       return 0.92;
+    case "mobile_chat_deep_refine":
+      return 1.08;
     case "document_analysis":
       return 1.02;
     case "planning":

@@ -1233,9 +1233,11 @@ export async function maybeQueueMemoryExtractionJob(
   },
 ) {
   if (input.persistedSignals <= 0) {
+    app.log.debug?.({ trigger: input.trigger }, "memory extraction skipped, no signals");
     return { created: false, reason: "no_persisted_signals" as const };
   }
 
+  app.log.info?.({ userId: input.userId, persistedSignals: input.persistedSignals, trigger: input.trigger }, "memory extraction job queued");
   return queueMemoryJob(app, {
     userId: input.userId,
     kind: "memory_extraction",

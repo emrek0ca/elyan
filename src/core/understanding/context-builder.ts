@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { learningEvents, subscriptions, users } from "../../db/schema.js";
+import { authIdentities, learningEvents, subscriptions, users } from "../../db/schema.js";
 import { searchBrainMemory } from "../../modules/brain/memory.js";
 import { buildContextPacketsFromMetadata, summarizeContextFreshness } from "./context-packets.js";
 import { buildMemoryProfileSnapshot } from "./memory-profile.js";
@@ -17,6 +17,7 @@ import type {
   UserUnderstandingContext,
 } from "./types.js";
 import { listFreshWorldSignals } from "../../modules/mobile/service.js";
+import { nlpDaemon } from "../../lib/nlp-daemon.js";
 
 const MAX_HINTS = 12;
 const MAX_CHARS = 4000;
@@ -148,24 +149,36 @@ async function loadSafeUserProfile(
   userId: string,
 ): Promise<Partial<UserProfileSnapshot> | null> {
   try {
-    const rows = await app.db
-      .select({
-        displayName: users.displayName,
-        planCode: subscriptions.planCode,
-        subscriptionStatus: subscriptions.status,
-      })
-      .from(users)
-      .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
-      .where(eq(users.id, userId))
-      .limit(1);
+    const [userRows, identityRows] = await Promise.all([
+      app.db
+        .select({
+          displayName: users.displayName,
+          planCode: subscriptions.planCode,
+          subscriptionStatus: subscriptions.status,
+        })
+        .from(users)
+        .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
+        .where(eq(users.id, userId))
+        .limit(1),
+      app.db
+        .select({ displayName: authIdentities.displayName })
+        .from(authIdentities)
+        .where(eq(authIdentities.userId, userId))
+        .limit(1),
+    ]);
 
-    const row = rows[0];
+    const row = userRows[0];
     if (!row) {
       return null;
     }
 
+    const displayName =
+      compactText(String(row.displayName ?? "")) ||
+      compactText(String(identityRows[0]?.displayName ?? "")) ||
+      null;
+
     return {
-      displayName: compactText(String(row.displayName ?? "")) || null,
+      displayName,
       planCode: compactText(String(row.planCode ?? "")).toLowerCase() || null,
       subscriptionStatus: compactText(String(row.subscriptionStatus ?? "")).toLowerCase() || null,
     };
@@ -457,15 +470,83 @@ export function buildUserContextFromMemory(input: {
   };
 }
 
+/* ── Extract quick user facts from the current message via C daemon ───── */
+async function extractQuickFacts(message: string): Promise<{ name?: string; city?: string }> {
+  const facts = await nlpDaemon.extractFacts(message).catch(() => []);
+  const result: { name?: string; city?: string } = {};
+  for (const f of facts) {
+    if (f.k === "name" && f.v) result.name = f.v;
+    if (f.k === "city" && f.v) result.city = f.v;
+  }
+  return result;
+}
+
+/* ── Derive C-level behavioral hints from world signals ───────────────── */
+async function deriveCHintsFromWorldSignals(
+  signals: Awaited<ReturnType<typeof listFreshWorldSignals>>,
+): Promise<{ situational: string[]; behavioral: string[]; environmental: string[] }> {
+  if (!nlpDaemon.isAvailable() || signals.length === 0) {
+    return { situational: [], behavioral: [], environmental: [] };
+  }
+
+  const allHints = (
+    await Promise.all(
+      signals.slice(0, 6).map((signal) => {
+        const facts = signal.facts as Record<string, unknown> | null;
+        const readRecord = (v: unknown) =>
+          v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+        const rf = readRecord(facts);
+        const readNum = (k: string) => {
+          const v = rf?.[k];
+          return typeof v === "number" && Number.isFinite(v) ? v : null;
+        };
+        const readStr = (k: string) => {
+          const v = rf?.[k];
+          return typeof v === "string" && v.trim() ? v.trim() : null;
+        };
+
+        return nlpDaemon.deriveHints({
+          kind:        signal.kind,
+          summary:     signal.summary,
+          energy:      readStr("energyLevel") ?? readStr("energy"),
+          readiness:   readNum("readiness"),
+          mobility:    readStr("mobility"),
+          busyness:    readStr("busyness") ?? readStr("busyLevel"),
+          attention:   readStr("attentionLoad") ?? readStr("notificationLoad"),
+          city:        readStr("city"),
+          freeMinutes: readNum("freeMinutesToday"),
+        }).catch(() => []);
+      }),
+    )
+  ).flat();
+
+  const situational:   string[] = [];
+  const behavioral:    string[] = [];
+  const environmental: string[] = [];
+
+  for (const h of allHints) {
+    if (h.bucket === "situational"   && !situational.includes(h.hint))   situational.push(h.hint);
+    if (h.bucket === "behavioral"    && !behavioral.includes(h.hint))    behavioral.push(h.hint);
+    if (h.bucket === "environmental" && !environmental.includes(h.hint)) environmental.push(h.hint);
+  }
+
+  return {
+    situational:   situational.slice(0, 4),
+    behavioral:    behavioral.slice(0, 4),
+    environmental: environmental.slice(0, 4),
+  };
+}
+
 export async function buildUserContext(
   app: FastifyInstance,
   input: TaskUnderstandingInput & { intent: IntentClassification },
 ): Promise<UserUnderstandingContext> {
-  const accountId = input.accountId ?? input.userId;
+  const accountId    = input.accountId ?? input.userId;
   const memoryEnabled = resolveMemoryEnabled(input.metadata);
-  const query = `${input.title ?? ""} ${input.message ?? ""} ${input.intent.primaryIntent}`;
-  const queryTokens = tokenize(query);
-  const now = new Date();
+  const query        = `${input.title ?? ""} ${input.message ?? ""} ${input.intent.primaryIntent}`;
+  const queryTokens  = tokenize(query);
+  const now          = new Date();
+
   const contextPackets = app.config.ELYAN_WORLD_CONTEXT_PACKETS_ENABLED
     ? buildContextPacketsFromMetadata(input.metadata, {
         now,
@@ -473,39 +554,38 @@ export async function buildUserContext(
         intent: input.intent.primaryIntent,
       })
     : [];
-  const [memorySearch, userProfile] = await Promise.all([
+
+  /* Run all async ops in parallel for minimum latency */
+  const [memorySearch, userProfile, quickFacts, freshWorldSignals] = await Promise.all([
     memoryEnabled
-      ? searchBrainMemory(app, {
-          userId: input.userId,
-          query,
-          limit: MAX_HINTS,
-        }).catch(() => ({
-          results: [],
-        }))
+      ? searchBrainMemory(app, { userId: input.userId, query, limit: MAX_HINTS }).catch(() => ({ results: [] }))
       : Promise.resolve({ results: [] }),
     loadSafeUserProfile(app, input.userId),
+    /* Quick C-based fact extraction from the current message */
+    nlpDaemon.isAvailable() ? extractQuickFacts(input.message).catch(() => ({ name: undefined, city: undefined })) : Promise.resolve({ name: undefined, city: undefined }),
+    listFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 72 }).catch(() => []),
   ]);
-  const freshWorldSignals = await listFreshWorldSignals(app, {
-    userId: input.userId,
-    sessionId: input.metadata?.sessionId && typeof input.metadata.sessionId === "string" ? input.metadata.sessionId : null,
-    limit: 12,
-    maxAgeHours: 72,
-  }).catch(() => []);
+
+  /* Enrich profile: if user name is unknown, try name extracted from this message */
+  let enrichedProfile = userProfile;
+  if (!userProfile?.displayName && quickFacts.name) {
+    enrichedProfile = { ...userProfile, displayName: quickFacts.name };
+  }
 
   const stableMemory = memorySearch.results.map((result) => ({
-    id: result.id,
-    type: result.memoryType,
-    key: result.title,
-    value: result.content,
-    confidence: result.confidence / 100,
-    scope: result.scope,
-    source: result.memorySource,
-    createdAt: new Date(result.updatedAt),
-    staleness: result.staleness,
+    id:             result.id,
+    type:           result.memoryType,
+    key:            result.title,
+    value:          result.content,
+    confidence:     result.confidence / 100,
+    scope:          result.scope,
+    source:         result.memorySource,
+    createdAt:      new Date(result.updatedAt),
+    staleness:      result.staleness,
     conflictStatus: result.conflictStatus,
     lastVerifiedAt: result.lastVerifiedAt ? new Date(result.lastVerifiedAt) : null,
     importanceScore: result.importanceScore,
-    isPinned: result.isPinned,
+    isPinned:       result.isPinned,
   }));
 
   const fallbackRows =
@@ -513,14 +593,14 @@ export async function buildUserContext(
       ? []
       : await app.db
           .select({
-            id: learningEvents.id,
-            type: learningEvents.type,
-            key: learningEvents.key,
-            value: learningEvents.value,
+            id:         learningEvents.id,
+            type:       learningEvents.type,
+            key:        learningEvents.key,
+            value:      learningEvents.value,
             confidence: learningEvents.confidence,
-            scope: learningEvents.scope,
-            source: learningEvents.source,
-            createdAt: learningEvents.createdAt,
+            scope:      learningEvents.scope,
+            source:     learningEvents.source,
+            createdAt:  learningEvents.createdAt,
           })
           .from(learningEvents)
           .where(
@@ -537,50 +617,99 @@ export async function buildUserContext(
     : deriveLearningSignalsFromWorldSignals(
         freshWorldSignals.map((signal) =>
           toDerivedSignalInput({
-            signalId: signal.signalId,
-            kind: signal.kind,
-            summary: signal.summary,
+            signalId:   signal.signalId,
+            kind:       signal.kind,
+            summary:    signal.summary,
             confidence: signal.confidence,
-            facts: signal.facts,
-            privacy: signal.privacy,
-            createdAt: signal.createdAt,
+            facts:      signal.facts,
+            privacy:    signal.privacy,
+            createdAt:  signal.createdAt,
           }),
         ),
       ).map((signal, index) => ({
-        id: `world-derived-${index}-${signal.key}`,
-        type: signal.type,
-        key: signal.key,
-        value: signal.value,
-        confidence: signal.confidence,
-        scope: signal.scope,
-        source: signal.source,
-        createdAt: new Date(),
-        staleness: "fresh" as const,
+        id:             `world-derived-${index}-${signal.key}`,
+        type:           signal.type,
+        key:            signal.key,
+        value:          signal.value,
+        confidence:     signal.confidence,
+        scope:          signal.scope,
+        source:         signal.source,
+        createdAt:      new Date(),
+        staleness:      "fresh" as const,
         conflictStatus: "active" as const,
         lastVerifiedAt: new Date(),
         importanceScore: 72,
-        isPinned: false,
-        metadata: signal.metadata,
+        isPinned:       false,
+        metadata:       signal.metadata,
       }));
 
-  const memory = [
+  const allMemory = [
     ...stableMemory,
     ...worldDerivedMemory,
-    ...fallbackRows.map((row) => ({
-      ...row,
-      confidence: row.confidence / 100,
-    })),
-  ]
-    .sort((left, right) => scoreMemory(right, queryTokens) - scoreMemory(left, queryTokens))
-    .slice(0, MAX_HINTS);
+    ...fallbackRows.map((row) => ({ ...row, confidence: row.confidence / 100 })),
+  ];
 
-  return buildUserContextFromMemory({
-    userId: input.userId,
+  /* Average document length for BM25 normalization */
+  const avgDocLen = allMemory.length > 0
+    ? allMemory.reduce((sum, m) => sum + tokenize(`${m.key} ${m.value}`).size, 0) / allMemory.length
+    : 20;
+
+  /* Score with BM25 (C daemon) when available; fall back to JS overlap scorer */
+  let memory: typeof allMemory;
+  if (nlpDaemon.isAvailable() && allMemory.length > 0) {
+    /* Single IPC round-trip for all documents via bm25_batch */
+    const docs = allMemory.map((item) => `${(item as { type?: string }).type ?? ""} ${item.key} ${item.value}`);
+    const bm25Scores = await nlpDaemon.bm25Batch(query, docs, avgDocLen).catch(() => null);
+
+    const scoringNow = Date.now();
+    const scores = allMemory.map((item, i) => {
+      const mem = item as RetrievedMemory;
+      const bm25 = bm25Scores?.[i] ?? null;
+      const referenceTime = mem.lastVerifiedAt?.getTime() ?? mem.createdAt.getTime();
+      const ageDays       = Math.max(0, (scoringNow - referenceTime) / 86_400_000);
+      const recency       = Math.max(0, 1 - ageDays / 120);
+      const stalenessPenalty  = mem.staleness === "contested" ? -1 : mem.staleness === "stale" ? -0.5 : 0.14;
+      const conflictPenalty   = mem.conflictStatus === "contested" ? -0.72 : mem.conflictStatus === "superseded" ? -1 : 0.08;
+      const pinBoost      = mem.isPinned ? 0.44 : 0;
+      const verifiedBoost = mem.lastVerifiedAt ? Math.max(0.08, Math.min(0.28, 0.28 - ageDays / 360)) : 0;
+      const relevance     = bm25 != null ? bm25 * 2.2 : scoreMemory(mem, queryTokens, scoringNow);
+      return relevance + mem.confidence + recency + stalenessPenalty + conflictPenalty + pinBoost + verifiedBoost;
+    });
+
+    memory = allMemory
+      .map((item, i) => ({ item, score: scores[i] ?? 0 }))
+      .sort((a, b) => b.score - a.score)
+      .map(({ item }) => item)
+      .slice(0, MAX_HINTS);
+  } else {
+    memory = allMemory
+      .sort((left, right) => scoreMemory(right as RetrievedMemory, queryTokens) - scoreMemory(left as RetrievedMemory, queryTokens))
+      .slice(0, MAX_HINTS);
+  }
+
+  /* Derive rich behavioral hints from world signals via C daemon */
+  const cHints = await deriveCHintsFromWorldSignals(freshWorldSignals).catch(() => ({
+    situational: [], behavioral: [], environmental: [],
+  }));
+
+  const ctx = buildUserContextFromMemory({
+    userId:      input.userId,
     accountId,
-    intent: input.intent,
-    task: input,
-    memory,
-    profile: userProfile,
+    intent:      input.intent,
+    task:        input,
+    memory:      memory as RetrievedMemory[],
+    profile:     enrichedProfile,
     contextPackets,
   });
+
+  /* Merge C-derived hints into the context (deduplicated, bounded) */
+  const mergeHints = (target: string[], incoming: string[]) => {
+    const state = { chars: target.reduce((s, h) => s + h.length, 0) };
+    for (const h of incoming) pushBounded(target, h, state);
+  };
+  mergeHints(ctx.situationalHints,   cHints.situational);
+  mergeHints(ctx.behavioralHints,    cHints.behavioral);
+  mergeHints(ctx.environmentHints,   cHints.environmental);
+
+  return ctx;
 }

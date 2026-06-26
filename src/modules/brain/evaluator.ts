@@ -19,6 +19,11 @@ export type BrainEvalFailureType =
   | "weak_reasoning_depth"
   | "overcompressed_answer"
   | "style_mismatch_mobile"
+  | "missed_personalization_opportunity"
+  | "memory_misuse"
+  | "weak_continuity"
+  | "unnecessary_clarification"
+  | "shallow_tradeoff_analysis"
   | "provider_disclosure"
   | "prompt_disclosure"
   | "identity_policy_leak"
@@ -62,6 +67,14 @@ export type BrainEvalInput = {
   toolUseRequired?: boolean;
   retrievalUsed?: boolean;
   retrievalSufficiency?: string | null;
+  personalizationScope?: string | null;
+  memoryUsed?: boolean;
+  clarificationDecision?: "not_needed" | "asked" | "assumed_and_proceeded";
+  continuitySignals?: {
+    hasUserGoal?: boolean;
+    hasAssistantState?: boolean;
+    openLoopCount?: number;
+  } | null;
 };
 
 export type BrainBenchmarkCase = {
@@ -350,6 +363,44 @@ export function evaluateBrainAnswer(input: BrainEvalInput): BrainEvalResult {
       constitutionRuleIds.add("clarification_on_ambiguity");
       correctedAnswer = correctedAnswer ?? buildClarificationPrompt(prompt);
     }
+  }
+
+  if (!shouldClarify && input.clarificationDecision === "asked") {
+    clarification = Math.min(clarification, 0.45);
+    failureTypes.push("unnecessary_clarification");
+  }
+
+  if (
+    input.personalizationScope === "none" &&
+    /hatırlıyorum|remember|sana göre|her zamanki gibi|daha önce söylediğin/i.test(loweredAnswer)
+  ) {
+    hallucination = Math.min(hallucination, 0.4);
+    failureTypes.push("memory_misuse");
+  }
+
+  if (
+    input.memoryUsed &&
+    /(senin için|alışkanlığına göre|programına göre|enerji seviyene göre|working window)/i.test(answer) === false &&
+    /\b(senin için|senin durumunda|buna göre)\b/i.test(loweredPrompt)
+  ) {
+    reasoning = Math.min(reasoning, 0.62);
+    failureTypes.push("missed_personalization_opportunity");
+  }
+
+  if (
+    (input.continuitySignals?.hasUserGoal || (input.continuitySignals?.openLoopCount ?? 0) > 0) &&
+    /baştan|sıfırdan|tamamen farklı|ilgisiz/i.test(loweredAnswer)
+  ) {
+    reasoning = Math.min(reasoning, 0.55);
+    failureTypes.push("weak_continuity");
+  }
+
+  if (
+    /\b(öner|recommend|hangisi daha iyi|tradeoff|artı eksi|kıyasla|karşılaştır)\b/i.test(loweredPrompt) &&
+    !/\b(artı|eksi|tradeoff|avantaj|dezavantaj|önerim|recommendation|öneri)\b/i.test(loweredAnswer)
+  ) {
+    reasoning = Math.min(reasoning, 0.58);
+    failureTypes.push("shallow_tradeoff_analysis");
   }
 
   if (input.toolUseRequired && includesAny(loweredAnswer, ["yaptım", "tamamladım", "checked", "opened", "scanned"])) {

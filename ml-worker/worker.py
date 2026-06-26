@@ -250,6 +250,7 @@ def claim_next_job(conn: psycopg.Connection) -> dict[str, Any] | None:
             select tj.*
             from training_jobs tj
             where tj.status = 'queued'
+            and tj.kind not in ('memory_extraction','memory_consolidation','memory_reconsolidation','memory_index')
             order by tj.created_at
             for update of tj skip locked
             limit 1

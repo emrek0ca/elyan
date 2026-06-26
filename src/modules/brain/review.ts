@@ -49,6 +49,11 @@ type BrainInteractionReviewRecord = {
   promptTokens?: number | null;
   completionTokens?: number | null;
   firstDeltaMs?: number | null;
+  reasoningPasses?: number | null;
+  refinementApplied?: boolean;
+  memoryUsed?: boolean;
+  personalizationScope?: string | null;
+  clarificationDecision?: string | null;
 };
 
 type ApprovedCorrectionDatasetExportRecord = {
@@ -158,6 +163,11 @@ function reviewRecordFromMetadata(metadata: Record<string, unknown>): BrainInter
     promptTokens: readNumber(review, "promptTokens"),
     completionTokens: readNumber(review, "completionTokens"),
     firstDeltaMs: readNumber(review, "firstDeltaMs"),
+    reasoningPasses: readNumber(review, "reasoningPasses"),
+    refinementApplied: readBoolean(review, "refinementApplied") ?? undefined,
+    memoryUsed: readBoolean(review, "memoryUsed") ?? undefined,
+    personalizationScope: readString(review, "personalizationScope"),
+    clarificationDecision: readString(review, "clarificationDecision"),
   };
 }
 
@@ -384,6 +394,11 @@ export async function recordBrainInteractionReview(
     promptTokens: typeof input.responseMetadata?.promptTokens === "number" ? input.responseMetadata.promptTokens : undefined,
     completionTokens: typeof input.responseMetadata?.completionTokens === "number" ? input.responseMetadata.completionTokens : undefined,
     firstDeltaMs: typeof input.responseMetadata?.firstDeltaMs === "number" ? input.responseMetadata.firstDeltaMs : undefined,
+    reasoningPasses: typeof input.responseMetadata?.reasoningPasses === "number" ? input.responseMetadata.reasoningPasses : undefined,
+    refinementApplied: typeof input.responseMetadata?.refinementApplied === "boolean" ? input.responseMetadata.refinementApplied : undefined,
+    memoryUsed: typeof input.responseMetadata?.memoryUsed === "boolean" ? input.responseMetadata.memoryUsed : undefined,
+    personalizationScope: typeof input.responseMetadata?.personalizationScope === "string" ? input.responseMetadata.personalizationScope : null,
+    clarificationDecision: typeof input.responseMetadata?.clarificationDecision === "string" ? input.responseMetadata.clarificationDecision : null,
   } satisfies BrainInteractionReviewRecord;
 
   const [row] = await app.db
@@ -424,6 +439,11 @@ export async function recordBrainInteractionReview(
         promptTokens: review.promptTokens,
         completionTokens: review.completionTokens,
         firstDeltaMs: review.firstDeltaMs,
+        reasoningPasses: review.reasoningPasses,
+        refinementApplied: review.refinementApplied,
+        memoryUsed: review.memoryUsed,
+        personalizationScope: review.personalizationScope,
+        clarificationDecision: review.clarificationDecision,
         constitutionVersion: ELYAN_CONSTITUTION_VERSION,
         promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
       },

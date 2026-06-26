@@ -8,6 +8,7 @@
     "node": ">=20.11.0"
   },
   "scripts": {
+    "compile:nlp": "mkdir -p bin && gcc -O2 -Wall -o bin/elyan_nlp src/native/elyan_nlp.c -lm",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",

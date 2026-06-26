@@ -34,6 +34,9 @@ export const errorHandlerPlugin = fp(async (app) => {
       if (retryAfterSeconds != null) {
         reply.header("retry-after", String(retryAfterSeconds));
       }
+      if (error.statusCode === 409) {
+        app.log.warn({ err: { code: error.code, message: error.message, details: error.details }, requestId: request.id, url: request.url }, "409 app error");
+      }
       reply.status(error.statusCode).send({
         error: error.code,
         message: error.message,
@@ -52,6 +55,7 @@ export const errorHandlerPlugin = fp(async (app) => {
     }
 
     if (typeof error === "object" && error && "code" in error && error.code === "23505") {
+      app.log.warn({ err: error, requestId: request.id, url: request.url }, "409 unique constraint violation");
       reply.status(409).send({
         error: "conflict",
         message: "Resource already exists",

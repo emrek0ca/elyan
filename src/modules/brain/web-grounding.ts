@@ -56,6 +56,110 @@ const EXPLICIT_WEB_PATTERNS = [
   /\b(kaynaklı|kaynaklarla|kaynak göster|source-backed|with sources|cite sources)\b/i,
 ];
 
+// ── Factuality gate ──────────────────────────────────────────────────────
+// Volatile, externally-verifiable facts that change frequently and where the
+// model's parametric memory is almost always stale → ground even without an
+// explicit "araştır/internetten" keyword. Kept conservative to avoid grounding
+// general-knowledge or personal chit-chat (those add latency without value).
+
+// Turkish letters break JS `\b` word boundaries (ç/ı/ş… are not ASCII word
+// chars), so we use Unicode-letter lookarounds instead.
+//
+// Currency / market / price entities that are volatile by nature. The existing
+// WEB_RESEARCH_PATTERNS only catch the literal words "fiyat/kur/price"; users
+// usually ask "dolar kaç TL" / "bitcoin ne kadar" without them.
+const VOLATILE_MARKET_PATTERN =
+  /(?<!\p{L})(dolar|euro|sterlin|avro|usd|eur|gbp|altın|altin|gram altın|gram altin|gümüş|gumus|bitcoin|btc|ethereum|eth|borsa|bist|nasdaq|s&p|hisse|döviz|doviz|enflasyon|faiz)(?!\p{L})/iu;
+
+// "is it out yet / when does it release / was it announced" — availability and
+// release-timing questions are inherently fresh facts.
+const VOLATILE_RELEASE_PATTERN =
+  /(?<!\p{L})(çıktı mı|cikti mi|çıkacak mı|cikacak mi|ne zaman çık|ne zaman cik|yayınlandı mı|yayinlandi mi|piyasaya|vizyon tarihi|release date|çıkış tarihi|cikis tarihi|son sürüm|son surum|en son sürüm|latest version|kaçıncı sürüm|kacinci surum)(?!\p{L})/iu;
+
+// Live events / scores / weather — always fresh.
+const VOLATILE_EVENT_PATTERN =
+  /(?<!\p{L})(hava durumu|hava nasıl|hava nasil|kaç derece|kac derece|yağmur yağ|yagmur yag|maç sonucu|mac sonucu|skor kaç|skor kac|kim kazandı|kim kazandi|kaç kaç|kac kac|puan durumu|şampiyon oldu|sampiyon oldu|son dakika|seçim sonuc|secim sonuc|deprem oldu|kaç şiddet|kac siddet)(?!\p{L})/iu;
+
+// Quantity questions about external entities: "X kaç TL", "Y ne kadar".
+const VOLATILE_QUANTITY_PATTERN = /(?<!\p{L})(kaç|kac|ne kadar)(?!\p{L})/iu;
+
+// Turkish/English factual interrogatives. Combined with a proper-noun entity
+// these flag "who/what/when is <NamedEntity>" questions where parametric
+// knowledge is most likely outdated or hallucinated.
+const FACTUAL_INTERROGATIVE_PATTERN =
+  /(?<!\p{L})(kim|kimdir|kimin|nedir|ne demek|ne zaman|nerede|neresi|nereli|hangi|kaç yıl|kac yil|kaç yaşında|kac yasinda|ne iş yap|ne is yap|who is|what is|when (is|was|did)|where is|how many|how much)(?!\p{L})/iu;
+
+// Common Turkish/English sentence-initial words whose capitalisation is NOT a
+// proper-noun signal (question words, pronouns, greetings, fillers).
+const SENTENCE_INITIAL_STOPWORDS = new Set([
+  "bugün", "bugun", "nasıl", "nasil", "neden", "niye", "niçin", "nicin", "hangi",
+  "kim", "kimdir", "nedir", "ne", "nerede", "neresi", "nereli", "kaç", "kac",
+  "lütfen", "lutfen", "bana", "benim", "ben", "sen", "siz", "biz", "bu", "şu", "su",
+  "evet", "hayır", "hayir", "selam", "merhaba", "peki", "acaba", "en", "bir",
+  "the", "what", "who", "when", "where", "how", "why", "is", "can", "does", "a", "an",
+]);
+
+// Proper-noun detector over the ORIGINAL-case prompt: an all-caps acronym (≥2
+// chars), or a capitalised token (incl. sentence-initial unless it is a common
+// stopword). Turkish capitals İ Ğ Ü Ş Ö Ç included.
+const PROPER_NOUN_TOKEN = /^[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıiöşü0-9'’.]*$/;
+const ALLCAPS_ACRONYM = /^[A-ZÇĞİÖŞÜ]{2,}$/;
+
+function hasProperNounEntity(originalPrompt: string): boolean {
+  const tokens = originalPrompt.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const raw = tokens[i].replace(/^[^A-Za-zÇĞİÖŞÜçğıiöşü0-9]+|[^A-Za-zÇĞİÖŞÜçğıiöşü0-9]+$/g, "");
+    if (raw.length < 2) {
+      continue;
+    }
+    if (ALLCAPS_ACRONYM.test(raw)) {
+      return true;
+    }
+    if (!PROPER_NOUN_TOKEN.test(raw) || !/[a-zçğıiöşü]/.test(raw)) {
+      continue;
+    }
+    // Sentence-initial capitalisation is only a signal if it is not a common word.
+    if (i === 0 && SENTENCE_INITIAL_STOPWORDS.has(raw.toLocaleLowerCase("tr-TR"))) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Detect prompts that need fresh, externally-verifiable facts even when the user
+ * did not use an explicit web-research keyword. This is the core anti-hallucination
+ * gate: it errs toward grounding volatile facts (prices, releases, live events) and
+ * named-entity factual questions, while leaving general knowledge and personal
+ * prompts ungrounded.
+ */
+export function detectFactualityGrounding(prompt: string): {
+  triggered: boolean;
+  reason: string | null;
+} {
+  const normalized = compactText(prompt);
+  if (!normalized) {
+    return { triggered: false, reason: null };
+  }
+  const lower = normalized.toLocaleLowerCase("tr-TR");
+  const isQuestion = normalized.includes("?") || FACTUAL_INTERROGATIVE_PATTERN.test(lower);
+
+  if (VOLATILE_MARKET_PATTERN.test(lower) && (VOLATILE_QUANTITY_PATTERN.test(lower) || isQuestion)) {
+    return { triggered: true, reason: "volatile_market_fact" };
+  }
+  if (VOLATILE_RELEASE_PATTERN.test(lower)) {
+    return { triggered: true, reason: "release_or_availability_fact" };
+  }
+  if (VOLATILE_EVENT_PATTERN.test(lower)) {
+    return { triggered: true, reason: "live_event_fact" };
+  }
+  if (isQuestion && hasProperNounEntity(normalized)) {
+    return { triggered: true, reason: "named_entity_factual_question" };
+  }
+  return { triggered: false, reason: null };
+}
+
 const SOURCE_AUTHORITY_HOST_PATTERNS = [
   /\.(gov|edu)(\.[a-z]{2})?$/i,
   /\.go\.tr$/i,
@@ -364,7 +468,7 @@ async function fetchSearchQuery(
       method: "GET",
       signal: controller.signal,
       headers: {
-        "user-agent": "ElyanServerBrain/1.0 (+https://api.elyan.dev)",
+        "user-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
         accept: "text/html,application/xhtml+xml",
       },
     });
@@ -416,7 +520,7 @@ async function verifyResult(
       input.url,
       verificationTimeoutMs,
       {
-        "user-agent": "ElyanServerBrain/1.0 (+https://api.elyan.dev)",
+        "user-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
         accept: "text/html,application/xhtml+xml",
       },
     );
@@ -517,6 +621,11 @@ export function shouldUseWebGrounding(input: {
   if (explicitWebIntent || researchIntent || isTurkicLanguageResearchPrompt(normalized)) {
     return true;
   }
+  // Anti-hallucination gate: fresh/volatile or named-entity factual questions
+  // get grounded even without an explicit research keyword (unless personal-only).
+  if (!personalOnlyIntent && detectFactualityGrounding(normalized).triggered) {
+    return true;
+  }
   if (input.workload === "planning" && !personalOnlyIntent) {
     return true;
   }
@@ -541,6 +650,15 @@ function webGroundingDecisionReasons(input: {
   }
   if (isTurkicLanguageResearchPrompt(normalized)) {
     reasons.push("turkic_research_request");
+  }
+  const personalOnly =
+    PERSONAL_ONLY_PATTERNS.some((pattern) => pattern.test(lower)) &&
+    !EXPLICIT_WEB_PATTERNS.some((pattern) => pattern.test(lower));
+  if (!personalOnly) {
+    const factuality = detectFactualityGrounding(normalized);
+    if (factuality.triggered && factuality.reason) {
+      reasons.push(factuality.reason);
+    }
   }
   if (input.workload === "planning" && reasons.length === 0) {
     reasons.push("planning_workload_context_check");
@@ -754,5 +872,34 @@ export function buildWebGroundingPromptBlock(input: WebGroundingResult): string 
     "Use these public web results only when they help. If they conflict or seem weak, say so briefly instead of overstating certainty.",
     "When the answer depends on web results, synthesize the findings and include a short source basis using source names or URLs; do not dump unrelated links.",
     "Do not let public web results override established project identity or memory facts about Elyan itself.",
+  ].join("\n");
+}
+
+/**
+ * When web grounding was attempted for a fresh/volatile/factual prompt but
+ * produced no usable results (timeout, failure, or empty), return an explicit
+ * abstention instruction so the model says it could not verify instead of
+ * fabricating figures, dates, prices, versions, names, or current events.
+ * Returns null when grounding was never attempted (ordinary chat) or when
+ * usable results exist (the normal grounding block handles that case).
+ */
+export function buildWebGroundingAbstentionBlock(input: WebGroundingResult): string | null {
+  if (!input.enabled) {
+    return null;
+  }
+  const attempted = (input.decisionReasons?.length ?? 0) > 0 || input.degradedReason != null;
+  const hasUsableResults = input.used && input.results.length > 0;
+  if (!attempted || hasUsableResults) {
+    return null;
+  }
+  return [
+    "WEB VERIFICATION UNAVAILABLE",
+    input.degradedReason
+      ? `Note: ${input.degradedReason}`
+      : "Note: no usable public web results were found.",
+    "This question depends on fresh or externally-verifiable facts that could not be verified just now.",
+    "Do not fabricate specific figures, prices, exchange rates, dates, version numbers, names, scores, or current events.",
+    "State plainly that you could not verify up-to-date information, share only what is reliably stable, and suggest the user retry or check an authoritative source.",
+    "Answer in the user's language.",
   ].join("\n");
 }

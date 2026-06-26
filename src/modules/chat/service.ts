@@ -28,7 +28,7 @@ import {
 } from "../billing/service.js";
 import { calculateBillablePlanTokens, estimateTextTokens } from "../billing/token-metering.js";
 import { assertTrialTaskQuotaAllowedFromUsage, getTrialQuotaUsage } from "../quota/service.js";
-import { decideCommandRoute } from "../routing-policy/service.js";
+import { routeChatTurn } from "../routing-policy/service.js";
 import { resolveCommandTarget } from "../routing-policy/service.js";
 import { createTask } from "../tasks/service.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
@@ -1335,7 +1335,7 @@ export async function createChatMessage(
   },
 ) {
   const usageAccess = await getUserUsageAccessTruth(app.db, input.userId);
-  const routeDecision = await decideCommandRoute(app, {
+  const routeDecision = await routeChatTurn(app, {
     userId: input.userId,
     message: input.content,
     source: input.source,
@@ -1359,7 +1359,7 @@ export async function createChatMessage(
     if (!usageAccess.serverBrainAllowed) {
       throw createUpgradeOrByokRequiredError(usageAccess);
     }
-    if (usageAccess.mode === "trial") {
+    if (usageAccess.mode === "trial" && usageAccess.planCode === "free") {
       const trialQuota = await getTrialQuotaUsage(app.db, input.userId);
       assertTrialTaskQuotaAllowedFromUsage(trialQuota);
     }
@@ -1418,6 +1418,9 @@ export async function createChatMessage(
     route: routeDecision.route,
     selectedWorkload: routeDecision.selectedWorkload,
     attachmentContextUsed: attachmentContext?.used === true,
+    hasVisionImage:
+      Array.isArray(attachmentContext?.visionImages) &&
+      (attachmentContext!.visionImages!.length ?? 0) > 0,
   });
   const assistantAckText =
     routeDecision.route === "server_brain"
@@ -1629,6 +1632,11 @@ export async function createChatMessage(
       source: input.source,
       metadata: {
         ...requestChatMetadata,
+        // Mark this as a chat-channel task so the fast streaming flow
+        // (processSharedBrainChatTask + token-by-token SSE deltas) is used
+        // instead of the synchronous REST reply. Without this the answer
+        // arrives in one shot.
+        channel: "chat",
         routeDecision,
         chat: {
           sessionId: session.id,

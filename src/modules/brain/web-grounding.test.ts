@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildWebGroundingAbstentionBlock,
   buildWebGroundingPromptBlock,
+  detectFactualityGrounding,
   parseDuckDuckGoHtml,
   searchPublicWebGrounding,
   shouldUseWebGrounding,
@@ -70,6 +72,105 @@ test("shouldUseWebGrounding enables public web grounding for research-like promp
       workload: "mobile_chat_fast",
     }),
     true,
+  );
+});
+
+test("detectFactualityGrounding flags volatile facts without explicit research keywords", () => {
+  // Market / currency without the words fiyat/kur
+  assert.equal(detectFactualityGrounding("Dolar kaç TL").triggered, true);
+  assert.equal(detectFactualityGrounding("bitcoin ne kadar oldu").triggered, true);
+  // Release / availability
+  assert.equal(detectFactualityGrounding("iPhone 17 çıktı mı").triggered, true);
+  // Live events
+  assert.equal(detectFactualityGrounding("Bugün hava durumu nasıl").triggered, true);
+  // Named-entity factual question
+  assert.equal(detectFactualityGrounding("Elon Musk kimdir").triggered, true);
+  assert.equal(
+    detectFactualityGrounding("Fenerbahçe son maçında kim kazandı").triggered,
+    true,
+  );
+});
+
+test("detectFactualityGrounding leaves general knowledge and chit-chat ungrounded", () => {
+  assert.equal(detectFactualityGrounding("Selam nasılsın").triggered, false);
+  assert.equal(detectFactualityGrounding("sevgi nedir").triggered, false);
+  assert.equal(detectFactualityGrounding("bana bir şiir yaz").triggered, false);
+  assert.equal(detectFactualityGrounding("teşekkür ederim").triggered, false);
+});
+
+test("shouldUseWebGrounding grounds volatile factual questions without keywords", () => {
+  assert.equal(
+    shouldUseWebGrounding({ prompt: "Dolar kaç TL", workload: "mobile_chat_fast" }),
+    true,
+  );
+  assert.equal(
+    shouldUseWebGrounding({ prompt: "Elon Musk kimdir", workload: "mobile_chat_fast" }),
+    true,
+  );
+  // Personal-only stays off even if phrased as a question.
+  assert.equal(
+    shouldUseWebGrounding({ prompt: "Benim profilim nedir", workload: "mobile_chat_fast" }),
+    false,
+  );
+});
+
+test("buildWebGroundingAbstentionBlock instructs abstention when grounding failed", () => {
+  const block = buildWebGroundingAbstentionBlock({
+    enabled: true,
+    used: false,
+    query: "dolar kaç tl",
+    queries: ["dolar tl"],
+    source: "duckduckgo_html",
+    results: [],
+    degradedReason: "web_search_timeout",
+    confidence: "low",
+    decisionReasons: ["volatile_market_fact"],
+  });
+  assert.ok(block);
+  assert.match(block, /WEB VERIFICATION UNAVAILABLE/);
+  assert.match(block, /Do not fabricate/);
+});
+
+test("buildWebGroundingAbstentionBlock stays silent for ordinary chat and for usable results", () => {
+  // Grounding never attempted (chit-chat): no decision reasons, no degraded reason.
+  assert.equal(
+    buildWebGroundingAbstentionBlock({
+      enabled: true,
+      used: false,
+      query: "selam",
+      queries: [],
+      source: "duckduckgo_html",
+      results: [],
+      degradedReason: null,
+      confidence: "low",
+      decisionReasons: [],
+    }),
+    null,
+  );
+  // Usable results exist → the normal grounding block handles it.
+  assert.equal(
+    buildWebGroundingAbstentionBlock({
+      enabled: true,
+      used: true,
+      query: "dolar kaç tl",
+      queries: ["dolar tl"],
+      source: "duckduckgo_html",
+      results: [
+        {
+          title: "USD/TRY",
+          url: "https://example.com",
+          snippet: "rate",
+          sourceHost: "example.com",
+          verificationState: "verified",
+          queryHits: 1,
+          score: 1,
+        },
+      ],
+      degradedReason: null,
+      confidence: "high",
+      decisionReasons: ["volatile_market_fact"],
+    }),
+    null,
   );
 });
 

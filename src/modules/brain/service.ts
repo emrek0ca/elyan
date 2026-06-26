@@ -1772,6 +1772,7 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       workloadProfiles: {
         mobileChatFast: getSharedBrainWorkloadProfile("mobile_chat_fast"),
         mobileChatBalanced: getSharedBrainWorkloadProfile("mobile_chat_balanced"),
+        mobileChatDeepRefine: getSharedBrainWorkloadProfile("mobile_chat_deep_refine"),
         planning: getSharedBrainWorkloadProfile("planning"),
         desktopHandoff: getSharedBrainWorkloadProfile("desktop_handoff"),
       },

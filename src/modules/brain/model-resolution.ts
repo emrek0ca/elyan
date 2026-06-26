@@ -57,6 +57,15 @@ const OLLAMA_MODEL_PREFERENCES_BY_WORKLOAD: Record<SharedBrainWorkload, string[]
     "qwen2.5-coder:3b",
     "llama3.2",
   ],
+  mobile_chat_deep_refine: [
+    "qwen2.5:7b-instruct-q5_K_M",
+    "qwen2.5:7b-instruct",
+    "deepseek-r1:8b",
+    "llama3:8b",
+    "qwen2.5:7b",
+    "llama3.1:8b",
+    "qwen2.5-coder:3b",
+  ],
   document_analysis: [
     "qwen2.5:7b-instruct-q5_K_M",
     "qwen2.5:7b-instruct",
@@ -76,6 +85,7 @@ const OLLAMA_MODEL_PREFERENCES_BY_WORKLOAD: Record<SharedBrainWorkload, string[]
     "qwen2.5-coder:3b",
   ],
   desktop_handoff: [],
+  vision_reasoning: [],
 };
 
 function normalizeModelName(value: string): string {
@@ -110,7 +120,7 @@ function getConfiguredModelForWorkload(
   const defaultFastModel = "qwen2.5-coder:3b";
   const defaultBalancedModel = "qwen2.5:7b-instruct-q5_K_M";
 
-  if (workload === "planning") {
+  if (workload === "planning" || workload === "mobile_chat_deep_refine") {
     return trimOr(app.config.ELYAN_SHARED_BRAIN_PLANNING_MODEL, defaultBalancedModel);
   }
   if (workload === "mobile_chat_balanced" || workload === "document_analysis") {

@@ -75,6 +75,7 @@ function createEnv(): AppEnv {
     GROQ_REASONING_MODEL: "openai/gpt-oss-120b",
     GROQ_FAST_MODEL: "openai/gpt-oss-20b",
     GROQ_FALLBACK_MODEL: "qwen/qwen3.6-27b",
+    GROQ_VISION_MODEL: "meta-llama/llama-4-scout-17b-16e-instruct",
     OPENROUTER_API_KEY: "",
     OPENROUTER_BASE_URL: "https://openrouter.ai/api/v1",
     IYZICO_API_KEY: "sandbox-api-key",

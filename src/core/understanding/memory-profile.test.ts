@@ -278,6 +278,7 @@ test("formatMemoryProfilePromptBlock renders a compact prompt-safe summary", () 
     ],
     preferenceFacts: [],
     projectFacts: [],
+    derivedFacts: [],
     recentEpisodes: [],
     safetyNotes: ["privacy boundary: keep private local data local"],
     memoryCount: 1,

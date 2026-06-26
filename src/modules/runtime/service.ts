@@ -63,6 +63,7 @@ export async function registerRuntime(
       userId: devices.userId,
       label: devices.label,
       type: devices.type,
+      isActive: devices.isActive,
       deviceKeyHash: devices.deviceKeyHash,
       platform: devices.platform,
     })
@@ -74,6 +75,12 @@ export async function registerRuntime(
 
   if (!device || device.type !== "desktop") {
     throw notFound("Desktop runtime device not found");
+  }
+
+  // Deactivated device: deviceKeyHash is wiped on deactivation so the secret
+  // check below would fail anyway, but we give a clearer error code here.
+  if (!device.isActive) {
+    throw unauthorized("Device has been deactivated");
   }
 
   if (!device.userId || !device.deviceKeyHash) {
@@ -163,7 +170,23 @@ export async function markRuntimeConnected(
   auth: RuntimeAuthTokenPayload,
   socketSessionId?: string,
 ): Promise<void> {
-  await getRuntimeConnectionByAuth(app, auth);
+  // Allow reconnecting a recently-disconnected session (e.g. brief network drop)
+  // by updating the row regardless of disconnectedAt, as long as the JWT is valid.
+  const rows = await app.db
+    .select({ id: runtimeConnections.id })
+    .from(runtimeConnections)
+    .where(
+      and(
+        eq(runtimeConnections.id, auth.connectionId),
+        eq(runtimeConnections.deviceId, auth.deviceId),
+        eq(runtimeConnections.userId, auth.sub),
+      ),
+    )
+    .limit(1);
+
+  if (!rows[0]) {
+    throw unauthorized("Runtime connection not found");
+  }
 
   await app.db
     .update(runtimeConnections)

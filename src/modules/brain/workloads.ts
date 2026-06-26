@@ -3,9 +3,11 @@ export const sharedBrainWorkloadValues = [
   "fast_route",
   "mobile_chat_fast",
   "mobile_chat_balanced",
+  "mobile_chat_deep_refine",
   "document_analysis",
   "planning",
   "desktop_handoff",
+  "vision_reasoning",
 ] as const;
 
 export type SharedBrainWorkload = (typeof sharedBrainWorkloadValues)[number];
@@ -60,6 +62,15 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
     cachePolicy: "safe_ephemeral",
     fallbackWorkload: "mobile_chat_fast",
   },
+  mobile_chat_deep_refine: {
+    workload: "mobile_chat_deep_refine",
+    timeoutMs: 9_500,
+    firstDeltaBudgetMs: 2_400,
+    maxTokens: 640,
+    streamingEnabled: true,
+    cachePolicy: "off",
+    fallbackWorkload: "mobile_chat_balanced",
+  },
   document_analysis: {
     workload: "document_analysis",
     timeoutMs: 8_500,
@@ -87,6 +98,15 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
     cachePolicy: "off",
     fallbackWorkload: null,
   },
+  vision_reasoning: {
+    workload: "vision_reasoning",
+    timeoutMs: 12_000,
+    firstDeltaBudgetMs: 3_500,
+    maxTokens: 768,
+    streamingEnabled: true,
+    cachePolicy: "off",
+    fallbackWorkload: "mobile_chat_balanced",
+  },
 };
 
 export function getSharedBrainWorkloadProfile(
@@ -105,10 +125,14 @@ export function resolveAttachmentAwareSharedBrainWorkload(input: {
   route?: string | null;
   selectedWorkload?: SharedBrainWorkload | null;
   attachmentContextUsed?: boolean;
+  hasVisionImage?: boolean;
 }): SharedBrainWorkload {
   const selectedWorkload = input.selectedWorkload ?? "mobile_chat_fast";
   if (selectedWorkload === "planning" || selectedWorkload === "desktop_handoff") {
     return selectedWorkload;
+  }
+  if (input.hasVisionImage === true) {
+    return "vision_reasoning";
   }
   if (selectedWorkload === "document_analysis") {
     return "document_analysis";

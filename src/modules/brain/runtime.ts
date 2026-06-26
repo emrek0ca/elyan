@@ -84,7 +84,14 @@ function getConfiguredProviderApiKey(app: FastifyInstance, provider: SharedBrain
     case "claude":
       return normalize(app.config.ANTHROPIC_API_KEY);
     case "groq":
-      return normalize(app.config.GROQ_API_KEY);
+      // GROQ_API_KEY may be a comma-separated pool; the provider expects a
+      // single bearer token, so use the first non-empty entry.
+      return (
+        String(app.config.GROQ_API_KEY ?? "")
+          .split(",")
+          .map((entry) => entry.trim())
+          .find((entry) => entry.length > 0) ?? ""
+      );
     case "openrouter":
       return normalize(app.config.OPENROUTER_API_KEY);
     default:

@@ -1948,6 +1948,11 @@ async function processSharedBrainChatTask(
       const visibleAckText = sanitizeAssistantVisibleText(ackText, {
         fallback: ackText,
       });
+      const ackBlocks = composeAssistantMessageBlocks({
+        content: visibleAckText,
+        blocks: [ackTaskTrace],
+        streaming: true,
+      });
       await publishVolatileChatStreamEvent(app, {
         userId: input.userId,
         deviceId: runningTask.targetDeviceId,
@@ -1958,24 +1963,13 @@ async function processSharedBrainChatTask(
         seq: ++streamSeq,
         payload: {
           delta: visibleAckText,
+          // content is omitted — mobile accumulates from delta.
+          // blocks are included so the task-trace card renders immediately.
           assistantMessage: shapeAssistantMessagePayload({
             id: chatStreaming.assistantMessageId,
             role: "assistant",
             status: "running",
-            content: visibleAckText,
-            ...(composeAssistantMessageBlocks({
-              content: visibleAckText,
-              blocks: [ackTaskTrace],
-              streaming: true,
-            }).length > 0
-              ? {
-                  blocks: composeAssistantMessageBlocks({
-                    content: visibleAckText,
-                    blocks: [ackTaskTrace],
-                    streaming: true,
-                  }),
-                }
-              : {}),
+            ...(ackBlocks.length > 0 ? { blocks: ackBlocks } : {}),
             taskId: runningTask.id,
             createdAt: runningTask.createdAt.toISOString(),
             updatedAt: now,
@@ -2043,11 +2037,12 @@ async function processSharedBrainChatTask(
               seq: ++streamSeq,
               payload: {
                 delta: visibleDelta,
+                // content is omitted — mobile accumulates text from delta.
+                // blocks update the task-trace card but do not carry the full text.
                 assistantMessage: shapeAssistantMessagePayload({
                   id: chatStreaming.assistantMessageId,
                   role: "assistant",
                   status: "running",
-                  content: visibleContent,
                   ...(blocks.length > 0 ? { blocks: blocks } : {}),
                   taskId: runningTask.id,
                   createdAt: runningTask.createdAt.toISOString(),
@@ -2332,40 +2327,40 @@ export async function createTask(
     };
   }
 
-  const understanding = useFastSharedBrainFlow
-    ? emptyUnderstanding({
-        userId: input.userId,
-        accountId: input.userId,
-        title: canonicalTitle,
-        message: prompt,
-        routeContext: "tasks.create",
-        source: typeof input.payload.source === "string" ? input.payload.source : undefined,
-        deviceId: targetDeviceId,
-        metadata: {
-          ...payloadMetadata,
-          routeDecision,
-          requestId: input.requestId,
-        },
-      })
-    : await buildTaskUnderstanding(app, {
-        userId: input.userId,
-        accountId: input.userId,
-        title: canonicalTitle,
-        message: prompt,
-        routeContext: "tasks.create",
-        source: typeof input.payload.source === "string" ? input.payload.source : undefined,
-        deviceId: targetDeviceId,
-        metadata: {
-          ...payloadMetadata,
-          routeDecision,
-          requestId: input.requestId,
-        },
-      });
+  const understandingInput = {
+    userId: input.userId,
+    accountId: input.userId,
+    title: canonicalTitle,
+    message: prompt,
+    routeContext: "tasks.create" as const,
+    source: typeof input.payload.source === "string" ? input.payload.source : undefined,
+    deviceId: targetDeviceId,
+    metadata: {
+      ...payloadMetadata,
+      routeDecision,
+      requestId: input.requestId,
+    },
+  };
+  const understanding = await buildTaskUnderstanding(app, understandingInput).catch(() =>
+    emptyUnderstanding(understandingInput),
+  );
+  const isDesktopRoute =
+    routeDecision.route === "desktop_runtime" ||
+    routeDecision.taskRoute?.operationalRoute === "desktop_runtime";
+  const desktopContext = isDesktopRoute
+    ? {
+        intent: routeDecision.taskRoute?.target ?? "desktop_runtime",
+        requiresCapabilities: routeCapabilities,
+        naturalLanguageGoal: prompt,
+        structuredSteps: null,
+      }
+    : null;
   const enrichedPayload = {
     ...input.payload,
     ...(buildQuantumTaskSnapshot({ capabilities: routeCapabilities, status: "pending", ready: !routeBlocked })
       ? { quantum: buildQuantumTaskSnapshot({ capabilities: routeCapabilities, status: "pending", ready: !routeBlocked }) }
       : {}),
+    ...(desktopContext ? { desktopContext } : {}),
     metadata: {
       ...payloadMetadata,
       routeDecision,

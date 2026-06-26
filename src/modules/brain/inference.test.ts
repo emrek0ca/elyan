@@ -858,8 +858,8 @@ test("generateSharedBrainReply uses web grounding for short research prompts", a
   assert.equal(Array.isArray(result.metadata.webSources), true);
   assert.equal((result.metadata.webSources as Array<Record<string, unknown>>)[0]?.url, "https://example.com/apple-news");
   assert.equal(Array.isArray(result.metadata.blocks), true);
-  assert.equal((result.metadata.blocks as Array<Record<string, unknown>>)[0]?.type, "context_signal");
-  assert.equal((result.metadata.blocks as Array<Record<string, unknown>>)[0]?.title, "Web kaynakları");
+  assert.equal((result.metadata.blocks as Array<Record<string, unknown>>)[0]?.type, "web_search");
+  assert.equal(typeof (result.metadata.blocks as Array<Record<string, unknown>>)[0]?.query, "string");
 });
 
 test("generateGovernedSharedBrainReply preserves public provider names in web research answers", async () => {
@@ -1146,6 +1146,9 @@ test("generateSharedBrainReply expands complete-answer budget for packaged conte
           technicalHints: [],
           ecosystemHints: [],
           safetyHints: [],
+          situationalHints: ["low energy window; prefer shorter, lower-friction steps"],
+          behavioralHints: ["prefers compact time-boxed steps on busy days"],
+          environmentHints: [],
         } as never,
         internalEvaluation: {
           skipUsageValidation: true,
@@ -1295,6 +1298,9 @@ test("generateSharedBrainReply keeps irrelevant world context silent for greetin
           technicalHints: [],
           ecosystemHints: [],
           safetyHints: [],
+          situationalHints: [],
+          behavioralHints: [],
+          environmentHints: [],
         } as never,
         internalEvaluation: {
           skipUsageValidation: true,
@@ -1410,6 +1416,9 @@ test("generateSharedBrainReply includes explicit local context but guards live w
           technicalHints: [],
           ecosystemHints: [],
           safetyHints: [],
+          situationalHints: [],
+          behavioralHints: [],
+          environmentHints: ["local context anchored around Kayseri"],
         } as never,
         internalEvaluation: {
           skipUsageValidation: true,

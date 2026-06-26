@@ -36,6 +36,7 @@ import { trainPanelRoutes } from "../modules/admin/train-panel.js";
 import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
 import { startTaskLeaseSweeper } from "../modules/tasks/lease-sweeper.js";
 import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
+import { nlpDaemon } from "../lib/nlp-daemon.js";
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -162,6 +163,7 @@ export async function buildApp(envInput?: AppEnv) {
     global: true,
     encodings: ["gzip", "br"],
   });
+
   await app.register(helmet, {
     global: true,
   });
@@ -177,7 +179,7 @@ export async function buildApp(envInput?: AppEnv) {
   );
   await app.register(rateLimit, {
     global: true,
-    max: 120,
+    max: 600,
     timeWindow: "1 minute",
     redis: env.RATE_LIMIT_REDIS_ENABLED ? reliability.store.redisClient ?? undefined : undefined,
     skipOnError: !env.RELIABILITY_REDIS_REQUIRED,
@@ -304,6 +306,12 @@ export async function buildApp(envInput?: AppEnv) {
 
   app.decorate("services", services);
 
+  /* Start C NLP daemon — non-fatal if binary is not yet compiled */
+  nlpDaemon.start({
+    info: (msg) => app.log.info(msg),
+    warn: (msg) => app.log.warn(msg),
+  });
+
   await ensureTaskDispatchWorker(app);
   const stopTaskLeaseSweeper = startTaskLeaseSweeper(app);
   const stopRealtimePruner = startRealtimeEventRetentionPruner(app);
@@ -363,6 +371,7 @@ export async function buildApp(envInput?: AppEnv) {
   app.addHook("onClose", async () => {
     stopTaskLeaseSweeper();
     stopRealtimePruner();
+    nlpDaemon.stop();
     await eventBus.close();
     await reliability.store.close();
   });

@@ -317,13 +317,9 @@ function buildLifecycleBlocks(
       }),
     );
   } else if (input.task.status === "running") {
-    blocks.push(
-      buildAssistantStatusBlock({
-        status: "running",
-        title: "İşlem sürüyor",
-        detail: "Cevap hazırlanıyor.",
-      }),
-    );
+    // While running, the only running-state UI is the quiet wave carried by the
+    // task trace block. No "İşlem sürüyor / Cevap hazırlanıyor" status card — it
+    // just clutters the surface while the answer is already streaming in.
   } else if (input.task.status === "completed" && summary) {
     blocks.push(
       buildAssistantSummaryBlock(summary, {

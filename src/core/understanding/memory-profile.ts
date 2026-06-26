@@ -40,6 +40,18 @@ const PROJECT_LABELS: Record<string, string> = {
   task_handoff_helpfulness: "Görev devir",
 };
 
+const DERIVED_LABELS: Record<string, string> = {
+  energy_rhythm: "Enerji ritmi",
+  planning_style: "Planlama stili",
+  schedule_pressure_pattern: "Program baskısı",
+  mobility_context: "Hareketlilik",
+  local_preference_context: "Yerel bağlam",
+  notification_attention_pattern: "Dikkat yükü",
+  preferred_working_window: "Çalışma penceresi",
+  common_city: "Sık şehir",
+  preferred_planning_granularity: "Plan yoğunluğu",
+};
+
 const SAFETY_KEYS = new Set([
   "implementation_boundary",
   "privacy_boundary",
@@ -387,6 +399,7 @@ export function buildMemoryProfileSnapshot(items: RetrievedMemory[]): MemoryProf
   const identityItems: RetrievedMemory[] = [];
   const preferenceItems: RetrievedMemory[] = [];
   const projectItems: RetrievedMemory[] = [];
+  const derivedItems: RetrievedMemory[] = [];
   const episodeItems: RetrievedMemory[] = [];
   const safetyNotes: string[] = [];
   let lastUpdatedAt: string | null = null;
@@ -419,6 +432,16 @@ export function buildMemoryProfileSnapshot(items: RetrievedMemory[]): MemoryProf
 
     if (PROJECT_LABELS[normalizedKey]) {
       projectItems.push(item);
+      continue;
+    }
+
+    if (
+      DERIVED_LABELS[normalizedKey] ||
+      (typeof item.metadata === "object" &&
+        item.metadata != null &&
+        (item.metadata as Record<string, unknown>).sourceCategory === "world_signal_derived")
+    ) {
+      derivedItems.push(item);
       continue;
     }
 
@@ -469,6 +492,17 @@ export function buildMemoryProfileSnapshot(items: RetrievedMemory[]): MemoryProf
     }),
   ),
   ).slice(0, MAX_FACTS_PER_SECTION);
+  const cappedDerived = sortFactsByStrength(
+    dedupeFacts(
+    selectBestMemoryItems(derivedItems, now).flatMap((item) => {
+      const fact = toFact(item, {
+        ...DERIVED_LABELS,
+        ...PROJECT_LABELS,
+      });
+      return fact ? [fact] : [];
+    }),
+  ),
+  ).slice(0, MAX_FACTS_PER_SECTION);
   const cappedEpisodes = sortFactsByStrength(
     dedupeFacts(
     selectBestMemoryItems(episodeItems, now).flatMap((item) => {
@@ -481,7 +515,12 @@ export function buildMemoryProfileSnapshot(items: RetrievedMemory[]): MemoryProf
     }),
   ),
   ).slice(0, MAX_FACTS_PER_SECTION);
-  const selectedCount = cappedIdentity.length + cappedPreferences.length + cappedProjects.length + cappedEpisodes.length;
+  const selectedCount =
+    cappedIdentity.length +
+    cappedPreferences.length +
+    cappedProjects.length +
+    cappedDerived.length +
+    cappedEpisodes.length;
 
   const summaryParts = [
     cappedIdentity.length ? `kimlik: ${cappedIdentity.map(describeMemoryFactForSummary).join(" · ")}` : null,
@@ -489,6 +528,7 @@ export function buildMemoryProfileSnapshot(items: RetrievedMemory[]): MemoryProf
       ? `tercih: ${cappedPreferences.map(describeMemoryFactForSummary).join(" · ")}`
       : null,
     cappedProjects.length ? `proje: ${cappedProjects.map(describeMemoryFactForSummary).join(" · ")}` : null,
+    cappedDerived.length ? `durumsal: ${cappedDerived.map(describeMemoryFactForSummary).join(" · ")}` : null,
     cappedEpisodes.length ? `son olay: ${cappedEpisodes[0]?.value ?? ""}` : null,
   ].filter(Boolean);
 
@@ -501,6 +541,7 @@ export function buildMemoryProfileSnapshot(items: RetrievedMemory[]): MemoryProf
     identityFacts: cappedIdentity,
     preferenceFacts: cappedPreferences,
     projectFacts: cappedProjects,
+    derivedFacts: cappedDerived,
     recentEpisodes: cappedEpisodes,
     safetyNotes: safetyNotes.slice(0, MAX_FACTS_PER_SECTION),
     memoryCount: items.length,
@@ -533,6 +574,12 @@ export function formatMemoryProfilePromptBlock(profile: MemoryProfileSnapshot | 
   if (profile.projectFacts.length) {
     lines.push("- Project context:");
     for (const item of profile.projectFacts) {
+      lines.push(`  - ${formatMemoryFactSentence(item)}`);
+    }
+  }
+  if (profile.derivedFacts.length) {
+    lines.push("- Derived context:");
+    for (const item of profile.derivedFacts) {
       lines.push(`  - ${formatMemoryFactSentence(item)}`);
     }
   }

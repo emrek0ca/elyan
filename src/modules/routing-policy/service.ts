@@ -829,6 +829,16 @@ function isServerBrainPublicCapability(capability: string): boolean {
   return normalized === "web_research";
 }
 
+function resolveDesktopUnavailableMessage(candidates: {
+  selectedDevice: { canReceiveTasks: boolean } | null;
+  canUseSelectedDevice: boolean;
+}): string {
+  if (candidates.selectedDevice && !candidates.canUseSelectedDevice) {
+    return "PC çevrimdışı, döndüğünde çalıştırılacak.";
+  }
+  return "Bu görev için önce bir masaüstü eşleştirmen gerekiyor.";
+}
+
 async function resolveDesktopCandidates(
   app: FastifyInstance,
   userId: string,
@@ -1205,7 +1215,7 @@ export async function decideCommandRoute(
       privacyClass,
       requiresApproval: false,
       reason: "İstek masaüstüne yazmayı gerektiriyor ama bağlı ve yetenekli bir masaüstü bulunamadı.",
-      userFacingMessage: "Bu görev için önce bir masaüstü eşleştirmen gerekiyor.",
+      userFacingMessage: resolveDesktopUnavailableMessage(desktopCandidates),
       primaryIntent: classification.primaryIntent,
       confidence: classification.confidence,
       requiresLocalRuntime: true,
@@ -1275,7 +1285,7 @@ export async function decideCommandRoute(
         privacyClass,
         requiresApproval: false,
         reason: "Yerel runtime gerekli ama bağlı ve yetenekli bir masaüstü bulunamadı.",
-        userFacingMessage: "Bu görev için önce bir masaüstü eşleştirmen gerekiyor.",
+        userFacingMessage: resolveDesktopUnavailableMessage(desktopCandidates),
         primaryIntent: classification.primaryIntent,
         confidence: classification.confidence,
         requiresLocalRuntime: true,
@@ -1600,7 +1610,7 @@ export async function decideCommandRoute(
         privacyClass,
         requiresApproval,
         reason: "Yerel runtime gerekli ama bağlı ve yetenekli bir masaüstü bulunamadı.",
-        userFacingMessage: "Bu görev için önce bir masaüstü eşleştirmen gerekiyor.",
+        userFacingMessage: resolveDesktopUnavailableMessage(desktopCandidates),
         primaryIntent: classification.primaryIntent,
         confidence: classification.confidence,
         requiresLocalRuntime: true,
@@ -1948,4 +1958,11 @@ export async function resolveCommandTarget(
     device: sharedBrainDevice,
     isSharedBrain: true,
   };
+}
+
+export async function routeChatTurn(
+  app: FastifyInstance,
+  input: Parameters<typeof decideCommandRoute>[1],
+): Promise<CommandRouteDecision> {
+  return decideCommandRoute(app, input);
 }

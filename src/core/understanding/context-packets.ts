@@ -228,7 +228,16 @@ function resolveMentionPolicy(input: {
           ? "planning_pacing_context"
           : "health_context_not_requested",
       allowedUse: explicit
-        ? ["wellbeing nudge", "energy-aware pacing", "no diagnosis or raw measurements"]
+        ? [
+            // The user explicitly asked about their own health metrics. The
+            // figures here are user-derived (steps, sleep, energy) and were
+            // already marked plaintext-safe, so answer with the actual numbers
+            // when asked. Only clinical interpretation stays off-limits.
+            "share the user's own metrics with exact figures when asked",
+            "wellbeing nudge",
+            "energy-aware pacing",
+            "no medical diagnosis or clinical interpretation",
+          ]
         : implicit
           ? ["adjust pacing without naming health data"]
           : ["do not mention health context"],
@@ -412,7 +421,7 @@ function buildHealthFactsSummary(facts: Record<string, unknown> | null, options:
   }
   const parts: string[] = [];
   // Priority: qualitative first (always present), then numeric derived facts.
-  const qualitativeKeys = new Set(["sleepquality", "activityband", "activitylevel", "energylevel", "energy", "trend", "readiness", "stress", "wellbeing"]);
+  const qualitativeKeys = new Set(["sleepquality", "activityband", "activitylevel", "energylevel", "energy", "trend", "readiness", "stress", "stresslevel", "wellbeing"]);
   const numericKeys = new Set(["stepstoday", "stepsyesterday", "stepsthisweek", "sleephourstoday", "sleephoursyesterday", "activeenergykcal", "workoutcount", "workoutdurationminutes", "workouttype", "sleeprempercent", "sleepdeeppercent"]);
   const orderedEntries = [
     ...Object.entries(facts).filter(([k]) => qualitativeKeys.has(normalizeKey(k))),

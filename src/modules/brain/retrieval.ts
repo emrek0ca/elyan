@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { knowledgeChunks, knowledgeDocuments, trainingJobs } from "../../db/schema.js";
 import type { BrainScope } from "../../contracts/domain.js";
 import { rerankSemanticCandidates } from "./semantic-rerank.js";
+import { nlpDaemon } from "../../lib/nlp-daemon.js";
 
 const RETRIEVAL_VECTOR_DIMENSIONS = 256;
 export const RETRIEVAL_EMBEDDING_MODEL = "elyan_hash_v1";
@@ -67,6 +68,15 @@ export function buildHashedKnowledgeEmbedding(text: string): number[] {
   }
 
   return vector.map((value) => Number((value / magnitude).toFixed(6)));
+}
+
+/** C-accelerated embedding; falls back to pure-JS when daemon unavailable */
+async function buildEmbedding(text: string): Promise<number[]> {
+  if (nlpDaemon.isAvailable()) {
+    const vec = await nlpDaemon.embed256(text).catch(() => null);
+    if (vec && vec.length === RETRIEVAL_VECTOR_DIMENSIONS) return vec;
+  }
+  return buildHashedKnowledgeEmbedding(text);
 }
 
 function vectorLiteral(vector: number[]): string {
@@ -271,7 +281,7 @@ async function searchKnowledgeHybrid(
     limit: number;
   },
 ): Promise<RetrievalSearchResult[]> {
-  const queryVector = buildVectorSql(buildHashedKnowledgeEmbedding(input.query));
+  const queryVector = buildVectorSql(await buildEmbedding(input.query));
   const rows = await app.db.execute(sql`
     select
       kd.id as "documentId",
@@ -404,8 +414,10 @@ export async function indexKnowledgeChunksForDocument(
     .orderBy(knowledgeChunks.ordinal);
 
   const indexedAt = new Date().toISOString();
-  for (const chunk of chunks) {
-    const embedding = buildVectorSql(buildHashedKnowledgeEmbedding(chunk.content));
+  /* Build all embeddings concurrently (C daemon queues IPC internally) */
+  const vectors = await Promise.all(chunks.map((chunk) => buildEmbedding(chunk.content)));
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const embedding = buildVectorSql(vectors[ci]!);
     await app.db.execute(sql`
       update knowledge_chunks
       set
@@ -417,7 +429,7 @@ export async function indexKnowledgeChunksForDocument(
           to_jsonb(${indexedAt}::text),
           true
         )
-      where id = ${chunk.id}
+      where id = ${chunks[ci]!.id}
     `);
   }
 

@@ -12,7 +12,7 @@ import {
   summarizeRuntimeCapabilities,
 } from "../runtime/capabilities.js";
 
-export const RUNTIME_CONNECTION_STALE_AFTER_MS = 120_000;
+export const RUNTIME_CONNECTION_STALE_AFTER_MS = 300_000; // 5 minutes — relay sends heartbeats every 2-5s so this is very forgiving
 
 type DeviceRow = {
   id: string;
@@ -95,6 +95,7 @@ export function shapeUserDevice(
     | {
         queuedTaskCount?: number;
         desktopAllowed?: boolean;
+        wsConnected?: boolean; // live WebSocket in realtimeHub — overrides DB stale check
       }
     | number,
   now = Date.now(),
@@ -102,17 +103,20 @@ export function shapeUserDevice(
   const options = typeof optionsOrNow === "number" ? undefined : optionsOrNow;
   const effectiveNow = typeof optionsOrNow === "number" ? optionsOrNow : now;
   const desktopAllowed = options?.desktopAllowed ?? true;
+  const wsConnected = options?.wsConnected ?? false; // in-memory hub says WS is OPEN
   const runtimeFresh = runtime
     ? isRuntimeConnectionFresh(runtime, effectiveNow)
     : false;
-  const runtimeConnected = runtimeFresh && runtime?.status !== "offline";
+  // If the WebSocket is live in the hub, treat the connection as fresh regardless of DB timestamp
+  const runtimeConnected = (runtimeFresh || wsConnected) && runtime?.status !== "offline";
   const runtimeStale =
-    Boolean(runtime) && runtime?.status !== "offline" && !runtimeFresh;
+    Boolean(runtime) && runtime?.status !== "offline" && !runtimeFresh && !wsConnected;
   const normalizedCapabilities = runtime
     ? normalizeRuntimeCapabilities(runtime.capabilities)
     : [];
   const isDesktop = device.type === "desktop";
-  const isOnline = isDesktop && runtimeConnected;
+  // When WS is live and the connection row exists (even with disconnectedAt), treat as online
+  const isOnline = isDesktop && (runtimeConnected || (wsConnected && Boolean(runtime)));
   const canReceiveTasks =
     isDesktop &&
     device.isActive &&
@@ -427,7 +431,10 @@ export async function listUserDevices(app: FastifyInstance, userId: string) {
   const desktopIds = deviceRows
     .filter((device) => device.type === "desktop")
     .map((device) => device.id);
-  const activeConnections =
+  // Fetch the most recent connection row per device regardless of disconnectedAt.
+  // We use wsConnected (live hub check) as the authoritative online signal,
+  // so even if disconnectedAt is set we can still route tasks when the WS is open.
+  const recentConnections =
     desktopIds.length > 0
       ? await app.db
           .select({
@@ -441,25 +448,28 @@ export async function listUserDevices(app: FastifyInstance, userId: string) {
             lastHeartbeatAt: runtimeConnections.lastHeartbeatAt,
           })
           .from(runtimeConnections)
-          .where(
-            and(
-              inArray(runtimeConnections.deviceId, desktopIds),
-              isNull(runtimeConnections.disconnectedAt),
-            ),
-          )
+          .where(inArray(runtimeConnections.deviceId, desktopIds))
+          .orderBy(desc(runtimeConnections.connectedAt))
       : [];
   const queuedTaskCounts = await listQueuedTaskCountsByDevice(app, desktopIds);
   const reachability = getBaseUrlReachability(app.config);
 
-  const activeByDeviceId = new Map(
-    activeConnections.map((connection) => [connection.deviceId, connection]),
-  );
+  // Keep only the most recent connection per device
+  const recentByDeviceId = new Map<string, typeof recentConnections[0]>();
+  for (const conn of recentConnections) {
+    if (!recentByDeviceId.has(conn.deviceId)) {
+      recentByDeviceId.set(conn.deviceId, conn);
+    }
+  }
 
   return deviceRows.map((device) => {
     const runtime =
       device.type === "desktop"
-        ? (activeByDeviceId.get(device.id) ?? null)
+        ? (recentByDeviceId.get(device.id) ?? null)
         : null;
+    const wsConnected = device.type === "desktop"
+      ? app.services.realtimeHub.isRuntimeConnected(device.id)
+      : false;
     return shapeUserDevice(
       device,
       runtime,
@@ -467,6 +477,7 @@ export async function listUserDevices(app: FastifyInstance, userId: string) {
       {
         queuedTaskCount: queuedTaskCounts.get(device.id) ?? 0,
         desktopAllowed,
+        wsConnected,
       },
     );
   });
@@ -504,6 +515,8 @@ export async function getUserDevice(
     return null;
   }
 
+  // Fetch the most recent connection row regardless of disconnectedAt —
+  // live WS presence (wsConnected) is the authoritative online signal.
   const runtimeRows =
     device.type === "desktop"
       ? await app.db
@@ -518,12 +531,7 @@ export async function getUserDevice(
             lastHeartbeatAt: runtimeConnections.lastHeartbeatAt,
           })
           .from(runtimeConnections)
-          .where(
-            and(
-              eq(runtimeConnections.deviceId, device.id),
-              isNull(runtimeConnections.disconnectedAt),
-            ),
-          )
+          .where(eq(runtimeConnections.deviceId, device.id))
           .orderBy(desc(runtimeConnections.connectedAt))
           .limit(1)
       : [];
@@ -532,6 +540,9 @@ export async function getUserDevice(
       ? await listQueuedTaskCountsByDevice(app, [device.id])
       : new Map<string, number>();
   const reachability = getBaseUrlReachability(app.config);
+  const wsConnected = device.type === "desktop"
+    ? app.services.realtimeHub.isRuntimeConnected(device.id)
+    : false;
 
   return shapeUserDevice(
     device,
@@ -540,6 +551,7 @@ export async function getUserDevice(
     {
       queuedTaskCount: queuedTaskCounts.get(device.id) ?? 0,
       desktopAllowed,
+      wsConnected,
     },
   );
 }
@@ -791,14 +803,37 @@ export async function deactivateUserDevice(
     throw conflict("Device is already inactive");
   }
 
+  const now = new Date();
+
+  // 1. Mark device inactive and wipe the deviceKeyHash so the old deviceSecret
+  //    can never be used to re-register or heartbeat again.
   const rows = await app.db
     .update(devices)
     .set({
       isActive: false,
-      updatedAt: new Date(),
+      deviceKeyHash: null,     // invalidate stored secret
+      updatedAt: now,
     })
     .where(eq(devices.id, device.id))
     .returning();
+
+  // 2. Disconnect all active runtime connections for this device.
+  await app.db
+    .update(runtimeConnections)
+    .set({
+      status: "offline",
+      disconnectedAt: now,
+    })
+    .where(
+      and(
+        eq(runtimeConnections.deviceId, device.id),
+        isNull(runtimeConnections.disconnectedAt),
+      ),
+    );
+
+  // 3. Force-close any live WebSocket with a specific close code so the desktop
+  //    bridge knows it was deactivated (not a transient drop) and clears creds.
+  app.services.realtimeHub.closeRuntime(device.id, 4003, "device_deactivated");
 
   invalidateBrainProfileCache(app, userId);
   return rows[0];

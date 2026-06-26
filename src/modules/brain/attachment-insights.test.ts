@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildAttachmentInsights } from "./attachment-insights.js";
+import { buildAttachmentInsights } from "./attachment-context.js";
 import type { ResolvedAttachmentContext } from "./attachment-context.js";
 
 function buildContext(): ResolvedAttachmentContext {
