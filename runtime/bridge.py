@@ -6049,12 +6049,14 @@ class RuntimeBridge:
 
     def _should_poll_assigned_tasks(self) -> bool:
         if not self._runtime_ws_connected:
+            # WS is down — poll HTTP as fallback to pick up queued tasks
             return True
         if self._assigned_task_fetch_requested.is_set():
             return True
         if self._last_assigned_task_fetch_at <= 0:
             return True
-        return (time.monotonic() - self._last_assigned_task_fetch_at) >= self._assigned_task_poll_fallback_seconds()
+        # WS is up — tasks arrive via task.dispatch; no periodic HTTP polling needed
+        return False
 
     def _runtime_auth_ready(self) -> bool:
         runtime = STATE.snapshot().get("runtime", {})
