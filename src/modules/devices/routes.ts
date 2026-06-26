@@ -3,6 +3,7 @@ import { getRequestContext } from "../../lib/http.js";
 import { getUserAuth } from "../../lib/request-auth.js";
 import { deviceParamsSchema, registerMobileDeviceBodySchema } from "./schemas.js";
 import { deactivateUserDevice, listDeviceTaskBacklog, listUserDevices, registerMobileDevice } from "./service.js";
+import { reconcileStaleRuntimeTasks } from "../tasks/service.js";
 
 export const deviceRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (request, reply) => {
@@ -72,6 +73,14 @@ export const deviceRoutes: FastifyPluginAsync = async (app) => {
 
     const params = deviceParamsSchema.parse(request.params);
     const auth = getUserAuth(request);
-    return deactivateUserDevice(app, auth.sub, params.deviceId);
+    const result = await deactivateUserDevice(app, auth.sub, params.deviceId);
+    // Immediately reconcile stale tasks for the deactivated device so
+    // running/planning tasks are re-queued without waiting for the sweeper.
+    reconcileStaleRuntimeTasks(app, {
+      userId: auth.sub,
+      targetDeviceId: params.deviceId,
+      limit: 50,
+    }).catch(() => undefined);
+    return result;
   });
 };
