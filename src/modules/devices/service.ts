@@ -835,6 +835,20 @@ export async function deactivateUserDevice(
   //    bridge knows it was deactivated (not a transient drop) and clears creds.
   app.services.realtimeHub.closeRuntime(device.id, 4003, "device_deactivated");
 
+  // 4. Notify mobile via SSE so it refreshes device status immediately without
+  //    waiting for the next bootstrap poll.
+  await app.services.eventBus.publishVolatile({
+    topic: "device.status_changed",
+    userId,
+    deviceId: device.id,
+    payload: {
+      deviceId: device.id,
+      isActive: false,
+      isOnline: false,
+      reason: "device_deactivated",
+    },
+  });
+
   invalidateBrainProfileCache(app, userId);
   return rows[0];
 }

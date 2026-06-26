@@ -205,6 +205,18 @@ export async function markRuntimeConnected(
       updatedAt: new Date(),
     })
     .where(eq(devices.id, auth.deviceId));
+
+  // Notify mobile that the desktop is now online.
+  await app.services.eventBus.publishVolatile({
+    topic: "device.status_changed",
+    userId: auth.sub,
+    deviceId: auth.deviceId,
+    payload: {
+      deviceId: auth.deviceId,
+      isOnline: true,
+      reason: "runtime_connected",
+    },
+  });
 }
 
 export async function heartbeatRuntime(
@@ -264,6 +276,18 @@ export async function disconnectRuntime(app: FastifyInstance, auth: RuntimeAuthT
     .where(eq(runtimeConnections.id, auth.connectionId));
 
   app.services.realtimeHub.closeRuntime(auth.deviceId, 4000, "runtime_disconnect");
+
+  // Notify mobile so it refreshes device status immediately.
+  await app.services.eventBus.publishVolatile({
+    topic: "device.status_changed",
+    userId: auth.sub,
+    deviceId: auth.deviceId,
+    payload: {
+      deviceId: auth.deviceId,
+      isOnline: false,
+      reason: "runtime_disconnect",
+    },
+  });
 }
 
 export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
