@@ -13,6 +13,8 @@ import {
   asRecord,
   asString,
   backendHealthRecord,
+  backendRecord,
+  backendResultData,
   controlPlaneRecord,
   runtimeSessionConnectionRecord,
   runtimeSessionDeviceRecord,
@@ -1349,72 +1351,121 @@ export function SettingsSurface({
 
           {activeSection === 'pairing' ? (
             <div className="settings-section">
-              <ListSection title="Telefon bağlantısı">
-                <ListItem
-                  title="Bağlantı durumu"
-                  hint={isPlanRestricted ? 'Bu özellik Pro plana özeldir.' : (runtimeReady ? 'Telefon bağlandı.' : 'Bağlantıyı yenile.')}
-                  status={isPlanRestricted ? 'Plan Yetersiz' : (runtimeReady ? 'Hazır' : 'Bekliyor')}
-                  actions={
-                    <>
-                      <button type="button" onClick={() => void createPairing()} disabled={busyKey === 'pairing' || isPlanRestricted}>
-                        Yeni kod oluştur
-                      </button>
-                      <button type="button" className="button-secondary" onClick={onEnsureRegistered} disabled={isPlanRestricted}>
-                        Yenile
-                      </button>
-                    </>
-                  }
-                >
-                  <div className="settings-pairing-detail">
-                    {isPlanRestricted ? (
-                      <div className="settings-pairing-empty" style={{ padding: '2rem 1rem', textAlign: 'center', background: 'rgba(255,100,100,0.1)', color: 'var(--text-primary)', borderRadius: '8px' }}>
-                        <p style={{ marginBottom: '1rem' }}>Bu cihazdan bağlantı kurabilmek için planınızın güncellenmesi gerekiyor.</p>
-                        <p style={{ opacity: 0.8, fontSize: '0.9em' }}>Hesabınızı Elyan.com üzerinden Pro'ya yükselterek tüm özellikleri açabilirsiniz.</p>
-                      </div>
-                    ) : (
-                      <>
-                        {qrDataUrl ? <img src={qrDataUrl} alt="Telefon eşleştirme QR" /> : <div className="settings-pairing-empty">Kod hazır olduğunda burada görünecek.</div>}
-                        <div className="settings-pairing-rows">
-                          <div>
-                            <strong>Kod</strong>
-                            <span>{asString(pairing.pairingCode, 'Henüz yok')}</span>
+              {isPlanRestricted ? (
+                <ListSection title="Telefon bağlantısı">
+                  <ListItem
+                    title="Plan yetersiz"
+                    hint="Bu özellik Pro plana özeldir. Hesabını Elyan.com üzerinden yükselt."
+                    status="Kilitli"
+                  />
+                </ListSection>
+              ) : (
+                <>
+                  <ListSection title="Bağlı cihazlar">
+                    {(() => {
+                      const mobileBootstrapData = backendResultData(backendRecord(snapshot).mobileBootstrap);
+                      const allDevices = asArray(mobileBootstrapData.devices);
+                      const mobileDevices = allDevices.map(asRecord).filter((d) => asString(d.type) === 'mobile');
+                      const desktopLabel = asString(runtimeDevice.label || runtimeDevice.id);
+                      const desktopConnected = runtimeReadiness.canReceiveTasks === true && isNetworkReady;
+
+                      return (
+                        <>
+                          <ListItem
+                            title={desktopLabel || 'Bu bilgisayar'}
+                            hint="Desktop — Şu an çalışıyor"
+                            status={desktopConnected ? 'Hazır' : 'Bekliyor'}
+                          />
+                          {mobileDevices.length === 0 ? (
+                            <ListItem
+                              title="Telefon bağlı değil"
+                              hint="Elyan mobil uygulamasından giriş yaparak bu bilgisayara bağlan."
+                              status="Bağlı değil"
+                            />
+                          ) : (
+                            mobileDevices.map((d, i) => {
+                              const label = asString(d.label || d.id) || `Telefon ${i + 1}`;
+                              const runtime = asRecord(d.runtime);
+                              const isConnected = runtime.isConnected === true;
+                              const isActive = d.isActive !== false;
+                              const platform = asString(d.platform);
+                              const hint = platform ? `${platform} · ${isActive ? 'Kayıtlı' : 'Devre dışı'}` : (isActive ? 'Kayıtlı' : 'Devre dışı');
+                              return (
+                                <ListItem
+                                  key={asString(d.id) || String(i)}
+                                  title={label}
+                                  hint={hint}
+                                  status={isConnected ? 'Bağlı' : (isActive ? 'Çevrimdışı' : 'Devre dışı')}
+                                />
+                              );
+                            })
+                          )}
+                        </>
+                      );
+                    })()}
+                  </ListSection>
+                  <ListSection title="Yeni cihaz ekle">
+                    <ListItem
+                      title="QR kod ile eşleştir"
+                      hint="Telefondaki Elyan uygulamasından QR kodunu tarat."
+                      actions={
+                        <>
+                          <button type="button" onClick={() => void createPairing()} disabled={busyKey === 'pairing'}>
+                            Yeni kod oluştur
+                          </button>
+                          <button type="button" className="button-secondary" onClick={onEnsureRegistered}>
+                            Yenile
+                          </button>
+                        </>
+                      }
+                    >
+                      <div className="settings-pairing-detail">
+                        {qrDataUrl ? (
+                          <img src={qrDataUrl} alt="Telefon eşleştirme QR" />
+                        ) : (
+                          <div className="settings-pairing-empty">Kod hazır olduğunda burada görünecek.</div>
+                        )}
+                        {(asString(pairing.pairingCode) || manualEntryCode) ? (
+                          <div className="settings-pairing-rows">
+                            {asString(pairing.pairingCode) ? (
+                              <div>
+                                <strong>Kod</strong>
+                                <span>{asString(pairing.pairingCode)}</span>
+                              </div>
+                            ) : null}
+                            {manualEntryCode ? (
+                              <div>
+                                <strong>Manuel kod</strong>
+                                <span>{manualEntryCode}</span>
+                              </div>
+                            ) : null}
                           </div>
-                          <div>
-                            <strong>Manuel kod</strong>
-                            <span>{manualEntryCode || 'Henüz yok'}</span>
-                          </div>
-                          <div>
-                            <strong>Durum</strong>
-                            <span>{runtimeReady ? 'Hazır' : 'Bekliyor'}</span>
-                          </div>
-                          <div>
-                            <strong>Bu bilgisayar</strong>
-                            <span>{asString(runtimeDevice.label || runtimeDevice.id, 'Hazırlanıyor')}</span>
-                          </div>
-                        </div>
+                        ) : null}
                         <div className="settings-pairing-actions">
-                          <button
-                            type="button"
-                            className="button-secondary"
-                            onClick={() => void copyPairingValue(asString(pairing.pairingCode), 'Bağlantı kodu kopyalandı.')}
-                            disabled={!asString(pairing.pairingCode)}
-                          >
-                            Kodu kopyala
-                          </button>
-                          <button
-                            type="button"
-                            className="button-secondary"
-                            onClick={() => void copyPairingValue(manualEntryCode, 'Manuel bağlantı verisi kopyalandı.')}
-                            disabled={!manualEntryCode}
-                          >
-                            Manuel veriyi kopyala
-                          </button>
+                          {asString(pairing.pairingCode) ? (
+                            <button
+                              type="button"
+                              className="button-secondary"
+                              onClick={() => void copyPairingValue(asString(pairing.pairingCode), 'Bağlantı kodu kopyalandı.')}
+                            >
+                              Kodu kopyala
+                            </button>
+                          ) : null}
+                          {manualEntryCode ? (
+                            <button
+                              type="button"
+                              className="button-secondary"
+                              onClick={() => void copyPairingValue(manualEntryCode, 'Manuel veriyi kopyala.')}
+                            >
+                              Manuel veriyi kopyala
+                            </button>
+                          ) : null}
                         </div>
-                      </>
-                    )}
-                  </div>
-                </ListItem>
-              </ListSection>
+                      </div>
+                    </ListItem>
+                  </ListSection>
+                </>
+              )}
             </div>
           ) : null}
 
