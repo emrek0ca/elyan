@@ -5,7 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { getBillingSummary, shapePublicUsageSnapshot } from "../billing/service.js";
 import { shapeSubscriptionTruth } from "../billing/subscription-truth.js";
 import { getBrainProfile, shapePublicBrainProfile } from "../brain/service.js";
-import { listUserDevices } from "../devices/service.js";
+import { listUserDevices, pruneStaleDevices } from "../devices/service.js";
 import { getTrialQuotaPolicy } from "../quota/service.js";
 import type { UploadWorldSignalsBody } from "./schemas.js";
 import { deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "../../core/understanding/world-signal-derived.js";
@@ -222,6 +222,7 @@ export function buildWorldSignalLogContext(input: {
 }
 
 export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
+  pruneStaleDevices(app, userId).catch(() => undefined);
   const [
     userRows,
     devices,

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { devices, runtimeConnections, tasks } from "../../db/schema.js";
 import { getBaseUrlReachability } from "../../config/env.js";
@@ -851,6 +851,26 @@ export async function deactivateUserDevice(
 
   invalidateBrainProfileCache(app, userId);
   return rows[0];
+}
+
+const STALE_MOBILE_DEVICE_DAYS = 90;
+
+export async function pruneStaleDevices(app: FastifyInstance, userId: string): Promise<void> {
+  const cutoff = new Date(Date.now() - STALE_MOBILE_DEVICE_DAYS * 24 * 60 * 60 * 1000);
+  const staleRows = await app.db
+    .select({ id: devices.id })
+    .from(devices)
+    .where(
+      and(
+        eq(devices.userId, userId),
+        eq(devices.type, "mobile"),
+        eq(devices.isActive, true),
+        lt(devices.lastSeenAt, cutoff),
+      ),
+    );
+  for (const row of staleRows) {
+    await deactivateUserDevice(app, userId, row.id).catch(() => undefined);
+  }
 }
 
 export async function listDeviceTaskBacklog(
