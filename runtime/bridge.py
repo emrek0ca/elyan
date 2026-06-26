@@ -550,6 +550,7 @@ def _runtime_advertised_capabilities() -> list[str]:
             "backend.auth_avatar_delete",
             "backend.auth_delete_account",
             "backend.auth_oauth_login",
+            "backend.device_deactivate",
         }
     )
     if not _quantum_simulator_ready():
@@ -6587,6 +6588,8 @@ class RuntimeBridge:
 
     def bootstrap(self) -> dict[str, Any]:
         backend_snapshot = self._runtime_backend_snapshot()
+        if self._user_auth_ready():
+            self._sync_conversation_truth_from_backend()
         state = STATE.snapshot()
         return {
             "state": state,
@@ -10616,6 +10619,15 @@ class RuntimeBridge:
                 result = self.backend_auth_avatar_get()
             elif capability == "backend.auth_avatar_delete":
                 result = self.backend_auth_avatar_delete()
+            elif capability == "backend.device_deactivate":
+                device_id = str(payload.get("deviceId", "") or payload.get("device_id", "") or "").strip()
+                if not device_id:
+                    result = {"ok": False, "error": {"code": "MISSING_DEVICE_ID", "message": "deviceId required"}}
+                else:
+                    r = self.backend.device_deactivate(device_id)
+                    result = {"ok": r.ok, "result": r.to_dict()}
+                    if r.ok:
+                        self.backend.mobile_bootstrap()
             elif capability == "backend.mobile_bootstrap":
                 result = self.backend_mobile_bootstrap()
             elif capability == "backend.truth_refresh":
