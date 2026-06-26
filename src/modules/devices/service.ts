@@ -11,6 +11,7 @@ import {
   normalizeRuntimeCapabilities,
   summarizeRuntimeCapabilities,
 } from "../runtime/capabilities.js";
+import { reconcileStaleRuntimeTasks } from "../tasks/service.js";
 
 export const RUNTIME_CONNECTION_STALE_AFTER_MS = 300_000; // 5 minutes — relay sends heartbeats every 2-5s so this is very forgiving
 
@@ -848,6 +849,14 @@ export async function deactivateUserDevice(
       reason: "device_deactivated",
     },
   });
+
+  // 5. Immediately reconcile stale tasks for this device so running/planning
+  //    tasks are re-queued rather than sitting stuck until the sweeper fires.
+  await reconcileStaleRuntimeTasks(app, {
+    userId,
+    targetDeviceId: device.id,
+    limit: 50,
+  }).catch(() => undefined); // non-fatal
 
   invalidateBrainProfileCache(app, userId);
   return rows[0];

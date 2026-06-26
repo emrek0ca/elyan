@@ -484,7 +484,18 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         try {
           await disconnectRuntime(app, payload);
         } catch {
-          // A replaced runtime may already have invalidated this connection.
+          // A replaced runtime may already have invalidated this connection;
+          // still notify mobile so it can refresh device status.
+          await app.services.eventBus.publishVolatile({
+            topic: "device.status_changed",
+            userId: payload.sub,
+            deviceId: payload.deviceId,
+            payload: {
+              deviceId: payload.deviceId,
+              isOnline: false,
+              reason: "ws_closed",
+            },
+          }).catch(() => undefined);
         }
       });
     } catch (error) {
