@@ -6774,7 +6774,7 @@ class RuntimeBridge:
 
     def list_archived_conversations(self) -> dict[str, Any]:
         if self._user_auth_ready() and hasattr(self.backend, "chat_sessions"):
-            result = self.backend.chat_sessions(status="archived", limit=30)
+            result = self.backend.chat_sessions(status="archived", limit=20)
             self._log_backend_result("chat_sessions_archived", result)
             if result.ok and isinstance(result.data, dict):
                 self._sync_conversation_truth_from_backend()
@@ -8188,7 +8188,7 @@ class RuntimeBridge:
             if isinstance(item, dict) and str(item.get("id", "") or "").strip()
         }
 
-        sessions_result = self.backend.chat_sessions(limit=30)
+        sessions_result = self.backend.chat_sessions(limit=20)
         if not sessions_result.ok or not isinstance(sessions_result.data, dict):
             return current_state
 
