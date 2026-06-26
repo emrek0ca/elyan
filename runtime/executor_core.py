@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from runtime import state_store
+from runtime.agent_planning import build_agent_plan
 from runtime.capability_registry import capability_metadata, capability_metadata_summary
 
 try:
@@ -67,16 +68,28 @@ class ExecutorCore:
         task_id: str = "",
         conversation_id: str = "",
         summary: str = "",
+        planned_steps: list[dict[str, Any]] | None = None,
+        plan_preview: dict[str, Any] | None = None,
         execution_id: str | None = None,
     ) -> str:
         with self._lock:
             active_id = execution_id or f"exec_{uuid.uuid4().hex[:12]}"
+            normalized_steps = [dict(step) for step in (planned_steps or []) if isinstance(step, dict)]
+            if not normalized_steps and isinstance(plan_preview, dict):
+                preview_steps = plan_preview.get("steps", [])
+                if isinstance(preview_steps, list):
+                    normalized_steps = [dict(step) for step in preview_steps if isinstance(step, dict)]
+            agent_plan = build_agent_plan(normalized_steps, summary=summary)
             self._current[active_id] = {
                 "id": active_id,
                 "source": str(source or "runtime"),
                 "taskId": str(task_id or "").strip(),
                 "conversationId": str(conversation_id or "").strip(),
                 "summary": _safe_text(summary),
+                "stepCount": agent_plan.get("stepCount", 0),
+                "stepCapabilities": agent_plan.get("capabilities", []),
+                "agentRoles": agent_plan.get("agentRoles", []),
+                "agentPlan": agent_plan,
                 "stage": "intake",
                 "startedAt": _utc_now_iso(),
                 "status": "running",
@@ -86,10 +99,40 @@ class ExecutorCore:
                 "displayStage": "Bakıyor",
                 "displayAction": "Bakıyor",
                 "verificationUsed": False,
-                "executionStrategy": "balanced",
+                "executionStrategy": str(agent_plan.get("executionStrategy", "single_lane") or "single_lane"),
             }
+            if isinstance(plan_preview, dict):
+                self._current[active_id]["planPreview"] = dict(plan_preview)
             self._persist()
             return active_id
+
+    def record_agent_plan(
+        self,
+        execution_id: str,
+        *,
+        summary: str = "",
+        planned_steps: list[dict[str, Any]] | None = None,
+        plan_preview: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            current = self._current.get(execution_id)
+            if not isinstance(current, dict):
+                return
+            normalized_steps = [dict(step) for step in (planned_steps or []) if isinstance(step, dict)]
+            if not normalized_steps and isinstance(plan_preview, dict):
+                preview_steps = plan_preview.get("steps", [])
+                if isinstance(preview_steps, list):
+                    normalized_steps = [dict(step) for step in preview_steps if isinstance(step, dict)]
+            agent_plan = build_agent_plan(normalized_steps, summary=summary or str(current.get("summary", "") or ""))
+            current["summary"] = _safe_text(summary or current.get("summary", ""))
+            current["stepCount"] = agent_plan.get("stepCount", current.get("stepCount", 0))
+            current["stepCapabilities"] = agent_plan.get("capabilities", current.get("stepCapabilities", []))
+            current["agentRoles"] = agent_plan.get("agentRoles", current.get("agentRoles", []))
+            current["agentPlan"] = agent_plan
+            current["executionStrategy"] = str(agent_plan.get("executionStrategy", current.get("executionStrategy", "single_lane")) or "single_lane")
+            if isinstance(plan_preview, dict):
+                current["planPreview"] = dict(plan_preview)
+            self._persist()
 
     def record_stage(self, execution_id: str, stage: str, *, detail: str = "", status: str = "running") -> None:
         with self._lock:
@@ -181,7 +224,7 @@ class ExecutorCore:
                 display_stage = "Bakıyor"
                 display_action = "Bakıyor"
                 current["verificationUsed"] = True
-            elif any(token in detail for token in ("document_write", "spreadsheet_write", "presentation_write")):
+            elif any(token in detail for token in ("document_write", "spreadsheet_write", "presentation_write", "canvas_write")):
                 display_stage = "Hazırlıyor"
                 display_action = "Hazırlıyor"
             else:
@@ -202,6 +245,8 @@ class ExecutorCore:
         with self._lock:
             current = [dict(item) for item in self._current.values()]
             active_agent = current[0] if current else {}
+            active_plan = active_agent.get("agentPlan", {})
+            active_plan = dict(active_plan) if isinstance(active_plan, dict) else {}
             return {
                 "available": True,
                 "graphBackend": self._graph_backend,
@@ -215,7 +260,16 @@ class ExecutorCore:
                     "displayStage": str(active_agent.get("displayStage", "") or ""),
                     "displayAction": str(active_agent.get("displayAction", "") or ""),
                     "verificationUsed": bool(active_agent.get("verificationUsed", False)),
-                    "executionStrategy": str(active_agent.get("executionStrategy", "balanced") or "balanced"),
+                    "executionStrategy": str(active_plan.get("executionStrategy", active_agent.get("executionStrategy", "single_lane")) or "single_lane"),
+                    "stepCount": int(active_plan.get("stepCount", active_agent.get("stepCount", 0)) or 0),
+                    "stepCapabilities": list(active_plan.get("capabilities", active_agent.get("stepCapabilities", [])))
+                    if isinstance(active_plan.get("capabilities", active_agent.get("stepCapabilities", [])), list)
+                    else [],
+                    "agentRoles": list(active_plan.get("agentRoles", active_agent.get("agentRoles", [])))
+                    if isinstance(active_plan.get("agentRoles", active_agent.get("agentRoles", [])), list)
+                    else [],
+                    "laneCount": int(active_plan.get("laneCount", len(active_plan.get("agentRoles", active_agent.get("agentRoles", [])) or [])) or 0),
+                    "planSummary": str(active_plan.get("summary", active_agent.get("summary", "")) or ""),
                 },
                 "lastFallbackReason": self._last_fallback_reason,
                 "metrics": dict(self._metrics),
@@ -247,6 +301,7 @@ class ExecutorCore:
                 for step in steps
                 if isinstance(step, dict)
             ),
+            planned_steps=steps,
         )
         outputs: list[str] = []
         events: list[dict[str, Any]] = []
@@ -333,6 +388,58 @@ class ExecutorCore:
         mode = str(metadata.get("verificationMode", "tool_result") or "tool_result")
         if mode == "none":
             return StepVerificationResult(True)
+        result_payload = tool_result.get("result")
+        result_payload = dict(result_payload) if isinstance(result_payload, dict) else {}
+        if mode == "foreground_confirmed":
+            if bool(result_payload.get("foregroundConfirmed", False)) and str(result_payload.get("appName", "") or "").strip():
+                return StepVerificationResult(True)
+            return StepVerificationResult(False, "Uygulamanın öne geldiği doğrulanamadı.")
+        if mode == "close_confirmed":
+            if bool(result_payload.get("closedConfirmed", False)) and str(result_payload.get("appName", "") or "").strip():
+                return StepVerificationResult(True)
+            return StepVerificationResult(False, "Uygulamanın kapandığı doğrulanamadı.")
+        if mode == "browser_handoff":
+            action = str(result_payload.get("action", "") or "").strip().lower()
+            target_url = str(result_payload.get("targetUrl", "") or "").strip()
+            query = str(result_payload.get("query", "") or "").strip()
+            handoff = str(result_payload.get("handoff", "") or "").strip()
+            verified = bool(result_payload.get("handoffVerified", False))
+            if (
+                bool(result_payload.get("launched", False))
+                and verified
+                and handoff
+                and ((action == "open_url" and target_url) or (action == "search" and query) or (action == "play_youtube" and (target_url or query)))
+            ):
+                return StepVerificationResult(True)
+            return StepVerificationResult(False, "Tarayıcı handoff doğrulanamadı.")
+        if mode == "media_handoff":
+            provider = str(result_payload.get("provider", "") or "").strip()
+            handoff = str(result_payload.get("handoff", "") or "").strip()
+            query = str(result_payload.get("query", "") or "").strip()
+            verified = bool(result_payload.get("handoffVerified", False))
+            if bool(result_payload.get("launched", False)) and provider and handoff and query and verified:
+                return StepVerificationResult(True)
+            return StepVerificationResult(False, "Medya yürütmesi doğrulanamadı.")
+        if mode == "screen_analysis":
+            if (
+                bool(result_payload.get("imageCaptured", False))
+                and str(result_payload.get("analysis", "") or "").strip()
+                and str(result_payload.get("captureSource", "") or "").strip()
+            ):
+                return StepVerificationResult(True)
+            return StepVerificationResult(False, "Ekran analizi doğrulanamadı.")
+        if mode == "operator_verified":
+            verification = result_payload.get("verification")
+            verification = dict(verification) if isinstance(verification, dict) else {}
+            if bool(result_payload.get("stopped", False)):
+                return StepVerificationResult(False, str(result_payload.get("stopReason", "") or "Operator durduruldu."))
+            if bool(verification.get("ok", False)) and str(result_payload.get("status", "") or "").strip().lower() == "completed":
+                return StepVerificationResult(True)
+            return StepVerificationResult(False, str(verification.get("reason", "") or "Operator doğrulaması başarısız oldu."))
+        if mode == "operator_cancelled":
+            if bool(result_payload.get("stopped", False)) and str(result_payload.get("status", "") or "").strip().lower() in {"stopped", "idle"}:
+                return StepVerificationResult(True)
+            return StepVerificationResult(False, "Operator durdurulamadı.")
         if mode == "artifact_exists":
             explicit_output = str(args.get("outputPath", "") or args.get("output_path", "") or "").strip()
             if explicit_output and Path(explicit_output).expanduser().exists():
@@ -347,7 +454,6 @@ class ExecutorCore:
                         return StepVerificationResult(True)
             return StepVerificationResult(False, "Çıktı dosyası doğrulanamadı.")
         output = str(tool_result.get("output", "") or "").strip()
-        result_payload = tool_result.get("result")
         artifacts = tool_result.get("artifacts", [])
         if output:
             return StepVerificationResult(True)

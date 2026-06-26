@@ -6,10 +6,9 @@ import datetime as dt
 import threading
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable
-from urllib.parse import urljoin, urlparse
-
-import requests
+from urllib.parse import urlencode, urljoin, urlparse
 
 from app_config import get_app_config_value
 from runtime.capability_registry import capability_names
@@ -109,6 +108,15 @@ def _safe_error_code(value: Any, fallback: str) -> str:
     return normalized[:80]
 
 
+@lru_cache(maxsize=1)
+def _requests_module() -> Any | None:
+    try:
+        import requests as requests_module
+    except Exception:
+        return None
+    return requests_module
+
+
 def _is_uuid_value(value: Any) -> bool:
     text = str(value or "").strip()
     if not text:
@@ -129,10 +137,11 @@ def _runtime_identity_repair_error_code(value: Any) -> str:
     return "runtime_register_invalid_identity"
 
 
-def _request_exception_code(exc: requests.RequestException) -> str:
-    if isinstance(exc, requests.Timeout):
+def _request_exception_code(exc: Any) -> str:
+    requests_mod = _requests_module()
+    if requests_mod is not None and isinstance(exc, requests_mod.Timeout):
         return "network_timeout"
-    if isinstance(exc, requests.ConnectionError):
+    if requests_mod is not None and isinstance(exc, requests_mod.ConnectionError):
         return "network_unreachable"
     return "request_failed"
 
@@ -254,13 +263,23 @@ class BackendClient:
         )
         fallback = ""
         for candidate in candidates:
-            value = str(candidate or "").strip().rstrip("/")
+            value = BackendClient._canonicalize_base_url(candidate)
             if value:
                 if not fallback:
                     fallback = value
                 if not _is_loopback_base_url(value):
                     return value
         return fallback or None
+
+    @staticmethod
+    def _canonicalize_base_url(value: Any) -> str:
+        text = str(value or "").strip().rstrip("/")
+        if not text:
+            return ""
+        parsed = urlparse(text)
+        if parsed.hostname == "84.247.172.213" and (parsed.port in {None, 4000}):
+            return "https://api.elyan.dev"
+        return text
 
     @property
     def configured(self) -> bool:
@@ -273,11 +292,14 @@ class BackendClient:
         parsed = urlparse(self.base_url)
         return _is_loopback(parsed.hostname)
 
-    def _session_for_thread(self) -> requests.Session:
+    def _session_for_thread(self) -> Any | None:
+        requests_mod = _requests_module()
+        if requests_mod is None:
+            return None
         session = getattr(self._session_local, "session", None)
-        if isinstance(session, requests.Session):
+        if isinstance(session, requests_mod.Session):
             return session
-        session = requests.Session()
+        session = requests_mod.Session()
         self._session_local.session = session
         return session
 
@@ -318,23 +340,42 @@ class BackendClient:
                 data=None,
                 error="backend_unconfigured",
             )
+        requests_mod = _requests_module()
+        if requests_mod is None:
+            return BackendResult(
+                ok=False,
+                request_id=request_id,
+                status_code=None,
+                data=None,
+                error="requests_unavailable",
+            )
 
         url = urljoin(self.base_url + "/", path.lstrip("/"))
         request_headers = {
             "Accept": "application/json",
             "X-Request-Id": request_id,
+            "X-Elyan-Client-Capabilities": "blocks_v1",
         }
         if headers:
             request_headers.update(headers)
         try:
-            response = self._session_for_thread().request(
+            session = self._session_for_thread()
+            if session is None:
+                return BackendResult(
+                    ok=False,
+                    request_id=request_id,
+                    status_code=None,
+                    data=None,
+                    error="requests_unavailable",
+                )
+            response = session.request(
                 method,
                 url,
                 json=json_body,
                 headers=request_headers,
                 timeout=(self.connect_timeout, self.read_timeout),
             )
-        except requests.RequestException as exc:
+        except requests_mod.RequestException as exc:
             return BackendResult(
                 ok=False,
                 request_id=request_id,
@@ -398,6 +439,7 @@ class BackendClient:
         billing_patch: dict[str, Any] = {}
         account_patch: dict[str, Any] = {}
         if subscription:
+            brain_profile = _map_from(subscription.get("brainProfile"))
             normalized = {
                 "planCode": _first_nonempty(subscription.get("planCode")),
                 "status": _first_nonempty(subscription.get("status")),
@@ -405,6 +447,25 @@ class BackendClient:
                 "taskLimitMonthly": int(subscription.get("taskLimitMonthly") or 0),
                 "periodEndsAt": _first_nonempty(subscription.get("periodEndsAt")),
             }
+            if brain_profile:
+                normalized["brainProfile"] = brain_profile
+            for key in (
+                "billingProvider",
+                "subscriptionSource",
+                "manageSubscriptionHint",
+                "creditBalance",
+                "creditGrantedThisPeriod",
+                "creditPeriodEndsAt",
+                "creditStatus",
+                "trialEndsAt",
+            ):
+                value = subscription.get(key)
+                if isinstance(value, dict):
+                    normalized[key] = dict(value)
+                else:
+                    text = _first_nonempty(value)
+                    if text:
+                        normalized[key] = text
             billing_patch.update(normalized)
             account_patch["subscription"] = normalized
         usage = _map_from(payload.get("usage"))
@@ -543,6 +604,10 @@ class BackendClient:
             runtime_patch["deviceSecret"] = device_secret
         if connection_id:
             runtime_patch["connectionId"] = connection_id
+        if "targetStatus" in payload:
+            runtime_patch["targetStatus"] = _first_nonempty(payload.get("targetStatus"))
+        if "targetErrorCode" in payload:
+            runtime_patch["targetErrorCode"] = _first_nonempty(payload.get("targetErrorCode"))
         if "currentTaskId" in payload:
             runtime_patch["currentTaskId"] = _first_nonempty(payload.get("currentTaskId"))
         if "ready" in payload:
@@ -582,6 +647,12 @@ class BackendClient:
             qr_payload.get("pairing_code"),
             qr_payload.get("code"),
         )
+        manual_entry_code = _first_nonempty(
+            payload.get("manualEntryCode"),
+            payload.get("manual_entry_code"),
+            qr_payload.get("manualEntryCode"),
+            qr_payload.get("manual_entry_code"),
+        )
         qr_text = _first_nonempty(payload.get("qrText"))
         qr_data_url = _first_nonempty(payload.get("qrDataUrl"))
         expires_at = _first_nonempty(payload.get("expiresAt"))
@@ -594,6 +665,8 @@ class BackendClient:
             pairing_patch["pairingToken"] = pairing_token
         if pairing_code:
             pairing_patch["pairingCode"] = pairing_code
+        if manual_entry_code:
+            pairing_patch["manualEntryCode"] = manual_entry_code
         if not qr_text and session_id and pairing_code:
             qr_text = _pairing_qr_text(session_id, pairing_code)
         if qr_text:
@@ -640,6 +713,7 @@ class BackendClient:
                     "desktopDeviceId": "",
                     "pairingToken": "",
                     "pairingCode": "",
+                    "manualEntryCode": "",
                     "qrText": "",
                     "qrDataUrl": "",
                     "expiresAt": "",
@@ -692,6 +766,7 @@ class BackendClient:
                     "desktopDeviceId": "",
                     "pairingToken": "",
                     "pairingCode": "",
+                    "manualEntryCode": "",
                     "qrText": "",
                     "qrDataUrl": "",
                     "expiresAt": "",
@@ -717,6 +792,10 @@ class BackendClient:
                     "limits": {},
                     "limitBehavior": "fail_closed",
                     "features": [],
+                },
+                "conversation": {
+                    "activeId": "",
+                    "items": [],
                 },
                 "controlPlane": {
                     "authMe": None,
@@ -826,6 +905,15 @@ class BackendClient:
                 data=None,
                 error="backend_unconfigured",
             )
+        requests_mod = _requests_module()
+        if requests_mod is None:
+            return BackendResult(
+                ok=False,
+                request_id=request_id,
+                status_code=None,
+                data=None,
+                error="requests_unavailable",
+            )
         url = urljoin(self.base_url + "/", path.lstrip("/"))
         headers: dict[str, str] = {
             "Accept": "*/*",
@@ -834,13 +922,22 @@ class BackendClient:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         try:
-            response = self._session_for_thread().request(
+            session = self._session_for_thread()
+            if session is None:
+                return BackendResult(
+                    ok=False,
+                    request_id=request_id,
+                    status_code=None,
+                    data=None,
+                    error="requests_unavailable",
+                )
+            response = session.request(
                 method,
                 url,
                 headers=headers,
                 timeout=(self.connect_timeout, self.read_timeout),
             )
-        except requests.RequestException as exc:
+        except requests_mod.RequestException as exc:
             return BackendResult(
                 ok=False,
                 request_id=request_id,
@@ -902,6 +999,41 @@ class BackendClient:
             self._apply_user_truth(result.data, include_tokens=True)
         return result
 
+    def auth_oauth_login(
+        self,
+        provider: str,
+        id_token: str,
+        *,
+        email: str | None = None,
+        display_name: str | None = None,
+        authorization_code: str | None = None,
+    ) -> BackendResult:
+        normalized_provider = str(provider or "").strip().lower()
+        if normalized_provider not in {"google", "apple"}:
+            return BackendResult(
+                ok=False,
+                request_id=_request_id(),
+                status_code=None,
+                data=None,
+                error="unsupported_auth_provider",
+            )
+        payload: dict[str, Any] = {
+            "idToken": str(id_token or "").strip(),
+        }
+        normalized_email = _first_nonempty(email)
+        normalized_display_name = _first_nonempty(display_name)
+        normalized_authorization_code = _first_nonempty(authorization_code)
+        if normalized_email:
+            payload["email"] = normalized_email
+        if normalized_display_name:
+            payload["displayName"] = normalized_display_name
+        if normalized_authorization_code:
+            payload["authorizationCode"] = normalized_authorization_code
+        result = self._request("POST", f"/v1/auth/oauth/{normalized_provider}", payload)
+        if result.ok and isinstance(result.data, dict):
+            self._apply_user_truth(result.data, include_tokens=True)
+        return result
+
     def runtime_register_identity_error(self) -> dict[str, str] | None:
         state = state_store.snapshot()
         pairing = _map_from(state.get("pairing"))
@@ -954,6 +1086,7 @@ class BackendClient:
                     "desktopDeviceId": "",
                     "pairingToken": "",
                     "pairingCode": "",
+                    "manualEntryCode": "",
                     "qrText": "",
                     "expiresAt": "",
                     "lastSessionStatus": "",
@@ -969,10 +1102,16 @@ class BackendClient:
         email: str,
         password: str,
         display_name: str | None = None,
+        legal_acceptance: dict[str, Any] | None = None,
     ) -> BackendResult:
         payload: dict[str, Any] = {"email": email, "password": password}
         if display_name:
             payload["displayName"] = display_name
+        if isinstance(legal_acceptance, dict):
+            payload["legalAcceptance"] = {
+                "termsAccepted": legal_acceptance.get("termsAccepted") is True,
+                "privacyAccepted": legal_acceptance.get("privacyAccepted") is True,
+            }
         result = self._request("POST", "/v1/auth/register", payload)
         if result.ok and isinstance(result.data, dict):
             self._apply_user_truth(result.data, include_tokens=True)
@@ -1050,13 +1189,31 @@ class BackendClient:
             headers["Authorization"] = f"Bearer {token}"
         url = urljoin(self.base_url + "/", "/v1/auth/avatar".lstrip("/"))
         try:
-            response = self._session_for_thread().request(
+            requests_mod = _requests_module()
+            if requests_mod is None:
+                return BackendResult(
+                    ok=False,
+                    request_id=request_id,
+                    status_code=None,
+                    data=None,
+                    error="requests_unavailable",
+                )
+            session = self._session_for_thread()
+            if session is None:
+                return BackendResult(
+                    ok=False,
+                    request_id=request_id,
+                    status_code=None,
+                    data=None,
+                    error="requests_unavailable",
+                )
+            response = session.request(
                 "GET",
                 url,
                 headers=headers,
                 timeout=(self.connect_timeout, self.read_timeout),
             )
-        except requests.RequestException as exc:
+        except requests_mod.RequestException as exc:
             return BackendResult(
                 ok=False,
                 request_id=request_id,
@@ -1251,6 +1408,83 @@ class BackendClient:
             state_store.update_state({"controlPlane": {"brainProfile": None}})
         return result
 
+    def chat_messages(self, payload: dict[str, Any]) -> BackendResult:
+        return self._authorized_request(
+            "POST",
+            "/v1/chat/messages",
+            dict(payload),
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def chat_sessions(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> BackendResult:
+        query: dict[str, Any] = {"limit": max(1, min(int(limit or 100), 100))}
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status:
+            query["status"] = normalized_status
+        path = "/v1/chat/sessions"
+        if query:
+            path = f"{path}?{urlencode(query)}"
+        return self._authorized_request(
+            "GET",
+            path,
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def chat_session_detail(self, session_id: str) -> BackendResult:
+        return self._authorized_request(
+            "GET",
+            f"/v1/chat/sessions/{session_id}",
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def chat_session_create(self, payload: dict[str, Any]) -> BackendResult:
+        return self._authorized_request(
+            "POST",
+            "/v1/chat/sessions",
+            dict(payload),
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def chat_session_update(self, session_id: str, payload: dict[str, Any]) -> BackendResult:
+        return self._authorized_request(
+            "PATCH",
+            f"/v1/chat/sessions/{session_id}",
+            dict(payload),
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def chat_session_delete(self, session_id: str) -> BackendResult:
+        return self._authorized_request(
+            "DELETE",
+            f"/v1/chat/sessions/{session_id}",
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def chat_sessions_clear(self, before: dt.datetime | None = None) -> BackendResult:
+        query: dict[str, Any] = {}
+        if before is not None:
+            query["before"] = before.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat()
+        path = "/v1/chat/sessions"
+        if query:
+            path = f"{path}?{urlencode(query)}"
+        return self._authorized_request(
+            "DELETE",
+            path,
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
     def brain_retrieval_search(self, payload: dict[str, Any]) -> BackendResult:
         return self._authorized_request(
             "POST",
@@ -1334,7 +1568,7 @@ class BackendClient:
                     "ready": False,
                     "lifecycleState": "offline",
                     "websocketConnected": False,
-                    "lastErrorCode": _first_nonempty(result.error),
+                    "lastErrorCode": _safe_error_code(result.error, "runtime_register_failed"),
                     "xRequestId": result.x_request_id or "",
                 }
             )
@@ -1436,6 +1670,7 @@ class BackendClient:
             readiness = _map_from(result.data.get("readiness"))
             connection = _map_from(result.data.get("connection"))
             target_status = _first_nonempty(readiness.get("targetStatus")).lower()
+            target_error_code = _first_nonempty(readiness.get("targetErrorCode"))
             can_receive_tasks = readiness.get("canReceiveTasks") is True
             connected = _first_nonempty(connection.get("status")).lower() == "online"
             realtime_ready = readiness.get("realtimeReady")
@@ -1451,6 +1686,8 @@ class BackendClient:
                     "currentTaskId": current_task_id,
                     "ready": realtime_ready,
                     "lifecycleState": "ready" if realtime_ready else "reconnecting",
+                    "targetStatus": target_status,
+                    "targetErrorCode": target_error_code,
                     "websocketConnected": connected,
                     "capabilities": _payload_capabilities(result.data) or self._advertised_capabilities(),
                     "capabilityStates": _payload_capability_states(result.data),

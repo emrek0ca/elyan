@@ -105,6 +105,46 @@ def test_runtime_unauthorized_clears_runtime_without_user_session(
     assert state["account"]["refreshToken"] == "refresh-token"
 
 
+def test_auth_register_sends_required_legal_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    client = BackendClient("http://backend.example")
+    captured: dict[str, Any] = {}
+
+    def fake_request(method: str, path: str, json_body: dict[str, Any] | None = None, **_kwargs: Any) -> BackendResult:
+        captured["method"] = method
+        captured["path"] = path
+        captured["json"] = json_body
+        return BackendResult(
+            ok=True,
+            request_id="req_auth_register",
+            status_code=200,
+            data={
+                "user": {"id": "user-1", "email": "user@example.com", "displayName": "User"},
+                "tokens": {"accessToken": "access-token", "refreshToken": "refresh-token"},
+            },
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    result = client.auth_register(
+        "user@example.com",
+        "secret1234",
+        "User",
+        {"termsAccepted": True, "privacyAccepted": True},
+    )
+
+    assert result.ok is True
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/v1/auth/register"
+    assert captured["json"]["legalAcceptance"] == {
+        "termsAccepted": True,
+        "privacyAccepted": True,
+    }
+
+
 def test_request_connection_errors_are_normalized(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -159,7 +199,7 @@ def test_backend_client_prefers_non_loopback_backend_url_when_available(
 
     client = BackendClient(None)
 
-    assert client.base_url == "http://84.247.172.213:4000"
+    assert client.base_url == "https://api.elyan.dev"
 
 
 def test_backend_client_keeps_loopback_url_when_no_remote_alternative_exists(
@@ -177,6 +217,21 @@ def test_backend_client_keeps_loopback_url_when_no_remote_alternative_exists(
     client = BackendClient(None)
 
     assert client.base_url == "http://127.0.0.1:4000"
+
+
+def test_backend_client_migrates_legacy_public_ip_to_public_api(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "runtime.backend_client.get_app_config_value",
+        lambda _key, default=None: default,
+    )
+
+    client = BackendClient("http://84.247.172.213:4000")
+
+    assert client.base_url == "https://api.elyan.dev"
 
 
 def test_pairing_poll_sends_pairing_token_and_stores_runtime_auth(
@@ -1049,6 +1104,160 @@ def test_brain_profile_truth_is_cached_into_control_plane_state(
     assert result.ok is True
     state = state_store.snapshot()
     assert state["controlPlane"]["brainProfile"]["chat"]["serverBrainName"] == "Elyan"
+
+
+def test_subscription_truth_preserves_brain_profile_and_plan_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    client = BackendClient("http://backend.example")
+
+    client._apply_subscription_truth(
+        {
+            "subscription": {
+                "planCode": "pro",
+                "status": "active",
+                "aiCreditsMonthly": 2500,
+                "taskLimitMonthly": 250,
+                "periodEndsAt": "2026-07-01T00:00:00Z",
+                "brainProfile": {
+                    "chat": {
+                        "reasoningMultiplier": 5,
+                        "tier": "premium",
+                    }
+                },
+                "billingProvider": "apple_store",
+                "subscriptionSource": "store",
+            }
+        }
+    )
+
+    state = state_store.snapshot()
+    assert state["billing"]["planCode"] == "pro"
+    assert state["billing"]["status"] == "active"
+    assert state["billing"]["brainProfile"]["chat"]["reasoningMultiplier"] == 5
+    assert state["account"]["subscription"]["billingProvider"] == "apple_store"
+    assert state["account"]["subscription"]["subscriptionSource"] == "store"
+
+
+def test_auth_oauth_login_posts_to_provider_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    client = BackendClient("http://backend.example")
+    captured: dict[str, Any] = {}
+
+    def fake_request(
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        request_id: str | None = None,
+    ) -> BackendResult:
+        captured["method"] = method
+        captured["path"] = path
+        captured["json_body"] = json_body
+        captured["request_id"] = request_id
+        return BackendResult(
+            ok=True,
+            request_id=request_id or "req_oauth",
+            status_code=200,
+            data={
+                "user": {"email": "user@example.com", "displayName": "Emre"},
+                "subscription": {
+                    "planCode": "solo",
+                    "status": "active",
+                    "aiCreditsMonthly": 1000,
+                    "taskLimitMonthly": 100,
+                    "periodEndsAt": "2026-07-01T00:00:00Z",
+                    "brainProfile": {"chat": {"tier": "standard"}},
+                },
+                "tokens": {"accessToken": "user-token", "refreshToken": "refresh-token"},
+            },
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    result = client.auth_oauth_login(
+        "google",
+        "google-id-token",
+        email="user@example.com",
+        display_name="Emre",
+        authorization_code="auth-code",
+    )
+
+    assert result.ok is True
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/v1/auth/oauth/google"
+    assert captured["json_body"] == {
+        "idToken": "google-id-token",
+        "email": "user@example.com",
+        "displayName": "Emre",
+        "authorizationCode": "auth-code",
+    }
+    state = state_store.snapshot()
+    assert state["account"]["accessToken"] == "user-token"
+    assert state["account"]["subscription"]["planCode"] == "solo"
+
+
+def test_chat_messages_uses_user_auth_surface(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    client = BackendClient("http://backend.example")
+    captured: dict[str, Any] = {}
+
+    def fake_authorized_request(
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        *,
+        token_kind: str = "user",
+        refresh_on_401: bool = False,
+    ) -> BackendResult:
+        captured["method"] = method
+        captured["path"] = path
+        captured["json_body"] = json_body
+        captured["token_kind"] = token_kind
+        captured["refresh_on_401"] = refresh_on_401
+        return BackendResult(
+            ok=True,
+            request_id="req_chat",
+            status_code=200,
+            data={
+                "assistantMessage": {"role": "assistant", "content": "Merhaba"},
+                "brain": {"serverBrainReady": True, "provider": "server_brain"},
+            },
+        )
+
+    monkeypatch.setattr(client, "_authorized_request", fake_authorized_request)
+
+    result = client.chat_messages(
+        {
+            "title": "Selam",
+            "content": "Selam",
+            "source": "desktop",
+            "requestedCapabilities": [],
+        }
+    )
+
+    assert result.ok is True
+    assert captured == {
+        "method": "POST",
+        "path": "/v1/chat/messages",
+        "json_body": {
+            "title": "Selam",
+            "content": "Selam",
+            "source": "desktop",
+            "requestedCapabilities": [],
+        },
+        "token_kind": "user",
+        "refresh_on_401": True,
+    }
 
 
 def test_brain_retrieval_search_uses_user_auth_surface(

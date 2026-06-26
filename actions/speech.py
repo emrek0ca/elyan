@@ -10,7 +10,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from actions._read_only_common import ensure_allowed_path, workspace_root
+from actions._read_only_common import ensure_allowed_path, is_explicit_path_value, workspace_root
 from runtime import state_store
 from runtime.capability_registry import SafeCapabilityError
 
@@ -33,6 +33,18 @@ def _capture_dir() -> Path:
 
 def _workspace_root() -> Path:
     return workspace_root()
+
+
+def _config_root() -> Path:
+    return state_store.CONFIG_DIR.resolve()
+
+
+def _is_under_config_root(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(_config_root())
+        return True
+    except Exception:
+        return False
 
 
 def _sounddevice_module() -> Any:
@@ -289,15 +301,32 @@ def _session_audio_path(session_id: str) -> Path:
 def _resolve_audio_path(audio_path: str, session_id: str) -> Path:
     if str(session_id or "").strip():
         return _session_audio_path(session_id)
-    return ensure_allowed_path(
-        audio_path,
-        allowed_suffixes=_AUDIO_SUFFIXES,
-        root_resolver=_workspace_root,
-    )
+    try:
+        return ensure_allowed_path(
+            audio_path,
+            allowed_suffixes=_AUDIO_SUFFIXES,
+            root_resolver=_workspace_root,
+        )
+    except Exception as exc:
+        if str(getattr(exc, "code", "") or "") != "ACCESS_DENIED":
+            raise
+        if not is_explicit_path_value(audio_path):
+            raise
+        candidate = Path(str(audio_path or "").strip()).expanduser().resolve()
+        if not candidate.exists() or not candidate.is_file():
+            raise SafeCapabilityError("FILE_NOT_FOUND", "İstenen dosya bulunamadı.") from exc
+        if candidate.suffix.lower() not in _AUDIO_SUFFIXES:
+            raise SafeCapabilityError("UNSUPPORTED_FORMAT", "Bu dosya türü bu özellik için desteklenmiyor.") from exc
+        if not _is_under_config_root(candidate):
+            raise SafeCapabilityError("ACCESS_DENIED", "Dosya yalnızca seçilmiş hedef veya izinli çalışma alanı içinden okunabilir.") from exc
+        return candidate
 
 
 def _transcribe_audio(path: Path, language_hint: str) -> tuple[str, str, int, list[dict[str, Any]]]:
-    model = _whisper_model()
+    try:
+        model = _whisper_model()
+    except ModuleNotFoundError as exc:
+        raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "Bu özellik bu kurulumda hazır değil.") from exc
     segments, info = model.transcribe(
         str(path),
         language=(str(language_hint or "").strip() or None),
@@ -333,25 +362,43 @@ def speech_to_text(
     _selectedPaths: list[str] | None = None,
 ) -> dict[str, Any]:
     del task_id
+    if not _stt_dependencies_available():
+        _set_last_error("DEPENDENCY_UNAVAILABLE")
+        raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "Bu özellik bu kurulumda hazır değil.")
     if str(session_id or "").strip():
         resolved = _resolve_audio_path(audio_path, session_id)
     else:
-        resolved = ensure_allowed_path(
-            audio_path,
-            allowed_suffixes=_AUDIO_SUFFIXES,
-            selected_paths=_selectedPaths,
-            root_resolver=_workspace_root,
-        )
+        try:
+            resolved = ensure_allowed_path(
+                audio_path,
+                allowed_suffixes=_AUDIO_SUFFIXES,
+                selected_paths=_selectedPaths,
+                root_resolver=_workspace_root,
+            )
+        except Exception as exc:
+            if str(getattr(exc, "code", "") or "") != "ACCESS_DENIED" or not is_explicit_path_value(audio_path):
+                raise
+            candidate = Path(str(audio_path or "").strip()).expanduser().resolve()
+            if not candidate.exists() or not candidate.is_file():
+                raise SafeCapabilityError("FILE_NOT_FOUND", "İstenen dosya bulunamadı.") from exc
+            if candidate.suffix.lower() not in _AUDIO_SUFFIXES:
+                raise SafeCapabilityError("UNSUPPORTED_FORMAT", "Bu dosya türü bu özellik için desteklenmiyor.") from exc
+            if not _is_under_config_root(candidate):
+                raise SafeCapabilityError("ACCESS_DENIED", "Dosya yalnızca seçilmiş hedef veya izinli çalışma alanı içinden okunabilir.") from exc
+            resolved = candidate
     try:
         transcript, detected_language, duration_ms, segments = _transcribe_audio(
             resolved,
             str(language_hint or _DEFAULT_LANGUAGE).strip() or _DEFAULT_LANGUAGE,
         )
-    except SafeCapabilityError as exc:
-        _set_last_error(exc.code)
-        raise
-    except Exception:
-        _set_last_error("TRANSCRIPTION_FAILED")
+    except Exception as exc:
+        code = str(getattr(exc, "code", "") or "").strip()
+        if code:
+            _set_last_error(code)
+        elif isinstance(exc, ModuleNotFoundError):
+            _set_last_error("DEPENDENCY_UNAVAILABLE")
+        else:
+            _set_last_error("TRANSCRIPTION_FAILED")
         raise
     _set_last_error("")
     return {

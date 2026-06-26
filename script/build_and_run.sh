@@ -4,7 +4,7 @@ set -euo pipefail
 MODE="${1:-run}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ELECTRON_DIR="$ROOT_DIR/electron"
+APP_DIR="$ROOT_DIR"
 APP_NAME="Elyan"
 PYTHON_EXECUTABLE="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
 
@@ -42,12 +42,12 @@ PY
 }
 
 ensure_electron_ready() {
-  if [ ! -d "$ELECTRON_DIR" ]; then
-    echo "Electron desktop directory not found: $ELECTRON_DIR" >&2
+  if [ ! -f "$APP_DIR/package.json" ]; then
+    echo "Electron desktop root package.json not found: $APP_DIR/package.json" >&2
     exit 2
   fi
-  if [ ! -d "$ELECTRON_DIR/node_modules" ]; then
-    echo "Electron dependencies missing. Run: cd $ELECTRON_DIR && npm install" >&2
+  if [ ! -d "$APP_DIR/node_modules" ]; then
+    echo "Electron dependencies missing. Run: cd $APP_DIR && npm install" >&2
     exit 2
   fi
 }
@@ -60,7 +60,7 @@ kill_existing() {
 run_app() {
   set_runtime_env
   ensure_electron_ready
-  (cd "$ELECTRON_DIR" && npm run dev)
+  (cd "$APP_DIR" && npm run dev)
 }
 
 debug_app() {
@@ -68,7 +68,7 @@ debug_app() {
   ensure_electron_ready
   export ELECTRON_ENABLE_LOGGING=1
   export ELECTRON_ENABLE_STACK_DUMPING=1
-  (cd "$ELECTRON_DIR" && npm run dev)
+  (cd "$APP_DIR" && npm run dev)
 }
 
 stream_logs() {
@@ -83,7 +83,7 @@ verify_app() {
   set_runtime_env
   ensure_electron_ready
   (
-    cd "$ELECTRON_DIR"
+    cd "$APP_DIR"
     npm run typecheck
     npm run test
     npm run build

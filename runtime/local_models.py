@@ -11,7 +11,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import requests
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _requests_module() -> Any | None:
+    try:
+        import requests as requests_module
+    except Exception:
+        return None
+    return requests_module
 
 
 def _utc_now_iso() -> str:
@@ -24,20 +33,39 @@ def _elapsed_ms(started_at: float) -> int:
     return max(0, int((time.perf_counter() - started_at) * 1000))
 
 
-def _request_error_code(exc: requests.RequestException) -> str:
-    if isinstance(exc, requests.Timeout):
+def _request_error_code(exc: Any) -> str:
+    requests_mod = _requests_module()
+    if requests_mod is not None and isinstance(exc, requests_mod.Timeout):
         return "request_timeout"
-    if isinstance(exc, requests.ConnectionError):
+    if requests_mod is not None and isinstance(exc, requests_mod.ConnectionError):
         return "provider_unreachable"
     return "provider_unreachable"
 
 
-def _json_response(response: requests.Response) -> dict[str, Any] | None:
+def _json_response(response: Any) -> dict[str, Any] | None:
     try:
         payload = response.json() if response.text else {}
     except ValueError:
         return None
     return payload if isinstance(payload, dict) else {}
+
+
+def _normalize_model_name(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def _extract_model_names(payload: dict[str, Any]) -> list[str]:
+    models = payload.get("models", [])
+    if not isinstance(models, list):
+        return []
+    names: list[str] = []
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "") or item.get("model", "") or "").strip()
+        if name:
+            names.append(name)
+    return names
 
 
 def _base_runtime_status(*, provider_id: str, base_url: str, default_model: str) -> dict[str, Any]:
@@ -157,9 +185,20 @@ class OllamaClient:
 
     def _tags_probe(self, timeout: float = 2.5) -> dict[str, Any]:
         started_at = time.perf_counter()
+        requests_mod = _requests_module()
+        if requests_mod is None:
+            return {
+                "ok": False,
+                "reachable": False,
+                "available": False,
+                "latencyMs": _elapsed_ms(started_at),
+                "lastCheckedAt": _utc_now_iso(),
+                "errorCode": "requests_unavailable",
+                "models": [],
+            }
         try:
-            response = requests.get(f"{self.base_url}/api/tags", timeout=timeout)
-        except requests.RequestException as exc:
+            response = requests_mod.get(f"{self.base_url}/api/tags", timeout=timeout)
+        except requests_mod.RequestException as exc:
             return {
                 "ok": False,
                 "reachable": False,
@@ -265,13 +304,25 @@ class OllamaClient:
         model_name = (model or self.default_model).strip()
         if not model_name:
             return {"ok": False, "error": "model_required"}
+        requests_mod = _requests_module()
+        if requests_mod is None:
+            return {"ok": False, "error": "requests_unavailable"}
+        probe = self._tags_probe(timeout=5)
+        if probe.get("ok", False):
+            available_models = _extract_model_names(probe)
+            if available_models:
+                available_lookup = {_normalize_model_name(name): name for name in available_models}
+                selected_model = available_lookup.get(_normalize_model_name(model_name))
+                if not selected_model:
+                    selected_model = available_models[0]
+                model_name = selected_model or model_name
         try:
-            response = requests.post(
+            response = requests_mod.post(
                 f"{self.base_url}/api/chat",
                 json={"model": model_name, "messages": messages, "stream": False},
                 timeout=60,
             )
-        except requests.RequestException as exc:
+        except requests_mod.RequestException as exc:
             return {"ok": False, "error": _request_error_code(exc)}
         if not response.ok:
             return {"ok": False, "error": "provider_unreachable"}
@@ -280,7 +331,7 @@ class OllamaClient:
             return {"ok": False, "error": "invalid_response"}
         message = payload.get("message", {}) if isinstance(payload, dict) else {}
         content = str(message.get("content", "") or "").strip()
-        return {"ok": True, "content": content, "raw": payload}
+        return {"ok": True, "content": content, "model": model_name, "raw": payload}
 
     def jobs(self) -> list[dict[str, Any]]:
         return self._jobs.list()
@@ -323,9 +374,20 @@ class OpenAICompatibleLocalClient:
 
     def _models_probe(self, timeout: float = 2.5) -> dict[str, Any]:
         started_at = time.perf_counter()
+        requests_mod = _requests_module()
+        if requests_mod is None:
+            return {
+                "ok": False,
+                "available": False,
+                "reachable": False,
+                "latencyMs": _elapsed_ms(started_at),
+                "lastCheckedAt": _utc_now_iso(),
+                "errorCode": "requests_unavailable",
+                "models": [],
+            }
         try:
-            response = requests.get(self._models_url(), headers=self._headers(), timeout=timeout)
-        except requests.RequestException as exc:
+            response = requests_mod.get(self._models_url(), headers=self._headers(), timeout=timeout)
+        except requests_mod.RequestException as exc:
             return {
                 "ok": False,
                 "available": False,
@@ -405,8 +467,11 @@ class OpenAICompatibleLocalClient:
         model_name = (model or self.default_model).strip()
         if not model_name:
             return {"ok": False, "error": "model_required"}
+        requests_mod = _requests_module()
+        if requests_mod is None:
+            return {"ok": False, "error": "requests_unavailable"}
         try:
-            response = requests.post(
+            response = requests_mod.post(
                 self._chat_url(),
                 headers=self._headers(),
                 json={
@@ -416,7 +481,7 @@ class OpenAICompatibleLocalClient:
                 },
                 timeout=60,
             )
-        except requests.RequestException as exc:
+        except requests_mod.RequestException as exc:
             return {"ok": False, "error": _request_error_code(exc)}
         if not response.ok:
             return {"ok": False, "error": "provider_unreachable"}

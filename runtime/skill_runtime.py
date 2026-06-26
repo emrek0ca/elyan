@@ -4,11 +4,13 @@ import copy
 import json
 import re
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 from runtime import mcp_runtime, state_store
 from runtime.capability_registry import SafeCapabilityError, capability_dependency_status
+from runtime.skill_catalog import builtin_skill_manifests as _catalog_builtin_skill_manifests
 
 
 _LOCK = threading.RLock()
@@ -58,6 +60,27 @@ def _string(value: Any, *, limit: int = 240) -> str:
     return " ".join(str(value or "").split()).strip()[:limit]
 
 
+def _fold_text(value: Any) -> str:
+    text = _string(value, limit=500)
+    if not text:
+        return ""
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").lower()
+
+
+def _tokenize(value: Any) -> list[str]:
+    folded = _fold_text(value)
+    if not folded:
+        return []
+    return [token for token in re.findall(r"[a-z0-9]+", folded) if len(token) > 1]
+
+
+def _unique_tokens(*values: Any) -> list[str]:
+    tokens: set[str] = set()
+    for value in values:
+        tokens.update(_tokenize(value))
+    return sorted(tokens)
+
+
 def _slug(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9._-]+", "-", _string(value, limit=120).lower())
     normalized = normalized.strip("-")
@@ -65,245 +88,7 @@ def _slug(value: str) -> str:
 
 
 def _builtin_skill_manifests() -> list[dict[str, Any]]:
-    return [
-        {
-            "id": "document.summary",
-            "name": "Document Summary",
-            "description": "Belgeyi kısa özet olarak çıkarır.",
-            "enabled": True,
-            "category": "document",
-            "requiresConfirmation": False,
-            "parameters": ["path"],
-            "requiredParameters": ["path"],
-            "steps": [
-                {
-                    "capability": "document_read",
-                    "description": "Belge özeti",
-                    "args": {"mode": "summary"},
-                    "argsFromPayload": {"path": "path"},
-                }
-            ],
-        },
-        {
-            "id": "document.bullets",
-            "name": "Document Bullets",
-            "description": "Belgeyi maddeler halinde çıkarır.",
-            "enabled": True,
-            "category": "document",
-            "requiresConfirmation": False,
-            "parameters": ["path"],
-            "requiredParameters": ["path"],
-            "steps": [
-                {
-                    "capability": "document_read",
-                    "description": "Belge maddeleri",
-                    "args": {"mode": "bullets"},
-                    "argsFromPayload": {"path": "path"},
-                }
-            ],
-        },
-        {
-            "id": "research.brief",
-            "name": "Research Brief",
-            "description": "Yerel bağlam ve çalışma alanından kısa, kaynaklı araştırma özeti üretir.",
-            "enabled": True,
-            "category": "research",
-            "requiresConfirmation": False,
-            "parameters": ["query", "sources", "limit", "conversationId"],
-            "requiredParameters": ["query"],
-            "steps": [
-                {
-                    "capability": "retrieve_context",
-                    "description": "Yerel bağlamı topla",
-                    "argsFromPayload": {
-                        "query": "query",
-                        "sources": "sources",
-                        "limit": "limit",
-                        "conversationId": "conversationId",
-                    },
-                }
-            ],
-        },
-        {
-            "id": "source.verify",
-            "name": "Source Verify",
-            "description": "Soru için kısa kaynak kontrolü yapar.",
-            "enabled": True,
-            "category": "research",
-            "requiresConfirmation": False,
-            "parameters": ["query", "sources", "limit", "conversationId"],
-            "requiredParameters": ["query"],
-            "steps": [
-                {
-                    "capability": "retrieve_context",
-                    "description": "Kaynak kontrolü",
-                    "args": {"sources": "workspace,conversations", "limit": 5},
-                    "argsFromPayload": {
-                        "query": "query",
-                        "sources": "sources",
-                        "limit": "limit",
-                        "conversationId": "conversationId",
-                    },
-                }
-            ],
-        },
-        {
-            "id": "workspace.answer",
-            "name": "Workspace Answer",
-            "description": "Çalışma alanından cevap hazırlamak için bağlam toplar.",
-            "enabled": True,
-            "category": "research",
-            "requiresConfirmation": False,
-            "parameters": ["query", "limit", "conversationId"],
-            "requiredParameters": ["query"],
-            "steps": [
-                {
-                    "capability": "retrieve_context",
-                    "description": "Çalışma alanını tara",
-                    "args": {"sources": "workspace", "limit": 6},
-                    "argsFromPayload": {
-                        "query": "query",
-                        "limit": "limit",
-                        "conversationId": "conversationId",
-                    },
-                }
-            ],
-        },
-        {
-            "id": "file.explain",
-            "name": "File Explain",
-            "description": "Belgeyi sade şekilde açıklar.",
-            "enabled": True,
-            "category": "document",
-            "requiresConfirmation": False,
-            "parameters": ["path"],
-            "requiredParameters": ["path"],
-            "steps": [
-                {
-                    "capability": "document_read",
-                    "description": "Belgeyi açıkla",
-                    "args": {"mode": "summary"},
-                    "argsFromPayload": {"path": "path"},
-                }
-            ],
-        },
-        {
-            "id": "document.report_from_context",
-            "name": "Context Report",
-            "description": "Bağlamı toplayıp DOCX rapora dönüştürür.",
-            "enabled": True,
-            "category": "document",
-            "requiresConfirmation": True,
-            "parameters": ["query", "outputPath", "title", "sources", "limit", "conversationId", "overwrite"],
-            "requiredParameters": ["query", "outputPath"],
-            "steps": [
-                {
-                    "capability": "retrieve_context",
-                    "description": "Bağlamı topla",
-                    "argsFromPayload": {
-                        "query": "query",
-                        "sources": "sources",
-                        "limit": "limit",
-                        "conversationId": "conversationId",
-                    },
-                },
-                {
-                    "capability": "document_write",
-                    "description": "DOCX rapor üret",
-                    "argsFromPayload": {
-                        "outputPath": "outputPath",
-                        "title": "title",
-                        "overwrite": "overwrite",
-                    },
-                    "argsFromPreviousOutput": ["sourceContext"],
-                },
-            ],
-        },
-        {
-            "id": "document.docx_from_context",
-            "name": "DOCX From Context",
-            "description": "Bağlam veya kaynak belgeden DOCX üretir.",
-            "enabled": True,
-            "category": "document",
-            "requiresConfirmation": True,
-            "parameters": [
-                "prompt",
-                "outputPath",
-                "title",
-                "sourcePath",
-                "sourceContext",
-                "overwrite",
-            ],
-            "steps": [
-                {
-                    "capability": "document_write",
-                    "description": "DOCX üret",
-                    "argsFromPayload": {
-                        "prompt": "prompt",
-                        "outputPath": "outputPath",
-                        "title": "title",
-                        "sourcePath": "sourcePath",
-                        "sourceContext": "sourceContext",
-                        "overwrite": "overwrite",
-                    },
-                }
-            ],
-        },
-        {
-            "id": "document.xlsx_from_rows",
-            "name": "XLSX From Rows",
-            "description": "Satırlardan XLSX üretir.",
-            "enabled": True,
-            "category": "document",
-            "requiresConfirmation": True,
-            "parameters": [
-                "prompt",
-                "outputPath",
-                "title",
-                "columns",
-                "rows",
-                "sourceContext",
-                "overwrite",
-            ],
-            "steps": [
-                {
-                    "capability": "spreadsheet_write",
-                    "description": "XLSX üret",
-                    "argsFromPayload": {
-                        "prompt": "prompt",
-                        "outputPath": "outputPath",
-                        "title": "title",
-                        "columns": "columns",
-                        "rows": "rows",
-                        "sourceContext": "sourceContext",
-                        "overwrite": "overwrite",
-                    },
-                }
-            ],
-        },
-        {
-            "id": "mcp.readonly_tool_proxy",
-            "name": "MCP Readonly Proxy",
-            "description": "Read-only MCP aracini preset olarak cagirir.",
-            "enabled": True,
-            "category": "mcp",
-            "requiresConfirmation": False,
-            "parameters": ["serverId", "toolName", "arguments"],
-            "requiredParameters": ["serverId", "toolName"],
-            "steps": [
-                {
-                    "capability": "mcp_call_tool",
-                    "description": "Read-only MCP araci",
-                    "argsFromPayload": {
-                        "serverId": "serverId",
-                        "toolName": "toolName",
-                        "arguments": "arguments",
-                    },
-                    "requiresReadOnlyMcp": True,
-                }
-            ],
-        },
-    ]
+    return _catalog_builtin_skill_manifests()
 
 
 def _builtin_skill_ids() -> set[str]:
@@ -316,17 +101,244 @@ def _allowed_local_capabilities() -> set[str]:
         "document_write",
         "spreadsheet_write",
         "presentation_write",
+        "canvas_write",
         "ocr_read",
         "image_read",
+        "image_generate",
+        "web_research",
+        "browser_control",
         "data_analyze",
         "chart_generate",
         "math_solve",
         "latex_parse",
+        "desktop_operator.run",
+        "desktop_operator.observe_screen",
+        "desktop_operator.locate",
+        "desktop_operator.focus_window",
+        "desktop_operator.execute_action",
         "retrieve_context",
         "mcp_call_tool",
         "speech_to_text",
         "text_to_speech",
     }
+
+
+def _skill_usage_state(state: dict[str, Any] | None = None) -> dict[str, Any]:
+    current_state = state if isinstance(state, dict) else state_store.snapshot()
+    skills = current_state.get("skills", {})
+    skills = skills if isinstance(skills, dict) else {}
+    usage = skills.get("usage", {})
+    usage = usage if isinstance(usage, dict) else {}
+    stats = usage.get("skillStats", {})
+    stats = stats if isinstance(stats, dict) else {}
+    recent_runs = usage.get("recentRuns", [])
+    recent_runs = recent_runs if isinstance(recent_runs, list) else []
+    return {
+        "skillStats": stats,
+        "recentRuns": recent_runs,
+        "lastSuccessfulSkillId": _string(usage.get("lastSuccessfulSkillId", ""), limit=160),
+        "lastSuccessfulAt": _string(usage.get("lastSuccessfulAt", ""), limit=80),
+        "lastFailedSkillId": _string(usage.get("lastFailedSkillId", ""), limit=160),
+        "lastFailedAt": _string(usage.get("lastFailedAt", ""), limit=80),
+    }
+
+
+_QUERY_ALIAS_MAP: dict[str, set[str]] = {
+    "ozet": {"summary", "brief", "bullet", "bullets"},
+    "ozetle": {"summary", "brief", "bullet", "bullets"},
+    "summary": {"ozet", "brief"},
+    "pdf": {"document", "file", "belge", "dosya"},
+    "belge": {"document", "file"},
+    "dosya": {"document", "file"},
+    "docx": {"document", "word"},
+    "xlsx": {"spreadsheet", "excel", "table"},
+    "excel": {"spreadsheet", "xlsx"},
+    "ppt": {"presentation", "slide", "sunum"},
+    "sunum": {"presentation", "slide"},
+    "canvas": {"canvas_write", "document", "layout", "table"},
+    "kanvas": {"canvas_write", "document", "layout", "table"},
+    "tuval": {"canvas_write", "document", "layout", "table"},
+    "web": {"browser", "search", "internet"},
+    "internet": {"web", "search"},
+    "arama": {"search", "browser"},
+    "ara": {"search", "browser"},
+    "search": {"browser", "research"},
+    "kaynak": {"research", "verify", "context"},
+    "arastir": {"research", "verify", "web", "source"},
+    "arastirma": {"research", "verify", "web", "source"},
+    "research": {"source", "verify", "web"},
+    "gorsel": {"image", "ocr", "vision", "picture"},
+    "goruntu": {"image", "ocr", "vision"},
+    "resim": {"image", "ocr"},
+    "ocr": {"image", "text"},
+    "veri": {"data", "analysis", "chart"},
+    "grafik": {"chart", "analysis"},
+    "chart": {"analysis", "data"},
+    "hesapla": {"math", "solve"},
+    "denklem": {"math", "solve"},
+    "latex": {"math", "parse"},
+    "ekran": {"desktop", "operator", "screen"},
+    "mouse": {"desktop", "operator"},
+    "terminal": {"shell"},
+    "skill": {"run_skill"},
+}
+
+
+def _expand_query_tokens(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for token in list(tokens):
+        for alias, mapped in _QUERY_ALIAS_MAP.items():
+            if token == alias or token.startswith(alias):
+                expanded.update(mapped)
+    return expanded
+
+
+def _skill_tokens(manifest: dict[str, Any]) -> set[str]:
+    tokens = set(
+        _unique_tokens(
+            manifest.get("id", ""),
+            manifest.get("name", ""),
+            manifest.get("description", ""),
+            manifest.get("category", ""),
+            manifest.get("adapter", ""),
+            *([item for item in (manifest.get("intentTags", []) or []) if str(item).strip()]),
+            *([item for item in (manifest.get("expectedInputs", []) or []) if str(item).strip()]),
+            *([item for item in (manifest.get("parameters", []) or []) if str(item).strip()]),
+            *([item for item in (manifest.get("libraries", []) or []) if str(item).strip()]),
+        )
+    )
+    return tokens
+
+
+def _skill_usage_for_id(skill_id: str, state: dict[str, Any] | None = None) -> dict[str, Any]:
+    usage = _skill_usage_state(state)
+    stats = usage.get("skillStats", {})
+    stats = stats if isinstance(stats, dict) else {}
+    item = stats.get(skill_id, {})
+    return item if isinstance(item, dict) else {}
+
+
+def _skill_score_for_request(
+    manifest: dict[str, Any],
+    query: str,
+    state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    skill_id = _string(manifest.get("id"), limit=120)
+    if not skill_id:
+        return {
+            "score": -1000.0,
+            "reasons": ["missing_skill_id"],
+            "matchCount": 0,
+        }
+    available = bool(manifest.get("available", True))
+    if not available:
+        return {
+            "score": -1000.0,
+            "reasons": ["unavailable"],
+            "matchCount": 0,
+        }
+    query_tokens = _expand_query_tokens(set(_tokenize(query)))
+    skill_tokens = _skill_tokens(manifest)
+    overlap = sorted(query_tokens & skill_tokens)
+    name_tokens = set(_tokenize(manifest.get("name", "")))
+    description_tokens = set(_tokenize(manifest.get("description", "")))
+    adapter_tokens = set(_tokenize(manifest.get("adapter", "")))
+    tag_tokens = set(_tokenize(manifest.get("intentTags", [])))
+    parameter_tokens = set(_tokenize(manifest.get("expectedInputs", [])))
+    score = float(manifest.get("selectionPriority", 50) or 50)
+    reasons: list[str] = []
+    if overlap:
+        score += len(overlap) * 10.0
+        reasons.append(f"overlap:{','.join(overlap[:5])}")
+    name_overlap = sorted(query_tokens & name_tokens)
+    if name_overlap:
+        score += len(name_overlap) * 8.0
+        reasons.append(f"name:{','.join(name_overlap[:3])}")
+    description_overlap = sorted(query_tokens & description_tokens)
+    if description_overlap:
+        score += min(10.0, len(description_overlap) * 3.0)
+        reasons.append(f"description:{','.join(description_overlap[:3])}")
+    adapter_overlap = sorted(query_tokens & adapter_tokens)
+    if adapter_overlap:
+        score += len(adapter_overlap) * 4.0
+        reasons.append(f"adapter:{','.join(adapter_overlap[:3])}")
+    tag_overlap = sorted(query_tokens & tag_tokens)
+    if tag_overlap:
+        score += len(tag_overlap) * 5.0
+        reasons.append(f"tags:{','.join(tag_overlap[:3])}")
+    parameter_overlap = sorted(query_tokens & parameter_tokens)
+    if parameter_overlap:
+        score += len(parameter_overlap) * 4.0
+        reasons.append(f"inputs:{','.join(parameter_overlap[:3])}")
+    latency_class = str(manifest.get("latencyClass", "") or "medium").strip().lower()
+    if latency_class == "quick":
+        score += 3.0
+    elif latency_class == "medium":
+        score += 1.5
+    else:
+        score -= 1.0
+    if bool(manifest.get("requiresConfirmation", False)):
+        score -= 5.0
+        reasons.append("confirmation")
+    usage = _skill_usage_for_id(skill_id, state)
+    success_count = max(0, int(usage.get("successCount", 0) or 0))
+    failure_count = max(0, int(usage.get("failureCount", 0) or 0))
+    score += min(8.0, success_count * 0.6)
+    score -= min(6.0, failure_count * 0.8)
+    last_success = _string(usage.get("lastOkAt", ""), limit=80)
+    last_failure = _string(usage.get("lastFailedAt", ""), limit=80)
+    if last_success:
+        score += 0.8
+    if last_failure:
+        score -= 0.5
+    if not overlap and not name_overlap and not description_overlap and not adapter_overlap and not tag_overlap:
+        score -= 6.0
+        reasons.append("weak_match")
+    return {
+        "score": round(score, 3),
+        "reasons": reasons,
+        "matchCount": len(overlap) + len(name_overlap) + len(description_overlap),
+    }
+
+
+def rank_skills_for_text(
+    text: str,
+    state: dict[str, Any] | None = None,
+    *,
+    skills: list[dict[str, Any]] | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    runtime_state = state if isinstance(state, dict) else state_store.snapshot()
+    skill_items = skills
+    if skill_items is None:
+        status = list_skill_runtime(runtime_state, refresh=False)
+        skill_items = status.get("skills", []) if isinstance(status, dict) else []
+    if not isinstance(skill_items, list) or not skill_items:
+        return []
+    candidates = [
+        item
+        for item in skill_items
+        if isinstance(item, dict) and bool(item.get("enabled", True)) and bool(item.get("available", True))
+    ]
+    if not candidates:
+        return []
+    ranked: list[dict[str, Any]] = []
+    for item in candidates:
+        score_payload = _skill_score_for_request(item, text, runtime_state)
+        ranked.append(
+            {
+                **item,
+                **score_payload,
+            }
+        )
+    ranked.sort(
+        key=lambda item: (
+            -float(item.get("score", 0.0) or 0.0),
+            -int(item.get("selectionPriority", 0) or 0),
+            str(item.get("id", "") or ""),
+        )
+    )
+    return ranked[: max(0, int(limit or 0)) or 8]
 
 
 def _ensure_builtin_manifests() -> None:
@@ -451,6 +463,28 @@ def _normalize_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
         for item in (payload.get("requiredParameters") if isinstance(payload.get("requiredParameters"), list) else [])
         if _string(item, limit=80)
     ]
+    libraries = [
+        _string(item, limit=120)
+        for item in (payload.get("libraries") if isinstance(payload.get("libraries"), list) else [])
+        if _string(item, limit=120)
+    ]
+    intent_tags = [
+        _string(item, limit=80)
+        for item in (payload.get("intentTags") if isinstance(payload.get("intentTags"), list) else [])
+        if _string(item, limit=80)
+    ]
+    expected_inputs = [
+        _string(item, limit=80)
+        for item in (payload.get("expectedInputs") if isinstance(payload.get("expectedInputs"), list) else [])
+        if _string(item, limit=80)
+    ]
+    latency_class = _string(payload.get("latencyClass"), limit=20).lower()
+    if latency_class not in {"quick", "medium", "slow"}:
+        latency_class = "medium"
+    try:
+        selection_priority = int(payload.get("selectionPriority", 50) or 50)
+    except (TypeError, ValueError):
+        selection_priority = 50
     for item in required_parameters:
         if item not in parameters:
             raise SafeCapabilityError("SKILL_MANIFEST_INVALID", "Required skill parameter tanimsiz.")
@@ -464,6 +498,12 @@ def _normalize_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
         "requiresConfirmation": bool(payload.get("requiresConfirmation", False)),
         "parameters": sorted(parameters),
         "requiredParameters": required_parameters,
+        "intentTags": list(dict.fromkeys(intent_tags)),
+        "latencyClass": latency_class,
+        "selectionPriority": max(0, min(100, selection_priority)),
+        "expectedInputs": list(dict.fromkeys(expected_inputs or required_parameters or sorted(parameters))),
+        "adapter": _string(payload.get("adapter"), limit=120),
+        "libraries": list(dict.fromkeys(libraries)),
         "steps": steps,
         "path": str(path),
         "source": "built_in" if path.name in {f"{_slug(item['id'])}.json" for item in _builtin_skill_manifests()} else "local",
@@ -501,10 +541,16 @@ def _skill_snapshot(
         "description": str(manifest.get("description", "") or ""),
         "enabled": bool(manifest.get("enabled", True)),
         "category": str(manifest.get("category", "") or ""),
+        "adapter": str(manifest.get("adapter", "") or ""),
+        "libraries": list(manifest.get("libraries", []) or []),
         "requiresConfirmation": bool(manifest.get("requiresConfirmation", False)),
         "stepCount": len(steps),
         "parameters": list(manifest.get("parameters", []) or []),
         "requiredParameters": list(manifest.get("requiredParameters", []) or []),
+        "intentTags": list(manifest.get("intentTags", []) or []),
+        "latencyClass": str(manifest.get("latencyClass", "") or ""),
+        "selectionPriority": int(manifest.get("selectionPriority", 50) or 50),
+        "expectedInputs": list(manifest.get("expectedInputs", []) or []),
         "path": str(manifest.get("path", "") or ""),
         "source": str(manifest.get("source", "") or "local"),
         "available": available,
@@ -619,7 +665,18 @@ def list_skill_runtime(state: dict[str, Any] | None = None, *, refresh: bool = F
         return refresh_skill_runtime(state)
 
 
-def planner_skill_context(state: dict[str, Any] | None = None) -> str:
+def _usage_summary_line(skill_id: str, state: dict[str, Any] | None = None) -> str:
+    usage = _skill_usage_for_id(skill_id, state)
+    if not usage:
+        return ""
+    success_count = max(0, int(usage.get("successCount", 0) or 0))
+    failure_count = max(0, int(usage.get("failureCount", 0) or 0))
+    if success_count == 0 and failure_count == 0:
+        return ""
+    return f"usage={success_count}ok/{failure_count}fail"
+
+
+def planner_skill_context(state: dict[str, Any] | None = None, text: str = "") -> str:
     status = list_skill_runtime(state, refresh=False)
     skills = status.get("skills", [])
     if not isinstance(skills, list):
@@ -631,15 +688,38 @@ def planner_skill_context(state: dict[str, Any] | None = None) -> str:
     ]
     if not enabled:
         return ""
+    ranked = rank_skills_for_text(text, state, skills=enabled, limit=8) if _string(text, limit=240) else sorted(
+        enabled,
+        key=lambda item: (
+            -int(item.get("selectionPriority", 0) or 0),
+            -int(bool(item.get("available", True))),
+            str(item.get("id", "") or ""),
+        ),
+    )
     lines = [
         "Enabled runnable local skills. Use capability=run_skill only with one of these exact skillId values.",
     ]
-    for item in enabled[:8]:
+    for item in ranked[:8]:
+        libraries = ", ".join(
+            str(value)
+            for value in list(item.get("libraries", []) or [])[:4]
+            if str(value).strip()
+        )
+        tags = ", ".join(str(value) for value in list(item.get("intentTags", []) or [])[:5] if str(value).strip())
+        usage_line = _usage_summary_line(str(item.get("id", "") or ""), state)
         lines.append(
-            f"- skillId={item.get('id', '')} category={item.get('category', '')} "
+            f"- skillId={item.get('id', '')} score={item.get('score', 0)} priority={item.get('selectionPriority', 0)} "
+            f"category={item.get('category', '')} latency={item.get('latencyClass', '')} "
+            f"adapter={item.get('adapter', '')} "
+            f"libraries={libraries or 'none'} "
+            f"tags={tags or 'none'} "
+            f"{usage_line + ' ' if usage_line else ''}"
             f"requiresConfirmation={bool(item.get('requiresConfirmation', False))} "
+            f"expectedInputs={', '.join(str(value) for value in list(item.get('expectedInputs', []) or [])[:4] if str(value).strip()) or 'none'} "
             f"description={_string(item.get('description', ''), limit=160)}"
         )
+    if _string(text, limit=240):
+        lines.append("Best matches above are ranked for this exact request. Prefer the highest scoring ready skill.")
     lines.append("If you choose run_skill, args must include skillId and optional payload object.")
     return "\n".join(lines)
 
@@ -666,6 +746,12 @@ def _manifest_payload_from_normalized(manifest: dict[str, Any]) -> dict[str, Any
         "description": str(manifest.get("description", "") or ""),
         "enabled": bool(manifest.get("enabled", True)),
         "category": str(manifest.get("category", "") or "custom"),
+        "intentTags": list(manifest.get("intentTags", []) or []),
+        "latencyClass": str(manifest.get("latencyClass", "") or "medium"),
+        "selectionPriority": int(manifest.get("selectionPriority", 50) or 50),
+        "expectedInputs": list(manifest.get("expectedInputs", []) or []),
+        "adapter": str(manifest.get("adapter", "") or ""),
+        "libraries": list(manifest.get("libraries", []) or []),
         "requiresConfirmation": bool(manifest.get("requiresConfirmation", False)),
         "parameters": list(manifest.get("parameters", []) or []),
         "requiredParameters": list(manifest.get("requiredParameters", []) or []),
@@ -689,6 +775,66 @@ def _manifest_payload_from_normalized(manifest: dict[str, Any]) -> dict[str, Any
             if isinstance(step, dict)
         ],
     }
+
+
+def record_skill_usage(
+    skill_id: str,
+    *,
+    success: bool,
+    source: str = "",
+    duration_ms: int = 0,
+    state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    skill_key = _string(skill_id, limit=120)
+    if not skill_key:
+        return {}
+    with _LOCK:
+        current_state = state if isinstance(state, dict) else state_store.snapshot()
+        merged_state = copy.deepcopy(current_state)
+        skills_state = merged_state.setdefault("skills", {})
+        if not isinstance(skills_state, dict):
+            skills_state = {}
+            merged_state["skills"] = skills_state
+        usage = skills_state.get("usage", {})
+        if not isinstance(usage, dict):
+            usage = {}
+        recent_runs = usage.get("recentRuns", [])
+        if not isinstance(recent_runs, list):
+            recent_runs = []
+        stats = usage.get("skillStats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+        stat = stats.get(skill_key, {})
+        if not isinstance(stat, dict):
+            stat = {}
+        now = _utc_now_iso()
+        recent_runs.insert(
+            0,
+            {
+                "skillId": skill_key,
+                "success": bool(success),
+                "source": _string(source, limit=80),
+                "durationMs": max(0, int(duration_ms or 0)),
+                "at": now,
+            },
+        )
+        usage["recentRuns"] = recent_runs[:40]
+        stat["successCount"] = max(0, int(stat.get("successCount", 0) or 0)) + (1 if success else 0)
+        stat["failureCount"] = max(0, int(stat.get("failureCount", 0) or 0)) + (0 if success else 1)
+        if success:
+            stat["lastOkAt"] = now
+            usage["lastSuccessfulSkillId"] = skill_key
+            usage["lastSuccessfulAt"] = now
+        else:
+            stat["lastFailedAt"] = now
+            usage["lastFailedSkillId"] = skill_key
+            usage["lastFailedAt"] = now
+        stat["lastDurationMs"] = max(0, int(duration_ms or 0))
+        stats[skill_key] = stat
+        usage["skillStats"] = stats
+        skills_state["usage"] = usage
+        state_store.save_state(merged_state)
+        return copy.deepcopy(usage)
 
 
 def clone_skill(skill_id: str) -> dict[str, Any]:

@@ -93,6 +93,15 @@ def summarize_text(text: str, *, max_chars: int = 280) -> str:
         return ""
     if len(cleaned) <= max_chars:
         return cleaned
+    boundary = -1
+    for separator in (". ", ".\n", "! ", "? ", "…", "\n"):
+        index = cleaned.rfind(separator, 0, max_chars)
+        if index > boundary and index >= int(max_chars * 0.6):
+            boundary = index + len(separator) - 1
+    if boundary > 0:
+        candidate = cleaned[:boundary].rstrip()
+        if candidate:
+            return candidate + ("…" if not candidate.endswith("…") else "")
     return cleaned[: max_chars - 1].rstrip() + "…"
 
 
@@ -103,17 +112,22 @@ def bulletize_text(text: str, *, limit: int = 6) -> list[str]:
         candidate = " ".join(line.split()).strip(" -•\t")
         if not candidate:
             continue
-        chunks.append(candidate)
+        if candidate not in chunks:
+            chunks.append(candidate)
         if len(chunks) >= limit:
             break
     if chunks:
         return chunks
 
-    sentence_chunks = [
-        " ".join(part.split()).strip()
-        for part in cleaned.replace("!", ".").replace("?", ".").split(".")
-        if " ".join(part.split()).strip()
-    ]
+    sentence_chunks: list[str] = []
+    for part in cleaned.replace("!", ".").replace("?", ".").split("."):
+        candidate = " ".join(part.split()).strip()
+        if not candidate:
+            continue
+        if candidate not in sentence_chunks:
+            sentence_chunks.append(candidate)
+        if len(sentence_chunks) >= limit:
+            break
     return sentence_chunks[:limit]
 
 

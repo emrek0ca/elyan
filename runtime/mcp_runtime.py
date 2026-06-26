@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import re
+import sys
 import uuid
 from importlib import import_module
 from pathlib import Path
@@ -64,6 +65,20 @@ def _as_string_list(value: Any) -> list[str]:
         parts = [part.strip() for part in value.splitlines()]
         return [part for part in parts if part]
     return []
+
+
+def _stdio_command(value: Any) -> str:
+    command = str(value or "").strip()
+    if not command:
+        return command
+    # Generic Python commands often resolve to the OS Python instead of the
+    # packaged/runtime interpreter that has Elyan optional deps installed.
+    # Absolute commands remain user-controlled.
+    if os.path.isabs(command):
+        return command
+    if Path(command).name.lower() in {"python", "python3", "python.exe"} and sys.executable:
+        return sys.executable
+    return command
 
 
 def _base_status() -> dict[str, Any]:
@@ -511,7 +526,7 @@ class MCPRuntimeManager:
         from mcp.client.stdio import stdio_client
 
         params = StdioServerParameters(
-            command=str(server.get("command", "") or ""),
+            command=_stdio_command(server.get("command", "")),
             args=list(server.get("args", []) or []),
             env=dict(os.environ),
             cwd=str(server.get("cwd", "") or "") or None,

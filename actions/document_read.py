@@ -151,8 +151,8 @@ def _extract_document_text(path: Path) -> tuple[str, int | None]:
     return text, pages
 
 
-def _user_facing_text(path: Path, mode: str, summary: str, bullets: list[str], text: str) -> str:
-    title = path.name
+def _user_facing_text(label: str, mode: str, summary: str, bullets: list[str], text: str) -> str:
+    title = label or "Paylaşılan metin"
     if mode == "summary":
         return f"{title}\n{summary}"
     if mode == "bullets":
@@ -163,15 +163,33 @@ def _user_facing_text(path: Path, mode: str, summary: str, bullets: list[str], t
     return f"{title}\n{preview}"
 
 
-def document_read(path: str, mode: str = "read", _selectedPaths: list[str] | None = None) -> dict[str, Any]:
-    resolved = ensure_allowed_path(
-        path,
-        allowed_suffixes=_ALLOWED_SUFFIXES,
-        selected_paths=_selectedPaths,
-        root_resolver=_workspace_root,
-    )
+def document_read(
+    path: str = "",
+    mode: str = "read",
+    text: str = "",
+    _selectedPaths: list[str] | None = None,
+) -> dict[str, Any]:
     normalized_mode = ensure_mode(mode)
-    extracted_text, pages, backend = _extract_document_content(resolved)
+    source_label = "Paylaşılan metin"
+    content_type = "text/plain"
+    source_path = ""
+
+    if str(text or "").strip():
+        extracted_text = str(text or "").strip()
+        pages = None
+        backend = "provided_text"
+    else:
+        resolved = ensure_allowed_path(
+            path,
+            allowed_suffixes=_ALLOWED_SUFFIXES,
+            selected_paths=_selectedPaths,
+            root_resolver=_workspace_root,
+        )
+        source_label = resolved.name
+        content_type = content_type_for(resolved)
+        source_path = str(resolved)
+        extracted_text, pages, backend = _extract_document_content(resolved)
+
     trimmed_text = preview_text(extracted_text)
     if not trimmed_text:
         raise SafeCapabilityError("EMPTY_DOCUMENT", "Belgede okunabilir metin bulunamadı.")
@@ -179,11 +197,12 @@ def document_read(path: str, mode: str = "read", _selectedPaths: list[str] | Non
     summary = summarize_text(trimmed_text, max_chars=320)
     bullets = bulletize_text(trimmed_text)
     return {
-        "text": _user_facing_text(resolved, normalized_mode, summary, bullets, trimmed_text),
+        "text": _user_facing_text(source_label, normalized_mode, summary, bullets, trimmed_text),
         "result": {
             "kind": "document_read",
-            "sourcePath": str(resolved),
-            "contentType": content_type_for(resolved),
+            "sourcePath": source_path,
+            "sourceKind": "text" if source_path == "" else "file",
+            "contentType": content_type,
             "pages": pages,
             "backend": backend,
             "mode": normalized_mode,

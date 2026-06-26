@@ -1,0 +1,83 @@
+name: Desktop V1 Gate
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-contracts:
+    name: runtime-contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest PyInstaller
+
+      - name: Compile Python runtime modules
+        run: python -m compileall runtime actions helpers
+
+      - name: Run runtime contract suite
+        run: python -m pytest tests/test_runtime_startup_contract.py tests/test_runtime_bridge_contract.py tests/test_executor_core_contract.py tests/test_desktop_os_contract.py tests/test_desktop_operator_contract.py
+
+  electron-gate:
+    name: electron-gate
+    runs-on: ubuntu-latest
+
+    env:
+      ELYAN_RUNTIME_BUNDLE_REQUIRED: "1"
+      ELYAN_NATIVE_REQUIRED: "1"
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python build dependencies
+        run: python -m pip install --upgrade pip && python -m pip install PyInstaller
+
+      - name: Install Electron dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build packaged runtime and native addon
+        run: npm run build
+
+      - name: Renderer smoke
+        run: xvfb-run -a npm run test:smoke

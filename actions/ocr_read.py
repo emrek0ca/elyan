@@ -175,3 +175,30 @@ def ocr_read(
         },
         "artifacts": [],
     }
+
+
+def ocr_read_status() -> dict[str, Any]:
+    easyocr_available = _easyocr_available()
+    tesseract_available = bool(shutil.which("tesseract"))
+    pymupdf_available = find_spec("fitz") is not None
+    available = bool((easyocr_available or tesseract_available) and pymupdf_available)
+    if available:
+        return {
+            "available": True,
+            "lastErrorCode": "",
+            "lastErrorMessage": "",
+            "backend": "easyocr" if easyocr_available else "tesseract",
+            "supportedFormats": ["image", "pdf"],
+        }
+    missing: list[str] = []
+    if not pymupdf_available:
+        missing.append("fitz")
+    if not easyocr_available and not tesseract_available:
+        missing.append("easyocr/tesseract")
+    return {
+        "available": False,
+        "lastErrorCode": "DEPENDENCY_UNAVAILABLE",
+        "lastErrorMessage": "OCR için gerekli yerel bağımlılıklar hazır değil.",
+        "missingDependencies": missing,
+        "supportedFormats": ["image", "pdf"],
+    }

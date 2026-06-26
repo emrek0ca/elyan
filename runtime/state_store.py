@@ -4,6 +4,7 @@ import copy
 import difflib
 import json
 import os
+import re
 import threading
 import sys
 from pathlib import Path
@@ -182,6 +183,14 @@ DEFAULT_STATE: dict[str, Any] = {
         "toolPermissions": {},
         "defaultSkill": "",
         "toolSafety": "balanced",
+        "usage": {
+            "recentRuns": [],
+            "skillStats": {},
+            "lastSuccessfulSkillId": "",
+            "lastSuccessfulAt": "",
+            "lastFailedSkillId": "",
+            "lastFailedAt": "",
+        },
     },
     "localIndexing": {
         "approvedRoots": [],
@@ -205,6 +214,7 @@ DEFAULT_STATE: dict[str, Any] = {
         "desktopDeviceId": "",
         "pairingToken": "",
         "pairingCode": "",
+        "manualEntryCode": "",
         "qrText": "",
         "qrDataUrl": "",
         "expiresAt": "",
@@ -281,6 +291,8 @@ DEFAULT_STATE: dict[str, Any] = {
     "permissions": {
         "allow_browser_control": False,
         "allow_screen_analysis": False,
+        "allow_computer_control": False,
+        "allow_sensitive_operator_actions": False,
         "allow_file_indexing": False,
         "allow_system_inspection": False,
         "allow_personal_actions": False,
@@ -315,6 +327,26 @@ DEFAULT_STATE: dict[str, Any] = {
         "pendingPlans": [],
         "lastUpdatedAt": "",
     },
+    "operator": {
+        "activeRunId": "",
+        "status": "idle",
+        "abortRequested": False,
+        "abortReason": "",
+        "currentStepIndex": 0,
+        "lastObservationId": "",
+        "lastStopReason": "",
+        "lastCompletedAt": "",
+        "operatorResolutionMode": "",
+        "lastTargetSource": "",
+        "lastVerificationSource": "",
+        "lastTargetConfidence": 0.0,
+        "operatorRuns": [],
+        "operatorSteps": [],
+        "screenObservations": [],
+        "inputActions": [],
+        "verificationResults": [],
+        "lastUpdatedAt": "",
+    },
     "updatedAt": "",
 }
 
@@ -335,6 +367,8 @@ _TASK_LINK_LIMIT = 24
 _ACTIVE_TASK_STATUSES = {"queued", "planning", "running", "waiting_approval"}
 _MCP_SERVER_LIMIT = 12
 _ARTIFACT_SELECTION_LIMIT = 3
+_ACTIVE_OPERATOR_STATUSES = {"observing", "locating", "executing", "verifying", "waiting_approval", "running"}
+_TERMINAL_OPERATOR_STATUSES = {"idle", "stopped", "failed", "completed"}
 
 
 def _task_inbox_timestamp() -> str:
@@ -358,6 +392,16 @@ def _normalize_task_item(task: dict[str, Any]) -> dict[str, Any]:
         route_decision = copy.deepcopy(route_decision)
     else:
         route_decision = {}
+    plan_preview = task.get("planPreview")
+    if isinstance(plan_preview, dict):
+        plan_preview = copy.deepcopy(plan_preview)
+    else:
+        plan_preview = {}
+    execution_trace = task.get("executionTrace")
+    if isinstance(execution_trace, dict):
+        execution_trace = copy.deepcopy(execution_trace)
+    else:
+        execution_trace = {}
     artifact_count = task.get("artifactCount")
     try:
         normalized_artifact_count = max(0, int(artifact_count or 0))
@@ -373,6 +417,8 @@ def _normalize_task_item(task: dict[str, Any]) -> dict[str, Any]:
         "error": str(task.get("error", "") or "").strip()[:240],
         "approvalRequest": approval_request,
         "routeDecision": route_decision,
+        "planPreview": plan_preview,
+        "executionTrace": execution_trace,
         "deliveryState": str(task.get("deliveryState", "") or "").strip()[:32],
         "runtimeConnectionId": str(task.get("runtimeConnectionId", "") or "").strip()[:80],
         "dispatchLeaseId": str(task.get("dispatchLeaseId", "") or "").strip()[:120],
@@ -634,6 +680,19 @@ def _strip_provider_secrets_in_place(state: dict[str, Any]) -> None:
                 provider_value.pop(key, None)
 
 
+def _strip_provider_endpoints_in_place(state: dict[str, Any]) -> None:
+    providers = state.get("providers", {})
+    if not isinstance(providers, dict):
+        return
+    endpoint_keys = {"baseUrl", "base_url"}
+    for provider_value in providers.values():
+        if not isinstance(provider_value, dict):
+            continue
+        for key in endpoint_keys:
+            if key in provider_value:
+                provider_value[key] = ""
+
+
 def _capture_provider_secrets_in_place(state: dict[str, Any]) -> None:
     providers = state.get("providers", {})
     if not isinstance(providers, dict):
@@ -684,53 +743,118 @@ def _normalise_mcp_server_state(state: dict[str, Any]) -> None:
     if not isinstance(skills, dict):
         state["skills"] = copy.deepcopy(DEFAULT_STATE["skills"])
         return
+    active_skills = skills.get("activeSkills", [])
+    if not isinstance(active_skills, list):
+        skills["activeSkills"] = []
+    else:
+        skills["activeSkills"] = [
+            str(item).strip()[:160]
+            for item in active_skills
+            if str(item).strip()
+        ]
+    tool_permissions = skills.get("toolPermissions", {})
+    if not isinstance(tool_permissions, dict):
+        skills["toolPermissions"] = {}
+    else:
+        skills["toolPermissions"] = {
+            str(key).strip()[:160]: bool(value)
+            for key, value in tool_permissions.items()
+            if str(key).strip()
+        }
+    skills["defaultSkill"] = str(skills.get("defaultSkill", "") or "").strip()[:120]
+    skills["toolSafety"] = str(skills.get("toolSafety", "balanced") or "balanced").strip()[:32] or "balanced"
     servers = skills.get("mcpServers", [])
     if not isinstance(servers, list):
         skills["mcpServers"] = []
-        return
-    normalized: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    for item in servers:
+    else:
+        normalized: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for item in servers:
+            if not isinstance(item, dict):
+                continue
+            server_id = " ".join(str(item.get("id", "") or "").split()).strip()[:80]
+            name = " ".join(str(item.get("name", "") or "").split()).strip()[:120]
+            command = str(item.get("command", "") or "").strip()[:500]
+            if not server_id and not command and not name:
+                continue
+            if not server_id:
+                server_id = f"mcp_{len(normalized) + 1}"
+            if server_id in seen_ids:
+                continue
+            seen_ids.add(server_id)
+            try:
+                startup_timeout = max(3, min(120, int(item.get("startupTimeoutSec", 15) or 15)))
+            except (TypeError, ValueError):
+                startup_timeout = 15
+            try:
+                call_timeout = max(5, min(180, int(item.get("callTimeoutSec", 45) or 45)))
+            except (TypeError, ValueError):
+                call_timeout = 45
+            normalized.append(
+                {
+                    "id": server_id,
+                    "name": name or command or server_id,
+                    "transport": "stdio",
+                    "command": command,
+                    "args": [
+                        str(arg).strip()[:500]
+                        for arg in (item.get("args", []) if isinstance(item.get("args"), list) else [])
+                        if str(arg).strip()
+                    ],
+                    "cwd": str(item.get("cwd", "") or "").strip()[:500],
+                    "enabled": bool(item.get("enabled", True)),
+                    "startupTimeoutSec": startup_timeout,
+                    "callTimeoutSec": call_timeout,
+                }
+            )
+            if len(normalized) >= _MCP_SERVER_LIMIT:
+                break
+        skills["mcpServers"] = normalized
+    usage = skills.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
+    recent_runs = usage.get("recentRuns", [])
+    if not isinstance(recent_runs, list):
+        recent_runs = []
+    normalized_runs: list[dict[str, Any]] = []
+    for item in recent_runs[:40]:
         if not isinstance(item, dict):
             continue
-        server_id = " ".join(str(item.get("id", "") or "").split()).strip()[:80]
-        name = " ".join(str(item.get("name", "") or "").split()).strip()[:120]
-        command = str(item.get("command", "") or "").strip()[:500]
-        if not server_id and not command and not name:
+        skill_id = str(item.get("skillId", "") or "").strip()[:160]
+        if not skill_id:
             continue
-        if not server_id:
-            server_id = f"mcp_{len(normalized) + 1}"
-        if server_id in seen_ids:
-            continue
-        seen_ids.add(server_id)
-        try:
-            startup_timeout = max(3, min(120, int(item.get("startupTimeoutSec", 15) or 15)))
-        except (TypeError, ValueError):
-            startup_timeout = 15
-        try:
-            call_timeout = max(5, min(180, int(item.get("callTimeoutSec", 45) or 45)))
-        except (TypeError, ValueError):
-            call_timeout = 45
-        normalized.append(
+        normalized_runs.append(
             {
-                "id": server_id,
-                "name": name or command or server_id,
-                "transport": "stdio",
-                "command": command,
-                "args": [
-                    str(arg).strip()[:500]
-                    for arg in (item.get("args", []) if isinstance(item.get("args"), list) else [])
-                    if str(arg).strip()
-                ],
-                "cwd": str(item.get("cwd", "") or "").strip()[:500],
-                "enabled": bool(item.get("enabled", True)),
-                "startupTimeoutSec": startup_timeout,
-                "callTimeoutSec": call_timeout,
+                "skillId": skill_id,
+                "success": bool(item.get("success", False)),
+                "source": str(item.get("source", "") or "").strip()[:80],
+                "durationMs": max(0, int(item.get("durationMs", 0) or 0)),
+                "at": str(item.get("at", "") or "").strip()[:80],
             }
         )
-        if len(normalized) >= _MCP_SERVER_LIMIT:
-            break
-    skills["mcpServers"] = normalized
+    skill_stats = usage.get("skillStats", {})
+    if not isinstance(skill_stats, dict):
+        skill_stats = {}
+    normalized_stats: dict[str, dict[str, Any]] = {}
+    for skill_id, item in skill_stats.items():
+        key = str(skill_id).strip()[:160]
+        if not key or not isinstance(item, dict):
+            continue
+        normalized_stats[key] = {
+            "successCount": max(0, int(item.get("successCount", 0) or 0)),
+            "failureCount": max(0, int(item.get("failureCount", 0) or 0)),
+            "lastOkAt": str(item.get("lastOkAt", "") or "").strip()[:80],
+            "lastFailedAt": str(item.get("lastFailedAt", "") or "").strip()[:80],
+            "lastDurationMs": max(0, int(item.get("lastDurationMs", 0) or 0)),
+        }
+    skills["usage"] = {
+        "recentRuns": normalized_runs,
+        "skillStats": normalized_stats,
+        "lastSuccessfulSkillId": str(usage.get("lastSuccessfulSkillId", "") or "").strip()[:160],
+        "lastSuccessfulAt": str(usage.get("lastSuccessfulAt", "") or "").strip()[:80],
+        "lastFailedSkillId": str(usage.get("lastFailedSkillId", "") or "").strip()[:160],
+        "lastFailedAt": str(usage.get("lastFailedAt", "") or "").strip()[:80],
+    }
 
 
 def _normalise_local_indexing_state(state: dict[str, Any]) -> None:
@@ -785,6 +909,8 @@ def _normalise_local_indexing_state(state: dict[str, Any]) -> None:
     if not isinstance(permissions, dict):
         permissions = {}
         state["permissions"] = permissions
+    permissions["allow_computer_control"] = bool(permissions.get("allow_computer_control", False))
+    permissions["allow_sensitive_operator_actions"] = bool(permissions.get("allow_sensitive_operator_actions", False))
     permissions["allow_file_indexing"] = bool(permissions.get("allow_file_indexing", False))
 
     runtime = state.get("runtime", {})
@@ -793,6 +919,27 @@ def _normalise_local_indexing_state(state: dict[str, Any]) -> None:
         state["runtime"] = runtime
     capability_states = runtime.get("capabilityStates", {})
     runtime["capabilityStates"] = capability_states if isinstance(capability_states, dict) else {}
+
+    operator = state.get("operator", {})
+    if not isinstance(operator, dict):
+        operator = copy.deepcopy(DEFAULT_STATE["operator"])
+        state["operator"] = operator
+    operator["activeRunId"] = str(operator.get("activeRunId", "") or "").strip()[:80]
+    operator["status"] = str(operator.get("status", "idle") or "idle").strip()[:64] or "idle"
+    operator["abortRequested"] = bool(operator.get("abortRequested", False))
+    operator["abortReason"] = str(operator.get("abortReason", "") or "").strip()[:80]
+    operator["currentStepIndex"] = max(0, int(operator.get("currentStepIndex", 0) or 0))
+    operator["lastObservationId"] = str(operator.get("lastObservationId", "") or "").strip()[:120]
+    operator["lastStopReason"] = str(operator.get("lastStopReason", "") or "").strip()[:80]
+    operator["lastCompletedAt"] = str(operator.get("lastCompletedAt", "") or "").strip()[:80]
+    operator["operatorResolutionMode"] = str(operator.get("operatorResolutionMode", "") or "").strip()[:80]
+    operator["lastTargetSource"] = str(operator.get("lastTargetSource", "") or "").strip()[:80]
+    operator["lastVerificationSource"] = str(operator.get("lastVerificationSource", "") or "").strip()[:80]
+    operator["lastTargetConfidence"] = max(0.0, min(float(operator.get("lastTargetConfidence", 0.0) or 0.0), 1.0))
+    for key in ("operatorRuns", "operatorSteps", "screenObservations", "inputActions", "verificationResults"):
+        if not isinstance(operator.get(key), list):
+            operator[key] = []
+    operator["lastUpdatedAt"] = str(operator.get("lastUpdatedAt", "") or "").strip()[:80]
 
 
 def _derive_artifact_kind(path: str, mime_type: str, current_kind: str = "") -> str:
@@ -935,6 +1082,40 @@ def update_state(patch: dict[str, Any]) -> dict[str, Any]:
         return save_state(state)
 
 
+def recover_operator_state_on_boot() -> dict[str, Any]:
+    with _LOCK:
+        state = load_state()
+        operator = state.get("operator", {})
+        operator = operator if isinstance(operator, dict) else {}
+        active_run_id = str(operator.get("activeRunId", "") or "").strip()
+        status = str(operator.get("status", "") or "").strip().lower()
+        if not active_run_id or status not in _ACTIVE_OPERATOR_STATUSES:
+            return state
+        operator_patch = {
+            "activeRunId": "",
+            "status": "stopped",
+            "abortRequested": False,
+            "abortReason": "",
+            "lastStopReason": "runtime_restarted",
+            "lastCompletedAt": _task_inbox_timestamp(),
+            "lastUpdatedAt": _task_inbox_timestamp(),
+        }
+        _deep_merge(state, {"operator": operator_patch})
+        runs = state.get("operator", {}).get("operatorRuns", [])
+        if isinstance(runs, list) and runs:
+            for item in runs:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("id", "") or "").strip() != active_run_id:
+                    continue
+                item["status"] = "stopped"
+                item["stopReason"] = "runtime_restarted"
+                item["completedAt"] = operator_patch["lastCompletedAt"]
+                break
+        state["updatedAt"] = state.get("updatedAt") or ""
+        return save_state(state)
+
+
 def list_conversations() -> list[dict[str, Any]]:
     state = load_state()
     conversations = state.get("conversation", {}).get("items", [])
@@ -944,18 +1125,62 @@ def list_conversations() -> list[dict[str, Any]]:
     for item in conversations:
         if not isinstance(item, dict):
             continue
+        if item.get("archived") is True:
+            continue
         messages = item.get("messages", [])
         preview = ""
+        if isinstance(item.get("preview"), str):
+            preview = str(item.get("preview", "") or "").strip()
         if isinstance(messages, list) and messages:
             last = messages[-1]
             if isinstance(last, dict):
-                preview = str(last.get("text", "") or "").strip()
+                preview = str(
+                    last.get("text", "") or last.get("content", "") or preview
+                ).strip()
         summaries.append(
             {
                 "id": str(item.get("id", "") or ""),
                 "title": str(item.get("title", "") or ""),
                 "updatedAt": str(item.get("updatedAt", "") or ""),
-                "messageCount": len(messages) if isinstance(messages, list) else 0,
+                "messageCount": int(
+                    item.get("messageCount", len(messages) if isinstance(messages, list) else 0)
+                    or 0
+                ),
+                "preview": preview[:120],
+            }
+        )
+    summaries.sort(key=lambda row: (row["updatedAt"], row["id"]), reverse=True)
+    return summaries
+
+
+def list_archived_conversations() -> list[dict[str, Any]]:
+    state = load_state()
+    conversations = state.get("conversation", {}).get("items", [])
+    if not isinstance(conversations, list):
+        return []
+    summaries: list[dict[str, Any]] = []
+    for item in conversations:
+        if not isinstance(item, dict) or item.get("archived") is not True:
+            continue
+        messages = item.get("messages", [])
+        preview = ""
+        if isinstance(item.get("preview"), str):
+            preview = str(item.get("preview", "") or "").strip()
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            if isinstance(last, dict):
+                preview = str(
+                    last.get("text", "") or last.get("content", "") or preview
+                ).strip()
+        summaries.append(
+            {
+                "id": str(item.get("id", "") or ""),
+                "title": str(item.get("title", "") or ""),
+                "updatedAt": str(item.get("updatedAt", "") or ""),
+                "messageCount": int(
+                    item.get("messageCount", len(messages) if isinstance(messages, list) else 0)
+                    or 0
+                ),
                 "preview": preview[:120],
             }
         )
@@ -991,18 +1216,109 @@ def _is_generic_title(value: str) -> bool:
     }
 
 
+_TITLE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "ayrıca",
+    "beni",
+    "benim",
+    "bu",
+    "da",
+    "de",
+    "diye",
+    "for",
+    "gibi",
+    "için",
+    "ile",
+    "in",
+    "is",
+    "it",
+    "kim",
+    "kimi",
+    "kimin",
+    "what",
+    "where",
+    "why",
+    "how",
+    "mi",
+    "mu",
+    "mü",
+    "mı",
+    "ne",
+    "neden",
+    "niçin",
+    "not",
+    "of",
+    "on",
+    "or",
+    "sen",
+    "seni",
+    "sana",
+    "the",
+    "to",
+    "ve",
+    "var",
+    "yani",
+    "ya",
+    "ya da",
+    "bir",
+    "şu",
+    "şunu",
+    "şunun",
+    "this",
+    "that",
+}
+
+
+def _normalize_title_words(text: str) -> list[str]:
+    words: list[str] = []
+    for raw_word in str(text or "").split():
+        word = re.sub(r"^[^\wçğıöşüÇĞİÖŞÜ]+|[^\wçğıöşüÇĞİÖŞÜ]+$", "", raw_word).strip()
+        if not word:
+            continue
+        words.append(word)
+    return words
+
+
 def _derive_conversation_title(text: str) -> str:
     cleaned = " ".join(str(text or "").split()).strip()
     if not cleaned:
         return ""
-    words = cleaned.split(" ")
+    words = _normalize_title_words(cleaned)
     if len(words) <= 6 and len(cleaned) <= 42:
         return cleaned
-    snippet = " ".join(words[:6]).strip()
-    if len(snippet) < len(cleaned):
-        snippet = snippet.rstrip(".,;:!?")
-        return f"{snippet}…"
-    return snippet
+    significant_words = [word for word in words if word.lower() not in _TITLE_STOPWORDS]
+    candidate_words = significant_words[:7] if significant_words else words[:7]
+    if len(candidate_words) <= 1 and len(words) > 2:
+        candidate_words = words[:6]
+    candidate = " ".join(candidate_words).strip().rstrip(".,;:!?")
+    if not candidate:
+        candidate = " ".join(words[:6]).strip().rstrip(".,;:!?")
+    if len(candidate) >= len(cleaned):
+        return candidate[:80]
+    return f"{candidate[:77].rstrip()}…"
+
+
+def _derive_conversation_title_from_messages(messages: list[dict[str, Any]]) -> str:
+    meaningful_texts: list[str] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        text = str(item.get("text", "") or "").strip()
+        if not text:
+            continue
+        meaningful_texts.append(text)
+        if len(meaningful_texts) >= 2:
+            break
+    if not meaningful_texts:
+        return ""
+    if len(meaningful_texts[0].split()) <= 2 and len(meaningful_texts) > 1:
+        return _derive_conversation_title(" ".join(meaningful_texts[:2]))
+    return _derive_conversation_title(meaningful_texts[0])
 
 
 def create_conversation(title: str = "") -> dict[str, Any]:
@@ -1013,6 +1329,7 @@ def create_conversation(title: str = "") -> dict[str, Any]:
         item = {
             "id": conv_id,
             "title": (title or "").strip()[:80],
+            "archived": False,
             "createdAt": "",
             "updatedAt": "",
             "messages": [],
@@ -1062,19 +1379,31 @@ def append_message(conversation_id: str, role: str, text: str, extra: dict[str, 
                     conv = item
                     break
         messages = conv.setdefault("messages", [])
+        normalized_text = str(text or "").strip()
         message = {
             "id": _generate_id("msg"),
+            "sessionId": conversation_id,
             "role": role,
             "text": text,
-            "createdAt": "",
+            "content": normalized_text,
+            "status": "completed",
+            "createdAt": _task_inbox_timestamp(),
         }
         if extra:
             message.update(extra)
+        message["sessionId"] = str(message.get("sessionId", "") or conversation_id)
+        message["content"] = str(message.get("content", "") or message.get("text", "") or "")
+        if not isinstance(message.get("blocks"), list):
+            block_text = str(message.get("content", "") or "").strip()
+            if block_text and role in {"assistant", "system", "tool"}:
+                message["blocks"] = [{"type": "text", "markdown": block_text, "version": 1}]
         messages.append(message)
         conv["updatedAt"] = message["id"]
         current_title = str(conv.get("title", "") or "").strip()
-        if role == "user" and _is_generic_title(current_title):
-            conv["title"] = _derive_conversation_title(text)
+        if _is_generic_title(current_title):
+            summary_source = _derive_conversation_title_from_messages(messages)
+            if summary_source:
+                conv["title"] = summary_source
         state["conversation"]["activeId"] = conversation_id
         save_state(state)
         return message
@@ -1088,6 +1417,78 @@ def update_conversation_title(conversation_id: str, title: str) -> None:
                 item["title"] = (title or "").strip()[:80]
                 save_state(state)
                 return
+
+
+def archive_conversation(conversation_id: str, archived: bool = True) -> dict[str, Any] | None:
+    target_id = str(conversation_id or "").strip()
+    if not target_id:
+        return None
+    with _LOCK:
+        state = load_state()
+        conversations = state.get("conversation", {}).get("items", [])
+        if not isinstance(conversations, list):
+            return None
+        found: dict[str, Any] | None = None
+        for item in conversations:
+            if isinstance(item, dict) and str(item.get("id", "")) == target_id:
+                item["archived"] = bool(archived)
+                found = copy.deepcopy(item)
+                break
+        if found is None:
+            return None
+        if archived and str(state.get("conversation", {}).get("activeId", "") or "") == target_id:
+            fallback = next(
+                (
+                    str(item.get("id", "") or "")
+                    for item in conversations
+                    if isinstance(item, dict) and item.get("archived") is not True and str(item.get("id", "") or "") != target_id
+                ),
+                "",
+            )
+            state.setdefault("conversation", {})["activeId"] = fallback
+        elif not archived and not str(state.get("conversation", {}).get("activeId", "") or "").strip():
+            state.setdefault("conversation", {})["activeId"] = target_id
+        save_state(state)
+        return found
+
+
+def delete_conversation(conversation_id: str) -> dict[str, Any] | None:
+    target_id = str(conversation_id or "").strip()
+    if not target_id:
+        return None
+    with _LOCK:
+        state = load_state()
+        conversation_state = state.setdefault("conversation", {})
+        conversations = conversation_state.get("items", [])
+        if not isinstance(conversations, list):
+            return None
+        removed: dict[str, Any] | None = None
+        updated: list[dict[str, Any]] = []
+        for item in conversations:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("id", "") or "") == target_id:
+                removed = copy.deepcopy(item)
+                continue
+            updated.append(item)
+        if removed is None:
+            return None
+        conversation_state["items"] = updated
+        active_id = str(conversation_state.get("activeId", "") or "").strip()
+        if active_id == target_id:
+            next_active = next(
+                (
+                    str(item.get("id", "") or "")
+                    for item in updated
+                    if isinstance(item, dict) and item.get("archived") is not True
+                ),
+                "",
+            )
+            if not next_active:
+                next_active = next((str(item.get("id", "") or "") for item in updated), "")
+            conversation_state["activeId"] = next_active
+        save_state(state)
+        return removed
 
 
 def save_pending_plan(plan: dict[str, Any]) -> dict[str, Any]:
@@ -1407,6 +1808,53 @@ def save_remote_task_link(
         return stored
 
 
+def save_runtime_dispatch_link(
+    task_id: str,
+    lease_id: str,
+    *,
+    title: str = "",
+    status: str = "accepted",
+    execution_state: str = "accepted",
+    transport: str = "websocket",
+    accepted_at: str = "",
+) -> dict[str, Any]:
+    normalized_task_id = str(task_id or "").strip()
+    normalized_lease_id = str(lease_id or "").strip()
+    if not normalized_task_id or not normalized_lease_id:
+        return {}
+    stored = {
+        "taskId": normalized_task_id,
+        "pendingPlanId": "",
+        "conversationId": "",
+        "title": " ".join(str(title or "").split())[:200],
+        "status": str(status or "accepted").strip()[:64] or "accepted",
+        "executionState": str(execution_state or "accepted").strip()[:64] or "accepted",
+        "transport": str(transport or "websocket").strip()[:32] or "websocket",
+        "leaseId": normalized_lease_id[:120],
+        "acceptedAt": str(accepted_at or _task_inbox_timestamp()).strip()[:80],
+        "dispatchAckAt": "",
+        "updatedAt": _task_inbox_timestamp(),
+    }
+    with _LOCK:
+        state = load_state()
+        inbox = state.setdefault("taskInbox", {})
+        links = inbox.get("links", [])
+        if not isinstance(links, list):
+            links = []
+        next_links: list[dict[str, Any]] = [stored]
+        for item in links:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("taskId", "") or "") == normalized_task_id:
+                continue
+            next_links.append(copy.deepcopy(item))
+            if len(next_links) >= _TASK_LINK_LIMIT:
+                break
+        inbox["links"] = next_links[:_TASK_LINK_LIMIT]
+        save_state(state)
+        return copy.deepcopy(stored)
+
+
 def get_remote_task_link(task_id: str) -> dict[str, Any] | None:
     normalized_task_id = str(task_id or "").strip()
     if not normalized_task_id:
@@ -1419,6 +1867,15 @@ def get_remote_task_link(task_id: str) -> dict[str, Any] | None:
         if isinstance(item, dict) and str(item.get("taskId", "") or "") == normalized_task_id:
             return copy.deepcopy(item)
     return None
+
+
+def get_runtime_dispatch_link(task_id: str) -> dict[str, Any] | None:
+    link = get_remote_task_link(task_id)
+    if not isinstance(link, dict):
+        return None
+    if not str(link.get("leaseId", "") or "").strip():
+        return None
+    return link
 
 
 def update_remote_task_link(task_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
@@ -1447,6 +1904,33 @@ def update_remote_task_link(task_id: str, updates: dict[str, Any]) -> dict[str, 
         inbox["links"] = next_links[:_TASK_LINK_LIMIT]
         save_state(state)
         return updated
+
+
+def mark_runtime_dispatch_acked(
+    task_id: str,
+    lease_id: str,
+    *,
+    acked_at: str = "",
+    status: str = "acked",
+) -> dict[str, Any] | None:
+    normalized_task_id = str(task_id or "").strip()
+    normalized_lease_id = str(lease_id or "").strip()
+    if not normalized_task_id or not normalized_lease_id:
+        return None
+    current = get_runtime_dispatch_link(normalized_task_id)
+    if not isinstance(current, dict):
+        return None
+    if str(current.get("leaseId", "") or "").strip() != normalized_lease_id:
+        return None
+    return update_remote_task_link(
+        normalized_task_id,
+        {
+            "status": str(status or "acked").strip()[:64] or "acked",
+            "executionState": "acked",
+            "dispatchAckAt": str(acked_at or _task_inbox_timestamp()).strip()[:80],
+            "leaseId": normalized_lease_id[:120],
+        },
+    )
 
 
 def remove_remote_task_link(task_id: str) -> None:
@@ -1747,5 +2231,6 @@ def snapshot() -> dict[str, Any]:
 def public_snapshot(state: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = copy.deepcopy(state if isinstance(state, dict) else load_state())
     _strip_provider_secrets_in_place(payload)
+    _strip_provider_endpoints_in_place(payload)
     _strip_transport_secrets_in_place(payload)
     return payload

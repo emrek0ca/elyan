@@ -1,87 +1,44 @@
-# Elyan Engineering Guide
+# Elyan V1 Engineering Roadmap
 
-You are working on Elyan.
+You are working on Elyan. Elyan is not a chatbot; it is a production-grade, local-first AI agent system that can think, plan, execute, verify, learn, and improve over time.
 
-Elyan is a production-grade local-first AI agent system that can think, plan, execute, verify, learn, and improve over time.
+This file is the single engineering direction document for the desktop repo. When another session reads only this file, it should understand the current architecture, what is already in place, and what must be completed before V1 is ready to ship.
 
-## Core architecture
+## Current Product Shape
 
-### 1. Elyan Desktop
-- Shipping desktop shell: `electron/`
-- Cross-platform target: macOS, Windows, Linux
-- UI stack: Electron renderer/preload/main
-- Execution core: Python runtime in `runtime/`
-- Native support: C++ thin OS shim and Rust sidecars where needed
-- Private/local work stays on device
-- Desktop must start asynchronously and fail safely when runtime or native dependencies are missing
-- UI must never freeze because of runtime or native work
+- Desktop app lives at the repository root and is the shipping desktop product.
+- Desktop stack: Electron renderer/preload/main in `src/`, Python runtime in `runtime/`, C++ thin OS shim in `native/window_tools/`, Rust sidecars where compute-heavy native work is needed.
+- Mobile remains Flutter-only in `/Users/emrekoca/Desktop/mobile-elyan` for iOS and Android.
+- Backend/control-plane remains separate in `/Users/emrekoca/Desktop/elyan-backend`.
+- Flutter desktop is not part of the shipping direction. Do not add or revive a desktop Flutter shell.
 
-### 2. Elyan Backend / Control-plane
-- Handles auth, billing, devices, pairing, routing, realtime, quota, learning events, retrieval metadata, and orchestration truth
-- Does not execute private local computer actions directly
-- Does not receive private local context unless the product flow explicitly allows it
+## System Boundary
 
-### 3. Elyan Mobile
-- Mobile app remains Flutter-only in `/Users/emrekoca/Desktop/mobile-elyan`
-- Targets iOS and Android only
-- Sends tasks, shows status/results, and pairs with desktop
-- Renders backend truth and does not talk directly to local desktop engines outside the Elyan task flow
+Required desktop execution path:
 
-## Required execution boundary
-
-Desktop UI  
--> preload API  
--> Electron main  
--> Python runtime bridge  
--> capability registry  
--> safety policy  
--> adapter  
--> library / tool / native integration  
--> structured result
+`Electron renderer -> preload API -> Electron main -> Python runtime bridge -> capability registry -> safety policy -> adapter -> library/tool/native integration -> structured result`
 
 Never use:
+
 - renderer -> Node/native libraries directly
 - mobile -> local engine directly
 - backend -> private local computer tools directly
+- UI/business logic -> third-party library calls scattered across components
 
-## Native rules
+Mobile sends tasks and shows status/results. Backend owns auth, billing, devices, pairing, routing, quota, realtime, learning events, retrieval metadata, and orchestration truth. Desktop owns private/local execution and full computer control after permission/safety checks.
 
-- Prefer Python as the execution orchestrator.
-- Use C++ only as a thin OS integration layer for Electron main:
-  - window/system integration
-  - process/app discovery
-  - permission probes
-  - safe OS capability truth
-- Use Rust for compute-heavy native sidecars such as local indexing.
-- Do not move business logic into the C++ addon.
-- All native features must degrade safely when unavailable.
+## What Exists Now
 
-## Engineering rules
+- Electron desktop shell with custom renderer, preload API, main process, native snapshot plumbing, window management, provider vault, dictation manager, and runtime supervisor.
+- Python runtime bridge with structured request/response envelopes, backend truth refresh, auth/login/register/logout, pairing, runtime registration/heartbeat/session, conversation/session actions, task relay, MCP, skills, local model status, executor core, and capability registry.
+- Runtime task flow includes backend-mediated assigned tasks, dispatch ack, status/artifact reporting, approval resume/cancel paths, and local task inbox state.
+- Capability categories already include desktop operator, browser, document read/write, OCR, image read/generation, media, speech, math, LaTeX, retrieval, local models, MCP tools, skills, shell, calendar/reminders, email, data analysis, charting, and quantum actions.
+- Recent desktop parity work is aligning Electron with the mobile product flow: signed-in home chat, session-based history/archive, backend truth hydration, runtime/device readiness, active remote task inbox, approval-required tasks, reconnect/degraded/offline states, and desktop-only power surfaces for apps/skills/operator readiness.
+- Mobile design/behavior remains the reference for chat, auth, history, pairing, realtime, and task status, but implementation must be native to Electron/React/TypeScript, not copied from Flutter.
 
-- Do not redesign Elyan into a separate architecture.
-- Improve the current Electron + Python + native structure only.
-- Keep changes minimal, isolated, and production-grade.
-- Every capability must go through registry + adapter + safety policy.
-- Missing dependencies must not crash the desktop app.
-- Heavy modules must lazy-load.
-- Long-running operations must support timeout/cancel.
-- No uncontrolled polling.
-- No raw stack traces to users.
-- No private user input in logs by default.
-- No hardcoded user-specific paths in production code.
+## Runtime Envelope Contract
 
-## Desktop direction
-
-- Flutter desktop is no longer part of the shipping product path.
-- Do not add new desktop work in Flutter.
-- New desktop UI, native, runtime, and packaging work belongs under:
-  - `electron/`
-  - `runtime/`
-  - `native/`
-
-## Success shape
-
-All runtime calls must use structured JSON-compatible request/response envelopes.
+Every runtime call must be JSON-compatible and return a safe envelope.
 
 Success:
 
@@ -117,3 +74,135 @@ Error:
   "durationMs": 0
 }
 ```
+
+No raw stack traces, private prompt/file contents, credentials, or uncontrolled logs should surface to users by default.
+
+## Engineering Rules
+
+- Improve the existing Electron + Python + native architecture only.
+- Keep changes minimal, isolated, testable, and production-grade.
+- Every capability goes through registry + adapter + safety policy.
+- Missing dependencies must degrade safely and must not crash app startup.
+- Heavy modules must lazy-load. Startup should load only protocol/config/registry/health truth.
+- Runtime startup must be asynchronous. Electron UI must never freeze because Python, native modules, MCP, OCR, Playwright, local models, or document conversion are slow/missing.
+- Long-running work must support timeout and cancellation where feasible.
+- No uncontrolled polling, infinite loops, or hidden background actions.
+- No hardcoded user-specific paths. Use `pathlib` in Python and platform-safe APIs in TypeScript/Dart.
+- No `shell=True` unless documented and unavoidable. Prefer direct process arguments.
+- Preserve macOS, Windows, and Linux behavior.
+- Preserve current UI/UX unless a UI change is explicitly part of the task.
+
+## Safety Policy
+
+Blocked by default:
+
+- arbitrary shell commands
+- file deletion/overwrite
+- private folder scanning without permission
+- system settings changes
+- credential access
+- email/message sending
+- payments/billing
+- destructive browser/computer actions
+- uncontrolled clicking/typing
+- hidden automation
+- background side effects without taskId/traceId
+
+Permission required:
+
+- browser control
+- computer screenshot/click/type/hotkey
+- file write
+- document edit/export
+- automation creation
+- MCP tool call with side effects
+- external API action
+- connector write action
+
+Allowed initially:
+
+- runtime status
+- capability listing
+- text processing
+- safe document parsing
+- safe math/LaTeX conversion
+- safe read-only operations in allowed workspace
+- local model/dependency status checks
+
+## Dependency Direction
+
+`requirements.txt` is a runtime dependency manifest and should remain as a build/install input. Keep AGENTS as the guidance document; do not delete dependency manifests required by packaging or local setup.
+
+Current Python dependency families include:
+
+- runtime/API: `requests`, `httpx`, `websocket-client`
+- agent/model routing: `google-genai`, `litellm`, `langgraph`
+- document/OCR/data: `markitdown`, `pymupdf`, `python-docx`, `openpyxl`, `python-pptx`, `pandas`, `matplotlib`
+- speech/media/vision: `SpeechRecognition`, `pyaudio`, `faster-whisper`, `sounddevice`, `soundfile`, `Pillow`, `playwright`
+- math/quantum: `sympy`, `latex2sympy2_extended`, `qiskit`, `qiskit-aer`
+- system/MCP: `psutil`, `mcp`
+
+Do not add unused dependencies. Prefer one primary stable library per capability and one fallback only when there is a concrete failure mode.
+
+## V1 Done Point
+
+V1 is ready only when all of these are true:
+
+- Desktop boots asynchronously on macOS, Windows, and Linux, and degrades safely when Python/runtime/native dependencies are missing.
+- Login/register/logout, backend truth refresh, pairing, runtime registration, heartbeat/session, and assigned task execution work through the runtime bridge.
+- Mobile -> backend -> desktop task flow is preserved. No direct mobile-to-engine shortcut exists.
+- Session history remains chat/session-based, not raw task-row based.
+- Desktop task shell shows runtime/device readiness, task inbox, approval-required tasks, reconnect/degraded/offline states, and desktop-only power surfaces.
+- Permission-gated desktop capabilities fail closed with clear human messages and no raw stack traces.
+- MCP and skills are optional; runtime boots without them, discovers dynamically, times out safely, and normalizes tool results.
+- Local private execution stays on desktop unless the product flow explicitly allows sharing.
+- Packaging works with optional PyInstaller runtime bundle and fallback/degraded runtime status.
+- Verification passes:
+  - `npm run typecheck`
+  - `npm run test`
+  - `npm run build`
+  - `npm run test:smoke` when a renderer preview/dev server is available
+  - `python -m pytest tests/test_runtime_startup_contract.py tests/test_runtime_bridge_contract.py -q`
+
+## Commands
+
+Run desktop locally:
+
+```bash
+npm install
+npm run dev
+```
+
+Root helper:
+
+```bash
+script/build_and_run.sh
+```
+
+Full verification:
+
+```bash
+npm run typecheck
+npm run test
+npm run build
+npm run test:smoke
+python -m pytest tests/test_runtime_startup_contract.py tests/test_runtime_bridge_contract.py -q
+```
+
+## Roadmap Discipline
+
+When adding a capability:
+
+1. Inspect the current extension point first.
+2. Choose the smallest stable library already allowed by the dependency direction.
+3. Add it through adapter + registry + safety policy.
+4. Keep UI changes minimal and presentation-only.
+5. Add dependency checks and graceful failure.
+6. Add tests/manual verification.
+7. Report exact files changed.
+
+If a task risks changing backend/mobile boundaries, stop and preserve this invariant:
+
+`Mobile -> Backend/control-plane -> Desktop runtime`
+
+Desktop can control the whole computer only through explicit, permission-gated, task-scoped runtime capabilities.

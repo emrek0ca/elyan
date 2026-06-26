@@ -58,8 +58,27 @@ def _app_exists(path: str) -> bool:
     return os.path.exists(path)
 
 
-def _play_youtube(query: str) -> str:
-    return browser_control("play_youtube", query=query)
+def _play_youtube(query: str) -> dict[str, object]:
+    payload = browser_control("play_youtube", query=query)
+    if isinstance(payload, str):
+        return {
+            "text": payload,
+            "result": {
+                "provider": "youtube",
+                "autoplay": True,
+                "query": query,
+                "launched": True,
+                "handoff": "browser_control",
+                "handoffVerified": bool(query.strip()),
+            },
+        }
+    result = payload.get("result")
+    result = dict(result) if isinstance(result, dict) else {}
+    result["provider"] = "youtube"
+    result["autoplay"] = True
+    result["query"] = query
+    payload["result"] = result
+    return payload
 
 
 def _play_spotify(query: str, autoplay: bool = True) -> str:
@@ -165,7 +184,21 @@ def _play_music_app(query: str, autoplay: bool = True) -> str:
     raise capability_unavailable("Music oynatma otomasyonu guvenli sekilde tamamlanamadi.")
 
 
-def play_media(query: str, provider: str = "auto", autoplay: bool = True) -> str:
+def _media_result(text: str, *, provider: str, handoff: str, autoplay: bool, query: str) -> dict[str, object]:
+    return {
+        "text": text,
+        "result": {
+            "provider": provider,
+            "handoff": handoff,
+            "autoplay": autoplay,
+            "query": query,
+            "launched": True,
+            "handoffVerified": bool(query.strip()),
+        },
+    }
+
+
+def play_media(query: str, provider: str = "auto", autoplay: bool = True) -> dict[str, object]:
     if not query or not query.strip():
         raise invalid_argument("Calinacak icerik belirtilmedi.")
 
@@ -178,11 +211,23 @@ def play_media(query: str, provider: str = "auto", autoplay: bool = True) -> str
     if normalized_provider == "spotify":
         if not is_macos():
             raise unsupported_platform("Spotify masaustu oynatma su anda yalnizca macOS'ta destekleniyor.")
-        return _play_spotify(query, autoplay=autoplay)
+        return _media_result(
+            _play_spotify(query, autoplay=autoplay),
+            provider="spotify",
+            handoff="desktop_app",
+            autoplay=autoplay,
+            query=query,
+        )
     if normalized_provider == "apple_music":
         if not is_macos():
             raise unsupported_platform("Apple Music masaustu oynatma su anda yalnizca macOS'ta destekleniyor.")
-        return _play_music_app(query, autoplay=autoplay)
+        return _media_result(
+            _play_music_app(query, autoplay=autoplay),
+            provider="apple_music",
+            handoff="desktop_app",
+            autoplay=autoplay,
+            query=query,
+        )
     if normalized_provider == "youtube":
         return _play_youtube(query)
 
@@ -191,12 +236,24 @@ def play_media(query: str, provider: str = "auto", autoplay: bool = True) -> str
         return _play_youtube(query)
     if _app_exists(SPOTIFY_APP):
         try:
-            return _play_spotify(query, autoplay=autoplay)
+            return _media_result(
+                _play_spotify(query, autoplay=autoplay),
+                provider="spotify",
+                handoff="desktop_app",
+                autoplay=autoplay,
+                query=query,
+            )
         except Exception as exc:
             if getattr(exc, "code", "") not in {"CAPABILITY_UNAVAILABLE", "UNSUPPORTED_PLATFORM"}:
                 raise
     try:
-        return _play_music_app(query, autoplay=autoplay)
+        return _media_result(
+            _play_music_app(query, autoplay=autoplay),
+            provider="apple_music",
+            handoff="desktop_app",
+            autoplay=autoplay,
+            query=query,
+        )
     except Exception as exc:
         if getattr(exc, "code", "") not in {"CAPABILITY_UNAVAILABLE", "UNSUPPORTED_PLATFORM"}:
             raise

@@ -1,0 +1,13 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#F5F0E8"/>
+  <rect x="24" y="24" width="1152" height="582" rx="34" fill="#FBF8F3" stroke="#DDD1C0"/>
+  <circle cx="908" cy="160" r="180" fill="#E9EFE7"/>
+  <circle cx="908" cy="160" r="104" fill="#F3ECE3"/>
+  <path d="M924 146C924 191.287 887.287 228 842 228H770C724.713 228 688 191.287 688 146C688 100.713 724.713 64 770 64H842C887.287 64 924 100.713 924 146ZM714 146C714 176.928 739.072 202 770 202H842C872.928 202 898 176.928 898 146C898 115.072 872.928 90 842 90H770C739.072 90 714 115.072 714 146Z" fill="#536653" fill-opacity="0.16"/>
+  <path d="M440 336C440 263.098 499.098 204 572 204H684C756.902 204 816 263.098 816 336C816 408.902 756.902 468 684 468H572C499.098 468 440 408.902 440 336ZM468 336C468 393.438 514.562 440 572 440H684C741.438 440 788 393.438 788 336C788 278.562 741.438 232 684 232H572C514.562 232 468 278.562 468 336Z" fill="#536653"/>
+  <circle cx="628" cy="336" r="38" fill="#6F8770"/>
+  <text x="96" y="218" fill="#6F8770" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="0.24em">ELYAN</text>
+  <text x="96" y="308" fill="#221C17" font-family="Inter, Arial, sans-serif" font-size="64" font-weight="700">AI Agent</text>
+  <text x="96" y="378" fill="#221C17" font-family="Inter, Arial, sans-serif" font-size="64" font-weight="700">Control Surface</text>
+  <text x="96" y="452" fill="#786B5D" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="500">Desktop runtime. Control-plane truth. Mobile task flow.</text>
+</svg>

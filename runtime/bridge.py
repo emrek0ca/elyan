@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import difflib
+import inspect
 import json
 import os
 import re
@@ -21,8 +22,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import requests
-
 from app_config import get_app_config_value
 from runtime.backend_client import BackendClient, BackendResult
 from runtime.capability_registry import (
@@ -38,6 +37,7 @@ from runtime.capability_registry import (
     safe_tool_event,
 )
 from runtime.safety_policy import PERSONAL_ACTION_CAPABILITIES, evaluate_tool
+from runtime.agent_planning import build_agent_plan
 from runtime.task_router import (
     RoutedTask,
     artifact_target_clarification,
@@ -78,6 +78,7 @@ SIDE_EFFECT_CAPABILITIES = {
     "document_write",
     "spreadsheet_write",
     "presentation_write",
+    "canvas_write",
     "run_skill",
 }
 LOCAL_PRIVATE_CAPABILITIES = {
@@ -92,6 +93,7 @@ LOCAL_PRIVATE_CAPABILITIES = {
     "save_whatsapp_contact",
     "document_read",
     "document_write",
+    "canvas_write",
     "ocr_read",
     "image_read",
     "data_analyze",
@@ -114,12 +116,71 @@ REMOTE_QUANTUM_CAPABILITIES = {
     "quantum_compare_classical",
     "quantum_generate_report",
 }
+REMOTE_DETERMINISTIC_CAPABILITIES = {
+    "retrieve_context",
+    "web_research",
+    "document_read",
+    "ocr_read",
+    "image_read",
+    "data_analyze",
+    "chart_generate",
+    "math_solve",
+    "latex_parse",
+    "document_write",
+    "spreadsheet_write",
+    "presentation_write",
+    "canvas_write",
+    "email_draft",
+    "email_send",
+    "browser_control",
+    "play_media",
+    "sys_info",
+    "desktop_operator.observe_screen",
+    "desktop_operator.locate",
+    "desktop_operator.focus_window",
+    "desktop_operator.execute_action",
+    "desktop_operator.run",
+    *REMOTE_QUANTUM_CAPABILITIES,
+}
+REMOTE_APPROVAL_CAPABILITIES = {
+    *SIDE_EFFECT_CAPABILITIES,
+    "browser_control",
+    "play_media",
+    "mcp_call_tool",
+    "desktop_operator.focus_window",
+    "desktop_operator.execute_action",
+    "desktop_operator.run",
+}
 QUANTUM_EXECUTION_CAPABILITIES = {"quantum_run_experiment"}
 EMAIL_ADDRESS_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 
 
 def _canonical_capability_name(value: Any) -> str:
-    return str(value or "").strip().lower().replace(".", "_").replace(" ", "_")
+    normalized = " ".join(str(value or "").strip().lower().split())
+    if not normalized:
+        return ""
+    normalized = normalized.replace(" ", "_")
+    aliases = {
+        "email.draft": "email_draft",
+        "email.send": "email_send",
+        "web.research": "web_research",
+        "runtime.status": "runtime.status",
+        "desktop.operator.observe_screen": "desktop_operator.observe_screen",
+        "desktop.operator.locate": "desktop_operator.locate",
+        "desktop.operator.focus_window": "desktop_operator.focus_window",
+        "desktop.operator.execute_action": "desktop_operator.execute_action",
+        "desktop.operator.run": "desktop_operator.run",
+        "desktop.operator.cancel": "desktop_operator.cancel",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    if normalized.startswith("desktop_operator."):
+        return normalized
+    if normalized.startswith("desktop.operator."):
+        return "desktop_operator." + normalized.removeprefix("desktop.operator.")
+    if normalized.startswith("desktop_os."):
+        return normalized
+    return normalized.replace(".", "_")
 
 
 def _extract_email_addresses_from_text(text: str) -> list[str]:
@@ -157,8 +218,29 @@ def _request_id() -> str:
     return f"req_{uuid.uuid4().hex[:12]}"
 
 
+def _is_uuid_value(value: Any) -> bool:
+    import uuid
+
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        uuid.UUID(text)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _map_from(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _first_nonempty(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def _parse_iso_datetime(value: str) -> dt.datetime | None:
@@ -187,6 +269,91 @@ def _safe_json(value: Any) -> Any:
         return json.loads(json.dumps(value, ensure_ascii=False))
     except Exception:
         return value
+
+
+def _text_from_text_block(block: dict[str, Any]) -> str:
+    return _first_nonempty(
+        block.get("markdown"),
+        block.get("content"),
+        block.get("text"),
+        block.get("summary"),
+        block.get("value"),
+        block.get("description"),
+    )
+
+
+def _normalize_text_block(block: Any) -> dict[str, Any] | None:
+    record = _map_from(block)
+    if not record:
+        return None
+    if str(record.get("visibility", "") or "").strip() == "assistant_internal_by_default":
+        return None
+    block_type = str(record.get("type", "") or "").strip() or "text"
+    normalized = dict(record)
+    normalized["type"] = block_type
+    if block_type == "text":
+        markdown = _text_from_text_block(record)
+        if not markdown:
+            return None
+        normalized["markdown"] = markdown
+        normalized["format"] = str(record.get("format", "") or "").strip() or "markdown"
+        try:
+            normalized["version"] = int(record.get("version") or 1)
+        except (TypeError, ValueError):
+            normalized["version"] = 1
+    return normalized
+
+
+def _normalize_message_blocks(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    blocks: list[dict[str, Any]] = []
+    for item in value:
+        block = _normalize_text_block(item)
+        if block is not None:
+            blocks.append(block)
+    return blocks
+
+
+def _flatten_blocks_text(blocks: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for block in blocks:
+        if str(block.get("type", "") or "").strip() == "text":
+            text = _text_from_text_block(block)
+        else:
+            text = _first_nonempty(
+                block.get("content"),
+                block.get("summary"),
+                block.get("description"),
+                block.get("value"),
+                block.get("title"),
+            )
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts).strip()
+
+
+def _message_blocks_from_content(text: str) -> list[dict[str, Any]]:
+    content = str(text or "").strip()
+    if not content:
+        return []
+    return [
+        {
+            "type": "text",
+            "markdown": content,
+            "format": "markdown",
+            "version": 1,
+        }
+    ]
+
+
+@lru_cache(maxsize=1)
+def _requests_module() -> Any | None:
+    try:
+        import requests as requests_module
+    except Exception:
+        return None
+    return requests_module
 
 
 def _simple_local_runtime_status(provider_id: str, status: dict[str, Any]) -> tuple[str, str]:
@@ -382,6 +549,7 @@ def _runtime_advertised_capabilities() -> list[str]:
             "backend.auth_avatar_get",
             "backend.auth_avatar_delete",
             "backend.auth_delete_account",
+            "backend.auth_oauth_login",
         }
     )
     if not _quantum_simulator_ready():
@@ -444,6 +612,117 @@ def _native_desktop_dependency_status() -> dict[str, Any]:
     }
 
 
+def _desktop_native_snapshot_payload() -> dict[str, Any]:
+    try:
+        module = import_module("actions.desktop_os")
+        runtime_status = module.desktop_os_runtime_status()
+        snapshot = module.desktop_os_snapshot()
+        permissions_status = module.desktop_os_permissions()
+    except Exception:
+        return {
+            "available": False,
+            "text": "Yerel native desktop snapshot hazır değil.",
+            "lastErrorCode": "native_snapshot_unavailable",
+            "platform": "",
+            "source": "",
+            "collectedAt": "",
+            "osPermissionModel": "",
+            "processInspectionAvailable": False,
+            "activeWindowAvailable": False,
+            "permissionProbeAvailable": False,
+            "globalShortcutsAvailable": False,
+            "screenCaptureAvailable": False,
+            "permissions": {},
+            "processes": {},
+            "activeWindow": {},
+            "operator": {},
+            "runtimeStatus": {},
+            "permissionsStatus": {},
+        }
+    result = snapshot.get("result", {}) if isinstance(snapshot, dict) else {}
+    result = result if isinstance(result, dict) else {}
+    runtime_status = runtime_status if isinstance(runtime_status, dict) else {}
+    permissions_status_result = permissions_status.get("result", {}) if isinstance(permissions_status, dict) else {}
+    permissions_status_result = permissions_status_result if isinstance(permissions_status_result, dict) else {}
+    permissions = result.get("permissions", {})
+    processes = result.get("processes", {})
+    active_window = result.get("activeWindow", {})
+    operator = result.get("operator", {})
+    return {
+        "available": bool(runtime_status.get("available", False)),
+        "text": str(snapshot.get("text", "") or ""),
+        "lastErrorCode": str(runtime_status.get("lastErrorCode", "") or ""),
+        "platform": str(result.get("platform", "") or ""),
+        "source": str(result.get("source", "") or ""),
+        "collectedAt": str(result.get("collectedAt", "") or ""),
+        "osPermissionModel": str(result.get("osPermissionModel", "") or ""),
+        "processInspectionAvailable": bool(result.get("processInspectionAvailable", False)),
+        "activeWindowAvailable": bool(result.get("activeWindowAvailable", False)),
+        "permissionProbeAvailable": bool(result.get("permissionProbeAvailable", False)),
+        "globalShortcutsAvailable": bool(result.get("globalShortcutsAvailable", False)),
+        "screenCaptureAvailable": bool(result.get("screenCaptureAvailable", False)),
+        "permissions": permissions if isinstance(permissions, dict) else {},
+        "processes": processes if isinstance(processes, dict) else {},
+        "activeWindow": active_window if isinstance(active_window, dict) else {},
+        "operator": operator if isinstance(operator, dict) else {},
+        "runtimeStatus": runtime_status,
+        "permissionsStatus": permissions_status_result,
+    }
+
+
+def _desktop_native_context_lines(snapshot: dict[str, Any]) -> str:
+    if not isinstance(snapshot, dict) or not bool(snapshot.get("available", False)):
+        return ""
+    permissions = snapshot.get("permissions", {})
+    permissions = permissions if isinstance(permissions, dict) else {}
+    permission_bits: list[str] = []
+    for name in ("accessibility", "screenRecording", "inputMonitoring", "automation"):
+        item = permissions.get(name)
+        if isinstance(item, dict):
+            permission_bits.append(f"{name}:{str(item.get('status', 'unknown') or 'unknown')}")
+    processes = snapshot.get("processes", {})
+    processes = processes if isinstance(processes, dict) else {}
+    active_window = snapshot.get("activeWindow", {})
+    active_window = active_window if isinstance(active_window, dict) else {}
+    operator = snapshot.get("operator", {})
+    operator = operator if isinstance(operator, dict) else {}
+    lines = [
+        "[DESKTOP NATIVE TRUTH]",
+        f"platform={str(snapshot.get('platform', '') or 'unknown')}",
+        f"source={str(snapshot.get('source', '') or 'unknown')}",
+        f"activeWindow={str(active_window.get('appName', '') or 'none')} :: {str(active_window.get('windowTitle', '') or 'none')}",
+        f"processCount={int(processes.get('total', 0) or 0)}",
+        f"processInspection={bool(snapshot.get('processInspectionAvailable', False))}",
+        f"activeWindowReady={bool(snapshot.get('activeWindowAvailable', False))}",
+        f"permissionProbe={bool(snapshot.get('permissionProbeAvailable', False))}",
+        f"operatorReady={bool(operator.get('available', False))}",
+        f"screenObservationReady={bool(operator.get('screenObservationReady', False))}",
+        f"accessibilityReady={bool(operator.get('accessibilityReady', False))}",
+        f"inputControlReady={bool(operator.get('inputControlReady', False))}",
+    ]
+    if permission_bits:
+        lines.append(f"permissions={', '.join(permission_bits)}")
+    return "\n".join(lines)
+
+
+def _operator_status_payload(state: dict[str, Any]) -> dict[str, Any]:
+    operator = _map_from(state.get("operator"))
+    return {
+        "activeRunId": str(operator.get("activeRunId", "") or "").strip(),
+        "status": str(operator.get("status", "idle") or "idle").strip() or "idle",
+        "abortRequested": bool(operator.get("abortRequested", False)),
+        "abortReason": str(operator.get("abortReason", "") or "").strip(),
+        "currentStep": max(0, int(operator.get("currentStepIndex", 0) or 0)),
+        "lastObservationId": str(operator.get("lastObservationId", "") or "").strip(),
+        "lastStopReason": str(operator.get("lastStopReason", "") or "").strip(),
+        "lastCompletedAt": str(operator.get("lastCompletedAt", "") or "").strip(),
+        "operatorResolutionMode": str(operator.get("operatorResolutionMode", "") or "").strip(),
+        "lastTargetSource": str(operator.get("lastTargetSource", "") or "").strip(),
+        "lastVerificationSource": str(operator.get("lastVerificationSource", "") or "").strip(),
+        "lastTargetConfidence": round(float(operator.get("lastTargetConfidence", 0.0) or 0.0), 3),
+    }
+
+
 def _desktop_os_capability_states() -> dict[str, dict[str, Any]]:
     try:
         module = import_module("actions.desktop_os")
@@ -489,11 +768,90 @@ def _desktop_os_capability_states() -> dict[str, dict[str, Any]]:
     }
 
 
+def _desktop_operator_capability_states() -> dict[str, dict[str, Any]]:
+    try:
+        module = import_module("actions.desktop_operator")
+        status = module.operator_runtime_status()
+    except Exception:
+        unavailable = {
+            "available": False,
+            "ready": False,
+            "errorCode": "desktop_operator_unavailable",
+        }
+        return {
+            "desktop_operator.observe_screen": dict(unavailable),
+            "desktop_operator.locate": dict(unavailable),
+            "desktop_operator.focus_window": dict(unavailable),
+            "desktop_operator.execute_action": dict(unavailable),
+            "desktop_operator.run": dict(unavailable),
+            "desktop_operator.cancel": dict(unavailable),
+        }
+    detail = status.get("detail", {}) if isinstance(status, dict) else {}
+    detail = detail if isinstance(detail, dict) else {}
+    available = bool(status.get("available", False))
+    screen_ready = bool(detail.get("screenObservationReady", False))
+    accessibility_ready = bool(detail.get("accessibilityReady", False))
+    input_ready = bool(detail.get("inputControlReady", False))
+    error_code = str(status.get("lastErrorCode", "") or "")
+    playwright_ready = bool(detail.get("playwrightReady", False))
+    browser_first_ready = bool(detail.get("browserFirstReady", False))
+    return {
+        "desktop_operator.observe_screen": {
+            "available": available,
+            "ready": available and screen_ready,
+            "errorCode": error_code if not (available and screen_ready) else "",
+            "platform": str(detail.get("platform", "") or ""),
+            "playwrightReady": playwright_ready,
+            "browserFirstReady": browser_first_ready,
+        },
+        "desktop_operator.locate": {
+            "available": available,
+            "ready": available and screen_ready,
+            "errorCode": error_code if not (available and screen_ready) else "",
+            "platform": str(detail.get("platform", "") or ""),
+            "playwrightReady": playwright_ready,
+            "browserFirstReady": browser_first_ready,
+        },
+        "desktop_operator.focus_window": {
+            "available": available,
+            "ready": available and accessibility_ready,
+            "errorCode": error_code if not (available and accessibility_ready) else "",
+            "platform": str(detail.get("platform", "") or ""),
+        },
+        "desktop_operator.execute_action": {
+            "available": available,
+            "ready": available and input_ready,
+            "errorCode": error_code if not (available and input_ready) else "",
+            "platform": str(detail.get("platform", "") or ""),
+            "emergencyStopAvailable": bool(detail.get("emergencyStopAvailable", False)),
+            "playwrightReady": playwright_ready,
+            "browserFirstReady": browser_first_ready,
+        },
+        "desktop_operator.run": {
+            "available": available,
+            "ready": available and screen_ready and input_ready,
+            "errorCode": error_code if not (available and screen_ready and input_ready) else "",
+            "platform": str(detail.get("platform", "") or ""),
+            "emergencyStopAvailable": bool(detail.get("emergencyStopAvailable", False)),
+            "playwrightReady": playwright_ready,
+            "browserFirstReady": browser_first_ready,
+        },
+        "desktop_operator.cancel": {
+            "available": available,
+            "ready": available,
+            "errorCode": error_code if not available else "",
+            "platform": str(detail.get("platform", "") or ""),
+            "emergencyStopAvailable": bool(detail.get("emergencyStopAvailable", False)),
+        },
+    }
+
+
 def _runtime_dynamic_capability_states(local_models_state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
         native_file_indexer.CAPABILITY_NAME: native_file_indexer.current_capability_state(),
         LOCAL_MODELS_CAPABILITY_NAME: local_models_state,
         **_desktop_os_capability_states(),
+        **_desktop_operator_capability_states(),
     }
 
 
@@ -628,13 +986,17 @@ def _skill_status_payload() -> dict[str, Any]:
         }
 
 
-def _build_system_instruction() -> str:
+def _build_system_instruction(state: dict[str, Any] | None = None) -> str:
     now = dt.datetime.now()
     time_ctx = f"[SU ANKI ZAMAN]\n{now.strftime('%A, %d %B %Y — %H:%M')}\n\n"
     memory = _memory_prompt_context()
     parts = [time_ctx]
     if memory:
         parts.append(memory + "\n\n")
+    if isinstance(state, dict):
+        task_intelligence = _task_intelligence_prompt_context(state)
+        if task_intelligence:
+            parts.append(task_intelligence + "\n\n")
     parts.append(_load_prompt())
     return "\n".join(parts)
 
@@ -674,6 +1036,121 @@ def _workspace_projects() -> list[dict[str, Any]]:
 
 def _conversation_entries() -> list[dict[str, Any]]:
     return state_store.list_conversations()
+
+
+def _normalize_backend_chat_message(message: Any) -> dict[str, Any]:
+    record = _map_from(message)
+    normalized = dict(record)
+    content_blob = _map_from(normalized.get("contentBlob") or normalized.get("content_blob"))
+    blocks = _normalize_message_blocks(normalized.get("blocks"))
+    if not blocks:
+        blocks = _normalize_message_blocks(content_blob.get("blocks"))
+    content = _first_nonempty(
+        _flatten_blocks_text(blocks),
+        normalized.get("visibleContent"),
+        normalized.get("visible_content"),
+        normalized.get("content"),
+        normalized.get("text"),
+        normalized.get("message"),
+        content_blob.get("visibleContent"),
+        content_blob.get("visible_content"),
+        content_blob.get("content"),
+        content_blob.get("text"),
+    )
+    if content:
+        normalized["text"] = content
+        normalized["content"] = content
+    else:
+        normalized["text"] = ""
+        normalized["content"] = ""
+    if not blocks:
+        blocks = _message_blocks_from_content(content)
+    if blocks:
+        normalized["blocks"] = blocks
+    metadata = _map_from(
+        normalized.get("meta")
+        or normalized.get("metadata")
+        or normalized.get("extra")
+    )
+    if metadata:
+        normalized["meta"] = metadata
+    role = str(normalized.get("role", "assistant") or "assistant").strip().lower()
+    if role not in {"system", "user", "assistant"}:
+        normalized["role"] = "assistant"
+    return normalized
+
+
+def _conversation_state_item_from_backend_session(
+    session: dict[str, Any],
+    *,
+    existing: dict[str, Any] | None = None,
+    messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    session_record = _map_from(session)
+    existing_record = _map_from(existing)
+    existing_messages = existing_record.get("messages", [])
+    if not isinstance(existing_messages, list):
+        existing_messages = []
+    source_messages = messages if messages is not None else existing_messages
+    if not isinstance(source_messages, list):
+        source_messages = []
+    normalized_messages = [
+        _normalize_backend_chat_message(message)
+        for message in source_messages
+        if isinstance(message, dict)
+    ]
+    title = _first_nonempty(session_record.get("title"), existing_record.get("title"))
+    preview = _first_nonempty(session_record.get("preview"), existing_record.get("preview"))
+    if not preview and normalized_messages:
+        preview = _first_nonempty(
+            normalized_messages[-1].get("text"),
+            normalized_messages[-1].get("content"),
+        )
+    message_count = session_record.get("messageCount")
+    try:
+        normalized_message_count = max(
+            0,
+            int(message_count if message_count is not None else len(normalized_messages)),
+        )
+    except (TypeError, ValueError):
+        normalized_message_count = len(normalized_messages)
+    status = _first_nonempty(session_record.get("status"), existing_record.get("status"))
+    archived = status == "archived"
+    return {
+        **existing_record,
+        "id": _first_nonempty(session_record.get("id"), existing_record.get("id")),
+        "title": title,
+        "preview": preview,
+        "messages": normalized_messages,
+        "archived": archived,
+        "createdAt": _first_nonempty(session_record.get("createdAt"), existing_record.get("createdAt")),
+        "updatedAt": _first_nonempty(
+            session_record.get("updatedAt"),
+            existing_record.get("updatedAt"),
+            session_record.get("lastMessageAt"),
+        ),
+        "lastMessageAt": _first_nonempty(
+            session_record.get("lastMessageAt"),
+            existing_record.get("lastMessageAt"),
+            session_record.get("updatedAt"),
+        ),
+        "targetDeviceId": _first_nonempty(
+            session_record.get("targetDeviceId"),
+            existing_record.get("targetDeviceId"),
+        ),
+        "source": _first_nonempty(session_record.get("source"), existing_record.get("source")),
+        "status": status or "active",
+        "messageCount": normalized_message_count,
+        "metadata": _map_from(session_record.get("metadata") or existing_record.get("metadata")),
+    }
+
+
+def _conversation_summary_session_ids(items: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(item.get("id", "") or "").strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("id", "") or "").strip()
+    }
 
 
 def _current_provider(state: dict[str, Any]) -> str:
@@ -878,7 +1355,12 @@ def _selected_local_runtime_error(state: dict[str, Any]) -> str:
     return "LOCAL_MODEL_UNREACHABLE"
 
 
-def _semantic_candidate_providers(state: dict[str, Any], *, privacy_class: str) -> list[str]:
+def _semantic_candidate_providers(
+    state: dict[str, Any],
+    *,
+    privacy_class: str,
+    backend: BackendClient | None = None,
+) -> list[str]:
     active = _current_provider(state)
     policy = _routing_policy(state)
     fallback_to_cloud = _is_truthy(state.get("providers", {}).get("fallbackToCloud", True))
@@ -939,6 +1421,25 @@ def _chat_messages(
     return messages
 
 
+def _prepend_system_instruction(
+    conversation: list[dict[str, Any]],
+    system_instruction: str,
+) -> list[dict[str, Any]]:
+    system_text = str(system_instruction or "").strip()
+    normalized_conversation = [
+        item
+        for item in conversation
+        if isinstance(item, dict)
+    ]
+    if not system_text:
+        return [dict(item) for item in normalized_conversation]
+    if normalized_conversation:
+        first = normalized_conversation[0]
+        if str(first.get("role", "") or "").strip() == "system" and str(first.get("text", "") or "").strip() == system_text:
+            return [dict(item) for item in normalized_conversation]
+    return [{"role": "system", "text": system_text}, *[dict(item) for item in normalized_conversation]]
+
+
 def _requires_tool_capable_route(text: str) -> bool:
     lowered = f" {str(text or '').lower()} "
     keyword_patterns = [
@@ -948,6 +1449,20 @@ def _requires_tool_capable_route(text: str) -> bool:
         r"\bçalıştır\b",
         r"\btıkla\b",
         r"\byaz\b",
+        r"\bhazırla\b",
+        r"\bhazirla\b",
+        r"\boluştur\b",
+        r"\bolustur\b",
+        r"\büret\b",
+        r"\buret\b",
+        r"\bplanla\b",
+        r"\bhesapla\b",
+        r"\bçöz\b",
+        r"\bcoz\b",
+        r"\bönceki\b",
+        r"\bonceki\b",
+        r"\bgeçen\b",
+        r"\bgecen\b",
         r"\bara\b",
         r"\btakvim\b",
         r"\bhatırlat",
@@ -993,6 +1508,13 @@ def _requires_tool_capable_route(text: str) -> bool:
         r"\bcalendar\b",
         r"\breminder\b",
         r"\bbrowser\b",
+        r"\bmasaüstü\b",
+        r"\bmasaustu\b",
+        r"\bbilgisayar\b",
+        r"\bwindow\b",
+        r"\bwindows\b",
+        r"\bscreen\b",
+        r"\bdesktop\b",
     ]
     return any(re.search(pattern, lowered) for pattern in keyword_patterns)
 
@@ -1095,6 +1617,10 @@ _TRANSPORT_SECRET_KEYS = {
     "lastSessionId",
     "connectionId",
 }
+_TRANSPORT_ENDPOINT_KEYS = {
+    "baseUrl",
+    "base_url",
+}
 
 
 def _public_state_snapshot() -> dict[str, Any]:
@@ -1111,6 +1637,9 @@ def _sanitize_transport_payload(value: Any) -> Any:
             if key in _TRANSPORT_SECRET_KEYS:
                 sanitized[key] = ""
                 continue
+            if key in _TRANSPORT_ENDPOINT_KEYS:
+                sanitized[key] = ""
+                continue
             sanitized[key] = _sanitize_transport_payload(item)
         return sanitized
     if isinstance(value, list):
@@ -1122,6 +1651,8 @@ def _safe_chat_error_message(raw: Any) -> str:
     value = str(raw or "").strip()
     if value == "PERMISSION_REQUIRED":
         return "Bu işlem için güvenlik izni gerekiyor."
+    if value == "OS_PERMISSION_REQUIRED":
+        return "Bu işlem için işletim sistemi izni gerekiyor."
     if value == "UNSUPPORTED_PLATFORM":
         return "Bu özellik bu işletim sisteminde desteklenmiyor."
     if value in {"CAPABILITY_UNAVAILABLE", "DEPENDENCY_UNAVAILABLE"}:
@@ -1144,6 +1675,8 @@ def _safe_chat_error_message(raw: Any) -> str:
         return "Seçili yerel runtime geçerli bir yanıt üretmedi."
     if value in {"LOCAL_MODEL_BINARY_MISSING", "ollama_binary_missing", "llamacpp_binary_missing"}:
         return "Seçili yerel runtime ikilisi bu kurulumda bulunamadı."
+    if value == "server_brain_unavailable":
+        return "Elyan'ın beyin yolu şu anda hazır değil."
     if value in {"google_api_key_missing", "google_genai_missing", "tool_capable_provider_required"}:
         return "Bu görev için araç destekli runtime yapılandırması gerekiyor."
     if value in {"WEB_RESEARCH_FAILED", "GMAIL_SEND_FAILED"}:
@@ -1212,6 +1745,24 @@ def _task_intelligence_prompt_context(state: dict[str, Any]) -> str:
     patterns = intelligence.get("confirmedPlanPatterns", [])
     response_style = intelligence.get("responseStyle", {})
     parts: list[str] = []
+    success_count = len(routes) if isinstance(routes, list) else 0
+    misroute_count = len(misroutes) if isinstance(misroutes, list) else 0
+    clarification_count = len(clarifications) if isinstance(clarifications, list) else 0
+    if misroute_count >= 3 and misroute_count >= success_count:
+        posture = "cautious"
+        posture_note = "Geçmişte düzeltme sinyali yüksek; önce niyeti netleştir, sonra uygula."
+    elif success_count >= 3 and misroute_count <= 1 and clarification_count <= 2:
+        posture = "confident"
+        posture_note = "Geçmiş eşleşmeler güçlü; kısa, doğrudan ve güvenli ilerle."
+    else:
+        posture = "balanced"
+        posture_note = "Kısa ve net kal; belirsizlikte tek kısa netleştirme sorusu sor."
+    parts.append(
+        "Task posture: "
+        f"{posture} "
+        f"(successes={success_count}, misroutes={misroute_count}, clarifications={clarification_count}). "
+        f"{posture_note}"
+    )
     if isinstance(routes, list) and routes:
         compact = []
         for item in routes[:4]:
@@ -1264,6 +1815,10 @@ def _task_intelligence_prompt_context(state: dict[str, Any]) -> str:
                 "Response style: "
                 + ", ".join(item for item in [length, directness, tone] if item)
             )
+    parts.append(
+        "Research posture: deep only for current facts, sources, comparison, verification, or explicit research; "
+        "otherwise use fast chat."
+    )
     return "\n\n".join(parts)
 
 
@@ -1360,10 +1915,157 @@ def _permission_needed_response(reason: str, *, intent: str = "permission", priv
         "clarificationNeeded": False,
         "permissionNeeded": True,
         "permissionReason": reason,
+        "permissionKey": "",
+        "canGrantPersistently": False,
+        "systemPermissionKey": "",
+        "systemPermissionRequired": False,
         "needsConfirmation": False,
         "privacyClass": privacy_class,
         "planPreview": None,
     }
+
+
+_CAPABILITY_PERMISSION_CONTEXT: dict[str, dict[str, str]] = {
+    "browser_control": {
+        "permissionKey": "allow_browser_control",
+        "systemPermissionKey": "accessibility",
+    },
+    "play_media": {
+        "permissionKey": "allow_browser_control",
+        "systemPermissionKey": "accessibility",
+    },
+    "analyze_screen": {
+        "permissionKey": "allow_screen_analysis",
+        "systemPermissionKey": "screenRecording",
+    },
+    "desktop_operator.observe_screen": {
+        "permissionKey": "allow_screen_analysis",
+        "systemPermissionKey": "screenRecording",
+    },
+    "desktop_operator.locate": {
+        "permissionKey": "allow_screen_analysis",
+        "systemPermissionKey": "screenRecording",
+    },
+    "desktop_operator.focus_window": {
+        "permissionKey": "allow_computer_control",
+        "systemPermissionKey": "accessibility",
+    },
+    "desktop_operator.execute_action": {
+        "permissionKey": "allow_computer_control",
+        "systemPermissionKey": "accessibility",
+    },
+    "desktop_operator.run": {
+        "permissionKey": "allow_computer_control",
+        "systemPermissionKey": "accessibility",
+    },
+    "desktop_os.processes": {
+        "permissionKey": "allow_system_inspection",
+        "systemPermissionKey": "",
+    },
+    "desktop_os.active_window": {
+        "permissionKey": "allow_system_inspection",
+        "systemPermissionKey": "accessibility",
+    },
+    "shell_run": {
+        "permissionKey": "allow_shell",
+        "systemPermissionKey": "",
+    },
+    "add_calendar_event": {
+        "permissionKey": "allow_personal_actions",
+        "systemPermissionKey": "",
+    },
+    "add_reminder": {
+        "permissionKey": "allow_personal_actions",
+        "systemPermissionKey": "",
+    },
+    "send_whatsapp_message": {
+        "permissionKey": "allow_personal_actions",
+        "systemPermissionKey": "",
+    },
+    "save_whatsapp_contact": {
+        "permissionKey": "allow_personal_actions",
+        "systemPermissionKey": "",
+    },
+    "email_send": {
+        "permissionKey": "allow_destructive_tools",
+        "systemPermissionKey": "",
+    },
+    "mcp_call_tool": {
+        "permissionKey": "allow_destructive_tools",
+        "systemPermissionKey": "",
+    },
+}
+
+
+def _desktop_os_permission_snapshot() -> dict[str, Any]:
+    try:
+        module = import_module("actions.desktop_os")
+        payload = module.desktop_os_permissions()
+    except Exception:
+        return {}
+    result = payload.get("result", {}) if isinstance(payload, dict) else {}
+    return result if isinstance(result, dict) else {}
+
+
+def _runtime_permission_enabled(state: dict[str, Any], permission_key: str) -> bool:
+    if not permission_key:
+        return False
+    account = state.get("account", {})
+    permissions = state.get("permissions", {})
+    if not isinstance(account, dict) or not isinstance(permissions, dict):
+        return False
+    return _is_truthy(account.get("dangerousAreaEnabled", False)) and _is_truthy(permissions.get(permission_key, False))
+
+
+def _system_permission_message(system_permission_key: str) -> str:
+    normalized = str(system_permission_key or "").strip().lower()
+    if normalized == "screenrecording":
+        return "macOS ekran kaydı izni kapalı. Ayarlar > Gizlilik bölümünden ekran kaydını açıp tekrar dene."
+    if normalized == "accessibility":
+        return "macOS erişilebilirlik izni kapalı. Ayarlar > Gizlilik bölümünden erişilebilirliği açıp tekrar dene."
+    if normalized == "automation":
+        return "macOS otomasyon izni kapalı. Ayarlar > Gizlilik bölümünden otomasyonu açıp tekrar dene."
+    if normalized == "inputmonitoring":
+        return "macOS giriş izleme izni kapalı. Ayarlar > Gizlilik bölümünden bu izni açıp tekrar dene."
+    return "macOS sistem izni gerekiyor. Ayarlar > Gizlilik bölümünden ilgili izni açıp tekrar dene."
+
+
+def _capability_permission_response(
+    capability: str,
+    reason: str,
+    *,
+    intent: str,
+    privacy_class: str,
+    state: dict[str, Any] | None = None,
+    error_code: str = "PERMISSION_REQUIRED",
+) -> dict[str, Any]:
+    payload = _permission_needed_response(reason, intent=intent, privacy_class=privacy_class)
+    context = _CAPABILITY_PERMISSION_CONTEXT.get(str(capability or "").strip(), {})
+    permission_key = str(context.get("permissionKey", "") or "").strip()
+    system_permission_key = str(context.get("systemPermissionKey", "") or "").strip()
+    payload["permissionKey"] = permission_key
+    payload["canGrantPersistently"] = bool(permission_key)
+    payload["systemPermissionKey"] = system_permission_key
+    payload["systemPermissionRequired"] = False
+    payload["permissionErrorCode"] = str(error_code or "PERMISSION_REQUIRED")
+    payload["osPermissionStatus"] = ""
+    if system_permission_key:
+        permissions = _desktop_os_permission_snapshot().get("permissions", {})
+        permissions = permissions if isinstance(permissions, dict) else {}
+        system_state = permissions.get(system_permission_key, {})
+        system_state = system_state if isinstance(system_state, dict) else {}
+        status = str(system_state.get("status", "") or "").strip().lower()
+        payload["osPermissionStatus"] = status
+        payload["systemPermissionRequired"] = status in {"required", "denied"}
+        if (
+            payload["systemPermissionRequired"]
+            and state is not None
+            and _runtime_permission_enabled(state, permission_key)
+        ):
+            payload["content"] = _system_permission_message(system_permission_key)
+            payload["permissionReason"] = payload["content"]
+            payload["permissionErrorCode"] = "OS_PERMISSION_REQUIRED"
+    return payload
 
 
 def _agent_status_from_result(result: dict[str, Any], *, active: bool = False) -> dict[str, Any]:
@@ -1634,6 +2336,12 @@ def _is_local_private_chat_request(text: str) -> bool:
             "terminal",
             "komut",
             "sistem",
+            "masaustu",
+            "masaüstü",
+            "bilgisayar",
+            "pencere",
+            "desktop",
+            "screen",
         )
     )
 
@@ -1749,6 +2457,202 @@ def _brain_profile_local_provider_hint(profile: dict[str, Any] | None) -> str:
     return ""
 
 
+def _server_brain_ready(state: dict[str, Any], *, backend: BackendClient | None = None) -> bool:
+    control_plane = _map_from(state.get("controlPlane"))
+    health = _map_from(control_plane.get("health"))
+    agent = _map_from(health.get("agent"))
+    brain_profile = _map_from(control_plane.get("brainProfile"))
+    chat = _map_from(brain_profile.get("chat"))
+    bridge = _map_from(_brain_profile_payload(brain_profile.get("bridge")))
+    connection = _map_from(chat.get("connection"))
+    snapshot_ready = bool(
+        chat.get("isChatUsable", False)
+        or connection.get("serverBrainReady", False)
+        or bridge.get("serverBrainReady", False)
+        or agent.get("serverBrainReady", False)
+        or agent.get("chatReady", False)
+    )
+    if backend is None:
+        return snapshot_ready
+    account = _map_from(state.get("account"))
+    auth_ready = bool(_map_from(control_plane.get("authMe")).get("ok"))
+    if not auth_ready:
+        auth_ready = any(
+            str(account.get(key, "") or "").strip()
+            for key in ("accessToken", "userAccessToken", "refreshToken")
+        )
+    if not auth_ready:
+        return False
+    auth_me = backend.auth_me() if hasattr(backend, "auth_me") else BackendResult(ok=False, request_id=_request_id(), status_code=None, data=None, error="auth_me_unavailable")
+    if not auth_me.ok:
+        return False
+    health_result = backend.health() if hasattr(backend, "health") else BackendResult(ok=True, request_id=_request_id(), status_code=None, data={}, error=None)
+    if not health_result.ok and not snapshot_ready:
+        return False
+    brain_result = backend.brain_profile() if hasattr(backend, "brain_profile") else BackendResult(ok=False, request_id=_request_id(), status_code=None, data=None, error="brain_profile_unavailable")
+    if not brain_result.ok or not isinstance(brain_result.data, dict):
+        return snapshot_ready
+    live_brain = _map_from(brain_result.data)
+    live_chat = _map_from(live_brain.get("chat"))
+    live_bridge = _map_from(_brain_profile_payload(live_brain.get("bridge")))
+    live_connection = _map_from(live_chat.get("connection"))
+    live_ready = bool(
+        live_chat.get("isChatUsable", False)
+        or live_connection.get("serverBrainReady", False)
+        or live_bridge.get("serverBrainReady", False)
+    )
+    return bool(live_ready or snapshot_ready)
+
+
+def _server_brain_provider_hint(state: dict[str, Any]) -> str:
+    control_plane = _map_from(state.get("controlPlane"))
+    brain_profile = _map_from(control_plane.get("brainProfile"))
+    chat = _map_from(brain_profile.get("chat"))
+    hint = _brain_profile_local_provider_hint(brain_profile)
+    if hint and hint != "server_brain":
+        return hint
+    serving_provider = str(chat.get("servingProvider", "") or "").strip().lower()
+    if serving_provider and serving_provider != "server_brain":
+        return serving_provider
+    local_hint = str(chat.get("localProviderHint", "") or "").strip().lower()
+    if local_hint and local_hint != "server_brain":
+        return local_hint
+    return ""
+
+
+def _server_brain_chat_title(text: str) -> str:
+    words = [word for word in " ".join(str(text or "").split()).split(" ") if word]
+    if not words:
+        return "Yeni sohbet"
+    return " ".join(words[:6])[:80]
+
+
+def _server_brain_response_text(value: Any) -> str:
+    if isinstance(value, dict):
+        normalized_blocks = _normalize_message_blocks(value.get("blocks"))
+        if not normalized_blocks:
+            normalized_blocks = _normalize_message_blocks(_map_from(value.get("contentBlob") or value.get("content_blob")).get("blocks"))
+        text = _flatten_blocks_text(normalized_blocks)
+        if text:
+            return text
+        content_blob = _map_from(value.get("contentBlob") or value.get("content_blob"))
+        for key in ("visibleContent", "visible_content", "content", "text", "message", "body", "summary"):
+            text = str(value.get(key, "") or "").strip()
+            if text:
+                return text
+        for key in ("visibleContent", "visible_content", "content", "text"):
+            text = str(content_blob.get(key, "") or "").strip()
+            if text:
+                return text
+        nested = value.get("content")
+        if isinstance(nested, dict):
+            return _server_brain_response_text(nested)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
+def _message_has_user_visible_text_block(message: dict[str, Any]) -> bool:
+    blocks = _normalize_message_blocks(message.get("blocks"))
+    if not blocks:
+        blocks = _normalize_message_blocks(_map_from(message.get("contentBlob") or message.get("content_blob")).get("blocks"))
+    return any(
+        str(block.get("type", "") or "").strip() == "text" and bool(_text_from_text_block(block))
+        for block in blocks
+    )
+
+
+def _assistant_message_is_final(message: dict[str, Any]) -> bool:
+    if not message:
+        return False
+    status = str(message.get("status", "") or "").strip().lower()
+    if status in {"failed", "error"}:
+        return True
+    if _message_has_user_visible_text_block(message):
+        return status in {"", "completed", "done", "succeeded", "success"} or bool(_server_brain_response_text(message))
+    content_blob = _map_from(message.get("contentBlob") or message.get("content_blob"))
+    return bool(
+        _first_nonempty(
+            message.get("visibleContent"),
+            message.get("visible_content"),
+            message.get("content"),
+            message.get("text"),
+            content_blob.get("visibleContent"),
+            content_blob.get("content"),
+            content_blob.get("text"),
+        )
+    )
+
+
+def _latest_final_assistant_message(messages: Any) -> dict[str, Any]:
+    if not isinstance(messages, list):
+        return {}
+    for item in reversed(messages):
+        message = _map_from(item)
+        if str(message.get("role", "") or "").strip().lower() != "assistant":
+            continue
+        if _assistant_message_is_final(message):
+            return message
+    return {}
+
+
+def _await_server_brain_final_message(
+    backend: BackendClient,
+    session_id: str,
+    *,
+    initial_message: dict[str, Any] | None = None,
+    timeout_seconds: float = 10.0,
+    interval_seconds: float = 0.45,
+) -> dict[str, Any]:
+    if initial_message and _assistant_message_is_final(initial_message):
+        return dict(initial_message)
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id or not _is_uuid_value(normalized_session_id) or not hasattr(backend, "chat_session_detail"):
+        return dict(initial_message or {})
+    deadline = time.monotonic() + max(0.5, timeout_seconds)
+    last_assistant = dict(initial_message or {})
+    while time.monotonic() < deadline:
+        time.sleep(max(0.1, interval_seconds))
+        detail = backend.chat_session_detail(normalized_session_id)
+        if not detail.ok or not isinstance(detail.data, dict):
+            continue
+        messages = detail.data.get("messages", [])
+        final_message = _latest_final_assistant_message(messages)
+        if final_message:
+            return final_message
+        if isinstance(messages, list):
+            for item in reversed(messages):
+                candidate = _map_from(item)
+                if str(candidate.get("role", "") or "").strip().lower() == "assistant":
+                    last_assistant = candidate
+                    break
+    return last_assistant
+
+
+def _invoke_provider_chat_with_context(
+    state: dict[str, Any],
+    provider: str,
+    conversation: list[dict[str, Any]],
+    text: str,
+    *,
+    backend: BackendClient | None = None,
+    conversation_id: str = "",
+) -> dict[str, Any]:
+    target = _invoke_provider_chat
+    extra_kwargs: dict[str, Any] = {}
+    try:
+        signature = inspect.signature(target)
+    except (TypeError, ValueError):
+        signature = None
+    if backend is not None and signature is not None:
+        params = signature.parameters
+        if "backend" in params:
+            extra_kwargs["backend"] = backend
+        if conversation_id and "conversation_id" in params:
+            extra_kwargs["conversation_id"] = conversation_id
+    return target(state, provider, conversation, text, **extra_kwargs)
+
+
 def _shared_brain_search_items(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
     source = _brain_profile_payload(payload)
     for key in ("results", "items", "matches", "documents", "chunks"):
@@ -1822,15 +2726,20 @@ def _shared_brain_prompt_context(payload: dict[str, Any] | None) -> tuple[str, d
     )
 
 
-def _conversation_system_context(conversation: list[dict[str, Any]]) -> str:
+def _conversation_system_context(
+    conversation: list[dict[str, Any]],
+    *,
+    exclude_text: str = "",
+) -> str:
     lines: list[str] = []
+    excluded = str(exclude_text or "").strip()
     for item in conversation:
         if not isinstance(item, dict):
             continue
         if str(item.get("role", "") or "").strip() != "system":
             continue
         text = str(item.get("text", "") or "").strip()
-        if text:
+        if text and text != excluded:
             lines.append(text)
     return "\n\n".join(lines[:4])
 
@@ -1847,30 +2756,36 @@ def _semantic_understanding_prompt(
     mcp_context: str = "",
 ) -> str:
     learning = _task_intelligence_prompt_context(state)
-    skill_context = skill_runtime.planner_skill_context(state)
+    skill_context = skill_runtime.planner_skill_context(state, text)
+    native_desktop_context = _desktop_native_context_lines(_desktop_native_snapshot_payload())
     platform_name = "macOS" if sys.platform == "darwin" else ("Windows" if os.name == "nt" else "Linux")
     guidance = (
         "You are Elyan local intent planner. Output one JSON object only. "
         "Map the request to one of these capabilities if possible: "
         "open_app, close_app, sys_info, get_weather, get_calendar_events, add_calendar_event, "
         "get_reminders, add_reminder, browser_control, send_whatsapp_message, save_whatsapp_contact, document_read, document_write, "
-        "spreadsheet_write, presentation_write, ocr_read, image_read, data_analyze, chart_generate, math_solve, latex_parse, retrieve_context, "
+        "spreadsheet_write, presentation_write, canvas_write, ocr_read, image_read, data_analyze, chart_generate, math_solve, latex_parse, retrieve_context, "
         "mcp_call_tool, run_skill, "
         "speech_to_text, text_to_speech, "
         "analyze_screen, get_youtube_channel_report, shell_run, play_media. "
         "If the request is unsupported or general chat, use intent=chat and capability=\"\". "
+        "Keep greetings, small talk, and topicless messages on fast chat; do not launch web_research for them. "
+        "Use web_research only when the user explicitly asks for current facts, sources, comparison, verification, or a deeper research pass. "
+        "If the research target is vague, ask one short clarifying question instead of guessing. "
         "Set confidence between 0 and 1. "
         "Set requiresConfirmation=true for side-effect actions, file writes, scheduling writes, personal actions, shell execution, or multi-step actions. "
         "Set privacyClass=local_private for files, screen, system details, calendar, reminders, personal actions, apps, shell; otherwise public_text. "
         "If a browser action is needed, args.action must be one of search, open_url, play_youtube. "
         "browser_control, play_media, and analyze_screen require explicit local permission before execution. "
         "add_calendar_event, add_reminder, send_whatsapp_message, and save_whatsapp_contact require explicit local personal-action permission before execution. "
-        "If document_read is chosen, args.mode must be read, summary, or bullets. "
+        "If document_read is chosen, args.mode must be read, summary, or bullets, and args may include path or text. "
+        "Use text when the content is already available as extracted readable text. "
         "If send_whatsapp_message is chosen, args must include message and may include recipient_name, phone_number, app_target, send_now. "
         "If save_whatsapp_contact is chosen, args must include display_name and phone_number and may include aliases. "
         "If document_write is chosen, args may include outputPath, title, sourcePath, sourceContext, overwrite. "
         "If spreadsheet_write is chosen, args may include outputPath, title, columns, rows, sourceContext, overwrite. "
         "If presentation_write is chosen, args may include outputPath, title, slides, sourceContext, overwrite. "
+        "If canvas_write is chosen, args may include outputPath, title, blocks, sections, outputFormat, width, height, sourcePath, sourceContext, overwrite. "
         "If ocr_read is chosen, args.mode must be read, summary, or bullets. "
         "If image_read is chosen, args.mode must be summary, metadata, or palette. "
         "If data_analyze is chosen, args.mode must be summary, profile, or preview. "
@@ -1882,11 +2797,12 @@ def _semantic_understanding_prompt(
         "If run_skill is chosen, args must include skillId and may include payload. "
         "If speech_to_text is chosen, args may include audioPath, sessionId, and languageHint. "
         "If text_to_speech is chosen, args must include text and may include languageHint, voice, interrupt. "
-        "If shell_run is chosen, args.command must be a simple argv-style command without shell operators. "
+        "If shell_run is chosen, args.command is the shell command (pipes and operators supported; set use_shell=true when using && || | ; > < operators). "
         "Prefer clarification over guessing missing targets, files, recipients, URLs, commands, or expressions. "
         "For complex requests, preserve the user's real goal, keep args minimal and exact, and use planPreview with ordered steps instead of collapsing everything into one guessed tool call. "
         "Do not invent file paths, app names, query text, recipients, or document contents. "
         "If the request clearly involves multiple sequential actions, set isMultiStep=true and include planPreview with summary and steps. "
+        "When a request needs multiple phases, make planPreview.agentPlan explicit with stepCount, agentRoles, laneCount, and executionStrategy. "
         "Never invent unsupported capabilities."
     )
     if sys.platform != "darwin":
@@ -1904,6 +2820,8 @@ def _semantic_understanding_prompt(
         guidance = f"{guidance}\n\n{mcp_context}"
     if skill_context:
         guidance = f"{guidance}\n\n{skill_context}"
+    if native_desktop_context:
+        guidance = f"{guidance}\n\n{native_desktop_context}"
     return (
         f"{guidance}\n\n"
         "Return JSON with keys: intent, capability, args, confidence, isMultiStep, "
@@ -1912,13 +2830,124 @@ def _semantic_understanding_prompt(
     )
 
 
-def _invoke_provider_chat(state: dict[str, Any], provider: str, conversation: list[dict[str, Any]], text: str) -> dict[str, Any]:
+def _invoke_provider_chat(
+    state: dict[str, Any],
+    provider: str,
+    conversation: list[dict[str, Any]],
+    text: str,
+    *,
+    backend: BackendClient | None = None,
+    conversation_id: str = "",
+) -> dict[str, Any]:
+    conversation = _prepend_system_instruction(conversation, _build_system_instruction(state))
     if provider == "local":
         providers = _map_from(state.get("providers"))
         local_cfg = _map_from(providers.get("local"))
         runtime_family = str(local_cfg.get("runtimeFamily", "") or providers.get("defaultLocalRuntime", "") or "ollama").strip().lower()
         target = runtime_family if runtime_family in {"ollama", "lmstudio", "llamacpp"} else "ollama"
-        return _invoke_provider_chat(state, target, conversation, text)
+        return _invoke_provider_chat(
+            state,
+            target,
+            conversation,
+            text,
+            backend=backend,
+            conversation_id=conversation_id,
+        )
+    if provider == "server_brain":
+        if backend is not None and hasattr(backend, "chat_messages"):
+            if hasattr(backend, "auth_me"):
+                auth_me = backend.auth_me()
+                if not auth_me.ok:
+                    error = _safe_error_code(auth_me.error or "auth_required")
+                    return {
+                        "ok": False,
+                        "error": error,
+                        "message": _safe_chat_error_message(error),
+                        "provider": "server_brain",
+                        "toolEvents": [],
+                    }
+            payload: dict[str, Any] = {
+                "title": _server_brain_chat_title(text),
+                "content": text,
+                "source": "desktop",
+                "requestedCapabilities": [],
+                "metadata": {
+                    "source": "desktop",
+                    "desktopTransport": {
+                        "rawPrivateDataUploaded": False,
+                        "derivedContextOnly": True,
+                        "scope": "user_chat_session",
+                    },
+                },
+            }
+            if _is_uuid_value(conversation_id):
+                payload["sessionId"] = conversation_id
+            result = backend.chat_messages(payload)
+            if result.ok and isinstance(result.data, dict):
+                data = _map_from(result.data)
+                assistant_message = _map_from(data.get("assistantMessage"))
+                brain = _map_from(data.get("brain"))
+                task = _map_from(data.get("task"))
+                session = _map_from(data.get("session"))
+                session_id = _first_nonempty(session.get("id"), data.get("sessionId"), assistant_message.get("sessionId"))
+                assistant_message = _await_server_brain_final_message(
+                    backend,
+                    session_id,
+                    initial_message=assistant_message,
+                )
+                if not _assistant_message_is_final(assistant_message):
+                    return {
+                        "ok": False,
+                        "error": "server_brain_response_pending",
+                        "message": "Sunucu yanıtı henüz tamamlanmadı. Birkaç saniye sonra tekrar dene.",
+                        "provider": "server_brain",
+                        "toolEvents": [],
+                        "session": session or data.get("session"),
+                        "task": task,
+                        "assistantMessage": assistant_message,
+                        "delivery": data.get("delivery"),
+                        "brain": brain,
+                    }
+                return {
+                    "ok": True,
+                    "content": _server_brain_response_text(assistant_message),
+                    "provider": "server_brain",
+                    "router": "backend_chat",
+                    "model": str(brain.get("model", "") or ""),
+                    "toolEvents": [],
+                    "session": session or data.get("session"),
+                    "task": task,
+                    "assistantMessage": assistant_message,
+                    "userMessage": data.get("userMessage"),
+                    "delivery": data.get("delivery"),
+                    "brain": brain,
+                    "dispatched": bool(data.get("dispatched", False)),
+                    "reused": bool(data.get("reused", False)),
+                }
+            error = _safe_error_code(result.error or "server_brain_unavailable")
+            return {
+                "ok": False,
+                "error": error,
+                "message": _safe_chat_error_message(error),
+                "provider": "server_brain",
+                "toolEvents": [],
+            }
+        hinted_provider = _server_brain_provider_hint(state)
+        if not hinted_provider:
+            return {"ok": False, "error": "server_brain_unavailable"}
+        routed = _invoke_provider_chat(
+            state,
+            hinted_provider,
+            conversation,
+            text,
+            backend=backend,
+            conversation_id=conversation_id,
+        )
+        if routed.get("ok"):
+            routed = dict(routed)
+            routed["provider"] = "server_brain"
+            routed["router"] = "server_brain"
+        return routed
     if provider in {"openai", "anthropic", "gemini", "groq", "custom"} and litellm_adapter.available():
         routed = _chat_with_litellm(state, provider, conversation, text)
         if routed.get("ok"):
@@ -1938,6 +2967,7 @@ def _semantic_route(
     text: str,
     *,
     conversation_id: str = "",
+    backend: BackendClient | None = None,
 ) -> dict[str, Any] | None:
     privacy_class = "local_private" if any(
         token in _normalise_text(text)
@@ -1971,7 +3001,7 @@ def _semantic_route(
         else None
     )
     mcp_context = mcp_runtime.planner_mcp_context(state)
-    for provider in _semantic_candidate_providers(state, privacy_class=privacy_class):
+    for provider in _semantic_candidate_providers(state, privacy_class=privacy_class, backend=backend):
         filtered_retrieval = _filter_retrieval_matches(
             retrieval,
             allowed_sources=_retrieval_sources_for_provider(provider),
@@ -1983,7 +3013,14 @@ def _semantic_route(
             mcp_context=mcp_context,
         )
         seeded_conversation = [{"role": "system", "text": prompt}]
-        result = _invoke_provider_chat(state, provider, seeded_conversation, text)
+        result = _invoke_provider_chat_with_context(
+            state,
+            provider,
+            seeded_conversation,
+            text,
+            backend=backend,
+            conversation_id=conversation_id,
+        )
         if not result.get("ok"):
             continue
         payload = _extract_json_object(str(result.get("content", "") or ""))
@@ -2075,6 +3112,153 @@ def _semantic_route(
     return None
 
 
+def _operator_candidate_providers(state: dict[str, Any]) -> list[str]:
+    ordered: list[str] = []
+
+    def add(provider: str) -> None:
+        if provider and provider not in ordered and _provider_enabled(state, provider) and _provider_is_configured_for_chat(state, provider):
+            ordered.append(provider)
+
+    local_provider = _local_runtime_family_from_state(state)
+    add(local_provider)
+    if _is_truthy(_map_from(state.get("providers")).get("fallbackToCloud", True)):
+        active = _current_provider(state)
+        if active not in {"local", "ollama", "lmstudio", "llamacpp"}:
+            add(active)
+        for provider in ("openai", "gemini", "anthropic", "groq", "custom"):
+            add(provider)
+    return ordered
+
+
+def _operator_planning_prompt(goal: str, observation: dict[str, Any]) -> str:
+    native_desktop = _desktop_native_snapshot_payload()
+    native_active_window = native_desktop.get("activeWindow", {})
+    native_active_window = native_active_window if isinstance(native_active_window, dict) else {}
+    native_processes = native_desktop.get("processes", {})
+    native_processes = native_processes if isinstance(native_processes, dict) else {}
+    native_operator = native_desktop.get("operator", {})
+    native_operator = native_operator if isinstance(native_operator, dict) else {}
+    elements = observation.get("elements", [])
+    elements = [dict(item) for item in elements if isinstance(item, dict)]
+    summarized = []
+    for item in elements[:24]:
+        summarized.append(
+                {
+                    "type": str(item.get("type", "") or ""),
+                    "text": " ".join(str(item.get("text", "") or "").split()).strip()[:96],
+                    "source": str(item.get("source", "") or ""),
+                    "role": str(item.get("role", "") or ""),
+                    "focused": bool(item.get("focused", False)),
+                    "enabled": bool(item.get("enabled", True)),
+                }
+        )
+    payload = {
+        "activeApp": str(observation.get("activeApp", "") or ""),
+        "activeWindow": str(observation.get("activeWindow", "") or ""),
+        "resolutionMode": str(observation.get("resolutionMode", "") or ""),
+        "elements": summarized,
+        "nativeDesktop": {
+            "available": bool(native_desktop.get("available", False)),
+            "platform": str(native_desktop.get("platform", "") or ""),
+            "source": str(native_desktop.get("source", "") or ""),
+            "activeWindow": {
+                "appName": str(native_active_window.get("appName", "") or ""),
+                "windowTitle": str(native_active_window.get("windowTitle", "") or ""),
+            },
+            "processCount": int(native_processes.get("total", 0) or 0),
+            "operatorReady": bool(native_operator.get("available", False)),
+            "accessibilityReady": bool(native_operator.get("accessibilityReady", False)),
+            "inputControlReady": bool(native_operator.get("inputControlReady", False)),
+        },
+    }
+    return (
+        "You are Elyan's desktop operator planner.\n"
+        "Use only the sanitized screen metadata below. Do not invent unseen UI.\n"
+        "Return strict JSON with keys: steps, confidence, clarificationQuestion, message.\n"
+        "steps must be a short array of actions. Each action can contain only: "
+        "action, targetText, elementType, text, keys, delta, duration, appName.\n"
+        "Allowed actions: click, double_click, right_click, type_text, scroll, hotkey, wait, focus_window.\n"
+        "If the target is ambiguous or unsafe, return an empty steps array and a clarificationQuestion.\n"
+        f"Goal: {goal.strip()}\n"
+        f"Observation: {json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def plan_visual_operator_steps(goal: str, observation: dict[str, Any], *, state: dict[str, Any] | None = None) -> dict[str, Any]:
+    runtime_state = state if isinstance(state, dict) else state_store.snapshot()
+    providers = _operator_candidate_providers(runtime_state)
+    if not providers:
+        return {
+            "steps": [],
+            "confidence": 0.0,
+            "provider": "",
+            "message": "Operator planner için hazır model bulunamadı.",
+            "clarificationQuestion": "",
+        }
+    prompt = _operator_planning_prompt(goal, observation)
+    for index, provider in enumerate(providers):
+        result = _invoke_provider_chat(
+            runtime_state,
+            provider,
+            [{"role": "system", "text": prompt}],
+            goal,
+        )
+        if not result.get("ok"):
+            continue
+        payload = _extract_json_object(str(result.get("content", "") or ""))
+        if not isinstance(payload, dict):
+            continue
+        raw_steps = payload.get("steps", [])
+        normalized_steps: list[dict[str, Any]] = []
+        if isinstance(raw_steps, list):
+            for item in raw_steps[:4]:
+                if not isinstance(item, dict):
+                    continue
+                action = str(item.get("action", "") or "").strip().lower()
+                if action not in {"click", "double_click", "right_click", "type_text", "scroll", "hotkey", "wait", "focus_window"}:
+                    continue
+                normalized_steps.append(
+                    {
+                        "action": action,
+                        "targetText": str(item.get("targetText", "") or ""),
+                        "elementType": str(item.get("elementType", "") or ""),
+                        "text": str(item.get("text", "") or ""),
+                        "keys": item.get("keys") if isinstance(item.get("keys"), list) else None,
+                        "delta": item.get("delta"),
+                        "duration": item.get("duration"),
+                        "appName": str(item.get("appName", "") or ""),
+                    }
+                )
+        confidence = _intent_confidence(payload.get("confidence"), 0.0)
+        if normalized_steps:
+            return {
+                "steps": normalized_steps,
+                "confidence": confidence,
+                "provider": provider,
+                "message": str(payload.get("message", "") or ""),
+                "clarificationQuestion": str(payload.get("clarificationQuestion", "") or ""),
+                "fallbackUsed": index > 0,
+            }
+        clarification = str(payload.get("clarificationQuestion", "") or "").strip()
+        if clarification:
+            return {
+                "steps": [],
+                "confidence": confidence,
+                "provider": provider,
+                "message": str(payload.get("message", "") or clarification),
+                "clarificationQuestion": clarification,
+                "fallbackUsed": index > 0,
+            }
+    return {
+        "steps": [],
+        "confidence": 0.0,
+        "provider": providers[-1] if providers else "",
+        "message": "Operator planner hedef adımı güvenli şekilde çıkaramadı.",
+        "clarificationQuestion": "Hangi buton veya alanla işlem yapmam gerektiğini biraz daha net söyler misin?",
+        "fallbackUsed": len(providers) > 1,
+    }
+
+
 def _normalise_text(value: str) -> str:
     return " ".join(
         str(value or "")
@@ -2088,6 +3272,32 @@ def _normalise_text(value: str) -> str:
         .replace("ç", "c")
         .split()
     )
+
+
+def _deterministic_app_clarification(text: str) -> str:
+    normalized = _normalise_text(text)
+    if normalized in {"one getir", "one al", "odakla", "focus", "bring to front"}:
+        return "Hangi uygulamayı öne getireyim?"
+    if normalized in {"yeniden ac", "restart", "relaunch"}:
+        return "Hangi uygulamayı yeniden açayım?"
+    # Generic open-app phrases without a specific target (normalised: ı→i ğ→g etc.)
+    _open_generic = {
+        "bir uygulamayi ac", "bir uygulamayi aca", "bir uygulama ac", "bir uygulama aca",
+        "uygulama ac", "uygulamayi ac", "bir seyleri ac", "bir seyler ac",
+        "open an app", "open app", "open a program", "open something",
+        "launch an app", "launch app", "start an app", "start app",
+        "bir uygulamay aci", "uygulamayi aca",
+    }
+    if normalized in _open_generic:
+        return "Hangi uygulamayı açmamı istersin?"
+    # Generic close-app phrases
+    _close_generic = {
+        "bir uygulamayi kapat", "uygulama kapat", "close an app", "close app",
+        "quit an app", "quit app",
+    }
+    if normalized in _close_generic:
+        return "Hangi uygulamayı kapatmamı istersin?"
+    return ""
 
 
 def _plan_steps_from_routed_task(routed: RoutedTask) -> list[dict[str, Any]]:
@@ -2355,6 +3565,44 @@ def _contextual_route(
                 },
                 steps=(step,),
             )
+        if path and any(token in normalized for token in ("canvas", "kanvas", "tuval", "layout", "board", "whiteboard")) and any(
+            token in normalized for token in ("yap", "cevir", "çevir", "olustur", "oluştur", "hazirla", "hazırla")
+        ):
+            target_path = str((Path.cwd() / "elyan_output" / f"{Path(path).stem or 'elyan-canvas'}.pdf").resolve())
+            step = {
+                "capability": "canvas_write",
+                "args": {
+                    "prompt": text,
+                    "sourcePath": path,
+                    "sourceContext": f"{Path(path).name} içeriğinden canvas üret",
+                    "outputPath": target_path,
+                    "outputFormat": "pdf",
+                    "overwrite": False,
+                },
+                "description": f"{Path(target_path).name} canvas çıktısı oluşturulacak.",
+            }
+            return RoutedTask(
+                "canvas_write",
+                {
+                    "prompt": text,
+                    "sourcePath": path,
+                    "sourceContext": f"{Path(path).name} içeriğinden canvas üret",
+                    "outputPath": target_path,
+                    "outputFormat": "pdf",
+                    "overwrite": False,
+                },
+                "context_followup_canvas_write",
+                intent="canvas_write",
+                confidence=0.82,
+                requires_confirmation=True,
+                privacy_class="local_private",
+                plan_preview={
+                    "summary": f"{Path(path).name} bağlamından {Path(target_path).name} canvas çıktısını oluşturacağım.",
+                    "steps": [step],
+                    "privacyClass": "local_private",
+                },
+                steps=(step,),
+            )
     return None
 
 
@@ -2420,6 +3668,9 @@ def _default_plan_preview(intent: str, capability: str, args: dict[str, Any], st
     elif capability == "presentation_write":
         output_path = str(args.get("outputPath", "") or args.get("output_path", "") or "")
         description = f"{Path(output_path).name or 'elyan.pptx'} PPTX sunumu oluşturulacak."
+    elif capability == "canvas_write":
+        output_path = str(args.get("outputPath", "") or args.get("output_path", "") or "")
+        description = f"{Path(output_path).name or 'elyan-canvas.pdf'} canvas çıktısı oluşturulacak."
     elif capability == "image_generate":
         output_path = str(args.get("outputPath", "") or args.get("output_path", "") or "")
         description = f"{Path(output_path).name or 'elyan-output.png'} görseli üretilecek."
@@ -2429,11 +3680,13 @@ def _default_plan_preview(intent: str, capability: str, args: dict[str, Any], st
         description = f"MCP aracı {tool_name or 'tool'} çalıştırılacak."
         if server_id:
             description = f"{server_id} üzerinde MCP aracı {tool_name or 'tool'} çalıştırılacak."
-    return {
+    preview = {
         "summary": description,
         "steps": steps,
         "privacyClass": privacy_class,
     }
+    preview["agentPlan"] = build_agent_plan(steps, summary=description)
+    return preview
 
 
 def _backend_status(backend: BackendClient) -> dict[str, Any]:
@@ -2689,11 +3942,12 @@ def _chat_with_ollama(state: dict[str, Any], conversation: list[dict[str, Any]],
     result = client.chat(model, messages)
     if not result.get("ok"):
         return {"ok": False, "error": result.get("error", "ollama_chat_failed")}
+    resolved_model = str(result.get("model", "") or model).strip()
     return {
         "ok": True,
         "content": str(result.get("content", "") or "").strip(),
         "provider": "ollama",
-        "model": model,
+        "model": resolved_model,
         "router": "native",
     }
 
@@ -2733,10 +3987,13 @@ def _chat_with_openai_compatible(state: dict[str, Any], provider: str, conversat
     headers = {
         "Content-Type": "application/json",
     }
+    requests_mod = _requests_module()
+    if requests_mod is None:
+        return {"ok": False, "error": "requests_unavailable"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
-        response = requests.post(
+        response = requests_mod.post(
             url,
             headers=headers,
             json={
@@ -2746,9 +4003,9 @@ def _chat_with_openai_compatible(state: dict[str, Any], provider: str, conversat
             },
             timeout=60,
         )
-    except requests.RequestException as exc:
+    except requests_mod.RequestException as exc:
         if provider in {"lmstudio", "llamacpp"}:
-            return {"ok": False, "error": "request_timeout" if isinstance(exc, requests.Timeout) else "provider_unreachable"}
+            return {"ok": False, "error": "request_timeout" if isinstance(exc, requests_mod.Timeout) else "provider_unreachable"}
         return {"ok": False, "error": str(exc)}
     if not response.ok:
         return {"ok": False, "error": "provider_unreachable" if provider in {"lmstudio", "llamacpp"} else response.text[:500]}
@@ -2773,12 +4030,15 @@ def _chat_with_anthropic(state: dict[str, Any], conversation: list[dict[str, Any
     if not api_key or not model:
         return {"ok": False, "error": "anthropic_config_missing"}
     messages = _chat_messages(conversation, text, allow_system=False)
-    system = _build_system_instruction()
-    conversation_system = _conversation_system_context(conversation)
+    system = _build_system_instruction(state)
+    conversation_system = _conversation_system_context(conversation, exclude_text=system)
     if conversation_system:
         system = f"{system}\n\n{conversation_system}"
+    requests_mod = _requests_module()
+    if requests_mod is None:
+        return {"ok": False, "error": "requests_unavailable"}
     try:
-        response = requests.post(
+        response = requests_mod.post(
             f"{base_url}/v1/messages",
             headers={
                 "x-api-key": api_key,
@@ -2793,7 +4053,7 @@ def _chat_with_anthropic(state: dict[str, Any], conversation: list[dict[str, Any
             },
             timeout=60,
         )
-    except requests.RequestException as exc:
+    except requests_mod.RequestException as exc:
         return {"ok": False, "error": str(exc)}
     if not response.ok:
         return {"ok": False, "error": response.text[:500]}
@@ -2825,9 +4085,13 @@ def _chat_with_google_live(state: dict[str, Any], conversation: list[dict[str, A
     model = str(_model_for_provider(state, "gemini") or os.environ.get("ELYAN_GOOGLE_MODEL", "") or get_app_config_value("gemini_model", GOOGLE_LIVE_MODEL_DEFAULT) or GOOGLE_LIVE_MODEL_DEFAULT).strip()
 
     async def _run() -> dict[str, Any]:
+        system_instruction = _build_system_instruction(state)
+        conversation_system = _conversation_system_context(conversation, exclude_text=system_instruction)
+        if conversation_system:
+            system_instruction = f"{system_instruction}\n\n{conversation_system}"
         config = google_types.LiveConnectConfig(
             response_modalities=["TEXT"],
-            system_instruction=_build_system_instruction(),
+            system_instruction=system_instruction,
             tools=[{"function_declarations": TOOL_DECLARATIONS}],
         )
         collected: list[str] = []
@@ -2885,7 +4149,12 @@ def _chat_with_google_live(state: dict[str, Any], conversation: list[dict[str, A
         return {"ok": False, "error": "google_live_failed"}
 
 
-def _chat_provider_candidates(state: dict[str, Any], *, privacy_class: str) -> list[str]:
+def _chat_provider_candidates(
+    state: dict[str, Any],
+    *,
+    privacy_class: str,
+    backend: BackendClient | None = None,
+) -> list[str]:
     active = _current_provider(state)
     policy = _routing_policy(state)
     fallback_to_cloud = _is_truthy(state.get("providers", {}).get("fallbackToCloud", True))
@@ -2899,6 +4168,14 @@ def _chat_provider_candidates(state: dict[str, Any], *, privacy_class: str) -> l
         for provider in ("openai", "gemini", "anthropic", "groq", "custom")
         if _provider_enabled(state, provider) and _provider_is_configured_for_chat(state, provider)
     ]
+    control_plane = _map_from(state.get("controlPlane"))
+    account = _map_from(state.get("account"))
+    auth_ready = bool(_map_from(control_plane.get("authMe")).get("ok"))
+    if not auth_ready:
+        auth_ready = any(
+            str(account.get(key, "") or "").strip()
+            for key in ("accessToken", "userAccessToken", "refreshToken")
+        )
 
     if policy == "provider_lock":
         if active == "local":
@@ -2910,6 +4187,8 @@ def _chat_provider_candidates(state: dict[str, Any], *, privacy_class: str) -> l
         return [locked] if _provider_is_configured_for_chat(state, locked) else []
 
     ordered: list[str] = []
+    if privacy_class == "public_text" and policy == "local_first" and auth_ready:
+        append_unique(ordered, "server_brain")
     if policy == "cloud_fallback":
         if active not in {"local", "ollama", "lmstudio", "llamacpp"} and _provider_is_configured_for_chat(state, active):
             append_unique(ordered, active)
@@ -2938,6 +4217,7 @@ def _route_chat(
     *,
     conversation_id: str = "",
     selected_artifacts: list[dict[str, Any]] | None = None,
+    backend: BackendClient | None = None,
 ) -> dict[str, Any]:
     routed = route_text_to_tool(text, selected_artifacts=selected_artifacts)
     contextual = _contextual_route(conversation_id, conversation, text)
@@ -2965,6 +4245,21 @@ def _route_chat(
             intent=str(clarification.get("kind", "") or "clarification"),
             privacy_class="local_private",
         )
+    app_clarification = _deterministic_app_clarification(text)
+    if app_clarification and routed is None and contextual is None:
+        try:
+            STATE.increment_clarification_count()
+        except Exception:
+            pass
+        _record_task_intelligence_outcome(
+            "clarified",
+            query=text,
+            intent="clarification",
+            capability="",
+            conversation_id=conversation_id,
+            question=app_clarification,
+        )
+        return _clarification_response(app_clarification, intent="clarification", privacy_class="local_private")
     if routed is not None:
         if routed.requires_confirmation or routed.is_multi_step:
             try:
@@ -3040,11 +4335,14 @@ def _route_chat(
                 "planPreview": None,
             }
         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
-        if str(error.get("code") or "") == "PERMISSION_REQUIRED":
-            return _permission_needed_response(
+        if str(error.get("code") or "") in {"PERMISSION_REQUIRED", "OS_PERMISSION_REQUIRED"}:
+            return _capability_permission_response(
+                routed.tool_name,
                 str(error.get("message") or tool_result.get("output") or "") or "Bu işlem için açık izin gerekiyor.",
                 intent=routed.intent or routed.reason,
                 privacy_class=routed.privacy_class,
+                state=state,
+                error_code=str(error.get("code") or "PERMISSION_REQUIRED"),
             )
         _record_task_intelligence_outcome(
             "misrouted",
@@ -3070,22 +4368,37 @@ def _route_chat(
     local_private_request = _is_local_private_chat_request(text)
     tool_capable_request = _requires_tool_capable_route(text)
     local_runtime_error = _selected_local_runtime_error(state)
+    # Only block on local model error when server-brain is also unavailable.
+    # If server-brain is reachable it can handle semantic routing for non-privacy tasks.
     if local_runtime_error and (local_private_request or tool_capable_request):
-        privacy_class = "local_private" if local_private_request else "public_text"
-        return {
-            "ok": False,
-            "error": local_runtime_error,
-            "message": _safe_chat_error_message(local_runtime_error),
-            "provider": _local_runtime_family_from_state(state),
-            "toolEvents": [],
-            "intent": "tool_request" if tool_capable_request else "chat",
-            "confidence": 0.0,
-            "executionMode": "local_model_unavailable",
-            "needsConfirmation": False,
-            "privacyClass": privacy_class,
-        }
+        server_brain_ok = _server_brain_ready(state, backend=backend)
+        if not server_brain_ok or local_private_request:
+            privacy_class = "local_private" if local_private_request else "public_text"
+            return {
+                "ok": False,
+                "error": local_runtime_error,
+                "message": _safe_chat_error_message(local_runtime_error),
+                "provider": _local_runtime_family_from_state(state),
+                "toolEvents": [],
+                "intent": "tool_request" if tool_capable_request else "chat",
+                "confidence": 0.0,
+                "executionMode": "local_model_unavailable",
+                "needsConfirmation": False,
+                "privacyClass": privacy_class,
+            }
+        # server_brain is available and request is not strictly private — fall through
 
-    semantic = _semantic_route(state, conversation, text, conversation_id=conversation_id)
+    semantic = (
+        _semantic_route(
+            state,
+            conversation,
+            text,
+            conversation_id=conversation_id,
+            backend=backend,
+        )
+        if tool_capable_request or local_private_request
+        else None
+    )
     if semantic and not semantic.get("capability"):
         if _requires_tool_capable_route(text):
             question = "Görevi netleştirmem gerekiyor. Hangi uygulama, dosya veya hedef üzerinde işlem yapmamı istiyorsun?"
@@ -3272,12 +4585,15 @@ def _route_chat(
                 **retrieval_metadata,
             }
         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
-        if str(error.get("code") or "") == "PERMISSION_REQUIRED":
+        if str(error.get("code") or "") in {"PERMISSION_REQUIRED", "OS_PERMISSION_REQUIRED"}:
             return {
-                **_permission_needed_response(
+                **_capability_permission_response(
+                    capability,
                     str(error.get("message") or tool_result.get("output") or "") or "Bu işlem için açık izin gerekiyor.",
                     intent=intent,
                     privacy_class=privacy_class,
+                    state=state,
+                    error_code=str(error.get("code") or "PERMISSION_REQUIRED"),
                 ),
                 **retrieval_metadata,
             }
@@ -3339,7 +4655,7 @@ def _route_chat(
         else None
     )
     if local_private_request:
-        local_candidates = _semantic_candidate_providers(state, privacy_class="local_private")
+        local_candidates = _semantic_candidate_providers(state, privacy_class="local_private", backend=backend)
         public_cloud_candidates = [
             provider
             for provider in ("openai", "gemini", "anthropic", "groq", "custom")
@@ -3350,7 +4666,7 @@ def _route_chat(
                 "Bu yerel görev için açık hedef veya açık izin olmadan bulut yükseltmesi kullanamam."
             )
 
-    for provider in _chat_provider_candidates(state, privacy_class="public_text"):
+    for provider in _chat_provider_candidates(state, privacy_class="public_text", backend=backend):
         filtered_retrieval = _filter_retrieval_matches(
             local_chat_retrieval,
             allowed_sources=_retrieval_sources_for_provider(provider),
@@ -3359,7 +4675,14 @@ def _route_chat(
         retrieval_context = _format_retrieval_context(filtered_retrieval)
         if retrieval_context:
             seeded_conversation = [{"role": "system", "text": retrieval_context}, *conversation]
-        result = _invoke_provider_chat(state, provider, seeded_conversation, text)
+        result = _invoke_provider_chat_with_context(
+            state,
+            provider,
+            seeded_conversation,
+            text,
+            backend=backend,
+            conversation_id=conversation_id,
+        )
         if not result.get("ok"):
             continue
         return {
@@ -3368,9 +4691,17 @@ def _route_chat(
             "provider": str(result.get("provider", provider) or provider),
             "model": str(result.get("model", "") or ""),
             "toolEvents": result.get("toolEvents", []),
+            "session": result.get("session") if isinstance(result.get("session"), dict) else None,
+            "userMessage": result.get("userMessage") if isinstance(result.get("userMessage"), dict) else None,
+            "assistantMessageRecord": result.get("assistantMessage") if isinstance(result.get("assistantMessage"), dict) else None,
+            "task": result.get("task") if isinstance(result.get("task"), dict) else None,
+            "delivery": result.get("delivery") if isinstance(result.get("delivery"), dict) else None,
+            "brain": result.get("brain") if isinstance(result.get("brain"), dict) else None,
+            "dispatched": bool(result.get("dispatched", False)),
+            "reused": bool(result.get("reused", False)),
             "intent": "chat",
             "confidence": 0.56 if provider == "ollama" else 0.62,
-            "executionMode": "local_model" if provider == "ollama" else "cloud_model",
+            "executionMode": "server_brain" if provider == "server_brain" else ("local_model" if provider == "ollama" else "cloud_model"),
             "needsConfirmation": False,
             "privacyClass": "public_text",
             "planPreview": None,
@@ -3410,6 +4741,7 @@ class RuntimeContext:
 
 class RuntimeBridge:
     def __init__(self):
+        STATE.recover_operator_state_on_boot()
         self.root = BASE_DIR
         self.backend = BackendClient(
             os.environ.get("APP_BASE_URL"),
@@ -3424,11 +4756,18 @@ class RuntimeBridge:
         self._runtime_ws_lock = threading.RLock()
         self._runtime_ws_connected = False
         self._runtime_ws_last_error = ""
+        self._runtime_ws_reconnect_attempts = 0
+        self._last_dispatch_ack_at = ""
         self._runtime_register_retry_lock = threading.RLock()
         self._runtime_register_retry_thread: threading.Thread | None = None
         self._runtime_register_retry_target: dict[str, str] | None = None
         self._runtime_register_retry_generation = 0
         self._runtime_register_retry_wake = threading.Event()
+        self._pairing_claim_poll_lock = threading.RLock()
+        self._pairing_claim_poll_thread: threading.Thread | None = None
+        self._pairing_claim_poll_target: dict[str, str] | None = None
+        self._pairing_claim_poll_generation = 0
+        self._pairing_claim_poll_wake = threading.Event()
         self._assigned_task_lock = threading.RLock()
         self._assigned_task_inflight: set[str] = set()
         self._assigned_task_recent_terminal: dict[str, float] = {}
@@ -3437,6 +4776,7 @@ class RuntimeBridge:
         self._last_shared_brain_error_code = ""
         self.executor_core = ExecutorCore()
         self._start_runtime_register_retry_if_needed()
+        self._start_pairing_claim_poll_if_needed()
         native_file_indexer.handle_state_change()
 
     def _runtime_diag(self, event: str, **details: Any) -> None:
@@ -3535,7 +4875,7 @@ class RuntimeBridge:
             model=model,
             reason=execution_mode or provider,
         )
-        if provider not in {"", "ollama", "lmstudio", "llamacpp", "local_tool", "local_planner"}:
+        if provider not in {"", "ollama", "lmstudio", "llamacpp", "local_tool", "local_planner", "server_brain"}:
             self.executor_core.record_fallback("local-first cloud fallback")
 
     def _execute_prompt_with_executor(
@@ -3556,6 +4896,14 @@ class RuntimeBridge:
         try:
             self.executor_core.record_stage(execution_id, "planning", detail=source)
             result = route_fn()
+            plan_preview = result.get("planPreview") if isinstance(result, dict) else None
+            if isinstance(plan_preview, dict):
+                self.executor_core.record_agent_plan(
+                    execution_id,
+                    summary=str(plan_preview.get("summary", "") or text),
+                    planned_steps=plan_preview.get("steps", []) if isinstance(plan_preview.get("steps", []), list) else None,
+                    plan_preview=plan_preview,
+                )
             self._record_executor_model_route(execution_id, result, STATE.snapshot())
             if result.get("needsConfirmation") is True:
                 self.executor_core.record_stage(execution_id, "permission_gate", detail="pending_approval", status="waiting")
@@ -3637,6 +4985,7 @@ class RuntimeBridge:
                     "desktopDeviceId": "",
                     "pairingToken": "",
                     "pairingCode": "",
+                    "manualEntryCode": "",
                     "qrText": "",
                     "expiresAt": "",
                     "lastSessionStatus": "",
@@ -3649,6 +4998,9 @@ class RuntimeBridge:
 
     def _runtime_register_retry_backoff_seconds(self) -> list[float]:
         return [0.0, 1.0, 2.0, 4.0]
+
+    def _pairing_claim_poll_backoff_seconds(self) -> list[float]:
+        return [0.5, 1.0, 1.5, 2.0, 3.0]
 
     def _runtime_register_retry_snapshot(self) -> dict[str, Any]:
         state = STATE.snapshot()
@@ -3673,20 +5025,23 @@ class RuntimeBridge:
         last_session_id = str(snapshot.get("lastSessionId", "") or "").strip()
         desktop_device_id = str(snapshot.get("desktopDeviceId", "") or "").strip()
         device_id = str(snapshot.get("deviceId", "") or "").strip()
-        if not last_session_id or not desktop_device_id or not device_id:
+        device_secret = str(snapshot.get("deviceSecret", "") or "").strip()
+        if not device_id or not device_secret:
             return None
         return {
             "lastSessionId": last_session_id,
-            "desktopDeviceId": desktop_device_id,
+            "desktopDeviceId": desktop_device_id or device_id,
             "deviceId": device_id,
         }
 
     def _runtime_register_retry_eligible(self, snapshot: dict[str, Any]) -> bool:
         if not str(snapshot.get("accessToken", "") or "").strip():
             return False
-        if str(snapshot.get("lastSessionStatus", "") or "").strip() != "claimed":
-            return False
         if bool(snapshot.get("ready", False)):
+            return False
+        if str(snapshot.get("deviceId", "") or "").strip() and str(snapshot.get("deviceSecret", "") or "").strip():
+            return self._runtime_register_identity_error() is None
+        if str(snapshot.get("lastSessionStatus", "") or "").strip() != "claimed":
             return False
         if _pairing_expired(str(snapshot.get("expiresAt", "") or "").strip()):
             return False
@@ -3716,6 +5071,114 @@ class RuntimeBridge:
             self._runtime_register_retry_target = None
             self._runtime_register_retry_wake.set()
 
+    def _pairing_claim_poll_snapshot(self) -> dict[str, Any]:
+        state = STATE.snapshot()
+        pairing = state.get("pairing", {})
+        pairing = pairing if isinstance(pairing, dict) else {}
+        return {
+            "lastSessionId": str(pairing.get("lastSessionId", "") or "").strip(),
+            "pairingToken": str(pairing.get("pairingToken", "") or "").strip(),
+            "lastSessionStatus": str(pairing.get("lastSessionStatus", "") or "").strip(),
+            "expiresAt": str(pairing.get("expiresAt", "") or "").strip(),
+        }
+
+    def _pairing_claim_poll_target_from_snapshot(self, snapshot: dict[str, Any]) -> dict[str, str] | None:
+        session_id = str(snapshot.get("lastSessionId", "") or "").strip()
+        pairing_token = str(snapshot.get("pairingToken", "") or "").strip()
+        if not session_id or not pairing_token:
+            return None
+        return {
+            "lastSessionId": session_id,
+            "pairingToken": pairing_token,
+        }
+
+    def _pairing_claim_poll_eligible(self, snapshot: dict[str, Any]) -> bool:
+        if str(snapshot.get("lastSessionStatus", "") or "").strip() != "pending":
+            return False
+        # Backend is the source of truth for a pairing session. The local
+        # expiry can become stale when mobile already claimed the QR but the
+        # renderer missed the transition; polling once more lets the runtime
+        # recover and register instead of staying offline forever.
+        return self._pairing_claim_poll_target_from_snapshot(snapshot) is not None
+
+    def _pairing_claim_poll_should_continue(
+        self,
+        target: dict[str, str],
+        *,
+        generation: int,
+    ) -> bool:
+        with self._pairing_claim_poll_lock:
+            if generation != self._pairing_claim_poll_generation:
+                return False
+            active_target = self._pairing_claim_poll_target
+        if active_target != target:
+            return False
+        snapshot = self._pairing_claim_poll_snapshot()
+        if not self._pairing_claim_poll_eligible(snapshot):
+            return False
+        return self._pairing_claim_poll_target_from_snapshot(snapshot) == target
+
+    def _invalidate_pairing_claim_poll(self) -> None:
+        with self._pairing_claim_poll_lock:
+            self._pairing_claim_poll_generation += 1
+            self._pairing_claim_poll_target = None
+            self._pairing_claim_poll_wake.set()
+
+    def _start_pairing_claim_poll_if_needed(self) -> None:
+        snapshot = self._pairing_claim_poll_snapshot()
+        if not self._pairing_claim_poll_eligible(snapshot):
+            return
+        target = self._pairing_claim_poll_target_from_snapshot(snapshot)
+        if target is None:
+            return
+        with self._pairing_claim_poll_lock:
+            if (
+                self._pairing_claim_poll_thread
+                and self._pairing_claim_poll_thread.is_alive()
+                and self._pairing_claim_poll_target == target
+            ):
+                return
+            self._pairing_claim_poll_generation += 1
+            generation = self._pairing_claim_poll_generation
+            self._pairing_claim_poll_target = target
+            self._pairing_claim_poll_wake.clear()
+            thread = threading.Thread(
+                target=self._pairing_claim_poll_loop,
+                args=(target, generation),
+                name="elyan-pairing-claim-poll",
+                daemon=True,
+            )
+            self._pairing_claim_poll_thread = thread
+            thread.start()
+
+    def _pairing_claim_poll_loop(self, target: dict[str, str], generation: int) -> None:
+        try:
+            backoff = self._pairing_claim_poll_backoff_seconds()
+            attempt = 0
+            while self._pairing_claim_poll_should_continue(target, generation=generation):
+                delay_seconds = backoff[attempt] if attempt < len(backoff) else 3.0
+                if delay_seconds > 0:
+                    if self._pairing_claim_poll_wake.wait(delay_seconds):
+                        return
+                    if not self._pairing_claim_poll_should_continue(target, generation=generation):
+                        return
+                response = self.pairing_get_session(target["lastSessionId"])
+                result = response.get("result") if isinstance(response, dict) else {}
+                result = result if isinstance(result, dict) else {}
+                data = result.get("data") if isinstance(result.get("data"), dict) else {}
+                status = str(data.get("status", "") or "").strip().lower()
+                if status == "claimed":
+                    return
+                if status == "expired" or result.get("statusCode") in {404, 409}:
+                    return
+                attempt += 1
+        finally:
+            with self._pairing_claim_poll_lock:
+                if generation == self._pairing_claim_poll_generation:
+                    self._pairing_claim_poll_target = None
+                if self._pairing_claim_poll_thread is threading.current_thread():
+                    self._pairing_claim_poll_thread = None
+
     def _start_runtime_register_retry_if_needed(self) -> None:
         snapshot = self._runtime_register_retry_snapshot()
         if not self._runtime_register_retry_eligible(snapshot):
@@ -3742,6 +5205,12 @@ class RuntimeBridge:
             )
             self._runtime_register_retry_thread = thread
             thread.start()
+
+    def _ensure_runtime_registered_for_status_if_needed(self) -> None:
+        snapshot = self._runtime_register_retry_snapshot()
+        if not self._runtime_register_retry_eligible(snapshot):
+            return
+        self.ensure_runtime_registered()
 
     def _runtime_register_retry_loop(self, target: dict[str, str], generation: int) -> None:
         try:
@@ -3903,7 +5372,27 @@ class RuntimeBridge:
 
     def _send_backend_runtime_heartbeat(self, status: str, current_task_id: str | None = None) -> BackendResult:
         self._runtime_state_patch(current_task_id=str(current_task_id or "").strip())
-        return self.backend.heartbeat(self._runtime_heartbeat_payload(status, current_task_id))
+        # Snapshot state before the call — BackendClient.heartbeat() calls _clear_runtime_session
+        # on 401 which wipes the token. If our WebSocket is still live we want to recover
+        # immediately via a WS heartbeat instead of going through a full re-registration.
+        runtime_state_before: dict[str, Any] = {}
+        try:
+            snap = STATE.snapshot().get("runtime", {})
+            if isinstance(snap, dict):
+                runtime_state_before = {k: v for k, v in snap.items()}
+        except Exception:
+            pass
+        result = self.backend.heartbeat(self._runtime_heartbeat_payload(status, current_task_id))
+        if not result.ok and result.status_code == 401 and self._runtime_ws_connected:
+            # WS is still open — restore the token/state wiped by _clear_runtime_session
+            # so the relay loop keeps running and the WS heartbeat can re-sync the backend DB.
+            try:
+                if runtime_state_before.get("runtimeToken"):
+                    state_store.update_state({"runtime": runtime_state_before})
+            except Exception:
+                pass
+            self._send_socket_runtime_heartbeat(status, current_task_id)
+        return result
 
     def _send_socket_runtime_heartbeat(self, status: str, current_task_id: str | None = None) -> bool:
         self._runtime_state_patch(current_task_id=str(current_task_id or "").strip())
@@ -4057,6 +5546,12 @@ class RuntimeBridge:
         route_decision = task.get("routeDecision")
         if not isinstance(route_decision, dict):
             route_decision = dict(existing.get("routeDecision", {}) or {})
+        plan_preview = task.get("planPreview")
+        if not isinstance(plan_preview, dict):
+            plan_preview = dict(existing.get("planPreview", {}) or {})
+        execution_trace = task.get("executionTrace")
+        if not isinstance(execution_trace, dict):
+            execution_trace = dict(existing.get("executionTrace", {}) or {})
         return {
             "id": task_id,
             "title": str(task.get("title", "") or existing.get("title", "") or "Yeni görev").strip()[:200],
@@ -4067,6 +5562,8 @@ class RuntimeBridge:
             "error": error[:240],
             "approvalRequest": approval_request,
             "routeDecision": route_decision,
+            "planPreview": plan_preview,
+            "executionTrace": execution_trace,
             "deliveryState": str(task.get("deliveryState", "") or existing.get("deliveryState", "") or "").strip()[:32],
             "runtimeConnectionId": str(task.get("runtimeConnectionId", "") or existing.get("runtimeConnectionId", "") or "").strip()[:80],
             "dispatchLeaseId": str(task.get("dispatchLeaseId", "") or existing.get("dispatchLeaseId", "") or "").strip()[:120],
@@ -4140,6 +5637,16 @@ class RuntimeBridge:
         approval_request = payload.get("approvalRequest")
         if not isinstance(approval_request, dict):
             approval_request = {}
+        plan_preview = payload.get("planPreview")
+        if not isinstance(plan_preview, dict):
+            plan_preview = dict(existing.get("planPreview", {}) or {})
+        result_payload = payload.get("result", {})
+        result_payload = result_payload if isinstance(result_payload, dict) else {}
+        execution_trace = payload.get("executionTrace")
+        if not isinstance(execution_trace, dict):
+            execution_trace = result_payload.get("executionTrace")
+        if not isinstance(execution_trace, dict):
+            execution_trace = dict(existing.get("executionTrace", {}) or {})
         summary = str(payload.get("summary", "") or "").strip()
         if not summary:
             summary = str(payload.get("message", "") or "").strip()
@@ -4150,6 +5657,8 @@ class RuntimeBridge:
             "summary": summary or str(existing.get("summary", "") or ""),
             "error": str(payload.get("error", "") or "").strip() or str(existing.get("error", "") or ""),
             "approvalRequest": approval_request,
+            "planPreview": plan_preview,
+            "executionTrace": execution_trace,
             "updatedAt": _utc_now_iso(),
             "lastVerifiedAt": _utc_now_iso(),
             "lastRemoteStatus": str(payload.get("status", "") or existing.get("status", "") or "queued"),
@@ -4323,6 +5832,36 @@ class RuntimeBridge:
             }
         ]
 
+    def _runtime_task_result_blocks(self, local_result: dict[str, Any]) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        execution_trace = local_result.get("executionTrace")
+        if isinstance(execution_trace, dict):
+            blocks.append(dict(execution_trace))
+        assistant_message = str(local_result.get("assistantMessage", "") or "").strip()
+        if assistant_message:
+            blocks.append({"type": "text", "markdown": assistant_message, "version": 1, "status": "completed"})
+        artifacts = local_result.get("artifacts", [])
+        if isinstance(artifacts, list):
+            for artifact in artifacts[:8]:
+                if not isinstance(artifact, dict):
+                    continue
+                title = self._truncate_text(artifact.get("name") or artifact.get("title") or "Artifact", 180)
+                mime = str(artifact.get("mimeType") or artifact.get("contentType") or artifact.get("mime") or "").strip()
+                summary = self._truncate_text(artifact.get("summary") or artifact.get("preview") or "", 500)
+                block: dict[str, Any] = {
+                    "type": "artifact",
+                    "artifactId": str(artifact.get("id", "") or artifact.get("artifactId", "") or ""),
+                    "title": title,
+                    "mime": mime,
+                    "summary": summary,
+                    "status": "completed",
+                }
+                url = str(artifact.get("url", "") or artifact.get("uri", "") or "").strip()
+                if url:
+                    block["url"] = url
+                blocks.append(block)
+        return blocks
+
     def _set_runtime_task_heartbeat(
         self,
         dispatched_via_websocket: bool,
@@ -4346,8 +5885,19 @@ class RuntimeBridge:
             "conversationId": local_result.get("conversationId", ""),
             "structuredResult": structured_result,
         }
+        plan_preview = local_result.get("planPreview")
+        if isinstance(plan_preview, dict):
+            result_payload["planPreview"] = dict(plan_preview)
+        execution_trace = local_result.get("executionTrace")
+        if isinstance(execution_trace, dict):
+            result_payload["executionTrace"] = dict(execution_trace)
+        blocks = self._runtime_task_result_blocks(local_result)
+        if blocks:
+            result_payload["blocks"] = blocks
         if isinstance(structured_result, dict) and isinstance(structured_result.get("quantum"), dict):
             result_payload["quantum"] = dict(structured_result["quantum"])
+        if isinstance(structured_result, dict) and isinstance(structured_result.get("operator"), dict):
+            result_payload["operator"] = dict(structured_result["operator"])
         return result_payload
 
     def _runtime_task_terminal_payload(
@@ -4370,8 +5920,12 @@ class RuntimeBridge:
             "summary": assistant_message[:1000],
             "approvalRequest": {},
             "result": self._runtime_task_result_payload(local_result),
+            "blocks": self._runtime_task_result_blocks(local_result),
             "artifacts": artifacts,
         }
+        plan_preview = local_result.get("planPreview")
+        if isinstance(plan_preview, dict):
+            payload["planPreview"] = dict(plan_preview)
         if not chat_ok:
             payload["error"] = str(
                 local_result.get("error", {}).get("code", "runtime_task_failed")
@@ -4512,7 +6066,11 @@ class RuntimeBridge:
         account = STATE.snapshot().get("account", {})
         if not isinstance(account, dict):
             return False
-        return bool(str(account.get("accessToken", "") or "").strip())
+        # Accept refreshToken too — api calls with refresh_on_401=True will auto-refresh
+        return bool(
+            str(account.get("accessToken", "") or "").strip()
+            or str(account.get("refreshToken", "") or "").strip()
+        )
 
     def _paired_runtime_ready(self) -> bool:
         runtime = STATE.snapshot().get("runtime", {})
@@ -4522,6 +6080,31 @@ class RuntimeBridge:
             str(runtime.get("deviceId", "") or "").strip()
             and str(runtime.get("deviceSecret", "") or "").strip()
         )
+
+    def _clear_runtime_credentials(self) -> None:
+        """Wipe all pairing credentials — called when the server deactivates this device.
+        After this, _paired_runtime_ready() and _runtime_auth_ready() both return False
+        so the relay loop and WS loop stop all reconnect attempts immediately."""
+        try:
+            state_store.update_state({
+                "runtime": {
+                    "deviceId": "",
+                    "deviceSecret": "",
+                    "runtimeToken": "",
+                    "connectionId": "",
+                    "ready": False,
+                    "lifecycleState": "offline",
+                    "websocketConnected": False,
+                    "lastErrorCode": "device_deactivated",
+                },
+                "pairing": {
+                    "realtimeReady": False,
+                    "lastHeartbeatAt": "",
+                    "paired": False,
+                },
+            })
+        except Exception:
+            pass
 
     def _prime_runtime_task_delivery(self) -> None:
         try:
@@ -4606,6 +6189,59 @@ class RuntimeBridge:
         if not self._try_mark_assigned_task_inflight(normalized_task_id):
             return "skipped_duplicate"
         return "accepted"
+
+    def _persist_runtime_dispatch_acceptance(
+        self,
+        task: dict[str, Any],
+        lease_id: str,
+        *,
+        transport: str,
+    ) -> str:
+        task_id = str(task.get("id", "") or "").strip()
+        if not task_id:
+            return ""
+        accepted_at = _utc_now_iso()
+        item = self._normalized_task_inbox_item(
+            {
+                **task,
+                "id": task_id,
+                "dispatchLeaseId": lease_id,
+                "deliveryState": str(task.get("deliveryState", "") or "dispatched"),
+                "updatedAt": accepted_at,
+            }
+        )
+        STATE.upsert_task_inbox_item(item, last_synced_at=accepted_at)
+        stored = STATE.save_runtime_dispatch_link(
+            task_id,
+            lease_id,
+            title=str(task.get("title", "") or item.get("title", "") or ""),
+            status="accepted",
+            execution_state="accepted",
+            transport=transport,
+            accepted_at=accepted_at,
+        )
+        if not isinstance(stored, dict) or not str(stored.get("leaseId", "") or "").strip():
+            return ""
+        return accepted_at
+
+    def _mark_runtime_dispatch_acked_local(
+        self,
+        task_id: str,
+        lease_id: str,
+        *,
+        accepted_at: str,
+    ) -> None:
+        acked_at = str(accepted_at or _utc_now_iso()).strip() or _utc_now_iso()
+        STATE.mark_runtime_dispatch_acked(task_id, lease_id, acked_at=acked_at)
+        STATE.upsert_task_inbox_item(
+            {
+                "id": task_id,
+                "deliveryState": "acked",
+                "dispatchAckAt": acked_at,
+                "updatedAt": acked_at,
+            },
+            last_synced_at=acked_at,
+        )
 
     def _execute_websocket_dispatched_task(self, task_id: str, task: dict[str, Any]) -> None:
         try:
@@ -4739,6 +6375,7 @@ class RuntimeBridge:
             def _on_open(_app: Any) -> None:
                 self._runtime_ws_connected = True
                 self._runtime_ws_last_error = ""
+                self._runtime_ws_reconnect_attempts = 0
                 self._runtime_state_patch(
                     lifecycle_state="ready",
                     ready=True,
@@ -4764,7 +6401,21 @@ class RuntimeBridge:
 
             def _on_close(_app: Any, status_code: Any, message: Any) -> None:
                 self._runtime_ws_connected = False
+                # 4003 = device_deactivated: the user removed this desktop from their account.
+                # Clear all stored credentials so the bridge stops trying to reconnect.
+                if int(status_code or 0) == 4003:
+                    self._runtime_diag("ws_deactivated", status=status_code, reason=message)
+                    self._clear_runtime_credentials()
+                    self._runtime_state_patch(
+                        lifecycle_state="offline",
+                        ready=False,
+                        websocket_connected=False,
+                        error_code="device_deactivated",
+                    )
+                    return
                 lifecycle = "offline" if self._runtime_ws_stop.is_set() or not self._paired_runtime_ready() else "reconnecting"
+                if lifecycle == "reconnecting":
+                    self._runtime_ws_reconnect_attempts += 1
                 self._runtime_state_patch(
                     lifecycle_state=lifecycle,
                     ready=False,
@@ -4860,12 +6511,32 @@ class RuntimeBridge:
                 if dispatch_state != "accepted":
                     self._runtime_diag("ws_dispatch_skipped", task_id=task_id, reason=dispatch_state)
                     return
+                accepted_at = self._persist_runtime_dispatch_acceptance(
+                    task,
+                    lease_id,
+                    transport="websocket",
+                )
+                if not accepted_at:
+                    self._clear_assigned_task_inflight(task_id)
+                    self._runtime_diag("ws_accept_persist_failed", task_id=task_id, lease_id=lease_id)
+                    return
                 if lease_id:
-                    ack_payload = {"type": "task.ack", "taskId": task_id, "leaseId": lease_id}
+                    ack_payload = {
+                        "type": "task.ack",
+                        "taskId": task_id,
+                        "leaseId": lease_id,
+                        "acceptedAt": accepted_at,
+                    }
                     if not self._send_runtime_socket_message(ack_payload):
                         self._clear_assigned_task_inflight(task_id)
                         self._runtime_diag("ws_ack_failed", task_id=task_id, lease_id=lease_id)
                         return
+                    self._mark_runtime_dispatch_acked_local(
+                        task_id,
+                        lease_id,
+                        accepted_at=accepted_at,
+                    )
+                    self._last_dispatch_ack_at = accepted_at
                 threading.Thread(
                     target=self._execute_websocket_dispatched_task,
                     args=(task_id, task),
@@ -4927,9 +6598,12 @@ class RuntimeBridge:
         }
 
     def status(self) -> dict[str, Any]:
+        self._ensure_runtime_registered_for_status_if_needed()
         state = STATE.snapshot()
         runtime = state.get("runtime", {})
         runtime = runtime if isinstance(runtime, dict) else {}
+        task_inbox = STATE.get_task_inbox()
+        pending_remote_task_count = int(task_inbox.get("pendingCount", 0) or 0) if isinstance(task_inbox, dict) else 0
         transport_mode = self._runtime_transport_mode()
         runtime_ready = bool(runtime.get("ready")) or self._runtime_ws_connected
         runtime_capabilities_raw = runtime.get("capabilities")
@@ -4960,6 +6634,8 @@ class RuntimeBridge:
             local_provider_readiness=self._local_provider_readiness(local_models),
             cloud_provider_readiness=self._cloud_provider_readiness(),
         )
+        operator_status = _operator_status_payload(state)
+        desktop_native_snapshot = _desktop_native_snapshot_payload()
         return {
             "ok": True,
             "startedAt": self.context.started_at,
@@ -4980,10 +6656,15 @@ class RuntimeBridge:
             "runtimeCapabilityMetadataSummary": capability_metadata_summary(runtime_capabilities),
             "runtimeReady": runtime_ready,
             "runtimeWebsocketConnected": self._runtime_ws_connected,
+            "runtimeRelayState": self._relay_mode(),
+            "pendingRemoteTaskCount": pending_remote_task_count,
+            "reconnectAttemptCount": self._runtime_ws_reconnect_attempts,
+            "lastDispatchAckAt": self._last_dispatch_ack_at,
             "controlPlane": self._control_plane_snapshot(local_models),
             "localModels": local_models,
             "executorStatus": executor_status,
             "agentStatus": executor_status.get("agentStatus", {}) if isinstance(executor_status, dict) else {},
+            "operatorStatus": operator_status,
             "runtimeTransport": {
                 "mode": transport_mode,
                 "connected": self._runtime_ws_connected if transport_mode == "websocket" else runtime_ready,
@@ -4994,11 +6675,12 @@ class RuntimeBridge:
             "speechStatus": _speech_status_payload(),
             "retrievalStatus": retrieval_status,
             "desktopNativeStatus": _native_desktop_dependency_status(),
+            "desktopNative": desktop_native_snapshot,
             "taskIntelligenceStatus": STATE.get_task_intelligence_status(),
             "artifactSelectionStatus": _artifact_selection_status_payload(),
             "mcpStatus": _mcp_status_payload(),
             "skillStatus": _skill_status_payload(),
-            "taskInbox": STATE.get_task_inbox(),
+            "taskInbox": task_inbox,
         }
 
     def get_state(self) -> dict[str, Any]:
@@ -5018,18 +6700,268 @@ class RuntimeBridge:
         }
 
     def create_conversation(self, title: str = "") -> dict[str, Any]:
-        created = STATE.create_conversation(title)
+        cleaned_title = str(title or "").strip()
+        if self._user_auth_ready():
+            # A blank composer is not a persisted chat. The backend creates the
+            # canonical session atomically with the first user message.
+            state = STATE.update_state({"conversation": {"activeId": ""}})
+            return {
+                "ok": True,
+                "conversation": None,
+                "conversationId": "",
+                "conversations": _conversation_entries(),
+                "state": state,
+            }
+
+        created = STATE.create_conversation(cleaned_title)
         return {
+            "ok": True,
             "conversation": created,
             "conversations": _conversation_entries(),
             "state": STATE.snapshot(),
         }
 
     def select_conversation(self, conversation_id: str) -> dict[str, Any]:
+        conversation_id = str(conversation_id or "").strip()
+        if not conversation_id:
+            return {
+                "ok": False,
+                "error": {"code": "CONVERSATION_ID_MISSING", "message": "Sohbet seçilemedi."},
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        if self._user_auth_ready() and hasattr(self.backend, "chat_session_detail"):
+            detail = self.backend.chat_session_detail(conversation_id)
+            self._log_backend_result("chat_session_detail", detail)
+            if detail.ok and isinstance(detail.data, dict):
+                session = _map_from(detail.data.get("session") or detail.data)
+                messages = detail.data.get("messages", [])
+                normalized_messages = [
+                    _normalize_backend_chat_message(message)
+                    for message in messages
+                    if isinstance(message, dict)
+                ]
+                self._sync_conversation_truth_from_backend(focus_session_id=conversation_id)
+                state = STATE.snapshot()
+                state.setdefault("conversation", {})["activeId"] = conversation_id
+                state = STATE.save_state(state)
+                return {
+                    "ok": True,
+                    "state": state,
+                    "activeConversationId": conversation_id,
+                    "conversations": _conversation_entries(),
+                }
+            return {
+                "ok": False,
+                "error": {
+                    "code": _safe_error_code(detail.error or "chat_session_detail_failed"),
+                    "message": _safe_chat_error_message(detail.error or "chat_session_detail_failed"),
+                },
+                "result": detail.to_dict(),
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+
         state = STATE.snapshot()
         state.setdefault("conversation", {})["activeId"] = conversation_id
         state = STATE.save_state(state)
-        return {"state": state, "activeConversationId": conversation_id, "conversations": _conversation_entries()}
+        return {"ok": True, "state": state, "activeConversationId": conversation_id, "conversations": _conversation_entries()}
+
+    def list_archived_conversations(self) -> dict[str, Any]:
+        if self._user_auth_ready() and hasattr(self.backend, "chat_sessions"):
+            result = self.backend.chat_sessions(status="archived", limit=30)
+            self._log_backend_result("chat_sessions_archived", result)
+            if result.ok and isinstance(result.data, dict):
+                self._sync_conversation_truth_from_backend()
+        return {
+            "conversations": STATE.list_archived_conversations(),
+            "activeConversationId": str(STATE.snapshot().get("conversation", {}).get("activeId", "") or ""),
+            "state": STATE.snapshot(),
+        }
+
+    def rename_conversation(self, conversation_id: str, title: str) -> dict[str, Any]:
+        conversation_id = str(conversation_id or "").strip()
+        cleaned_title = str(title or "").strip()
+        if not conversation_id:
+            return {
+                "ok": False,
+                "error": {"code": "CONVERSATION_ID_MISSING", "message": "Sohbet seçilemedi."},
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        if not cleaned_title:
+            return {
+                "ok": False,
+                "error": {"code": "CONVERSATION_TITLE_MISSING", "message": "Sohbet adı boş olamaz."},
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        if self._user_auth_ready() and hasattr(self.backend, "chat_session_update"):
+            result = self.backend.chat_session_update(conversation_id, {"title": cleaned_title})
+            self._log_backend_result("chat_session_update", result)
+            if result.ok and isinstance(result.data, dict):
+                self._sync_conversation_truth_from_backend(focus_session_id=conversation_id)
+                return {
+                    "ok": True,
+                    "conversationId": conversation_id,
+                    "title": cleaned_title,
+                    "conversations": _conversation_entries(),
+                    "state": STATE.snapshot(),
+                }
+            return {
+                "ok": False,
+                "error": {
+                    "code": _safe_error_code(result.error or "chat_session_update_failed"),
+                    "message": _safe_chat_error_message(result.error or "chat_session_update_failed"),
+                },
+                "result": result.to_dict(),
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        STATE.update_conversation_title(conversation_id, cleaned_title)
+        return {
+            "ok": True,
+            "conversationId": conversation_id,
+            "title": cleaned_title,
+            "conversations": _conversation_entries(),
+            "state": STATE.snapshot(),
+        }
+
+    def archive_conversation(self, conversation_id: str, archived: bool = True) -> dict[str, Any]:
+        conversation_id = str(conversation_id or "").strip()
+        if not conversation_id:
+            return {
+                "ok": False,
+                "error": {"code": "CONVERSATION_ID_MISSING", "message": "Sohbet seçilemedi."},
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        if self._user_auth_ready() and hasattr(self.backend, "chat_session_update"):
+            result = self.backend.chat_session_update(
+                conversation_id,
+                {"status": "archived" if archived else "active"},
+            )
+            self._log_backend_result("chat_session_update", result)
+            if result.ok and isinstance(result.data, dict):
+                self._sync_conversation_truth_from_backend(focus_session_id=conversation_id)
+                updated = STATE.get_conversation(conversation_id)
+                return {
+                    "ok": True,
+                    "conversation": updated,
+                    "conversationId": conversation_id,
+                    "archived": bool(archived),
+                    "activeConversationId": str(STATE.snapshot().get("conversation", {}).get("activeId", "") or ""),
+                    "conversations": _conversation_entries(),
+                    "state": STATE.snapshot(),
+                }
+            return {
+                "ok": False,
+                "error": {
+                    "code": _safe_error_code(result.error or "chat_session_update_failed"),
+                    "message": _safe_chat_error_message(result.error or "chat_session_update_failed"),
+                },
+                "result": result.to_dict(),
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        updated = STATE.archive_conversation(conversation_id, archived)
+        if updated is None:
+            return {
+                "ok": False,
+                "error": {"code": "CONVERSATION_NOT_FOUND", "message": "Sohbet bulunamadı."},
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        return {
+            "ok": True,
+            "conversation": updated,
+            "conversationId": conversation_id,
+            "archived": bool(archived),
+            "activeConversationId": str(STATE.snapshot().get("conversation", {}).get("activeId", "") or ""),
+            "conversations": _conversation_entries(),
+            "state": STATE.snapshot(),
+        }
+
+    def delete_conversation(self, conversation_id: str) -> dict[str, Any]:
+        conversation_id = str(conversation_id or "").strip()
+        if not conversation_id:
+            return {
+                "ok": False,
+                "error": {"code": "CONVERSATION_ID_MISSING", "message": "Sohbet seçilemedi."},
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        if self._user_auth_ready() and hasattr(self.backend, "chat_session_delete"):
+            result = self.backend.chat_session_delete(conversation_id)
+            self._log_backend_result("chat_session_delete", result)
+            if result.ok and isinstance(result.data, dict):
+                self._sync_conversation_truth_from_backend()
+                return {
+                    "ok": True,
+                    "conversation": {"id": conversation_id},
+                    "conversationId": conversation_id,
+                    "activeConversationId": str(STATE.snapshot().get("conversation", {}).get("activeId", "") or ""),
+                    "conversations": _conversation_entries(),
+                    "state": STATE.snapshot(),
+                }
+            return {
+                "ok": False,
+                "error": {
+                    "code": _safe_error_code(result.error or "chat_session_delete_failed"),
+                    "message": _safe_chat_error_message(result.error or "chat_session_delete_failed"),
+                },
+                "result": result.to_dict(),
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        removed = STATE.delete_conversation(conversation_id)
+        if removed is None:
+            return {
+                "ok": False,
+                "error": {"code": "CONVERSATION_NOT_FOUND", "message": "Sohbet bulunamadı."},
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        return {
+            "ok": True,
+            "conversation": removed,
+            "conversationId": conversation_id,
+            "activeConversationId": str(STATE.snapshot().get("conversation", {}).get("activeId", "") or ""),
+            "conversations": _conversation_entries(),
+            "state": STATE.snapshot(),
+        }
+
+    def clear_conversation_history(self, before: dt.datetime | None = None) -> dict[str, Any]:
+        if self._user_auth_ready() and hasattr(self.backend, "chat_sessions_clear"):
+            result = self.backend.chat_sessions_clear(before=before)
+            self._log_backend_result("chat_sessions_clear", result)
+            if result.ok and isinstance(result.data, dict):
+                self._sync_conversation_truth_from_backend(clear_all=True)
+                return {
+                    "ok": True,
+                    "result": result.to_dict(),
+                    "conversations": _conversation_entries(),
+                    "state": STATE.snapshot(),
+                }
+            return {
+                "ok": False,
+                "error": {
+                    "code": _safe_error_code(result.error or "chat_sessions_clear_failed"),
+                    "message": _safe_chat_error_message(result.error or "chat_sessions_clear_failed"),
+                },
+                "result": result.to_dict(),
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
+        state = STATE.snapshot()
+        state.setdefault("conversation", {})["items"] = []
+        state.setdefault("conversation", {})["activeId"] = ""
+        state = STATE.save_state(state)
+        return {
+            "ok": True,
+            "state": state,
+            "conversations": _conversation_entries(),
+        }
 
     def _store_pending_plan(self, conversation_id: str, result: dict[str, Any], text: str) -> dict[str, Any] | None:
         pending = result.get("pendingPlan")
@@ -5039,6 +6971,15 @@ class RuntimeBridge:
         payload["conversationId"] = conversation_id
         payload["query"] = text
         payload["createdAt"] = _utc_now_iso()
+        plan_preview = result.get("planPreview")
+        if isinstance(plan_preview, dict):
+            payload["planPreview"] = dict(plan_preview)
+            agent_plan = plan_preview.get("agentPlan")
+            if isinstance(agent_plan, dict):
+                payload["agentPlan"] = dict(agent_plan)
+                payload["stepCount"] = int(agent_plan.get("stepCount", payload.get("stepCount", 0)) or 0)
+                payload["agentRoles"] = list(agent_plan.get("agentRoles", payload.get("agentRoles", [])))
+                payload["executionStrategy"] = str(agent_plan.get("executionStrategy", payload.get("executionStrategy", "")) or "")
         return STATE.save_pending_plan(payload)
 
     def _pending_plan_exists(self, plan_id: str) -> bool:
@@ -5402,7 +7343,6 @@ class RuntimeBridge:
             conversation_id = str(conversation["id"])
             state = STATE.snapshot()
         messages = conversation.get("messages", []) if isinstance(conversation, dict) else []
-        message_list = messages if isinstance(messages, list) else []
         chat_context = []
         if isinstance(messages, list):
             for message in messages[-20:]:
@@ -5433,7 +7373,7 @@ class RuntimeBridge:
         shared_prompt_context, shared_metadata, _shared_profile = self._shared_brain_context_for_conversation(
             text=text,
             conversation_id=conversation_id,
-            enabled=not message_list,
+            enabled=True,
         )
         state = STATE.snapshot()
         route_conversation = list(chat_context)
@@ -5450,6 +7390,7 @@ class RuntimeBridge:
                 text,
                 conversation_id=conversation_id,
                 selected_artifacts=normalized_selected,
+                backend=self.backend,
             ),
         )
         self._record_executor_retrieval_usage(result, shared_metadata=shared_metadata)
@@ -5472,6 +7413,12 @@ class RuntimeBridge:
                     "clarificationQuestion": str(result.get("clarificationQuestion", "") or ""),
                     "permissionNeeded": bool(result.get("permissionNeeded", False)),
                     "permissionReason": str(result.get("permissionReason", "") or ""),
+                    "permissionKey": str(result.get("permissionKey", "") or ""),
+                    "canGrantPersistently": bool(result.get("canGrantPersistently", False)),
+                    "systemPermissionKey": str(result.get("systemPermissionKey", "") or ""),
+                    "systemPermissionRequired": bool(result.get("systemPermissionRequired", False)),
+                    "permissionErrorCode": str(result.get("permissionErrorCode", "") or ""),
+                    "osPermissionStatus": str(result.get("osPermissionStatus", "") or ""),
                     "revisePlanSupported": bool(result.get("revisePlanSupported", False)),
                     "retrievalUsed": bool(result.get("retrievalUsed", False)),
                     "retrievalStrategy": str(result.get("retrievalStrategy", "") or ""),
@@ -5499,6 +7446,12 @@ class RuntimeBridge:
                 "clarificationQuestion": str(result.get("clarificationQuestion", "") or ""),
                 "permissionNeeded": bool(result.get("permissionNeeded", False)),
                 "permissionReason": str(result.get("permissionReason", "") or ""),
+                "permissionKey": str(result.get("permissionKey", "") or ""),
+                "canGrantPersistently": bool(result.get("canGrantPersistently", False)),
+                "systemPermissionKey": str(result.get("systemPermissionKey", "") or ""),
+                "systemPermissionRequired": bool(result.get("systemPermissionRequired", False)),
+                "permissionErrorCode": str(result.get("permissionErrorCode", "") or ""),
+                "osPermissionStatus": str(result.get("osPermissionStatus", "") or ""),
                 "revisePlanSupported": bool(result.get("revisePlanSupported", False)),
                 "retrievalUsed": bool(result.get("retrievalUsed", False)),
                 "retrievalStrategy": str(result.get("retrievalStrategy", "") or ""),
@@ -5514,7 +7467,11 @@ class RuntimeBridge:
         content = str(result.get("content", "") or "").strip()
         if not content:
             content = "Mesaj işlendi ama içerik döndürülmedi."
+        backend_session = result.get("session") if isinstance(result.get("session"), dict) else {}
+        backend_session_id = _first_nonempty(backend_session.get("id"))
         stored_plan = self._store_pending_plan(conversation_id, result, text)
+        stored_plan_id = stored_plan.get("id") if isinstance(stored_plan, dict) else None
+        needs_confirmation = bool(result.get("needsConfirmation", False) or stored_plan_id)
         STATE.append_message(
             conversation_id,
             "assistant",
@@ -5526,13 +7483,19 @@ class RuntimeBridge:
                 "executionMode": result.get("executionMode", "chat"),
                 "structuredResult": result.get("structuredResult"),
                 "artifacts": result.get("artifacts", []),
-                "needsConfirmation": bool(result.get("needsConfirmation", False)),
+                "needsConfirmation": needs_confirmation,
                 "planPreview": result.get("planPreview"),
-                "pendingPlanId": stored_plan.get("id") if isinstance(stored_plan, dict) else None,
+                "pendingPlanId": stored_plan_id,
                 "clarificationNeeded": bool(result.get("clarificationNeeded", False)),
                 "clarificationQuestion": str(result.get("clarificationQuestion", "") or ""),
                 "permissionNeeded": bool(result.get("permissionNeeded", False)),
                 "permissionReason": str(result.get("permissionReason", "") or ""),
+                "permissionKey": str(result.get("permissionKey", "") or ""),
+                "canGrantPersistently": bool(result.get("canGrantPersistently", False)),
+                "systemPermissionKey": str(result.get("systemPermissionKey", "") or ""),
+                "systemPermissionRequired": bool(result.get("systemPermissionRequired", False)),
+                "permissionErrorCode": str(result.get("permissionErrorCode", "") or ""),
+                "osPermissionStatus": str(result.get("osPermissionStatus", "") or ""),
                 "revisePlanSupported": bool(result.get("revisePlanSupported", False)),
                 "retrievalUsed": bool(result.get("retrievalUsed", False)),
                 "retrievalStrategy": str(result.get("retrievalStrategy", "") or ""),
@@ -5544,6 +7507,11 @@ class RuntimeBridge:
         if title:
             STATE.update_conversation_title(conversation_id, title)
         cleared_state = _clear_selected_artifacts()
+        if backend_session_id and _is_uuid_value(backend_session_id):
+            cleared_state = self._sync_conversation_truth_from_backend(
+                focus_session_id=backend_session_id,
+            )
+            conversation_id = backend_session_id
         response: dict[str, Any] = {
             "ok": True,
             "chatOk": True,
@@ -5552,18 +7520,32 @@ class RuntimeBridge:
             "assistantMessage": content,
             "provider": result.get("provider", ""),
             "toolEvents": result.get("toolEvents", []),
+            "session": backend_session or None,
+            "userMessage": result.get("userMessage") if isinstance(result.get("userMessage"), dict) else None,
+            "assistantMessageRecord": result.get("assistantMessageRecord") if isinstance(result.get("assistantMessageRecord"), dict) else None,
+            "task": result.get("task") if isinstance(result.get("task"), dict) else None,
+            "delivery": result.get("delivery") if isinstance(result.get("delivery"), dict) else None,
+            "brain": result.get("brain") if isinstance(result.get("brain"), dict) else None,
+            "dispatched": bool(result.get("dispatched", False)),
+            "reused": bool(result.get("reused", False)),
             "structuredResult": result.get("structuredResult"),
             "artifacts": result.get("artifacts", []),
             "intent": result.get("intent", ""),
             "confidence": result.get("confidence", 0.0),
             "executionMode": result.get("executionMode", "chat"),
-            "needsConfirmation": bool(result.get("needsConfirmation", False)),
+            "needsConfirmation": needs_confirmation,
             "planPreview": result.get("planPreview"),
-            "pendingPlanId": stored_plan.get("id") if isinstance(stored_plan, dict) else None,
+            "pendingPlanId": stored_plan_id,
             "clarificationNeeded": bool(result.get("clarificationNeeded", False)),
             "clarificationQuestion": str(result.get("clarificationQuestion", "") or ""),
             "permissionNeeded": bool(result.get("permissionNeeded", False)),
             "permissionReason": str(result.get("permissionReason", "") or ""),
+            "permissionKey": str(result.get("permissionKey", "") or ""),
+            "canGrantPersistently": bool(result.get("canGrantPersistently", False)),
+            "systemPermissionKey": str(result.get("systemPermissionKey", "") or ""),
+            "systemPermissionRequired": bool(result.get("systemPermissionRequired", False)),
+            "permissionErrorCode": str(result.get("permissionErrorCode", "") or ""),
+            "osPermissionStatus": str(result.get("osPermissionStatus", "") or ""),
             "revisePlanSupported": bool(result.get("revisePlanSupported", False)),
             "retrievalUsed": bool(result.get("retrievalUsed", False)),
             "retrievalStrategy": str(result.get("retrievalStrategy", "") or ""),
@@ -5711,7 +7693,7 @@ class RuntimeBridge:
                     "enabled": bool(cfg.get("enabled", False)),
                     "active": _current_provider(state) == provider_id or (provider_id == selected_runtime and _current_provider(state) == "local"),
                     "defaultModel": str(cfg.get("defaultModel", "") or ""),
-                    "baseUrl": str(cfg.get("baseUrl", "") or ""),
+                    "endpointConfigured": bool(str(cfg.get("baseUrl", "") or "").strip()),
                     "configured": _provider_is_configured_for_chat(state, provider_id),
                     "secretConfigured": bool(_provider_secret(provider_id)),
                     "validationStatus": str(cfg.get("validationStatus", "") or "idle"),
@@ -5848,7 +7830,7 @@ class RuntimeBridge:
                 "providerId": provider_id,
                 "models": models.get("models", []),
                 "available": bool(models.get("available")),
-                "error": str(models.get("error", "") or ""),
+                "error": _safe_error_code(models.get("error", ""), "ollama_client_unavailable"),
             }
         elif provider_id == "lmstudio":
             client = self._lmstudio_client_from_state()
@@ -5858,7 +7840,7 @@ class RuntimeBridge:
                 "providerId": provider_id,
                 "models": models.get("models", []),
                 "available": bool(models.get("available")),
-                "error": str(models.get("error", "") or ""),
+                "error": _safe_error_code(models.get("error", ""), "lmstudio_client_unavailable"),
             }
         elif provider_id == "llamacpp":
             client = self._llamacpp_client_from_state()
@@ -5868,69 +7850,117 @@ class RuntimeBridge:
                 "providerId": provider_id,
                 "models": models.get("models", []),
                 "available": bool(models.get("available")),
-                "error": str(models.get("error", "") or ""),
+                "error": _safe_error_code(models.get("error", ""), "llamacpp_client_unavailable"),
             }
         elif provider_id in {"openai", "groq", "custom"}:
             cfg = _provider_config(state, provider_id)
             api_key = str(cfg.get("apiKey", "") or "").strip()
             base_url = str(cfg.get("baseUrl", "") or "").strip().rstrip("/")
             url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
-            try:
-                response = requests.get(
-                    url,
-                    headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
-                    timeout=12,
-                )
-                payload_json = response.json() if response.text else {}
-                models = payload_json.get("data", []) if isinstance(payload_json, dict) else []
-                validation = {
-                    "ok": response.ok,
-                    "providerId": provider_id,
-                    "models": models,
-                    "available": response.ok,
-                    "error": "" if response.ok else response.text[:240],
-                }
-            except requests.RequestException as exc:
-                validation = {"ok": False, "providerId": provider_id, "models": [], "available": False, "error": str(exc)}
+            requests_mod = _requests_module()
+            if requests_mod is None:
+                validation = {"ok": False, "providerId": provider_id, "models": [], "available": False, "error": "requests_unavailable"}
+            else:
+                try:
+                    response = requests_mod.get(
+                        url,
+                        headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
+                        timeout=12,
+                    )
+                    payload_json = response.json() if response.text else {}
+                    models = payload_json.get("data", []) if isinstance(payload_json, dict) else []
+                    error_code = ""
+                    if not response.ok:
+                        if response.status_code in {401, 403}:
+                            error_code = "provider_auth_failed"
+                        elif response.status_code == 404:
+                            error_code = "provider_not_found"
+                        elif response.status_code == 429:
+                            error_code = "provider_rate_limited"
+                        elif response.status_code >= 500:
+                            error_code = "provider_unreachable"
+                        else:
+                            error_code = "provider_unreachable"
+                    validation = {
+                        "ok": response.ok,
+                        "providerId": provider_id,
+                        "models": models,
+                        "available": response.ok,
+                        "error": error_code,
+                    }
+                except requests_mod.RequestException as exc:
+                    validation = {"ok": False, "providerId": provider_id, "models": [], "available": False, "error": _safe_error_code(_request_exception_code(exc), "provider_unreachable")}
         elif provider_id == "anthropic":
             cfg = _provider_config(state, provider_id)
             api_key = str(cfg.get("apiKey", "") or "").strip()
             base_url = str(cfg.get("baseUrl", "") or "https://api.anthropic.com").strip().rstrip("/")
-            try:
-                response = requests.get(
-                    f"{base_url}/v1/models",
-                    headers={
-                        "x-api-key": api_key,
-                        "anthropic-version": "2023-06-01",
-                    },
-                    timeout=12,
-                )
-                payload_json = response.json() if response.text else {}
-                validation = {
-                    "ok": response.ok,
-                    "providerId": provider_id,
-                    "models": payload_json.get("data", []) if isinstance(payload_json, dict) else [],
-                    "available": response.ok,
-                    "error": "" if response.ok else response.text[:240],
-                }
-            except requests.RequestException as exc:
-                validation = {"ok": False, "providerId": provider_id, "models": [], "available": False, "error": str(exc)}
+            requests_mod = _requests_module()
+            if requests_mod is None:
+                validation = {"ok": False, "providerId": provider_id, "models": [], "available": False, "error": "requests_unavailable"}
+            else:
+                try:
+                    response = requests_mod.get(
+                        f"{base_url}/v1/models",
+                        headers={
+                            "x-api-key": api_key,
+                            "anthropic-version": "2023-06-01",
+                        },
+                        timeout=12,
+                    )
+                    payload_json = response.json() if response.text else {}
+                    error_code = ""
+                    if not response.ok:
+                        if response.status_code in {401, 403}:
+                            error_code = "provider_auth_failed"
+                        elif response.status_code == 404:
+                            error_code = "provider_not_found"
+                        elif response.status_code == 429:
+                            error_code = "provider_rate_limited"
+                        elif response.status_code >= 500:
+                            error_code = "provider_unreachable"
+                        else:
+                            error_code = "provider_unreachable"
+                    validation = {
+                        "ok": response.ok,
+                        "providerId": provider_id,
+                        "models": payload_json.get("data", []) if isinstance(payload_json, dict) else [],
+                        "available": response.ok,
+                        "error": error_code,
+                    }
+                except requests_mod.RequestException as exc:
+                    validation = {"ok": False, "providerId": provider_id, "models": [], "available": False, "error": _safe_error_code(_request_exception_code(exc), "provider_unreachable")}
         else:
             cfg = _provider_config(state, "gemini")
             api_key = str(cfg.get("apiKey", "") or "").strip()
             base_url = str(cfg.get("baseUrl", "") or "https://generativelanguage.googleapis.com").rstrip("/")
-            try:
-                response = requests.get(f"{base_url}/v1beta/models?key={api_key}", timeout=12)
-                payload_json = response.json() if response.text else {}
-                validation = {
-                    "ok": response.ok,
-                    "providerId": "gemini",
-                    "models": payload_json.get("models", []) if isinstance(payload_json, dict) else [],
-                    "available": response.ok,
-                    "error": "" if response.ok else response.text[:240],
-                }
-            except requests.RequestException as exc:
-                validation = {"ok": False, "providerId": "gemini", "models": [], "available": False, "error": str(exc)}
+            requests_mod = _requests_module()
+            if requests_mod is None:
+                validation = {"ok": False, "providerId": "gemini", "models": [], "available": False, "error": "requests_unavailable"}
+            else:
+                try:
+                    response = requests_mod.get(f"{base_url}/v1beta/models?key={api_key}", timeout=12)
+                    payload_json = response.json() if response.text else {}
+                    error_code = ""
+                    if not response.ok:
+                        if response.status_code in {401, 403}:
+                            error_code = "provider_auth_failed"
+                        elif response.status_code == 404:
+                            error_code = "provider_not_found"
+                        elif response.status_code == 429:
+                            error_code = "provider_rate_limited"
+                        elif response.status_code >= 500:
+                            error_code = "provider_unreachable"
+                        else:
+                            error_code = "provider_unreachable"
+                    validation = {
+                        "ok": response.ok,
+                        "providerId": "gemini",
+                        "models": payload_json.get("models", []) if isinstance(payload_json, dict) else [],
+                        "available": response.ok,
+                        "error": error_code,
+                    }
+                except requests_mod.RequestException as exc:
+                    validation = {"ok": False, "providerId": "gemini", "models": [], "available": False, "error": _safe_error_code(_request_exception_code(exc), "provider_unreachable")}
         validation_status = "ready" if validation.get("ok") else "error"
         STATE.update_state(
             {
@@ -6039,15 +8069,211 @@ class RuntimeBridge:
             account_patch["onboardingCompleted"] = True
             STATE.update_state({"account": account_patch})
         if subscription:
+            brain_profile = _map_from(subscription.get("brainProfile"))
             plan_code = str(subscription.get("planCode", "") or subscription.get("code", "") or "").strip()
             status = str(subscription.get("status", "") or "").strip()
             billing_patch: dict[str, Any] = {}
+            normalized_subscription: dict[str, Any] = {}
             if plan_code:
-                billing_patch["subscriptionPlan"] = plan_code
+                normalized_subscription["planCode"] = plan_code
             if status:
-                billing_patch["subscriptionStatus"] = status
+                normalized_subscription["status"] = status
+            try:
+                normalized_subscription["aiCreditsMonthly"] = max(0, int(subscription.get("aiCreditsMonthly", 0) or 0))
+            except (TypeError, ValueError):
+                normalized_subscription["aiCreditsMonthly"] = 0
+            try:
+                normalized_subscription["taskLimitMonthly"] = max(0, int(subscription.get("taskLimitMonthly", 0) or 0))
+            except (TypeError, ValueError):
+                normalized_subscription["taskLimitMonthly"] = 0
+            period_ends_at = str(subscription.get("periodEndsAt", "") or subscription.get("trialEndsAt", "") or "").strip()
+            if period_ends_at:
+                normalized_subscription["periodEndsAt"] = period_ends_at
+            if brain_profile:
+                normalized_subscription["brainProfile"] = brain_profile
+            for key in ("billingProvider", "subscriptionSource", "manageSubscriptionHint", "creditPeriodEndsAt", "creditStatus", "trialEndsAt"):
+                text = str(subscription.get(key, "") or "").strip()
+                if text:
+                    normalized_subscription[key] = text
+            for key in ("creditBalance", "creditGrantedThisPeriod"):
+                try:
+                    numeric = subscription.get(key)
+                    if numeric is not None and str(numeric).strip() != "":
+                        normalized_subscription[key] = max(0, int(numeric))
+                except (TypeError, ValueError):
+                    continue
+            billing_patch.update(normalized_subscription)
             if billing_patch:
                 STATE.update_state({"billing": billing_patch})
+            if normalized_subscription:
+                account_patch["subscription"] = normalized_subscription
+        if account_patch:
+            STATE.update_state({"account": account_patch})
+
+    def backend_auth_oauth_login(self, payload: dict[str, Any]) -> dict[str, Any]:
+        provider = str(payload.get("provider", "") or payload.get("authProvider", "") or "").strip().lower()
+        id_token = str(
+            payload.get("idToken", "")
+            or payload.get("id_token", "")
+            or payload.get("identityToken", "")
+            or payload.get("identity_token", "")
+            or ""
+        ).strip()
+        if not hasattr(self.backend, "auth_oauth_login"):
+            result = BackendResult(
+                ok=False,
+                request_id=_request_id(),
+                status_code=None,
+                data=None,
+                error="auth_oauth_login_unavailable",
+            )
+            return {
+                "ok": False,
+                "result": result.to_dict(),
+                "error": _safe_auth_error(result, "auth_oauth_login_failed", "Giriş yapılamadı."),
+            }
+        result = self.backend.auth_oauth_login(
+            provider,
+            id_token,
+            email=str(payload.get("email", "") or "").strip() or None,
+            display_name=str(payload.get("displayName", "") or payload.get("display_name", "") or "").strip() or None,
+            authorization_code=str(payload.get("authorizationCode", "") or payload.get("authorization_code", "") or payload.get("code", "") or "").strip() or None,
+        )
+        self._log_backend_result(f"auth_oauth_login:{provider or 'unknown'}", result)
+        if not result.ok:
+            return {
+                "ok": False,
+                "result": result.to_dict(),
+                "error": _safe_auth_error(result, "auth_oauth_login_failed", "Giriş yapılamadı."),
+            }
+        self._apply_auth_result_truth(result.data if isinstance(result.data, dict) else None)
+        hydrated = self._hydrate_backend_truth()
+        self._start_runtime_register_retry_if_needed()
+        return {
+            "ok": True,
+            "hydrationOk": bool(hydrated.get("ok")),
+            "result": result.to_dict(),
+            "authMe": hydrated["authMe"],
+            "mobileBootstrap": hydrated["mobileBootstrap"],
+            "health": hydrated["health"],
+            "brainProfile": hydrated["brainProfile"],
+            "runtimeSession": hydrated["runtimeSession"],
+            "controlPlane": hydrated["controlPlane"],
+            "state": hydrated["state"],
+            "runtime": self.status(),
+        }
+
+    def _sync_conversation_truth_from_backend(
+        self,
+        *,
+        focus_session_id: str = "",
+        clear_all: bool = False,
+    ) -> dict[str, Any]:
+        if not self._user_auth_ready() or not hasattr(self.backend, "chat_sessions"):
+            return STATE.snapshot()
+
+        current_state = STATE.snapshot()
+        current_conversation = _map_from(current_state.get("conversation"))
+        current_items = current_conversation.get("items", [])
+        if not isinstance(current_items, list):
+            current_items = []
+        current_by_id = {
+            str(item.get("id", "") or "").strip(): item
+            for item in current_items
+            if isinstance(item, dict) and str(item.get("id", "") or "").strip()
+        }
+
+        sessions_result = self.backend.chat_sessions(limit=30)
+        if not sessions_result.ok or not isinstance(sessions_result.data, dict):
+            return current_state
+
+        sessions = sessions_result.data.get("sessions", [])
+        if not isinstance(sessions, list):
+            sessions = []
+
+        detail_session: dict[str, Any] | None = None
+        detail_messages: list[dict[str, Any]] | None = None
+        normalized_focus_session_id = str(focus_session_id or "").strip()
+        if normalized_focus_session_id and hasattr(self.backend, "chat_session_detail"):
+            detail_result = self.backend.chat_session_detail(normalized_focus_session_id)
+            if detail_result.ok and isinstance(detail_result.data, dict):
+                detail_session = _map_from(detail_result.data.get("session"))
+                messages = detail_result.data.get("messages", [])
+                if isinstance(messages, list):
+                    detail_messages = [
+                        _normalize_backend_chat_message(message)
+                        for message in messages
+                        if isinstance(message, dict)
+                    ]
+
+        next_items: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for raw_session in sessions:
+            session = _map_from(raw_session)
+            session_id = _first_nonempty(session.get("id"))
+            if not session_id:
+                continue
+            seen_ids.add(session_id)
+            existing = current_by_id.get(session_id)
+            next_messages = None
+            if normalized_focus_session_id and session_id == normalized_focus_session_id and detail_messages is not None:
+                next_messages = detail_messages
+                if detail_session:
+                    session = {**session, **detail_session}
+            next_items.append(
+                _conversation_state_item_from_backend_session(
+                    session,
+                    existing=existing,
+                    messages=next_messages,
+                )
+            )
+
+        if detail_session is not None:
+            detail_session_id = _first_nonempty(detail_session.get("id"), normalized_focus_session_id)
+            if detail_session_id and detail_session_id not in seen_ids:
+                next_items.append(
+                    _conversation_state_item_from_backend_session(
+                        detail_session,
+                        existing=current_by_id.get(detail_session_id),
+                        messages=detail_messages,
+                    )
+                )
+
+        active_id = str(current_conversation.get("activeId", "") or "").strip()
+        if normalized_focus_session_id:
+            active_id = normalized_focus_session_id
+        if clear_all:
+            active_id = ""
+        elif active_id:
+            active_ids = _conversation_summary_session_ids(next_items)
+            if active_id not in active_ids:
+                active_id = next(
+                    (
+                        str(item.get("id", "") or "").strip()
+                        for item in next_items
+                        if isinstance(item, dict) and item.get("archived") is not True
+                    ),
+                    "",
+                )
+                if not active_id:
+                    active_id = next(
+                        (
+                            str(item.get("id", "") or "").strip()
+                            for item in next_items
+                            if isinstance(item, dict) and str(item.get("id", "") or "").strip()
+                        ),
+                        "",
+                    )
+
+        STATE.update_state(
+            {
+                "conversation": {
+                    "items": next_items,
+                    "activeId": active_id,
+                }
+            }
+        )
+        return STATE.snapshot()
 
     def _brain_profile_result(self) -> BackendResult:
         if not self._user_auth_ready():
@@ -6140,6 +8366,18 @@ class RuntimeBridge:
         self._log_backend_result("runtime_session", runtime_session)
         if mobile_bootstrap.ok and isinstance(mobile_bootstrap.data, dict):
             self._sync_task_inbox_from_bootstrap_payload(mobile_bootstrap.data)
+        current_conversation_id = str(STATE.snapshot().get("conversation", {}).get("activeId", "") or "").strip()
+        self._sync_conversation_truth_from_backend(focus_session_id=current_conversation_id)
+        control_plane = self._control_plane_snapshot()
+        STATE.update_state(
+            {
+                "controlPlane": control_plane,
+                "runtime": {
+                    "backendTruthLastSyncedAt": _utc_now_iso(),
+                },
+            }
+        )
+        state_snapshot = STATE.snapshot()
         ok = auth_me.ok and mobile_bootstrap.ok and health.ok
         return {
             "ok": ok,
@@ -6148,8 +8386,26 @@ class RuntimeBridge:
             "health": health.to_dict(),
             "brainProfile": brain_profile.to_dict(),
             "runtimeSession": runtime_session.to_dict(),
-            "controlPlane": self._control_plane_snapshot(),
-            "state": STATE.snapshot(),
+            "controlPlane": control_plane,
+            "state": state_snapshot,
+            "runtime": self.status(),
+            "syncedAt": state_snapshot.get("runtime", {}).get("backendTruthLastSyncedAt", ""),
+        }
+
+    def backend_truth_refresh(self) -> dict[str, Any]:
+        hydrated = self._hydrate_backend_truth()
+        return {
+            "ok": True,
+            "truthOk": bool(hydrated.get("ok")),
+            "authMe": hydrated["authMe"],
+            "mobileBootstrap": hydrated["mobileBootstrap"],
+            "health": hydrated["health"],
+            "brainProfile": hydrated["brainProfile"],
+            "runtimeSession": hydrated["runtimeSession"],
+            "controlPlane": hydrated["controlPlane"],
+            "runtime": hydrated["runtime"],
+            "state": hydrated["state"],
+            "syncedAt": hydrated.get("syncedAt", ""),
         }
 
     def backend_auth_login(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -6182,10 +8438,17 @@ class RuntimeBridge:
         }
 
     def backend_auth_register(self, payload: dict[str, Any]) -> dict[str, Any]:
+        legal_acceptance = payload.get("legalAcceptance")
+        if not isinstance(legal_acceptance, dict):
+            legal_acceptance = {
+                "termsAccepted": payload.get("termsAccepted") is True,
+                "privacyAccepted": payload.get("privacyAccepted") is True,
+            }
         result = self.backend.auth_register(
             str(payload.get("email", "") or ""),
             str(payload.get("password", "") or ""),
             str(payload.get("displayName", "") or payload.get("display_name", "") or "") or None,
+            legal_acceptance,
         )
         self._log_backend_result("auth_register", result)
         if not result.ok:
@@ -6716,6 +8979,15 @@ class RuntimeBridge:
             source="skill_runtime",
         )
         if tool_result.get("ok"):
+            try:
+                skill_runtime.record_skill_usage(
+                    skill_id,
+                    success=True,
+                    source="skill_runtime",
+                    state=STATE.snapshot(),
+                )
+            except Exception:
+                pass
             return {
                 "ok": True,
                 "result": tool_result,
@@ -6723,8 +8995,17 @@ class RuntimeBridge:
                 "artifacts": tool_result.get("artifacts", []),
                 "state": STATE.snapshot(),
                 "conversations": _conversation_entries(),
-            }
+        }
         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
+        try:
+            skill_runtime.record_skill_usage(
+                skill_id,
+                success=False,
+                source="skill_runtime",
+                state=STATE.snapshot(),
+            )
+        except Exception:
+            pass
         return {
             "ok": False,
             "error": error or {
@@ -6789,6 +9070,8 @@ class RuntimeBridge:
     def pairing_create_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.backend.pairing_create_session(payload)
         self._log_backend_result("pairing_create_session", result)
+        if result.ok:
+            self._start_pairing_claim_poll_if_needed()
         return {"ok": result.ok, "result": result.to_dict()}
 
     def pairing_claim_session(self, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -6801,8 +9084,11 @@ class RuntimeBridge:
         self._log_backend_result("pairing_get_session", result)
         registration: dict[str, Any] | None = None
         if result.ok and isinstance(result.data, dict) and str(result.data.get("status", "") or "") == "claimed":
+            self._invalidate_pairing_claim_poll()
             registration = self.ensure_runtime_registered()
             self._start_runtime_register_retry_if_needed()
+        elif result.ok and isinstance(result.data, dict) and str(result.data.get("status", "") or "") == "pending":
+            self._start_pairing_claim_poll_if_needed()
         return {"ok": result.ok, "result": result.to_dict(), "registration": registration}
 
     def register_runtime(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -6913,6 +9199,10 @@ class RuntimeBridge:
             },
         }
 
+    def _restart_runtime_registration_after_unauthorized(self, result: BackendResult) -> None:
+        if not result.ok and result.status_code == 401:
+            self._start_runtime_register_retry_if_needed()
+
     def heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
         heartbeat_payload = dict(payload)
         if not str(heartbeat_payload.get("status", "") or "").strip():
@@ -6921,26 +9211,31 @@ class RuntimeBridge:
             heartbeat_payload["capabilities"] = _runtime_advertised_capabilities()
         result = self.backend.heartbeat(heartbeat_payload)
         self._log_backend_result("runtime_heartbeat", result)
+        self._restart_runtime_registration_after_unauthorized(result)
         return {"ok": result.ok, "result": result.to_dict()}
 
     def runtime_session(self) -> dict[str, Any]:
         result = self.backend.runtime_session()
         self._log_backend_result("runtime_session", result)
+        self._restart_runtime_registration_after_unauthorized(result)
         return {"ok": result.ok, "result": result.to_dict()}
 
     def runtime_tasks_assigned(self) -> dict[str, Any]:
         result = self.backend.runtime_tasks_assigned()
         self._log_backend_result("runtime_tasks_assigned", result)
+        self._restart_runtime_registration_after_unauthorized(result)
         return {"ok": result.ok, "result": result.to_dict()}
 
     def runtime_task_status(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.backend.runtime_task_status(task_id, payload)
         self._log_backend_result("runtime_task_status", result)
+        self._restart_runtime_registration_after_unauthorized(result)
         return {"ok": result.ok, "result": result.to_dict()}
 
     def runtime_task_artifacts(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.backend.runtime_task_artifacts(task_id, payload)
         self._log_backend_result("runtime_task_artifacts", result)
+        self._restart_runtime_registration_after_unauthorized(result)
         return {"ok": result.ok, "result": result.to_dict()}
 
     def _report_runtime_task_status(self, task_id: str, payload: dict[str, Any]) -> BackendResult | None:
@@ -7097,6 +9392,276 @@ class RuntimeBridge:
             raw = []
         return {_canonical_capability_name(item) for item in raw if str(item or "").strip()}
 
+    def _remote_task_step_sources(self, task: dict[str, Any], route_decision: dict[str, Any]) -> list[Any]:
+        payload = task.get("payload", {})
+        payload = payload if isinstance(payload, dict) else {}
+        metadata = payload.get("metadata", {})
+        metadata = metadata if isinstance(metadata, dict) else {}
+        sources: list[Any] = []
+        for container in (
+            route_decision,
+            route_decision.get("planPreview") if isinstance(route_decision.get("planPreview"), dict) else None,
+            route_decision.get("plan") if isinstance(route_decision.get("plan"), dict) else None,
+            payload.get("planPreview") if isinstance(payload.get("planPreview"), dict) else None,
+            metadata.get("planPreview") if isinstance(metadata.get("planPreview"), dict) else None,
+            task.get("planPreview") if isinstance(task.get("planPreview"), dict) else None,
+        ):
+            if not isinstance(container, dict):
+                continue
+            raw_steps = container.get("steps")
+            if isinstance(raw_steps, list) and raw_steps:
+                sources.append(raw_steps)
+        return sources
+
+    def _remote_task_step_args(
+        self,
+        capability: str,
+        raw_args: dict[str, Any],
+        *,
+        task: dict[str, Any],
+        prompt: str,
+        route_decision: dict[str, Any],
+    ) -> dict[str, Any]:
+        args = dict(raw_args)
+        title = str(task.get("title", "") or "").strip()
+        topic = self._truncate_text(_research_topic_from_text(prompt), 180)
+        task_payload = task.get("payload", {})
+        task_payload = task_payload if isinstance(task_payload, dict) else {}
+        if capability in {"web_research", "retrieve_context"} and not str(args.get("query", "") or "").strip():
+            args["query"] = topic
+        elif capability == "math_solve" and not str(args.get("expression", "") or "").strip():
+            expression = str(route_decision.get("expression", "") or route_decision.get("query", "") or "").strip()
+            if expression:
+                args["expression"] = expression
+        elif capability == "latex_parse" and not str(args.get("latex", "") or args.get("text", "") or "").strip():
+            latex = str(route_decision.get("latex", "") or "").strip()
+            if latex:
+                args["latex"] = latex
+        elif capability == "browser_control":
+            if not str(args.get("action", "") or "").strip():
+                args["action"] = "search"
+            if str(args.get("action", "") or "").strip() == "search" and not str(args.get("query", "") or "").strip():
+                args["query"] = topic
+        elif capability == "play_media" and not str(args.get("query", "") or "").strip():
+            args["query"] = topic
+        elif capability in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write"}:
+            if not str(args.get("prompt", "") or "").strip():
+                args["prompt"] = prompt
+            if not str(args.get("title", "") or "").strip() and title:
+                args["title"] = title
+            if capability == "document_write" and not str(args.get("sourceContext", "") or args.get("source_context", "") or "").strip():
+                args["sourceContext"] = prompt
+        elif capability == "email_draft":
+            recipients = self._remote_task_email_recipients(task, task_payload, prompt, route_decision)
+            if recipients and not args.get("to"):
+                args["to"] = recipients
+            if not str(args.get("subject", "") or "").strip():
+                args["subject"] = f"{topic[:80]} hakkında notlar"
+            if not str(args.get("prompt", "") or "").strip():
+                args["prompt"] = prompt
+            if not str(args.get("topic", "") or "").strip():
+                args["topic"] = topic
+        elif capability == "email_send":
+            recipients = self._remote_task_email_recipients(task, task_payload, prompt, route_decision)
+            if recipients and not args.get("to"):
+                args["to"] = recipients
+            if not str(args.get("subject", "") or "").strip():
+                args["subject"] = f"{topic[:80]} hakkında notlar"
+        return args
+
+    def _normalize_remote_task_step(
+        self,
+        raw_step: dict[str, Any],
+        *,
+        task: dict[str, Any],
+        prompt: str,
+        route_decision: dict[str, Any],
+        index: int,
+        allowed_capabilities: set[str],
+    ) -> dict[str, Any] | None:
+        capability = _canonical_capability_name(
+            raw_step.get("capability")
+            or raw_step.get("tool")
+            or raw_step.get("name")
+            or raw_step.get("action")
+        )
+        if not capability or capability not in allowed_capabilities:
+            return None
+        raw_args = raw_step.get("args")
+        if not isinstance(raw_args, dict):
+            raw_args = raw_step.get("payload")
+        if not isinstance(raw_args, dict):
+            raw_args = raw_step.get("input")
+        args = dict(raw_args) if isinstance(raw_args, dict) else {}
+        args = self._remote_task_step_args(
+            capability,
+            args,
+            task=task,
+            prompt=prompt,
+            route_decision=route_decision,
+        )
+        description = str(raw_step.get("description", "") or raw_step.get("summary", "") or capability).strip()
+        return {
+            "id": str(raw_step.get("id", "") or f"remote_step_{index}"),
+            "capability": capability,
+            "args": args,
+            "description": self._truncate_text(description, 220),
+        }
+
+    def _remote_task_explicit_steps_from_route(
+        self,
+        task: dict[str, Any],
+        prompt: str,
+        route_decision: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        allowed_capabilities = set(capability_names())
+        steps: list[dict[str, Any]] = []
+        for source_steps in self._remote_task_step_sources(task, route_decision):
+            for raw_step in source_steps:
+                if not isinstance(raw_step, dict):
+                    continue
+                normalized = self._normalize_remote_task_step(
+                    raw_step,
+                    task=task,
+                    prompt=prompt,
+                    route_decision=route_decision,
+                    index=len(steps) + 1,
+                    allowed_capabilities=allowed_capabilities,
+                )
+                if normalized is not None:
+                    steps.append(normalized)
+                if len(steps) >= 8:
+                    break
+            if steps:
+                break
+        if not steps:
+            return [], {}
+        plan_preview = route_decision.get("planPreview")
+        plan_preview = dict(plan_preview) if isinstance(plan_preview, dict) else {}
+        summary = str(
+            plan_preview.get("summary", "")
+            or route_decision.get("reason", "")
+            or "Mobil görev desktop runtime üzerinde adım adım yürütülecek."
+        ).strip()
+        privacy_class = str(
+            plan_preview.get("privacyClass", "")
+            or route_decision.get("privacyClass", "")
+            or ("local_private" if any(step["capability"] in LOCAL_PRIVATE_CAPABILITIES for step in steps) else "public_text")
+        ).strip()
+        return steps, {
+            **plan_preview,
+            "summary": summary,
+            "steps": steps,
+            "privacyClass": privacy_class,
+            "agentPlan": build_agent_plan(steps, summary=summary),
+        }
+
+    def _remote_task_trace_payload(
+        self,
+        plan_preview: dict[str, Any],
+        *,
+        status: str,
+        task_id: str = "",
+    ) -> dict[str, Any]:
+        steps = plan_preview.get("steps", [])
+        normalized_status = str(status or "running").strip().lower()
+        safe_steps: list[dict[str, Any]] = []
+        step_count = 0
+        if isinstance(steps, list):
+            step_count = sum(1 for s in steps if isinstance(s, dict))
+            for index, step in enumerate(steps[:8], start=1):
+                if not isinstance(step, dict):
+                    continue
+                capability = str(step.get("capability", "") or "").strip()
+                description = self._truncate_text(
+                    step.get("description", "") or step.get("label", "") or capability, 220
+                )
+                step_id = str(step.get("id", "") or f"step_{index}").strip() or f"step_{index}"
+                label = description or capability or f"Adım {index}"
+                # Assign per-step status reflecting execution progress
+                if normalized_status == "completed":
+                    step_status = "completed"
+                elif normalized_status == "failed":
+                    # Mark last step as failed, previous as completed
+                    step_status = "failed" if index == step_count else "completed"
+                elif normalized_status == "waiting_approval":
+                    # Pre-approval steps completed, rest pending
+                    approval_idx = next(
+                        (i + 1 for i, s in enumerate(steps[:8]) if isinstance(s, dict) and _canonical_capability_name(s.get("capability")) in REMOTE_APPROVAL_CAPABILITIES),
+                        step_count + 1,
+                    )
+                    if index < approval_idx:
+                        step_status = "completed"
+                    elif index == approval_idx:
+                        step_status = "running"
+                    else:
+                        step_status = "pending"
+                else:  # running
+                    step_status = "running" if index == 1 else "pending"
+                safe_steps.append(
+                    {
+                        "id": step_id,
+                        "label": label,
+                        "status": step_status,
+                        "capability": capability,
+                    }
+                )
+        agent_plan = plan_preview.get("agentPlan")
+        active_step_id = None
+        if safe_steps:
+            running_step = next((s for s in safe_steps if s["status"] == "running"), None)
+            if running_step:
+                active_step_id = running_step["id"]
+            elif normalized_status == "completed" and safe_steps:
+                active_step_id = safe_steps[-1]["id"]
+        result: dict[str, Any] = {
+            "type": "task_trace",
+            "taskId": str(task_id or "").strip(),
+            "status": normalized_status,
+            "title": self._truncate_text(plan_preview.get("summary", "") or "Görev yürütülüyor.", 220),
+            "steps": safe_steps,
+            "visibility": "user_visible",
+            "agentPlan": dict(agent_plan) if isinstance(agent_plan, dict) else build_agent_plan(
+                [dict(step) for step in steps if isinstance(step, dict)] if isinstance(steps, list) else [],
+                summary=str(plan_preview.get("summary", "") or ""),
+            ),
+        }
+        if active_step_id:
+            result["activeStepId"] = active_step_id
+        return result
+
+    def _remote_task_running_plan_preview(self, task: dict[str, Any], prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
+        route_decision = self._remote_task_route_decision(payload)
+        mobile_metadata = _map_from(payload.get("metadata") or {})
+        mobile_desktop_required = bool(mobile_metadata.get("desktopRequired", False))
+        route = str(route_decision.get("route", "") or "").strip()
+        # Accept desktop_runtime from routeDecision OR from mobile's desktopRequired hint
+        if route != "desktop_runtime" and not mobile_desktop_required:
+            return {}
+        capabilities = self._remote_task_capabilities(task, payload)
+        has_explicit_steps = bool(self._remote_task_step_sources(task, route_decision))
+        # When mobile signals desktopRequired, also try routing the prompt directly
+        if not capabilities.intersection(REMOTE_DETERMINISTIC_CAPABILITIES) and not has_explicit_steps:
+            if mobile_desktop_required:
+                routed = route_text_to_tool(prompt)
+                if routed is not None:
+                    routed_steps = _plan_steps_from_routed_task(routed)
+                    if routed_steps:
+                        plan_preview = dict(routed.plan_preview) if isinstance(routed.plan_preview, dict) else {}
+                        if not isinstance(plan_preview.get("agentPlan"), dict):
+                            plan_preview["agentPlan"] = build_agent_plan(routed_steps, summary=str(plan_preview.get("summary", "") or ""))
+                        return plan_preview
+            return {}
+        steps, plan_preview = self._remote_task_steps_from_route(task, prompt, capabilities, route_decision)
+        if not steps:
+            return {}
+        if not isinstance(plan_preview.get("agentPlan"), dict):
+            plan_preview = {
+                **plan_preview,
+                "agentPlan": build_agent_plan(steps, summary=str(plan_preview.get("summary", "") or "")),
+            }
+        return plan_preview
+
     def _remote_task_email_recipients(
         self,
         task: dict[str, Any],
@@ -7145,6 +9710,10 @@ class RuntimeBridge:
         decision_reason = str(decision.get("reason", "") or "").strip()
         decision_privacy = str(decision.get("privacyClass", "") or "").strip()
         if decision_route == "desktop_runtime" and decision:
+            explicit_steps, explicit_preview = self._remote_task_explicit_steps_from_route(task, prompt, decision)
+            if explicit_steps:
+                return explicit_steps, explicit_preview
+        if decision_route == "desktop_runtime" and decision:
             quantum_requested = bool(capabilities.intersection(REMOTE_QUANTUM_CAPABILITIES))
             if quantum_requested:
                 title = self._truncate_text(
@@ -7180,10 +9749,49 @@ class RuntimeBridge:
                     "privacyClass": decision_privacy or "public_text",
                 }
 
-            topic = self._truncate_text(_research_topic_from_text(prompt), 120)
-            recipients = self._remote_task_email_recipients(task, task.get("payload", {}), prompt, decision)
+            payload_top = task.get("payload", {})
+            payload_top = payload_top if isinstance(payload_top, dict) else {}
+            desktop_ctx = payload_top.get("desktopContext")
+            desktop_ctx = desktop_ctx if isinstance(desktop_ctx, dict) else {}
+            natural_goal = str(desktop_ctx.get("naturalLanguageGoal", "") or "").strip() or prompt
+            topic = self._truncate_text(_research_topic_from_text(natural_goal), 120)
+            recipients = self._remote_task_email_recipients(task, payload_top, natural_goal, decision)
             subject = f"{topic[:80]} hakkında notlar"
             steps: list[dict[str, Any]] = []
+            if "browser_control" in capabilities:
+                import re as _re
+                url_match = _re.search(r"https?://\S+", natural_goal)
+                if url_match:
+                    steps.append(
+                        {
+                            "capability": "browser_control",
+                            "args": {"action": "navigate", "url": url_match.group(0)},
+                            "description": f"{url_match.group(0)} adresine gidilecek.",
+                        }
+                    )
+                else:
+                    steps.append(
+                        {
+                            "capability": "browser_control",
+                            "args": {"action": "search", "query": topic},
+                            "description": f"Tarayıcıda '{topic}' araması yapılacak.",
+                        }
+                    )
+            if "computer_control" in capabilities and "browser_control" not in capabilities:
+                steps.append(
+                    {
+                        "capability": "analyze_screen",
+                        "args": {},
+                        "description": "Masaüstü ekranı analiz edilecek.",
+                    }
+                )
+                steps.append(
+                    {
+                        "capability": "computer_control",
+                        "args": {"action": "run", "prompt": natural_goal},
+                        "description": f"Bilgisayar kontrolü ile görev yürütülecek: {topic}",
+                    }
+                )
             if "web_research" in capabilities:
                 steps.append(
                     {
@@ -7200,7 +9808,7 @@ class RuntimeBridge:
                             "to": recipients,
                             "subject": subject,
                             "topic": topic,
-                            "prompt": prompt,
+                            "prompt": natural_goal,
                         },
                         "description": f"{', '.join(recipients) if recipients else 'alıcı'} için e-posta taslağı hazırlanacak.",
                     }
@@ -7214,7 +9822,8 @@ class RuntimeBridge:
                     }
                 )
             if steps:
-                privacy_class = decision_privacy or ("side_effect" if "email_send" in capabilities else "public_text")
+                has_browser = any(s.get("capability") in {"browser_control", "computer_control"} for s in steps)
+                privacy_class = decision_privacy or ("side_effect" if ("email_send" in capabilities or has_browser) else "public_text")
                 return steps, {
                     "summary": decision_reason
                     or "Backend routeDecision kararına göre desktop görevi yürütülecek.",
@@ -7266,6 +9875,31 @@ class RuntimeBridge:
         recipients = _extract_email_addresses_from_text(prompt)
         subject = f"{_research_topic_from_text(prompt)[:80]} hakkında notlar"
         fallback_steps: list[dict[str, Any]] = []
+        payload_fb = task.get("payload", {})
+        payload_fb = payload_fb if isinstance(payload_fb, dict) else {}
+        desktop_ctx_fb = payload_fb.get("desktopContext")
+        desktop_ctx_fb = desktop_ctx_fb if isinstance(desktop_ctx_fb, dict) else {}
+        natural_goal_fb = str(desktop_ctx_fb.get("naturalLanguageGoal", "") or "").strip() or prompt
+        if "browser_control" in capabilities:
+            import re as _re
+            url_match_fb = _re.search(r"https?://\S+", natural_goal_fb)
+            if url_match_fb:
+                fallback_steps.append(
+                    {
+                        "capability": "browser_control",
+                        "args": {"action": "navigate", "url": url_match_fb.group(0)},
+                        "description": f"{url_match_fb.group(0)} adresine gidilecek.",
+                    }
+                )
+            else:
+                topic_fb = _research_topic_from_text(natural_goal_fb)
+                fallback_steps.append(
+                    {
+                        "capability": "browser_control",
+                        "args": {"action": "search", "query": topic_fb},
+                        "description": f"Tarayıcıda '{topic_fb}' araması yapılacak.",
+                    }
+                )
         if "web_research" in capabilities:
             topic = _research_topic_from_text(prompt)
             fallback_steps.append(
@@ -7296,10 +9930,11 @@ class RuntimeBridge:
                     "description": f"{', '.join(recipients)} adresine e-posta gönderilecek.",
                 }
             )
+        has_browser_fb = any(s.get("capability") in {"browser_control", "computer_control"} for s in fallback_steps)
         return fallback_steps, {
             "summary": "Backend routing kararına göre desktop görevi yürütülecek.",
             "steps": fallback_steps,
-            "privacyClass": "side_effect" if "email_send" in capabilities else "public_text",
+            "privacyClass": "side_effect" if ("email_send" in capabilities or has_browser_fb) else "public_text",
         }
 
     def _email_send_step_from_draft(
@@ -7341,39 +9976,77 @@ class RuntimeBridge:
     ) -> dict[str, Any] | None:
         payload = task.get("payload", {})
         payload = payload if isinstance(payload, dict) else {}
+        task_id = str(task.get("id", "") or "").strip()
         route_decision = self._remote_task_route_decision(payload)
-        if str(route_decision.get("route", "") or "").strip() != "desktop_runtime":
+        mobile_metadata = _map_from(payload.get("metadata") or {})
+        mobile_desktop_required = bool(mobile_metadata.get("desktopRequired", False))
+        mobile_intent_category = str(mobile_metadata.get("intentCategory", "") or "").strip()
+        route = str(route_decision.get("route", "") or "").strip()
+        # Accept desktop routing from routeDecision OR from mobile's desktopRequired hint
+        if route != "desktop_runtime" and not mobile_desktop_required:
             return None
 
         capabilities = self._remote_task_capabilities(task, payload)
-        if not capabilities.intersection({"web_research", "email_draft", "email_send", *REMOTE_QUANTUM_CAPABILITIES}):
+        # Merge mobile-suggested capabilities when present
+        mobile_suggested_caps = [
+            str(c or "").strip() for c in (mobile_metadata.get("suggestedCapabilities") or [])
+            if str(c or "").strip()
+        ]
+        if mobile_suggested_caps:
+            capabilities = capabilities | {_canonical_capability_name(c) for c in mobile_suggested_caps}
+        has_explicit_steps = bool(self._remote_task_step_sources(task, route_decision))
+        # When mobile signals desktopRequired, bypass the deterministic capability check
+        if not (capabilities.intersection(REMOTE_DETERMINISTIC_CAPABILITIES) or has_explicit_steps or mobile_desktop_required):
             return None
 
         steps, plan_preview = self._remote_task_steps_from_route(task, prompt, capabilities, route_decision)
+        # If backend gave no explicit steps but mobile has intentCategory, enrich summary
+        if not steps and mobile_intent_category:
+            return None
+        if plan_preview and not str(plan_preview.get("summary", "") or "").strip() and mobile_intent_category:
+            plan_preview = {**plan_preview, "summary": f"Mobil görev ({mobile_intent_category}) desktop runtime üzerinde yürütülüyor."}
         if not steps:
             return None
+        if not isinstance(plan_preview.get("agentPlan"), dict):
+            plan_preview = {
+                **plan_preview,
+                "agentPlan": build_agent_plan(steps, summary=str(plan_preview.get("summary", "") or "")),
+            }
 
-        send_requested = any(_canonical_capability_name(step.get("capability")) == "email_send" for step in steps)
+        approval_steps = [
+            step
+            for step in steps
+            if _canonical_capability_name(step.get("capability")) in REMOTE_APPROVAL_CAPABILITIES
+        ]
+        approval_requested = bool(approval_steps)
         pre_approval_steps = [
             step
             for step in steps
-            if _canonical_capability_name(step.get("capability")) != "email_send"
-        ] if send_requested else steps
+            if _canonical_capability_name(step.get("capability")) not in REMOTE_APPROVAL_CAPABILITIES
+        ] if approval_requested else steps
         conversation = STATE.create_conversation(title or "Remote task")
         conversation_id = str(conversation.get("id", "") or "")
-        ok, content, tool_events, error_code, structured_result, artifacts = self.executor_core.execute_plan_steps(
-            steps=pre_approval_steps,
-            state_factory=STATE.snapshot,
-            execute_step=lambda capability, args, state, source: _execute_capability_with_preprocessing(
-                capability,
-                args,
-                state,
-                source=source,
-            ),
-            source="runtime_task",
-            task_id=str(task.get("id", "") or ""),
-            conversation_id=conversation_id,
-        )
+        if pre_approval_steps:
+            ok, content, tool_events, error_code, structured_result, artifacts = self.executor_core.execute_plan_steps(
+                steps=pre_approval_steps,
+                state_factory=STATE.snapshot,
+                execute_step=lambda capability, args, state, source: _execute_capability_with_preprocessing(
+                    capability,
+                    args,
+                    state,
+                    source=source,
+                ),
+                source="runtime_task",
+                task_id=str(task.get("id", "") or ""),
+                conversation_id=conversation_id,
+            )
+        else:
+            ok = True
+            content = str(plan_preview.get("summary", "") or "Görev için açık onay gerekiyor.")
+            tool_events = []
+            error_code = ""
+            structured_result = None
+            artifacts = []
         if conversation_id:
             STATE.append_message(
                 conversation_id,
@@ -7397,21 +10070,44 @@ class RuntimeBridge:
                 "needsConfirmation": False,
                 "structuredResult": structured_result,
                 "artifacts": artifacts,
+                "planPreview": plan_preview,
+                "executionTrace": self._remote_task_trace_payload(plan_preview, status="failed", task_id=task_id),
                 "error": {"code": _safe_error_code(error_code), "message": content},
             }
 
-        if send_requested:
-            send_step = self._email_send_step_from_draft(steps, structured_result)
-            send_args = dict(send_step.get("args", {}) or {})
-            approval_structured = {
-                "kind": "email_send",
-                "to": self._string_list(send_args.get("to")),
-                "subject": str(send_args.get("subject", "") or ""),
-                "body": str(send_args.get("body", "") or ""),
-                "provider": str(send_args.get("provider", "") or "google"),
-            }
+        if approval_requested:
+            pending_steps: list[dict[str, Any]] = []
+            approval_capability = _canonical_capability_name(approval_steps[0].get("capability"))
+            approval_structured: dict[str, Any] = {"kind": approval_capability, "capability": approval_capability}
+            send_step: dict[str, Any] | None = None
+            if any(_canonical_capability_name(step.get("capability")) == "email_send" for step in approval_steps):
+                send_step = self._email_send_step_from_draft(steps, structured_result)
+            for approval_step in approval_steps:
+                if _canonical_capability_name(approval_step.get("capability")) == "email_send" and send_step is not None:
+                    pending_steps.append(send_step)
+                    continue
+                pending_steps.append(dict(approval_step))
+            if send_step is not None:
+                send_args = dict(send_step.get("args", {}) or {})
+                approval_structured = {
+                    "kind": "email_send",
+                    "capability": "email_send",
+                    "to": self._string_list(send_args.get("to")),
+                    "subject": str(send_args.get("subject", "") or ""),
+                    "body": str(send_args.get("body", "") or ""),
+                    "provider": str(send_args.get("provider", "") or "google"),
+                }
+            elif pending_steps:
+                first_args = pending_steps[0].get("args", {})
+                first_args = dict(first_args) if isinstance(first_args, dict) else {}
+                approval_structured = {
+                    "kind": approval_capability,
+                    "capability": approval_capability,
+                    "summary": str(plan_preview.get("summary", "") or content or "Yerel işlem onayı gerekiyor."),
+                    "args": first_args,
+                }
             approval_preview = {
-                "summary": str(plan_preview.get("summary", "") or content or "Mail gönderimi için onay gerekiyor."),
+                "summary": str(plan_preview.get("summary", "") or content or "Yerel işlem onayı gerekiyor."),
                 "steps": [
                     {
                         "capability": str(step.get("capability", "") or ""),
@@ -7422,16 +10118,27 @@ class RuntimeBridge:
                 ],
                 "privacyClass": "side_effect",
             }
+            approval_preview["agentPlan"] = build_agent_plan(
+                [dict(step) for step in steps if isinstance(step, dict)],
+                summary=str(approval_preview.get("summary", "") or ""),
+            )
+            stored_agent_plan = approval_preview["agentPlan"]
             stored_plan = STATE.save_pending_plan(
                 {
                     "conversationId": conversation_id,
                     "query": prompt,
-                    "intent": "email_send",
-                    "capability": "email_send",
+                    "intent": approval_capability,
+                    "capability": approval_capability,
                     "confidence": 0.93,
                     "privacyClass": "side_effect",
-                    "steps": [send_step],
+                    "steps": pending_steps,
                     "planPreview": approval_preview,
+                    "agentPlan": stored_agent_plan,
+                    "stepCount": int(stored_agent_plan.get("stepCount", len(pending_steps)) or 0)
+                    if isinstance(stored_agent_plan, dict)
+                    else len(pending_steps),
+                    "agentRoles": list(stored_agent_plan.get("agentRoles", [])) if isinstance(stored_agent_plan, dict) else [],
+                    "executionStrategy": str(stored_agent_plan.get("executionStrategy", "") or "") if isinstance(stored_agent_plan, dict) else "",
                     "source": "remote_task_adapter",
                     "createdAt": _utc_now_iso(),
                 }
@@ -7449,6 +10156,7 @@ class RuntimeBridge:
                 "planPreview": approval_preview,
                 "structuredResult": approval_structured,
                 "artifacts": artifacts,
+                "executionTrace": self._remote_task_trace_payload(approval_preview, status="waiting_approval", task_id=task_id),
             }
 
         return {
@@ -7461,6 +10169,8 @@ class RuntimeBridge:
             "needsConfirmation": False,
             "structuredResult": structured_result,
             "artifacts": artifacts,
+            "planPreview": plan_preview,
+            "executionTrace": self._remote_task_trace_payload(plan_preview, status="completed", task_id=task_id),
         }
 
     def _execute_runtime_task(self, task: dict[str, Any], dispatched_via_websocket: bool = False) -> dict[str, Any]:
@@ -7506,13 +10216,21 @@ class RuntimeBridge:
 
         self._set_runtime_task_heartbeat(dispatched_via_websocket, "busy", task_id)
 
+        running_payload: dict[str, Any] = {
+            "status": "running",
+            "message": "Desktop runtime görevi yürütüyor.",
+            "artifacts": [],
+        }
+        running_plan_preview = self._remote_task_running_plan_preview(task, prompt, payload)
+        if running_plan_preview:
+            running_payload["summary"] = str(running_plan_preview.get("summary", "") or running_payload["message"])[:1000]
+            running_payload["planPreview"] = running_plan_preview
+            running_payload["result"] = {
+                "executionTrace": self._remote_task_trace_payload(running_plan_preview, status="running", task_id=task_id),
+            }
         running = self._report_runtime_task_status(
             task_id,
-            {
-                "status": "running",
-                "message": "Desktop runtime görevi yürütüyor.",
-                "artifacts": [],
-            },
+            running_payload,
         )
         if running is None or not running.ok:
             self._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
@@ -7559,6 +10277,18 @@ class RuntimeBridge:
                     },
                 }
             approval_request = self._approval_request_payload(local_result)
+            waiting_result = {
+                "assistantMessage": assistant_message,
+                "provider": provider,
+                "toolEvents": tool_events if isinstance(tool_events, list) else [],
+                "conversationId": conversation_id,
+            }
+            local_plan_preview = local_result.get("planPreview")
+            if isinstance(local_plan_preview, dict):
+                waiting_result["planPreview"] = dict(local_plan_preview)
+            local_execution_trace = local_result.get("executionTrace")
+            if isinstance(local_execution_trace, dict):
+                waiting_result["executionTrace"] = dict(local_execution_trace)
             STATE.save_remote_task_link(
                 task_id,
                 pending_plan_id,
@@ -7571,12 +10301,7 @@ class RuntimeBridge:
                 "message": "Yerel onay bekleniyor.",
                 "summary": approval_request.get("summary", assistant_message) or assistant_message[:1000],
                 "approvalRequest": approval_request,
-                "result": {
-                    "assistantMessage": assistant_message,
-                    "provider": provider,
-                    "toolEvents": tool_events if isinstance(tool_events, list) else [],
-                    "conversationId": conversation_id,
-                },
+                "result": waiting_result,
                 "artifacts": [],
             }
             report = self._report_runtime_task_status(task_id, waiting_payload)
@@ -7770,10 +10495,30 @@ class RuntimeBridge:
                 result = self.update_state(payload)
             elif capability == "conversation.list":
                 result = {"conversations": _conversation_entries(), "activeConversationId": str(STATE.snapshot().get("conversation", {}).get("activeId", "") or "")}
+            elif capability == "conversation.list_archives":
+                result = self.list_archived_conversations()
             elif capability == "conversation.create":
                 result = self.create_conversation(str(payload.get("title", "") or ""))
             elif capability == "conversation.select":
                 result = self.select_conversation(str(payload.get("conversationId", "") or payload.get("conversation_id", "") or ""))
+            elif capability == "conversation.rename":
+                result = self.rename_conversation(
+                    str(payload.get("conversationId", "") or payload.get("conversation_id", "") or ""),
+                    str(payload.get("title", "") or ""),
+                )
+            elif capability == "conversation.archive":
+                result = self.archive_conversation(
+                    str(payload.get("conversationId", "") or payload.get("conversation_id", "") or ""),
+                    bool(payload.get("archived", True)),
+                )
+            elif capability == "conversation.delete":
+                result = self.delete_conversation(str(payload.get("conversationId", "") or payload.get("conversation_id", "") or ""))
+            elif capability == "conversation.clear_history":
+                before_value = payload.get("before")
+                before = before_value if isinstance(before_value, dt.datetime) else None
+                if before is None and isinstance(before_value, str) and before_value.strip():
+                    before = _parse_iso_datetime(before_value)
+                result = self.clear_conversation_history(before)
             elif capability == "conversation.send":
                 result = self.send_conversation(
                     str(payload.get("conversationId", "") or payload.get("conversation_id", "") or ""),
@@ -7849,6 +10594,8 @@ class RuntimeBridge:
                 result = self.backend_auth_me()
             elif capability == "backend.auth_login":
                 result = self.backend_auth_login(payload)
+            elif capability == "backend.auth_oauth_login":
+                result = self.backend_auth_oauth_login(payload)
             elif capability == "backend.auth_register":
                 result = self.backend_auth_register(payload)
             elif capability == "backend.auth_refresh":
@@ -7869,6 +10616,8 @@ class RuntimeBridge:
                 result = self.backend_auth_avatar_delete()
             elif capability == "backend.mobile_bootstrap":
                 result = self.backend_mobile_bootstrap()
+            elif capability == "backend.truth_refresh":
+                result = self.backend_truth_refresh()
             elif capability == "backend.brain_profile":
                 result = self.backend_brain_profile()
             elif capability == "backend.brain_retrieval_search":
@@ -7961,12 +10710,14 @@ class RuntimeBridge:
                     },
                 }
         except Exception as exc:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             print(f"runtime error capability={capability} type={type(exc).__name__}", file=sys.stderr)
             result = {
                 "ok": False,
                 "error": {
                     "code": "UNHANDLED_ERROR",
-                    "message": "Runtime isteği güvenli şekilde tamamlanamadı.",
+                    "message": f"Runtime isteği güvenli şekilde tamamlanamadı. ({type(exc).__name__}: {str(exc)})",
                 },
             }
 

@@ -166,6 +166,47 @@ def test_open_app_prefers_native_snapshot_for_frontmost_application_name(
     assert called is False
 
 
+def test_play_media_direct_capability_escalates_to_os_permission_required(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.media as media
+    import runtime.capability_registry as registry
+
+    snapshot_path = tmp_path / "desktop-runtime.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "permissions": {
+                    "accessibility": {
+                        "required": True,
+                        "granted": False,
+                        "status": "denied",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ELYAN_DESKTOP_NATIVE_STATE_PATH", str(snapshot_path))
+
+    def fake_play_media(_query: str, provider: str = "auto", autoplay: bool = True) -> str:
+        raise registry.SafeCapabilityError("PERMISSION_REQUIRED", "Spotify otomasyonu icin erisilebilirlik izni gerekiyor.")
+
+    monkeypatch.setattr(media, "play_media", fake_play_media)
+
+    result = registry.run_capability(
+        "play_media",
+        {"query": "Müslüm Gürses", "provider": "spotify"},
+        _dangerous_state(allow_browser_control=True),
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "OS_PERMISSION_REQUIRED"
+    assert result["error"]["message"] == "macOS erişilebilirlik izni kapalı."
+
+
 @pytest.mark.parametrize(
     ("capability", "payload"),
     [
@@ -198,7 +239,7 @@ def test_personal_actions_require_explicit_permission(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "PERMISSION_REQUIRED"
-    assert "açık izin" in result["error"]["message"]
+    assert "Ayarlar > Gizlilik" in result["error"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -332,7 +373,8 @@ def test_send_whatsapp_message_does_not_persist_contact_implicitly(
         _dangerous_state(allow_personal_actions=True),
     )
 
-    assert result["ok"] is True
+    assert result["ok"] is False
+    assert result["error"]["code"] == "UNSUPPORTED_PLATFORM"
     assert writes == []
 
 
@@ -393,7 +435,7 @@ def test_analyze_screen_permission_gate_blocks_helper(
 
     assert denied["ok"] is False
     assert denied["error"]["code"] == "PERMISSION_REQUIRED"
-    assert "bulut vision" in denied["error"]["message"]
+    assert "Tam yetki kapalı" in denied["error"]["message"]
     assert invoked is False
 
 
@@ -446,6 +488,7 @@ def test_non_darwin_desktop_capabilities_fail_closed(
     import runtime.capability_registry as registry
 
     monkeypatch.setattr(platform_common.sys, "platform", "linux")
+    registry._load_adapter.cache_clear()
 
     cases = [
         ("open_app", {"app_name": "Finder"}, state_store.snapshot()),
@@ -554,6 +597,7 @@ def test_play_media_auto_non_darwin_falls_back_to_youtube(
 
     monkeypatch.setattr(platform_common.sys, "platform", "linux")
     monkeypatch.setattr(media, "browser_control", lambda action, url="", query="": f"{action}:{query or url}")
+    registry._load_adapter.cache_clear()
 
     result = registry.run_capability(
         "play_media",
@@ -588,8 +632,8 @@ def test_whatsapp_non_darwin_web_draft_path_is_supported(
         _dangerous_state(allow_personal_actions=True),
     )
 
-    assert result["ok"] is True
-    assert "default browser" in result["output"]
+    assert result["ok"] is False
+    assert result["error"]["code"] == "UNSUPPORTED_PLATFORM"
 
 
 def test_bridge_import_does_not_eager_load_action_or_local_model_modules() -> None:

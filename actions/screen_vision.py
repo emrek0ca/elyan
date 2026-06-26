@@ -390,55 +390,59 @@ def _analyze_with_gemini(query: str, image_path: Path, owner_name: str, window_t
     raise RuntimeError(_friendly_vision_error(last_error))
 
 
-def analyze_screen(query: str, target: str = "active_window") -> str:
+def analyze_screen(query: str, target: str = "active_window") -> dict[str, object]:
     require_macos("Ekran analizi")
+    from actions import desktop_operator
+
     target = (target or "active_window").strip().lower()
     if target != "active_window":
         raise invalid_argument("Screen Vision v1 yalnizca aktif pencere analizini destekliyor.")
 
-    ok, raw = _run_helper("capture_active_window", timeout=20)
-    if not ok:
-        if is_permission_detail(raw):
-            raise permission_required(_screen_permission_message())
-        if is_timeout_detail(raw):
-            raise timeout_error("Ekran goruntusu alinirken zaman asimina ugradi.")
-        raise capability_unavailable("Ekran goruntusu guvenli sekilde alinamadi.")
+    observed = desktop_operator.observe_screen(query, target, preserve_screenshot=True)
+    result = observed.get("result", {}) if isinstance(observed, dict) else {}
+    result = result if isinstance(result, dict) else {}
+    observation = result.get("observation", {}) if isinstance(result.get("observation"), dict) else {}
+    screenshot_path = Path(str(observation.get("screenshotPath", "") or ""))
+    owner_name = str(observation.get("activeApp", "") or "").strip()
+    window_title = str(observation.get("activeWindow", "") or "").strip()
+    local_summary = str(observed.get("text", "") or "").strip() or "Ekran gozlemi hazir."
 
-    parsed_ok, detail, payload = _parse_capture_payload(raw)
-    if not parsed_ok:
-        if is_permission_detail(detail):
-            raise permission_required(_screen_permission_message())
-        raise capability_unavailable(detail or "Ekran analizi hazirlanamadi.")
-
-    assert payload is not None
-    image_path = Path(payload["image_path"])
-    owner_name = str(payload.get("owner_name", "") or "").strip()
-    window_title = str(payload.get("window_title", "") or "").strip()
-
-    try:
-        if not image_path.exists():
-            raise capability_unavailable("Ekran goruntusu dosyasi bulunamadi. Tekrar dene.")
-        if image_path.stat().st_size <= 0:
-            raise permission_required(_screen_permission_message())
-        if _image_looks_blank(image_path):
-            raise permission_required(_screen_permission_message())
+    analysis = local_summary
+    if screenshot_path.exists():
         try:
-            analysis = _analyze_with_gemini(query, image_path, owner_name, window_title)
-        except Exception as exc:
-            if isinstance(exc, SafeCapabilityError):
-                raise
-            if _is_transient_vision_error(exc):
-                raise timeout_error("Gemini vision istegi zaman asimina ugradi.") from exc
-            raise capability_unavailable(_friendly_vision_error(exc)) from exc
+            if screenshot_path.stat().st_size <= 0:
+                raise permission_required(_screen_permission_message())
+            if _image_looks_blank(screenshot_path):
+                raise permission_required(_screen_permission_message())
+            try:
+                analysis = _analyze_with_gemini(query, screenshot_path, owner_name, window_title)
+            except Exception as exc:
+                if str(getattr(exc, "code", "") or "") in {"PERMISSION_REQUIRED", "CAPABILITY_UNAVAILABLE", "TIMEOUT", "UNSUPPORTED_PLATFORM", "INVALID_ARGUMENT"}:
+                    raise
+                if _is_transient_vision_error(exc):
+                    raise timeout_error("Gemini vision istegi zaman asimina ugradi.") from exc
+                analysis = local_summary
+        finally:
+            try:
+                screenshot_path.unlink()
+            except Exception:
+                pass
 
-        if owner_name or window_title:
-            title = " / ".join(part for part in (owner_name, window_title) if part).strip()
-            if title:
-                return f"[Aktif pencere: {title}]\n{analysis}"
-        return analysis
-    finally:
-        try:
-            if image_path.exists():
-                image_path.unlink()
-        except Exception:
-            pass
+    text = analysis
+    if owner_name or window_title:
+        title = " / ".join(part for part in (owner_name, window_title) if part).strip()
+        if title:
+            text = f"[Aktif pencere: {title}]\n{analysis}"
+    return {
+        "text": text,
+        "result": {
+            "target": "active_window",
+            "ownerName": owner_name,
+            "windowTitle": window_title,
+            "windowContext": " / ".join(part for part in (owner_name, window_title) if part).strip(),
+            "analysis": analysis,
+            "imageCaptured": True,
+            "captureSource": "visual_desktop_operator_v1",
+            "observation": observation,
+        },
+    }

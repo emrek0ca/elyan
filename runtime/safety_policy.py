@@ -38,6 +38,11 @@ KNOWN_SAFE_TOOLS = {
     "text_to_speech",
     "desktop_os.status",
     "desktop_os.permissions",
+    "desktop_os.open_permission_settings",
+    "desktop_operator.observe_screen",
+    "desktop_operator.locate",
+    "desktop_operator.focus_window",
+    "desktop_operator.cancel",
 }
 
 DESTRUCTIVE_OR_SENSITIVE_TOOLS = {
@@ -50,6 +55,7 @@ WRITE_CAPABILITIES = {
     "document_write",
     "spreadsheet_write",
     "presentation_write",
+    "canvas_write",
     "image_generate",
 }
 
@@ -84,18 +90,28 @@ def _permission_enabled(state: dict[str, Any], key: str) -> bool:
     return _dangerous_area_enabled(state) and _truthy(permissions.get(key, False))
 
 
+def _permission_block(state: dict[str, Any], key: str, disabled_message: str, master_message: str) -> PolicyDecision:
+    if not _dangerous_area_enabled(state):
+        return PolicyDecision(False, "PERMISSION_REQUIRED", master_message)
+    if not _permission_enabled(state, key):
+        return PolicyDecision(False, "PERMISSION_REQUIRED", disabled_message)
+    return PolicyDecision(True)
+
+
 def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -> PolicyDecision:
     name = str(tool_name or "").strip()
     if not name:
         return PolicyDecision(False, "UNKNOWN_CAPABILITY", "Bilinmeyen araç.")
 
     if name == "shell_run":
-        if not _permission_enabled(state, "allow_shell"):
-            return PolicyDecision(
-                False,
-                "PERMISSION_REQUIRED",
-                "Terminal komutu çalıştırmak için güvenlik izni gerekiyor.",
-            )
+        shell_gate = _permission_block(
+            state,
+            "allow_shell",
+            "Gelişmiş komut izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Terminal komutları için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+        )
+        if not shell_gate.allowed:
+            return shell_gate
         if _truthy(args.get("_confirmed", False)):
             return PolicyDecision(True)
         return PolicyDecision(
@@ -114,13 +130,15 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
         )
 
     if name in {"delete_memory", "delete_calendar_event"}:
-        if _permission_enabled(state, "allow_destructive_tools"):
-            return PolicyDecision(True)
-        return PolicyDecision(
-            False,
-            "PERMISSION_REQUIRED",
-            "Bu işlem silme/değişiklik izni gerektiriyor.",
+        destructive_gate = _permission_block(
+            state,
+            "allow_destructive_tools",
+            "Silme ve geri alınamaz işlem izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Silme ve geri alınamaz işlemler için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
         )
+        if destructive_gate.allowed:
+            return PolicyDecision(True)
+        return destructive_gate
 
     if name == "send_whatsapp_message" and _truthy(args.get("send_now", False)):
         if not _permission_enabled(state, "allow_destructive_tools"):
@@ -131,12 +149,14 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
             )
 
     if name in PERSONAL_ACTION_CAPABILITIES:
-        if not _permission_enabled(state, "allow_personal_actions"):
-            return PolicyDecision(
-                False,
-                "PERMISSION_REQUIRED",
-                "Takvim, hatırlatıcı ve mesaj işlemleri için açık izin gerekiyor.",
-            )
+        personal_gate = _permission_block(
+            state,
+            "allow_personal_actions",
+            "Takvim, hatırlatıcı ve mesaj işlemleri izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Kişisel işlemler için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+        )
+        if not personal_gate.allowed:
+            return personal_gate
         if _truthy(args.get("_confirmed", False)):
             return PolicyDecision(True)
         return PolicyDecision(
@@ -173,31 +193,83 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
         )
 
     if name in {"browser_control", "play_media"}:
-        if _permission_enabled(state, "allow_browser_control"):
-            return PolicyDecision(True)
-        return PolicyDecision(
-            False,
-            "PERMISSION_REQUIRED",
-            "Tarayıcı veya medya kontrolü için açık izin gerekiyor.",
+        browser_gate = _permission_block(
+            state,
+            "allow_browser_control",
+            "Tarayıcı ve medya erişimi kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Tarayıcı ve medya işlemleri için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
         )
+        if browser_gate.allowed:
+            return PolicyDecision(True)
+        return browser_gate
 
     if name in {"desktop_os.processes", "desktop_os.active_window"}:
-        if _permission_enabled(state, "allow_system_inspection"):
-            return PolicyDecision(True)
-        return PolicyDecision(
-            False,
-            "PERMISSION_REQUIRED",
-            "Sistem proses ve pencere görünürlüğü için açık izin gerekiyor.",
+        system_gate = _permission_block(
+            state,
+            "allow_system_inspection",
+            "Sistem görünürlüğü izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Sistem görünürlüğü için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
         )
+        if system_gate.allowed:
+            return PolicyDecision(True)
+        return system_gate
 
     if name == "analyze_screen":
-        if _permission_enabled(state, "allow_screen_analysis"):
-            return PolicyDecision(True)
-        return PolicyDecision(
-            False,
-            "PERMISSION_REQUIRED",
-            "Ekran analizi özel ekran görüntüsünü bulut vision yoluna gönderebilir. Çalıştırmak için açık izin gerekiyor.",
+        screen_gate = _permission_block(
+            state,
+            "allow_screen_analysis",
+            "Ekran okuma izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Ekran analizi için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
         )
+        if screen_gate.allowed:
+            return PolicyDecision(True)
+        return screen_gate
+
+    if name in {"desktop_operator.observe_screen", "desktop_operator.locate"}:
+        screen_gate = _permission_block(
+            state,
+            "allow_screen_analysis",
+            "Visual operator ekran gözlemi kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Visual operator ekran gözlemi için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+        )
+        if screen_gate.allowed:
+            return PolicyDecision(True)
+        return screen_gate
+
+    if name in {"desktop_operator.focus_window", "desktop_operator.execute_action", "desktop_operator.run"}:
+        control_gate = _permission_block(
+            state,
+            "allow_computer_control",
+            "Bilgisayar kontrolü kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Bilgisayar kontrolü için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+        )
+        if not control_gate.allowed:
+            return control_gate
+
+        risky_text = " ".join(
+            str(args.get(key, "") or "")
+            for key in ("actionType", "action", "targetText", "target_text", "text", "goal")
+        ).lower()
+        risky_hint = _truthy(args.get("_riskyAction", False)) or any(
+            token in risky_text
+            for token in ("submit", "apply", "pay", "delete", "remove", "send", "install", "upload", "run command")
+        )
+        if risky_hint and not _permission_enabled(state, "allow_sensitive_operator_actions"):
+            return PolicyDecision(
+                False,
+                "PERMISSION_REQUIRED",
+                "Riskli operator aksiyonları kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            )
+        if risky_hint and not _truthy(args.get("_confirmed", False)):
+            return PolicyDecision(
+                False,
+                "PERMISSION_REQUIRED",
+                "Riskli operator aksiyonu için açık onay gerekiyor.",
+            )
+        return PolicyDecision(True)
+
+    if name == "desktop_operator.cancel":
+        return PolicyDecision(True)
 
     if name in KNOWN_SAFE_TOOLS:
         return PolicyDecision(True)

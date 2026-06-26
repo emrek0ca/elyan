@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 from typing import Any
 
 from actions._platform_common import capability_unavailable, invalid_argument, require_macos, timeout_error
@@ -126,6 +127,32 @@ def _escape_osascript_text(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _active_app_matches(target: str) -> bool:
+    normalized_target = _resolve_app_name(target).strip().lower()
+    active = _frontmost_application_name().strip().lower()
+    if not normalized_target or not active:
+        return False
+    return active == normalized_target or normalized_target in active or active in normalized_target
+
+
+def _wait_for_active_app(target: str, *, timeout_seconds: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _active_app_matches(target):
+            return True
+        time.sleep(0.15)
+    return _active_app_matches(target)
+
+
+def _wait_until_not_active(target: str, *, timeout_seconds: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not _active_app_matches(target):
+            return True
+        time.sleep(0.15)
+    return not _active_app_matches(target)
+
+
 def _terminate_matching_processes(target: str) -> int:
     if psutil is None:
         return 0
@@ -177,7 +204,47 @@ def _terminate_matching_processes(target: str) -> int:
     return len(gone) + len(alive)
 
 
-def open_app(app_name: str) -> str:
+def _matching_process_count(target: str) -> int:
+    if psutil is None:
+        return 0
+
+    normalized = target.lower().strip()
+    if not normalized:
+        return 0
+
+    candidates = {
+        normalized,
+        normalized.replace(" ", ""),
+        normalized.replace(".", ""),
+    }
+    count = 0
+    for proc in psutil.process_iter(["name", "exe", "cmdline"]):
+        try:
+            name = str(proc.info.get("name") or "").lower()
+            exe = str(proc.info.get("exe") or "").lower()
+            cmdline = " ".join(str(item) for item in (proc.info.get("cmdline") or [])).lower()
+            haystack = " ".join([name, exe, cmdline]).strip()
+            if haystack and any(candidate and candidate in haystack for candidate in candidates):
+                count += 1
+        except Exception:
+            continue
+    return count
+
+
+def _wait_until_closed(target: str, *, timeout_seconds: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        active = _active_app_matches(target)
+        process_count = _matching_process_count(target)
+        if not active and (psutil is None or process_count == 0):
+            return True
+        time.sleep(0.15)
+    active = _active_app_matches(target)
+    process_count = _matching_process_count(target)
+    return not active and (psutil is None or process_count == 0)
+
+
+def open_app(app_name: str) -> dict[str, Any]:
     """Uygulamayı açar, başarı/hata mesajı döndürür."""
     require_macos("Uygulama kontrolu")
     if not app_name:
@@ -193,7 +260,17 @@ def open_app(app_name: str) -> str:
             timeout=10,
         )
         if result.returncode == 0:
-            return f"{resolved} açıldı."
+            if _wait_for_active_app(resolved):
+                return {
+                    "text": f"{resolved} açıldı.",
+                    "result": {
+                        "appName": resolved,
+                        "verificationStatus": "foreground_confirmed",
+                        "foregroundConfirmed": True,
+                        "processObserved": _matching_process_count(resolved) > 0,
+                    },
+                }
+            raise capability_unavailable(f"{resolved} açıldı gibi göründü ama öne geldiği doğrulanamadı.")
 
         # Spotlight ile dene
         result2 = subprocess.run(
@@ -203,7 +280,17 @@ def open_app(app_name: str) -> str:
             timeout=10,
         )
         if result2.returncode == 0:
-            return f"{app_name} açıldı."
+            if _wait_for_active_app(resolved):
+                return {
+                    "text": f"{resolved} açıldı.",
+                    "result": {
+                        "appName": resolved,
+                        "verificationStatus": "foreground_confirmed",
+                        "foregroundConfirmed": True,
+                        "processObserved": _matching_process_count(resolved) > 0,
+                    },
+                }
+            raise capability_unavailable(f"{resolved} açıldı gibi göründü ama öne geldiği doğrulanamadı.")
         raise capability_unavailable(f"{resolved} bulunamadi veya guvenli sekilde acilamadi.")
     except subprocess.TimeoutExpired as exc:
         raise timeout_error(f"{resolved} acilirken zaman asimina ugradi.") from exc
@@ -211,7 +298,7 @@ def open_app(app_name: str) -> str:
         raise capability_unavailable(f"{resolved} guvenli sekilde acilamadi.") from exc
 
 
-def close_app(app_name: str) -> str:
+def close_app(app_name: str) -> dict[str, Any]:
     """Uygulamayı güvenli şekilde kapatır."""
     require_macos("Uygulama kontrolu")
     resolved = _resolve_app_name(app_name) if app_name else ""
@@ -229,14 +316,31 @@ def close_app(app_name: str) -> str:
             timeout=10,
         )
         if result.returncode == 0:
-            return f"{resolved} kapatıldı."
+            if _wait_until_closed(resolved):
+                return {
+                    "text": f"{resolved} kapatıldı.",
+                    "result": {
+                        "appName": resolved,
+                        "verificationStatus": "closed_confirmed",
+                        "closedConfirmed": True,
+                        "processObserved": _matching_process_count(resolved) == 0,
+                    },
+                }
     except subprocess.TimeoutExpired as exc:
         raise timeout_error(f"{resolved} kapatilirken zaman asimina ugradi.") from exc
     except Exception:
         pass
 
     terminated = _terminate_matching_processes(resolved)
-    if terminated > 0:
-        return f"{resolved} kapatıldı."
+    if terminated > 0 and _wait_until_closed(resolved):
+        return {
+            "text": f"{resolved} kapatıldı.",
+            "result": {
+                "appName": resolved,
+                "verificationStatus": "closed_confirmed",
+                "closedConfirmed": True,
+                "processObserved": _matching_process_count(resolved) == 0,
+            },
+        }
 
     raise capability_unavailable(f"{resolved} calisan bir uygulama olarak bulunamadi.")

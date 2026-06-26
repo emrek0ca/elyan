@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from runtime.agent_planning import build_agent_plan
+
 
 @dataclass(frozen=True)
 class RoutedTask:
@@ -82,10 +84,34 @@ def _strip_leading_fillers(value: str) -> str:
     return cleaned.strip(" .,!?:;")
 
 
+_TRAILING_CASE_TOKENS = {
+    "i",
+    "ı",
+    "u",
+    "ü",
+    "yi",
+    "yı",
+    "yu",
+    "yü",
+    "ni",
+    "nı",
+    "nu",
+    "nü",
+}
+
+
+def _strip_trailing_case_particles(value: str) -> str:
+    tokens = [token for token in str(value or "").strip().split() if token]
+    while tokens and _normalise(tokens[-1]) in _TRAILING_CASE_TOKENS:
+        tokens.pop()
+    return " ".join(tokens).strip()
+
+
 def _clean_app_name(value: str) -> str:
     cleaned = _strip_polite_suffix(value)
     cleaned = _strip_leading_fillers(cleaned)
     cleaned = re.sub(r"[’'](?:i|ı|u|ü|yi|yı|yu|yü)$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = _strip_trailing_case_particles(cleaned)
     return cleaned.strip(" .,!?:;\"'’")
 
 
@@ -102,6 +128,22 @@ def _is_generic_app_target(value: str) -> bool:
         "bu",
         "uygulama",
         "uygulamayi",
+        "pencere",
+        "window",
+    }
+
+
+def _is_generic_window_reference(value: str) -> bool:
+    normalized = _normalise(value)
+    return normalized in {
+        "",
+        "onu",
+        "bunu",
+        "o",
+        "bu",
+        "buradaki",
+        "aktif pencere",
+        "bu pencere",
         "pencere",
         "window",
     }
@@ -207,6 +249,8 @@ _DATA_SUFFIXES = {".csv", ".json"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 _OCR_SUFFIXES = _IMAGE_SUFFIXES | {".pdf"}
 _AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".mp4", ".webm"}
+_DOCUMENT_SUMMARY_SAVE_TOKENS = {"ozetle", "özetle", "summary", "summarize"}
+_DOCUMENT_SAVE_TOKENS = {"kaydet", "save", "sakla", "store"}
 
 
 def _selected_artifact_items(selected_artifacts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -332,6 +376,42 @@ def _resolve_image_target(text: str, selected_artifacts: list[dict[str, Any]] | 
         suffixes=_IMAGE_SUFFIXES,
     )
     return (selected, [selected]) if selected else ("", [])
+
+
+def _embedded_attachment_payload(text: str) -> tuple[str, list[str]]:
+    original = str(text or "").strip()
+    if not original:
+        return "", []
+    pattern = re.compile(
+        r"---\s*(?P<label>.+?)\s*---\s*\n(?P<body>.*?)\n---\s*BELGE SONU:\s*(?P=label)\s*---",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    parts: list[str] = []
+    labels: list[str] = []
+    for match in pattern.finditer(original):
+        body = str(match.group("body") or "").strip()
+        if not body:
+            continue
+        parts.append(body)
+        label = " ".join(str(match.group("label") or "").split()).strip()
+        if label and label not in labels:
+            labels.append(label)
+    return ("\n\n".join(parts).strip(), labels) if parts else ("", [])
+
+
+def _document_source_payload(
+    text: str,
+    selected_artifacts: list[dict[str, Any]] | None,
+) -> tuple[str, str, list[str], list[str]]:
+    embedded_text, labels = _embedded_attachment_payload(text)
+    path, selected_paths = _resolve_document_target(text, selected_artifacts)
+    if path and not embedded_text:
+        return path, "", selected_paths, [Path(path).stem]
+    if embedded_text:
+        return "", embedded_text, [], labels
+    if path:
+        return path, "", selected_paths, [Path(path).stem]
+    return "", "", [], labels
 
 
 def _document_mode(text: str) -> str:
@@ -514,10 +594,15 @@ def _strip_schedule_tokens(text: str) -> str:
 
 
 def _build_plan_summary(summary: str, steps: list[dict[str, Any]], privacy_class: str) -> dict[str, Any]:
+    agent_plan = build_agent_plan(steps, summary=summary)
     return {
         "summary": summary,
         "steps": steps,
         "privacyClass": privacy_class,
+        "agentPlan": agent_plan,
+        "stepCount": agent_plan.get("stepCount", 0),
+        "agentRoles": agent_plan.get("agentRoles", []),
+        "executionStrategy": agent_plan.get("executionStrategy", "single_lane"),
     }
 
 
@@ -768,21 +853,20 @@ def _workspace_reminders_route(text: str) -> RoutedTask | None:
 
 def _document_route(text: str, selected_artifacts: list[dict[str, Any]] | None = None) -> RoutedTask | None:
     q = _normalise(text)
-    selected_document = _selected_artifact_path(
-        selected_artifacts,
-        kinds={"document"},
-        suffixes=_DOCUMENT_SUFFIXES,
-    )
-    if not selected_document and not any(
+    source_path, source_text, selected_paths, _labels = _document_source_payload(text, selected_artifacts)
+    if not source_path and not source_text and not any(
         token in q for token in ("dosya", "belge", "pdf", "docx", "markdown", "json", "csv", "txt")
     ):
         return None
     if not any(token in q for token in ("oku", "ozetle", "özetle", "cikar", "çıkar", "listele", "maddeler")):
         return None
-    path, selected_paths = _resolve_document_target(text, selected_artifacts)
-    if not path:
+    if not source_path and not source_text:
         return None
-    args: dict[str, Any] = {"path": path, "mode": _document_mode(text)}
+    args: dict[str, Any] = {"mode": _document_mode(text)}
+    if source_path:
+        args["path"] = source_path
+    if source_text:
+        args["text"] = source_text
     if selected_paths:
         args["_selectedPaths"] = selected_paths
     return RoutedTask(
@@ -792,6 +876,76 @@ def _document_route(text: str, selected_artifacts: list[dict[str, Any]] | None =
         intent="document_read",
         confidence=0.82,
         privacy_class="local_private",
+    )
+
+
+def _document_summary_save_route(
+    text: str,
+    selected_artifacts: list[dict[str, Any]] | None = None,
+) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(token in q for token in _DOCUMENT_SUMMARY_SAVE_TOKENS):
+        return None
+    if not any(token in q for token in _DOCUMENT_SAVE_TOKENS):
+        return None
+
+    source_path, source_text, selected_paths, labels = _document_source_payload(text, selected_artifacts)
+    if not source_path and not source_text:
+        return None
+
+    source_label = labels[0] if labels else (Path(source_path).stem if source_path else "paylasilan-metin")
+    summary_label = Path(source_label).stem.replace("_", " ").strip() or "paylaşılan metin"
+    output_path = _resolve_output_path(text, ".docx", hint=f"{summary_label}-ozet")
+    title = f"{summary_label} özeti"
+    payload: dict[str, Any] = {
+        "path": source_path,
+        "text": source_text,
+        "selectedPaths": selected_paths,
+        "outputPath": output_path,
+        "title": title,
+        "overwrite": False,
+    }
+    skill_steps = [
+        {
+            "capability": "document_read",
+            "description": "Kaynak içerik özetlenecek.",
+            "args": {"mode": "summary"},
+            "argsFromPayload": {
+                "path": "path",
+                "text": "text",
+                "_selectedPaths": "selectedPaths",
+            },
+        },
+        {
+            "capability": "document_write",
+            "description": "Özet DOCX dosyasına kaydedilecek.",
+            "args": {"overwrite": False},
+            "argsFromPayload": {
+                "outputPath": "outputPath",
+                "title": "title",
+                "overwrite": "overwrite",
+            },
+            "argsFromPreviousResult": {"source_context": "summary"},
+        },
+    ]
+    summary = f"{summary_label} özetlenecek ve {Path(output_path).name} olarak masaüstüne kaydedilecek."
+    return RoutedTask(
+        "run_skill",
+        {"skillId": "document.summary_and_save", "payload": payload},
+        "document_summary_save",
+        intent="document_summary_save",
+        confidence=0.95,
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, skill_steps, "local_private"),
+        steps=(
+            {
+                "capability": "run_skill",
+                "args": {"skillId": "document.summary_and_save", "payload": payload},
+                "description": summary,
+            },
+        ),
     )
 
 
@@ -1045,6 +1199,37 @@ def _document_write_route(text: str) -> RoutedTask | None:
     )
 
 
+def _canvas_write_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(token in q for token in ("canvas", "kanvas", "tuval", "whiteboard", "layout", "board")):
+        return None
+    if not any(token in q for token in ("yap", "cevir", "çevir", "olustur", "oluştur", "hazirla", "hazırla", "tasarla", "design")):
+        return None
+    output_path = _resolve_output_path(text, ".pdf", hint=text or "elyan-canvas")
+    steps = [
+        {
+            "capability": "canvas_write",
+            "args": {"prompt": text, "outputPath": output_path, "outputFormat": "pdf", "overwrite": False},
+            "description": f"{Path(output_path).name} canvas çıktısı oluşturulacak.",
+        }
+    ]
+    return RoutedTask(
+        "canvas_write",
+        {"prompt": text, "outputPath": output_path, "outputFormat": "pdf", "overwrite": False},
+        "canvas_write",
+        intent="canvas_write",
+        confidence=0.84,
+        requires_confirmation=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(
+            f"{Path(output_path).name} canvas çıktısını oluşturacağım.",
+            steps,
+            "local_private",
+        ),
+        steps=tuple(steps),
+    )
+
+
 def _spreadsheet_write_route(text: str) -> RoutedTask | None:
     q = _normalise(text)
     if not any(token in q for token in ("xlsx", "excel", "tablo", "cizelge", "çizelge", "sheet")):
@@ -1169,6 +1354,53 @@ def _research_topic(text: str) -> str:
     return _strip_leading_fillers(original)
 
 
+_RESEARCH_STRONG_TRIGGERS = {"araştır", "arastir", "araştırma", "research", "incele"}
+_RESEARCH_WEAK_TRIGGERS = {"kaynak", "source", "verify"}
+_RESEARCH_STOPWORDS = {
+    "araştır",
+    "arastir",
+    "araştırma",
+    "research",
+    "incele",
+    "kaynak",
+    "source",
+    "verify",
+    "ver",
+    "goster",
+    "göster",
+    "bak",
+    "yap",
+    "et",
+    "please",
+    "lutfen",
+    "lütfen",
+}
+
+
+def _research_topic_terms(text: str) -> list[str]:
+    return [
+        word
+        for word in _normalise(text).split()
+        if word and word not in _RESEARCH_STOPWORDS
+    ]
+
+
+def _research_request_profile(text: str) -> tuple[str, bool]:
+    original = str(text or "").strip()
+    q = _normalise(original)
+    if not any(token in q for token in (*_RESEARCH_STRONG_TRIGGERS, *_RESEARCH_WEAK_TRIGGERS)):
+        return "", False
+    topic = _research_topic(original)
+    topic_terms = _research_topic_terms(topic)
+    if not topic_terms:
+        return topic, False
+    if any(token in q for token in _RESEARCH_STRONG_TRIGGERS):
+        return topic, True
+    if any(token in q for token in ("hakkinda", "about")):
+        return topic, True
+    return topic, len(topic_terms) >= 2
+
+
 def _email_subject(topic: str, fallback: str) -> str:
     cleaned = _strip_leading_fillers(topic) or _strip_leading_fillers(fallback)
     if cleaned:
@@ -1178,13 +1410,13 @@ def _email_subject(topic: str, fallback: str) -> str:
 
 def _build_web_research_route(text: str) -> RoutedTask | None:
     original = str(text or "").strip()
-    q = _normalise(original)
-    if not any(token in q for token in ("araştır", "arastir", "araştırma", "research", "incele", "kaynak", "source", "verify")):
+    topic, specific = _research_request_profile(original)
+    if not specific:
         return None
+    q = _normalise(original)
     if _extract_email_addresses(original) and any(token in q for token in ("mail", "email", "e-posta", "gönder", "gonder", "send")):
         return None
 
-    topic = _research_topic(original)
     steps = [
         {
             "capability": "web_research",
@@ -1277,9 +1509,8 @@ def _email_send_route(text: str) -> RoutedTask | None:
         return None
     if not any(token in q for token in ("gönder", "gonder", "yolla", "at", "send", "mail", "email")):
         return None
-    research_query = ""
-    if any(token in q for token in ("araştır", "arastir", "araştırma", "research", "incele", "kaynak", "source", "verify")):
-        research_query = _research_topic(original)
+    research_query, specific_research = _research_request_profile(original)
+    research_query = research_query if specific_research else ""
     topic = research_query or _strip_leading_fillers(original)
     if not recipients:
         return None
@@ -1384,6 +1615,14 @@ def artifact_target_clarification(
                 "kind": "image",
                 "question": "Bu görsel için önce bir dosya seç veya çalışma alanındaki açık yolu yaz.",
             }
+    if any(token in q for token in _DOCUMENT_SUMMARY_SAVE_TOKENS) and any(token in q for token in _DOCUMENT_SAVE_TOKENS):
+        path, _ = _resolve_document_target(text, selected_artifacts)
+        embedded_text, _labels = _embedded_attachment_payload(text)
+        if not path and not embedded_text:
+            return {
+                "kind": "document",
+                "question": "Özetlenecek belgeyi seç veya belge içeriğini paylaş.",
+            }
     if audio_requested:
         path, _ = _resolve_audio_target(text, selected_artifacts)
         if not path:
@@ -1393,6 +1632,393 @@ def artifact_target_clarification(
             }
     return None
 
+
+# ── File system helpers ───────────────────────────────────────────────────────
+
+_COMMON_LOCATIONS: dict[str, str] = {
+    # Turkish → English path segment
+    "masaustu": "Desktop",
+    "masaüstü": "Desktop",
+    "indirilenler": "Downloads",
+    "downloads": "Downloads",
+    "belgeler": "Documents",
+    "documents": "Documents",
+    "resimler": "Pictures",
+    "pictures": "Pictures",
+    "muzik": "Music",
+    "müzik": "Music",
+    "music": "Music",
+    "videolar": "Movies",
+    "filmler": "Movies",
+    "movies": "Movies",
+    "ev": "",
+    "home": "",
+}
+
+_LOCATION_TRIGGER_PATTERNS = {
+    "masaustune", "masaüstüne", "masaustunde", "masaüstünde", "masaustundeki",
+    "masaüstündeki", "masaustundan", "masaüstünden", "masaustu", "masaüstü",
+    "indirilenlere", "indirilenler", "indirilenlerden", "indirilenlerdeki",
+    "belgelere", "belgeler", "belgelerden", "belgelerdeki",
+    "desktop", "downloads", "documents",
+}
+
+
+def _resolve_location_path(text: str) -> str:
+    """Return ~/LocationName for recognised Turkish/English location names."""
+    q = _normalise(text)
+    home = Path.home()
+    for key, folder in _COMMON_LOCATIONS.items():
+        if key in q:
+            if folder:
+                return str(home / folder)
+            return str(home)
+    return str(home / "Desktop")  # safe default when context implies a location
+
+
+def _mentions_location(text: str) -> bool:
+    q = _normalise(text)
+    return any(tok in q for tok in _LOCATION_TRIGGER_PATTERNS)
+
+
+def _extract_quoted_name(text: str) -> str:
+    match = re.search(r'["\'«»„"](.+?)["\'»"]', text)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+# Tokens that are never valid folder names on their own
+_FOLDER_NAME_STOPWORDS = {
+    "klasor", "klasör", "folder", "dizin", "yeni", "olustur", "oluştur",
+    "yap", "masaustune", "masaüstüne", "masaustunde", "masaüstünde",
+    "indirilenlere", "belgelere", "desktop", "downloads", "documents",
+    "lutfen", "lütfen", "please",
+}
+
+
+def _extract_folder_name(text: str) -> str:
+    """Extract folder name from phrases like 'X adlı klasör', 'X klasörü', 'X adında klasör'."""
+    original = str(text or "").strip()
+    quoted = _extract_quoted_name(original)
+    if quoted:
+        return quoted
+    patterns = [
+        r'"(.+?)"',
+        r"(\w[\w\s\-\.]*?)\s+adl[ıi]\s+klasör",
+        r"(\w[\w\s\-\.]*?)\s+ad[ıi]nda\s+klasör",
+        r"(\w[\w\s\-\.]*?)\s+isimli\s+klasör",
+        r"(?:yeni\s+)?klasör(?:ü)?\s+oluştur(?:un?)?\s+(.+)$",
+        r"(?:yeni\s+)?klasör\s+yap\s+(.+)$",
+    ]
+    for pat in patterns:
+        m = re.search(pat, original, flags=re.IGNORECASE)
+        if m:
+            candidate = m.group(1).strip(" .,!?:;\"'")
+            # Strip leading location words
+            candidate = re.sub(
+                r"^(?:masaüstüne|masaustune|indirilenlere|belgelere|desktop|downloads?|documents?)\s+",
+                "", candidate, flags=re.IGNORECASE,
+            ).strip()
+            if candidate and _normalise(candidate) not in _FOLDER_NAME_STOPWORDS:
+                return candidate
+    return ""
+
+
+def _extract_file_name(text: str) -> str:
+    quoted = _extract_quoted_name(text)
+    if quoted:
+        return quoted
+    # Look for common file patterns
+    m = re.search(r"([A-Za-z0-9_\-ığüşöçİĞÜŞÖÇ]+(?:\.[a-zA-Z0-9]{1,6})+)", text)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_rename_target(text: str) -> tuple[str, str]:
+    """Returns (old_name, new_name) from rename phrases."""
+    original = str(text or "").strip()
+    # Normalise various quote styles to ASCII double-quote for simpler matching
+    normalised_quotes = re.sub(r'[""«»„]', '"', original)
+    patterns = [
+        r'"(.+?)"\s+ad[ıi]n[ıi]\s+"(.+?)"\s+(?:yap|degistir|değiştir|olarak degistir)',
+        r'"(.+?)"\s+(?:dosyas[ıi]n[ıi]|klasör[ü]n[ü])\s+"(.+?)"\s+(?:olarak yeniden adlandir|olarak adlandir)',
+        r'"(.+?)"\s+ad[ıi]n[ıi]\s+"(.+?)"\s+(?:olarak\s+)?(?:degistir|değiştir)',
+        r"(.+?)\s+ad[ıi]n[ıi]\s+(.+?)\s+(?:yap|degistir)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, normalised_quotes, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+    return "", ""
+
+
+def _mkdir_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    # Triggers: "klasör oluştur", "klasör yap", "yeni klasör", "dizin oluştur"
+    is_mkdir = any(tok in q for tok in (
+        "klasor olustur", "klasör oluştur",
+        "klasor yap", "klasör yap",
+        "yeni klasor", "yeni klasör",
+        "dizin olustur", "dizin oluştur",
+        "folder olustur", "folder oluştur",
+        "create folder", "make folder", "mkdir",
+        "new folder", "yeni dizin",
+    ))
+    if not is_mkdir:
+        return None
+
+    folder_name = _extract_folder_name(text)
+    location_path = _resolve_location_path(text)
+
+    if folder_name:
+        target_path = str(Path(location_path) / folder_name)
+        command = f'mkdir -p "{target_path}"'
+        description = f'"{folder_name}" klasörü {Path(location_path).name} içinde oluşturulacak.'
+        summary = f'{Path(location_path).name} konumunda "{folder_name}" adlı klasör oluşturacağım.'
+    else:
+        target_path = location_path
+        command = f'mkdir -p "{target_path}/Yeni Klasör"'
+        description = f"{Path(location_path).name} içinde yeni klasör oluşturulacak."
+        summary = f'{Path(location_path).name} konumuna yeni bir klasör oluşturacağım.'
+
+    steps = [{"capability": "shell_run", "args": {"command": command, "use_shell": False}, "description": description}]
+    return RoutedTask(
+        "shell_run",
+        {"command": command, "use_shell": False},
+        "mkdir",
+        intent="file_system_mkdir",
+        confidence=0.95,
+        requires_confirmation=False,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _list_dir_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    triggers = (
+        "klasor icerigi", "klasör içeriği",
+        "dizin icerigi", "dizin içeriği",
+        "dosyalari listele", "dosyaları listele",
+        "dosyalari goster", "dosyaları göster",
+        "icerigi goster", "içeriği göster",
+        "ne var", "neler var",
+        "listele", "list",
+    )
+    location_triggers = _LOCATION_TRIGGER_PATTERNS
+    has_trigger = any(tok in q for tok in triggers)
+    has_location = any(tok in q for tok in location_triggers)
+
+    if not (has_trigger and has_location):
+        # Also match "masaüstünü göster" / "indirilenler klasörü"
+        if not (any(t in q for t in ("goster", "göster", "bak")) and has_location):
+            return None
+
+    location_path = _resolve_location_path(text)
+    location_name = Path(location_path).name or "Ana dizin"
+    command = f'ls -la "{location_path}"'
+    description = f"{location_name} klasörünün içeriği listeleniyor."
+    summary = f"{location_name} içindeki dosya ve klasörleri listeleceğim."
+    steps = [{"capability": "shell_run", "args": {"command": command, "use_shell": False}, "description": description}]
+    return RoutedTask(
+        "shell_run",
+        {"command": command, "use_shell": False},
+        "list_dir",
+        intent="file_system_list",
+        confidence=0.88,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _file_move_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(tok in q for tok in ("tasi", "taşı", "move", "transfer")):
+        return None
+    # Need a source and destination reference
+    file_name = _extract_file_name(text)
+    if not file_name and not _explicit_path_for_suffixes(text, _DOCUMENT_SUFFIXES | _IMAGE_SUFFIXES | _DATA_SUFFIXES | _AUDIO_SUFFIXES):
+        return None
+    dest_path = _resolve_location_path(text)
+    src_explicit = _explicit_path_for_suffixes(text, _DOCUMENT_SUFFIXES | _IMAGE_SUFFIXES | _DATA_SUFFIXES | _AUDIO_SUFFIXES)
+    if src_explicit:
+        src = src_explicit
+    elif file_name:
+        # Try to find source in common locations
+        for loc in ("Desktop", "Downloads", "Documents"):
+            candidate = str(Path.home() / loc / file_name)
+            if Path(candidate).exists():
+                src = candidate
+                break
+        else:
+            src = str(Path.home() / "Desktop" / file_name)
+    else:
+        return None
+
+    command = f'mv "{src}" "{dest_path}/"'
+    description = f'"{Path(src).name}" dosyası {Path(dest_path).name} konumuna taşınacak.'
+    summary = f'"{Path(src).name}" dosyasını {Path(dest_path).name} klasörüne taşıyacağım.'
+    steps = [{"capability": "shell_run", "args": {"command": command, "use_shell": False}, "description": description}]
+    return RoutedTask(
+        "shell_run",
+        {"command": command, "use_shell": False},
+        "file_move",
+        intent="file_system_move",
+        confidence=0.85,
+        requires_confirmation=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _file_copy_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(tok in q for tok in ("kopyala", "copy", "kopyasini olustur", "kopyasını oluştur", "duplicate")):
+        return None
+    src_explicit = _explicit_path_for_suffixes(text, _DOCUMENT_SUFFIXES | _IMAGE_SUFFIXES | _DATA_SUFFIXES | _AUDIO_SUFFIXES)
+    file_name = _extract_file_name(text)
+    if not src_explicit and not file_name:
+        return None
+    dest_path = _resolve_location_path(text)
+    src = src_explicit or str(Path.home() / "Desktop" / file_name)
+    command = f'cp -r "{src}" "{dest_path}/"'
+    description = f'"{Path(src).name}" dosyası {Path(dest_path).name} konumuna kopyalanacak.'
+    summary = f'"{Path(src).name}" dosyasını {Path(dest_path).name} klasörüne kopyalayacağım.'
+    steps = [{"capability": "shell_run", "args": {"command": command, "use_shell": False}, "description": description}]
+    return RoutedTask(
+        "shell_run",
+        {"command": command, "use_shell": False},
+        "file_copy",
+        intent="file_system_copy",
+        confidence=0.84,
+        requires_confirmation=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _file_delete_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(tok in q for tok in ("sil", "delete", "remove", "kaldir", "kaldır", "cop kutusuna", "çöp kutusuna")):
+        return None
+    # Be conservative — require explicit file reference or quoted name
+    src_explicit = _explicit_path_for_suffixes(text, _DOCUMENT_SUFFIXES | _IMAGE_SUFFIXES | _DATA_SUFFIXES | _AUDIO_SUFFIXES)
+    quoted = _extract_quoted_name(text)
+    if not src_explicit and not quoted:
+        return None
+    src = src_explicit or str(Path.home() / "Desktop" / quoted)
+    # Move to trash instead of hard delete for safety
+    trash_cmd = f'osascript -e \'tell application "Finder" to delete POSIX file "{src}"\''
+    description = f'"{Path(src).name}" çöp kutusuna taşınacak.'
+    summary = f'"{Path(src).name}" dosyasını çöp kutusuna taşıyacağım.'
+    steps = [{"capability": "shell_run", "args": {"command": trash_cmd, "use_shell": True}, "description": description}]
+    return RoutedTask(
+        "shell_run",
+        {"command": trash_cmd, "use_shell": True},
+        "file_delete",
+        intent="file_system_delete",
+        confidence=0.9,
+        requires_confirmation=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _file_rename_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(tok in q for tok in ("yeniden adlandir", "adini degistir", "olarak degistir", "rename", "isim degistir")):
+        return None
+    old_name, new_name = _extract_rename_target(text)
+    if not old_name or not new_name:
+        return None
+    location_path = _resolve_location_path(text) if _mentions_location(text) else str(Path.home() / "Desktop")
+    src = str(Path(location_path) / old_name)
+    dst = str(Path(location_path) / new_name)
+    command = f'mv "{src}" "{dst}"'
+    description = f'"{old_name}" → "{new_name}" olarak yeniden adlandırılacak.'
+    summary = f'"{old_name}" dosyasının adını "{new_name}" olarak değiştireceğim.'
+    steps = [{"capability": "shell_run", "args": {"command": command, "use_shell": False}, "description": description}]
+    return RoutedTask(
+        "shell_run",
+        {"command": command, "use_shell": False},
+        "file_rename",
+        intent="file_system_rename",
+        confidence=0.88,
+        requires_confirmation=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _create_file_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(tok in q for tok in ("dosya olustur", "dosyasi olustur", "yeni dosya", "create file", "txt olustur", "new file")):
+        return None
+    file_name = _extract_file_name(text) or _extract_folder_name(text) or "yeni-dosya.txt"
+    if not Path(file_name).suffix:
+        file_name += ".txt"
+    location_path = _resolve_location_path(text)
+    target_path = str(Path(location_path) / file_name)
+    command = f'touch "{target_path}"'
+    description = f'"{file_name}" dosyası {Path(location_path).name} konumunda oluşturulacak.'
+    summary = f'{Path(location_path).name} konumunda "{file_name}" adlı yeni dosya oluşturacağım.'
+    steps = [{"capability": "shell_run", "args": {"command": command, "use_shell": False}, "description": description}]
+    return RoutedTask(
+        "shell_run",
+        {"command": command, "use_shell": False},
+        "create_file",
+        intent="file_system_create",
+        confidence=0.9,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _desktop_document_route(text: str, selected_artifacts: list[dict[str, Any]] | None = None) -> RoutedTask | None:
+    """Resolve 'masaüstündeki [dosya]' patterns for document operations."""
+    if not _mentions_location(text):
+        return None
+    q = _normalise(text)
+    if not any(tok in q for tok in ("ozetle", "özetle", "oku", "cikar", "çıkar", "analiz", "incele", "summary", "summarize")):
+        return None
+    # Try to extract file name from text
+    file_name = _extract_file_name(text)
+    location_path = _resolve_location_path(text)
+    if file_name:
+        candidate = str(Path(location_path) / file_name)
+        src = candidate
+    else:
+        # List common document files on the location
+        src = location_path
+    suffix = Path(src).suffix.lower() if file_name else ""
+    if suffix in _DATA_SUFFIXES:
+        return RoutedTask(
+            "data_analyze",
+            {"path": src, "mode": _data_mode(text)},
+            "desktop_data_analyze",
+            intent="data_analyze",
+            confidence=0.82,
+            privacy_class="local_private",
+        )
+    # Default: document read/summarize
+    return RoutedTask(
+        "document_read",
+        {"path": src, "mode": _document_mode(text)},
+        "desktop_document_read",
+        intent="document_read",
+        confidence=0.80,
+        privacy_class="local_private",
+    )
+
+
+# ── route_text_to_tool ────────────────────────────────────────────────────────
 
 def route_text_to_tool(
     text: str,
@@ -1404,6 +2030,41 @@ def route_text_to_tool(
         return None
     q = _normalise(original)
 
+    # ── File system operations (highest priority — very specific intents) ──────
+    mkdir = _mkdir_route(original)
+    if mkdir is not None:
+        return mkdir
+
+    file_rename = _file_rename_route(original)
+    if file_rename is not None:
+        return file_rename
+
+    file_delete = _file_delete_route(original)
+    if file_delete is not None:
+        return file_delete
+
+    file_move = _file_move_route(original)
+    if file_move is not None:
+        return file_move
+
+    file_copy = _file_copy_route(original)
+    if file_copy is not None:
+        return file_copy
+
+    list_dir = _list_dir_route(original)
+    if list_dir is not None:
+        return list_dir
+
+    create_file = _create_file_route(original)
+    if create_file is not None:
+        return create_file
+
+    # Desktop-located document operations ("masaüstündeki belgeyi özetle")
+    desktop_doc = _desktop_document_route(original, selected_artifacts)
+    if desktop_doc is not None:
+        return desktop_doc
+
+    # ── Scheduled / calendar ──────────────────────────────────────────────────
     calendar_add = _calendar_add_route(original)
     if calendar_add is not None:
         return calendar_add
@@ -1431,6 +2092,14 @@ def route_text_to_tool(
     chart_generate = _chart_generate_route(original, selected_artifacts)
     if chart_generate is not None:
         return chart_generate
+
+    document_summary_save = _document_summary_save_route(original, selected_artifacts)
+    if document_summary_save is not None:
+        return document_summary_save
+
+    canvas_write = _canvas_write_route(original)
+    if canvas_write is not None:
+        return canvas_write
 
     document = _document_route(original, selected_artifacts)
     if document is not None:
@@ -1496,9 +2165,27 @@ def route_text_to_tool(
             "ekrani analiz",
             "ekran analizi",
             "bu hatayi oku",
+            "buradaki hatayi oku",
+            "buradaki hatayi incele",
             "pencereyi analiz",
+            "aktif pencereyi analiz",
+            "aktif pencereye bak",
+            "bu pencereyi oku",
+            "burada ne var",
             "ne goruyorsun",
             "ekrana bak",
+            "masaustunde ne var",
+            "masaustune bak",
+            "masaustunu analiz",
+            "masaustunu goster",
+            "bilgisayarda ne var",
+            "bilgisayarda ne acik",
+            "bilgisayara bak",
+            "ne acik",
+            "what is on",
+            "whats on",
+            "what's on",
+            "desktop",
             "screen",
         )
     ):
@@ -1550,8 +2237,8 @@ def route_text_to_tool(
 
     youtube_query = _extract_after(
         [
-            r"youtube(?:['’]?(?:da|de)|\s+da|\s+de)?\s+(.+?)\s+(?:ac|aç|cal|çal|oynat|ara)$",
-            r"(.+?)\s+youtube(?:['’]?(?:da|de)|\s+da|\s+de)?\s+(?:ac|aç|cal|çal|oynat)$",
+            r"youtube(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?\s+(.+?)\s+(?:ac|aç|cal|çal|oynat|ara)$",
+            r"(.+?)\s+youtube(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?\s+(?:ac|aç|cal|çal|oynat)$",
         ],
         original,
     )
@@ -1567,8 +2254,8 @@ def route_text_to_tool(
 
     search_query = _extract_after(
         [
-            r"(?:google(?:['’]?(?:da|de)|\s+da|\s+de)?|web(?:['’]?(?:de)|\s+de)?|internette)\s+(.+?)\s+(?:ara|search)$",
-            r"(.+?)\s+(?:google(?:['’]?(?:da|de)|\s+da|\s+de)?|web(?:['’]?(?:de)|\s+de)?|internette)\s+(?:ara|search)$",
+            r"(?:google(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?|web(?:['’]?(?:de|den)|\s+(?:de|den))?|internette)\s+(.+?)\s+(?:ara|search)$",
+            r"(.+?)\s+(?:google(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?|web(?:['’]?(?:de|den)|\s+(?:de|den))?|internette)\s+(?:ara|search)$",
         ],
         original,
     )
@@ -1596,6 +2283,49 @@ def route_text_to_tool(
         if close_target and not any(token in _normalise(close_target) for token in ("dosya", "file", "klasor", "folder")):
             return RoutedTask("close_app", {"app_name": close_target}, "close_app", intent="close_app", confidence=0.94, privacy_class="local_private")
 
+    if any(token in q for token in ("onu kapat", "bunu kapat", "aktif pencereyi kapat", "bu pencereyi kapat")):
+        return RoutedTask("close_app", {"app_name": ""}, "close_active_app", intent="close_app", confidence=0.93, privacy_class="local_private")
+
+    focus_target = _extract_after(
+        [
+            r"(.+?)\s+(?:uygulamas[ıi]n[ıi]\s+)?(?:one getir|öne getir|one al|öne al|odakla|focus|bring to front)$",
+            r"(?:one getir|öne getir|one al|öne al|odakla|focus|bring to front)\s+(.+)$",
+        ],
+        original,
+    )
+    if focus_target:
+        focus_target = _clean_app_name(focus_target)
+        if not _is_generic_window_reference(focus_target):
+            return RoutedTask("open_app", {"app_name": focus_target}, "focus_app", intent="focus_app", confidence=0.92, privacy_class="local_private")
+
+    restart_target = _extract_after(
+        [
+            r"(.+?)\s+(?:uygulamas[ıi]n[ıi]\s+)?(?:yeniden ac|yeniden aç|restart|relaunch)$",
+            r"(?:yeniden ac|yeniden aç|restart|relaunch)\s+(.+)$",
+        ],
+        original,
+    )
+    if restart_target:
+        restart_target = _clean_app_name(restart_target)
+        if restart_target and not _is_generic_window_reference(restart_target):
+            steps = [
+                {"capability": "close_app", "args": {"app_name": restart_target}, "description": f"{restart_target} kapatılacak."},
+                {"capability": "open_app", "args": {"app_name": restart_target}, "description": f"{restart_target} yeniden açılacak."},
+            ]
+            summary = f"{restart_target} kapatılıp yeniden açılacak."
+            return RoutedTask(
+                "close_app",
+                {"app_name": restart_target},
+                "restart_app",
+                intent="restart_app",
+                confidence=0.9,
+                requires_confirmation=True,
+                is_multi_step=True,
+                privacy_class="local_private",
+                plan_preview=_build_plan_summary(summary, steps, "local_private"),
+                steps=tuple(steps),
+            )
+
     open_target = _extract_after(
         [
             r"(.+?)\s+(?:uygulamas[ıi]n[ıi]\s+)?(?:ac|aç|open|launch|başlat|baslat|start)$",
@@ -1612,26 +2342,31 @@ def route_text_to_tool(
 
     command = _extract_after(
         [
-            r"(?:terminalde|terminal|komut)\s+(.+?)\s+(?:calistir|çalıştır|run)$",
-            r"(?:calistir|çalıştır|run)\s+(.+)$",
+            r"(?:terminalde|terminal[a-z]*|komut satiri[a-z]*|shell[a-z]*)\s+(.+?)\s+(?:calistir|çalıştır|run|execute|exec)$",
+            r"(?:terminalde|terminal[a-z]*|komut satiri[a-z]*|shell[a-z]*)\s+(.+)$",
+            r"(?:calistir|çalıştır|run|execute)\s+([\w\-\.]+(?:\s+.+)?)$",
+            r"^((?:ls|dir|pwd|echo|cat|grep|find|ps|top|df|du|ping|curl|wget|git|npm|pip|python|python3|node|brew|apt|yum|dnf|pacman|choco|winget)\s*.+)$",
         ],
         original,
     )
     if command:
+        # Strip leading quotes if LLM wrapped the command
+        command = command.strip("'\"").strip()
+        use_shell = any(op in command for op in ("&&", "||", "|", ";", ">", "<", "$(", "`"))
         summary = f"`{command}` komutu çalıştırılacak."
         steps = [
             {
                 "capability": "shell_run",
-                "args": {"command": command},
+                "args": {"command": command, "use_shell": use_shell},
                 "description": summary,
             }
         ]
         return RoutedTask(
             "shell_run",
-            {"command": command},
+            {"command": command, "use_shell": use_shell},
             "shell_command",
             intent="shell_command",
-            confidence=0.98,
+            confidence=0.97,
             requires_confirmation=True,
             privacy_class="local_private",
             plan_preview=_build_plan_summary(summary, steps, "local_private"),

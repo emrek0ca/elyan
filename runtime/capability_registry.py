@@ -65,6 +65,51 @@ def _normalize_capability_name(value: Any) -> str:
     return str(value or "").strip().lower().replace(".", "_").replace(" ", "_")
 
 
+_CAPABILITY_SYSTEM_PERMISSION_KEYS: dict[str, str] = {
+    "browser_control": "accessibility",
+    "play_media": "accessibility",
+    "analyze_screen": "screenRecording",
+    "desktop_os.active_window": "accessibility",
+    "desktop_operator.observe_screen": "screenRecording",
+    "desktop_operator.locate": "screenRecording",
+    "desktop_operator.focus_window": "accessibility",
+    "desktop_operator.execute_action": "accessibility",
+    "desktop_operator.run": "accessibility",
+    "desktop_operator.cancel": "accessibility",
+}
+
+
+def _system_permission_message(permission_key: str) -> str:
+    normalized = str(permission_key or "").strip().lower()
+    if normalized == "screenrecording":
+        return "macOS ekran kaydı izni kapalı."
+    if normalized == "accessibility":
+        return "macOS erişilebilirlik izni kapalı."
+    if normalized == "automation":
+        return "macOS otomasyon izni kapalı."
+    if normalized == "inputmonitoring":
+        return "macOS giriş izleme izni kapalı."
+    return "macOS sistem izni gerekiyor."
+
+
+def _system_permission_status_for_capability(tool_name: str) -> str:
+    permission_key = _CAPABILITY_SYSTEM_PERMISSION_KEYS.get(str(tool_name or "").strip(), "")
+    if not permission_key:
+        return ""
+    try:
+        desktop_os = import_module("actions.desktop_os")
+        payload = desktop_os.desktop_os_permissions()
+    except Exception:
+        return ""
+    result = payload.get("result", {}) if isinstance(payload, dict) else {}
+    result = result if isinstance(result, dict) else {}
+    permissions = result.get("permissions", {})
+    permissions = permissions if isinstance(permissions, dict) else {}
+    state = permissions.get(permission_key, {})
+    state = state if isinstance(state, dict) else {}
+    return str(state.get("status", "") or "").strip().lower()
+
+
 def _tool_decl(
     name: str,
     description: str,
@@ -174,6 +219,66 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         ["query"],
     ),
     _tool_decl(
+        "desktop_operator.observe_screen",
+        "Aktif pencereyi structured ekran gözlemine çevirir.",
+        {
+            "query": {"type": "STRING"},
+            "target": {"type": "STRING"},
+            "preserveScreenshot": {"type": "BOOLEAN"},
+        },
+    ),
+    _tool_decl(
+        "desktop_operator.locate",
+        "Metin veya öğe tipine göre ekrandaki hedef öğeyi bulur.",
+        {
+            "text": {"type": "STRING"},
+            "elementType": {"type": "STRING"},
+        },
+    ),
+    _tool_decl(
+        "desktop_operator.focus_window",
+        "Bir masaüstü uygulamasını öne alır.",
+        {"appName": {"type": "STRING"}, "bundleId": {"type": "STRING"}},
+    ),
+    _tool_decl(
+        "desktop_operator.execute_action",
+        "Visual desktop operator ile güvenli bir UI aksiyonu çalıştırır.",
+        {
+            "actionType": {"type": "STRING"},
+            "targetText": {"type": "STRING"},
+            "elementType": {"type": "STRING"},
+            "bbox": {"type": "OBJECT"},
+            "text": {"type": "STRING"},
+            "keys": {"type": "ARRAY"},
+            "delta": {"type": "NUMBER"},
+            "duration": {"type": "NUMBER"},
+            "appName": {"type": "STRING"},
+        },
+        ["actionType"],
+    ),
+    _tool_decl(
+        "desktop_operator.run",
+        "Observe -> locate -> execute -> verify döngüsüyle görev tabanlı operator akışı çalıştırır.",
+        {
+            "goal": {"type": "STRING"},
+            "action": {"type": "STRING"},
+            "targetText": {"type": "STRING"},
+            "elementType": {"type": "STRING"},
+            "text": {"type": "STRING"},
+            "appName": {"type": "STRING"},
+            "steps": {"type": "ARRAY"},
+        },
+    ),
+    _tool_decl(
+        "desktop_operator.cancel",
+        "Aktif visual desktop operator çalışmasını güvenli şekilde durdurur.",
+        {
+            "runId": {"type": "STRING"},
+            "reason": {"type": "STRING"},
+            "source": {"type": "STRING"},
+        },
+    ),
+    _tool_decl(
         "get_youtube_channel_report",
         "YouTube kanal istatistiklerini ve son video performansını raporlar.",
         {"query": {"type": "STRING"}, "handle": {"type": "STRING"}, "video_limit": {"type": "NUMBER"}},
@@ -225,7 +330,11 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
     _tool_decl(
         "document_read",
         "Belge veya dosya içeriğini güvenli şekilde okur.",
-        {"path": {"type": "STRING"}, "mode": {"type": "STRING"}},
+        {
+            "path": {"type": "STRING"},
+            "text": {"type": "STRING"},
+            "mode": {"type": "STRING"},
+        },
         ["path"],
     ),
     _tool_decl(
@@ -257,6 +366,24 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
             "overwrite": {"type": "BOOLEAN"},
         },
         ["prompt"],
+    ),
+    _tool_decl(
+        "canvas_write",
+        "Metin, tablo, grafik ve görselleri PDF veya PNG canvas çıktısına dönüştürür.",
+        {
+            "prompt": {"type": "STRING"},
+            "outputPath": {"type": "STRING"},
+            "title": {"type": "STRING"},
+            "blocks": {"type": "ARRAY"},
+            "sections": {"type": "ARRAY"},
+            "outputFormat": {"type": "STRING"},
+            "width": {"type": "NUMBER"},
+            "height": {"type": "NUMBER"},
+            "sourceContext": {"type": "STRING"},
+            "sourcePath": {"type": "STRING"},
+            "overwrite": {"type": "BOOLEAN"},
+        },
+        ["outputPath"],
     ),
     _tool_decl(
         "data_analyze",
@@ -439,6 +566,13 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         {},
     ),
     _tool_decl(
+        "desktop_os.open_permission_settings",
+        "İlgili sistem izin ekranını güvenli şekilde açar.",
+        {
+            "permission": {"type": "STRING"},
+        },
+    ),
+    _tool_decl(
         "desktop_os.processes",
         "Yerel çalışan prosesleri güvenli şekilde listeler.",
         {
@@ -480,6 +614,12 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "shell_run": _AdapterSpec("actions.shell", "shell_run"),
     "play_media": _AdapterSpec("actions.media", "play_media"),
     "analyze_screen": _AdapterSpec("actions.screen_vision", "analyze_screen"),
+    "desktop_operator.observe_screen": _AdapterSpec("actions.desktop_operator", "observe_screen"),
+    "desktop_operator.locate": _AdapterSpec("actions.desktop_operator", "locate"),
+    "desktop_operator.focus_window": _AdapterSpec("actions.desktop_operator", "focus_window"),
+    "desktop_operator.execute_action": _AdapterSpec("actions.desktop_operator", "execute_action"),
+    "desktop_operator.run": _AdapterSpec("actions.desktop_operator", "run"),
+    "desktop_operator.cancel": _AdapterSpec("actions.desktop_operator", "cancel"),
     "get_youtube_channel_report": _AdapterSpec("actions.youtube_stats", "get_youtube_channel_report"),
     "send_whatsapp_message": _AdapterSpec("actions.whatsapp", "send_whatsapp_message"),
     "save_whatsapp_contact": _AdapterSpec("actions.whatsapp", "save_whatsapp_contact"),
@@ -489,6 +629,7 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "ocr_read": _AdapterSpec("actions.ocr_read", "ocr_read"),
     "image_read": _AdapterSpec("actions.image_read", "image_read"),
     "image_generate": _AdapterSpec("actions.image_generate", "image_generate"),
+    "canvas_write": _AdapterSpec("actions.canvas_write", "canvas_write"),
     "data_analyze": _AdapterSpec("actions.data_analyze", "data_analyze"),
     "chart_generate": _AdapterSpec("actions.chart_generate", "chart_generate"),
     "math_solve": _AdapterSpec("actions.math_solve", "math_solve"),
@@ -507,6 +648,7 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "mcp_call_tool": _AdapterSpec("actions.mcp_tool", "mcp_call_tool"),
     "desktop_os_status": _AdapterSpec("actions.desktop_os", "desktop_os_status"),
     "desktop_os_permissions": _AdapterSpec("actions.desktop_os", "desktop_os_permissions"),
+    "desktop_os_open_permission_settings": _AdapterSpec("actions.desktop_os", "desktop_os_open_permission_settings"),
     "desktop_os_processes": _AdapterSpec("actions.desktop_os", "desktop_os_processes"),
     "desktop_os_active_window": _AdapterSpec("actions.desktop_os", "desktop_os_active_window"),
     "update_memory": _AdapterSpec("memory.memory_manager", "update_memory"),
@@ -529,11 +671,18 @@ _DARWIN_ONLY_CAPABILITIES = {
     "send_whatsapp_message",
     "save_whatsapp_contact",
     "analyze_screen",
+    "desktop_operator.observe_screen",
+    "desktop_operator.locate",
+    "desktop_operator.focus_window",
+    "desktop_operator.execute_action",
+    "desktop_operator.run",
+    "desktop_operator.cancel",
 }
 _WRITE_CAPABILITIES = {
     "document_write",
     "spreadsheet_write",
     "presentation_write",
+    "canvas_write",
     "image_generate",
     "chart_generate",
 }
@@ -541,6 +690,10 @@ _SIDE_EFFECT_CAPABILITIES = {
     "open_app",
     "close_app",
     "shell_run",
+    "desktop_operator.focus_window",
+    "desktop_operator.execute_action",
+    "desktop_operator.run",
+    "desktop_operator.cancel",
     "add_calendar_event",
     "delete_calendar_event",
     "add_reminder",
@@ -550,6 +703,7 @@ _SIDE_EFFECT_CAPABILITIES = {
     "document_write",
     "spreadsheet_write",
     "presentation_write",
+    "canvas_write",
     "image_generate",
     "chart_generate",
     "run_skill",
@@ -567,7 +721,7 @@ _NON_RETRYABLE_SIDE_EFFECTS = {
     "email_send",
 }
 _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
-    "web_research": ("httpx", "trafilatura"),
+    "web_research": ("httpx",),
     "ocr_read": (),
     "image_read": ("pillow",),
     "math_solve": ("sympy",),
@@ -577,9 +731,17 @@ _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
     "document_write": ("python_docx",),
     "spreadsheet_write": ("openpyxl",),
     "presentation_write": ("python_pptx",),
+    "canvas_write": ("reportlab", "pillow"),
+    "browser_control": ("requests",),
     "speech_to_text": ("faster_whisper", "soundfile"),
-    "text_to_speech": ("piper",),
+    "text_to_speech": (),
     "mcp_call_tool": ("mcp",),
+    "desktop_operator.observe_screen": ("pillow",),
+    "desktop_operator.locate": ("pillow",),
+    "desktop_operator.focus_window": (),
+    "desktop_operator.execute_action": (),
+    "desktop_operator.run": ("pillow",),
+    "desktop_operator.cancel": (),
     "quantum_model_problem": ("qiskit",),
     "quantum_run_experiment": ("qiskit", "qiskit_aer"),
     "quantum_compare_classical": ("qiskit", "qiskit_aer"),
@@ -616,6 +778,7 @@ def dependency_status_snapshot() -> dict[str, dict[str, Any]]:
         "python_docx": {"available": _module_available("docx"), "label": "python-docx"},
         "openpyxl": {"available": _module_available("openpyxl"), "label": "openpyxl"},
         "python_pptx": {"available": _module_available("pptx"), "label": "python-pptx"},
+        "reportlab": {"available": _module_available("reportlab"), "label": "ReportLab"},
         "sentence_transformers": {
             "available": _module_available("sentence_transformers"),
             "label": "sentence-transformers",
@@ -623,6 +786,10 @@ def dependency_status_snapshot() -> dict[str, dict[str, Any]]:
         "httpx": {
             "available": _module_available("httpx"),
             "label": "httpx",
+        },
+        "requests": {
+            "available": _module_available("requests"),
+            "label": "requests",
         },
         "trafilatura": {
             "available": _module_available("trafilatura"),
@@ -632,9 +799,17 @@ def dependency_status_snapshot() -> dict[str, dict[str, Any]]:
             "available": _module_available("playwright"),
             "label": "Playwright",
         },
+        "opencv_python": {
+            "available": _module_available("cv2"),
+            "label": "OpenCV",
+        },
         "pillow": {
             "available": _module_available("PIL"),
             "label": "Pillow",
+        },
+        "numpy": {
+            "available": _module_available("numpy"),
+            "label": "NumPy",
         },
         "faster_whisper": {
             "available": _module_available("faster_whisper"),
@@ -780,11 +955,15 @@ def capability_metadata(name: str) -> dict[str, Any]:
     category = "other"
     if normalized in {"web_research", "retrieve_context", "document_read", "ocr_read", "image_read"}:
         category = "research_docs"
+    elif normalized in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write", "image_generate", "chart_generate"}:
+        category = "research_docs"
     elif normalized in {"email_draft", "email_send", "send_whatsapp_message", "save_whatsapp_contact", "add_calendar_event", "delete_calendar_event", "get_calendar_events", "get_reminders", "add_reminder", "run_skill", "mcp_call_tool"}:
         category = "communication_approval"
     elif normalized in {"math_solve", "latex_parse", "quantum_model_problem", "quantum_run_experiment", "quantum_compare_classical", "quantum_generate_report"}:
         category = "math_quantum"
-    elif normalized in {"open_app", "close_app", "sys_info", "browser_control", "play_media", "analyze_screen", "shell_run", "desktop_os.status", "desktop_os.permissions", "desktop_os.processes", "desktop_os.active_window", "speech_capture", "speech_to_text", "text_to_speech"}:
+    elif normalized in {"open_app", "close_app", "sys_info", "browser_control", "play_media", "analyze_screen", "shell_run", "desktop_os.status", "desktop_os.permissions", "desktop_os.open_permission_settings", "desktop_os.processes", "desktop_os.active_window", "speech_capture", "speech_to_text", "text_to_speech"}:
+        category = "local_execution"
+    elif normalized.startswith("desktop_operator."):
         category = "local_execution"
 
     permissions: tuple[str, ...] = ()
@@ -792,6 +971,12 @@ def capability_metadata(name: str) -> dict[str, Any]:
         permissions = ("allow_browser_control",)
     elif normalized == "analyze_screen":
         permissions = ("allow_screen_analysis",)
+    elif normalized in {"desktop_operator.observe_screen", "desktop_operator.locate"}:
+        permissions = ("allow_screen_analysis",)
+    elif normalized in {"desktop_operator.focus_window", "desktop_operator.execute_action", "desktop_operator.run"}:
+        permissions = ("allow_computer_control",)
+    elif normalized == "desktop_operator.cancel":
+        permissions = ()
     elif normalized == "shell_run":
         permissions = ("allow_shell",)
     elif normalized in {"desktop_os.processes", "desktop_os.active_window"}:
@@ -803,6 +988,24 @@ def capability_metadata(name: str) -> dict[str, Any]:
 
     supported_platforms = ("darwin",) if normalized in _DARWIN_ONLY_CAPABILITIES else ("darwin", "win32", "linux")
     verification_mode = "tool_result"
+    if normalized == "open_app":
+        verification_mode = "foreground_confirmed"
+    elif normalized == "close_app":
+        verification_mode = "close_confirmed"
+    elif normalized == "browser_control":
+        verification_mode = "browser_handoff"
+    elif normalized == "play_media":
+        verification_mode = "media_handoff"
+    elif normalized == "analyze_screen":
+        verification_mode = "screen_analysis"
+    elif normalized == "desktop_operator.observe_screen":
+        verification_mode = "screen_observation"
+    elif normalized == "desktop_operator.locate":
+        verification_mode = "target_located"
+    elif normalized in {"desktop_operator.focus_window", "desktop_operator.execute_action", "desktop_operator.run"}:
+        verification_mode = "operator_verified"
+    elif normalized == "desktop_operator.cancel":
+        verification_mode = "operator_cancelled"
     if normalized in _WRITE_CAPABILITIES:
         verification_mode = "artifact_exists"
     elif normalized in {"document_read", "ocr_read", "image_read", "data_analyze", "math_solve", "latex_parse", "speech_to_text", "text_to_speech", "web_research", "retrieve_context", "email_draft", "quantum_model_problem", "quantum_compare_classical", "quantum_generate_report"}:
@@ -811,18 +1014,18 @@ def capability_metadata(name: str) -> dict[str, Any]:
         verification_mode = "none"
 
     preferred_model_class = "reasoning"
-    if normalized in {"image_read", "ocr_read", "analyze_screen"}:
+    if normalized in {"image_read", "ocr_read", "analyze_screen", "desktop_operator.observe_screen", "desktop_operator.locate"}:
         preferred_model_class = "vision"
     elif normalized in {"speech_to_text", "text_to_speech", "speech_capture"}:
         preferred_model_class = "audio"
-    elif normalized in {"document_read", "document_write", "spreadsheet_write", "presentation_write"}:
+    elif normalized in {"document_read", "document_write", "spreadsheet_write", "presentation_write", "canvas_write"}:
         preferred_model_class = "document"
     elif normalized.startswith("quantum_"):
         preferred_model_class = "reasoning"
 
     dependency_keys = _CAPABILITY_DEPENDENCY_KEYS.get(normalized, ())
     timeout_seconds = 60
-    if normalized in {"web_research", "document_write", "spreadsheet_write", "presentation_write", "quantum_run_experiment", "image_generate", "ocr_read"}:
+    if normalized in {"web_research", "document_write", "spreadsheet_write", "presentation_write", "canvas_write", "quantum_run_experiment", "image_generate", "ocr_read", "desktop_operator.observe_screen", "desktop_operator.locate", "desktop_operator.execute_action", "desktop_operator.run"}:
         timeout_seconds = 120
     elif normalized == "shell_run":
         timeout_seconds = 180
@@ -883,6 +1086,7 @@ _CAPABILITY_GROUP_DEFINITIONS: tuple[tuple[str, str, set[str]], ...] = (
             "document_write",
             "spreadsheet_write",
             "presentation_write",
+            "canvas_write",
         },
     ),
     (
@@ -923,12 +1127,19 @@ _CAPABILITY_GROUP_DEFINITIONS: tuple[tuple[str, str, set[str]], ...] = (
             "browser_control",
             "play_media",
             "analyze_screen",
+            "desktop_operator.observe_screen",
+            "desktop_operator.locate",
+            "desktop_operator.focus_window",
+            "desktop_operator.execute_action",
+            "desktop_operator.run",
+            "desktop_operator.cancel",
             "shell_run",
             "speech_capture",
             "speech_to_text",
             "text_to_speech",
             "desktop_os.status",
             "desktop_os.permissions",
+            "desktop_os.open_permission_settings",
             "desktop_os.processes",
             "desktop_os.active_window",
             "save_memory",
@@ -1028,6 +1239,8 @@ def capability_dependency_status(capability_name: str) -> dict[str, Any]:
         status_function_names.insert(0, "mcp_tool_status")
     elif spec.module == "actions.desktop_os":
         status_function_names.insert(0, "desktop_os_runtime_status")
+    elif spec.module == "actions.desktop_operator":
+        status_function_names.insert(0, "operator_runtime_status")
 
     for status_function_name in status_function_names:
         status_fn = getattr(module, status_function_name, None)
@@ -1183,7 +1396,12 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             _as_int(args.get("max_results"), 4),
             str(args.get("languageHint", "") or args.get("language_hint", "") or ""),
         ),
-        "shell_run": lambda args: _load_adapter("shell_run")(str(args.get("command", "") or "")),
+        "shell_run": lambda args: _load_adapter("shell_run")(
+            str(args.get("command", "") or ""),
+            int(args.get("timeout", 30) or 30),
+            use_shell=bool(args.get("use_shell", False)),
+            working_dir=str(args.get("working_dir", "") or args.get("workingDir", "") or ""),
+        ),
         "play_media": lambda args: _load_adapter("play_media")(
             str(args.get("query", "") or ""),
             str(args.get("provider", "auto") or "auto"),
@@ -1192,6 +1410,47 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
         "analyze_screen": lambda args: _load_adapter("analyze_screen")(
             str(args.get("query", "Ekranda ne var?") or "Ekranda ne var?"),
             str(args.get("target", "active_window") or "active_window"),
+        ),
+        "desktop_operator.observe_screen": lambda args: _load_adapter("desktop_operator.observe_screen")(
+            str(args.get("query", "") or ""),
+            str(args.get("target", "active_window") or "active_window"),
+            bool(args.get("preserveScreenshot", True)),
+        ),
+        "desktop_operator.locate": lambda args: _load_adapter("desktop_operator.locate")(
+            str(args.get("text", "") or args.get("targetText", "") or ""),
+            str(args.get("elementType", "") or args.get("element_type", "") or ""),
+            dict(args.get("bbox", {}) or {}) if isinstance(args.get("bbox", {}), dict) else None,
+        ),
+        "desktop_operator.focus_window": lambda args: _load_adapter("desktop_operator.focus_window")(
+            str(args.get("appName", "") or args.get("app_name", "") or ""),
+            str(args.get("bundleId", "") or args.get("bundle_id", "") or ""),
+        ),
+        "desktop_operator.execute_action": lambda args: _load_adapter("desktop_operator.execute_action")(
+            str(args.get("actionType", "") or args.get("action_type", "") or ""),
+            target_text=str(args.get("targetText", "") or args.get("target_text", "") or ""),
+            element_type=str(args.get("elementType", "") or args.get("element_type", "") or ""),
+            bbox=dict(args.get("bbox", {}) or {}) if isinstance(args.get("bbox", {}), dict) else None,
+            text=str(args.get("text", "") or ""),
+            keys=list(args.get("keys", []) or []) if isinstance(args.get("keys"), list) else None,
+            delta=args.get("delta"),
+            duration=args.get("duration"),
+            app_name=str(args.get("appName", "") or args.get("app_name", "") or ""),
+            _confirmed=bool(args.get("_confirmed", False)),
+        ),
+        "desktop_operator.run": lambda args: _load_adapter("desktop_operator.run")(
+            goal=str(args.get("goal", "") or ""),
+            action=str(args.get("action", "") or ""),
+            target_text=str(args.get("targetText", "") or args.get("target_text", "") or ""),
+            text=str(args.get("text", "") or ""),
+            element_type=str(args.get("elementType", "") or args.get("element_type", "") or ""),
+            app_name=str(args.get("appName", "") or args.get("app_name", "") or ""),
+            steps=list(args.get("steps", []) or []) if isinstance(args.get("steps"), list) else None,
+            _confirmed=bool(args.get("_confirmed", False)),
+        ),
+        "desktop_operator.cancel": lambda args: _load_adapter("desktop_operator.cancel")(
+            str(args.get("runId", "") or args.get("run_id", "") or ""),
+            str(args.get("reason", "user_cancel") or "user_cancel"),
+            str(args.get("source", "manual") or "manual"),
         ),
         "get_youtube_channel_report": lambda args: _load_adapter("get_youtube_channel_report")(
             str(args.get("query", "overview") or "overview"),
@@ -1208,6 +1467,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
         "document_read": lambda args: _load_adapter("document_read")(
             str(args.get("path", "") or ""),
             str(args.get("mode", "read") or "read"),
+            str(args.get("text", "") or args.get("content", "") or ""),
             list(args.get("_selectedPaths", []) or []),
         ),
         "ocr_read": lambda args: _load_adapter("ocr_read")(
@@ -1276,8 +1536,23 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             output_path=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
             title=str(args.get("title", "") or ""),
             sections=args.get("sections") if isinstance(args.get("sections"), list) else None,
+            blocks=args.get("blocks") if isinstance(args.get("blocks"), list) else None,
             source_path=str(args.get("sourcePath", "") or args.get("source_path", "") or ""),
             source_context=str(args.get("sourceContext", "") or args.get("source_context", "") or ""),
+            overwrite=bool(args.get("overwrite", False)),
+        ),
+        "canvas_write": lambda args: _load_adapter("canvas_write")(
+            prompt=str(args.get("prompt", "") or ""),
+            output_path=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
+            title=str(args.get("title", "") or ""),
+            blocks=args.get("blocks") if isinstance(args.get("blocks"), list) else None,
+            sections=args.get("sections") if isinstance(args.get("sections"), list) else None,
+            output_format=str(args.get("outputFormat", "") or args.get("output_format", "") or ""),
+            width=args.get("width"),
+            height=args.get("height"),
+            theme=args.get("theme") if isinstance(args.get("theme"), dict) else None,
+            source_context=str(args.get("sourceContext", "") or args.get("source_context", "") or ""),
+            source_path=str(args.get("sourcePath", "") or args.get("source_path", "") or ""),
             overwrite=bool(args.get("overwrite", False)),
         ),
         "spreadsheet_write": lambda args: _load_adapter("spreadsheet_write")(
@@ -1294,6 +1569,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             output_path=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
             title=str(args.get("title", "") or ""),
             slides=args.get("slides") if isinstance(args.get("slides"), list) else None,
+            blocks=args.get("blocks") if isinstance(args.get("blocks"), list) else None,
             source_context=str(args.get("sourceContext", "") or args.get("source_context", "") or ""),
             overwrite=bool(args.get("overwrite", False)),
         ),
@@ -1327,6 +1603,9 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
         ),
         "desktop_os.status": lambda args: _load_adapter("desktop_os_status")(),
         "desktop_os.permissions": lambda args: _load_adapter("desktop_os_permissions")(),
+        "desktop_os.open_permission_settings": lambda args: _load_adapter("desktop_os_open_permission_settings")(
+            str(args.get("permission", "") or "privacy"),
+        ),
         "desktop_os.processes": lambda args: _load_adapter("desktop_os_processes")(
             str(args.get("query", "") or ""),
             _as_int(args.get("limit"), 20),
@@ -1396,8 +1675,8 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
         return {
             "ok": False,
             "tool": tool_name,
-            "output": "Bilinmeyen araç.",
-            "error": {"code": "UNKNOWN_CAPABILITY", "message": "Bilinmeyen araç."},
+            "output": "Bu özellik şu anda hazır değil.",
+            "error": {"code": "CAPABILITY_UNAVAILABLE", "message": "Bu özellik şu anda hazır değil."},
         }
 
     try:
@@ -1410,6 +1689,16 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             "error": {"code": exc.code, "message": exc.message},
         }
     except SafeCapabilityError as exc:
+        if str(exc.code or "") == "PERMISSION_REQUIRED":
+            status = _system_permission_status_for_capability(tool_name)
+            if status in {"required", "denied"}:
+                message = _system_permission_message(_CAPABILITY_SYSTEM_PERMISSION_KEYS.get(str(tool_name or "").strip(), ""))
+                return {
+                    "ok": False,
+                    "tool": tool_name,
+                    "output": message,
+                    "error": {"code": "OS_PERMISSION_REQUIRED", "message": message},
+                }
         return {
             "ok": False,
             "tool": tool_name,

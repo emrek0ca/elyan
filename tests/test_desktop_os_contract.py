@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -36,10 +37,10 @@ def _write_snapshot(tmp_path: Path) -> Path:
         "globalShortcutsAvailable": True,
         "screenCaptureAvailable": True,
         "permissions": {
-            "accessibility": {"required": True, "granted": None, "status": "required"},
-            "screenRecording": {"required": True, "granted": None, "status": "required"},
-            "inputMonitoring": {"required": True, "granted": None, "status": "required"},
-            "automation": {"required": True, "granted": None, "status": "required"},
+            "accessibility": {"required": True, "granted": None, "status": "required", "source": "ax_api", "lastCheckedAt": "2026-06-03T12:00:00Z", "settingsDeepLinkAvailable": True},
+            "screenRecording": {"required": True, "granted": None, "status": "required", "source": "cg_preflight", "lastCheckedAt": "2026-06-03T12:00:00Z", "settingsDeepLinkAvailable": True},
+            "inputMonitoring": {"required": True, "granted": None, "status": "unknown", "source": "unknown_unavailable_probe", "lastCheckedAt": "2026-06-03T12:00:00Z", "settingsDeepLinkAvailable": True},
+            "automation": {"required": True, "granted": None, "status": "unknown", "source": "ae_probe_unavailable", "lastCheckedAt": "2026-06-03T12:00:00Z", "settingsDeepLinkAvailable": True},
         },
         "processes": {
             "available": True,
@@ -62,6 +63,8 @@ def _write_snapshot(tmp_path: Path) -> Path:
             "processId": 202,
             "executablePath": "/Applications/Elyan.app",
             "bundleId": "com.elyan.desktop",
+            "source": "cg_window_list+nsworkspace_frontmost",
+            "confidence": 0.98,
         },
         "lastErrorCode": "",
     }
@@ -83,6 +86,27 @@ def test_desktop_os_status_returns_structured_native_snapshot(
     assert result["ok"] is True
     assert result["result"]["platform"] == "darwin"
     assert result["result"]["processInspectionAvailable"] is True
+
+
+def test_desktop_os_permissions_preserve_additive_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    snapshot_path = _write_snapshot(tmp_path)
+    monkeypatch.setenv("ELYAN_DESKTOP_NATIVE_STATE_PATH", str(snapshot_path))
+
+    result = capability_registry.run_capability(
+        "desktop_os.permissions",
+        {},
+        _dangerous_state(allow_system_inspection=True),
+    )
+
+    assert result["ok"] is True
+    permissions = result["result"]["permissions"]
+    assert permissions["inputMonitoring"]["source"] == "unknown_unavailable_probe"
+    assert permissions["automation"]["source"] == "ae_probe_unavailable"
+    assert permissions["automation"]["settingsDeepLinkAvailable"] is True
 
 
 def test_desktop_os_processes_requires_permission(
@@ -159,11 +183,35 @@ def test_desktop_os_active_window_returns_snapshot_when_permission_enabled(
     )
 
     assert result["ok"] is True
-    assert result["result"] == {
-        "available": True,
-        "appName": "Elyan",
-        "windowTitle": "Yeni Konuşma",
-        "processId": 202,
-        "executablePath": "/Applications/Elyan.app",
-        "bundleId": "com.elyan.desktop",
-    }
+    assert result["result"]["available"] is True
+    assert result["result"]["appName"] == "Elyan"
+    assert result["result"]["windowTitle"] == "Yeni Konuşma"
+    assert result["result"]["processId"] == 202
+    assert result["result"]["executablePath"] == "/Applications/Elyan.app"
+    assert result["result"]["bundleId"] == "com.elyan.desktop"
+
+
+def test_desktop_os_open_permission_settings_opens_macos_privacy_uri(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    snapshot_path = _write_snapshot(tmp_path)
+    monkeypatch.setenv("ELYAN_DESKTOP_NATIVE_STATE_PATH", str(snapshot_path))
+
+    opened: list[list[str]] = []
+
+    def fake_run(args: list[str], capture_output: bool, text: bool, timeout: int) -> subprocess.CompletedProcess[str]:
+        opened.append(args)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = capability_registry.run_capability(
+        "desktop_os.open_permission_settings",
+        {"permission": "screenRecording"},
+        state_store._ensure_defaults({}),
+    )
+
+    assert result["ok"] is True
+    assert opened == [["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"]]

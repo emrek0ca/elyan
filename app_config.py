@@ -32,8 +32,11 @@ DEFAULT_CONFIG = {
     "voice": "Charon",
     "youtube_api_key": "",
     "youtube_channel_handle": "",
-    "backend_base_url": "http://84.247.172.213:4000",
+    "backend_base_url": "https://api.elyan.dev",
 }
+
+LEGACY_BACKEND_BASE_URL = "http://84.247.172.213:4000"
+PUBLIC_BACKEND_BASE_URL = "https://api.elyan.dev"
 
 
 def load_app_config() -> dict:
@@ -52,6 +55,9 @@ def load_app_config() -> dict:
             raw = {}
         if isinstance(raw, dict):
             config.update(raw)
+        backend_base_url = str(config.get("backend_base_url", "") or "").strip().rstrip("/")
+        if backend_base_url == LEGACY_BACKEND_BASE_URL:
+            config["backend_base_url"] = PUBLIC_BACKEND_BASE_URL
     except Exception:
         pass
     return config

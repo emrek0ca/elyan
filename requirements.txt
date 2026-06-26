@@ -4,6 +4,7 @@ SpeechRecognition
 pyaudio
 psutil
 Pillow
+reportlab
 requests
 httpx
 litellm
