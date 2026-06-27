@@ -975,11 +975,13 @@ async function resolveAmbiguousTaskRouteFallback(
     const response = await generateSharedBrainReply(app, {
       userId: input.userId,
       prompt: [
-        "Route this Elyan request. Return only JSON.",
+        "Route this Elyan request. Return only JSON with no extra text.",
         "Allowed target values: server_brain, mobile_local, desktop_runtime, hybrid.",
         "Allowed operationalRoute values: server_brain, desktop_runtime.",
         'Allowed executionPlan values: ["mobile_local"], ["server_brain"], ["desktop_runtime"], ["mobile_local","server_brain"], ["mobile_local","desktop_runtime"], ["desktop_runtime","server_brain"].',
-        "Never set needsDesktop true, operationalRoute desktop_runtime, or executionPlan desktop_runtime unless the request genuinely needs desktop.",
+        "Set needsDesktop=true and operationalRoute=desktop_runtime ONLY when the request requires: local file read/write, browser control (click/navigate/scrape), computer control (screenshot/keyboard/mouse/window), app launch/quit, terminal/shell commands, screen recording, or local notifications/calendar.",
+        "The server brain handles: writing, reasoning, math, research, code generation, document summarization, image analysis, memory recall, and any cloud-solvable task.",
+        "Never set needsDesktop true for tasks the server brain can do without local OS access.",
         "If uncertain and no desktop is needed, choose server_brain.",
         `User request: ${input.message}`,
         `Router summary: ${input.promptSummary}`,

@@ -260,8 +260,9 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     const secondaryIntents = unique(matched.filter((intent) => intent !== primaryIntent));
     const requiresLocalRuntime =
       ["automation", "browser", "computer"].includes(primaryIntent) ||
-      /\b(local|desktop|file system|screenshot|click|type|hotkey|browser|terminal|shell)\b/i.test(text) ||
-      /\b(yerel|masaustu|masaüstü|dosya|terminal|tarayıcı|ekran)\b/i.test(text);
+      /\b(local|desktop|file system|screenshot|click|type|hotkey|browser|terminal|shell|keyboard shortcut|mouse|window management|screen record|screen capture|open app|launch app|quit app|close app|finder|dock)\b/i.test(text) ||
+      Boolean(/(?<!\p{L})(yerel|masaustu|masaüstü|dosya|klasör|klasor|terminal|tarayıcı|tarayici|ekran|pencere|uygulama aç|safari|chrome|firefox|finder|tuş kısayolu|tus kisayolu|ekran görüntüsü|ekran goruntusu|ekran kaydı|ekran kaydi|ses kayıt|ses kayit|bildirim gönder|takvim aç|kamera|mikrofon)(?!\p{L})/iu.test(text)) ||
+      Boolean(/(?<!\p{L})(aç|ac|kapat|çalıştır|calistir|başlat|indir|kaydet|taşı|tasi|sil|kopyala)(?!\p{L}).{0,60}(?<!\p{L})(dosya|klasör|klasor|uygulama|safari|chrome|firefox|finder|terminal|masaüstü|masaustu)(?!\p{L})/iu.test(text));
     const requiresRetrieval =
       primaryIntent === "research" || /\b(previous|past|memory|context|docs|retrieval|history)\b/i.test(text);
     const requiresCitation = primaryIntent === "research" || /\b(cite|citation|source|kaynak)\b/i.test(text);

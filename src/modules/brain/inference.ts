@@ -1038,21 +1038,45 @@ function buildElyanEcosystemPromptBlock(input: {
   routeDecision?: CommandRouteDecision | null;
 }): string | null {
   const context = input.context;
-  const ecosystemHints = context?.ecosystemHints ?? [];
-  const projectHints = context?.projectHints ?? [];
   const frame = context?.taskFrame;
+  const requiresDesktop =
+    input.routeDecision?.requiredRuntime === "desktop" ||
+    input.routeDecision?.requiredRuntime === "both" ||
+    input.routeDecision?.taskRoute?.needsDesktop === true;
 
-  return [
+  const lines = [
     "Elyan ecosystem model:",
-    "- desktop runtime executes private/local actions and stays the execution boundary for local files, browser control, computer control, and other private tools",
-    "- backend/control-plane owns auth, routing, quota, learning metadata, memory orchestration, and shared truth",
-    "- mobile is the task sender and status surface; it does not call local engines directly",
-    "- when a request needs the desktop runtime, say so plainly instead of pretending the server brain can do it",
-    "- when Elyan is asked about itself, answer from the current project truth and memory; do not invent people, roles, or architecture",
-    frame?.shouldClarify ? "- because the request is ambiguous enough to change outcomes, prefer one short clarifying question" : null,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
+    "- backend/control-plane: owns auth, routing, memory, learning metadata, shared truth, and all cloud-solvable tasks",
+    "- mobile: task sender and status surface; does not call local engines directly",
+    "- desktop runtime: paired macOS app that executes private/local actions — the ONLY component that can do:",
+    "    • local file operations (read, write, move, delete files and folders)",
+    "    • browser control (open URLs, click, fill forms, scrape pages in Safari/Chrome/Firefox)",
+    "    • computer control (screenshots, keyboard shortcuts, mouse clicks, window management)",
+    "    • app automation (launch, quit, interact with native macOS apps)",
+    "    • terminal/shell commands (run scripts, manage processes)",
+    "    • local notifications and calendar access",
+    "    • screen recording and audio capture",
+    "- desktop capability boundary: the backend brain CANNOT execute any of the above; do not pretend otherwise",
+    "- when a request clearly requires desktop capabilities, respond with:",
+    '    {"type":"status","status":"needs_desktop","title":"<short Turkish action title>","detail":"<one sentence explaining what will run on desktop>"}',
+    "    then add a short text block explaining what will happen when the desktop executes it",
+    "- when desktop is offline or not paired, tell the user clearly and ask them to open the desktop app",
+    "- when Elyan is asked about itself, answer from current project truth and memory; never invent people, roles, or architecture",
+  ];
+
+  if (requiresDesktop) {
+    lines.push(
+      "- ROUTING DECISION: this request requires the desktop runtime; emit the needs_desktop status block before your reply",
+    );
+  }
+
+  if (frame?.shouldClarify) {
+    lines.push(
+      "- the request is ambiguous enough to change the outcome; ask one short clarifying question before routing",
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function shouldUseRestrainedHumor(input: SharedBrainInferenceInput): boolean {
@@ -1139,7 +1163,7 @@ function buildStructuredSystemPrompt(basePrompt: string, input: SharedBrainInfer
     "Research answer policy: when PUBLIC WEB GROUNDING is present, turn it into a clean answer with a short source basis, date/scope awareness, and no unsupported extrapolation. If no web grounding was used, do not imply that you searched the internet.",
     "Context awareness policy: packaged health, location, calendar, time, device, and notification context is private derived context provided by the user's own device. If mentionPolicy is silent, do not mention or hint at that context. If mentionPolicy is implicit, only adapt pacing, brevity, or planning silently. If mentionPolicy is explicit_when_relevant, you MUST answer the user's question about this data directly and accurately using the values provided in 'Live context' above — do not refuse, generalize, or say you don't have access, because the data is already present. For health questions specifically: state the actual numbers (steps, sleep hours, energy) when asked. Never diagnose or prescribe. Never mention context during greetings or unrelated small talk. Never invent live weather or temperature unless public web grounding is present.",
     "Anti-hallucination policy: only state personal, memory, or project facts that are present in the current memory, retrieval context, user profile, or user request. If a fact is missing, say you do not know it yet instead of guessing. The user's verified name and account information are always safe to use. For other identity questions about a person or role, do not infer from vibes or prior wording; answer only when the current context explicitly supports it.",
-    "Task-routing policy: if a request belongs on the paired desktop runtime, say that clearly and transition naturally instead of pretending the server brain can do it.",
+    "Task-routing policy: if a request belongs on the paired desktop runtime (file ops, browser control, computer control, app automation, shell, screen capture), emit a status block with status=needs_desktop and a short Turkish title, then briefly explain what will execute on desktop. Never invent local execution you cannot perform.",
     "Tone policy: be calm, direct, sincere, and slightly warmer than before. Sound like Elyan: close to the user, but never fake intimacy, never overpromise, and never turn warmth into filler.",
     "Language policy: match the user's language by default. When replying in Turkish, use standard Turkish grammar, spelling, punctuation, and capitalization; when the user's message appears to be in another Turkic language, keep the reply in that language when possible; prefer native Turkish wording over unnecessary English borrowings. Do not mirror the user's typos, devrik sentence order, or broken punctuation; proofread the response before sending.",
     "Style policy: keep hitabet consistent, avoid filler, avoid broken English words inside Turkish sentences, and prefer short, clean sentences over long tangled ones.",
