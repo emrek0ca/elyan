@@ -1328,6 +1328,14 @@ class BackendClient:
             state_store.update_state({"controlPlane": {"authMe": None}})
         return result
 
+    def device_deactivate(self, device_id: str) -> BackendResult:
+        return self._authorized_request(
+            "POST",
+            f"/v1/devices/{device_id.strip()}/deactivate",
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
     def mobile_bootstrap(self) -> BackendResult:
         result = self._authorized_request(
             "GET",
@@ -1421,9 +1429,9 @@ class BackendClient:
         self,
         *,
         status: str | None = None,
-        limit: int = 100,
+        limit: int = 20,
     ) -> BackendResult:
-        query: dict[str, Any] = {"limit": max(1, min(int(limit or 100), 100))}
+        query: dict[str, Any] = {"limit": max(1, min(int(limit or 20), 20))}
         normalized_status = str(status or "").strip().lower()
         if normalized_status:
             query["status"] = normalized_status

@@ -1365,16 +1365,39 @@ export function SettingsSurface({
                     {(() => {
                       const mobileBootstrapData = backendResultData(backendRecord(snapshot).mobileBootstrap);
                       const allDevices = asArray(mobileBootstrapData.devices);
-                      const mobileDevices = allDevices.map(asRecord).filter((d) => asString(d.type) === 'mobile');
-                      const desktopLabel = asString(runtimeDevice.label || runtimeDevice.id);
+                      const activeDevices = allDevices.map(asRecord).filter((d) => d.isActive !== false);
+                      const mobileDevices = activeDevices.filter((d) => asString(d.type) === 'mobile');
+                      const desktopLabel = asString(runtimeDevice.label) || 'Bu bilgisayar';
+                      const wsConnected = asBoolean(runtimeRecord(snapshot).runtimeWebsocketConnected);
                       const desktopConnected = runtimeReadiness.canReceiveTasks === true && isNetworkReady;
+                      const desktopHint = wsConnected
+                        ? 'Desktop — WebSocket bağlı'
+                        : desktopConnected
+                          ? 'Desktop — HTTP modunda'
+                          : 'Desktop — Bağlantı bekleniyor';
+
+                      const removeDevice = async (deviceId: string) => {
+                        if (!window.confirm('Bu cihazı kaldırmak istediğine emin misin?')) return;
+                        setBusyKey(`remove-${deviceId}`);
+                        try {
+                          await desktopApi.request({
+                            capability: 'backend.device_deactivate',
+                            payload: { deviceId },
+                          });
+                          await onRefresh();
+                        } catch {
+                          setError('Cihaz kaldırılamadı.');
+                        } finally {
+                          setBusyKey('');
+                        }
+                      };
 
                       return (
                         <>
                           <ListItem
-                            title={desktopLabel || 'Bu bilgisayar'}
-                            hint="Desktop — Şu an çalışıyor"
-                            status={desktopConnected ? 'Hazır' : 'Bekliyor'}
+                            title={desktopLabel}
+                            hint={desktopHint}
+                            status={desktopConnected ? (wsConnected ? 'Hazır (WS)' : 'Hazır') : 'Bekliyor'}
                           />
                           {mobileDevices.length === 0 ? (
                             <ListItem
@@ -1384,18 +1407,33 @@ export function SettingsSurface({
                             />
                           ) : (
                             mobileDevices.map((d, i) => {
+                              const deviceId = asString(d.id);
                               const label = asString(d.label || d.id) || `Telefon ${i + 1}`;
                               const runtime = asRecord(d.runtime);
                               const isConnected = runtime.isConnected === true;
-                              const isActive = d.isActive !== false;
                               const platform = asString(d.platform);
-                              const hint = platform ? `${platform} · ${isActive ? 'Kayıtlı' : 'Devre dışı'}` : (isActive ? 'Kayıtlı' : 'Devre dışı');
+                              const lastSeenAt = asString(d.lastSeenAt);
+                              const lastSeenLabel = lastSeenAt
+                                ? `Son görülme: ${new Date(lastSeenAt).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+                                : '';
+                              const hint = [platform, lastSeenLabel].filter(Boolean).join(' · ');
+                              const isBusy = busyKey === `remove-${deviceId}`;
                               return (
                                 <ListItem
-                                  key={asString(d.id) || String(i)}
+                                  key={deviceId || String(i)}
                                   title={label}
-                                  hint={hint}
-                                  status={isConnected ? 'Bağlı' : (isActive ? 'Çevrimdışı' : 'Devre dışı')}
+                                  hint={hint || 'Mobil'}
+                                  status={isConnected ? 'Aktif' : 'Çevrimdışı'}
+                                  actions={
+                                    <button
+                                      type="button"
+                                      className="button-secondary button-danger"
+                                      disabled={isBusy}
+                                      onClick={() => void removeDevice(deviceId)}
+                                    >
+                                      {isBusy ? '…' : 'Kaldır'}
+                                    </button>
+                                  }
                                 />
                               );
                             })

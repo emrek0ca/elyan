@@ -553,6 +553,10 @@ def _runtime_advertised_capabilities() -> list[str]:
             "backend.device_deactivate",
         }
     )
+    # Routing policy checks high-level aliases; add them when underlying capabilities exist.
+    _desktop_op_caps = {"desktop_operator.run", "desktop_operator.execute_action", "desktop_operator.observe_screen"}
+    if _desktop_op_caps.intersection(capabilities):
+        capabilities.add("computer.control")
     if not _quantum_simulator_ready():
         capabilities.difference_update(QUANTUM_EXECUTION_CAPABILITIES)
     if native_file_indexer.sidecar_available():
@@ -6576,7 +6580,10 @@ class RuntimeBridge:
                 if self._runtime_auth_ready():
                     if not self._runtime_ws_connected:
                         self._start_runtime_websocket_if_needed()
-                    self._send_backend_runtime_heartbeat("online")
+                    if self._runtime_ws_connected:
+                        self._send_socket_runtime_heartbeat("online")
+                    else:
+                        self._send_backend_runtime_heartbeat("online")
                     if self._should_poll_assigned_tasks():
                         self.execute_assigned_runtime_tasks(limit=self._relay_task_fetch_limit())
                 elif self._paired_runtime_ready():
@@ -10362,7 +10369,7 @@ class RuntimeBridge:
         if runtime_device_id and target_device_id and runtime_device_id != target_device_id:
             return {
                 "code": "runtime_target_mismatch",
-                "message": "Görev başka bir masaüstüne atanmış görünüyor. Güvenli şekilde yürütme durduruldu.",
+                "message": "Bu görev farklı bir masaüstüne atanmış. Doğru cihaza geçip tekrar deneyin.",
             }
 
         requested_capabilities = self._remote_task_capabilities(task, payload)
@@ -10370,9 +10377,10 @@ class RuntimeBridge:
             available_capabilities = self._runtime_delivery_capabilities()
             missing = sorted(capability for capability in requested_capabilities if capability not in available_capabilities)
             if missing:
+                cap_hint = missing[0].replace(".", " ").replace("_", " ")
                 return {
                     "code": "runtime_capability_mismatch",
-                    "message": f"Görev için gereken yetenekler bu masaüstünde hazır değil: {', '.join(missing)}.",
+                    "message": f"Bu işlem için masaüstünde '{cap_hint}' özelliği gerekiyor. Elyan masaüstü uygulamasının güncel olduğundan emin olun.",
                 }
 
         return None
