@@ -13,6 +13,7 @@ import {
   recordTaskFeedback,
   recordTaskLearningFromCompletion,
   recordTaskLearningFromCreation,
+  recordConversationExchangeLearning,
 } from "../../core/understanding/user-understanding-service.js";
 import type { FeedbackType } from "../../core/understanding/types.js";
 import { createAuditLog } from "../audit/service.js";
@@ -33,6 +34,7 @@ import {
 } from "../chat/message-blocks.js";
 import { syncChatTaskLifecycle } from "../chat/task-sync.js";
 import { buildTaskTraceBlock } from "../chat/task-trace.js";
+import { persistRollingSummaryToSession } from "../chat/service.js";
 import { getUserDevice, RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { decideCommandRoute, resolveCommandTarget, resolvePendingDesktopQueueTarget } from "../routing-policy/service.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
@@ -2082,6 +2084,24 @@ async function processSharedBrainChatTask(
       routingMode: "server_brain_first",
       requestId: input.requestId,
     });
+    // Konuşma değişiminden gerçek zamanlı öğrenme (fire-and-forget)
+    void recordConversationExchangeLearning(app, {
+      userId: input.userId,
+      taskId: completedTask.id,
+      userMessage: input.prompt,
+      assistantReply: inference.text,
+      intent: input.understanding.intent.primaryIntent,
+      requestId: input.requestId,
+    }).catch(() => undefined);
+    // Rolling summary'yi session'a yaz (fire-and-forget)
+    if (chatStreaming?.sessionId) {
+      void persistRollingSummaryToSession(app, {
+        userId: input.userId,
+        sessionId: chatStreaming.sessionId,
+        userMessage: input.prompt,
+        assistantReply: inference.text,
+      }).catch(() => undefined);
+    }
     if (chatStreaming) {
       const completionMetadata = readServerBrainCompletionMetadata(inference.metadata);
       const taskTrace = buildTaskTraceBlock({

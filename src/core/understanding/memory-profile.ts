@@ -67,7 +67,27 @@ const EPISODE_KEYS = new Set([
   "mobile_sync_quality",
   "positive_feedback",
   "negative_feedback",
+  "user_mood",
+  "emotional_signal",
+  "user_excitement",
+  "user_frustration",
+  "important_decision",
+  "life_event",
+  "conversation_highlight",
 ]);
+
+export const EPISODIC_LABELS: Record<string, string> = {
+  user_mood: "Ruh hali",
+  emotional_signal: "Duygusal sinyal",
+  user_excitement: "Heyecan",
+  user_frustration: "Hayal kırıklığı",
+  important_decision: "Önemli karar",
+  life_event: "Yaşam olayı",
+  conversation_highlight: "Konuşma notu",
+  positive_feedback: "Olumlu geri bildirim",
+  negative_feedback: "Olumsuz geri bildirim",
+  task_handoff_helpfulness: "Görev devir kalitesi",
+};
 
 const PREFERENCE_VALUE_LABELS: Record<string, Record<string, string>> = {
   preferred_language: {

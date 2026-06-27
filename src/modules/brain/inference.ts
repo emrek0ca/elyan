@@ -820,6 +820,23 @@ function buildStructuredDataPromptBlock(input: SharedBrainInferenceInput): strin
           responseLanguage: detectPromptLanguage(input.prompt),
         }
       : undefined,
+    conversationContinuity:
+      context?.continuitySummary &&
+      (context.continuitySummary.userGoal ||
+        context.continuitySummary.assistantState ||
+        (context.continuitySummary.openLoops ?? []).length > 0)
+        ? {
+            ...(context.continuitySummary.userGoal
+              ? { priorGoal: context.continuitySummary.userGoal }
+              : {}),
+            ...(context.continuitySummary.assistantState
+              ? { priorAssistantState: context.continuitySummary.assistantState }
+              : {}),
+            ...(context.continuitySummary.openLoops?.length
+              ? { openLoops: context.continuitySummary.openLoops }
+              : {}),
+          }
+        : undefined,
     evidence: {
       primaryAttachmentSource: input.attachmentContext?.used
         ? input.attachmentContext.source ?? "local_derived"
@@ -971,6 +988,9 @@ function buildReasoningProtocolPromptBlock(input: {
   const routeMode = input.routeDecision?.mode ?? input.route ?? "shared_brain";
   const routingHint = input.routeDecision?.selectedWorkload ?? input.workload;
 
+  const continuitySummary = context?.continuitySummary;
+  const hasOpenLoops = (continuitySummary?.openLoops ?? []).length > 0;
+
   const lines = [
     "Reasoning protocol:",
     `- infer the user's goal before answering; do not answer the surface text if the request clearly implies a different task`,
@@ -980,7 +1000,13 @@ function buildReasoningProtocolPromptBlock(input: {
     `- if the request is about the Elyan ecosystem, use the system truth available in memory/context and do not invent architecture`,
     `- if the request is ambiguous and the outcome would change, ask one short clarification; otherwise continue`,
     `- explain what the request means, what you will do, and why that path is selected; keep the explanation brief and operational`,
-  ];
+    continuitySummary?.userGoal
+      ? `- conversation continuity: the user's prior goal was "${continuitySummary.userGoal}"; check if this message continues or shifts that goal`
+      : null,
+    hasOpenLoops
+      ? `- open loops from prior turn: ${continuitySummary!.openLoops.join(" | ")}; acknowledge or resolve them if this message addresses them`
+      : null,
+  ].filter((line): line is string => line !== null);
 
   if (ecosystemHints.length > 0) {
     lines.push(`- ecosystem focus: ${ecosystemHints.join(", ")}`);

@@ -25,7 +25,8 @@ export type LearningSignalType =
   | "style"
   | "technical_stack"
   | "routing"
-  | "bridge";
+  | "bridge"
+  | "episodic";
 export type ContextPacketKind =
   | "health_context"
   | "calendar_context"

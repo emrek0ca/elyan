@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { authIdentities, learningEvents, subscriptions, users } from "../../db/schema.js";
 import { searchBrainMemory } from "../../modules/brain/memory.js";
 import { buildContextPacketsFromMetadata, summarizeContextFreshness } from "./context-packets.js";
-import { buildMemoryProfileSnapshot } from "./memory-profile.js";
+import { buildMemoryProfileSnapshot, EPISODIC_LABELS } from "./memory-profile.js";
 import { filterRetrievedMemory } from "./personalization-policy.js";
 import { extractProjectHints } from "./project-context.js";
 import { buildDerivedHintBuckets, deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "./world-signal-derived.js";
@@ -67,6 +67,26 @@ function tokenize(value: string): Set<string> {
       .filter((token) => token.length >= 3)
       .slice(0, 80),
   );
+}
+
+function getIntentTypeBoost(memType: string, intent: string): number {
+  // Her intent için hangi memory tipleri daha değerli
+  const intentBoostMap: Record<string, string[]> = {
+    coding:       ["technical_stack", "project_context", "style"],
+    debugging:    ["technical_stack", "project_context", "correction"],
+    planning:     ["project_context", "workflow", "preference"],
+    writing:      ["style", "preference", "identity"],
+    research:     ["preference", "project_context"],
+    automation:   ["technical_stack", "project_context", "routing"],
+    browser:      ["routing", "technical_stack"],
+    computer:     ["routing", "technical_stack"],
+    document:     ["style", "preference"],
+    math:         ["preference", "style"],
+    chat:         ["identity", "preference", "episodic"],
+    unknown:      ["identity", "preference"],
+  };
+  const boostedTypes = intentBoostMap[intent] ?? [];
+  return boostedTypes.includes(memType) ? 0.35 : 0;
 }
 
 function scoreMemory(item: RetrievedMemory, queryTokens: Set<string>, now = Date.now()): number {
@@ -249,19 +269,79 @@ function resolveMemoryEnabled(metadata: Record<string, unknown> | undefined): bo
   return nested ?? direct ?? true;
 }
 
+const OPEN_LOOP_PATTERNS = [
+  /\b(yarın|sonra|daha sonra|ilerleyen|bir sonraki|devam edelim|takip edelim|hatırlat|tomorrow|later|next time|follow up|remind me|let's continue|we'll do|we can do)\b/i,
+  /\b(bekliyor|bekleyecek|onay bekleniyor|cevap bekliyor|waiting for|pending|needs approval|to be done)\b/i,
+  /\?$/,
+];
+
+function extractOpenLoopsFromMessages(
+  messages: Array<{ role: string; content: string }>,
+): string[] {
+  const loops: string[] = [];
+  // Son 4 mesaja bak, kullanıcı mesajlarında açık döngü sinyali ara
+  for (const msg of messages.slice(-4)) {
+    if (msg.role !== "user") continue;
+    const text = compactText(msg.content);
+    if (OPEN_LOOP_PATTERNS.some((p) => p.test(text))) {
+      const snippet = text.length > 100 ? `${text.slice(0, 97)}…` : text;
+      if (!loops.includes(snippet)) loops.push(snippet);
+    }
+  }
+  return loops.slice(0, 3);
+}
+
+function deriveGoalFromRecentMessages(
+  messages: Array<{ role: string; content: string }>,
+): string | null {
+  // En son kullanıcı mesajından hedef türet
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  if (!lastUser) return null;
+  const text = compactText(lastUser.content);
+  return text.length > 180 ? `${text.slice(0, 177)}…` : text;
+}
+
 function deriveContinuitySummary(metadata: Record<string, unknown> | undefined) {
   const root = readRecord(metadata);
   const compactContext = readRecord(root?.compactContext);
   const chatContext = readRecord(root?.chatContext);
-  const rollingSummary = readRecord(compactContext?.rollingSummary ?? chatContext?.rollingSummary);
-  const openLoopsRaw = Array.isArray(rollingSummary?.openLoops) ? rollingSummary?.openLoops : [];
+
+  // Önce mevcut rollingSummary'ye bak (mobil veya önceki backend geçişinden)
+  const rollingSummary = readRecord(
+    compactContext?.rollingSummary ?? chatContext?.rollingSummary,
+  );
+  const storedGoal = readStringValue(rollingSummary, "userGoal");
+  const storedState = readStringValue(rollingSummary, "assistantState");
+  const storedLoopsRaw = Array.isArray(rollingSummary?.openLoops) ? rollingSummary.openLoops : [];
+  const storedLoops = storedLoopsRaw
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+
+  // recentMessages varsa açık döngüleri ve hedefi onlardan da türet
+  const recentRaw = Array.isArray(compactContext?.recentMessages)
+    ? (compactContext.recentMessages as unknown[])
+    : [];
+  const recentMessages = recentRaw
+    .map((item) => {
+      const r = readRecord(item as unknown);
+      if (!r) return null;
+      const role = typeof r.role === "string" ? r.role : null;
+      const content = typeof r.content === "string" ? r.content : null;
+      if (!role || !content) return null;
+      return { role, content };
+    })
+    .filter((m): m is { role: string; content: string } => m !== null);
+
+  const derivedLoops =
+    storedLoops.length === 0 ? extractOpenLoopsFromMessages(recentMessages) : storedLoops;
+  const derivedGoal =
+    storedGoal ?? (recentMessages.length > 0 ? deriveGoalFromRecentMessages(recentMessages) : null);
+
   return {
-    userGoal: readStringValue(rollingSummary, "userGoal"),
-    assistantState: readStringValue(rollingSummary, "assistantState"),
-    openLoops: openLoopsRaw
-      .map((item) => String(item ?? "").trim())
-      .filter(Boolean)
-      .slice(0, 4),
+    userGoal: derivedGoal,
+    assistantState: storedState,
+    openLoops: derivedLoops,
   };
 }
 
@@ -347,8 +427,33 @@ export function buildUserContextFromMemory(input: {
     pushBounded(projectHints, hint, state);
   }
 
+  const now = Date.now();
   for (const item of filteredMemory) {
-    const hint = `${item.key}: ${item.value}`;
+    // Temporal etiket: ne kadar önce öğrenildi
+    const ageDays = Math.max(
+      0,
+      (now - (item.lastVerifiedAt?.getTime() ?? item.createdAt.getTime())) / 86_400_000,
+    );
+    const ageLabel =
+      ageDays < 2
+        ? "bugün/dün"
+        : ageDays < 7
+          ? "bu hafta"
+          : ageDays < 30
+            ? "bu ay"
+            : ageDays < 90
+              ? "son 3 ayda"
+              : "daha önce";
+    // Güven etiketi
+    const confLabel =
+      item.confidence >= 0.8
+        ? "çok güçlü"
+        : item.confidence >= 0.6
+          ? "güçlü"
+          : item.confidence >= 0.4
+            ? "orta"
+            : "zayıf";
+    const hint = `${item.key}: ${item.value} (${confLabel}, ${ageLabel})`;
 
     if (item.type === "style") {
       pushBounded(styleHints, hint, state);
@@ -358,6 +463,9 @@ export function buildUserContextFromMemory(input: {
       pushBounded(projectHints, hint, state);
     } else if (item.type === "correction") {
       pushBounded(safetyHints, hint, state);
+    } else if (item.type === "episodic" || Object.keys(EPISODIC_LABELS).includes(item.key)) {
+      // Epizodik anılar: kullanıcıyla ilişki bağlamı için ayrı kova
+      pushBounded(situationalHints, hint, state);
     } else {
       pushBounded(personalizationHints, hint, state);
     }
@@ -672,8 +780,10 @@ export async function buildUserContext(
       const conflictPenalty   = mem.conflictStatus === "contested" ? -0.72 : mem.conflictStatus === "superseded" ? -1 : 0.08;
       const pinBoost      = mem.isPinned ? 0.44 : 0;
       const verifiedBoost = mem.lastVerifiedAt ? Math.max(0.08, Math.min(0.28, 0.28 - ageDays / 360)) : 0;
+      // Intent-aware type boost: request ile eşleşen memory tiplerine öncelik ver
+      const intentTypeBoost = getIntentTypeBoost(mem.type, input.intent.primaryIntent);
       const relevance     = bm25 != null ? bm25 * 2.2 : scoreMemory(mem, queryTokens, scoringNow);
-      return relevance + mem.confidence + recency + stalenessPenalty + conflictPenalty + pinBoost + verifiedBoost;
+      return relevance + mem.confidence + recency + stalenessPenalty + conflictPenalty + pinBoost + verifiedBoost + intentTypeBoost;
     });
 
     memory = allMemory

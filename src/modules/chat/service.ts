@@ -1092,6 +1092,71 @@ export async function updateChatSession(
   };
 }
 
+// Rolling summary'yi session metadata'sına yazar
+// Her chat tamamlandıktan sonra fire-and-forget olarak çağrılır
+export async function persistRollingSummaryToSession(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId: string;
+    userMessage: string;
+    assistantReply: string;
+    existingMetadata?: Record<string, unknown> | null;
+  },
+): Promise<void> {
+  try {
+    const existing = input.existingMetadata ?? {};
+    const existingChatCtx = readRecord(existing.chatContext) ?? {};
+    const existingRS = readRecord(existingChatCtx.rollingSummary);
+
+    // Önceki openLoops'ları koru, yenileri ekle
+    const prevLoops: string[] = Array.isArray(existingRS?.openLoops)
+      ? (existingRS.openLoops as unknown[]).map((l) => String(l ?? "")).filter(Boolean)
+      : [];
+
+    // Kullanıcı mesajından hedef ve açık döngüleri derive et
+    const userGoal = input.userMessage.length > 180
+      ? `${input.userMessage.slice(0, 177)}…`
+      : input.userMessage;
+
+    const assistantStateSummary = input.assistantReply.length > 180
+      ? `${input.assistantReply.slice(0, 177)}…`
+      : input.assistantReply;
+
+    // Açık döngü tespiti: soru işareti veya açık kalan şey sinyali
+    const newLoops: string[] = [];
+    const OPEN_LOOP_DETECT = /\b(yarın|sonra|daha sonra|follow up|remind me|let's continue|bekliyor|pending|onay bekleniyor)\b|\?$/i;
+    if (OPEN_LOOP_DETECT.test(input.userMessage)) {
+      const snippet = userGoal.length > 100 ? `${userGoal.slice(0, 97)}…` : userGoal;
+      if (!prevLoops.includes(snippet)) newLoops.push(snippet);
+    }
+
+    const mergedLoops = [...newLoops, ...prevLoops].slice(0, 3);
+
+    const rollingSummary = {
+      userGoal,
+      assistantState: assistantStateSummary,
+      openLoops: mergedLoops,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updatedMetadata = {
+      ...existing,
+      chatContext: {
+        ...existingChatCtx,
+        rollingSummary,
+      },
+    };
+
+    await app.db
+      .update(chatSessions)
+      .set({ metadata: updatedMetadata, updatedAt: new Date() })
+      .where(and(eq(chatSessions.id, input.sessionId), eq(chatSessions.userId, input.userId)));
+  } catch {
+    // Başarısız olursa sessizce geç — kritik değil
+  }
+}
+
 export async function deleteChatSession(
   app: FastifyInstance,
   input: {

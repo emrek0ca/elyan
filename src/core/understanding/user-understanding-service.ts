@@ -262,6 +262,140 @@ export async function recordTaskLearningFromCreation(
   });
 }
 
+// Konuşma değişiminden gerçek zamanlı sinyal çıkarma
+// Hem kullanıcı mesajından hem asistan cevabından öğrenir
+export async function recordConversationExchangeLearning(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    accountId?: string;
+    taskId?: string;
+    userMessage: string;
+    assistantReply: string;
+    intent: string;
+    requestId?: string;
+  },
+): Promise<number> {
+  const signals: LearningSignal[] = [];
+  const userText = input.userMessage.toLowerCase();
+  const replyText = input.assistantReply.toLowerCase();
+
+  // Dil tercihi: kullanıcı Türkçe mi İngilizce mi yazıyor?
+  const hasTurkishChars = /[çğıöşü]/i.test(input.userMessage);
+  const turkishSignals = /\b(ve|ile|için|bu|şu|merhaba|tamam|evet|hayır)\b/.test(userText);
+  if (hasTurkishChars || turkishSignals) {
+    signals.push({
+      type: "preference",
+      key: "preferred_language",
+      value: "turkish",
+      confidence: 0.82,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 180,
+    });
+  }
+
+  // Cevap uzunluğu tercihi: kullanıcı kısa mı uzun mu yazıyor?
+  const msgLen = input.userMessage.trim().length;
+  if (msgLen < 60) {
+    signals.push({
+      type: "preference",
+      key: "answer_length",
+      value: "concise",
+      confidence: 0.55,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 60,
+    });
+  } else if (msgLen > 300) {
+    signals.push({
+      type: "preference",
+      key: "answer_length",
+      value: "detailed",
+      confidence: 0.6,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 60,
+    });
+  }
+
+  // Teknik stack sinyali: mesajda spesifik teknoloji geçiyor mu?
+  const techPatterns: Array<[RegExp, string]> = [
+    [/\b(flutter|dart)\b/i, "flutter"],
+    [/\b(typescript|ts)\b/i, "typescript"],
+    [/\b(python)\b/i, "python"],
+    [/\b(swift|swiftui|ios)\b/i, "swift/ios"],
+    [/\b(fastify|node\.?js)\b/i, "fastify/nodejs"],
+    [/\b(postgres|postgresql)\b/i, "postgresql"],
+    [/\b(react|next\.?js)\b/i, "react"],
+  ];
+  for (const [pattern, stack] of techPatterns) {
+    if (pattern.test(input.userMessage)) {
+      signals.push({
+        type: "technical_stack",
+        key: "stack",
+        value: stack,
+        confidence: 0.72,
+        scope: "user",
+        source: "interaction",
+        ttlDays: 120,
+        metadata: { detectedIn: "user_message", intent: input.intent },
+      });
+    }
+  }
+
+  // Duygusal sinyal: kullanıcı heyecan mı hayal kırıklığı mı yaşıyor?
+  const excitementPatterns = /\b(harika|mükemmel|süper|amazing|perfect|great|excellent|teşekkür|thanks|👍|🎉|❤️)\b/i;
+  const frustrationPatterns = /\b(olmadı|çalışmıyor|hata|bug|sorun|problem|yanlış|wrong|broken|didn't work|not working)\b/i;
+  if (excitementPatterns.test(input.userMessage)) {
+    signals.push({
+      type: "episodic",
+      key: "emotional_signal",
+      value: "positive",
+      confidence: 0.65,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 30,
+      metadata: { intent: input.intent, taskId: input.taskId },
+    });
+  }
+  if (frustrationPatterns.test(input.userMessage)) {
+    signals.push({
+      type: "episodic",
+      key: "emotional_signal",
+      value: "frustrated",
+      confidence: 0.62,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 14,
+      metadata: { intent: input.intent, taskId: input.taskId },
+    });
+  }
+
+  // Pozitif feedback: asistan cevabı kısa + kullanıcı devam ediyor = kaliteli etkileşim
+  if (replyText.length < 600 && input.userMessage.length > 10) {
+    signals.push({
+      type: "workflow",
+      key: "positive_feedback",
+      value: "interaction_continued",
+      confidence: 0.52,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 30,
+    });
+  }
+
+  if (signals.length === 0) return 0;
+
+  return persistLearningSignals(app, {
+    userId: input.userId,
+    accountId: input.accountId,
+    taskId: input.taskId,
+    signals,
+    requestId: input.requestId,
+  });
+}
+
 export async function recordTaskLearningFromCompletion(
   app: FastifyInstance,
   input: {
