@@ -294,3 +294,48 @@ test("composeAssistantMessageBlocks accepts table and file blocks additively", (
   );
   assert.equal(blocks[2]?.type, "text");
 });
+
+test("shapeAssistantMessagePayload keeps top-level typed blocks and appends visible text once", () => {
+  const payload = shapeAssistantMessagePayload({
+    id: "assistant-typed-1",
+    role: "assistant",
+    status: "completed",
+    content: "Belge hazır.",
+    blocks: [
+      {
+        type: "document_block",
+        title: "Haftalık Rapor",
+        sections: [{ heading: "Özet", content: "Teslim edildi." }],
+      },
+    ],
+  });
+
+  const blocks = (payload as { blocks?: Array<Record<string, unknown>> }).blocks ?? [];
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]?.type, "document_block");
+  assert.equal(blocks[1]?.type, "text");
+  assert.equal(blocks[1]?.markdown, "Belge hazır.");
+  assert.equal(payload.content, "Belge hazır.");
+});
+
+test("shapeAssistantMessagePayload prefers top-level blocks over empty metadata blocks", () => {
+  const payload = shapeAssistantMessagePayload({
+    id: "assistant-typed-2",
+    role: "assistant",
+    status: "completed",
+    content: "",
+    blocks: [
+      {
+        type: "attachment_ack",
+        summary: "1 belge alındı.",
+        attachmentCount: 1,
+      },
+    ],
+    metadata: { blocks: [] },
+  });
+
+  const blocks = (payload as { blocks?: Array<Record<string, unknown>> }).blocks ?? [];
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "attachment_ack");
+  assert.equal((blocks[0] as { summary?: string }).summary, "1 belge alındı.");
+});

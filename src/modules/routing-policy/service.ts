@@ -148,6 +148,18 @@ const MOBILE_DOCUMENT_EXPORT_PATTERNS = [
   /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(pdf|word|docx|doc|belge|png|jpg|jpeg|webp|afiş|afis|poster|banner|kapak|thumbnail|screenshot|görsel|gorsel|resim|image)\b/i,
   /\b(pdf olarak ver|pdf'e çevir|pdfe çevir|pdf yap|pdf oluştur|pdf üret|word olarak ver|word olarak hazırla|word yap|word oluştur|word üret|docx olarak hazırla|docx yap|docx oluştur|docx üret|görsel üret|görsel yap|görsel oluştur|resim üret|resim yap|image üret|image yap|png oluştur|png üret|jpg oluştur|jpg üret|jpeg oluştur|jpeg üret|webp oluştur|webp üret|afiş oluştur|afiş üret|afis oluştur|afis üret|poster oluştur|poster üret|banner oluştur|banner üret|kapak oluştur|kapak üret|thumbnail oluştur|thumbnail üret|screenshot oluştur|screenshot üret)\b/i,
 ];
+// Yeni bir çok bölümlü belge/rapor ÜRETME niyeti (mevcut içeriği export değil).
+// document_generate workload'unu tetikler → model {"type":"document_block"} üretir.
+// NOT: Türkçe karakterler JS `\b` (ASCII word-boundary) ile çalışmadığından
+// Unicode-aware lookaround (?<!\p{L})...(?!\p{L}) kullanılıyor (bkz. memory:
+// "TÜRKÇE \b REGEX TUZAĞI"). "raporla"/"yazılım" gibi kelimelerin yanlış
+// eşleşmesini engeller.
+const DOC_NOUN = String.raw`(?:rapor|makale|belge|d[öo]k[üu]man|deneme|kompozisyon|dilek[çc]e|mektup|essay|article|report|bülten|bulten|kılavuz|kilavuz|sunum metni|köşe yaz[ıi]s[ıi]|kose yaz[ıi]s[ıi]|blog yaz[ıi]s[ıi]|blog post|taslak)`;
+const DOC_VERB = String.raw`(?:yaz|haz[ıi]rla|olu[şs]tur|[üu]ret|d[üu]zenle|kaleme al|derle|haz[ıi]rlay)`;
+const DOCUMENT_GENERATE_PATTERNS = [
+  new RegExp(`(?<!\\p{L})${DOC_NOUN}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_VERB}`, "iu"),
+  new RegExp(`(?<!\\p{L})${DOC_VERB}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_NOUN}(?!\\p{L})`, "iu"),
+];
 const QUANTUM_TOPIC_PATTERNS = [
   /\b(quantum|kuantum|qubo|ising|qaoa|vqe|qiskit|ocean sdk|dwave|d-wave|hamiltonian)\b/i,
 ];
@@ -504,6 +516,34 @@ function hasDesktopActionSignal(message: string): boolean {
   return hasDesktopPrivateDataSignal(message) || hasDesktopSaveExportSignal(message) || hasDesktopWriteSideEffectSignal(message);
 }
 
+// Capabilities that can ONLY be satisfied on the user's desktop runtime.
+// Cloud-doable capabilities (document_write, web_research, document_read for
+// in-message attachments, data_analyze, generate_response, reason, summarize,
+// transform_chunks, image_ocr, file_transform, document_parse, email_draft)
+// are intentionally excluded — the server brain handles them inline.
+const DESKTOP_ONLY_CAPABILITIES = new Set<string>([
+  "shell_run",
+  "filesystem_read",
+  "filesystem_write",
+  "app_control",
+  "open_app",
+  "close_app",
+  "screen_context",
+  "analyze_screen",
+  "terminal",
+  "recent_files",
+  "browser_control",
+  "computer_control",
+  "add_calendar_event",
+  "add_reminder",
+  "email_send",
+]);
+
+function isDesktopOnlyCapability(capability: string): boolean {
+  const normalized = String(capability ?? "").trim().toLowerCase().replace(/[\s.]+/g, "_");
+  return DESKTOP_ONLY_CAPABILITIES.has(normalized);
+}
+
 function buildSemanticCapabilitiesForRoute(input: {
   target: ExecutionTarget;
   executionPlan: Array<"mobile_local" | "server_brain" | "desktop_runtime">;
@@ -681,6 +721,14 @@ function deriveSelectedWorkload(input: {
   }
   if (input.intent === "planning_request") {
     return "planning";
+  }
+  // Belge/rapor ÜRETME isteği → document_generate workload (model document_block
+  // üretir). Bu olmadan mobildeki document_block / pdf kartları HİÇ veri almıyordu
+  // çünkü hiçbir kod bu workload'u seçmiyordu. Mevcut içeriği export eden istekler
+  // (MOBILE_DOCUMENT_EXPORT) ve ek-okuma istekleri buraya düşmez; sadece açık
+  // üretme fiilleri (yaz/hazırla/oluştur/üret) + belge-türü isim eşleşince tetiklenir.
+  if (matchesAny(input.message, DOCUMENT_GENERATE_PATTERNS)) {
+    return "document_generate";
   }
   return selectHybridMobileChatWorkload({
     message: input.message,
@@ -1023,14 +1071,17 @@ export async function decideCommandRoute(
   app: FastifyInstance,
   input: CommandRouteInput,
 ): Promise<CommandRouteDecision> {
-  const cleanInputMessage = stripDocumentPayload(input.message);
-  const message = normalizeMessage(cleanInputMessage);
-  const metadata = readRecord(input.metadata);
+  // SINGLE source of truth: the mobile user toggles a "dispatch to desktop"
+  // button. Every prior keyword/intent heuristic is gone — they produced more
+  // wrong decisions than right ones. If the toggle says desktop and a ready
+  // desktop is available, route there. Otherwise the server brain handles it.
+  const message = normalizeMessage(stripDocumentPayload(input.message));
+  const metadata = readRecord(input.metadata) ?? {};
   const desktopAllowed = input.desktopAllowed ?? true;
   const classification = classifyIntent({
     userId: input.userId,
     accountId: input.userId,
-    message: cleanInputMessage,
+    message: input.message,
     routeContext: "command_route",
     source: input.source,
     metadata: {
@@ -1038,497 +1089,95 @@ export async function decideCommandRoute(
       requestedCapabilities: input.requestedCapabilities ?? [],
     },
   });
-  const hasEmailSideEffect = matchesAny(message, EMAIL_SIDE_EFFECT_PATTERNS) || extractEmailAddresses(message).length > 0;
-  const hasEmailDraftSignal = matchesAny(message, EMAIL_DRAFT_PATTERNS);
-  const hasResearchSignal =
-    classification.primaryIntent === "research" ||
-    /\b(research|araştır|arastir|araştırma|kaynak|sources?|verify|verification)\b/i.test(message);
-  const hasPackagedWorldContextRequest = hasPackagedWorldContextSignal(message);
-  const hasLocalPrivateSignal =
-    (matchesAny(message, LOCAL_PRIVATE_PATTERNS) || classification.requiresLocalRuntime) &&
-    !hasPackagedWorldContextRequest;
-  const hasDesktopPrivateDataRequest = hasDesktopPrivateDataSignal(message) && !hasPackagedWorldContextRequest;
-  const hasDesktopSaveExportRequest = hasDesktopSaveExportSignal(message);
-  const hasDesktopWriteSideEffectRequest = hasDesktopWriteSideEffectSignal(message);
-  const hasAttachmentAnalysisRequest = hasAttachmentAnalysisSignal(message, metadata);
-  const hasMobileLocalDocumentExportMetadata = hasMobileLocalDocumentExportHint(metadata);
-  const hasMobileDocumentExportSignal =
-    matchesAny(message, MOBILE_DOCUMENT_EXPORT_PATTERNS) ||
-    hasMobileLocalDocumentExportMetadata;
-  const hasMobileLocalDocumentExportSignal =
-    hasMobileDocumentExportSignal && !hasLocalPrivateSignal && !hasDesktopWriteSideEffectRequest;
-  const hasMobileDerivedDocumentSignal = hasLocalDerivedDocumentContext(metadata);
-  const hasMobileReadableDocumentSignal =
-    hasMobileReadableDocumentHint(metadata) || hasMobileDerivedDocumentSignal || hasAttachmentAnalysisRequest;
-  const hasQuantumSignal = matchesAny(message, QUANTUM_TOPIC_PATTERNS);
-  const hasQuantumExecutionSignal = hasQuantumSignal && matchesAny(message, QUANTUM_EXECUTION_PATTERNS);
-  const derivedCapabilities = intentToCapabilities(classification.primaryIntent, message, hasResearchSignal);
-  const requestedCapabilities = normalizeRuntimeCapabilities(input.requestedCapabilities ?? []);
-  const capabilities = [...new Set([...requestedCapabilities, ...derivedCapabilities])];
-  const privacyClass = determinePrivacyClass(capabilities, message, {
-    packagedWorldContext: hasPackagedWorldContextRequest,
-  });
-  const mode = determineMode(capabilities, classification.primaryIntent);
-  const requiresApproval =
-    hasEmailSideEffect ||
-    hasDesktopWriteSideEffectRequest ||
-    capabilities.includes("browser_control") ||
-    capabilities.includes("shell_run") ||
-    capabilities.includes("computer_control");
-  const hasExplicitDesktopTarget = Boolean(input.selectedDeviceId?.trim());
-  const hasDesktopActionRequest = hasDesktopActionSignal(message) && !hasPackagedWorldContextRequest;
-  const hasDesktopWorkSignal =
-    hasDesktopActionRequest ||
-    hasDesktopPrivateDataRequest ||
-    hasEmailSideEffect ||
-    hasEmailDraftSignal ||
-    hasQuantumExecutionSignal ||
-    capabilities.includes("browser_control") ||
-    capabilities.includes("computer_control") ||
-    capabilities.includes("shell_run");
-  if (!desktopAllowed && hasDesktopWorkSignal) {
-    const taskRoute = buildTaskRoute({
-      target: "desktop_runtime",
-      operationalRoute: "desktop_runtime",
-      executionPlan: ["desktop_runtime", "server_brain"],
-      reason: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
-      needsDesktop: true,
-      needsPrivateDesktopData: hasLocalPrivateSignal,
-      needsUserApproval: requiresApproval,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        hasAttachment: hasAttachmentPayload(metadata),
-        hasDesktopPrivateData: hasLocalPrivateSignal,
-        hasDesktopSaveExport: hasDesktopSaveExportRequest,
-        hasDesktopWriteSideEffect: hasDesktopWriteSideEffectRequest,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
-    return buildDecision({
-      route: "pairing_required",
-      taskRoute,
-      mode,
-      capabilities,
-      privacyClass,
-      requiresApproval,
-      reason: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
-      userFacingMessage: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
-      primaryIntent: classification.primaryIntent,
-      confidence: classification.confidence,
-      requiresLocalRuntime: true,
-      message,
-      failClosedReason: "desktop_plan_required",
-    });
-  }
-  if (hasMobileLocalDocumentExportSignal) {
-    const mobileLocalExecutionPlan: Array<"mobile_local" | "server_brain"> =
-      hasAttachmentPayload(metadata)
-        ? ["mobile_local", "server_brain"]
-        : ["server_brain"];
-    const taskRoute = buildTaskRoute({
-      target: "server_brain",
-      operationalRoute: "server_brain",
-      executionPlan: mobileLocalExecutionPlan,
-      reason: "Metin tabanlı belge çıktısı mobilde yerel olarak üretilebilir; masaüstü eşleştirmesi gerekmez.",
-      needsDesktop: false,
-      needsPrivateDesktopData: false,
-      needsUserApproval: false,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "server_brain",
-        executionPlan: mobileLocalExecutionPlan,
-        hasAttachment: hasAttachmentPayload(metadata),
-        hasDesktopPrivateData: false,
-        hasDesktopSaveExport: false,
-        hasDesktopWriteSideEffect: false,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
-    return buildDecision({
-      route: "server_brain",
-      taskRoute,
-      mode: "chat",
-      capabilities: [],
-      privacyClass: "public_text",
-      requiresApproval: false,
-      reason: "Metin tabanlı belge çıktısı mobilde yerel olarak üretilebilir; masaüstü eşleştirmesi gerekmez.",
-      userFacingMessage: "Bu istek sohbet olarak işlenecek.",
-      primaryIntent: classification.primaryIntent,
-      confidence: classification.confidence,
-      requiresLocalRuntime: false,
-      message,
-      brainProfile: input.brainProfile,
-    });
-  }
-  if (hasDesktopSaveExportRequest) {
-    const desktopCapabilities = ["filesystem", "document_write"];
-    const desktopCandidates = await resolveDesktopCandidates(
-      app,
-      input.userId,
-      desktopCapabilities,
-      input.selectedDeviceId,
-    );
-    const taskRoute = buildTaskRoute({
-      target: "hybrid",
-      operationalRoute: "desktop_runtime",
-      executionPlan: ["mobile_local", "desktop_runtime"],
-      reason: "İstek önce mobilde hazırlanıp ardından masaüstüne yazılmalı.",
-      needsDesktop: true,
-      needsPrivateDesktopData: false,
-      needsUserApproval: false,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "hybrid",
-        executionPlan: ["mobile_local", "desktop_runtime"],
-        hasAttachment: hasAttachmentPayload(metadata),
-        hasDesktopPrivateData: false,
-        hasDesktopSaveExport: true,
-        hasDesktopWriteSideEffect: hasDesktopWriteSideEffectRequest,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
 
-    if (desktopCandidates.selectedDevice && desktopCandidates.canUseSelectedDevice) {
-      return buildDecision({
-        route: "desktop_runtime",
-        taskRoute,
-        mode: "mixed_task",
-        capabilities: desktopCapabilities,
-        privacyClass,
-        requiresApproval: hasDesktopWriteSideEffectRequest || hasEmailSideEffect || hasEmailDraftSignal
-          ? requiresApproval
-          : false,
-        reason: "Mobil hazırlama adımı tamamlandıktan sonra çıktı masaüstüne yazılmalı.",
-        userFacingMessage: hasDesktopWriteSideEffectRequest
-          ? "Bu görev masaüstünde yürütülecek ve onay isteyebilir."
-          : "Bu görev masaüstünde yürütülecek.",
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: true,
-        message,
-        failClosedReason: "desktop_runtime_required",
-      });
-    }
+  // ONE signal drives desktop routing: `desktopDispatch`, set by the mobile app
+  // when the user turns on the laptop toggle or taps the one-shot chip. No
+  // message-content heuristics, no legacy aliases — explicit user intent only.
+  const userWantsDesktop = metadata.desktopDispatch === true;
 
-    return buildDecision({
-      route: "pairing_required",
-      taskRoute,
-      mode: "mixed_task",
-      capabilities: desktopCapabilities,
-      privacyClass,
-      requiresApproval: false,
-      reason: "İstek masaüstüne yazmayı gerektiriyor ama bağlı ve yetenekli bir masaüstü bulunamadı.",
-      userFacingMessage: resolveDesktopUnavailableMessage(desktopCandidates),
-      primaryIntent: classification.primaryIntent,
-      confidence: classification.confidence,
-      requiresLocalRuntime: true,
-      message,
-      failClosedReason: "pairing_required",
-    });
-  }
-  if (hasLocalPrivateSignal) {
-    const desktopCapabilities = ["filesystem", "document_read", "recent_files"];
-    const desktopCandidates = await resolveDesktopCandidates(
-      app,
-      input.userId,
-      desktopCapabilities,
-      input.selectedDeviceId,
-    );
-    const taskRoute = buildTaskRoute({
-      target: "desktop_runtime",
-      operationalRoute: "desktop_runtime",
-      executionPlan: ["desktop_runtime", "server_brain"],
-      reason: "Yerel özel dosya sistemi veya bilgisayar bağlamı gerekli.",
-      needsDesktop: true,
-      needsPrivateDesktopData: true,
-      needsUserApproval: requiresApproval,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        hasAttachment: hasAttachmentPayload(metadata),
-        hasDesktopPrivateData: true,
-        hasDesktopSaveExport: false,
-        hasDesktopWriteSideEffect: hasDesktopWriteSideEffectRequest,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
-
-    if (desktopCandidates.selectedDevice && desktopCandidates.canUseSelectedDevice) {
-      return buildDecision({
-        route: "desktop_runtime",
-        taskRoute,
-        mode: hasEmailSideEffect || (hasEmailDraftSignal && hasResearchSignal) ? "mixed_task" : mode,
-        capabilities: desktopCapabilities,
-        privacyClass,
-        requiresApproval: hasDesktopWriteSideEffectRequest || hasEmailSideEffect || hasEmailDraftSignal
-          ? requiresApproval
-          : false,
-        reason: hasEmailSideEffect
-          ? "Gorev yerel arastirma ve/veya side-effect capability gerektiriyor."
-          : hasEmailDraftSignal
-            ? "Gorev e-posta taslagi icin desktop runtime capability gerektiriyor."
-            : "Gorev yerel runtime capability gerektiriyor.",
-        userFacingMessage: hasDesktopWriteSideEffectRequest || hasEmailSideEffect || hasEmailDraftSignal
-          ? "Bu görev masaüstünde yürütülecek ve onay isteyebilir."
-          : "Bu görev masaüstünde yürütülecek.",
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: true,
-        message,
-        failClosedReason: "desktop_runtime_required",
-      });
-    }
-
-    if (hasEmailSideEffect || hasEmailDraftSignal || hasDesktopWriteSideEffectRequest || hasLocalPrivateSignal) {
-      return buildDecision({
-        route: "pairing_required",
-        taskRoute,
-        mode: hasEmailSideEffect || (hasEmailDraftSignal && hasResearchSignal) ? "mixed_task" : mode,
-        capabilities: desktopCapabilities,
-        privacyClass,
-        requiresApproval: false,
-        reason: "Yerel runtime gerekli ama bağlı ve yetenekli bir masaüstü bulunamadı.",
-        userFacingMessage: resolveDesktopUnavailableMessage(desktopCandidates),
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: true,
-        message,
-        failClosedReason: "pairing_required",
-      });
-    }
-  }
-  const canServeReadableMobileDocument =
-    hasMobileReadableDocumentSignal &&
-    !hasLocalPrivateSignal &&
-    !hasDesktopWriteSideEffectRequest &&
-    !hasDesktopSaveExportRequest &&
-    !hasEmailSideEffect &&
-    !hasEmailDraftSignal;
-  if (canServeReadableMobileDocument) {
-    const taskRoute = buildTaskRoute({
-      target: "hybrid",
-      operationalRoute: "server_brain",
-      executionPlan: ["mobile_local", "server_brain"],
-      reason: "Mobilde okunabilir hale getirilen belge önce yerelde hazırlanıp ardından beyin tarafında çözülebilir.",
-      needsDesktop: false,
-      needsPrivateDesktopData: false,
-      needsUserApproval: false,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "hybrid",
-        executionPlan: ["mobile_local", "server_brain"],
-        hasAttachment: hasAttachmentPayload(metadata),
-        hasDesktopPrivateData: false,
-        hasDesktopSaveExport: false,
-        hasDesktopWriteSideEffect: false,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
-    return buildDecision({
-      route: "server_brain",
-      taskRoute,
-      mode: "chat",
-      capabilities: [],
-      privacyClass: "public_text",
-      requiresApproval: false,
-      reason: "Mobilde okunabilir hale getirilen belge sunucu beyninde çözülebilir; masaüstü eşleştirmesi gerekmez.",
-      userFacingMessage: "Bu belge sunucu beyninde okunacak.",
-      primaryIntent: classification.primaryIntent,
-      confidence: classification.confidence,
-      requiresLocalRuntime: false,
-      message,
-      brainProfile: input.brainProfile,
-      selectedWorkloadOverride: "mobile_chat_balanced",
-    });
-  }
-  const isPublicChatOnly =
-    mode === "chat" &&
-    privacyClass === "public_text" &&
-    !hasLocalPrivateSignal &&
-    !hasEmailSideEffect &&
-    !hasEmailDraftSignal &&
-    !hasQuantumExecutionSignal &&
-    requestedCapabilities.length === 0 &&
-    capabilities.every(isServerBrainPublicCapability);
-
-  if (hasExplicitDesktopTarget && isPublicChatOnly) {
-    const taskRoute = buildTaskRoute({
-      target: "server_brain",
-      operationalRoute: "server_brain",
-      executionPlan: ["server_brain"],
-      reason: "Public sohbet seçili masaüstünden bağımsız olarak sunucu beyninde çözülebilir.",
-      needsDesktop: false,
-      needsPrivateDesktopData: false,
-      needsUserApproval: false,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "server_brain",
-        executionPlan: ["server_brain"],
-        hasAttachment: false,
-        hasDesktopPrivateData: false,
-        hasDesktopSaveExport: false,
-        hasDesktopWriteSideEffect: false,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
-    return buildDecision({
-      route: "server_brain",
-      taskRoute,
-      mode: "chat",
-      capabilities: [],
-      privacyClass: "public_text",
-      requiresApproval: false,
-      reason: "Seçili masaüstü public sohbeti task'a çevirmedi; abonelik profiline göre sunucu beyninde çözülebilir.",
-      userFacingMessage: "Bu istek sohbet olarak işlenecek.",
-      primaryIntent: classification.primaryIntent,
-      confidence: classification.confidence,
-      requiresLocalRuntime: false,
-      message,
-      brainProfile: input.brainProfile,
-    });
-  }
-
-  if (hasExplicitDesktopTarget && hasDesktopWorkSignal && !desktopAllowed) {
-    const taskRoute = buildTaskRoute({
-      target: "desktop_runtime",
-      operationalRoute: "desktop_runtime",
-      executionPlan: ["desktop_runtime", "server_brain"],
-      reason: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
-      needsDesktop: true,
-      needsPrivateDesktopData: hasLocalPrivateSignal,
-      needsUserApproval: requiresApproval,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        hasAttachment: hasAttachmentPayload(metadata),
-        hasDesktopPrivateData: hasLocalPrivateSignal,
-        hasDesktopSaveExport: hasDesktopSaveExportRequest,
-        hasDesktopWriteSideEffect: hasDesktopWriteSideEffectRequest,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
-    return buildDecision({
-      route: "pairing_required",
-      taskRoute,
-      mode,
-      capabilities,
-      privacyClass,
-      requiresApproval,
-      reason: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
-      userFacingMessage: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
-      primaryIntent: classification.primaryIntent,
-      confidence: classification.confidence,
-      requiresLocalRuntime: true,
-      message,
-      failClosedReason: "desktop_plan_required",
-    });
-  }
-
-  if (hasExplicitDesktopTarget && hasDesktopWorkSignal) {
-    const taskRoute = buildTaskRoute({
-      target: "desktop_runtime",
-      operationalRoute: "desktop_runtime",
-      executionPlan: ["desktop_runtime", "server_brain"],
-      reason: "Kullanıcı açıkça bir masaüstü hedefi seçti ve görev desktop runtime üzerinde yürütülmeli.",
-      needsDesktop: true,
-      needsPrivateDesktopData: hasLocalPrivateSignal,
-      needsUserApproval: requiresApproval,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        hasAttachment: hasAttachmentPayload(metadata),
-        hasDesktopPrivateData: hasLocalPrivateSignal,
-        hasDesktopSaveExport: hasDesktopSaveExportRequest,
-        hasDesktopWriteSideEffect: hasDesktopWriteSideEffectRequest,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
-    return buildDecision({
-      route: "desktop_runtime",
-      taskRoute,
-      mode,
-      capabilities,
-      privacyClass,
-      requiresApproval,
-      reason: "Kullanici acikca bir masaustu hedefi secti; gorev desktop runtime uzerinden fail-closed ilerlemeli.",
-      userFacingMessage: requiresApproval
-        ? "Bu görev seçili masaüstünde çalışacak ve onay isteyebilir."
-        : "Bu görev seçili masaüstünde çalışacak.",
-      primaryIntent: classification.primaryIntent,
-      confidence: classification.confidence,
-      requiresLocalRuntime: true,
-      message,
-      failClosedReason: "desktop_runtime_selected_target",
-    });
-  }
-
-  if (hasQuantumExecutionSignal) {
-    const quantumCapabilities = capabilities.filter((capability) =>
-      String(capability ?? "").trim().toLowerCase().replace(/[\s_]+/g, ".").startsWith("quantum."),
-    );
-    const desktopCandidates = await resolveDesktopCandidates(app, input.userId, quantumCapabilities, input.selectedDeviceId);
-    if (desktopCandidates.selectedDevice && desktopCandidates.canUseSelectedDevice) {
+  if (userWantsDesktop) {
+    if (!desktopAllowed) {
       const taskRoute = buildTaskRoute({
         target: "desktop_runtime",
         operationalRoute: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        reason: "Quantum deney yürütmesi desktop runtime quantum capability seti gerektiriyor.",
+        executionPlan: ["desktop_runtime"],
+        reason: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
         needsDesktop: true,
         needsPrivateDesktopData: false,
         needsUserApproval: false,
-        requiredCapabilities: buildSemanticCapabilitiesForRoute({
-          target: "desktop_runtime",
-          executionPlan: ["desktop_runtime", "server_brain"],
-          hasAttachment: false,
-          hasDesktopPrivateData: false,
-          hasDesktopSaveExport: false,
-          hasDesktopWriteSideEffect: false,
-          primaryIntent: classification.primaryIntent,
-        }),
+        requiredCapabilities: [],
       });
       return buildDecision({
-        route: "desktop_runtime",
+        route: "pairing_required",
         taskRoute,
-        mode: "mixed_task",
-        capabilities: quantumCapabilities,
-        privacyClass: "public_text",
+        mode: "executable_task",
+        capabilities: [],
+        privacyClass: "local_private",
         requiresApproval: false,
-        reason: "Quantum deney yürütmesi desktop runtime quantum capability seti gerektiriyor.",
-        userFacingMessage: "Quantum deney görevi masaüstünde yürütülecek.",
+        reason: "Masaüstü dispatch açık ama plan izin vermiyor.",
+        userFacingMessage: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
         primaryIntent: classification.primaryIntent,
         confidence: classification.confidence,
         requiresLocalRuntime: true,
         message,
-        failClosedReason: "desktop_runtime_required",
+        failClosedReason: "desktop_plan_required",
       });
     }
 
+    const candidates = await resolveDesktopCandidates(
+      app,
+      input.userId,
+      input.requestedCapabilities ?? [],
+      input.selectedDeviceId,
+    );
+    if (candidates.selectedDevice && candidates.canUseSelectedDevice) {
+      const taskRoute = buildTaskRoute({
+        target: "desktop_runtime",
+        operationalRoute: "desktop_runtime",
+        executionPlan: ["desktop_runtime"],
+        reason: "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+        needsDesktop: true,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: input.requestedCapabilities ?? [],
+      });
+      return buildDecision({
+        route: "desktop_runtime",
+        taskRoute,
+        mode: "executable_task",
+        capabilities: input.requestedCapabilities ?? [],
+        privacyClass: "local_private",
+        requiresApproval: false,
+        reason: "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+        userFacingMessage: "Bu görev masaüstünde çalışacak.",
+        primaryIntent: classification.primaryIntent,
+        confidence: classification.confidence,
+        requiresLocalRuntime: true,
+        message,
+        failClosedReason: "desktop_runtime_selected_target",
+      });
+    }
+
+    // Toggle ON but no ready desktop — surface a friendly pairing prompt.
     const taskRoute = buildTaskRoute({
       target: "desktop_runtime",
       operationalRoute: "desktop_runtime",
-      executionPlan: ["desktop_runtime", "server_brain"],
-      reason: "Quantum deneyleri için bağlı ve yetenekli bir masaüstü bulunamadı.",
+      executionPlan: ["desktop_runtime"],
+      reason: "Dispatch açık ama bağlı bir masaüstü bulunamadı.",
       needsDesktop: true,
       needsPrivateDesktopData: false,
       needsUserApproval: false,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        hasAttachment: false,
-        hasDesktopPrivateData: false,
-        hasDesktopSaveExport: false,
-        hasDesktopWriteSideEffect: false,
-        primaryIntent: classification.primaryIntent,
-      }),
+      requiredCapabilities: input.requestedCapabilities ?? [],
     });
     return buildDecision({
       route: "pairing_required",
       taskRoute,
-      mode: "mixed_task",
-      capabilities: quantumCapabilities,
-      privacyClass: "public_text",
+      mode: "executable_task",
+      capabilities: input.requestedCapabilities ?? [],
+      privacyClass: "local_private",
       requiresApproval: false,
-      reason: desktopCandidates.missingCapabilities.length
-        ? "Quantum capability seti için uygun masaüstü bulunamadı."
-        : "Quantum deneyleri için bağlı ve yetenekli bir masaüstü bulunamadı.",
-      userFacingMessage: "Quantum deneyleri için Elyan Desktop'ı eşleştirip quantum runtime yeteneklerini hazır hale getirmen gerekiyor.",
+      reason: "Dispatch açık ama bağlı bir masaüstü bulunamadı.",
+      userFacingMessage: resolveDesktopUnavailableMessage(candidates),
       primaryIntent: classification.primaryIntent,
       confidence: classification.confidence,
       requiresLocalRuntime: true,
@@ -1537,289 +1186,33 @@ export async function decideCommandRoute(
     });
   }
 
-  if (hasLocalPrivateSignal || hasEmailSideEffect || hasEmailDraftSignal || hasDesktopWriteSideEffectRequest || requestedCapabilities.includes("document_read")) {
-    const desktopCandidates = await resolveDesktopCandidates(app, input.userId, capabilities, input.selectedDeviceId);
-    if (desktopCandidates.selectedDevice && desktopCandidates.canUseSelectedDevice) {
-      const taskRoute = buildTaskRoute({
-        target: "desktop_runtime",
-        operationalRoute: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        reason: hasEmailSideEffect
-          ? "Gorev yerel arastirma ve/veya side-effect capability gerektiriyor."
-          : hasEmailDraftSignal
-            ? "Gorev e-posta taslagi icin desktop runtime capability gerektiriyor."
-            : "Gorev yerel runtime capability gerektiriyor.",
-        needsDesktop: true,
-        needsPrivateDesktopData: hasLocalPrivateSignal,
-        needsUserApproval: requiresApproval,
-        requiredCapabilities: buildSemanticCapabilitiesForRoute({
-          target: "desktop_runtime",
-          executionPlan: ["desktop_runtime", "server_brain"],
-          hasAttachment: hasAttachmentPayload(metadata),
-          hasDesktopPrivateData: hasLocalPrivateSignal,
-          hasDesktopSaveExport: false,
-          hasDesktopWriteSideEffect: hasEmailSideEffect || hasDesktopWriteSideEffectRequest,
-          primaryIntent: classification.primaryIntent,
-        }),
-      });
-      return buildDecision({
-        route: "desktop_runtime",
-        taskRoute,
-        mode: hasEmailSideEffect || (hasEmailDraftSignal && hasResearchSignal) ? "mixed_task" : mode,
-        capabilities,
-        privacyClass,
-        requiresApproval,
-        reason: hasEmailSideEffect
-          ? "Gorev yerel arastirma ve/veya side-effect capability gerektiriyor."
-          : hasEmailDraftSignal
-            ? "Gorev e-posta taslagi icin desktop runtime capability gerektiriyor."
-          : "Gorev yerel runtime capability gerektiriyor.",
-        userFacingMessage: requiresApproval
-          ? "Bu görev masaüstünde yürütülecek ve onay isteyebilir."
-          : "Bu görev masaüstünde yürütülecek.",
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: true,
-        message,
-        failClosedReason: "desktop_runtime_required",
-      });
-    }
-
-    if (hasEmailSideEffect || hasEmailDraftSignal || hasDesktopWriteSideEffectRequest || hasLocalPrivateSignal) {
-      const taskRoute = buildTaskRoute({
-        target: "desktop_runtime",
-        operationalRoute: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        reason: "Yerel runtime gerekli ama bağlı ve yetenekli bir masaüstü bulunamadı.",
-        needsDesktop: true,
-        needsPrivateDesktopData: hasLocalPrivateSignal,
-        needsUserApproval: requiresApproval,
-        requiredCapabilities: buildSemanticCapabilitiesForRoute({
-          target: "desktop_runtime",
-          executionPlan: ["desktop_runtime", "server_brain"],
-          hasAttachment: hasAttachmentPayload(metadata),
-          hasDesktopPrivateData: hasLocalPrivateSignal,
-          hasDesktopSaveExport: false,
-          hasDesktopWriteSideEffect: hasEmailSideEffect || hasDesktopWriteSideEffectRequest,
-          primaryIntent: classification.primaryIntent,
-        }),
-      });
-      return buildDecision({
-        route: "pairing_required",
-        taskRoute,
-        mode: hasEmailSideEffect || (hasEmailDraftSignal && hasResearchSignal) ? "mixed_task" : mode,
-        capabilities,
-        privacyClass,
-        requiresApproval,
-        reason: "Yerel runtime gerekli ama bağlı ve yetenekli bir masaüstü bulunamadı.",
-        userFacingMessage: resolveDesktopUnavailableMessage(desktopCandidates),
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: true,
-        message,
-        failClosedReason: "pairing_required",
-      });
-    }
-  }
-
-  if (hasResearchSignal) {
-    const taskRoute = buildTaskRoute({
-      target: "server_brain",
-      operationalRoute: "server_brain",
-      executionPlan: ["server_brain"],
-      reason: "Public araştırma veya sohbet isteği sunucu beyninde çözülebilir.",
-      needsDesktop: false,
-      needsPrivateDesktopData: false,
-      needsUserApproval: false,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "server_brain",
-        executionPlan: ["server_brain"],
-        hasAttachment: false,
-        hasDesktopPrivateData: false,
-        hasDesktopSaveExport: false,
-        hasDesktopWriteSideEffect: false,
-        primaryIntent: classification.primaryIntent,
-      }),
-    });
-    return buildDecision({
-      route: "server_brain",
-      taskRoute,
-      mode: "chat",
-      capabilities: [],
-      privacyClass: "public_text",
-      requiresApproval: false,
-      reason: "Public research veya sohbet isteği sunucu beyninde çözülebilir.",
-      userFacingMessage: "Bu istek sohbet olarak işlenecek.",
-      primaryIntent: classification.primaryIntent,
-      confidence: classification.confidence,
-      requiresLocalRuntime: classification.requiresLocalRuntime,
-      message,
-      brainProfile: input.brainProfile,
-    });
-  }
-
-  if (mode === "executable_task" && capabilities.length > 0) {
-    const desktopCandidates = await resolveDesktopCandidates(app, input.userId, capabilities, input.selectedDeviceId);
-    if (desktopCandidates.selectedDevice && desktopCandidates.canUseSelectedDevice) {
-      const taskRoute = buildTaskRoute({
-        target: "desktop_runtime",
-        operationalRoute: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        reason: "Görev seçili masaüstü runtime üzerinde yürütülebilir.",
-        needsDesktop: true,
-        needsPrivateDesktopData: hasLocalPrivateSignal,
-        needsUserApproval: requiresApproval,
-        requiredCapabilities: buildSemanticCapabilitiesForRoute({
-          target: "desktop_runtime",
-          executionPlan: ["desktop_runtime", "server_brain"],
-          hasAttachment: hasAttachmentPayload(metadata),
-          hasDesktopPrivateData: hasLocalPrivateSignal,
-          hasDesktopSaveExport: hasDesktopSaveExportRequest,
-          hasDesktopWriteSideEffect: hasDesktopWriteSideEffectRequest,
-          primaryIntent: classification.primaryIntent,
-        }),
-      });
-      return buildDecision({
-        route: "desktop_runtime",
-        taskRoute,
-        mode,
-        capabilities,
-        privacyClass,
-        requiresApproval,
-        reason: "Görev seçili masaüstü runtime üzerinde yürütülebilir.",
-        userFacingMessage: requiresApproval
-          ? "Bu görev masaüstünde çalışacak ve onay isteyebilir."
-          : "Bu görev masaüstünde çalışacak.",
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: classification.requiresLocalRuntime,
-        message,
-        failClosedReason: "desktop_runtime_required",
-      });
-    }
-    if (requestedCapabilities.length > 0) {
-      const taskRoute = buildTaskRoute({
-        target: "desktop_runtime",
-        operationalRoute: "desktop_runtime",
-        executionPlan: ["desktop_runtime", "server_brain"],
-        reason: "İstenen capability seti için uygun masaüstü yok.",
-        needsDesktop: true,
-        needsPrivateDesktopData: hasLocalPrivateSignal,
-        needsUserApproval: requiresApproval,
-        requiredCapabilities: buildSemanticCapabilitiesForRoute({
-          target: "desktop_runtime",
-          executionPlan: ["desktop_runtime", "server_brain"],
-          hasAttachment: hasAttachmentPayload(metadata),
-          hasDesktopPrivateData: hasLocalPrivateSignal,
-          hasDesktopSaveExport: hasDesktopSaveExportRequest,
-          hasDesktopWriteSideEffect: hasDesktopWriteSideEffectRequest,
-          primaryIntent: classification.primaryIntent,
-        }),
-      });
-      return buildDecision({
-        route: "pairing_required",
-        taskRoute,
-        mode,
-        capabilities,
-        privacyClass,
-        requiresApproval,
-        reason: "İstenen capability seti için uygun masaüstü yok.",
-        userFacingMessage: "Bu görev için bağlı bir masaüstü gerekiyor.",
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: true,
-        message,
-        failClosedReason: "pairing_required",
-      });
-    }
-  }
-
-  const shouldUseRouterFallback =
-    !hasDesktopWorkSignal &&
-    (classification.confidence < 0.55 || isMateriallyAmbiguousUserPrompt(cleanInputMessage));
-
-  if (shouldUseRouterFallback) {
-    const fallbackTaskRoute = await resolveAmbiguousTaskRouteFallback(app, {
-      userId: input.userId,
-      message: cleanInputMessage,
-      brainProfile: input.brainProfile,
-      promptSummary: [
-        `intent=${classification.primaryIntent}`,
-        `confidence=${classification.confidence.toFixed(2)}`,
-        `attachment=${hasAttachmentPayload(metadata) ? "yes" : "no"}`,
-        `mobileReadable=${hasMobileReadableDocumentSignal ? "yes" : "no"}`,
-        `research=${hasResearchSignal ? "yes" : "no"}`,
-      ].join("; "),
-    });
-
-    if (fallbackTaskRoute && fallbackTaskRoute.operationalRoute === "server_brain") {
-      const sanitizedTarget: ExecutionTarget =
-        fallbackTaskRoute.executionPlan.includes("mobile_local") &&
-        fallbackTaskRoute.executionPlan.includes("server_brain")
-          ? "hybrid"
-          : "server_brain";
-      const sharedBrainTaskRoute = buildTaskRoute({
-        target: sanitizedTarget,
-        operationalRoute: "server_brain",
-        executionPlan: fallbackTaskRoute.executionPlan,
-        reason: fallbackTaskRoute.reason,
-        needsDesktop: false,
-        needsPrivateDesktopData: fallbackTaskRoute.needsPrivateDesktopData,
-        needsUserApproval: fallbackTaskRoute.needsUserApproval,
-        requiredCapabilities: fallbackTaskRoute.requiredCapabilities,
-      });
-
-      return buildDecision({
-        route: "server_brain",
-        taskRoute: sharedBrainTaskRoute,
-        mode: fallbackTaskRoute.executionPlan.length > 1 ? "mixed_task" : "chat",
-        capabilities: [],
-        privacyClass: "public_text",
-        requiresApproval: false,
-        reason: fallbackTaskRoute.reason,
-        userFacingMessage: "Bu istek sohbet olarak işlenecek.",
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: false,
-        message,
-        brainProfile: input.brainProfile,
-      });
-    }
-  }
-
+  // Default path: server brain answers everything else.
   return buildDecision({
     route: "server_brain",
     taskRoute: buildTaskRoute({
       target: "server_brain",
       operationalRoute: "server_brain",
       executionPlan: ["server_brain"],
-      reason: "Sohbet veya public bilgi isteği sunucu beynine yönlendirildi.",
+      reason: "Sohbet veya bilgi isteği sunucu beyninde çözülecek.",
       needsDesktop: false,
       needsPrivateDesktopData: false,
       needsUserApproval: false,
-      requiredCapabilities: buildSemanticCapabilitiesForRoute({
-        target: "server_brain",
-        executionPlan: ["server_brain"],
-        hasAttachment: false,
-        hasDesktopPrivateData: false,
-        hasDesktopSaveExport: false,
-        hasDesktopWriteSideEffect: false,
-        primaryIntent: classification.primaryIntent,
-      }),
+      requiredCapabilities: [],
     }),
     mode: "chat",
     capabilities: [],
     privacyClass: "public_text",
     requiresApproval: false,
-    reason: "Sohbet veya public bilgi isteği sunucu beynine yönlendirildi.",
+    reason: "Sohbet veya bilgi isteği sunucu beyninde çözülecek.",
     userFacingMessage: "Bu istek sohbet olarak işlenecek.",
     primaryIntent: classification.primaryIntent,
     confidence: classification.confidence,
-    requiresLocalRuntime: classification.requiresLocalRuntime,
+    requiresLocalRuntime: false,
     message,
     brainProfile: input.brainProfile,
   });
 }
+
 
 async function getDefaultDesktopTaskTarget(
   app: FastifyInstance,

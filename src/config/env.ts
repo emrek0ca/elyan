@@ -145,6 +145,10 @@ const envSchema = z.object({
   ELYAN_WEB_SEARCH_BASE_URL: z.string().url().default("https://html.duckduckgo.com/html/"),
   ELYAN_WEB_GROUNDING_MAX_RESULTS: z.coerce.number().int().positive().max(8).default(4),
   ELYAN_WEB_GROUNDING_TIMEOUT_MS: z.coerce.number().int().positive().default(6_500),
+  ELYAN_SEARCH_PROVIDER: z.enum(["duckduckgo_html", "brave", "searxng"]).default("duckduckgo_html"),
+  BRAVE_SEARCH_API_KEY: z.string().optional(),
+  SEARXNG_BASE_URL: z.string().url().optional(),
+  JINA_READER_ENABLED: booleanFlag(true),
   ELYAN_RAG_SEMANTIC_RERANK_ENABLED: booleanFlag(true),
   ELYAN_RAG_SEMANTIC_RERANK_MODEL: z.string().default("Xenova/multilingual-e5-small"),
   ELYAN_RAG_SEMANTIC_RERANK_WINDOW: z.coerce.number().int().positive().max(32).default(8),
@@ -239,6 +243,10 @@ export type AppEnv = ParsedEnv & {
   ELYAN_WEB_SEARCH_BASE_URL: string;
   ELYAN_WEB_GROUNDING_MAX_RESULTS: number;
   ELYAN_WEB_GROUNDING_TIMEOUT_MS: number;
+  ELYAN_SEARCH_PROVIDER: "duckduckgo_html" | "brave" | "searxng";
+  BRAVE_SEARCH_API_KEY?: string;
+  SEARXNG_BASE_URL?: string;
+  JINA_READER_ENABLED: boolean;
   ELYAN_RAG_SEMANTIC_RERANK_ENABLED: boolean;
   ELYAN_RAG_SEMANTIC_RERANK_MODEL: string;
   ELYAN_RAG_SEMANTIC_RERANK_WINDOW: number;
@@ -367,6 +375,10 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ELYAN_WEB_SEARCH_BASE_URL: parsed.ELYAN_WEB_SEARCH_BASE_URL,
     ELYAN_WEB_GROUNDING_MAX_RESULTS: parsed.ELYAN_WEB_GROUNDING_MAX_RESULTS,
     ELYAN_WEB_GROUNDING_TIMEOUT_MS: parsed.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
+    ELYAN_SEARCH_PROVIDER: parsed.ELYAN_SEARCH_PROVIDER,
+    BRAVE_SEARCH_API_KEY: parsed.BRAVE_SEARCH_API_KEY,
+    SEARXNG_BASE_URL: parsed.SEARXNG_BASE_URL,
+    JINA_READER_ENABLED: parsed.JINA_READER_ENABLED,
     ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: parsed.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
   };
 }

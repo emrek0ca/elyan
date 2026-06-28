@@ -116,7 +116,9 @@ export async function ensureTaskDispatchWorker(app: FastifyInstance): Promise<vo
   worker.on("error", (error) => {
     app.log.warn(
       {
-        error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+        errorCode: (error as NodeJS.ErrnoException).code,
       },
       "task dispatch worker error",
     );

@@ -3,8 +3,8 @@ import type { TaskStatus } from "../../contracts/domain.js";
 import { getRequestContext, serializeZodError } from "../../lib/http.js";
 import { getIdempotencyKey } from "../../lib/idempotency.js";
 import { getUserAuth } from "../../lib/request-auth.js";
-import { approvalBodySchema, createTaskBodySchema, feedbackBodySchema, listTasksQuerySchema, taskParamsSchema } from "./schemas.js";
-import { cancelTask, createTask, getTaskDetail, listTasks, resolveTaskApproval, submitTaskFeedback } from "./service.js";
+import { approvalBodySchema, createTaskBodySchema, feedbackBodySchema, listTasksQuerySchema, taskArtifactParamsSchema, taskParamsSchema } from "./schemas.js";
+import { cancelTask, createTask, getTaskArtifact, getTaskArtifactContent, getTaskDetail, listTasks, resolveTaskApproval, submitTaskFeedback } from "./service.js";
 
 function parseTaskParamsOrReply(request: FastifyRequest, reply: FastifyReply): { taskId: string } | null {
   const parsed = taskParamsSchema.safeParse(request.params);
@@ -12,6 +12,23 @@ function parseTaskParamsOrReply(request: FastifyRequest, reply: FastifyReply): {
     reply.status(400).send({
       error: "validation_error",
       message: "Invalid task id",
+      details: serializeZodError(parsed.error),
+      requestId: request.id,
+    });
+    return null;
+  }
+  return parsed.data;
+}
+
+function parseTaskArtifactParamsOrReply(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): { taskId: string; artifactId: string } | null {
+  const parsed = taskArtifactParamsSchema.safeParse(request.params);
+  if (!parsed.success) {
+    reply.status(400).send({
+      error: "validation_error",
+      message: "Invalid artifact params",
       details: serializeZodError(parsed.error),
       requestId: request.id,
     });
@@ -86,6 +103,36 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     }
     const auth = getUserAuth(request);
     return getTaskDetail(app, params.taskId, auth.sub);
+  });
+
+  app.get("/:taskId/artifacts/:artifactId", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const params = parseTaskArtifactParamsOrReply(request, reply);
+    if (!params) {
+      return;
+    }
+    const auth = getUserAuth(request);
+    return getTaskArtifact(app, params.taskId, params.artifactId, auth.sub);
+  });
+
+  app.get("/:taskId/artifacts/:artifactId/content", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const params = parseTaskArtifactParamsOrReply(request, reply);
+    if (!params) {
+      return;
+    }
+    const auth = getUserAuth(request);
+    return getTaskArtifactContent(app, params.taskId, params.artifactId, auth.sub);
   });
 
   app.post("/:taskId/cancel", async (request, reply) => {

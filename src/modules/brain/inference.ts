@@ -47,6 +47,9 @@ import {
   shouldUseWebGrounding,
   type WebGroundingResult,
 } from "./web-grounding.js";
+import { buildUrlContextBlock, promptContainsUrl } from "./url-context.js";
+import { buildDocumentContextBlock, buildAttachmentAckText } from "./document-context.js";
+import { extractClientAttachments, type ClientAttachment } from "./document-types.js";
 import { isSocialChatPrompt } from "./chat-heuristics.js";
 import {
   listSharedBrainProviderCandidates,
@@ -110,6 +113,8 @@ type SharedBrainInferenceInput = {
   title?: string;
   conversation?: SharedBrainConversationMessage[];
   attachmentContext?: ResolvedAttachmentContext | null;
+  /** İstemcide işlenmiş belge/görsel/tablo verileri — ham dosya değil */
+  clientAttachments?: ClientAttachment[] | null;
   requestMetadata?: Record<string, unknown>;
   route?: string;
   routeDecision?: CommandRouteDecision | null;
@@ -400,6 +405,126 @@ function estimateTokens(text: string): number {
   return estimateTextTokens(text);
 }
 
+/**
+ * document_generate workload için: model çıktısındaki {"type":"document_block"} JSON'larını
+ * text'ten ayıklar. Görünür metin (JSON olmayan kısım) ve blok listesini döner.
+ */
+// LLM'ler document_block JSON'unu üretirken string DEĞERLERİNİN içine sık sık
+// literal satır başı/tab koyar (örn. "content": "satır1\n\n- madde"). Bu GEÇERSİZ
+// JSON'dur ve JSON.parse patlar → belge tamamen kaybolurdu. Bu fonksiyon string
+// içindeki ham kontrol karakterlerini kaçışlı hale getirip JSON'u kurtarır.
+function repairLooseJsonObject(candidate: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate[i];
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      out += ch;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\n") { out += "\\n"; continue; }
+      if (ch === "\r") { out += "\\r"; continue; }
+      if (ch === "\t") { out += "\\t"; continue; }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+// Önce ham metni, olmazsa kurtarılmış sürümü JSON.parse dener. typed blok döner.
+function tryParseTypedJsonObject(candidate: string): Record<string, unknown> | null {
+  for (const variant of [candidate, repairLooseJsonObject(candidate)]) {
+    try {
+      const parsed = JSON.parse(variant);
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        typeof (parsed as Record<string, unknown>).type === "string"
+      ) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* sonraki varyantı dene */
+    }
+  }
+  return null;
+}
+
+function extractTypedJsonBlocksFromText(text: string): { visibleText: string; blocks: unknown[] } {
+  const blocks: unknown[] = [];
+  const seen = new Set<string>();
+
+  // Metin içinde herhangi bir yerde ```json ... ``` fence'i bul
+  // Model önce 1-2 cümle yazar, sonra code fence içinde JSON üretir.
+  const fencePattern = /```(?:json)?\s*([\s\S]*?)```/g;
+  let visibleText = text;
+  let match: RegExpExecArray | null;
+
+  while ((match = fencePattern.exec(text)) !== null) {
+    const candidate = match[1].trim();
+    if (!candidate.startsWith("{")) continue;
+    const parsed = tryParseTypedJsonObject(candidate);
+    if (parsed) {
+      // Model bazen aynı bloğu iki kez akıtır; tekrarı at.
+      const dedupKey = JSON.stringify(parsed);
+      if (!seen.has(dedupKey)) {
+        seen.add(dedupKey);
+        blocks.push(parsed);
+      }
+      // Fence'i görünür metinden çıkar (parse başarısız olsa da fence'i bırakma)
+      visibleText = visibleText.replace(match[0], "").trim();
+    }
+  }
+
+  // Eğer fence bulunamadıysa satır başında { ile başlayan raw JSON dene
+  if (blocks.length === 0) {
+    const trimmed = text.trim();
+    const braceIdx = trimmed.indexOf("{");
+    if (braceIdx >= 0) {
+      let depth = 0;
+      let end = -1;
+      let inString = false;
+      let escaped = false;
+      for (let j = braceIdx; j < trimmed.length; j++) {
+        const ch = trimmed[j];
+        if (escaped) { escaped = false; continue; }
+        if (ch === "\\") { escaped = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) { end = j; break; }
+        }
+      }
+      if (end > braceIdx) {
+        const candidate = trimmed.slice(braceIdx, end + 1);
+        const parsed = tryParseTypedJsonObject(candidate);
+        if (parsed) {
+          blocks.push(parsed);
+          visibleText = (trimmed.slice(0, braceIdx) + trimmed.slice(end + 1)).trim();
+        }
+      }
+    }
+  }
+
+  return { visibleText, blocks };
+}
+
 function isMobileLocalExportMode(metadata: Record<string, unknown> | undefined): boolean {
   if (!metadata) {
     return false;
@@ -477,6 +602,8 @@ const TRANSIENT_ASSISTANT_ACKS = new Set([
   "bir saniye, bakıyorum.",
   "anladım, planı çıkarıyorum.",
   "anladım, biraz daha derin bakıyorum.",
+  "belge hazırlanıyor, birkaç saniye...",
+  "rapor hazırlanıyor, birkaç saniye...",
 ]);
 
 function isLikelyTransientAssistantAck(text: string): boolean {
@@ -1053,6 +1180,42 @@ function buildReasoningProtocolPromptBlock(input: {
   if (environmentHints.length > 0) {
     lines.push(
       "- explainability policy: use derived local context silently by default; mention it only when the answer directly depends on local context or the user asks how you decided.",
+    );
+  }
+
+  /* Chain-of-Thought: inject step-by-step reasoning mandate for deep/planning workloads */
+  const needsDeepReasoning =
+    frame?.reasoningMode === "deep" ||
+    input.workload === "planning" ||
+    input.workload === "mobile_chat_deep_refine";
+
+  if (needsDeepReasoning) {
+    lines.push(
+      "- deep reasoning mode: before writing your final answer, silently work through these steps: (1) restate the core question in one sentence, (2) list what evidence is available (memory, web, context, or none), (3) identify the key tradeoffs or failure modes, (4) choose the strongest path, then (5) write your answer. Never show this internal process to the user — only show the clean result. If the question is complex, use short headers or numbered steps in the visible answer to make it scannable.",
+    );
+    lines.push(
+      "- completeness check: after drafting your answer, verify that every sub-question in the user's message is addressed and that no claim contradicts the available evidence. Trim redundant phrases before sending.",
+    );
+  }
+
+  /* ── Document generation ─────────────────────────────────────────── */
+  if (input.workload === "document_generate") {
+    lines.push(
+      '- DOCUMENT GENERATION MODE: First, write 1-2 short sentences describing what you are creating (this streams to the user immediately). Then output the document data inside a code fence exactly like this:\n```json\n{"type":"document_block","title":"...","format":"report|letter|outline|notes","sections":[{"heading":"...","content":"markdown text","level":1},...],"wordCount":N}\n```\nRules: (1) ≥2 sections, (2) each section content is plain markdown, (3) format must be one of: report, letter, outline, notes, (4) wordCount is approximate total word count, (5) after the code fence you MAY add one short follow-up sentence.',
+    );
+  }
+
+  /* ── Table generation ────────────────────────────────────────────── */
+  if (input.workload === "table_generate") {
+    lines.push(
+      '- table generation mode: produce a structured table as primary response. Emit a {"type":"table"} block with "columns" (string[]) and "rows" (string[][]). Optional: "title", "caption". Max 12 columns, 80 rows, cell text ≤120 chars. If editing an existing table, apply only requested changes and return the full updated table. Optionally follow with a short text block.',
+    );
+  }
+
+  /* ── Image analysis ──────────────────────────────────────────────── */
+  if (input.workload === "image_analyze" || input.workload === "vision_reasoning") {
+    lines.push(
+      '- image analysis mode: analyze the provided image (thumbnail + OCR from client). Emit a {"type":"image_analysis"} block with: "description" (what you see), optional "detectedText" (visible text in image), optional "tags" (string[]), optional "language", optional "confidence" (0-1). Then add a text block with your analysis or answer to the user\'s question.',
     );
   }
 
@@ -3039,6 +3202,32 @@ export async function generateSharedBrainReply(
   const memoryBlock = buildMemoryPromptBlock({ workload, results: memory.results });
   const webGroundingBlock =
     buildWebGroundingPromptBlock(webGrounding) ?? buildWebGroundingAbstentionBlock(webGrounding);
+
+  /* URL context: fetch content from user-provided URLs (fire parallel, max 2) */
+  const urlContextBlock = promptContainsUrl(input.prompt)
+    ? await buildUrlContextBlock(app, input.prompt).catch(() => null)
+    : null;
+
+  /* Client attachments: pre-processed document/image/table data from mobile/desktop */
+  const rawClientAttachments = input.clientAttachments ??
+    extractClientAttachments(input.requestMetadata ?? {});
+  const clientDocCtx = rawClientAttachments.length > 0
+    ? await buildDocumentContextBlock(app, rawClientAttachments, {
+        charBudget: workload === "document_generate" ? 28_000 : 20_000,
+      }).catch(() => null)
+    : null;
+  const clientDocBlock = clientDocCtx?.promptBlock ?? null;
+  /* Expose vision thumbnails to the model when workload supports it */
+  const clientVisionImages: ResolvedAttachmentContextVisionImage[] =
+    (workload === "image_analyze" || workload === "vision_reasoning")
+      ? (clientDocCtx?.visionImages ?? []).map((img) => ({
+          documentId: img.imageId,
+          mimeType: img.mimeType,
+          base64: img.base64,
+          label: img.label,
+        }))
+      : [];
+
   const documentSourceCount = new Set(retrieval.results.map((result) => result.documentId)).size;
   const groundingUsed = documentSourceCount > 0;
   const webSourceCount = webGrounding.results.length;
@@ -3111,13 +3300,15 @@ export async function generateSharedBrainReply(
     },
   );
   const systemPrompt = buildStructuredSystemPrompt(
-    retrievalBlock == null && memoryBlock == null && webGroundingBlock == null
+    retrievalBlock == null && memoryBlock == null && webGroundingBlock == null && urlContextBlock == null && clientDocBlock == null
         ? app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT
         : [
             app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
             retrievalBlock,
             memoryBlock,
             webGroundingBlock,
+            urlContextBlock,
+            clientDocBlock,
           ]
             .filter(Boolean)
             .join("\n\n"),
@@ -3231,7 +3422,7 @@ export async function generateSharedBrainReply(
                   maxTokens,
                   app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
                   false,
-                  input.attachmentContext?.visionImages ?? [],
+                  [...(input.attachmentContext?.visionImages ?? []), ...clientVisionImages],
                 ),
               },
             ]
@@ -3245,7 +3436,7 @@ export async function generateSharedBrainReply(
                   maxTokens,
                   app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
                   false,
-                  input.attachmentContext?.visionImages ?? [],
+                  [...(input.attachmentContext?.visionImages ?? []), ...clientVisionImages],
                 ),
               },
             ];
@@ -3675,11 +3866,51 @@ export async function generateSharedBrainReply(
     });
   }
 
+  /* ── Quota low-balance warning — fire-and-forget SSE ────────────────────
+   * After usage is committed we know the post-inference remaining credits.
+   * If the user has < 20% of their monthly grant left, emit quota.warning
+   * so the mobile app can show a soft banner without blocking the response.
+   */
+  if (
+    usageBudget.remainingAiCredits != null &&
+    usageBudget.grantedAiCredits != null &&
+    usageBudget.grantedAiCredits > 0
+  ) {
+    const remainingAfter = Math.max(0, usageBudget.remainingAiCredits - billableAiCredits);
+    const fractionLeft = remainingAfter / usageBudget.grantedAiCredits;
+    if (fractionLeft < 0.20) {
+      void app.services.eventBus.publishVolatile({
+        topic: "quota.warning",
+        userId: input.userId,
+        taskId: input.taskId ?? undefined,
+        payload: {
+          remainingCredits: remainingAfter,
+          grantedCredits: usageBudget.grantedAiCredits,
+          fractionLeft: Math.round(fractionLeft * 100) / 100,
+          periodEndsAt: usageBudget.periodEndsAt ?? null,
+          warningLevel: fractionLeft < 0.05 ? "critical" : "low",
+        },
+      }).catch(() => undefined);
+    }
+  }
+
   const attachmentInsightBlocks = buildAttachmentInsightBlocks(input.attachmentContext);
   const webGroundingBlocks = buildWebGroundingBlocks(webGrounding);
-  const assistantMetadataBlocks = [...webGroundingBlocks, ...attachmentInsightBlocks];
+
+  // document_generate workload: model JSON blok üretiyor, text'ten parse et
+  const extractedTypedBlocks: unknown[] = [];
+  let finalText = text;
+  if (workload === "document_generate") {
+    const extracted = extractTypedJsonBlocksFromText(text);
+    if (extracted.blocks.length > 0) {
+      extractedTypedBlocks.push(...extracted.blocks);
+      finalText = extracted.visibleText;
+    }
+  }
+
+  const assistantMetadataBlocks = [...webGroundingBlocks, ...attachmentInsightBlocks, ...extractedTypedBlocks];
   const result: SharedBrainInferenceResult = {
-    text,
+    text: finalText,
     provider: successfulProvider,
     model: successfulModel,
     latencyMs,
@@ -4228,6 +4459,58 @@ export async function generateGovernedSharedBrainReply(
       inference.metadata.webGroundingUsed === true ||
       Number(inference.metadata.webSourceCount ?? 0) > 0,
   };
+
+  // Yapısal çıktı (document_block / table) post-processing'i ATLAR.
+  // document_generate çıktısı bir JSON bloğudur; JSON çıkarıldıktan sonra geriye
+  // kalan görünür metin kısadır (önsöz + takip cümlesi). finalizeIncompleteResponse
+  // ve deep-refine pass'leri bunu "yarım yanıt" sanıp tamamlama/temizleme modeli
+  // çağırıyor, boş input'a "Üzgünüm, tamamlanacak metni göremiyorum" dönüyor ve
+  // document_block tamamen kayboluyordu. Blok varsa olduğu gibi döndür.
+  const structuredBlocks = Array.isArray(inference.metadata.blocks)
+    ? (inference.metadata.blocks as unknown[])
+    : [];
+  const hasStructuredOutputBlock = structuredBlocks.some(
+    (block) =>
+      block !== null &&
+      typeof block === "object" &&
+      ["document_block", "table"].includes(
+        String((block as Record<string, unknown>).type ?? ""),
+      ),
+  );
+  if (hasStructuredOutputBlock) {
+    const structuredVisible =
+      polishAssistantVisibleText(
+        sanitizeAssistantVisibleText(inference.text, {
+          ...visibleTextSanitizerOptions,
+          fallback: inference.text,
+        }),
+        visibleTextSanitizerOptions,
+      ) || inference.text;
+    const structuredEvaluation = evaluateBrainAnswer({
+      prompt: input.prompt,
+      modelAnswer: structuredVisible,
+      answerSource: "model",
+      routeDecision,
+      boundaryOutcome: null,
+      toolUseRequired: routeToolUseRequired,
+      retrievalUsed: false,
+      retrievalSufficiency: null,
+      personalizationScope: null,
+      memoryUsed: inference.metadata.memoryUsed === true,
+      clarificationDecision: "not_needed",
+      continuitySignals: null,
+    });
+    return {
+      ...inference,
+      text: structuredVisible,
+      answerSource: "model",
+      gateRuleIds: [],
+      boundaryOutcome: null,
+      failureType: null,
+      evaluation: structuredEvaluation,
+    };
+  }
+
   const finalized = await finalizeIncompleteResponse(
     app,
     input,

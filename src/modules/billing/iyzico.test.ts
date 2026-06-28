@@ -96,6 +96,8 @@ function createEnv(): AppEnv {
     ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
     ELYAN_WEB_GROUNDING_MAX_RESULTS: 4,
     ELYAN_WEB_GROUNDING_TIMEOUT_MS: 6500,
+    ELYAN_SEARCH_PROVIDER: "duckduckgo_html" as const,
+    JINA_READER_ENABLED: true,
     ELYAN_RAG_SEMANTIC_RERANK_ENABLED: true,
     ELYAN_RAG_SEMANTIC_RERANK_MODEL: "Xenova/multilingual-e5-small",
     ELYAN_RAG_SEMANTIC_RERANK_WINDOW: 8,

@@ -5,6 +5,9 @@ export const sharedBrainWorkloadValues = [
   "mobile_chat_balanced",
   "mobile_chat_deep_refine",
   "document_analysis",
+  "document_generate",
+  "table_generate",
+  "image_analyze",
   "planning",
   "desktop_handoff",
   "vision_reasoning",
@@ -80,6 +83,36 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
     cachePolicy: "off",
     fallbackWorkload: "mobile_chat_balanced",
   },
+  /* AI generates a structured multi-section document */
+  document_generate: {
+    workload: "document_generate",
+    timeoutMs: 14_000,
+    firstDeltaBudgetMs: 2_800,
+    maxTokens: 1_600,
+    streamingEnabled: true,
+    cachePolicy: "off",
+    fallbackWorkload: "document_analysis",
+  },
+  /* AI generates or edits a structured table from natural language */
+  table_generate: {
+    workload: "table_generate",
+    timeoutMs: 9_000,
+    firstDeltaBudgetMs: 2_200,
+    maxTokens: 800,
+    streamingEnabled: true,
+    cachePolicy: "off",
+    fallbackWorkload: "mobile_chat_balanced",
+  },
+  /* Thumbnail + OCR text analysis — no raw file, vision model optional */
+  image_analyze: {
+    workload: "image_analyze",
+    timeoutMs: 12_000,
+    firstDeltaBudgetMs: 3_000,
+    maxTokens: 640,
+    streamingEnabled: true,
+    cachePolicy: "off",
+    fallbackWorkload: "document_analysis",
+  },
   planning: {
     workload: "planning",
     timeoutMs: 9_000,
@@ -128,7 +161,13 @@ export function resolveAttachmentAwareSharedBrainWorkload(input: {
   hasVisionImage?: boolean;
 }): SharedBrainWorkload {
   const selectedWorkload = input.selectedWorkload ?? "mobile_chat_fast";
-  if (selectedWorkload === "planning" || selectedWorkload === "desktop_handoff") {
+  if (
+    selectedWorkload === "planning" ||
+    selectedWorkload === "desktop_handoff" ||
+    selectedWorkload === "document_generate" ||
+    selectedWorkload === "table_generate" ||
+    selectedWorkload === "image_analyze"
+  ) {
     return selectedWorkload;
   }
   if (input.hasVisionImage === true) {

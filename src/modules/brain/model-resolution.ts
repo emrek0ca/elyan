@@ -84,6 +84,20 @@ const OLLAMA_MODEL_PREFERENCES_BY_WORKLOAD: Record<SharedBrainWorkload, string[]
     "llama3.1:8b",
     "qwen2.5-coder:3b",
   ],
+  document_generate: [
+    "qwen2.5:7b-instruct-q5_K_M",
+    "qwen2.5:7b-instruct",
+    "deepseek-r1:8b",
+    "llama3:8b",
+    "llama3.1:8b",
+  ],
+  table_generate: [
+    "qwen2.5:7b-instruct-q5_K_M",
+    "qwen2.5:7b-instruct",
+    "llama3:8b",
+    "llama3.1:8b",
+  ],
+  image_analyze: [],
   desktop_handoff: [],
   vision_reasoning: [],
 };

@@ -269,6 +269,121 @@ export class NlpDaemon {
     }
   }
 
+  /** Keyword-based sentiment analysis — no LLM required. */
+  async scoreSentiment(text: string): Promise<{ label: "positive" | "negative" | "neutral" | "mixed"; score: number; positive: number; negative: number } | null> {
+    try {
+      const r = await this._send({ type: "score_sentiment", text });
+      if (typeof r.label !== "string") return null;
+      return {
+        label:    r.label    as "positive" | "negative" | "neutral" | "mixed",
+        score:    typeof r.score    === "number" ? r.score    : 0.5,
+        positive: typeof r.positive === "number" ? r.positive : 0,
+        negative: typeof r.negative === "number" ? r.negative : 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Detect language of text — returns "tr", "en", or "mixed" with confidence. */
+  async detectLanguage(text: string): Promise<{ lang: "tr" | "en" | "mixed"; confidence: number } | null> {
+    try {
+      const r = await this._send({ type: "detect_language", text });
+      if (typeof r.lang !== "string") return null;
+      return {
+        lang:       r.lang       as "tr" | "en" | "mixed",
+        confidence: typeof r.confidence === "number" ? r.confidence : 0.5,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Extract top-N keywords from text — useful for memory tagging. */
+  async extractKeywords(text: string, topN = 8): Promise<string[]> {
+    try {
+      const r = await this._send({ type: "extract_keywords", text, topN: String(topN) });
+      return Array.isArray(r.keywords) ? (r.keywords as string[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Per-plan token bucket rate check — in-process, zero DB.
+   * Returns allowed=true and consumes one token, or allowed=false with retryAfterMs.
+   */
+  async rateCheck(userId: string, plan: string): Promise<{ allowed: boolean; retryAfterMs: number }> {
+    try {
+      const r = await this._send({ type: "rate_check", userId, plan });
+      return {
+        allowed:      r.allowed === true,
+        retryAfterMs: typeof r.retryAfterMs === "number" ? r.retryAfterMs : 0,
+      };
+    } catch {
+      return { allowed: true, retryAfterMs: 0 };
+    }
+  }
+
+  /** Fast token count estimate — same formula as estimateTextTokens(), no LLM. */
+  async estimateTokens(text: string): Promise<{ tokens: number; chars: number } | null> {
+    try {
+      const r = await this._send({ type: "estimate_tokens", text });
+      if (typeof r.tokens !== "number") return null;
+      return {
+        tokens: r.tokens as number,
+        chars:  typeof r.chars === "number" ? r.chars as number : 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Measure text complexity — for calibrating response verbosity. */
+  async scoreComplexity(text: string): Promise<{ avgSentenceLen: number; vocabRichness: number; tokenCount: number; sentenceCount: number } | null> {
+    try {
+      const r = await this._send({ type: "score_complexity", text });
+      if (typeof r.tokenCount !== "number") return null;
+      return {
+        avgSentenceLen: typeof r.avgSentenceLen === "number" ? r.avgSentenceLen : 0,
+        vocabRichness:  typeof r.vocabRichness  === "number" ? r.vocabRichness  : 0,
+        tokenCount:     typeof r.tokenCount     === "number" ? r.tokenCount     : 0,
+        sentenceCount:  typeof r.sentenceCount  === "number" ? r.sentenceCount  : 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Selects chunk IDs that fit within charBudget (edge-boosted greedy).
+   * Returns null on error (fail-open → caller uses its own fallback).
+   */
+  async chunkBudget(
+    chunks: Array<{ id: string; charCount: number; position?: number }>,
+    budgetChars: number,
+  ): Promise<string[] | null> {
+    try {
+      const r = await this._send({ type: "chunk_budget", chunks, budgetChars });
+      return Array.isArray(r.selected) ? (r.selected as string[]) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Strips Turkish/English stopwords from a search query.
+   * Returns the original query on error (fail-open).
+   */
+  async cleanSearchQuery(query: string): Promise<string> {
+    try {
+      const r = await this._send({ type: "clean_search_query", query });
+      return typeof r.query === "string" && r.query.length > 0 ? r.query : query;
+    } catch {
+      return query;
+    }
+  }
+
   stop(): void {
     this.available = false;
     try { this.proc?.stdin?.end(); } catch {}

@@ -189,6 +189,9 @@ export const elyanAssistantBlockTypeValues = [
   "file",
   "actionable",
   "block_group",
+  "document_block",
+  "attachment_ack",
+  "image_analysis",
 ] as const;
 export const elyanAssistantBlockVisibilityValues = [
   "user_visible",
@@ -474,13 +477,19 @@ export const elyanAssistantTableBlockSchema =
       .max(80),
     caption: z.string().min(1).max(240).optional(),
   });
+const elyanAssistantChartSeriesSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  labels: z.array(z.string().min(1).max(120)).min(1).max(24),
+  values: z.array(z.number()).min(1).max(24),
+});
 export const elyanAssistantChartBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
     type: z.literal("chart"),
     title: z.string().min(1).max(120).optional(),
     chartType: z.enum(["bar", "line", "pie"]),
-    labels: z.array(z.string().min(1).max(120)).min(1).max(24),
-    values: z.array(z.number()).min(1).max(24),
+    labels: z.array(z.string().min(1).max(120)).min(1).max(24).optional(),
+    values: z.array(z.number()).min(1).max(24).optional(),
+    series: z.array(elyanAssistantChartSeriesSchema).min(1).max(8).optional(),
     caption: z.string().min(1).max(240).optional(),
   });
 export const elyanAssistantFileBlockSchema =
@@ -524,6 +533,45 @@ export const elyanAssistantBlockGroupBlockSchema: z.ZodType<any> =
       .min(1)
       .max(12),
   });
+
+/* ── document_block: AI-generated multi-section document ─────────────── */
+const elyanDocumentSectionSchema = z.object({
+  heading: z.string().min(1).max(200).optional(),
+  content: z.string().min(1).max(8_000),
+  level: z.number().int().min(1).max(3).optional(),
+});
+export const elyanAssistantDocumentBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("document_block"),
+    title: z.string().min(1).max(200).optional(),
+    sections: z.array(elyanDocumentSectionSchema).min(1).max(40),
+    format: z.enum(["report", "letter", "outline", "notes"]).optional(),
+    wordCount: z.number().int().nonnegative().optional(),
+  });
+
+/* ── attachment_ack: what the backend received/processed ─────────────── */
+export const elyanAssistantAttachmentAckBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("attachment_ack"),
+    summary: z.string().min(1).max(400),
+    attachmentCount: z.number().int().nonnegative(),
+    pageCount: z.number().int().nonnegative().optional(),
+    chunkCount: z.number().int().nonnegative().optional(),
+    hasTable: z.boolean().optional(),
+    hasImage: z.boolean().optional(),
+  });
+
+/* ── image_analysis: structured result of image + OCR processing ─────── */
+export const elyanAssistantImageAnalysisBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("image_analysis"),
+    description: z.string().min(1).max(2_000),
+    detectedText: z.string().max(2_000).optional(),
+    tags: z.array(z.string().min(1).max(60)).max(12).optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    language: z.string().max(20).optional(),
+  });
+
 export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantTextBlockSchema,
   elyanAssistantSummaryBlockSchema,
@@ -538,6 +586,9 @@ export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantFileBlockSchema,
   elyanAssistantActionableBlockSchema,
   elyanAssistantBlockGroupBlockSchema,
+  elyanAssistantDocumentBlockSchema,
+  elyanAssistantAttachmentAckBlockSchema,
+  elyanAssistantImageAnalysisBlockSchema,
 ]);
 
 export type DeviceType = z.infer<typeof deviceTypeSchema>;
@@ -638,5 +689,14 @@ export type ElyanAssistantBlockGroupBlock = z.infer<
 >;
 export type ElyanAssistantWebSearchBlock = z.infer<
   typeof elyanAssistantWebSearchBlockSchema
+>;
+export type ElyanAssistantDocumentBlock = z.infer<
+  typeof elyanAssistantDocumentBlockSchema
+>;
+export type ElyanAssistantAttachmentAckBlock = z.infer<
+  typeof elyanAssistantAttachmentAckBlockSchema
+>;
+export type ElyanAssistantImageAnalysisBlock = z.infer<
+  typeof elyanAssistantImageAnalysisBlockSchema
 >;
 export type ElyanAssistantBlock = z.infer<typeof elyanAssistantBlockSchema>;

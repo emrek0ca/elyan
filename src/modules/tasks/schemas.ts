@@ -39,6 +39,11 @@ export const taskParamsSchema = z.object({
   taskId: z.string().uuid(),
 });
 
+export const taskArtifactParamsSchema = z.object({
+  taskId: z.string().uuid(),
+  artifactId: z.string().uuid(),
+});
+
 export const listTasksQuerySchema = z.object({
   targetDeviceId: z.string().uuid().optional(),
   status: z.string().optional(),

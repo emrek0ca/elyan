@@ -1,0 +1,76 @@
+# SearXNG settings for Elyan backend
+# Self-hosted, internal only — no external exposure
+
+use_default_settings: true
+
+general:
+  instance_name: "elyan-search"
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "tr-TR"
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "elyan_searxng_internal_secret_do_not_expose"
+  limiter: false
+  image_proxy: false
+  http_protocol_version: "1.1"
+  method: "GET"
+
+ui:
+  static_use_hash: true
+  default_locale: "tr"
+  theme_args:
+    simple_style: "dark"
+
+# Override specific engines — enable what aggregates well
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: d
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: w
+    disabled: false
+    language: tr
+
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    disabled: false
+
+  - name: yahoo
+    engine: yahoo
+    shortcut: y
+    disabled: false
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 10.0
+  useragent_suffix: ""
+  pool_connections: 100
+  pool_maxsize: 20

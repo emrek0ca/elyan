@@ -23,22 +23,29 @@ import {
   resolveAttachmentContextWithCache,
 } from "../brain/attachment-context.js";
 import { buildSharedBrainAckText } from "../brain/chat-heuristics.js";
+import { extractClientAttachments } from "../brain/document-types.js";
+import { buildDocumentContextBlock, buildAttachmentAckText } from "../brain/document-context.js";
+import { buildAssistantAttachmentAckBlock, buildAssistantCodeBlock, buildAssistantDocumentBlock, buildAssistantTableBlock } from "../chat/message-blocks.js";
 import { maybeGenerateHostedImageArtifact } from "../brain/image-generation.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import { maybeQueueAutomaticSharedBrainRefresh } from "../brain/service.js";
 import { resolveAttachmentAwareSharedBrainWorkload } from "../brain/workloads.js";
 import {
   composeAssistantMessageBlocks,
+  normalizeAssistantMessageBlocks,
   sanitizeAssistantVisibleText,
   shapeAssistantMessagePayload,
+  withAssistantBlocksMetadata,
 } from "../chat/message-blocks.js";
-import { syncChatTaskLifecycle } from "../chat/task-sync.js";
+import { chatMessages } from "../../db/schema.js";
+import { syncChatTaskLifecycle, compactMessagePreview } from "../chat/task-sync.js";
 import { buildTaskTraceBlock } from "../chat/task-trace.js";
-import { persistRollingSummaryToSession } from "../chat/service.js";
+import { persistRollingSummaryToSession, listChatSessionMessages } from "../chat/service.js";
 import { getUserDevice, RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { decideCommandRoute, resolveCommandTarget, resolvePendingDesktopQueueTarget } from "../routing-policy/service.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import { assertMonthlyTaskUsageAllowed, recordUsageLedgerEntry, BILLING_USAGE_METRICS } from "../billing/usage-ledger.js";
+import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import { createUpgradeOrByokRequiredError, getUserUsageAccessTruth } from "../billing/service.js";
 import {
   assertAttachmentQuotaAllowedFromUsage,
@@ -312,6 +319,366 @@ export function readServerBrainCompletionMetadata(metadata: Record<string, unkno
     contextFreshness: metadata.contextFreshness ?? null,
     assistantBlocks: Array.isArray(metadata.blocks) ? metadata.blocks : [],
   };
+}
+
+function isMarkdownTableDivider(line: string) {
+  const normalized = line.trim();
+  if (!normalized.includes("|")) {
+    return false;
+  }
+  const cells = normalized
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  return (
+    cells.length > 0 &&
+    cells.every((cell) => cell.length > 0 && /^:?-{3,}:?$/.test(cell))
+  );
+}
+
+function splitMarkdownTableRow(line: string) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+// Extract the first code fence from response markdown.
+// Returns a typed code block AND the matched source span so the caller can
+// strip it from the visible text (avoids the "code shown twice" duplication —
+// once as markdown, once as the code widget).
+function extractMarkdownCodeBlock(responseText: string) {
+  const text = String(responseText ?? "");
+  const match = /```(\w*)\n([\s\S]+?)```/.exec(text);
+  if (!match) return null;
+  const language = match[1].trim() || undefined;
+  const code = match[2].trim();
+  if (!code) return null;
+  return {
+    block: buildAssistantCodeBlock({ code, language }),
+    source: match[0],
+  };
+}
+
+// Extract structured document sections from responses with 3+ markdown headings.
+// This activates the mobile document_block widget (PDF preview + share).
+function extractMarkdownDocumentBlock(responseText: string) {
+  const text = String(responseText ?? "").replace(/\r\n?/g, "\n");
+  const lines = text.split("\n");
+
+  const sections: Array<{ heading?: string; content: string; level: number }> = [];
+  let currentHeading: string | undefined;
+  let currentLevel = 1;
+  let currentLines: string[] = [];
+  let headingCount = 0;
+
+  const flush = () => {
+    const content = currentLines.join("\n").trim();
+    if (content || currentHeading) {
+      sections.push({ heading: currentHeading, content, level: currentLevel });
+    }
+    currentLines = [];
+  };
+
+  for (const line of lines) {
+    const hMatch = /^(#{1,3})\s+(.+)/.exec(line.trim());
+    if (hMatch) {
+      flush();
+      currentLevel = hMatch[1].length;
+      currentHeading = hMatch[2].trim();
+      headingCount += 1;
+    } else {
+      currentLines.push(line);
+    }
+  }
+  flush();
+
+  // Only extract when there are enough real sections with content
+  const validSections = sections.filter((s) => s.content.length > 0 || s.heading);
+  if (headingCount < 2 || validSections.length === 0) return null;
+
+  const totalWords = validSections
+    .reduce((sum, s) => sum + s.content.split(/\s+/).filter(Boolean).length, 0);
+  if (totalWords < 60) return null;
+
+  // Treat the first section without heading as document title if it's short
+  let title: string | undefined;
+  const firstSection = validSections[0];
+  if (!firstSection.heading && firstSection.content.length < 120 && validSections.length > 1) {
+    title = firstSection.content.split("\n")[0]?.trim();
+    validSections.shift();
+  } else if (firstSection.heading && validSections.every((s) => s.level >= firstSection.level)) {
+    title = firstSection.heading;
+    firstSection.heading = undefined;
+  }
+
+  const wordCount = validSections
+    .reduce((sum, s) => sum + (s.heading ?? "").split(/\s+/).length + s.content.split(/\s+/).filter(Boolean).length, 0);
+
+  // Document widget renders the full content — the raw text is redundant
+  // alongside it, so signal "consume the whole response".
+  return {
+    block: buildAssistantDocumentBlock({
+      title,
+      sections: validSections,
+      format: "report",
+      wordCount,
+    }),
+    source: text,
+  };
+}
+
+function extractMarkdownTableBlock(responseText: string) {
+  const normalized = String(responseText ?? "").replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  for (let index = 0; index <= lines.length - 3; index += 1) {
+    const headerLine = lines[index]?.trim() ?? "";
+    const dividerLine = lines[index + 1]?.trim() ?? "";
+    if (!headerLine.includes("|") || !isMarkdownTableDivider(dividerLine)) {
+      continue;
+    }
+    const columns = splitMarkdownTableRow(headerLine);
+    if (columns.length === 0) {
+      continue;
+    }
+
+    const rows: string[][] = [];
+    let lastRow = index + 1; // divider line
+    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
+      const rowLine = lines[rowIndex]?.trim() ?? "";
+      if (!rowLine || !rowLine.includes("|")) {
+        break;
+      }
+      if (isMarkdownTableDivider(rowLine)) {
+        lastRow = rowIndex;
+        continue;
+      }
+      const row = splitMarkdownTableRow(rowLine);
+      if (row.length !== columns.length) {
+        break;
+      }
+      rows.push(row);
+      lastRow = rowIndex;
+    }
+
+    if (rows.length === 0) {
+      continue;
+    }
+
+    // Source span = headerLine .. lastRow (joined back). Caller strips this
+    // from the visible text so the table is not also rendered as markdown.
+    const source = lines.slice(index, lastRow + 1).join("\n");
+    return {
+      block: buildAssistantTableBlock({ columns, rows }),
+      source,
+    };
+  }
+
+  return null;
+}
+
+// Some model outputs come back as a single bare JSON object whose `type` is
+// one of our known structured block types. Render them as a real block widget
+// instead of leaking JSON as plain text.
+const STRUCTURED_BLOCK_TYPES = new Set<string>([
+  "status",
+  "summary",
+  "next_steps",
+  "desktop_suggestion",
+  "actionable",
+  "attachment_context",
+  "context_signal",
+  "memory_echo",
+]);
+
+/**
+ * Splits a response that starts with a single typed-block JSON object from any
+ * trailing prose. Models prompted with "emit a status block, then write your
+ * reply" return both in one turn (e.g.
+ *   {"type":"status","status":"needs_desktop",...}\nMasaüstünüzdeki dosya…
+ * ). The previous bare-only extractor missed this hybrid shape because the
+ * string did not end in "}", and the raw JSON leaked into chat (prod bug).
+ *
+ * Approach: walk balanced braces from the first "{" to locate the boundary,
+ * parse just that slice, and return both the block and any remaining text.
+ * Quote/escape aware so braces inside strings cannot fool the depth counter.
+ */
+function extractLeadingJsonBlock(
+  responseText: string,
+): { block: Record<string, unknown>; rest: string } | null {
+  const text = String(responseText ?? "");
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  // Only treat it as a leading block when nothing meaningful precedes the "{".
+  if (text.slice(0, start).trim().length > 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let end = -1;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end === -1) return null;
+
+  const candidate = text.slice(start, end + 1);
+  try {
+    const parsed = JSON.parse(candidate) as Record<string, unknown>;
+    const type = String(parsed?.type ?? "").trim().toLowerCase();
+    if (!STRUCTURED_BLOCK_TYPES.has(type)) return null;
+    return { block: parsed, rest: text.slice(end + 1).trimStart() };
+  } catch {
+    return null;
+  }
+}
+
+export function resolveCompletionAssistantBlocks(input: {
+  responseText: string;
+  assistantBlocks?: unknown[];
+}): { blocks: unknown[]; text: string } {
+  const assistantBlocks = Array.isArray(input.assistantBlocks) ? [...input.assistantBlocks] : [];
+  const normalizedBlocks = normalizeAssistantMessageBlocks({ blocks: assistantBlocks });
+
+  const hasTableBlock = normalizedBlocks.some((b) => b.type === "table");
+  const hasCodeBlock = normalizedBlocks.some((b) => b.type === "code");
+  const hasDocumentBlock = normalizedBlocks.some((b) => b.type === "document_block");
+
+  // Normalize line endings first — extractor sources are reconstructed from
+  // LF-only lines, so `text.split(source)` would never match CRLF content
+  // and the duplicate markdown would remain in chat (bug seen in prod).
+  let text = String(input.responseText ?? "").replace(/\r\n?/g, "\n");
+  const sourcesToStrip: string[] = [];
+
+  // Extract markdown table if model didn't produce a typed table block
+  if (!hasTableBlock) {
+    const parsedTable = extractMarkdownTableBlock(text);
+    if (parsedTable) {
+      assistantBlocks.push(parsedTable.block);
+      sourcesToStrip.push(parsedTable.source);
+    }
+  }
+
+  // Extract code fences → syntax-highlighted code block for mobile
+  if (!hasCodeBlock) {
+    const parsedCode = extractMarkdownCodeBlock(text);
+    if (parsedCode) {
+      assistantBlocks.push(parsedCode.block);
+      sourcesToStrip.push(parsedCode.source);
+    }
+  }
+
+  // Extract structured headings → document_block (PDF preview + share on mobile)
+  // Only when no other rich block is present to avoid double-rendering
+  if (!hasDocumentBlock && !hasTableBlock) {
+    const parsedDoc = extractMarkdownDocumentBlock(text);
+    if (parsedDoc) {
+      assistantBlocks.push(parsedDoc.block);
+      sourcesToStrip.push(parsedDoc.source);
+    }
+  }
+
+  // The model often emits a typed-block JSON (e.g. status:needs_desktop) at the
+  // start of its turn, sometimes ALONE and sometimes followed by a prose reply.
+  // Promote the JSON to a typed block and keep only the trailing prose as
+  // visible text — otherwise the raw JSON leaks into chat as plain text.
+  const leadingJson = extractLeadingJsonBlock(text);
+  if (leadingJson) {
+    assistantBlocks.push(leadingJson.block);
+    text = leadingJson.rest;
+  }
+
+  // Strip every extracted span so the inline text doesn't duplicate the widget.
+  for (const span of sourcesToStrip) {
+    if (!span) continue;
+    text = text.split(span).join("");
+  }
+  // Collapse leftover blank lines from the strips.
+  text = text.replace(/\n{3,}/g, "\n\n").trim();
+
+  return { blocks: assistantBlocks, text };
+}
+
+function summarizeStructuredAssistantBlocks(assistantBlocks: unknown[]) {
+  const normalizedBlocks = normalizeAssistantMessageBlocks({
+    blocks: assistantBlocks,
+  }).filter((block) => block.type !== "text");
+  if (normalizedBlocks.length === 0) {
+    return null;
+  }
+
+  const firstBlock = normalizedBlocks[0];
+  if (firstBlock.type === "document_block") {
+    return firstBlock.title?.trim() ? `${firstBlock.title.trim()} hazır.` : "Belge hazır.";
+  }
+  if (firstBlock.type === "table") {
+    return firstBlock.title?.trim() ? `${firstBlock.title.trim()} hazır.` : "Tablo hazır.";
+  }
+  if (firstBlock.type === "chart") {
+    return firstBlock.title?.trim() ? `${firstBlock.title.trim()} hazır.` : "Grafik hazır.";
+  }
+  if (firstBlock.type === "file") {
+    return firstBlock.fileName?.trim() ? `${firstBlock.fileName.trim()} hazır.` : "Dosya hazır.";
+  }
+  if (firstBlock.type === "web_search") {
+    return "Web kaynaklari hazir.";
+  }
+  return "Yapilandirilmis cikti hazir.";
+}
+
+export function resolveVisibleAssistantResponse(input: {
+  responseText: string;
+  assistantBlocks?: unknown[];
+  allowPublicProviderReferences?: boolean;
+}) {
+  const visibleTextSanitizerOptions = {
+    allowPublicProviderReferences: input.allowPublicProviderReferences === true,
+  };
+  const normalizedBlocks = normalizeAssistantMessageBlocks({
+    blocks: input.assistantBlocks,
+  });
+  const blockVisibleText = normalizedBlocks
+    .filter((block): block is Extract<(typeof normalizedBlocks)[number], { type: "text" }> => block.type === "text")
+    .map((block) => block.markdown.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const visibleResponseText =
+    sanitizeAssistantVisibleText(input.responseText, visibleTextSanitizerOptions) ||
+    sanitizeAssistantVisibleText(blockVisibleText, visibleTextSanitizerOptions);
+  if (visibleResponseText) {
+    return visibleResponseText;
+  }
+  const hasStructuredBlocks = normalizedBlocks.some((block) => block.type !== "text");
+  if (hasStructuredBlocks) {
+    return "";
+  }
+  return sanitizeAssistantVisibleText(input.responseText, {
+    ...visibleTextSanitizerOptions,
+    fallback: "Yanıtı temiz biçimde hazırlayamadım. İstersen aynı isteği tekrar deneyelim.",
+  });
 }
 
 function resolveTaskRouteNeedsDesktop(routeDecision: CommandRouteDecision | null | undefined): boolean {
@@ -925,6 +1292,25 @@ async function shapePublicArtifactRecord(
   });
 }
 
+async function getTaskArtifactRecordForUser(
+  app: FastifyInstance,
+  taskId: string,
+  artifactId: string,
+  userId: string,
+) {
+  await getTaskForUser(app, taskId, userId);
+  const rows = await app.db
+    .select()
+    .from(artifacts)
+    .where(and(eq(artifacts.id, artifactId), eq(artifacts.taskId, taskId)))
+    .limit(1);
+  const artifact = rows[0];
+  if (!artifact) {
+    throw notFound("Artifact not found");
+  }
+  return artifact;
+}
+
 async function getExistingTaskForIdempotency(
   db: Pick<FastifyInstance["db"], "select">,
   input: {
@@ -1524,16 +1910,17 @@ async function completeServerBrainTask(
       : {};
   const payloadMetadata = getPayloadMetadata(payload);
   const prompt = getTaskPrompt(payload);
-  const visibleTextSanitizerOptions = {
+  const resolved = resolveCompletionAssistantBlocks({
+    responseText: input.responseText,
+    assistantBlocks: input.assistantBlocks,
+  });
+  const resolvedAssistantBlocks = resolved.blocks;
+  const visibleResponseText = resolveVisibleAssistantResponse({
+    responseText: resolved.text,
+    assistantBlocks: resolvedAssistantBlocks,
     allowPublicProviderReferences:
       input.webGroundingUsed === true || (input.webSourceCount ?? 0) > 0,
-  };
-  const visibleResponseText =
-    sanitizeAssistantVisibleText(input.responseText, visibleTextSanitizerOptions) ||
-    sanitizeAssistantVisibleText(input.responseText, {
-      ...visibleTextSanitizerOptions,
-      fallback: "Yanıtı temiz biçimde hazırlayamadım. İstersen aynı isteği tekrar deneyelim.",
-    });
+  });
   const generatedImageArtifact = await maybeGenerateHostedImageArtifact(app, {
     prompt,
     responseText: visibleResponseText,
@@ -1541,7 +1928,8 @@ async function completeServerBrainTask(
   });
   const renderRecipe = generatedImageArtifact
     ? null
-    : buildLocalRenderRecipe({
+    : visibleResponseText
+      ? buildLocalRenderRecipe({
         prompt,
         responseText: visibleResponseText,
         metadata: payloadMetadata,
@@ -1550,7 +1938,12 @@ async function completeServerBrainTask(
             ? "desktop"
             : "mobile",
         taskId: task.id,
-      });
+      })
+      : null;
+  const structuredSummary = summarizeStructuredAssistantBlocks(resolvedAssistantBlocks);
+  const taskSummary = visibleResponseText
+    ? visibleResponseText.slice(0, 280)
+    : structuredSummary;
 
   const now = new Date();
   const result = {
@@ -1563,7 +1956,12 @@ async function completeServerBrainTask(
     totalTokens: input.totalTokens,
     firstDeltaMs: input.firstDeltaMs ?? null,
     completionLatencyMs: input.completionLatencyMs ?? input.latencyMs,
-    responseBytes: input.responseBytes ?? Buffer.byteLength(visibleResponseText, "utf8"),
+    responseBytes:
+      input.responseBytes ??
+      Buffer.byteLength(
+        visibleResponseText || JSON.stringify(resolvedAssistantBlocks ?? []),
+        "utf8",
+      ),
     fallbackUsed: input.fallbackUsed ?? false,
     groundingUsed: input.groundingUsed ?? false,
     documentSourceCount: input.documentSourceCount ?? 0,
@@ -1600,7 +1998,7 @@ async function completeServerBrainTask(
     contextPacketKinds: input.contextPacketKinds ?? [],
     healthContextUsed: input.healthContextUsed ?? false,
     contextFreshness: input.contextFreshness ?? null,
-    assistantBlocks: Array.isArray(input.assistantBlocks) ? input.assistantBlocks : [],
+    assistantBlocks: resolvedAssistantBlocks,
     imageArtifactGenerated: Boolean(generatedImageArtifact),
     ...(renderRecipe ? { renderRecipe } : {}),
   };
@@ -1615,7 +2013,7 @@ async function completeServerBrainTask(
     .update(tasks)
     .set({
       status: "completed",
-      summary: visibleResponseText.slice(0, 280),
+      summary: taskSummary,
       error: null,
       result,
       resultBlobId: resultBlob?.blobId ?? null,
@@ -1629,7 +2027,7 @@ async function completeServerBrainTask(
   const updatedTask = rows[0] ?? {
     ...task,
     status: "completed" as const,
-    summary: visibleResponseText.slice(0, 280),
+    summary: taskSummary,
     error: null,
     result,
     completedAt: now,
@@ -1881,6 +2279,20 @@ async function processSharedBrainChatTask(
   },
 ) {
   try {
+    /* Per-plan in-process rate check — C daemon token bucket, zero DB.
+     * On limit: fail fast with rate_limited before expensive processing. */
+    if (nlpDaemon.isAvailable()) {
+      const rateResult = await nlpDaemon.rateCheck(
+        input.userId,
+        String(input.planCode ?? "free"),
+      ).catch(() => ({ allowed: true, retryAfterMs: 0 }));
+      if (!rateResult.allowed) {
+        throw new AppError(429, "rate_limited", "Çok fazla istek gönderildi. Lütfen bekleyin.", {
+          retryAfterMs: rateResult.retryAfterMs,
+        });
+      }
+    }
+
     await recordTaskLearningFromCreation(app, {
       userId: input.userId,
       accountId: input.userId,
@@ -1934,9 +2346,27 @@ async function processSharedBrainChatTask(
         ? (runningTask.payload as Record<string, unknown>)
         : {};
     const attachmentContext = await resolveTaskAttachmentContext(app, runningPayload, input.prompt);
+
+    /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
+    const clientAttachments = extractClientAttachments(getPayloadMetadata(runningPayload));
+    const clientDocCtx = clientAttachments.length > 0
+      ? await buildDocumentContextBlock(app, clientAttachments).catch(() => null)
+      : null;
+
+    // Mobil metadata.selectedWorkload düz olarak gönderiyorsa routeDecision yokken de oku
+    const metadataSelectedWorkload = (() => {
+      const v = getPayloadMetadata(runningPayload).selectedWorkload;
+      return typeof v === "string" && v.trim() ? (v.trim() as import("../brain/workloads.js").SharedBrainWorkload) : null;
+    })();
+    const effectiveRouteDecision: CommandRouteDecision | null =
+      routeDecision ??
+      (metadataSelectedWorkload
+        ? ({ selectedWorkload: metadataSelectedWorkload, route: "server_brain" } as CommandRouteDecision)
+        : null);
+
     const selectedWorkload = resolveSharedBrainWorkloadForRouteDecision(
-      routeDecision,
-      attachmentContext?.used === true,
+      effectiveRouteDecision,
+      attachmentContext?.used === true || (clientDocCtx?.hasContent === true),
     );
     const ackText = buildSharedBrainAckText(selectedWorkload);
     const ackTaskTrace = buildTaskTraceBlock({
@@ -1945,6 +2375,17 @@ async function processSharedBrainChatTask(
     });
     let streamSeq = 0;
 
+    /* Eğer istemci ek dosya gönderdiyse, attachment_ack bloğu — hem açılış hem kapanış event'ine eklenir */
+    const attachmentAckBlock = clientDocCtx?.hasContent
+      ? buildAssistantAttachmentAckBlock({
+          summary: buildAttachmentAckText(clientDocCtx),
+          attachmentCount: clientAttachments.length,
+          chunkCount: clientDocCtx.chunkCount,
+          hasTable: clientDocCtx.tableCount > 0,
+          hasImage: clientDocCtx.imageCount > 0,
+        })
+      : null;
+
     if (chatStreaming) {
       const now = new Date().toISOString();
       const visibleAckText = sanitizeAssistantVisibleText(ackText, {
@@ -1952,7 +2393,7 @@ async function processSharedBrainChatTask(
       });
       const ackBlocks = composeAssistantMessageBlocks({
         content: visibleAckText,
-        blocks: [ackTaskTrace],
+        blocks: [ackTaskTrace, ...(attachmentAckBlock ? [attachmentAckBlock] : [])],
         streaming: true,
       });
       await publishVolatileChatStreamEvent(app, {
@@ -1978,7 +2419,6 @@ async function processSharedBrainChatTask(
           }),
           streaming: {
             firstDeltaMs: 0,
-            selectedProfile: selectedWorkload,
             answerSource: "backend_ack",
           },
         },
@@ -1988,13 +2428,57 @@ async function processSharedBrainChatTask(
     let lastVisibleStreamingContent = sanitizeAssistantVisibleText(ackText, {
       fallback: ackText,
     });
+
+    // Session varsa önceki mesajları DB'den yükle — inference'ı bloke etmemek için 1.5s timeout
+    const payloadConversation = extractSharedBrainConversation(runningPayload);
+    let conversationHistory = payloadConversation;
+    if (!payloadConversation?.length && chatStreaming?.sessionId) {
+      const sessionIdForHistory = chatStreaming.sessionId;
+      const historyPromise = listChatSessionMessages(app, {
+        userId: input.userId,
+        sessionId: sessionIdForHistory,
+        limit: 20,
+      }).then((page) =>
+        page.messages
+          .filter((m) => (m.role === "user" || m.role === "assistant") && m.content?.trim())
+          .slice(-16)
+          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content! })),
+      ).catch(() => null);
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_500));
+      const result = await Promise.race([historyPromise, timeoutPromise]);
+      if (result && result.length > 0) {
+        conversationHistory = result;
+      }
+    }
+
+    // Inference sırasında heartbeat — mobil "hâlâ çalışıyor" bilgisi alır, asma yapmaz
+    const inferenceStartedAt = Date.now();
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    if (chatStreaming) {
+      const hbSessionId = chatStreaming.sessionId;
+      const hbMessageId = chatStreaming.assistantMessageId;
+      heartbeatTimer = setInterval(() => {
+        publishVolatileChatStreamEvent(app, {
+          userId: input.userId,
+          deviceId: runningTask.targetDeviceId,
+          taskId: runningTask.id,
+          sessionId: hbSessionId,
+          messageId: hbMessageId,
+          event: "heartbeat",
+          seq: ++streamSeq,
+          payload: { status: "thinking", elapsedMs: Date.now() - inferenceStartedAt },
+        }).catch(() => undefined);
+      }, 5_000);
+    }
+
     const inference = await generateGovernedSharedBrainReply(app, {
       userId: input.userId,
       taskId: runningTask.id,
       prompt: input.prompt,
       title: input.canonicalTitle,
-      conversation: extractSharedBrainConversation(runningPayload),
+      conversation: conversationHistory,
       attachmentContext,
+      clientAttachments: clientAttachments.length > 0 ? clientAttachments : null,
       requestMetadata: getPayloadMetadata(runningPayload),
       route: "shared_brain",
       routeDecision,
@@ -2003,15 +2487,12 @@ async function processSharedBrainChatTask(
       planCode: input.planCode,
       understandingContext: input.understanding.context,
       brainProfile: input.brainProfile,
-      onDelta: chatStreaming
+          onDelta: chatStreaming
         ? async (delta) => {
-            const now = new Date().toISOString();
-            const rawContent =
-              ackText && delta.content.trim()
-                  ? `${ackText}\n\n${delta.content}`
-                  : delta.content || ackText;
+            // Model token'ı geldi — visible content değiştiyse typed text block
+            // ile aynı assistant message id altında SSE gönder.
             const visibleContent =
-              sanitizeAssistantVisibleText(rawContent, { fallback: ackText }) ||
+              sanitizeAssistantVisibleText(delta.content, { fallback: "" }) ||
               lastVisibleStreamingContent;
             if (visibleContent === lastVisibleStreamingContent) {
               return;
@@ -2020,13 +2501,10 @@ async function processSharedBrainChatTask(
               ? visibleContent.slice(lastVisibleStreamingContent.length)
               : visibleContent;
             lastVisibleStreamingContent = visibleContent;
-            const taskTrace = buildTaskTraceBlock({
-              task: runningTask,
-              assistantContent: visibleContent,
-            });
-            const blocks = composeAssistantMessageBlocks({
+            const now = new Date().toISOString();
+            const streamingBlocks = composeAssistantMessageBlocks({
               content: visibleContent,
-              blocks: [taskTrace],
+              blocks: [ackTaskTrace, ...(attachmentAckBlock ? [attachmentAckBlock] : [])],
               streaming: true,
             });
             await publishVolatileChatStreamEvent(app, {
@@ -2039,13 +2517,13 @@ async function processSharedBrainChatTask(
               seq: ++streamSeq,
               payload: {
                 delta: visibleDelta,
-                // content is omitted — mobile accumulates text from delta.
-                // blocks update the task-trace card but do not carry the full text.
+                ...(streamingBlocks.length > 0 ? { blocks: streamingBlocks } : {}),
                 assistantMessage: shapeAssistantMessagePayload({
                   id: chatStreaming.assistantMessageId,
                   role: "assistant",
                   status: "running",
-                  ...(blocks.length > 0 ? { blocks: blocks } : {}),
+                  content: visibleContent,
+                  ...(streamingBlocks.length > 0 ? { blocks: streamingBlocks } : {}),
                   taskId: runningTask.id,
                   createdAt: runningTask.createdAt.toISOString(),
                   updatedAt: now,
@@ -2060,6 +2538,7 @@ async function processSharedBrainChatTask(
           }
         : undefined,
     });
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     const completedTask = await completeServerBrainTask(app, {
       taskId: input.currentTask.id,
       userId: input.userId,
@@ -2108,10 +2587,44 @@ async function processSharedBrainChatTask(
         task: completedTask,
         assistantContent: inference.text,
       });
-      const finalBlocks = composeAssistantMessageBlocks({
-        content: inference.text,
-        blocks: [taskTrace, ...completionMetadata.assistantBlocks],
+      const inferenceResolved = resolveCompletionAssistantBlocks({
+        responseText: inference.text,
+        assistantBlocks: completionMetadata.assistantBlocks,
       });
+      const inferenceBlocks = inferenceResolved.blocks;
+      // Use the cleaned text everywhere so the inline prose doesn't repeat a
+      // table/code/document that a widget block is already rendering.
+      const visibleText = inferenceResolved.text || inference.text;
+      // attachmentAck varsa tüm blokların önüne ekle (belge alındı kartı)
+      const ackBlock = attachmentAckBlock ? [attachmentAckBlock] : [];
+      const finalBlocks = composeAssistantMessageBlocks({
+        content: visibleText,
+        blocks: [...ackBlock, taskTrace, ...inferenceBlocks],
+      });
+      // Persist final blocks + cleaned content to the chat_messages row so a
+      // later GET /messages (user leaves and reopens) returns the same
+      // widget-only view, not the duplicated markdown.
+      await app.db
+        .update(chatMessages)
+        .set({
+          status: "completed",
+          content: visibleText,
+          preview: compactMessagePreview(visibleText),
+          metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
+            withAssistantBlocksMetadata({}, {
+              content: visibleText,
+              blocks: finalBlocks,
+            }),
+          )}::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(chatMessages.id, chatStreaming.assistantMessageId),
+            eq(chatMessages.sessionId, chatStreaming.sessionId),
+            eq(chatMessages.userId, input.userId),
+          ),
+        );
       await publishPersistedChatStreamEvent(app, {
         userId: input.userId,
         deviceId: completedTask.targetDeviceId,
@@ -2121,13 +2634,13 @@ async function processSharedBrainChatTask(
         event: "message.completed",
         seq: ++streamSeq,
         payload: {
-          content: inference.text,
+          content: visibleText,
           blocks: finalBlocks,
           assistantMessage: shapeAssistantMessagePayload({
             id: chatStreaming.assistantMessageId,
             role: "assistant",
             status: "completed",
-            content: inference.text,
+            content: visibleText,
             blocks: finalBlocks,
             taskId: completedTask.id,
             createdAt: completedTask.createdAt.toISOString(),
@@ -3113,6 +3626,52 @@ export async function getTaskDetail(app: FastifyInstance, taskId: string, userId
       })),
     ),
     artifacts: await Promise.all(taskArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact))),
+  };
+}
+
+export async function getTaskArtifact(
+  app: FastifyInstance,
+  taskId: string,
+  artifactId: string,
+  userId: string,
+) {
+  const artifact = await getTaskArtifactRecordForUser(app, taskId, artifactId, userId);
+  return {
+    artifact: await shapePublicArtifactRecord(app, artifact),
+  };
+}
+
+export async function getTaskArtifactContent(
+  app: FastifyInstance,
+  taskId: string,
+  artifactId: string,
+  userId: string,
+) {
+  const artifact = await getTaskArtifactRecordForUser(app, taskId, artifactId, userId);
+  const shapedArtifact = await shapePublicArtifactRecord(app, artifact);
+  const hydratedBody = artifact.bodyBlobId
+    ? await app.services?.blobs?.hydrateJson<Record<string, unknown>>(artifact.bodyBlobId)
+    : null;
+  const bodyRecord =
+    hydratedBody && typeof hydratedBody === "object" && !Array.isArray(hydratedBody)
+      ? (hydratedBody as Record<string, unknown>)
+      : null;
+  return {
+    artifact: shapedArtifact,
+    content: {
+      textContent:
+        typeof bodyRecord?.textContent === "string"
+          ? sanitizePublicInferenceValue(bodyRecord.textContent)
+          : artifact.textContent,
+      payload: sanitizePublicInferenceValue(
+        bodyRecord?.payload ?? artifact.payload ?? null,
+      ),
+      metadata: sanitizePublicInferenceValue(
+        bodyRecord?.metadata ?? artifact.metadata ?? null,
+      ),
+      downloadUrl: shapedArtifact.downloadUrl,
+      downloadable: shapedArtifact.downloadable,
+    },
   };
 }
 

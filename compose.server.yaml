@@ -26,6 +26,22 @@ services:
     volumes:
       - redis_data:/data
 
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      SEARXNG_SECRET: "elyan_searxng_internal_secret_do_not_expose"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # Internal only — not exposed to internet
+    expose:
+      - "8080"
+
   backend:
     build:
       context: .
@@ -34,6 +50,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      searxng:
         condition: service_healthy
     extra_hosts: ["host.docker.internal:host-gateway"]
     env_file:
@@ -71,6 +89,8 @@ services:
       ELYAN_SHARED_BRAIN_PLANNING_MODEL: openai/gpt-oss-120b
       ELYAN_SHARED_BRAIN_KEEP_ALIVE: 2h
       ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: "true"
+      ELYAN_SEARCH_PROVIDER: "searxng"
+      SEARXNG_BASE_URL: "http://searxng:8080"
     ports:
       - "127.0.0.1:4000:4000"
     healthcheck:

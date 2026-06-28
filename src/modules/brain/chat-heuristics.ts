@@ -86,10 +86,12 @@ export function isMateriallyAmbiguousUserPrompt(prompt: string): boolean {
   return AMBIGUOUS_REFERENCE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function buildSharedBrainAckText(_workload: SharedBrainWorkload): string {
-  // Return empty — frontend loading indicator handles the pending state.
+export function buildSharedBrainAckText(workload: SharedBrainWorkload): string {
   // Legacy ack strings are tracked separately in TRANSIENT_ASSISTANT_ACKS
   // in inference.ts so existing sessions in DB are still filtered correctly.
+  if (workload === "document_generate") {
+    return "Rapor hazırlanıyor, birkaç saniye...";
+  }
   return "";
 }
 

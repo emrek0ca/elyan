@@ -5,6 +5,7 @@ import { classifyIntent } from "./intent-classifier.js";
 import { buildUserContext } from "./context-builder.js";
 import { extractFeedbackSignals, extractPreferenceSignals } from "./preference-extractor.js";
 import { filterLearningSignals } from "./personalization-policy.js";
+import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import type {
   ClarificationDiagnostics,
   FeedbackType,
@@ -277,27 +278,40 @@ export async function recordConversationExchangeLearning(
   },
 ): Promise<number> {
   const signals: LearningSignal[] = [];
-  const userText = input.userMessage.toLowerCase();
   const replyText = input.assistantReply.toLowerCase();
 
-  // Dil tercihi: kullanıcı Türkçe mi İngilizce mi yazıyor?
-  const hasTurkishChars = /[çğıöşü]/i.test(input.userMessage);
-  const turkishSignals = /\b(ve|ile|için|bu|şu|merhaba|tamam|evet|hayır)\b/.test(userText);
-  if (hasTurkishChars || turkishSignals) {
+  // C NLP daemon çağrıları (paralel) — regex fallback ile
+  const [langResult, sentimentResult, complexityResult, keywordsResult] = await Promise.all([
+    nlpDaemon.detectLanguage(input.userMessage).catch(() => null),
+    nlpDaemon.scoreSentiment(input.userMessage).catch(() => null),
+    nlpDaemon.scoreComplexity(input.userMessage).catch(() => null),
+    nlpDaemon.extractKeywords(input.userMessage, 6).catch(() => [] as string[]),
+  ]);
+
+  // Dil tercihi: C daemon veya regex fallback
+  const isTurkish = langResult
+    ? langResult.lang === "tr" && langResult.confidence >= 0.6
+    : /[çğıöşü]/i.test(input.userMessage) || /\b(ve|ile|için|bu|şu|merhaba|tamam|evet|hayır)\b/.test(input.userMessage.toLowerCase());
+
+  if (isTurkish) {
     signals.push({
       type: "preference",
       key: "preferred_language",
       value: "turkish",
-      confidence: 0.82,
+      confidence: langResult ? Math.min(0.95, langResult.confidence * 0.9) : 0.82,
       scope: "user",
       source: "interaction",
       ttlDays: 180,
     });
   }
 
-  // Cevap uzunluğu tercihi: kullanıcı kısa mı uzun mu yazıyor?
+  // Cevap uzunluğu tercihi: C complexity veya char length fallback
+  const tokenCount = complexityResult?.tokenCount ?? 0;
   const msgLen = input.userMessage.trim().length;
-  if (msgLen < 60) {
+  const isShort = tokenCount > 0 ? tokenCount < 12 : msgLen < 60;
+  const isLong  = tokenCount > 0 ? tokenCount > 60  : msgLen > 300;
+
+  if (isShort) {
     signals.push({
       type: "preference",
       key: "answer_length",
@@ -307,7 +321,7 @@ export async function recordConversationExchangeLearning(
       source: "interaction",
       ttlDays: 60,
     });
-  } else if (msgLen > 300) {
+  } else if (isLong) {
     signals.push({
       type: "preference",
       key: "answer_length",
@@ -316,6 +330,19 @@ export async function recordConversationExchangeLearning(
       scope: "user",
       source: "interaction",
       ttlDays: 60,
+    });
+  }
+
+  // Vocab richness → kullanıcı karmaşık dil kullanıyorsa "expert" sinyali
+  if (complexityResult && complexityResult.vocabRichness > 0.75 && complexityResult.tokenCount >= 10) {
+    signals.push({
+      type: "style",
+      key: "vocabulary_richness",
+      value: "high",
+      confidence: 0.58,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 90,
     });
   }
 
@@ -344,27 +371,47 @@ export async function recordConversationExchangeLearning(
     }
   }
 
-  // Duygusal sinyal: kullanıcı heyecan mı hayal kırıklığı mı yaşıyor?
-  const excitementPatterns = /\b(harika|mükemmel|süper|amazing|perfect|great|excellent|teşekkür|thanks|👍|🎉|❤️)\b/i;
-  const frustrationPatterns = /\b(olmadı|çalışmıyor|hata|bug|sorun|problem|yanlış|wrong|broken|didn't work|not working)\b/i;
-  if (excitementPatterns.test(input.userMessage)) {
+  // Duygusal sinyal: C sentiment veya regex fallback
+  const sentLabel = sentimentResult?.label;
+  if (sentLabel === "positive" && (sentimentResult?.positive ?? 0) >= 1) {
     signals.push({
       type: "episodic",
       key: "emotional_signal",
       value: "positive",
-      confidence: 0.65,
+      confidence: Math.min(0.85, 0.55 + (sentimentResult?.score ?? 0.5) * 0.3),
       scope: "user",
       source: "interaction",
       ttlDays: 30,
-      metadata: { intent: input.intent, taskId: input.taskId },
+      metadata: { intent: input.intent, taskId: input.taskId, sentimentScore: sentimentResult?.score },
     });
-  }
-  if (frustrationPatterns.test(input.userMessage)) {
+  } else if (sentLabel === "negative" && (sentimentResult?.negative ?? 0) >= 1) {
     signals.push({
       type: "episodic",
       key: "emotional_signal",
       value: "frustrated",
-      confidence: 0.62,
+      confidence: Math.min(0.80, 0.50 + (sentimentResult?.score ?? 0.5) * 0.3),
+      scope: "user",
+      source: "interaction",
+      ttlDays: 14,
+      metadata: { intent: input.intent, taskId: input.taskId, sentimentScore: sentimentResult?.score },
+    });
+  } else if (!sentimentResult) {
+    // regex fallback if C daemon unavailable
+    if (/\b(harika|mükemmel|süper|amazing|perfect|great|excellent|teşekkür|thanks)\b/i.test(input.userMessage)) {
+      signals.push({ type: "episodic", key: "emotional_signal", value: "positive", confidence: 0.65, scope: "user", source: "interaction", ttlDays: 30, metadata: { intent: input.intent, taskId: input.taskId } });
+    }
+    if (/\b(olmadı|çalışmıyor|hata|bug|sorun|problem|yanlış|wrong|broken)\b/i.test(input.userMessage)) {
+      signals.push({ type: "episodic", key: "emotional_signal", value: "frustrated", confidence: 0.62, scope: "user", source: "interaction", ttlDays: 14, metadata: { intent: input.intent, taskId: input.taskId } });
+    }
+  }
+
+  // Keyword-based memory tag: C'den gelen keyword'lar varsa project_context olarak kaydet
+  if (keywordsResult && keywordsResult.length >= 3) {
+    signals.push({
+      type: "project_context",
+      key: "message_keywords",
+      value: keywordsResult.slice(0, 5).join(", "),
+      confidence: 0.50,
       scope: "user",
       source: "interaction",
       ttlDays: 14,

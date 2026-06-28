@@ -5,11 +5,14 @@ import {
 } from "../../lib/elyan-public-identity.js";
 import type {
   ElyanAssistantActionableBlock,
+  ElyanAssistantAttachmentAckBlock,
   ElyanAssistantBlock,
   ElyanAssistantChartBlock,
   ElyanAssistantCodeBlock,
+  ElyanAssistantDocumentBlock,
   ElyanAssistantFileBlock,
   ElyanAssistantBlockGroupBlock,
+  ElyanAssistantImageAnalysisBlock,
   ElyanAssistantInfoCardBlock,
   ElyanAssistantNextStepsBlock,
   ElyanAssistantStatusBlock,
@@ -688,7 +691,7 @@ export function buildAssistantCodeBlock(
   }
   return {
     type: "code",
-    code,
+    code: code,
     ...(normalizeTextValue(input.language, 40) ? { language: normalizeTextValue(input.language, 40)! } : {}),
     ...(normalizeTextValue(input.filename, 180) ? { filename: normalizeTextValue(input.filename, 180)! } : {}),
     ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
@@ -742,6 +745,7 @@ export function buildAssistantChartBlock(
     chartType: ElyanAssistantChartBlock["chartType"];
     labels: unknown;
     values: unknown;
+    seriesName?: string | null;
     title?: string | null;
     caption?: string | null;
   },
@@ -765,11 +769,19 @@ export function buildAssistantChartBlock(
   ) {
     return null;
   }
+  const trimmedLabels = labels.slice(0, values.length);
+  const trimmedValues = values.slice(0, trimmedLabels.length);
   return {
     type: "chart",
     chartType: input.chartType,
-    labels: labels.slice(0, values.length),
-    values,
+    // Mobile expects series array: [{name, labels, values}]
+    series: [
+      {
+        name: normalizeTextValue(input.seriesName, 80) ?? "Veri",
+        labels: trimmedLabels,
+        values: trimmedValues,
+      },
+    ],
     ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
     ...(normalizeTextValue(input.caption, 240) ? { caption: normalizeTextValue(input.caption, 240)! } : {}),
     ...withAssistantBlockDefaults("chart", {}, {
@@ -814,6 +826,102 @@ export function buildAssistantFileBlock(
         density: "compact",
         ...(options.renderHints ?? {}),
       },
+      ...options,
+    }),
+  };
+}
+
+export function buildAssistantDocumentBlock(
+  input: {
+    title?: string | null;
+    sections: Array<{ heading?: string | null; content: string; level?: number | null }>;
+    format?: string | null;
+    wordCount?: number | null;
+  },
+  options: AssistantBlockCommon = {},
+): ElyanAssistantDocumentBlock | null {
+  const sections = (input.sections ?? [])
+    .map((s) => ({
+      ...(s.heading ? { heading: String(s.heading).slice(0, 200) } : {}),
+      content: String(s.content ?? "").trim().slice(0, 8_000),
+      ...(typeof s.level === "number" && s.level >= 1 && s.level <= 3 ? { level: s.level } : {}),
+    }))
+    .filter((s) => s.content.length > 0)
+    .slice(0, 40);
+  if (sections.length === 0) return null;
+  const validFormats = ["report", "letter", "outline", "notes"] as const;
+  const format = validFormats.find((f) => f === input.format) ?? undefined;
+  return {
+    type: "document_block",
+    sections,
+    ...(normalizeTextValue(input.title, 200) ? { title: normalizeTextValue(input.title, 200)! } : {}),
+    ...(format ? { format } : {}),
+    ...(typeof input.wordCount === "number" && input.wordCount >= 0 ? { wordCount: input.wordCount } : {}),
+    ...withAssistantBlockDefaults("document_block", {}, {
+      priority: options.priority ?? 2,
+      renderHints: { sectionRole: "document", density: "full", ...(options.renderHints ?? {}) },
+      ...options,
+    }),
+  };
+}
+
+export function buildAssistantAttachmentAckBlock(
+  input: {
+    summary: string;
+    attachmentCount: number;
+    pageCount?: number | null;
+    chunkCount?: number | null;
+    hasTable?: boolean;
+    hasImage?: boolean;
+  },
+  options: AssistantBlockCommon = {},
+): ElyanAssistantAttachmentAckBlock | null {
+  const summary = normalizeTextValue(input.summary, 400);
+  if (!summary) return null;
+  return {
+    type: "attachment_ack",
+    summary,
+    attachmentCount: Math.max(0, Math.floor(input.attachmentCount ?? 0)),
+    ...(typeof input.pageCount === "number" ? { pageCount: input.pageCount } : {}),
+    ...(typeof input.chunkCount === "number" ? { chunkCount: input.chunkCount } : {}),
+    ...(typeof input.hasTable === "boolean" ? { hasTable: input.hasTable } : {}),
+    ...(typeof input.hasImage === "boolean" ? { hasImage: input.hasImage } : {}),
+    ...withAssistantBlockDefaults("attachment_ack", {}, {
+      priority: options.priority ?? 3,
+      visibility: options.visibility ?? "user_visible",
+      renderHints: { sectionRole: "status", density: "compact", ...(options.renderHints ?? {}) },
+      ...options,
+    }),
+  };
+}
+
+export function buildAssistantImageAnalysisBlock(
+  input: {
+    description: string;
+    detectedText?: string | null;
+    tags?: string[] | null;
+    confidence?: number | null;
+    language?: string | null;
+  },
+  options: AssistantBlockCommon = {},
+): ElyanAssistantImageAnalysisBlock | null {
+  const description = normalizeTextValue(input.description, 2_000);
+  if (!description) return null;
+  const tags = normalizeStringList(input.tags, { max: 12, itemMaxLength: 60 });
+  return {
+    type: "image_analysis",
+    description,
+    ...(normalizeTextValue(input.detectedText, 2_000)
+      ? { detectedText: normalizeTextValue(input.detectedText, 2_000)! }
+      : {}),
+    ...(tags.length > 0 ? { tags } : {}),
+    ...(typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1
+      ? { confidence: input.confidence }
+      : {}),
+    ...(normalizeTextValue(input.language, 20) ? { language: normalizeTextValue(input.language, 20)! } : {}),
+    ...withAssistantBlockDefaults("image_analysis", {}, {
+      priority: options.priority ?? 2,
+      renderHints: { sectionRole: "image_result", density: "full", ...(options.renderHints ?? {}) },
       ...options,
     }),
   };
@@ -1169,11 +1277,22 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
     if (!["bar", "line", "pie"].includes(chartType)) {
       return null;
     }
+    // Support both series format [{name,labels,values}] and flat {labels,values}
+    let labels: unknown = record.labels;
+    let values: unknown = record.values;
+    let seriesName: string | undefined;
+    if (Array.isArray(record.series) && record.series.length > 0) {
+      const first = record.series[0] as Record<string, unknown>;
+      labels = first.labels ?? first.x ?? labels;
+      values = first.values ?? first.y ?? values;
+      seriesName = typeof first.name === "string" ? first.name : undefined;
+    }
     return buildAssistantChartBlock(
       {
         chartType: chartType as ElyanAssistantChartBlock["chartType"],
-        labels: record.labels,
-        values: record.values,
+        labels,
+        values,
+        seriesName,
         title: typeof record.title === "string" ? record.title : undefined,
         caption: typeof record.caption === "string" ? record.caption : undefined,
       },
@@ -1231,6 +1350,50 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
       title: typeof record.title === "string" ? record.title : undefined,
       ...parseCommonMetadata(record),
     });
+  }
+  if (type === "document_block") {
+    const rawSections = Array.isArray(record.sections) ? record.sections : [];
+    const sections = rawSections
+      .filter((s): s is Record<string, unknown> => s != null && typeof s === "object")
+      .map((s) => ({
+        heading: typeof s.heading === "string" ? s.heading : undefined,
+        content: typeof s.content === "string" ? s.content : String(s.text ?? s.body ?? ""),
+        level: typeof s.level === "number" ? s.level : undefined,
+      }));
+    return buildAssistantDocumentBlock(
+      {
+        title: typeof record.title === "string" ? record.title : undefined,
+        sections,
+        format: typeof record.format === "string" ? record.format : undefined,
+        wordCount: typeof record.wordCount === "number" ? record.wordCount : undefined,
+      },
+      parseCommonMetadata(record),
+    );
+  }
+  if (type === "attachment_ack") {
+    return buildAssistantAttachmentAckBlock(
+      {
+        summary: typeof record.summary === "string" ? record.summary : "Alındı.",
+        attachmentCount: typeof record.attachmentCount === "number" ? record.attachmentCount : 0,
+        pageCount: typeof record.pageCount === "number" ? record.pageCount : undefined,
+        chunkCount: typeof record.chunkCount === "number" ? record.chunkCount : undefined,
+        hasTable: typeof record.hasTable === "boolean" ? record.hasTable : undefined,
+        hasImage: typeof record.hasImage === "boolean" ? record.hasImage : undefined,
+      },
+      parseCommonMetadata(record),
+    );
+  }
+  if (type === "image_analysis") {
+    return buildAssistantImageAnalysisBlock(
+      {
+        description: typeof record.description === "string" ? record.description : "",
+        detectedText: typeof record.detectedText === "string" ? record.detectedText : undefined,
+        tags: Array.isArray(record.tags) ? record.tags : undefined,
+        confidence: typeof record.confidence === "number" ? record.confidence : undefined,
+        language: typeof record.language === "string" ? record.language : undefined,
+      },
+      parseCommonMetadata(record),
+    );
   }
   const markdown = normalizeMarkdown(
     typeof record.markdown === "string"
@@ -1373,12 +1536,12 @@ export function composeAssistantMessageBlocks(input: {
   }
   const existingVisibleBlocks = normalizedBlocks.filter((block) => block.type !== "text");
   return mergeAssistantBlocks([
-    ...existingVisibleBlocks,
     ...(textBlocks.length > 0
       ? textBlocks
       : normalizedBlocks.filter(
           (block): block is AssistantTextMessageBlock => block.type === "text",
         )),
+    ...existingVisibleBlocks,
   ]);
 }
 
@@ -1438,8 +1601,15 @@ export function shapeAssistantMessagePayload<
     message.metadata && typeof message.metadata === "object" && !Array.isArray(message.metadata)
       ? (message.metadata as Record<string, unknown>)
       : undefined;
+  // Çağıranlar tipli blokları (document_block, table, chart, code…) TOP-LEVEL
+  // `blocks` alanında geçiyor (service.ts message.completed). Eskiden yalnız
+  // metadata.blocks okunuyordu → metadata yoksa TÜM tipli bloklar düşüp content
+  // tek bir `text` bloğuna indirgeniyordu. Mobilde "widget hiç açılmıyor"
+  // semptomunun kök sebebi buydu. Önce top-level blocks, yoksa metadata.blocks.
+  const topLevelBlocks = (message as Record<string, unknown>).blocks;
+  const sourceBlocks = Array.isArray(topLevelBlocks) ? topLevelBlocks : metadata?.blocks;
   const blocks = composeAssistantMessageBlocks({
-    blocks: metadata?.blocks,
+    blocks: sourceBlocks,
     content: typeof message.content === "string" ? message.content : "",
     streaming: String((message as Record<string, unknown>).status ?? "").trim().toLowerCase() === "running",
   });

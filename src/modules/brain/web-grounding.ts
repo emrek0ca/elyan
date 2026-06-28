@@ -4,6 +4,10 @@ import {
   buildTurkicWebQueryVariants,
   isTurkicLanguageResearchPrompt,
 } from "../../core/understanding/turkic-language.js";
+import { Readability } from "@mozilla/readability";
+import { parseHTML } from "linkedom";
+import { LRUCache } from "lru-cache";
+import { nlpDaemon } from "../../lib/nlp-daemon.js";
 
 export type WebGroundingSearchResult = {
   title: string;
@@ -13,6 +17,7 @@ export type WebGroundingSearchResult = {
   verificationState: "verified" | "partial" | "unverified";
   queryHits: number;
   score: number;
+  pageContent?: string;
 };
 
 export type WebGroundingResult = {
@@ -20,17 +25,12 @@ export type WebGroundingResult = {
   used: boolean;
   query: string;
   queries: string[];
-  source: "duckduckgo_html";
+  source: "duckduckgo_html" | "brave" | "searxng";
   results: WebGroundingSearchResult[];
   degradedReason: string | null;
   confidence: "high" | "medium" | "low";
   retrievedAt?: string;
   decisionReasons?: string[];
-};
-
-type WebGroundingCacheEntry = {
-  expiresAt: number;
-  value: WebGroundingResult | Promise<WebGroundingResult>;
 };
 
 const WEB_RESEARCH_PATTERNS = [
@@ -225,7 +225,10 @@ const WEB_QUERY_STOPWORDS = new Set([
 ]);
 
 const WEB_QUERY_MAX_RESULTS = 3;
-const webGroundingCache = new WeakMap<FastifyInstance, Map<string, WebGroundingCacheEntry>>();
+const webGroundingCache = new WeakMap<
+  FastifyInstance,
+  LRUCache<string, WebGroundingResult | Promise<WebGroundingResult>>
+>();
 
 function createAbortController(): AbortController {
   const controller = new AbortController();
@@ -360,12 +363,18 @@ function buildWebQueries(prompt: string, limit = WEB_QUERY_MAX_RESULTS): string[
   );
 }
 
-function getWebGroundingCache(app: FastifyInstance): Map<string, WebGroundingCacheEntry> {
+function getWebGroundingCache(
+  app: FastifyInstance,
+): LRUCache<string, WebGroundingResult | Promise<WebGroundingResult>> {
   const existing = webGroundingCache.get(app);
   if (existing) {
     return existing;
   }
-  const created = new Map<string, WebGroundingCacheEntry>();
+  /* max 200 unique queries, TTL set per-entry at write time */
+  const created = new LRUCache<string, WebGroundingResult | Promise<WebGroundingResult>>({
+    max: 200,
+    ttlAutopurge: false,
+  });
   webGroundingCache.set(app, created);
   return created;
 }
@@ -450,6 +459,216 @@ function extractFirstParagraph(html: string): string {
   return stripHtml(match?.[1] ?? "");
 }
 
+function extractMainContent(html: string, maxChars = 700): string {
+  try {
+    const { document } = parseHTML(html);
+    const article = new Readability(document as unknown as Document).parse();
+    if (article?.textContent) {
+      return article.textContent.replace(/\s{2,}/g, " ").trim().slice(0, maxChars);
+    }
+  } catch {
+    /* fall through to regex fallback */
+  }
+
+  /* Regex fallback when Readability cannot parse (e.g. fragment HTML) */
+  const cleaned = html
+    .replace(/<(script|style|nav|header|footer|aside|form|button|input|select|textarea)[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  const parts: string[] = [];
+  const tagRe = /<(p|li|h[1-3]|td)[^>]*>([\s\S]{1,400}?)<\/\1>/gi;
+  let match: RegExpExecArray | null;
+  let total = 0;
+  while ((match = tagRe.exec(cleaned)) !== null && total < maxChars) {
+    const text = stripHtml(match[2] ?? "").trim();
+    if (text.length < 20) continue;
+    parts.push(text);
+    total += text.length + 1;
+  }
+  return parts.join(" ").slice(0, maxChars).trim();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Brave Search API provider
+ * Docs: https://api.search.brave.com/app/documentation/web-search/get-started
+ * Free tier: 2 000 req/month, 1 req/s
+ * ════════════════════════════════════════════════════════════════════════ */
+
+type BraveWebResult = {
+  title?: string;
+  url?: string;
+  description?: string;
+  page_age?: string;
+  extra_snippets?: string[];
+};
+
+async function fetchBraveSearchQuery(
+  app: FastifyInstance,
+  query: string,
+): Promise<{
+  query: string;
+  results: WebGroundingSearchResult[];
+  degradedReason: string | null;
+}> {
+  const apiKey = app.config.BRAVE_SEARCH_API_KEY;
+  if (!apiKey) {
+    return { query, results: [], degradedReason: "brave_api_key_missing" };
+  }
+
+  const url = new URL("https://api.search.brave.com/res/v1/web/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("count", String(Math.min(app.config.ELYAN_WEB_GROUNDING_MAX_RESULTS + 2, 10)));
+  url.searchParams.set("country", "TR");
+  url.searchParams.set("search_lang", "tr");
+  url.searchParams.set("safesearch", "moderate");
+  url.searchParams.set("extra_snippets", "true");
+
+  const { controller, timeout } = createTimedAbortController(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS);
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip",
+        "X-Subscription-Token": apiKey,
+      },
+    });
+
+    if (!response.ok) {
+      return { query, results: [], degradedReason: `brave_http_${response.status}` };
+    }
+
+    const json = await response.json() as { web?: { results?: BraveWebResult[] } };
+    const raw = json?.web?.results ?? [];
+
+    const results: WebGroundingSearchResult[] = raw
+      .filter((r): r is BraveWebResult & { url: string; title: string } => Boolean(r.url && r.title))
+      .map((r) => {
+        const snippet = [r.description, ...(r.extra_snippets ?? [])].filter(Boolean).join(" ").slice(0, 350);
+        return {
+          title: r.title,
+          url: r.url,
+          snippet,
+          sourceHost: hostFromUrl(r.url),
+          verificationState: "partial" as const,
+          queryHits: 1,
+          score: 1.1,
+        };
+      });
+
+    return { query, results, degradedReason: results.length === 0 ? "brave_no_results" : null };
+  } catch (error) {
+    return {
+      query,
+      results: [],
+      degradedReason:
+        error instanceof Error && error.name === "AbortError"
+          ? "brave_timeout"
+          : "brave_failed",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * SearXNG provider — self-hosted meta search (free, no rate limits)
+ * Aggregates: Google, Bing, DuckDuckGo, Brave, Yahoo, Wikipedia + more
+ * API: GET /search?q=...&format=json&language=tr-TR&categories=general
+ * ════════════════════════════════════════════════════════════════════════ */
+
+type SearXNGResult = {
+  title?: string;
+  url?: string;
+  content?: string;
+  score?: number;
+  engine?: string;
+  engines?: string[];
+  category?: string;
+};
+
+async function fetchSearXNGQuery(
+  app: FastifyInstance,
+  query: string,
+): Promise<{
+  query: string;
+  results: WebGroundingSearchResult[];
+  degradedReason: string | null;
+}> {
+  const baseUrl = app.config.SEARXNG_BASE_URL;
+  if (!baseUrl) {
+    return { query, results: [], degradedReason: "searxng_not_configured" };
+  }
+
+  /* Strip stopwords for a cleaner, more signal-rich SearXNG query */
+  const cleanedQuery = nlpDaemon.isAvailable()
+    ? await nlpDaemon.cleanSearchQuery(query).catch(() => query)
+    : query;
+
+  const url = new URL(`${baseUrl}/search`);
+  url.searchParams.set("q", cleanedQuery);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("language", "tr-TR");
+  url.searchParams.set("categories", "general");
+  url.searchParams.set("engines", "google,bing,duckduckgo,brave,yahoo,wikipedia");
+  url.searchParams.set("pageno", "1");
+
+  const { controller, timeout } = createTimedAbortController(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS);
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+      },
+    });
+
+    if (!response.ok) {
+      return { query, results: [], degradedReason: `searxng_http_${response.status}` };
+    }
+
+    const json = await response.json() as { results?: SearXNGResult[] };
+    const raw = json?.results ?? [];
+
+    const results: WebGroundingSearchResult[] = raw
+      .filter((r): r is SearXNGResult & { url: string; title: string } => Boolean(r.url && r.title))
+      .slice(0, app.config.ELYAN_WEB_GROUNDING_MAX_RESULTS + 2)
+      .map((r) => {
+        /* SearXNG score: higher = better; normalize to 0-1 range */
+        const engineCount = (r.engines ?? (r.engine ? [r.engine] : [])).length;
+        const rawScore = typeof r.score === "number" ? r.score : 1;
+        const normalizedScore = Math.min(1 + rawScore * 0.1 + engineCount * 0.15, 2.5);
+        return {
+          title: r.title,
+          url: r.url,
+          snippet: (r.content ?? "").slice(0, 350),
+          sourceHost: hostFromUrl(r.url),
+          verificationState: "partial" as const,
+          queryHits: engineCount || 1,
+          score: normalizedScore,
+        };
+      });
+
+    return {
+      query,
+      results,
+      degradedReason: results.length === 0 ? "searxng_no_results" : null,
+    };
+  } catch (error) {
+    return {
+      query,
+      results: [],
+      degradedReason:
+        error instanceof Error && error.name === "AbortError"
+          ? "searxng_timeout"
+          : "searxng_failed",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchSearchQuery(
   app: FastifyInstance,
   query: string,
@@ -458,6 +677,16 @@ async function fetchSearchQuery(
   results: WebGroundingSearchResult[];
   degradedReason: string | null;
 }> {
+  /* SearXNG: self-hosted meta search, free and most capable */
+  if (app.config.ELYAN_SEARCH_PROVIDER === "searxng" && app.config.SEARXNG_BASE_URL) {
+    return fetchSearXNGQuery(app, query);
+  }
+
+  /* Route to Brave when configured and API key is present */
+  if (app.config.ELYAN_SEARCH_PROVIDER === "brave" && app.config.BRAVE_SEARCH_API_KEY) {
+    return fetchBraveSearchQuery(app, query);
+  }
+
   const { controller, timeout } = createTimedAbortController(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS);
   try {
     const searchUrl = new URL(app.config.ELYAN_WEB_SEARCH_BASE_URL);
@@ -514,6 +743,64 @@ async function verifyResult(
   app: FastifyInstance,
   input: WebGroundingSearchResult,
 ): Promise<WebGroundingSearchResult> {
+  /* When Jina Reader is enabled, use it for clean markdown content */
+  if (app.config.JINA_READER_ENABLED) {
+    return verifyResultViaJina(app, input);
+  }
+  return verifyResultViaHtml(app, input);
+}
+
+async function verifyResultViaJina(
+  app: FastifyInstance,
+  input: WebGroundingSearchResult,
+): Promise<WebGroundingSearchResult> {
+  const jinaUrl = `https://r.jina.ai/${input.url}`;
+  const timeoutMs = Math.max(3000, Math.min(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS, 7000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(jinaUrl, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        "Accept": "text/plain,text/markdown",
+        "X-Return-Format": "markdown",
+        "User-Agent": "Mozilla/5.0 (compatible; ElyanBot/1.0)",
+      },
+    });
+
+    if (!response.ok) {
+      return { ...input, verificationState: "partial", score: input.score - 0.05 };
+    }
+
+    const text = await response.text();
+    const titleMatch = text.match(/^Title:\s*(.+)$/m);
+    const jinaTitle = titleMatch?.[1]?.trim() || "";
+    const contentStart = text.indexOf("\n\n");
+    const raw = contentStart >= 0 ? text.slice(contentStart + 2) : text;
+    const pageContent = raw.replace(/\n{3,}/g, "\n\n").trim().slice(0, 700) || undefined;
+
+    const title = jinaTitle || input.title;
+    const queryMatchBoost = title.toLowerCase().includes(input.title.slice(0, 20).toLowerCase()) ? 0.12 : 0;
+
+    return {
+      ...input,
+      title,
+      pageContent,
+      verificationState: pageContent ? "verified" : "partial",
+      score: input.score + (pageContent ? 0.35 : 0.1) + queryMatchBoost,
+    };
+  } catch {
+    return { ...input, verificationState: "partial", score: input.score - 0.1 };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function verifyResultViaHtml(
+  app: FastifyInstance,
+  input: WebGroundingSearchResult,
+): Promise<WebGroundingSearchResult> {
   const verificationTimeoutMs = Math.max(1200, Math.min(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS, 2500));
   try {
     const response = await fetchTextWithTimeout(
@@ -546,6 +833,7 @@ async function verifyResult(
     const fetchedTitle = extractPageTitle(html);
     const fetchedDescription = extractMetaContent(html, ["description", "og:description"]);
     const fetchedParagraph = extractFirstParagraph(html);
+    const pageContent = extractMainContent(html, 700);
     const verifiedSnippet = fetchedDescription || fetchedParagraph || input.snippet;
     const verificationState =
       fetchedTitle || fetchedDescription ? "verified" : input.snippet ? "partial" : "unverified";
@@ -563,6 +851,7 @@ async function verifyResult(
       ...input,
       title,
       snippet,
+      pageContent: pageContent || undefined,
       verificationState,
       score:
         input.score +
@@ -711,13 +1000,19 @@ export async function searchPublicWebGrounding(
 ): Promise<WebGroundingResult> {
   const query = compactText(input.prompt).slice(0, 320);
   const decisionReasons = webGroundingDecisionReasons(input);
+  const searchSource =
+    app.config.ELYAN_SEARCH_PROVIDER === "searxng" && app.config.SEARXNG_BASE_URL
+      ? "searxng" as const
+      : app.config.ELYAN_SEARCH_PROVIDER === "brave" && app.config.BRAVE_SEARCH_API_KEY
+        ? "brave" as const
+        : "duckduckgo_html" as const;
   if (!app.config.ELYAN_WEB_GROUNDING_ENABLED || !query || !shouldUseWebGrounding(input)) {
     return {
       enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
       used: false,
       query,
       queries: [],
-      source: "duckduckgo_html",
+      source: searchSource,
       results: [],
       degradedReason: null,
       confidence: "low",
@@ -735,8 +1030,8 @@ export async function searchPublicWebGrounding(
   });
   const cache = cacheTtlMs > 0 ? getWebGroundingCache(app) : null;
   const cached = cache?.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cloneWebGroundingResult(await cached.value);
+  if (cached !== undefined) {
+    return cloneWebGroundingResult(await cached);
   }
 
   const run = (async () => {
@@ -807,7 +1102,7 @@ export async function searchPublicWebGrounding(
         used,
         query,
         queries: buildWebQueries(query, getWebQueryLimit(input.workload)),
-        source: "duckduckgo_html",
+        source: searchSource,
         results: finalResults,
         degradedReason: used ? (degradedReasons.length > 0 ? uniqueStrings(degradedReasons).join(",") : null) : "web_search_no_results",
         confidence,
@@ -821,7 +1116,7 @@ export async function searchPublicWebGrounding(
         used: false,
         query,
         queries: buildWebQueries(query, getWebQueryLimit(input.workload)),
-        source: "duckduckgo_html",
+        source: searchSource,
         results: [],
         degradedReason:
           error instanceof Error && error.name === "AbortError"
@@ -836,18 +1131,12 @@ export async function searchPublicWebGrounding(
   })();
 
   if (cache && cacheTtlMs > 0) {
-    cache.set(cacheKey, {
-      expiresAt: Date.now() + cacheTtlMs,
-      value: run,
-    });
+    cache.set(cacheKey, run, { ttl: cacheTtlMs });
   }
 
   const result = await run;
   if (cache && cacheTtlMs > 0) {
-    cache.set(cacheKey, {
-      expiresAt: Date.now() + cacheTtlMs,
-      value: result,
-    });
+    cache.set(cacheKey, result, { ttl: cacheTtlMs });
   }
 
   return cloneWebGroundingResult(result);
@@ -866,8 +1155,19 @@ export function buildWebGroundingPromptBlock(input: WebGroundingResult): string 
     `Grounding confidence: ${input.confidence}`,
     input.degradedReason ? `Grounding note: ${input.degradedReason}` : null,
     ...input.results.map(
-      (result, index) =>
-        `${index + 1}. [${result.verificationState}] ${result.title} (${result.sourceHost || hostFromUrl(result.url)})\nURL: ${result.url}\nSnippet: ${result.snippet || "No snippet provided."}\nQuery hits: ${result.queryHits}`,
+      (result, index) => {
+        const lines = [
+          `${index + 1}. [${result.verificationState}] ${result.title} (${result.sourceHost || hostFromUrl(result.url)})`,
+          `URL: ${result.url}`,
+          `Snippet: ${result.snippet || "No snippet provided."}`,
+        ];
+        /* Include page content for top 2 verified results to avoid context bloat */
+        if (index < 2 && result.pageContent && result.pageContent.length > 60) {
+          lines.push(`Page content: ${result.pageContent}`);
+        }
+        lines.push(`Query hits: ${result.queryHits}`);
+        return lines.join("\n");
+      },
     ),
     "Use these public web results only when they help. If they conflict or seem weak, say so briefly instead of overstating certainty.",
     "When the answer depends on web results, synthesize the findings and include a short source basis using source names or URLs; do not dump unrelated links.",

@@ -684,3 +684,103 @@ test("syncChatTaskLifecycle emits phased v1.1 summary blocks when enabled", asyn
   assert.equal(blocks[1]?.type, "task_trace");
   assert.equal(blocks[2]?.type, "text");
 });
+
+test("syncChatTaskLifecycle preserves typed result blocks even when v1.1 chrome is disabled", async () => {
+  const published: Array<Record<string, unknown>> = [];
+  const app = {
+    config: {
+      ELYAN_BLOCKS_V11_ENABLED: false,
+    },
+    db: {
+      update() {
+        return {
+          set(values: Record<string, unknown>) {
+            return {
+              where() {
+                return {
+                  returning: async () => [
+                    {
+                      id: "assistant-1",
+                      sessionId: "session-1",
+                      userId: "user-1",
+                      taskId: "task-1",
+                      role: "assistant",
+                      status: values.status,
+                      content: values.content,
+                      error: values.error ?? null,
+                    },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+    services: {
+      eventBus: {
+        publish(event: Record<string, unknown>) {
+          published.push(event);
+        },
+      },
+    },
+  };
+
+  await syncChatTaskLifecycle(app as never, {
+    originalTask: {
+      id: "task-1",
+      userId: "user-1",
+      targetDeviceId: "device-1",
+      payload: {
+        metadata: {
+          presentation: "chat",
+          chat: {
+            sessionId: "session-1",
+            assistantMessageId: "assistant-1",
+          },
+        },
+      },
+    } as never,
+    updatedTask: {
+      id: "task-1",
+      userId: "user-1",
+      targetDeviceId: "device-1",
+      title: "Haftalık rapor",
+      status: "completed",
+      queuePosition: 0,
+      requestedCapabilities: [],
+      summary: "Belge hazır.",
+      result: {
+        text: "",
+        assistantBlocks: [
+          {
+            type: "document_block",
+            title: "Haftalık Rapor",
+            sections: [{ heading: "Özet", content: "Teslim edildi." }],
+          },
+        ],
+      },
+      createdAt: new Date("2026-01-01T12:00:00.000Z"),
+      updatedAt: new Date("2026-01-01T12:00:02.000Z"),
+      completedAt: new Date("2026-01-01T12:00:02.000Z"),
+      payload: {
+        metadata: {
+          presentation: "chat",
+          chat: {
+            sessionId: "session-1",
+            assistantMessageId: "assistant-1",
+          },
+        },
+      },
+    } as never,
+  });
+
+  const payload = published[0]?.payload as
+    | {
+        assistantMessage?: { blocks?: Array<Record<string, unknown>> };
+      }
+    | undefined;
+  const blocks = payload?.assistantMessage?.blocks ?? [];
+  assert.equal(blocks[0]?.type, "document_block");
+  assert.equal(blocks[1]?.type, "task_trace");
+});

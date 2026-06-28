@@ -68,7 +68,7 @@ function mapTaskStatusToChatStatus(status: TaskStatus) {
   }
 }
 
-function compactMessagePreview(value: string, maxLength = 320) {
+export function compactMessagePreview(value: string, maxLength = 320) {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return null;
@@ -260,7 +260,7 @@ function buildLifecycleBlocks(
 ) {
   const blocks: AssistantMessageBlock[] = [];
   if (!app.config.ELYAN_BLOCKS_V11_ENABLED) {
-    return [input.taskTraceBlock];
+    return [...(input.resultBlocks ?? []), input.taskTraceBlock];
   }
   const routeDecision = extractTaskRouteDecision(input.task.payload);
   const normalizedError = String(input.task.error ?? "").trim().toLowerCase();

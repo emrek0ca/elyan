@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
+import { pack, unpack } from "msgpackr";
 
 export type DomainEvent = {
   id?: number;
@@ -165,11 +166,13 @@ export class RedisRealtimeFanout implements RealtimeFanout {
 
     subscriber.on("pmessage", (_pattern, channel, raw) => {
       try {
-        const parsed = JSON.parse(String(raw)) as {
-          originId?: string;
-          channel?: string;
-          event?: DomainEvent;
-        };
+        /* msgpackr: try binary unpack, fall back to JSON for legacy messages */
+        let parsed: { originId?: string; channel?: string; event?: DomainEvent };
+        try {
+          parsed = unpack(Buffer.from(raw, "binary")) as typeof parsed;
+        } catch {
+          parsed = JSON.parse(raw) as typeof parsed;
+        }
 
         if (parsed.originId === this.instanceId || !parsed.channel || !parsed.event) {
           return;
@@ -210,11 +213,7 @@ export class RedisRealtimeFanout implements RealtimeFanout {
       uniqueChannels.map((channel) =>
         this.publisher!.publish(
           this.redisChannel(channel),
-          JSON.stringify({
-            originId: this.instanceId,
-            channel,
-            event,
-          }),
+          pack({ originId: this.instanceId, channel, event }).toString("binary"),
         ),
       ),
     );
