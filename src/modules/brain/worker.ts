@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -640,4 +640,153 @@ export async function runTrainingWorker(app: FastifyInstance, options: TrainingW
 
     await sleep(processed ? 0 : idleDelayMs);
   }
+}
+
+// ── In-process memory worker ────────────────────────────────────────────────
+//
+// Memory jobs (extraction/consolidation/…) are pure TS DB aggregation, but the
+// node training-worker container is disabled in prod ("ml-worker owns training
+// job execution") and the python ml-worker only does model training. So these
+// jobs piled up forever (queued, never run) and brain_memory_facts stayed
+// empty — Elyan never remembered anyone. We drain ONLY memory-kind jobs in the
+// backend process; ML training jobs are left untouched for the python worker.
+
+const MEMORY_JOB_KINDS = [
+  "memory_extraction",
+  "memory_consolidation",
+  "memory_reconsolidation",
+  "memory_index",
+] as const;
+
+async function claimNextQueuedMemoryJob(
+  app: FastifyInstance,
+): Promise<TrainingJobRow | null> {
+  const queuedRows = await app.db
+    .select()
+    .from(trainingJobs)
+    .where(
+      and(
+        eq(trainingJobs.status, "queued"),
+        inArray(trainingJobs.kind, [...MEMORY_JOB_KINDS]),
+      ),
+    )
+    .orderBy(asc(trainingJobs.createdAt))
+    .limit(1);
+
+  const queuedJob = queuedRows[0];
+  if (!queuedJob) {
+    return null;
+  }
+
+  const now = new Date();
+  const updatedRows = await app.db
+    .update(trainingJobs)
+    .set({
+      status: "running",
+      startedAt: now,
+      updatedAt: now,
+      metadata: mergeTrainingMetadata(queuedJob.metadata, {
+        workerStatus: "running",
+        claimedAt: now.toISOString(),
+        claimedBy: "in_process_memory_worker",
+      }),
+    })
+    // Atomic claim: only one worker wins even with concurrent backends.
+    .where(and(eq(trainingJobs.id, queuedJob.id), eq(trainingJobs.status, "queued")))
+    .returning();
+
+  return updatedRows[0] ?? null;
+}
+
+export async function processNextQueuedMemoryJob(
+  app: FastifyInstance,
+): Promise<boolean> {
+  const job = await claimNextQueuedMemoryJob(app);
+  if (!job) {
+    return false;
+  }
+  // processMemoryTrainingJob transitions the row to completed/failed itself.
+  const outcome = await processMemoryTrainingJob(app, job);
+  if (!outcome) {
+    await failTrainingJob(app, job, "memory_job_unhandled", { kind: job.kind });
+  }
+  return true;
+}
+
+type MemoryWorkerState = {
+  timer: ReturnType<typeof setInterval>;
+  running: boolean;
+  stopped: boolean;
+};
+
+const activeMemoryWorkers = new WeakMap<FastifyInstance, MemoryWorkerState>();
+const MEMORY_WORKER_INTERVAL_MS = 30_000;
+const MEMORY_WORKER_BATCH = 25;
+
+/// Starts the periodic in-process memory-job drainer. Returns a stop callback.
+export function startInProcessMemoryWorker(app: FastifyInstance): () => void {
+  if (process.env.ELYAN_MEMORY_WORKER_DISABLED === "true") {
+    app.log.info?.("in-process memory worker disabled via ELYAN_MEMORY_WORKER_DISABLED");
+    return () => {};
+  }
+
+  const existing = activeMemoryWorkers.get(app);
+  if (existing) {
+    return () => {
+      if (existing.stopped) {
+        return;
+      }
+      existing.stopped = true;
+      clearInterval(existing.timer);
+      activeMemoryWorkers.delete(app);
+    };
+  }
+
+  const state: MemoryWorkerState = {
+    timer: setInterval(() => {
+      void drain();
+    }, MEMORY_WORKER_INTERVAL_MS),
+    running: false,
+    stopped: false,
+  };
+  state.timer.unref?.();
+  activeMemoryWorkers.set(app, state);
+
+  void drain();
+
+  async function drain() {
+    if (state.stopped || state.running) {
+      return;
+    }
+    state.running = true;
+    try {
+      let processed = 0;
+      while (processed < MEMORY_WORKER_BATCH && !state.stopped) {
+        const did = await processNextQueuedMemoryJob(app);
+        if (!did) {
+          break;
+        }
+        processed += 1;
+      }
+      if (processed > 0) {
+        app.log.info?.({ processed }, "in-process memory worker drained jobs");
+      }
+    } catch (error) {
+      app.log.error(
+        { error: describePostgresError(error) },
+        "in-process memory worker iteration failed",
+      );
+    } finally {
+      state.running = false;
+    }
+  }
+
+  return () => {
+    if (state.stopped) {
+      return;
+    }
+    state.stopped = true;
+    clearInterval(state.timer);
+    activeMemoryWorkers.delete(app);
+  };
 }

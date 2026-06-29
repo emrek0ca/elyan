@@ -1,12 +1,19 @@
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../lib/errors.js";
-import { isCircuitCallAllowed, recordCircuitFailure, recordCircuitSuccess } from "../../lib/reliability/circuit-breaker.js";
+import {
+  isCircuitCallAllowed,
+  recordCircuitFailure,
+  recordCircuitSuccess,
+} from "../../lib/reliability/circuit-breaker.js";
 import { withLoadSheddingPermit } from "../../lib/reliability/load-shedding.js";
 import { aiProviderInvocations } from "../../db/schema.js";
 import type { UserUnderstandingContext } from "../../core/understanding/types.js";
 import { formatMemoryProfilePromptBlock } from "../../core/understanding/memory-profile.js";
 import { recordCreditLedgerEntry } from "../billing/credit-ledger.js";
-import { BILLING_USAGE_METRICS, recordUsageLedgerEntry } from "../billing/usage-ledger.js";
+import {
+  BILLING_USAGE_METRICS,
+  recordUsageLedgerEntry,
+} from "../billing/usage-ledger.js";
 import {
   assertSharedBrainUsageBudgetAllowed,
   getSharedBrainUsageBudget,
@@ -20,7 +27,10 @@ import {
   type TokenMeteringSurface,
 } from "../billing/token-metering.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
-import { ELYAN_CONSTITUTION_VERSION, ELYAN_PROMPT_PROFILE_VERSION } from "./constitution.js";
+import {
+  ELYAN_CONSTITUTION_VERSION,
+  ELYAN_PROMPT_PROFILE_VERSION,
+} from "./constitution.js";
 import {
   resolveBoundaryGate,
   resolveElyanIdentityGate,
@@ -31,10 +41,17 @@ import { resolveSharedBrainModel } from "./model-resolution.js";
 import { resolveGroqFallbackModel } from "./groq-models.js";
 import { recordBrainInteractionReview } from "./review.js";
 import { searchKnowledge } from "./retrieval.js";
-import { buildBrainCorpusRetrievalQuery, detectBrainCorpusDomains } from "./corpus.js";
+import {
+  buildBrainCorpusGuidanceBlock,
+  buildBrainCorpusRetrievalQuery,
+  detectBrainCorpusDomains,
+} from "./corpus.js";
 import { searchBrainMemory } from "./memory.js";
 import { resolveSharedBrainSelection } from "./selection.js";
-import type { ResolvedAttachmentContext, ResolvedAttachmentContextVisionImage } from "./attachment-context.js";
+import type {
+  ResolvedAttachmentContext,
+  ResolvedAttachmentContextVisionImage,
+} from "./attachment-context.js";
 import {
   buildAttachmentInsightBlocks,
   buildAttachmentInsightMetadata,
@@ -48,8 +65,14 @@ import {
   type WebGroundingResult,
 } from "./web-grounding.js";
 import { buildUrlContextBlock, promptContainsUrl } from "./url-context.js";
-import { buildDocumentContextBlock, buildAttachmentAckText } from "./document-context.js";
-import { extractClientAttachments, type ClientAttachment } from "./document-types.js";
+import {
+  buildDocumentContextBlock,
+  buildAttachmentAckText,
+} from "./document-context.js";
+import {
+  extractClientAttachments,
+  type ClientAttachment,
+} from "./document-types.js";
 import { isSocialChatPrompt } from "./chat-heuristics.js";
 import {
   listSharedBrainProviderCandidates,
@@ -62,10 +85,22 @@ import {
   type SharedBrainWorkload,
 } from "./workloads.js";
 import { executeSkill } from "../skills/executor.js";
-import { getActiveSkillById, listActiveSkillSummaries } from "../skills/registry.js";
+import {
+  getActiveSkillById,
+  listActiveSkillSummaries,
+} from "../skills/registry.js";
 import { routeSkill } from "../skills/router.js";
 import { parseStrictJsonObject } from "../skills/validator.js";
-import { formatTurkicLanguageLabel, getTurkicLanguagePromptHint } from "../../core/understanding/turkic-language.js";
+import {
+  formatTurkicLanguageLabel,
+  getTurkicLanguagePromptHint,
+} from "../../core/understanding/turkic-language.js";
+import {
+  isExplicitChartRequest,
+  isExplicitMathOrLatexRequest,
+  isExplicitSvgRequest,
+  isExplicitTableRequest,
+} from "../../core/understanding/structured-output-policy.js";
 import { buildGroqModelCatalog } from "./groq-models.js";
 import {
   buildAssistantInfoCardBlock,
@@ -173,7 +208,9 @@ const MOBILE_CHAT_MAX_MESSAGES = 12;
 const MOBILE_CHAT_MAX_TOKENS = 2_800;
 const SHARED_BRAIN_PROVIDER_RETRY_DELAY_MS = 120;
 const SHARED_BRAIN_PROVIDER_MAX_RETRIES = 1;
-const RESPONSE_CACHE_TTL_MS_BY_WORKLOAD: Partial<Record<SharedBrainWorkload, number>> = {
+const RESPONSE_CACHE_TTL_MS_BY_WORKLOAD: Partial<
+  Record<SharedBrainWorkload, number>
+> = {
   fast_route: 60_000,
   mobile_chat_fast: 60_000,
   mobile_chat_balanced: 60_000,
@@ -197,7 +234,10 @@ type SharedBrainResponseCacheEntry = {
   expiresAt: number;
 };
 
-const brainModelWarmCache = new WeakMap<FastifyInstance, Map<string, BrainModelWarmCacheEntry>>();
+const brainModelWarmCache = new WeakMap<
+  FastifyInstance,
+  Map<string, BrainModelWarmCacheEntry>
+>();
 const sharedBrainInferenceProbeCache = new WeakMap<
   FastifyInstance,
   Map<string, SharedBrainInferenceProbeCacheEntry>
@@ -230,17 +270,26 @@ function readMetadataRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function readMetadataString(record: Record<string, unknown> | null, key: string): string | null {
+function readMetadataString(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function readMetadataBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+function readMetadataBoolean(
+  record: Record<string, unknown> | null,
+  key: string,
+): boolean | null {
   const value = record?.[key];
   return typeof value === "boolean" ? value : null;
 }
 
-function readMetadataArray(record: Record<string, unknown> | null, key: string): unknown[] {
+function readMetadataArray(
+  record: Record<string, unknown> | null,
+  key: string,
+): unknown[] {
   const value = record?.[key];
   return Array.isArray(value) ? value : [];
 }
@@ -254,7 +303,11 @@ function detectMemoryEnabled(
   }
   const root = readMetadataRecord(metadata);
   const compactContext = readMetadataRecord(root?.compactContext);
-  return readMetadataBoolean(compactContext, "memoryEnabled") ?? readMetadataBoolean(root, "memoryEnabled") ?? true;
+  return (
+    readMetadataBoolean(compactContext, "memoryEnabled") ??
+    readMetadataBoolean(root, "memoryEnabled") ??
+    true
+  );
 }
 
 function sentenceCase(value: string): string {
@@ -265,7 +318,9 @@ function sentenceCase(value: string): string {
   return compact.charAt(0).toUpperCase() + compact.slice(1);
 }
 
-function analyzeResponseCompleteness(value: string): ResponseCompletenessAnalysis {
+function analyzeResponseCompleteness(
+  value: string,
+): ResponseCompletenessAnalysis {
   const normalized = compactText(value);
   if (!normalized) {
     return {
@@ -300,11 +355,24 @@ function analyzeResponseCompleteness(value: string): ResponseCompletenessAnalysi
   ) {
     flags.push("missing_terminal_punctuation");
   }
-  if (/\b(ve|veya|ama|çünkü|ile|then|and|or|because|so|for example|örneğin|mesela)$/i.test(lower)) {
+  if (
+    /\b(ve|veya|ama|çünkü|ile|then|and|or|because|so|for example|örneğin|mesela)$/i.test(
+      lower,
+    )
+  ) {
     flags.push("dangling_connector");
   }
   if (/(^|\n)([-*]|\d+\.)\s+[^\n]{1,12}$/m.test(normalized)) {
     flags.push("broken_list_item");
+  }
+  if (
+    /(^|\n)#{1,6}\s+[^\n]{1,18}$/m.test(normalized) &&
+    !/[.!?…)]$/.test(normalized)
+  ) {
+    flags.push("dangling_heading");
+  }
+  if (/\|\s*$/.test(normalized) && normalized.includes("|")) {
+    flags.push("broken_table_row");
   }
   if (lineCount >= 3 && /[:;,]\s*$/.test(normalized)) {
     flags.push("dangling_list_lead");
@@ -318,13 +386,18 @@ function analyzeResponseCompleteness(value: string): ResponseCompletenessAnalysi
       "unclosed_code_fence",
       "dangling_connector",
       "broken_list_item",
+      "dangling_heading",
+      "broken_table_row",
       "dangling_list_lead",
     ].includes(flag),
   );
 
   return {
     isComplete: flags.length === 0,
-    needsRepair: needsRepair || (flags.includes("missing_terminal_punctuation") && normalized.length >= 120),
+    needsRepair:
+      needsRepair ||
+      (flags.includes("missing_terminal_punctuation") &&
+        normalized.length >= 120),
     flags,
   };
 }
@@ -335,7 +408,12 @@ async function finalizeIncompleteResponse(
   responseText: string,
   workload: SharedBrainWorkload,
   options: { allowPublicProviderReferences?: boolean } = {},
-): Promise<{ text: string; repairApplied: boolean; repairAttempted: boolean; completeness: ResponseCompletenessAnalysis }> {
+): Promise<{
+  text: string;
+  repairApplied: boolean;
+  repairAttempted: boolean;
+  completeness: ResponseCompletenessAnalysis;
+}> {
   const initial = analyzeResponseCompleteness(responseText);
   if (!initial.needsRepair) {
     return {
@@ -349,24 +427,47 @@ async function finalizeIncompleteResponse(
   const repairPrompt = [
     "Aşağıdaki Elyan yanıtı yarım kalmış veya biçim olarak bozuk olabilir.",
     "Görev: anlamı değiştirmeden yalnız görünür cevabı tamamla ve temizle.",
-    "Kurallar: yeni bilgi uydurma, gizli reasoning ekleme, açıklama yapma, sadece tamamlanmış son cevabı döndür.",
+    "Kurallar: yeni bilgi uydurma, gizli reasoning ekleme, açıklama yapma, kendi süreç cümlelerini ekleme, sadece tamamlanmış son cevabı döndür.",
+    "Yanıt belge/rapor/liste ise son cümleyi veya son maddeyi yarım bırakma; mümkünse temiz bir bitiş cümlesiyle kapat.",
     "",
     "Yanıt:",
     responseText,
   ].join("\n");
+
+  const responseTokenEstimate = estimateTokens(responseText);
+  const repairWorkload =
+    workload === "planning" ||
+    workload === "document_analysis" ||
+    responseTokenEstimate >= 360
+      ? "mobile_chat_deep_refine"
+      : workload === "mobile_chat_fast"
+        ? "mobile_chat_balanced"
+        : workload;
+  const repairTokenCap =
+    repairWorkload === "mobile_chat_deep_refine" ? 1_600 : 960;
 
   try {
     const repaired = await generateSharedBrainReply(app, {
       userId: input.userId,
       prompt: repairPrompt,
       route: input.route,
-      workload: workload === "planning" ? "mobile_chat_balanced" : workload,
+      workload: repairWorkload,
       meteringSurface: "chat",
       planCode: input.planCode,
       brainProfile: input.brainProfile,
       understandingContext: input.understandingContext,
-      maxCompletionTokensOverride: Math.min(640, Math.max(240, Math.round(responseText.length / 2))),
-      timeoutMsOverride: 4_500,
+      maxCompletionTokensOverride: Math.min(
+        repairTokenCap,
+        Math.max(
+          320,
+          Math.min(
+            1_200,
+            responseTokenEstimate + Math.round(responseTokenEstimate * 0.45),
+          ),
+        ),
+      ),
+      timeoutMsOverride:
+        repairWorkload === "mobile_chat_deep_refine" ? 6_500 : 4_800,
       internalEvaluation: {
         skipUsageValidation: true,
         skipReviewLogging: true,
@@ -382,12 +483,13 @@ async function finalizeIncompleteResponse(
           fallback: responseText,
         }),
         options,
-      ) ||
-      polishAssistantVisibleText(responseText, options);
+      ) || polishAssistantVisibleText(responseText, options);
     const repairedCompleteness = analyzeResponseCompleteness(repairedVisible);
     return {
       text: repairedVisible,
-      repairApplied: repairedCompleteness.isComplete || repairedVisible !== polishAssistantVisibleText(responseText, options),
+      repairApplied:
+        repairedCompleteness.isComplete ||
+        repairedVisible !== polishAssistantVisibleText(responseText, options),
       repairAttempted: true,
       completeness: repairedCompleteness,
     };
@@ -435,9 +537,18 @@ function repairLooseJsonObject(candidate: string): string {
       continue;
     }
     if (inString) {
-      if (ch === "\n") { out += "\\n"; continue; }
-      if (ch === "\r") { out += "\\r"; continue; }
-      if (ch === "\t") { out += "\\t"; continue; }
+      if (ch === "\n") {
+        out += "\\n";
+        continue;
+      }
+      if (ch === "\r") {
+        out += "\\r";
+        continue;
+      }
+      if (ch === "\t") {
+        out += "\\t";
+        continue;
+      }
     }
     out += ch;
   }
@@ -445,7 +556,9 @@ function repairLooseJsonObject(candidate: string): string {
 }
 
 // Önce ham metni, olmazsa kurtarılmış sürümü JSON.parse dener. typed blok döner.
-function tryParseTypedJsonObject(candidate: string): Record<string, unknown> | null {
+function tryParseTypedJsonObject(
+  candidate: string,
+): Record<string, unknown> | null {
   for (const variant of [candidate, repairLooseJsonObject(candidate)]) {
     try {
       const parsed = JSON.parse(variant);
@@ -464,7 +577,10 @@ function tryParseTypedJsonObject(candidate: string): Record<string, unknown> | n
   return null;
 }
 
-function extractTypedJsonBlocksFromText(text: string): { visibleText: string; blocks: unknown[] } {
+function extractTypedJsonBlocksFromText(text: string): {
+  visibleText: string;
+  blocks: unknown[];
+} {
   const blocks: unknown[] = [];
   const seen = new Set<string>();
 
@@ -501,14 +617,26 @@ function extractTypedJsonBlocksFromText(text: string): { visibleText: string; bl
       let escaped = false;
       for (let j = braceIdx; j < trimmed.length; j++) {
         const ch = trimmed[j];
-        if (escaped) { escaped = false; continue; }
-        if (ch === "\\") { escaped = true; continue; }
-        if (ch === '"') { inString = !inString; continue; }
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
         if (inString) continue;
         if (ch === "{") depth++;
         else if (ch === "}") {
           depth--;
-          if (depth === 0) { end = j; break; }
+          if (depth === 0) {
+            end = j;
+            break;
+          }
         }
       }
       if (end > braceIdx) {
@@ -516,7 +644,9 @@ function extractTypedJsonBlocksFromText(text: string): { visibleText: string; bl
         const parsed = tryParseTypedJsonObject(candidate);
         if (parsed) {
           blocks.push(parsed);
-          visibleText = (trimmed.slice(0, braceIdx) + trimmed.slice(end + 1)).trim();
+          visibleText = (
+            trimmed.slice(0, braceIdx) + trimmed.slice(end + 1)
+          ).trim();
         }
       }
     }
@@ -525,7 +655,9 @@ function extractTypedJsonBlocksFromText(text: string): { visibleText: string; bl
   return { visibleText, blocks };
 }
 
-function isMobileLocalExportMode(metadata: Record<string, unknown> | undefined): boolean {
+function isMobileLocalExportMode(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
   if (!metadata) {
     return false;
   }
@@ -665,7 +797,9 @@ export function calculateBillableAiCredits(input: {
   }).billableTokens;
 }
 
-function telemetryProviderForSharedBrain(_provider: SharedBrainProvider): "groq" {
+function telemetryProviderForSharedBrain(
+  _provider: SharedBrainProvider,
+): "groq" {
   return "groq";
 }
 
@@ -725,7 +859,8 @@ function buildHostedProviderCandidates(
   const baseUrl = getConfiguredProviderBaseUrl(app, providerCode);
   const catalog = buildGroqModelCatalog(app.config);
   const primaryModel = catalog.defaultModelByWorkload[workload];
-  const fallbackModel = resolveGroqFallbackModel(app.config, primaryModel) ?? catalog.fallbackModel;
+  const fallbackModel =
+    resolveGroqFallbackModel(app.config, primaryModel) ?? catalog.fallbackModel;
   if (!apiKey || !baseUrl || !primaryModel) {
     return [];
   }
@@ -735,7 +870,8 @@ function buildHostedProviderCandidates(
       provider: providerCode,
       baseUrl,
       preferredModels: [primaryModel, fallbackModel].filter(
-        (model, index, values): model is string => Boolean(model) && values.indexOf(model) === index,
+        (model, index, values): model is string =>
+          Boolean(model) && values.indexOf(model) === index,
       ),
       hosted: true,
     } satisfies SharedBrainProviderCandidate,
@@ -790,11 +926,14 @@ const CONTEXT_KIND_LABELS: Record<string, string> = {
   world_context: "Konum & dünya",
 };
 
-function buildUserIdentityPromptBlock(context: UserUnderstandingContext | undefined): string | null {
+function buildUserIdentityPromptBlock(
+  context: UserUnderstandingContext | undefined,
+): string | null {
   if (!context) {
     return null;
   }
-  const preferredName = context.userProfile?.preferredName ?? context.userProfile?.displayName;
+  const preferredName =
+    context.userProfile?.preferredName ?? context.userProfile?.displayName;
   const lines: string[] = [];
 
   if (preferredName) {
@@ -807,11 +946,21 @@ function buildUserIdentityPromptBlock(context: UserUnderstandingContext | undefi
   if (contextPackets.length > 0) {
     // Explicit packets: show to AI to use when directly relevant.
     const explicitPackets = contextPackets
-      .filter((p) => p.freshness !== "stale" && p.summary && p.mentionPolicy === "explicit_when_relevant")
+      .filter(
+        (p) =>
+          p.freshness !== "stale" &&
+          p.summary &&
+          p.mentionPolicy === "explicit_when_relevant",
+      )
       .slice(0, 6);
     // Implicit packets: show for silent adaptation (pacing, tone).
     const implicitPackets = contextPackets
-      .filter((p) => p.freshness !== "stale" && p.summary && p.mentionPolicy === "implicit")
+      .filter(
+        (p) =>
+          p.freshness !== "stale" &&
+          p.summary &&
+          p.mentionPolicy === "implicit",
+      )
       .slice(0, 3);
 
     if (explicitPackets.length > 0) {
@@ -840,7 +989,9 @@ function buildUserIdentityPromptBlock(context: UserUnderstandingContext | undefi
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
-function buildPreferencePromptBlock(context: UserUnderstandingContext | undefined): string | null {
+function buildPreferencePromptBlock(
+  context: UserUnderstandingContext | undefined,
+): string | null {
   if (!context) {
     return null;
   }
@@ -866,28 +1017,55 @@ function buildPreferencePromptBlock(context: UserUnderstandingContext | undefine
       `Explicit personalization directive from user settings: ${context.personalizationPrompt}. Apply this to tone, pacing, formatting, and interaction style when relevant, but never let it override safety, privacy, honesty, routing truth, or factual accuracy.`,
     );
   }
-  const preferredLanguageFact = preferenceFacts.find((item) => item.key === "preferred_language" || item.key === "language");
+  const preferredLanguageFact = preferenceFacts.find(
+    (item) => item.key === "preferred_language" || item.key === "language",
+  );
   if (preferredLanguageFact) {
-    const languageValue = formatPreferencePromptValue(preferredLanguageFact.key, preferredLanguageFact.value);
+    const languageValue = formatPreferencePromptValue(
+      preferredLanguageFact.key,
+      preferredLanguageFact.value,
+    );
     pushHint(
       `Preferred language: ${languageValue}. When the user writes in a Turkic language, answer in the same language when possible; otherwise use polished standard Turkish by default and do not mirror typos or broken punctuation.`,
     );
   }
 
-  const responseStyleFact = preferenceFacts.find((item) => item.key === "response_style_preference" || item.key === "preferred_tone");
+  const responseStyleFact = preferenceFacts.find(
+    (item) =>
+      item.key === "response_style_preference" || item.key === "preferred_tone",
+  );
   if (responseStyleFact) {
-    pushHint(`Response style preference: ${formatPreferencePromptValue(responseStyleFact.key, responseStyleFact.value)}.`);
+    pushHint(
+      `Response style preference: ${formatPreferencePromptValue(responseStyleFact.key, responseStyleFact.value)}.`,
+    );
   }
 
-  const answerLengthFact = preferenceFacts.find((item) => item.key === "answer_length" || item.key === "brevity_preference");
+  const answerLengthFact = preferenceFacts.find(
+    (item) => item.key === "answer_length" || item.key === "brevity_preference",
+  );
   if (answerLengthFact) {
-    pushHint(`Answer length preference: ${formatPreferencePromptValue(answerLengthFact.key, answerLengthFact.value)}.`);
+    pushHint(
+      `Answer length preference: ${formatPreferencePromptValue(answerLengthFact.key, answerLengthFact.value)}.`,
+    );
   }
 
-  for (const hint of [...context.personalizationHints.slice(0, 2), ...context.styleHints.slice(0, 3), ...context.safetyHints.slice(0, 2)]) {
+  for (const hint of [
+    ...(context.personalizationHints ?? []).slice(0, 2),
+    ...(context.styleHints ?? []).slice(0, 3),
+    ...(context.safetyHints ?? []).slice(0, 2),
+  ]) {
     pushHint(hint);
   }
-  for (const hint of [...context.behavioralHints.slice(0, 2), ...context.environmentHints.slice(0, 2)]) {
+  for (const hint of (context.relationshipContextDigest ?? []).slice(0, 3)) {
+    pushHint(hint);
+  }
+  for (const hint of (context.speakingStyleDirectives ?? []).slice(0, 3)) {
+    pushHint(hint);
+  }
+  for (const hint of [
+    ...(context.behavioralHints ?? []).slice(0, 2),
+    ...(context.environmentHints ?? []).slice(0, 2),
+  ]) {
     pushHint(hint);
   }
 
@@ -895,14 +1073,20 @@ function buildPreferencePromptBlock(context: UserUnderstandingContext | undefine
     return null;
   }
 
-  return ["User preference hints:", ...hints.map((item) => `- ${item}`)].join("\n");
+  return ["User preference hints:", ...hints.map((item) => `- ${item}`)].join(
+    "\n",
+  );
 }
 
-function buildMemoryProfilePromptBlock(context: UserUnderstandingContext | undefined): string | null {
+function buildMemoryProfilePromptBlock(
+  context: UserUnderstandingContext | undefined,
+): string | null {
   return formatMemoryProfilePromptBlock(context?.memorySnapshot);
 }
 
-function buildPromptSafeContextPacket(packet: UserUnderstandingContext["contextPackets"][number]) {
+function buildPromptSafeContextPacket(
+  packet: UserUnderstandingContext["contextPackets"][number],
+) {
   const canExposeSummary = packet.mentionPolicy === "explicit_when_relevant";
   return {
     kind: packet.kind,
@@ -919,9 +1103,13 @@ function buildPromptSafeContextPacket(packet: UserUnderstandingContext["contextP
   };
 }
 
-function buildStructuredDataPromptBlock(input: SharedBrainInferenceInput): string | null {
+function buildStructuredDataPromptBlock(
+  input: SharedBrainInferenceInput,
+): string | null {
   const context = input.understandingContext;
-  const attachmentInsightMetadata = buildAttachmentInsightMetadata(input.attachmentContext);
+  const attachmentInsightMetadata = buildAttachmentInsightMetadata(
+    input.attachmentContext,
+  );
   const userProfile = context?.userProfile;
   const taskFrame = context?.taskFrame;
   const contextPackets = (context?.contextPackets ?? []).slice(0, 8);
@@ -930,11 +1118,19 @@ function buildStructuredDataPromptBlock(input: SharedBrainInferenceInput): strin
     currentUser:
       userProfile && Object.values(userProfile).some((value) => value != null)
         ? {
-            ...(userProfile.displayName ? { displayName: userProfile.displayName } : {}),
-            ...(userProfile.preferredName ? { preferredName: userProfile.preferredName } : {}),
-            ...(userProfile.preferredLanguage ? { preferredLanguage: userProfile.preferredLanguage } : {}),
+            ...(userProfile.displayName
+              ? { displayName: userProfile.displayName }
+              : {}),
+            ...(userProfile.preferredName
+              ? { preferredName: userProfile.preferredName }
+              : {}),
+            ...(userProfile.preferredLanguage
+              ? { preferredLanguage: userProfile.preferredLanguage }
+              : {}),
             ...(userProfile.planCode ? { planCode: userProfile.planCode } : {}),
-            ...(userProfile.subscriptionStatus ? { subscriptionStatus: userProfile.subscriptionStatus } : {}),
+            ...(userProfile.subscriptionStatus
+              ? { subscriptionStatus: userProfile.subscriptionStatus }
+              : {}),
           }
         : undefined,
     requestFrame: taskFrame
@@ -957,7 +1153,9 @@ function buildStructuredDataPromptBlock(input: SharedBrainInferenceInput): strin
               ? { priorGoal: context.continuitySummary.userGoal }
               : {}),
             ...(context.continuitySummary.assistantState
-              ? { priorAssistantState: context.continuitySummary.assistantState }
+              ? {
+                  priorAssistantState: context.continuitySummary.assistantState,
+                }
               : {}),
             ...(context.continuitySummary.openLoops?.length
               ? { openLoops: context.continuitySummary.openLoops }
@@ -966,12 +1164,15 @@ function buildStructuredDataPromptBlock(input: SharedBrainInferenceInput): strin
         : undefined,
     evidence: {
       primaryAttachmentSource: input.attachmentContext?.used
-        ? input.attachmentContext.source ?? "local_derived"
+        ? (input.attachmentContext.source ?? "local_derived")
         : "request_only",
-      attachmentDocumentCount: input.attachmentContext?.documentIds?.length ?? 0,
+      attachmentDocumentCount:
+        input.attachmentContext?.documentIds?.length ?? 0,
       attachmentChunkCount: input.attachmentContext?.chunks?.length ?? 0,
-      attachmentInsightTableCount: attachmentInsightMetadata.attachmentInsightTableCount,
-      attachmentInsightVisualCount: attachmentInsightMetadata.attachmentInsightVisualCount,
+      attachmentInsightTableCount:
+        attachmentInsightMetadata.attachmentInsightTableCount,
+      attachmentInsightVisualCount:
+        attachmentInsightMetadata.attachmentInsightVisualCount,
       memoryCount: context?.retrievedMemory?.length ?? 0,
       contextPacketCount: contextPackets.length,
       contextPacketKinds: context?.packetKinds ?? [],
@@ -979,41 +1180,58 @@ function buildStructuredDataPromptBlock(input: SharedBrainInferenceInput): strin
       memoryEnabled: context?.memoryEnabled ?? true,
       route: input.routeDecision?.route ?? input.route ?? "shared_brain",
     },
-    continuity:
-      context
-        ? {
-            userGoal: context.continuitySummary?.userGoal ?? null,
-            assistantState: context.continuitySummary?.assistantState ?? null,
-            openLoops: context.continuitySummary?.openLoops ?? [],
-          }
-        : undefined,
+    continuity: context
+      ? {
+          userGoal: context.continuitySummary?.userGoal ?? null,
+          assistantState: context.continuitySummary?.assistantState ?? null,
+          openLoops: context.continuitySummary?.openLoops ?? [],
+        }
+      : undefined,
     clarificationDiagnostics: context?.clarificationDiagnostics,
     contextPackets:
       contextPackets.length > 0
         ? contextPackets.map((packet) => buildPromptSafeContextPacket(packet))
         : undefined,
-    derivedHints:
-      context
-        ? {
-            situationalHints: (context.situationalHints ?? []).slice(0, 4),
-            behavioralHints: (context.behavioralHints ?? []).slice(0, 4),
-            environmentHints: (context.environmentHints ?? []).slice(0, 4),
-            memoryRelevanceSummary: (context.memoryRelevanceSummary ?? []).slice(0, 4),
-          }
-        : undefined,
-    contextFreshness: contextPackets.length > 0 ? context?.freshness : undefined,
+    derivedHints: context
+      ? {
+          situationalHints: (context.situationalHints ?? []).slice(0, 4),
+          behavioralHints: (context.behavioralHints ?? []).slice(0, 4),
+          environmentHints: (context.environmentHints ?? []).slice(0, 4),
+          memoryRelevanceSummary: (context.memoryRelevanceSummary ?? []).slice(
+            0,
+            4,
+          ),
+        }
+      : undefined,
+    contextFreshness:
+      contextPackets.length > 0 ? context?.freshness : undefined,
     dataPolicy: {
       rawFileAccess: false,
       rawAttachmentUpload: false,
-      attachmentMode: input.attachmentContext?.used ? "derived_attachment_data" : "no_attachment_data",
-      worldContextMode: contextPackets.length > 0 ? "packaged_context_only" : "no_packaged_world_context",
-      healthContextMode: context?.healthContextUsed ? "short_lived_summary_only_no_diagnosis" : "not_used",
-      calendarContextMode: context?.packetKinds?.includes("calendar_context") ? "derived_schedule_load_only" : "not_used",
-      deviceContextMode: context?.packetKinds?.includes("device_context") ? "derived_device_state_only" : "not_used",
-      notificationContextMode: context?.packetKinds?.includes("notification_context")
+      attachmentMode: input.attachmentContext?.used
+        ? "derived_attachment_data"
+        : "no_attachment_data",
+      worldContextMode:
+        contextPackets.length > 0
+          ? "packaged_context_only"
+          : "no_packaged_world_context",
+      healthContextMode: context?.healthContextUsed
+        ? "short_lived_summary_only_no_diagnosis"
+        : "not_used",
+      calendarContextMode: context?.packetKinds?.includes("calendar_context")
+        ? "derived_schedule_load_only"
+        : "not_used",
+      deviceContextMode: context?.packetKinds?.includes("device_context")
+        ? "derived_device_state_only"
+        : "not_used",
+      notificationContextMode: context?.packetKinds?.includes(
+        "notification_context",
+      )
         ? "derived_attention_signal_only"
         : "not_used",
-      timeContextMode: context?.packetKinds?.includes("time_context") ? "derived_local_time_only" : "not_used",
+      timeContextMode: context?.packetKinds?.includes("time_context")
+        ? "derived_local_time_only"
+        : "not_used",
     },
   };
 
@@ -1025,7 +1243,9 @@ function buildStructuredDataPromptBlock(input: SharedBrainInferenceInput): strin
   ].join("\n");
 }
 
-function detectPromptLanguage(prompt: string): "tr" | "en" | "turkic" | "mixed" | "unknown" {
+function detectPromptLanguage(
+  prompt: string,
+): "tr" | "en" | "turkic" | "mixed" | "unknown" {
   const compact = compactText(prompt);
   if (!compact) {
     return "unknown";
@@ -1033,9 +1253,18 @@ function detectPromptLanguage(prompt: string): "tr" | "en" | "turkic" | "mixed" 
 
   const lowered = compact.toLocaleLowerCase("tr-TR");
   const hasTurkishChars = /[çğıöşü]/i.test(compact);
-  const turkishSignals = /\b(selam|merhaba|ve|ile|için|bunu|şunu|burada|nedir|nasıl|özetle|düzelt|belge|görsel)\b/i.test(lowered);
-  const englishSignals = /\b(the|and|for|what|how|summarize|analyze|fix|document|image)\b/i.test(lowered);
-  const turkicSignals = /\b(oğuz|kıpçak|karluk|özbek|kazak|kırgız|türkmen|uygur|azerbaycan)\b/i.test(lowered);
+  const turkishSignals =
+    /\b(selam|merhaba|ve|ile|için|bunu|şunu|burada|nedir|nasıl|özetle|düzelt|belge|görsel)\b/i.test(
+      lowered,
+    );
+  const englishSignals =
+    /\b(the|and|for|what|how|summarize|analyze|fix|document|image)\b/i.test(
+      lowered,
+    );
+  const turkicSignals =
+    /\b(oğuz|kıpçak|karluk|özbek|kazak|kırgız|türkmen|uygur|azerbaycan)\b/i.test(
+      lowered,
+    );
 
   if ((hasTurkishChars || turkishSignals) && englishSignals) {
     return "mixed";
@@ -1052,7 +1281,9 @@ function detectPromptLanguage(prompt: string): "tr" | "en" | "turkic" | "mixed" 
   return "unknown";
 }
 
-function inferDataGroundingLevel(input: SharedBrainInferenceInput): "attachment_grounded" | "memory_augmented" | "request_only" {
+function inferDataGroundingLevel(
+  input: SharedBrainInferenceInput,
+): "attachment_grounded" | "memory_augmented" | "request_only" {
   if (input.attachmentContext?.used) {
     return "attachment_grounded";
   }
@@ -1065,11 +1296,19 @@ function inferDataGroundingLevel(input: SharedBrainInferenceInput): "attachment_
   return "request_only";
 }
 
-function buildDataUnderstandingQualityPromptBlock(input: SharedBrainInferenceInput): string {
+function buildDataUnderstandingQualityPromptBlock(
+  input: SharedBrainInferenceInput,
+): string {
   const intent = input.understandingContext?.intent ?? "unknown";
   const groundingLevel = inferDataGroundingLevel(input);
   const responseLanguage = detectPromptLanguage(input.prompt);
-  const attachmentInsightMetadata = buildAttachmentInsightMetadata(input.attachmentContext);
+  const attachmentInsightMetadata = buildAttachmentInsightMetadata(
+    input.attachmentContext,
+  );
+  const explicitTableRequest = isExplicitTableRequest(input.prompt);
+  const explicitChartRequest = isExplicitChartRequest(input.prompt);
+  const explicitMathOrLatexRequest = isExplicitMathOrLatexRequest(input.prompt);
+  const explicitSvgRequest = isExplicitSvgRequest(input.prompt);
   const isTransformOrWriting =
     intent === "writing" ||
     intent === "document" ||
@@ -1085,6 +1324,18 @@ function buildDataUnderstandingQualityPromptBlock(input: SharedBrainInferenceInp
     attachmentInsightMetadata.attachmentInsightTableCount > 0
       ? "- attachment tables are available as bounded derived table packets; preserve row/column relationships, never use literal <br> tags, and avoid half-finished tables"
       : "- if tabular evidence is requested but not available as a clean table, summarize the visible rows instead of inventing cells",
+    explicitTableRequest
+      ? "- the user explicitly asked for a table: emit ONE {\"type\":\"table\"} block only if the data genuinely fits stable rows/columns, otherwise answer in prose. Output the table exactly once and never also repeat it as a markdown table in prose."
+      : "- DEFAULT TO PROSE OR A SHORT BULLET LIST. Do NOT use a table for definitions, explanations, single facts, comparisons of two items, summaries, opinions, step-by-step instructions, or simple questions. Use a table ONLY when the user explicitly asks for one or the answer is inherently a multi-row dataset. Never emit more than one table in a reply, and never repeat a table you already produced.",
+    explicitChartRequest
+      ? '- chart/graph request: emit a typed {"type":"chart"} block as the primary visual output. For data charts use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values, points, or series. For 2D function graphs use chartType "function", expression, variables ["x"], and range {"x":[min,max]}. For 3D surface/mesh requests prefer chartType "surface3d" or "mesh" with expression "x^2 + y^2", variables ["x","y"], and range {"x":[min,max],"y":[min,max]}; use bounded points [{x,y,z}] only when the data is already sampled. For current/live values (e.g. "güncel altın grafiği", an exchange-rate, crypto, or price trend), extract the numeric series from the PUBLIC WEB GROUNDING evidence above and plot it as a "line"/"bar" chart with dated labels — this is a server capability, never defer it to desktop. If no grounding data is available, say the live data could not be retrieved instead of emitting a needs_desktop block.'
+      : "- do not generate a chart block unless the user asks for a graph/plot/visualization or the answer is clearly numeric-series data.",
+    explicitMathOrLatexRequest
+      ? '- math/LaTeX request: when a formula, derivation, equation, or final expression is important, emit a typed {"type":"math","content":"...","format":"latex","displayMode":true} block. Keep LaTeX renderer-safe; do not wrap it in prose-only markdown if a math block is more precise.'
+      : "- use inline prose for ordinary numbers; reserve math blocks for explicit math, formulas, equations, proofs, or LaTeX requests.",
+    explicitSvgRequest
+      ? '- SVG/vector request: emit a typed {"type":"svg","svg":"<svg ...>...</svg>"} block. Use self-contained safe SVG only: no script, foreignObject, external fetches, event handlers, or hidden links. Keep dimensions mobile-friendly and include viewBox.'
+      : "- do not emit SVG unless the user explicitly asks for vector/diagram/geometric drawing output.",
     attachmentInsightMetadata.attachmentInsightVisualCount > 0
       ? "- image/OCR evidence is available as derived visual notes; answer from visible text and visual summaries only"
       : "- do not claim image details unless they are present in derived attachment evidence",
@@ -1108,6 +1359,8 @@ function buildReasoningProtocolPromptBlock(input: {
   const projectHints = context?.projectHints ?? [];
   const technicalHints = context?.technicalHints ?? [];
   const safetyHints = context?.safetyHints ?? [];
+  const speakingStyleDirectives = context?.speakingStyleDirectives ?? [];
+  const reasoningDirectives = context?.reasoningDirectives ?? [];
   const situationalHints = context?.situationalHints ?? [];
   const behavioralHints = context?.behavioralHints ?? [];
   const environmentHints = context?.environmentHints ?? [];
@@ -1116,6 +1369,8 @@ function buildReasoningProtocolPromptBlock(input: {
   const routingHint = input.routeDecision?.selectedWorkload ?? input.workload;
 
   const continuitySummary = context?.continuitySummary;
+  const continuityBoundary = context?.continuityBoundary;
+  const relationshipContextDigest = context?.relationshipContextDigest ?? [];
   const hasOpenLoops = (continuitySummary?.openLoops ?? []).length > 0;
 
   const lines = [
@@ -1142,25 +1397,56 @@ function buildReasoningProtocolPromptBlock(input: {
     lines.push(`- project context: ${projectHints.slice(0, 3).join(" | ")}`);
   }
   if (technicalHints.length > 0) {
-    lines.push(`- technical context: ${technicalHints.slice(0, 3).join(" | ")}`);
+    lines.push(
+      `- technical context: ${technicalHints.slice(0, 3).join(" | ")}`,
+    );
   }
   if (safetyHints.length > 0) {
     lines.push(`- safety context: ${safetyHints.slice(0, 2).join(" | ")}`);
   }
+  if (reasoningDirectives.length > 0) {
+    lines.push(
+      `- reasoning directives: ${reasoningDirectives.slice(0, 4).join(" | ")}`,
+    );
+  }
+  if (speakingStyleDirectives.length > 0) {
+    lines.push(
+      `- speaking style directives: ${speakingStyleDirectives.slice(0, 4).join(" | ")}`,
+    );
+  }
   if (situationalHints.length > 0) {
-    lines.push(`- situational context: ${situationalHints.slice(0, 3).join(" | ")}`);
+    lines.push(
+      `- situational context: ${situationalHints.slice(0, 3).join(" | ")}`,
+    );
   }
   if (behavioralHints.length > 0) {
-    lines.push(`- behavioral context: ${behavioralHints.slice(0, 3).join(" | ")}`);
+    lines.push(
+      `- behavioral context: ${behavioralHints.slice(0, 3).join(" | ")}`,
+    );
   }
   if (environmentHints.length > 0) {
-    lines.push(`- environment context: ${environmentHints.slice(0, 3).join(" | ")}`);
+    lines.push(
+      `- environment context: ${environmentHints.slice(0, 3).join(" | ")}`,
+    );
+  }
+  if (relationshipContextDigest.length > 0) {
+    lines.push(
+      `- user continuity digest: ${relationshipContextDigest.slice(0, 4).join(" | ")}`,
+    );
+  }
+  if (continuityBoundary) {
+    lines.push(
+      `- continuity boundary: ${continuityBoundary.mode} (${continuityBoundary.reason}); ${continuityBoundary.carryContinuity ? "carry stable prior context when relevant" : "prefer current-turn context over prior chat state"}`,
+    );
   }
   if (contextPackets.length > 0) {
     lines.push(
       `- packaged user context: ${contextPackets
         .slice(0, 4)
-        .map((packet) => `${packet.kind}/${packet.freshness}/${packet.privacyClass}/${packet.mentionPolicy ?? "silent"}`)
+        .map(
+          (packet) =>
+            `${packet.kind}/${packet.freshness}/${packet.privacyClass}/${packet.mentionPolicy ?? "silent"}`,
+        )
         .join(" | ")}`,
     );
     lines.push(
@@ -1201,19 +1487,22 @@ function buildReasoningProtocolPromptBlock(input: {
   /* ── Document generation ─────────────────────────────────────────── */
   if (input.workload === "document_generate") {
     lines.push(
-      '- DOCUMENT GENERATION MODE: First, write 1-2 short sentences describing what you are creating (this streams to the user immediately). Then output the document data inside a code fence exactly like this:\n```json\n{"type":"document_block","title":"...","format":"report|letter|outline|notes","sections":[{"heading":"...","content":"markdown text","level":1},...],"wordCount":N}\n```\nRules: (1) ≥2 sections, (2) each section content is plain markdown, (3) format must be one of: report, letter, outline, notes, (4) wordCount is approximate total word count, (5) after the code fence you MAY add one short follow-up sentence.',
+      '- DOCUMENT GENERATION MODE: First, write 1-2 short sentences describing what you are creating (this streams to the user immediately). Then output the document data inside a code fence exactly like this:\n```json\n{"type":"document_block","title":"...","format":"report|letter|outline|notes","sections":[{"heading":"...","content":"markdown text","level":1},...],"wordCount":N}\n```\nRules: (1) ≥2 sections, (2) each section content is plain markdown and must contain ONLY the document body, never assistant chatter like "hazırladım", "işte belge", "aşağıda", "umarım", or process notes, (3) format must be one of: report, letter, outline, notes, (4) wordCount is approximate total word count, (5) use markdown tables inside section content only when the user explicitly asked for a table or spreadsheet, otherwise prefer headings, short paragraphs, and lists, (6) if the user wants PDF/DOCX/XLSX quality, produce a clean title, stable section hierarchy, and complete sentences ready for export, (7) after the code fence you MAY add one short follow-up sentence.',
     );
   }
 
   /* ── Table generation ────────────────────────────────────────────── */
   if (input.workload === "table_generate") {
     lines.push(
-      '- table generation mode: produce a structured table as primary response. Emit a {"type":"table"} block with "columns" (string[]) and "rows" (string[][]). Optional: "title", "caption". Max 12 columns, 80 rows, cell text ≤120 chars. If editing an existing table, apply only requested changes and return the full updated table. Optionally follow with a short text block.',
+      '- table generation mode: produce a structured table as primary response. Emit a {"type":"table"} block with "columns" (string[]) and "rows" (string[][]). Optional: "title", "caption". Max 12 columns, 80 rows, cell text ≤120 chars. Keep headers short, keep every row aligned, and normalize markdown so raw **bold** markers do not leak into cells. If editing an existing table, apply only requested changes and return the full updated table. Emit the table EXACTLY ONCE — never repeat the same table block, and do not also write the full table as markdown in prose. Optionally follow with one short explanatory text block.',
     );
   }
 
   /* ── Image analysis ──────────────────────────────────────────────── */
-  if (input.workload === "image_analyze" || input.workload === "vision_reasoning") {
+  if (
+    input.workload === "image_analyze" ||
+    input.workload === "vision_reasoning"
+  ) {
     lines.push(
       '- image analysis mode: analyze the provided image (thumbnail + OCR from client). Emit a {"type":"image_analysis"} block with: "description" (what you see), optional "detectedText" (visible text in image), optional "tags" (string[]), optional "language", optional "confidence" (0-1). Then add a text block with your analysis or answer to the user\'s question.',
     );
@@ -1237,7 +1526,7 @@ function buildElyanEcosystemPromptBlock(input: {
     "Elyan ecosystem model:",
     "- backend/control-plane: owns auth, routing, memory, learning metadata, shared truth, and all cloud-solvable tasks",
     "- mobile: task sender and status surface; does not call local engines directly",
-    "- desktop runtime: paired macOS app that executes private/local actions — the ONLY component that can do:",
+    "- desktop runtime: paired macOS app that executes private/local actions on the user's OWN machine — the ONLY component that can do:",
     "    • local file operations (read, write, move, delete files and folders)",
     "    • browser control (open URLs, click, fill forms, scrape pages in Safari/Chrome/Firefox)",
     "    • computer control (screenshots, keyboard shortcuts, mouse clicks, window management)",
@@ -1245,17 +1534,19 @@ function buildElyanEcosystemPromptBlock(input: {
     "    • terminal/shell commands (run scripts, manage processes)",
     "    • local notifications and calendar access",
     "    • screen recording and audio capture",
-    "- desktop capability boundary: the backend brain CANNOT execute any of the above; do not pretend otherwise",
-    "- when a request clearly requires desktop capabilities, respond with:",
-    '    {"type":"status","status":"needs_desktop","title":"<short Turkish action title>","detail":"<one sentence explaining what will run on desktop>"}',
-    "    then add a short text block explaining what will happen when the desktop executes it",
-    "- when desktop is offline or not paired, tell the user clearly and ask them to open the desktop app",
+    "- desktop capability boundary: the backend brain CANNOT execute the LOCAL actions above; do not pretend otherwise",
+    "- live/public data (market prices, exchange rates, gold/crypto, weather, sports scores, news, releases) is fetched by the SERVER via public web grounding — this is NOT a desktop action. Drawing a chart or table of such data is a backend capability you already have.",
+    "- desktop dispatch is controlled ONLY by the user's laptop toggle (surfaced as the routing decision below), never inferred from the wording of the message.",
     "- when Elyan is asked about itself, answer from current project truth and memory; never invent people, roles, or architecture",
   ];
 
   if (requiresDesktop) {
     lines.push(
-      "- ROUTING DECISION: this request requires the desktop runtime; emit the needs_desktop status block before your reply",
+      "- DESKTOP DISPATCH IS ON (user enabled the laptop toggle): this request is routed to the paired desktop runtime. Emit a {\"type\":\"status\",\"status\":\"needs_desktop\",\"title\":\"<short Turkish action title>\",\"detail\":\"<one sentence explaining what will run on desktop>\"} block, then a short text block explaining what will execute. If the desktop is offline or not paired, tell the user clearly and ask them to open the desktop app.",
+    );
+  } else {
+    lines.push(
+      "- DESKTOP DISPATCH IS OFF (user has not enabled the laptop toggle): do NOT emit a needs_desktop status block. Fulfill the request yourself on the server — for current/live data use the public web grounding evidence and turn it into chart/table/document/text blocks. ONLY if the request genuinely needs the user's own machine (local files, app or computer control, shell), briefly tell them to enable the laptop (desktop dispatch) toggle so it can run on their desktop — still without emitting a status block.",
     );
   }
 
@@ -1301,20 +1592,43 @@ function shouldUseRestrainedHumor(input: SharedBrainInferenceInput): boolean {
   return sensitivePatterns.some((pattern) => joined.includes(pattern));
 }
 
-function buildStructuredSystemPrompt(basePrompt: string, input: SharedBrainInferenceInput): string {
-  const preferenceBlock = buildPreferencePromptBlock(input.understandingContext);
-  const memoryProfileBlock = buildMemoryProfilePromptBlock(input.understandingContext);
+function buildStructuredSystemPrompt(
+  basePrompt: string,
+  input: SharedBrainInferenceInput,
+): string {
+  const preferenceBlock = buildPreferencePromptBlock(
+    input.understandingContext,
+  );
+  const memoryProfileBlock = buildMemoryProfilePromptBlock(
+    input.understandingContext,
+  );
   const structuredDataBlock = buildStructuredDataPromptBlock(input);
-  const attachmentContextBlock = buildAttachmentContextPromptBlock(input.attachmentContext);
-  const attachmentInsightBlock = buildAttachmentInsightPromptBlock(input.attachmentContext);
+  const attachmentContextBlock = buildAttachmentContextPromptBlock(
+    input.attachmentContext,
+  );
+  const attachmentInsightBlock = buildAttachmentInsightPromptBlock(
+    input.attachmentContext,
+  );
   const resolvedIntentBlock = buildResolvedAttachmentIntentPromptBlock(input);
   const compactContextBlock = buildCompactContextPromptBlock(input);
   const languageHint = getTurkicLanguagePromptHint(input.prompt);
+  // Desktop execution is decided ONLY by the user's laptop toggle (surfaced as
+  // the route decision), never by the wording of the message. When the toggle
+  // is off the brain must do the work on the server instead of punting with a
+  // needs_desktop status block.
+  const desktopDispatchActive =
+    input.routeDecision?.requiredRuntime === "desktop" ||
+    input.routeDecision?.requiredRuntime === "both" ||
+    input.routeDecision?.taskRoute?.needsDesktop === true;
+  const taskRoutingPolicy = desktopDispatchActive
+    ? "Task-routing policy: desktop dispatch is ON; for paired-desktop actions (file ops, browser control, computer control, app automation, shell, screen capture) emit a needs_desktop status block with a short Turkish title, then briefly explain what will execute on desktop. Never invent local execution you cannot perform."
+    : "Task-routing policy: desktop dispatch is OFF (user-controlled laptop toggle). Never emit a needs_desktop status block, and never claim a task must run on desktop because of how the message is worded. Do the work on the server: use web grounding for current/live data and answer with typed blocks (chart, table, document, text). Desktop routing is decided only by the user's toggle, not by you.";
   const humorPolicy = shouldUseRestrainedHumor(input)
     ? "Humor policy: keep humor off unless it would reduce tension without diluting technical accuracy. Do not joke in failures, billing, security, data loss, pairing, or degraded-state responses."
     : "Humor policy: light, occasional, short humor is allowed in low-risk chat if it helps warmth. Never let humor replace the answer or dominate the reply.";
   const mobilePolicy =
-    input.workload === "mobile_chat_balanced" || input.workload === "mobile_chat_fast"
+    input.workload === "mobile_chat_balanced" ||
+    input.workload === "mobile_chat_fast"
       ? input.responseBudget?.requestedLongForm
         ? "Mobile reply policy: fulfill the requested depth, organize the answer for incremental reading, finish every sentence completely, and end with a complete final paragraph within the available budget. Do not stop mid-sentence or promise an unrequested continuation."
         : "Mobile reply policy: give the net result first, then add only the shortest necessary explanation. Finish every sentence fully, avoid repetitive closings, ask at most one short follow-up when helpful, and prefer practical next steps."
@@ -1350,9 +1664,9 @@ function buildStructuredSystemPrompt(basePrompt: string, input: SharedBrainInfer
     "Verification policy: stay honest about readiness, routing, limits, and uncertainty. Never invent success, capabilities, sources, roles, people, names, relationships, or results.",
     "Public web policy: use web grounding for external facts, current events, and citations. Treat public web results as evidence, not truth by default. If public sources conflict, say so briefly. Do not let public web results override established Elyan project identity or memory facts.",
     "Research answer policy: when PUBLIC WEB GROUNDING is present, turn it into a clean answer with a short source basis, date/scope awareness, and no unsupported extrapolation. If no web grounding was used, do not imply that you searched the internet.",
-    "Context awareness policy: packaged health, location, calendar, time, device, and notification context is private derived context provided by the user's own device. If mentionPolicy is silent, do not mention or hint at that context. If mentionPolicy is implicit, only adapt pacing, brevity, or planning silently. If mentionPolicy is explicit_when_relevant, you MUST answer the user's question about this data directly and accurately using the values provided in 'Live context' above — do not refuse, generalize, or say you don't have access, because the data is already present. For health questions specifically: state the actual numbers (steps, sleep hours, energy) when asked. Never diagnose or prescribe. Never mention context during greetings or unrelated small talk. Never invent live weather or temperature unless public web grounding is present.",
+    "Context awareness policy: packaged health, location, calendar, time, device, and notification context is private derived context provided by the user's own device. If mentionPolicy is silent, do not mention or hint at that context. If mentionPolicy is implicit, only adapt pacing, brevity, or planning silently. If mentionPolicy is explicit_when_relevant, you MUST answer the user's question about this data directly and accurately using the values provided in 'Live context' above — do not refuse, generalize, or say you don't have access, because the data is already present. For health questions specifically: state the actual numbers (steps, sleep hours, energy) when asked. Never diagnose or prescribe. Do not mention situational context unless the user asks or the request directly requires it. Never mention battery, network, device state, health, steps, notifications, or location during greetings. Never mention context during greetings or unrelated small talk. Never invent live weather or temperature unless public web grounding is present.",
     "Anti-hallucination policy: only state personal, memory, or project facts that are present in the current memory, retrieval context, user profile, or user request. If a fact is missing, say you do not know it yet instead of guessing. The user's verified name and account information are always safe to use. For other identity questions about a person or role, do not infer from vibes or prior wording; answer only when the current context explicitly supports it.",
-    "Task-routing policy: if a request belongs on the paired desktop runtime (file ops, browser control, computer control, app automation, shell, screen capture), emit a status block with status=needs_desktop and a short Turkish title, then briefly explain what will execute on desktop. Never invent local execution you cannot perform.",
+    taskRoutingPolicy,
     "Tone policy: be calm, direct, sincere, and slightly warmer than before. Sound like Elyan: close to the user, but never fake intimacy, never overpromise, and never turn warmth into filler.",
     "Language policy: match the user's language by default. When replying in Turkish, use standard Turkish grammar, spelling, punctuation, and capitalization; when the user's message appears to be in another Turkic language, keep the reply in that language when possible; prefer native Turkish wording over unnecessary English borrowings. Do not mirror the user's typos, devrik sentence order, or broken punctuation; proofread the response before sending.",
     "Style policy: keep hitabet consistent, avoid filler, avoid broken English words inside Turkish sentences, and prefer short, clean sentences over long tangled ones.",
@@ -1368,7 +1682,9 @@ function buildStructuredSystemPrompt(basePrompt: string, input: SharedBrainInfer
     .join("\n\n");
 }
 
-function buildCompactContextPromptBlock(input: SharedBrainInferenceInput): string | null {
+function buildCompactContextPromptBlock(
+  input: SharedBrainInferenceInput,
+): string | null {
   const metadata = readMetadataRecord(input.requestMetadata);
   const compactContext = readMetadataRecord(metadata?.compactContext);
   const chatContext = readMetadataRecord(metadata?.chatContext);
@@ -1376,24 +1692,45 @@ function buildCompactContextPromptBlock(input: SharedBrainInferenceInput): strin
     compactContext?.rollingSummary ?? chatContext?.rollingSummary,
   );
   const derivedContext = readMetadataRecord(
-    compactContext?.derivedContextDigest ?? chatContext?.lastDerivedContextDigest,
+    compactContext?.derivedContextDigest ??
+      chatContext?.lastDerivedContextDigest,
   );
   const attachmentDigest = readMetadataRecord(compactContext?.attachmentDigest);
   const recentMessages = readMetadataArray(compactContext, "recentMessages");
   const contextPackets = input.understandingContext?.contextPackets ?? [];
   const lines: string[] = [];
   const continuitySummary = input.understandingContext?.continuitySummary;
-  const clarificationDiagnostics = input.understandingContext?.clarificationDiagnostics;
-  const memoryRelevanceSummary = input.understandingContext?.memoryRelevanceSummary ?? [];
+  const continuityBoundary = input.understandingContext?.continuityBoundary;
+  const clarificationDiagnostics =
+    input.understandingContext?.clarificationDiagnostics;
+  const memoryRelevanceSummary =
+    input.understandingContext?.memoryRelevanceSummary ?? [];
+  const relationshipContextDigest =
+    input.understandingContext?.relationshipContextDigest ?? [];
+  const reasoningDirectives =
+    input.understandingContext?.reasoningDirectives ?? [];
+  const speakingStyleDirectives =
+    input.understandingContext?.speakingStyleDirectives ?? [];
 
-  if (continuitySummary?.userGoal && !lines.some((line) => line.includes("Current user goal:"))) {
+  if (
+    continuitySummary?.userGoal &&
+    !lines.some((line) => line.includes("Current user goal:"))
+  ) {
     lines.push(`- Current user goal: ${continuitySummary.userGoal}`);
   }
-  if (continuitySummary?.assistantState && !lines.some((line) => line.includes("Last assistant state:"))) {
+  if (
+    continuitySummary?.assistantState &&
+    !lines.some((line) => line.includes("Last assistant state:"))
+  ) {
     lines.push(`- Last assistant state: ${continuitySummary.assistantState}`);
   }
-  if ((continuitySummary?.openLoops.length ?? 0) > 0 && !lines.some((line) => line.includes("Open follow-ups:"))) {
-    lines.push(`- Open follow-ups: ${continuitySummary!.openLoops.join(" | ")}`);
+  if (
+    (continuitySummary?.openLoops.length ?? 0) > 0 &&
+    !lines.some((line) => line.includes("Open follow-ups:"))
+  ) {
+    lines.push(
+      `- Open follow-ups: ${continuitySummary!.openLoops.join(" | ")}`,
+    );
   }
 
   if (rollingSummary) {
@@ -1458,14 +1795,20 @@ function buildCompactContextPromptBlock(input: SharedBrainInferenceInput): strin
     if (implicitPackets.length > 0) {
       lines.push(
         `- Implicit packaged context available: ${implicitPackets
-          .map((packet) => `${packet.kind}: ${(packet.allowedUse ?? []).join(", ") || "silent adaptation only"}`)
+          .map(
+            (packet) =>
+              `${packet.kind}: ${(packet.allowedUse ?? []).join(", ") || "silent adaptation only"}`,
+          )
           .join(" | ")}`,
       );
     }
     if (silentPackets.length > 0) {
       lines.push(
         `- Suppressed private context packets: ${silentPackets
-          .map((packet) => `${packet.kind}/${packet.relevanceReason ?? "not_relevant"}`)
+          .map(
+            (packet) =>
+              `${packet.kind}/${packet.relevanceReason ?? "not_relevant"}`,
+          )
           .join(" | ")}. Do not mention these unless the user asks.`,
       );
     }
@@ -1498,7 +1841,29 @@ function buildCompactContextPromptBlock(input: SharedBrainInferenceInput): strin
   }
 
   if (memoryRelevanceSummary.length > 0) {
-    lines.push(`- Relevant user memory shortlist: ${memoryRelevanceSummary.slice(0, 3).join(" | ")}`);
+    lines.push(
+      `- Relevant user memory shortlist: ${memoryRelevanceSummary.slice(0, 3).join(" | ")}`,
+    );
+  }
+  if (relationshipContextDigest.length > 0) {
+    lines.push(
+      `- User continuity digest: ${relationshipContextDigest.slice(0, 4).join(" | ")}`,
+    );
+  }
+  if (continuityBoundary) {
+    lines.push(
+      `- Continuity boundary: ${continuityBoundary.mode} (${continuityBoundary.reason}); ${continuityBoundary.carryContinuity ? "relevant prior context may be reused" : "do not assume prior chat state still applies"}`,
+    );
+  }
+  if (reasoningDirectives.length > 0) {
+    lines.push(
+      `- Reasoning directives: ${reasoningDirectives.slice(0, 4).join(" | ")}`,
+    );
+  }
+  if (speakingStyleDirectives.length > 0) {
+    lines.push(
+      `- Speaking style directives: ${speakingStyleDirectives.slice(0, 4).join(" | ")}`,
+    );
   }
 
   if (!lines.length) {
@@ -1508,7 +1873,9 @@ function buildCompactContextPromptBlock(input: SharedBrainInferenceInput): strin
   return ["Session continuity context:", ...lines].join("\n");
 }
 
-function shouldPreferExpandedMobileReply(input: SharedBrainInferenceInput): boolean {
+function shouldPreferExpandedMobileReply(
+  input: SharedBrainInferenceInput,
+): boolean {
   const metadata = readMetadataRecord(input.requestMetadata);
   const compactContext = readMetadataRecord(metadata?.compactContext);
   if (
@@ -1534,11 +1901,15 @@ function shouldUseCompleteMobileReplyBudget(
     memoryResultCount: number;
   },
 ): boolean {
-  const workload = input.workload ?? input.routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD;
+  const workload =
+    input.workload ?? input.routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD;
   if (workload !== "mobile_chat_fast" && workload !== "mobile_chat_balanced") {
     return false;
   }
-  if (input.attachmentContext?.used || input.attachmentContext?.needsClarification) {
+  if (
+    input.attachmentContext?.used ||
+    input.attachmentContext?.needsClarification
+  ) {
     return true;
   }
   if ((input.understandingContext?.contextPackets?.length ?? 0) > 0) {
@@ -1580,21 +1951,28 @@ function buildAttachmentContextMetadata(
     attachmentContextUsed: Boolean(attachmentContext?.used),
     attachmentContextSource: attachmentContext?.source ?? null,
     attachmentDocumentIds: attachmentContext?.documentIds ?? [],
-    selectedChunkHashes: attachmentContext?.chunks.map((chunk) => chunk.chunkHash) ?? [],
+    selectedChunkHashes:
+      attachmentContext?.chunks.map((chunk) => chunk.chunkHash) ?? [],
     cacheHit: attachmentContext?.cacheHit ?? false,
     attachmentCacheHit: attachmentContext?.cacheHit ?? false,
     // attachmentNeedsClarification is the attachment-specific flag; callers that
     // have a separate selfCheck.needsClarification field use the existing key.
-    attachmentNeedsClarification: attachmentContext?.needsClarification ?? false,
+    attachmentNeedsClarification:
+      attachmentContext?.needsClarification ?? false,
     ...buildAttachmentInsightMetadata(attachmentContext),
   };
 }
 
-function buildContextPacketMetadata(context: UserUnderstandingContext | undefined) {
+function buildContextPacketMetadata(
+  context: UserUnderstandingContext | undefined,
+) {
   return {
     contextPacketCount: context?.contextPackets?.length ?? 0,
     contextPacketKinds: context?.packetKinds ?? [],
-    contextPacketMentionPolicies: context?.contextPackets?.map((packet) => packet.mentionPolicy ?? "silent") ?? [],
+    contextPacketMentionPolicies:
+      context?.contextPackets?.map(
+        (packet) => packet.mentionPolicy ?? "silent",
+      ) ?? [],
     healthContextUsed: context?.healthContextUsed ?? false,
     contextFreshness: context?.freshness ?? null,
   };
@@ -1604,7 +1982,10 @@ function buildWebGroundingMetadata(webGrounding: WebGroundingResult) {
   return {
     webGroundingConfidence: webGrounding.confidence,
     webGroundingQueries: webGrounding.queries.slice(0, 4),
-    webGroundingDecisionReasons: (webGrounding.decisionReasons ?? []).slice(0, 4),
+    webGroundingDecisionReasons: (webGrounding.decisionReasons ?? []).slice(
+      0,
+      4,
+    ),
     webGroundingRetrievedAt: webGrounding.retrievedAt ?? null,
     webSources: webGrounding.results.slice(0, 5).map((result) => ({
       title: result.title,
@@ -1659,21 +2040,29 @@ function buildRetrievalTelemetry(
   }>,
 ) {
   const retrievalResultCount =
-    typeof retrieval.retrievalResultCount === "number" && Number.isFinite(retrieval.retrievalResultCount)
+    typeof retrieval.retrievalResultCount === "number" &&
+    Number.isFinite(retrieval.retrievalResultCount)
       ? retrieval.retrievalResultCount
       : retrieval.results.length;
   const lexicalCandidateCount =
-    typeof retrieval.lexicalCandidateCount === "number" && Number.isFinite(retrieval.lexicalCandidateCount)
+    typeof retrieval.lexicalCandidateCount === "number" &&
+    Number.isFinite(retrieval.lexicalCandidateCount)
       ? retrieval.lexicalCandidateCount
       : retrievalResultCount;
   const semanticCandidateCount =
-    typeof retrieval.semanticCandidateCount === "number" && Number.isFinite(retrieval.semanticCandidateCount)
+    typeof retrieval.semanticCandidateCount === "number" &&
+    Number.isFinite(retrieval.semanticCandidateCount)
       ? retrieval.semanticCandidateCount
       : retrievalResultCount;
   const candidateCount =
-    typeof retrieval.candidateCount === "number" && Number.isFinite(retrieval.candidateCount)
+    typeof retrieval.candidateCount === "number" &&
+    Number.isFinite(retrieval.candidateCount)
       ? retrieval.candidateCount
-      : Math.max(retrievalResultCount, lexicalCandidateCount, semanticCandidateCount);
+      : Math.max(
+          retrievalResultCount,
+          lexicalCandidateCount,
+          semanticCandidateCount,
+        );
 
   return {
     retrievalMode: retrieval.retrievalMode,
@@ -1682,7 +2071,8 @@ function buildRetrievalTelemetry(
     semanticCandidateCount,
     candidateCount,
     rerankUsed: retrieval.rerankUsed === true,
-    rerankDegradedReason: retrieval.rerankDegradedReason ?? retrieval.degradedReason ?? null,
+    rerankDegradedReason:
+      retrieval.rerankDegradedReason ?? retrieval.degradedReason ?? null,
     degradedReason: retrieval.degradedReason,
   };
 }
@@ -1690,7 +2080,10 @@ function buildRetrievalTelemetry(
 function buildResolvedAttachmentIntentPromptBlock(
   input: SharedBrainInferenceInput,
 ): string | null {
-  if (!input.attachmentContext?.used && !isMobileLocalExportMode(input.requestMetadata)) {
+  if (
+    !input.attachmentContext?.used &&
+    !isMobileLocalExportMode(input.requestMetadata)
+  ) {
     return null;
   }
 
@@ -1698,7 +2091,10 @@ function buildResolvedAttachmentIntentPromptBlock(
 }
 
 function resolveAttachmentIntentMode(
-  input: Pick<SharedBrainInferenceInput, "prompt" | "requestMetadata" | "attachmentContext">,
+  input: Pick<
+    SharedBrainInferenceInput,
+    "prompt" | "requestMetadata" | "attachmentContext"
+  >,
 ): "answer" | "analyze" | "semantic_edit" | "export" {
   const metadata = readMetadataRecord(input.requestMetadata);
   const normalizedPrompt = compactText(input.prompt).toLowerCase();
@@ -1760,11 +2156,20 @@ function buildRetrievalPromptBlock(input: {
     return null;
   }
 
-  const limit = input.workload === "planning" ? 3 : input.workload === "mobile_chat_balanced" ? 3 : 2;
-  const selectedResults = [...new Map(input.results.map((result) => [`${result.sourceUri ?? ""}:${compactText(result.title).toLowerCase()}:${compactText(result.content).toLowerCase()}`, result])).values()].slice(
-    0,
-    limit,
-  );
+  const limit =
+    input.workload === "planning"
+      ? 3
+      : input.workload === "mobile_chat_balanced"
+        ? 3
+        : 2;
+  const selectedResults = [
+    ...new Map(
+      input.results.map((result) => [
+        `${result.sourceUri ?? ""}:${compactText(result.title).toLowerCase()}:${compactText(result.content).toLowerCase()}`,
+        result,
+      ]),
+    ).values(),
+  ].slice(0, limit);
   const lines = [
     `Retrieved context mode: ${input.retrievalMode}`,
     ...selectedResults.map((result, index) => {
@@ -1784,13 +2189,26 @@ function buildMemoryPromptBlock(input: {
     return null;
   }
 
-  const limit = input.workload === "planning" ? 4 : input.workload === "mobile_chat_balanced" ? 4 : 3;
-  const activeResults = input.results.filter((result) => result.conflictStatus === "active");
-  const freshActiveResults = activeResults.filter((result) => result.staleness === "fresh");
+  const limit =
+    input.workload === "planning"
+      ? 4
+      : input.workload === "mobile_chat_balanced"
+        ? 4
+        : 3;
+  const activeResults = input.results.filter(
+    (result) => result.conflictStatus === "active",
+  );
+  const freshActiveResults = activeResults.filter(
+    (result) => result.staleness === "fresh",
+  );
   const candidatePool =
     freshActiveResults.length >= Math.min(limit, 2)
       ? freshActiveResults
-      : [...freshActiveResults, ...activeResults.filter((result) => result.isPinned), ...activeResults];
+      : [
+          ...freshActiveResults,
+          ...activeResults.filter((result) => result.isPinned),
+          ...activeResults,
+        ];
   const selectedResults = (
     candidatePool.length > 0 ? candidatePool : input.results.slice(0, 1)
   ).filter((result, index, all) => {
@@ -1820,7 +2238,11 @@ function deriveBrainMode(input: {
   workload: SharedBrainInferenceInput["workload"];
   memoryCount: number;
   retrievalCount: number;
-}): "fast_mobile_chat" | "memory_augmented_chat" | "research_augmented_chat" | "desktop_required" {
+}):
+  | "fast_mobile_chat"
+  | "memory_augmented_chat"
+  | "research_augmented_chat"
+  | "desktop_required" {
   if (input.route === "desktop_required") {
     return "desktop_required";
   }
@@ -1844,8 +2266,12 @@ function buildSelfCheck(input: {
 }) {
   const usedMemory = input.memoryCount > 0;
   const topMemoryConfidence = input.memoryResults[0]?.confidence ?? 0;
-  const hasStaleMemory = input.memoryResults.some((item) => item.staleness !== "fresh");
-  const hasContestedMemory = input.memoryResults.some((item) => item.staleness === "contested");
+  const hasStaleMemory = input.memoryResults.some(
+    (item) => item.staleness !== "fresh",
+  );
+  const hasContestedMemory = input.memoryResults.some(
+    (item) => item.staleness === "contested",
+  );
   const retrievalSufficiency =
     input.retrievalCount > 0 || input.memoryCount >= 2
       ? "strong"
@@ -1853,10 +2279,13 @@ function buildSelfCheck(input: {
         ? "partial"
         : "weak";
   const needsClarification =
-    (input.workload === "mobile_chat_balanced" || input.workload === "mobile_chat_fast") &&
+    (input.workload === "mobile_chat_balanced" ||
+      input.workload === "mobile_chat_fast") &&
     input.route !== "desktop_required" &&
     retrievalSufficiency === "weak" &&
-    (input.retrievalDegradedReason != null || input.memoryDegradedReason != null || topMemoryConfidence < 60);
+    (input.retrievalDegradedReason != null ||
+      input.memoryDegradedReason != null ||
+      topMemoryConfidence < 60);
   const selfCheckOutcome =
     input.route === "desktop_required"
       ? "route_to_task"
@@ -1868,8 +2297,14 @@ function buildSelfCheck(input: {
 
   return {
     usedMemory,
-    memoryConfidence: Number((Math.max(0, Math.min(1, topMemoryConfidence / 100))).toFixed(2)),
-    memoryConflictRisk: hasContestedMemory ? "elevated" : hasStaleMemory ? "low" : "none",
+    memoryConfidence: Number(
+      Math.max(0, Math.min(1, topMemoryConfidence / 100)).toFixed(2),
+    ),
+    memoryConflictRisk: hasContestedMemory
+      ? "elevated"
+      : hasStaleMemory
+        ? "low"
+        : "none",
     needsClarification,
     retrievalSufficiency,
     selfCheckOutcome,
@@ -1893,18 +2328,17 @@ function buildDataQualityMetadata(input: {
       : input.memoryCount > 0
         ? "memory_augmented"
         : "request_only";
-  const evidenceSufficiency =
-    input.attachmentContext?.needsClarification
-      ? "ambiguous"
-      : input.attachmentContext?.used
-        ? attachmentChunkCount >= 2
-          ? "strong"
-          : "partial"
-        : input.retrievalCount > 0 || input.webSourceCount > 0
-          ? "strong"
-          : input.memoryCount > 0
-            ? "partial"
-            : "weak";
+  const evidenceSufficiency = input.attachmentContext?.needsClarification
+    ? "ambiguous"
+    : input.attachmentContext?.used
+      ? attachmentChunkCount >= 2
+        ? "strong"
+        : "partial"
+      : input.retrievalCount > 0 || input.webSourceCount > 0
+        ? "strong"
+        : input.memoryCount > 0
+          ? "partial"
+          : "weak";
   const dataConfidence =
     evidenceSufficiency === "strong"
       ? "high"
@@ -1936,7 +2370,10 @@ function buildDataQualityMetadata(input: {
   };
 }
 
-function buildConversation(input: SharedBrainInferenceInput, systemPrompt: string): SharedBrainConversationMessage[] {
+function buildConversation(
+  input: SharedBrainInferenceInput,
+  systemPrompt: string,
+): SharedBrainConversationMessage[] {
   const messages: SharedBrainConversationMessage[] = [
     {
       role: "system",
@@ -1956,7 +2393,12 @@ function buildConversation(input: SharedBrainInferenceInput, systemPrompt: strin
   }
 
   const prompt = compactText(input.prompt) || compactText(input.title ?? "");
-  if (!messages.some((message) => message.role === "user" && message.content === prompt) && prompt) {
+  if (
+    !messages.some(
+      (message) => message.role === "user" && message.content === prompt,
+    ) &&
+    prompt
+  ) {
     messages.push({
       role: "user",
       content: prompt,
@@ -2028,13 +2470,17 @@ function shouldAugmentKnowledge(input: {
     return true;
   }
 
-  if (input.workload === "planning" || input.workload === "mobile_chat_balanced") {
+  if (
+    input.workload === "planning" ||
+    input.workload === "mobile_chat_balanced"
+  ) {
     return true;
   }
 
-  const hasElyanSignals = /\b(elyan|ekosistem|ecosystem|mimari|architecture|brain|memory|retrieval|pairing|runtime|backend|mobile|desktop)\b/i.test(
-    normalized,
-  );
+  const hasElyanSignals =
+    /\b(elyan|ekosistem|ecosystem|mimari|architecture|brain|memory|retrieval|pairing|runtime|backend|mobile|desktop)\b/i.test(
+      normalized,
+    );
 
   if (input.brainProfile.tier === "premium") {
     return hasElyanSignals || normalized.length >= 12;
@@ -2051,7 +2497,10 @@ function shouldAugmentKnowledge(input: {
   return normalized.length >= 18;
 }
 
-function shouldUseResponseCache(input: SharedBrainInferenceInput, workload: SharedBrainWorkload): boolean {
+function shouldUseResponseCache(
+  input: SharedBrainInferenceInput,
+  workload: SharedBrainWorkload,
+): boolean {
   const profile = getSharedBrainWorkloadProfile(workload);
   if (profile.cachePolicy !== "safe_ephemeral") {
     return false;
@@ -2068,14 +2517,23 @@ function shouldUseResponseCache(input: SharedBrainInferenceInput, workload: Shar
   if (input.routeDecision?.shouldAskClarification) {
     return false;
   }
-  if (input.attachmentContext?.used || input.attachmentContext?.needsClarification) {
+  if (
+    input.attachmentContext?.used ||
+    input.attachmentContext?.needsClarification
+  ) {
     return false;
   }
-  const conversation = trimConversationForWorkload(input.conversation ?? [], workload);
+  const conversation = trimConversationForWorkload(
+    input.conversation ?? [],
+    workload,
+  );
   if (conversation.length > 1) {
     return false;
   }
-  return compactText(input.prompt).length > 0 && compactText(input.prompt).length <= 600;
+  return (
+    compactText(input.prompt).length > 0 &&
+    compactText(input.prompt).length <= 600
+  );
 }
 
 function shouldRunDeepRefinement(input: {
@@ -2088,7 +2546,11 @@ function shouldRunDeepRefinement(input: {
   if (input.alreadyRefined) {
     return false;
   }
-  if (input.workload === "mobile_chat_deep_refine" || input.workload === "planning" || input.workload === "document_analysis") {
+  if (
+    input.workload === "mobile_chat_deep_refine" ||
+    input.workload === "planning" ||
+    input.workload === "document_analysis"
+  ) {
     return false;
   }
   const failures = new Set(input.evaluation.failureTypes);
@@ -2112,10 +2574,11 @@ function shouldRunDeepRefinement(input: {
     return true;
   }
   return (
-    (input.context?.behavioralHints.length ?? 0) > 0 ||
-    (input.context?.situationalHints.length ?? 0) > 0 ||
-    (input.context?.continuitySummary?.openLoops.length ?? 0) > 0
-  ) && input.evaluation.outputQuality.usefulness < 0.72;
+    ((input.context?.behavioralHints.length ?? 0) > 0 ||
+      (input.context?.situationalHints.length ?? 0) > 0 ||
+      (input.context?.continuitySummary?.openLoops.length ?? 0) > 0) &&
+    input.evaluation.outputQuality.usefulness < 0.72
+  );
 }
 
 function createResponseCacheKey(
@@ -2124,8 +2587,14 @@ function createResponseCacheKey(
   brainProfile: ReturnType<typeof normalizePlanBrainProfile>,
 ): string {
   const prompt = compactText(input.prompt).toLowerCase();
-  const conversation = trimConversationForWorkload(input.conversation ?? [], workload)
-    .map((message) => `${message.role}:${compactText(message.content).toLowerCase()}`)
+  const conversation = trimConversationForWorkload(
+    input.conversation ?? [],
+    workload,
+  )
+    .map(
+      (message) =>
+        `${message.role}:${compactText(message.content).toLowerCase()}`,
+    )
     .join("|");
   return JSON.stringify({
     userId: input.userId,
@@ -2135,7 +2604,10 @@ function createResponseCacheKey(
     route: input.routeDecision?.route ?? input.route ?? "shared_brain",
     constitutionVersion: ELYAN_CONSTITUTION_VERSION,
     promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
-    planCode: String(input.planCode ?? "free").trim().toLowerCase() || "free",
+    planCode:
+      String(input.planCode ?? "free")
+        .trim()
+        .toLowerCase() || "free",
     brainProfile: {
       tier: brainProfile.tier,
       reasoningMultiplier: brainProfile.reasoningMultiplier,
@@ -2146,7 +2618,9 @@ function createResponseCacheKey(
   });
 }
 
-function buildPromptFromConversation(messages: SharedBrainConversationMessage[]): string {
+function buildPromptFromConversation(
+  messages: SharedBrainConversationMessage[],
+): string {
   return messages
     .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
     .join("\n\n")
@@ -2221,7 +2695,9 @@ async function postStreamingJson(
             clearTimeout(firstPayloadTimer);
             firstPayloadTimer = null;
           }
-          const data = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
+          const data = trimmed.startsWith("data:")
+            ? trimmed.slice(5).trim()
+            : trimmed;
           if (!data || data === "[DONE]") {
             continue;
           }
@@ -2244,7 +2720,9 @@ async function postStreamingJson(
           clearTimeout(firstPayloadTimer);
           firstPayloadTimer = null;
         }
-        const data = trailing.startsWith("data:") ? trailing.slice(5).trim() : trailing;
+        const data = trailing.startsWith("data:")
+          ? trailing.slice(5).trim()
+          : trailing;
         if (data && data !== "[DONE]") {
           await onPayload(JSON.parse(data));
         }
@@ -2262,7 +2740,9 @@ async function postStreamingJson(
   }
 }
 
-function getWarmCache(app: FastifyInstance): Map<string, BrainModelWarmCacheEntry> {
+function getWarmCache(
+  app: FastifyInstance,
+): Map<string, BrainModelWarmCacheEntry> {
   const cache = brainModelWarmCache.get(app);
   if (cache) {
     return cache;
@@ -2442,10 +2922,13 @@ function buildOpenAiMessagesWithVision(
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (i === messages.length - 1 && msg.role === "user") {
-      const textContent = typeof msg.content === "string"
-        ? msg.content
-        : String(msg.content ?? "");
-      const blocks: OpenAiContentBlock[] = [{ type: "text", text: textContent }];
+      const textContent =
+        typeof msg.content === "string"
+          ? msg.content
+          : String(msg.content ?? "");
+      const blocks: OpenAiContentBlock[] = [
+        { type: "text", text: textContent },
+      ];
       for (const img of visionImages) {
         blocks.push({
           type: "image_url",
@@ -2550,13 +3033,18 @@ function buildInferenceProviderCandidates(input: {
   runtime: Awaited<ReturnType<typeof selectSharedBrainRuntime>>;
   localModels: string[];
 }) {
-  const localCandidates = listSharedBrainProviderCandidates(input.app).map((candidate) => ({
-    provider: candidate.provider,
-    baseUrl: candidate.baseUrl,
-    preferredModels: input.localModels,
-    hosted: false,
-  })) satisfies SharedBrainProviderCandidate[];
-  const hostedCandidates = buildHostedProviderCandidates(input.app, input.workload);
+  const localCandidates = listSharedBrainProviderCandidates(input.app).map(
+    (candidate) => ({
+      provider: candidate.provider,
+      baseUrl: candidate.baseUrl,
+      preferredModels: input.localModels,
+      hosted: false,
+    }),
+  ) satisfies SharedBrainProviderCandidate[];
+  const hostedCandidates = buildHostedProviderCandidates(
+    input.app,
+    input.workload,
+  );
   const preferredLocalCandidate = input.runtime.ready
     ? {
         provider: input.runtime.provider,
@@ -2573,7 +3061,9 @@ function buildInferenceProviderCandidates(input: {
   return buildCandidateOrder(hostedCandidates, hostedCandidates[0]);
 }
 
-function getChatTimeoutMs(workload: SharedBrainInferenceInput["workload"]): number {
+function getChatTimeoutMs(
+  workload: SharedBrainInferenceInput["workload"],
+): number {
   return getSharedBrainWorkloadProfile(workload).timeoutMs;
 }
 
@@ -2592,13 +3082,13 @@ function getMaxTokensForWorkload(
       ? 900
       : workload === "mobile_chat_deep_refine"
         ? 980
-      : workload === "mobile_chat_balanced"
-        ? 760
-        : workload === "mobile_chat_fast"
-          ? 360
-          : workload === "document_analysis"
-            ? 900
-            : baseTokens;
+        : workload === "mobile_chat_balanced"
+          ? 760
+          : workload === "mobile_chat_fast"
+            ? 360
+            : workload === "document_analysis"
+              ? 900
+              : baseTokens;
 
   return Math.max(baseTokens, Math.min(scaledTokens, maxTokensByWorkload));
 }
@@ -2616,7 +3106,11 @@ function getLoadSheddingOptions(
         : "shared-brain:standard",
     maxConcurrent: brainProfile.tier === "premium" ? 2 : 4,
     ttlMs: Math.max(workloadProfile.timeoutMs + 8_000, 20_000),
-    salt: `${String(planCode ?? "free").trim().toLowerCase() || "free"}:${workload}:${brainProfile.reasoningMultiplier}:${brainProfile.retrievalFanout}:${brainProfile.memoryFanout}`,
+    salt: `${
+      String(planCode ?? "free")
+        .trim()
+        .toLowerCase() || "free"
+    }:${workload}:${brainProfile.reasoningMultiplier}:${brainProfile.retrievalFanout}:${brainProfile.memoryFanout}`,
     retryAfterSeconds: 5,
   };
 }
@@ -2823,7 +3317,11 @@ export function createDeltaPublisher(input: {
     get firstDeltaMs() {
       return firstDeltaMs;
     },
-    async publish(delta: string, content: string, options: { force?: boolean } = {}) {
+    async publish(
+      delta: string,
+      content: string,
+      options: { force?: boolean } = {},
+    ) {
       if (!input.onDelta) {
         return;
       }
@@ -2883,7 +3381,10 @@ async function runSharedBrainInferenceProbe(
     selection: brain,
     runtime,
   });
-  const baseModel = (modelResolution.resolvedBaseModel ?? modelResolution.configuredBaseModel) || null;
+  const baseModel =
+    (modelResolution.resolvedBaseModel ??
+      modelResolution.configuredBaseModel) ||
+    null;
 
   if (!baseModel) {
     return {
@@ -3028,15 +3529,13 @@ export async function probeSharedBrainInference(
   });
 
   cache.set(cacheKey, {
-    result:
-      cached?.result ??
-      {
-        ready: false,
-        provider: null,
-        model: null,
-        checkedAt: new Date(0),
-        reason: "pending",
-      },
+    result: cached?.result ?? {
+      ready: false,
+      provider: null,
+      model: null,
+      checkedAt: new Date(0),
+      reason: "pending",
+    },
     expiresAt: Date.now() + BRAIN_INFERENCE_PROBE_UNHEALTHY_TTL_MS,
     pending,
   });
@@ -3078,7 +3577,9 @@ export async function generateSharedBrainReply(
   const planBrainProfile = normalizePlanBrainProfile(input.brainProfile);
   const cacheable = shouldUseResponseCache(input, workload);
   const responseCache = getResponseCache(app);
-  const responseCacheKey = cacheable ? createResponseCacheKey(input, workload, planBrainProfile) : null;
+  const responseCacheKey = cacheable
+    ? createResponseCacheKey(input, workload, planBrainProfile)
+    : null;
   if (responseCacheKey) {
     const cached = responseCache.get(responseCacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -3107,666 +3608,985 @@ export async function generateSharedBrainReply(
     app,
     getLoadSheddingOptions(workload, planBrainProfile),
     async () => {
-  const brain = await resolveSharedBrainSelection(app, input.userId);
-  const runtime = await selectSharedBrainRuntime(app);
-  const modelResolution = await resolveSharedBrainModel(app, {
-    userId: input.userId,
-    workload,
-    selection: brain,
-    runtime,
-  });
-  const baseModel = (modelResolution.resolvedBaseModel ?? modelResolution.configuredBaseModel) || "llama3.2";
-  const fallbackModel =
-    modelResolution.resolvedFallbackModel ??
-    (modelResolution.availableModels.find((model) => model !== baseModel) ?? null);
-  const localModels = [baseModel, fallbackModel]
-    .filter((model, index, values): model is string => Boolean(model) && values.indexOf(model) === index);
-  const providerCandidates = buildInferenceProviderCandidates({
-    app,
-    workload,
-    runtime,
-    localModels,
-  });
-  const primaryCandidate = providerCandidates[0] ?? null;
-  const servingProvider =
-    primaryCandidate?.provider ??
-    (runtime.ready ? runtime.provider : app.config.ELYAN_SHARED_BRAIN_PROVIDER);
-  const shouldAugment = shouldAugmentKnowledge({
-    workload,
-    prompt: input.prompt,
-    brainProfile: planBrainProfile,
-  });
-  const brainCorpusDomains = detectBrainCorpusDomains(input.prompt);
-  const retrievalQuery = buildBrainCorpusRetrievalQuery(input.prompt);
-  const [retrieval, memory, webGrounding] = shouldAugment
-    ? await Promise.all([
-        searchKnowledge(app, {
-          userId: input.userId,
-          query: retrievalQuery,
-          limit: planBrainProfile.retrievalFanout,
-        }).catch(() => ({
-          retrievalMode: "lexical_fallback" as const,
-          results: [],
-          degradedReason: "retrieval_unavailable",
-        })),
-        searchBrainMemory(app, {
-          userId: input.userId,
-          query: input.prompt,
-          limit: planBrainProfile.memoryFanout,
-        }).catch(() => ({
-          retrievalMode: "lexical_fallback" as const,
-          results: [],
-          degradedReason: "memory_unavailable",
-        })),
-        searchPublicWebGrounding(app, {
-          prompt: input.prompt,
-          workload,
-        }).catch(() => ({
-          enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
-          used: false,
-          query: input.prompt,
-          queries: [],
-          source: "duckduckgo_html" as const,
-          results: [],
-          degradedReason: "web_search_unavailable",
-          confidence: "low" as const,
-        })),
-      ])
-    : [
-        {
-          retrievalMode: "lexical_fallback" as const,
-          results: [],
-          degradedReason: null,
-        },
-        {
-          retrievalMode: "lexical_fallback" as const,
-          results: [],
-          degradedReason: null,
-        },
-        {
-          enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
-          used: false,
-          query: input.prompt,
-          queries: [],
-          source: "duckduckgo_html" as const,
-          results: [],
-          degradedReason: null,
-          confidence: "low" as const,
-        },
-      ];
-  const retrievalTelemetry = buildRetrievalTelemetry(retrieval);
-  const retrievalBlock = buildRetrievalPromptBlock({
-    workload,
-    ...retrieval,
-  });
-  const memoryBlock = buildMemoryPromptBlock({ workload, results: memory.results });
-  const webGroundingBlock =
-    buildWebGroundingPromptBlock(webGrounding) ?? buildWebGroundingAbstentionBlock(webGrounding);
-
-  /* URL context: fetch content from user-provided URLs (fire parallel, max 2) */
-  const urlContextBlock = promptContainsUrl(input.prompt)
-    ? await buildUrlContextBlock(app, input.prompt).catch(() => null)
-    : null;
-
-  /* Client attachments: pre-processed document/image/table data from mobile/desktop */
-  const rawClientAttachments = input.clientAttachments ??
-    extractClientAttachments(input.requestMetadata ?? {});
-  const clientDocCtx = rawClientAttachments.length > 0
-    ? await buildDocumentContextBlock(app, rawClientAttachments, {
-        charBudget: workload === "document_generate" ? 28_000 : 20_000,
-      }).catch(() => null)
-    : null;
-  const clientDocBlock = clientDocCtx?.promptBlock ?? null;
-  /* Expose vision thumbnails to the model when workload supports it */
-  const clientVisionImages: ResolvedAttachmentContextVisionImage[] =
-    (workload === "image_analyze" || workload === "vision_reasoning")
-      ? (clientDocCtx?.visionImages ?? []).map((img) => ({
-          documentId: img.imageId,
-          mimeType: img.mimeType,
-          base64: img.base64,
-          label: img.label,
-        }))
-      : [];
-
-  const documentSourceCount = new Set(retrieval.results.map((result) => result.documentId)).size;
-  const groundingUsed = documentSourceCount > 0;
-  const webSourceCount = webGrounding.results.length;
-  const webGroundingUsed = webGrounding.used && webSourceCount > 0;
-  const selfCheck = buildSelfCheck({
-    workload,
-    memoryCount: memory.results.length,
-    retrievalCount: retrieval.results.length,
-    memoryResults: memory.results,
-    retrievalDegradedReason: retrieval.degradedReason,
-    memoryDegradedReason: memory.degradedReason,
-    route: input.route,
-  });
-  const memoryEnabled = detectMemoryEnabled(input.requestMetadata, input.understandingContext);
-  const clarificationDecision: "not_needed" | "asked" | "assumed_and_proceeded" =
-    input.understandingContext?.clarificationDiagnostics?.shouldClarify === true
-      ? "asked"
-      : selfCheck.needsClarification
-        ? "asked"
-        : "assumed_and_proceeded";
-  const dataQualityMetadata = buildDataQualityMetadata({
-    attachmentContext: input.attachmentContext,
-    memoryCount: memory.results.length,
-    retrievalCount: retrieval.results.length,
-    webSourceCount,
-    prompt: input.prompt,
-    memoryEnabled,
-    clarificationDecision,
-  });
-  const brainMode = deriveBrainMode({
-    route: input.route,
-    workload,
-    memoryCount: memory.results.length,
-    retrievalCount: retrieval.results.length,
-  });
-  const usageBudget = input.internalEvaluation?.skipUsageValidation
-    ? {
-        access: {
-          mode: "paid" as const,
-        },
-        remainingAiCredits: null,
-        grantedAiCredits: null,
-        periodEndsAt: null,
-      }
-    : await getSharedBrainUsageBudget(app.db, input.userId);
-  const baseMaxTokens = getMaxTokensForWorkload(workload, planBrainProfile);
-  const completeAnswerBudgetHint = shouldUseCompleteMobileReplyBudget(input, {
-    webGroundingUsed,
-    retrievalResultCount: retrieval.results.length,
-    memoryResultCount: memory.results.length,
-  });
-  const inferenceBudget = resolveAdaptiveInferenceBudget({
-    workload,
-    prompt: input.prompt,
-    baseMaxTokens,
-    requestedLongFormHint:
-      shouldPreferExpandedMobileReply(input) || completeAnswerBudgetHint,
-    premium: planBrainProfile.tier === "premium",
-    qualityProfile: planBrainProfile.qualityProfile,
-    planCode: "planCode" in usageBudget.access ? usageBudget.access.planCode : input.planCode,
-    remainingCredits: usageBudget.remainingAiCredits,
-    grantedCredits: usageBudget.grantedAiCredits,
-  });
-  const boundedConversation = trimConversationForWorkload(
-    input.conversation ?? [],
-    workload,
-    {
-      maxMessages: inferenceBudget.conversationMessageBudget,
-      maxTokens: inferenceBudget.conversationTokenBudget,
-    },
-  );
-  const systemPrompt = buildStructuredSystemPrompt(
-    retrievalBlock == null && memoryBlock == null && webGroundingBlock == null && urlContextBlock == null && clientDocBlock == null
-        ? app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT
+      const brain = await resolveSharedBrainSelection(app, input.userId);
+      const runtime = await selectSharedBrainRuntime(app);
+      const modelResolution = await resolveSharedBrainModel(app, {
+        userId: input.userId,
+        workload,
+        selection: brain,
+        runtime,
+      });
+      const baseModel =
+        (modelResolution.resolvedBaseModel ??
+          modelResolution.configuredBaseModel) ||
+        "llama3.2";
+      const fallbackModel =
+        modelResolution.resolvedFallbackModel ??
+        modelResolution.availableModels.find((model) => model !== baseModel) ??
+        null;
+      const localModels = [baseModel, fallbackModel].filter(
+        (model, index, values): model is string =>
+          Boolean(model) && values.indexOf(model) === index,
+      );
+      const providerCandidates = buildInferenceProviderCandidates({
+        app,
+        workload,
+        runtime,
+        localModels,
+      });
+      const primaryCandidate = providerCandidates[0] ?? null;
+      const servingProvider =
+        primaryCandidate?.provider ??
+        (runtime.ready
+          ? runtime.provider
+          : app.config.ELYAN_SHARED_BRAIN_PROVIDER);
+      const shouldAugment = shouldAugmentKnowledge({
+        workload,
+        prompt: input.prompt,
+        brainProfile: planBrainProfile,
+      });
+      const brainCorpusDomains = detectBrainCorpusDomains(input.prompt);
+      const retrievalQuery = buildBrainCorpusRetrievalQuery(input.prompt);
+      const [retrieval, memory, webGrounding] = shouldAugment
+        ? await Promise.all([
+            searchKnowledge(app, {
+              userId: input.userId,
+              query: retrievalQuery,
+              limit: planBrainProfile.retrievalFanout,
+            }).catch(() => ({
+              retrievalMode: "lexical_fallback" as const,
+              results: [],
+              degradedReason: "retrieval_unavailable",
+            })),
+            searchBrainMemory(app, {
+              userId: input.userId,
+              query: input.prompt,
+              limit: planBrainProfile.memoryFanout,
+            }).catch(() => ({
+              retrievalMode: "lexical_fallback" as const,
+              results: [],
+              degradedReason: "memory_unavailable",
+            })),
+            searchPublicWebGrounding(app, {
+              prompt: input.prompt,
+              workload,
+            }).catch(() => ({
+              enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
+              used: false,
+              query: input.prompt,
+              queries: [],
+              source: "duckduckgo_html" as const,
+              results: [],
+              degradedReason: "web_search_unavailable",
+              confidence: "low" as const,
+            })),
+          ])
         : [
-            app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
-            retrievalBlock,
-            memoryBlock,
-            webGroundingBlock,
-            urlContextBlock,
-            clientDocBlock,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-    {
-      ...input,
-      conversation: boundedConversation,
-      responseBudget: inferenceBudget,
-    },
-  );
-  const messages = buildConversation(
-    {
-      ...input,
-      conversation: boundedConversation,
-    },
-    systemPrompt,
-  );
-  const prompt = buildPromptFromConversation(messages);
-  void warmOllamaModelIfNeeded(app, runtime, baseModel).catch((error) => {
-    app.log.debug?.(
-      {
-        provider: runtime.provider,
-        model: baseModel,
-        error: describeProviderFailure(error),
-      },
-      "shared brain warmup skipped",
-    );
-  });
-  app.log.debug?.(
-    {
-      route: input.route ?? "shared_brain",
-      provider: servingProvider,
-      model: baseModel,
-      messageCount: messages.length,
-      promptChars: messages.reduce((total, message) => total + message.content.length, 0),
-      workload,
-    },
-    "shared brain request prepared",
-  );
-  const promptTokens = estimateTokens(messages.map((message) => message.content).join("\n\n"));
-  const userInputTokens = estimateTokens(input.prompt);
-  const meteringSurface =
-    input.meteringSurface ??
-    (input.routeDecision && input.routeDecision.mode !== "chat" ? "task" : "chat");
-  const timeoutMs =
-    typeof input.timeoutMsOverride === "number" && input.timeoutMsOverride > 0
-      ? Math.min(input.timeoutMsOverride, getChatTimeoutMs(workload))
-      : getChatTimeoutMs(workload);
-  const maxTokens =
-    typeof input.maxCompletionTokensOverride === "number" && input.maxCompletionTokensOverride > 0
-      ? Math.min(input.maxCompletionTokensOverride, inferenceBudget.maxCompletionTokens)
-      : inferenceBudget.maxCompletionTokens;
-  const estimatedBillableTokenUsage = calculateBillablePlanTokens({
-    surface: meteringSurface,
-    workload,
-    userInputTokens,
-    promptTokens,
-    completionTokens: maxTokens,
-  });
-  const estimatedAiCredits = estimatedBillableTokenUsage.billableTokens;
-  if (!input.internalEvaluation?.skipUsageValidation) {
-    if (usageBudget.access.mode === "trial" && "planCode" in usageBudget.access && usageBudget.access.planCode === "free") {
-      const quota = await getTrialQuotaUsage(app.db, input.userId);
-      assertTrialTaskQuotaAllowedFromUsage(quota, estimatedAiCredits);
-    }
-    assertSharedBrainUsageBudgetAllowed(usageBudget, estimatedAiCredits);
-  }
-  const usageAccess = usageBudget.access;
-  const startedAt = Date.now();
+            {
+              retrievalMode: "lexical_fallback" as const,
+              results: [],
+              degradedReason: null,
+            },
+            {
+              retrievalMode: "lexical_fallback" as const,
+              results: [],
+              degradedReason: null,
+            },
+            {
+              enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
+              used: false,
+              query: input.prompt,
+              queries: [],
+              source: "duckduckgo_html" as const,
+              results: [],
+              degradedReason: null,
+              confidence: "low" as const,
+            },
+          ];
+      const retrievalTelemetry = buildRetrievalTelemetry(retrieval);
+      const retrievalBlock = buildRetrievalPromptBlock({
+        workload,
+        ...retrieval,
+      });
+      const memoryBlock = buildMemoryPromptBlock({
+        workload,
+        results: memory.results,
+      });
+      const webGroundingBlock =
+        buildWebGroundingPromptBlock(webGrounding) ??
+        buildWebGroundingAbstentionBlock(webGrounding);
 
-  let lastError: unknown = null;
-  let successfulProvider: SharedBrainProvider | null = null;
-  let successfulModel = baseModel;
-  let payload: unknown = null;
-  let firstDeltaMs: number | null = null;
-  let fallbackUsed = false;
-  let fallbackState: string | null = null;
+      /* URL context: fetch content from user-provided URLs (fire parallel, max 2) */
+      const urlContextBlock = promptContainsUrl(input.prompt)
+        ? await buildUrlContextBlock(app, input.prompt).catch(() => null)
+        : null;
 
-  for (const candidate of providerCandidates) {
-    if (!candidate) {
-      continue;
-    }
-    const reliability = app.services?.reliability;
-    const circuitKey = getBrainCircuitKey(candidate);
-    if (reliability && !(await isCircuitCallAllowed(reliability.store, circuitKey))) {
-      lastError = "provider_circuit_open";
-      continue;
-    }
+      /* Client attachments: pre-processed document/image/table data from mobile/desktop */
+      const rawClientAttachments =
+        input.clientAttachments ??
+        extractClientAttachments(input.requestMetadata ?? {});
+      const clientDocCtx =
+        rawClientAttachments.length > 0
+          ? await buildDocumentContextBlock(app, rawClientAttachments, {
+              charBudget: workload === "document_generate" ? 28_000 : 20_000,
+            }).catch(() => null)
+          : null;
+      const clientDocBlock = clientDocCtx?.promptBlock ?? null;
+      /* Expose vision thumbnails to the model when workload supports it */
+      const clientVisionImages: ResolvedAttachmentContextVisionImage[] =
+        workload === "image_analyze" || workload === "vision_reasoning"
+          ? (clientDocCtx?.visionImages ?? []).map((img) => ({
+              documentId: img.imageId,
+              mimeType: img.mimeType,
+              base64: img.base64,
+              label: img.label,
+            }))
+          : [];
 
-    const candidateModelAttempts = candidate.preferredModels
-      .filter((model, index, values): model is string => Boolean(model) && values.indexOf(model) === index);
-
-    for (const attemptedModel of candidateModelAttempts) {
-      const candidateAttempts: SharedBrainRequestAttempt[] =
-        candidate.provider === "ollama"
-          ? [
-              {
-                path: "/api/generate",
-                body: buildGenerateRequestBody(
-                  attemptedModel,
-                  prompt,
-                  maxTokens,
-                  app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
-                ),
-              },
-              {
-                path: getChatCompletionPath(candidate.provider),
-                body: buildRequestBody(
-                  candidate.provider,
-                  attemptedModel,
-                  messages,
-                  maxTokens,
-                  app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
-                  false,
-                  [...(input.attachmentContext?.visionImages ?? []), ...clientVisionImages],
-                ),
-              },
-            ]
+      const documentSourceCount = new Set(
+        retrieval.results.map((result) => result.documentId),
+      ).size;
+      const groundingUsed = documentSourceCount > 0;
+      const webSourceCount = webGrounding.results.length;
+      const webGroundingUsed = webGrounding.used && webSourceCount > 0;
+      const selfCheck = buildSelfCheck({
+        workload,
+        memoryCount: memory.results.length,
+        retrievalCount: retrieval.results.length,
+        memoryResults: memory.results,
+        retrievalDegradedReason: retrieval.degradedReason,
+        memoryDegradedReason: memory.degradedReason,
+        route: input.route,
+      });
+      const memoryEnabled = detectMemoryEnabled(
+        input.requestMetadata,
+        input.understandingContext,
+      );
+      const clarificationDecision:
+        "not_needed" | "asked" | "assumed_and_proceeded" =
+        input.understandingContext?.clarificationDiagnostics?.shouldClarify ===
+        true
+          ? "asked"
+          : selfCheck.needsClarification
+            ? "asked"
+            : "assumed_and_proceeded";
+      const dataQualityMetadata = buildDataQualityMetadata({
+        attachmentContext: input.attachmentContext,
+        memoryCount: memory.results.length,
+        retrievalCount: retrieval.results.length,
+        webSourceCount,
+        prompt: input.prompt,
+        memoryEnabled,
+        clarificationDecision,
+      });
+      const brainMode = deriveBrainMode({
+        route: input.route,
+        workload,
+        memoryCount: memory.results.length,
+        retrievalCount: retrieval.results.length,
+      });
+      const usageBudget = input.internalEvaluation?.skipUsageValidation
+        ? {
+            access: {
+              mode: "paid" as const,
+            },
+            remainingAiCredits: null,
+            grantedAiCredits: null,
+            periodEndsAt: null,
+          }
+        : await getSharedBrainUsageBudget(app.db, input.userId);
+      const baseMaxTokens = getMaxTokensForWorkload(workload, planBrainProfile);
+      const completeAnswerBudgetHint = shouldUseCompleteMobileReplyBudget(
+        input,
+        {
+          webGroundingUsed,
+          retrievalResultCount: retrieval.results.length,
+          memoryResultCount: memory.results.length,
+        },
+      );
+      const inferenceBudget = resolveAdaptiveInferenceBudget({
+        workload,
+        prompt: input.prompt,
+        baseMaxTokens,
+        requestedLongFormHint:
+          shouldPreferExpandedMobileReply(input) || completeAnswerBudgetHint,
+        premium: planBrainProfile.tier === "premium",
+        qualityProfile: planBrainProfile.qualityProfile,
+        planCode:
+          "planCode" in usageBudget.access
+            ? usageBudget.access.planCode
+            : input.planCode,
+        remainingCredits: usageBudget.remainingAiCredits,
+        grantedCredits: usageBudget.grantedAiCredits,
+      });
+      const boundedConversation = trimConversationForWorkload(
+        input.conversation ?? [],
+        workload,
+        {
+          maxMessages: inferenceBudget.conversationMessageBudget,
+          maxTokens: inferenceBudget.conversationTokenBudget,
+        },
+      );
+      // Deterministic corpus guidance (design/skills/data language) — RAM-cached
+      // + C-BM25 ranked, independent of embedding-based retrieval so it surfaces
+      // reliably for "rapor/tablo/pdf yap" style requests.
+      const corpusGuidanceBlock = await buildBrainCorpusGuidanceBlock(
+        input.prompt,
+        brainCorpusDomains,
+      ).catch(() => null);
+      const systemPrompt = buildStructuredSystemPrompt(
+        retrievalBlock == null &&
+          memoryBlock == null &&
+          webGroundingBlock == null &&
+          urlContextBlock == null &&
+          clientDocBlock == null &&
+          corpusGuidanceBlock == null
+          ? app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT
           : [
-              {
-                path: getChatCompletionPath(candidate.provider),
-                body: buildRequestBody(
-                  candidate.provider,
-                  attemptedModel,
-                  messages,
-                  maxTokens,
-                  app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
-                  false,
-                  [...(input.attachmentContext?.visionImages ?? []), ...clientVisionImages],
-                ),
-              },
-            ];
+              app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
+              corpusGuidanceBlock,
+              retrievalBlock,
+              memoryBlock,
+              webGroundingBlock,
+              urlContextBlock,
+              clientDocBlock,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+        {
+          ...input,
+          conversation: boundedConversation,
+          responseBudget: inferenceBudget,
+        },
+      );
+      const messages = buildConversation(
+        {
+          ...input,
+          conversation: boundedConversation,
+        },
+        systemPrompt,
+      );
+      const prompt = buildPromptFromConversation(messages);
+      void warmOllamaModelIfNeeded(app, runtime, baseModel).catch((error) => {
+        app.log.debug?.(
+          {
+            provider: runtime.provider,
+            model: baseModel,
+            error: describeProviderFailure(error),
+          },
+          "shared brain warmup skipped",
+        );
+      });
+      app.log.debug?.(
+        {
+          route: input.route ?? "shared_brain",
+          provider: servingProvider,
+          model: baseModel,
+          messageCount: messages.length,
+          promptChars: messages.reduce(
+            (total, message) => total + message.content.length,
+            0,
+          ),
+          workload,
+        },
+        "shared brain request prepared",
+      );
+      const promptTokens = estimateTokens(
+        messages.map((message) => message.content).join("\n\n"),
+      );
+      const userInputTokens = estimateTokens(input.prompt);
+      const meteringSurface =
+        input.meteringSurface ??
+        (input.routeDecision && input.routeDecision.mode !== "chat"
+          ? "task"
+          : "chat");
+      const timeoutMs =
+        typeof input.timeoutMsOverride === "number" &&
+        input.timeoutMsOverride > 0
+          ? Math.min(input.timeoutMsOverride, getChatTimeoutMs(workload))
+          : getChatTimeoutMs(workload);
+      const maxTokens =
+        typeof input.maxCompletionTokensOverride === "number" &&
+        input.maxCompletionTokensOverride > 0
+          ? Math.min(
+              input.maxCompletionTokensOverride,
+              inferenceBudget.maxCompletionTokens,
+            )
+          : inferenceBudget.maxCompletionTokens;
+      const estimatedBillableTokenUsage = calculateBillablePlanTokens({
+        surface: meteringSurface,
+        workload,
+        userInputTokens,
+        promptTokens,
+        completionTokens: maxTokens,
+      });
+      const estimatedAiCredits = estimatedBillableTokenUsage.billableTokens;
+      if (!input.internalEvaluation?.skipUsageValidation) {
+        if (
+          usageBudget.access.mode === "trial" &&
+          "planCode" in usageBudget.access &&
+          usageBudget.access.planCode === "free"
+        ) {
+          const quota = await getTrialQuotaUsage(app.db, input.userId);
+          assertTrialTaskQuotaAllowedFromUsage(quota, estimatedAiCredits);
+        }
+        assertSharedBrainUsageBudgetAllowed(usageBudget, estimatedAiCredits);
+      }
+      const usageAccess = usageBudget.access;
+      const startedAt = Date.now();
 
-      for (const attempt of candidateAttempts) {
-        let attemptSucceeded = false;
+      let lastError: unknown = null;
+      let successfulProvider: SharedBrainProvider | null = null;
+      let successfulModel = baseModel;
+      let payload: unknown = null;
+      let firstDeltaMs: number | null = null;
+      let fallbackUsed = false;
+      let fallbackState: string | null = null;
 
-        for (let retryIndex = 0; retryIndex <= SHARED_BRAIN_PROVIDER_MAX_RETRIES; retryIndex += 1) {
-          let attemptHadDelta = false;
-          let attemptRetryable = false;
-
-          try {
-            if (input.onDelta && supportsNativeStreamingAttempt(candidate.provider, attempt.path)) {
-              let streamedText = "";
-              const deltaPublisher = createDeltaPublisher({
-                startedAt,
-                provider: candidate.provider,
-                model: attemptedModel,
-                onDelta: input.onDelta,
-              });
-              const streamResponse = await postStreamingJson(
-                app,
-                candidate.provider,
-                joinProviderUrl(candidate.baseUrl, attempt.path),
-                {
-                  ...attempt.body,
-                  stream: true,
-                },
-                timeoutMs,
-                workloadProfile.firstDeltaBudgetMs,
-                async (chunk) => {
-                  const delta = extractResponseDelta(chunk);
-                  if (!delta) {
-                    return;
-                  }
-                  streamedText += delta;
-                  await deltaPublisher.publish(delta, streamedText);
-                },
-              );
-
-              attemptHadDelta = deltaPublisher.firstDeltaMs != null;
-
-              if (!streamResponse.ok) {
-                lastError = {
-                  status: streamResponse.status,
-                  provider: candidate.provider,
-                  path: attempt.path,
-                };
-                attemptRetryable = isRetryableProviderStatus(streamResponse.status);
-              } else {
-                const text = streamedText.trim();
-                if (!text) {
-                  lastError = {
-                    status: 503,
-                    provider: candidate.provider,
-                    path: attempt.path,
-                    reason: "empty_stream_response",
-                  };
-                  attemptRetryable = true;
-                } else {
-                  await deltaPublisher.publish("", streamedText, { force: true });
-                  firstDeltaMs = deltaPublisher.firstDeltaMs;
-                  successfulProvider = candidate.provider;
-                  successfulModel = attemptedModel;
-                  fallbackUsed =
-                    candidate.provider !== primaryCandidate?.provider ||
-                    attemptedModel !== primaryCandidate?.preferredModels[0];
-                  fallbackState = fallbackUsed ? `${candidate.provider}:${attemptedModel}` : null;
-                  if (reliability) {
-                    await recordCircuitSuccess(reliability.store, circuitKey, app.config.BRAIN_CIRCUIT_OPEN_MS);
-                  }
-                  payload = {
-                    response: text,
-                    provider: candidate.provider,
-                    model: attemptedModel,
-                    path: attempt.path,
-                    streamed: true,
-                    ...(firstDeltaMs != null ? { firstDeltaMs } : {}),
-                  };
-                  attemptSucceeded = true;
-                }
-              }
-            } else {
-              const candidateResponse = await postJson(
-                app,
-                candidate.provider,
-                joinProviderUrl(candidate.baseUrl, attempt.path),
-                attempt.body,
-                timeoutMs,
-              );
-              const rawText = await candidateResponse.text();
-              try {
-                payload = rawText ? JSON.parse(rawText) : {};
-              } catch {
-                payload = {};
-              }
-              app.log.debug?.(
-                {
-                  provider: candidate.provider,
-                  path: attempt.path,
-                  status: candidateResponse.status,
-                  rawTextLength: rawText.length,
-                  hasMessage: !!extractResponseText(candidate.provider, payload),
-                },
-                "shared brain provider response received",
-              );
-
-              if (!candidateResponse.ok) {
-                lastError = {
-                  status: candidateResponse.status,
-                  provider: candidate.provider,
-                  path: attempt.path,
-                };
-                attemptRetryable = isRetryableProviderStatus(candidateResponse.status);
-              } else {
-                const text = extractResponseText(candidate.provider, payload);
-                if (!text) {
-                  lastError = {
-                    status: 503,
-                    provider: candidate.provider,
-                    path: attempt.path,
-                    reason: "empty_response",
-                  };
-                  attemptRetryable = true;
-                } else {
-                  successfulProvider = candidate.provider;
-                  successfulModel = attemptedModel;
-                  fallbackUsed =
-                    candidate.provider !== primaryCandidate?.provider ||
-                    attemptedModel !== primaryCandidate?.preferredModels[0];
-                  fallbackState = fallbackUsed ? `${candidate.provider}:${attemptedModel}` : null;
-                  if (reliability) {
-                    await recordCircuitSuccess(reliability.store, circuitKey, app.config.BRAIN_CIRCUIT_OPEN_MS);
-                  }
-                  payload = {
-                    ...((payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {}) as Record<string, unknown>),
-                    provider: candidate.provider,
-                    model: attemptedModel,
-                    path: attempt.path,
-                    streamed: false,
-                  };
-                  attemptSucceeded = true;
-                }
-              }
-            }
-          } catch (error) {
-            lastError = error;
-            attemptRetryable = isRetryableProviderFailure(error);
-          }
-
-          if (attemptSucceeded) {
-            break;
-          }
-
-          if (!attemptRetryable || attemptHadDelta || retryIndex >= SHARED_BRAIN_PROVIDER_MAX_RETRIES) {
-            break;
-          }
-
-          await sleep(SHARED_BRAIN_PROVIDER_RETRY_DELAY_MS);
+      for (const candidate of providerCandidates) {
+        if (!candidate) {
+          continue;
+        }
+        const reliability = app.services?.reliability;
+        const circuitKey = getBrainCircuitKey(candidate);
+        if (
+          reliability &&
+          !(await isCircuitCallAllowed(reliability.store, circuitKey))
+        ) {
+          lastError = "provider_circuit_open";
+          continue;
         }
 
-        if (attemptSucceeded) {
+        const candidateModelAttempts = candidate.preferredModels.filter(
+          (model, index, values): model is string =>
+            Boolean(model) && values.indexOf(model) === index,
+        );
+
+        for (const attemptedModel of candidateModelAttempts) {
+          const candidateAttempts: SharedBrainRequestAttempt[] =
+            candidate.provider === "ollama"
+              ? [
+                  {
+                    path: "/api/generate",
+                    body: buildGenerateRequestBody(
+                      attemptedModel,
+                      prompt,
+                      maxTokens,
+                      app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+                    ),
+                  },
+                  {
+                    path: getChatCompletionPath(candidate.provider),
+                    body: buildRequestBody(
+                      candidate.provider,
+                      attemptedModel,
+                      messages,
+                      maxTokens,
+                      app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+                      false,
+                      [
+                        ...(input.attachmentContext?.visionImages ?? []),
+                        ...clientVisionImages,
+                      ],
+                    ),
+                  },
+                ]
+              : [
+                  {
+                    path: getChatCompletionPath(candidate.provider),
+                    body: buildRequestBody(
+                      candidate.provider,
+                      attemptedModel,
+                      messages,
+                      maxTokens,
+                      app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+                      false,
+                      [
+                        ...(input.attachmentContext?.visionImages ?? []),
+                        ...clientVisionImages,
+                      ],
+                    ),
+                  },
+                ];
+
+          for (const attempt of candidateAttempts) {
+            let attemptSucceeded = false;
+
+            for (
+              let retryIndex = 0;
+              retryIndex <= SHARED_BRAIN_PROVIDER_MAX_RETRIES;
+              retryIndex += 1
+            ) {
+              let attemptHadDelta = false;
+              let attemptRetryable = false;
+
+              try {
+                if (
+                  input.onDelta &&
+                  supportsNativeStreamingAttempt(
+                    candidate.provider,
+                    attempt.path,
+                  )
+                ) {
+                  let streamedText = "";
+                  const deltaPublisher = createDeltaPublisher({
+                    startedAt,
+                    provider: candidate.provider,
+                    model: attemptedModel,
+                    onDelta: input.onDelta,
+                  });
+                  const streamResponse = await postStreamingJson(
+                    app,
+                    candidate.provider,
+                    joinProviderUrl(candidate.baseUrl, attempt.path),
+                    {
+                      ...attempt.body,
+                      stream: true,
+                    },
+                    timeoutMs,
+                    workloadProfile.firstDeltaBudgetMs,
+                    async (chunk) => {
+                      const delta = extractResponseDelta(chunk);
+                      if (!delta) {
+                        return;
+                      }
+                      streamedText += delta;
+                      await deltaPublisher.publish(delta, streamedText);
+                    },
+                  );
+
+                  attemptHadDelta = deltaPublisher.firstDeltaMs != null;
+
+                  if (!streamResponse.ok) {
+                    lastError = {
+                      status: streamResponse.status,
+                      provider: candidate.provider,
+                      path: attempt.path,
+                    };
+                    attemptRetryable = isRetryableProviderStatus(
+                      streamResponse.status,
+                    );
+                  } else {
+                    const text = streamedText.trim();
+                    if (!text) {
+                      lastError = {
+                        status: 503,
+                        provider: candidate.provider,
+                        path: attempt.path,
+                        reason: "empty_stream_response",
+                      };
+                      attemptRetryable = true;
+                    } else {
+                      await deltaPublisher.publish("", streamedText, {
+                        force: true,
+                      });
+                      firstDeltaMs = deltaPublisher.firstDeltaMs;
+                      successfulProvider = candidate.provider;
+                      successfulModel = attemptedModel;
+                      fallbackUsed =
+                        candidate.provider !== primaryCandidate?.provider ||
+                        attemptedModel !== primaryCandidate?.preferredModels[0];
+                      fallbackState = fallbackUsed
+                        ? `${candidate.provider}:${attemptedModel}`
+                        : null;
+                      if (reliability) {
+                        await recordCircuitSuccess(
+                          reliability.store,
+                          circuitKey,
+                          app.config.BRAIN_CIRCUIT_OPEN_MS,
+                        );
+                      }
+                      payload = {
+                        response: text,
+                        provider: candidate.provider,
+                        model: attemptedModel,
+                        path: attempt.path,
+                        streamed: true,
+                        ...(firstDeltaMs != null ? { firstDeltaMs } : {}),
+                      };
+                      attemptSucceeded = true;
+                    }
+                  }
+                } else {
+                  const candidateResponse = await postJson(
+                    app,
+                    candidate.provider,
+                    joinProviderUrl(candidate.baseUrl, attempt.path),
+                    attempt.body,
+                    timeoutMs,
+                  );
+                  const rawText = await candidateResponse.text();
+                  try {
+                    payload = rawText ? JSON.parse(rawText) : {};
+                  } catch {
+                    payload = {};
+                  }
+                  app.log.debug?.(
+                    {
+                      provider: candidate.provider,
+                      path: attempt.path,
+                      status: candidateResponse.status,
+                      rawTextLength: rawText.length,
+                      hasMessage: !!extractResponseText(
+                        candidate.provider,
+                        payload,
+                      ),
+                    },
+                    "shared brain provider response received",
+                  );
+
+                  if (!candidateResponse.ok) {
+                    lastError = {
+                      status: candidateResponse.status,
+                      provider: candidate.provider,
+                      path: attempt.path,
+                    };
+                    attemptRetryable = isRetryableProviderStatus(
+                      candidateResponse.status,
+                    );
+                  } else {
+                    const text = extractResponseText(
+                      candidate.provider,
+                      payload,
+                    );
+                    if (!text) {
+                      lastError = {
+                        status: 503,
+                        provider: candidate.provider,
+                        path: attempt.path,
+                        reason: "empty_response",
+                      };
+                      attemptRetryable = true;
+                    } else {
+                      successfulProvider = candidate.provider;
+                      successfulModel = attemptedModel;
+                      fallbackUsed =
+                        candidate.provider !== primaryCandidate?.provider ||
+                        attemptedModel !== primaryCandidate?.preferredModels[0];
+                      fallbackState = fallbackUsed
+                        ? `${candidate.provider}:${attemptedModel}`
+                        : null;
+                      if (reliability) {
+                        await recordCircuitSuccess(
+                          reliability.store,
+                          circuitKey,
+                          app.config.BRAIN_CIRCUIT_OPEN_MS,
+                        );
+                      }
+                      payload = {
+                        ...((payload &&
+                        typeof payload === "object" &&
+                        !Array.isArray(payload)
+                          ? payload
+                          : {}) as Record<string, unknown>),
+                        provider: candidate.provider,
+                        model: attemptedModel,
+                        path: attempt.path,
+                        streamed: false,
+                      };
+                      attemptSucceeded = true;
+                    }
+                  }
+                }
+              } catch (error) {
+                lastError = error;
+                attemptRetryable = isRetryableProviderFailure(error);
+              }
+
+              if (attemptSucceeded) {
+                break;
+              }
+
+              if (
+                !attemptRetryable ||
+                attemptHadDelta ||
+                retryIndex >= SHARED_BRAIN_PROVIDER_MAX_RETRIES
+              ) {
+                break;
+              }
+
+              await sleep(SHARED_BRAIN_PROVIDER_RETRY_DELAY_MS);
+            }
+
+            if (attemptSucceeded) {
+              break;
+            }
+          }
+
+          if (successfulProvider) {
+            break;
+          }
+        }
+
+        if (successfulProvider) {
           break;
         }
+
+        if (reliability) {
+          await recordCircuitFailure(
+            reliability.store,
+            circuitKey,
+            {
+              failureThreshold: app.config.BRAIN_CIRCUIT_FAILURE_THRESHOLD,
+              openMs: app.config.BRAIN_CIRCUIT_OPEN_MS,
+            },
+            "server_brain_unavailable",
+          );
+        }
       }
 
-      if (successfulProvider) {
-        break;
-      }
-    }
+      if (!successfulProvider) {
+        if (!input.internalEvaluation?.skipInvocationLogging) {
+          await app.db.insert(aiProviderInvocations).values({
+            userId: input.userId,
+            taskId: input.taskId ?? null,
+            provider: telemetryProviderForSharedBrain(servingProvider),
+            model: baseModel,
+            workload,
+            route: input.route ?? "shared_brain",
+            status: "error",
+            promptTokens,
+            completionTokens: 0,
+            totalTokens: promptTokens,
+            latencyMs: Date.now() - startedAt,
+            metadata: {
+              attemptedProviders: providerCandidates.map((candidate) => ({
+                provider: candidate.provider,
+                hosted: candidate.hosted,
+                baseUrl: candidate.baseUrl,
+              })),
+              attemptedModels: providerCandidates.flatMap(
+                (candidate) => candidate.preferredModels,
+              ),
+              runtimeProvider: runtime.provider,
+              reason: "provider_request_failed",
+              lastError: describeProviderFailure(lastError),
+              brainMode,
+              selfCheck,
+              usedMemory: selfCheck.usedMemory,
+              memoryResultCount: memory.results.length,
+              memoryRetrievalMode: memory.retrievalMode,
+              retrievalMode: retrievalTelemetry.retrievalMode,
+              retrievalResultCount: retrievalTelemetry.retrievalResultCount,
+              brainCorpusDomains,
+              retrievalCandidateCount: retrievalTelemetry.candidateCount,
+              retrievalLexicalCandidateCount:
+                retrievalTelemetry.lexicalCandidateCount,
+              retrievalSemanticCandidateCount:
+                retrievalTelemetry.semanticCandidateCount,
+              rerankUsed: retrievalTelemetry.rerankUsed,
+              rerankDegradedReason: retrievalTelemetry.rerankDegradedReason,
+              groundingUsed,
+              documentSourceCount,
+              webGroundingUsed,
+              webSourceCount,
+              webGroundingDegradedReason: webGrounding.degradedReason,
+              ...buildWebGroundingMetadata(webGrounding),
+              constitutionVersion: ELYAN_CONSTITUTION_VERSION,
+              promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
+              routeDecision: input.routeDecision ?? null,
+              skillExecution: input.skillExecutionMetadata ?? null,
+              answerSource: "model",
+              fallbackUsed,
+              fallbackState,
+              completionLatencyMs: Date.now() - startedAt,
+              responseBytes: 0,
+              responseBudgetState: inferenceBudget.budgetState,
+              responseBudgetReason: inferenceBudget.budgetReason,
+              cached: false,
+              ...buildContextPacketMetadata(input.understandingContext),
+              ...dataQualityMetadata,
+              memoryEnabled,
+              memoryRelevanceSummary:
+                input.understandingContext?.memoryRelevanceSummary ?? [],
+              continuitySummary:
+                input.understandingContext?.continuitySummary ?? null,
+              clarificationDiagnostics:
+                input.understandingContext?.clarificationDiagnostics ?? null,
+            },
+          });
+        }
 
-    if (successfulProvider) {
-      break;
-    }
-
-    if (reliability) {
-      await recordCircuitFailure(
-        reliability.store,
-        circuitKey,
-        {
-          failureThreshold: app.config.BRAIN_CIRCUIT_FAILURE_THRESHOLD,
-          openMs: app.config.BRAIN_CIRCUIT_OPEN_MS,
-        },
-        "server_brain_unavailable",
-      );
-    }
-  }
-
-  if (!successfulProvider) {
-    if (!input.internalEvaluation?.skipInvocationLogging) {
-      await app.db.insert(aiProviderInvocations).values({
-        userId: input.userId,
-        taskId: input.taskId ?? null,
-        provider: telemetryProviderForSharedBrain(servingProvider),
-        model: baseModel,
-        workload,
-        route: input.route ?? "shared_brain",
-        status: "error",
-        promptTokens,
-        completionTokens: 0,
-        totalTokens: promptTokens,
-        latencyMs: Date.now() - startedAt,
-          metadata: {
+        app.log.warn(
+          {
+            route: input.route ?? "shared_brain",
+            workload,
             attemptedProviders: providerCandidates.map((candidate) => ({
               provider: candidate.provider,
               hosted: candidate.hosted,
-              baseUrl: candidate.baseUrl,
             })),
-            attemptedModels: providerCandidates.flatMap((candidate) => candidate.preferredModels),
-            runtimeProvider: runtime.provider,
-            reason: "provider_request_failed",
-            lastError: describeProviderFailure(lastError),
-            brainMode,
-            selfCheck,
-            usedMemory: selfCheck.usedMemory,
-            memoryResultCount: memory.results.length,
-            memoryRetrievalMode: memory.retrievalMode,
-            retrievalMode: retrievalTelemetry.retrievalMode,
-            retrievalResultCount: retrievalTelemetry.retrievalResultCount,
-            brainCorpusDomains,
-            retrievalCandidateCount: retrievalTelemetry.candidateCount,
-            retrievalLexicalCandidateCount: retrievalTelemetry.lexicalCandidateCount,
-            retrievalSemanticCandidateCount: retrievalTelemetry.semanticCandidateCount,
-            rerankUsed: retrievalTelemetry.rerankUsed,
-            rerankDegradedReason: retrievalTelemetry.rerankDegradedReason,
-            groundingUsed,
-            documentSourceCount,
+            attemptedModels: providerCandidates.flatMap(
+              (candidate) => candidate.preferredModels,
+            ),
+            lastErrorCode: describeProviderFailure(lastError),
+          },
+          "shared brain inference unavailable",
+        );
+
+        throw new AppError(
+          503,
+          "server_brain_unavailable",
+          "Elyan beyni şu anda yanıt veremiyor",
+          {
+            route: input.route ?? "shared_brain",
+            workload,
+            provider: servingProvider,
+            model: baseModel,
+            transient: true,
+            retrySuggested: true,
+            fallbackUsed,
+            fallbackState,
+            attemptedProviders: providerCandidates.map(
+              (candidate) => candidate.provider,
+            ),
+            attemptedModels: providerCandidates.flatMap(
+              (candidate) => candidate.preferredModels,
+            ),
             webGroundingUsed,
             webSourceCount,
             webGroundingDegradedReason: webGrounding.degradedReason,
             ...buildWebGroundingMetadata(webGrounding),
-            constitutionVersion: ELYAN_CONSTITUTION_VERSION,
-            promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
-            routeDecision: input.routeDecision ?? null,
-            skillExecution: input.skillExecutionMetadata ?? null,
-            answerSource: "model",
-            fallbackUsed,
-            fallbackState,
-            completionLatencyMs: Date.now() - startedAt,
-            responseBytes: 0,
-            responseBudgetState: inferenceBudget.budgetState,
-            responseBudgetReason: inferenceBudget.budgetReason,
-            cached: false,
-            ...buildContextPacketMetadata(input.understandingContext),
-            ...dataQualityMetadata,
-            memoryEnabled,
-            memoryRelevanceSummary: input.understandingContext?.memoryRelevanceSummary ?? [],
-            continuitySummary: input.understandingContext?.continuitySummary ?? null,
-            clarificationDiagnostics: input.understandingContext?.clarificationDiagnostics ?? null,
           },
+        );
+      }
+
+      const text = extractResponseText(successfulProvider, payload);
+
+      const completionTokens = estimateTokens(text);
+      const totalTokens = promptTokens + completionTokens;
+      const responseBytes = estimateResponseBytes(text);
+      const billableTokenUsage = calculateBillablePlanTokens({
+        surface: meteringSurface,
+        workload,
+        userInputTokens,
+        promptTokens,
+        completionTokens,
+      });
+      const billableAiCredits = billableTokenUsage.billableTokens;
+      const latencyMs = Date.now() - startedAt;
+
+      if (!input.internalEvaluation?.skipInvocationLogging) {
+        await app.db.transaction(async (tx) => {
+          const invocationRows = await tx
+            .insert(aiProviderInvocations)
+            .values({
+              userId: input.userId,
+              taskId: input.taskId ?? null,
+              provider: telemetryProviderForSharedBrain(successfulProvider),
+              model: successfulModel,
+              workload,
+              route: input.route ?? "shared_brain",
+              status:
+                successfulProvider === primaryCandidate?.provider &&
+                !fallbackUsed
+                  ? "success"
+                  : "fallback",
+              promptTokens,
+              completionTokens,
+              totalTokens,
+              latencyMs,
+              fallbackFromProvider: null,
+              fallbackFromModel: fallbackUsed ? baseModel : null,
+              metadata: {
+                route: input.route ?? "shared_brain",
+                workload,
+                provider: successfulProvider,
+                model: successfulModel,
+                billableAiCredits,
+                billableTokens: billableAiCredits,
+                tokenMetering: billableTokenUsage,
+                tokenBudget: inferenceBudget,
+                responseBudgetState: inferenceBudget.budgetState,
+                responseBudgetReason: inferenceBudget.budgetReason,
+                runtimeProvider: runtime.provider,
+                modelSource: modelResolution.resolvedBaseModelSource,
+                streamed: Boolean(
+                  (payload as Record<string, unknown> | null)?.streamed,
+                ),
+                firstDeltaMs,
+                completionLatencyMs: latencyMs,
+                responseBytes,
+                cached: false,
+                ...buildContextPacketMetadata(input.understandingContext),
+                fallbackUsed,
+                fallbackState,
+                brainMode,
+                selfCheck,
+                usedMemory: selfCheck.usedMemory,
+                memoryConfidence: selfCheck.memoryConfidence,
+                memoryConflictRisk: selfCheck.memoryConflictRisk,
+                needsClarification: selfCheck.needsClarification,
+                retrievalSufficiency: selfCheck.retrievalSufficiency,
+                selfCheckOutcome: selfCheck.selfCheckOutcome,
+                memoryResultCount: memory.results.length,
+                memoryRetrievalMode: memory.retrievalMode,
+                retrievalMode: retrievalTelemetry.retrievalMode,
+                retrievalResultCount: retrievalTelemetry.retrievalResultCount,
+                brainCorpusDomains,
+                retrievalCandidateCount: retrievalTelemetry.candidateCount,
+                retrievalLexicalCandidateCount:
+                  retrievalTelemetry.lexicalCandidateCount,
+                retrievalSemanticCandidateCount:
+                  retrievalTelemetry.semanticCandidateCount,
+                rerankUsed: retrievalTelemetry.rerankUsed,
+                rerankDegradedReason: retrievalTelemetry.rerankDegradedReason,
+                groundingUsed,
+                documentSourceCount,
+                webGroundingUsed,
+                webSourceCount,
+                webGroundingDegradedReason: webGrounding.degradedReason,
+                ...buildWebGroundingMetadata(webGrounding),
+                constitutionVersion: ELYAN_CONSTITUTION_VERSION,
+                promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
+                routeDecision: input.routeDecision ?? null,
+                skillExecution: input.skillExecutionMetadata ?? null,
+                answerSource: "model",
+                fallbackFromProvider:
+                  successfulProvider === primaryCandidate?.provider &&
+                  !fallbackUsed
+                    ? null
+                    : (primaryCandidate?.provider ?? runtime.provider),
+                fallbackFromModel: fallbackUsed ? baseModel : null,
+                ...dataQualityMetadata,
+                memoryEnabled,
+                memoryRelevanceSummary:
+                  input.understandingContext?.memoryRelevanceSummary ?? [],
+                continuitySummary:
+                  input.understandingContext?.continuitySummary ?? null,
+                clarificationDiagnostics:
+                  input.understandingContext?.clarificationDiagnostics ?? null,
+              },
+            })
+            .returning({
+              id: aiProviderInvocations.id,
+            });
+
+          const canRecordMeteredUsage =
+            !("serverBrainAllowed" in usageAccess) ||
+            usageAccess.serverBrainAllowed;
+          if (input.taskId && canRecordMeteredUsage) {
+            const usageIdentity = await resolveUsageIdentityContext(tx, {
+              userId: input.userId,
+            });
+            await recordUsageLedgerEntry(tx, {
+              userId: input.userId,
+              identityId: usageIdentity.identityId,
+              taskId: input.taskId,
+              metric: BILLING_USAGE_METRICS.subscriptionAiCredit,
+              quantity: billableAiCredits,
+              budgetUnits: billableAiCredits,
+              qualityProfile: usageIdentity.qualityProfile,
+              planSnapshot: {
+                planCode: usageIdentity.planCode,
+                qualityProfile: usageIdentity.qualityProfile,
+                route: input.route ?? "shared_brain",
+                workload,
+                usageSurface: meteringSurface,
+              },
+            });
+
+            if (invocationRows[0]?.id && usageAccess.mode !== "trial") {
+              await recordCreditLedgerEntry(tx, {
+                userId: input.userId,
+                taskId: input.taskId,
+                aiProviderInvocationId: invocationRows[0].id,
+                reason: "ai_inference",
+                deltaCredits: -billableAiCredits,
+                metadata: {
+                  provider: successfulProvider,
+                  model: successfulModel,
+                  route: input.route ?? "shared_brain",
+                  promptTokens,
+                  completionTokens,
+                  totalTokens,
+                  billableAiCredits,
+                  billableTokens: billableAiCredits,
+                  tokenMetering: billableTokenUsage,
+                  tokenBudget: inferenceBudget,
+                },
+              });
+            }
+          }
         });
-    }
+      }
 
-    app.log.warn(
-      {
-        route: input.route ?? "shared_brain",
-        workload,
-        attemptedProviders: providerCandidates.map((candidate) => ({
-          provider: candidate.provider,
-          hosted: candidate.hosted,
-        })),
-        attemptedModels: providerCandidates.flatMap((candidate) => candidate.preferredModels),
-        lastErrorCode: describeProviderFailure(lastError),
-      },
-      "shared brain inference unavailable",
-    );
+      /* ── Quota low-balance warning — fire-and-forget SSE ────────────────────
+       * After usage is committed we know the post-inference remaining credits.
+       * If the user has < 20% of their monthly grant left, emit quota.warning
+       * so the mobile app can show a soft banner without blocking the response.
+       */
+      if (
+        usageBudget.remainingAiCredits != null &&
+        usageBudget.grantedAiCredits != null &&
+        usageBudget.grantedAiCredits > 0
+      ) {
+        const remainingAfter = Math.max(
+          0,
+          usageBudget.remainingAiCredits - billableAiCredits,
+        );
+        const fractionLeft = remainingAfter / usageBudget.grantedAiCredits;
+        if (fractionLeft < 0.2) {
+          void app.services.eventBus
+            .publishVolatile({
+              topic: "quota.warning",
+              userId: input.userId,
+              taskId: input.taskId ?? undefined,
+              payload: {
+                remainingCredits: remainingAfter,
+                grantedCredits: usageBudget.grantedAiCredits,
+                fractionLeft: Math.round(fractionLeft * 100) / 100,
+                periodEndsAt: usageBudget.periodEndsAt ?? null,
+                warningLevel: fractionLeft < 0.05 ? "critical" : "low",
+              },
+            })
+            .catch(() => undefined);
+        }
+      }
 
-    throw new AppError(503, "server_brain_unavailable", "Elyan beyni şu anda yanıt veremiyor", {
-      route: input.route ?? "shared_brain",
-      workload,
-      provider: servingProvider,
-      model: baseModel,
-      transient: true,
-      retrySuggested: true,
-      fallbackUsed,
-      fallbackState,
-      attemptedProviders: providerCandidates.map((candidate) => candidate.provider),
-      attemptedModels: providerCandidates.flatMap((candidate) => candidate.preferredModels),
-      webGroundingUsed,
-      webSourceCount,
-      webGroundingDegradedReason: webGrounding.degradedReason,
-      ...buildWebGroundingMetadata(webGrounding),
-    });
-  }
+      const attachmentInsightBlocks = buildAttachmentInsightBlocks(
+        input.attachmentContext,
+      );
+      const webGroundingBlocks = buildWebGroundingBlocks(webGrounding);
 
-  const text = extractResponseText(successfulProvider, payload);
+      // document_generate workload: model JSON blok üretiyor, text'ten parse et
+      const extractedTypedBlocks: unknown[] = [];
+      let finalText = text;
+      if (workload === "document_generate") {
+        const extracted = extractTypedJsonBlocksFromText(text);
+        if (extracted.blocks.length > 0) {
+          extractedTypedBlocks.push(...extracted.blocks);
+          finalText = extracted.visibleText;
+        }
+      }
 
-  const completionTokens = estimateTokens(text);
-  const totalTokens = promptTokens + completionTokens;
-  const responseBytes = estimateResponseBytes(text);
-  const billableTokenUsage = calculateBillablePlanTokens({
-    surface: meteringSurface,
-    workload,
-    userInputTokens,
-    promptTokens,
-    completionTokens,
-  });
-  const billableAiCredits = billableTokenUsage.billableTokens;
-  const latencyMs = Date.now() - startedAt;
-
-  if (!input.internalEvaluation?.skipInvocationLogging) {
-    await app.db.transaction(async (tx) => {
-      const invocationRows = await tx.insert(aiProviderInvocations).values({
-        userId: input.userId,
-        taskId: input.taskId ?? null,
-        provider: telemetryProviderForSharedBrain(successfulProvider),
+      const assistantMetadataBlocks = [
+        ...webGroundingBlocks,
+        ...attachmentInsightBlocks,
+        ...extractedTypedBlocks,
+      ];
+      const result: SharedBrainInferenceResult = {
+        text: finalText,
+        provider: successfulProvider,
         model: successfulModel,
-        workload,
-        route: input.route ?? "shared_brain",
-        status: successfulProvider === primaryCandidate?.provider && !fallbackUsed ? "success" : "fallback",
+        latencyMs,
         promptTokens,
         completionTokens,
         totalTokens,
-        latencyMs,
-        fallbackFromProvider: null,
-        fallbackFromModel: fallbackUsed ? baseModel : null,
         metadata: {
           route: input.route ?? "shared_brain",
           workload,
           provider: successfulProvider,
           model: successfulModel,
-          billableAiCredits,
           billableTokens: billableAiCredits,
+          billableAiCredits,
           tokenMetering: billableTokenUsage,
           tokenBudget: inferenceBudget,
           responseBudgetState: inferenceBudget.budgetState,
           responseBudgetReason: inferenceBudget.budgetReason,
-          runtimeProvider: runtime.provider,
           modelSource: modelResolution.resolvedBaseModelSource,
-          streamed: Boolean((payload as Record<string, unknown> | null)?.streamed),
+          streamed: Boolean(
+            (payload as Record<string, unknown> | null)?.streamed,
+          ),
           firstDeltaMs,
           completionLatencyMs: latencyMs,
           responseBytes,
@@ -3774,6 +4594,11 @@ export async function generateSharedBrainReply(
           ...buildContextPacketMetadata(input.understandingContext),
           fallbackUsed,
           fallbackState,
+          fallbackFromProvider:
+            successfulProvider === primaryCandidate?.provider && !fallbackUsed
+              ? null
+              : (primaryCandidate?.provider ?? runtime.provider),
+          fallbackFromModel: fallbackUsed ? baseModel : null,
           brainMode,
           selfCheck,
           usedMemory: selfCheck.usedMemory,
@@ -3788,8 +4613,10 @@ export async function generateSharedBrainReply(
           retrievalResultCount: retrievalTelemetry.retrievalResultCount,
           brainCorpusDomains,
           retrievalCandidateCount: retrievalTelemetry.candidateCount,
-          retrievalLexicalCandidateCount: retrievalTelemetry.lexicalCandidateCount,
-          retrievalSemanticCandidateCount: retrievalTelemetry.semanticCandidateCount,
+          retrievalLexicalCandidateCount:
+            retrievalTelemetry.lexicalCandidateCount,
+          retrievalSemanticCandidateCount:
+            retrievalTelemetry.semanticCandidateCount,
           rerankUsed: retrievalTelemetry.rerankUsed,
           rerankDegradedReason: retrievalTelemetry.rerankDegradedReason,
           groundingUsed,
@@ -3800,196 +4627,33 @@ export async function generateSharedBrainReply(
           ...buildWebGroundingMetadata(webGrounding),
           constitutionVersion: ELYAN_CONSTITUTION_VERSION,
           promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
-          routeDecision: input.routeDecision ?? null,
           skillExecution: input.skillExecutionMetadata ?? null,
-          answerSource: "model",
-          fallbackFromProvider:
-            successfulProvider === primaryCandidate?.provider && !fallbackUsed
-              ? null
-              : primaryCandidate?.provider ?? runtime.provider,
-          fallbackFromModel: fallbackUsed ? baseModel : null,
           ...dataQualityMetadata,
           memoryEnabled,
-          memoryRelevanceSummary: input.understandingContext?.memoryRelevanceSummary ?? [],
-          continuitySummary: input.understandingContext?.continuitySummary ?? null,
-          clarificationDiagnostics: input.understandingContext?.clarificationDiagnostics ?? null,
+          memoryRelevanceSummary:
+            input.understandingContext?.memoryRelevanceSummary ?? [],
+          continuitySummary:
+            input.understandingContext?.continuitySummary ?? null,
+          clarificationDiagnostics:
+            input.understandingContext?.clarificationDiagnostics ?? null,
+          ...buildAttachmentContextMetadata(input.attachmentContext),
+          ...(assistantMetadataBlocks.length > 0
+            ? { blocks: assistantMetadataBlocks }
+            : {}),
         },
-      }).returning({
-        id: aiProviderInvocations.id,
-      });
+      };
 
-      const canRecordMeteredUsage =
-        !("serverBrainAllowed" in usageAccess) || usageAccess.serverBrainAllowed;
-      if (input.taskId && canRecordMeteredUsage) {
-        const usageIdentity = await resolveUsageIdentityContext(tx, {
-          userId: input.userId,
-        });
-        await recordUsageLedgerEntry(tx, {
-          userId: input.userId,
-          identityId: usageIdentity.identityId,
-          taskId: input.taskId,
-          metric: BILLING_USAGE_METRICS.subscriptionAiCredit,
-          quantity: billableAiCredits,
-          budgetUnits: billableAiCredits,
-          qualityProfile: usageIdentity.qualityProfile,
-          planSnapshot: {
-            planCode: usageIdentity.planCode,
-            qualityProfile: usageIdentity.qualityProfile,
-            route: input.route ?? "shared_brain",
-            workload,
-            usageSurface: meteringSurface,
-          },
-        });
-
-        if (invocationRows[0]?.id && usageAccess.mode !== "trial") {
-          await recordCreditLedgerEntry(tx, {
-            userId: input.userId,
-            taskId: input.taskId,
-            aiProviderInvocationId: invocationRows[0].id,
-            reason: "ai_inference",
-            deltaCredits: -billableAiCredits,
-            metadata: {
-              provider: successfulProvider,
-              model: successfulModel,
-              route: input.route ?? "shared_brain",
-              promptTokens,
-              completionTokens,
-              totalTokens,
-              billableAiCredits,
-              billableTokens: billableAiCredits,
-              tokenMetering: billableTokenUsage,
-              tokenBudget: inferenceBudget,
-            },
+      if (responseCacheKey && cacheable) {
+        const ttlMs = RESPONSE_CACHE_TTL_MS_BY_WORKLOAD[workload];
+        if (ttlMs && ttlMs > 0) {
+          responseCache.set(responseCacheKey, {
+            result,
+            expiresAt: Date.now() + ttlMs,
           });
         }
       }
-    });
-  }
 
-  /* ── Quota low-balance warning — fire-and-forget SSE ────────────────────
-   * After usage is committed we know the post-inference remaining credits.
-   * If the user has < 20% of their monthly grant left, emit quota.warning
-   * so the mobile app can show a soft banner without blocking the response.
-   */
-  if (
-    usageBudget.remainingAiCredits != null &&
-    usageBudget.grantedAiCredits != null &&
-    usageBudget.grantedAiCredits > 0
-  ) {
-    const remainingAfter = Math.max(0, usageBudget.remainingAiCredits - billableAiCredits);
-    const fractionLeft = remainingAfter / usageBudget.grantedAiCredits;
-    if (fractionLeft < 0.20) {
-      void app.services.eventBus.publishVolatile({
-        topic: "quota.warning",
-        userId: input.userId,
-        taskId: input.taskId ?? undefined,
-        payload: {
-          remainingCredits: remainingAfter,
-          grantedCredits: usageBudget.grantedAiCredits,
-          fractionLeft: Math.round(fractionLeft * 100) / 100,
-          periodEndsAt: usageBudget.periodEndsAt ?? null,
-          warningLevel: fractionLeft < 0.05 ? "critical" : "low",
-        },
-      }).catch(() => undefined);
-    }
-  }
-
-  const attachmentInsightBlocks = buildAttachmentInsightBlocks(input.attachmentContext);
-  const webGroundingBlocks = buildWebGroundingBlocks(webGrounding);
-
-  // document_generate workload: model JSON blok üretiyor, text'ten parse et
-  const extractedTypedBlocks: unknown[] = [];
-  let finalText = text;
-  if (workload === "document_generate") {
-    const extracted = extractTypedJsonBlocksFromText(text);
-    if (extracted.blocks.length > 0) {
-      extractedTypedBlocks.push(...extracted.blocks);
-      finalText = extracted.visibleText;
-    }
-  }
-
-  const assistantMetadataBlocks = [...webGroundingBlocks, ...attachmentInsightBlocks, ...extractedTypedBlocks];
-  const result: SharedBrainInferenceResult = {
-    text: finalText,
-    provider: successfulProvider,
-    model: successfulModel,
-    latencyMs,
-    promptTokens,
-    completionTokens,
-    totalTokens,
-    metadata: {
-      route: input.route ?? "shared_brain",
-      workload,
-      provider: successfulProvider,
-      model: successfulModel,
-      billableTokens: billableAiCredits,
-      billableAiCredits,
-      tokenMetering: billableTokenUsage,
-      tokenBudget: inferenceBudget,
-      responseBudgetState: inferenceBudget.budgetState,
-      responseBudgetReason: inferenceBudget.budgetReason,
-      modelSource: modelResolution.resolvedBaseModelSource,
-      streamed: Boolean((payload as Record<string, unknown> | null)?.streamed),
-      firstDeltaMs,
-      completionLatencyMs: latencyMs,
-      responseBytes,
-      cached: false,
-      ...buildContextPacketMetadata(input.understandingContext),
-      fallbackUsed,
-      fallbackState,
-      fallbackFromProvider:
-        successfulProvider === primaryCandidate?.provider && !fallbackUsed
-          ? null
-          : primaryCandidate?.provider ?? runtime.provider,
-      fallbackFromModel: fallbackUsed ? baseModel : null,
-      brainMode,
-      selfCheck,
-      usedMemory: selfCheck.usedMemory,
-      memoryConfidence: selfCheck.memoryConfidence,
-      memoryConflictRisk: selfCheck.memoryConflictRisk,
-      needsClarification: selfCheck.needsClarification,
-      retrievalSufficiency: selfCheck.retrievalSufficiency,
-      selfCheckOutcome: selfCheck.selfCheckOutcome,
-      memoryResultCount: memory.results.length,
-      memoryRetrievalMode: memory.retrievalMode,
-      retrievalMode: retrievalTelemetry.retrievalMode,
-      retrievalResultCount: retrievalTelemetry.retrievalResultCount,
-      brainCorpusDomains,
-      retrievalCandidateCount: retrievalTelemetry.candidateCount,
-      retrievalLexicalCandidateCount: retrievalTelemetry.lexicalCandidateCount,
-      retrievalSemanticCandidateCount: retrievalTelemetry.semanticCandidateCount,
-      rerankUsed: retrievalTelemetry.rerankUsed,
-      rerankDegradedReason: retrievalTelemetry.rerankDegradedReason,
-      groundingUsed,
-      documentSourceCount,
-      webGroundingUsed,
-      webSourceCount,
-      webGroundingDegradedReason: webGrounding.degradedReason,
-      ...buildWebGroundingMetadata(webGrounding),
-      constitutionVersion: ELYAN_CONSTITUTION_VERSION,
-      promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
-      skillExecution: input.skillExecutionMetadata ?? null,
-      ...dataQualityMetadata,
-      memoryEnabled,
-      memoryRelevanceSummary: input.understandingContext?.memoryRelevanceSummary ?? [],
-      continuitySummary: input.understandingContext?.continuitySummary ?? null,
-      clarificationDiagnostics: input.understandingContext?.clarificationDiagnostics ?? null,
-      ...buildAttachmentContextMetadata(input.attachmentContext),
-      ...(assistantMetadataBlocks.length > 0 ? { blocks: assistantMetadataBlocks } : {}),
-    },
-  };
-
-  if (responseCacheKey && cacheable) {
-    const ttlMs = RESPONSE_CACHE_TTL_MS_BY_WORKLOAD[workload];
-    if (ttlMs && ttlMs > 0) {
-      responseCache.set(responseCacheKey, {
-        result,
-        expiresAt: Date.now() + ttlMs,
-      });
-    }
-  }
-
-  return result;
+      return result;
     },
   );
 }
@@ -4016,12 +4680,14 @@ async function classifySkillRouteWithModel(
           })),
         ),
         `User prompt: ${input.prompt}`,
-        `Attachment documents: ${JSON.stringify(input.attachmentContext.documents.map((document) => ({
-          documentId: document.documentId,
-          title: document.title,
-          mimeType: document.mimeType,
-          summary: document.summary,
-        })))}`,
+        `Attachment documents: ${JSON.stringify(
+          input.attachmentContext.documents.map((document) => ({
+            documentId: document.documentId,
+            title: document.title,
+            mimeType: document.mimeType,
+            summary: document.summary,
+          })),
+        )}`,
         'Schema: {"needsSkill":boolean,"skillId":string|null,"confidence":number,"reason":string}',
       ].join("\n\n"),
       route: "shared_brain",
@@ -4050,7 +4716,8 @@ async function classifySkillRouteWithModel(
       needsSkill: parsed.needsSkill === true,
       skillId,
       confidence:
-        typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        typeof parsed.confidence === "number" &&
+        Number.isFinite(parsed.confidence)
           ? Math.max(0, Math.min(1, parsed.confidence))
           : 0,
       reason:
@@ -4146,7 +4813,8 @@ async function tryGenerateSkillReply(
             : modelInput.metadata,
         internalEvaluation: {
           skipUsageValidation: input.internalEvaluation?.skipUsageValidation,
-          skipInvocationLogging: input.internalEvaluation?.skipInvocationLogging,
+          skipInvocationLogging:
+            input.internalEvaluation?.skipInvocationLogging,
           skipReviewLogging: true,
         },
       }),
@@ -4167,13 +4835,17 @@ async function tryGenerateSkillReply(
     retrievalSufficiency: "strong",
   });
   const displayText =
-    sanitizeAssistantVisibleText(evaluation.correctedAnswer ?? skillResult.text) ||
+    sanitizeAssistantVisibleText(
+      evaluation.correctedAnswer ?? skillResult.text,
+    ) ||
     sanitizeAssistantVisibleText(skillResult.text, {
-      fallback: "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
+      fallback:
+        "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
     });
   const displayCompletionTokens = estimateTokens(displayText);
   const responseBytes = estimateResponseBytes(displayText);
-  const attachmentInsightBlocks = buildAttachmentInsightBlocks(attachmentContext);
+  const attachmentInsightBlocks =
+    buildAttachmentInsightBlocks(attachmentContext);
 
   if (!input.internalEvaluation?.skipReviewLogging) {
     await recordBrainInteractionReview(app, {
@@ -4210,7 +4882,9 @@ async function tryGenerateSkillReply(
       constitutionVersion: ELYAN_CONSTITUTION_VERSION,
       promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
       ...buildAttachmentContextMetadata(attachmentContext),
-      ...(attachmentInsightBlocks.length > 0 ? { blocks: attachmentInsightBlocks } : {}),
+      ...(attachmentInsightBlocks.length > 0
+        ? { blocks: attachmentInsightBlocks }
+        : {}),
       completionLatencyMs: skillResult.latencyMs,
       responseBytes,
       skillExecution: {
@@ -4244,14 +4918,23 @@ async function tryGenerateSkillReply(
         retrievalCount: 0,
         webSourceCount: 0,
         prompt: input.prompt,
-        memoryEnabled: input.understandingContext?.memoryEnabled ?? detectMemoryEnabled(input.requestMetadata, input.understandingContext),
-        clarificationDecision: input.understandingContext?.clarificationDiagnostics?.shouldClarify ? "asked" : "not_needed",
+        memoryEnabled:
+          input.understandingContext?.memoryEnabled ??
+          detectMemoryEnabled(
+            input.requestMetadata,
+            input.understandingContext,
+          ),
+        clarificationDecision: input.understandingContext
+          ?.clarificationDiagnostics?.shouldClarify
+          ? "asked"
+          : "not_needed",
       }),
     },
     answerSource: "model",
     gateRuleIds: [],
     boundaryOutcome: null,
-    failureType: evaluation.failureTypes.find((item) => item !== "none") ?? null,
+    failureType:
+      evaluation.failureTypes.find((item) => item !== "none") ?? null,
     evaluation,
   };
 }
@@ -4267,7 +4950,9 @@ export async function generateGovernedSharedBrainReply(
     resolveElyanIdentityGate(input.prompt) ??
     (routeDecision ? resolveBoundaryGate(routeDecision, input.prompt) : null);
   const routeToolUseRequired = Boolean(
-    routeDecision && (routeDecision.mode !== "chat" || routeDecision.privacyClass === "local_private"),
+    routeDecision &&
+    (routeDecision.mode !== "chat" ||
+      routeDecision.privacyClass === "local_private"),
   );
 
   if (gate) {
@@ -4291,7 +4976,8 @@ export async function generateGovernedSharedBrainReply(
         answerSource: "backend_gate",
         gateRuleIds: gate.gateRuleIds,
         boundaryOutcome: gate.boundaryOutcome,
-        selectedProfile: input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
+        selectedProfile:
+          input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
         latencyMs: 0,
         toolCalls: [],
       });
@@ -4307,7 +4993,8 @@ export async function generateGovernedSharedBrainReply(
       totalTokens: estimateTokens(input.prompt) + estimateTokens(gate.text),
       metadata: {
         route: routeDecision?.route ?? input.route ?? "shared_brain",
-        workload: input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
+        workload:
+          input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
         answerSource: "backend_gate",
         gateRuleIds: gate.gateRuleIds,
         boundaryOutcome: gate.boundaryOutcome,
@@ -4352,7 +5039,8 @@ export async function generateGovernedSharedBrainReply(
         answerSource: "backend_gate",
         gateRuleIds: ["attachment_context_clarification"],
         boundaryOutcome: "attachment_context_clarification",
-        selectedProfile: input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
+        selectedProfile:
+          input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
         latencyMs: 0,
         toolCalls: [],
       });
@@ -4368,7 +5056,8 @@ export async function generateGovernedSharedBrainReply(
       totalTokens: estimateTokens(input.prompt) + estimateTokens(text),
       metadata: {
         route: routeDecision?.route ?? input.route ?? "shared_brain",
-        workload: input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
+        workload:
+          input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
         answerSource: "backend_gate",
         gateRuleIds: ["attachment_context_clarification"],
         boundaryOutcome: "attachment_context_clarification",
@@ -4412,7 +5101,8 @@ export async function generateGovernedSharedBrainReply(
         answerSource: "backend_gate",
         gateRuleIds: ["mobile_local_export_shortcut"],
         boundaryOutcome: "mobile_local_export_shortcut",
-        selectedProfile: input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
+        selectedProfile:
+          input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
         latencyMs: 0,
         toolCalls: [],
       });
@@ -4425,10 +5115,12 @@ export async function generateGovernedSharedBrainReply(
       latencyMs: 0,
       promptTokens: estimateTokens(input.prompt),
       completionTokens: estimateTokens(mobileLocalExportReply),
-      totalTokens: estimateTokens(input.prompt) + estimateTokens(mobileLocalExportReply),
+      totalTokens:
+        estimateTokens(input.prompt) + estimateTokens(mobileLocalExportReply),
       metadata: {
         route: routeDecision?.route ?? input.route ?? "shared_brain",
-        workload: input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
+        workload:
+          input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD,
         answerSource: "backend_gate",
         gateRuleIds: ["mobile_local_export_shortcut"],
         boundaryOutcome: "mobile_local_export_shortcut",
@@ -4448,7 +5140,12 @@ export async function generateGovernedSharedBrainReply(
     };
   }
 
-  const skillReply = await tryGenerateSkillReply(app, input, routeDecision, attachmentContext);
+  const skillReply = await tryGenerateSkillReply(
+    app,
+    input,
+    routeDecision,
+    attachmentContext,
+  );
   if (skillReply) {
     return skillReply;
   }
@@ -4515,7 +5212,9 @@ export async function generateGovernedSharedBrainReply(
     app,
     input,
     inference.text,
-    (input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD) as SharedBrainWorkload,
+    (input.workload ??
+      routeDecision?.selectedWorkload ??
+      DEFAULT_WORKLOAD) as SharedBrainWorkload,
     visibleTextSanitizerOptions,
   );
   const visibleAnswer =
@@ -4529,7 +5228,8 @@ export async function generateGovernedSharedBrainReply(
     polishAssistantVisibleText(
       sanitizeAssistantVisibleText(inference.text, {
         ...visibleTextSanitizerOptions,
-        fallback: "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
+        fallback:
+          "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
       }),
       visibleTextSanitizerOptions,
     );
@@ -4545,7 +5245,7 @@ export async function generateGovernedSharedBrainReply(
       Number(inference.metadata.memoryResultCount ?? 0) > 0 ||
       inference.metadata.webGroundingUsed === true ||
       Number(inference.metadata.webSourceCount ?? 0) > 0,
-      retrievalSufficiency:
+    retrievalSufficiency:
       typeof inference.metadata.retrievalSufficiency === "string"
         ? inference.metadata.retrievalSufficiency
         : null,
@@ -4561,9 +5261,14 @@ export async function generateGovernedSharedBrainReply(
         : "not_needed",
     continuitySignals: input.understandingContext
       ? {
-          hasUserGoal: Boolean(input.understandingContext.continuitySummary?.userGoal),
-          hasAssistantState: Boolean(input.understandingContext.continuitySummary?.assistantState),
-          openLoopCount: input.understandingContext.continuitySummary?.openLoops.length ?? 0,
+          hasUserGoal: Boolean(
+            input.understandingContext.continuitySummary?.userGoal,
+          ),
+          hasAssistantState: Boolean(
+            input.understandingContext.continuitySummary?.assistantState,
+          ),
+          openLoopCount:
+            input.understandingContext.continuitySummary?.openLoops.length ?? 0,
         }
       : null,
   });
@@ -4575,7 +5280,9 @@ export async function generateGovernedSharedBrainReply(
 
   if (
     shouldRunDeepRefinement({
-      workload: (input.workload ?? routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD) as SharedBrainWorkload,
+      workload: (input.workload ??
+        routeDecision?.selectedWorkload ??
+        DEFAULT_WORKLOAD) as SharedBrainWorkload,
       prompt: input.prompt,
       evaluation,
       context: input.understandingContext,
@@ -4597,8 +5304,14 @@ export async function generateGovernedSharedBrainReply(
       ...input,
       prompt: refinementPrompt,
       workload: "mobile_chat_deep_refine",
-      maxCompletionTokensOverride: Math.max(320, inference.completionTokens + 120),
-      timeoutMsOverride: Math.max(7_500, Math.min(9_500, getChatTimeoutMs("mobile_chat_deep_refine"))),
+      maxCompletionTokensOverride: Math.max(
+        320,
+        inference.completionTokens + 120,
+      ),
+      timeoutMsOverride: Math.max(
+        7_500,
+        Math.min(9_500, getChatTimeoutMs("mobile_chat_deep_refine")),
+      ),
       internalEvaluation: {
         ...input.internalEvaluation,
         refinementPass: true,
@@ -4621,7 +5334,8 @@ export async function generateGovernedSharedBrainReply(
       boundaryOutcome: null,
       toolUseRequired: routeToolUseRequired,
       retrievalUsed:
-        String(refinedInference.metadata.retrievalMode ?? "") !== "lexical_fallback" ||
+        String(refinedInference.metadata.retrievalMode ?? "") !==
+          "lexical_fallback" ||
         Number(refinedInference.metadata.memoryResultCount ?? 0) > 0 ||
         refinedInference.metadata.webGroundingUsed === true ||
         Number(refinedInference.metadata.webSourceCount ?? 0) > 0,
@@ -4636,14 +5350,21 @@ export async function generateGovernedSharedBrainReply(
       memoryUsed: refinedInference.metadata.memoryUsed === true,
       clarificationDecision:
         refinedInference.metadata.clarificationDecision === "asked" ||
-        refinedInference.metadata.clarificationDecision === "assumed_and_proceeded"
+        refinedInference.metadata.clarificationDecision ===
+          "assumed_and_proceeded"
           ? refinedInference.metadata.clarificationDecision
           : "not_needed",
       continuitySignals: input.understandingContext
         ? {
-            hasUserGoal: Boolean(input.understandingContext.continuitySummary?.userGoal),
-            hasAssistantState: Boolean(input.understandingContext.continuitySummary?.assistantState),
-            openLoopCount: input.understandingContext.continuitySummary?.openLoops.length ?? 0,
+            hasUserGoal: Boolean(
+              input.understandingContext.continuitySummary?.userGoal,
+            ),
+            hasAssistantState: Boolean(
+              input.understandingContext.continuitySummary?.assistantState,
+            ),
+            openLoopCount:
+              input.understandingContext.continuitySummary?.openLoops.length ??
+              0,
           }
         : null,
     });
@@ -4667,17 +5388,29 @@ export async function generateGovernedSharedBrainReply(
         );
   const displayText =
     polishAssistantVisibleText(
-      sanitizeAssistantVisibleText(activeEvaluation.correctedAnswer ?? postRefineFinalized.text ?? activeVisibleAnswer, visibleTextSanitizerOptions) ||
-      sanitizeAssistantVisibleText(postRefineFinalized.text ?? activeVisibleAnswer, {
-        ...visibleTextSanitizerOptions,
-        fallback: postRefineFinalized.text ?? activeVisibleAnswer,
-      }),
+      sanitizeAssistantVisibleText(
+        activeEvaluation.correctedAnswer ??
+          postRefineFinalized.text ??
+          activeVisibleAnswer,
+        visibleTextSanitizerOptions,
+      ) ||
+        sanitizeAssistantVisibleText(
+          postRefineFinalized.text ?? activeVisibleAnswer,
+          {
+            ...visibleTextSanitizerOptions,
+            fallback: postRefineFinalized.text ?? activeVisibleAnswer,
+          },
+        ),
       visibleTextSanitizerOptions,
     ) ||
-    sanitizeAssistantVisibleText(postRefineFinalized.text ?? activeVisibleAnswer, {
-      ...visibleTextSanitizerOptions,
-      fallback: "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
-    });
+    sanitizeAssistantVisibleText(
+      postRefineFinalized.text ?? activeVisibleAnswer,
+      {
+        ...visibleTextSanitizerOptions,
+        fallback:
+          "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
+      },
+    );
   const displayCompletionTokens = estimateTokens(displayText);
 
   if (!input.internalEvaluation?.skipReviewLogging) {
@@ -4691,7 +5424,9 @@ export async function generateGovernedSharedBrainReply(
       answerSource: "model",
       gateRuleIds: [],
       boundaryOutcome: null,
-      selectedProfile: String(activeInference.metadata.workload ?? input.workload ?? DEFAULT_WORKLOAD),
+      selectedProfile: String(
+        activeInference.metadata.workload ?? input.workload ?? DEFAULT_WORKLOAD,
+      ),
       latencyMs: activeInference.latencyMs,
       toolCalls: [],
       responseMetadata: {
@@ -4726,7 +5461,8 @@ export async function generateGovernedSharedBrainReply(
     answerSource: "model",
     gateRuleIds: [],
     boundaryOutcome: null,
-    failureType: activeEvaluation.failureTypes.find((item) => item !== "none") ?? null,
+    failureType:
+      activeEvaluation.failureTypes.find((item) => item !== "none") ?? null,
     evaluation: activeEvaluation,
   };
 }

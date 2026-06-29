@@ -36,6 +36,7 @@ import { trainPanelRoutes } from "../modules/admin/train-panel.js";
 import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
 import { startTaskLeaseSweeper } from "../modules/tasks/lease-sweeper.js";
 import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
+import { startInProcessMemoryWorker } from "../modules/brain/worker.js";
 import { nlpDaemon } from "../lib/nlp-daemon.js";
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -315,6 +316,9 @@ export async function buildApp(envInput?: AppEnv) {
   await ensureTaskDispatchWorker(app);
   const stopTaskLeaseSweeper = startTaskLeaseSweeper(app);
   const stopRealtimePruner = startRealtimeEventRetentionPruner(app);
+  // Drains memory-extraction jobs in-process (the node training-worker is
+  // disabled in prod and the python ml-worker doesn't run TS memory jobs).
+  const stopMemoryWorker = startInProcessMemoryWorker(app);
 
   app.decorate("authenticateUser", async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -371,6 +375,7 @@ export async function buildApp(envInput?: AppEnv) {
   app.addHook("onClose", async () => {
     stopTaskLeaseSweeper();
     stopRealtimePruner();
+    stopMemoryWorker();
     nlpDaemon.stop();
     await eventBus.close();
     await reliability.store.close();

@@ -5,6 +5,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { knowledgeChunks, knowledgeDocuments } from "../../db/schema.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
+import { nlpDaemon } from "../../lib/nlp-daemon.js";
 
 export const ELYAN_BRAIN_CORPUS_VERSION = "2026-06-v1";
 
@@ -168,6 +169,135 @@ export function detectBrainCorpusDomains(prompt: string): BrainCorpusDomain[] {
   }
 
   return domains;
+}
+
+// ── Deterministic corpus guidance injection (RAM-cached, C-BM25 ranked) ──────
+//
+// The corpus is also seeded into the knowledge DB for RAG, but prod retrieval is
+// lexical-fallback (no embeddings), so design/skill guidance was not reliably
+// surfacing for "rapor/tablo/pdf yap" prompts. Here we inject it deterministically:
+//   * corpus markdown is read from disk ONCE and cached in-process (a few KB total,
+//     no per-request I/O, no DB query — saves server storage + RAM churn),
+//   * for the detected domain we pick the single most relevant `##` section using
+//     the C NLP daemon's BM25 (fast, native), falling back to a tiny lexical scorer,
+//   * only that capped section is injected, keeping the prompt token-cheap.
+
+const corpusSectionCache = new Map<BrainCorpusDomain, string[]>();
+const GUIDANCE_DOMAIN_LIMIT = 2;
+const GUIDANCE_SECTION_CHARS = 620;
+
+async function loadCorpusSectionsCached(
+  domain: BrainCorpusDomain,
+): Promise<string[]> {
+  const cached = corpusSectionCache.get(domain);
+  if (cached) {
+    return cached;
+  }
+  const source = CORPUS_SOURCES.find((entry) => entry.domain === domain);
+  if (!source) {
+    corpusSectionCache.set(domain, []);
+    return [];
+  }
+  try {
+    const content = await readCorpusFile(source.fileName);
+    const sections = content
+      .split(/\n(?=##\s+)/g)
+      .map((section) => section.trim())
+      .filter(Boolean);
+    corpusSectionCache.set(domain, sections);
+    return sections;
+  } catch {
+    corpusSectionCache.set(domain, []);
+    return [];
+  }
+}
+
+function lexicalBestSectionIndex(prompt: string, sections: string[]): number {
+  const terms = new Set(
+    compactText(prompt)
+      .toLowerCase()
+      .split(" ")
+      .filter((term) => term.length > 2),
+  );
+  let bestIndex = 0;
+  let bestScore = -1;
+  sections.forEach((section, index) => {
+    const text = section.toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      if (text.includes(term)) {
+        score += 1;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
+async function pickBestCorpusSection(
+  prompt: string,
+  sections: string[],
+): Promise<string | null> {
+  if (sections.length === 0) {
+    return null;
+  }
+  if (sections.length === 1) {
+    return sections[0];
+  }
+  try {
+    const scores = await nlpDaemon.bm25Batch(
+      prompt,
+      sections.map((section) => compactText(section)),
+    );
+    if (scores && scores.length === sections.length) {
+      let bestIndex = 0;
+      for (let index = 1; index < scores.length; index += 1) {
+        if (scores[index] > scores[bestIndex]) {
+          bestIndex = index;
+        }
+      }
+      return sections[bestIndex];
+    }
+  } catch {
+    // daemon unavailable — fall through to lexical
+  }
+  return sections[lexicalBestSectionIndex(prompt, sections)];
+}
+
+/**
+ * Builds a compact, token-disciplined guidance block from the brain corpus for
+ * the detected domains. Used to make Elyan actually apply its design / skill /
+ * data language when producing tables, PDFs, reports, and visual output.
+ */
+export async function buildBrainCorpusGuidanceBlock(
+  prompt: string,
+  domains: BrainCorpusDomain[],
+): Promise<string | null> {
+  if (domains.length === 0) {
+    return null;
+  }
+  const orderedDomains = CORPUS_SOURCES.filter((entry) =>
+    domains.includes(entry.domain),
+  )
+    .sort((left, right) => right.priority - left.priority)
+    .map((entry) => entry.domain)
+    .slice(0, GUIDANCE_DOMAIN_LIMIT);
+
+  const picked: string[] = [];
+  for (const domain of orderedDomains) {
+    const sections = await loadCorpusSectionsCached(domain);
+    const best = await pickBestCorpusSection(prompt, sections);
+    if (best) {
+      picked.push(best.slice(0, GUIDANCE_SECTION_CHARS).trim());
+    }
+  }
+  if (picked.length === 0) {
+    return null;
+  }
+  return `Elyan brain corpus guidance (apply the relevant points, do not quote this verbatim):\n\n${picked.join("\n\n")}`;
 }
 
 export function buildBrainCorpusRetrievalQuery(prompt: string): string {

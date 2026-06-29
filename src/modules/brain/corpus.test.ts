@@ -1,12 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildBrainCorpusGuidanceBlock,
   buildBrainCorpusRetrievalQuery,
   detectBrainCorpusDomains,
   ELYAN_BRAIN_CORPUS_VERSION,
   getBrainCorpusManifest,
 } from "./corpus.js";
 import { shapePublicBrainProfile } from "./service.js";
+
+test("brain corpus guidance is injected for design/data prompts", async () => {
+  const domains = detectBrainCorpusDomains("Profesyonel bir PDF raporu tasarla, tablo da olsun");
+  const block = await buildBrainCorpusGuidanceBlock(
+    "Profesyonel bir PDF raporu tasarla, tablo da olsun",
+    domains,
+  );
+  assert.ok(block, "guidance block should not be null for a design/data request");
+  assert.match(block!, /corpus guidance/i);
+  // At most GUIDANCE_DOMAIN_LIMIT (2) sections, each capped — keep it token-cheap.
+  assert.ok(block!.length < 1600, "guidance block should stay compact");
+});
+
+test("brain corpus guidance is empty when no domain matches", async () => {
+  const block = await buildBrainCorpusGuidanceBlock("naber nasilsin", []);
+  assert.equal(block, null);
+});
 
 test("brain corpus manifest is versioned and hash-backed", async () => {
   const manifest = await getBrainCorpusManifest();
