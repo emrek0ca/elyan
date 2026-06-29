@@ -19,6 +19,7 @@ export type BillingPlan = {
   desktopLimit: number;
   taskLimitMonthly: number;
   aiCreditsMonthly: number;
+  fiveHourBudgetUnits: number;
   dailyBudgetUnits: number;
   weeklyBudgetUnits: number;
   documentUploadLimit: number;
@@ -61,6 +62,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     desktopLimit: 0,
     taskLimitMonthly: 50,
     aiCreditsMonthly: 120,
+    fiveHourBudgetUnits: 4,
     dailyBudgetUnits: 4,
     weeklyBudgetUnits: 72,
     documentUploadLimit: 4,
@@ -79,7 +81,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     providerProducts: {},
     features: [
       "No desktop connection",
-      "120 tokens included",
+      "5-hour and weekly usage windows",
       "Best for trying Elyan mobile chat",
     ],
   },
@@ -92,6 +94,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     desktopLimit: 0,
     taskLimitMonthly: 200,
     aiCreditsMonthly: 600,
+    fiveHourBudgetUnits: 18,
     dailyBudgetUnits: 18,
     weeklyBudgetUnits: 288,
     documentUploadLimit: 14,
@@ -120,7 +123,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     },
     features: [
       "No desktop connection",
-      "600 tokens included",
+      "Expanded 5-hour and weekly usage",
       "Best for light daily use",
     ],
   },
@@ -133,6 +136,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     desktopLimit: 3,
     taskLimitMonthly: 2_000,
     aiCreditsMonthly: 2_000,
+    fiveHourBudgetUnits: 60,
     dailyBudgetUnits: 60,
     weeklyBudgetUnits: 960,
     documentUploadLimit: 48,
@@ -162,7 +166,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     },
     features: [
       "3 desktops",
-      "2,000 tokens included",
+      "Highest 5-hour and weekly usage",
       "Priority queue and richer history",
     ],
   },

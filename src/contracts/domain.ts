@@ -186,6 +186,8 @@ export const elyanAssistantBlockTypeValues = [
   "code",
   "table",
   "chart",
+  "math",
+  "svg",
   "file",
   "actionable",
   "block_group",
@@ -479,18 +481,57 @@ export const elyanAssistantTableBlockSchema =
   });
 const elyanAssistantChartSeriesSchema = z.object({
   name: z.string().min(1).max(120).optional(),
-  labels: z.array(z.string().min(1).max(120)).min(1).max(24),
-  values: z.array(z.number()).min(1).max(24),
+  labels: z.array(z.string().min(1).max(120)).min(1).max(240).optional(),
+  values: z.array(z.number()).min(1).max(240).optional(),
+  points: z.array(z.record(z.any())).min(1).max(1_500).optional(),
+  data: z.array(z.any()).min(1).max(1_500).optional(),
 });
 export const elyanAssistantChartBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
     type: z.literal("chart"),
     title: z.string().min(1).max(120).optional(),
-    chartType: z.enum(["bar", "line", "pie"]),
-    labels: z.array(z.string().min(1).max(120)).min(1).max(24).optional(),
-    values: z.array(z.number()).min(1).max(24).optional(),
+    chartType: z.enum([
+      "bar",
+      "line",
+      "pie",
+      "area",
+      "scatter",
+      "geometry",
+      "function",
+      "surface3d",
+      "mesh",
+      "heatmap",
+    ]),
+    labels: z.array(z.string().min(1).max(120)).min(1).max(240).optional(),
+    values: z.array(z.number()).min(1).max(240).optional(),
+    points: z.array(z.record(z.any())).min(1).max(1_500).optional(),
+    data: z.array(z.any()).min(1).max(1_500).optional(),
     series: z.array(elyanAssistantChartSeriesSchema).min(1).max(8).optional(),
+    expression: z.string().min(1).max(2_000).optional(),
+    variables: z.array(z.string().min(1).max(24)).max(12).optional(),
+    range: z.record(z.any()).optional(),
+    fixed: z.record(z.number()).optional(),
+    xLabel: z.string().min(1).max(120).optional(),
+    yLabel: z.string().min(1).max(120).optional(),
+    renderer: z.string().min(1).max(40).optional(),
     caption: z.string().min(1).max(240).optional(),
+  });
+export const elyanAssistantMathBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("math"),
+    content: z.string().min(1).max(8_000),
+    latex: z.string().min(1).max(8_000).optional(),
+    displayMode: z.boolean().optional(),
+    format: z.enum(["latex", "tex", "plain"]).optional(),
+  });
+export const elyanAssistantSvgBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("svg"),
+    title: z.string().min(1).max(120).optional(),
+    caption: z.string().min(1).max(240).optional(),
+    svg: z.string().min(1).max(80_000).optional(),
+    markup: z.string().min(1).max(80_000).optional(),
+    url: z.string().min(1).max(2_000).optional(),
   });
 export const elyanAssistantFileBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
@@ -583,6 +624,8 @@ export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantCodeBlockSchema,
   elyanAssistantTableBlockSchema,
   elyanAssistantChartBlockSchema,
+  elyanAssistantMathBlockSchema,
+  elyanAssistantSvgBlockSchema,
   elyanAssistantFileBlockSchema,
   elyanAssistantActionableBlockSchema,
   elyanAssistantBlockGroupBlockSchema,
@@ -677,6 +720,12 @@ export type ElyanAssistantTableBlock = z.infer<
 >;
 export type ElyanAssistantChartBlock = z.infer<
   typeof elyanAssistantChartBlockSchema
+>;
+export type ElyanAssistantMathBlock = z.infer<
+  typeof elyanAssistantMathBlockSchema
+>;
+export type ElyanAssistantSvgBlock = z.infer<
+  typeof elyanAssistantSvgBlockSchema
 >;
 export type ElyanAssistantFileBlock = z.infer<
   typeof elyanAssistantFileBlockSchema

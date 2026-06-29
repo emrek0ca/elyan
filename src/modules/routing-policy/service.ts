@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
+import { isExplicitTableRequest } from "../../core/understanding/structured-output-policy.js";
 import type { UnderstandingIntent } from "../../core/understanding/types.js";
 import { isMateriallyAmbiguousUserPrompt, selectHybridMobileChatWorkload } from "../brain/chat-heuristics.js";
 import { normalizePlanBrainProfile, type PlanBrainProfile } from "../billing/catalog.js";
@@ -721,6 +722,9 @@ function deriveSelectedWorkload(input: {
   }
   if (input.intent === "planning_request") {
     return "planning";
+  }
+  if (isExplicitTableRequest(input.message)) {
+    return "table_generate";
   }
   // Belge/rapor ÜRETME isteği → document_generate workload (model document_block
   // üretir). Bu olmadan mobildeki document_block / pdf kartları HİÇ veri almıyordu

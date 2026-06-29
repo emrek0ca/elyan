@@ -277,9 +277,11 @@ test("billing catalog keeps desktop connections pro-only", () => {
   assert.equal(free.monthlyPrice, 0);
   assert.equal(free.taskLimitMonthly, 50);
   assert.equal(free.aiCreditsMonthly, 120);
+  assert.equal(free.fiveHourBudgetUnits, 4);
   assert.equal(free.byokRequired, false);
   assert.equal(solo.desktopLimit, 0);
   assert.equal(solo.monthlyPrice, 6.99);
+  assert.equal(solo.fiveHourBudgetUnits, 18);
   assert.equal(
     solo.providerProducts.apple?.productId,
     "com.elyan.elyanMobile.solo.monthly",
@@ -290,6 +292,7 @@ test("billing catalog keeps desktop connections pro-only", () => {
   );
   assert.equal(pro.desktopLimit > 0, true);
   assert.equal(pro.monthlyPrice, 17.99);
+  assert.equal(pro.fiveHourBudgetUnits, 60);
   assert.equal(
     pro.providerProducts.apple?.productId,
     "com.elyan.elyanMobile.pro.monthly",

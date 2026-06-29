@@ -7,6 +7,7 @@ import {
   polishAssistantVisibleText,
   sanitizeAssistantVisibleText,
   shapeAssistantMessagePayload,
+  withAssistantBlocksMetadata,
 } from "./message-blocks.js";
 
 test("buildAssistantMessageBlocks keeps text-only answers in a single markdown block", () => {
@@ -20,6 +21,27 @@ test("buildAssistantMessageBlocks keeps text-only answers in a single markdown b
   assert.equal(blocks[0]?.visibility, "user_visible");
   assert.ok(blocks[0]?.stableBlockId);
   assert.ok(blocks[0]?.cacheDigest);
+});
+
+test("withAssistantBlocksMetadata marks assistant replies as block-first contract", () => {
+  const metadata = withAssistantBlocksMetadata(
+    { source: "test" },
+    { content: "Kısa ve temiz cevap." },
+  );
+
+  const blocks = metadata.blocks as Array<Record<string, unknown>>;
+  const contract = metadata.renderContract as Record<string, unknown>;
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "text");
+  assert.equal(blocks[0]?.markdown, "Kısa ve temiz cevap.");
+  assert.equal(contract.version, "elyan_blocks.v2");
+  assert.equal(contract.mode, "block_first");
+  assert.equal(contract.canonicalSurface, "blocks");
+  assert.equal(contract.legacyContent, "fallback_only");
+  assert.equal(contract.hasVisibleBlocks, true);
+  assert.deepEqual(contract.visibleBlockTypes, ["text"]);
+  assert.equal(contract.textIsBlockWrapped, true);
 });
 
 test("buildAssistantMessageBlocks preserves fenced code inside the same markdown block", () => {

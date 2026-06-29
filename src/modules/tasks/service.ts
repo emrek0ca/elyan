@@ -16,6 +16,12 @@ import {
   recordConversationExchangeLearning,
 } from "../../core/understanding/user-understanding-service.js";
 import type { FeedbackType } from "../../core/understanding/types.js";
+import {
+  isExplicitChartRequest,
+  isExplicitMathOrLatexRequest,
+  isExplicitSvgRequest,
+  shouldPromoteMarkdownTableToWidget,
+} from "../../core/understanding/structured-output-policy.js";
 import { createAuditLog } from "../audit/service.js";
 import {
   extractAttachmentMetadataCarrier,
@@ -44,11 +50,12 @@ import { persistRollingSummaryToSession, listChatSessionMessages } from "../chat
 import { getUserDevice, RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { decideCommandRoute, resolveCommandTarget, resolvePendingDesktopQueueTarget } from "../routing-policy/service.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
-import { assertMonthlyTaskUsageAllowed, recordUsageLedgerEntry, BILLING_USAGE_METRICS } from "../billing/usage-ledger.js";
+import { recordUsageLedgerEntry, BILLING_USAGE_METRICS } from "../billing/usage-ledger.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import { createUpgradeOrByokRequiredError, getUserUsageAccessTruth } from "../billing/service.js";
 import {
   assertAttachmentQuotaAllowedFromUsage,
+  assertTrialTaskQuotaAllowedFromUsage,
   getTrialQuotaUsage,
   resolveUsageIdentityContext,
 } from "../quota/service.js";
@@ -492,6 +499,11 @@ const STRUCTURED_BLOCK_TYPES = new Set<string>([
   "attachment_context",
   "context_signal",
   "memory_echo",
+  "table",
+  "chart",
+  "math",
+  "svg",
+  "document_block",
 ]);
 
 /**
@@ -556,11 +568,110 @@ function extractLeadingJsonBlock(
   }
 }
 
+function shouldAcceptStructuredBlock(input: {
+  block: Record<string, unknown>;
+  prompt?: string | null;
+  selectedWorkload?: string | null;
+}) {
+  const type = String(input.block.type ?? "").trim().toLowerCase();
+  const selectedWorkload = String(input.selectedWorkload ?? "").trim().toLowerCase();
+  if (type === "table") {
+    return shouldPromoteMarkdownTableToWidget({
+      prompt: input.prompt,
+      selectedWorkload: input.selectedWorkload,
+    });
+  }
+  if (type === "chart") {
+    return isExplicitChartRequest(input.prompt ?? "");
+  }
+  if (type === "svg") {
+    return isExplicitSvgRequest(input.prompt ?? "");
+  }
+  if (type === "math") {
+    return isExplicitMathOrLatexRequest(input.prompt ?? "");
+  }
+  if (type === "document_block") {
+    return selectedWorkload === "document_generate";
+  }
+  return true;
+}
+
+function filterAssistantBlocksByIntent(input: {
+  blocks: unknown[];
+  prompt?: string | null;
+  selectedWorkload?: string | null;
+}) {
+  return input.blocks.filter((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      return true;
+    }
+    return shouldAcceptStructuredBlock({
+      block: block as Record<string, unknown>,
+      prompt: input.prompt,
+      selectedWorkload: input.selectedWorkload,
+    });
+  });
+}
+
+function cleanInlineMarkdown(value: unknown, maxLength = 160) {
+  return String(value ?? "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function structuredBlockToPlainFallback(block: Record<string, unknown>): string {
+  const type = String(block.type ?? "").trim().toLowerCase();
+  if (type !== "table") {
+    return "";
+  }
+  const columns = Array.isArray(block.columns)
+    ? block.columns.map((column) => cleanInlineMarkdown(column, 80)).filter(Boolean)
+    : [];
+  const rows = Array.isArray(block.rows) ? block.rows.slice(0, 12) : [];
+  if (columns.length === 0 || rows.length === 0) {
+    return "";
+  }
+  const title = cleanInlineMarkdown(block.title, 120);
+  const lines = title ? [`${title}:`] : [];
+  for (const rawRow of rows) {
+    const row = Array.isArray(rawRow)
+      ? rawRow
+      : rawRow && typeof rawRow === "object" && !Array.isArray(rawRow)
+        ? Object.values(rawRow as Record<string, unknown>)
+        : [];
+    const cells = row.map((cell) => cleanInlineMarkdown(cell, 140));
+    const head = cells[0];
+    if (!head) {
+      continue;
+    }
+    const details = cells
+      .slice(1, columns.length)
+      .map((cell, index) => {
+        const label = columns[index + 1] ?? "";
+        return cell ? `${label ? `${label}: ` : ""}${cell}` : "";
+      })
+      .filter(Boolean)
+      .join("; ");
+    lines.push(`- ${head}${details ? `: ${details}` : ""}`);
+  }
+  return lines.join("\n");
+}
+
 export function resolveCompletionAssistantBlocks(input: {
   responseText: string;
   assistantBlocks?: unknown[];
+  prompt?: string | null;
+  selectedWorkload?: string | null;
 }): { blocks: unknown[]; text: string } {
-  const assistantBlocks = Array.isArray(input.assistantBlocks) ? [...input.assistantBlocks] : [];
+  const assistantBlocks = filterAssistantBlocksByIntent({
+    blocks: Array.isArray(input.assistantBlocks) ? [...input.assistantBlocks] : [],
+    prompt: input.prompt,
+    selectedWorkload: input.selectedWorkload,
+  });
   const normalizedBlocks = normalizeAssistantMessageBlocks({ blocks: assistantBlocks });
 
   const hasTableBlock = normalizedBlocks.some((b) => b.type === "table");
@@ -574,7 +685,10 @@ export function resolveCompletionAssistantBlocks(input: {
   const sourcesToStrip: string[] = [];
 
   // Extract markdown table if model didn't produce a typed table block
-  if (!hasTableBlock) {
+  if (!hasTableBlock && shouldPromoteMarkdownTableToWidget({
+    prompt: input.prompt,
+    selectedWorkload: input.selectedWorkload,
+  })) {
     const parsedTable = extractMarkdownTableBlock(text);
     if (parsedTable) {
       assistantBlocks.push(parsedTable.block);
@@ -607,8 +721,18 @@ export function resolveCompletionAssistantBlocks(input: {
   // visible text — otherwise the raw JSON leaks into chat as plain text.
   const leadingJson = extractLeadingJsonBlock(text);
   if (leadingJson) {
-    assistantBlocks.push(leadingJson.block);
-    text = leadingJson.rest;
+    const acceptLeadingBlock = shouldAcceptStructuredBlock({
+      block: leadingJson.block,
+      prompt: input.prompt,
+      selectedWorkload: input.selectedWorkload,
+    });
+    if (acceptLeadingBlock) {
+      assistantBlocks.push(leadingJson.block);
+      text = leadingJson.rest;
+    } else {
+      const fallback = structuredBlockToPlainFallback(leadingJson.block);
+      text = [fallback, leadingJson.rest].map((part) => part.trim()).filter(Boolean).join("\n\n");
+    }
   }
 
   // Strip every extracted span so the inline text doesn't duplicate the widget.
@@ -619,7 +743,17 @@ export function resolveCompletionAssistantBlocks(input: {
   // Collapse leftover blank lines from the strips.
   text = text.replace(/\n{3,}/g, "\n\n").trim();
 
-  return { blocks: assistantBlocks, text };
+  const blocks = normalizeAssistantMessageBlocks({
+    blocks: filterAssistantBlocksByIntent({
+      blocks: assistantBlocks,
+      prompt: input.prompt,
+      selectedWorkload: input.selectedWorkload,
+    }),
+  });
+  return {
+    blocks,
+    text,
+  };
 }
 
 function summarizeStructuredAssistantBlocks(assistantBlocks: unknown[]) {
@@ -1913,6 +2047,9 @@ async function completeServerBrainTask(
   const resolved = resolveCompletionAssistantBlocks({
     responseText: input.responseText,
     assistantBlocks: input.assistantBlocks,
+    prompt,
+    selectedWorkload:
+      typeof payloadMetadata.selectedWorkload === "string" ? payloadMetadata.selectedWorkload : null,
   });
   const resolvedAssistantBlocks = resolved.blocks;
   const visibleResponseText = resolveVisibleAssistantResponse({
@@ -1932,6 +2069,7 @@ async function completeServerBrainTask(
       ? buildLocalRenderRecipe({
         prompt,
         responseText: visibleResponseText,
+        assistantBlocks: resolvedAssistantBlocks,
         metadata: payloadMetadata,
         renderOn:
           typeof payload.source === "string" && payload.source.trim().toLowerCase() === "desktop"
@@ -2590,6 +2728,8 @@ async function processSharedBrainChatTask(
       const inferenceResolved = resolveCompletionAssistantBlocks({
         responseText: inference.text,
         assistantBlocks: completionMetadata.assistantBlocks,
+        prompt: input.prompt,
+        selectedWorkload,
       });
       const inferenceBlocks = inferenceResolved.blocks;
       // Use the cleaned text everywhere so the inline prose doesn't repeat a
@@ -3106,7 +3246,8 @@ export async function createTask(
       });
     }
 
-    await assertMonthlyTaskUsageAllowed(tx, input.userId);
+    const taskQuota = await getTrialQuotaUsage(tx, input.userId);
+    assertTrialTaskQuotaAllowedFromUsage(taskQuota);
 
     const activeCounts = await tx
       .select({

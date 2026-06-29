@@ -16,7 +16,8 @@ function createSelectBuilder(result: unknown) {
 }
 
 test("registerRuntime replaces the active connection and returns a connection-bound runtime token", async () => {
-  const closeCalls: Array<{ deviceId: string; code: number; reason: string }> = [];
+  const closeCalls: Array<{ deviceId: string; code: number; reason: string }> =
+    [];
   const updates: Array<{ values: Record<string, unknown> }> = [];
   const inserts: Array<Record<string, unknown>> = [];
   const deviceRow = {
@@ -24,6 +25,7 @@ test("registerRuntime replaces the active connection and returns a connection-bo
     userId: "user-1",
     label: "Elyan",
     type: "desktop",
+    isActive: true,
     deviceKeyHash: await hashSecret("derived-device-secret"),
     platform: "macos",
   };
@@ -73,7 +75,9 @@ test("registerRuntime replaces the active connection and returns a connection-bo
           values(values: Record<string, unknown>) {
             inserts.push(values);
             return {
-              returning: async () => [{ id: "22222222-2222-4222-8222-222222222222" }],
+              returning: async () => [
+                { id: "22222222-2222-4222-8222-222222222222" },
+              ],
             };
           },
         };
@@ -88,23 +92,20 @@ test("registerRuntime replaces the active connection and returns a connection-bo
     },
   };
 
-  const result = await registerRuntime(
-    app as never,
-    {
-      deviceId: deviceRow.id,
-      deviceSecret: "derived-device-secret",
-      runtimeVersion: "1.0.0",
-      capabilities: ["runtime.status", "task.execution"],
-      capabilityStates: {
-        "local_files.index": {
-          available: true,
-          ready: false,
-          stats: { rootCount: 0, indexedFileCount: 0, lastScanAt: "" },
-          errorCode: "no_approved_roots",
-        },
+  const result = await registerRuntime(app as never, {
+    deviceId: deviceRow.id,
+    deviceSecret: "derived-device-secret",
+    runtimeVersion: "1.0.0",
+    capabilities: ["runtime.status", "task.execution"],
+    capabilityStates: {
+      "local_files.index": {
+        available: true,
+        ready: false,
+        stats: { rootCount: 0, indexedFileCount: 0, lastScanAt: "" },
+        errorCode: "no_approved_roots",
       },
     },
-  );
+  });
 
   assert.deepEqual(closeCalls, [
     {
@@ -114,7 +115,10 @@ test("registerRuntime replaces the active connection and returns a connection-bo
     },
   ]);
   assert.equal(result.runtime.deviceId, deviceRow.id);
-  assert.equal(result.runtime.connectionId, "22222222-2222-4222-8222-222222222222");
+  assert.equal(
+    result.runtime.connectionId,
+    "22222222-2222-4222-8222-222222222222",
+  );
   assert.deepEqual(result.capabilities, ["runtime.status", "task.execution"]);
   assert.deepEqual(result.capabilityStates, {
     "local_files.index": {
@@ -127,7 +131,10 @@ test("registerRuntime replaces the active connection and returns a connection-bo
   assert.equal(result.capabilitySummary.total, 2);
   assert.equal(result.capabilitySummary.categories.runtime, 1);
   assert.equal(result.capabilitySummary.categories.task, 1);
-  assert.equal(result.tokens.accessToken, "runtime-token:22222222-2222-4222-8222-222222222222");
+  assert.equal(
+    result.tokens.accessToken,
+    "runtime-token:22222222-2222-4222-8222-222222222222",
+  );
   assert.equal(result.realtime.websocketPath, "/v1/realtime/runtime");
   assert.equal(result.realtime.ssePath, "/v1/realtime/stream");
   assert.equal(inserts.length, 1);
@@ -155,6 +162,7 @@ test("registerRuntime returns pairing_pending until the desktop is paired", asyn
             userId: null,
             label: "Elyan",
             type: "desktop",
+            isActive: true,
             deviceKeyHash: null,
             platform: "macos",
           },
@@ -165,17 +173,17 @@ test("registerRuntime returns pairing_pending until the desktop is paired", asyn
 
   await assert.rejects(
     () =>
-      registerRuntime(
-        app as never,
-        {
-          deviceId: "11111111-1111-4111-8111-111111111111",
-          deviceSecret: "derived-device-secret",
-          capabilities: ["runtime.status"],
-        },
-      ),
+      registerRuntime(app as never, {
+        deviceId: "11111111-1111-4111-8111-111111111111",
+        deviceSecret: "derived-device-secret",
+        capabilities: ["runtime.status"],
+      }),
     (error: unknown) => {
       assert.equal(error instanceof Error, true);
-      assert.equal((error as { message: string }).message, "Desktop runtime has not completed pairing");
+      assert.equal(
+        (error as { message: string }).message,
+        "Desktop runtime has not completed pairing",
+      );
       assert.equal((error as { code?: string }).code, "pairing_pending");
       return true;
     },

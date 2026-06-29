@@ -213,6 +213,22 @@ test("resolveAdaptiveInferenceBudget treats document analysis as its own long-fo
   assert.equal(budget.conversationTokenBudget, 4_200);
 });
 
+test("resolveAdaptiveInferenceBudget does not collapse document generation into fast chat budgets", () => {
+  const budget = resolveAdaptiveInferenceBudget({
+    workload: "document_generate",
+    prompt: "3 sayfalık araştırma raporu yaz, yarım bırakma.",
+    baseMaxTokens: 1_600,
+    premium: true,
+    planCode: "pro",
+    remainingCredits: 1_200,
+    grantedCredits: 2_000,
+  });
+
+  assert.equal(budget.requestedLongForm, true);
+  assert.equal(budget.maxCompletionTokens, 2_800);
+  assert.equal(budget.conversationTokenBudget, 4_200);
+});
+
 test("resolveAdaptiveInferenceBudget escalates normal mobile chat quality when the prompt is nontrivial", () => {
   const budget = resolveAdaptiveInferenceBudget({
     workload: "mobile_chat_fast",

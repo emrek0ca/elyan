@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildGroqModelCatalog, resolveGroqFallbackModel } from "./groq-models.js";
+import {
+  buildGroqModelCatalog,
+  resolveGroqFallbackModel,
+} from "./groq-models.js";
 
 test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq models", () => {
   const catalog = buildGroqModelCatalog({
@@ -15,10 +18,13 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
   assert.deepEqual(catalog.defaultModelByWorkload, {
     intent: "openai/gpt-oss-20b",
     fast_route: "openai/gpt-oss-20b",
-    mobile_chat_fast: "openai/gpt-oss-120b",
+    mobile_chat_fast: "openai/gpt-oss-20b",
     mobile_chat_balanced: "openai/gpt-oss-120b",
     mobile_chat_deep_refine: "openai/gpt-oss-120b",
     document_analysis: "qwen/qwen3.6-27b",
+    document_generate: "openai/gpt-oss-120b",
+    table_generate: "openai/gpt-oss-120b",
+    image_analyze: "meta-llama/llama-4-scout-17b-16e-instruct",
     planning: "openai/gpt-oss-120b",
     desktop_handoff: "openai/gpt-oss-20b",
     vision_reasoning: "meta-llama/llama-4-scout-17b-16e-instruct",

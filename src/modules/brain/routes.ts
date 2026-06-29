@@ -25,6 +25,7 @@ import {
   reviewInteractionParamsSchema,
   searchKnowledgeBodySchema,
   trainingJobParamsSchema,
+  updateBrainMemoryBodySchema,
   updateDatasetManifestBodySchema,
   updateModelArtifactBodySchema,
 } from "./schemas.js";
@@ -46,6 +47,7 @@ import {
   setBrainMemoryContestState,
   setBrainMemoryPinState,
   softDeleteBrainMemoryRecord,
+  updateBrainMemoryRecord,
   queueContinuousBrainTrainingJob,
   sanitizePublicBrainValue,
   shapePublicBrainProfile,
@@ -139,6 +141,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
     const renderRecipe = buildLocalRenderRecipe({
       prompt: body.prompt,
       responseText: replyResult.text,
+      assistantBlocks: Array.isArray(replyResult.metadata.blocks) ? replyResult.metadata.blocks : [],
       metadata: {
         routeDecision,
         workload: routeDecision.selectedWorkload,
@@ -689,6 +692,35 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
       isAdmin: actingAsAdmin,
       memoryId: params.memoryId,
       reason: body.reason ?? "user_requested_soft_delete",
+      requestId: context.requestId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+  });
+
+  app.post("/memory/:memoryId/update", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) {
+      return;
+    }
+
+    const params = brainMemoryParamsSchema.parse(request.params);
+    const body = updateBrainMemoryBodySchema.parse(request.body ?? {});
+    const auth = getUserAuth(request);
+    const actingAsAdmin = Boolean(body.userId && body.userId !== auth.sub);
+    if (actingAsAdmin) {
+      await assertAdmin(app, auth.sub);
+    }
+    const context = getRequestContext(request);
+
+    return updateBrainMemoryRecord(app, {
+      actorUserId: auth.sub,
+      targetUserId: actingAsAdmin ? body.userId ?? auth.sub : auth.sub,
+      isAdmin: actingAsAdmin,
+      memoryId: params.memoryId,
+      title: body.title ?? null,
+      content: body.content,
+      reason: body.reason ?? null,
       requestId: context.requestId,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,

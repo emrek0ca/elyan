@@ -12,8 +12,12 @@ export type TokenMeteringWorkload =
   | "mobile_chat_balanced"
   | "mobile_chat_deep_refine"
   | "document_analysis"
+  | "document_generate"
+  | "table_generate"
+  | "image_analyze"
   | "planning"
-  | "desktop_handoff";
+  | "desktop_handoff"
+  | "vision_reasoning";
 
 export type TokenMeteringDepth = "short" | "standard" | "deep" | "planning";
 export type TokenBudgetState = "normal" | "conserve" | "critical";
@@ -66,8 +70,12 @@ function normalizeWorkload(value: string | null | undefined): TokenMeteringWorkl
     case "mobile_chat_balanced":
     case "mobile_chat_deep_refine":
     case "document_analysis":
+    case "document_generate":
+    case "table_generate":
+    case "image_analyze":
     case "planning":
     case "desktop_handoff":
+    case "vision_reasoning":
       return value;
     default:
       return "mobile_chat_fast";
@@ -231,7 +239,7 @@ export function resolveAdaptiveInferenceBudget(input: {
           : isSoloProfile
             ? 1_200
             : 700
-        : workload === "document_analysis"
+      : workload === "document_analysis"
           ? isFreePlan
             ? 900
             : isProProfile
@@ -239,6 +247,30 @@ export function resolveAdaptiveInferenceBudget(input: {
               : isSoloProfile
                 ? 1_650
                 : 1_200
+        : workload === "document_generate"
+          ? isFreePlan
+            ? 1_100
+            : isProProfile
+              ? 2_800
+              : isSoloProfile
+                ? 2_100
+                : 1_500
+        : workload === "table_generate"
+          ? isFreePlan
+            ? 760
+            : isProProfile
+              ? 1_800
+              : isSoloProfile
+                ? 1_300
+                : 960
+        : workload === "image_analyze" || workload === "vision_reasoning"
+          ? isFreePlan
+            ? 820
+            : isProProfile
+              ? 1_900
+              : isSoloProfile
+                ? 1_450
+                : 1_080
         : workload === "mobile_chat_fast"
           ? isFreePlan
             ? 260
@@ -297,7 +329,23 @@ export function resolveAdaptiveInferenceBudget(input: {
             : isSoloProfile
               ? 3_200
               : 2_400
-          : qualityEscalated
+        : workload === "document_generate"
+          ? isFreePlan
+            ? 1_500
+            : isProProfile
+              ? 4_000
+              : isSoloProfile
+                ? 3_000
+                : 2_300
+        : workload === "table_generate"
+          ? isFreePlan
+            ? 1_300
+            : isProProfile
+              ? 3_200
+              : isSoloProfile
+                ? 2_500
+                : 1_900
+        : qualityEscalated
             ? isFreePlan
               ? 1_500
               : isProProfile
@@ -367,6 +415,13 @@ function workloadMultiplier(workload: TokenMeteringWorkload): number {
       return 1.08;
     case "document_analysis":
       return 1.02;
+    case "document_generate":
+      return 1.08;
+    case "table_generate":
+      return 0.98;
+    case "image_analyze":
+    case "vision_reasoning":
+      return 1.04;
     case "planning":
       return 1.18;
     case "desktop_handoff":

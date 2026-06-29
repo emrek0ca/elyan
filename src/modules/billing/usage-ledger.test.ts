@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AppError } from "../../lib/errors.js";
 import {
   assertMonthlyAiUsageAllowed,
   getBillingUsageSummary,
@@ -137,7 +136,7 @@ test("getBillingUsageSummary keeps free remaining credits on usage_records when 
   assert.equal(summary.aiUsage.remaining, 119);
 });
 
-test("assertMonthlyAiUsageAllowed fails closed when free plan credits are exhausted", async () => {
+test("assertMonthlyAiUsageAllowed only validates subscription activity; quota windows enforce usage", async () => {
   const app = {
     db: new FakeDb([
       [],
@@ -148,15 +147,7 @@ test("assertMonthlyAiUsageAllowed fails closed when free plan credits are exhaus
     ]),
   };
 
-  await assert.rejects(
-    async () => assertMonthlyAiUsageAllowed(app.db as never, "user-1", 1),
-    (error: unknown) => {
-      assert.ok(error instanceof AppError);
-      assert.equal(error.code, "ai_credit_limit_reached");
-      assert.equal(error.statusCode, 409);
-      return true;
-    },
-  );
+  await assert.doesNotReject(() => assertMonthlyAiUsageAllowed(app.db as never, "user-1", 1));
 });
 
 test("recordUsageLedgerEntry appends a usage row", async () => {

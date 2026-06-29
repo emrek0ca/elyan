@@ -30,7 +30,7 @@ import { calculateBillablePlanTokens, estimateTextTokens } from "../billing/toke
 import { assertTrialTaskQuotaAllowedFromUsage, getTrialQuotaUsage } from "../quota/service.js";
 import { routeChatTurn } from "../routing-policy/service.js";
 import { resolveCommandTarget } from "../routing-policy/service.js";
-import { createTask } from "../tasks/service.js";
+import { createTask, shapeTaskFeedItem } from "../tasks/service.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import { listFreshWorldSignals } from "../mobile/service.js";
 import {
@@ -71,6 +71,7 @@ const INITIAL_CHAT_MESSAGE_PAGE_LIMIT = 30;
 const OLDER_CHAT_MESSAGE_PAGE_LIMIT = 10;
 const CHAT_MESSAGE_PAGE_LIMIT_MAX = 50;
 const GENERIC_CHAT_TITLES = new Set(["yeni görev", "yeni sohbet"]);
+const RECENT_DUPLICATE_CHAT_TURN_WINDOW_MS = 20_000;
 
 type ChatSessionCursor = {
   timestamp: string;
@@ -125,6 +126,72 @@ function estimateMessageTokens(value: string) {
     return 0;
   }
   return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
+async function findRecentDuplicateChatTurn(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId: string;
+    content: string;
+  },
+) {
+  const recentRows = await app.db
+    .select()
+    .from(chatMessages)
+    .where(
+      and(
+        eq(chatMessages.sessionId, input.sessionId),
+        eq(chatMessages.userId, input.userId),
+      ),
+    )
+    .orderBy(desc(chatMessages.createdAt))
+    .limit(8);
+  const orderedRows = [...recentRows].reverse();
+  const normalizedContent = normalizeChatTitle(input.content);
+  if (!normalizedContent) {
+    return null;
+  }
+  const now = Date.now();
+
+  for (let index = orderedRows.length - 1; index >= 0; index -= 1) {
+    const row = orderedRows[index];
+    if (
+      row.role !== "user" ||
+      normalizeChatTitle(row.content) !== normalizedContent
+    ) {
+      continue;
+    }
+    const createdAtMs = row.createdAt instanceof Date
+      ? row.createdAt.getTime()
+      : new Date(row.createdAt).getTime();
+    if (!Number.isFinite(createdAtMs) || now - createdAtMs > RECENT_DUPLICATE_CHAT_TURN_WINDOW_MS) {
+      continue;
+    }
+
+    const assistantRow = orderedRows
+      .slice(index + 1)
+      .find((candidate) => candidate.role === "assistant" && candidate.taskId);
+    if (!assistantRow?.taskId) {
+      continue;
+    }
+    const taskRows = await app.db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.id, assistantRow.taskId), eq(tasks.userId, input.userId)))
+      .limit(1);
+    const task = taskRows[0];
+    if (!task) {
+      continue;
+    }
+    return {
+      userMessage: row,
+      assistantMessage: assistantRow,
+      task,
+    };
+  }
+
+  return null;
 }
 
 function titleFromChatPreview(title: string | undefined, preview: string) {
@@ -1467,6 +1534,63 @@ export async function createChatMessage(
     targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
     metadata: routingMetadata,
   });
+  const duplicateTurn = await findRecentDuplicateChatTurn(app, {
+    userId: input.userId,
+    sessionId: session.id,
+    content: input.content,
+  });
+  if (duplicateTurn) {
+    const billing = await getBillingSummary(app, input.userId);
+    const shapedTask = shapeTaskFeedItem(duplicateTurn.task);
+    const shapedAssistantMessage = {
+      ...shapeChatMessageForResponse(duplicateTurn.assistantMessage),
+      taskId: duplicateTurn.assistantMessage.taskId,
+      status: duplicateTurn.assistantMessage.status,
+      content: duplicateTurn.assistantMessage.content,
+    };
+    const taskBrainRecord = readRecord((shapedTask as Record<string, unknown>).brain);
+    const resultRecord = readRecord((duplicateTurn.task as Record<string, unknown>).result);
+    const pendingTokenDebit = estimatePendingChatTokenDebit({
+      route: routeDecision.route,
+      reused: true,
+      taskStatus: duplicateTurn.task.status,
+      content: input.content,
+      workload: routeDecision.selectedWorkload ?? "mobile_chat_fast",
+      brainProfile: billing.subscription.brainProfile,
+    });
+    return {
+      session,
+      userMessage: shapeChatMessageForResponse(duplicateTurn.userMessage),
+      assistantMessage: shapedAssistantMessage,
+      task: shapedTask,
+      renderRecipe: resultRecord?.renderRecipe ?? null,
+      routeDecision,
+      delivery: buildChatDispatchDeliverySnapshot({
+        task: shapedTask,
+        routeDecision,
+        requestedTargetDeviceId: input.targetDeviceId,
+      }),
+      brain: {
+        selectedProfile: routeDecision.selectedWorkload ?? "mobile_chat_fast",
+        profileMode: "elyan_managed",
+        serverBrainReady: routeDecision.route === "server_brain",
+        firstDeltaMs: readNumber(taskBrainRecord, "firstDeltaMs"),
+        fallbackUsed: readBoolean(taskBrainRecord, "fallbackUsed"),
+        groundingUsed: readBoolean(taskBrainRecord, "groundingUsed"),
+        documentSourceCount: readNumber(taskBrainRecord, "documentSourceCount"),
+        webGroundingUsed: readBoolean(taskBrainRecord, "webGroundingUsed"),
+        webSourceCount: readNumber(taskBrainRecord, "webSourceCount"),
+      },
+      usage: shapePublicUsageSnapshot({
+        usage: billing.usage,
+        subscription: billing.subscription,
+        pendingTokens: pendingTokenDebit,
+      }),
+      dispatched: false,
+      reused: true,
+      deduped: true,
+    };
+  }
   const priorChatContext = await loadChatConversation(app, {
     userId: input.userId,
     sessionId: session.id,

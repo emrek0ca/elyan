@@ -56,6 +56,7 @@ import {
   setBrainMemoryContest,
   setBrainMemoryPinning,
   softDeleteBrainMemory,
+  updateBrainMemory,
 } from "./memory.js";
 import { selectSharedBrainRuntime } from "./runtime.js";
 import { isCompleteReadyBrainModelArtifact, type SharedBrainSelection } from "./selection.js";
@@ -3647,6 +3648,34 @@ export async function softDeleteBrainMemoryRecord(
   return softDeleteBrainMemory(app, {
     userId: input.targetUserId,
     memoryId: input.memoryId,
+    reason: input.reason,
+    actorUserId: input.actorUserId,
+    requestId: input.requestId,
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+  });
+}
+
+export async function updateBrainMemoryRecord(
+  app: FastifyInstance,
+  input: {
+    actorUserId: string;
+    targetUserId: string;
+    isAdmin: boolean;
+    memoryId: string;
+    title?: string | null;
+    content: string;
+    reason: string | null;
+    requestId?: string;
+    ipAddress?: string;
+    userAgent?: string;
+  },
+) {
+  return updateBrainMemory(app, {
+    userId: input.targetUserId,
+    memoryId: input.memoryId,
+    title: input.title ?? null,
+    content: input.content,
     reason: input.reason,
     actorUserId: input.actorUserId,
     requestId: input.requestId,

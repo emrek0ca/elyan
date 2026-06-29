@@ -1,7 +1,7 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { subscriptions, usageRecords } from "../../db/schema.js";
-import { AppError, conflict } from "../../lib/errors.js";
+import { conflict } from "../../lib/errors.js";
 import { getCreditWindowSummary } from "./credit-ledger.js";
 import {
   getBillingPlan,
@@ -181,19 +181,9 @@ function assertSubscriptionActive(summary: BillingUsageSummary): void {
   }
 }
 
-function buildRetryAt(summary: BillingUsageSummary): Date {
-  return summary.periodEndsAt;
-}
-
 export async function assertMonthlyTaskUsageAllowed(db: BillingReadDb, userId: string): Promise<void> {
   const summary = await getBillingUsageSummary(db, userId);
   assertSubscriptionActive(summary);
-
-  if (summary.taskUsage.remaining <= 0) {
-    throw new AppError(409, "task_limit_reached", "Aylık görev limiti doldu.", {
-      retryAt: buildRetryAt(summary),
-    });
-  }
 }
 
 export async function assertMonthlyAiUsageAllowed(
@@ -203,15 +193,7 @@ export async function assertMonthlyAiUsageAllowed(
 ): Promise<void> {
   const summary = await getBillingUsageSummary(db, userId);
   assertSubscriptionActive(summary);
-
-  const requiredCredits = Math.max(1, Math.ceil(estimatedCredits));
-
-  if (summary.aiCreditsMonthly <= 0 || summary.aiUsage.remaining < requiredCredits) {
-    throw new AppError(409, "ai_credit_limit_reached", "Aylık token hakkı doldu.", {
-      retryAt: buildRetryAt(summary),
-      estimatedCredits: requiredCredits,
-    });
-  }
+  void estimatedCredits;
 }
 
 export async function recordUsageLedgerEntry(

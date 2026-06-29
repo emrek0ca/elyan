@@ -170,6 +170,33 @@ test("decideCommandRoute does not select document_generate for read/summary or u
   }
 });
 
+test("decideCommandRoute selects table_generate only for explicit table or spreadsheet asks", async () => {
+  const app = createApp([]);
+  for (const message of [
+    "hava durumunu tablo olarak ver",
+    "bunu excel tablosu halinde hazirla",
+    "ulkeleri csv olarak cikar",
+  ]) {
+    const decision = await decideCommandRoute(app as never, {
+      userId: "user-1",
+      message,
+      source: "mobile",
+    });
+    assert.equal(decision.selectedWorkload, "table_generate");
+  }
+});
+
+test("decideCommandRoute keeps ordinary factual lists out of table_generate", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Turk matematikcileri kisaca anlat",
+    source: "mobile",
+  });
+
+  assert.notEqual(decision.selectedWorkload, "table_generate");
+});
+
 test("decideCommandRoute upgrades complex public chat to the balanced profile", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {

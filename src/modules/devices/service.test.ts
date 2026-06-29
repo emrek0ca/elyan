@@ -7,7 +7,7 @@ import {
 } from "./service.js";
 
 const now = new Date("2026-05-13T00:02:00.000Z").getTime();
-const staleTimestamp = new Date(now - 5 * 60_000);
+const staleTimestamp = new Date(now - 5 * 60_000 - 1);
 const freshTimestamp = new Date(now - 30_000);
 
 function createDevice() {
@@ -27,7 +27,10 @@ function createDevice() {
   } as const;
 }
 
-function createRuntime(status: "online" | "busy" | "idle" | "offline", lastHeartbeatAt = freshTimestamp) {
+function createRuntime(
+  status: "online" | "busy" | "idle" | "offline",
+  lastHeartbeatAt = freshTimestamp,
+) {
   return {
     id: "runtime-1",
     deviceId: "device-1",
@@ -37,7 +40,11 @@ function createRuntime(status: "online" | "busy" | "idle" | "offline", lastHeart
       "local_files.index": {
         available: true,
         ready: false,
-        stats: { rootCount: 1, indexedFileCount: 0, lastScanAt: "2026-06-03T00:00:00Z" },
+        stats: {
+          rootCount: 1,
+          indexedFileCount: 0,
+          lastScanAt: "2026-06-03T00:00:00Z",
+        },
         errorCode: "no_approved_roots",
       },
     },
@@ -48,7 +55,12 @@ function createRuntime(status: "online" | "busy" | "idle" | "offline", lastHeart
 }
 
 test("shapeUserDevice keeps registered-but-not-connected runtimes offline", () => {
-  const shaped = shapeUserDevice(createDevice() as never, createRuntime("offline", staleTimestamp) as never, true, now);
+  const shaped = shapeUserDevice(
+    createDevice() as never,
+    createRuntime("offline", staleTimestamp) as never,
+    true,
+    now,
+  );
 
   assert.equal(shaped.isOnline, false);
   assert.equal(shaped.canReceiveTasks, false);
@@ -58,7 +70,12 @@ test("shapeUserDevice keeps registered-but-not-connected runtimes offline", () =
 });
 
 test("shapeUserDevice reports stale live runtimes separately from offline devices", () => {
-  const shaped = shapeUserDevice(createDevice() as never, createRuntime("online", staleTimestamp) as never, true, now);
+  const shaped = shapeUserDevice(
+    createDevice() as never,
+    createRuntime("online", staleTimestamp) as never,
+    true,
+    now,
+  );
 
   assert.equal(shaped.isOnline, false);
   assert.equal(shaped.canReceiveTasks, false);
@@ -69,7 +86,12 @@ test("shapeUserDevice reports stale live runtimes separately from offline device
 });
 
 test("shapeUserDevice fails closed when backend advertised base url is not externally reachable", () => {
-  const shaped = shapeUserDevice(createDevice() as never, createRuntime("online") as never, false, now);
+  const shaped = shapeUserDevice(
+    createDevice() as never,
+    createRuntime("online") as never,
+    false,
+    now,
+  );
 
   assert.equal(shaped.isOnline, true);
   assert.equal(shaped.canReceiveTasks, false);
@@ -78,7 +100,12 @@ test("shapeUserDevice fails closed when backend advertised base url is not exter
 });
 
 test("shapeUserDevice reports ready only when runtime is live and backend is reachable", () => {
-  const shaped = shapeUserDevice(createDevice() as never, createRuntime("online") as never, true, now);
+  const shaped = shapeUserDevice(
+    createDevice() as never,
+    createRuntime("online") as never,
+    true,
+    now,
+  );
 
   assert.equal(shaped.isOnline, true);
   assert.equal(shaped.canReceiveTasks, true);
@@ -88,7 +115,11 @@ test("shapeUserDevice reports ready only when runtime is live and backend is rea
     "local_files.index": {
       available: true,
       ready: false,
-      stats: { rootCount: 1, indexedFileCount: 0, lastScanAt: "2026-06-03T00:00:00Z" },
+      stats: {
+        rootCount: 1,
+        indexedFileCount: 0,
+        lastScanAt: "2026-06-03T00:00:00Z",
+      },
       errorCode: "no_approved_roots",
     },
   });

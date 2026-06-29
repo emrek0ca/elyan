@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getBillingDependencyStatus, getReadiness, summarizeRuntimeOperationalRows } from "./service.js";
+import {
+  getBillingDependencyStatus,
+  getReadiness,
+  summarizeRuntimeOperationalRows,
+} from "./service.js";
 
 function withBrainConfig(config: Record<string, unknown>) {
   return {
@@ -73,7 +77,8 @@ test("getBillingDependencyStatus is degraded when no billing provider env is com
 
 test("getReadiness exposes mobile-safe diagnostics for external clients", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
+  globalThis.fetch = (async () =>
+    new Response("{}", { status: 200 })) as typeof fetch;
   const readiness = await getReadiness({
     config: withBrainConfig({
       APP_BASE_URL: "https://api.elyan.dev",
@@ -100,7 +105,10 @@ test("getReadiness exposes mobile-safe diagnostics for external clients", async 
   assert.equal(readiness.agent.quantumDesktopReady, false);
   assert.equal(readiness.agent.quantumCapabilitiesReady, false);
   assert.deepEqual(readiness.agent.quantumSupportedProblemClasses, []);
-  assert.deepEqual(readiness.agent.quantumBlockingReasons, ["desktop_runtime_unavailable", "quantum_capabilities_unavailable"]);
+  assert.deepEqual(readiness.agent.quantumBlockingReasons, [
+    "desktop_runtime_unavailable",
+    "quantum_capabilities_unavailable",
+  ]);
   assert.equal(readiness.agent.neuralReady, false);
   assert.equal(readiness.agent.trainingWorkerReady, false);
   assert.equal(readiness.agent.embeddingReady, false);
@@ -117,7 +125,9 @@ test("getReadiness exposes mobile-safe diagnostics for external clients", async 
   assert.equal(readiness.agent.mlWorkerLastErrorCode, null);
   assert.deepEqual(readiness.agent.optionalLibraries, {});
   assert.equal(readiness.agent.runnerBacklog, null);
-  assert.deepEqual(readiness.agent.brainBlockingReasons, ["neural_readiness_unavailable"]);
+  assert.deepEqual(readiness.agent.brainBlockingReasons, [
+    "neural_readiness_unavailable",
+  ]);
   assert.equal(readiness.agent.desktopReadyCount, 0);
   assert.equal(readiness.agent.activeRuntimeConnections, 0);
   assert.equal(readiness.agent.staleRuntimeConnections, 0);
@@ -146,7 +156,8 @@ test("getReadiness exposes mobile-safe diagnostics for external clients", async 
 
 test("getReadiness keeps commercial billing degradation separate from core agent readiness", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
+  globalThis.fetch = (async () =>
+    new Response("{}", { status: 200 })) as typeof fetch;
   const readiness = await getReadiness({
     config: withBrainConfig({
       APP_BASE_URL: "https://api.elyan.dev",
@@ -179,7 +190,7 @@ test("getReadiness keeps commercial billing degradation separate from core agent
 test("summarizeRuntimeOperationalRows counts only fresh connections as active", () => {
   const now = Date.parse("2030-01-01T00:00:00.000Z");
   const fresh = new Date(now - 30_000);
-  const stale = new Date(now - 5 * 60_000);
+  const stale = new Date(now - 5 * 60_000 - 1);
 
   const result = summarizeRuntimeOperationalRows(
     [
@@ -213,7 +224,9 @@ test("summarizeRuntimeOperationalRows counts only fresh connections as active", 
   assert.equal(result.desktopReadyCount, 1);
   assert.equal(result.desktopTaskReady, true);
   assert.equal(result.quantumReady, false);
-  assert.deepEqual(result.quantumBlockingReasons, ["quantum_capabilities_unavailable"]);
+  assert.deepEqual(result.quantumBlockingReasons, [
+    "quantum_capabilities_unavailable",
+  ]);
   assert.equal(result.latestDesktopHeartbeatAgeSeconds, 30);
 });
 
@@ -245,7 +258,12 @@ test("summarizeRuntimeOperationalRows reports quantum readiness only for fresh c
   assert.equal(result.quantumReady, true);
   assert.equal(result.quantumDesktopReady, true);
   assert.equal(result.quantumCapabilitiesReady, true);
-  assert.deepEqual(result.quantumSupportedProblemClasses, ["qubo", "ising", "qaoa", "vqe"]);
+  assert.deepEqual(result.quantumSupportedProblemClasses, [
+    "qubo",
+    "ising",
+    "qaoa",
+    "vqe",
+  ]);
   assert.deepEqual(result.quantumBlockingReasons, []);
 });
 
@@ -276,12 +294,14 @@ test("summarizeRuntimeOperationalRows keeps quantum readiness false without exec
   assert.equal(result.quantumReady, false);
   assert.equal(result.quantumDesktopReady, false);
   assert.equal(result.quantumCapabilitiesReady, false);
-  assert.deepEqual(result.quantumBlockingReasons, ["quantum_capabilities_unavailable"]);
+  assert.deepEqual(result.quantumBlockingReasons, [
+    "quantum_capabilities_unavailable",
+  ]);
 });
 
 test("summarizeRuntimeOperationalRows reports no desktop task readiness without fresh desktop heartbeat", () => {
   const now = Date.parse("2030-01-01T00:00:00.000Z");
-  const stale = new Date(now - 5 * 60_000);
+  const stale = new Date(now - 5 * 60_000 - 1);
 
   const result = summarizeRuntimeOperationalRows(
     [

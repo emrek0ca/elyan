@@ -52,9 +52,14 @@ test("resolveSharedBrainModel skips Ollama model discovery when Groq is primary"
 
     assert.equal(fetchCalled, false);
     assert.equal(result.configuredBaseModel, "openai/gpt-oss-120b");
-    assert.equal(result.resolvedBaseModel, "openai/gpt-oss-120b");
+    assert.equal(result.resolvedBaseModel, "openai/gpt-oss-20b");
     assert.equal(result.resolvedFallbackModel, "qwen/qwen3.6-27b");
-    assert.deepEqual(result.availableModels, ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b", "meta-llama/llama-4-scout-17b-16e-instruct"]);
+    assert.deepEqual(result.availableModels, [
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "qwen/qwen3.6-27b",
+      "meta-llama/llama-4-scout-17b-16e-instruct",
+    ]);
     assert.equal(result.resolvedBaseModelSource, "configured");
   } finally {
     globalThis.fetch = originalFetch;

@@ -93,6 +93,12 @@ export type TaskFrame = {
   shouldClarify: boolean;
 };
 
+export type ContinuityBoundary = {
+  mode: "same_topic" | "possible_shift" | "new_topic";
+  reason: string;
+  carryContinuity: boolean;
+};
+
 export type ClarificationDiagnostics = {
   shouldClarify: boolean;
   ambiguityKind:
@@ -188,6 +194,8 @@ export type UserUnderstandingContext = {
   personalizationHints: string[];
   projectHints: string[];
   styleHints: string[];
+  speakingStyleDirectives?: string[];
+  reasoningDirectives?: string[];
   technicalHints: string[];
   safetyHints: string[];
   situationalHints: string[];
@@ -198,6 +206,8 @@ export type UserUnderstandingContext = {
     assistantState: string | null;
     openLoops: string[];
   };
+  continuityBoundary?: ContinuityBoundary;
+  relationshipContextDigest: string[];
   clarificationDiagnostics: ClarificationDiagnostics;
   memoryEnabled: boolean;
   personalizationPrompt: string | null;

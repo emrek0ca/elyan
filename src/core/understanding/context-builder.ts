@@ -9,6 +9,7 @@ import { extractProjectHints } from "./project-context.js";
 import { buildDerivedHintBuckets, deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "./world-signal-derived.js";
 import type {
   ContextPacket,
+  ContinuityBoundary,
   IntentClassification,
   MemoryProfileSnapshot,
   RetrievedMemory,
@@ -21,6 +22,10 @@ import { nlpDaemon } from "../../lib/nlp-daemon.js";
 
 const MAX_HINTS = 12;
 const MAX_CHARS = 4000;
+const PLANNING_TOPIC_PATTERN =
+  /\b(plan|planla|planning|program|schedule|günlük|gunluk|haftalık|haftalik|çalışma|calisma|task|görev|gorev|roadmap|routine|rutin)\b/i;
+const DEBUG_TOPIC_PATTERN =
+  /\b(auth|login|oauth|session|token|bug|hata|error|debug|fix|backend|api|pipeline|refresh|403|401)\b/i;
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -67,6 +72,33 @@ function tokenize(value: string): Set<string> {
       .filter((token) => token.length >= 3)
       .slice(0, 80),
   );
+}
+
+function overlapScore(query: string, text: string): number {
+  const queryTokens = tokenize(query);
+  const textTokens = tokenize(text);
+  let overlap = 0;
+  for (const token of queryTokens) {
+    if (textTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
+function tokenOverlapRatio(left: string, right: string): number {
+  const leftTokens = tokenize(left);
+  const rightTokens = tokenize(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) {
+    return 0;
+  }
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap / Math.max(1, Math.min(leftTokens.size, rightTokens.size));
 }
 
 function getIntentTypeBoost(memType: string, intent: string): number {
@@ -137,6 +169,371 @@ function readFactValue(
   }
 
   return null;
+}
+
+function pushDigestLine(target: string[], value: string | null, maxItems = 6) {
+  const compact = compactText(value ?? "");
+  if (!compact || target.includes(compact) || target.length >= maxItems) {
+    return;
+  }
+  target.push(compact);
+}
+
+function readSnapshotFact(
+  snapshot: MemoryProfileSnapshot | undefined,
+  keys: string[],
+): { key: string; value: string } | null {
+  const facts = [
+    ...(snapshot?.identityFacts ?? []),
+    ...(snapshot?.preferenceFacts ?? []),
+    ...(snapshot?.projectFacts ?? []),
+    ...(snapshot?.derivedFacts ?? []),
+    ...(snapshot?.recentEpisodes ?? []),
+  ];
+
+  for (const key of keys) {
+    const match = facts.find((item) => item.key === key && compactText(item.value));
+    if (match) {
+      return { key: match.key, value: compactText(match.value) };
+    }
+  }
+
+  return null;
+}
+
+function buildRelationshipContextDigest(input: {
+  userProfile?: UserProfileSnapshot;
+  memorySnapshot?: MemoryProfileSnapshot;
+  continuitySummary: UserUnderstandingContext["continuitySummary"];
+  continuityBoundary: ContinuityBoundary;
+  situationalHints: string[];
+  behavioralHints: string[];
+  environmentHints: string[];
+  projectHints: string[];
+  technicalHints: string[];
+}): string[] {
+  const digest: string[] = [];
+  const preferredName = input.userProfile?.preferredName ?? input.userProfile?.displayName;
+  const preferredLanguage = input.userProfile?.preferredLanguage;
+  const answerLength = readSnapshotFact(input.memorySnapshot, ["answer_length", "brevity_preference"]);
+  const responseStyle = readSnapshotFact(input.memorySnapshot, [
+    "response_style_preference",
+    "preferred_tone",
+  ]);
+  const recentTopics = readSnapshotFact(input.memorySnapshot, ["self_model_recent_topics"]);
+
+  if (preferredName) {
+    pushDigestLine(digest, `Use the user's name naturally: ${preferredName}.`);
+  }
+  if (preferredLanguage) {
+    pushDigestLine(digest, `Default response language preference: ${preferredLanguage}.`);
+  }
+  if (answerLength) {
+    pushDigestLine(digest, `Stable answer length preference: ${answerLength.value}.`);
+  }
+  if (responseStyle) {
+    pushDigestLine(digest, `Stable response style preference: ${responseStyle.value}.`);
+  }
+  if (recentTopics) {
+    pushDigestLine(digest, recentTopics.value);
+  }
+  if (input.continuityBoundary.carryContinuity && input.continuitySummary.userGoal) {
+    pushDigestLine(digest, `Continuing user goal: ${input.continuitySummary.userGoal}`);
+  }
+  if (input.continuityBoundary.carryContinuity && input.continuitySummary.openLoops.length > 0) {
+    pushDigestLine(digest, `Open follow-up to keep track of: ${input.continuitySummary.openLoops[0]}`);
+  }
+  if (input.situationalHints.length > 0) {
+    pushDigestLine(digest, `Current situational context: ${input.situationalHints[0]}`);
+  }
+  if (input.behavioralHints.length > 0) {
+    pushDigestLine(digest, `Planning/interaction adaptation: ${input.behavioralHints[0]}`);
+  }
+  if (input.environmentHints.length > 0) {
+    pushDigestLine(digest, `Local/environment context: ${input.environmentHints[0]}`);
+  }
+  if (input.projectHints.length > 0) {
+    pushDigestLine(digest, `Relevant project context: ${input.projectHints[0]}`);
+  }
+  if (input.technicalHints.length > 0) {
+    pushDigestLine(digest, `Relevant technical context: ${input.technicalHints[0]}`);
+  }
+
+  return digest;
+}
+
+function buildMemoryRelevanceSummary(input: {
+  memory: RetrievedMemory[];
+  continuitySummary: UserUnderstandingContext["continuitySummary"];
+  continuityBoundary: ContinuityBoundary;
+}): string[] {
+  const summary: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of input.memory) {
+    const metadata = readRecord(item.metadata);
+    if (readStringValue(metadata, "sourceCategory") === "world_signal_derived") {
+      continue;
+    }
+    const line = compactText(`${item.key}: ${item.value}`);
+    const key = line.toLowerCase();
+    if (!line || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    summary.push(line);
+    if (summary.length >= 3) {
+      break;
+    }
+  }
+
+  if (summary.length < 3 && input.continuityBoundary.carryContinuity && input.continuitySummary.userGoal) {
+    summary.push(`current_goal: ${input.continuitySummary.userGoal}`);
+  }
+
+  if (summary.length < 3 && input.continuityBoundary.carryContinuity && input.continuitySummary.openLoops.length > 0) {
+    summary.push(`open_follow_up: ${input.continuitySummary.openLoops[0]}`);
+  }
+
+  return summary.slice(0, 4);
+}
+
+function isWorldDerivedMemory(item: RetrievedMemory): boolean {
+  const metadata = readRecord(item.metadata);
+  return readStringValue(metadata, "sourceCategory") === "world_signal_derived";
+}
+
+function continuityBucketForMemory(item: RetrievedMemory):
+  | "identity"
+  | "preference"
+  | "project"
+  | "technical"
+  | "correction"
+  | "episodic"
+  | "other" {
+  if (item.source === "episodic_memory" || item.type === "episodic") {
+    return "episodic";
+  }
+  if (item.type === "identity") {
+    return "identity";
+  }
+  if (item.type === "preference" || item.type === "style") {
+    return "preference";
+  }
+  if (item.type === "project_context") {
+    return "project";
+  }
+  if (item.type === "technical_stack" || item.type === "routing" || item.type === "bridge") {
+    return "technical";
+  }
+  if (item.type === "correction") {
+    return "correction";
+  }
+  return "other";
+}
+
+function continuityBucketLimit(bucket: ReturnType<typeof continuityBucketForMemory>): number {
+  switch (bucket) {
+    case "identity":
+      return 2;
+    case "preference":
+      return 2;
+    case "project":
+      return 2;
+    case "technical":
+      return 2;
+    case "correction":
+      return 1;
+    case "episodic":
+      return 1;
+    default:
+      return 1;
+  }
+}
+
+function scoreContinuityCandidate(input: {
+  item: RetrievedMemory;
+  queryTokens: Set<string>;
+  intent: IntentClassification;
+  continuitySummary: UserUnderstandingContext["continuitySummary"];
+}): number {
+  const base = scoreMemory(input.item, input.queryTokens);
+  const bucket = continuityBucketForMemory(input.item);
+  const pinnedBoost = input.item.isPinned ? 0.3 : 0;
+  const verifiedBoost = input.item.lastVerifiedAt ? 0.12 : 0;
+  const freshnessBoost = input.item.staleness === "fresh" ? 0.14 : input.item.staleness === "stale" ? -0.12 : -0.5;
+  const bucketBoost =
+    bucket === "episodic"
+      ? 0.1
+      : bucket === "identity" || bucket === "preference"
+        ? 0.16
+        : bucket === "project" || bucket === "technical"
+          ? 0.12
+          : 0;
+  const continuityText = `${input.continuitySummary.userGoal ?? ""} ${(input.continuitySummary.openLoops ?? []).join(" ")}`;
+  const continuityMatch =
+    continuityText.trim().length > 0
+      ? overlapScore(continuityText, `${input.item.key} ${input.item.value}`) * 0.08
+      : 0;
+  const sharedPenalty = input.item.scope === "shared" ? -1.4 : 0;
+  const worldDerivedPenalty = isWorldDerivedMemory(input.item) ? -1.2 : 0;
+  const stalePenalty =
+    input.item.conflictStatus === "superseded" || input.item.conflictStatus === "contested"
+      ? -2
+      : 0;
+
+  return (
+    base +
+    pinnedBoost +
+    verifiedBoost +
+    freshnessBoost +
+    bucketBoost +
+    continuityMatch +
+    sharedPenalty +
+    worldDerivedPenalty +
+    stalePenalty
+  );
+}
+
+export function selectContinuityMemory(input: {
+  memory: RetrievedMemory[];
+  queryTokens: Set<string>;
+  intent: IntentClassification;
+  continuitySummary: UserUnderstandingContext["continuitySummary"];
+  continuityBoundary?: ContinuityBoundary;
+  limit?: number;
+}): RetrievedMemory[] {
+  const selected: RetrievedMemory[] = [];
+  const bucketCounts = new Map<string, number>();
+  const seen = new Set<string>();
+  const limit = Math.max(4, Math.min(input.limit ?? MAX_HINTS, MAX_HINTS));
+
+  const ordered = [...input.memory]
+    .filter((item) => item.scope === "user")
+    .filter((item) => !isWorldDerivedMemory(item))
+    .filter((item) => item.conflictStatus !== "superseded" && item.conflictStatus !== "contested")
+    .sort(
+      (left, right) =>
+        scoreContinuityCandidate({
+          item: right,
+          queryTokens: input.queryTokens,
+          intent: input.intent,
+          continuitySummary: input.continuitySummary,
+        }) -
+          scoreContinuityCandidate({
+            item: left,
+            queryTokens: input.queryTokens,
+            intent: input.intent,
+            continuitySummary: input.continuitySummary,
+          }) ||
+        right.confidence - left.confidence,
+    );
+
+  for (const item of ordered) {
+    const bucket = continuityBucketForMemory(item);
+    const bucketCount = bucketCounts.get(bucket) ?? 0;
+    const bucketLimit =
+      input.continuityBoundary?.carryContinuity === false && bucket === "episodic"
+        ? 0
+        : input.continuityBoundary?.carryContinuity === false && (bucket === "project" || bucket === "technical")
+          ? 1
+          : continuityBucketLimit(bucket);
+    if (bucketCount >= bucketLimit) {
+      continue;
+    }
+
+    const dedupeKey = `${bucket}:${item.key}:${item.value.toLowerCase()}`;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    bucketCounts.set(bucket, bucketCount + 1);
+    selected.push(item);
+
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+
+  return selected;
+}
+
+function buildSpeakingStyleDirectives(input: {
+  intent: IntentClassification;
+  userProfile?: UserProfileSnapshot;
+  memorySnapshot?: MemoryProfileSnapshot;
+  continuityBoundary: ContinuityBoundary;
+}): string[] {
+  const directives: string[] = [];
+  const answerLength = readSnapshotFact(input.memorySnapshot, ["answer_length", "brevity_preference"])?.value.toLowerCase() ?? "";
+  const preferredTone = readSnapshotFact(input.memorySnapshot, [
+    "preferred_tone",
+    "response_style_preference",
+  ])?.value.toLowerCase() ?? "";
+  const continuityStyle = readSnapshotFact(input.memorySnapshot, ["reflective_continuity_style"])?.value ?? "";
+  const preferredLanguage = input.userProfile?.preferredLanguage ?? null;
+
+  if (preferredLanguage) {
+    directives.push(`Answer in ${preferredLanguage} unless the user clearly requests another language.`);
+  }
+  if (answerLength.includes("concise") || answerLength.includes("short")) {
+    directives.push("Start with the direct answer, then add only the minimum supporting detail.");
+  } else if (answerLength.includes("detailed") || answerLength.includes("long")) {
+    directives.push("Give a fuller explanation when needed, but keep the structure clean and deliberate.");
+  }
+  if (preferredTone.includes("warm")) {
+    directives.push("Use a warm and close tone, but keep it grounded and non-theatrical.");
+  } else if (preferredTone.includes("professional")) {
+    directives.push("Keep the tone precise, calm, and professional.");
+  }
+  if (input.intent.primaryIntent === "chat") {
+    directives.push("Sound natural and human, but avoid filler, hype, or repetitive reassurance.");
+  }
+  if (!input.continuityBoundary.carryContinuity) {
+    directives.push("Do not drag prior chat context into the answer when the user has clearly shifted topics.");
+  }
+  if (continuityStyle) {
+    directives.push(continuityStyle);
+  }
+
+  return directives.slice(0, 5);
+}
+
+function buildReasoningDirectives(input: {
+  intent: IntentClassification;
+  continuityBoundary: ContinuityBoundary;
+  clarificationDiagnostics: UserUnderstandingContext["clarificationDiagnostics"];
+  memorySnapshot?: MemoryProfileSnapshot;
+}): string[] {
+  const directives = ["Infer the real task before answering the surface wording."];
+  const reflectiveReasoningStyle = readSnapshotFact(input.memorySnapshot, ["reflective_reasoning_style"])?.value;
+
+  if (input.intent.primaryIntent === "debugging") {
+    directives.push("Separate symptom, likely root cause, proof path, and fix path.");
+  } else if (input.intent.primaryIntent === "coding") {
+    directives.push("Prefer the smallest safe implementation change that preserves the current architecture.");
+  } else if (input.intent.primaryIntent === "planning") {
+    directives.push("Break the request into decisions, constraints, tradeoffs, and the smallest reliable next steps.");
+  } else if (input.intent.primaryIntent === "research") {
+    directives.push("Distinguish verified facts, inference, and unknowns explicitly.");
+  } else if (input.intent.primaryIntent === "writing") {
+    directives.push("Preserve meaning first, then improve clarity, flow, and tone.");
+  } else if (input.intent.primaryIntent === "chat") {
+    directives.push("If the user implies a real task under casual wording, surface and answer that task directly.");
+  }
+
+  if (input.continuityBoundary.mode !== "same_topic") {
+    directives.push("Treat prior chat state as optional background, not as the default frame for the answer.");
+  }
+  if (input.clarificationDiagnostics.shouldClarify) {
+    directives.push("Ask a clarification only if the missing detail would materially change the answer or action.");
+  }
+  if (reflectiveReasoningStyle) {
+    directives.push(reflectiveReasoningStyle);
+  }
+
+  return directives.slice(0, 6);
 }
 
 function buildUserProfileSnapshot(input: {
@@ -345,6 +742,91 @@ function deriveContinuitySummary(metadata: Record<string, unknown> | undefined) 
   };
 }
 
+function deriveContinuityBoundary(input: {
+  metadata: Record<string, unknown> | undefined;
+  message: string;
+  continuitySummary: UserUnderstandingContext["continuitySummary"];
+  intent: IntentClassification;
+}): ContinuityBoundary {
+  const current = compactText(input.message);
+  if (!current || (!input.continuitySummary.userGoal && input.continuitySummary.openLoops.length === 0)) {
+    return {
+      mode: "new_topic",
+      reason: "no_prior_context",
+      carryContinuity: false,
+    };
+  }
+
+  const root = readRecord(input.metadata);
+  const compactContext = readRecord(root?.compactContext);
+  const recentRaw = Array.isArray(compactContext?.recentMessages)
+    ? (compactContext.recentMessages as unknown[])
+    : [];
+  const recentMessages = recentRaw
+    .map((item) => readRecord(item))
+    .filter((item): item is Record<string, unknown> => item !== null)
+    .map((item) => ({
+      role: typeof item.role === "string" ? item.role : "",
+      content: typeof item.content === "string" ? item.content : "",
+    }))
+    .filter((item) => item.role && item.content);
+  const lastUserMessage = [...recentMessages].reverse().find((item) => item.role === "user")?.content ?? "";
+  const priorText = compactText(
+    [
+      input.continuitySummary.userGoal ?? "",
+      input.continuitySummary.openLoops.join(" "),
+      lastUserMessage,
+    ].join(" "),
+  );
+
+  if (/^(bunu|şunu|sunu|buradaki|bundaki|aynı|same|that|this|it|devam|sürdür|surdur)\b/i.test(current)) {
+    return {
+      mode: "same_topic",
+      reason: "referential_followup",
+      carryContinuity: true,
+    };
+  }
+
+  const overlap = overlapScore(current, priorText);
+  const overlapRatio = tokenOverlapRatio(current, priorText);
+  if (overlap >= 2 || overlapRatio >= 0.24) {
+    return {
+      mode: "same_topic",
+      reason: "lexical_topic_overlap",
+      carryContinuity: true,
+    };
+  }
+
+  const taskShapeOverlap =
+    (input.intent.primaryIntent === "planning" &&
+      PLANNING_TOPIC_PATTERN.test(current) &&
+      PLANNING_TOPIC_PATTERN.test(priorText)) ||
+    ((input.intent.primaryIntent === "coding" || input.intent.primaryIntent === "debugging") &&
+      DEBUG_TOPIC_PATTERN.test(current) &&
+      DEBUG_TOPIC_PATTERN.test(priorText));
+  if (taskShapeOverlap) {
+    return {
+      mode: "same_topic",
+      reason: "task_shape_overlap",
+      carryContinuity: true,
+    };
+  }
+
+  if (["planning", "coding", "debugging", "document", "research"].includes(input.intent.primaryIntent)) {
+    return {
+      mode: "new_topic",
+      reason: "task_reset_without_topic_overlap",
+      carryContinuity: false,
+    };
+  }
+
+  return {
+    mode: "possible_shift",
+    reason: "weak_topic_overlap",
+    carryContinuity: false,
+  };
+}
+
 function deriveClarificationDiagnostics(input: {
   intent: IntentClassification;
   message: string;
@@ -412,6 +894,12 @@ export function buildUserContextFromMemory(input: {
   const behavioralHints: string[] = [];
   const environmentHints: string[] = [];
   const continuitySummary = deriveContinuitySummary(input.task.metadata);
+  const continuityBoundary = deriveContinuityBoundary({
+    metadata: input.task.metadata,
+    message: input.task.message,
+    continuitySummary,
+    intent: input.intent,
+  });
   const clarificationDiagnostics = deriveClarificationDiagnostics({
     intent: input.intent,
     message: input.task.message,
@@ -542,6 +1030,30 @@ export function buildUserContextFromMemory(input: {
     );
   }
 
+  const relationshipContextDigest = buildRelationshipContextDigest({
+    userProfile,
+    memorySnapshot,
+    continuitySummary,
+    continuityBoundary,
+    situationalHints,
+    behavioralHints,
+    environmentHints,
+    projectHints,
+    technicalHints,
+  });
+  const speakingStyleDirectives = buildSpeakingStyleDirectives({
+    intent: input.intent,
+    userProfile,
+    memorySnapshot,
+    continuityBoundary,
+  });
+  const reasoningDirectives = buildReasoningDirectives({
+    intent: input.intent,
+    continuityBoundary,
+    clarificationDiagnostics,
+    memorySnapshot,
+  });
+
   return {
     userId: input.userId,
     accountId: input.accountId,
@@ -554,16 +1066,24 @@ export function buildUserContextFromMemory(input: {
     personalizationHints,
     projectHints,
     styleHints,
+    speakingStyleDirectives,
+    reasoningDirectives,
     technicalHints,
     safetyHints,
     situationalHints,
     behavioralHints,
     environmentHints,
     continuitySummary,
+    continuityBoundary,
+    relationshipContextDigest,
     clarificationDiagnostics,
     memoryEnabled,
     personalizationPrompt,
-    memoryRelevanceSummary: filteredMemory.slice(0, 4).map((item) => `${item.key}: ${item.value}`),
+    memoryRelevanceSummary: buildMemoryRelevanceSummary({
+      memory: filteredMemory,
+      continuitySummary,
+      continuityBoundary,
+    }),
     contextPackets,
     healthContextUsed,
     packetKinds,
@@ -802,12 +1322,32 @@ export async function buildUserContext(
     situational: [], behavioral: [], environmental: [],
   }));
 
+  const continuitySummary = deriveContinuitySummary(input.metadata);
+  const continuityBoundary = deriveContinuityBoundary({
+    metadata: input.metadata,
+    message: input.message,
+    continuitySummary,
+    intent: input.intent,
+  });
+  const selectedContinuityMemory = selectContinuityMemory({
+    memory: memory as RetrievedMemory[],
+    queryTokens,
+    intent: input.intent,
+    continuitySummary,
+    continuityBoundary,
+    limit: Math.max(6, MAX_HINTS - 3),
+  });
+  const derivedPromptMemory = (memory as RetrievedMemory[])
+    .filter((item) => isWorldDerivedMemory(item))
+    .slice(0, 3);
+  const promptMemory = [...selectedContinuityMemory, ...derivedPromptMemory];
+
   const ctx = buildUserContextFromMemory({
     userId:      input.userId,
     accountId,
     intent:      input.intent,
     task:        input,
-    memory:      memory as RetrievedMemory[],
+    memory:      promptMemory,
     profile:     enrichedProfile,
     contextPackets,
   });

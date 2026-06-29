@@ -75,3 +75,59 @@ test("buildDerivedHintBuckets suppresses irrelevant world-signal hints for greet
   assert.deepEqual(hints.situationalHints, []);
   assert.deepEqual(hints.environmentHints, []);
 });
+
+test("buildDerivedHintBuckets keeps behavioral and environmental hints gated by request relevance", () => {
+  const genericHints = buildDerivedHintBuckets({
+    requestText: "Bana kısa bir şiir yaz.",
+    memory: [
+      {
+        key: "preferred_planning_granularity",
+        value: "prefers compact time-boxed steps on busy days",
+        metadata: {
+          sourceCategory: "world_signal_derived",
+          derivedTraitCategory: "behavioral",
+        },
+        staleness: "fresh",
+      },
+      {
+        key: "common_city",
+        value: "Istanbul",
+        metadata: {
+          sourceCategory: "world_signal_derived",
+          derivedTraitCategory: "environmental",
+        },
+        staleness: "fresh",
+      },
+    ],
+  });
+
+  assert.deepEqual(genericHints.behavioralHints, []);
+  assert.deepEqual(genericHints.environmentHints, []);
+
+  const planningHints = buildDerivedHintBuckets({
+    requestText: "Bugünkü çalışma planımı çıkar.",
+    memory: [
+      {
+        key: "preferred_planning_granularity",
+        value: "prefers compact time-boxed steps on busy days",
+        metadata: {
+          sourceCategory: "world_signal_derived",
+          derivedTraitCategory: "behavioral",
+        },
+        staleness: "fresh",
+      },
+      {
+        key: "local_preference_context",
+        value: "local context anchored around Istanbul, Kadikoy",
+        metadata: {
+          sourceCategory: "world_signal_derived",
+          derivedTraitCategory: "environmental",
+        },
+        staleness: "fresh",
+      },
+    ],
+  });
+
+  assert.ok(planningHints.behavioralHints.some((item) => item.includes("compact time-boxed")));
+  assert.ok(planningHints.environmentHints.some((item) => item.includes("Istanbul")));
+});

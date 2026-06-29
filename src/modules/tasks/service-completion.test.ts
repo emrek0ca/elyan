@@ -7,6 +7,7 @@ import {
 
 test("resolveCompletionAssistantBlocks promotes markdown tables into typed table blocks", () => {
   const result = resolveCompletionAssistantBlocks({
+    prompt: "Durumu tablo olarak ver",
     responseText: [
       "Asagidaki tablo durumu gosterir.",
       "",
@@ -67,6 +68,35 @@ test("resolveCompletionAssistantBlocks handles a bare-only typed JSON response",
   assert.equal(result.text.trim(), "");
 });
 
+test("resolveCompletionAssistantBlocks promotes leading chart math and svg JSON", () => {
+  const chart = resolveCompletionAssistantBlocks({
+    prompt: "x^2 fonksiyonunun grafiğini çiz",
+    responseText:
+      '{"type":"chart","chartType":"function","expression":"pow(x,2)","variables":["x"],"range":{"x":[-2,2]}}\nGrafik hazır.',
+    assistantBlocks: [],
+  });
+  const math = resolveCompletionAssistantBlocks({
+    prompt: "Bu integrali LaTeX olarak çöz",
+    responseText:
+      '{"type":"math","content":"\\\\int_0^1 x^2 dx = \\\\frac{1}{3}","format":"latex"}',
+    assistantBlocks: [],
+  });
+  const svg = resolveCompletionAssistantBlocks({
+    prompt: "Basit SVG daire çiz",
+    responseText:
+      '{"type":"svg","svg":"<svg viewBox=\\"0 0 10 10\\"><circle cx=\\"5\\" cy=\\"5\\" r=\\"4\\"/></svg>"}',
+    assistantBlocks: [],
+  });
+
+  assert.ok((chart.blocks as Array<Record<string, unknown>>).some((b) => b.type === "chart"));
+  assert.ok(!chart.text.includes('"type"'));
+  assert.equal(chart.text, "Grafik hazır.");
+  assert.ok((math.blocks as Array<Record<string, unknown>>).some((b) => b.type === "math"));
+  assert.equal(math.text, "");
+  assert.ok((svg.blocks as Array<Record<string, unknown>>).some((b) => b.type === "svg"));
+  assert.equal(svg.text, "");
+});
+
 test("resolveCompletionAssistantBlocks ignores prose that merely contains a JSON-looking phrase", () => {
   // Negative case: the response is plain prose with a JSON snippet quoted in
   // the middle. Nothing should be promoted; the text must pass through intact.
@@ -96,4 +126,66 @@ test("resolveVisibleAssistantResponse avoids fallback error text when structured
   });
 
   assert.equal(visibleText, "");
+});
+
+test("resolveCompletionAssistantBlocks keeps incidental markdown tables as text when the user did not ask for a table", () => {
+  const responseText = [
+    "Turk matematikcilerinden bazilari:",
+    "",
+    "| Isim | Alan | Not |",
+    "| --- | --- | --- |",
+    "| Cahit Arf | Matematik | Arf degismeziyle bilinir |",
+    "| Kerim Erim | Matematik | Erken donem akademisyenlerinden |",
+  ].join("\n");
+
+  const result = resolveCompletionAssistantBlocks({
+    prompt: "Turk matematikcileri kisaca anlat",
+    responseText,
+    assistantBlocks: [],
+  });
+
+  const blocks = result.blocks as Array<Record<string, unknown>>;
+  assert.ok(!blocks.some((block) => block.type === "table"));
+  assert.equal(result.text, responseText);
+});
+
+test("resolveCompletionAssistantBlocks converts unrequested table JSON to a plain list", () => {
+  const result = resolveCompletionAssistantBlocks({
+    prompt: "Turk matematikcileri kisaca anlat",
+    responseText: JSON.stringify({
+      type: "table",
+      columns: ["Isim", "Detay"],
+      rows: [
+        ["**Cahit Arf**", "Arf degismezi ve cebir calismalariyla bilinir."],
+        ["Kerim Erim", "Turkiye'de modern matematigin oncusu kabul edilir."],
+      ],
+    }),
+    assistantBlocks: [],
+  });
+
+  const blocks = result.blocks as Array<Record<string, unknown>>;
+  assert.ok(!blocks.some((block) => block.type === "table"));
+  assert.equal(
+    result.text,
+    [
+      "- Cahit Arf: Detay: Arf degismezi ve cebir calismalariyla bilinir.",
+      "- Kerim Erim: Detay: Turkiye'de modern matematigin oncusu kabul edilir.",
+    ].join("\n"),
+  );
+});
+
+test("resolveCompletionAssistantBlocks deduplicates repeated typed blocks", () => {
+  const repeatedTable = {
+    type: "table",
+    columns: ["Yil", "Gelir"],
+    rows: [["2025", "120"]],
+  };
+  const result = resolveCompletionAssistantBlocks({
+    prompt: "Veriyi tablo olarak ver",
+    assistantBlocks: [repeatedTable, repeatedTable],
+    responseText: "",
+  });
+
+  const blocks = result.blocks as Array<Record<string, unknown>>;
+  assert.equal(blocks.filter((block) => block.type === "table").length, 1);
 });

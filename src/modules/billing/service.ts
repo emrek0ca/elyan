@@ -29,14 +29,18 @@ import {
 import { createIdempotencyFingerprint } from "../../lib/idempotency.js";
 import { AppError, badRequest, conflict, notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
-import { buildTrialQuotaWindows, getTrialQuotaUsage } from "../quota/service.js";
+import {
+  assertTrialTaskQuotaAllowedFromUsage,
+  buildTrialQuotaWindows,
+  getTrialQuotaUsage,
+} from "../quota/service.js";
 import {
   buildCreditStatus,
   buildManageSubscriptionHint,
   getCreditWindowSummary,
   recordCreditLedgerEntry,
 } from "./credit-ledger.js";
-import { getBillingUsageSummary, assertMonthlyTaskUsageAllowed } from "./usage-ledger.js";
+import { getBillingUsageSummary } from "./usage-ledger.js";
 import {
   resolveTokenBudgetState,
   TOKEN_METERING_UNIT_SIZE,
@@ -301,6 +305,7 @@ function shapePlanSummary(code: string) {
     desktopLimit: plan.desktopLimit,
     taskLimitMonthly: plan.taskLimitMonthly,
     aiCreditsMonthly: plan.aiCreditsMonthly,
+    fiveHourBudgetUnits: plan.fiveHourBudgetUnits,
     dailyBudgetUnits: plan.dailyBudgetUnits,
     weeklyBudgetUnits: plan.weeklyBudgetUnits,
     documentUploadLimit: plan.documentUploadLimit,
@@ -367,12 +372,11 @@ export async function getSharedBrainUsageBudget(
   }
 
   if (access.mode === "paid" || (access.mode === "free" && access.serverBrainAllowed)) {
-    const summary = await getBillingUsageSummary(db, userId);
     return {
       access,
-      remainingAiCredits: summary.aiUsage.remaining,
-      grantedAiCredits: summary.aiUsage.granted,
-      periodEndsAt: summary.periodEndsAt,
+      remainingAiCredits: null,
+      grantedAiCredits: null,
+      periodEndsAt: null,
     };
   }
 
@@ -393,7 +397,7 @@ export function assertSharedBrainUsageBudgetAllowed(
 
   const requiredCredits = Math.max(1, Math.ceil(estimatedAiCredits));
   if (budget.remainingAiCredits < requiredCredits) {
-    throw new AppError(409, "ai_credit_limit_reached", "Aylık kullanım hakkı doldu.", {
+    throw new AppError(409, "ai_credit_limit_reached", "Kullanım hakkı doldu.", {
       retryAt: budget.periodEndsAt,
       estimatedCredits: requiredCredits,
     });
@@ -1952,13 +1956,7 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
     subscription.periodEndsAt.getTime() <= currentTime.getTime();
   if (subscription && (welcomeProExpired || canceledPaidPeriodEnded)) {
     const freeDefaults = applyBillingPlanDefaults("free");
-    const nextPeriodEnd = new Date(
-      Date.UTC(
-        currentTime.getUTCFullYear(),
-        currentTime.getUTCMonth() + 1,
-        1,
-      ),
-    );
+    const nextPeriodEnd = new Date(currentTime.getTime() + 5 * 60 * 60 * 1000);
     const repairedRows = await app.db
       .update(subscriptions)
       .set({
@@ -2068,6 +2066,21 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
         qualityProfile: accessTruth.brainProfile.qualityProfile,
       },
       usage: {
+        quotaWindows: buildTrialQuotaWindows(trialQuota),
+        budgetUnits: {
+          fiveHour: {
+            limit: trialQuota.dailyLimit,
+            used: trialQuota.dailyUsed,
+            remaining: trialQuota.dailyRemaining,
+            resetsAt: trialQuota.dailyResetAt,
+          },
+          weekly: {
+            limit: trialQuota.weeklyLimit,
+            used: trialQuota.weeklyUsed,
+            remaining: trialQuota.weeklyRemaining,
+            resetsAt: trialQuota.weeklyResetAt,
+          },
+        },
         tokens: {
           limit: usageSummary.aiCreditsMonthly,
           used: usageSummary.aiUsage.used,
@@ -2132,6 +2145,7 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
       taskLimitMonthly: usageSummary.taskLimitMonthly,
       aiCreditsMonthly: usageSummary.aiCreditsMonthly,
       tokensMonthly: usageSummary.aiCreditsMonthly,
+      fiveHourBudgetUnits: trialQuota.dailyLimit,
       dailyBudgetUnits: trialQuota.dailyLimit,
       weeklyBudgetUnits: trialQuota.weeklyLimit,
       documentUploadLimit: trialQuota.documentUploadLimit,
@@ -2266,7 +2280,8 @@ export async function assertDesktopPairingAllowed(
 }
 
 export async function assertTaskCreationAllowed(app: FastifyInstance, userId: string): Promise<void> {
-  await assertMonthlyTaskUsageAllowed(app.db, userId);
+  const quota = await getTrialQuotaUsage(app.db, userId);
+  assertTrialTaskQuotaAllowedFromUsage(quota);
 }
 
 export async function createSubscriptionCheckout(

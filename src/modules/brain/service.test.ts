@@ -731,6 +731,7 @@ test("getBrainProfile exposes the stable mobile and desktop contract surface", a
   assert.equal(profile.quota.consumptionMetric, "budget_units");
   assert.deepEqual(profile.quota.appliesTo, ["chat", "task", "document_upload", "image_upload"]);
   assert.deepEqual(profile.quota.safeErrorCodes, [
+    "five_hour_quota_reached",
     "daily_quota_reached",
     "weekly_quota_reached",
     "document_quota_reached",

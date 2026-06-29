@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyIntent } from "./intent-classifier.js";
-import { buildUserContextFromMemory } from "./context-builder.js";
+import { buildUserContextFromMemory, selectContinuityMemory } from "./context-builder.js";
 import { buildContextPacketsFromMetadata } from "./context-packets.js";
 
 test("buildUserContextFromMemory deduplicates and caps prompt hints", () => {
@@ -52,7 +52,7 @@ test("buildUserContextFromMemory deduplicates and caps prompt hints", () => {
     context.safetyHints.length;
 
   assert.ok(hintCount <= context.tokenBudget.maxHints);
-  assert.equal(context.styleHints.filter((hint) => hint === "answer_length: concise").length, 1);
+  assert.equal(context.styleHints.filter((hint) => hint.includes("answer_length: concise")).length, 1);
   assert.ok(context.projectHints.includes("project:Elyan"));
   assert.ok(context.ecosystemHints.includes("elyan_ecosystem"));
   assert.ok(context.ecosystemHints.includes("backend_control_plane"));
@@ -209,6 +209,9 @@ test("buildUserContextFromMemory derives preferred name and language from safe m
   assert.deepEqual(context.situationalHints, []);
   assert.deepEqual(context.behavioralHints, []);
   assert.deepEqual(context.environmentHints, []);
+  assert.ok(context.relationshipContextDigest.some((item) => item.includes("Emre")));
+  assert.ok(context.relationshipContextDigest.some((item) => item.includes("Türkçe")));
+  assert.ok((context.speakingStyleDirectives ?? []).some((item) => item.includes("Türkçe")));
 });
 
 test("buildUserContextFromMemory promotes derived world-signal memory into situational and behavioral hints", () => {
@@ -270,6 +273,297 @@ test("buildUserContextFromMemory promotes derived world-signal memory into situa
   assert.ok(context.situationalHints.some((hint) => hint.includes("low energy window")));
   assert.ok(context.behavioralHints.some((hint) => hint.includes("compact time-boxed")));
   assert.equal(context.memorySnapshot?.derivedFacts.length, 2);
+});
+
+test("buildUserContextFromMemory builds a clean continuity digest and memory shortlist", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Bugünkü planımı kısa ve net çıkar.",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Bugünkü planımı kısa ve net çıkar.",
+      metadata: {
+        compactContext: {
+          rollingSummary: {
+            userGoal: "Haftalık çalışma sistemini toparlamak",
+            assistantState: "Önceki turda kaba plan çıkarıldı",
+            openLoops: ["Takvime göre net günlük plan çıkarmak"],
+          },
+          recentMessages: [
+            { role: "user", content: "Haftalık çalışma sistemimi toparla ve günlük plan çıkar" },
+            { role: "assistant", content: "Önce haftalık çerçeveyi kurup sonra günlük planı netleştirelim." },
+          ],
+        },
+      },
+    },
+    profile: {
+      displayName: "Emre",
+      preferredLanguage: "Türkçe",
+    },
+    memory: [
+      {
+        id: "pref-length",
+        type: "preference",
+        key: "answer_length",
+        value: "concise",
+        confidence: 0.95,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 91,
+        isPinned: true,
+      },
+      {
+        id: "project",
+        type: "project_context",
+        key: "active_project",
+        value: "Elyan backend personalization",
+        confidence: 0.91,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 84,
+        isPinned: false,
+      },
+      {
+        id: "world-derived",
+        type: "workflow",
+        key: "common_city",
+        value: "Istanbul",
+        confidence: 0.88,
+        scope: "user",
+        source: "system",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 76,
+        isPinned: false,
+        metadata: {
+          sourceCategory: "world_signal_derived",
+          derivedTraitCategory: "environmental",
+        },
+      },
+    ],
+  });
+
+  assert.ok(context.relationshipContextDigest.some((item) => item.includes("Emre")));
+  assert.ok(context.relationshipContextDigest.some((item) => item.includes("Haftalık çalışma sistemini toparlamak")));
+  assert.ok(context.relationshipContextDigest.some((item) => item.includes("Takvime göre net günlük plan çıkarmak")));
+  assert.ok(context.memoryRelevanceSummary.includes("answer_length: concise"));
+  assert.ok(context.memoryRelevanceSummary.includes("active_project: Elyan backend personalization"));
+  assert.equal(context.memoryRelevanceSummary.some((item) => item.includes("Istanbul")), false);
+  assert.equal(context.continuityBoundary?.mode, "same_topic");
+  assert.equal(context.continuityBoundary?.carryContinuity, true);
+});
+
+test("selectContinuityMemory keeps only user-scoped safe continuity facts and caps noisy categories", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Backend tarafında auth akışını düzelt.",
+  });
+
+  const selected = selectContinuityMemory({
+    queryTokens: new Set(["backend", "auth", "akış"]),
+    intent,
+    continuitySummary: {
+      userGoal: "Auth akışını düzeltmek",
+      assistantState: null,
+      openLoops: ["403 hatasının kök nedenini bulmak"],
+    },
+    continuityBoundary: {
+      mode: "same_topic",
+      reason: "test",
+      carryContinuity: true,
+    },
+    memory: [
+      {
+        id: "shared-project",
+        type: "project_context",
+        key: "project_name",
+        value: "Global tenant memory",
+        confidence: 0.99,
+        scope: "shared",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 95,
+        isPinned: true,
+      },
+      {
+        id: "world-derived",
+        type: "workflow",
+        key: "common_city",
+        value: "Istanbul",
+        confidence: 0.9,
+        scope: "user",
+        source: "system",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 70,
+        isPinned: false,
+        metadata: {
+          sourceCategory: "world_signal_derived",
+          derivedTraitCategory: "environmental",
+        },
+      },
+      {
+        id: "episode-1",
+        type: "episodic",
+        key: "recent_issue",
+        value: "auth callback 403 hatası konuşuldu",
+        confidence: 0.9,
+        scope: "user",
+        source: "episodic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: null,
+        importanceScore: 80,
+        isPinned: false,
+      },
+      {
+        id: "episode-2",
+        type: "episodic",
+        key: "recent_issue_2",
+        value: "session refresh bug araştırıldı",
+        confidence: 0.88,
+        scope: "user",
+        source: "episodic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: null,
+        importanceScore: 79,
+        isPinned: false,
+      },
+      {
+        id: "tech-1",
+        type: "technical_stack",
+        key: "stack",
+        value: "fastify auth pipeline",
+        confidence: 0.92,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 84,
+        isPinned: true,
+      },
+      {
+        id: "tech-2",
+        type: "technical_stack",
+        key: "stack_2",
+        value: "jwt refresh handling",
+        confidence: 0.9,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 82,
+        isPinned: false,
+      },
+      {
+        id: "tech-3",
+        type: "technical_stack",
+        key: "stack_3",
+        value: "postgres audit trail",
+        confidence: 0.89,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 81,
+        isPinned: false,
+      },
+    ],
+  });
+
+  assert.equal(selected.some((item) => item.scope === "shared"), false);
+  assert.equal(selected.some((item) => item.metadata?.sourceCategory === "world_signal_derived"), false);
+  assert.equal(selected.filter((item) => item.source === "episodic_memory").length, 1);
+  assert.ok(selected.some((item) => item.key === "stack"));
+  assert.ok(selected.some((item) => item.key === "stack_2"));
+  assert.equal(selected.some((item) => item.key === "stack_3"), false);
+});
+
+test("buildUserContextFromMemory suppresses stale continuity when the user clearly shifts topic", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Bana kısa bir şiir yaz.",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Bana kısa bir şiir yaz.",
+      metadata: {
+        compactContext: {
+          rollingSummary: {
+            userGoal: "Backend auth bugını düzeltmek",
+            assistantState: "Root cause aranıyordu",
+            openLoops: ["403 hatasını doğrulamak"],
+          },
+          recentMessages: [
+            { role: "user", content: "Backend auth bugını düzelt" },
+            { role: "assistant", content: "Önce root cause bulalım." },
+          ],
+        },
+      },
+    },
+    profile: {
+      displayName: "Emre",
+    },
+    memory: [
+      {
+        id: "pref-tone",
+        type: "preference",
+        key: "preferred_tone",
+        value: "warm_professional",
+        confidence: 0.92,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 85,
+        isPinned: true,
+      },
+    ],
+  });
+
+  assert.equal(context.continuityBoundary?.mode, "possible_shift");
+  assert.equal(context.continuityBoundary?.carryContinuity, false);
+  assert.equal(context.relationshipContextDigest.some((item) => item.includes("Backend auth")), false);
+  assert.equal(context.memoryRelevanceSummary.some((item) => item.includes("open_follow_up")), false);
+  assert.ok((context.speakingStyleDirectives ?? []).some((item) => item.includes("Do not drag prior chat context")));
+  assert.ok((context.reasoningDirectives ?? []).some((item) => item.includes("optional background")));
 });
 
 test("buildContextPacketsFromMetadata packages health signals without raw measurements", () => {

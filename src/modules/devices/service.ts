@@ -108,15 +108,20 @@ export function shapeUserDevice(
     ? isRuntimeConnectionFresh(runtime, effectiveNow)
     : false;
   // If the WebSocket is live in the hub, treat the connection as fresh regardless of DB timestamp
-  const runtimeConnected = (runtimeFresh || wsConnected) && runtime?.status !== "offline";
+  const runtimeConnected =
+    (runtimeFresh || wsConnected) && runtime?.status !== "offline";
   const runtimeStale =
-    Boolean(runtime) && runtime?.status !== "offline" && !runtimeFresh && !wsConnected;
+    Boolean(runtime) &&
+    runtime?.status !== "offline" &&
+    !runtimeFresh &&
+    !wsConnected;
   const normalizedCapabilities = runtime
     ? normalizeRuntimeCapabilities(runtime.capabilities)
     : [];
   const isDesktop = device.type === "desktop";
   // When WS is live and the connection row exists (even with disconnectedAt), treat as online
-  const isOnline = isDesktop && (runtimeConnected || (wsConnected && Boolean(runtime)));
+  const isOnline =
+    isDesktop && (runtimeConnected || (wsConnected && Boolean(runtime)));
   const canReceiveTasks =
     isDesktop &&
     device.isActive &&
@@ -127,29 +132,29 @@ export function shapeUserDevice(
     ? "not_desktop"
     : !desktopAllowed
       ? "plan_restricted"
-    : !device.isActive
-      ? "inactive"
-      : !externalClientsCanReachAdvertisedBaseUrl
-        ? "backend_unreachable"
-        : runtimeStale
-          ? "runtime_stale"
-          : isOnline
-            ? "ready"
-            : "offline";
+      : !device.isActive
+        ? "inactive"
+        : !externalClientsCanReachAdvertisedBaseUrl
+          ? "backend_unreachable"
+          : runtimeStale
+            ? "runtime_stale"
+            : isOnline
+              ? "ready"
+              : "offline";
   const targetErrorCode =
     targetStatus === "ready"
       ? null
       : targetStatus === "plan_restricted"
         ? "desktop_plan_required"
-      : targetStatus === "backend_unreachable"
-        ? "backend_unreachable"
-      : targetStatus === "offline"
-        ? "device_offline"
-          : targetStatus === "runtime_stale"
-            ? "runtime_stale"
-            : targetStatus === "inactive"
-              ? "device_inactive"
-              : "invalid_target";
+        : targetStatus === "backend_unreachable"
+          ? "backend_unreachable"
+          : targetStatus === "offline"
+            ? "device_offline"
+            : targetStatus === "runtime_stale"
+              ? "runtime_stale"
+              : targetStatus === "inactive"
+                ? "device_inactive"
+                : "invalid_target";
   const queuedTaskCountValue =
     typeof options === "number" ? options : options?.queuedTaskCount;
   const queuedTaskCount = Math.max(0, queuedTaskCountValue ?? 0);
@@ -197,10 +202,7 @@ export function shapeUserDevice(
         : {
             isConnected: false,
             status: (runtime?.status ?? "offline") as
-              | "online"
-              | "busy"
-              | "idle"
-              | "offline",
+              "online" | "busy" | "idle" | "offline",
             capabilities: normalizedCapabilities,
             capabilityStates: runtime?.capabilityStates ?? {},
             capabilitySummary: summarizeRuntimeCapabilities(
@@ -455,7 +457,7 @@ export async function listUserDevices(app: FastifyInstance, userId: string) {
   const reachability = getBaseUrlReachability(app.config);
 
   // Keep only the most recent connection per device
-  const recentByDeviceId = new Map<string, typeof recentConnections[0]>();
+  const recentByDeviceId = new Map<string, (typeof recentConnections)[0]>();
   for (const conn of recentConnections) {
     if (!recentByDeviceId.has(conn.deviceId)) {
       recentByDeviceId.set(conn.deviceId, conn);
@@ -467,9 +469,10 @@ export async function listUserDevices(app: FastifyInstance, userId: string) {
       device.type === "desktop"
         ? (recentByDeviceId.get(device.id) ?? null)
         : null;
-    const wsConnected = device.type === "desktop"
-      ? app.services.realtimeHub.isRuntimeConnected(device.id)
-      : false;
+    const wsConnected =
+      device.type === "desktop"
+        ? Boolean(app.services.realtimeHub?.isRuntimeConnected?.(device.id))
+        : false;
     return shapeUserDevice(
       device,
       runtime,
@@ -540,9 +543,10 @@ export async function getUserDevice(
       ? await listQueuedTaskCountsByDevice(app, [device.id])
       : new Map<string, number>();
   const reachability = getBaseUrlReachability(app.config);
-  const wsConnected = device.type === "desktop"
-    ? app.services.realtimeHub.isRuntimeConnected(device.id)
-    : false;
+  const wsConnected =
+    device.type === "desktop"
+      ? Boolean(app.services.realtimeHub?.isRuntimeConnected?.(device.id))
+      : false;
 
   return shapeUserDevice(
     device,
@@ -811,7 +815,7 @@ export async function deactivateUserDevice(
     .update(devices)
     .set({
       isActive: false,
-      deviceKeyHash: null,     // invalidate stored secret
+      deviceKeyHash: null, // invalidate stored secret
       updatedAt: now,
     })
     .where(eq(devices.id, device.id))
@@ -855,8 +859,13 @@ export async function deactivateUserDevice(
 
 const STALE_MOBILE_DEVICE_DAYS = 90;
 
-export async function pruneStaleDevices(app: FastifyInstance, userId: string): Promise<void> {
-  const cutoff = new Date(Date.now() - STALE_MOBILE_DEVICE_DAYS * 24 * 60 * 60 * 1000);
+export async function pruneStaleDevices(
+  app: FastifyInstance,
+  userId: string,
+): Promise<void> {
+  const cutoff = new Date(
+    Date.now() - STALE_MOBILE_DEVICE_DAYS * 24 * 60 * 60 * 1000,
+  );
   const staleRows = await app.db
     .select({ id: devices.id })
     .from(devices)

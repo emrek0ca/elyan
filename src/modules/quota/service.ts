@@ -17,12 +17,14 @@ import {
 } from "../billing/catalog.js";
 import { BILLING_USAGE_METRICS, recordUsageLedgerEntry } from "../billing/usage-ledger.js";
 
-const DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const FIVE_HOUR_WINDOW_MS = 5 * 60 * 60 * 1000;
 const WEEKLY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-export const TRIAL_DAILY_LIMIT = getBillingPlan("free").dailyBudgetUnits;
+export const TRIAL_FIVE_HOUR_LIMIT = getBillingPlan("free").fiveHourBudgetUnits;
+export const TRIAL_DAILY_LIMIT = TRIAL_FIVE_HOUR_LIMIT;
 export const TRIAL_WEEKLY_LIMIT = getBillingPlan("free").weeklyBudgetUnits;
 
 export const TRIAL_QUOTA_SAFE_ERROR_CODES = [
+  "five_hour_quota_reached",
   "daily_quota_reached",
   "weekly_quota_reached",
   "document_quota_reached",
@@ -35,6 +37,7 @@ export type TrialQuotaPolicy = {
   source: "usage_records+quota_state";
   commitPoint: "task.create+brain.inference";
   consumptionMetric: "budget_units";
+  fiveHourWindowHours: number;
   dailyWindowHours: number;
   weeklyWindowHours: number;
   idempotency: {
@@ -74,7 +77,9 @@ export type TrialQuotaUsage = {
 };
 
 export type QuotaWindowTruth = {
+  type: "five_hour" | "weekly";
   title: string;
+  windowHours: number;
   limit: number;
   used: number;
   remaining: number;
@@ -378,7 +383,7 @@ export async function getTrialQuotaUsage(db: QuotaDb, userId: string): Promise<T
   const planCode = normalizeBillingPlanCode(user.planCode);
   const plan = getBillingPlan(planCode);
   const current = now();
-  const dailyStartAt = new Date(current.getTime() - DAILY_WINDOW_MS);
+  const dailyStartAt = new Date(current.getTime() - FIVE_HOUR_WINDOW_MS);
   const weeklyStartAt = new Date(current.getTime() - WEEKLY_WINDOW_MS);
 
   const [daily, weekly] = await Promise.all([
@@ -394,13 +399,13 @@ export async function getTrialQuotaUsage(db: QuotaDb, userId: string): Promise<T
 
   const dailyUsed = daily.usedUnits;
   const weeklyUsed = weekly.usedUnits;
-  const dailyRemaining = Math.max(0, plan.dailyBudgetUnits - dailyUsed);
+  const dailyRemaining = Math.max(0, plan.fiveHourBudgetUnits - dailyUsed);
   const weeklyRemaining = Math.max(0, plan.weeklyBudgetUnits - weeklyUsed);
   const documentUploadCount = weekly.documentUnits;
   const imageUploadCount = weekly.imageUnits;
   const documentUploadRemaining = Math.max(0, plan.documentUploadLimit - documentUploadCount);
   const imageUploadRemaining = Math.max(0, plan.imageUploadLimit - imageUploadCount);
-  const dailyResetAt = buildResetAt(daily.oldestCreatedAt, DAILY_WINDOW_MS);
+  const dailyResetAt = buildResetAt(daily.oldestCreatedAt, FIVE_HOUR_WINDOW_MS);
   const weeklyResetAt = buildResetAt(weekly.oldestCreatedAt, WEEKLY_WINDOW_MS);
 
   await syncQuotaStateMaterialization(db, {
@@ -437,11 +442,11 @@ export async function getTrialQuotaUsage(db: QuotaDb, userId: string): Promise<T
     identityId: identity.id,
     planCode,
     qualityProfile: readQualityProfileForPlan(planCode),
-    dailyLimit: plan.dailyBudgetUnits,
+    dailyLimit: plan.fiveHourBudgetUnits,
     dailyUsed,
     dailyRemaining,
     dailyResetAt,
-    dailyProgressPercent: buildRemainingPercent(dailyUsed, plan.dailyBudgetUnits),
+    dailyProgressPercent: buildRemainingPercent(dailyUsed, plan.fiveHourBudgetUnits),
     weeklyLimit: plan.weeklyBudgetUnits,
     weeklyUsed,
     weeklyRemaining,
@@ -459,7 +464,9 @@ export async function getTrialQuotaUsage(db: QuotaDb, userId: string): Promise<T
 export function buildTrialQuotaWindows(quota: TrialQuotaUsage): QuotaWindowTruth[] {
   return [
     {
-      title: "Günlük",
+      type: "five_hour",
+      title: "5 Saatlik",
+      windowHours: 5,
       limit: quota.dailyLimit,
       used: quota.dailyUsed,
       remaining: quota.dailyRemaining,
@@ -468,7 +475,9 @@ export function buildTrialQuotaWindows(quota: TrialQuotaUsage): QuotaWindowTruth
       resetAt: quota.dailyResetAt,
     },
     {
-      title: "Haftalık",
+      type: "weekly",
+      title: "7 Günlük",
+      windowHours: 168,
       limit: quota.weeklyLimit,
       used: quota.weeklyUsed,
       remaining: quota.weeklyRemaining,
@@ -485,7 +494,8 @@ export function getTrialQuotaPolicy(): TrialQuotaPolicy {
     source: "usage_records+quota_state",
     commitPoint: "task.create+brain.inference",
     consumptionMetric: "budget_units",
-    dailyWindowHours: 24,
+    fiveHourWindowHours: 5,
+    dailyWindowHours: 5,
     weeklyWindowHours: 168,
     idempotency: {
       scope: "identity",
@@ -518,7 +528,7 @@ export function assertTrialTaskQuotaAllowedFromUsage(
   const requiredUnits = Math.max(1, normalizeCount(requiredBudgetUnits));
 
   if (quota.dailyRemaining < requiredUnits) {
-    throw new AppError(409, "daily_quota_reached", "Günlük kullanım hakkı doldu.", {
+    throw new AppError(409, "five_hour_quota_reached", "5 saatlik kullanım hakkı doldu.", {
       retryAt: quota.dailyResetAt,
       requiredBudgetUnits: requiredUnits,
     });

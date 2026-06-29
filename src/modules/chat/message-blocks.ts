@@ -14,8 +14,10 @@ import type {
   ElyanAssistantBlockGroupBlock,
   ElyanAssistantImageAnalysisBlock,
   ElyanAssistantInfoCardBlock,
+  ElyanAssistantMathBlock,
   ElyanAssistantNextStepsBlock,
   ElyanAssistantStatusBlock,
+  ElyanAssistantSvgBlock,
   ElyanAssistantSummaryBlock,
   ElyanAssistantTableBlock,
   ElyanAssistantTextBlock,
@@ -31,6 +33,15 @@ type BuildAssistantBlocksOptions = {
 };
 
 type AssistantBlockVisibility = "user_visible" | "assistant_internal_by_default";
+type AssistantRenderContract = {
+  version: "elyan_blocks.v2";
+  mode: "block_first";
+  canonicalSurface: "blocks";
+  legacyContent: "fallback_only";
+  hasVisibleBlocks: boolean;
+  visibleBlockTypes: string[];
+  textIsBlockWrapped: boolean;
+};
 
 type AssistantBlockCommon = {
   stableBlockId?: string;
@@ -745,15 +756,26 @@ export function buildAssistantChartBlock(
     chartType: ElyanAssistantChartBlock["chartType"];
     labels: unknown;
     values: unknown;
+    points?: unknown;
+    data?: unknown;
+    series?: unknown;
+    expression?: string | null;
+    variables?: unknown;
+    range?: unknown;
+    fixed?: unknown;
+    xLabel?: string | null;
+    yLabel?: string | null;
+    renderer?: string | null;
     seriesName?: string | null;
     title?: string | null;
     caption?: string | null;
   },
   options: AssistantBlockCommon = {},
 ): ElyanAssistantChartBlock | null {
+  const chartType = normalizeChartType(input.chartType);
   const labels = normalizeStringList(input.labels, {
     min: 1,
-    max: 24,
+    max: 240,
     itemMaxLength: 120,
   });
   const values = Array.isArray(input.values)
@@ -762,26 +784,44 @@ export function buildAssistantChartBlock(
         .filter((value): value is number => value != null)
         .slice(0, labels.length)
     : [];
-  if (
-    !["bar", "line", "pie"].includes(input.chartType) ||
-    labels.length === 0 ||
-    values.length === 0
-  ) {
+  const points = Array.isArray(input.points) ? input.points.slice(0, 1_500) : undefined;
+  const data = Array.isArray(input.data) ? input.data.slice(0, 1_500) : undefined;
+  const series = normalizeChartSeries(input.series);
+  const expression = normalizeTextValue(input.expression, 2_000);
+  const hasDirectData =
+    values.length > 0 || (points?.length ?? 0) > 0 || (data?.length ?? 0) > 0 || (series?.length ?? 0) > 0 || Boolean(expression);
+  if (!chartType || !hasDirectData) {
     return null;
   }
   const trimmedLabels = labels.slice(0, values.length);
   const trimmedValues = values.slice(0, trimmedLabels.length);
+  const fallbackSeries =
+    trimmedLabels.length > 0 && trimmedValues.length > 0
+      ? [
+          {
+            name: normalizeTextValue(input.seriesName, 80) ?? "Veri",
+            labels: trimmedLabels,
+            values: trimmedValues,
+          },
+        ]
+      : undefined;
   return {
     type: "chart",
-    chartType: input.chartType,
-    // Mobile expects series array: [{name, labels, values}]
-    series: [
-      {
-        name: normalizeTextValue(input.seriesName, 80) ?? "Veri",
-        labels: trimmedLabels,
-        values: trimmedValues,
-      },
-    ],
+    chartType,
+    ...(trimmedLabels.length > 0 ? { labels: trimmedLabels } : {}),
+    ...(trimmedValues.length > 0 ? { values: trimmedValues } : {}),
+    ...(points && points.length > 0 ? { points } : {}),
+    ...(data && data.length > 0 ? { data } : {}),
+    ...(series && series.length > 0 ? { series } : fallbackSeries ? { series: fallbackSeries } : {}),
+    ...(expression ? { expression } : {}),
+    ...(normalizeStringList(input.variables, { max: 12, itemMaxLength: 24 }).length > 0
+      ? { variables: normalizeStringList(input.variables, { max: 12, itemMaxLength: 24 }) }
+      : {}),
+    ...(input.range && typeof input.range === "object" && !Array.isArray(input.range) ? { range: input.range as Record<string, unknown> } : {}),
+    ...(input.fixed && typeof input.fixed === "object" && !Array.isArray(input.fixed) ? { fixed: input.fixed as Record<string, number> } : {}),
+    ...(normalizeTextValue(input.xLabel, 120) ? { xLabel: normalizeTextValue(input.xLabel, 120)! } : {}),
+    ...(normalizeTextValue(input.yLabel, 120) ? { yLabel: normalizeTextValue(input.yLabel, 120)! } : {}),
+    ...(normalizeTextValue(input.renderer, 40) ? { renderer: normalizeTextValue(input.renderer, 40)! } : {}),
     ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
     ...(normalizeTextValue(input.caption, 240) ? { caption: normalizeTextValue(input.caption, 240)! } : {}),
     ...withAssistantBlockDefaults("chart", {}, {
@@ -789,6 +829,118 @@ export function buildAssistantChartBlock(
       renderHints: {
         sectionRole: "chart",
         density: "regular",
+        ...(options.renderHints ?? {}),
+      },
+      ...options,
+    }),
+  };
+}
+
+function normalizeChartType(value: unknown): ElyanAssistantChartBlock["chartType"] | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized || normalized === "chart" || normalized === "data_chart") {
+    return "bar";
+  }
+  if (["bar", "column", "bar_chart", "column_chart"].includes(normalized)) return "bar";
+  if (["line", "line2d", "line_chart", "spline"].includes(normalized)) return "line";
+  if (["pie", "donut", "doughnut"].includes(normalized)) return "pie";
+  if (["area", "area_chart"].includes(normalized)) return "area";
+  if (["scatter", "scatterplot", "scatter_plot"].includes(normalized)) return "scatter";
+  if (["geometry", "plot", "geometric", "geometry_plot"].includes(normalized)) return "geometry";
+  if (["function", "function_plot", "curve", "math_function"].includes(normalized)) return "function";
+  if (["surface", "surface3d", "3d", "3d_plot"].includes(normalized)) return "surface3d";
+  if (["mesh", "mesh3d"].includes(normalized)) return "mesh";
+  if (["heatmap", "heat_map"].includes(normalized)) return "heatmap";
+  return null;
+}
+
+function normalizeChartSeries(value: unknown): ElyanAssistantChartBlock["series"] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const series = value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const labels = normalizeStringList(item.labels ?? item.categories ?? item.x, {
+        max: 240,
+        itemMaxLength: 120,
+      });
+      const rawValues = Array.isArray(item.values ?? item.y) ? (item.values ?? item.y) as unknown[] : [];
+      const values = rawValues
+        .map((entry) => (typeof entry === "number" && Number.isFinite(entry) ? entry : null))
+        .filter((entry): entry is number => entry != null)
+        .slice(0, labels.length > 0 ? labels.length : 240);
+      const points = Array.isArray(item.points) ? item.points.slice(0, 1_500) : undefined;
+      const data = Array.isArray(item.data) ? item.data.slice(0, 1_500) : undefined;
+      if (labels.length === 0 && values.length === 0 && !points && !data) return null;
+      return {
+        ...(normalizeTextValue(item.name, 120) ? { name: normalizeTextValue(item.name, 120)! } : {}),
+        ...(labels.length > 0 ? { labels } : {}),
+        ...(values.length > 0 ? { values } : {}),
+        ...(points && points.length > 0 ? { points: points as Record<string, unknown>[] } : {}),
+        ...(data && data.length > 0 ? { data } : {}),
+      };
+    })
+    .filter((item): item is NonNullable<ElyanAssistantChartBlock["series"]>[number] => item != null)
+    .slice(0, 8);
+  return series.length > 0 ? series : undefined;
+}
+
+export function buildAssistantMathBlock(
+  input: {
+    content?: string | null;
+    latex?: string | null;
+    displayMode?: boolean | null;
+    format?: string | null;
+  },
+  options: AssistantBlockCommon = {},
+): ElyanAssistantMathBlock | null {
+  const content = normalizeTextValue(input.content ?? input.latex, 8_000);
+  if (!content) {
+    return null;
+  }
+  const format = String(input.format ?? "latex").trim().toLowerCase();
+  return {
+    type: "math",
+    content,
+    ...(input.latex ? { latex: input.latex } : {}),
+    ...(typeof input.displayMode === "boolean" ? { displayMode: input.displayMode } : {}),
+    format: format === "tex" || format === "plain" ? format : "latex",
+    ...withAssistantBlockDefaults("math", {}, {
+      priority: options.priority ?? 2,
+      renderHints: {
+        sectionRole: "math",
+        ...(options.renderHints ?? {}),
+      },
+      ...options,
+    }),
+  };
+}
+
+export function buildAssistantSvgBlock(
+  input: {
+    svg?: string | null;
+    markup?: string | null;
+    url?: string | null;
+    title?: string | null;
+    caption?: string | null;
+  },
+  options: AssistantBlockCommon = {},
+): ElyanAssistantSvgBlock | null {
+  const svg = normalizeTextValue(input.svg ?? input.markup, 80_000);
+  const url = normalizeTextValue(input.url, 2_000);
+  if (!svg && !url) {
+    return null;
+  }
+  return {
+    type: "svg",
+    ...(svg ? { svg } : {}),
+    ...(url ? { url } : {}),
+    ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
+    ...(normalizeTextValue(input.caption, 240) ? { caption: normalizeTextValue(input.caption, 240)! } : {}),
+    ...withAssistantBlockDefaults("svg", {}, {
+      priority: options.priority ?? 2,
+      renderHints: {
+        sectionRole: "svg",
+        vectorSafe: true,
         ...(options.renderHints ?? {}),
       },
       ...options,
@@ -1135,6 +1287,33 @@ function parseInfoItems(value: unknown): ElyanAssistantInfoCardBlock["items"] {
     .slice(0, 8);
 }
 
+function stableBlockDedupeKey(block: AssistantMessageBlock): string {
+  const record = block as Record<string, unknown>;
+  const stableBlockId = typeof record.stableBlockId === "string" ? record.stableBlockId.trim() : "";
+  if (stableBlockId) {
+    return `${block.type}:id:${stableBlockId}`;
+  }
+  const cacheDigest = typeof record.cacheDigest === "string" ? record.cacheDigest.trim() : "";
+  if (cacheDigest) {
+    return `${block.type}:cache:${cacheDigest}`;
+  }
+  return `${block.type}:body:${JSON.stringify(block)}`;
+}
+
+function dedupeAssistantBlocks(blocks: AssistantMessageBlock[]): AssistantMessageBlock[] {
+  const seen = new Set<string>();
+  const result: AssistantMessageBlock[] = [];
+  for (const block of blocks) {
+    const key = stableBlockDedupeKey(block);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(block);
+  }
+  return result;
+}
+
 function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -1273,26 +1452,84 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
     );
   }
   if (type === "chart") {
-    const chartType = String(record.chartType ?? record.kind ?? "").trim().toLowerCase();
-    if (!["bar", "line", "pie"].includes(chartType)) {
-      return null;
-    }
-    // Support both series format [{name,labels,values}] and flat {labels,values}
-    let labels: unknown = record.labels;
-    let values: unknown = record.values;
-    let seriesName: string | undefined;
-    if (Array.isArray(record.series) && record.series.length > 0) {
-      const first = record.series[0] as Record<string, unknown>;
-      labels = first.labels ?? first.x ?? labels;
-      values = first.values ?? first.y ?? values;
-      seriesName = typeof first.name === "string" ? first.name : undefined;
-    }
     return buildAssistantChartBlock(
       {
-        chartType: chartType as ElyanAssistantChartBlock["chartType"],
-        labels,
-        values,
-        seriesName,
+        chartType: String(record.chartType ?? record.chart_type ?? record.kind ?? "bar") as ElyanAssistantChartBlock["chartType"],
+        labels: record.labels ?? record.categories ?? record.x,
+        values: record.values ?? record.y,
+        points: record.points,
+        data: record.data,
+        series: record.series ?? record.datasets,
+        expression: typeof record.expression === "string"
+          ? record.expression
+          : typeof record.expr === "string"
+            ? record.expr
+            : typeof record.formula === "string"
+              ? record.formula
+              : typeof record.function === "string"
+                ? record.function
+                : undefined,
+        variables: record.variables,
+        range: record.range,
+        fixed: record.fixed,
+        xLabel: typeof record.xLabel === "string"
+          ? record.xLabel
+          : typeof record.x_label === "string"
+            ? record.x_label
+            : undefined,
+        yLabel: typeof record.yLabel === "string"
+          ? record.yLabel
+          : typeof record.y_label === "string"
+            ? record.y_label
+            : undefined,
+        renderer: typeof record.renderer === "string" ? record.renderer : undefined,
+        title: typeof record.title === "string" ? record.title : undefined,
+        caption: typeof record.caption === "string" ? record.caption : undefined,
+      },
+      parseCommonMetadata(record),
+    );
+  }
+  if (type === "math" || type === "latex" || type === "formula" || type === "equation") {
+    return buildAssistantMathBlock(
+      {
+        content:
+          typeof record.content === "string"
+            ? record.content
+            : typeof record.latex === "string"
+              ? record.latex
+              : typeof record.tex === "string"
+                ? record.tex
+                : typeof record.equation === "string"
+                  ? record.equation
+                  : typeof record.expression === "string"
+                    ? record.expression
+                    : undefined,
+        latex: typeof record.latex === "string" ? record.latex : undefined,
+        displayMode:
+          typeof record.displayMode === "boolean"
+            ? record.displayMode
+            : typeof record.display_mode === "boolean"
+              ? record.display_mode
+              : undefined,
+        format: typeof record.format === "string" ? record.format : undefined,
+      },
+      parseCommonMetadata(record),
+    );
+  }
+  if (type === "svg" || type === "vector" || type === "diagram") {
+    return buildAssistantSvgBlock(
+      {
+        svg:
+          typeof record.svg === "string"
+            ? record.svg
+            : typeof record.markup === "string"
+              ? record.markup
+              : typeof record.source === "string"
+                ? record.source
+                : typeof record.content === "string"
+                  ? record.content
+                  : undefined,
+        url: typeof record.url === "string" ? record.url : undefined,
         title: typeof record.title === "string" ? record.title : undefined,
         caption: typeof record.caption === "string" ? record.caption : undefined,
       },
@@ -1534,15 +1771,14 @@ export function composeAssistantMessageBlocks(input: {
   if (normalizedBlocks.length === 0) {
     return textBlocks;
   }
-  const existingVisibleBlocks = normalizedBlocks.filter((block) => block.type !== "text");
-  return mergeAssistantBlocks([
-    ...(textBlocks.length > 0
-      ? textBlocks
-      : normalizedBlocks.filter(
-          (block): block is AssistantTextMessageBlock => block.type === "text",
-        )),
-    ...existingVisibleBlocks,
-  ]);
+  const existingTypedBlocks = normalizedBlocks.filter((block) => block.type !== "text");
+  const existingTextBlocks = normalizedBlocks.filter(
+    (block): block is AssistantTextMessageBlock => block.type === "text",
+  );
+  return dedupeAssistantBlocks(mergeAssistantBlocks([
+    ...existingTypedBlocks,
+    ...(textBlocks.length > 0 ? textBlocks : existingTextBlocks),
+  ]));
 }
 
 export function normalizeAssistantMessageBlocks(input: {
@@ -1556,7 +1792,7 @@ export function normalizeAssistantMessageBlocks(input: {
         .filter((value): value is AssistantMessageBlock => value != null)
     : [];
   if (normalizedBlocks.length > 0) {
-    return mergeAssistantBlocks(normalizedBlocks);
+    return dedupeAssistantBlocks(mergeAssistantBlocks(normalizedBlocks));
   }
   return buildAssistantMessageBlocks(input.content, {
     streaming: input.streaming,
@@ -1582,6 +1818,23 @@ export function withAssistantBlocksMetadata(
   } else {
     delete next.blocks;
   }
+  const visibleBlockTypes = blocks
+    .filter(
+      (block) =>
+        (block as { visibility?: unknown }).visibility !==
+        "assistant_internal_by_default",
+    )
+    .map((block) => block.type);
+  const renderContract: AssistantRenderContract = {
+    version: "elyan_blocks.v2",
+    mode: "block_first",
+    canonicalSurface: "blocks",
+    legacyContent: "fallback_only",
+    hasVisibleBlocks: visibleBlockTypes.length > 0,
+    visibleBlockTypes,
+    textIsBlockWrapped: blocks.some((block) => block.type === "text"),
+  };
+  next.renderContract = renderContract;
   return next;
 }
 

@@ -23,19 +23,27 @@ const NON_TABLE_PREFERENCE_PATTERNS = [
 ];
 
 const EXPLICIT_CHART_REQUEST_PATTERNS = [
-  /\b(grafik|grafiği|grafigi|chart|graph|plot|çiz|ciz|çizim|cizim|visualize|visualise|görselleştir|gorsellestir)\b/i,
-  /\b(fonksiyon grafiği|fonksiyon grafigi|function graph|function plot|scatter|line chart|bar chart|pie chart)\b/i,
-  /\b(3d|3 boyutlu|üç boyutlu|uc boyutlu|surface|mesh|yüzey grafiği|yuzey grafigi)\b/i,
+  /(?<!\p{L})(grafik|grafiği|grafiğini|grafigi|grafigini|chart|graph|plot|çiz|ciz|çizim|cizim|visualize|visualise|görselleştir|gorsellestir)(?!\p{L})/iu,
+  /(?<!\p{L})(fonksiyon grafiği|fonksiyon grafigi|function graph|function plot|scatter|line chart|bar chart|pie chart)(?!\p{L})/iu,
+  /(?<!\p{L})(3d|3 boyutlu|üç boyutlu|uc boyutlu|surface|mesh|yüzey grafiği|yuzey grafigi)(?!\p{L})/iu,
 ];
 
 const EXPLICIT_MATH_LATEX_REQUEST_PATTERNS = [
-  /\b(matematik|math|denklem|equation|integral|türev|turev|limit|ispat|proof|çöz|coz|solve)\b/i,
-  /\b(latex|tex|ka?tex|formula|formül|formul)\b/i,
+  /(?<!\p{L})(matematik|math|denklem|equation|integral|türev|turev|limit|ispat|proof|çöz|coz|solve)(?!\p{L})/iu,
+  /(?<!\p{L})(latex|tex|ka?tex|formula|formül|formul)(?!\p{L})/iu,
 ];
 
 const EXPLICIT_SVG_REQUEST_PATTERNS = [
-  /\b(svg|vektör|vektor|vector|diagram|geometrik çizim|geometrik cizim)\b/i,
+  /(?<!\p{L})(svg|vektör|vektor|vector|diagram|geometrik çizim|geometrik cizim)(?!\p{L})/iu,
 ];
+
+export type StructuredResponseDecision = {
+  primaryShape: "prose" | "list" | "table" | "chart" | "math" | "svg" | "document";
+  primaryBlockType: "text" | "table" | "chart" | "math" | "svg" | "document_block";
+  tablePolicy: "forbidden" | "explicit_only";
+  widgetPolicy: "none" | "single_primary_widget";
+  reasons: string[];
+};
 
 export function isExplicitTableRequest(prompt: string): boolean {
   const normalized = compactText(prompt);
@@ -98,4 +106,83 @@ export function isExplicitSvgRequest(prompt: string): boolean {
     return false;
   }
   return EXPLICIT_SVG_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function decideStructuredResponseDecision(input: {
+  prompt?: string | null;
+  selectedWorkload?: string | null;
+}): StructuredResponseDecision {
+  const prompt = input.prompt ?? "";
+  const selectedWorkload = String(input.selectedWorkload ?? "").trim().toLowerCase();
+  const reasons: string[] = [];
+
+  if (selectedWorkload === "document_generate") {
+    reasons.push("document_generation_workload");
+    return {
+      primaryShape: "document",
+      primaryBlockType: "document_block",
+      tablePolicy: isExplicitTableRequest(prompt) ? "explicit_only" : "forbidden",
+      widgetPolicy: "single_primary_widget",
+      reasons,
+    };
+  }
+
+  if (isExplicitSvgRequest(prompt)) {
+    reasons.push("explicit_svg_request");
+    return {
+      primaryShape: "svg",
+      primaryBlockType: "svg",
+      tablePolicy: "forbidden",
+      widgetPolicy: "single_primary_widget",
+      reasons,
+    };
+  }
+
+  if (isExplicitChartRequest(prompt)) {
+    reasons.push("explicit_chart_request");
+    return {
+      primaryShape: "chart",
+      primaryBlockType: "chart",
+      tablePolicy: "forbidden",
+      widgetPolicy: "single_primary_widget",
+      reasons,
+    };
+  }
+
+  if (isExplicitMathOrLatexRequest(prompt)) {
+    reasons.push("explicit_math_latex_request");
+    return {
+      primaryShape: "math",
+      primaryBlockType: "math",
+      tablePolicy: "forbidden",
+      widgetPolicy: "single_primary_widget",
+      reasons,
+    };
+  }
+
+  if (
+    selectedWorkload === "table_generate" ||
+    shouldPromoteMarkdownTableToWidget({ prompt, selectedWorkload })
+  ) {
+    reasons.push(selectedWorkload === "table_generate" ? "table_workload" : "explicit_table_request");
+    return {
+      primaryShape: "table",
+      primaryBlockType: "table",
+      tablePolicy: "explicit_only",
+      widgetPolicy: "single_primary_widget",
+      reasons,
+    };
+  }
+
+  if (shouldPreferPlainListOrProse(prompt)) {
+    reasons.push("plain_list_or_prose_preferred");
+  }
+
+  return {
+    primaryShape: "prose",
+    primaryBlockType: "text",
+    tablePolicy: "forbidden",
+    widgetPolicy: "none",
+    reasons,
+  };
 }

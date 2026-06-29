@@ -4,6 +4,7 @@ import {
   listBrainMemory,
   scoreMemoryRecallCandidate,
   softDeleteBrainMemory,
+  updateBrainMemory,
 } from "./memory.js";
 
 class FakeMemoryDb {
@@ -180,6 +181,53 @@ test("listBrainMemory hides soft-deleted records for user-safe views by default"
   assert.equal(result.summary.softDeleted, 1);
 });
 
+test("listBrainMemory presents synthesized continuity memories with clean labels", async () => {
+  const app = {
+    db: new FakeMemoryDb([
+      {
+        rows: [
+          {
+            id: "fact-continuity",
+            memoryType: "self_model",
+            title: "self_model_recent_topics",
+            content: "Recent recurring topics: backend, auth, planning",
+            confidence: 90,
+            importanceScore: 82,
+            isPinned: false,
+            scope: "user",
+            conflictStatus: "active",
+            lifecycleStatus: "active",
+            lastVerifiedAt: "2030-01-01T00:00:00.000Z",
+            deletedAt: null,
+            deletedReason: null,
+            staleAt: null,
+            metadata: {},
+            createdAt: "2030-01-01T00:00:00.000Z",
+            updatedAt: "2030-01-01T00:00:00.000Z",
+          },
+        ],
+      },
+      { rows: [] },
+    ]),
+  };
+
+  const result = await listBrainMemory(app as never, {
+    userId: "user-1",
+    limit: 10,
+    includeSoftDeleted: false,
+    surface: "all",
+    lifecycle: [],
+    isAdmin: false,
+  });
+
+  assert.equal(result.items[0]?.title, "Recent Topics");
+  assert.equal(result.items[0]?.content, "backend, auth, planning");
+  assert.equal(
+    ((result.items[0]?.metadata?.presentation as Record<string, unknown> | undefined)?.editable),
+    true,
+  );
+});
+
 test("softDeleteBrainMemory marks a memory as soft_deleted and keeps audit-safe metadata", async () => {
   const app = {
     db: new FakeMemoryDb([
@@ -243,4 +291,77 @@ test("softDeleteBrainMemory marks a memory as soft_deleted and keeps audit-safe 
 
   assert.equal(result.lifecycleStatus, "soft_deleted");
   assert.equal((app.db as FakeMemoryDb).updates[0]?.values["lifecycleStatus"], "soft_deleted");
+});
+
+test("updateBrainMemory edits fact content and clears deleted state", async () => {
+  const app = {
+    db: new FakeMemoryDb([
+      {
+        rows: [
+          {
+            id: "fact-1",
+            memoryType: "self_model",
+            title: "self_model_recent_topics",
+            content: "Recent recurring topics: backend, auth",
+            confidence: 92,
+            importanceScore: 88,
+            isPinned: false,
+            scope: "user",
+            conflictStatus: "active",
+            lifecycleStatus: "active",
+            lastVerifiedAt: "2030-01-01T00:00:00.000Z",
+            deletedAt: null,
+            deletedReason: null,
+            staleAt: null,
+            metadata: {},
+            createdAt: "2030-01-01T00:00:00.000Z",
+            updatedAt: "2030-01-01T00:00:00.000Z",
+          },
+        ],
+      },
+      { rows: [] },
+      {
+        rows: [
+          {
+            id: "fact-1",
+            memoryType: "self_model",
+            title: "self_model_recent_topics",
+            content: "Backend ve auth yerine backend ve routing",
+            confidence: 92,
+            importanceScore: 88,
+            isPinned: false,
+            scope: "user",
+            conflictStatus: "active",
+            lifecycleStatus: "active",
+            lastVerifiedAt: "2030-01-01T00:00:00.000Z",
+            deletedAt: null,
+            deletedReason: null,
+            staleAt: null,
+            metadata: {
+              userEdited: true,
+            },
+            createdAt: "2030-01-01T00:00:00.000Z",
+            updatedAt: "2030-01-02T00:00:00.000Z",
+          },
+        ],
+      },
+    ]),
+    log: {
+      info: () => undefined,
+      warn: () => undefined,
+      debug: () => undefined,
+    },
+  };
+
+  const result = await updateBrainMemory(app as never, {
+    userId: "user-1",
+    memoryId: "fact-1",
+    content: "Backend ve auth yerine backend ve routing",
+    title: null,
+    reason: "manual correction",
+    actorUserId: "user-1",
+  });
+
+  assert.equal((app.db as FakeMemoryDb).updates[0]?.values["value"], "Backend ve auth yerine backend ve routing");
+  assert.equal(result.content, "Backend ve auth yerine backend ve routing");
 });

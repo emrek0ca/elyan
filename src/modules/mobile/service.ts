@@ -1,14 +1,27 @@
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { chatSessions, devices, learningEvents, tasks, users, worldSignals } from "../../db/schema.js";
+import {
+  chatSessions,
+  devices,
+  learningEvents,
+  tasks,
+  users,
+  worldSignals,
+} from "../../db/schema.js";
 import { AppError } from "../../lib/errors.js";
-import { getBillingSummary, shapePublicUsageSnapshot } from "../billing/service.js";
+import {
+  getBillingSummary,
+  shapePublicUsageSnapshot,
+} from "../billing/service.js";
 import { shapeSubscriptionTruth } from "../billing/subscription-truth.js";
 import { getBrainProfile, shapePublicBrainProfile } from "../brain/service.js";
 import { listUserDevices, pruneStaleDevices } from "../devices/service.js";
 import { getTrialQuotaPolicy } from "../quota/service.js";
 import type { UploadWorldSignalsBody } from "./schemas.js";
-import { deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "../../core/understanding/world-signal-derived.js";
+import {
+  deriveLearningSignalsFromWorldSignals,
+  toDerivedSignalInput,
+} from "../../core/understanding/world-signal-derived.js";
 import { filterLearningSignals } from "../../core/understanding/personalization-policy.js";
 
 const MAX_WORLD_SIGNAL_PAYLOAD_BYTES = 24 * 1024;
@@ -111,7 +124,10 @@ const BLOCKED_DEBUG_KEYS = new Set([
 ]);
 
 function normalizeKey(value: string) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
 function looksLikeLocalPath(value: string) {
@@ -129,7 +145,11 @@ function assertWorldSignalValueSafe(value: unknown, key = ""): void {
   }
   if (typeof value === "string") {
     if (looksLikeLocalPath(value.trim())) {
-      throw new AppError(422, "local_path_blocked", "Local file paths cannot be uploaded.");
+      throw new AppError(
+        422,
+        "local_path_blocked",
+        "Local file paths cannot be uploaded.",
+      );
     }
     return;
   }
@@ -138,7 +158,11 @@ function assertWorldSignalValueSafe(value: unknown, key = ""): void {
   }
   if (Array.isArray(value)) {
     if (value.length > 16) {
-      throw new AppError(413, "payload_too_large", "World signal list payload is too large.");
+      throw new AppError(
+        413,
+        "payload_too_large",
+        "World signal list payload is too large.",
+      );
     }
     for (const item of value) {
       assertWorldSignalValueSafe(item, key);
@@ -149,22 +173,46 @@ function assertWorldSignalValueSafe(value: unknown, key = ""): void {
     for (const [entryKey, entryValue] of Object.entries(value)) {
       const normalizedKey = normalizeKey(entryKey);
       if (BLOCKED_SECRET_KEYS.has(normalizedKey)) {
-        throw new AppError(422, "secret_blocked", "Secrets cannot be uploaded.");
+        throw new AppError(
+          422,
+          "secret_blocked",
+          "Secrets cannot be uploaded.",
+        );
       }
       if (BLOCKED_BINARY_KEYS.has(normalizedKey)) {
-        throw new AppError(422, "raw_payload_blocked", "Raw private content cannot be uploaded.");
+        throw new AppError(
+          422,
+          "raw_payload_blocked",
+          "Raw private content cannot be uploaded.",
+        );
       }
       if (BLOCKED_PRECISE_LOCATION_KEYS.has(normalizedKey)) {
-        throw new AppError(422, "precise_location_blocked", "Precise coordinates cannot be uploaded.");
+        throw new AppError(
+          422,
+          "precise_location_blocked",
+          "Precise coordinates cannot be uploaded.",
+        );
       }
       if (BLOCKED_HEALTH_KEYS.has(normalizedKey)) {
-        throw new AppError(422, "raw_health_blocked", "Raw health values cannot be uploaded.");
+        throw new AppError(
+          422,
+          "raw_health_blocked",
+          "Raw health values cannot be uploaded.",
+        );
       }
       if (BLOCKED_CALENDAR_KEYS.has(normalizedKey)) {
-        throw new AppError(422, "raw_calendar_blocked", "Raw calendar fields cannot be uploaded.");
+        throw new AppError(
+          422,
+          "raw_calendar_blocked",
+          "Raw calendar fields cannot be uploaded.",
+        );
       }
       if (BLOCKED_DEBUG_KEYS.has(normalizedKey)) {
-        throw new AppError(422, "debug_payload_blocked", "Debug or reasoning payloads cannot be uploaded.");
+        throw new AppError(
+          422,
+          "debug_payload_blocked",
+          "Debug or reasoning payloads cannot be uploaded.",
+        );
       }
       assertWorldSignalValueSafe(entryValue, normalizedKey);
     }
@@ -174,7 +222,11 @@ function assertWorldSignalValueSafe(value: unknown, key = ""): void {
 export function assertSafeWorldSignalPayload(body: UploadWorldSignalsBody) {
   const payloadBytes = Buffer.byteLength(JSON.stringify(body), "utf8");
   if (payloadBytes > MAX_WORLD_SIGNAL_PAYLOAD_BYTES) {
-    throw new AppError(413, "payload_too_large", "World signal payload exceeds the size limit.");
+    throw new AppError(
+      413,
+      "payload_too_large",
+      "World signal payload exceeds the size limit.",
+    );
   }
 
   for (const signal of body.signals) {
@@ -183,14 +235,22 @@ export function assertSafeWorldSignalPayload(body: UploadWorldSignalsBody) {
         ? false
         : Boolean(signal.privacy.rawDataUploaded);
     if (rawDataUploaded) {
-      throw new AppError(422, "raw_payload_blocked", "Raw world data cannot be uploaded.");
+      throw new AppError(
+        422,
+        "raw_payload_blocked",
+        "Raw world data cannot be uploaded.",
+      );
     }
     if (
       signal.privacy.rawFileUploaded === true ||
       signal.privacy.rawImageUploaded === true ||
       signal.privacy.rawAudioUploaded === true
     ) {
-      throw new AppError(422, "raw_payload_blocked", "Raw world data cannot be uploaded.");
+      throw new AppError(
+        422,
+        "raw_payload_blocked",
+        "Raw world data cannot be uploaded.",
+      );
     }
     assertWorldSignalValueSafe(signal.summary, "summary");
     assertWorldSignalValueSafe(signal.facts, "facts");
@@ -223,13 +283,7 @@ export function buildWorldSignalLogContext(input: {
 
 export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
   pruneStaleDevices(app, userId).catch(() => undefined);
-  const [
-    userRows,
-    devices,
-    pendingCounts,
-    billing,
-    brain,
-  ] = await Promise.all([
+  const [userRows, devices, pendingCounts, billing, brain] = await Promise.all([
     app.db
       .select({
         id: users.id,
@@ -358,15 +412,25 @@ export async function ingestWorldSignals(
     input.externalDeviceId,
   );
   if (!ownedDevice || !ownedDevice.isActive) {
-    throw new AppError(403, "device_revoked", "Mobile device scope is not valid for this user.");
+    throw new AppError(
+      403,
+      "device_revoked",
+      "Mobile device scope is not valid for this user.",
+    );
   }
 
-  const scopedSessionId =
+  const scopedSession =
     input.body.sessionId == null
       ? null
-      : (await resolveOwnedChatSession(app, input.userId, input.body.sessionId))?.id ?? null;
-  // If the session doesn't exist yet (mobile may send signals before the session is created),
-  // store signals without session scope rather than rejecting them.
+      : await resolveOwnedChatSession(app, input.userId, input.body.sessionId);
+  if (input.body.sessionId != null && !scopedSession) {
+    throw new AppError(
+      403,
+      "session_scope_invalid",
+      "World signal session scope is not valid for this user.",
+    );
+  }
+  const scopedSessionId = scopedSession?.id ?? null;
 
   const payloadBytes = Buffer.byteLength(JSON.stringify(input.body), "utf8");
   await app.db
@@ -381,7 +445,10 @@ export async function ingestWorldSignals(
         source: signal.source,
         kind: signal.kind,
         summary: signal.summary,
-        confidenceBps: Math.max(0, Math.min(1000, Math.round(signal.confidence * 1000))),
+        confidenceBps: Math.max(
+          0,
+          Math.min(1000, Math.round(signal.confidence * 1000)),
+        ),
         facts: signal.facts,
         privacy: signal.privacy,
         renderHints: signal.renderHints ?? {},
@@ -485,7 +552,9 @@ export async function listFreshWorldSignals(
       and(
         eq(worldSignals.userId, input.userId),
         input.deviceId ? eq(worldSignals.deviceId, input.deviceId) : undefined,
-        input.sessionId ? eq(worldSignals.sessionId, input.sessionId) : undefined,
+        input.sessionId
+          ? eq(worldSignals.sessionId, input.sessionId)
+          : undefined,
         gte(
           worldSignals.createdAt,
           new Date(Date.now() - 1000 * 60 * 60 * (input.maxAgeHours ?? 24)),

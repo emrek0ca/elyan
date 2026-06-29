@@ -18,6 +18,10 @@ import {
   RETRIEVAL_EMBEDDING_MODEL,
 } from "./retrieval.js";
 import { rerankSemanticCandidates } from "./semantic-rerank.js";
+import {
+  buildContinuityEnrichmentBaseline,
+  refineContinuityEnrichmentWithPython,
+} from "../../lib/python-continuity-enricher.js";
 
 const MEMORY_VECTOR_DIMENSIONS = 256;
 const MEMORY_EXTRACTION_BATCH = 120;
@@ -75,6 +79,21 @@ type BrainMemoryRecord = {
   metadata: Record<string, unknown>;
 };
 
+const SYNTHETIC_MEMORY_PRESENTATION: Record<string, { title: string; description: string }> = {
+  self_model_recent_topics: {
+    title: "Recent Topics",
+    description: "Recently recurring conversation themes inferred from your own memory history.",
+  },
+  reflective_continuity_style: {
+    title: "Continuity Style",
+    description: "How Elyan should carry multi-turn work forward for you.",
+  },
+  reflective_reasoning_style: {
+    title: "Reasoning Style",
+    description: "How Elyan should reason through ongoing work based on prior interaction patterns.",
+  },
+};
+
 export type MemoryRecallCandidate = {
   memorySource: MemorySearchHit["memorySource"];
   memoryType: string;
@@ -102,6 +121,34 @@ function toRows(input: unknown): ExecuteRow[] {
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function cleanSyntheticMemoryContent(value: string): string {
+  return compactText(value)
+    .replace(/^Recent recurring topics:\s*/i, "")
+    .replace(/\s*;\s*/g, ". ");
+}
+
+function applyMemoryPresentation(record: BrainMemoryRecord): BrainMemoryRecord {
+  const preset = SYNTHETIC_MEMORY_PRESENTATION[record.title] ?? SYNTHETIC_MEMORY_PRESENTATION[record.memoryType];
+  if (!preset) {
+    return record;
+  }
+
+  return {
+    ...record,
+    title: preset.title,
+    content: cleanSyntheticMemoryContent(record.content),
+    metadata: {
+      ...record.metadata,
+      presentation: {
+        kind: "synthetic_profile_memory",
+        editable: true,
+        deletable: true,
+        description: preset.description,
+      },
+    },
+  };
 }
 
 function normalizeMemoryValue(value: string): string {
@@ -894,7 +941,7 @@ function shapeBrainMemoryRecord(input: {
   });
   const memoryType = String(row.memoryType ?? (input.entityType === "fact" ? "semantic" : "episode"));
 
-  return {
+  return applyMemoryPresentation({
     id: String(row.id),
     entityType: input.entityType,
     memorySource:
@@ -921,7 +968,7 @@ function shapeBrainMemoryRecord(input: {
           ? String(safeMetadata(row.metadata).sourceTrainingJobId)
           : null,
     metadata: safeMetadata(row.metadata),
-  };
+  });
 }
 
 async function fetchBrainMemoryFacts(app: FastifyInstance, userId: string, limit: number) {
@@ -1761,6 +1808,130 @@ async function synthesizeSelfModelSummary(app: FastifyInstance, userId: string) 
   };
 }
 
+async function synthesizeContinuityProfileMemory(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sourceRunId: string;
+  },
+) {
+  const [factRows, episodeRows] = await Promise.all([
+    app.db
+      .select({
+        key: brainMemoryFacts.key,
+        value: brainMemoryFacts.value,
+        factType: brainMemoryFacts.factType,
+      })
+      .from(brainMemoryFacts)
+      .where(
+        and(
+          eq(brainMemoryFacts.userId, input.userId),
+          eq(brainMemoryFacts.scope, "user"),
+          eq(brainMemoryFacts.lifecycleStatus, "active"),
+        ),
+      )
+      .orderBy(desc(brainMemoryFacts.updatedAt))
+      .limit(20),
+    app.db
+      .select({
+        episodeType: brainMemoryEpisodes.episodeType,
+        summary: brainMemoryEpisodes.summary,
+      })
+      .from(brainMemoryEpisodes)
+      .where(
+        and(
+          eq(brainMemoryEpisodes.userId, input.userId),
+          eq(brainMemoryEpisodes.scope, "user"),
+          eq(brainMemoryEpisodes.lifecycleStatus, "active"),
+        ),
+      )
+      .orderBy(desc(brainMemoryEpisodes.updatedAt))
+      .limit(12),
+  ]);
+
+  const seed = {
+    facts: factRows.map((row) => ({
+      key: row.key,
+      value: row.value,
+      factType: row.factType,
+    })),
+    episodes: episodeRows.map((row) => ({
+      episodeType: row.episodeType,
+      summary: row.summary,
+    })),
+  };
+
+  const baseline = buildContinuityEnrichmentBaseline(seed);
+  const pythonRefined = await refineContinuityEnrichmentWithPython(seed).catch(() => null);
+  const effective = pythonRefined ?? baseline;
+
+  if (!effective) {
+    return {
+      continuityProfile: null,
+    };
+  }
+
+  if (effective.recentTopics) {
+    await upsertSynthesisFact(app, {
+      userId: input.userId,
+      key: "self_model_recent_topics",
+      value: effective.recentTopics,
+      factType: "self_model",
+      importanceScore: 76,
+      metadata: {
+        sourceRunId: input.sourceRunId,
+        synthesis: "continuity_profile",
+        continuitySource: effective.source,
+        topicTokens: effective.topicTokens,
+        evidenceCount: effective.evidenceCount,
+      },
+    });
+  }
+
+  if (effective.continuityStyle) {
+    await upsertSynthesisFact(app, {
+      userId: input.userId,
+      key: "reflective_continuity_style",
+      value: effective.continuityStyle,
+      factType: "reflective",
+      importanceScore: 72,
+      metadata: {
+        sourceRunId: input.sourceRunId,
+        synthesis: "continuity_profile",
+        continuitySource: effective.source,
+        evidenceCount: effective.evidenceCount,
+      },
+    });
+  }
+
+  if (effective.reasoningStyle) {
+    await upsertSynthesisFact(app, {
+      userId: input.userId,
+      key: "reflective_reasoning_style",
+      value: effective.reasoningStyle,
+      factType: "reflective",
+      importanceScore: 74,
+      metadata: {
+        sourceRunId: input.sourceRunId,
+        synthesis: "continuity_profile",
+        continuitySource: effective.source,
+        evidenceCount: effective.evidenceCount,
+      },
+    });
+  }
+
+  return {
+    continuityProfile: {
+      source: effective.source,
+      topicTokens: effective.topicTokens,
+      evidenceCount: effective.evidenceCount,
+      hasRecentTopics: Boolean(effective.recentTopics),
+      hasContinuityStyle: Boolean(effective.continuityStyle),
+      hasReasoningStyle: Boolean(effective.reasoningStyle),
+    },
+  };
+}
+
 async function upsertSynthesisFact(
   app: FastifyInstance,
   input: {
@@ -1792,6 +1963,9 @@ async function synthesizeSelfModelAndReflectiveMemory(
   },
 ) {
   const summary = await synthesizeSelfModelSummary(app, input.userId);
+  const continuityProfile = await synthesizeContinuityProfileMemory(app, input).catch(() => ({
+    continuityProfile: null,
+  }));
 
   await upsertSynthesisFact(app, {
     userId: input.userId,
@@ -1843,6 +2017,9 @@ async function synthesizeSelfModelAndReflectiveMemory(
       limitations: summary.limitations,
     },
     reflectivePromotions: summary.recentFailurePatterns,
+    ...(continuityProfile.continuityProfile
+      ? { continuityProfile: continuityProfile.continuityProfile }
+      : {}),
   };
 }
 
@@ -2378,6 +2555,93 @@ export async function setBrainMemoryContest(
       supersedesMemoryId: input.supersedesMemoryId,
       reason: input.reason,
       entityType: record.entityType,
+    },
+  });
+
+  invalidateBrainProfileCache(app, input.userId);
+  return getBrainMemoryById(app, {
+    userId: input.userId,
+    memoryId: input.memoryId,
+  });
+}
+
+export async function updateBrainMemory(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    memoryId: string;
+    title?: string | null;
+    content: string;
+    reason: string | null;
+    actorUserId: string;
+    requestId?: string;
+    ipAddress?: string;
+    userAgent?: string;
+  },
+) {
+  const record = await getBrainMemoryById(app, {
+    userId: input.userId,
+    memoryId: input.memoryId,
+  });
+  const now = new Date();
+  const normalizedContent = compactText(input.content).slice(0, 1000);
+  const normalizedTitle = compactText(input.title ?? "").slice(0, 120);
+  const nextMetadata = {
+    ...record.metadata,
+    userEditedAt: now.toISOString(),
+    userEditReason: input.reason,
+    userEdited: true,
+  };
+
+  if (record.entityType === "fact") {
+    await app.db
+      .update(brainMemoryFacts)
+      .set({
+        key: normalizedTitle || record.title,
+        value: normalizedContent,
+        staleAt: null,
+        deletedAt: null,
+        deletedReason: null,
+        lifecycleStatus: "active",
+        conflictStatus: "active",
+        lastVerifiedAt: now,
+        metadata: nextMetadata,
+        updatedAt: now,
+      })
+      .where(and(eq(brainMemoryFacts.id, record.id), eq(brainMemoryFacts.userId, input.userId)));
+  } else {
+    await app.db
+      .update(brainMemoryEpisodes)
+      .set({
+        summary: normalizedContent,
+        staleAt: null,
+        deletedAt: null,
+        deletedReason: null,
+        lifecycleStatus: "active",
+        metadata: nextMetadata,
+        updatedAt: now,
+      })
+      .where(and(eq(brainMemoryEpisodes.id, record.id), eq(brainMemoryEpisodes.userId, input.userId)));
+  }
+
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.actorUserId,
+    action: "brain.memory.update",
+    resourceType: "brain_memory",
+    resourceId: record.id,
+    status: "success",
+    requestId: input.requestId,
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    payload: {
+      entityType: record.entityType,
+      previousTitle: record.title,
+      previousContent: record.content.slice(0, 240),
+      newTitle: normalizedTitle || record.title,
+      newContent: normalizedContent.slice(0, 240),
+      reason: input.reason,
     },
   });
 

@@ -227,6 +227,13 @@ export const mutateBrainMemoryBodySchema = z.object({
   supersedesMemoryId: z.string().uuid().optional(),
 });
 
+export const updateBrainMemoryBodySchema = z.object({
+  userId: z.string().uuid().optional(),
+  reason: z.string().trim().min(1).max(500).optional(),
+  title: z.string().trim().min(1).max(120).optional(),
+  content: z.string().trim().min(1).max(1000),
+});
+
 export const reviewInteractionParamsSchema = z.object({
   interactionId: z.string().uuid(),
 });

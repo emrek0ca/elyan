@@ -129,3 +129,60 @@ test("buildLocalRenderRecipe exposes structured blocks for mobile canvas renderi
   assert.equal(recipe?.text_blocks.filter((block) => block.type === "bullet").length, 3);
   assert.equal(recipe?.metadata.render_intent, "raster_image_export");
 });
+
+test("buildLocalRenderRecipe preserves explicit XLSX export format", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bunu xlsx olarak hazırla",
+    responseText: "Özet\n\n| İsim | Değer |\n| --- | --- |\n| A | 12 |",
+    metadata: {
+      documentExportMode: "mobile_local",
+      title: "Veri Özeti",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.output_type, "document_render_recipe");
+  assert.equal(recipe?.format, "xlsx");
+  assert.equal(
+    recipe?.mime_type,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  assert.match(recipe?.file_name ?? "", /\.xlsx$/);
+});
+
+test("buildLocalRenderRecipe prefers structured assistant blocks over preface prose for document exports", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bunu PDF olarak ver",
+    responseText: "Raporu hazırladım. Aşağıda belge var.",
+    assistantBlocks: [
+      {
+        type: "document_block",
+        title: "Yapay Zeka Raporu",
+        sections: [
+          {
+            heading: "Giriş",
+            content: "**Tanım**\n\n- İlk madde\n- İkinci madde",
+            level: 1,
+          },
+        ],
+      },
+      {
+        type: "table",
+        title: "Karşılaştırma",
+        columns: ["Alan", "Etki"],
+        rows: [["Sağlık", "Yüksek"]],
+      },
+    ],
+    metadata: {
+      documentExportMode: "mobile_local",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.content_model.title, "Yapay Zeka Raporu");
+  assert.equal(recipe?.text_blocks[0]?.type, "title");
+  assert.equal(recipe?.text_blocks[0]?.text, "Yapay Zeka Raporu");
+  assert.equal(recipe?.text_blocks.some((block) => block.type === "table"), true);
+  assert.equal(recipe?.content_model.plain_text.includes("Raporu hazırladım"), false);
+  assert.equal(recipe?.content_model.plain_text.includes("Tanım"), true);
+});

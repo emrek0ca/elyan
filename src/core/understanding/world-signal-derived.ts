@@ -38,6 +38,8 @@ const NOTIFICATION_RELEVANCE_PATTERN =
   /\b(bildirim|notification|dikkat|attention|rahatsız|rahatsiz|odak|focus|sessiz|silent|acil|urgent|öncelik|oncelik)\b/i;
 const GREETING_PATTERN =
   /^(selam|selamlar|merhaba|mrb|hey|hi|hello|günaydın|gunaydin|iyi akşamlar|iyi aksamlar|iyi geceler|naber|nasılsın|nasilsin)[\s!.?]*$/i;
+const ADAPTIVE_WORK_PATTERN =
+  /\b(plan|planla|planning|program|schedule|bugün|bugun|yarın|yarin|task|görev|gorev|workflow|routine|rutin|araştır|arastir|research|debug|kod|code|odak|focus|hazırla|hazirla|çıkar|cikar|optimize|iyileştir|iyilestir|prepare)\b/i;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -340,6 +342,7 @@ export function buildDerivedHintBuckets(input: {
   const wantsHealth = HEALTH_RELEVANCE_PATTERN.test(request);
   const wantsLocation = LOCATION_RELEVANCE_PATTERN.test(request);
   const wantsNotifications = NOTIFICATION_RELEVANCE_PATTERN.test(request);
+  const wantsAdaptiveHelp = ADAPTIVE_WORK_PATTERN.test(request);
 
   for (const item of input.memory) {
     if (item.staleness === "stale" || item.staleness === "contested") {
@@ -373,11 +376,17 @@ export function buildDerivedHintBuckets(input: {
     }
 
     if (category === "behavioral") {
-      maybePush(behavioralHints, value);
+      if (!isGreeting && (wantsSchedule || wantsHealth || wantsNotifications || wantsAdaptiveHelp)) {
+        maybePush(behavioralHints, value);
+      }
     }
 
     if (category === "environmental") {
-      if (!isGreeting && (wantsLocation || wantsSchedule || item.key === "common_city")) {
+      if (
+        !isGreeting &&
+        ((item.key === "common_city" && wantsLocation) ||
+          (item.key !== "common_city" && (wantsLocation || wantsSchedule)))
+      ) {
         maybePush(environmentHints, value);
       }
     }
