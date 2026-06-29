@@ -4,6 +4,11 @@ import type { FastifyInstance } from "fastify";
 import { knowledgeChunks, knowledgeDocuments, trainingJobs } from "../../db/schema.js";
 import type { BrainScope } from "../../contracts/domain.js";
 import { rerankSemanticCandidates } from "./semantic-rerank.js";
+import {
+  embedQueryForStorage,
+  embedTextsForStorage,
+  STORAGE_SEMANTIC_MODEL_TAG,
+} from "./semantic-embedder.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
 
 const RETRIEVAL_VECTOR_DIMENSIONS = 256;
@@ -147,6 +152,110 @@ export async function canUseHybridRetrieval(app: FastifyInstance): Promise<boole
   return extensionReady && columnReady;
 }
 
+const semanticV2ColumnReady = new WeakMap<FastifyInstance, Promise<boolean>>();
+const semanticV2BackfillStarted = new WeakSet<FastifyInstance>();
+const SEMANTIC_V2_BACKFILL_BATCH = 16;
+const SEMANTIC_V2_BACKFILL_MAX_BATCHES = 12;
+
+/**
+ * One-shot background backfill — populates `embedding_v2` for chunks that have
+ * a hash embedding but lack a semantic one. Bounded by batch count so it
+ * never thrashes the model or DB on a huge corpus. Idempotent: safe to invoke
+ * multiple times; subsequent calls see no work to do.
+ */
+export async function backfillSemanticV2Embeddings(
+  app: FastifyInstance,
+  options: { maxBatches?: number } = {},
+): Promise<{ processed: number; batches: number; stopped: string }> {
+  if (!(await ensureSemanticV2Column(app))) {
+    return { processed: 0, batches: 0, stopped: "v2_column_unavailable" };
+  }
+  const limit = SEMANTIC_V2_BACKFILL_BATCH;
+  const maxBatches = options.maxBatches ?? SEMANTIC_V2_BACKFILL_MAX_BATCHES;
+  let processed = 0;
+  let batches = 0;
+  for (let i = 0; i < maxBatches; i += 1) {
+    const rows = await app.db
+      .select({
+        id: knowledgeChunks.id,
+        content: knowledgeChunks.content,
+      })
+      .from(knowledgeChunks)
+      .where(
+        and(
+          sql`${knowledgeChunks.embeddingModel} is not null`,
+          sql`embedding_v2 is null`,
+        ),
+      )
+      .limit(limit);
+    if (rows.length === 0) {
+      return { processed, batches, stopped: "complete" };
+    }
+    const vectors = await embedTextsForStorage(
+      rows.map((r) => r.content),
+      app.log,
+    );
+    if (!vectors) {
+      return { processed, batches, stopped: "model_unavailable" };
+    }
+    for (let ci = 0; ci < rows.length; ci += 1) {
+      try {
+        const v2 = buildVectorSql(vectors[ci]!);
+        await app.db.execute(sql`
+          update knowledge_chunks
+          set embedding_v2 = ${v2}
+          where id = ${rows[ci]!.id}
+        `);
+        processed += 1;
+      } catch (error) {
+        app.log?.warn?.({ error, chunkId: rows[ci]!.id }, "v2 backfill row failed");
+      }
+    }
+    batches += 1;
+  }
+  return { processed, batches, stopped: "max_batches_reached" };
+}
+
+/**
+ * Fire-and-forget startup hook — runs the backfill in the background so the
+ * server boot isn't blocked while the e5 model warms up. Safe to call from
+ * `build-app`: it tracks per-app start so re-registering is a no-op.
+ */
+export function maybeStartSemanticV2Backfill(app: FastifyInstance): void {
+  if (semanticV2BackfillStarted.has(app)) return;
+  semanticV2BackfillStarted.add(app);
+  void backfillSemanticV2Embeddings(app)
+    .then((result) =>
+      app.log?.info?.(result, "semantic v2 embedding backfill complete"),
+    )
+    .catch((error) => app.log?.warn?.({ error }, "semantic v2 backfill failed"));
+}
+
+/**
+ * Adds the 384-dim `embedding_v2` column the first time it's needed. Idempotent
+ * and cached per-app. Returns false if pgvector isn't available so callers can
+ * gracefully skip the semantic-v2 path.
+ */
+async function ensureSemanticV2Column(app: FastifyInstance): Promise<boolean> {
+  const cached = semanticV2ColumnReady.get(app);
+  if (cached) return cached;
+  const pending = (async () => {
+    if (!(await isPgvectorAvailable(app))) return false;
+    try {
+      await app.db.execute(sql`
+        alter table knowledge_chunks
+          add column if not exists embedding_v2 vector(384)
+      `);
+      return true;
+    } catch (error) {
+      app.log?.warn?.({ error }, "failed to ensure embedding_v2 column");
+      return false;
+    }
+  })();
+  semanticV2ColumnReady.set(app, pending);
+  return pending;
+}
+
 export async function getRetrievalStatus(app: FastifyInstance, userId: string) {
   const hybridReady = await canUseHybridRetrieval(app);
   try {
@@ -281,30 +390,77 @@ async function searchKnowledgeHybrid(
     limit: number;
   },
 ): Promise<RetrievalSearchResult[]> {
-  const queryVector = buildVectorSql(await buildEmbedding(input.query));
-  const rows = await app.db.execute(sql`
-    select
-      kd.id as "documentId",
-      kd.title as "title",
-      kd.source_type as "sourceType",
-      kd.source_uri as "sourceUri",
-      kd.summary as "summary",
-      kc.scope as "scope",
-      kc.id as "chunkId",
-      kc.ordinal as "ordinal",
-      kc.content as "content",
-      kc.token_estimate as "tokenEstimate",
-      kc.metadata as "metadata",
-      kd.updated_at as "updatedAt",
-      1 - (kc.embedding <=> ${queryVector}) as "semanticScore"
-    from knowledge_chunks kc
-    inner join knowledge_documents kd on kd.id = kc.document_id
-    where kd.status = 'ready'
-      and (kc.scope = 'shared' or kc.owner_user_id = ${input.userId})
-      and kc.embedding_model is not null
-    order by kc.embedding <=> ${queryVector}
-    limit ${Math.max(input.limit * 6, 24)}
-  `);
+  // Storage embedding strategy:
+  //   • Primary: 384-dim real semantic (embedding_v2, e5-small) when the model
+  //     loaded AND we can compute a query vector with matching dims.
+  //   • Fallback: 256-dim hash embedding (always available, fast).
+  // Chunks that don't yet have a v2 vector are matched via the hash fallback,
+  // so the upgrade is incremental and zero-downtime.
+  const v2ColumnReady = await ensureSemanticV2Column(app);
+  const semanticQueryVector = v2ColumnReady
+    ? await embedQueryForStorage(input.query, app.log).catch(() => null)
+    : null;
+  const hashVector = buildVectorSql(await buildEmbedding(input.query));
+  const candidateLimit = Math.max(input.limit * 6, 24);
+
+  let rows: unknown;
+  if (semanticQueryVector) {
+    const v2QueryVector = buildVectorSql(semanticQueryVector);
+    rows = await app.db.execute(sql`
+      select
+        kd.id as "documentId",
+        kd.title as "title",
+        kd.source_type as "sourceType",
+        kd.source_uri as "sourceUri",
+        kd.summary as "summary",
+        kc.scope as "scope",
+        kc.id as "chunkId",
+        kc.ordinal as "ordinal",
+        kc.content as "content",
+        kc.token_estimate as "tokenEstimate",
+        kc.metadata as "metadata",
+        kd.updated_at as "updatedAt",
+        case
+          when kc.embedding_v2 is not null then 1 - (kc.embedding_v2 <=> ${v2QueryVector})
+          else 1 - (kc.embedding <=> ${hashVector})
+        end as "semanticScore"
+      from knowledge_chunks kc
+      inner join knowledge_documents kd on kd.id = kc.document_id
+      where kd.status = 'ready'
+        and (kc.scope = 'shared' or kc.owner_user_id = ${input.userId})
+        and kc.embedding_model is not null
+      order by
+        case
+          when kc.embedding_v2 is not null then kc.embedding_v2 <=> ${v2QueryVector}
+          else kc.embedding <=> ${hashVector}
+        end
+      limit ${candidateLimit}
+    `);
+  } else {
+    rows = await app.db.execute(sql`
+      select
+        kd.id as "documentId",
+        kd.title as "title",
+        kd.source_type as "sourceType",
+        kd.source_uri as "sourceUri",
+        kd.summary as "summary",
+        kc.scope as "scope",
+        kc.id as "chunkId",
+        kc.ordinal as "ordinal",
+        kc.content as "content",
+        kc.token_estimate as "tokenEstimate",
+        kc.metadata as "metadata",
+        kd.updated_at as "updatedAt",
+        1 - (kc.embedding <=> ${hashVector}) as "semanticScore"
+      from knowledge_chunks kc
+      inner join knowledge_documents kd on kd.id = kc.document_id
+      where kd.status = 'ready'
+        and (kc.scope = 'shared' or kc.owner_user_id = ${input.userId})
+        and kc.embedding_model is not null
+      order by kc.embedding <=> ${hashVector}
+      limit ${candidateLimit}
+    `);
+  }
 
   const rawRows = Array.isArray(rows) ? rows : (rows as { rows?: Array<Record<string, unknown>> }).rows ?? [];
   return rawRows
@@ -416,6 +572,19 @@ export async function indexKnowledgeChunksForDocument(
   const indexedAt = new Date().toISOString();
   /* Build all embeddings concurrently (C daemon queues IPC internally) */
   const vectors = await Promise.all(chunks.map((chunk) => buildEmbedding(chunk.content)));
+
+  // Real semantic embeddings (e5-small, 384-dim) populated alongside the hash
+  // vectors. The hash stays as the always-available fallback; v2 becomes the
+  // primary similarity signal when present. Best-effort: a model load failure
+  // never blocks the legacy hash path.
+  const v2Ready = await ensureSemanticV2Column(app);
+  const v2Vectors = v2Ready
+    ? await embedTextsForStorage(
+        chunks.map((c) => c.content),
+        app.log,
+      )
+    : null;
+
   for (let ci = 0; ci < chunks.length; ci++) {
     const embedding = buildVectorSql(vectors[ci]!);
     await app.db.execute(sql`
@@ -431,6 +600,28 @@ export async function indexKnowledgeChunksForDocument(
         )
       where id = ${chunks[ci]!.id}
     `);
+    if (v2Vectors && v2Vectors[ci]) {
+      try {
+        const v2 = buildVectorSql(v2Vectors[ci]!);
+        await app.db.execute(sql`
+          update knowledge_chunks
+          set
+            embedding_v2 = ${v2},
+            metadata = jsonb_set(
+              coalesce(metadata, '{}'::jsonb),
+              '{semanticModel}',
+              to_jsonb(${STORAGE_SEMANTIC_MODEL_TAG}::text),
+              true
+            )
+          where id = ${chunks[ci]!.id}
+        `);
+      } catch (error) {
+        app.log?.warn?.(
+          { error, chunkId: chunks[ci]!.id },
+          "embedding_v2 write skipped",
+        );
+      }
+    }
   }
 
   return {

@@ -1297,6 +1297,60 @@ export async function maybeQueueMemoryExtractionJob(
   }).catch(() => ({ created: false, reason: "memory_job_queue_failed" as const }));
 }
 
+/**
+ * Returns a one-line continuity hint when the user opens a fresh chat and we
+ * have a meaningful recent episode (≤ N days, importance ≥ 60, active). Used
+ * to seed the system prompt so Elyan can naturally reference where you left
+ * off — the "kaldığımız yer" effect.
+ *
+ * Bounded query: one row, indexed on user+updated, no joins. Cheap enough to
+ * run on every fresh session start.
+ */
+export async function findRecentContinuityEpisode(
+  app: FastifyInstance,
+  input: { userId: string; withinDays?: number; minImportance?: number },
+): Promise<{
+  summary: string;
+  episodeType: string;
+  updatedAt: Date;
+  importance: number;
+  sourceSessionId: string | null;
+} | null> {
+  const withinDays = input.withinDays ?? 7;
+  const minImportance = input.minImportance ?? 60;
+  const cutoff = new Date(Date.now() - withinDays * 86_400_000);
+
+  const rows = await app.db
+    .select({
+      summary: brainMemoryEpisodes.summary,
+      episodeType: brainMemoryEpisodes.episodeType,
+      updatedAt: brainMemoryEpisodes.updatedAt,
+      importance: brainMemoryEpisodes.importanceScore,
+      sourceSessionId: brainMemoryEpisodes.sourceSessionId,
+    })
+    .from(brainMemoryEpisodes)
+    .where(
+      and(
+        eq(brainMemoryEpisodes.userId, input.userId),
+        eq(brainMemoryEpisodes.lifecycleStatus, "active"),
+        gt(brainMemoryEpisodes.updatedAt, cutoff),
+        gt(brainMemoryEpisodes.importanceScore, minImportance - 1),
+      ),
+    )
+    .orderBy(desc(brainMemoryEpisodes.updatedAt))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    summary: row.summary,
+    episodeType: row.episodeType,
+    updatedAt: row.updatedAt,
+    importance: row.importance,
+    sourceSessionId: row.sourceSessionId,
+  };
+}
+
 async function extractMemoryCandidates(app: FastifyInstance, userId: string) {
   const lastRunRows = await app.db
     .select({
@@ -2023,6 +2077,119 @@ async function synthesizeSelfModelAndReflectiveMemory(
   };
 }
 
+/**
+ * Rolls the per-event style signals captured by recordConversationExchangeLearning
+ * (preferred_language, answer_length, vocabulary_richness, tone, etc.) into a
+ * single durable "communication style" snapshot the prompt can adapt to.
+ *
+ * Pure aggregation over learning_events; no LLM, no external service. Runs as
+ * part of the in-process memory extraction job so it costs no extra resources.
+ */
+async function aggregateCommunicationStyleSnapshot(
+  app: FastifyInstance,
+  userId: string,
+  sourceRunId: string,
+): Promise<boolean> {
+  const lookback = new Date(Date.now() - 30 * 86_400_000);
+  const rows = await app.db
+    .select({
+      key: learningEvents.key,
+      value: learningEvents.value,
+      confidence: learningEvents.confidence,
+    })
+    .from(learningEvents)
+    .where(
+      and(
+        eq(learningEvents.userId, userId),
+        eq(learningEvents.privacyLevel, "safe"),
+        gt(learningEvents.createdAt, lookback),
+      ),
+    )
+    .limit(500);
+
+  if (rows.length < 4) {
+    // Not enough evidence yet — better no profile than a noisy one.
+    return false;
+  }
+
+  const tallies = new Map<string, Map<string, { count: number; confidence: number }>>();
+  for (const row of rows) {
+    const key = row.key;
+    if (
+      key !== "preferred_language" &&
+      key !== "answer_length" &&
+      key !== "vocabulary_richness" &&
+      key !== "preferred_tone" &&
+      key !== "response_style_preference"
+    ) {
+      continue;
+    }
+    const bucket = tallies.get(key) ?? new Map();
+    const slot = bucket.get(row.value) ?? { count: 0, confidence: 0 };
+    slot.count += 1;
+    slot.confidence += row.confidence;
+    bucket.set(row.value, slot);
+    tallies.set(key, bucket);
+  }
+
+  if (tallies.size === 0) return false;
+
+  // Pick the dominant value per dimension (count first, then average confidence).
+  function dominant(key: string): string | null {
+    const bucket = tallies.get(key);
+    if (!bucket) return null;
+    let bestValue: string | null = null;
+    let bestCount = 0;
+    let bestConf = 0;
+    for (const [value, slot] of bucket) {
+      const avgConf = slot.confidence / slot.count;
+      if (
+        slot.count > bestCount ||
+        (slot.count === bestCount && avgConf > bestConf)
+      ) {
+        bestValue = value;
+        bestCount = slot.count;
+        bestConf = avgConf;
+      }
+    }
+    return bestValue;
+  }
+
+  const profile = [
+    ["language", dominant("preferred_language")],
+    ["response length", dominant("answer_length")],
+    ["vocabulary", dominant("vocabulary_richness")],
+    ["tone", dominant("preferred_tone")],
+    ["overall style", dominant("response_style_preference")],
+  ]
+    .filter(([, value]) => Boolean(value))
+    .map(([label, value]) => `${label}: ${value}`);
+
+  if (profile.length === 0) return false;
+
+  const totalEvidence = Array.from(tallies.values())
+    .flatMap((bucket) => Array.from(bucket.values()))
+    .reduce((sum, slot) => sum + slot.count, 0);
+  const confidence = Math.min(95, 45 + Math.min(40, totalEvidence));
+
+  await upsertMemoryFact(app, {
+    userId,
+    key: "self_model_communication_style",
+    value: profile.join("; "),
+    scope: "user",
+    factType: "self_model",
+    confidence,
+    importanceScore: 70,
+    metadata: {
+      evidenceCount: totalEvidence,
+      lookbackDays: 30,
+      derivedFrom: Array.from(tallies.keys()),
+    },
+    sourceRunId,
+  });
+  return true;
+}
+
 async function processMemoryExtractionJob(app: FastifyInstance, job: typeof trainingJobs.$inferSelect) {
   const userId = job.ownerUserId;
   if (!userId) {
@@ -2119,16 +2286,25 @@ async function processMemoryExtractionJob(app: FastifyInstance, job: typeof trai
     });
   }
 
+  // Roll per-event style signals into a stable user style snapshot. Best-
+  // effort: failure here doesn't fail the whole extraction job.
+  const styleApplied = await aggregateCommunicationStyleSnapshot(
+    app,
+    userId,
+    job.id,
+  ).catch(() => false);
+
   await queueFollowUpMemoryJobs(app, userId);
 
   return {
     status: "completed" as const,
-    processedCount: factCount + episodeCount,
+    processedCount: factCount + episodeCount + (styleApplied ? 1 : 0),
     metadata: {
       sourceEventCount: extracted.sourceEventCount,
       extractedFactCount: factCount,
       extractedEpisodeCount: episodeCount,
       linkedMemoryCount: linkedPairs.length,
+      communicationStyleApplied: styleApplied,
       promotedSemanticFacts: extracted.facts.filter((fact) => fact.factType === "semantic" && fact.count >= 2).length,
     },
   };

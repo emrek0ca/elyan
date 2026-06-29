@@ -1,4 +1,8 @@
 import { buildHashedKnowledgeEmbedding } from "../../modules/brain/retrieval.js";
+import {
+  embedQueryForStorage,
+  embedTextsForStorage,
+} from "../../modules/brain/semantic-embedder.js";
 import type { UnderstandingIntent } from "./types.js";
 
 /**
@@ -154,5 +158,70 @@ export function classifyIntentSemantic(
   if (!best || best.score < minScore) {
     return null;
   }
+  return best;
+}
+
+// ── Transformer-based intent classification (real semantic) ──────────────────
+//
+// Hash embeddings are essentially bag-of-tokens — they miss paraphrases and
+// mostly-different-words synonyms. The e5-small model already loaded for
+// storage embeddings gives true multilingual semantic matching at ~50ms per
+// call (warm). When the model is unavailable, the hash path above is kept as
+// a synchronous fallback.
+
+let transformerPrototypesPromise:
+  | Promise<Array<{ intent: UnderstandingIntent; vector: number[] }> | null>
+  | null = null;
+
+async function loadTransformerPrototypes(): Promise<
+  Array<{ intent: UnderstandingIntent; vector: number[] }> | null
+> {
+  if (transformerPrototypesPromise) return transformerPrototypesPromise;
+  transformerPrototypesPromise = (async () => {
+    // Build one consolidated "passage" per intent by joining its seed phrases.
+    // This gives a single 384-dim prototype per intent rather than averaging
+    // multiple embeddings (which is what the e5 model is trained for: pooled
+    // passage representation).
+    const entries = Object.entries(INTENT_SEED_PHRASES).filter(
+      ([, phrases]) => Array.isArray(phrases) && phrases.length > 0,
+    );
+    const passages = entries.map(([, phrases]) => phrases!.join(". "));
+    const vectors = await embedTextsForStorage(passages);
+    if (!vectors) return null;
+    return entries.map(([intent], index) => ({
+      intent: intent as UnderstandingIntent,
+      vector: vectors[index]!,
+    }));
+  })();
+  return transformerPrototypesPromise;
+}
+
+/**
+ * Real semantic intent classification using the e5-small storage embedder.
+ * Returns null when the model is unavailable so callers can fall back to the
+ * synchronous hash classifier. The transformer call is ~50ms warm; only worth
+ * paying for the no-regex-match path (caller is intent-classifier.ts).
+ */
+export async function classifyIntentTransformer(
+  text: string,
+  minScore = 0.62,
+): Promise<{ intent: UnderstandingIntent; score: number } | null> {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+  const [prototypes, queryVector] = await Promise.all([
+    loadTransformerPrototypes(),
+    embedQueryForStorage(trimmed),
+  ]);
+  if (!prototypes || !queryVector) return null;
+  let best: { intent: UnderstandingIntent; score: number } | null = null;
+  for (const prototype of prototypes) {
+    const score = dot(queryVector, prototype.vector);
+    if (!best || score > best.score) {
+      best = { intent: prototype.intent, score };
+    }
+  }
+  // e5 vectors live in a tighter similarity range than hash vectors, so a
+  // higher minScore guards against weak matches polluting routing decisions.
+  if (!best || best.score < minScore) return null;
   return best;
 }

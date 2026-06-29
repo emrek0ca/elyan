@@ -37,6 +37,7 @@ import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
 import { startTaskLeaseSweeper } from "../modules/tasks/lease-sweeper.js";
 import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
 import { startInProcessMemoryWorker } from "../modules/brain/worker.js";
+import { maybeStartSemanticV2Backfill } from "../modules/brain/retrieval.js";
 import { nlpDaemon } from "../lib/nlp-daemon.js";
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -319,6 +320,9 @@ export async function buildApp(envInput?: AppEnv) {
   // Drains memory-extraction jobs in-process (the node training-worker is
   // disabled in prod and the python ml-worker doesn't run TS memory jobs).
   const stopMemoryWorker = startInProcessMemoryWorker(app);
+  // Backfills the new 384-dim semantic embedding column for existing chunks
+  // that only have the legacy hash vector. Fire-and-forget; bounded.
+  maybeStartSemanticV2Backfill(app);
 
   app.decorate("authenticateUser", async (request: FastifyRequest, reply: FastifyReply) => {
     try {

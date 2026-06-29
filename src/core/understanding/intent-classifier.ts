@@ -1,6 +1,9 @@
 import type { IntentClassification, RoutingHints, TaskUnderstandingInput, UnderstandingIntent } from "./types.js";
 import { hasTurkicLanguageSignals } from "./turkic-language.js";
-import { classifyIntentSemantic } from "./intent-semantic.js";
+import {
+  classifyIntentSemantic,
+  classifyIntentTransformer,
+} from "./intent-semantic.js";
 
 const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = [
   {
@@ -369,4 +372,46 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
       routingHints: calculateRoutingHints("unknown", false, false),
     };
   }
+}
+
+/**
+ * Optional transformer enhancement for the sync classifier above. When the
+ * sync path lands on "chat"/"unknown" or matches only weakly, the e5-small
+ * embedder gives a real-semantic second opinion. Async by necessity (the
+ * model call is non-blocking but takes ~50ms warm). Callers in async contexts
+ * can `await enhanceIntentWithTransformer(text, classification)` to upgrade
+ * the classification when the transformer disagrees with high confidence.
+ *
+ * Idempotent: when the transformer isn't loaded yet, returns the original.
+ */
+export async function enhanceIntentWithTransformer(
+  text: string,
+  current: IntentClassification,
+): Promise<IntentClassification> {
+  // Only re-classify when the sync path was unsure: "chat", "unknown", or
+  // confidence below 0.6. Otherwise the regex match is already definitive
+  // and a transformer disagreement is more often a false positive.
+  if (
+    current.primaryIntent !== "chat" &&
+    current.primaryIntent !== "unknown" &&
+    current.confidence >= 0.6
+  ) {
+    return current;
+  }
+  const result = await classifyIntentTransformer(text).catch(() => null);
+  if (!result) return current;
+  if (result.intent === current.primaryIntent) return current;
+  // The transformer must beat a strong margin — semantic intent classification
+  // on short prompts can be noisy. 0.68 cosine on e5 is a meaningful signal.
+  if (result.score < 0.68) return current;
+  return {
+    ...current,
+    primaryIntent: result.intent,
+    secondaryIntents: unique([
+      current.primaryIntent,
+      ...current.secondaryIntents,
+    ]).filter((intent) => intent !== result.intent),
+    confidence: Math.max(current.confidence, Math.min(0.85, result.score)),
+    reason: `${current.reason}+transformer_${result.intent}`,
+  };
 }

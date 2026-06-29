@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
 import { maybeQueueMemoryExtractionJob } from "../../modules/brain/memory.js";
-import { classifyIntent } from "./intent-classifier.js";
+import {
+  classifyIntent,
+  enhanceIntentWithTransformer,
+} from "./intent-classifier.js";
 import { buildUserContext } from "./context-builder.js";
 import { extractFeedbackSignals, extractPreferenceSignals } from "./preference-extractor.js";
 import { filterLearningSignals } from "./personalization-policy.js";
@@ -116,7 +119,11 @@ export async function buildTaskUnderstanding(
   }
 
   try {
-    const intent = classifyIntent(input);
+    const baseIntent = classifyIntent(input);
+    // Real-semantic upgrade via the same e5-small transformer that powers
+    // storage embeddings. Only fires when the sync classifier was unsure
+    // (chat/unknown/<0.6 confidence) — keeps the fast path fast.
+    const intent = await enhanceIntentWithTransformer(input.message ?? "", baseIntent);
     app.log.info(
       {
         requestId: input.metadata?.requestId,
@@ -124,6 +131,7 @@ export async function buildTaskUnderstanding(
         intent: intent.primaryIntent,
         confidence: intent.confidence,
         privacyRisk: intent.privacyRisk,
+        upgradedByTransformer: intent !== baseIntent,
       },
       "understanding intent classified",
     );

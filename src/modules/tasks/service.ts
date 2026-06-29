@@ -2563,6 +2563,10 @@ async function processSharedBrainChatTask(
       });
     }
 
+    // Reasoning-channel ("Düşünüyor...") snapshot. Lives next to content so the
+    // SSE delta can carry an updated reasoning block even when content hasn't
+    // grown — gpt-oss emits reasoning chunks BEFORE the first content token.
+    let lastStreamedReasoning = "";
     let lastVisibleStreamingContent = sanitizeAssistantVisibleText(ackText, {
       fallback: ackText,
     });
@@ -2627,22 +2631,50 @@ async function processSharedBrainChatTask(
       brainProfile: input.brainProfile,
           onDelta: chatStreaming
         ? async (delta) => {
-            // Model token'ı geldi — visible content değiştiyse typed text block
-            // ile aynı assistant message id altında SSE gönder.
+            // Two channels arrive here: content (visible answer) and reasoning
+            // (the "düşünüyor" trace). Either can change without the other.
+            const incomingReasoning = delta.reasoningContent ?? "";
+            const reasoningChanged =
+              incomingReasoning && incomingReasoning !== lastStreamedReasoning;
+            if (reasoningChanged) {
+              lastStreamedReasoning = incomingReasoning;
+            }
+
             const visibleContent =
               sanitizeAssistantVisibleText(delta.content, { fallback: "" }) ||
               lastVisibleStreamingContent;
-            if (visibleContent === lastVisibleStreamingContent) {
+            const contentChanged = visibleContent !== lastVisibleStreamingContent;
+            if (!contentChanged && !reasoningChanged) {
               return;
             }
-            const visibleDelta = visibleContent.startsWith(lastVisibleStreamingContent)
-              ? visibleContent.slice(lastVisibleStreamingContent.length)
-              : visibleContent;
-            lastVisibleStreamingContent = visibleContent;
+            const visibleDelta = contentChanged
+              ? visibleContent.startsWith(lastVisibleStreamingContent)
+                ? visibleContent.slice(lastVisibleStreamingContent.length)
+                : visibleContent
+              : "";
+            if (contentChanged) {
+              lastVisibleStreamingContent = visibleContent;
+            }
             const now = new Date().toISOString();
+            // Surface reasoning as a typed block so the existing block pipeline
+            // delivers it to the client. Status flips to "completed" once the
+            // final answer (content) is in flight or after generation ends —
+            // see the post-inference patch below.
+            const reasoningBlock = lastStreamedReasoning
+              ? {
+                  type: "reasoning_trace",
+                  status: contentChanged ? "completed" : "running",
+                  content: lastStreamedReasoning,
+                  visibility: "user_visible",
+                }
+              : null;
             const streamingBlocks = composeAssistantMessageBlocks({
               content: visibleContent,
-              blocks: [ackTaskTrace, ...(attachmentAckBlock ? [attachmentAckBlock] : [])],
+              blocks: [
+                ackTaskTrace,
+                ...(attachmentAckBlock ? [attachmentAckBlock] : []),
+                ...(reasoningBlock ? [reasoningBlock] : []),
+              ],
               streaming: true,
             });
             await publishVolatileChatStreamEvent(app, {
