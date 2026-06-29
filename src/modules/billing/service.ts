@@ -1650,7 +1650,7 @@ export async function verifyStorePurchase(
     const accountToken = "appAccountToken" in verification
       ? readReceiptText(verification.appAccountToken)
       : "";
-    if (!accountToken || accountToken.toLowerCase() !== userId.toLowerCase()) {
+    if (accountToken && accountToken.toLowerCase() !== userId.toLowerCase()) {
       throw conflict("apple_app_account_token_mismatch");
     }
     const originalTransactionId = "originalTransactionId" in verification

@@ -42,7 +42,7 @@ import {
 } from "../../db/schema.js";
 import { hashSecret, verifySecret } from "../../lib/auth-crypto.js";
 import { calculateRefreshTokenExpiry, signUserAccessToken, signUserRefreshToken } from "../../lib/auth-tokens.js";
-import { badRequest, conflict, notFound, unauthorized } from "../../lib/errors.js";
+import { AppError, badRequest, conflict, notFound, unauthorized } from "../../lib/errors.js";
 import type { UserAuthTokenPayload } from "../../types/auth.js";
 import { createAuditLog } from "../audit/service.js";
 import {
@@ -56,6 +56,13 @@ import {
   ensureUserIdentity,
   getTrialQuotaPolicy,
 } from "../quota/service.js";
+import {
+  buildOtpAuthUri,
+  createTotpSecret,
+  decryptTotpSecret,
+  encryptTotpSecret,
+  verifyTotpCode,
+} from "./totp.js";
 
 type SessionContext = {
   ipAddress?: string;
@@ -607,7 +614,7 @@ export async function registerUser(
 
 export async function loginUser(
   app: FastifyInstance,
-  input: { email: string; password: string },
+  input: { email: string; password: string; twoFactorCode?: string },
   context: SessionContext,
 ) {
   const email = normalizeEmail(input.email);
@@ -617,6 +624,8 @@ export async function loginUser(
       email: users.email,
       displayName: users.displayName,
       passwordHash: users.passwordHash,
+      twoFactorEnabled: users.twoFactorEnabled,
+      twoFactorSecretEncrypted: users.twoFactorSecretEncrypted,
       deletedAt: users.deletedAt,
     })
     .from(users)
@@ -627,6 +636,19 @@ export async function loginUser(
 
   if (!user || user.deletedAt || !(await verifySecret(input.password, user.passwordHash))) {
     throw unauthorized("Şifre yanlış.");
+  }
+
+  if (user.twoFactorEnabled) {
+    if (!user.twoFactorSecretEncrypted) {
+      throw new AppError(409, "two_factor_misconfigured", "2FA yapılandırması tamamlanmamış.");
+    }
+    if (!input.twoFactorCode) {
+      throw new AppError(401, "two_factor_required", "İki faktörlü doğrulama kodu gerekli.");
+    }
+    const secret = decryptTotpSecret(user.twoFactorSecretEncrypted, app.config.JWT_SECRET);
+    if (!verifyTotpCode({ secret, code: input.twoFactorCode })) {
+      throw new AppError(401, "two_factor_invalid", "2FA kodu yanlış.");
+    }
   }
 
   const tokens = await createUserSession(
@@ -1043,6 +1065,170 @@ export async function changeCurrentUserPassword(
   return {
     ok: true,
     changed: true,
+  };
+}
+
+async function getUserTwoFactorRow(app: FastifyInstance, userId: string) {
+  const rows = await app.db
+    .select({
+      id: users.id,
+      email: users.email,
+      twoFactorEnabled: users.twoFactorEnabled,
+      twoFactorSecretEncrypted: users.twoFactorSecretEncrypted,
+      twoFactorConfirmedAt: users.twoFactorConfirmedAt,
+      deletedAt: users.deletedAt,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const user = rows[0];
+  if (!user || user.deletedAt) {
+    throw unauthorized("Bilgileri kontrol et.");
+  }
+  return user;
+}
+
+export async function getCurrentUserTwoFactorStatus(app: FastifyInstance, userId: string) {
+  const user = await getUserTwoFactorRow(app, userId);
+  return {
+    enabled: Boolean(user.twoFactorEnabled),
+    confirmedAt: user.twoFactorConfirmedAt,
+  };
+}
+
+export async function startCurrentUserTwoFactorSetup(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    ipAddress?: string;
+    userAgent?: string;
+    requestId?: string;
+  },
+) {
+  const user = await getUserTwoFactorRow(app, input.userId);
+  const secret = createTotpSecret();
+  const encryptedSecret = encryptTotpSecret(secret, app.config.JWT_SECRET);
+  await app.db
+    .update(users)
+    .set({
+      twoFactorEnabled: false,
+      twoFactorSecretEncrypted: encryptedSecret,
+      twoFactorConfirmedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, input.userId));
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "auth.2fa.setup.start",
+    resourceType: "user",
+    resourceId: input.userId,
+    status: "success",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    requestId: input.requestId,
+    payload: {},
+  });
+  return {
+    enabled: false,
+    secret,
+    otpauthUri: buildOtpAuthUri({
+      issuer: "Elyan",
+      accountName: user.email,
+      secret,
+    }),
+  };
+}
+
+export async function enableCurrentUserTwoFactor(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    code: string;
+    ipAddress?: string;
+    userAgent?: string;
+    requestId?: string;
+  },
+) {
+  const user = await getUserTwoFactorRow(app, input.userId);
+  if (!user.twoFactorSecretEncrypted) {
+    throw new AppError(409, "two_factor_setup_required", "Önce 2FA kurulumu başlatılmalı.");
+  }
+  const secret = decryptTotpSecret(user.twoFactorSecretEncrypted, app.config.JWT_SECRET);
+  if (!verifyTotpCode({ secret, code: input.code })) {
+    throw new AppError(401, "two_factor_invalid", "2FA kodu yanlış.");
+  }
+  const confirmedAt = new Date();
+  await app.db
+    .update(users)
+    .set({
+      twoFactorEnabled: true,
+      twoFactorConfirmedAt: confirmedAt,
+      updatedAt: confirmedAt,
+    })
+    .where(eq(users.id, input.userId));
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "auth.2fa.enable",
+    resourceType: "user",
+    resourceId: input.userId,
+    status: "success",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    requestId: input.requestId,
+    payload: {},
+  });
+  return {
+    enabled: true,
+    confirmedAt,
+  };
+}
+
+export async function disableCurrentUserTwoFactor(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    code: string;
+    ipAddress?: string;
+    userAgent?: string;
+    requestId?: string;
+  },
+) {
+  const user = await getUserTwoFactorRow(app, input.userId);
+  if (!user.twoFactorEnabled || !user.twoFactorSecretEncrypted) {
+    return { enabled: false };
+  }
+  const secret = decryptTotpSecret(user.twoFactorSecretEncrypted, app.config.JWT_SECRET);
+  if (!verifyTotpCode({ secret, code: input.code })) {
+    throw new AppError(401, "two_factor_invalid", "2FA kodu yanlış.");
+  }
+  await app.db
+    .update(users)
+    .set({
+      twoFactorEnabled: false,
+      twoFactorSecretEncrypted: null,
+      twoFactorConfirmedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, input.userId));
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "auth.2fa.disable",
+    resourceType: "user",
+    resourceId: input.userId,
+    status: "success",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    requestId: input.requestId,
+    payload: {},
+  });
+  return {
+    enabled: false,
   };
 }
 

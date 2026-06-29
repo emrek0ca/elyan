@@ -183,6 +183,13 @@
       "when": 1781866800000,
       "tag": "0025_world_signals",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1782766800000,
+      "tag": "0026_user_two_factor",
+      "breakpoints": true
     }
   ]
 }

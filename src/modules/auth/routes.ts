@@ -5,6 +5,7 @@ import { assertRequestBudget } from "../../lib/reliability/request-budget.js";
 import { getUserAuth } from "../../lib/request-auth.js";
 import {
   changePasswordBodySchema,
+  disableTwoFactorBodySchema,
   loginBodySchema,
   oauthLoginBodySchema,
   oauthProviderParamsSchema,
@@ -12,19 +13,24 @@ import {
   registerBodySchema,
   updateProfileBodySchema,
   uploadAvatarBodySchema,
+  verifyTwoFactorBodySchema,
 } from "./schemas.js";
 import {
   changeCurrentUserPassword,
   deleteCurrentUserAvatar,
   deleteCurrentUserAccount,
+  disableCurrentUserTwoFactor,
   getCurrentUserAvatar,
   getCurrentUserProfile,
+  getCurrentUserTwoFactorStatus,
+  enableCurrentUserTwoFactor,
   loginUser,
   loginWithApple,
   loginWithGoogle,
   refreshUserSession,
   registerUser,
   revokeUserSession,
+  startCurrentUserTwoFactorSetup,
   updateCurrentUserProfile,
   upsertCurrentUserAvatar,
 } from "./service.js";
@@ -228,6 +234,80 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       userAgent: context.userAgent,
       requestId: context.requestId,
     });
+  });
+
+  app.get("/2fa/status", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const auth = getUserAuth(request);
+    return {
+      twoFactor: await getCurrentUserTwoFactorStatus(app, auth.sub),
+    };
+  });
+
+  app.post("/2fa/setup", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const auth = getUserAuth(request);
+    const context = getRequestContext(request);
+    return {
+      twoFactor: await startCurrentUserTwoFactorSetup(app, {
+        userId: auth.sub,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+        requestId: context.requestId,
+      }),
+    };
+  });
+
+  app.post("/2fa/enable", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const auth = getUserAuth(request);
+    const body = verifyTwoFactorBodySchema.parse(request.body);
+    const context = getRequestContext(request);
+    return {
+      twoFactor: await enableCurrentUserTwoFactor(app, {
+        userId: auth.sub,
+        code: body.code,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+        requestId: context.requestId,
+      }),
+    };
+  });
+
+  app.post("/2fa/disable", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const auth = getUserAuth(request);
+    const body = disableTwoFactorBodySchema.parse(request.body);
+    const context = getRequestContext(request);
+    return {
+      twoFactor: await disableCurrentUserTwoFactor(app, {
+        userId: auth.sub,
+        code: body.code,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+        requestId: context.requestId,
+      }),
+    };
   });
 
   app.post("/avatar", async (request, reply) => {

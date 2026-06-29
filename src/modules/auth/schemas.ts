@@ -18,6 +18,7 @@ export const registerBodySchema = z.object({
 export const loginBodySchema = z.object({
   email: z.string().email().max(320),
   password: z.string().min(8).max(128),
+  twoFactorCode: z.string().trim().regex(/^[0-9 ]{6,12}$/).optional(),
 });
 
 export const refreshBodySchema = z.object({
@@ -36,6 +37,14 @@ export const changePasswordBodySchema = z.object({
 export const uploadAvatarBodySchema = z.object({
   mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),
   dataBase64: z.string().min(1).max(3_000_000),
+});
+
+export const verifyTwoFactorBodySchema = z.object({
+  code: z.string().trim().regex(/^[0-9 ]{6,12}$/),
+});
+
+export const disableTwoFactorBodySchema = z.object({
+  code: z.string().trim().regex(/^[0-9 ]{6,12}$/),
 });
 
 export const oauthProviderParamsSchema = z.object({
