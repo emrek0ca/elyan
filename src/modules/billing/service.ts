@@ -404,6 +404,36 @@ export function assertSharedBrainUsageBudgetAllowed(
   }
 }
 
+export function isStoreSubscriptionClaimLocked(
+  subscription?: {
+    billingProvider?: string | null;
+    planCode?: string | null;
+    status?: string | null;
+    periodEndsAt?: Date | null;
+  } | null,
+  currentTime: Date = now(),
+) {
+  if (!subscription) {
+    return false;
+  }
+  const provider = String(subscription.billingProvider || "").trim();
+  if (provider !== "apple_store" && provider !== "google_play") {
+    return false;
+  }
+  const planCode = normalizeBillingPlanCode(subscription.planCode);
+  if (planCode === "free") {
+    return false;
+  }
+  const status = normalizeSubscriptionStatus(subscription.status);
+  const periodStillActive =
+    subscription.periodEndsAt instanceof Date &&
+    subscription.periodEndsAt.getTime() > currentTime.getTime();
+  if (periodStillActive && (status === "active" || status === "trialing" || status === "canceled")) {
+    return true;
+  }
+  return !(subscription.periodEndsAt instanceof Date) && (status === "active" || status === "trialing");
+}
+
 async function getUserRow(app: FastifyInstance, userId: string) {
   const rows = await app.db
     .select({
@@ -1077,6 +1107,7 @@ export async function upsertStoreTransaction(
     status: string;
     payload: Record<string, unknown>;
     verifiedAt?: Date | null;
+    allowUserReassignment?: boolean;
   },
 ) {
   const planCode = normalizeBillingPlanCode(input.planCode);
@@ -1107,7 +1138,7 @@ export async function upsertStoreTransaction(
     : [];
 
   if (existingRows[0]) {
-    if (input.userId && existingRows[0].userId && existingRows[0].userId !== input.userId) {
+    if (input.userId && existingRows[0].userId && existingRows[0].userId !== input.userId && !input.allowUserReassignment) {
       throw conflict("store_transaction_owned_by_another_user");
     }
     const rows = await app.db
@@ -1651,9 +1682,13 @@ export async function verifyStorePurchase(
     ? normalizeBillingPlanCode(verification.planCode)
     : requestedPlanCode;
   const plan = getBillingPlan(planCode);
+  let allowStoreTransactionUserReassignment = false;
   if (platform === "apple") {
     const originalTransactionId = "originalTransactionId" in verification
       ? readReceiptText(verification.originalTransactionId)
+      : "";
+    const appAccountToken = "appAccountToken" in verification
+      ? readReceiptText(verification.appAccountToken)
       : "";
     if (originalTransactionId) {
       const ownedTransactions = await app.db
@@ -1669,7 +1704,16 @@ export async function verifyStorePurchase(
         )
         .limit(1);
       if (ownedTransactions[0]?.userId && ownedTransactions[0].userId !== userId) {
-        throw conflict("apple_subscription_owned_by_another_user");
+        const existingSubscription = await loadSubscriptionForProviderRefs(app, {
+          providerSubscriptionReferenceCode: originalTransactionId,
+          providerCustomerReferenceCode: originalTransactionId,
+        });
+        const verifiedForCurrentUser = appAccountToken === userId;
+        const lockedByActiveStorePeriod = isStoreSubscriptionClaimLocked(existingSubscription);
+        if (!verifiedForCurrentUser && lockedByActiveStorePeriod) {
+          throw conflict("apple_subscription_owned_by_another_user");
+        }
+        allowStoreTransactionUserReassignment = true;
       }
     }
   }
@@ -1709,6 +1753,7 @@ export async function verifyStorePurchase(
     status: verification.status,
     payload: verification.verificationPayload,
     verifiedAt: now(),
+    allowUserReassignment: allowStoreTransactionUserReassignment,
   });
 
   await persistSubscriptionState(app, userId, {
@@ -2967,22 +3012,6 @@ export async function handleAppleStoreWebhook(app: FastifyInstance, payload: Rec
   });
 
   if (providerSubscriptionReferenceCode && transactionInfo) {
-    const appAccountToken = readReceiptText(transactionInfo.appAccountToken);
-    const subscriptionRows = await app.db
-      .select({
-        userId: subscriptions.userId,
-      })
-      .from(subscriptions)
-      .where(
-        and(
-          eq(subscriptions.billingProvider, "apple_store"),
-          eq(subscriptions.providerSubscriptionReferenceCode, providerSubscriptionReferenceCode),
-        ),
-      )
-      .limit(1);
-    if (subscriptionRows[0]?.userId && appAccountToken && subscriptionRows[0].userId !== appAccountToken) {
-      throw conflict("apple_notification_account_ownership_mismatch");
-    }
     await syncStoreSubscriptionFromProof(app, {
       provider: "apple_store",
       providerSubscriptionReferenceCode,

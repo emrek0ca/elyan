@@ -7,6 +7,7 @@ import {
   createUpgradeOrByokRequiredError,
   getBillingProviderForStorePlatform,
   getCheckoutInitializationState,
+  isStoreSubscriptionClaimLocked,
   normalizeStoreWebhookStatus,
   resolveUsageAccessTruth,
   resolveUsagePresentationTruth,
@@ -166,6 +167,108 @@ test("upsertStoreTransaction matches App Store renewals by original transaction 
   assert.equal(row.originalTransactionId, "2000001193376342");
   assert.equal(updatedRows.length, 1);
   assert.equal(updatedRows[0].planCode, "pro");
+});
+
+test("store subscription claim lock allows expired Apple subscriptions but blocks active paid periods", () => {
+  const now = new Date("2026-06-30T00:00:00.000Z");
+
+  assert.equal(
+    isStoreSubscriptionClaimLocked(
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "past_due",
+        periodEndsAt: new Date("2026-06-25T00:00:00.000Z"),
+      },
+      now,
+    ),
+    false,
+  );
+
+  assert.equal(
+    isStoreSubscriptionClaimLocked(
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "active",
+        periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+      },
+      now,
+    ),
+    true,
+  );
+});
+
+test("upsertStoreTransaction can reassign an expired App Store original transaction after ownership check", async () => {
+  const existingRow = {
+    id: "store-tx-1",
+    userId: "old-user",
+    planCode: "solo",
+    productId: "com.elyan.solo.monthly",
+    purchaseToken: null,
+    originalTransactionId: "2000001193376342",
+    transactionId: "2000001194098613",
+    orderId: null,
+    linkedPurchaseToken: null,
+    environment: "Sandbox",
+    appAccountToken: "old-user",
+    verifiedAt: new Date("2026-06-01T00:00:00.000Z"),
+  };
+  const updatedRows: Array<Record<string, unknown>> = [];
+
+  const app = {
+    db: {
+      select() {
+        return {
+          from() {
+            return this;
+          },
+          where() {
+            return this;
+          },
+          limit: async () => [existingRow],
+        };
+      },
+      update() {
+        return {
+          set(values: Record<string, unknown>) {
+            updatedRows.push(values);
+            return {
+              where() {
+                return {
+                  returning: async () => [
+                    {
+                      ...existingRow,
+                      ...values,
+                    },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+
+  const row = await upsertStoreTransaction(app as never, {
+    userId: "new-user",
+    provider: "apple_store",
+    planCode: "solo",
+    productId: "com.elyan.solo.monthly",
+    originalTransactionId: "2000001193376342",
+    transactionId: "2000001200000000",
+    appAccountToken: "new-user",
+    status: "active",
+    payload: { source: "unit-test" },
+    verifiedAt: new Date("2026-06-30T00:00:00.000Z"),
+    allowUserReassignment: true,
+  });
+
+  assert.equal(row.id, "store-tx-1");
+  assert.equal(row.userId, "new-user");
+  assert.equal(row.appAccountToken, "new-user");
+  assert.equal(updatedRows.length, 1);
 });
 
 test("resolveUsageAccessTruth keeps new free trials server-brain eligible until trial expiry", () => {
