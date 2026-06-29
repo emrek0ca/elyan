@@ -426,10 +426,26 @@ function isHighValueLearningKey(key: string): boolean {
     "session_recovered",
     "task_completed",
     "task_not_completed",
+    "emotional_signal",
+    "user_mood",
+    "user_excitement",
+    "user_frustration",
+    "important_decision",
+    "life_event",
+    "conversation_highlight",
     "positive_feedback",
     "negative_feedback",
     "project_constraint",
     "routing_mode",
+    "energy_rhythm",
+    "planning_style",
+    "schedule_pressure_pattern",
+    "mobility_context",
+    "local_preference_context",
+    "notification_attention_pattern",
+    "preferred_working_window",
+    "common_city",
+    "preferred_planning_granularity",
   ].includes(key);
 }
 
@@ -437,13 +453,132 @@ function inferFactType(key: string): "semantic" | "self_model" | "reflective" {
   if (key.startsWith("self_model_")) {
     return "self_model";
   }
-  if (["task_handoff_helpfulness", "mobile_sync_quality", "positive_feedback", "negative_feedback"].includes(key)) {
+  if ([
+    "task_handoff_helpfulness",
+    "mobile_sync_quality",
+    "positive_feedback",
+    "negative_feedback",
+    "emotional_signal",
+    "user_mood",
+    "user_excitement",
+    "user_frustration",
+    "energy_rhythm",
+    "planning_style",
+    "schedule_pressure_pattern",
+    "notification_attention_pattern",
+    "preferred_planning_granularity",
+  ].includes(key)) {
     return "reflective";
   }
   return "semantic";
 }
 
-function computeImportanceScore(input: { key: string; count: number; confidence: number }): number {
+function readMetadataNumber(metadata: Record<string, unknown>, key: string): number | null {
+  const value = metadata[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readMetadataString(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function computeLearningValueScore(input: {
+  key: string;
+  value: string;
+  type: string;
+  source: string;
+  confidence: number;
+  metadata: Record<string, unknown>;
+}): number {
+  const key = input.key;
+  let score = Math.max(0, Math.min(1, input.confidence / 100)) * 42;
+
+  if ([
+    "name",
+    "preferred_name",
+    "preferred_language",
+    "preferred_tone",
+    "response_style_preference",
+    "project_constraint",
+    "implementation_boundary",
+    "privacy_boundary",
+  ].includes(key)) {
+    score += 34;
+  }
+  if ([
+    "important_decision",
+    "life_event",
+    "conversation_highlight",
+    "negative_feedback",
+    "positive_feedback",
+    "task_handoff_helpfulness",
+  ].includes(key)) {
+    score += 28;
+  }
+  if ([
+    "emotional_signal",
+    "user_mood",
+    "user_excitement",
+    "user_frustration",
+    "energy_rhythm",
+    "planning_style",
+    "schedule_pressure_pattern",
+  ].includes(key)) {
+    score += 18;
+  }
+  if (input.type === "style" || input.type === "preference") score += 10;
+  if (input.type === "technical_stack" || input.type === "project_context") score += 8;
+  if (input.source === "feedback") score += 14;
+  if (input.source === "runtime") score -= 8;
+  if (input.metadata.explicit === true) score += 18;
+  if (readMetadataString(input.metadata, "sourceBlobHash")) score += 8;
+
+  const sentimentScore = readMetadataNumber(input.metadata, "sentimentScore");
+  if (sentimentScore != null && sentimentScore >= 0.72) score += 8;
+  const tokenCount = readMetadataNumber(input.metadata, "tokenCount");
+  if (tokenCount != null && tokenCount >= 18) score += 5;
+
+  const compactValue = compactText(input.value);
+  if (compactValue.length < 2) score -= 20;
+  if (compactValue.length > 240 && key !== "project_constraint") score -= 10;
+  if (key === "message_keywords") score -= 28;
+  if (/^(ok|tamam|evet|hayır|hayir|thanks|teşekkürler?)$/i.test(compactValue)) score -= 20;
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function shouldPromoteLearningEvent(input: {
+  key: string;
+  type: string;
+  confidence: number;
+  metadata: Record<string, unknown>;
+  learningValueScore: number;
+}): boolean {
+  if (!isHighValueLearningKey(input.key)) {
+    return false;
+  }
+  if (input.metadata.explicit === true) {
+    return true;
+  }
+  if ([
+    "name",
+    "preferred_name",
+    "preferred_language",
+    "project_constraint",
+    "privacy_boundary",
+    "implementation_boundary",
+    "negative_feedback",
+  ].includes(input.key)) {
+    return input.confidence >= 55;
+  }
+  if (input.type === "workflow" && input.key === "task_completed") {
+    return input.learningValueScore >= 72;
+  }
+  return input.learningValueScore >= 58;
+}
+
+function computeImportanceScore(input: { key: string; count: number; confidence: number; learningValueScore?: number }): number {
   const base =
     ["name", "preferred_name", "job_title", "company", "location", "timezone"].includes(input.key)
       ? 88
@@ -453,10 +588,15 @@ function computeImportanceScore(input: { key: string; count: number; confidence:
       ? 82
       : input.key === "task_handoff_helpfulness" || input.key === "mobile_sync_quality"
         ? 76
+        : input.key === "emotional_signal" || input.key === "user_mood" || input.key === "user_frustration"
+          ? 74
+          : input.key === "planning_style" || input.key === "energy_rhythm" || input.key === "schedule_pressure_pattern"
+            ? 72
         : input.key === "positive_feedback" || input.key === "negative_feedback"
           ? 68
           : 60;
-  return Math.max(1, Math.min(99, Math.round(base + input.count * 3 + input.confidence * 0.1)));
+  const learningBoost = input.learningValueScore == null ? 0 : Math.round((input.learningValueScore - 50) * 0.28);
+  return Math.max(1, Math.min(99, Math.round(base + input.count * 3 + input.confidence * 0.1 + learningBoost)));
 }
 
 function summarizeEpisode(key: string, value: string): string {
@@ -492,6 +632,24 @@ function summarizeEpisode(key: string, value: string): string {
   }
   if (key === "positive_feedback") {
     return `User marked an answer as helpful: ${value}.`;
+  }
+  if (key === "emotional_signal" || key === "user_mood") {
+    return `User's recent emotional state in the conversation was ${value}.`;
+  }
+  if (key === "user_frustration") {
+    return `User showed frustration about: ${value}.`;
+  }
+  if (key === "user_excitement") {
+    return `User showed excitement about: ${value}.`;
+  }
+  if (key === "important_decision") {
+    return `Important decision captured from the conversation: ${value}.`;
+  }
+  if (key === "life_event") {
+    return `User shared a meaningful life event: ${value}.`;
+  }
+  if (key === "conversation_highlight") {
+    return `Conversation highlight: ${value}.`;
   }
   return `${key}: ${value}`;
 }
@@ -1395,6 +1553,7 @@ async function extractMemoryCandidates(app: FastifyInstance, userId: string) {
       factType: "semantic" | "self_model" | "reflective";
       count: number;
       confidenceTotal: number;
+      learningValueTotal: number;
       latestAt: Date;
       taskId: string | null;
       metadata: Record<string, unknown>;
@@ -1416,21 +1575,38 @@ async function extractMemoryCandidates(app: FastifyInstance, userId: string) {
   >();
 
   for (const event of eventRows) {
-    if (!isHighValueLearningKey(event.key)) {
+    const eventMetadata = safeMetadata(event.metadata);
+    const eventConfidence = Number(event.confidence ?? 50);
+    const learningValueScore = computeLearningValueScore({
+      key: event.key,
+      value: event.value,
+      type: event.type,
+      source: event.source,
+      confidence: eventConfidence,
+      metadata: eventMetadata,
+    });
+
+    if (!shouldPromoteLearningEvent({
+      key: event.key,
+      type: event.type,
+      confidence: eventConfidence,
+      metadata: eventMetadata,
+      learningValueScore,
+    })) {
       continue;
     }
 
     const factType = inferFactType(event.key);
     const mapKey = `${factType}:${event.key}:${normalizeMemoryValue(event.value)}`;
     const existing = facts.get(mapKey);
-    const eventMetadata = safeMetadata(event.metadata);
     facts.set(mapKey, {
       key: event.key,
       value: event.value,
       scope: event.scope === "shared" ? "shared" : "user",
       factType,
       count: (existing?.count ?? 0) + 1,
-      confidenceTotal: (existing?.confidenceTotal ?? 0) + Number(event.confidence ?? 50),
+      confidenceTotal: (existing?.confidenceTotal ?? 0) + eventConfidence,
+      learningValueTotal: (existing?.learningValueTotal ?? 0) + learningValueScore,
       latestAt:
         existing && existing.latestAt.getTime() > event.createdAt.getTime() ? existing.latestAt : event.createdAt,
       taskId: event.taskId ?? existing?.taskId ?? null,
@@ -1439,6 +1615,7 @@ async function extractMemoryCandidates(app: FastifyInstance, userId: string) {
         latestSource: event.source,
         latestType: event.type,
         explicit: eventMetadata.explicit === true,
+        learningValueScore,
         extractorVersion:
           typeof eventMetadata.extractorVersion === "string" ? eventMetadata.extractorVersion : undefined,
         sourceTurnId:
@@ -1481,13 +1658,14 @@ async function extractMemoryCandidates(app: FastifyInstance, userId: string) {
         episodeType: event.key,
         summary,
         scope: event.scope === "shared" ? "shared" : "user",
-        confidence: Number(event.confidence ?? 50),
-        importanceScore: computeImportanceScore({ key: event.key, count: 1, confidence: Number(event.confidence ?? 50) }),
+        confidence: eventConfidence,
+        importanceScore: computeImportanceScore({ key: event.key, count: 1, confidence: eventConfidence, learningValueScore }),
         createdAt: event.createdAt,
         metadata: {
           sourceEventId: event.id,
           value: event.value,
           explicit: eventMetadata.explicit === true,
+          learningValueScore,
           extractorVersion:
             typeof eventMetadata.extractorVersion === "string" ? eventMetadata.extractorVersion : undefined,
           sourceTurnId:
@@ -2222,9 +2400,11 @@ async function processMemoryExtractionJob(app: FastifyInstance, job: typeof trai
         key: fact.key,
         count: fact.count,
         confidence: Math.round(fact.confidenceTotal / Math.max(1, fact.count)),
+        learningValueScore: Math.round(fact.learningValueTotal / Math.max(1, fact.count)),
       }),
       metadata: {
         sourceCount: fact.count,
+        averageLearningValueScore: Math.round(fact.learningValueTotal / Math.max(1, fact.count)),
         latestAt: fact.latestAt.toISOString(),
         taskId: fact.taskId,
         ...fact.metadata,

@@ -773,6 +773,11 @@ test("buildContextPacketsFromMetadata exposes only relevant world context", () =
     intent: "planning",
   });
   assert.equal(planningPackets.find((packet) => packet.kind === "health_context")?.mentionPolicy, "implicit");
+  assert.equal(planningPackets.find((packet) => packet.kind === "world_context")?.mentionPolicy, "implicit");
+  assert.equal(
+    planningPackets.find((packet) => packet.kind === "world_context")?.relevanceReason,
+    "location_context_for_logistics_only",
+  );
 
   const localPackets = buildContextPacketsFromMetadata(baseSignals, {
     now,

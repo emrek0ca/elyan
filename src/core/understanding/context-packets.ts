@@ -145,6 +145,8 @@ const SCHEDULE_RELEVANCE_PATTERN =
   /\b(takvim|calendar|program|plan|planla|saat|time|bugün|bugun|yarın|yarin|toplantı|toplanti|müsait|musait|boş|bos|deadline|son tarih|odak|focus|yoğun|yogun|rutin|ajanda|zaman)\b/i;
 const NOTIFICATION_RELEVANCE_PATTERN =
   /\b(bildirim|notification|dikkat|attention|rahatsız|rahatsiz|odak|focus|sessiz|silent|acil|urgent|öncelik|oncelik)\b/i;
+const ADAPTIVE_WORK_PATTERN =
+  /\b(plan|planla|planning|program|schedule|bugün|bugun|yarın|yarin|task|görev|gorev|workflow|routine|rutin|araştır|arastir|research|debug|kod|code|odak|focus|hazırla|hazirla|çıkar|cikar|optimize|iyileştir|iyilestir|prepare)\b/i;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -257,23 +259,37 @@ function resolveMentionPolicy(input: {
 
   if (input.packetKind === "world_context") {
     const explicit = LOCATION_RELEVANCE_PATTERN.test(message);
+    const implicit = !explicit && (intent === "planning" || ADAPTIVE_WORK_PATTERN.test(message));
     return {
-      mentionPolicy: explicit ? "explicit_when_relevant" : "silent",
-      relevanceReason: explicit ? "location_or_local_recommendation_request" : "location_context_not_requested",
+      mentionPolicy: explicit ? "explicit_when_relevant" : implicit ? "implicit" : "silent",
+      relevanceReason: explicit
+        ? "location_or_local_recommendation_request"
+        : implicit
+          ? "location_context_for_logistics_only"
+          : "location_context_not_requested",
       allowedUse: explicit
         ? ["local recommendation", "logistics or place-aware suggestion", "do not invent live weather"]
-        : ["do not mention location"],
+        : implicit
+          ? ["silently adjust timing or logistics", "do not mention location unless asked"]
+          : ["do not mention location"],
     };
   }
 
   if (input.packetKind === "notification_context") {
     const explicit = NOTIFICATION_RELEVANCE_PATTERN.test(message);
+    const implicit = !explicit && (intent === "planning" || ADAPTIVE_WORK_PATTERN.test(message));
     return {
-      mentionPolicy: explicit ? "explicit_when_relevant" : "silent",
-      relevanceReason: explicit ? "attention_or_notification_request" : "notification_context_not_requested",
+      mentionPolicy: explicit ? "explicit_when_relevant" : implicit ? "implicit" : "silent",
+      relevanceReason: explicit
+        ? "attention_or_notification_request"
+        : implicit
+          ? "attention_context_for_pacing_only"
+          : "notification_context_not_requested",
       allowedUse: explicit
         ? ["attention-aware prioritization", "do not quote notification contents"]
-        : ["do not mention notifications"],
+        : implicit
+          ? ["silently reduce cognitive load", "do not mention notifications"]
+          : ["do not mention notifications"],
     };
   }
 

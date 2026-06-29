@@ -326,6 +326,15 @@ export async function recordConversationExchangeLearning(
   const msgLen = input.userMessage.trim().length;
   const isShort = tokenCount > 0 ? tokenCount < 12 : msgLen < 60;
   const isLong  = tokenCount > 0 ? tokenCount > 60  : msgLen > 300;
+  const cProfileMetadata = {
+    tokenCount: complexityResult?.tokenCount,
+    sentenceCount: complexityResult?.sentenceCount,
+    vocabRichness: complexityResult?.vocabRichness,
+    avgSentenceLen: complexityResult?.avgSentenceLen,
+    sentimentLabel: sentimentResult?.label,
+    sentimentScore: sentimentResult?.score,
+    keywordCount: keywordsResult?.length ?? 0,
+  };
 
   if (isShort) {
     signals.push({
@@ -336,6 +345,7 @@ export async function recordConversationExchangeLearning(
       scope: "user",
       source: "interaction",
       ttlDays: 60,
+      metadata: { ...cProfileMetadata, intent: input.intent },
     });
   } else if (isLong) {
     signals.push({
@@ -346,6 +356,7 @@ export async function recordConversationExchangeLearning(
       scope: "user",
       source: "interaction",
       ttlDays: 60,
+      metadata: { ...cProfileMetadata, intent: input.intent },
     });
   }
 
@@ -359,6 +370,40 @@ export async function recordConversationExchangeLearning(
       scope: "user",
       source: "interaction",
       ttlDays: 90,
+      metadata: { ...cProfileMetadata, intent: input.intent },
+    });
+  }
+
+  if (/\b(hatırla|hatirla|beni tanı|beni tani|kişiselleştir|kisisellestir|derin bağ|derin bag|yakın hisset|yakin hisset|devamlılık|devamlilik|süreklilik|sureklilik|remember me|personalize|continuity)\b/i.test(input.userMessage)) {
+    signals.push({
+      type: "style",
+      key: "response_style_preference",
+      value: "warm_contextual",
+      confidence: 0.78,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 180,
+      metadata: {
+        ...cProfileMetadata,
+        intent: input.intent,
+        explicit: true,
+        reason: "user_requested_deeper_personalization",
+      },
+    });
+    signals.push({
+      type: "episodic",
+      key: "conversation_highlight",
+      value: "user wants Elyan to remember only useful context and build deeper continuity",
+      confidence: 0.82,
+      scope: "user",
+      source: "interaction",
+      ttlDays: 90,
+      metadata: {
+        ...cProfileMetadata,
+        intent: input.intent,
+        explicit: true,
+        reason: "relationship_continuity_request",
+      },
     });
   }
 
@@ -380,9 +425,9 @@ export async function recordConversationExchangeLearning(
         value: stack,
         confidence: 0.72,
         scope: "user",
-        source: "interaction",
-        ttlDays: 120,
-        metadata: { detectedIn: "user_message", intent: input.intent },
+      source: "interaction",
+      ttlDays: 120,
+        metadata: { ...cProfileMetadata, detectedIn: "user_message", intent: input.intent },
       });
     }
   }
@@ -398,7 +443,7 @@ export async function recordConversationExchangeLearning(
       scope: "user",
       source: "interaction",
       ttlDays: 30,
-      metadata: { intent: input.intent, taskId: input.taskId, sentimentScore: sentimentResult?.score },
+      metadata: { ...cProfileMetadata, intent: input.intent, taskId: input.taskId },
     });
   } else if (sentLabel === "negative" && (sentimentResult?.negative ?? 0) >= 1) {
     signals.push({
@@ -409,7 +454,7 @@ export async function recordConversationExchangeLearning(
       scope: "user",
       source: "interaction",
       ttlDays: 14,
-      metadata: { intent: input.intent, taskId: input.taskId, sentimentScore: sentimentResult?.score },
+      metadata: { ...cProfileMetadata, intent: input.intent, taskId: input.taskId },
     });
   } else if (!sentimentResult) {
     // regex fallback if C daemon unavailable
@@ -431,7 +476,7 @@ export async function recordConversationExchangeLearning(
       scope: "user",
       source: "interaction",
       ttlDays: 14,
-      metadata: { intent: input.intent, taskId: input.taskId },
+      metadata: { ...cProfileMetadata, intent: input.intent, taskId: input.taskId },
     });
   }
 
