@@ -325,6 +325,59 @@ export class NlpDaemon {
     }
   }
 
+  async rateCheckV2(input: {
+    identity: string;
+    plan: string;
+    scope: string;
+    costWeight?: number;
+  }): Promise<{ allowed: boolean; retryAfterMs: number; capacity: number; ratePerMinute: number } | null> {
+    try {
+      const r = await this._send({
+        type: "rate_check_v2",
+        identity: input.identity,
+        plan: input.plan,
+        scope: input.scope,
+        costWeight: String(input.costWeight ?? 1),
+      });
+      return {
+        allowed: r.allowed === true,
+        retryAfterMs: typeof r.retryAfterMs === "number" ? r.retryAfterMs : 0,
+        capacity: typeof r.capacity === "number" ? r.capacity : 0,
+        ratePerMinute: typeof r.ratePerMinute === "number" ? r.ratePerMinute : 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async abuseScore(input: {
+    text: string;
+    scope: string;
+    plan: string;
+    hasAuth: boolean;
+    hasDevice: boolean;
+    costWeight?: number;
+  }): Promise<{ score: number; signals: string[] } | null> {
+    try {
+      const r = await this._send({
+        type: "abuse_score",
+        text: input.text,
+        scope: input.scope,
+        plan: input.plan,
+        hasAuth: input.hasAuth ? "1" : "0",
+        hasDevice: input.hasDevice ? "1" : "0",
+        costWeight: String(input.costWeight ?? 1),
+      });
+      if (typeof r.score !== "number") return null;
+      return {
+        score: Math.max(0, Math.min(1, r.score)),
+        signals: Array.isArray(r.signals) ? (r.signals as string[]).filter((value) => typeof value === "string") : [],
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** Fast token count estimate — same formula as estimateTextTokens(), no LLM. */
   async estimateTokens(text: string): Promise<{ tokens: number; chars: number } | null> {
     try {

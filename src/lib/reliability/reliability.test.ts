@@ -3,7 +3,7 @@ import test from "node:test";
 import { AppError } from "../errors.js";
 import { recordCircuitFailure, recordCircuitSuccess, getCircuitState, isCircuitCallAllowed } from "./circuit-breaker.js";
 import { tryAcquireLoadSheddingPermit, withLoadSheddingPermit } from "./load-shedding.js";
-import { assertRequestBudget } from "./request-budget.js";
+import { assertRequestBudget, enforceRouteRequestBudget } from "./request-budget.js";
 import { ReliabilityStore } from "./redis.js";
 
 function createMemoryStore(required = false) {
@@ -82,6 +82,181 @@ test("request budget fails closed with a safe error", async () => {
         windowMs: 1000,
       }),
     (error) => error instanceof AppError && error.statusCode === 429 && error.code === "request_budget_exceeded",
+  );
+});
+
+function createAdmissionApp(input: {
+  nodeEnv?: "development" | "test" | "production";
+  store?: ReliabilityStore;
+  planCode?: string;
+}) {
+  const store = input.store ?? createMemoryStore();
+  return {
+    config: {
+      NODE_ENV: input.nodeEnv ?? "test",
+      REQUEST_BUDGET_WINDOW_MS: 60_000,
+      AUTH_REQUEST_BUDGET_MAX: 10,
+      CHAT_REQUEST_BUDGET_MAX: 60,
+      TASK_REQUEST_BUDGET_MAX: 60,
+    },
+    services: {
+      reliability: {
+        store,
+      },
+    },
+    db: {
+      select() {
+        return {
+          from() {
+            return this;
+          },
+          where() {
+            return this;
+          },
+          limit: async () => [{ planCode: input.planCode ?? "free" }],
+        };
+      },
+    },
+  };
+}
+
+function createAdmissionRequest(input: {
+  method: string;
+  url: string;
+  userId?: string;
+  planCode?: string;
+  ip?: string;
+  body?: Record<string, unknown>;
+}): never {
+  return {
+    method: input.method,
+    url: input.url,
+    ip: input.ip ?? "203.0.113.10",
+    headers: {
+      "user-agent": "elyan-test",
+      "x-elyan-device-id": "device-1",
+    },
+    auth: input.userId
+      ? {
+          sub: input.userId,
+          planCode: input.planCode,
+        }
+      : undefined,
+    body: input.body,
+  } as never;
+}
+
+test("admission applies plan-aware chat budgets before expensive brain work", async () => {
+  const freeApp = createAdmissionApp({ planCode: "free" });
+  for (let i = 0; i < 40; i += 1) {
+    await enforceRouteRequestBudget(
+      freeApp as never,
+      createAdmissionRequest({
+        method: "POST",
+        url: "/v1/chat/messages",
+        userId: "free-user",
+        body: { content: `hello ${i}` },
+      }),
+    );
+  }
+  await assert.rejects(
+    () =>
+      enforceRouteRequestBudget(
+        freeApp as never,
+        createAdmissionRequest({
+          method: "POST",
+          url: "/v1/chat/messages",
+          userId: "free-user",
+          body: { content: "hello over limit" },
+        }),
+      ),
+    (error) => error instanceof AppError && error.statusCode === 429 && error.code === "rate_limited",
+  );
+
+  const proApp = createAdmissionApp({ planCode: "pro" });
+  for (let i = 0; i < 60; i += 1) {
+    await enforceRouteRequestBudget(
+      proApp as never,
+      createAdmissionRequest({
+        method: "POST",
+        url: "/v1/chat/messages",
+        userId: "pro-user",
+        body: { content: `hello ${i}` },
+      }),
+    );
+  }
+});
+
+test("admission throttles repeated auth attempts by ip and credential", async () => {
+  const app = createAdmissionApp({});
+  for (let i = 0; i < 4; i += 1) {
+    await enforceRouteRequestBudget(
+      app as never,
+      createAdmissionRequest({
+        method: "POST",
+        url: "/v1/auth/login",
+        body: { email: "person@example.com" },
+      }),
+    );
+  }
+  await assert.rejects(
+    () =>
+      enforceRouteRequestBudget(
+        app as never,
+        createAdmissionRequest({
+          method: "POST",
+          url: "/v1/auth/login",
+          body: { email: "person@example.com" },
+        }),
+      ),
+    (error) => error instanceof AppError && error.statusCode === 429 && error.code === "rate_limited",
+  );
+});
+
+test("admission allows normal authenticated chat cadence", async () => {
+  const app = createAdmissionApp({ planCode: "solo" });
+  for (let i = 0; i < 8; i += 1) {
+    await enforceRouteRequestBudget(
+      app as never,
+      createAdmissionRequest({
+        method: "POST",
+        url: "/v1/chat/messages",
+        userId: "solo-user",
+        body: { content: `normal message ${i}` },
+      }),
+    );
+  }
+});
+
+test("admission tightens production limits when Redis is unavailable", async () => {
+  const app = createAdmissionApp({
+    nodeEnv: "production",
+    store: createMemoryStore(),
+    planCode: "free",
+  });
+  for (let i = 0; i < 20; i += 1) {
+    await enforceRouteRequestBudget(
+      app as never,
+      createAdmissionRequest({
+        method: "POST",
+        url: "/v1/chat/messages",
+        userId: "degraded-user",
+        body: { content: `degraded ${i}` },
+      }),
+    );
+  }
+  await assert.rejects(
+    () =>
+      enforceRouteRequestBudget(
+        app as never,
+        createAdmissionRequest({
+          method: "POST",
+          url: "/v1/chat/messages",
+          userId: "degraded-user",
+          body: { content: "degraded over limit" },
+        }),
+      ),
+    (error) => error instanceof AppError && error.statusCode === 429,
   );
 });
 

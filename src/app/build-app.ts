@@ -372,7 +372,7 @@ export async function buildApp(envInput?: AppEnv) {
     }
   });
 
-  app.addHook("onRequest", async (request) => {
+  app.addHook("preHandler", async (request) => {
     await enforceRouteRequestBudget(app, request);
   });
 

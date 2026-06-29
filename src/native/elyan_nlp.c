@@ -1071,6 +1071,58 @@ static int tb_consume(const char *userId, const char *plan, float *retry_after_m
   return 0;
 }
 
+static void tb_scope_params(const char *plan, const char *scope, float cost, float *rate_out, float *cap_out) {
+  float rate, cap;
+  tb_plan_params(plan, &rate, &cap);
+  if (scope && strstr(scope, "auth")) {
+    rate = 8.0f / 60.0f;
+    cap = 4.0f;
+  } else if (scope && strstr(scope, "billing")) {
+    rate = 8.0f / 60.0f;
+    cap = 4.0f;
+  } else if (scope && strstr(scope, "tasks")) {
+    rate *= 0.65f;
+    cap *= 0.75f;
+  } else if (scope && strstr(scope, "realtime")) {
+    rate = 12.0f / 60.0f;
+    cap = 4.0f;
+  }
+  if (cost > 1.0f) {
+    float factor = 1.0f / cost;
+    rate *= factor;
+    cap *= factor;
+  }
+  if (rate < 1.0f / 60.0f) rate = 1.0f / 60.0f;
+  if (cap < 1.0f) cap = 1.0f;
+  *rate_out = rate;
+  *cap_out = cap;
+}
+
+static int tb_consume_v2(const char *identity, const char *plan, const char *scope, float cost, float *retry_after_ms_out, float *rate_out, float *cap_out) {
+  char key[TB_KEY_LEN];
+  snprintf(key, sizeof(key), "%s|%s|%s", identity, plan ? plan : "free", scope ? scope : "route");
+  float rate, cap;
+  tb_scope_params(plan, scope, cost, &rate, &cap);
+  TBucket *b = tb_find_or_create(key, rate, cap);
+  b->rate = rate;
+  b->capacity = cap;
+  double now = tb_now();
+  float elapsed = (float)(now - b->last_refill);
+  b->tokens = b->tokens + elapsed * b->rate;
+  if (b->tokens > b->capacity) b->tokens = b->capacity;
+  b->last_refill = now;
+  *rate_out = rate;
+  *cap_out = cap;
+  if (b->tokens >= 1.0f) {
+    b->tokens -= 1.0f;
+    *retry_after_ms_out = 0.0f;
+    return 1;
+  }
+  float wait_tokens = 1.0f - b->tokens;
+  *retry_after_ms_out = (wait_tokens / b->rate) * 1000.0f;
+  return 0;
+}
+
 static void h_rate_check(const char *json, const char *id) {
   char userId[TB_KEY_LEN] = {0};
   char plan[16]           = {0};
@@ -1085,6 +1137,74 @@ static void h_rate_check(const char *json, const char *id) {
   printf(",\"allowed\":%s,\"retryAfterMs\":%d}\n",
          allowed ? "true" : "false",
          allowed ? 0 : (int)(retry_ms + 0.5f));
+}
+
+static void h_rate_check_v2(const char *json, const char *id) {
+  char identity[TB_KEY_LEN] = {0};
+  char plan[16] = {0};
+  char scope[64] = {0};
+  float cost = 1.0f;
+  if (!jstr(json, "identity", identity, sizeof(identity))) {
+    write_err(id, "missing identity");
+    return;
+  }
+  jstr(json, "plan", plan, sizeof(plan));
+  jstr(json, "scope", scope, sizeof(scope));
+  jnum_flex(json, "costWeight", &cost);
+  if (cost < 1.0f) cost = 1.0f;
+  if (cost > 8.0f) cost = 8.0f;
+  float retry_ms = 0.0f, rate = 0.0f, cap = 0.0f;
+  int allowed = tb_consume_v2(identity, plan, scope, cost, &retry_ms, &rate, &cap);
+  write_ok(id);
+  printf(",\"allowed\":%s,\"retryAfterMs\":%d,\"capacity\":%.2f,\"ratePerMinute\":%.2f}\n",
+         allowed ? "true" : "false",
+         allowed ? 0 : (int)(retry_ms + 0.5f),
+         cap,
+         rate * 60.0f);
+}
+
+static void h_abuse_score(const char *json, const char *id) {
+  char text[MAX_LINE] = {0};
+  char scope[64] = {0};
+  char has_auth[8] = {0};
+  char has_device[8] = {0};
+  float cost = 1.0f;
+  jstr(json, "text", text, sizeof(text));
+  jstr(json, "scope", scope, sizeof(scope));
+  jstr(json, "hasAuth", has_auth, sizeof(has_auth));
+  jstr(json, "hasDevice", has_device, sizeof(has_device));
+  jnum_flex(json, "costWeight", &cost);
+  char lo[MAX_LINE] = {0};
+  lowercase_to(text, lo, sizeof(lo));
+  int len = (int)strlen(lo);
+  float score = 0.0f;
+  int repeated = 0;
+  for (int i = 1, run = 1; i < len; i++) {
+    if (lo[i] == lo[i-1] && lo[i] != ' ') run++;
+    else run = 1;
+    if (run >= 12) { repeated = 1; break; }
+  }
+  int suspicious =
+    strstr(lo, "<script") || strstr(lo, "drop table") || strstr(lo, "select ") ||
+    strstr(lo, "http://") || strstr(lo, "https://") || strstr(lo, "token") ||
+    strstr(lo, "password") || strstr(lo, "bearer ");
+  if (!has_auth[0] || !strcmp(has_auth, "0") || !strcmp(has_auth, "false")) score += 0.18f;
+  if (!has_device[0] || !strcmp(has_device, "0") || !strcmp(has_device, "false")) score += 0.08f;
+  if (len == 0) score += 0.20f;
+  if (len > 1500) score += 0.12f;
+  if (repeated) score += 0.18f;
+  if (suspicious) score += 0.22f;
+  if (scope[0] && strstr(scope, "auth")) score += 0.10f;
+  if (cost >= 3.0f) score += 0.12f;
+  if (score > 1.0f) score = 1.0f;
+  write_ok(id);
+  printf(",\"score\":%.4f,\"signals\":[", score);
+  int wrote = 0;
+  if (repeated) { printf("\"repeated_chars\""); wrote = 1; }
+  if (suspicious) { if (wrote) putchar(','); printf("\"suspicious_text\""); wrote = 1; }
+  if (len > 1500) { if (wrote) putchar(','); printf("\"large_text\""); wrote = 1; }
+  if (!has_auth[0] || !strcmp(has_auth, "0") || !strcmp(has_auth, "false")) { if (wrote) putchar(','); printf("\"anonymous\""); }
+  printf("]}\n");
 }
 
 static void h_estimate_tokens(const char *json, const char *id) {
@@ -1324,6 +1444,8 @@ int main(void) {
     else if (!strcmp(type,"extract_keywords")) h_extract_keywords(line,req_id);
     else if (!strcmp(type,"score_complexity")) h_score_complexity(line,req_id);
     else if (!strcmp(type,"rate_check"))       h_rate_check(line,req_id);
+    else if (!strcmp(type,"rate_check_v2"))    h_rate_check_v2(line,req_id);
+    else if (!strcmp(type,"abuse_score"))      h_abuse_score(line,req_id);
     else if (!strcmp(type,"estimate_tokens"))      h_estimate_tokens(line,req_id);
     else if (!strcmp(type,"clean_search_query"))   h_clean_search_query(line,req_id);
     else if (!strcmp(type,"chunk_budget"))          h_chunk_budget(line,req_id);
