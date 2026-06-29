@@ -51,6 +51,27 @@ test("error handler preserves rate limit failures as 429 responses", async () =>
   await app.close();
 });
 
+test("error handler keeps Fastify empty JSON parser errors as client errors", async () => {
+  const app = Fastify({ logger: false });
+  await app.register(errorHandlerPlugin);
+  app.delete("/me", async () => ({ ok: true }));
+
+  const response = await app.inject({
+    method: "DELETE",
+    url: "/me",
+    headers: {
+      "content-type": "application/json",
+    },
+    payload: "",
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error, "invalid_request");
+  assert.equal(response.json().message, "Invalid request payload");
+  assert.doesNotMatch(response.body, /stack|Body cannot be empty/i);
+  await app.close();
+});
+
 test("error handler preserves retry-after metadata for app rate limit errors", async () => {
   const app = Fastify({ logger: false });
   await app.register(errorHandlerPlugin);

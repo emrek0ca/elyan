@@ -1060,7 +1060,7 @@ function hashBillingPayload(payload: Record<string, unknown>) {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
-async function upsertStoreTransaction(
+export async function upsertStoreTransaction(
   app: FastifyInstance,
   input: {
     userId?: string | null;
@@ -1091,6 +1091,11 @@ async function upsertStoreTransaction(
   }
   if (purchaseToken) {
     matchConditions.push(and(eq(billingStoreTransactions.provider, input.provider), eq(billingStoreTransactions.purchaseToken, purchaseToken)));
+  }
+  if (originalTransactionId) {
+    matchConditions.push(
+      and(eq(billingStoreTransactions.provider, input.provider), eq(billingStoreTransactions.originalTransactionId, originalTransactionId)),
+    );
   }
 
   const existingRows = matchConditions.length

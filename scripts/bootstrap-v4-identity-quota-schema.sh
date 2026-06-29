@@ -36,4 +36,8 @@ docker compose -f "${COMPOSE_FILE}" exec -T "${POSTGRES_SERVICE}" \
   psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
   < drizzle/0024_identity_quota_state.sql
 
+docker compose -f "${COMPOSE_FILE}" exec -T "${POSTGRES_SERVICE}" \
+  psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+  < drizzle/0026_user_two_factor.sql
+
 echo "==> Identity quota schema bootstrap complete"

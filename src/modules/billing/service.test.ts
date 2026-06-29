@@ -11,6 +11,7 @@ import {
   resolveUsageAccessTruth,
   resolveUsagePresentationTruth,
   shapePublicUsageSnapshot,
+  upsertStoreTransaction,
 } from "./service.js";
 
 test("getCheckoutInitializationState stays pending for placeholder rows", () => {
@@ -82,6 +83,89 @@ test("normalizeStoreWebhookStatus keeps entitlement updates fail-closed for reco
   assert.equal(normalizeStoreWebhookStatus("SUBSCRIPTION_STATE_IN_TRIAL"), "trialing");
   assert.equal(normalizeStoreWebhookStatus("SUBSCRIPTION_STATE_ON_HOLD"), "past_due");
   assert.equal(normalizeStoreWebhookStatus("SUBSCRIPTION_STATE_CANCELED"), "canceled");
+});
+
+test("upsertStoreTransaction matches App Store renewals by original transaction id", async () => {
+  const existingRow = {
+    id: "store-tx-1",
+    userId: "user-1",
+    planCode: "solo",
+    productId: "com.elyan.solo.monthly",
+    purchaseToken: null,
+    originalTransactionId: "2000001193376342",
+    transactionId: "2000001194808999",
+    orderId: null,
+    linkedPurchaseToken: null,
+    environment: "Sandbox",
+    appAccountToken: null,
+    verifiedAt: new Date("2026-06-01T00:00:00.000Z"),
+  };
+  const updatedRows: Array<Record<string, unknown>> = [];
+  let insertCalled = false;
+
+  const app = {
+    db: {
+      select() {
+        return {
+          from() {
+            return this;
+          },
+          where() {
+            return this;
+          },
+          limit: async () => [existingRow],
+        };
+      },
+      update() {
+        return {
+          set(values: Record<string, unknown>) {
+            updatedRows.push(values);
+            return {
+              where() {
+                return {
+                  returning: async () => [
+                    {
+                      ...existingRow,
+                      ...values,
+                    },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+      insert() {
+        insertCalled = true;
+        return {
+          values() {
+            return {
+              returning: async () => [],
+            };
+          },
+        };
+      },
+    },
+  };
+
+  const row = await upsertStoreTransaction(app as never, {
+    userId: "user-1",
+    provider: "apple_store",
+    planCode: "pro",
+    productId: "com.elyan.pro.monthly",
+    originalTransactionId: "2000001193376342",
+    transactionId: "2000001196569299",
+    status: "active",
+    payload: { source: "unit-test" },
+    verifiedAt: new Date("2026-06-30T00:00:00.000Z"),
+  });
+
+  assert.equal(insertCalled, false);
+  assert.equal(row.id, "store-tx-1");
+  assert.equal(row.transactionId, "2000001196569299");
+  assert.equal(row.originalTransactionId, "2000001193376342");
+  assert.equal(updatedRows.length, 1);
+  assert.equal(updatedRows[0].planCode, "pro");
 });
 
 test("resolveUsageAccessTruth keeps new free trials server-brain eligible until trial expiry", () => {

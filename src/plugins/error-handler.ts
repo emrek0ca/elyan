@@ -64,6 +64,17 @@ export const errorHandlerPlugin = fp(async (app) => {
       return;
     }
 
+    if (isHttpClientError(error)) {
+      const statusCode = Number((error as { statusCode: number }).statusCode);
+      app.log.warn({ err: error, requestId: request.id, url: request.url }, "client request error");
+      reply.status(statusCode).send({
+        error: "invalid_request",
+        message: "Invalid request payload",
+        requestId: request.id,
+      });
+      return;
+    }
+
     if (
       typeof error === "object" &&
       error &&
@@ -97,6 +108,14 @@ export const errorHandlerPlugin = fp(async (app) => {
     });
   });
 });
+
+function isHttpClientError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("statusCode" in error)) {
+    return false;
+  }
+  const statusCode = Number((error as { statusCode?: unknown }).statusCode);
+  return Number.isInteger(statusCode) && statusCode >= 400 && statusCode < 500 && statusCode !== 429;
+}
 
 function parseRetryAfterSeconds(message: string): number | null {
   const match = /retry in\s+(\d+)\s+seconds?/i.exec(message);
