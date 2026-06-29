@@ -1647,12 +1647,6 @@ export async function verifyStorePurchase(
     : requestedPlanCode;
   const plan = getBillingPlan(planCode);
   if (platform === "apple") {
-    const accountToken = "appAccountToken" in verification
-      ? readReceiptText(verification.appAccountToken)
-      : "";
-    if (accountToken && accountToken.toLowerCase() !== userId.toLowerCase()) {
-      throw conflict("apple_app_account_token_mismatch");
-    }
     const originalTransactionId = "originalTransactionId" in verification
       ? readReceiptText(verification.originalTransactionId)
       : "";
