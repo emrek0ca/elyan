@@ -1085,6 +1085,29 @@ async function resolveAmbiguousTaskRouteFallback(
   return parsed;
 }
 
+// Strong, explicit signals that a message needs the LOCAL desktop machine.
+// Used ONLY to decide, when the dispatch toggle is on, whether to hand a message
+// off to desktop vs answer it normally on the server. Intentionally conservative
+// — it looks for possessive/local markers (bilgisayarım, masaüstüm, yerel),
+// screen/terminal/shell, or explicit app/device control, not generic words.
+const DESKTOP_TASK_PATTERNS: RegExp[] = [
+  /(bilgisayar[ıi]m|masa[üu]st[üu]|yerel|local\b|finder|explorer)/i,
+  /(klas[öo]r|indirilenler|belgelerim|downloads folder|my files?)/i,
+  /(ekran g[öo]r[üu]nt[üu]s[üu]|screenshot|ekran[ıi]m)/i,
+  /(terminal|komut sat[ıi]r|\bshell\b|command line|komut[ıi]? [çc]al[ıi][şs]t[ıi]r|run a command)/i,
+  /(uygulamay[ıi]|program[ıi]|vs ?code|visual studio code|chrome'?u|safari'?yi)\s*\w*\s*(a[çc]|ba[şs]lat|kapat)/i,
+  /(ekran parlakl[ıi]|sistem ayar|wifi|bluetooth)/i,
+  /(open|read|list|delete|index|move|rename)\b.{0,24}\b(file|folder|directory|app|screenshot|terminal)/i,
+];
+
+function messageLikelyNeedsDesktop(message: string): boolean {
+  const normalized = String(message ?? "").toLocaleLowerCase("tr-TR");
+  if (!normalized.trim()) {
+    return false;
+  }
+  return DESKTOP_TASK_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 export async function decideCommandRoute(
   app: FastifyInstance,
   input: CommandRouteInput,
@@ -1108,12 +1131,18 @@ export async function decideCommandRoute(
     },
   });
 
-  // ONE signal drives desktop routing: `desktopDispatch`, set by the mobile app
-  // when the user turns on the laptop toggle or taps the one-shot chip. No
-  // message-content heuristics, no legacy aliases — explicit user intent only.
+  // `desktopDispatch` (the laptop toggle) means "I have a desktop available for
+  // tasks that need it" — NOT "send literally everything to the desktop". With
+  // the toggle on we still answer normal chat / knowledge questions on the
+  // server brain, and only hand off messages that genuinely need the local
+  // machine (files, screen, terminal, app control). Otherwise toggling the
+  // button silently broke ordinary conversation. The check is conservative:
+  // bias toward answering normally, since blocking chat is worse than running a
+  // clearly-local task on the server (which will just say it lacks local access).
   const userWantsDesktop = metadata.desktopDispatch === true;
+  const dispatchToDesktop = userWantsDesktop && messageLikelyNeedsDesktop(message);
 
-  if (userWantsDesktop) {
+  if (dispatchToDesktop) {
     if (!desktopAllowed) {
       const taskRoute = buildTaskRoute({
         target: "desktop_runtime",

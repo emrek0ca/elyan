@@ -1018,13 +1018,13 @@ test("resolveCommandTarget keeps chat routing on the shared brain by default", a
 // keyword/path heuristic any more. These tests lock that contract in place.
 // ---------------------------------------------------------------------------
 
-test("decideCommandRoute routes to the desktop when dispatch is on", async () => {
-  // Both the session toggle and the one-shot chip set the same wire signal:
-  // metadata.desktopDispatch === true.
+test("decideCommandRoute routes to the desktop when dispatch is on AND the task needs the local machine", async () => {
+  // Toggle on (metadata.desktopDispatch === true) + a clearly-local task →
+  // desktop. The toggle means "I have a desktop for tasks that need it".
   const app = createDesktopReadyApp();
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
-    message: "altın grafiği çıkar",
+    message: "masaüstümdeki dosyaları aç",
     source: "mobile",
     metadata: { desktopDispatch: true },
   });
@@ -1034,6 +1034,23 @@ test("decideCommandRoute routes to the desktop when dispatch is on", async () =>
   assert.equal(decision.requiredRuntime, "desktop");
   assert.equal(decision.taskRoute?.target, "desktop_runtime");
   assert.equal(decision.taskRoute?.needsDesktop, true);
+});
+
+test("decideCommandRoute still answers normal chat on the server even when dispatch is on", async () => {
+  // The user complaint: toggling the desktop button broke ordinary conversation
+  // because EVERY message was forced to desktop. A normal question must still be
+  // answered by the brain even with the toggle on — only local tasks hand off.
+  const app = createDesktopReadyApp();
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Fransa'nın başkenti neresidir?",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.mode, "chat");
+  assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
 test("decideCommandRoute ignores legacy routePreference/desktopDispatchOnce signals", async () => {
@@ -1069,7 +1086,7 @@ test("decideCommandRoute asks for pairing when dispatch is on but no desktop is 
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
-    message: "altın grafiği çıkar",
+    message: "masaüstümdeki dosyaları aç",
     source: "mobile",
     metadata: { desktopDispatch: true },
   });
@@ -1083,7 +1100,7 @@ test("decideCommandRoute fails closed when dispatch is on but the plan forbids d
   const app = createDesktopReadyApp();
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
-    message: "altın grafiği çıkar",
+    message: "masaüstümdeki dosyaları aç",
     source: "mobile",
     desktopAllowed: false,
     metadata: { desktopDispatch: true },
