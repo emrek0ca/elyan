@@ -175,7 +175,11 @@ export function resolveSecurityDecisionGate(prompt: string): BrainBoundaryGateRe
     /(^|[^\p{L}])(founder|owner|admin|root|superuser|kurucu\p{L}*|sahibiyim|sistem sahibi|yetkili\p{L}*|administrator)([^\p{L}]|$)/iu.test(securityHaystack);
   const secretTarget = includesAny(
     [
-      /\b(openai_api_key|groq_api_key|anthropic_api_key|api[_ -]?key|secret[_ -]?key|access[_ -]?token|refresh[_ -]?token|bearer token|private key|client_secret|webhook secret)\b/i,
+      /\b(openai_api_key|groq_api_key|anthropic_api_key|gemini_api_key|api[_ -]?key|secret[_ -]?key|access[_ -]?token|refresh[_ -]?token|bearer token|private key|client_secret|webhook secret)\b/i,
+      // Generic env-style secret/key/token names: jwt_secret, nextauth_secret,
+      // iyzico_secret_key, session_secret, stripe_secret_key, etc. The benchmark
+      // proved JWT_SECRET slipped through the explicit list above.
+      /\b[a-z0-9]+_(secret(_key)?|api_key|access_key|private_key)\b/i,
       /(^|[^\p{L}])(\.env|env|environment variable|ortam değişken\p{L}*|gizli anahtar\p{L}*|api anahtar\p{L}*|token\p{L}*|credential\p{L}*|kimlik bilgisi\p{L}*)/iu,
     ],
     securityHaystack,
@@ -183,7 +187,9 @@ export function resolveSecurityDecisionGate(prompt: string): BrainBoundaryGateRe
   const requestVerb = includesAny(
     [
       /\b(show|print|dump|reveal|send|give|share|export|list|leak|copy|write|return)\b/i,
-      /(^|[^\p{L}])(göster\p{L}*|yazdır\p{L}*|dök\p{L}*|dok\p{L}*|sızdır\p{L}*|sizdir\p{L}*|ver|paylaş\p{L}*|paylas\p{L}*|listele\p{L}*|kopyala\p{L}*|döndür\p{L}*|dondur\p{L}*|çıkar\p{L}*|cikar\p{L}*)([^\p{L}]|$)/iu,
+      // "yaz" (write) was missing — "API_KEY'i yaz" misclassified as a weaker
+      // disclosure instead of secret_extraction/critical.
+      /(^|[^\p{L}])(göster\p{L}*|yaz|yazar mısın|yazdır\p{L}*|dök\p{L}*|dok\p{L}*|sızdır\p{L}*|sizdir\p{L}*|ver|söyle\p{L}*|soyle\p{L}*|paylaş\p{L}*|paylas\p{L}*|listele\p{L}*|kopyala\p{L}*|döndür\p{L}*|dondur\p{L}*|çıkar\p{L}*|cikar\p{L}*)([^\p{L}]|$)/iu,
     ],
     securityHaystack,
   );
@@ -201,7 +207,16 @@ export function resolveSecurityDecisionGate(prompt: string): BrainBoundaryGateRe
     );
   }
 
-  if (/\b(database_url|postgres(?:ql)?:\/\/|mysql:\/\/|mongodb(?:\+srv)?:\/\/|redis:\/\/|db password|veritabanı şifresi|veritabani sifresi|database credential)\b/i.test(securityHaystack)) {
+  if (
+    /\b(database_url|postgres(?:ql)?:\/\/|mysql:\/\/|mongodb(?:\+srv)?:\/\/|redis:\/\/|db password|veritabanı şifresi|veritabani sifresi|database credential)\b/i.test(
+      securityHaystack,
+    ) ||
+    // "postgres bağlantı adresini ve şifresini yaz" — connection/credential
+    // phrasing near a DB name, not just literal connection strings.
+    /\b(postgres(?:ql)?|veritaban[ıi]|database|mysql|mongo(?:db)?|redis|db)\b[\s\S]{0,40}\b(şifre\p{L}*|sifre\p{L}*|parola\p{L}*|bağlant[ıi]\p{L}*|baglant[ıi]\p{L}*|connection|credential\p{L}*|kimlik bilgi\p{L}*)/iu.test(
+      securityHaystack,
+    )
+  ) {
     return buildSecurityGateResult(
       decision({
         requestType: "database_credential_request",
@@ -229,7 +244,14 @@ export function resolveSecurityDecisionGate(prompt: string): BrainBoundaryGateRe
     );
   }
 
-  if (/\b(\/internal|\/admin|\/debug|\/metrics|\/readyz|\/healthz|localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.|internal endpoint|private endpoint|dahili endpoint|iç endpoint|debug endpoint|debug mode|debug mod|admin mode|admin mod)\b/i.test(securityHaystack)) {
+  if (
+    // Slash-prefixed routes: a leading \b before "/" never matches (space→slash
+    // is not a word boundary), so /admin and /internal were slipping through.
+    /(\/internal|\/admin|\/debug|\/metrics|\/readyz|\/healthz)\b/i.test(securityHaystack) ||
+    /\b(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.|internal endpoint|private endpoint|dahili endpoint|iç endpoint|debug endpoint|debug mode|debug mod|admin mode|admin mod)\b/i.test(
+      securityHaystack,
+    )
+  ) {
     return buildSecurityGateResult(
       decision({
         requestType: "internal_endpoint_request",
