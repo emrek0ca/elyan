@@ -132,9 +132,10 @@ export type SharedBrainUsageBudgetTruth = {
 export function buildTrialSubscriptionSeed(createdAt: Date = now()) {
   const trialEndsAt = new Date(createdAt.getTime() + NEW_USER_TRIAL_WINDOW_MS);
   return {
-    planCode: "free" as const,
-    status: "free" as const,
-    ...applyBillingPlanDefaults("free"),
+    planCode: "pro" as const,
+    status: "trialing" as const,
+    billingProvider: "welcome_trial",
+    ...applyBillingPlanDefaults("pro"),
     currentPeriodStartedAt: createdAt,
     periodEndsAt: trialEndsAt,
     trialEndsAt,
@@ -1032,6 +1033,19 @@ async function persistSubscriptionState(
 
 export async function claimWelcomeProTrial(app: FastifyInstance, userId: string) {
   const claimedAt = now();
+  const subscription = await getSubscriptionRow(app, userId);
+
+  if (
+    subscription &&
+    normalizeBillingPlanCode(subscription.planCode) === "pro" &&
+    subscription.status === "trialing" &&
+    subscription.billingProvider === "welcome_trial" &&
+    subscription.trialEndsAt instanceof Date &&
+    subscription.trialEndsAt.getTime() > claimedAt.getTime()
+  ) {
+    return getBillingSummary(app, userId);
+  }
+
   const trialEndsAt = new Date(claimedAt.getTime() + NEW_USER_TRIAL_WINDOW_MS);
   const proDefaults = applyBillingPlanDefaults("pro");
   const updatedRows = await app.db
@@ -1067,7 +1081,6 @@ export async function claimWelcomeProTrial(app: FastifyInstance, userId: string)
     return getBillingSummary(app, userId);
   }
 
-  const subscription = await getSubscriptionRow(app, userId);
   const offer = shapeWelcomeProTrialOffer(subscription, claimedAt);
 
   if (offer.claimed) {

@@ -448,14 +448,15 @@ test("resolveUsageAccessTruth keeps provider trialing paid plans active when no 
   assert.equal(truth.brainProfile.tier, "premium");
 });
 
-test("buildTrialSubscriptionSeed creates a claimable welcome pro offer without auto-activating pro", () => {
+test("buildTrialSubscriptionSeed auto-activates pro trial for new users", () => {
   const createdAt = new Date("2030-01-01T00:00:00.000Z");
   const seed = buildTrialSubscriptionSeed(createdAt);
 
-  assert.equal(seed.planCode, "free");
-  assert.equal(seed.status, "free");
-  assert.equal(seed.taskLimitMonthly, 50);
-  assert.equal(seed.aiCreditsMonthly, 120);
+  assert.equal(seed.planCode, "pro");
+  assert.equal(seed.status, "trialing");
+  assert.equal(seed.billingProvider, "welcome_trial");
+  assert.equal(seed.taskLimitMonthly, 2_000);
+  assert.equal(seed.aiCreditsMonthly, 2_000);
   assert.equal(seed.currentPeriodStartedAt, createdAt);
   assert.equal(seed.trialEndsAt.getTime(), createdAt.getTime() + 30 * 24 * 60 * 60 * 1000);
   assert.equal(seed.periodEndsAt.getTime(), seed.trialEndsAt.getTime());
