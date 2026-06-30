@@ -430,6 +430,34 @@ export function isStoreSubscriptionClaimLocked(
   return !(subscription.periodEndsAt instanceof Date) && (status === "active" || status === "trialing");
 }
 
+/**
+ * App Store abonelik sahiplik kararı (saf fonksiyon, test edilebilir).
+ *
+ * appAccountToken, Apple imzalı JWS içinde taşınan ve satın almayı başlatan
+ * app-kullanıcısını (UUID) tanımlayan TEK güvenilir kanıttır. Kararı yalnızca
+ * bu pozitif kanıta dayandırırız:
+ *   • token mevcut kullanıcıya aitse → kendi aboneliği (blocked: false).
+ *   • token BAŞKA kullanıcıya aitse ve aktif dönem kilitliyse → gerçekten
+ *     başkasınınki (blocked: true).
+ *   • token YOKSA → StoreKit 1 `applicationUsername` çoğu zaman JWS'e
+ *     appAccountToken olarak yansımaz; yokluğu "başkasının" anlamına GELMEZ.
+ *     Geçerli Apple imzalı makbuzu sunan cihaz o Apple ID'nin sahibidir →
+ *     engelleme yok, abonelik mevcut kullanıcıya taşınır.
+ */
+export function decideAppleSubscriptionOwnership(input: {
+  appAccountToken: string;
+  currentUserId: string;
+  lockedByActiveStorePeriod: boolean;
+}): { blocked: boolean } {
+  const normalizeId = (id: string) => id.toLowerCase().replace(/-/g, "");
+  const token = (input.appAccountToken ?? "").trim();
+  const tokenOwnedByDifferentUser =
+    token.length > 0 && normalizeId(token) !== normalizeId(input.currentUserId);
+  return {
+    blocked: tokenOwnedByDifferentUser && input.lockedByActiveStorePeriod,
+  };
+}
+
 export function shouldIgnoreStaleStoreVerification(
   existing?: {
     billingProvider?: string | null;
@@ -1745,9 +1773,13 @@ export async function verifyStorePurchase(
           providerSubscriptionReferenceCode: originalTransactionId,
           providerCustomerReferenceCode: originalTransactionId,
         });
-        const verifiedForCurrentUser = appAccountToken === userId;
-        const lockedByActiveStorePeriod = isStoreSubscriptionClaimLocked(existingSubscription);
-        if (!verifiedForCurrentUser && lockedByActiveStorePeriod) {
+        const ownership = decideAppleSubscriptionOwnership({
+          appAccountToken,
+          currentUserId: userId,
+          lockedByActiveStorePeriod:
+            isStoreSubscriptionClaimLocked(existingSubscription),
+        });
+        if (ownership.blocked) {
           throw conflict("apple_subscription_owned_by_another_user");
         }
         allowStoreTransactionUserReassignment = true;

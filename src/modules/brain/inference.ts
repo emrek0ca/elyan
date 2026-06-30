@@ -629,7 +629,71 @@ function repairLooseJsonObject(candidate: string): string {
   return out;
 }
 
-// Önce ham metni, olmazsa kurtarılmış sürümü JSON.parse dener. typed blok döner.
+// Model bazen TAMAMEN GEÇERSİZ JSON üretir (örn. anahtar/değer birleşmesi:
+// `"displayMode\frac{dy}{dx}`). JSON.parse de repairLooseJsonObject da
+// başarısız olduğunda, bilinen blok tiplerinin alanlarını regex ile tek tek
+// söküp geçerli bir blok kurarız. Amaç: ham JSON ASLA kullanıcıya sızmasın —
+// en azından temel alanlarıyla (type + content/expression/code) render edilsin.
+function coerceMalformedTypedBlock(
+  candidate: string,
+): Record<string, unknown> | null {
+  const typeMatch = candidate.match(/"type"\s*:\s*"([a-z0-9_]+)"/i);
+  if (!typeMatch) {
+    return null;
+  }
+  const type = typeMatch[1].toLowerCase();
+
+  const pickString = (key: string): string | undefined => {
+    // "key":"..." — değer içindeki kaçışlı tırnakları tolere et, ilk
+    // kaçışsız kapanış tırnağında dur.
+    const match = candidate.match(
+      new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`, "i"),
+    );
+    return match ? match[1] : undefined;
+  };
+  const pickBool = (key: string): boolean | undefined => {
+    const match = candidate.match(
+      new RegExp(`"${key}"\\s*:\\s*(true|false)`, "i"),
+    );
+    return match ? match[1].toLowerCase() === "true" : undefined;
+  };
+
+  const block: Record<string, unknown> = { type };
+  const assignString = (key: string): void => {
+    const value = pickString(key);
+    if (value !== undefined) {
+      block[key] = value;
+    }
+  };
+  for (const key of [
+    "title",
+    "content",
+    "format",
+    "result",
+    "expression",
+    "language",
+    "code",
+    "caption",
+    "summary",
+  ]) {
+    assignString(key);
+  }
+  const displayMode = pickBool("displayMode");
+  if (displayMode !== undefined) {
+    block.displayMode = displayMode;
+  }
+
+  // En azından bir anlamlı içerik alanı yoksa kurtarmayı reddet.
+  const hasPayload =
+    typeof block.content === "string" ||
+    typeof block.expression === "string" ||
+    typeof block.code === "string" ||
+    typeof block.result === "string";
+  return hasPayload ? block : null;
+}
+
+// Önce ham metni, olmazsa kurtarılmış sürümü JSON.parse dener; o da olmazsa
+// alan-bazlı kurtarma yapar. typed blok döner.
 function tryParseTypedJsonObject(
   candidate: string,
 ): Record<string, unknown> | null {
@@ -648,10 +712,11 @@ function tryParseTypedJsonObject(
       /* sonraki varyantı dene */
     }
   }
-  return null;
+  // Geçerli JSON elde edilemedi — alan-bazlı kurtarma (ham sızıntıyı önler).
+  return coerceMalformedTypedBlock(candidate);
 }
 
-function extractTypedJsonBlocksFromText(text: string): {
+export function extractTypedJsonBlocksFromText(text: string): {
   visibleText: string;
   blocks: unknown[];
 } {
@@ -680,53 +745,179 @@ function extractTypedJsonBlocksFromText(text: string): {
     }
   }
 
-  // Eğer fence bulunamadıysa satır başında { ile başlayan raw JSON dene
+  // Fence yoksa: ham metindeki TÜM üst düzey { ... } bloklarını sırayla ayıkla.
+  // Model bazen birden fazla raw JSON objesi (intro + asıl blok) art arda akıtır.
   if (blocks.length === 0) {
-    const trimmed = text.trim();
-    const braceIdx = trimmed.indexOf("{");
-    if (braceIdx >= 0) {
-      let depth = 0;
-      let end = -1;
-      let inString = false;
-      let escaped = false;
-      for (let j = braceIdx; j < trimmed.length; j++) {
-        const ch = trimmed[j];
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (ch === "\\") {
-          escaped = true;
-          continue;
-        }
-        if (ch === '"') {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-        if (ch === "{") depth++;
-        else if (ch === "}") {
-          depth--;
-          if (depth === 0) {
-            end = j;
-            break;
-          }
-        }
+    let working = visibleText;
+    let guard = 0;
+    while (guard++ < 8) {
+      const braceIdx = working.indexOf("{");
+      if (braceIdx < 0) {
+        break;
       }
-      if (end > braceIdx) {
-        const candidate = trimmed.slice(braceIdx, end + 1);
-        const parsed = tryParseTypedJsonObject(candidate);
-        if (parsed) {
+      const end = findBalancedObjectEnd(working, braceIdx);
+      if (end < 0) {
+        break;
+      }
+      const candidate = working.slice(braceIdx, end + 1);
+      const parsed = tryParseTypedJsonObject(candidate);
+      if (parsed) {
+        const dedupKey = JSON.stringify(parsed);
+        if (!seen.has(dedupKey)) {
+          seen.add(dedupKey);
           blocks.push(parsed);
-          visibleText = (
-            trimmed.slice(0, braceIdx) + trimmed.slice(end + 1)
-          ).trim();
+        }
+        working = (working.slice(0, braceIdx) + working.slice(end + 1)).trim();
+      } else {
+        // Dengeli ama typed olmayan obje (örn. {"İşte ...örneği:"} sarmalı):
+        // görünür metinden kaldır, içeriğini düz metin olarak geri ver.
+        const unwrapped = unwrapPlainBraceSentence(candidate);
+        working = (
+          working.slice(0, braceIdx) +
+          unwrapped +
+          working.slice(end + 1)
+        ).trim();
+      }
+    }
+    visibleText = working;
+  }
+
+  // Son çare: dengeli kapanışı OLMAYAN bozuk JSON (örn. anahtar/değer
+  // birleşmesi yüzünden string hiç kapanmıyor). Trailing `{ ... "type" ... }`
+  // bölgesini alan-bazlı kurtar ve görünür metinden tamamen sil.
+  if (blocks.length === 0) {
+    const braceIdx = visibleText.indexOf("{");
+    if (braceIdx >= 0) {
+      const region = visibleText.slice(braceIdx);
+      if (/"type"\s*:/.test(region)) {
+        const coerced = coerceMalformedTypedBlock(region);
+        if (coerced) {
+          blocks.push(coerced);
+          visibleText = visibleText.slice(0, braceIdx).trim();
         }
       }
     }
   }
 
   return { visibleText, blocks };
+}
+
+// braceIdx'teki `{` ile başlayan dengeli objenin kapanış `}` indeksini bulur,
+// string ve kaçış karakterlerini dikkate alır. Bulunamazsa -1.
+function findBalancedObjectEnd(text: string, braceIdx: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let j = braceIdx; j < text.length; j++) {
+    const ch = text[j];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return j;
+      }
+    }
+  }
+  return -1;
+}
+
+// {"Sadece bir cümle"} gibi typed olmayan sarmalları düz metne çevirir.
+function unwrapPlainBraceSentence(candidate: string): string {
+  const inner = candidate.slice(1, -1).trim();
+  const quoted = inner.match(/^"((?:[^"\\]|\\.)*)"$/);
+  if (quoted) {
+    return quoted[1];
+  }
+  return "";
+}
+
+// STREAMING GATE: akış sırasında kullanıcıya gösterilecek "görünür" metni
+// hesaplar. Ham typed JSON ({"type":...}) ve ```json fence'leri gizler; henüz
+// kapanmamış (yarıda kalan) blokları, kapanana kadar saklar. Böylece kullanıcı
+// asla ham JSON akışı görmez — blok tamamlanınca yapısal olarak render edilir.
+// Tasarım monotonik: yarım kalan `{` her zaman gizlenir (kesilir), kapanınca ya
+// kaldırılır (typed) ya da görünür olur (düz cümle) — yani daha önce yayınlanan
+// metin asla geri alınmaz.
+// İki metnin ortak ön-ek uzunluğu — gate beklenmedik şekilde metni yeniden
+// şekillendirirse (nadiren) güvenli yeniden senkronizasyon için.
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a[i] === b[i]) {
+    i++;
+  }
+  return i;
+}
+
+export function computeStreamVisibleText(full: string): string {
+  let visible = full;
+
+  // 1) Tamamlanmış ```json ... ``` fence'leri: typed ise görünürden çıkar.
+  const fencePattern = /```(?:json)?\s*([\s\S]*?)```/g;
+  let fenceMatch: RegExpExecArray | null;
+  const fencesToStrip: string[] = [];
+  while ((fenceMatch = fencePattern.exec(full)) !== null) {
+    const inner = fenceMatch[1].trim();
+    if (inner.startsWith("{") && tryParseTypedJsonObject(inner)) {
+      fencesToStrip.push(fenceMatch[0]);
+    }
+  }
+  for (const fence of fencesToStrip) {
+    visible = visible.replace(fence, "");
+  }
+
+  // 2) Kapanmamış (streaming) trailing fence → fence başından kes.
+  const fenceCount = (visible.match(/```/g) ?? []).length;
+  if (fenceCount % 2 === 1) {
+    const openFenceIdx = visible.lastIndexOf("```");
+    if (openFenceIdx >= 0) {
+      visible = visible.slice(0, openFenceIdx).trimEnd();
+    }
+  }
+
+  // 3) Üst düzey { ... } objelerini sırayla işle.
+  let working = visible;
+  let out = "";
+  let guard = 0;
+  while (guard++ < 16) {
+    const braceIdx = working.indexOf("{");
+    if (braceIdx < 0) {
+      out += working;
+      break;
+    }
+    const end = findBalancedObjectEnd(working, braceIdx);
+    if (end < 0) {
+      // Kapanmamış trailing obje → akış sürüyor, brace'ten itibaren gizle.
+      out += working.slice(0, braceIdx);
+      working = "";
+      break;
+    }
+    const candidate = working.slice(braceIdx, end + 1);
+    out += working.slice(0, braceIdx);
+    if (!tryParseTypedJsonObject(candidate)) {
+      // typed değilse: düz cümle sarmalını aç, değilse olduğu gibi bırak.
+      out += unwrapPlainBraceSentence(candidate) || candidate;
+    }
+    working = working.slice(end + 1);
+  }
+
+  return out.trim();
 }
 
 function isMobileLocalExportMode(
@@ -3621,6 +3812,8 @@ export function createDeltaPublisher(input: {
   let firstDeltaMs: number | null = null;
   let lastPublishedContent = "";
   let lastObservedContent = "";
+  // Görünür (JSON gizlenmiş) kümülatif metin — streaming gate'in çıktısı.
+  let lastVisibleContent = "";
   let pendingContent = "";
   let lastFlushAt = input.startedAt;
   let emittedFirstChunk = false;
@@ -3674,26 +3867,30 @@ export function createDeltaPublisher(input: {
       }
 
       const normalizedContent = normalizeDelta(content);
-      const normalizedDelta = normalizeDelta(delta);
 
       if (!normalizedContent.trim() && !options.force) {
         return;
       }
 
-      if (normalizedContent === lastObservedContent) {
-        return;
-      }
-
-      const appended = normalizedContent.startsWith(lastObservedContent)
-        ? normalizedContent.slice(lastObservedContent.length)
-        : normalizedDelta || normalizedContent;
-      if (!appended) {
+      // Yeni ham içerik geldiyse: STREAMING GATE ile görünür metni türet (typed
+      // JSON / fence gizlenir) ve yalnızca görünür artışı pending'e ekle. Böylece
+      // kullanıcı asla ham JSON akışı görmez.
+      if (normalizedContent !== lastObservedContent) {
         lastObservedContent = normalizedContent;
-        return;
+        const visibleContent = computeStreamVisibleText(normalizedContent);
+        if (visibleContent !== lastVisibleContent) {
+          const appended = visibleContent.startsWith(lastVisibleContent)
+            ? visibleContent.slice(lastVisibleContent.length)
+            : visibleContent.slice(
+                commonPrefixLength(visibleContent, lastVisibleContent),
+              );
+          lastVisibleContent = visibleContent;
+          pendingContent += appended;
+        }
       }
 
-      lastObservedContent = normalizedContent;
-      pendingContent += appended;
+      // force, bekleyen görünür metni (örn. bir blok bölgesinin gölgesinde
+      // kalmış son cümleyi) her durumda boşaltır.
       if (!shouldFlushPending(pendingContent, options.force === true)) {
         return;
       }
@@ -4962,22 +5159,22 @@ export async function generateSharedBrainReply(
       );
       const webGroundingBlocks = buildWebGroundingBlocks(webGrounding);
 
-      // document_generate workload: model JSON blok üretiyor, text'ten parse et
+      // Model çıktısındaki {"type":...} typed JSON bloklarını HER ZAMAN text'ten
+      // ayıkla. Per-prompt sınıflandırıcı (responseDecision) yalnızca modelden
+      // NE İSTEDİĞİMİZİ şekillendirir; modelin gerçekte ürettiği ham JSON'u
+      // temizleyip temizlemeyeceğimizi ASLA belirlemez. Ham JSON'un kullanıcıya
+      // sızması hiçbir koşulda kabul edilemez (örn. "çöz bunu" gibi text olarak
+      // sınıflanan ama bağlam gereği math bloğu üreten istemler).
       const extractedTypedBlocks: unknown[] = [];
       let finalText = text;
       const responseDecision = decideStructuredResponseDecision({
         prompt: input.prompt,
         selectedWorkload: workload,
       });
-      const shouldExtractTypedJsonBlocks =
-        workload === "document_generate" ||
-        responseDecision.primaryBlockType !== "text";
-      if (shouldExtractTypedJsonBlocks) {
-        const extracted = extractTypedJsonBlocksFromText(text);
-        if (extracted.blocks.length > 0) {
-          extractedTypedBlocks.push(...extracted.blocks);
-          finalText = extracted.visibleText;
-        }
+      const extracted = extractTypedJsonBlocksFromText(text);
+      if (extracted.blocks.length > 0) {
+        extractedTypedBlocks.push(...extracted.blocks);
+        finalText = extracted.visibleText;
       }
 
       const finalTextBlocks = buildAssistantMessageBlocks(finalText);

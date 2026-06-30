@@ -5,6 +5,7 @@ import {
   assertSharedBrainUsageBudgetAllowed,
   buildTrialSubscriptionSeed,
   createUpgradeOrByokRequiredError,
+  decideAppleSubscriptionOwnership,
   getBillingProviderForStorePlatform,
   getSharedBrainUsageBudget,
   getCheckoutInitializationState,
@@ -717,4 +718,42 @@ test("createUpgradeOrByokRequiredError keeps the failure user-safe", () => {
     error.message,
     "Token hakkın doldu. Devam etmek için planını yükselt veya kendi yerel modelini kullan.",
   );
+});
+
+test("decideAppleSubscriptionOwnership reassigns when appAccountToken is absent (StoreKit 1)", () => {
+  // En yaygın gerçek senaryo: aynı Apple ID, yeni app oturumu; JWS'te
+  // appAccountToken yok. Engellenmemeli (kullanıcı kendi makbuzunu sunuyor).
+  const decision = decideAppleSubscriptionOwnership({
+    appAccountToken: "",
+    currentUserId: "11111111-1111-1111-1111-111111111111",
+    lockedByActiveStorePeriod: true,
+  });
+  assert.equal(decision.blocked, false);
+});
+
+test("decideAppleSubscriptionOwnership allows the owner regardless of casing/dashes", () => {
+  const decision = decideAppleSubscriptionOwnership({
+    appAccountToken: "ABCDEF12-3456-7890-ABCD-EF1234567890",
+    currentUserId: "abcdef1234567890abcdef1234567890",
+    lockedByActiveStorePeriod: true,
+  });
+  assert.equal(decision.blocked, false);
+});
+
+test("decideAppleSubscriptionOwnership blocks a different user on a locked active period", () => {
+  const decision = decideAppleSubscriptionOwnership({
+    appAccountToken: "99999999-9999-9999-9999-999999999999",
+    currentUserId: "11111111-1111-1111-1111-111111111111",
+    lockedByActiveStorePeriod: true,
+  });
+  assert.equal(decision.blocked, true);
+});
+
+test("decideAppleSubscriptionOwnership does not block a different user when the period is not locked", () => {
+  const decision = decideAppleSubscriptionOwnership({
+    appAccountToken: "99999999-9999-9999-9999-999999999999",
+    currentUserId: "11111111-1111-1111-1111-111111111111",
+    lockedByActiveStorePeriod: false,
+  });
+  assert.equal(decision.blocked, false);
 });

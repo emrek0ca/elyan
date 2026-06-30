@@ -3,7 +3,9 @@ import test from "node:test";
 import { AppError } from "../../lib/errors.js";
 import {
   calculateBillableAiCredits,
+  computeStreamVisibleText,
   createDeltaPublisher,
+  extractTypedJsonBlocksFromText,
   generateGovernedSharedBrainReply,
   generateSharedBrainReply,
 } from "./inference.js";
@@ -510,6 +512,90 @@ test("createDeltaPublisher batches rapid streaming deltas without losing order",
   assert.equal(deltas[0].content, "Mer");
   assert.equal(deltas.at(-1)?.content, finalContent);
   assert.equal(deltas.map((delta) => String(delta.delta ?? "")).join(""), finalContent);
+});
+
+test("computeStreamVisibleText hides a complete typed JSON block from the visible stream", () => {
+  const full =
+    'İşte basit bir diferansiyel denklem örneği:\n' +
+    '{"type":"math","title":"Birinci mertebeden lineer ODE","content":"\\\\frac{dy}{dx}+y = e^{x}","format":"latex","displayMode":true}';
+  const visible = computeStreamVisibleText(full);
+  assert.equal(visible.includes('"type"'), false);
+  assert.equal(visible.includes("\\frac"), false);
+  assert.equal(visible.includes("İşte basit bir diferansiyel denklem örneği"), true);
+});
+
+test("computeStreamVisibleText holds back an in-progress (unclosed) typed JSON block", () => {
+  // Akış yarıda: blok henüz kapanmadı → ham JSON görünmemeli.
+  const partial = 'Çözüm:\n{"type":"math","content":"y(x) = \\\\frac{1}{2}e^{x}';
+  const visible = computeStreamVisibleText(partial);
+  assert.equal(visible, "Çözüm:");
+});
+
+test("computeStreamVisibleText unwraps a brace-wrapped plain sentence", () => {
+  const full = '{"Sadece düz bir cümle"}';
+  assert.equal(computeStreamVisibleText(full), "Sadece düz bir cümle");
+});
+
+test("computeStreamVisibleText keeps ordinary prose braces intact", () => {
+  const full = "Küme gösterimi {1, 2, 3} biçimindedir.";
+  assert.equal(computeStreamVisibleText(full), "Küme gösterimi {1, 2, 3} biçimindedir.");
+});
+
+test("the delta publisher never streams raw typed JSON to the client", async () => {
+  const deltas: Array<Record<string, unknown>> = [];
+  const publisher = createDeltaPublisher({
+    startedAt: 0,
+    provider: "ollama",
+    model: "test-model",
+    onDelta(delta) {
+      deltas.push(delta);
+    },
+  });
+
+  // Model akışı: önce prose, sonra typed math JSON bloğu karakter karakter gelir.
+  const steps = [
+    "İşte ",
+    "çözüm: ",
+    '{"type":',
+    '"math",',
+    '"content":',
+    '"y = e^{x}"',
+    "}",
+  ];
+  let acc = "";
+  for (const chunk of steps) {
+    acc += chunk;
+    await publisher.publish(chunk, acc);
+  }
+  await publisher.publish("", acc, { force: true });
+
+  const streamedContent = String(deltas.at(-1)?.content ?? "");
+  const streamedDeltas = deltas.map((d) => String(d.delta ?? "")).join("");
+  assert.equal(streamedContent.includes('"type"'), false);
+  assert.equal(streamedDeltas.includes('"type"'), false);
+  assert.equal(streamedContent.trim(), "İşte çözüm:");
+});
+
+test("extractTypedJsonBlocksFromText recovers a malformed typed block instead of leaking raw JSON", () => {
+  // Ekran görüntüsündeki gerçek bozulma: anahtar/değer birleşmesi yüzünden
+  // JSON GEÇERSİZ — string hiç kapanmıyor. Yine de blok kurtarılmalı.
+  const text =
+    '{"type":"math","title":"Birinci mertebeden lineer ODE","content":"\\\\frac{dy}{dx}+y = e^{x}","format":"latex","displayMode\\frac{dy}{dx}+y = e^{x}';
+  const { visibleText, blocks } = extractTypedJsonBlocksFromText(text);
+  assert.equal(blocks.length, 1);
+  const block = blocks[0] as Record<string, unknown>;
+  assert.equal(block.type, "math");
+  assert.equal(String(block.content).includes("frac"), true);
+  assert.equal(visibleText.includes('"type"'), false);
+});
+
+test("extractTypedJsonBlocksFromText pulls a clean typed block and leaves prose", () => {
+  const text =
+    'Hesap tamamlandı.\n{"type":"math","content":"x = 2","format":"latex"}';
+  const { visibleText, blocks } = extractTypedJsonBlocksFromText(text);
+  assert.equal(blocks.length, 1);
+  assert.equal((blocks[0] as Record<string, unknown>).type, "math");
+  assert.equal(visibleText, "Hesap tamamlandı.");
 });
 
 test("generateSharedBrainReply streams Ollama deltas before final completion", async () => {
