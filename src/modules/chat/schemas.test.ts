@@ -29,6 +29,23 @@ test("createChatMessageBodySchema accepts chatSessionId as a sessionId alias", (
   assert.equal("chatSessionId" in parsed, false);
 });
 
+test("createChatMessageBodySchema derives content from Elyan text blocks", () => {
+  const parsed = createChatMessageBodySchema.parse({
+    sessionId,
+    blocks: [
+      {
+        type: "text",
+        markdown: "Bunda ne yazıyor?",
+        visibility: "user_visible",
+      },
+    ],
+    source: "mobile",
+  });
+
+  assert.equal(parsed.content, "Bunda ne yazıyor?");
+  assert.equal(parsed.blocks?.[0]?.type, "text");
+});
+
 test("createChatMessageBodySchema rejects conflicting session id aliases", () => {
   const result = createChatMessageBodySchema.safeParse({
     sessionId,

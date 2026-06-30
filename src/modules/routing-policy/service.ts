@@ -1,6 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
-import { isExplicitTableRequest } from "../../core/understanding/structured-output-policy.js";
+import {
+  isExplicitChartRequest,
+  isExplicitMathSurface3DRequest,
+  isExplicitMathOrLatexRequest,
+  isExplicitTableRequest,
+} from "../../core/understanding/structured-output-policy.js";
 import type { UnderstandingIntent } from "../../core/understanding/types.js";
 import { isMateriallyAmbiguousUserPrompt, selectHybridMobileChatWorkload } from "../brain/chat-heuristics.js";
 import { normalizePlanBrainProfile, type PlanBrainProfile } from "../billing/catalog.js";
@@ -160,6 +165,12 @@ const DOC_VERB = String.raw`(?:yaz|haz[ıi]rla|olu[şs]tur|[üu]ret|d[üu]zenle|
 const DOCUMENT_GENERATE_PATTERNS = [
   new RegExp(`(?<!\\p{L})${DOC_NOUN}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_VERB}`, "iu"),
   new RegExp(`(?<!\\p{L})${DOC_VERB}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_NOUN}(?!\\p{L})`, "iu"),
+];
+const DOCUMENT_OUTPUT_GENERATE_PATTERNS = [
+  /\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b.*\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|yap)\b/i,
+  /\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|yap)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b/i,
+  /\b(tasarım|tasarim|layout|şablon|sablon)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum metni)\b/i,
+  /\b(pdf olarak|word olarak|docx olarak)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle)\b/i,
 ];
 const QUANTUM_TOPIC_PATTERNS = [
   /\b(quantum|kuantum|qubo|ising|qaoa|vqe|qiskit|ocean sdk|dwave|d-wave|hamiltonian)\b/i,
@@ -731,8 +742,11 @@ function deriveSelectedWorkload(input: {
   // çünkü hiçbir kod bu workload'u seçmiyordu. Mevcut içeriği export eden istekler
   // (MOBILE_DOCUMENT_EXPORT) ve ek-okuma istekleri buraya düşmez; sadece açık
   // üretme fiilleri (yaz/hazırla/oluştur/üret) + belge-türü isim eşleşince tetiklenir.
-  if (matchesAny(input.message, DOCUMENT_GENERATE_PATTERNS)) {
+  if (matchesAny(input.message, DOCUMENT_GENERATE_PATTERNS) || matchesAny(input.message, DOCUMENT_OUTPUT_GENERATE_PATTERNS)) {
     return "document_generate";
+  }
+  if (isExplicitMathSurface3DRequest(input.message) || isExplicitChartRequest(input.message) || isExplicitMathOrLatexRequest(input.message)) {
+    return "mobile_chat_balanced";
   }
   return selectHybridMobileChatWorkload({
     message: input.message,

@@ -186,6 +186,7 @@ export const elyanAssistantBlockTypeValues = [
   "code",
   "table",
   "chart",
+  "math_surface_3d",
   "math",
   "svg",
   "file",
@@ -453,6 +454,28 @@ export const elyanAssistantStatusBlockSchema =
     title: z.string().min(1).max(120),
     detail: z.string().min(1).max(240).optional(),
   });
+export const elyanAssistantSecurityDecisionBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("security_decision"),
+    request_type: z.enum([
+      "secret_extraction_attempt",
+      "system_prompt_extraction_attempt",
+      "internal_endpoint_request",
+      "database_credential_request",
+      "payment_action_request",
+      "destructive_action_request",
+      "external_send_request",
+    ]),
+    is_sensitive: z.boolean(),
+    should_refuse: z.boolean(),
+    blocked_fields: z.array(z.string().min(1).max(120)).max(16),
+    reason: z.string().min(1).max(500),
+    safe_alternative: z.string().min(1).max(500),
+    leaked_secret: z.literal(false),
+    invented_internal_info: z.literal(false),
+    requires_verified_admin_channel: z.boolean(),
+    risk: z.enum(["low", "medium", "high", "critical"]),
+  });
 export const elyanAssistantInfoCardBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
     type: z.enum(["attachment_context", "context_signal"]),
@@ -472,12 +495,22 @@ export const elyanAssistantTableBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
     type: z.literal("table"),
     title: z.string().min(1).max(120).optional(),
+    summary: z.string().min(1).max(240).optional(),
     columns: z.array(z.string().min(1).max(120)).min(1).max(12),
     rows: z
       .array(z.array(z.string().max(240)).min(1).max(12))
       .min(1)
       .max(80),
+    previewRows: z
+      .array(z.array(z.string().max(240)).min(1).max(12))
+      .max(20)
+      .optional(),
+    totalRowCount: z.number().int().positive().optional(),
     caption: z.string().min(1).max(240).optional(),
+    highlightRules: z.array(z.record(z.any())).max(12).optional(),
+    density: z.enum(["compact", "comfortable", "spacious"]).optional(),
+    style: z.record(z.any()).optional(),
+    interactions: z.array(z.enum(["sort", "copy", "share", "fullscreen"])).max(8).optional(),
   });
 const elyanAssistantChartSeriesSchema = z.object({
   name: z.string().min(1).max(120).optional(),
@@ -513,16 +546,71 @@ export const elyanAssistantChartBlockSchema =
     fixed: z.record(z.number()).optional(),
     xLabel: z.string().min(1).max(120).optional(),
     yLabel: z.string().min(1).max(120).optional(),
+    unit: z.string().min(1).max(40).optional(),
     renderer: z.string().min(1).max(40).optional(),
     caption: z.string().min(1).max(240).optional(),
+    interactions: z
+      .array(z.enum(["tooltip", "trackball", "zoom", "pan", "type_switch", "fullscreen", "share"]))
+      .max(8)
+      .optional(),
+    theme: z.enum(["system", "presentation", "report", "minimal"]).optional(),
+    style: z.record(z.any()).optional(),
+  });
+const elyanMathSurfaceRangeAxisSchema = z
+  .tuple([z.number(), z.number()])
+  .refine(([min, max]) => Number.isFinite(min) && Number.isFinite(max) && min < max, {
+    message: "surface range axis must be finite and ascending",
+  });
+export const elyanAssistantMathSurface3DBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("math_surface_3d"),
+    title: z.string().min(1).max(120).optional(),
+    expression: z.string().min(1).max(240).optional(),
+    variables: z.tuple([z.literal("x"), z.literal("y")]).optional(),
+    range: z
+      .object({
+        x: elyanMathSurfaceRangeAxisSchema,
+        y: elyanMathSurfaceRangeAxisSchema,
+      })
+      .optional(),
+    resolution: z.number().int().min(10).max(120).optional(),
+    zLabel: z.string().min(1).max(160).optional(),
+    colorBy: z.enum(["z", "gradientMagnitude"]).optional(),
+    mode: z.enum(["surface"]).optional(),
+    interactive: z.boolean().optional(),
+    cacheKey: z.string().min(1).max(128).optional(),
+    renderer: z.enum(["plotly_local_webview"]).optional(),
+    caption: z.string().min(1).max(240).optional(),
+    error: z
+      .object({
+        code: z.string().min(1).max(80),
+        message: z.string().min(1).max(240),
+      })
+      .optional(),
   });
 export const elyanAssistantMathBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
     type: z.literal("math"),
+    title: z.string().min(1).max(120).optional(),
     content: z.string().min(1).max(8_000),
     latex: z.string().min(1).max(8_000).optional(),
     displayMode: z.boolean().optional(),
     format: z.enum(["latex", "tex", "plain"]).optional(),
+    result: z.string().min(1).max(240).optional(),
+    explanation: z.string().min(1).max(480).optional(),
+    steps: z
+      .array(
+        z.union([
+          z.string().min(1).max(2_000),
+          z.object({
+            label: z.string().min(1).max(80).optional(),
+            content: z.string().min(1).max(2_000),
+            note: z.string().min(1).max(240).optional(),
+          }),
+        ]),
+      )
+      .max(8)
+      .optional(),
   });
 export const elyanAssistantSvgBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
@@ -532,6 +620,9 @@ export const elyanAssistantSvgBlockSchema =
     svg: z.string().min(1).max(80_000).optional(),
     markup: z.string().min(1).max(80_000).optional(),
     url: z.string().min(1).max(2_000).optional(),
+    viewBox: z.string().min(1).max(80).optional(),
+    exportFormats: z.array(z.enum(["svg", "png", "pdf"])).max(3).optional(),
+    style: z.record(z.any()).optional(),
   });
 export const elyanAssistantFileBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
@@ -580,6 +671,7 @@ const elyanDocumentSectionSchema = z.object({
   heading: z.string().min(1).max(200).optional(),
   content: z.string().min(1).max(8_000),
   level: z.number().int().min(1).max(3).optional(),
+  role: z.enum(["title", "summary", "body", "table", "appendix"]).optional(),
 });
 export const elyanAssistantDocumentBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
@@ -588,6 +680,16 @@ export const elyanAssistantDocumentBlockSchema =
     sections: z.array(elyanDocumentSectionSchema).min(1).max(40),
     format: z.enum(["report", "letter", "outline", "notes"]).optional(),
     wordCount: z.number().int().nonnegative().optional(),
+    summary: z.string().min(1).max(300).optional(),
+    exportFormats: z.array(z.enum(["pdf", "docx", "xlsx"])).max(3).optional(),
+    design: z
+      .object({
+        theme: z.enum(["system", "report", "editorial", "minimal"]).optional(),
+        density: z.enum(["compact", "comfortable", "spacious"]).optional(),
+        pageSize: z.enum(["A4", "Letter"]).optional(),
+      })
+      .passthrough()
+      .optional(),
   });
 
 /* ── attachment_ack: what the backend received/processed ─────────────── */
@@ -618,12 +720,14 @@ export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantSummaryBlockSchema,
   elyanAssistantNextStepsBlockSchema,
   elyanAssistantStatusBlockSchema,
+  elyanAssistantSecurityDecisionBlockSchema,
   elyanTaskTraceBlockSchema,
   elyanAssistantInfoCardBlockSchema,
   elyanAssistantWebSearchBlockSchema,
   elyanAssistantCodeBlockSchema,
   elyanAssistantTableBlockSchema,
   elyanAssistantChartBlockSchema,
+  elyanAssistantMathSurface3DBlockSchema,
   elyanAssistantMathBlockSchema,
   elyanAssistantSvgBlockSchema,
   elyanAssistantFileBlockSchema,
@@ -721,6 +825,9 @@ export type ElyanAssistantTableBlock = z.infer<
 export type ElyanAssistantChartBlock = z.infer<
   typeof elyanAssistantChartBlockSchema
 >;
+export type ElyanAssistantMathSurface3DBlock = z.infer<
+  typeof elyanAssistantMathSurface3DBlockSchema
+>;
 export type ElyanAssistantMathBlock = z.infer<
   typeof elyanAssistantMathBlockSchema
 >;
@@ -747,5 +854,8 @@ export type ElyanAssistantAttachmentAckBlock = z.infer<
 >;
 export type ElyanAssistantImageAnalysisBlock = z.infer<
   typeof elyanAssistantImageAnalysisBlockSchema
+>;
+export type ElyanAssistantSecurityDecisionBlock = z.infer<
+  typeof elyanAssistantSecurityDecisionBlockSchema
 >;
 export type ElyanAssistantBlock = z.infer<typeof elyanAssistantBlockSchema>;

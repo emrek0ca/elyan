@@ -37,6 +37,7 @@ import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import { maybeQueueAutomaticSharedBrainRefresh } from "../brain/service.js";
 import { resolveAttachmentAwareSharedBrainWorkload } from "../brain/workloads.js";
 import {
+  type AssistantMessageBlock,
   composeAssistantMessageBlocks,
   normalizeAssistantMessageBlocks,
   sanitizeAssistantVisibleText,
@@ -95,6 +96,33 @@ export { canonicalTaskTitle, shapeTaskFeedItem } from "./service-helpers.js";
 type ShapedTaskFeedItem = ReturnType<typeof shapeTaskFeedItem>;
 
 const STALE_RUNTIME_TASK_AFTER_MS = 120_000;
+
+function visibleTextFromAssistantBlocks(blocks: AssistantMessageBlock[] | undefined): string {
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    return "";
+  }
+  return blocks
+    .filter((block): block is AssistantMessageBlock & { type: "text"; markdown: string } => block.type === "text")
+    .map((block) => block.markdown.trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+function conversationTextFromChatMessage(message: {
+  role: "user" | "assistant";
+  content?: string | null;
+  blocks?: AssistantMessageBlock[];
+}): string {
+  if (message.role === "assistant") {
+    const blockText = visibleTextFromAssistantBlocks(message.blocks);
+    if (blockText) {
+      return blockText;
+    }
+  }
+  return typeof message.content === "string" ? message.content.trim() : "";
+}
+
 type RuntimeConnectionSnapshot = {
   id: string;
   deviceId: string;
@@ -2582,9 +2610,22 @@ async function processSharedBrainChatTask(
         limit: 20,
       }).then((page) =>
         page.messages
-          .filter((m) => (m.role === "user" || m.role === "assistant") && m.content?.trim())
+          .map((m) => {
+            if (m.role !== "user" && m.role !== "assistant") {
+              return null;
+            }
+            const content = conversationTextFromChatMessage({
+              role: m.role,
+              content: m.content,
+              blocks: m.blocks,
+            });
+            return content ? { role: m.role as "user" | "assistant", content } : null;
+          })
+          .filter(
+            (m): m is { role: "user" | "assistant"; content: string } =>
+              m != null,
+          )
           .slice(-16)
-          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content! })),
       ).catch(() => null);
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_500));
       const result = await Promise.race([historyPromise, timeoutPromise]);

@@ -16,6 +16,7 @@ import type {
   ElyanAssistantInfoCardBlock,
   ElyanAssistantMathBlock,
   ElyanAssistantNextStepsBlock,
+  ElyanAssistantSecurityDecisionBlock,
   ElyanAssistantStatusBlock,
   ElyanAssistantSvgBlock,
   ElyanAssistantSummaryBlock,
@@ -37,7 +38,7 @@ type AssistantRenderContract = {
   version: "elyan_blocks.v2";
   mode: "block_first";
   canonicalSurface: "blocks";
-  legacyContent: "fallback_only";
+  legacyContent: "none";
   hasVisibleBlocks: boolean;
   visibleBlockTypes: string[];
   textIsBlockWrapped: boolean;
@@ -274,19 +275,60 @@ function readStructuredVisibleText(record: Record<string, unknown>): string | nu
 
 function tryParseStructuredVisibleText(value: string): string | null {
   const candidate = stripFenceWrapper(value);
-  if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
+  if (!candidate.startsWith("{")) {
     return null;
   }
 
-  try {
-    const parsed = JSON.parse(candidate) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
+  if (candidate.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return null;
+      }
+      return readStructuredVisibleText(parsed as Record<string, unknown>);
+    } catch {
+      // Fall through to tolerant envelope recovery below.
     }
-    return readStructuredVisibleText(parsed as Record<string, unknown>);
-  } catch {
+  }
+
+  return recoverTextFromStructuredEnvelope(candidate);
+}
+
+function recoverTextFromStructuredEnvelope(candidate: string): string | null {
+  const compact = candidate.replace(/\s+/g, "");
+  if (!candidate.trimStart().startsWith("{") || !compact.includes('"type":"text"')) {
     return null;
   }
+  const keyMatch = /"(?:markdown|text|content|body|message)"\s*:\s*"/i.exec(candidate);
+  if (!keyMatch) {
+    return null;
+  }
+  let cursor = keyMatch.index + keyMatch[0].length;
+  let escaped = false;
+  let value = "";
+  for (; cursor < candidate.length; cursor += 1) {
+    const char = candidate[cursor] ?? "";
+    if (escaped) {
+      value += `\\${char}`;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      break;
+    }
+    value += char;
+  }
+  const repaired = value
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\");
+  return normalizeMarkdown(repaired);
 }
 
 function stripBulletPrefix(value: string) {
@@ -1374,6 +1416,57 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
       parseCommonMetadata(record),
     );
   }
+  if (type === "security_decision") {
+    const requestType = String(record.request_type ?? "").trim();
+    const risk = String(record.risk ?? "").trim();
+    if (
+      ![
+        "secret_extraction_attempt",
+        "system_prompt_extraction_attempt",
+        "internal_endpoint_request",
+        "database_credential_request",
+        "payment_action_request",
+        "destructive_action_request",
+        "external_send_request",
+      ].includes(requestType) ||
+      !["low", "medium", "high", "critical"].includes(risk)
+    ) {
+      return null;
+    }
+    return {
+      type: "security_decision",
+      request_type: requestType as ElyanAssistantSecurityDecisionBlock["request_type"],
+      is_sensitive: record.is_sensitive === true,
+      should_refuse: record.should_refuse === true,
+      blocked_fields: Array.isArray(record.blocked_fields)
+        ? record.blocked_fields.map((item) => String(item)).filter(Boolean).slice(0, 16)
+        : [],
+      reason: typeof record.reason === "string" ? record.reason : "Security-sensitive request was blocked.",
+      safe_alternative:
+        typeof record.safe_alternative === "string"
+          ? record.safe_alternative
+          : "I can help with a safe alternative.",
+      leaked_secret: false,
+      invented_internal_info: false,
+      requires_verified_admin_channel:
+        record.requires_verified_admin_channel === true,
+      risk: risk as ElyanAssistantSecurityDecisionBlock["risk"],
+      ...withAssistantBlockDefaults("security_decision", {}, {
+        visibility: normalizeVisibility(record.visibility) ?? "assistant_internal_by_default",
+        confidence: normalizeConfidence(record.confidence),
+        priority: normalizePriority(record.priority),
+        stableBlockId:
+          typeof record.stableBlockId === "string" && record.stableBlockId.trim()
+            ? record.stableBlockId.trim()
+            : undefined,
+        cacheDigest:
+          typeof record.cacheDigest === "string" && record.cacheDigest.trim()
+            ? record.cacheDigest.trim()
+            : undefined,
+        renderHints: normalizeRenderHints(record.renderHints) ?? {},
+      }),
+    };
+  }
   if (type === "web_search") {
     const rawResults = Array.isArray(record.results) ? record.results : [];
     const results = rawResults
@@ -1829,7 +1922,7 @@ export function withAssistantBlocksMetadata(
     version: "elyan_blocks.v2",
     mode: "block_first",
     canonicalSurface: "blocks",
-    legacyContent: "fallback_only",
+    legacyContent: "none",
     hasVisibleBlocks: visibleBlockTypes.length > 0,
     visibleBlockTypes,
     textIsBlockWrapped: blocks.some((block) => block.type === "text"),
@@ -1866,16 +1959,12 @@ export function shapeAssistantMessagePayload<
     content: typeof message.content === "string" ? message.content : "",
     streaming: String((message as Record<string, unknown>).status ?? "").trim().toLowerCase() === "running",
   });
-  const visibleText = blocks
-    .filter((block): block is AssistantTextMessageBlock => block.type === "text")
-    .map((block) => block.markdown.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-
-  return {
-    ...message,
-    ...(visibleText ? { content: visibleText } : {}),
-    ...(blocks.length > 0 ? { blocks } : {}),
-  };
+  const payload = { ...(message as Record<string, unknown>) };
+  delete payload.content;
+  if (blocks.length > 0) {
+    payload.blocks = blocks;
+  } else {
+    delete payload.blocks;
+  }
+  return payload as Omit<T, "content"> & { blocks?: AssistantMessageBlock[] };
 }

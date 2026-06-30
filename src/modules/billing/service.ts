@@ -362,21 +362,17 @@ export async function getSharedBrainUsageBudget(
 ): Promise<SharedBrainUsageBudgetTruth> {
   const access = await getUserUsageAccessTruth(db, userId);
 
-  if (access.mode === "trial") {
+  if (
+    access.mode === "trial" ||
+    access.mode === "paid" ||
+    (access.mode === "free" && access.serverBrainAllowed)
+  ) {
+    const usage = await getBillingUsageSummary(db, userId);
     return {
       access,
-      remainingAiCredits: null,
-      grantedAiCredits: null,
-      periodEndsAt: access.trialEndsAt,
-    };
-  }
-
-  if (access.mode === "paid" || (access.mode === "free" && access.serverBrainAllowed)) {
-    return {
-      access,
-      remainingAiCredits: null,
-      grantedAiCredits: null,
-      periodEndsAt: null,
+      remainingAiCredits: usage.aiUsage.remaining,
+      grantedAiCredits: usage.aiUsage.granted,
+      periodEndsAt: usage.periodEndsAt,
     };
   }
 

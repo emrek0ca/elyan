@@ -17,13 +17,28 @@ export const createChatSessionBodySchema = z.object({
   }
 });
 
+const chatInputBlockSchema = z.object({
+  type: z.literal("text"),
+  markdown: z.string().trim().min(1).max(20_000),
+}).passthrough();
+
+function contentFromInputBlocks(blocks: Array<z.infer<typeof chatInputBlockSchema>> | undefined): string {
+  return (blocks ?? [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.markdown.trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
 export const createChatMessageBodySchema = z.object({
   sessionId: z.string().uuid().optional(),
   chatSessionId: z.string().uuid().optional(),
   targetDeviceId: z.string().uuid().optional(),
   source: chatSessionSourceSchema.default("mobile"),
   title: z.string().trim().min(1).max(200).optional(),
-  content: z.string().trim().min(1).max(20_000),
+  content: z.string().trim().min(1).max(20_000).optional(),
+  blocks: z.array(chatInputBlockSchema).max(8).optional(),
   requestedCapabilities: z
     .array(z.string().trim().min(1).max(80))
     .max(20)
@@ -32,6 +47,14 @@ export const createChatMessageBodySchema = z.object({
   metadata: z.record(z.any()).optional(),
 })
   .superRefine((input, ctx) => {
+    const content = input.content?.trim() || contentFromInputBlocks(input.blocks);
+    if (!content) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["blocks"],
+        message: "content must be provided as an Elyan text block",
+      });
+    }
     if (
       input.sessionId &&
       input.chatSessionId &&
@@ -51,10 +74,14 @@ export const createChatMessageBodySchema = z.object({
       });
     }
   })
-  .transform(({ chatSessionId, ...input }) => ({
-    ...input,
-    sessionId: input.sessionId ?? chatSessionId,
-  }));
+  .transform(({ chatSessionId, ...input }) => {
+    const content = input.content?.trim() || contentFromInputBlocks(input.blocks);
+    return {
+      ...input,
+      content,
+      sessionId: input.sessionId ?? chatSessionId,
+    };
+  });
 
 export const updateChatSessionBodySchema = z
   .object({

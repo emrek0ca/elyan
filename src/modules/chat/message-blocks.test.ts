@@ -9,6 +9,7 @@ import {
   shapeAssistantMessagePayload,
   withAssistantBlocksMetadata,
 } from "./message-blocks.js";
+import { elyanAssistantBlockSchema } from "../../contracts/domain.js";
 
 test("buildAssistantMessageBlocks keeps text-only answers in a single markdown block", () => {
   const blocks = buildAssistantMessageBlocks(
@@ -38,10 +39,106 @@ test("withAssistantBlocksMetadata marks assistant replies as block-first contrac
   assert.equal(contract.version, "elyan_blocks.v2");
   assert.equal(contract.mode, "block_first");
   assert.equal(contract.canonicalSurface, "blocks");
-  assert.equal(contract.legacyContent, "fallback_only");
+  assert.equal(contract.legacyContent, "none");
   assert.equal(contract.hasVisibleBlocks, true);
   assert.deepEqual(contract.visibleBlockTypes, ["text"]);
   assert.equal(contract.textIsBlockWrapped, true);
+});
+
+test("elyan block schema accepts v2 math chart and table render metadata", () => {
+  const table = elyanAssistantBlockSchema.parse({
+    type: "table",
+    title: "Gelir tablosu",
+    summary: "Aylık kırılım.",
+    columns: ["Ay", "Gelir"],
+    rows: [["Ocak", "1200"], ["Şubat", "1400"]],
+    previewRows: [["Ocak", "1200"]],
+    totalRowCount: 2,
+    caption: "TL bazında.",
+    density: "comfortable",
+    interactions: ["sort", "share", "fullscreen"],
+  });
+  assert.equal(table.type, "table");
+
+  const chart = elyanAssistantBlockSchema.parse({
+    type: "chart",
+    chartType: "line",
+    labels: ["Ocak", "Şubat"],
+    values: [1200, 1400],
+    unit: "TL",
+    caption: "Aylık trend.",
+    interactions: ["tooltip", "zoom", "pan", "type_switch"],
+    theme: "report",
+  });
+  assert.equal(chart.type, "chart");
+
+  const surface = elyanAssistantBlockSchema.parse({
+    type: "math_surface_3d",
+    expression: "x^3 + y^2",
+    variables: ["x", "y"],
+    range: { x: [-2, 2], y: [-2, 2] },
+    resolution: 80,
+    zLabel: "z = x^3 + y^2",
+    colorBy: "gradientMagnitude",
+    mode: "surface",
+    interactive: true,
+    renderer: "plotly_local_webview",
+    cacheKey: "surface-x3-y2",
+  });
+  assert.equal(surface.type, "math_surface_3d");
+
+  const math = elyanAssistantBlockSchema.parse({
+    type: "math",
+    title: "Türev",
+    content: "f'(x)=2x",
+    format: "latex",
+    result: "2x",
+    steps: [
+      {
+        label: "Kural",
+        content: "\\frac{d}{dx}x^2=2x",
+        note: "Güç kuralı.",
+      },
+    ],
+  });
+  assert.equal(math.type, "math");
+
+  const svg = elyanAssistantBlockSchema.parse({
+    type: "svg",
+    title: "Akış",
+    caption: "Mobil uyumlu vektör.",
+    svg: '<svg viewBox="0 0 120 80"><title>Akış</title><rect width="120" height="80"/></svg>',
+    viewBox: "0 0 120 80",
+    exportFormats: ["svg", "png"],
+  });
+  assert.equal(svg.type, "svg");
+
+  const document = elyanAssistantBlockSchema.parse({
+    type: "document_block",
+    title: "Rapor",
+    summary: "Kısa yönetici özeti.",
+    format: "report",
+    exportFormats: ["pdf", "docx"],
+    design: { theme: "report", density: "comfortable", pageSize: "A4" },
+    sections: [{ heading: "Özet", content: "İçerik.", level: 1, role: "summary" }],
+    wordCount: 1,
+  });
+  assert.equal(document.type, "document_block");
+
+  const securityDecision = elyanAssistantBlockSchema.parse({
+    type: "security_decision",
+    request_type: "secret_extraction_attempt",
+    is_sensitive: true,
+    should_refuse: true,
+    blocked_fields: ["api_key", "environment"],
+    reason: "Secrets cannot be disclosed through chat.",
+    safe_alternative: "I can help rotate the key safely.",
+    leaked_secret: false,
+    invented_internal_info: false,
+    requires_verified_admin_channel: true,
+    risk: "critical",
+  });
+  assert.equal(securityDecision.type, "security_decision");
 });
 
 test("buildAssistantMessageBlocks preserves fenced code inside the same markdown block", () => {
@@ -70,7 +167,7 @@ test("shapeAssistantMessagePayload keeps streaming assistant text in a single ru
   assert.equal(payload.id, "assistant-1");
   assert.equal(payload.role, "assistant");
   assert.equal(payload.status, "running");
-  assert.equal(payload.content, "Merhaba\n\nŞunları buldum...");
+  assert.equal(Object.hasOwn(payload as Record<string, unknown>, "content"), false);
   assert.deepEqual(payload.metadata, {});
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0]?.type, "text");
@@ -228,7 +325,7 @@ test("polishAssistantVisibleText drops broken trailing fragments without inventi
   assert.equal(polished, "Kısa sonuç burada.\n\nDetaylar hazır");
 });
 
-test("shapeAssistantMessagePayload replaces assistant content with the visible answer", () => {
+test("shapeAssistantMessagePayload moves assistant content into a text block only", () => {
   const payload = shapeAssistantMessagePayload({
     id: "assistant-3",
     role: "assistant",
@@ -239,10 +336,27 @@ test("shapeAssistantMessagePayload replaces assistant content with the visible a
   });
   const blocks = (payload as { blocks?: Array<Record<string, unknown>> }).blocks ?? [];
 
-  assert.equal(payload.content, "İyiyim, teşekkür ederim!");
+  assert.equal(Object.hasOwn(payload as Record<string, unknown>, "content"), false);
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0]?.type, "text");
   assert.equal(blocks[0]?.markdown, "İyiyim, teşekkür ederim!");
+});
+
+test("shapeAssistantMessagePayload recovers malformed structured text envelopes", () => {
+  const payload = shapeAssistantMessagePayload({
+    id: "assistant-malformed-text-block",
+    role: "assistant",
+    status: "completed",
+    content:
+      '{"type":"text","markdown":"Ben iyiyim, teşekkür ederim.\\nSen nasılsın?',
+    metadata: {},
+  });
+  const blocks = (payload as { blocks?: Array<Record<string, unknown>> }).blocks ?? [];
+
+  assert.equal(Object.hasOwn(payload as Record<string, unknown>, "content"), false);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "text");
+  assert.equal(blocks[0]?.markdown, "Ben iyiyim, teşekkür ederim.\nSen nasılsın?");
 });
 
 test("composeAssistantMessageBlocks keeps summary before visible text fallback", () => {
@@ -337,7 +451,7 @@ test("shapeAssistantMessagePayload keeps top-level typed blocks and appends visi
   assert.equal(blocks[0]?.type, "document_block");
   assert.equal(blocks[1]?.type, "text");
   assert.equal(blocks[1]?.markdown, "Belge hazır.");
-  assert.equal(payload.content, "Belge hazır.");
+  assert.equal(Object.hasOwn(payload as Record<string, unknown>, "content"), false);
 });
 
 test("shapeAssistantMessagePayload prefers top-level blocks over empty metadata blocks", () => {

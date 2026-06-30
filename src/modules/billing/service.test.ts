@@ -6,6 +6,7 @@ import {
   buildTrialSubscriptionSeed,
   createUpgradeOrByokRequiredError,
   getBillingProviderForStorePlatform,
+  getSharedBrainUsageBudget,
   getCheckoutInitializationState,
   isStoreSubscriptionClaimLocked,
   normalizeStoreWebhookStatus,
@@ -15,6 +16,62 @@ import {
   shouldIgnoreStaleStoreVerification,
   upsertStoreTransaction,
 } from "./service.js";
+
+class QueuedSelectQuery<T> implements PromiseLike<T[]> {
+  constructor(private readonly rows: T[]) {}
+
+  from(): this {
+    return this;
+  }
+
+  where(): this {
+    return this;
+  }
+
+  orderBy(): this {
+    return this;
+  }
+
+  limit(): Promise<T[]> {
+    return Promise.resolve(this.rows);
+  }
+
+  then<TResult1 = T[], TResult2 = never>(
+    onfulfilled?: ((value: T[]) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ): PromiseLike<TResult1 | TResult2> {
+    return Promise.resolve(this.rows).then(onfulfilled, onrejected);
+  }
+}
+
+class QueuedSelectDb {
+  constructor(private readonly queuedRows: unknown[][]) {}
+
+  select(): QueuedSelectQuery<unknown> {
+    return new QueuedSelectQuery(this.queuedRows.shift() ?? []);
+  }
+}
+
+function subscriptionRow(input: {
+  planCode: string;
+  status: string;
+  taskLimitMonthly: number;
+  aiCreditsMonthly: number;
+  currentPeriodStartedAt?: Date;
+  periodEndsAt?: Date;
+  trialEndsAt?: Date | null;
+}) {
+  return {
+    userId: "user-1",
+    planCode: input.planCode,
+    status: input.status,
+    taskLimitMonthly: input.taskLimitMonthly,
+    aiCreditsMonthly: input.aiCreditsMonthly,
+    currentPeriodStartedAt: input.currentPeriodStartedAt ?? new Date("2030-01-01T00:00:00.000Z"),
+    periodEndsAt: input.periodEndsAt ?? new Date("2030-02-01T00:00:00.000Z"),
+    trialEndsAt: input.trialEndsAt ?? null,
+  };
+}
 
 test("getCheckoutInitializationState stays pending for placeholder rows", () => {
   const state = getCheckoutInitializationState({
@@ -574,6 +631,81 @@ test("assertSharedBrainUsageBudgetAllowed rejects exhausted bounded free credits
       return true;
     },
   );
+});
+
+test("getSharedBrainUsageBudget resolves legacy free rows from catalog-backed monthly AI credits", async () => {
+  const row = subscriptionRow({
+    planCode: "free",
+    status: "free",
+    taskLimitMonthly: 0,
+    aiCreditsMonthly: 0,
+  });
+  const db = new QueuedSelectDb([
+    [row],
+    [row],
+    [{ used: 0 }],
+    [{ used: 1 }],
+    [{ granted: 0, used: 0 }],
+    [],
+  ]);
+
+  const budget = await getSharedBrainUsageBudget(db as never, "user-1");
+
+  assert.equal(budget.access.serverBrainAllowed, true);
+  assert.equal(budget.remainingAiCredits, 119);
+  assert.equal(budget.grantedAiCredits, 120);
+  assert.equal(budget.periodEndsAt?.toISOString(), "2030-02-01T00:00:00.000Z");
+});
+
+test("getSharedBrainUsageBudget exposes depleted free credits to the shared brain guard", async () => {
+  const row = subscriptionRow({
+    planCode: "free",
+    status: "free",
+    taskLimitMonthly: 0,
+    aiCreditsMonthly: 0,
+  });
+  const db = new QueuedSelectDb([
+    [row],
+    [row],
+    [{ used: 0 }],
+    [{ used: 120 }],
+    [{ granted: 0, used: 0 }],
+    [],
+  ]);
+
+  const budget = await getSharedBrainUsageBudget(db as never, "user-1");
+
+  assert.equal(budget.remainingAiCredits, 0);
+  assert.throws(
+    () => assertSharedBrainUsageBudgetAllowed(budget, 1),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "ai_credit_limit_reached");
+      return true;
+    },
+  );
+});
+
+test("getSharedBrainUsageBudget keeps active paid plan credits bounded by billing usage", async () => {
+  const row = subscriptionRow({
+    planCode: "pro",
+    status: "active",
+    taskLimitMonthly: 2000,
+    aiCreditsMonthly: 2000,
+  });
+  const db = new QueuedSelectDb([
+    [row],
+    [row],
+    [{ used: 4 }],
+    [{ used: 5 }],
+    [{ granted: 0, used: 0 }],
+    [],
+  ]);
+
+  const budget = await getSharedBrainUsageBudget(db as never, "user-1");
+
+  assert.equal(budget.access.mode, "paid");
+  assert.equal(budget.remainingAiCredits, 1995);
+  assert.equal(budget.grantedAiCredits, 2000);
 });
 
 test("createUpgradeOrByokRequiredError keeps the failure user-safe", () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../lib/errors.js";
 import {
@@ -35,6 +36,7 @@ import {
   resolveBoundaryGate,
   resolveElyanIdentityGate,
   resolvePromptSecurityGate,
+  resolveSecurityDecisionGate,
 } from "./boundary-gate.js";
 import { evaluateBrainAnswer } from "./evaluator.js";
 import { resolveSharedBrainModel } from "./model-resolution.js";
@@ -85,6 +87,7 @@ import {
   type SharedBrainWorkload,
 } from "./workloads.js";
 import { executeSkill } from "../skills/executor.js";
+import { createAuditLog } from "../audit/service.js";
 import {
   getActiveSkillById,
   listActiveSkillSummaries,
@@ -98,6 +101,7 @@ import {
 import {
   decideStructuredResponseDecision,
   isExplicitChartRequest,
+  isExplicitMathSurface3DRequest,
   isExplicitMathOrLatexRequest,
   isExplicitSvgRequest,
   isExplicitTableRequest,
@@ -105,6 +109,7 @@ import {
 import { buildGroqModelCatalog } from "./groq-models.js";
 import {
   buildAssistantInfoCardBlock,
+  buildAssistantMessageBlocks,
   buildAssistantWebSearchBlock,
   polishAssistantVisibleText,
   sanitizeAssistantVisibleText,
@@ -195,12 +200,76 @@ export type GovernedSharedBrainReplyResult = SharedBrainInferenceResult & {
   evaluation: ReturnType<typeof evaluateBrainAnswer>;
 };
 
+function buildSecurityDecisionBlock(decision: Record<string, unknown>) {
+  return {
+    type: "security_decision",
+    visibility: "assistant_internal_by_default",
+    stableBlockId: `security_${String(decision.request_type ?? "decision")}`,
+    ...decision,
+  };
+}
+
+async function recordSecurityDecisionAudit(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    taskId?: string;
+    prompt: string;
+    decision: Record<string, unknown>;
+  },
+) {
+  const db = (app as unknown as { db?: unknown }).db;
+  if (!db) {
+    return;
+  }
+  const promptHash = createHash("sha256")
+    .update(input.prompt)
+    .digest("hex")
+    .slice(0, 24);
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "security.decision.blocked",
+    resourceType: "chat_security_decision",
+    resourceId: input.taskId,
+    status: "failure",
+    payload: {
+      promptHash,
+      requestType: input.decision.request_type,
+      risk: input.decision.risk,
+      blockedFields: input.decision.blocked_fields,
+      modelAnswerSkipped: true,
+    },
+  }).catch(() => undefined);
+}
+
 export type SharedBrainInferenceProbe = {
   ready: boolean;
   provider: SharedBrainProvider | null;
   model: string | null;
   checkedAt: Date;
   reason: string;
+};
+
+type MathSurface3DBlock = {
+  type: "math_surface_3d";
+  title?: string;
+  expression?: string;
+  variables?: ["x", "y"];
+  range?: { x: [number, number]; y: [number, number] };
+  resolution?: number;
+  zLabel?: string;
+  colorBy?: "z" | "gradientMagnitude";
+  mode?: "surface";
+  interactive?: boolean;
+  renderer?: "plotly_local_webview";
+  cacheKey?: string;
+  caption?: string;
+  error?: { code: string; message: string };
+  visibility: "user_visible";
+  stableBlockId: string;
+  cacheDigest: string;
 };
 
 const DEFAULT_WORKLOAD = "fast_route";
@@ -1378,6 +1447,7 @@ function buildDataUnderstandingQualityPromptBlock(
   );
   const explicitTableRequest = isExplicitTableRequest(input.prompt);
   const explicitChartRequest = isExplicitChartRequest(input.prompt);
+  const explicitMathSurface3DRequest = isExplicitMathSurface3DRequest(input.prompt);
   const explicitMathOrLatexRequest = isExplicitMathOrLatexRequest(input.prompt);
   const explicitSvgRequest = isExplicitSvgRequest(input.prompt);
   const responseDecision = decideStructuredResponseDecision({
@@ -1396,6 +1466,11 @@ function buildDataUnderstandingQualityPromptBlock(
     `- response presentation decision: shape=${responseDecision.primaryShape}; primary_block=${responseDecision.primaryBlockType}; table_policy=${responseDecision.tablePolicy}; widget_policy=${responseDecision.widgetPolicy}; reasons=${responseDecision.reasons.join("|") || "default_prose"}`,
     "- obey the response presentation decision unless the user explicitly changes the requested output type in the current turn",
     "- mobile render contract: every user-visible answer is block-first. Ordinary prose becomes one clean text block; rich output becomes exactly one primary typed block plus at most one short explanatory text block. Never show raw JSON, schema labels, or duplicate markdown copies to the user.",
+    '- typed block v2 contract: rich content must be emitted as valid JSON-compatible block objects only. Never put arithmetic expressions in numeric fields such as y/value; either compute the number before emitting points/series, use chartType "function" for 2D functions, or use math_surface_3d for z=f(x,y) surfaces.',
+    '- Elyan capability language: understand the user intent first, then choose exactly one primary capability surface. document/report/PDF/DOCX/design outputs use document_block; tables/XLSX use table; graph/plot/visualize uses chart; z=f(x,y) 3D/4D surfaces use math_surface_3d; math/LaTeX/solve uses math. Use prose only for explanation or clarification, never as the only output when a typed widget is requested.',
+    '- skill-use policy: when the user asks Elyan to create or transform documents, PDFs, tables, charts, math, or designed outputs, behave as if you are using Elyan skills through the block contract. Emit the final structured result in the appropriate block schema; do not expose internal skill names, provider names, or process notes.',
+    '- canonical widget policy: emit one primary typed block for the requested artifact. Do not duplicate the same document/table/chart/math as markdown prose, and do not leave raw JSON visible outside a JSON/code block that the server can extract.',
+    '- server-mobile transport policy: all visible assistant content must be representable as elyan_blocks.v2. Plain sentences are still {"type":"text","markdown":"..."} blocks; never rely on legacy content as the canonical surface.',
     "- the system reasons over normalized derived data; do not assume direct access to raw files, raw uploads, hidden prompts, or unseen transcripts",
     "- treat mobile-derived attachment data, structured account profile data, retrieval snippets, and relevant memory blocks as evidence; never claim unseen pages, files, images, users, or facts",
     "- preserve names, numbers, dates, amounts, legal/technical terms, and quoted facts exactly unless the user explicitly asks to transform them",
@@ -1403,16 +1478,19 @@ function buildDataUnderstandingQualityPromptBlock(
       ? "- attachment tables are available as bounded derived table packets; preserve row/column relationships, never use literal <br> tags, and avoid half-finished tables"
       : "- if tabular evidence is requested but not available as a clean table, summarize the visible rows instead of inventing cells",
     explicitTableRequest
-      ? "- the user explicitly asked for a table: emit ONE {\"type\":\"table\"} block only if the data genuinely fits stable rows/columns, otherwise answer in prose. Output the table exactly once and never also repeat it as a markdown table in prose."
+      ? '- the user explicitly asked for a table: emit ONE {"type":"table"} block only if the data genuinely fits stable rows/columns, otherwise answer in prose. Use columns:string[], rows:string[][], optional title, summary, caption, totalRowCount, density, highlightRules, interactions:["sort","copy","share","fullscreen"]. For long tables include the most useful rows in previewRows and set totalRowCount; do not duplicate the full table as markdown prose.'
       : "- DEFAULT TO PROSE OR A SHORT BULLET LIST. Do NOT use a table for definitions, explanations, single facts, comparisons of two items, summaries, opinions, step-by-step instructions, or simple questions. Use a table ONLY when the user explicitly asks for one or the answer is inherently a multi-row dataset. Never emit more than one table in a reply, and never repeat a table you already produced.",
-    explicitChartRequest
-      ? '- chart/graph request: emit a typed {"type":"chart"} block as the primary visual output. For data charts use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values, points, or series. For 2D function graphs use chartType "function", expression, variables ["x"], and range {"x":[min,max]}. For 3D surface/mesh requests prefer chartType "surface3d" or "mesh" with expression "x^2 + y^2", variables ["x","y"], and range {"x":[min,max],"y":[min,max]}; use bounded points [{x,y,z}] only when the data is already sampled. For current/live values (e.g. "güncel altın grafiği", an exchange-rate, crypto, or price trend), extract the numeric series from the PUBLIC WEB GROUNDING evidence above and plot it as a "line"/"bar" chart with dated labels — this is a server capability, never defer it to desktop. If no grounding data is available, say the live data could not be retrieved instead of emitting a needs_desktop block.'
+    explicitMathSurface3DRequest
+      ? '- 3D/4D mathematical surface request: emit ONE {"type":"math_surface_3d","expression":"x^3 + y^2","variables":["x","y"],"range":{"x":[-2,2],"y":[-2,2]},"resolution":80,"zLabel":"z = x^3 + y^2","colorBy":"z","mode":"surface","interactive":true} block. For 4D requests set colorBy:"gradientMagnitude". Do not emit sampled points, markdown tables, SVG, image URLs, or prose-only explanations for this request.'
+      : "- use math_surface_3d only for explicit z=f(x,y), 3D surface, mesh, or 4D color-channel graph requests.",
+    explicitChartRequest && !explicitMathSurface3DRequest
+      ? '- chart/graph request: emit a typed {"type":"chart"} block as the primary visual output. For sampled data charts use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values, points, or series where every y/value is a real number, not a formula string. Include title, xLabel, yLabel, unit, caption, interactions:["tooltip","trackball","zoom","pan","type_switch","fullscreen","share"] when relevant, and theme:"minimal"|"report". For 2D function graphs use chartType "function", expression, variables ["x"], range {"x":[min,max]}, xLabel, yLabel, and optional caption. For 3D surface/mesh requests prefer chartType "surface3d" or "mesh" with expression "x^2 + y^2", variables ["x","y"], range {"x":[min,max],"y":[min,max]}; use bounded points [{x,y,z}] only when the data is already sampled. For current/live values, extract the numeric series from PUBLIC WEB GROUNDING evidence and plot it as a "line"/"bar" chart with dated labels, unit, and caption. If no grounding data is available, say the live data could not be retrieved instead of emitting a needs_desktop block.'
       : "- do not generate a chart block unless the user asks for a graph/plot/visualization or the answer is clearly numeric-series data.",
     explicitMathOrLatexRequest
-      ? '- math/LaTeX request: when a formula, derivation, equation, or final expression is important, emit a typed {"type":"math","content":"...","format":"latex","displayMode":true} block. Keep LaTeX renderer-safe; do not wrap it in prose-only markdown if a math block is more precise.'
+      ? '- math/LaTeX request: when a formula, derivation, equation, or final expression is important, emit a typed {"type":"math","title":"...","content":"...","format":"latex","displayMode":true,"result":"...","steps":[{"label":"...","content":"...","note":"..."}]} block. Keep LaTeX renderer-safe: use \\frac, ^, _, \\sqrt, \\begin{aligned} only when needed; do not wrap the same formula as markdown prose. Use steps only when they add value.'
       : "- use inline prose for ordinary numbers; reserve math blocks for explicit math, formulas, equations, proofs, or LaTeX requests.",
     explicitSvgRequest
-      ? '- SVG/vector request: emit a typed {"type":"svg","svg":"<svg ...>...</svg>"} block. Use self-contained safe SVG only: no script, foreignObject, external fetches, event handlers, or hidden links. Keep dimensions mobile-friendly and include viewBox.'
+      ? '- SVG/vector request: emit a typed {"type":"svg","title":"...","caption":"...","svg":"<svg ...>...</svg>","viewBox":"0 0 W H","exportFormats":["svg","png"]} block. Use self-contained safe SVG only: no script, foreignObject, external fetches, event handlers, or hidden links. Use a real viewBox, scalable vector geometry, balanced spacing, accessible title/desc inside the SVG, and mobile-friendly dimensions.'
       : "- do not emit SVG unless the user explicitly asks for vector/diagram/geometric drawing output.",
     attachmentInsightMetadata.attachmentInsightVisualCount > 0
       ? "- image/OCR evidence is available as derived visual notes; answer from visible text and visual summaries only"
@@ -1566,14 +1644,14 @@ function buildReasoningProtocolPromptBlock(input: {
   /* ── Document generation ─────────────────────────────────────────── */
   if (input.workload === "document_generate") {
     lines.push(
-      '- DOCUMENT GENERATION MODE: First, write 1-2 short sentences describing what you are creating (this streams to the user immediately). Then output the document data inside a code fence exactly like this:\n```json\n{"type":"document_block","title":"...","format":"report|letter|outline|notes","sections":[{"heading":"...","content":"markdown text","level":1},...],"wordCount":N}\n```\nRules: (1) ≥2 sections, (2) each section content is plain markdown and must contain ONLY the document body, never assistant chatter like "hazırladım", "işte belge", "aşağıda", "umarım", or process notes, (3) format must be one of: report, letter, outline, notes, (4) wordCount is approximate total word count, (5) use markdown tables inside section content only when the user explicitly asked for a table or spreadsheet, otherwise prefer headings, short paragraphs, and lists, (6) if the user wants PDF/DOCX/XLSX quality, produce a clean title, stable section hierarchy, and complete sentences ready for export, (7) after the code fence you MAY add one short follow-up sentence.',
+      '- DOCUMENT GENERATION MODE: First, write 1 short sentence describing what you are creating (this streams to the user immediately). Then output the document data inside a code fence exactly like this:\n```json\n{"type":"document_block","title":"...","format":"report|letter|outline|notes","summary":"...","exportFormats":["pdf","docx"],"design":{"theme":"report","density":"comfortable","pageSize":"A4"},"sections":[{"heading":"...","content":"markdown text","level":1,"role":"body"},...],"wordCount":N}\n```\nRules: (1) ≥2 sections, (2) each section content is plain markdown and must contain ONLY the document body, never assistant chatter like "hazırladım", "işte belge", "aşağıda", "umarım", or process notes, (3) format must be one of: report, letter, outline, notes, (4) wordCount is approximate total word count, (5) use markdown tables inside section content only when the user explicitly asked for a table or spreadsheet, otherwise prefer headings, short paragraphs, and lists, (6) if the user asks for PDF/DOCX or design quality, treat document_block as the source of truth for the mobile renderer: use a clean title, stable section hierarchy, export-ready prose, restrained visual structure, summary, exportFormats, and no raw JSON/user-visible schema text, (7) after the code fence you MAY add one short follow-up sentence.',
     );
   }
 
   /* ── Table generation ────────────────────────────────────────────── */
   if (input.workload === "table_generate") {
     lines.push(
-      '- table generation mode: produce a structured table as primary response. Emit a {"type":"table"} block with "columns" (string[]) and "rows" (string[][]). Optional: "title", "caption". Max 12 columns, 80 rows, cell text ≤120 chars. Keep headers short, keep every row aligned, and normalize markdown so raw **bold** markers do not leak into cells. If editing an existing table, apply only requested changes and return the full updated table. Emit the table EXACTLY ONCE — never repeat the same table block, and do not also write the full table as markdown in prose. Optionally follow with one short explanatory text block.',
+      '- table generation mode: produce a structured table as primary response. Emit a {"type":"table"} block with "columns" (string[]) and "rows" (string[][]). Optional: "title", "summary", "caption", "totalRowCount", "previewRows", "highlightRules". Max 12 columns, 80 rows, cell text ≤120 chars. Keep headers short, keep every row aligned, and normalize markdown so raw **bold** markers do not leak into cells. For long tables, put the best mobile preview in previewRows and set totalRowCount. If editing an existing table, apply only requested changes and return the full updated table. Emit the table EXACTLY ONCE — never repeat the same table block, and do not also write the full table as markdown in prose. Optionally follow with one short explanatory text block.',
     );
   }
 
@@ -3882,6 +3960,10 @@ export async function generateSharedBrainReply(
   const workload =
     input.workload ?? input.routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD;
   const workloadProfile = getSharedBrainWorkloadProfile(workload);
+  const deterministicMathSurfaceResult = buildMathSurface3DResult(input, workload);
+  if (deterministicMathSurfaceResult) {
+    return deterministicMathSurfaceResult;
+  }
   const planBrainProfile = normalizePlanBrainProfile(input.brainProfile);
   const cacheable = shouldUseResponseCache(input, workload);
   const responseCache = getResponseCache(app);
@@ -4898,9 +4980,11 @@ export async function generateSharedBrainReply(
         }
       }
 
+      const finalTextBlocks = buildAssistantMessageBlocks(finalText);
       const assistantMetadataBlocks = [
         ...webGroundingBlocks,
         ...attachmentInsightBlocks,
+        ...finalTextBlocks,
         ...extractedTypedBlocks,
       ];
       const result: SharedBrainInferenceResult = {
@@ -5077,6 +5161,389 @@ async function classifySkillRouteWithModel(
   } catch {
     return null;
   }
+}
+
+const mathSurfaceAllowedIdentifierSet = new Set([
+  "x",
+  "y",
+  "sin",
+  "cos",
+  "tan",
+  "exp",
+  "log",
+  "sqrt",
+  "abs",
+]);
+
+const defaultMathSurfacePolynomialExpression = "x^3 - 3*x*y^2 + 3*x^2*y - y^3";
+
+function normalizeMathSurfaceExpression(raw: string): string {
+  const expanded = expandMathSurfaceSuperscripts(raw)
+    .replace(/[−–—]/g, "-")
+    .replace(/\*\*/g, "^")
+    .replace(/^\s*z\s*=\s*/i, "")
+    .trim();
+  return insertMathSurfaceImplicitMultiplication(expanded);
+}
+
+function expandMathSurfaceSuperscripts(raw: string): string {
+  const superscriptDigits: Record<string, string> = {
+    "⁰": "0",
+    "¹": "1",
+    "²": "2",
+    "³": "3",
+    "⁴": "4",
+    "⁵": "5",
+    "⁶": "6",
+    "⁷": "7",
+    "⁸": "8",
+    "⁹": "9",
+    "⁻": "-",
+  };
+  let out = "";
+  let pendingPower = "";
+  const flushPower = () => {
+    if (!pendingPower) return;
+    out += `^${pendingPower}`;
+    pendingPower = "";
+  };
+  for (const char of String(raw ?? "")) {
+    const mapped = superscriptDigits[char];
+    if (mapped !== undefined) {
+      pendingPower += mapped;
+      continue;
+    }
+    flushPower();
+    out += char;
+  }
+  flushPower();
+  return out;
+}
+
+type MathSurfaceToken =
+  | { kind: "number"; value: string }
+  | { kind: "variable"; value: "x" | "y" }
+  | { kind: "identifier"; value: string }
+  | { kind: "operator"; value: string }
+  | { kind: "open"; value: "(" }
+  | { kind: "close"; value: ")" };
+
+function tokenizeMathSurfaceExpression(expression: string): MathSurfaceToken[] {
+  const src = expression.replace(/\s+/g, "");
+  const tokens: MathSurfaceToken[] = [];
+  let pos = 0;
+  while (pos < src.length) {
+    const char = src[pos] ?? "";
+    if (/[0-9.]/.test(char)) {
+      const start = pos;
+      pos++;
+      while (/[0-9.]/.test(src[pos] ?? "")) pos++;
+      if ((src[pos] ?? "").toLowerCase() === "e") {
+        pos++;
+        if ((src[pos] ?? "") === "+" || (src[pos] ?? "") === "-") pos++;
+        while (/[0-9]/.test(src[pos] ?? "")) pos++;
+      }
+      tokens.push({ kind: "number", value: src.slice(start, pos) });
+      continue;
+    }
+    if (/[A-Za-z_]/.test(char)) {
+      const start = pos;
+      pos++;
+      while (/[A-Za-z0-9_]/.test(src[pos] ?? "")) pos++;
+      const identifier = src.slice(start, pos);
+      if (/^[xy]+$/i.test(identifier)) {
+        for (const variable of identifier.toLowerCase()) {
+          tokens.push({ kind: "variable", value: variable as "x" | "y" });
+        }
+      } else {
+        tokens.push({ kind: "identifier", value: identifier.toLowerCase() });
+      }
+      continue;
+    }
+    if (char === "(") {
+      tokens.push({ kind: "open", value: "(" });
+      pos++;
+      continue;
+    }
+    if (char === ")") {
+      tokens.push({ kind: "close", value: ")" });
+      pos++;
+      continue;
+    }
+    tokens.push({ kind: "operator", value: char });
+    pos++;
+  }
+  return tokens;
+}
+
+function insertMathSurfaceImplicitMultiplication(expression: string): string {
+  const tokens = tokenizeMathSurfaceExpression(expression);
+  const parts: string[] = [];
+  let previous: MathSurfaceToken | null = null;
+  const canEndFactor = (token: MathSurfaceToken | null) =>
+    token?.kind === "number" || token?.kind === "variable" || token?.kind === "close";
+  const canStartFactor = (token: MathSurfaceToken) =>
+    token.kind === "number" ||
+    token.kind === "variable" ||
+    token.kind === "identifier" ||
+    token.kind === "open";
+  for (const token of tokens) {
+    if (previous && canEndFactor(previous) && canStartFactor(token)) {
+      parts.push("*");
+    }
+    parts.push(token.value);
+    previous = token;
+  }
+  return parts.join("");
+}
+
+function extractMathSurfaceExpression(prompt: string): string | null {
+  const compact = String(prompt ?? "").replace(/\s+/g, " ").trim();
+  const zMatch = compact.match(/\bz\s*=\s*([^,;:\n]+?)(?=\s+(?:fonksiyon\w*|function|için|icin|grafi\w*|çiz|ciz|plot|surface|3d|3 boyutlu|4d|4 boyutlu)\b|$)/i);
+  if (zMatch?.[1]) {
+    return normalizeMathSurfaceExpression(zMatch[1]);
+  }
+  const functionMatch = compact.match(/\bf\s*\(\s*x\s*,\s*y\s*\)\s*=\s*([^,;:\n]+?)(?=\s+(?:fonksiyon\w*|function|için|icin|grafi\w*|çiz|ciz|plot|surface|3d|3 boyutlu|4d|4 boyutlu)\b|$)/i);
+  if (functionMatch?.[1]) {
+    return normalizeMathSurfaceExpression(functionMatch[1]);
+  }
+  return null;
+}
+
+function assertSafeMathSurfaceExpression(expression: string): void {
+  const normalized = normalizeMathSurfaceExpression(expression);
+  if (!normalized || normalized.length > 240) {
+    throw new Error("empty_expression");
+  }
+  if (!/^[0-9xy+\-*/^().,\sA-Za-z]+$/.test(normalized)) {
+    throw new Error("unsupported_character");
+  }
+  for (const match of normalized.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+    if (!mathSurfaceAllowedIdentifierSet.has(match[0].toLowerCase())) {
+      throw new Error("unsupported_identifier");
+    }
+  }
+  new MathSurfaceExpressionParser(normalized).parse();
+}
+
+class MathSurfaceExpressionParser {
+  private pos = 0;
+  private readonly src: string;
+
+  constructor(expression: string) {
+    this.src = expression.replace(/\s+/g, "");
+  }
+
+  parse(): void {
+    this.parseExpression();
+    if (this.pos !== this.src.length) {
+      throw new Error("unexpected_expression_tail");
+    }
+  }
+
+  private parseExpression(): void {
+    this.parseTerm();
+    while (this.peek("+") || this.peek("-")) {
+      this.pos++;
+      this.parseTerm();
+    }
+  }
+
+  private parseTerm(): void {
+    this.parsePower();
+    while (this.peek("*") || this.peek("/")) {
+      this.pos++;
+      this.parsePower();
+    }
+  }
+
+  private parsePower(): void {
+    this.parseUnary();
+    if (this.peek("^")) {
+      this.pos++;
+      this.parsePower();
+    }
+  }
+
+  private parseUnary(): void {
+    if (this.peek("+") || this.peek("-")) {
+      this.pos++;
+      this.parseUnary();
+      return;
+    }
+    this.parsePrimary();
+  }
+
+  private parsePrimary(): void {
+    if (this.peek("(")) {
+      this.pos++;
+      this.parseExpression();
+      this.expect(")");
+      return;
+    }
+    const identifier = this.readIdentifier();
+    if (identifier) {
+      const normalized = identifier.toLowerCase();
+      if (normalized === "x" || normalized === "y") {
+        return;
+      }
+      if (!mathSurfaceAllowedIdentifierSet.has(normalized)) {
+        throw new Error("unsupported_identifier");
+      }
+      this.expect("(");
+      this.parseExpression();
+      this.expect(")");
+      return;
+    }
+    this.readNumber();
+  }
+
+  private readIdentifier(): string | null {
+    const start = this.pos;
+    if (!/[A-Za-z_]/.test(this.src[this.pos] ?? "")) {
+      return null;
+    }
+    this.pos++;
+    while (/[A-Za-z0-9_]/.test(this.src[this.pos] ?? "")) {
+      this.pos++;
+    }
+    return this.src.slice(start, this.pos);
+  }
+
+  private readNumber(): void {
+    const start = this.pos;
+    while (/[0-9.]/.test(this.src[this.pos] ?? "")) {
+      this.pos++;
+    }
+    if ((this.src[this.pos] ?? "").toLowerCase() === "e") {
+      this.pos++;
+      if (this.peek("+") || this.peek("-")) {
+        this.pos++;
+      }
+      while (/[0-9]/.test(this.src[this.pos] ?? "")) {
+        this.pos++;
+      }
+    }
+    if (start === this.pos || Number.isNaN(Number(this.src.slice(start, this.pos)))) {
+      throw new Error("expected_number");
+    }
+  }
+
+  private peek(value: string): boolean {
+    return this.src[this.pos] === value;
+  }
+
+  private expect(value: string): void {
+    if (!this.peek(value)) {
+      throw new Error("missing_token");
+    }
+    this.pos++;
+  }
+}
+
+function buildMathSurfaceCacheKey(input: {
+  expression?: string;
+  range?: { x: [number, number]; y: [number, number] };
+  resolution?: number;
+  colorBy?: string;
+}): string {
+  return createHash("sha256")
+    .update(JSON.stringify(input))
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function withMathSurfaceBlockMeta(block: Omit<MathSurface3DBlock, "visibility" | "stableBlockId" | "cacheDigest">): MathSurface3DBlock {
+  const cacheDigest = buildMathSurfaceCacheKey({
+    expression: block.expression,
+    range: block.range,
+    resolution: block.resolution,
+    colorBy: block.colorBy,
+  });
+  return {
+    ...block,
+    visibility: "user_visible",
+    stableBlockId: `math_surface_3d_${cacheDigest}`,
+    cacheDigest,
+  };
+}
+
+function buildMathSurface3DResult(input: SharedBrainInferenceInput, workload: SharedBrainWorkload): SharedBrainInferenceResult | null {
+  if (!isExplicitMathSurface3DRequest(input.prompt)) {
+    return null;
+  }
+  const expression = extractMathSurfaceExpression(input.prompt) ?? defaultMathSurfacePolynomialExpression;
+  const isFourDimensional = /\b(4d|4 boyutlu|dört boyutlu|dort boyutlu)\b/i.test(input.prompt);
+  let block: MathSurface3DBlock;
+  try {
+    assertSafeMathSurfaceExpression(expression);
+    const range: { x: [number, number]; y: [number, number] } = {
+      x: [-2, 2],
+      y: [-2, 2],
+    };
+    const resolution = 80;
+    const colorBy = isFourDimensional ? "gradientMagnitude" : "z";
+    const cacheKey = buildMathSurfaceCacheKey({
+      expression,
+      range,
+      resolution,
+      colorBy,
+    });
+    block = withMathSurfaceBlockMeta({
+      type: "math_surface_3d",
+      title: `z = ${expression}`,
+      expression,
+      variables: ["x", "y"],
+      range,
+      resolution,
+      zLabel: `z = ${expression}`,
+      colorBy,
+      mode: "surface",
+      interactive: true,
+      renderer: "plotly_local_webview",
+      cacheKey,
+      caption: colorBy === "gradientMagnitude"
+        ? "4. boyut renk kanalında gradyan büyüklüğüyle gösterilir."
+        : "Yüzey mobil cihazda yerel olarak hesaplanır ve döndürülebilir.",
+    });
+  } catch {
+    block = withMathSurfaceBlockMeta({
+      type: "math_surface_3d",
+      title: "3B yüzey grafiği",
+      expression,
+      error: {
+        code: "invalid_expression",
+        message: "Bu ifade güvenli yüzey grafiği parser'ı tarafından desteklenmiyor.",
+      },
+    });
+  }
+  return {
+    text: "",
+    provider: "elyan",
+    model: "deterministic-math-surface",
+    latencyMs: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    metadata: {
+      route: input.route ?? "shared_brain",
+      workload,
+      provider: "elyan",
+      model: "deterministic-math-surface",
+      deterministic: true,
+      fallbackUsed: false,
+      renderContract: {
+        version: "elyan_blocks.v2",
+        mode: "block_first",
+        canonicalSurface: "blocks",
+        legacyContent: "fallback_only",
+        hasVisibleBlocks: true,
+        visibleBlockTypes: ["math_surface_3d"],
+        textIsBlockWrapped: false,
+      },
+      blocks: [block],
+    },
+  };
 }
 
 function readSkillHint(metadata: unknown): string | null {
@@ -5294,6 +5761,7 @@ export async function generateGovernedSharedBrainReply(
   const routeDecision = input.routeDecision ?? null;
   const attachmentContext = input.attachmentContext ?? null;
   const gate =
+    resolveSecurityDecisionGate(input.prompt) ??
     resolvePromptSecurityGate(input.prompt) ??
     resolveElyanIdentityGate(input.prompt) ??
     (routeDecision ? resolveBoundaryGate(routeDecision, input.prompt) : null);
@@ -5304,6 +5772,17 @@ export async function generateGovernedSharedBrainReply(
   );
 
   if (gate) {
+    if (gate.securityDecision) {
+      await recordSecurityDecisionAudit(app, {
+        userId: input.userId,
+        taskId: input.taskId,
+        prompt: input.prompt,
+        decision: gate.securityDecision,
+      });
+    }
+    const securityBlocks = gate.securityDecision
+      ? [buildSecurityDecisionBlock(gate.securityDecision)]
+      : [];
     const evaluation = evaluateBrainAnswer({
       prompt: input.prompt,
       modelAnswer: gate.text,
@@ -5350,6 +5829,12 @@ export async function generateGovernedSharedBrainReply(
         enforcedByBackend: gate.enforcedByBackend,
         responseCode: gate.responseCode,
         modelAnswerSkipped: gate.modelAnswerSkipped,
+        ...(gate.securityDecision
+          ? {
+              securityDecision: gate.securityDecision,
+              blocks: securityBlocks,
+            }
+          : {}),
         constitutionVersion: ELYAN_CONSTITUTION_VERSION,
         promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
         ...buildAttachmentContextMetadata(attachmentContext),

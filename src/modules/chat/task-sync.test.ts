@@ -346,7 +346,7 @@ test("syncChatTaskLifecycle prefers resume summary for approved waiting approval
   assert.equal(updates[0]?.content, "Onay alındı. Görev devam ediyor.");
 });
 
-test("syncChatTaskLifecycle publishes completed assistant content with the task snapshot", async () => {
+test("syncChatTaskLifecycle publishes completed assistant blocks with the task snapshot", async () => {
   const updates: Array<Record<string, unknown>> = [];
   const published: Array<{
     topic?: string;
@@ -463,10 +463,7 @@ test("syncChatTaskLifecycle publishes completed assistant content with the task 
   assert.equal(completedPayload?.sessionId, "session-1");
   assert.equal(completedPayload?.presentation, "chat");
   assert.equal(completedPayload?.taskStatus, "completed");
-  assert.equal(
-    completedPayload?.assistantMessage?.content,
-    "Merhaba, nasıl yardımcı olabilirim?",
-  );
+  assert.equal(completedPayload?.assistantMessage?.content, undefined);
   const completedBlocks = completedPayload?.assistantMessage?.blocks as
     | Array<Record<string, unknown>>
     | undefined;
@@ -584,7 +581,7 @@ Final answer: Görselde okunan metin kabaca "10:03 cku.itiraf.paylasim •II = 3
 
   assert.equal(
     completedPayload?.assistantMessage?.content,
-    'Görselde okunan metin kabaca "10:03 cku.itiraf.paylasim •II = 37" diye başlıyor.',
+    undefined,
   );
   assert.equal(
     completedPayload?.assistantMessage?.blocks?.[1]?.markdown,

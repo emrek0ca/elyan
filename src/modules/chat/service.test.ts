@@ -527,7 +527,7 @@ test("listChatSessionMessages returns the latest page first and keeps chronologi
 
   assert.equal(page.session.id, "session-1");
   assert.equal(page.messages.length, 1);
-  assert.equal(page.messages[0]?.content, "Merhaba");
+  assert.equal(Object.hasOwn(page.messages[0] ?? {}, "content"), false);
   const firstBlock = page.messages[0]?.blocks?.[0];
   assert.equal(firstBlock?.type, "text");
   assert.equal(firstBlock?.markdown, "Merhaba");
@@ -646,10 +646,13 @@ test("getChatSessionDetail returns the latest window instead of eager full histo
   const detail = await getChatSessionDetail(app as never, "user-1", "session-1");
 
   assert.equal(detail.session.id, "session-1");
-  assert.deepEqual(
-    detail.messages.map((message) => message.content),
-    ["Bir", "İki", "Üç"],
-  );
+  assert.equal(detail.messages[0]?.content, "Bir");
+  assert.equal(Object.hasOwn(detail.messages[1] ?? {}, "content"), false);
+  assert.equal(detail.messages[1]?.blocks?.[0]?.type, "text");
+  assert.equal(detail.messages[1]?.blocks?.[0]?.markdown, "İki");
+  assert.equal(Object.hasOwn(detail.messages[2] ?? {}, "content"), false);
+  assert.equal(detail.messages[2]?.blocks?.[0]?.type, "text");
+  assert.equal(detail.messages[2]?.blocks?.[0]?.markdown, "Üç");
   assert.equal(detail.hasMore, false);
   assert.equal(detail.nextCursor, null);
 });

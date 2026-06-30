@@ -28,6 +28,14 @@ const EXPLICIT_CHART_REQUEST_PATTERNS = [
   /(?<!\p{L})(3d|3 boyutlu|üç boyutlu|uc boyutlu|surface|mesh|yüzey grafiği|yuzey grafigi)(?!\p{L})/iu,
 ];
 
+const EXPLICIT_MATH_SURFACE_3D_REQUEST_PATTERNS = [
+  /\b(3d|3 boyutlu|üç boyutlu|uc boyutlu)\b.{0,80}\b(yüzey grafiği|yuzey grafigi|surface plot|surface|mesh|grafiğini çiz|grafigini ciz|grafik|plot)\b/i,
+  /\b(4d|4 boyutlu|dört boyutlu|dort boyutlu)\b.{0,80}\b(grafik|plot|surface|yüzey|yuzey)\b/i,
+  /\bz\s*=\s*f\s*\(\s*x\s*,\s*y\s*\)\b.{0,80}\b(çiz|ciz|grafik|plot|surface)\b/i,
+  /\bz\s*=\s*[^,\n]+?\b.{0,80}\b(3d|3 boyutlu|üç boyutlu|uc boyutlu|4d|4 boyutlu|surface plot|yüzey grafiği|yuzey grafigi)\b/i,
+  /\b(surface plot|math surface|3d surface|4d surface)\b/i,
+];
+
 const EXPLICIT_MATH_LATEX_REQUEST_PATTERNS = [
   /(?<!\p{L})(matematik|math|denklem|equation|integral|türev|turev|limit|ispat|proof|çöz|coz|solve)(?!\p{L})/iu,
   /(?<!\p{L})(latex|tex|ka?tex|formula|formül|formul)(?!\p{L})/iu,
@@ -38,8 +46,8 @@ const EXPLICIT_SVG_REQUEST_PATTERNS = [
 ];
 
 export type StructuredResponseDecision = {
-  primaryShape: "prose" | "list" | "table" | "chart" | "math" | "svg" | "document";
-  primaryBlockType: "text" | "table" | "chart" | "math" | "svg" | "document_block";
+  primaryShape: "prose" | "list" | "table" | "chart" | "math_surface_3d" | "math" | "svg" | "document";
+  primaryBlockType: "text" | "table" | "chart" | "math_surface_3d" | "math" | "svg" | "document_block";
   tablePolicy: "forbidden" | "explicit_only";
   widgetPolicy: "none" | "single_primary_widget";
   reasons: string[];
@@ -92,6 +100,14 @@ export function isExplicitChartRequest(prompt: string): boolean {
   return EXPLICIT_CHART_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+export function isExplicitMathSurface3DRequest(prompt: string): boolean {
+  const normalized = compactText(prompt);
+  if (!normalized) {
+    return false;
+  }
+  return EXPLICIT_MATH_SURFACE_3D_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 export function isExplicitMathOrLatexRequest(prompt: string): boolean {
   const normalized = compactText(prompt);
   if (!normalized) {
@@ -122,6 +138,17 @@ export function decideStructuredResponseDecision(input: {
       primaryShape: "document",
       primaryBlockType: "document_block",
       tablePolicy: isExplicitTableRequest(prompt) ? "explicit_only" : "forbidden",
+      widgetPolicy: "single_primary_widget",
+      reasons,
+    };
+  }
+
+  if (isExplicitMathSurface3DRequest(prompt)) {
+    reasons.push("explicit_math_surface_3d_request");
+    return {
+      primaryShape: "math_surface_3d",
+      primaryBlockType: "math_surface_3d",
+      tablePolicy: "forbidden",
       widgetPolicy: "single_primary_widget",
       reasons,
     };

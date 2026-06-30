@@ -143,6 +143,8 @@ test("decideCommandRoute selects document_generate for report/document creation 
     "Yapay zeka hakkında kısa bir rapor yaz",
     "iklim değişikliği üzerine bir makale hazırla",
     "şirket için bülten hazırlar mısın",
+    "yatırım planı için şık bir PDF hazırla",
+    "bu konu için tasarımlı bir docx belge oluştur",
   ]) {
     const decision = await decideCommandRoute(app as never, {
       userId: "user-1",
@@ -151,6 +153,25 @@ test("decideCommandRoute selects document_generate for report/document creation 
     });
     assert.equal(decision.route, "server_brain");
     assert.equal(decision.selectedWorkload, "document_generate");
+  }
+});
+
+test("decideCommandRoute keeps chart and math widget requests on capable server workload", async () => {
+  const app = createApp([]);
+  for (const message of [
+    "f(x)=x^2 fonksiyonunun grafiğini çiz",
+    "bu denklemi LaTeX ile adım adım çöz",
+    "z = x^3 + y^2 fonksiyonunun 3 boyutlu yüzey grafiğini çiz",
+    "4 boyutlu grafik çiz: z = x^3 + y^2",
+    "z=f(x,y) çiz surface plot",
+  ]) {
+    const decision = await decideCommandRoute(app as never, {
+      userId: "user-1",
+      message,
+      source: "mobile",
+    });
+    assert.equal(decision.route, "server_brain");
+    assert.equal(decision.selectedWorkload, "mobile_chat_balanced");
   }
 });
 

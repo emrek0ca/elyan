@@ -546,8 +546,11 @@ async function hydrateMessageContent(
 
 function shapeChatMessageForResponse<T extends typeof chatMessages.$inferSelect>(
   message: T,
-) : T & { blocks?: AssistantMessageBlock[] } {
-  return shapeAssistantMessagePayload(message);
+): T & { blocks?: AssistantMessageBlock[]; content?: string } {
+  return shapeAssistantMessagePayload(message) as T & {
+    blocks?: AssistantMessageBlock[];
+    content?: string;
+  };
 }
 
 function encodeCursor(cursor: ChatSessionCursor | ChatMessageCursor) {
@@ -1734,7 +1737,6 @@ export async function createChatMessage(
         ...shapeChatMessageForResponse(assistantMessage),
         taskId: inputTask.id,
         status: assistantAckStatus,
-        content: assistantAckText,
       } as typeof responseAssistantMessage);
 
     responseLastMessageAt = new Date();
