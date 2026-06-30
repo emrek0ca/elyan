@@ -12,6 +12,7 @@ import {
   resolveUsageAccessTruth,
   resolveUsagePresentationTruth,
   shapePublicUsageSnapshot,
+  shouldIgnoreStaleStoreVerification,
   upsertStoreTransaction,
 } from "./service.js";
 
@@ -196,6 +197,46 @@ test("store subscription claim lock allows expired Apple subscriptions but block
       now,
     ),
     true,
+  );
+});
+
+test("stale store verification cannot downgrade a newer active store period", () => {
+  const now = new Date("2026-06-30T00:00:00.000Z");
+
+  assert.equal(
+    shouldIgnoreStaleStoreVerification(
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "active",
+        periodEndsAt: new Date("2026-07-01T22:59:27.000Z"),
+      },
+      {
+        billingProvider: "apple_store",
+        status: "past_due",
+        periodEndsAt: new Date("2026-06-29T16:09:35.000Z"),
+      },
+      now,
+    ),
+    true,
+  );
+
+  assert.equal(
+    shouldIgnoreStaleStoreVerification(
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "active",
+        periodEndsAt: new Date("2026-07-01T22:59:27.000Z"),
+      },
+      {
+        billingProvider: "apple_store",
+        status: "active",
+        periodEndsAt: new Date("2026-07-02T22:59:27.000Z"),
+      },
+      now,
+    ),
+    false,
   );
 });
 

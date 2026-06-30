@@ -434,6 +434,47 @@ export function isStoreSubscriptionClaimLocked(
   return !(subscription.periodEndsAt instanceof Date) && (status === "active" || status === "trialing");
 }
 
+export function shouldIgnoreStaleStoreVerification(
+  existing?: {
+    billingProvider?: string | null;
+    planCode?: string | null;
+    status?: string | null;
+    periodEndsAt?: Date | null;
+  } | null,
+  incoming?: {
+    billingProvider?: string | null;
+    status?: string | null;
+    periodEndsAt?: Date | null;
+  } | null,
+  currentTime: Date = now(),
+) {
+  if (!existing || !incoming) {
+    return false;
+  }
+  const existingProvider = String(existing.billingProvider || "").trim();
+  const incomingProvider = String(incoming.billingProvider || "").trim();
+  if (
+    (existingProvider !== "apple_store" && existingProvider !== "google_play") ||
+    (incomingProvider !== "apple_store" && incomingProvider !== "google_play")
+  ) {
+    return false;
+  }
+  if (normalizeBillingPlanCode(existing.planCode) === "free") {
+    return false;
+  }
+  const existingStatus = normalizeSubscriptionStatus(existing.status);
+  const existingPeriodEndsAt = existing.periodEndsAt;
+  if (
+    !(existingPeriodEndsAt instanceof Date) ||
+    existingPeriodEndsAt.getTime() <= currentTime.getTime() ||
+    (existingStatus !== "active" && existingStatus !== "trialing" && existingStatus !== "canceled")
+  ) {
+    return false;
+  }
+  const incomingPeriodEndsAt = incoming.periodEndsAt;
+  return !(incomingPeriodEndsAt instanceof Date) || incomingPeriodEndsAt.getTime() <= existingPeriodEndsAt.getTime();
+}
+
 async function getUserRow(app: FastifyInstance, userId: string) {
   const rows = await app.db
     .select({
@@ -1716,6 +1757,32 @@ export async function verifyStorePurchase(
         allowStoreTransactionUserReassignment = true;
       }
     }
+  }
+
+  const existingSubscription = await getSubscriptionRow(app, userId);
+  if (
+    shouldIgnoreStaleStoreVerification(existingSubscription, {
+      billingProvider: verification.billingProvider || provider,
+      status: verification.status,
+      periodEndsAt: verification.periodEndsAt,
+    })
+  ) {
+    app.log.warn(
+      {
+        userId,
+        platform,
+        provider,
+        currentPlanCode: existingSubscription?.planCode ?? null,
+        currentStatus: existingSubscription?.status ?? null,
+        currentPeriodEndsAt: existingSubscription?.periodEndsAt ?? null,
+        incomingPlanCode: planCode,
+        incomingStatus: verification.status,
+        incomingPeriodEndsAt: verification.periodEndsAt,
+        incomingReferenceId: verification.referenceId,
+      },
+      "Ignoring stale store verification that would downgrade an active subscription period",
+    );
+    return getBillingSummary(app, userId);
   }
 
   await persistStoreVerificationEvent(app, {
