@@ -2710,6 +2710,108 @@ def test_backend_auth_logout_returns_cleared_state(
     assert response["runtime"]["runtimeLifecycleState"] == "offline"
 
 
+def test_backend_auth_sync_session_hydrates_truth_surfaces(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+
+    class FakeBackend:
+        configured = True
+        loopback = False
+
+        def auth_me(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_me",
+                status_code=200,
+                data={"user": {"email": "user@example.com", "displayName": "Emre"}},
+            )
+
+        def mobile_bootstrap(self) -> BackendResult:
+            return BackendResult(ok=True, request_id="req_bootstrap", status_code=200, data={"devices": []})
+
+        def health(self) -> BackendResult:
+            return BackendResult(ok=True, request_id="req_health", status_code=200, data={"dependencies": {}})
+
+        def brain_profile(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_brain",
+                status_code=200,
+                data={"chat": {"serverBrainName": "Elyan"}},
+            )
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    response = runtime.backend_auth_sync_session(
+        {
+            "signedIn": True,
+            "id": "user-1",
+            "email": "user@example.com",
+            "displayName": "Emre",
+            "accessToken": "user-token",
+            "refreshToken": "refresh-token",
+        }
+    )
+
+    assert response["ok"] is True
+    assert response["signedIn"] is True
+    assert response["authMe"]["ok"] is True
+    assert response["mobileBootstrap"]["ok"] is True
+    assert response["brainProfile"]["ok"] is True
+    state = response["state"]
+    assert state["account"]["accessToken"] == "user-token"
+    assert state["account"]["refreshToken"] == "refresh-token"
+    assert state["account"]["email"] == "user@example.com"
+    assert state["account"]["displayName"] == "Emre"
+
+
+def test_backend_auth_sync_session_clears_local_truth_without_network_logout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "account": {
+                "accessToken": "user-token",
+                "refreshToken": "refresh-token",
+                "email": "user@example.com",
+                "displayName": "Emre",
+                "subscription": {"planCode": "solo"},
+            },
+            "controlPlane": {
+                "authMe": {"ok": True},
+                "mobileBootstrap": {"ok": True},
+                "brainProfile": {"ok": True},
+                "runtimeSession": {"ok": True},
+            },
+        }
+    )
+
+    class FakeBackend:
+        configured = True
+        loopback = False
+
+        def health(self) -> BackendResult:
+            return BackendResult(ok=True, request_id="req_health", status_code=200, data={"dependencies": {}})
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    response = runtime.backend_auth_sync_session({"signedIn": False})
+
+    assert response["ok"] is True
+    assert response["signedIn"] is False
+    assert response["authMe"]["error"] == "logged_out"
+    assert response["state"]["account"]["accessToken"] == ""
+    assert response["state"]["account"]["refreshToken"] == ""
+    assert response["state"]["controlPlane"]["authMe"] is None
+    assert response["state"]["controlPlane"]["mobileBootstrap"] is None
+
+
 def test_runtime_handle_sanitizes_state_tokens_for_transport(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

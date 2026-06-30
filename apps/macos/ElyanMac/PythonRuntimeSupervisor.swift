@@ -4,6 +4,9 @@ import Foundation
 final class PythonRuntimeSupervisor: ObservableObject {
     private let bridge = RuntimeBridgeSwift()
     private var canQueryRuntimeSession = false
+    private var pendingAuthSession: ElyanAuthSession?
+    private var pendingAuthSync = false
+    private var lastAuthFingerprint = ""
     @Published var isRunning = false
     @Published var runtimeReady = false
     @Published var backendReady = false
@@ -55,12 +58,15 @@ final class PythonRuntimeSupervisor: ObservableObject {
         }
     }
 
-    func start() {
+    func start(initialSession: ElyanAuthSession? = nil) {
         Task {
             do {
                 try bridge.startProcess()
                 isRunning = true
                 lifecycleState = "connecting"
+                pendingAuthSession = initialSession
+                pendingAuthSync = true
+                _ = await flushPendingAuthSync()
                 await refreshAll()
                 startPollLoop()
             } catch {
@@ -84,6 +90,12 @@ final class PythonRuntimeSupervisor: ObservableObject {
         backendReady = false
         runtimeLifecycleState = ""
         lifecycleState = "stopped"
+    }
+
+    func syncAuthSession(_ session: ElyanAuthSession?) async {
+        pendingAuthSession = session
+        pendingAuthSync = true
+        _ = await flushPendingAuthSync()
     }
 
     /// Mobile-dispatched tasks are normally picked up automatically by the
@@ -141,6 +153,7 @@ final class PythonRuntimeSupervisor: ObservableObject {
     /// Lightweight refresh used by the poll loop: a single `runtime.bootstrap`
     /// call carries connection state, sign-in state, and the live task inbox.
     private func refreshConnectionAndTasks() async {
+        _ = await flushPendingAuthSync()
         do {
             let response = try await bridge.request(capability: "runtime.bootstrap", timeoutSeconds: 30)
             applyBootstrap(response)
@@ -148,6 +161,31 @@ final class PythonRuntimeSupervisor: ObservableObject {
         } catch {
             lastError = safeMessage(error)
             lifecycleState = runtimeReady ? "ready_with_backend_issue" : "degraded"
+        }
+    }
+
+    private func flushPendingAuthSync() async -> Bool {
+        guard isRunning, pendingAuthSync else { return false }
+        let session = pendingAuthSession
+        let fingerprint = authFingerprint(for: session)
+        guard fingerprint != lastAuthFingerprint else {
+            pendingAuthSync = false
+            return false
+        }
+
+        do {
+            let response = try await bridge.request(
+                capability: "backend.auth_sync_session",
+                payload: authPayload(for: session),
+                timeoutSeconds: 20
+            )
+            pendingAuthSync = false
+            lastAuthFingerprint = fingerprint
+            applySyncedAuth(response)
+            return true
+        } catch {
+            lastError = safeMessage(error)
+            return false
         }
     }
 
@@ -169,9 +207,15 @@ final class PythonRuntimeSupervisor: ObservableObject {
     }
 
     func refreshAll() async {
+        let didSyncAuth = await flushPendingAuthSync()
         do {
             let bootstrap = try await bridge.request(capability: "runtime.bootstrap", timeoutSeconds: 45)
             applyBootstrap(bootstrap)
+
+            if didSyncAuth {
+                lifecycleState = isOperational ? "connected" : (runtimeReady ? "runtime_ready" : "degraded")
+                return
+            }
 
             let mobile = try await bridge.request(capability: "backend.mobile_bootstrap", timeoutSeconds: 25)
             applyMobileBootstrap(mobile)
@@ -191,6 +235,20 @@ final class PythonRuntimeSupervisor: ObservableObject {
             lastError = safeMessage(error)
             lifecycleState = runtimeReady ? "ready_with_backend_issue" : "degraded"
         }
+    }
+
+    private func applySyncedAuth(_ response: RuntimeResponse) {
+        signedIn = response.ok && ((response.resultMap["signedIn"] as? Bool) ?? signedIn)
+        if let auth = response.resultMap["authMe"] as? [String: Any] {
+            applyAuthMap(auth)
+        }
+        if let mobile = response.resultMap["mobileBootstrap"] as? [String: Any] {
+            applyMobileBootstrapMap(mobile)
+        }
+        if let session = response.resultMap["runtimeSession"] as? [String: Any] {
+            applyRuntimeSessionMap(session)
+        }
+        lifecycleState = isOperational ? "connected" : (runtimeReady ? "runtime_ready" : "degraded")
     }
 
     func createPairingSession() async {
@@ -260,6 +318,31 @@ final class PythonRuntimeSupervisor: ObservableObject {
         }
     }
 
+    private func authPayload(for session: ElyanAuthSession?) -> [String: Any] {
+        guard let session else {
+            return ["signedIn": false]
+        }
+        return [
+            "signedIn": true,
+            "id": session.id,
+            "email": session.email,
+            "displayName": session.displayName,
+            "accessToken": session.accessToken,
+            "refreshToken": session.refreshToken,
+        ]
+    }
+
+    private func authFingerprint(for session: ElyanAuthSession?) -> String {
+        guard let session else { return "signed_out" }
+        return [
+            session.id,
+            session.email,
+            session.displayName,
+            session.accessToken,
+            session.refreshToken,
+        ].joined(separator: "|")
+    }
+
     private func handleUnsolicited(_ response: RuntimeResponse) {
         if response.capability == "bridge.ready" {
             runtimeReady = response.ok
@@ -301,6 +384,14 @@ final class PythonRuntimeSupervisor: ObservableObject {
         }
     }
 
+    private func applyAuthMap(_ auth: [String: Any]) {
+        if bool(auth["ok"]) {
+            signedIn = true
+        } else if !signedIn, let error = auth["error"] as? [String: Any], let message = string(error["message"]) {
+            lastError = message
+        }
+    }
+
     private func applyMobileBootstrap(_ response: RuntimeResponse) {
         backendReady = backendReady || response.ok
         let backendResult = response.resultMap["result"] as? [String: Any] ?? response.resultMap
@@ -313,10 +404,29 @@ final class PythonRuntimeSupervisor: ObservableObject {
         }
     }
 
+    private func applyMobileBootstrapMap(_ mobile: [String: Any]) {
+        backendReady = backendReady || bool(mobile["ok"])
+        let backendResult = mobile["result"] as? [String: Any] ?? mobile
+        let data = backendResult["data"] as? [String: Any] ?? backendResult
+        if data["user"] is [String: Any] {
+            signedIn = true
+        }
+        if bool(mobile["ok"]) {
+            lifecycleState = runtimeReady ? "connected" : lifecycleState
+        }
+    }
+
     private func applyRuntimeSession(_ response: RuntimeResponse) {
         let result = response.resultMap
         let runtime = result["runtime"] as? [String: Any] ?? result
         runtimeReady = response.ok || bool(runtime["ready"])
+        runtimeLifecycleState = string(runtime["lifecycleState"]) ?? runtimeLifecycleState
+        lifecycleState = isOperational ? "connected" : lifecycleState
+    }
+
+    private func applyRuntimeSessionMap(_ session: [String: Any]) {
+        let runtime = session["runtime"] as? [String: Any] ?? session
+        runtimeReady = bool(session["ok"]) || bool(runtime["ready"])
         runtimeLifecycleState = string(runtime["lifecycleState"]) ?? runtimeLifecycleState
         lifecycleState = isOperational ? "connected" : lifecycleState
     }

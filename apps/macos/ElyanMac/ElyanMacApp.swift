@@ -28,7 +28,7 @@ struct RootView: View {
             }
         }
         .task {
-            appState.supervisor.start()
+            appState.supervisor.start(initialSession: backend.session)
             // Best-effort silent refresh on launch so a stale access token
             // doesn't make a logged-in user look logged out.
             if backend.isSignedIn {

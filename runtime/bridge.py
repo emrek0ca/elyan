@@ -569,6 +569,7 @@ def _runtime_advertised_capabilities() -> list[str]:
             "backend.auth_avatar_delete",
             "backend.auth_delete_account",
             "backend.auth_oauth_login",
+            "backend.auth_sync_session",
             "backend.device_deactivate",
         }
     )
@@ -8571,6 +8572,105 @@ class RuntimeBridge:
         self._log_backend_result("auth_me", result)
         return {"ok": result.ok, "result": result.to_dict()}
 
+    def backend_auth_sync_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        signed_in = payload.get("signedIn") is True
+        access_token = str(payload.get("accessToken", "") or "").strip()
+        refresh_token = str(payload.get("refreshToken", "") or "").strip()
+        current_account = _map_from(STATE.snapshot().get("account"))
+        current_access_token = str(current_account.get("accessToken", "") or "").strip()
+
+        if not signed_in or not access_token:
+            self._invalidate_runtime_register_retry()
+            self._stop_runtime_websocket()
+            STATE.update_state(
+                {
+                    "account": {
+                        "accessToken": "",
+                        "refreshToken": "",
+                        "email": "",
+                        "displayName": "",
+                        "subscription": {},
+                    },
+                    "controlPlane": {
+                        "authMe": None,
+                        "mobileBootstrap": None,
+                        "brainProfile": None,
+                        "runtimeSession": None,
+                    },
+                }
+            )
+            health = self.backend.health()
+            self._log_backend_result("health", health)
+            return {
+                "ok": True,
+                "signedIn": False,
+                "authMe": BackendResult(
+                    ok=False,
+                    request_id=_request_id(),
+                    status_code=401,
+                    data=None,
+                    error="logged_out",
+                ).to_dict(),
+                "mobileBootstrap": BackendResult(
+                    ok=False,
+                    request_id=_request_id(),
+                    status_code=401,
+                    data=None,
+                    error="logged_out",
+                ).to_dict(),
+                "health": health.to_dict(),
+                "brainProfile": BackendResult(
+                    ok=False,
+                    request_id=_request_id(),
+                    status_code=401,
+                    data=None,
+                    error="logged_out",
+                ).to_dict(),
+                "runtimeSession": BackendResult(
+                    ok=False,
+                    request_id=_request_id(),
+                    status_code=401,
+                    data=None,
+                    error="logged_out",
+                ).to_dict(),
+                "controlPlane": self._control_plane_snapshot(),
+                "state": STATE.snapshot(),
+                "runtime": self.status(),
+            }
+
+        if current_access_token and current_access_token != access_token:
+            self._invalidate_runtime_register_retry()
+            self._stop_runtime_websocket()
+
+        self._apply_auth_result_truth(
+            {
+                "user": {
+                    "id": str(payload.get("id", "") or "").strip(),
+                    "email": str(payload.get("email", "") or "").strip(),
+                    "displayName": str(payload.get("displayName", "") or payload.get("name", "") or "").strip(),
+                },
+                "tokens": {
+                    "accessToken": access_token,
+                    "refreshToken": refresh_token,
+                },
+            }
+        )
+        hydrated = self._hydrate_backend_truth()
+        self._start_runtime_register_retry_if_needed()
+        return {
+            "ok": True,
+            "signedIn": True,
+            "hydrationOk": bool(hydrated.get("ok")),
+            "authMe": hydrated["authMe"],
+            "mobileBootstrap": hydrated["mobileBootstrap"],
+            "health": hydrated["health"],
+            "brainProfile": hydrated["brainProfile"],
+            "runtimeSession": hydrated["runtimeSession"],
+            "controlPlane": hydrated["controlPlane"],
+            "state": hydrated["state"],
+            "runtime": self.status(),
+        }
+
     def _hydrate_backend_truth(self) -> dict[str, Any]:
         auth_me = self.backend.auth_me()
         mobile_bootstrap = self.backend.mobile_bootstrap()
@@ -10920,6 +11020,8 @@ class RuntimeBridge:
                 result = self.backend_auth_register(payload)
             elif capability == "backend.auth_refresh":
                 result = self.backend_auth_refresh()
+            elif capability == "backend.auth_sync_session":
+                result = self.backend_auth_sync_session(payload)
             elif capability == "backend.auth_logout":
                 result = self.backend_auth_logout()
             elif capability == "backend.auth_delete_account":

@@ -9,8 +9,14 @@ final class AppState: ObservableObject {
 
     init() {
         let backend = ElyanBackend()
+        let supervisor = PythonRuntimeSupervisor()
         self.backend = backend
         self.chat = ChatStore(backend: backend)
-        self.supervisor = PythonRuntimeSupervisor()
+        self.supervisor = supervisor
+        backend.onSessionChanged = { session in
+            Task { @MainActor in
+                await supervisor.syncAuthSession(session)
+            }
+        }
     }
 }

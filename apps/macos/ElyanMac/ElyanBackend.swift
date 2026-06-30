@@ -25,6 +25,7 @@ final class ElyanBackend: ObservableObject {
 
     @Published private(set) var session: ElyanAuthSession?
     var isSignedIn: Bool { session != nil }
+    var onSessionChanged: ((ElyanAuthSession?) -> Void)?
 
     // MARK: - Lifecycle
 
@@ -467,11 +468,13 @@ final class ElyanBackend: ObservableObject {
         session = updated
         let data = try encoder.encode(updated)
         Self.writeKeychain(data: data)
+        onSessionChanged?(updated)
     }
 
     private func clearSession() throws {
         session = nil
         Self.deleteKeychain()
+        onSessionChanged?(nil)
     }
 
     private static func loadSessionFromKeychain() -> ElyanAuthSession? {
