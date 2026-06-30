@@ -49,9 +49,29 @@ export type StructuredResponseDecision = {
   primaryShape: "prose" | "list" | "table" | "chart" | "math_surface_3d" | "math" | "svg" | "document";
   primaryBlockType: "text" | "table" | "chart" | "math_surface_3d" | "math" | "svg" | "document_block";
   tablePolicy: "forbidden" | "explicit_only";
-  widgetPolicy: "none" | "single_primary_widget";
+  // "single_primary_widget" → explicit request, force exactly one widget.
+  // "proactive_optional"    → no explicit request, but the model MAY emit one
+  //                           widget when the answer content genuinely warrants
+  //                           it (balanced proactive). "none" → stay prose
+  //                           (user explicitly asked for prose/list).
+  widgetPolicy: "none" | "single_primary_widget" | "proactive_optional";
   reasons: string[];
 };
+
+// Strong signals that the user explicitly wants plain prose / a bullet list, so
+// we should NOT proactively reach for a widget even if the topic looks visual.
+const EXPLICIT_PROSE_PREFERENCE_PATTERNS = [
+  /\b(düz yazı|duz yazi|paragraf olarak|paragraf halinde|madde madde|bullet|kısaca|kisaca|kısa(ca)? (anlat|açıkla|özetle)|tek c[uü]mle|sadece (yaz|anlat|söyle|soyle))\b/i,
+  /\b(in plain text|as prose|in a paragraph|just explain|in words only|no (table|chart|diagram|graph))\b/i,
+];
+
+export function prefersPlainProseExplicitly(prompt: string): boolean {
+  const normalized = compactText(prompt);
+  if (!normalized) {
+    return false;
+  }
+  return EXPLICIT_PROSE_PREFERENCE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 
 export function isExplicitTableRequest(prompt: string): boolean {
   const normalized = compactText(prompt);
@@ -201,15 +221,32 @@ export function decideStructuredResponseDecision(input: {
     };
   }
 
-  if (shouldPreferPlainListOrProse(prompt)) {
-    reasons.push("plain_list_or_prose_preferred");
+  // No explicit widget request. Balanced-proactive default: let the model emit
+  // ONE widget when the actual answer content is genuinely visual (a dataset, a
+  // numeric series/trend, an equation, a process diagram) — the model sees the
+  // content a keyword classifier cannot. Unless the user explicitly asked for
+  // plain prose / a bullet list, in which case we stay text-only.
+  const wantsPlainProse = prefersPlainProseExplicitly(prompt);
+  if (wantsPlainProse) {
+    reasons.push("explicit_prose_preference");
+    return {
+      primaryShape: "prose",
+      primaryBlockType: "text",
+      tablePolicy: "forbidden",
+      widgetPolicy: "none",
+      reasons,
+    };
   }
 
+  reasons.push("proactive_visuals_allowed");
   return {
     primaryShape: "prose",
     primaryBlockType: "text",
-    tablePolicy: "forbidden",
-    widgetPolicy: "none",
+    // Tables stay opt-in even when proactive: charts/math/diagrams are the
+    // proactive surfaces; tables remain the most over-used so they require a
+    // genuine multi-row dataset (enforced in the prompt), not a forbidden state.
+    tablePolicy: "explicit_only",
+    widgetPolicy: "proactive_optional",
     reasons,
   };
 }

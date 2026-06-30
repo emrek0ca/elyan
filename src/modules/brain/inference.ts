@@ -1470,9 +1470,11 @@ function buildStructuredDataPromptBlock(
       canonicalSurface: "blocks",
       legacyContent: "fallback_only",
       instruction:
-        responseDecision.primaryBlockType === "text"
-          ? "Render as one clean text block worth of prose or short bullets. Do not create a table/widget unless later evidence makes it explicit, and never expose raw JSON as the visible answer."
-          : `Render as one primary ${responseDecision.primaryBlockType} typed block. Do not duplicate the same content as prose, markdown, or a second JSON block.`,
+        responseDecision.primaryBlockType !== "text"
+          ? `Render as one primary ${responseDecision.primaryBlockType} typed block. Do not duplicate the same content as prose, markdown, or a second JSON block.`
+          : responseDecision.widgetPolicy === "proactive_optional"
+            ? "Default to one clean text block of prose or short bullets. BUT when your actual answer is genuinely visual — a multi-row dataset, a numeric series/trend/distribution, a plottable function, an equation/derivation, or a process/architecture — emit ONE matching typed block (table/chart/math/math_surface_3d/svg) instead of describing it in words. At most one widget; never duplicate its content as prose; never expose raw JSON as the visible answer. Simple, factual, or conversational answers stay prose."
+            : "Render as one clean text block worth of prose or short bullets. Do not create a table/widget, and never expose raw JSON as the visible answer.",
     },
     conversationContinuity:
       context?.continuitySummary &&
@@ -1650,12 +1652,18 @@ function buildDataUnderstandingQualityPromptBlock(
     intent === "document" ||
     resolveAttachmentIntentMode(input) === "semantic_edit" ||
     resolveAttachmentIntentMode(input) === "export";
+  // Balanced-proactive: no explicit widget request, but the model may reach for
+  // ONE visual when the answer content genuinely warrants it.
+  const proactiveVisuals = responseDecision.widgetPolicy === "proactive_optional";
 
   return [
     "Data understanding and quality protocol:",
     `- grounding level: ${groundingLevel}; intent=${intent}; response_language=${responseLanguage}`,
     `- response presentation decision: shape=${responseDecision.primaryShape}; primary_block=${responseDecision.primaryBlockType}; table_policy=${responseDecision.tablePolicy}; widget_policy=${responseDecision.widgetPolicy}; reasons=${responseDecision.reasons.join("|") || "default_prose"}`,
     "- obey the response presentation decision unless the user explicitly changes the requested output type in the current turn",
+    proactiveVisuals
+      ? "- PROACTIVE VISUAL POLICY (balanced): you are NOT limited to prose. When your answer is genuinely better as a visual, emit ONE primary typed block on your own initiative — a chart for numeric series/trends/distributions/comparisons or a plottable function, a table for a real multi-row/multi-column dataset, a math block for an equation/derivation/step solution, math_surface_3d for a z=f(x,y) surface, or an svg for a process/flow/architecture/geometry. Choose based on the ACTUAL content of your answer, not on keywords in the question. Hard limits: at most ONE widget per reply; never duplicate the widget's content as prose; if the answer is simple, factual, opinion, or conversational, stay prose. Quality over quantity — a visual must add real understanding."
+      : "- response stays prose-only for this turn (the user asked for plain text or a list); do not emit chart/table/math/svg/document widgets.",
     "- mobile render contract: every user-visible answer is block-first. Ordinary prose becomes one clean text block; rich output becomes exactly one primary typed block plus at most one short explanatory text block. Never show raw JSON, schema labels, or duplicate markdown copies to the user.",
     '- typed block v2 contract: rich content must be emitted as valid JSON-compatible block objects only. Never put arithmetic expressions in numeric fields such as y/value; either compute the number before emitting points/series, use chartType "function" for 2D functions, or use math_surface_3d for z=f(x,y) surfaces.',
     '- Elyan capability language: understand the user intent first, then choose exactly one primary capability surface. document/report/PDF/DOCX/design outputs use document_block; tables/XLSX use table; graph/plot/visualize uses chart; z=f(x,y) 3D/4D surfaces use math_surface_3d; math/LaTeX/solve uses math. Use prose only for explanation or clarification, never as the only output when a typed widget is requested.',
@@ -1670,19 +1678,29 @@ function buildDataUnderstandingQualityPromptBlock(
       : "- if tabular evidence is requested but not available as a clean table, summarize the visible rows instead of inventing cells",
     explicitTableRequest
       ? '- the user explicitly asked for a table: emit ONE {"type":"table"} block only if the data genuinely fits stable rows/columns, otherwise answer in prose. Use columns:string[], rows:string[][], optional title, summary, caption, totalRowCount, density, highlightRules, interactions:["sort","copy","share","fullscreen"]. For long tables include the most useful rows in previewRows and set totalRowCount; do not duplicate the full table as markdown prose.'
-      : "- DEFAULT TO PROSE OR A SHORT BULLET LIST. Do NOT use a table for definitions, explanations, single facts, comparisons of two items, summaries, opinions, step-by-step instructions, or simple questions. Use a table ONLY when the user explicitly asks for one or the answer is inherently a multi-row dataset. Never emit more than one table in a reply, and never repeat a table you already produced.",
+      : proactiveVisuals
+        ? '- TABLE (proactive, conservative): you MAY emit ONE {"type":"table"} block when the answer is genuinely a multi-row dataset or a structured comparison of 3+ items across 2+ attributes. Do NOT table definitions, single facts, two-item comparisons, summaries, opinions, or step lists — those stay prose. Use columns:string[], rows:string[][], optional title/summary/caption, interactions:["sort","copy","share","fullscreen"]. One table max; never duplicate it as markdown prose.'
+        : "- DEFAULT TO PROSE OR A SHORT BULLET LIST. Do NOT use a table for definitions, explanations, single facts, comparisons of two items, summaries, opinions, step-by-step instructions, or simple questions. Use a table ONLY when the user explicitly asks for one or the answer is inherently a multi-row dataset. Never emit more than one table in a reply, and never repeat a table you already produced.",
     explicitMathSurface3DRequest
       ? '- 3D/4D mathematical surface request: emit ONE {"type":"math_surface_3d","expression":"x^3 + y^2","variables":["x","y"],"range":{"x":[-2,2],"y":[-2,2]},"resolution":80,"zLabel":"z = x^3 + y^2","colorBy":"z","mode":"surface","interactive":true} block. For 4D requests set colorBy:"gradientMagnitude". Do not emit sampled points, markdown tables, SVG, image URLs, or prose-only explanations for this request.'
-      : "- use math_surface_3d only for explicit z=f(x,y), 3D surface, mesh, or 4D color-channel graph requests.",
+      : proactiveVisuals
+        ? '- 3D SURFACE (proactive): when the answer centers on a two-variable function z=f(x,y) or a surface/field that a 3D view explains far better than text, emit ONE {"type":"math_surface_3d","expression":"x^2 + y^2","variables":["x","y"],"range":{"x":[-3,3],"y":[-3,3]},"resolution":80,"zLabel":"z","colorBy":"z","mode":"surface","interactive":true} block. Otherwise prose. Do not force it for ordinary single-variable math.'
+        : "- use math_surface_3d only for explicit z=f(x,y), 3D surface, mesh, or 4D color-channel graph requests.",
     explicitChartRequest && !explicitMathSurface3DRequest
       ? '- chart/graph request: emit a typed {"type":"chart"} block as the primary visual output. For sampled data charts use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values, points, or series where every y/value is a real number, not a formula string. Include title, xLabel, yLabel, unit, caption, interactions:["tooltip","trackball","zoom","pan","type_switch","fullscreen","share"] when relevant, and theme:"minimal"|"report". For 2D function graphs use chartType "function", expression, variables ["x"], range {"x":[min,max]}, xLabel, yLabel, and optional caption. For 3D surface/mesh requests prefer chartType "surface3d" or "mesh" with expression "x^2 + y^2", variables ["x","y"], range {"x":[min,max],"y":[min,max]}; use bounded points [{x,y,z}] only when the data is already sampled. For current/live values, extract the numeric series from PUBLIC WEB GROUNDING evidence and plot it as a "line"/"bar" chart with dated labels, unit, and caption. If no grounding data is available, say the live data could not be retrieved instead of emitting a needs_desktop block.'
-      : "- do not generate a chart block unless the user asks for a graph/plot/visualization or the answer is clearly numeric-series data.",
+      : proactiveVisuals
+        ? '- CHART (proactive, encouraged): when your answer contains numeric series, trends over time, distributions, breakdowns, comparisons of measured values, or a plottable function, emit ONE {"type":"chart"} block instead of listing the numbers in prose. For sampled data use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values or points where every y/value is a REAL number (never a formula string); include title, xLabel, yLabel, unit, caption, interactions:["tooltip","zoom","pan","fullscreen"]. For a 2D function use chartType "function", expression, variables ["x"], range {"x":[min,max]}. Pull live/current numbers only from PUBLIC WEB GROUNDING evidence; if none, say so in prose instead of charting invented data. Otherwise (no real numeric content) stay prose.'
+        : "- do not generate a chart block unless the user asks for a graph/plot/visualization or the answer is clearly numeric-series data.",
     explicitMathOrLatexRequest
       ? '- math/LaTeX request: when a formula, derivation, equation, or final expression is important, emit a typed {"type":"math","title":"...","content":"...","format":"latex","displayMode":true,"result":"...","steps":[{"label":"...","content":"...","note":"..."}]} block. Keep LaTeX renderer-safe: use \\frac, ^, _, \\sqrt, \\begin{aligned} only when needed; do not wrap the same formula as markdown prose. Use steps only when they add value.'
-      : "- use inline prose for ordinary numbers; reserve math blocks for explicit math, formulas, equations, proofs, or LaTeX requests.",
+      : proactiveVisuals
+        ? '- MATH (proactive): when a formula, derivation, equation, or step-by-step solution is central to the answer, emit ONE typed {"type":"math","title":"...","content":"...","format":"latex","displayMode":true,"result":"...","steps":[{"label":"...","content":"...","note":"..."}]} block (renderer-safe LaTeX: \\frac, ^, _, \\sqrt, \\begin{aligned}). Use inline prose for ordinary numbers; reserve the block for genuinely mathematical content. Do not also repeat the formula as prose.'
+        : "- use inline prose for ordinary numbers; reserve math blocks for explicit math, formulas, equations, proofs, or LaTeX requests.",
     explicitSvgRequest
       ? '- SVG/vector request: emit a typed {"type":"svg","title":"...","caption":"...","svg":"<svg ...>...</svg>","viewBox":"0 0 W H","exportFormats":["svg","png"]} block. Use self-contained safe SVG only: no script, foreignObject, external fetches, event handlers, or hidden links. Use a real viewBox, scalable vector geometry, balanced spacing, accessible title/desc inside the SVG, and mobile-friendly dimensions.'
-      : "- do not emit SVG unless the user explicitly asks for vector/diagram/geometric drawing output.",
+      : proactiveVisuals
+        ? '- SVG DIAGRAM (proactive): when explaining a process, workflow, system architecture, hierarchy, timeline, or geometric relationship that a diagram clarifies more than words, emit ONE {"type":"svg","title":"...","caption":"...","svg":"<svg ...>...</svg>","viewBox":"0 0 W H","exportFormats":["svg","png"]} block. Safe self-contained SVG only: no script, foreignObject, external fetch, event handlers, or links; real viewBox, scalable geometry, readable labels, mobile-friendly size. Otherwise prose.'
+        : "- do not emit SVG unless the user explicitly asks for vector/diagram/geometric drawing output.",
     attachmentInsightMetadata.attachmentInsightVisualCount > 0
       ? "- image/OCR evidence is available as derived visual notes; answer from visible text and visual summaries only"
       : "- do not claim image details unless they are present in derived attachment evidence",

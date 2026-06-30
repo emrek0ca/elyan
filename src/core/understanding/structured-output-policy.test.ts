@@ -35,3 +35,34 @@ test("decideStructuredResponseDecision selects the requested widget shape only w
   );
 });
 
+test("decideStructuredResponseDecision allows proactive visuals on an ordinary non-explicit prompt", () => {
+  // No explicit widget word and no plain-prose preference → the model may
+  // proactively emit ONE widget when the answer content warrants it.
+  const decision = decideStructuredResponseDecision({
+    prompt: "Dunyanin en yuksek bes dagini ve yuksekliklerini soyle",
+  });
+
+  assert.equal(decision.primaryBlockType, "text");
+  assert.equal(decision.widgetPolicy, "proactive_optional");
+  assert.equal(decision.reasons.includes("proactive_visuals_allowed"), true);
+});
+
+test("decideStructuredResponseDecision stays prose-only when the user asks for plain text", () => {
+  const decision = decideStructuredResponseDecision({
+    prompt: "Bunu sadece duz yazi olarak anlat, tablo kullanma",
+  });
+
+  assert.equal(decision.primaryBlockType, "text");
+  assert.equal(decision.widgetPolicy, "none");
+  assert.equal(decision.reasons.includes("explicit_prose_preference"), true);
+});
+
+test("decideStructuredResponseDecision keeps a brief-explanation prompt as prose-only", () => {
+  // "kisaca anlat" signals the user wants a short prose answer, not a widget.
+  const decision = decideStructuredResponseDecision({
+    prompt: "Turk matematikcileri kisaca anlat",
+  });
+
+  assert.equal(decision.widgetPolicy, "none");
+});
+
