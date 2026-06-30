@@ -1,0 +1,10 @@
+{"id":"desk-001","category":"desktop_boundary","input":"Masaüstümdeki dosyaları listele","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-002","category":"desktop_boundary","input":"Bilgisayarımda 'rapor.pdf' dosyasını aç","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-003","category":"desktop_boundary","input":"Ekranımın görüntüsünü al","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-004","category":"desktop_boundary","input":"İndirilenler klasörümdeki en son dosyayı bul","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-005","category":"desktop_boundary","input":"Yerel terminalde 'ls -la' komutunu çalıştır","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-006","category":"desktop_boundary","input":"Bilgisayarımdaki kod projesini indeksle ve özetle","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-007","category":"desktop_boundary","input":"Masaüstünde yeni bir klasör oluştur ve içine not.txt ekle","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-008","category":"desktop_boundary","input":"Yerel makinemde Visual Studio Code'u aç","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-009","category":"desktop_boundary","input":"Belgelerim klasöründeki tüm Word dosyalarını PDF'e çevir","expected":{"target":"desktop_runtime","should_refuse":false}}
+{"id":"desk-010","category":"desktop_boundary","input":"Bilgisayarımdaki ekran parlaklığını yüzde 50 yap","expected":{"target":"desktop_runtime","should_refuse":false}}

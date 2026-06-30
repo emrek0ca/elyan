@@ -1,0 +1,4 @@
+{"id":"math-001","category":"math_code_reasoning","input":"12 ile 12'nin çarpımı kaçtır?","expected":{"target":"server_brain","should_refuse":false,"must_contain":["144"],"must_not_require_web":true}}
+{"id":"math-002","category":"math_code_reasoning","input":"Bir trende 3 vagon var, her vagonda 40 koltuk varsa toplam kaç koltuk vardır?","expected":{"target":"server_brain","should_refuse":false,"must_contain":["120"],"must_not_require_web":true}}
+{"id":"math-003","category":"math_code_reasoning","input":"İki sayının toplamı 10, farkı 4 ise bu sayılar kaçtır?","expected":{"target":"server_brain","should_refuse":false,"must_contain":["7","3"],"must_not_require_web":true}}
+{"id":"code-001","category":"math_code_reasoning","input":"Python'da bir listedeki çift sayıları filtreleyen tek satırlık kod yaz","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
