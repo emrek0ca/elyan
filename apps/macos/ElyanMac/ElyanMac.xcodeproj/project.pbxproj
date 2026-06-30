@@ -44,7 +44,7 @@
 		2719DA9829A7A096CA7C71FB /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		2C6E2A8B3E70C4EBD48A2E3F /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4DF32D9114D668C52985F9F1 /* BlockViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BlockViews.swift; sourceTree = "<group>"; };
-		573305C5E86DAAF7023F6FF0 /* ElyanMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ElyanMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		573305C5E86DAAF7023F6FF0 /* Elyan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Elyan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		61AC165473B573A1A75E7B30 /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		75A59607E2D3C68DFEF1037C /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		94B5F833000C00A51BA6C17D /* RuntimeBridgeSwift.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RuntimeBridgeSwift.swift; sourceTree = "<group>"; };
@@ -150,7 +150,7 @@
 			);
 			name = ElyanMac;
 			productName = ElyanMac;
-			productReference = 573305C5E86DAAF7023F6FF0 /* ElyanMac.app */;
+			productReference = 573305C5E86DAAF7023F6FF0 /* Elyan.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */

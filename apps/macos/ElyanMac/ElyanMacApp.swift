@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct ElyanMacApp: App {
+struct ElyanApp: App {
     @StateObject private var appState = AppState()
 
     var body: some Scene {
@@ -28,6 +28,7 @@ struct RootView: View {
             }
         }
         .task {
+            appState.supervisor.start()
             // Best-effort silent refresh on launch so a stale access token
             // doesn't make a logged-in user look logged out.
             if backend.isSignedIn {

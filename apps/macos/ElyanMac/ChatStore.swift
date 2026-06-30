@@ -48,7 +48,11 @@ final class ChatStore: ObservableObject {
         lastError = ""
 
         do {
-            let dispatch = try await backend.sendChatMessage(prompt: trimmed, sessionId: sessionId)
+            let dispatch = try await backend.sendChatMessage(
+                prompt: trimmed,
+                sessionId: sessionId,
+                source: "desktop"
+            )
             if let sid = dispatch.sessionId, !sid.isEmpty {
                 sessionId = sid
             }

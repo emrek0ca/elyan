@@ -56,7 +56,7 @@ actor ElyanSSEClient {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
             request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-            request.setValue("ElyanMac/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
+            request.setValue("Elyan/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
 
             do {
                 let (bytes, response) = try await session.bytes(for: request)

@@ -136,21 +136,25 @@ final class ElyanBackend: ObservableObject {
 
     // MARK: - Sessions / History
 
-    /// GET /v1/sessions — list of conversation sessions, newest first.
-    func getSessions(limit: Int = 40, offset: Int = 0) async throws -> [ElyanSession] {
-        let raw = try await internalGetJSON(path: "/v1/sessions?limit=\(limit)&offset=\(offset)", requireAuth: true)
+    /// GET /v1/chat/sessions — list of conversation sessions, newest first.
+    func getSessions(limit: Int = 40, cursor: String? = nil) async throws -> [ElyanSession] {
+        var queryItems = ["limit=\(max(1, min(limit, 20)))"]
+        if let cursor, !cursor.isEmpty {
+            queryItems.append("cursor=\(cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cursor)")
+        }
+        let raw = try await internalGetJSON(path: "/v1/chat/sessions?\(queryItems.joined(separator: "&"))", requireAuth: true)
         return Self.parseSessions(raw)
     }
 
-    /// GET /v1/sessions/{id}/messages
+    /// GET /v1/chat/sessions/{id}/messages
     func getSessionMessages(sessionId: String) async throws -> [ElyanSessionMessage] {
-        let raw = try await internalGetJSON(path: "/v1/sessions/\(sessionId)/messages", requireAuth: true)
+        let raw = try await internalGetJSON(path: "/v1/chat/sessions/\(sessionId)/messages", requireAuth: true)
         return Self.parseSessionMessages(raw)
     }
 
-    /// DELETE /v1/sessions/{id}
+    /// DELETE /v1/chat/sessions/{id}
     func deleteSession(sessionId: String) async throws {
-        _ = try await deleteJSON(path: "/v1/sessions/\(sessionId)", requireAuth: true)
+        _ = try await deleteJSON(path: "/v1/chat/sessions/\(sessionId)", requireAuth: true)
     }
 
     // MARK: - Profile
@@ -188,10 +192,14 @@ final class ElyanBackend: ObservableObject {
 
     // MARK: - Chat
 
-    /// POST /v1/chat/messages with the exact body shape the mobile client uses.
+    /// POST /v1/chat/messages with the exact body shape the desktop chat router expects.
     /// Returns the `task` object that carries the id we must use to subscribe
     /// to /v1/realtime/stream?taskId=...
-    func sendChatMessage(prompt: String, sessionId: String? = nil) async throws -> ChatDispatch {
+    func sendChatMessage(
+        prompt: String,
+        sessionId: String? = nil,
+        source: String = "desktop"
+    ) async throws -> ChatDispatch {
         guard let current = session else { throw ElyanBackendError.notAuthenticated }
 
         let userBlock: [String: Any] = [
@@ -200,16 +208,22 @@ final class ElyanBackend: ObservableObject {
             "visibility": "user_visible"
         ]
         var body: [String: Any] = [
+            "content": prompt,
             "blocks": [userBlock],
-            "source": "mobile",
+            "source": source,
             "requestedCapabilities": [],
             "metadata": [
-                "source": "mobile",
+                "source": source,
+                "desktopTransport": [
+                    "rawPrivateDataUploaded": false,
+                    "derivedContextOnly": true,
+                    "scope": "user_chat_session"
+                ],
                 "renderContract": [
                     "version": "elyan_blocks.v2",
                     "mode": "block_first",
                     "canonicalSurface": "blocks",
-                    "legacyContent": "none"
+                    "legacyContent": "content"
                 ],
                 "userBlocks": [userBlock]
             ]
@@ -394,7 +408,7 @@ final class ElyanBackend: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("ElyanMac/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue("Elyan/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
         return request
     }
 

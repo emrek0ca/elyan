@@ -3,9 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_PATH="$ROOT_DIR/apps/macos/ElyanMac/ElyanMac.xcodeproj"
-DERIVED_DATA_PATH="$ROOT_DIR/apps/macos/ElyanMac/build-debug"
-APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug/ElyanMac.app"
-APP_NAME="ElyanMac"
+DERIVED_DATA_PATH="$ROOT_DIR/apps/macos/ElyanMac/build-release"
+APP_PATH="$DERIVED_DATA_PATH/Build/Products/Release/Elyan.app"
+APP_NAME="Elyan"
+TARGET_NAME="ElyanMac"
 
 if [[ "${1:-}" == "--help" ]]; then
   printf 'Usage: %s [--verify|--logs]\n' "$0"
@@ -13,23 +14,33 @@ if [[ "${1:-}" == "--help" ]]; then
 fi
 
 pkill -x "$APP_NAME" 2>/dev/null || true
+pkill -x "ElyanMac" 2>/dev/null || true
+
+rm -rf "$DERIVED_DATA_PATH"
 
 xcodebuild \
   -project "$PROJECT_PATH" \
-  -scheme "$APP_NAME" \
-  -configuration Debug \
+  -scheme "$TARGET_NAME" \
+  -configuration Release \
   -derivedDataPath "$DERIVED_DATA_PATH" \
   build \
   CODE_SIGNING_ALLOWED=NO
 
+rm -rf "$DERIVED_DATA_PATH/Build/Products/Release/ElyanMac.app"
+
 /usr/bin/open -n "$APP_PATH"
 
 if [[ "${1:-}" == "--verify" ]]; then
-  sleep 3
+  for _ in {1..20}; do
+    if pgrep -x "$APP_NAME" >/dev/null && pgrep -fl "runtime/bridge.py" >/dev/null; then
+      break
+    fi
+    sleep 1
+  done
   pgrep -x "$APP_NAME" >/dev/null
   pgrep -fl "runtime/bridge.py" >/dev/null
 fi
 
 if [[ "${1:-}" == "--logs" ]]; then
-  /usr/bin/log stream --info --predicate 'process == "ElyanMac"'
+  /usr/bin/log stream --info --predicate 'process == "Elyan"'
 fi
