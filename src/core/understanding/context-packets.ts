@@ -140,7 +140,7 @@ const DEVICE_RELEVANCE_PATTERN =
 const HEALTH_RELEVANCE_PATTERN =
   /\b(sağlık|saglik|health|uyku|sleep|enerji|energy|yorgun|dinlen|adım|adim|steps?|spor|egzersiz|workout|fitness|stres|stress|odak|focus|rutin|wellbeing|iyi oluş|iyi olus|tempo)\b/i;
 const LOCATION_RELEVANCE_PATTERN =
-  /\b(nerede|konum|location|şehir|sehir|ilçe|ilce|yakın|yakin|çevre|cevre|mekan|restoran|yemek|hava|weather|sıcaklık|sicaklik|gezi|seyahat|rota|ulaşım|ulasim|öner|oner|meşhur|meshur|kayseri|hatay|istanbul|ankara|izmir)\b/i;
+  /\b(nerede|neredeyim|konum|location|şehir|sehir|ilçe|ilce|yakın|yakin|çevre|cevre|mekan|restoran|yemek|hava|weather|sıcaklık|sicaklik|gezi|seyahat|rota|ulaşım|ulasim|öner|oner|meşhur|meshur|kayseri|hatay|istanbul|ankara|izmir)\b/i;
 const SCHEDULE_RELEVANCE_PATTERN =
   /\b(takvim|calendar|program|plan|planla|saat|time|bugün|bugun|yarın|yarin|toplantı|toplanti|müsait|musait|boş|bos|deadline|son tarih|odak|focus|yoğun|yogun|rutin|ajanda|zaman)\b/i;
 const NOTIFICATION_RELEVANCE_PATTERN =
@@ -489,6 +489,7 @@ function extractWorldSignalRecords(metadata: Record<string, unknown> | undefined
   const root = readRecord(metadata);
   const compactContext = readRecord(root?.compactContext);
   const chatContext = readRecord(root?.chatContext);
+  const memorySnapshot = readRecord(root?.memorySnapshot);
   const directDerived = readRecord(root?.derivedContextDigest);
   const compactDerived = readRecord(compactContext?.derivedContextDigest);
   const chatDerived = readRecord(chatContext?.lastDerivedContextDigest);
@@ -496,6 +497,7 @@ function extractWorldSignalRecords(metadata: Record<string, unknown> | undefined
     readArray(compactDerived?.worldSignals),
     readArray(chatDerived?.worldSignals),
     readArray(directDerived?.worldSignals),
+    readArray(memorySnapshot?.recentSignals),
   ];
   const seen = new Set<string>();
   const records: Record<string, unknown>[] = [];

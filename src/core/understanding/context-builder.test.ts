@@ -788,6 +788,35 @@ test("buildContextPacketsFromMetadata exposes only relevant world context", () =
   assert.match(localPackets.find((packet) => packet.kind === "world_context")?.summary ?? "", /şehir: Kayseri/);
 });
 
+test("buildContextPacketsFromMetadata reads world signals from mobile memory snapshots", () => {
+  const packets = buildContextPacketsFromMetadata(
+    {
+      memorySnapshot: {
+        recentSignals: [
+          {
+            kind: "location",
+            summary: "Konum: İstanbul, Kadıköy, Türkiye.",
+            confidence: 0.82,
+            facts: { city: "İstanbul", district: "Kadıköy", country: "Türkiye" },
+            privacy: { precision: "coarse", backendPlaintextAllowed: true },
+          },
+        ],
+      },
+    },
+    {
+      now: new Date("2030-01-01T12:00:00.000Z"),
+      requestText: "Şu an neredeyim?",
+      intent: "chat",
+    },
+  );
+
+  assert.equal(packets.length, 1);
+  assert.equal(packets[0]?.kind, "world_context");
+  assert.equal(packets[0]?.mentionPolicy, "explicit_when_relevant");
+  assert.match(packets[0]?.summary ?? "", /İstanbul/);
+  assert.match(packets[0]?.summary ?? "", /ilçe: Kadıköy/);
+});
+
 test("buildUserContextFromMemory exposes packet flags and health safety hint", () => {
   const intent = classifyIntent({
     userId: "user_1",

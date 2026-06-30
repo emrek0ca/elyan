@@ -321,6 +321,8 @@ function sanitizeWorldSignalDigest(value: unknown) {
       const summary = readString(item, "summary");
       const confidence = readNumber(item, "confidence");
       const createdAt = readString(item, "createdAt");
+      const facts = readRecord(item.facts);
+      const privacy = readRecord(item.privacy);
       if (!kind || !summary) {
         return null;
       }
@@ -330,6 +332,8 @@ function sanitizeWorldSignalDigest(value: unknown) {
         summary: clipCompactText(summary, 140),
         ...(confidence != null ? { confidence } : {}),
         ...(createdAt ? { createdAt } : {}),
+        ...(facts ? { facts } : {}),
+        ...(privacy ? { privacy } : {}),
       };
     })
     .filter(Boolean)
@@ -426,7 +430,7 @@ export async function enrichChatMetadataForRequest(
   const freshSignals = await listFreshWorldSignals(app, {
     userId: input.userId,
     limit: 10,
-    maxAgeHours: 24,
+    maxAgeHours: 72,
   });
   freshWorldSignalDigest = freshSignals.map((signal) => ({
     signalId: signal.signalId,
@@ -437,6 +441,10 @@ export async function enrichChatMetadataForRequest(
     facts:
       signal.facts && typeof signal.facts === "object" && !Array.isArray(signal.facts)
         ? signal.facts
+        : {},
+    privacy:
+      signal.privacy && typeof signal.privacy === "object" && !Array.isArray(signal.privacy)
+        ? signal.privacy
         : {},
   }));
 

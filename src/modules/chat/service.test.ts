@@ -95,7 +95,7 @@ class WorldSignalDb {
       summary: "Enerji orta, stres yüksek.",
       confidenceBps: 860,
       facts: { energyLevel: "medium", stressLevel: "elevated" },
-      privacy: { rawDataUploaded: false, precision: "summary" },
+      privacy: { rawDataUploaded: false, precision: "summary", backendPlaintextAllowed: true },
       renderHints: {},
       visibility: "assistant_internal_by_default",
       createdAt: new Date("2030-01-01T12:00:00.000Z"),
@@ -239,6 +239,15 @@ test("enrichChatMetadataForRequest keeps fresh world signals user-scoped for ser
   assert.equal(worldSignals.length, 1);
   assert.equal(worldSignals[0]?.kind, "health");
   assert.match(String(worldSignals[0]?.summary ?? ""), /Enerji orta/);
+  assert.deepEqual(worldSignals[0]?.facts, {
+    energyLevel: "medium",
+    stressLevel: "elevated",
+  });
+  assert.deepEqual(worldSignals[0]?.privacy, {
+    rawDataUploaded: false,
+    precision: "summary",
+    backendPlaintextAllowed: true,
+  });
 });
 
 test("buildChatDispatchDeliverySnapshot preserves desktop ack and lease truth", () => {
