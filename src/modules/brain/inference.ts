@@ -3439,6 +3439,7 @@ function buildRequestBody(
   stream = false,
   visionImages: ResolvedAttachmentContextVisionImage[] = [],
   reasoningPolicy: "hidden" | "visible" = "hidden",
+  reasoningEffort: "low" | "medium" | "high" = "low",
 ) {
   if (provider === "ollama") {
     return {
@@ -3465,17 +3466,54 @@ function buildRequestBody(
     max_tokens: maxTokens,
     stream,
     // gpt-oss reasoning models emit a separate `reasoning` channel before any
-    // `content`. For chit-chat we keep it `hidden` + `low` (latency-first), so
-    // `content` arrives immediately. For thinking workloads (planning,
-    // document_generate, balanced, vision) we switch to parsed+medium so the
-    // user actually sees Elyan reason before the final answer. With limited
-    // token budgets, hidden+low avoids empty_stream_response on quick prompts.
+    // `content`. Two orthogonal dials:
+    //   • format: "parsed" when we stream a visible "düşünüyor" trace, else
+    //     "hidden" (chit-chat keeps content arriving immediately).
+    //   • effort: low/medium/high by question difficulty — HARD analytical
+    //     questions get "high" so the answer is deep, not shallow; chit-chat
+    //     stays "low" for latency. Budget guard: "high" reasoning can consume
+    //     the whole token budget and starve the content (empty_stream_response),
+    //     so we cap to "medium" when maxTokens is tight.
     ...(isReasoningChannelModel(model)
-      ? reasoningPolicy === "visible"
-        ? { reasoning_format: "parsed", reasoning_effort: "medium" }
-        : { reasoning_format: "hidden", reasoning_effort: "low" }
+      ? {
+          reasoning_format: reasoningPolicy === "visible" ? "parsed" : "hidden",
+          reasoning_effort:
+            reasoningEffort === "high" && maxTokens < 1500
+              ? "medium"
+              : reasoningEffort,
+        }
       : {}),
   };
+}
+
+/**
+ * Reasoning depth dial for gpt-oss models. HARD analytical work (planning,
+ * document generation/analysis, explicit deep-refine, or a task frame the
+ * understanding layer marked reasoningMode="deep") gets "high" so answers are
+ * thorough instead of shallow. Moderate thinking workloads get "medium".
+ * Everything else (chit-chat, fast routes) stays "low" to protect latency.
+ */
+export function resolveReasoningEffort(
+  workload: SharedBrainWorkload | undefined,
+  reasoningMode: string | undefined,
+): "low" | "medium" | "high" {
+  if (
+    reasoningMode === "deep" ||
+    workload === "planning" ||
+    workload === "document_generate" ||
+    workload === "document_analysis" ||
+    workload === "mobile_chat_deep_refine"
+  ) {
+    return "high";
+  }
+  if (
+    workload === "mobile_chat_balanced" ||
+    workload === "vision_reasoning" ||
+    workload === "image_analyze"
+  ) {
+    return "medium";
+  }
+  return "low";
 }
 
 function isReasoningChannelModel(model: string): boolean {
@@ -4558,6 +4596,13 @@ export async function generateSharedBrainReply(
         input.onDelta && shouldStreamReasoning(input.workload)
           ? "visible"
           : "hidden";
+      // Depth dial: harder questions reason at "high" effort (deeper, less
+      // shallow), chit-chat stays "low" (fast). Independent of whether the
+      // reasoning trace is shown.
+      const reasoningEffort = resolveReasoningEffort(
+        input.workload,
+        input.understandingContext?.taskFrame?.reasoningMode,
+      );
 
       for (const candidate of providerCandidates) {
         if (!candidate) {
@@ -4605,6 +4650,7 @@ export async function generateSharedBrainReply(
                         ...clientVisionImages,
                       ],
                       reasoningPolicy,
+                      reasoningEffort,
                     ),
                   },
                 ]
@@ -4623,6 +4669,7 @@ export async function generateSharedBrainReply(
                         ...clientVisionImages,
                       ],
                       reasoningPolicy,
+                      reasoningEffort,
                     ),
                   },
                 ];

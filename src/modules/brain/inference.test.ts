@@ -8,6 +8,7 @@ import {
   extractTypedJsonBlocksFromText,
   generateGovernedSharedBrainReply,
   generateSharedBrainReply,
+  resolveReasoningEffort,
 } from "./inference.js";
 
 class FakeQuery<T> {
@@ -512,6 +513,24 @@ test("createDeltaPublisher batches rapid streaming deltas without losing order",
   assert.equal(deltas[0].content, "Mer");
   assert.equal(deltas.at(-1)?.content, finalContent);
   assert.equal(deltas.map((delta) => String(delta.delta ?? "")).join(""), finalContent);
+});
+
+test("resolveReasoningEffort escalates hard analytical work to high and keeps chit-chat low", () => {
+  // Hard / deep work → deep reasoning.
+  assert.equal(resolveReasoningEffort("planning", undefined), "high");
+  assert.equal(resolveReasoningEffort("document_generate", undefined), "high");
+  assert.equal(resolveReasoningEffort("document_analysis", undefined), "high");
+  assert.equal(resolveReasoningEffort("mobile_chat_deep_refine", undefined), "high");
+  // A fast workload still escalates when the understanding layer marked the
+  // task frame as deep reasoning.
+  assert.equal(resolveReasoningEffort("mobile_chat_fast", "deep"), "high");
+  // Moderate thinking workloads → medium.
+  assert.equal(resolveReasoningEffort("mobile_chat_balanced", undefined), "medium");
+  assert.equal(resolveReasoningEffort("vision_reasoning", undefined), "medium");
+  // Chit-chat / fast routes stay low for latency.
+  assert.equal(resolveReasoningEffort("mobile_chat_fast", undefined), "low");
+  assert.equal(resolveReasoningEffort("fast_route", "fast"), "low");
+  assert.equal(resolveReasoningEffort(undefined, undefined), "low");
 });
 
 test("computeStreamVisibleText hides a complete typed JSON block from the visible stream", () => {
