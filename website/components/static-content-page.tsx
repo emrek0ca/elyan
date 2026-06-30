@@ -11,6 +11,15 @@ import type { SiteLocale } from '@/lib/locales';
 
 type StaticPageKey = Exclude<PageKey, 'home'>;
 
+function extractEffectiveDate(intro: string) {
+  const match = intro.match(/(?:Yürürlük tarihi|Effective date):\s*([^.]*)\./i);
+  return match?.[1]?.trim() || null;
+}
+
+function cleanLegalTitle(title: string) {
+  return title.replace(/^\d+\.\s*/, '');
+}
+
 export function StaticContentPage({
   locale,
   slug
@@ -20,6 +29,58 @@ export function StaticContentPage({
 }) {
   const page = getPageContent(locale, slug);
   const site = getSiteContent(locale);
+  const effectiveDate = extractEffectiveDate(page.intro);
+  const legalSections =
+    page.legal?.map((section) => ({
+      title: section.title,
+      body: section.body
+    })) ??
+    (slug === 'data-deletion'
+      ? page.sections.map((section, index) => ({
+          title: `${index + 1}. ${section.title}`,
+          body: [section.body]
+        }))
+      : []);
+
+  if (legalSections.length) {
+    return (
+      <SiteShell locale={locale}>
+        <section className="legal-document-shell" aria-labelledby="legal-document-title">
+          <AnimatedBlock className="legal-document-paper">
+            <header className="legal-document-header">
+              <div className="legal-document-kicker">
+                <span>{page.eyebrow}</span>
+                <span>{locale === 'tr' ? 'Resmi belge' : 'Official document'}</span>
+                <span>{effectiveDate ? `${locale === 'tr' ? 'Yururluk' : 'Effective'} ${effectiveDate}` : 'V1'}</span>
+              </div>
+              <h1 id="legal-document-title">{page.title}</h1>
+              <p>{page.intro}</p>
+            </header>
+
+            <div className="legal-document-body">
+              {legalSections.map((section, index) => (
+                <section className="legal-document-section" key={section.title}>
+                  <div className="legal-document-section__number">{String(index + 1).padStart(2, '0')}</div>
+                  <div className="legal-document-section__content">
+                    <h2>{cleanLegalTitle(section.title)}</h2>
+                    {section.body.map((paragraph) => (
+                      <p key={paragraph}>{paragraph}</p>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </AnimatedBlock>
+        </section>
+
+        <section className="subfooter-links">
+          <Link className="pill-link pill-link--soft" href={`/${locale}`}>
+            {site.messages.ui.backHome}
+          </Link>
+        </section>
+      </SiteShell>
+    );
+  }
 
   return (
     <SiteShell locale={locale}>

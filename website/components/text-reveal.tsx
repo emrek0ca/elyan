@@ -1,68 +1,77 @@
 'use client';
 
-import { motion } from 'motion/react';
-import { useReducedMotion } from 'motion/react';
+import { useEffect, useRef, useState, type CSSProperties, type ElementType } from 'react';
 
 type TextRevealProps = {
   text: string;
   className?: string;
-  as?: React.ElementType;
+  as?: ElementType;
   delay?: number;
   wordDelay?: number;
+  id?: string;
 };
 
+/**
+ * Word-by-word reveal driven by CSS transitions. Robust by construction: the
+ * end-state is visible even if the tab is hidden or animations never run, and
+ * the full text stays in the DOM for assistive tech and crawlers.
+ */
 export function TextReveal({
   text,
   className = '',
   as: Component = 'span',
   delay = 0,
-  wordDelay = 0.03
+  wordDelay = 0.03,
+  id
 }: TextRevealProps) {
-  const prefersReducedMotion = useReducedMotion();
+  const ref = useRef<HTMLElement>(null);
+  const [inView, setInView] = useState(false);
 
-  // Split text into words, then words into characters or just keep words.
-  // For a clean look, word-by-word reveal is usually best.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '0px 0px -6% 0px' }
+    );
+    observer.observe(el);
+
+    const safety = window.setTimeout(() => {
+      setInView(true);
+      observer.disconnect();
+    }, 1000);
+
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(safety);
+    };
+  }, []);
+
   const words = text.split(' ');
 
-  if (prefersReducedMotion) {
-    return <Component className={className}>{text}</Component>;
-  }
-
-  const container = {
-    hidden: { opacity: 0 },
-    visible: (i = 1) => ({
-      opacity: 1,
-      transition: { staggerChildren: wordDelay, delayChildren: delay * i },
-    }),
-  };
-
-  const child = {
-    visible: { opacity: 1, y: 0, filter: 'blur(0px)', transition: { type: 'spring' as const, damping: 20, stiffness: 100 } },
-    hidden: { opacity: 0, y: 20, filter: 'blur(10px)', transition: { type: 'spring' as const, damping: 20, stiffness: 100 } },
-  };
-
-  // Convert Component to motion component
-  const MotionComponent = motion.create(Component as any);
-
   return (
-    <MotionComponent
-      className={className}
-      variants={container}
-      initial="hidden"
-      whileInView="visible"
-      viewport={{ once: true, margin: '-20px' }}
+    <Component
+      ref={ref}
+      id={id}
+      className={`text-reveal${inView ? ' is-in' : ''}${className ? ` ${className}` : ''}`}
       aria-label={text}
     >
       {words.map((word, index) => (
-        <motion.span
-          variants={child}
-          style={{ display: 'inline-block', marginRight: '0.25em' }}
+        <span
           key={index}
+          className="text-reveal__word"
           aria-hidden="true"
+          style={{ '--word-delay': `${delay + index * wordDelay}s` } as CSSProperties}
         >
           {word}
-        </motion.span>
+        </span>
       ))}
-    </MotionComponent>
+    </Component>
   );
 }

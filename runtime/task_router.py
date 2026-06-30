@@ -111,6 +111,7 @@ def _clean_app_name(value: str) -> str:
     cleaned = _strip_polite_suffix(value)
     cleaned = _strip_leading_fillers(cleaned)
     cleaned = re.sub(r"[’'](?:i|ı|u|ü|yi|yı|yu|yü)$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?i)(.{3,}?)(?:yi|yı|yu|yü|ni|nı|nu|nü)$", r"\1", cleaned)
     cleaned = _strip_trailing_case_particles(cleaned)
     return cleaned.strip(" .,!?:;\"'’")
 
@@ -1990,13 +1991,11 @@ def _desktop_document_route(text: str, selected_artifacts: list[dict[str, Any]] 
         return None
     # Try to extract file name from text
     file_name = _extract_file_name(text)
+    if not file_name:
+        return None
     location_path = _resolve_location_path(text)
-    if file_name:
-        candidate = str(Path(location_path) / file_name)
-        src = candidate
-    else:
-        # List common document files on the location
-        src = location_path
+    candidate = str(Path(location_path) / file_name)
+    src = candidate
     suffix = Path(src).suffix.lower() if file_name else ""
     if suffix in _DATA_SUFFIXES:
         return RoutedTask(
@@ -2161,6 +2160,18 @@ def route_text_to_tool(
     if any(
         token in q
         for token in (
+            "ss al",
+            "screenshot al",
+            "ekran goruntusu al",
+            "ekran görüntüsü al",
+            "ekran resmini al",
+            "ekranin resmini al",
+            "ekranın resmini al",
+            "ekrani cek",
+            "ekranı çek",
+            "ekran fotosu al",
+            "ekran fotografi al",
+            "ekran fotoğrafı al",
             "ekranda ne var",
             "ekrani analiz",
             "ekran analizi",
@@ -2189,6 +2200,29 @@ def route_text_to_tool(
             "screen",
         )
     ):
+        screenshot_terms = {
+            "ss al",
+            "screenshot al",
+            "ekran goruntusu al",
+            "ekran görüntüsü al",
+            "ekran resmini al",
+            "ekranin resmini al",
+            "ekranın resmini al",
+            "ekrani cek",
+            "ekranı çek",
+            "ekran fotosu al",
+            "ekran fotografi al",
+            "ekran fotoğrafı al",
+        }
+        if any(token in q for token in screenshot_terms):
+            return RoutedTask(
+                "desktop_operator.observe_screen",
+                {"query": original, "target": "active_window", "preserveScreenshot": True},
+                "screen_screenshot",
+                intent="screen_screenshot",
+                confidence=0.97,
+                privacy_class="local_private",
+            )
         return RoutedTask(
             "analyze_screen",
             {"query": original, "target": "active_window"},

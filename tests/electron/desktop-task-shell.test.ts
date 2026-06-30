@@ -102,4 +102,39 @@ describe('desktop task shell view model', () => {
     expect(shell.canReceiveTasks).toBe(false);
     expect(shell.readinessDetail).toContain('tekrar denenecek');
   });
+
+  it('keeps backend task status wire-compatible while rendering desktop trace state', () => {
+    const shell = deriveDesktopTaskShell({
+      state: {},
+      workspace: {},
+      conversations: [],
+      runtime: {
+        taskInbox: {
+          pendingCount: 0,
+          activeCount: 1,
+          items: [
+            {
+              id: 'task-verify',
+              title: 'Raporu doğrula',
+              status: 'running',
+              executionTrace: { status: 'verifying' },
+              updatedAt: '2030-05-22T15:32:12Z',
+            },
+          ],
+        },
+        controlPlane: {
+          runtimeSession: {
+            readiness: { canReceiveTasks: true, targetStatus: 'ready' },
+            connection: { status: 'online' },
+          },
+        },
+      },
+      backend: {},
+      localModels: {},
+    });
+
+    expect(shell.recentTasks[0]?.status).toBe('running');
+    expect(shell.recentTasks[0]?.statusLabel).toBe('doğrulanıyor');
+    expect(shell.activeRemoteTaskCount).toBe(1);
+  });
 });

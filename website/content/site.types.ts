@@ -72,6 +72,10 @@ export type HomeContent = {
   finalTitle: string;
   finalCopy: string;
   finalLinks: readonly HeroLink[];
+  systemWidgets?: {
+    velocityText: string;
+    fabricTitle: string;
+  };
 };
 
 export type SiteContent = {

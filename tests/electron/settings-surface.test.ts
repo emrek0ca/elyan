@@ -353,6 +353,23 @@ async function changeFileInput(container: HTMLElement, file: File): Promise<void
 describe('settings surface', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    desktopApiMock.request.mockImplementation(async (request: { capability: string }) => {
+      if (request.capability === 'providers.catalog') {
+        return desktopApiMock.state.response;
+      }
+      if (request.capability === 'providers.validate') {
+        return desktopApiMock.state.validateResponse;
+      }
+      return {
+        ok: true,
+        result: {},
+        events: [],
+        artifacts: [],
+        error: null,
+        durationMs: 0,
+      };
+    });
     document.body.innerHTML = '';
   });
 
@@ -391,15 +408,149 @@ describe('settings surface', () => {
   });
 
   it('renders pairing section with phone-first copy', async () => {
-    const { container, root } = await renderSettings(createSnapshot());
+    const snapshot = createSnapshot();
+    snapshot.backend = {
+      mobileBootstrap: {
+        ok: true,
+        data: {
+          devices: [
+            {
+              id: 'mobile-1',
+              type: 'mobile',
+              label: 'iPhone',
+              platform: 'ios',
+              runtime: { isConnected: true },
+              lastSeenAt: '2030-05-22T15:35:00Z',
+            },
+          ],
+        },
+      },
+    };
+    const { container, root } = await renderSettings(snapshot);
 
     await clickButton(container, 'Telefon Bağlantısı');
-    expect(container.textContent).toContain('Telefon bağlantısı');
+    expect(container.textContent).toContain('Bağlı cihazlar');
     expect(container.textContent).toContain('PWGSFB5B');
     expect(container.textContent).toContain('session-1|PWGSFB5B');
     expect(container.textContent).toContain('Bekliyor');
-    expect(container.textContent).toContain('Bu bilgisayar');
+    expect(container.textContent).toContain('Elyan Bilgisayar');
+    expect(container.textContent).toContain('iPhone');
     expect(container.textContent).not.toContain('heartbeat_missing');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('removes a paired phone through the runtime cleanup capability', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const requestMock = desktopApiMock.request;
+    const onRefresh = vi.fn();
+    const snapshot = createSnapshot();
+    snapshot.backend = {
+      mobileBootstrap: {
+        ok: true,
+        data: {
+          devices: [
+            {
+              id: 'mobile-1',
+              type: 'mobile',
+              label: 'iPhone',
+              platform: 'ios',
+              runtime: { isConnected: false },
+            },
+          ],
+        },
+      },
+    };
+
+    const { container, root } = await renderSettings(snapshot, { onRefresh });
+    await clickButton(container, 'Telefon Bağlantısı');
+    await clickButton(container, 'Kaldır');
+
+    expect(requestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: 'backend.device_deactivate',
+        payload: { deviceId: 'mobile-1' },
+      }),
+    );
+    expect(onRefresh).toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('shows device cleanup failures instead of refreshing stale phone state', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    const requestMock = desktopApiMock.request;
+    requestMock.mockImplementation(async (request: { capability: string }) => {
+      if (request.capability === 'backend.device_deactivate') {
+        return {
+          ok: false,
+          result: {},
+          events: [],
+          artifacts: [],
+          error: { code: 'DEVICE_DEACTIVATE_FAILED', message: 'Cihaz kaldırılamadı.' },
+          durationMs: 0,
+        };
+      }
+      return {
+        ok: true,
+        result: {},
+        events: [],
+        artifacts: [],
+        error: null,
+        durationMs: 0,
+      };
+    });
+    const onRefresh = vi.fn();
+    const snapshot = createSnapshot();
+    snapshot.backend = {
+      mobileBootstrap: {
+        ok: true,
+        data: {
+          devices: [
+            {
+              id: 'mobile-1',
+              type: 'mobile',
+              label: 'iPhone',
+              platform: 'ios',
+            },
+          ],
+        },
+      },
+    };
+
+    const { container, root } = await renderSettings(snapshot, { onRefresh });
+    await clickButton(container, 'Telefon Bağlantısı');
+    await clickButton(container, 'Kaldır');
+
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Cihaz kaldırılamadı.');
+
+    vi.unstubAllGlobals();
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('locks pairing controls when runtime truth reports a plan restriction', async () => {
+    const snapshot = createSnapshot();
+    snapshot.state.account.subscription = { planCode: 'free', status: 'free' } as never;
+    snapshot.state.billing = { planCode: 'free', status: 'free' } as never;
+    snapshot.state.pairing.lastSessionStatus = '';
+    snapshot.runtime = {
+      targetErrorCode: 'desktop_plan_required',
+      targetStatus: 'plan_restricted',
+    };
+
+    const { container, root } = await renderSettings(snapshot);
+
+    await clickButton(container, 'Telefon Bağlantısı');
+    expect(container.textContent).toContain('Plan yetersiz');
+    expect(container.textContent).toContain('Kilitli');
 
     await act(async () => {
       root.unmount();

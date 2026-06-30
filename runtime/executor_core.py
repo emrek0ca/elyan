@@ -19,6 +19,8 @@ except Exception:  # pragma: no cover - optional dependency
 
 from runtime import litellm_adapter
 
+PLANNER_VERSION = "runtime_v2"
+
 
 def _utc_now_iso() -> str:
     return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
@@ -54,6 +56,145 @@ class ExecutorCore:
         self._graph_backend = "langgraph" if StateGraph is not None else "sequential_fallback"
         self._model_router_backend = "litellm" if litellm_adapter.available() else "native_router"
         self._persist()
+
+    def _initial_execution_trace(self, *, summary: str = "", execution_strategy: str = "single_lane") -> dict[str, Any]:
+        return {
+            "plannerVersion": PLANNER_VERSION,
+            "summary": _safe_text(summary),
+            "executionStrategy": str(execution_strategy or "single_lane"),
+            "stepStates": [],
+            "verificationState": {
+                "status": "pending",
+                "checkedSteps": 0,
+                "failedStepId": "",
+                "lastReason": "",
+            },
+            "repair": {
+                "attempted": False,
+                "repairAttempts": 0,
+                "lastStrategy": "",
+                "lastReason": "",
+            },
+            "stopReason": "",
+        }
+
+    def _step_state(self, current: dict[str, Any], step_id: str) -> dict[str, Any]:
+        trace = current.get("executionTrace")
+        trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+        step_states = trace.get("stepStates")
+        step_states = step_states if isinstance(step_states, list) else []
+        for state in step_states:
+            if isinstance(state, dict) and str(state.get("id", "") or "") == step_id:
+                current["executionTrace"] = trace
+                return state
+        state: dict[str, Any] = {"id": step_id}
+        step_states.append(state)
+        trace["stepStates"] = step_states
+        current["executionTrace"] = trace
+        return state
+
+    def _record_step_started(
+        self,
+        execution_id: str,
+        *,
+        step_id: str,
+        capability: str,
+        phase: str,
+        role: str,
+        verification_mode: str,
+        attempt: int,
+    ) -> None:
+        with self._lock:
+            current = self._current.get(execution_id)
+            if not isinstance(current, dict):
+                return
+            step_state = self._step_state(current, step_id)
+            step_state.update(
+                {
+                    "id": step_id,
+                    "capability": capability,
+                    "phase": phase,
+                    "role": role,
+                    "status": "running",
+                    "attemptCount": max(int(step_state.get("attemptCount", 0) or 0), attempt),
+                    "startedAt": str(step_state.get("startedAt", "") or _utc_now_iso()),
+                    "finishedAt": "",
+                    "verificationMode": verification_mode,
+                    "verificationStatus": "pending",
+                    "errorCode": "",
+                    "stopReason": "",
+                }
+            )
+            self._persist()
+
+    def _record_step_result(
+        self,
+        execution_id: str,
+        *,
+        step_id: str,
+        status: str,
+        verification_status: str,
+        output_preview: str = "",
+        error_code: str = "",
+        stop_reason: str = "",
+    ) -> None:
+        with self._lock:
+            current = self._current.get(execution_id)
+            if not isinstance(current, dict):
+                return
+            step_state = self._step_state(current, step_id)
+            step_state.update(
+                {
+                    "status": status,
+                    "verificationStatus": verification_status,
+                    "outputPreview": _safe_text(output_preview, limit=240) if output_preview else "",
+                    "errorCode": error_code,
+                    "stopReason": stop_reason,
+                    "finishedAt": _utc_now_iso(),
+                }
+            )
+            trace = current.get("executionTrace")
+            trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+            verification = trace.get("verificationState")
+            verification = dict(verification) if isinstance(verification, dict) else {}
+            verification["checkedSteps"] = int(verification.get("checkedSteps", 0) or 0) + 1
+            if verification_status in {"passed", "repaired"}:
+                verification["status"] = verification_status
+            elif verification_status == "failed":
+                verification["status"] = "failed"
+                verification["failedStepId"] = step_id
+                verification["lastReason"] = stop_reason or output_preview
+            trace["verificationState"] = verification
+            current["executionTrace"] = trace
+            self._persist()
+
+    def _record_repair_attempt(self, execution_id: str, *, strategy: str, reason: str) -> None:
+        with self._lock:
+            current = self._current.get(execution_id)
+            if not isinstance(current, dict):
+                return
+            trace = current.get("executionTrace")
+            trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+            repair = trace.get("repair")
+            repair = dict(repair) if isinstance(repair, dict) else {}
+            repair["attempted"] = True
+            repair["repairAttempts"] = int(repair.get("repairAttempts", 0) or 0) + 1
+            repair["lastStrategy"] = strategy
+            repair["lastReason"] = reason
+            trace["repair"] = repair
+            current["executionTrace"] = trace
+            self._persist()
+
+    def _set_stop_reason(self, execution_id: str, reason: str) -> None:
+        with self._lock:
+            current = self._current.get(execution_id)
+            if not isinstance(current, dict):
+                return
+            trace = current.get("executionTrace")
+            trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+            trace["stopReason"] = str(reason or "").strip()
+            current["executionTrace"] = trace
+            self._persist()
 
     def graph_backend(self) -> str:
         return self._graph_backend
@@ -100,6 +241,12 @@ class ExecutorCore:
                 "displayAction": "Bakıyor",
                 "verificationUsed": False,
                 "executionStrategy": str(agent_plan.get("executionStrategy", "single_lane") or "single_lane"),
+                "nativeReadiness": {},
+                "degradationReasons": [],
+                "executionTrace": self._initial_execution_trace(
+                    summary=summary,
+                    execution_strategy=str(agent_plan.get("executionStrategy", "single_lane") or "single_lane"),
+                ),
             }
             if isinstance(plan_preview, dict):
                 self._current[active_id]["planPreview"] = dict(plan_preview)
@@ -130,6 +277,12 @@ class ExecutorCore:
             current["agentRoles"] = agent_plan.get("agentRoles", current.get("agentRoles", []))
             current["agentPlan"] = agent_plan
             current["executionStrategy"] = str(agent_plan.get("executionStrategy", current.get("executionStrategy", "single_lane")) or "single_lane")
+            trace = current.get("executionTrace")
+            trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+            trace["plannerVersion"] = PLANNER_VERSION
+            trace["executionStrategy"] = current["executionStrategy"]
+            trace["summary"] = _safe_text(summary or current.get("summary", ""))
+            current["executionTrace"] = trace
             if isinstance(plan_preview, dict):
                 current["planPreview"] = dict(plan_preview)
             self._persist()
@@ -188,7 +341,12 @@ class ExecutorCore:
                 self._metrics["completed"] += 1
             else:
                 self._metrics["failed"] += 1
-            self._persist(last_execution_at=_utc_now_iso(), last_detail=detail, last_ok=ok)
+            self._persist(
+                last_execution_at=_utc_now_iso(),
+                last_detail=detail,
+                last_ok=ok,
+                last_execution_trace=current.get("executionTrace") if isinstance(current.get("executionTrace"), dict) else None,
+            )
 
     def _apply_display_state(self, current: dict[str, Any]) -> None:
         stage = str(current.get("stage", "") or "").strip().lower()
@@ -270,6 +428,8 @@ class ExecutorCore:
                     else [],
                     "laneCount": int(active_plan.get("laneCount", len(active_plan.get("agentRoles", active_agent.get("agentRoles", [])) or [])) or 0),
                     "planSummary": str(active_plan.get("summary", active_agent.get("summary", "")) or ""),
+                    "nativeReadiness": dict(active_agent.get("nativeReadiness", {}) or {}) if isinstance(active_agent.get("nativeReadiness"), dict) else {},
+                    "degradationReasons": list(active_agent.get("degradationReasons", [])) if isinstance(active_agent.get("degradationReasons"), list) else [],
                 },
                 "lastFallbackReason": self._last_fallback_reason,
                 "metrics": dict(self._metrics),
@@ -314,17 +474,39 @@ class ExecutorCore:
 
         try:
             self.record_stage(execution_id, "plan_execution", detail="steps")
-            for step in steps:
+            planned_roles = self._current.get(execution_id, {}).get("agentPlan", {}).get("stepRoles", [])
+            planned_roles = planned_roles if isinstance(planned_roles, list) else []
+            for index, step in enumerate(steps, start=1):
                 if not isinstance(step, dict):
                     continue
                 capability = str(step.get("capability", "") or "").strip()
                 if not capability:
                     continue
                 metadata = capability_metadata(capability)
+                step_role = next(
+                    (
+                        candidate for candidate in planned_roles
+                        if isinstance(candidate, dict)
+                        and str(candidate.get("capability", "") or "").strip() == capability
+                    ),
+                    {},
+                )
+                step_id = str(step.get("id", "") or step_role.get("id", "") or f"step_{index}")
+                step_phase = str(step.get("phase", "") or step_role.get("phase", "") or "act")
+                step_role_name = str(step.get("role", "") or step_role.get("role", "") or "operator")
                 self.record_stage(execution_id, "step_execution", detail=capability)
                 attempt = 0
                 while True:
                     attempt += 1
+                    self._record_step_started(
+                        execution_id,
+                        step_id=step_id,
+                        capability=capability,
+                        phase=step_phase,
+                        role=step_role_name,
+                        verification_mode=str(metadata.get("verificationMode", "tool_result") or "tool_result"),
+                        attempt=attempt,
+                    )
                     args = step.get("args", {})
                     args = dict(args) if isinstance(args, dict) else {}
                     args["_confirmed"] = True
@@ -346,19 +528,51 @@ class ExecutorCore:
                         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
                         error_code = str(error.get("code") or "TOOL_EXECUTION_FAILED")
                         message = str(error.get("message") or tool_result.get("output") or "").strip() or "Araç güvenli şekilde tamamlanamadı."
+                        self._record_step_result(
+                            execution_id,
+                            step_id=step_id,
+                            status="failed",
+                            verification_status="failed",
+                            output_preview=message,
+                            error_code=error_code,
+                            stop_reason=message,
+                        )
+                        self._set_stop_reason(execution_id, error_code.lower())
                         self.finish_execution(execution_id, ok=False, detail=message)
                         return False, message, events, error_code, structured_result, artifacts
 
                     verification = self._verify_step_result(metadata, args, tool_result)
                     if verification.ok:
+                        self._record_step_result(
+                            execution_id,
+                            step_id=step_id,
+                            status="completed",
+                            verification_status="repaired" if attempt > 1 else "passed",
+                            output_preview=str(tool_result.get("output", "") or ""),
+                        )
                         break
                     if not bool(metadata.get("retryable", False)) or attempt >= 2:
                         error_code = "VERIFICATION_FAILED"
+                        self._record_step_result(
+                            execution_id,
+                            step_id=step_id,
+                            status="failed",
+                            verification_status="failed",
+                            output_preview=verification.message,
+                            error_code=error_code,
+                            stop_reason=verification.message,
+                        )
+                        self._set_stop_reason(execution_id, "verification_failed")
                         self.finish_execution(execution_id, ok=False, detail=verification.message)
                         return False, verification.message or "Doğrulama başarısız oldu.", events, error_code, structured_result, artifacts
                     with self._lock:
                         self._metrics["verificationRetries"] += 1
                         self._persist()
+                    self._record_repair_attempt(
+                        execution_id,
+                        strategy="retry_same_capability",
+                        reason=verification.message,
+                    )
                     self.record_stage(execution_id, "retry_repair", detail=f"{capability}:{verification.message}")
 
                 output = str(tool_result.get("output", "") or "").strip()
@@ -377,10 +591,12 @@ class ExecutorCore:
 
             summary = "\n".join(output for output in outputs if output).strip() or "İşlem tamamlandı."
             self.record_stage(execution_id, "finalize", detail=summary, status="completed")
+            self._set_stop_reason(execution_id, "completed")
             self.finish_execution(execution_id, ok=True, detail=summary)
             return True, summary, events, error_code, structured_result, artifacts
         except Exception as exc:  # pragma: no cover - defensive safety net
             message = str(exc) or "executor_plan_failed"
+            self._set_stop_reason(execution_id, "executor_plan_failed")
             self.finish_execution(execution_id, ok=False, detail=message)
             return False, message, events, "EXECUTOR_PLAN_FAILED", structured_result, artifacts
 
@@ -463,7 +679,14 @@ class ExecutorCore:
             return StepVerificationResult(True)
         return StepVerificationResult(False, "Araç sonucu boş döndü.")
 
-    def _persist(self, *, last_execution_at: str = "", last_detail: str = "", last_ok: bool | None = None) -> None:
+    def _persist(
+        self,
+        *,
+        last_execution_at: str = "",
+        last_detail: str = "",
+        last_ok: bool | None = None,
+        last_execution_trace: dict[str, Any] | None = None,
+    ) -> None:
         payload: dict[str, Any] = {
             "available": True,
             "graphBackend": self._graph_backend,
@@ -481,4 +704,6 @@ class ExecutorCore:
             payload["lastExecutionDetail"] = _safe_text(last_detail, limit=240)
         if last_ok is not None:
             payload["lastExecutionOk"] = bool(last_ok)
+        if isinstance(last_execution_trace, dict):
+            payload["lastExecutionTrace"] = dict(last_execution_trace)
         state_store.update_state({"runtime": {"executor": payload}})

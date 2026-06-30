@@ -19,6 +19,9 @@ describe('native addon loader', () => {
     expect(addon.runtimeSnapshot.operator.mode).toBe('macos_first');
     expect(addon.runtimeSnapshot.operator.failSafeCornerAbort).toBe(true);
     expect(addon.runtimeSnapshot.operator.browserFirstReady).toBe(false);
+    expect(addon.runtimeSnapshot.nativeReadiness?.runtimeReady).toBe(false);
+    expect(addon.runtimeSnapshot.nativeReadiness?.nativeAddonAvailable).toBe(false);
+    expect(addon.runtimeSnapshot.nativeReadiness?.degradedReasons).toContain('native_addon_missing');
     expect(addon.runtimeSnapshot.lastErrorCode).toBe('native_addon_missing');
   });
 });

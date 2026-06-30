@@ -39,6 +39,7 @@ class CapabilityMetadata:
     category: str
     side_effect: bool
     required_permissions: tuple[str, ...]
+    permission_class: str
     supported_platforms: tuple[str, ...]
     dependency_keys: tuple[str, ...]
     timeout_seconds: int
@@ -52,6 +53,7 @@ class CapabilityMetadata:
             "category": self.category,
             "sideEffect": self.side_effect,
             "requiredPermissions": list(self.required_permissions),
+            "permissionClass": self.permission_class,
             "supportedPlatforms": list(self.supported_platforms),
             "dependencyKeys": list(self.dependency_keys),
             "timeoutSeconds": self.timeout_seconds,
@@ -108,6 +110,38 @@ def _system_permission_status_for_capability(tool_name: str) -> str:
     state = permissions.get(permission_key, {})
     state = state if isinstance(state, dict) else {}
     return str(state.get("status", "") or "").strip().lower()
+
+
+def _system_permission_detail_for_capability(tool_name: str, *, allow_probe: bool = False) -> dict[str, Any]:
+    permission_key = _CAPABILITY_SYSTEM_PERMISSION_KEYS.get(str(tool_name or "").strip(), "")
+    if not permission_key:
+        return {}
+    if not allow_probe:
+        return {
+            "systemPermissionKey": permission_key,
+            "osPermissionStatus": "",
+            "systemPermissionRequired": False,
+        }
+    try:
+        desktop_os = import_module("actions.desktop_os")
+        payload = desktop_os.desktop_os_permissions()
+    except Exception:
+        return {
+            "systemPermissionKey": permission_key,
+            "osPermissionStatus": "",
+        }
+    result = payload.get("result", {}) if isinstance(payload, dict) else {}
+    result = result if isinstance(result, dict) else {}
+    permissions = result.get("permissions", {})
+    permissions = permissions if isinstance(permissions, dict) else {}
+    state = permissions.get(permission_key, {})
+    state = state if isinstance(state, dict) else {}
+    status = str(state.get("status", "") or "").strip().lower()
+    return {
+        "systemPermissionKey": permission_key,
+        "osPermissionStatus": status,
+        "systemPermissionRequired": bool(state.get("required", False)),
+    }
 
 
 def _tool_decl(
@@ -205,7 +239,19 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         },
         ["query"],
     ),
-    _tool_decl("shell_run", "Yerel terminal komutu çalıştırır.", {"command": {"type": "STRING"}}, ["command"]),
+    _tool_decl(
+        "shell_run",
+        "Yerel terminal komutu çalıştırır.",
+        {
+            "command": {"type": "STRING"},
+            "mode": {"type": "STRING"},
+            "timeout": {"type": "NUMBER"},
+            "use_shell": {"type": "BOOLEAN"},
+            "working_dir": {"type": "STRING"},
+            "riskOverride": {"type": "STRING"},
+        },
+        ["command"],
+    ),
     _tool_decl(
         "play_media",
         "YouTube, Spotify veya Music ile medya oynatır.",
@@ -883,6 +929,7 @@ def capability_readiness(
 ) -> dict[str, Any]:
     metadata = capability_metadata(name)
     normalized = str(metadata.get("name", "") or "").strip()
+    system_permission = _system_permission_detail_for_capability(normalized, allow_probe=False)
     if not normalized:
         return {
             "available": False,
@@ -890,6 +937,7 @@ def capability_readiness(
             "errorCode": "UNKNOWN_CAPABILITY",
             "dependencyKeys": [],
             "missingDependencies": [],
+            "degradationReason": "unknown_capability",
         }
 
     runtime = state.get("runtime", {}) if isinstance(state, dict) else {}
@@ -901,12 +949,21 @@ def capability_readiness(
         if isinstance(observed, dict) and (
             observed.get("ready") is False or observed.get("available") is False
         ):
+            observed_error = str(observed.get("errorCode", "") or "CAPABILITY_UNAVAILABLE")
+            if normalized.startswith("desktop_operator.") and observed_error in {"", "CAPABILITY_UNAVAILABLE", "native_snapshot_unavailable", "desktop_operator_unavailable"}:
+                dependency = capability_dependency_status(normalized)
+                if dependency.get("available") is True:
+                    break
             return {
                 **metadata,
                 "available": bool(observed.get("available", False)),
                 "ready": bool(observed.get("ready", False)),
-                "errorCode": str(observed.get("errorCode", "") or "CAPABILITY_UNAVAILABLE"),
+                "errorCode": observed_error,
                 "missingDependencies": list(observed.get("missingDependencies", []) or []),
+                "dependencyReady": bool(observed.get("available", False)),
+                "platformSupported": True,
+                "degradationReason": observed_error.lower() or "capability_unavailable",
+                **system_permission,
             }
 
     supported_platforms = metadata.get("supportedPlatforms", [])
@@ -917,6 +974,10 @@ def capability_readiness(
             "ready": False,
             "errorCode": "UNSUPPORTED_PLATFORM",
             "missingDependencies": [],
+            "dependencyReady": True,
+            "platformSupported": False,
+            "degradationReason": "unsupported_platform",
+            **system_permission,
         }
 
     dependencies = metadata.get("dependencyKeys", [])
@@ -927,13 +988,24 @@ def capability_readiness(
         for key in dependencies
         if not bool((snapshot.get(key) or {}).get("available", False))
     ]
-    return {
+    readiness = {
         **metadata,
         "available": not missing,
         "ready": not missing,
         "errorCode": "DEPENDENCY_UNAVAILABLE" if missing else "",
         "missingDependencies": missing,
+        "dependencyReady": not missing,
+        "platformSupported": True,
+        "degradationReason": "dependency_unavailable" if missing else "",
+        **system_permission,
     }
+    os_permission_status = str(readiness.get("osPermissionStatus", "") or "").strip().lower()
+    if os_permission_status in {"required", "denied"} and str(readiness.get("permissionClass", "") or "") != "read_only":
+        readiness["available"] = False
+        readiness["ready"] = False
+        readiness["errorCode"] = "OS_PERMISSION_REQUIRED"
+        readiness["degradationReason"] = "os_permission_required"
+    return readiness
 
 
 def capability_metadata(name: str) -> dict[str, Any]:
@@ -944,6 +1016,7 @@ def capability_metadata(name: str) -> dict[str, Any]:
             category="other",
             side_effect=False,
             required_permissions=(),
+            permission_class="blocked",
             supported_platforms=("darwin", "win32", "linux"),
             dependency_keys=(),
             timeout_seconds=60,
@@ -985,6 +1058,14 @@ def capability_metadata(name: str) -> dict[str, Any]:
         permissions = ("allow_personal_actions",)
     elif normalized in _WRITE_CAPABILITIES or normalized in {"email_send", "mcp_call_tool", "run_skill"}:
         permissions = ("allow_destructive_tools",)
+
+    permission_class = "blocked"
+    if normalized in _SIDE_EFFECT_CAPABILITIES:
+        permission_class = "approval_required"
+    elif permissions:
+        permission_class = "degraded_but_safe"
+    else:
+        permission_class = "read_only"
 
     supported_platforms = ("darwin",) if normalized in _DARWIN_ONLY_CAPABILITIES else ("darwin", "win32", "linux")
     verification_mode = "tool_result"
@@ -1036,6 +1117,7 @@ def capability_metadata(name: str) -> dict[str, Any]:
         category=category,
         side_effect=normalized in _SIDE_EFFECT_CAPABILITIES,
         required_permissions=permissions,
+        permission_class=permission_class,
         supported_platforms=supported_platforms,
         dependency_keys=dependency_keys,
         timeout_seconds=timeout_seconds,
@@ -1174,7 +1256,12 @@ def capability_groups(
 
 
 def capability_dependency_status(capability_name: str) -> dict[str, Any]:
-    normalized = _normalize_capability_name(capability_name)
+    raw_name = str(capability_name or "").strip()
+    normalized = raw_name if raw_name in _ADAPTER_SPECS else _normalize_capability_name(raw_name)
+    if normalized not in _ADAPTER_SPECS and raw_name.startswith("desktop.operator."):
+        dotted_alias = "desktop_operator." + raw_name.removeprefix("desktop.operator.")
+        if dotted_alias in _ADAPTER_SPECS:
+            normalized = dotted_alias
     if not normalized:
         return {
             "capability": "",
@@ -1401,6 +1488,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             int(args.get("timeout", 30) or 30),
             use_shell=bool(args.get("use_shell", False)),
             working_dir=str(args.get("working_dir", "") or args.get("workingDir", "") or ""),
+            mode=str(args.get("mode", "") or "confirmed"),
         ),
         "play_media": lambda args: _load_adapter("play_media")(
             str(args.get("query", "") or ""),
@@ -1661,6 +1749,8 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             message = "Bu özellik bu işletim sisteminde desteklenmiyor."
         elif error_code == "DEPENDENCY_UNAVAILABLE":
             message = "Bu özellik bu kurulumda hazır değil."
+        elif error_code == "OS_PERMISSION_REQUIRED":
+            message = _system_permission_message(str(readiness.get("systemPermissionKey", "") or ""))
         else:
             message = "Bu özellik güvenli şekilde başlatılamadı."
         return {
@@ -1668,6 +1758,7 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             "tool": tool_name,
             "output": message,
             "error": {"code": error_code, "message": message},
+            "readiness": readiness,
         }
 
     handler = _handlers().get(tool_name)
@@ -1687,6 +1778,7 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             "tool": tool_name,
             "output": exc.message,
             "error": {"code": exc.code, "message": exc.message},
+            "readiness": readiness,
         }
     except SafeCapabilityError as exc:
         if str(exc.code or "") == "PERMISSION_REQUIRED":
@@ -1704,6 +1796,7 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             "tool": tool_name,
             "output": exc.message,
             "error": {"code": exc.code, "message": exc.message},
+            "readiness": readiness,
         }
     except ModuleNotFoundError:
         return {
@@ -1711,6 +1804,7 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             "tool": tool_name,
             "output": "Bu özellik bu kurulumda hazır değil.",
             "error": {"code": "DEPENDENCY_UNAVAILABLE", "message": "Bu özellik bu kurulumda hazır değil."},
+            "readiness": readiness,
         }
     except ImportError:
         return {
@@ -1718,6 +1812,7 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             "tool": tool_name,
             "output": "Bu özellik güvenli şekilde başlatılamadı.",
             "error": {"code": "CAPABILITY_UNAVAILABLE", "message": "Bu özellik güvenli şekilde başlatılamadı."},
+            "readiness": readiness,
         }
     except NotImplementedError:
         return {
@@ -1728,6 +1823,7 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
                 "code": "UNSUPPORTED_PLATFORM",
                 "message": "Bu özellik bu işletim sisteminde desteklenmiyor.",
             },
+            "readiness": readiness,
         }
     except Exception as exc:
         code = str(getattr(exc, "code", "") or "").strip()
@@ -1738,12 +1834,14 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
                 "tool": tool_name,
                 "output": message,
                 "error": {"code": code, "message": message},
+                "readiness": readiness,
             }
         return {
             "ok": False,
             "tool": tool_name,
             "output": "Araç güvenli şekilde tamamlanamadı.",
             "error": {"code": "TOOL_EXECUTION_FAILED", "message": "Araç güvenli şekilde tamamlanamadı."},
+            "readiness": readiness,
         }
 
     structured_result: dict[str, Any] | None = None
@@ -1768,6 +1866,7 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
         "result": structured_result,
         "artifacts": artifacts,
         "error": None,
+        "readiness": readiness,
     }
 
 

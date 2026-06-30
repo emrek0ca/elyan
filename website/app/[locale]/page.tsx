@@ -1,18 +1,24 @@
 import Link from 'next/link';
 
-import Image from 'next/image';
 import { ParallaxImage } from '@/components/parallax-image';
 import { TextReveal } from '@/components/text-reveal';
 import { AnimatedBlock } from '@/components/animated-block';
 import { SiteShell } from '@/components/site-shell';
-import { VelocityScroll } from '@/components/velocity-scroll';
-import { StickyScroll } from '@/components/sticky-scroll';
-import { BentoGrid, BentoCard } from '@/components/bento-grid';
+import { CommandDemo } from '@/components/command-demo';
+import { CapabilityMarquee } from '@/components/capability-marquee';
+import { PromptTyper } from '@/components/prompt-typer';
 import { getSiteContent } from '@/lib/content';
 import { buildMetadata } from '@/lib/metadata';
 import { isSiteLocale, type SiteLocale } from '@/lib/locales';
 import { canonicalUrl } from '@/lib/routes';
 import { setRequestLocale } from 'next-intl/server';
+
+// New Waow Components
+import { MagneticButton } from '@/components/magnetic-button';
+import { BentoGrid, BentoCard } from '@/components/bento-grid';
+import { KineticFabric } from '@/components/kinetic-fabric';
+import { ScrollPath } from '@/components/scroll-path';
+import { VelocityScroll } from '@/components/velocity-scroll';
 
 export async function generateMetadata({
   params
@@ -35,133 +41,144 @@ export default async function HomePage({
 }) {
   const { locale } = await params;
   const safeLocale: SiteLocale = isSiteLocale(locale) ? locale : 'tr';
-  
+
   setRequestLocale(safeLocale);
 
   const site = getSiteContent(safeLocale);
   const home = site.home;
+  const isEnglish = safeLocale === 'en';
 
   return (
     <SiteShell locale={safeLocale}>
+      <ScrollPath className="z-0 mix-blend-difference" />
       
-      {/* Cinematic Hero */}
-      <section className="home-hero">
-        <div className="absolute top-[20%] left-0 w-full opacity-5 pointer-events-none z-0">
-          <VelocityScroll text="ELYAN • " defaultVelocity={1.5} className="text-[10rem] md:text-[16rem] font-bold text-[var(--foreground)] tracking-tighter" />
-        </div>
-        
-        <div className="absolute inset-0 z-0 opacity-80 mix-blend-luminosity" style={{ maskImage: 'linear-gradient(to bottom, black 40%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to bottom, black 40%, transparent 100%)' }}>
-          <ParallaxImage
-            src="/hero_cafe.png"
-            alt="Elyan Hero"
-            priority
-          />
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-t from-[var(--background)] via-[var(--background-deep)]/90 to-[var(--background)]/40 z-0"></div>
-        <div className="absolute inset-0 bg-gradient-to-r from-[var(--background)]/80 to-transparent z-0"></div>
-        
-        <AnimatedBlock className="relative z-10 max-w-4xl mx-auto w-full pt-20">
-          <span className="text-sm md:text-base font-semibold tracking-wider uppercase mb-6 block text-[var(--text-muted)]">
-            {home.eyebrow}
-          </span>
-          <TextReveal 
-            as="h1" 
-            text={home.title} 
-            className="text-5xl md:text-7xl font-bold tracking-tight text-[var(--text)] mb-6 balanced"
-            delay={0.2}
-          />
-          <TextReveal 
-            as="p" 
-            text={home.description} 
-            className="text-xl md:text-3xl text-[var(--text-muted)] font-medium max-w-2xl"
-            delay={0.6}
-            wordDelay={0.015}
-          />
-        </AnimatedBlock>
-      </section>
-
-      {/* Intro + CTAs */}
-      <section className="home-intro-section overflow-visible">
-        <AnimatedBlock className="home-intro-inner relative">
-          <div className="relative w-full aspect-[4/3] md:aspect-[3/4] rounded-2xl shadow-2xl z-10">
-            <div className="absolute inset-0 rounded-2xl overflow-hidden">
-              <ParallaxImage
-                src="/desk_focus.png"
-                alt="Elyan focused"
-              />
-            </div>
-          </div>
-          <div className="home-intro-copy relative z-10">
-            <TextReveal 
-              as="p"
-              text={home.intro} 
-              className="home-intro-text"
-            />
-            <div className="hero-actions home-intro-actions">
-              {home.ctas.map((item, index) => (
-                <Link
+      <section className="home-hero relative z-10" aria-labelledby="home-title">
+        <KineticFabric className="absolute top-[-10%] left-[50%] w-[100vw] -translate-x-1/2 h-[120%] -z-10 overflow-hidden flex flex-col group cursor-crosshair select-none opacity-40 mix-blend-screen pointer-events-auto" />
+        <AnimatedBlock className="home-hero__copy">
+          <span className="eyebrow">{home.eyebrow}</span>
+          <TextReveal as="h1" id="home-title" text={home.title} className="home-hero__title" />
+          <p className="home-hero__lede">{home.description}</p>
+          <div className="home-hero__actions">
+            {home.ctas.map((item, index) => (
+              index === 0 ? (
+                <MagneticButton
                   key={item.href}
+                  as="link"
                   href={item.href}
-                  className={index === 0 ? 'home-cta-primary' : 'home-cta-secondary'}
+                  className="btn btn--primary"
                 >
                   {item.label}
-                </Link>
-              ))}
-            </div>
+                </MagneticButton>
+              ) : (
+                <MagneticButton
+                  key={item.href}
+                  as="link"
+                  href={item.href}
+                  className="btn btn--ghost"
+                >
+                  {item.label}
+                </MagneticButton>
+              )
+            ))}
           </div>
+        </AnimatedBlock>
+
+        <AnimatedBlock className="home-hero__visual" delay={0.12}>
+          <figure className="home-hero__frame">
+            <ParallaxImage src="/desk_focus.png" alt="Elyan" priority />
+            <PromptTyper locale={safeLocale} />
+          </figure>
         </AnimatedBlock>
       </section>
 
-      {/* Feature Loop Steps */}
-      <section className="relative overflow-visible pb-20">
-        <StickyScroll 
-          content={home.loopSteps.map((step) => ({
-            title: step.title,
-            description: step.body,
-            image: step.image
-          }))} 
-        />
+      <section className="home-marquee relative z-10" aria-label={isEnglish ? 'What Elyan can do' : 'Elyan neler yapabilir'}>
+        <span className="eyebrow">{isEnglish ? 'What Elyan can do' : 'Elyan neler yapabilir'}</span>
+        <CapabilityMarquee locale={safeLocale} />
       </section>
 
-      {/* Boundary / Legal section */}
-      <section className="content-section">
-        <BentoGrid>
+      {/* Cinematic Velocity Scroll Background */}
+      <div className="relative w-full py-12 md:py-24 -my-12 z-0 opacity-5 pointer-events-none overflow-hidden">
+        <VelocityScroll text={home.systemWidgets?.velocityText || 'AUTONOMOUS • LOCAL • SECURE • '} className="font-display text-[8rem] md:text-[14rem] tracking-tighter text-[var(--text)]" />
+      </div>
+
+      <section className="home-value relative z-10" aria-labelledby="value-title">
+        <AnimatedBlock className="home-value__head">
+          <TextReveal as="h2" id="value-title" text={home.boundaryTitle} className="section-title" />
+          <p className="home-value__lede">{home.intro}</p>
+        </AnimatedBlock>
+        
+        {/* Replaced static list with 3D Bento Grid */}
+        <BentoGrid className="mt-12 md:mt-20">
           {home.boundaryCopy.map((item, index) => (
-            <BentoCard 
+            <BentoCard
               key={item.title}
               title={item.title}
               description={item.body}
               delay={index * 0.1}
-              className={index === 0 ? "md:col-span-2" : index === 3 ? "md:col-span-2" : ""}
+              header={
+                <div className="w-12 h-12 rounded-2xl bg-[var(--surface-2)] border border-[var(--outline)] flex items-center justify-center font-mono text-[var(--secondary)] font-bold text-lg shadow-inner">
+                  {String(index + 1).padStart(2, '0')}
+                </div>
+              }
             />
           ))}
         </BentoGrid>
       </section>
 
-      {/* Final CTA */}
-      <section className="relative min-h-[80vh] flex items-center justify-center overflow-hidden w-full py-32">
-        <div className="absolute inset-0 z-0 opacity-40 mix-blend-luminosity" style={{ maskImage: 'radial-gradient(circle at center, black 0%, transparent 70%)', WebkitMaskImage: 'radial-gradient(circle at center, black 0%, transparent 70%)' }}>
-          <ParallaxImage
-            src="/cozy_night.png"
-            alt="Elyan night CTA"
-          />
+
+
+      <section className="home-flow relative z-10" aria-labelledby="flow-title">
+        <div className="home-flow__grid">
+          <AnimatedBlock className="home-flow__head">
+            <span className="eyebrow">{site.messages.ui.controlLoopTitle}</span>
+            <h2 id="flow-title" className="section-title">{home.loopTitle}</h2>
+            <ol className="home-flow__steps">
+              {home.loopSteps.map((step, index) => (
+                <li key={step.title}>
+                  <span className="home-flow__step-index">{String(index + 1).padStart(2, '0')}</span>
+                  <div>
+                    <h3>{step.title}</h3>
+                    <p>{step.body}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </AnimatedBlock>
+          <AnimatedBlock className="home-flow__demo" delay={0.1}>
+            <CommandDemo locale={safeLocale} />
+          </AnimatedBlock>
         </div>
-        <AnimatedBlock className="relative z-10 max-w-5xl mx-auto text-center px-4 flex flex-col items-center">
-          <TextReveal 
-            as="h2"
-            text={home.finalTitle}
-            className="text-6xl md:text-8xl font-medium tracking-tight mb-8 text-[var(--foreground)]"
-          />
-          <p className="text-xl md:text-3xl text-[var(--foreground)]/70 font-light mb-16 max-w-3xl leading-relaxed">{home.finalCopy}</p>
-          <div className="flex flex-wrap items-center justify-center gap-6">
+      </section>
+
+      <section className="home-cta relative z-10" aria-labelledby="cta-title">
+        <div className="home-cta__image" aria-hidden="true">
+          <ParallaxImage src="/cozy_night.png" alt="" />
+        </div>
+        <AnimatedBlock className="home-cta__copy">
+          <span className="eyebrow">{site.messages.ui.finalCtaLabel}</span>
+          <TextReveal as="h2" id="cta-title" text={home.finalTitle} className="home-cta__title" />
+          <p className="home-cta__lede">{home.finalCopy}</p>
+          <div className="home-cta__actions">
             {home.finalLinks.map((item, index) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={index === 0 ? 'home-cta-primary text-xl px-10 py-5 rounded-full shadow-2xl hover:scale-105 transition-transform' : 'home-cta-secondary text-xl px-10 py-5 rounded-full hover:scale-105 transition-transform'}
-              >
-                {item.label}
-              </Link>
+              index === 0 ? (
+                <MagneticButton
+                  key={item.href}
+                  as="link"
+                  href={item.href}
+                  className="btn btn--primary"
+                >
+                  {item.label}
+                </MagneticButton>
+              ) : (
+                <MagneticButton
+                  key={item.href}
+                  as="link"
+                  href={item.href}
+                  className="btn btn--ghost"
+                >
+                  {item.label}
+                </MagneticButton>
+              )
             ))}
           </div>
         </AnimatedBlock>

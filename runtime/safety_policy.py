@@ -51,6 +51,18 @@ DESTRUCTIVE_OR_SENSITIVE_TOOLS = {
     "delete_calendar_event",
 }
 
+FULL_ACCESS_GRANTED_PERMISSIONS = {
+    "allow_shell",
+    "allow_computer_control",
+    "allow_screen_analysis",
+    "allow_system_inspection",
+    "allow_browser_control",
+}
+
+CRITICAL_ACTION_PERMISSIONS = {
+    "allow_destructive_tools",
+}
+
 WRITE_CAPABILITIES = {
     "document_write",
     "spreadsheet_write",
@@ -78,6 +90,16 @@ def _permissions(state: dict[str, Any]) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _full_access_enabled(state: dict[str, Any]) -> bool:
+    runtime = state.get("runtime", {})
+    runtime = runtime if isinstance(runtime, dict) else {}
+    access = runtime.get("access", {})
+    access = access if isinstance(access, dict) else {}
+    session = access.get("fullAccessSession", {})
+    session = session if isinstance(session, dict) else {}
+    return _truthy(session.get("enabled", False))
+
+
 def _dangerous_area_enabled(state: dict[str, Any]) -> bool:
     account = state.get("account", {})
     if not isinstance(account, dict):
@@ -87,10 +109,16 @@ def _dangerous_area_enabled(state: dict[str, Any]) -> bool:
 
 def _permission_enabled(state: dict[str, Any], key: str) -> bool:
     permissions = _permissions(state)
+    if key in FULL_ACCESS_GRANTED_PERMISSIONS and _full_access_enabled(state):
+        return True
+    if key in CRITICAL_ACTION_PERMISSIONS and _full_access_enabled(state):
+        return _truthy(permissions.get(key, False))
     return _dangerous_area_enabled(state) and _truthy(permissions.get(key, False))
 
 
 def _permission_block(state: dict[str, Any], key: str, disabled_message: str, master_message: str) -> PolicyDecision:
+    if key in FULL_ACCESS_GRANTED_PERMISSIONS and _full_access_enabled(state):
+        return PolicyDecision(True)
     if not _dangerous_area_enabled(state):
         return PolicyDecision(False, "PERMISSION_REQUIRED", master_message)
     if not _permission_enabled(state, key):
@@ -104,6 +132,18 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
         return PolicyDecision(False, "UNKNOWN_CAPABILITY", "Bilinmeyen araç.")
 
     if name == "shell_run":
+        mode = str(args.get("mode", "") or "").strip().lower()
+        risk_override = str(args.get("riskOverride", "") or args.get("risk_override", "") or "").strip().lower()
+        if mode == "read_only" or _truthy(args.get("_readOnlyHint", False)):
+            return PolicyDecision(True)
+        if risk_override in {"critical", "credential", "payment", "irreversible_delete", "upload", "share"}:
+            if not _permission_enabled(state, "allow_destructive_tools") or not _truthy(args.get("_confirmed", False)):
+                return PolicyDecision(
+                    False,
+                    "PERMISSION_REQUIRED",
+                    "Kilit eylem için ayrıca açık onay gerekiyor.",
+                )
+            return PolicyDecision(True)
         shell_gate = _permission_block(
             state,
             "allow_shell",
@@ -112,6 +152,8 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
         )
         if not shell_gate.allowed:
             return shell_gate
+        if mode == "full_access" and _full_access_enabled(state):
+            return PolicyDecision(True)
         if _truthy(args.get("_confirmed", False)):
             return PolicyDecision(True)
         return PolicyDecision(
@@ -254,6 +296,14 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
             token in risky_text
             for token in ("submit", "apply", "pay", "delete", "remove", "send", "install", "upload", "run command")
         )
+        if risky_hint and _full_access_enabled(state):
+            if not _truthy(args.get("_confirmed", False)):
+                return PolicyDecision(
+                    False,
+                    "PERMISSION_REQUIRED",
+                    "Kilit operator eylemi için açık onay gerekiyor.",
+                )
+            return PolicyDecision(True)
         if risky_hint and not _permission_enabled(state, "allow_sensitive_operator_actions"):
             return PolicyDecision(
                 False,

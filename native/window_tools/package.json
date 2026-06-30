@@ -1,7 +1,0 @@
-{
-  "name": "@elyan/window-tools",
-  "version": "0.1.0",
-  "private": true,
-  "gypfile": true,
-  "description": "Optional Electron-main native window capability shim for Elyan."
-}

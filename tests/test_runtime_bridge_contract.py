@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -317,6 +318,9 @@ def test_runtime_status_includes_full_desktop_native_snapshot(
     assert payload["desktopNative"]["available"] is True
     assert payload["desktopNative"]["platform"] == "darwin"
     assert payload["desktopNative"]["activeWindow"]["appName"] == "Finder"
+    assert payload["desktopNative"]["nativeReadiness"]["runtimeReady"] is True
+    assert payload["agentStatus"]["nativeReadiness"]["runtimeReady"] is True
+    assert payload["agentStatus"]["degradationReasons"] == []
     assert payload["desktopNativeStatus"]["available"] is True
 
 
@@ -975,6 +979,164 @@ def test_execute_assigned_runtime_task_uses_explicit_route_steps_without_replann
     assert inbox_item["executionTrace"]["status"] == "completed"
 
 
+def test_remote_task_runner_adds_canonical_run_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.status_updates: list[tuple[str, dict]] = []
+
+        def runtime_tasks_assigned(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_tasks",
+                status_code=200,
+                data={
+                    "tasks": [
+                        {
+                            "id": "task-canonical",
+                            "title": "Canonical payload",
+                            "status": "queued",
+                            "payload": {
+                                "prompt": "Cihaz durumunu kontrol et",
+                                "metadata": {
+                                    "routeDecision": {
+                                        "route": "desktop_runtime",
+                                        "steps": [
+                                            {
+                                                "capability": "sys_info",
+                                                "args": {"query": "battery"},
+                                                "description": "Cihaz durumu okunacak.",
+                                            }
+                                        ],
+                                    }
+                                },
+                            },
+                        }
+                    ]
+                },
+            )
+
+        def runtime_task_status(self, task_id: str, payload: dict) -> BackendResult:
+            self.status_updates.append((task_id, payload))
+            return BackendResult(ok=True, request_id="req_status", status_code=200, data={"ok": True})
+
+        def heartbeat(self, payload: dict) -> BackendResult:
+            return BackendResult(ok=True, request_id="req_heartbeat", status_code=200, data={"ok": True})
+
+    def fake_run_capability(capability: str, args: dict, _state: dict) -> dict:
+        return {
+            "ok": True,
+            "tool": capability,
+            "output": "sys_info:ok",
+            "result": {"kind": capability, "receivedArgs": dict(args)},
+            "artifacts": [],
+            "error": None,
+        }
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+    monkeypatch.setattr(bridge, "run_capability", fake_run_capability)
+
+    result = runtime.execute_assigned_runtime_tasks()
+
+    assert result["ok"] is True
+    assert result["executions"][0]["status"] == "completed"
+    running = runtime.backend.status_updates[0][1]  # type: ignore[attr-defined]
+    completed = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
+    assert running["result"]["runnerVersion"] == "remote_task_orchestrator_v1"
+    assert running["result"]["taskRunId"].startswith("run_")
+    assert running["result"]["capabilityReadiness"][0]["capability"] == "sys_info"
+    assert completed["result"]["taskRunId"] == running["result"]["taskRunId"]
+    assert completed["result"]["executionTrace"]["runnerVersion"] == "remote_task_orchestrator_v1"
+    inbox_item = state_store.get_task_inbox_item("task-canonical")
+    assert inbox_item is not None
+    assert inbox_item["taskRunId"] == running["result"]["taskRunId"]
+    assert inbox_item["capabilityReadiness"][0]["capability"] == "sys_info"
+
+
+def test_remote_task_runner_readiness_failure_reports_safe_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    from runtime import remote_task_runner
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.status_updates: list[tuple[str, dict]] = []
+
+        def runtime_tasks_assigned(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_tasks",
+                status_code=200,
+                data={
+                    "tasks": [
+                        {
+                            "id": "task-readiness-fail",
+                            "title": "Readiness fail",
+                            "status": "queued",
+                            "payload": {
+                                "prompt": "Belge hazırla",
+                                "metadata": {
+                                    "routeDecision": {
+                                        "route": "desktop_runtime",
+                                        "steps": [
+                                            {
+                                                "capability": "document_write",
+                                                "args": {"title": "Rapor"},
+                                                "description": "DOCX üretilecek.",
+                                            }
+                                        ],
+                                    }
+                                },
+                            },
+                        }
+                    ]
+                },
+            )
+
+        def runtime_task_status(self, task_id: str, payload: dict) -> BackendResult:
+            self.status_updates.append((task_id, payload))
+            return BackendResult(ok=True, request_id="req_status", status_code=200, data={"ok": True})
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        remote_task_runner,
+        "capability_readiness",
+        lambda name, **_kwargs: {
+            "ready": False,
+            "available": False,
+            "dependencyReady": False,
+            "platformSupported": True,
+            "permissionClass": "approval_required",
+            "errorCode": "DEPENDENCY_UNAVAILABLE",
+            "missingDependencies": ["python-docx"],
+            "degradationReason": "dependency_unavailable",
+        },
+    )
+    monkeypatch.setattr(
+        bridge,
+        "run_capability",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("readiness failure must not execute")),
+    )
+
+    result = runtime.execute_assigned_runtime_tasks()
+
+    assert result["ok"] is True
+    assert result["executions"][0]["status"] == "failed"
+    terminal = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
+    assert terminal["status"] == "failed"
+    assert terminal["error"] == "DEPENDENCY_UNAVAILABLE"
+    assert terminal["result"]["runnerVersion"] == "remote_task_orchestrator_v1"
+    assert terminal["result"]["capabilityReadiness"][0]["missingDependencies"] == ["python-docx"]
+
+
 def test_explicit_route_side_effect_waits_for_approval_before_execution(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1247,12 +1409,61 @@ def test_runtime_websocket_mode_uses_poll_only_for_fallback_recovery(
     runtime = bridge.RuntimeBridge()
     runtime._runtime_ws_connected = True
     runtime._last_assigned_task_fetch_at = time.monotonic()
+    monkeypatch.setattr(runtime, "_assigned_task_poll_fallback_seconds", lambda: 12.0)
 
     assert runtime._should_poll_assigned_tasks() is False
 
     runtime._request_assigned_task_fetch()
 
     assert runtime._should_poll_assigned_tasks() is True
+
+
+def test_runtime_websocket_mode_periodically_polls_assigned_tasks_as_delivery_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    runtime._runtime_ws_connected = True
+    monkeypatch.setattr(runtime, "_assigned_task_poll_fallback_seconds", lambda: 12.0)
+
+    runtime._last_assigned_task_fetch_at = time.monotonic() - 11.0
+
+    assert runtime._should_poll_assigned_tasks() is False
+
+    runtime._last_assigned_task_fetch_at = time.monotonic() - 12.1
+
+    assert runtime._should_poll_assigned_tasks() is True
+
+
+def test_remote_task_explicit_computer_control_maps_to_desktop_operator(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    steps, preview = runtime._remote_task_explicit_steps_from_route(
+        {"id": "task-computer-control", "payload": {}},
+        "Safariyi aç",
+        {
+            "route": "desktop_runtime",
+            "planPreview": {
+                "steps": [
+                    {
+                        "capability": "computer_control",
+                        "args": {"prompt": "Safariyi aç"},
+                        "description": "Bilgisayar kontrolü çalışacak.",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert steps
+    assert steps[0]["capability"] == "desktop_operator.run"
+    assert steps[0]["args"]["goal"] == "Safariyi aç"
+    assert preview["agentPlan"]["capabilities"] == ["desktop_operator.run"]
 
 
 def test_execute_assigned_runtime_task_fails_closed_on_capability_mismatch(
@@ -2144,6 +2355,84 @@ def test_backend_auth_login_stays_ok_when_bootstrap_is_partial(
     assert response["brainProfile"]["ok"] is False
 
 
+def test_bootstrap_and_truth_refresh_share_canonical_backend_truth_surfaces(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+
+    class FakeBackend:
+        configured = True
+        loopback = False
+
+        def auth_me(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_me",
+                status_code=200,
+                data={
+                    "user": {"id": "user-1", "email": "user@example.com", "displayName": "Emre"},
+                    "subscription": {"planCode": "pro", "status": "active"},
+                    "usage": {"dailyRemaining": 5, "weeklyRemaining": 25, "serverBrainAllowed": True},
+                },
+            )
+
+        def mobile_bootstrap(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_bootstrap",
+                status_code=200,
+                data={"devices": [{"id": "mobile-1", "type": "mobile", "isActive": True}]},
+            )
+
+        def health(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_health",
+                status_code=200,
+                data={"network": {"externalClientsCanReachAdvertisedBaseUrl": True}},
+            )
+
+        def brain_profile(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_brain_profile",
+                status_code=200,
+                data={"chat": {"serverBrainName": "Elyan"}, "bridge": {"serverBrainReady": True}},
+            )
+
+        def runtime_session(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_runtime_session",
+                status_code=200,
+                data={
+                    "readiness": {"targetStatus": "ready", "canReceiveTasks": True},
+                    "connection": {"status": "online"},
+                },
+            )
+
+    runtime = bridge.RuntimeBridge()
+    state_store.update_state(
+        {
+            "account": {"accessToken": "user-token"},
+            "runtime": {
+                "runtimeToken": "runtime-token",
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+            },
+        }
+    )
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    bootstrap = runtime.bootstrap()
+    truth = runtime.backend_truth_refresh()
+
+    for key in ("authMe", "mobileBootstrap", "health", "brainProfile", "runtimeSession"):
+        assert bootstrap["backend"][key] == truth[key]
+        assert bootstrap["backend"]["controlPlane"][key] == truth["controlPlane"][key]
+
+
 def test_backend_auth_oauth_login_hydrates_truth_surfaces(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2589,6 +2878,31 @@ def test_ensure_runtime_registered_uses_heartbeat_fallback_when_websocket_unavai
     assert snapshot["runtime"]["ready"] is True
 
 
+def test_runtime_transport_heartbeats_until_websocket_is_actually_open(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    heartbeat_calls: list[str] = []
+    relay_started = {"value": False}
+    monkeypatch.setattr(runtime, "_start_runtime_websocket_if_needed", lambda: True)
+    monkeypatch.setattr(
+        runtime,
+        "_send_backend_runtime_heartbeat",
+        lambda status: heartbeat_calls.append(status)
+        or BackendResult(ok=True, request_id="req-heartbeat", status_code=200, data={"ok": True}),
+    )
+    monkeypatch.setattr(runtime, "_start_task_relay_if_ready", lambda: relay_started.__setitem__("value", True))
+
+    connected, heartbeat = runtime._connect_runtime_transport()
+
+    assert connected is False
+    assert heartbeat is not None and heartbeat.ok is True
+    assert heartbeat_calls == ["online"]
+    assert relay_started["value"] is True
+
+
 def test_ensure_runtime_registered_rejects_invalid_runtime_identity_without_backend_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2759,6 +3073,69 @@ def test_runtime_register_rejects_invalid_identity_without_backend_call(
     assert snapshot["runtime"]["deviceId"] == ""
     assert snapshot["runtime"]["deviceSecret"] == ""
     assert snapshot["pairing"]["lastSessionId"] == ""
+
+
+def test_concurrent_runtime_registration_is_single_flight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    state_store.update_state(
+        {
+            "account": {"accessToken": "user-token"},
+            "pairing": {
+                "lastSessionId": "session-1",
+                "desktopDeviceId": VALID_DEVICE_ID,
+                "lastSessionStatus": "claimed",
+            },
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "ready": False,
+            },
+        }
+    )
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.register_calls = 0
+
+        def runtime_register_identity_error(self) -> None:
+            return None
+
+        def register_runtime(self, _payload: dict[str, object]) -> BackendResult:
+            self.register_calls += 1
+            time.sleep(0.03)
+            return BackendResult(
+                ok=True,
+                request_id="req-register",
+                status_code=200,
+                data={
+                    "runtime": {"deviceId": VALID_DEVICE_ID, "connectionId": VALID_CONNECTION_ID},
+                    "tokens": {"accessToken": "runtime-token"},
+                },
+            )
+
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    def connect_once() -> tuple[bool, None]:
+        state_store.update_state({"runtime": {"ready": True}})
+        return True, None
+
+    monkeypatch.setattr(runtime, "_connect_runtime_transport", connect_once)
+    monkeypatch.setattr(runtime, "_prime_runtime_task_delivery", lambda: None)
+    results: list[dict[str, object]] = []
+    threads = [threading.Thread(target=lambda: results.append(runtime.ensure_runtime_registered())) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=1)
+
+    assert runtime.backend.register_calls == 1  # type: ignore[attr-defined]
+    assert len(results) == 2
+    assert all(result["ok"] is True for result in results)
+    assert any(result.get("reused") is True for result in results)
 
 
 def test_ensure_runtime_registered_primes_assigned_task_fetch(
@@ -3012,6 +3389,36 @@ def test_pairing_claim_poll_recovers_claimed_session_and_registers_runtime(
     assert snapshot["pairing"]["lastSessionStatus"] == "claimed"
     assert snapshot["runtime"]["runtimeToken"] == "runtime-token"
     assert snapshot["runtime"]["ready"] is True
+
+
+def test_pairing_claim_poll_marks_runtime_waiting_for_phone(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    state_store.update_state(
+        {
+            "pairing": {
+                "lastSessionId": "session-pending",
+                "pairingToken": "pair-token",
+                "lastSessionStatus": "pending",
+                "expiresAt": "2030-05-22T15:30:00Z",
+            },
+            "runtime": {
+                "lifecycleState": "offline",
+                "lastErrorCode": "runtime_unauthorized",
+            },
+        }
+    )
+    monkeypatch.setattr(runtime, "_pairing_claim_poll_loop", lambda *_args: None)
+
+    runtime._start_pairing_claim_poll_if_needed()
+
+    state = state_store.snapshot()
+    assert state["runtime"]["lifecycleState"] == "waiting_claim"
+    assert state["runtime"]["lastErrorCode"] == ""
+    assert state["runtime"]["ready"] is False
 
 
 def test_runtime_unauthorized_endpoint_starts_register_retry(
@@ -3683,6 +4090,7 @@ def test_router_handles_app_close_commands() -> None:
 def test_router_strips_turkish_case_particles_for_app_open_close() -> None:
     open_route = bridge.route_text_to_tool("chrome u aç")
     close_route = bridge.route_text_to_tool("chrome u kapat")
+    safari_route = bridge.route_text_to_tool("Safariyi aç")
 
     assert open_route is not None
     assert open_route.tool_name == "open_app"
@@ -3691,6 +4099,22 @@ def test_router_strips_turkish_case_particles_for_app_open_close() -> None:
     assert close_route is not None
     assert close_route.tool_name == "close_app"
     assert close_route.args == {"app_name": "chrome"}
+
+    assert safari_route is not None
+    assert safari_route.tool_name == "open_app"
+    assert safari_route.args == {"app_name": "Safari"}
+
+
+def test_router_handles_short_screenshot_command() -> None:
+    routed = bridge.route_text_to_tool("ss al")
+
+    assert routed is not None
+    assert routed.tool_name == "desktop_operator.observe_screen"
+    assert routed.args == {
+        "query": "ss al",
+        "target": "active_window",
+        "preserveScreenshot": True,
+    }
 
 
 def test_router_handles_youtube_ablative_suffix() -> None:
@@ -6754,6 +7178,119 @@ def test_task_intelligence_outcomes_stay_bounded(
     assert len(snapshot["recentClarifications"]) <= 16
 
 
+def test_select_conversation_preserves_active_session_when_backend_detail_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state({"account": {"accessToken": "user-token"}})
+
+    class FakeBackend:
+        configured = True
+        loopback = False
+
+        def chat_session_detail(self, _session_id: str) -> BackendResult:
+            return BackendResult(
+                ok=False,
+                request_id="req_chat_detail_failed",
+                status_code=503,
+                data=None,
+                error="service_unavailable",
+            )
+
+        def chat_sessions(self, **_kwargs: object) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_chat_sessions",
+                status_code=200,
+                data={
+                    "sessions": [
+                        {
+                            "id": VALID_CHAT_SESSION_ID,
+                            "title": "Geçmiş sohbet",
+                            "updatedAt": "2030-05-22T15:30:00Z",
+                        }
+                    ]
+                },
+            )
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    response = runtime.handle(
+        {
+            "capability": "conversation.select",
+            "payload": {"conversationId": VALID_CHAT_SESSION_ID},
+        }
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["activeConversationId"] == VALID_CHAT_SESSION_ID
+    assert response["result"]["state"]["conversation"]["activeId"] == VALID_CHAT_SESSION_ID
+    assert response["result"]["warning"]["code"] == "SERVICE_UNAVAILABLE"
+
+
+def test_backend_device_deactivate_removes_local_mobile_truth_when_refresh_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "controlPlane": {
+                "mobileBootstrap": {
+                    "ok": True,
+                    "data": {
+                        "devices": [
+                            {"id": "mobile-1", "type": "mobile", "label": "iPhone"},
+                            {"id": "mobile-2", "type": "mobile", "label": "iPad"},
+                        ]
+                    },
+                }
+            },
+            "pairing": {
+                "connectedDevices": [
+                    {"id": "mobile-1", "label": "iPhone"},
+                    {"id": "mobile-2", "label": "iPad"},
+                ]
+            },
+        }
+    )
+
+    class FakeBackend:
+        configured = True
+        loopback = False
+
+        def device_deactivate(self, device_id: str) -> BackendResult:
+            assert device_id == "mobile-1"
+            return BackendResult(ok=True, request_id="req_device_delete", status_code=200, data={"id": device_id})
+
+        def mobile_bootstrap(self) -> BackendResult:
+            return BackendResult(
+                ok=False,
+                request_id="req_mobile_bootstrap_failed",
+                status_code=503,
+                data=None,
+                error="service_unavailable",
+            )
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    response = runtime.handle(
+        {
+            "capability": "backend.device_deactivate",
+            "payload": {"deviceId": "mobile-1"},
+        }
+    )
+
+    assert response["ok"] is True
+    state = state_store.snapshot()
+    devices = state["controlPlane"]["mobileBootstrap"]["data"]["devices"]
+    assert [device["id"] for device in devices] == ["mobile-2"]
+    assert [device["id"] for device in state["pairing"]["connectedDevices"]] == ["mobile-2"]
+
+
 def test_append_message_stores_common_block_message_contract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -6768,3 +7305,83 @@ def test_append_message_stores_common_block_message_contract(
     assert message["status"] == "completed"
     assert message["createdAt"]
     assert message["blocks"] == [{"type": "text", "markdown": "Hazır cevap", "version": 1}]
+
+
+def test_runtime_full_access_session_is_volatile_and_shapes_effective_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    granted = runtime.handle(
+        {
+            "capability": "runtime.access.grant_session",
+            "payload": {"source": "test", "ttlSeconds": 120},
+        }
+    )
+
+    assert granted["ok"] is True
+    access = granted["result"]["access"]
+    assert access["fullAccessSession"]["enabled"] is True
+    assert access["effectivePermissions"]["allow_shell"] is True
+    assert access["effectivePermissions"]["allow_computer_control"] is True
+    assert state_store.snapshot().get("runtime", {}).get("access") is None
+
+    restarted = bridge.RuntimeBridge()
+    status = restarted.handle({"capability": "runtime.access.status", "payload": {}})
+    assert status["result"]["access"]["fullAccessSession"]["enabled"] is False
+
+
+def test_runtime_full_access_allows_shell_without_persistent_permission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.shell as shell
+
+    class FakeCompleted:
+        stdout = "ok\n"
+        stderr = ""
+        returncode = 0
+
+    monkeypatch.setattr(shell.subprocess, "run", lambda *_args, **_kwargs: FakeCompleted())
+    runtime = bridge.RuntimeBridge()
+    runtime.runtime_access_grant_session({"source": "test"})
+
+    response = runtime.handle(
+        {
+            "capability": "shell_run",
+            "payload": {"command": "npm test", "mode": "full_access"},
+        }
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["result"]["result"]["classifiedRisk"] == "mutating"
+
+
+def test_runtime_task_terminal_payload_marks_private_artifacts_share_required(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    payload, artifacts, ok = runtime._runtime_task_terminal_payload(
+        {
+            "chatOk": True,
+            "assistantMessage": "Yerel rapor hazır.",
+            "provider": "local",
+            "artifacts": [{"id": "art_1", "name": "rapor.pdf", "path": str(tmp_path / "rapor.pdf")}],
+            "planPreview": {"privacyClass": "local_private"},
+            "executionTrace": {"verificationState": {"status": "passed", "checkedSteps": 1}},
+        }
+    )
+
+    assert ok is True
+    assert payload["accessMode"] == "permission_gated"
+    assert payload["privacyClass"] == "local_private"
+    assert payload["verification"]["status"] == "passed"
+    assert payload["safeSummary"] == "Yerel rapor hazır."
+    assert artifacts[0]["shareable"] is False
+    assert artifacts[0]["requiresUserShare"] is True

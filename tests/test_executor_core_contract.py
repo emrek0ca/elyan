@@ -61,6 +61,11 @@ def test_executor_core_retries_verification_for_artifact_outputs(
     assert attempts["count"] == 2
     assert runtime_state["metrics"]["verificationRetries"] == 1
     assert runtime_state["metrics"]["completed"] >= 1
+    assert runtime_state["lastExecutionTrace"]["plannerVersion"] == "runtime_v2"
+    assert runtime_state["lastExecutionTrace"]["repair"]["attempted"] is True
+    assert runtime_state["lastExecutionTrace"]["repair"]["repairAttempts"] == 1
+    assert runtime_state["lastExecutionTrace"]["verificationState"]["status"] == "repaired"
+    assert runtime_state["lastExecutionTrace"]["stepStates"][0]["verificationStatus"] == "repaired"
 
 
 def test_executor_core_status_payload_exposes_router_and_capability_summary(
@@ -124,6 +129,10 @@ def test_executor_core_agent_plan_decomposes_steps_into_roles(
     assert payload["currentExecutions"][0]["agentPlan"]["phases"][0]["phase"] == "gather"
     assert payload["currentExecutions"][0]["agentPlan"]["riskLevel"] == "approval_required"
     assert payload["currentExecutions"][0]["agentPlan"]["requiresApproval"] is True
+    assert payload["currentExecutions"][0]["executionTrace"]["plannerVersion"] == "runtime_v2"
+    assert payload["currentExecutions"][0]["executionTrace"]["executionStrategy"] == "multi_lane"
+    assert payload["agentStatus"]["nativeReadiness"] == {}
+    assert payload["agentStatus"]["degradationReasons"] == []
 
 
 def test_executor_core_verifies_foreground_confirmed_for_open_app(
@@ -194,6 +203,11 @@ def test_executor_core_fails_when_browser_handoff_cannot_be_verified(
     assert ok is False
     assert error_code == "VERIFICATION_FAILED"
     assert content == "Tarayıcı handoff doğrulanamadı."
+    runtime_state = state_store.snapshot()["runtime"]["executor"]
+    assert runtime_state["lastExecutionTrace"]["stopReason"] == "verification_failed"
+    assert runtime_state["lastExecutionTrace"]["verificationState"]["status"] == "failed"
+    assert runtime_state["lastExecutionTrace"]["stepStates"][0]["status"] == "failed"
+    assert runtime_state["lastExecutionTrace"]["stepStates"][0]["errorCode"] == "VERIFICATION_FAILED"
 
 
 def test_executor_core_accepts_verified_media_handoff(

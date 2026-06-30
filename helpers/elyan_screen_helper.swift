@@ -166,6 +166,36 @@ func captureWindow(_ windowID: Int, to destination: URL) -> (Bool, String) {
     return (true, detail.trimmingCharacters(in: .whitespacesAndNewlines))
 }
 
+func captureScreen(to destination: URL) -> (Bool, String) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    process.arguments = ["-x", destination.path]
+    let outPipe = Pipe()
+    let errPipe = Pipe()
+    process.standardOutput = outPipe
+    process.standardError = errPipe
+
+    do {
+        try process.run()
+        process.waitUntilExit()
+    } catch {
+        return (false, "screencapture_failed: \(error.localizedDescription)")
+    }
+
+    let stderrData = errPipe.fileHandleForReading.readDataToEndOfFile()
+    let stdoutData = outPipe.fileHandleForReading.readDataToEndOfFile()
+    let detail = String(data: stderrData, encoding: .utf8) ?? String(data: stdoutData, encoding: .utf8) ?? ""
+    if process.terminationStatus != 0 {
+        return (false, detail.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    if !FileManager.default.fileExists(atPath: destination.path) {
+        return (false, "screenshot_file_missing")
+    }
+
+    return (true, detail.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+
 if mode != "capture_active_window" {
     emit([
         "ok": false,
@@ -200,10 +230,20 @@ let rect = rectFromBounds(bounds)
 let screenshotURL = URL(fileURLWithPath: NSTemporaryDirectory())
     .appendingPathComponent("elyan-screen-\(UUID().uuidString).png")
 
-let captureResult = captureWindow(windowID, to: screenshotURL)
+var captureResult = captureWindow(windowID, to: screenshotURL)
+var usedScreenFallback = false
+if !captureResult.0 && captureResult.1.lowercased().contains("could not create image from window") {
+    captureResult = captureScreen(to: screenshotURL)
+    usedScreenFallback = captureResult.0
+}
+
 if !captureResult.0 {
     let detail = captureResult.1.lowercased()
-    let errorCode = detail.contains("permission") || detail.contains("not permitted") ? "permission_denied" : "capture_failed"
+    let permissionDenied =
+        detail.contains("permission")
+        || detail.contains("not permitted")
+        || detail.contains("could not create image from display")
+    let errorCode = permissionDenied ? "permission_denied" : "capture_failed"
     emit([
         "ok": false,
         "error": errorCode,
@@ -214,16 +254,19 @@ if !captureResult.0 {
     exit(0)
 }
 
+let capturedRect = usedScreenFallback ? (NSScreen.main?.frame ?? rect) : rect
+
 emit([
     "ok": true,
     "image_path": screenshotURL.path,
     "owner_name": ownerName,
     "window_title": windowTitle,
+    "capture_scope": usedScreenFallback ? "screen" : "window",
     "bounds": [
-        "x": rect.origin.x,
-        "y": rect.origin.y,
-        "width": rect.width,
-        "height": rect.height,
+        "x": capturedRect.origin.x,
+        "y": capturedRect.origin.y,
+        "width": capturedRect.width,
+        "height": capturedRect.height,
     ],
     "detail": captureResult.1,
 ])

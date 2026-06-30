@@ -137,6 +137,22 @@ def _runtime_identity_repair_error_code(value: Any) -> str:
     return "runtime_register_invalid_identity"
 
 
+def _runtime_registration_identity_error(result: "BackendResult") -> str:
+    values: list[str] = [str(result.error or "")]
+    if isinstance(result.data, dict):
+        values.extend(str(result.data.get(key, "") or "") for key in ("error", "code", "message"))
+        nested = result.data.get("error")
+        if isinstance(nested, dict):
+            values.extend(str(nested.get(key, "") or "") for key in ("code", "message"))
+    normalized = " ".join(values).upper()
+    for code in ("RUNTIME_REGISTER_INVALID_IDENTITY", "DESKTOP_RUNTIME_DEVICE_NOT_FOUND"):
+        if code in normalized:
+            return code
+    if result.status_code == 404 and "DESKTOP RUNTIME DEVICE NOT FOUND" in normalized:
+        return "DESKTOP_RUNTIME_DEVICE_NOT_FOUND"
+    return ""
+
+
 def _request_exception_code(exc: Any) -> str:
     requests_mod = _requests_module()
     if requests_mod is not None and isinstance(exc, requests_mod.Timeout):
@@ -156,6 +172,47 @@ def _pairing_qr_text(session_id: str, pairing_code: str) -> str:
     if not session_id or not pairing_code:
         return ""
     return f"elyan://pair?sessionId={session_id}&pairingCode={pairing_code}"
+
+
+def _pairing_expired(expires_at: Any, *, skew_seconds: int = 15) -> bool:
+    text = str(expires_at or "").strip()
+    if not text:
+        return False
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        expires = dt.datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=dt.timezone.utc)
+    now = dt.datetime.now(dt.timezone.utc)
+    return expires <= now - dt.timedelta(seconds=skew_seconds)
+
+
+def _terminal_auth_failure(result: "BackendResult") -> bool:
+    if result.status_code not in {401, 403}:
+        return False
+    values: list[str] = []
+    for value in (result.error, result.data):
+        if isinstance(value, dict):
+            values.extend(str(value.get(key, "") or "").strip().lower() for key in ("error", "code", "message"))
+        else:
+            values.append(str(value or "").strip().lower())
+    text = " ".join(item for item in values if item)
+    if not text:
+        return False
+    terminal_markers = (
+        "invalid_refresh",
+        "refresh_token_invalid",
+        "refresh token invalid",
+        "refresh_token_revoked",
+        "refresh token revoked",
+        "session_expired",
+        "token_expired",
+        "session_revoked",
+        "refresh_revoked",
+    )
+    return any(marker in text for marker in terminal_markers)
 
 
 def _capability_list_from_payload(value: Any) -> list[str]:
@@ -252,6 +309,7 @@ class BackendClient:
         self.read_timeout = max(float(timeout), self.connect_timeout)
         self._capabilities_provider = capabilities_provider
         self._session_local = threading.local()
+        self._user_refresh_lock = threading.Lock()
 
     @staticmethod
     def _normalize_base_url(base_url: str | None) -> str | None:
@@ -816,7 +874,10 @@ class BackendClient:
                     "ready": False,
                     "lifecycleState": "offline",
                     "websocketConnected": False,
+                    "targetStatus": "",
+                    "targetErrorCode": "",
                     "lastErrorCode": error_code,
+                    "lastXRequestId": "",
                 },
                 "pairing": {
                     "realtimeReady": False,
@@ -827,6 +888,23 @@ class BackendClient:
                 },
             }
         )
+
+    def _expire_user_session(self) -> None:
+        if self._runtime_token():
+            self.disconnect_runtime()
+        self._clear_session()
+
+    def _refresh_user_session_after_unauthorized(self, stale_access_token: str) -> BackendResult:
+        with self._user_refresh_lock:
+            current_access_token = self._user_access_token()
+            if current_access_token and current_access_token != stale_access_token:
+                return BackendResult(
+                    ok=True,
+                    request_id=_request_id(),
+                    status_code=200,
+                    data={"reusedRotatedSession": True},
+                )
+            return self.refresh_session()
 
     def _authorized_request(
         self,
@@ -839,9 +917,15 @@ class BackendClient:
     ) -> BackendResult:
         request_id = _request_id()
         token = self._user_access_token() if token_kind == "user" else self._runtime_token()
-        headers: dict[str, str] = {}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        if not token:
+            return BackendResult(
+                ok=False,
+                request_id=request_id,
+                status_code=None,
+                data=None,
+                error="user_token_missing" if token_kind == "user" else "runtime_token_missing",
+            )
+        headers: dict[str, str] = {"Authorization": f"Bearer {token}"}
         result = self._request(
             method,
             path,
@@ -854,27 +938,32 @@ class BackendClient:
         if token_kind != "user" or not refresh_on_401 or result.status_code != 401:
             return result
 
-        refresh_result = self.refresh_session()
+        refresh_result = self._refresh_user_session_after_unauthorized(token)
         if not refresh_result.ok:
-            self._clear_session()
+            if _terminal_auth_failure(refresh_result):
+                self._expire_user_session()
+                error_code = "session_expired"
+                status_code = 401
+            else:
+                error_code = refresh_result.error or "auth_refresh_failed"
+                status_code = refresh_result.status_code
             return BackendResult(
                 ok=False,
                 request_id=request_id,
-                status_code=401,
-                data=result.data,
-                error="session_expired",
-                x_request_id=result.x_request_id,
+                status_code=status_code,
+                data=refresh_result.data if refresh_result.data is not None else result.data,
+                error=error_code,
+                x_request_id=refresh_result.x_request_id or result.x_request_id,
             )
 
         refreshed_token = self._user_access_token()
         if not refreshed_token:
-            self._clear_session()
             return BackendResult(
                 ok=False,
                 request_id=request_id,
                 status_code=401,
                 data=result.data,
-                error="session_expired",
+                error="auth_refresh_token_missing",
                 x_request_id=result.x_request_id,
             )
 
@@ -946,16 +1035,24 @@ class BackendClient:
                 error=_request_exception_code(exc),
             )
         if token_kind == "user" and refresh_on_401 and response.status_code == 401:
-            refresh_result = self.refresh_session()
+            refresh_result = self._refresh_user_session_after_unauthorized(token)
             if not refresh_result.ok:
-                self._clear_session()
+                if _terminal_auth_failure(refresh_result):
+                    self._expire_user_session()
+                    error_code = "session_expired"
+                    status_code = 401
+                else:
+                    error_code = refresh_result.error or "auth_refresh_failed"
+                    status_code = refresh_result.status_code
                 return BackendResult(
                     ok=False,
                     request_id=request_id,
-                    status_code=401,
-                    data=None,
-                    error="session_expired",
-                    x_request_id=response.headers.get("x-request-id") or response.headers.get("X-Request-Id"),
+                    status_code=status_code,
+                    data=refresh_result.data,
+                    error=error_code,
+                    x_request_id=refresh_result.x_request_id
+                    or response.headers.get("x-request-id")
+                    or response.headers.get("X-Request-Id"),
                 )
             return self._authorized_binary_request(method, path, token_kind=token_kind, refresh_on_401=False)
         if not response.ok:
@@ -1222,16 +1319,24 @@ class BackendClient:
                 error=_request_exception_code(exc),
             )
         if response.status_code == 401:
-            refresh_result = self.refresh_session()
+            refresh_result = self._refresh_user_session_after_unauthorized(token)
             if not refresh_result.ok:
-                self._clear_session()
+                if _terminal_auth_failure(refresh_result):
+                    self._expire_user_session()
+                    error_code = "session_expired"
+                    status_code = 401
+                else:
+                    error_code = refresh_result.error or "auth_refresh_failed"
+                    status_code = refresh_result.status_code
                 return BackendResult(
                     ok=False,
                     request_id=request_id,
-                    status_code=401,
-                    data=None,
-                    error="session_expired",
-                    x_request_id=response.headers.get("x-request-id") or response.headers.get("X-Request-Id"),
+                    status_code=status_code,
+                    data=refresh_result.data,
+                    error=error_code,
+                    x_request_id=refresh_result.x_request_id
+                    or response.headers.get("x-request-id")
+                    or response.headers.get("X-Request-Id"),
                 )
             return self.auth_avatar_get()
         if not response.ok:
@@ -1282,8 +1387,8 @@ class BackendClient:
         )
         if result.ok and isinstance(result.data, dict):
             self._apply_user_truth(result.data, include_tokens=True)
-        elif result.status_code == 401:
-            self._clear_session()
+        elif _terminal_auth_failure(result):
+            self._expire_user_session()
         return result
 
     def refresh_session(self) -> BackendResult:
@@ -1559,6 +1664,19 @@ class BackendClient:
             request_id=request_id,
         )
         if result.ok and isinstance(result.data, dict):
+            state_store.update_state(
+                {
+                    "runtime": {
+                        "runtimeToken": "",
+                        "connectionId": "",
+                        "currentTaskId": "",
+                        "ready": False,
+                        "websocketConnected": False,
+                        "targetStatus": "",
+                        "targetErrorCode": "",
+                    }
+                }
+            )
             self._apply_runtime_truth(
                 {
                     **result.data,
@@ -1571,6 +1689,17 @@ class BackendClient:
                 }
             )
         elif not result.ok:
+            identity_error_code = _runtime_registration_identity_error(result)
+            if identity_error_code:
+                self.repair_invalid_runtime_identity(identity_error_code)
+                return BackendResult(
+                    ok=False,
+                    request_id=result.request_id,
+                    status_code=result.status_code,
+                    data=result.data,
+                    error=_runtime_identity_repair_error_code(identity_error_code),
+                    x_request_id=result.x_request_id,
+                )
             self._apply_runtime_truth(
                 {
                     "ready": False,
@@ -1776,6 +1905,37 @@ class BackendClient:
     def pairing_create_session(self, payload: dict[str, Any]) -> BackendResult:
         request_payload = dict(payload)
         pairing = _map_from(state_store.snapshot().get("pairing"))
+        current_session_id = _first_nonempty(pairing.get("lastSessionId"))
+        current_status = _first_nonempty(pairing.get("lastSessionStatus")).lower()
+        current_pairing_token = _first_nonempty(pairing.get("pairingToken"))
+        current_pairing_code = _first_nonempty(pairing.get("pairingCode"))
+        current_qr_text = _first_nonempty(pairing.get("qrText"))
+        force_new = bool(request_payload.pop("forceNew", False) or request_payload.pop("force_new", False))
+        if (
+            not force_new
+            and current_status == "pending"
+            and current_session_id
+            and current_pairing_token
+            and (current_pairing_code or current_qr_text)
+            and not _pairing_expired(pairing.get("expiresAt"))
+        ):
+            return BackendResult(
+                ok=True,
+                request_id=_request_id(),
+                status_code=200,
+                data={
+                    "sessionId": current_session_id,
+                    "desktopDeviceId": _first_nonempty(pairing.get("desktopDeviceId")),
+                    "status": "pending",
+                    "pairingToken": current_pairing_token,
+                    "pairingCode": current_pairing_code,
+                    "manualEntryCode": _first_nonempty(pairing.get("manualEntryCode")),
+                    "qrText": current_qr_text,
+                    "qrDataUrl": _first_nonempty(pairing.get("qrDataUrl")),
+                    "expiresAt": _first_nonempty(pairing.get("expiresAt")),
+                    "reused": True,
+                },
+            )
         external_device_id = _first_nonempty(
             request_payload.get("externalDeviceId"),
             request_payload.get("external_device_id"),
@@ -1811,6 +1971,29 @@ class BackendClient:
         )
 
     def pairing_get_session(self, session_id: str, pairing_token: str | None = None) -> BackendResult:
+        current_pairing = _map_from(state_store.snapshot().get("pairing"))
+        if (
+            session_id
+            and session_id == _first_nonempty(current_pairing.get("lastSessionId"))
+            and _pairing_expired(current_pairing.get("expiresAt"))
+        ):
+            self._clear_active_pairing_session(error_code="PAIRING_SESSION_EXPIRED")
+            self._apply_runtime_truth(
+                {
+                    "ready": False,
+                    "lifecycleState": "waiting_claim",
+                    "websocketConnected": False,
+                    "lastErrorCode": "pairing_session_expired",
+                    "xRequestId": "",
+                }
+            )
+            return BackendResult(
+                ok=False,
+                request_id=_request_id(),
+                status_code=409,
+                data={"error": "PAIRING_SESSION_EXPIRED"},
+                error="Pair session has expired",
+            )
         token = _first_nonempty(pairing_token, self._pairing_token())
         headers = {"x-pairing-token": token} if token else {}
         result = self._request("GET", f"/v1/pairing/sessions/{session_id}", headers=headers)

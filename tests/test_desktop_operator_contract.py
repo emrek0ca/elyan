@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,31 @@ def _dangerous_state(**permissions: bool) -> dict[str, object]:
     )
 
 
+def test_desktop_operator_readiness_ignores_stale_native_unavailable_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state = state_store._ensure_defaults(
+        {
+            "runtime": {
+                "capabilityStates": {
+                    "desktop_operator.observe_screen": {
+                        "available": False,
+                        "ready": False,
+                        "errorCode": "CAPABILITY_UNAVAILABLE",
+                    }
+                }
+            }
+        }
+    )
+
+    readiness = capability_registry.capability_readiness("desktop_operator.observe_screen", state=state)
+
+    assert readiness["ready"] is True
+    assert readiness["errorCode"] == ""
+
+
 def test_desktop_operator_observe_screen_requires_permission(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -37,6 +63,26 @@ def test_desktop_operator_observe_screen_requires_permission(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "PERMISSION_REQUIRED"
+
+
+def test_screen_helper_display_capture_failure_maps_to_permission_required() -> None:
+    from actions import screen_vision
+    from actions._platform_common import is_permission_detail
+
+    parsed_ok, detail, payload = screen_vision._parse_capture_payload(
+        json.dumps(
+            {
+                "ok": False,
+                "error": "permission_denied",
+                "detail": "could not create image from display",
+            }
+        )
+    )
+
+    assert parsed_ok is False
+    assert payload is None
+    assert "macOS ekran kaydi izni gerekiyor" in detail
+    assert is_permission_detail(detail) is True
 
 
 def test_desktop_operator_observe_screen_returns_structured_observation(

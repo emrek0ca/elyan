@@ -27,8 +27,8 @@ export const StickyScroll = ({
     <div className="relative flex justify-center w-full" ref={ref}>
       <div className="flex w-full relative z-10 justify-between items-start">
         {/* Left side text content */}
-        <div className="w-full md:w-1/2 relative py-[20vh] px-4 md:px-10 z-20">
-          <div className="space-y-[40vh]">
+        <div className="w-full md:w-1/2 relative py-[12vh] md:py-[20vh] px-1 md:px-10 z-20">
+          <div className="space-y-28 md:space-y-[34vh]">
             {content.map((item, index) => (
               <motion.div
                 key={item.title + index}
@@ -37,17 +37,17 @@ export const StickyScroll = ({
                 viewport={{ margin: "-40% 0px -40% 0px" }}
                 onViewportEnter={() => setActiveCard(index)}
                 transition={{ duration: 0.5 }}
-                className="mt-10 md:mt-20"
+                className="mt-8 md:mt-20"
               >
-                <h3 className="text-3xl md:text-5xl font-bold text-[var(--text)] mb-6">
+                <h3 className="text-3xl md:text-5xl font-bold text-[var(--text)] mb-4 md:mb-6">
                   {item.title}
                 </h3>
-                <p className="text-xl md:text-2xl text-[var(--text-muted)] max-w-lg leading-relaxed">
+                <p className="text-base md:text-2xl text-[var(--text-muted)] max-w-lg leading-relaxed">
                   {item.description}
                 </p>
               </motion.div>
             ))}
-            <div className="h-[20vh]" />
+            <div className="h-10 md:h-[20vh]" />
           </div>
         </div>
 

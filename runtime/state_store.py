@@ -402,6 +402,11 @@ def _normalize_task_item(task: dict[str, Any]) -> dict[str, Any]:
         execution_trace = copy.deepcopy(execution_trace)
     else:
         execution_trace = {}
+    capability_readiness = task.get("capabilityReadiness")
+    if isinstance(capability_readiness, list):
+        capability_readiness = [copy.deepcopy(item) for item in capability_readiness if isinstance(item, dict)]
+    else:
+        capability_readiness = []
     artifact_count = task.get("artifactCount")
     try:
         normalized_artifact_count = max(0, int(artifact_count or 0))
@@ -419,6 +424,8 @@ def _normalize_task_item(task: dict[str, Any]) -> dict[str, Any]:
         "routeDecision": route_decision,
         "planPreview": plan_preview,
         "executionTrace": execution_trace,
+        "capabilityReadiness": capability_readiness,
+        "taskRunId": str(task.get("taskRunId", "") or "").strip()[:120],
         "deliveryState": str(task.get("deliveryState", "") or "").strip()[:32],
         "runtimeConnectionId": str(task.get("runtimeConnectionId", "") or "").strip()[:80],
         "dispatchLeaseId": str(task.get("dispatchLeaseId", "") or "").strip()[:120],
@@ -1646,7 +1653,7 @@ def upsert_task_inbox_item(task: dict[str, Any], *, last_synced_at: str = "") ->
         if not isinstance(links, list):
             links = []
         normalized_status = str(normalized.get("status", "") or "").strip()
-        terminal_status = normalized_status in {"completed", "failed", "canceled"}
+        terminal_status = normalized_status in {"completed", "failed", "canceled", "cancelled"}
         removed_pending_plan_ids: set[str] = set()
         next_links: list[dict[str, Any]] = []
         for item in links:
@@ -1731,7 +1738,7 @@ def reconcile_task_inbox(
                 reconciled.append(normalized)
                 continue
             last_remote_status = str(normalized.get("lastRemoteStatus", "") or "").strip()
-            if last_remote_status in {"completed", "failed", "canceled"}:
+            if last_remote_status in {"completed", "failed", "canceled", "cancelled"}:
                 normalized["status"] = last_remote_status
             else:
                 normalized["status"] = "unknown"
@@ -1774,18 +1781,28 @@ def save_remote_task_link(
     *,
     title: str = "",
     status: str = "waiting_approval",
+    task_run_id: str = "",
+    remote_task_id: str = "",
+    last_backend_status: str = "",
+    resume_token: str = "",
+    terminal_duplicate_guard: bool = False,
 ) -> dict[str, Any]:
     normalized_task_id = str(task_id or "").strip()
     normalized_plan_id = str(pending_plan_id or "").strip()
     normalized_conversation_id = str(conversation_id or "").strip()
-    if not normalized_task_id or not normalized_plan_id:
+    if not normalized_task_id or (not normalized_plan_id and not str(task_run_id or "").strip()):
         return {}
     stored = {
         "taskId": normalized_task_id,
+        "remoteTaskId": str(remote_task_id or normalized_task_id).strip()[:120],
         "pendingPlanId": normalized_plan_id,
         "conversationId": normalized_conversation_id,
+        "taskRunId": str(task_run_id or "").strip()[:120],
         "title": " ".join(str(title or "").split())[:200],
         "status": str(status or "waiting_approval").strip()[:64] or "waiting_approval",
+        "lastBackendStatus": str(last_backend_status or status or "waiting_approval").strip()[:64] or "waiting_approval",
+        "resumeToken": str(resume_token or normalized_plan_id).strip()[:160],
+        "terminalDuplicateGuard": bool(terminal_duplicate_guard),
         "updatedAt": _task_inbox_timestamp(),
     }
     with _LOCK:

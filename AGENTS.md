@@ -7,16 +7,15 @@ This file is the single engineering direction document for the desktop repo. Whe
 ## Current Product Shape
 
 - Desktop app lives at the repository root and is the shipping desktop product.
-- Desktop stack: Electron renderer/preload/main in `src/`, Python runtime in `runtime/`, C++ thin OS shim in `native/window_tools/`, Rust sidecars where compute-heavy native work is needed.
+- Desktop stack: macOS SwiftUI app in `apps/macos/ElyanMac`, Windows Flutter app in `apps/windows` (planned), and common Python runtime in `runtime/`.
 - Mobile remains Flutter-only in `/Users/emrekoca/Desktop/mobile-elyan` for iOS and Android.
 - Backend/control-plane remains separate in `/Users/emrekoca/Desktop/elyan-backend`.
-- Flutter desktop is not part of the shipping direction. Do not add or revive a desktop Flutter shell.
 
 ## System Boundary
 
 Required desktop execution path:
 
-`Electron renderer -> preload API -> Electron main -> Python runtime bridge -> capability registry -> safety policy -> adapter -> library/tool/native integration -> structured result`
+`SwiftUI (macOS) / Flutter (Windows) -> JSON stdin/stdout IPC -> Python runtime bridge -> capability registry -> safety policy -> adapter -> library/tool/native integration -> structured result`
 
 Never use:
 
@@ -29,12 +28,12 @@ Mobile sends tasks and shows status/results. Backend owns auth, billing, devices
 
 ## What Exists Now
 
-- Electron desktop shell with custom renderer, preload API, main process, native snapshot plumbing, window management, provider vault, dictation manager, and runtime supervisor.
+- Native macOS SwiftUI desktop shell with RuntimeBridgeSwift, PythonRuntimeSupervisor, and Liquid Glass design system.
 - Python runtime bridge with structured request/response envelopes, backend truth refresh, auth/login/register/logout, pairing, runtime registration/heartbeat/session, conversation/session actions, task relay, MCP, skills, local model status, executor core, and capability registry.
 - Runtime task flow includes backend-mediated assigned tasks, dispatch ack, status/artifact reporting, approval resume/cancel paths, and local task inbox state.
 - Capability categories already include desktop operator, browser, document read/write, OCR, image read/generation, media, speech, math, LaTeX, retrieval, local models, MCP tools, skills, shell, calendar/reminders, email, data analysis, charting, and quantum actions.
-- Recent desktop parity work is aligning Electron with the mobile product flow: signed-in home chat, session-based history/archive, backend truth hydration, runtime/device readiness, active remote task inbox, approval-required tasks, reconnect/degraded/offline states, and desktop-only power surfaces for apps/skills/operator readiness.
-- Mobile design/behavior remains the reference for chat, auth, history, pairing, realtime, and task status, but implementation must be native to Electron/React/TypeScript, not copied from Flutter.
+- Desktop parity aligns with the mobile product flow: signed-in home chat, session-based history/archive, backend truth hydration, runtime/device readiness, active remote task inbox, approval-required tasks, reconnect/degraded/offline states, and desktop-only power surfaces for apps/skills/operator readiness.
+- Mobile design/behavior remains the reference for chat, auth, history, pairing, realtime, and task status.
 
 ## Runtime Envelope Contract
 
@@ -84,7 +83,7 @@ No raw stack traces, private prompt/file contents, credentials, or uncontrolled 
 - Every capability goes through registry + adapter + safety policy.
 - Missing dependencies must degrade safely and must not crash app startup.
 - Heavy modules must lazy-load. Startup should load only protocol/config/registry/health truth.
-- Runtime startup must be asynchronous. Electron UI must never freeze because Python, native modules, MCP, OCR, Playwright, local models, or document conversion are slow/missing.
+- Runtime startup must be asynchronous. Desktop UI must never freeze because Python, native modules, MCP, OCR, Playwright, local models, or document conversion are slow/missing.
 - Long-running work must support timeout and cancellation where feasible.
 - No uncontrolled polling, infinite loops, or hidden background actions.
 - No hardcoded user-specific paths. Use `pathlib` in Python and platform-safe APIs in TypeScript/Dart.
@@ -158,34 +157,21 @@ V1 is ready only when all of these are true:
 - Local private execution stays on desktop unless the product flow explicitly allows sharing.
 - Packaging works with optional PyInstaller runtime bundle and fallback/degraded runtime status.
 - Verification passes:
-  - `npm run typecheck`
-  - `npm run test`
-  - `npm run build`
-  - `npm run test:smoke` when a renderer preview/dev server is available
+  - `xcodebuild -project apps/macos/ElyanMac/ElyanMac.xcodeproj -target ElyanMac`
   - `python -m pytest tests/test_runtime_startup_contract.py tests/test_runtime_bridge_contract.py -q`
 
 ## Commands
 
-Run desktop locally:
+Run macOS desktop locally:
 
 ```bash
-npm install
-npm run dev
-```
-
-Root helper:
-
-```bash
-script/build_and_run.sh
+xcodebuild -project apps/macos/ElyanMac/ElyanMac.xcodeproj -target ElyanMac
 ```
 
 Full verification:
 
 ```bash
-npm run typecheck
-npm run test
-npm run build
-npm run test:smoke
+xcodebuild -project apps/macos/ElyanMac/ElyanMac.xcodeproj -target ElyanMac
 python -m pytest tests/test_runtime_startup_contract.py tests/test_runtime_bridge_contract.py -q
 ```
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime as dt
 import difflib
 import inspect
@@ -46,6 +47,7 @@ from runtime.task_router import (
 )
 from runtime import state_store
 from runtime.executor_core import ExecutorCore
+from runtime.remote_task_runner import RemoteTaskRunner
 from runtime import native_file_indexer
 from runtime import mcp_runtime
 from runtime import skill_runtime
@@ -56,6 +58,20 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 PROMPT_PATH = BASE_DIR / "core" / "prompt.txt"
 STATE = state_store
 KNOWN_PROVIDER_IDS = {"local", "ollama", "lmstudio", "llamacpp", "openai", "gemini", "anthropic", "groq", "custom"}
+FULL_ACCESS_PERMISSION_KEYS = {
+    "allow_shell",
+    "allow_computer_control",
+    "allow_screen_analysis",
+    "allow_system_inspection",
+    "allow_browser_control",
+}
+FULL_ACCESS_CRITICAL_ACTIONS = [
+    "credential_access",
+    "payment",
+    "irreversible_delete",
+    "external_upload",
+    "external_share",
+]
 GOOGLE_LIVE_MODEL_DEFAULT = "models/gemini-2.5-flash"
 LOCAL_MODELS_CAPABILITY_NAME = "local_models.api"
 RECOMMENDED_LOCAL_MODELS = [
@@ -171,6 +187,9 @@ def _canonical_capability_name(value: Any) -> str:
         "desktop.operator.execute_action": "desktop_operator.execute_action",
         "desktop.operator.run": "desktop_operator.run",
         "desktop.operator.cancel": "desktop_operator.cancel",
+        "computer_control": "desktop_operator.run",
+        "computer.control": "desktop_operator.run",
+        "computer.run": "desktop_operator.run",
     }
     if normalized in aliases:
         return aliases[normalized]
@@ -643,6 +662,13 @@ def _desktop_native_snapshot_payload() -> dict[str, Any]:
             "operator": {},
             "runtimeStatus": {},
             "permissionsStatus": {},
+            "nativeReadiness": {
+                "runtimeReady": False,
+                "nativeAddonAvailable": False,
+                "permissionProbeAvailable": False,
+                "operatorReady": False,
+                "degradationReasons": ["native_snapshot_unavailable"],
+            },
         }
     result = snapshot.get("result", {}) if isinstance(snapshot, dict) else {}
     result = result if isinstance(result, dict) else {}
@@ -653,7 +679,7 @@ def _desktop_native_snapshot_payload() -> dict[str, Any]:
     processes = result.get("processes", {})
     active_window = result.get("activeWindow", {})
     operator = result.get("operator", {})
-    return {
+    payload = {
         "available": bool(runtime_status.get("available", False)),
         "text": str(snapshot.get("text", "") or ""),
         "lastErrorCode": str(runtime_status.get("lastErrorCode", "") or ""),
@@ -673,6 +699,8 @@ def _desktop_native_snapshot_payload() -> dict[str, Any]:
         "runtimeStatus": runtime_status,
         "permissionsStatus": permissions_status_result,
     }
+    payload["nativeReadiness"] = _desktop_native_readiness(payload)
+    return payload
 
 
 def _desktop_native_context_lines(snapshot: dict[str, Any]) -> str:
@@ -708,6 +736,31 @@ def _desktop_native_context_lines(snapshot: dict[str, Any]) -> str:
     if permission_bits:
         lines.append(f"permissions={', '.join(permission_bits)}")
     return "\n".join(lines)
+
+
+def _desktop_native_readiness(snapshot: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(snapshot) if isinstance(snapshot, dict) else {}
+    operator = payload.get("operator", {})
+    operator = operator if isinstance(operator, dict) else {}
+    degraded_reasons: list[str] = []
+    if not bool(payload.get("available", False)):
+        degraded_reasons.append(str(payload.get("lastErrorCode", "") or "native_snapshot_unavailable"))
+    if not bool(payload.get("permissionProbeAvailable", False)):
+        degraded_reasons.append("permission_probe_partial")
+    operator_declared = bool(operator)
+    operator_error = str(operator.get("lastErrorCode", "") or "").strip()
+    operator_mode = str(operator.get("mode", "") or "").strip().lower()
+    if operator_declared and not bool(operator.get("available", False)) and operator_error not in {"", "native_snapshot_unavailable"}:
+        degraded_reasons.append("operator_unavailable")
+    elif operator_declared and operator_mode not in {"", "scaffold_only"} and not bool(operator.get("screenObservationReady", False)):
+        degraded_reasons.append("operator_screen_observation_unavailable")
+    return {
+        "runtimeReady": bool(payload.get("available", False)),
+        "nativeAddonAvailable": bool(payload.get("available", False)) and str(payload.get("source", "") or "") == "native_addon",
+        "permissionProbeAvailable": bool(payload.get("permissionProbeAvailable", False)),
+        "operatorReady": bool(operator.get("available", False)) if operator_declared else True,
+        "degradationReasons": degraded_reasons,
+    }
 
 
 def _operator_status_payload(state: dict[str, Any]) -> dict[str, Any]:
@@ -2114,6 +2167,7 @@ def _agent_status_from_result(result: dict[str, Any], *, active: bool = False) -
     display_action = display_stage
     if retrieval_used or shared_retrieval_used:
         display_action = "Kaynak topluyor" if active else "Kontrol ediyor"
+    native_readiness = _desktop_native_readiness(_desktop_native_snapshot_payload())
 
     return {
         "active": bool(active),
@@ -2122,6 +2176,8 @@ def _agent_status_from_result(result: dict[str, Any], *, active: bool = False) -
         "verificationUsed": verification_used,
         "verificationReason": verification_reason,
         "executionStrategy": "balanced",
+        "nativeReadiness": native_readiness,
+        "degradationReasons": list(native_readiness.get("degradationReasons", [])),
     }
 
 
@@ -4764,6 +4820,7 @@ class RuntimeBridge:
         self._runtime_ws_reconnect_attempts = 0
         self._last_dispatch_ack_at = ""
         self._runtime_register_retry_lock = threading.RLock()
+        self._runtime_registration_lock = threading.RLock()
         self._runtime_register_retry_thread: threading.Thread | None = None
         self._runtime_register_retry_target: dict[str, str] | None = None
         self._runtime_register_retry_generation = 0
@@ -4780,6 +4837,14 @@ class RuntimeBridge:
         self._last_assigned_task_fetch_at = 0.0
         self._last_shared_brain_error_code = ""
         self.executor_core = ExecutorCore()
+        self.remote_task_runner = RemoteTaskRunner(self)
+        self._full_access_session: dict[str, Any] = {
+            "enabled": False,
+            "startedAt": "",
+            "expiresAt": "",
+            "source": "",
+            "scope": "session",
+        }
         self._start_runtime_register_retry_if_needed()
         self._start_pairing_claim_poll_if_needed()
         native_file_indexer.handle_state_change()
@@ -5136,6 +5201,12 @@ class RuntimeBridge:
         target = self._pairing_claim_poll_target_from_snapshot(snapshot)
         if target is None:
             return
+        self._runtime_state_patch(
+            lifecycle_state="waiting_claim",
+            ready=False,
+            websocket_connected=False,
+            error_code="",
+        )
         with self._pairing_claim_poll_lock:
             if (
                 self._pairing_claim_poll_thread
@@ -5158,6 +5229,8 @@ class RuntimeBridge:
 
     def _pairing_claim_poll_loop(self, target: dict[str, str], generation: int) -> None:
         try:
+            if not callable(getattr(self.backend, "pairing_get_session", None)):
+                return
             backoff = self._pairing_claim_poll_backoff_seconds()
             attempt = 0
             while self._pairing_claim_poll_should_continue(target, generation=generation):
@@ -5212,6 +5285,8 @@ class RuntimeBridge:
             thread.start()
 
     def _ensure_runtime_registered_for_status_if_needed(self) -> None:
+        if not callable(getattr(self.backend, "register_runtime", None)):
+            return
         snapshot = self._runtime_register_retry_snapshot()
         if not self._runtime_register_retry_eligible(snapshot):
             return
@@ -5262,7 +5337,8 @@ class RuntimeBridge:
         )
 
     def _connect_runtime_transport(self) -> tuple[bool, BackendResult | None]:
-        connected = self._start_runtime_websocket_if_needed()
+        websocket_started = self._start_runtime_websocket_if_needed()
+        connected = self._runtime_ws_connected
         heartbeat = None
         if not connected:
             heartbeat = self._send_backend_runtime_heartbeat("online")
@@ -5283,7 +5359,7 @@ class RuntimeBridge:
                     error_code=_safe_error_code(heartbeat.error or "runtime_heartbeat_failed"),
                     x_request_id=heartbeat.x_request_id or heartbeat.request_id,
                 )
-        if connected or (heartbeat and heartbeat.ok):
+        if websocket_started or connected or (heartbeat and heartbeat.ok):
             self._start_task_relay_if_ready()
         return connected, heartbeat
 
@@ -5455,12 +5531,13 @@ class RuntimeBridge:
         )
         if mobile.ok and isinstance(mobile.data, dict):
             self._sync_task_inbox_from_bootstrap_payload(mobile.data)
-        runtime_session = self.backend.runtime_session() if self._runtime_auth_ready() else BackendResult(
+        runtime_session_fn = getattr(self.backend, "runtime_session", None)
+        runtime_session = runtime_session_fn() if self._runtime_auth_ready() and callable(runtime_session_fn) else BackendResult(
             ok=False,
             request_id=_request_id(),
             status_code=None,
             data=None,
-            error="runtime_token_missing",
+            error="runtime_session_unavailable" if self._runtime_auth_ready() else "runtime_token_missing",
         )
         if runtime_session.ok and isinstance(runtime_session.data, dict):
             readiness = runtime_session.data.get("readiness", {})
@@ -5557,8 +5634,12 @@ class RuntimeBridge:
         execution_trace = task.get("executionTrace")
         if not isinstance(execution_trace, dict):
             execution_trace = dict(existing.get("executionTrace", {}) or {})
+        capability_readiness = task.get("capabilityReadiness")
+        if not isinstance(capability_readiness, list):
+            capability_readiness = list(existing.get("capabilityReadiness", []) or [])
         return {
             "id": task_id,
+            "taskRunId": str(task.get("taskRunId", "") or existing.get("taskRunId", "") or "").strip()[:120],
             "title": str(task.get("title", "") or existing.get("title", "") or "Yeni görev").strip()[:200],
             "status": status,
             "targetDeviceId": str(task.get("targetDeviceId", "") or existing.get("targetDeviceId", "") or "").strip()[:80],
@@ -5569,6 +5650,7 @@ class RuntimeBridge:
             "routeDecision": route_decision,
             "planPreview": plan_preview,
             "executionTrace": execution_trace,
+            "capabilityReadiness": capability_readiness,
             "deliveryState": str(task.get("deliveryState", "") or existing.get("deliveryState", "") or "").strip()[:32],
             "runtimeConnectionId": str(task.get("runtimeConnectionId", "") or existing.get("runtimeConnectionId", "") or "").strip()[:80],
             "dispatchLeaseId": str(task.get("dispatchLeaseId", "") or existing.get("dispatchLeaseId", "") or "").strip()[:120],
@@ -5652,6 +5734,11 @@ class RuntimeBridge:
             execution_trace = result_payload.get("executionTrace")
         if not isinstance(execution_trace, dict):
             execution_trace = dict(existing.get("executionTrace", {}) or {})
+        capability_readiness = payload.get("capabilityReadiness")
+        if not isinstance(capability_readiness, list):
+            capability_readiness = result_payload.get("capabilityReadiness")
+        if not isinstance(capability_readiness, list):
+            capability_readiness = list(existing.get("capabilityReadiness", []) or [])
         summary = str(payload.get("summary", "") or "").strip()
         if not summary:
             summary = str(payload.get("message", "") or "").strip()
@@ -5664,6 +5751,8 @@ class RuntimeBridge:
             "approvalRequest": approval_request,
             "planPreview": plan_preview,
             "executionTrace": execution_trace,
+            "capabilityReadiness": capability_readiness,
+            "taskRunId": str(payload.get("taskRunId", "") or result_payload.get("taskRunId", "") or existing.get("taskRunId", "") or "").strip()[:120],
             "updatedAt": _utc_now_iso(),
             "lastVerifiedAt": _utc_now_iso(),
             "lastRemoteStatus": str(payload.get("status", "") or existing.get("status", "") or "queued"),
@@ -5883,17 +5972,37 @@ class RuntimeBridge:
 
     def _runtime_task_result_payload(self, local_result: dict[str, Any]) -> dict[str, Any]:
         structured_result = local_result.get("structuredResult")
+        plan_preview = local_result.get("planPreview")
+        privacy_class = "local_private"
+        if isinstance(plan_preview, dict):
+            privacy_class = str(plan_preview.get("privacyClass", "") or privacy_class)
+        execution_trace = local_result.get("executionTrace")
+        verification = {}
+        if isinstance(execution_trace, dict):
+            verification = execution_trace.get("verificationState", {})
+            verification = verification if isinstance(verification, dict) else {}
+        access_mode = "full_access" if self._full_access_active() else "permission_gated"
+        safe_summary = self._truncate_text(str(local_result.get("assistantMessage", "") or "").strip(), 1000)
         result_payload: dict[str, Any] = {
-            "assistantMessage": str(local_result.get("assistantMessage", "") or "").strip(),
+            "assistantMessage": safe_summary,
             "provider": str(local_result.get("provider", "") or ""),
             "toolEvents": local_result.get("toolEvents", []) if isinstance(local_result.get("toolEvents"), list) else [],
             "conversationId": local_result.get("conversationId", ""),
             "structuredResult": structured_result,
+            "taskRunId": str(local_result.get("taskRunId", "") or ""),
+            "accessMode": access_mode,
+            "privacyClass": privacy_class,
+            "verification": verification or {"status": "completed" if local_result.get("chatOk", True) is not False else "failed"},
+            "safeSummary": safe_summary,
+            "capabilityReadiness": local_result.get("capabilityReadiness", [])
+            if isinstance(local_result.get("capabilityReadiness"), list)
+            else [],
         }
-        plan_preview = local_result.get("planPreview")
+        agent_status = local_result.get("agentStatus")
+        if isinstance(agent_status, dict):
+            result_payload["agentStatus"] = dict(agent_status)
         if isinstance(plan_preview, dict):
             result_payload["planPreview"] = dict(plan_preview)
-        execution_trace = local_result.get("executionTrace")
         if isinstance(execution_trace, dict):
             result_payload["executionTrace"] = dict(execution_trace)
         blocks = self._runtime_task_result_blocks(local_result)
@@ -5917,16 +6026,28 @@ class RuntimeBridge:
             for item in (local_result.get("artifacts", []) if isinstance(local_result.get("artifacts"), list) else [])
             if isinstance(item, dict)
         ]
+        for artifact in artifacts:
+            artifact.setdefault("shareable", False)
+            artifact.setdefault("requiresUserShare", True)
         if assistant_message and not any(str(item.get("kind", "") or "").strip() == "summary" for item in artifacts):
             artifacts.extend(self._summary_artifacts(assistant_message, provider))
+        for artifact in artifacts:
+            if str(artifact.get("kind", "") or "") != "summary":
+                artifact.setdefault("shareable", False)
+                artifact.setdefault("requiresUserShare", True)
+        result_payload = self._runtime_task_result_payload(local_result)
         payload: dict[str, Any] = {
             "status": "completed" if chat_ok else "failed",
             "message": "Görev tamamlandı." if chat_ok else "Görev güvenli şekilde tamamlanamadı.",
             "summary": assistant_message[:1000],
             "approvalRequest": {},
-            "result": self._runtime_task_result_payload(local_result),
+            "result": result_payload,
             "blocks": self._runtime_task_result_blocks(local_result),
             "artifacts": artifacts,
+            "accessMode": result_payload.get("accessMode", "permission_gated"),
+            "privacyClass": result_payload.get("privacyClass", "local_private"),
+            "verification": result_payload.get("verification", {}),
+            "safeSummary": result_payload.get("safeSummary", ""),
         }
         plan_preview = local_result.get("planPreview")
         if isinstance(plan_preview, dict):
@@ -6060,8 +6181,9 @@ class RuntimeBridge:
             return True
         if self._last_assigned_task_fetch_at <= 0:
             return True
-        # WS is up — tasks arrive via task.dispatch; no periodic HTTP polling needed
-        return False
+        # WS dispatch remains the primary path, but mobile-origin tasks can still
+        # be queued server-side if a dispatch frame is missed or not emitted.
+        return (time.monotonic() - self._last_assigned_task_fetch_at) >= self._assigned_task_poll_fallback_seconds()
 
     def _runtime_auth_ready(self) -> bool:
         runtime = STATE.snapshot().get("runtime", {})
@@ -6593,11 +6715,97 @@ class RuntimeBridge:
             interval = self._relay_interval_seconds()
             self._relay_stop.wait(interval)
 
+    def _full_access_active(self) -> bool:
+        session = self._full_access_session if isinstance(self._full_access_session, dict) else {}
+        if not bool(session.get("enabled", False)):
+            return False
+        expires_at = str(session.get("expiresAt", "") or "").strip()
+        if expires_at:
+            parsed = _parse_iso_datetime(expires_at)
+            if parsed is not None and parsed <= dt.datetime.utcnow():
+                self._full_access_session = {
+                    "enabled": False,
+                    "startedAt": str(session.get("startedAt", "") or ""),
+                    "expiresAt": expires_at,
+                    "source": str(session.get("source", "") or ""),
+                    "scope": "session",
+                    "revokedReason": "expired",
+                }
+                return False
+        return True
+
+    def _access_status(self) -> dict[str, Any]:
+        session = dict(self._full_access_session) if isinstance(self._full_access_session, dict) else {}
+        session["enabled"] = self._full_access_active()
+        persistent = STATE.snapshot().get("permissions", {})
+        persistent = persistent if isinstance(persistent, dict) else {}
+        effective = {str(key): bool(value) for key, value in persistent.items()}
+        if session["enabled"]:
+            for key in FULL_ACCESS_PERMISSION_KEYS:
+                effective[key] = True
+        return {
+            "fullAccessSession": {
+                "enabled": bool(session.get("enabled", False)),
+                "startedAt": str(session.get("startedAt", "") or ""),
+                "expiresAt": str(session.get("expiresAt", "") or ""),
+                "source": str(session.get("source", "") or ""),
+                "scope": str(session.get("scope", "session") or "session"),
+                "revokedReason": str(session.get("revokedReason", "") or ""),
+            },
+            "effectivePermissions": effective,
+            "blockedCriticalActions": list(FULL_ACCESS_CRITICAL_ACTIONS),
+        }
+
+    def _state_with_access(self) -> dict[str, Any]:
+        state = copy.deepcopy(STATE.snapshot())
+        runtime = state.get("runtime", {})
+        if not isinstance(runtime, dict):
+            runtime = {}
+            state["runtime"] = runtime
+        runtime["access"] = self._access_status()
+        return state
+
+    def runtime_access_status(self) -> dict[str, Any]:
+        return {"ok": True, "access": self._access_status(), "state": self._state_with_access()}
+
+    def runtime_access_grant_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ttl_raw = payload.get("ttlSeconds", payload.get("ttl_seconds", 0))
+        try:
+            ttl_seconds = int(ttl_raw or 0)
+        except (TypeError, ValueError):
+            ttl_seconds = 0
+        if ttl_seconds <= 0:
+            ttl_seconds = 8 * 60 * 60
+        ttl_seconds = max(60, min(ttl_seconds, 12 * 60 * 60))
+        started = dt.datetime.utcnow().replace(microsecond=0)
+        expires = started + dt.timedelta(seconds=ttl_seconds)
+        self._full_access_session = {
+            "enabled": True,
+            "startedAt": started.isoformat() + "Z",
+            "expiresAt": expires.isoformat() + "Z",
+            "source": str(payload.get("source", "") or "settings"),
+            "scope": "session",
+            "revokedReason": "",
+        }
+        return self.runtime_access_status()
+
+    def runtime_access_revoke_session(self) -> dict[str, Any]:
+        current = self._full_access_session if isinstance(self._full_access_session, dict) else {}
+        self._full_access_session = {
+            "enabled": False,
+            "startedAt": str(current.get("startedAt", "") or ""),
+            "expiresAt": str(current.get("expiresAt", "") or ""),
+            "source": str(current.get("source", "") or ""),
+            "scope": "session",
+            "revokedReason": "user_revoked",
+        }
+        return self.runtime_access_status()
+
     def bootstrap(self) -> dict[str, Any]:
         backend_snapshot = self._runtime_backend_snapshot()
         if self._user_auth_ready():
             self._sync_conversation_truth_from_backend()
-        state = STATE.snapshot()
+        state = self._state_with_access()
         return {
             "state": state,
             "workspace": {
@@ -6611,7 +6819,7 @@ class RuntimeBridge:
 
     def status(self) -> dict[str, Any]:
         self._ensure_runtime_registered_for_status_if_needed()
-        state = STATE.snapshot()
+        state = self._state_with_access()
         runtime = state.get("runtime", {})
         runtime = runtime if isinstance(runtime, dict) else {}
         task_inbox = STATE.get_task_inbox()
@@ -6648,6 +6856,11 @@ class RuntimeBridge:
         )
         operator_status = _operator_status_payload(state)
         desktop_native_snapshot = _desktop_native_snapshot_payload()
+        native_readiness = _desktop_native_readiness(desktop_native_snapshot)
+        agent_status = executor_status.get("agentStatus", {}) if isinstance(executor_status, dict) else {}
+        agent_status = dict(agent_status) if isinstance(agent_status, dict) else {}
+        agent_status["nativeReadiness"] = native_readiness
+        agent_status["degradationReasons"] = list(native_readiness.get("degradationReasons", []))
         return {
             "ok": True,
             "startedAt": self.context.started_at,
@@ -6675,7 +6888,7 @@ class RuntimeBridge:
             "controlPlane": self._control_plane_snapshot(local_models),
             "localModels": local_models,
             "executorStatus": executor_status,
-            "agentStatus": executor_status.get("agentStatus", {}) if isinstance(executor_status, dict) else {},
+            "agentStatus": agent_status,
             "operatorStatus": operator_status,
             "runtimeTransport": {
                 "mode": transport_mode,
@@ -6693,11 +6906,12 @@ class RuntimeBridge:
             "mcpStatus": _mcp_status_payload(),
             "skillStatus": _skill_status_payload(),
             "taskInbox": task_inbox,
+            "access": self._access_status(),
         }
 
     def get_state(self) -> dict[str, Any]:
         return {
-            "state": STATE.snapshot(),
+            "state": self._state_with_access(),
             "workspace": {"projects": _workspace_projects()},
             "conversations": _conversation_entries(),
         }
@@ -6763,15 +6977,19 @@ class RuntimeBridge:
                     "activeConversationId": conversation_id,
                     "conversations": _conversation_entries(),
                 }
+            self._sync_conversation_truth_from_backend(focus_session_id=conversation_id)
+            state = STATE.snapshot()
+            state.setdefault("conversation", {})["activeId"] = conversation_id
+            state = STATE.save_state(state)
             return {
-                "ok": False,
-                "error": {
+                "ok": True,
+                "state": state,
+                "activeConversationId": conversation_id,
+                "conversations": _conversation_entries(),
+                "warning": {
                     "code": _safe_error_code(detail.error or "chat_session_detail_failed"),
                     "message": _safe_chat_error_message(detail.error or "chat_session_detail_failed"),
                 },
-                "result": detail.to_dict(),
-                "state": STATE.snapshot(),
-                "conversations": _conversation_entries(),
             }
 
         state = STATE.snapshot()
@@ -7003,7 +7221,7 @@ class RuntimeBridge:
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
         return self.executor_core.execute_plan_steps(
             steps=steps,
-            state_factory=STATE.snapshot,
+            state_factory=self._state_with_access,
             execute_step=lambda capability, args, state, source: _execute_capability_with_preprocessing(
                 capability,
                 args,
@@ -8195,7 +8413,7 @@ class RuntimeBridge:
             if isinstance(item, dict) and str(item.get("id", "") or "").strip()
         }
 
-        sessions_result = self.backend.chat_sessions(limit=20)
+        sessions_result = self.backend.chat_sessions(limit=30)
         if not sessions_result.ok or not isinstance(sessions_result.data, dict):
             return current_state
 
@@ -8571,6 +8789,68 @@ class RuntimeBridge:
             "state": STATE.snapshot(),
             "runtime": self.status(),
         }
+
+    def backend_device_deactivate(self, device_id: str) -> dict[str, Any]:
+        normalized_device_id = str(device_id or "").strip()
+        if not normalized_device_id:
+            return {"ok": False, "error": {"code": "MISSING_DEVICE_ID", "message": "deviceId required"}}
+        result = self.backend.device_deactivate(normalized_device_id)
+        self._log_backend_result("device_deactivate", result)
+        if not result.ok:
+            return {
+                "ok": False,
+                "error": {
+                    "code": _safe_error_code(result.error or "device_deactivate_failed"),
+                    "message": "Cihaz kaldırılamadı.",
+                },
+                "result": result.to_dict(),
+                "state": self._state_with_access(),
+            }
+        bootstrap = self.backend.mobile_bootstrap()
+        self._log_backend_result("mobile_bootstrap_after_device_deactivate", bootstrap)
+        if not bootstrap.ok:
+            self._remove_device_from_local_mobile_truth(normalized_device_id)
+        return {
+            "ok": True,
+            "result": result.to_dict(),
+            "mobileBootstrap": bootstrap.to_dict(),
+            "state": self._state_with_access(),
+            "runtime": self.status(),
+        }
+
+    def _remove_device_from_local_mobile_truth(self, device_id: str) -> None:
+        normalized_device_id = str(device_id or "").strip()
+        if not normalized_device_id:
+            return
+        state = STATE.snapshot()
+        control_plane = _map_from(state.get("controlPlane"))
+        mobile_bootstrap = _map_from(control_plane.get("mobileBootstrap"))
+        bootstrap_data = _map_from(mobile_bootstrap.get("data"))
+        devices = mobile_bootstrap.get("devices", bootstrap_data.get("devices", []))
+        if isinstance(devices, list):
+            filtered_devices = [
+                dict(item)
+                for item in devices
+                if isinstance(item, dict) and str(item.get("id", "") or "").strip() != normalized_device_id
+            ]
+            if "devices" in mobile_bootstrap:
+                mobile_bootstrap["devices"] = filtered_devices
+            else:
+                bootstrap_data["devices"] = filtered_devices
+                mobile_bootstrap["data"] = bootstrap_data
+        pairing = _map_from(state.get("pairing"))
+        connected = pairing.get("connectedDevices", [])
+        pairing_patch: dict[str, Any] = {}
+        if isinstance(connected, list):
+            pairing_patch["connectedDevices"] = [
+                dict(item)
+                for item in connected
+                if isinstance(item, dict) and str(item.get("id", "") or "").strip() != normalized_device_id
+            ]
+        patch: dict[str, Any] = {"controlPlane": {"mobileBootstrap": mobile_bootstrap}}
+        if pairing_patch:
+            patch["pairing"] = pairing_patch
+        STATE.update_state(patch)
 
     def backend_auth_update_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.backend.auth_update_profile(
@@ -8976,7 +9256,7 @@ class RuntimeBridge:
         }
 
     def skill_run(self, payload: dict[str, Any]) -> dict[str, Any]:
-        state = STATE.snapshot()
+        state = self._state_with_access()
         skill_id = str(payload.get("skillId", "") or payload.get("skill_id", "") or "").strip()
         skill_payload = payload.get("payload", {})
         skill_payload = dict(skill_payload) if isinstance(skill_payload, dict) else {}
@@ -9149,6 +9429,10 @@ class RuntimeBridge:
         return {"ok": False, "result": result.to_dict()}
 
     def ensure_runtime_registered(self) -> dict[str, Any]:
+        with self._runtime_registration_lock:
+            return self._ensure_runtime_registered_locked()
+
+    def _ensure_runtime_registered_locked(self) -> dict[str, Any]:
         identity_error = self._runtime_register_identity_error()
         if identity_error is not None:
             if identity_error.get("code") == "RUNTIME_REGISTER_INVALID_IDENTITY":
@@ -9165,6 +9449,20 @@ class RuntimeBridge:
         payload = self._runtime_register_payload()
         if payload is None:
             return {"ok": False, "error": {"code": "RUNTIME_AUTH_MISSING", "message": "Runtime eşleştirmesi tamamlanmamış."}}
+
+        runtime_state = STATE.snapshot().get("runtime", {})
+        runtime_state = runtime_state if isinstance(runtime_state, dict) else {}
+        if bool(runtime_state.get("ready", False)) and str(runtime_state.get("runtimeToken", "") or "").strip():
+            return {
+                "ok": True,
+                "register": None,
+                "heartbeat": None,
+                "transport": {
+                    "mode": "websocket" if self._runtime_ws_connected else "heartbeat",
+                    "connected": self._runtime_ws_connected,
+                },
+                "reused": True,
+            }
 
         if self._runtime_ws_connected:
             return {
@@ -9301,6 +9599,14 @@ class RuntimeBridge:
             )
 
     def _cancel_remote_pending_task(self, task_id: str) -> None:
+        try:
+            run_capability(
+                "desktop_operator.cancel",
+                {"reason": "task_cancelled", "source": "remote_task", "runId": ""},
+                self._state_with_access(),
+            )
+        except Exception:
+            pass
         link = STATE.get_remote_task_link(task_id)
         if isinstance(link, dict):
             plan_id = str(link.get("pendingPlanId", "") or "").strip()
@@ -9324,6 +9630,7 @@ class RuntimeBridge:
         )
 
     def _resume_remote_task_after_approval(self, task_id: str, approved: bool) -> dict[str, Any]:
+        return self.remote_task_runner.resume_after_approval(task_id, approved)
         if not approved:
             self._cancel_remote_pending_task(task_id)
             return {"taskId": task_id, "ok": True, "status": "canceled"}
@@ -9456,6 +9763,11 @@ class RuntimeBridge:
                 args["query"] = topic
         elif capability == "play_media" and not str(args.get("query", "") or "").strip():
             args["query"] = topic
+        elif capability == "desktop_operator.run":
+            if not str(args.get("goal", "") or "").strip():
+                args["goal"] = str(args.get("prompt", "") or args.get("query", "") or prompt)
+            if not str(args.get("action", "") or "").strip():
+                args["action"] = "run"
         elif capability in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write"}:
             if not str(args.get("prompt", "") or "").strip():
                 args["prompt"] = prompt
@@ -9777,7 +10089,7 @@ class RuntimeBridge:
                     steps.append(
                         {
                             "capability": "browser_control",
-                            "args": {"action": "navigate", "url": url_match.group(0)},
+                            "args": {"action": "open_url", "url": url_match.group(0)},
                             "description": f"{url_match.group(0)} adresine gidilecek.",
                         }
                     )
@@ -9789,18 +10101,11 @@ class RuntimeBridge:
                             "description": f"Tarayıcıda '{topic}' araması yapılacak.",
                         }
                     )
-            if "computer_control" in capabilities and "browser_control" not in capabilities:
+            if "desktop_operator.run" in capabilities and "browser_control" not in capabilities:
                 steps.append(
                     {
-                        "capability": "analyze_screen",
-                        "args": {},
-                        "description": "Masaüstü ekranı analiz edilecek.",
-                    }
-                )
-                steps.append(
-                    {
-                        "capability": "computer_control",
-                        "args": {"action": "run", "prompt": natural_goal},
+                        "capability": "desktop_operator.run",
+                        "args": {"goal": natural_goal, "action": "run", "appName": ""},
                         "description": f"Bilgisayar kontrolü ile görev yürütülecek: {topic}",
                     }
                 )
@@ -9834,7 +10139,7 @@ class RuntimeBridge:
                     }
                 )
             if steps:
-                has_browser = any(s.get("capability") in {"browser_control", "computer_control"} for s in steps)
+                has_browser = any(_canonical_capability_name(s.get("capability")) in {"browser_control", "desktop_operator.run"} for s in steps)
                 privacy_class = decision_privacy or ("side_effect" if ("email_send" in capabilities or has_browser) else "public_text")
                 return steps, {
                     "summary": decision_reason
@@ -9899,7 +10204,7 @@ class RuntimeBridge:
                 fallback_steps.append(
                     {
                         "capability": "browser_control",
-                        "args": {"action": "navigate", "url": url_match_fb.group(0)},
+                            "args": {"action": "open_url", "url": url_match_fb.group(0)},
                         "description": f"{url_match_fb.group(0)} adresine gidilecek.",
                     }
                 )
@@ -9942,7 +10247,7 @@ class RuntimeBridge:
                     "description": f"{', '.join(recipients)} adresine e-posta gönderilecek.",
                 }
             )
-        has_browser_fb = any(s.get("capability") in {"browser_control", "computer_control"} for s in fallback_steps)
+        has_browser_fb = any(_canonical_capability_name(s.get("capability")) in {"browser_control", "desktop_operator.run"} for s in fallback_steps)
         return fallback_steps, {
             "summary": "Backend routing kararına göre desktop görevi yürütülecek.",
             "steps": fallback_steps,
@@ -10041,7 +10346,7 @@ class RuntimeBridge:
         if pre_approval_steps:
             ok, content, tool_events, error_code, structured_result, artifacts = self.executor_core.execute_plan_steps(
                 steps=pre_approval_steps,
-                state_factory=STATE.snapshot,
+                state_factory=self._state_with_access,
                 execute_step=lambda capability, args, state, source: _execute_capability_with_preprocessing(
                     capability,
                     args,
@@ -10186,6 +10491,7 @@ class RuntimeBridge:
         }
 
     def _execute_runtime_task(self, task: dict[str, Any], dispatched_via_websocket: bool = False) -> dict[str, Any]:
+        return self.remote_task_runner.execute_runtime_task(task, dispatched_via_websocket=dispatched_via_websocket)
         task_id = str(task.get("id", "") or "")
         payload = task.get("payload", {})
         payload = payload if isinstance(payload, dict) else {}
@@ -10386,6 +10692,7 @@ class RuntimeBridge:
         return None
 
     def execute_assigned_runtime_tasks(self, limit: int = 1) -> dict[str, Any]:
+        return self.remote_task_runner.execute_assigned_runtime_tasks(limit=limit)
         self._assigned_task_fetch_requested.clear()
         self._last_assigned_task_fetch_at = time.monotonic()
         assigned = self.backend.runtime_tasks_assigned()
@@ -10462,7 +10769,7 @@ class RuntimeBridge:
         return {"ok": True, "executions": executions, "fetched": len(tasks)}
 
     def _speech_capability_result(self, capability: str, payload: dict[str, Any]) -> dict[str, Any]:
-        tool_result = run_capability(capability, payload, STATE.snapshot())
+        tool_result = run_capability(capability, payload, self._state_with_access())
         event = safe_tool_event(capability, tool_result, source="speech_runtime")
         if tool_result.get("ok"):
             structured = tool_result.get("result")
@@ -10629,13 +10936,7 @@ class RuntimeBridge:
                 result = self.backend_auth_avatar_delete()
             elif capability == "backend.device_deactivate":
                 device_id = str(payload.get("deviceId", "") or payload.get("device_id", "") or "").strip()
-                if not device_id:
-                    result = {"ok": False, "error": {"code": "MISSING_DEVICE_ID", "message": "deviceId required"}}
-                else:
-                    r = self.backend.device_deactivate(device_id)
-                    result = {"ok": r.ok, "result": r.to_dict()}
-                    if r.ok:
-                        self.backend.mobile_bootstrap()
+                result = self.backend_device_deactivate(device_id)
             elif capability == "backend.mobile_bootstrap":
                 result = self.backend_mobile_bootstrap()
             elif capability == "backend.truth_refresh":
@@ -10699,6 +11000,12 @@ class RuntimeBridge:
                 result = self.heartbeat(payload)
             elif capability == "runtime.session":
                 result = self.runtime_session()
+            elif capability == "runtime.access.status":
+                result = self.runtime_access_status()
+            elif capability == "runtime.access.grant_session":
+                result = self.runtime_access_grant_session(payload)
+            elif capability == "runtime.access.revoke_session":
+                result = self.runtime_access_revoke_session()
             elif capability == "runtime.tasks.assigned":
                 result = self.runtime_tasks_assigned()
             elif capability == "runtime.tasks.status":
@@ -10714,7 +11021,7 @@ class RuntimeBridge:
             elif capability == "pairing.get_session":
                 result = self.pairing_get_session(str(payload.get("sessionId", "") or payload.get("session_id", "") or ""))
             elif capability in capability_names():
-                tool_result = run_capability(capability, payload, STATE.snapshot())
+                tool_result = run_capability(capability, payload, self._state_with_access())
                 result = {
                     "ok": bool(tool_result.get("ok")),
                     "result": tool_result,
@@ -10747,6 +11054,22 @@ class RuntimeBridge:
             result = _sanitize_transport_payload(result)
 
         ok = bool(result.get("ok", True))
+        response_error = None
+        if not ok:
+            response_error = result.get("error") if isinstance(result.get("error"), dict) else None
+            if response_error is None:
+                nested_result = result.get("result") if isinstance(result.get("result"), dict) else {}
+                status_code = nested_result.get("statusCode")
+                nested_error = nested_result.get("error") or nested_result.get("code")
+                fallback_code = f"backend_status_{status_code}" if status_code else "SAFE_ERROR"
+                safe_code = _safe_error_code(nested_error or fallback_code)
+                safe_message = _normalize_error_message(nested_error)
+                if not safe_message and status_code:
+                    safe_message = f"Sunucu isteği tamamlanamadı. HTTP {status_code}."
+                response_error = {
+                    "code": safe_code or "SAFE_ERROR",
+                    "message": safe_message or "Beklenmeyen hata",
+                }
         response = {
             "id": request_id,
             "taskId": task_id,
@@ -10755,7 +11078,7 @@ class RuntimeBridge:
             "result": result if ok else None,
             "events": result.get("events", []) if isinstance(result, dict) else [],
             "artifacts": result.get("artifacts", []) if isinstance(result, dict) else [],
-            "error": None if ok else result.get("error", {"code": "SAFE_ERROR", "message": "Beklenmeyen hata"}),
+            "error": None if ok else response_error,
             "durationMs": int((time.perf_counter() - start) * 1000),
         }
         if isinstance(result, dict) and result.get("requestId"):

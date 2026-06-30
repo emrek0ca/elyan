@@ -78,7 +78,13 @@ def test_runtime_unauthorized_clears_runtime_without_user_session(
     state_store.update_state(
         {
             "account": {"accessToken": "user-token", "refreshToken": "refresh-token"},
-            "runtime": {"runtimeToken": "stale-runtime-token", "connectionId": "old-connection", "ready": True},
+            "runtime": {
+                "runtimeToken": "stale-runtime-token",
+                "connectionId": "old-connection",
+                "ready": True,
+                "targetStatus": "ready",
+                "targetErrorCode": "desktop_plan_required",
+            },
         }
     )
     client = BackendClient("http://backend.example")
@@ -101,8 +107,258 @@ def test_runtime_unauthorized_clears_runtime_without_user_session(
     assert result.status_code == 401
     assert state["runtime"]["runtimeToken"] == ""
     assert state["runtime"]["connectionId"] == ""
+    assert state["runtime"]["targetStatus"] == ""
+    assert state["runtime"]["targetErrorCode"] == ""
     assert state["account"]["accessToken"] == "user-token"
     assert state["account"]["refreshToken"] == "refresh-token"
+
+
+def test_user_session_expiry_disconnects_runtime_before_clearing_local_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "account": {"accessToken": "user-token", "refreshToken": "refresh-token"},
+            "runtime": {
+                "runtimeToken": "runtime-token",
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "connectionId": VALID_CONNECTION_ID,
+                "ready": True,
+            },
+        }
+    )
+    client = BackendClient("http://backend.example")
+    disconnected = {"called": False}
+
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *_args, **_kwargs: BackendResult(
+            ok=False,
+            request_id="req_session_401",
+            status_code=401,
+            data={"error": "session_expired"},
+            error="session_expired",
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "refresh_session",
+        lambda: BackendResult(
+            ok=False,
+            request_id="req_refresh_failed",
+            status_code=401,
+            data={"error": "session_expired"},
+            error="session_expired",
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "disconnect_runtime",
+        lambda: disconnected.__setitem__("called", True) or BackendResult(
+            ok=True,
+            request_id="req_runtime_disconnect",
+            status_code=200,
+            data={"ok": True},
+        ),
+    )
+
+    result = client._authorized_request("GET", "/v1/auth/me", token_kind="user", refresh_on_401=True)
+
+    state = state_store.snapshot()
+    assert result.ok is False
+    assert result.error == "session_expired"
+    assert disconnected["called"] is True
+    assert state["account"]["accessToken"] == ""
+    assert state["account"]["refreshToken"] == ""
+    assert state["runtime"]["runtimeToken"] == ""
+    assert state["runtime"]["ready"] is False
+
+
+def test_user_refresh_network_failure_preserves_local_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "account": {"accessToken": "user-token", "refreshToken": "refresh-token"},
+            "runtime": {
+                "runtimeToken": "runtime-token",
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "connectionId": VALID_CONNECTION_ID,
+                "ready": True,
+            },
+        }
+    )
+    client = BackendClient("http://backend.example")
+    disconnected = {"called": False}
+
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *_args, **_kwargs: BackendResult(
+            ok=False,
+            request_id="req_session_401",
+            status_code=401,
+            data={"error": "expired_access"},
+            error="expired_access",
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "refresh_session",
+        lambda: BackendResult(
+            ok=False,
+            request_id="req_refresh_network",
+            status_code=None,
+            data=None,
+            error="network_timeout",
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "disconnect_runtime",
+        lambda: disconnected.__setitem__("called", True) or BackendResult(
+            ok=True,
+            request_id="req_runtime_disconnect",
+            status_code=200,
+            data={"ok": True},
+        ),
+    )
+
+    result = client._authorized_request("GET", "/v1/auth/me", token_kind="user", refresh_on_401=True)
+
+    state = state_store.snapshot()
+    assert result.ok is False
+    assert result.error == "network_timeout"
+    assert disconnected["called"] is False
+    assert state["account"]["accessToken"] == "user-token"
+    assert state["account"]["refreshToken"] == "refresh-token"
+    assert state["runtime"]["runtimeToken"] == "runtime-token"
+    assert state["runtime"]["ready"] is True
+
+
+def test_generic_refresh_unauthorized_preserves_local_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "account": {"accessToken": "user-token", "refreshToken": "refresh-token"},
+            "runtime": {
+                "runtimeToken": "runtime-token",
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "connectionId": VALID_CONNECTION_ID,
+                "ready": True,
+            },
+        }
+    )
+    client = BackendClient("http://backend.example")
+    disconnected = {"called": False}
+
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *_args, **_kwargs: BackendResult(
+            ok=False,
+            request_id="req_session_401",
+            status_code=401,
+            data={"error": "access_denied"},
+            error="access_denied",
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "refresh_session",
+        lambda: BackendResult(
+            ok=False,
+            request_id="req_refresh_403",
+            status_code=403,
+            data={"error": "forbidden"},
+            error="forbidden",
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "disconnect_runtime",
+        lambda: disconnected.__setitem__("called", True) or BackendResult(
+            ok=True,
+            request_id="req_runtime_disconnect",
+            status_code=200,
+            data={"ok": True},
+        ),
+    )
+
+    result = client._authorized_request("GET", "/v1/auth/me", token_kind="user", refresh_on_401=True)
+
+    state = state_store.snapshot()
+    assert result.ok is False
+    assert result.error == "forbidden"
+    assert disconnected["called"] is False
+    assert state["account"]["accessToken"] == "user-token"
+    assert state["account"]["refreshToken"] == "refresh-token"
+    assert state["runtime"]["runtimeToken"] == "runtime-token"
+    assert state["runtime"]["ready"] is True
+
+
+def test_stale_concurrent_unauthorized_reuses_already_rotated_user_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "account": {"accessToken": "stale-access", "refreshToken": "stale-refresh"},
+            "runtime": {"runtimeToken": "runtime-token", "ready": True},
+        }
+    )
+    client = BackendClient("http://backend.example")
+    refresh_calls = {"count": 0}
+    request_calls = {"count": 0}
+
+    def fake_request(*_args: Any, **kwargs: Any) -> BackendResult:
+        request_calls["count"] += 1
+        authorization = str(kwargs.get("headers", {}).get("Authorization", ""))
+        if authorization == "Bearer stale-access":
+            state_store.update_state(
+                {"account": {"accessToken": "rotated-access", "refreshToken": "rotated-refresh"}}
+            )
+            return BackendResult(
+                ok=False,
+                request_id="req_stale_access",
+                status_code=401,
+                data={"error": "token_expired"},
+                error="token_expired",
+            )
+        return BackendResult(
+            ok=True,
+            request_id="req_rotated_access",
+            status_code=200,
+            data={"ok": True},
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    monkeypatch.setattr(
+        client,
+        "refresh_session",
+        lambda: refresh_calls.__setitem__("count", refresh_calls["count"] + 1)
+        or BackendResult(ok=False, request_id="unexpected", status_code=401, error="invalid_refresh_token"),
+    )
+
+    result = client._authorized_request("GET", "/v1/auth/me", token_kind="user", refresh_on_401=True)
+
+    assert result.ok is True
+    assert request_calls["count"] == 2
+    assert refresh_calls["count"] == 0
+    assert state_store.snapshot()["account"]["accessToken"] == "rotated-access"
+    assert state_store.snapshot()["account"]["refreshToken"] == "rotated-refresh"
 
 
 def test_auth_register_sends_required_legal_acceptance(
@@ -331,6 +587,38 @@ def test_pairing_create_session_hydrates_canonical_qr_truth(
     assert state["runtime"]["lifecycleState"] == "waiting_claim"
 
 
+def test_pairing_create_session_reuses_valid_pending_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "pairing": {
+                "lastSessionId": "session-pending",
+                "desktopDeviceId": VALID_DEVICE_ID,
+                "pairingToken": "pair-token",
+                "pairingCode": "ABC12345",
+                "qrText": "elyan://pair?sessionId=session-pending&pairingCode=ABC12345",
+                "expiresAt": "2030-05-22T15:30:00Z",
+                "lastSessionStatus": "pending",
+            }
+        }
+    )
+    client = BackendClient("http://backend.example")
+    monkeypatch.setattr(
+        client,
+        "_authorized_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pending pairing should be reused")),
+    )
+
+    result = client.pairing_create_session({"deviceLabel": "Elyan", "platform": "macos"})
+
+    assert result.ok is True
+    assert result.data["sessionId"] == "session-pending"
+    assert result.data["reused"] is True
+
+
 def test_pairing_terminal_error_clears_active_qr_truth(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -375,6 +663,49 @@ def test_pairing_terminal_error_clears_active_qr_truth(
     assert state["pairing"]["lastSessionStatus"] == ""
     assert state["pairing"]["lastErrorCode"] == "PAIRING_SESSION_EXPIRED"
     assert state["runtime"]["lifecycleState"] == "waiting_claim"
+    assert state["runtime"]["ready"] is False
+
+
+def test_pairing_local_expiry_clears_active_qr_without_backend_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "pairing": {
+                "lastSessionId": "session-1",
+                "desktopDeviceId": VALID_DEVICE_ID,
+                "pairingToken": "pair-token",
+                "pairingCode": "PWGSFB5B",
+                "qrText": "elyan://pair?sessionId=session-1&pairingCode=PWGSFB5B",
+                "expiresAt": "2020-01-01T00:00:00Z",
+                "lastSessionStatus": "pending",
+            },
+            "runtime": {
+                "lifecycleState": "waiting_claim",
+                "ready": False,
+            },
+        }
+    )
+    client = BackendClient("http://backend.example")
+
+    def fail_request(*_args: Any, **_kwargs: Any) -> BackendResult:
+        raise AssertionError("expired local pairing session should not call backend")
+
+    monkeypatch.setattr(client, "_request", fail_request)
+
+    result = client.pairing_get_session("session-1")
+
+    state = state_store.snapshot()
+    assert result.ok is False
+    assert result.status_code == 409
+    assert state["pairing"]["lastSessionId"] == ""
+    assert state["pairing"]["desktopDeviceId"] == ""
+    assert state["pairing"]["pairingToken"] == ""
+    assert state["pairing"]["pairingCode"] == ""
+    assert state["pairing"]["lastErrorCode"] == "PAIRING_SESSION_EXPIRED"
+    assert state["runtime"]["lastErrorCode"] == "pairing_session_expired"
     assert state["runtime"]["ready"] is False
 
 
@@ -608,6 +939,8 @@ def test_runtime_session_failure_marks_runtime_reconnecting_without_clearing_ide
                 "ready": True,
                 "lifecycleState": "ready",
                 "websocketConnected": True,
+                "targetStatus": "ready",
+                "targetErrorCode": "desktop_limit_reached",
             },
             "pairing": {"realtimeReady": True, "lastHeartbeatAt": "2030-05-22T15:30:00Z"},
         }
@@ -682,6 +1015,8 @@ def test_runtime_tasks_assigned_unauthorized_clears_runtime_session(
     assert state["runtime"]["runtimeToken"] == ""
     assert state["runtime"]["connectionId"] == ""
     assert state["runtime"]["lastErrorCode"] == "runtime_unauthorized"
+    assert state["runtime"]["targetStatus"] == ""
+    assert state["runtime"]["targetErrorCode"] == ""
     assert state["pairing"]["realtimeReady"] is False
 
 
@@ -809,6 +1144,55 @@ def test_register_runtime_uses_device_secret_payload_without_user_bearer(
     assert state["runtime"]["capabilities"] == sorted(capability_names())
 
 
+def test_register_runtime_replaces_stale_connection_bound_runtime_truth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "runtimeToken": "stale-runtime-token",
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "connectionId": "stale-connection",
+                "currentTaskId": "task-stale",
+                "ready": True,
+                "targetStatus": "ready",
+                "targetErrorCode": "desktop_plan_required",
+            }
+        }
+    )
+    client = BackendClient("http://backend.example")
+
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *_args, **_kwargs: BackendResult(
+            ok=True,
+            request_id="req_register_replace",
+            status_code=200,
+            data={
+                "runtime": {"deviceId": VALID_DEVICE_ID, "connectionId": VALID_CONNECTION_ID},
+                "tokens": {"accessToken": "fresh-runtime-token"},
+            },
+            x_request_id="req-server-register-replace",
+        ),
+    )
+
+    result = client.register_runtime({"capabilities": ["runtime.status"]})
+
+    state = state_store.snapshot()
+    assert result.ok is True
+    assert state["runtime"]["runtimeToken"] == "fresh-runtime-token"
+    assert state["runtime"]["connectionId"] == VALID_CONNECTION_ID
+    assert state["runtime"]["currentTaskId"] == ""
+    assert state["runtime"]["targetStatus"] == ""
+    assert state["runtime"]["targetErrorCode"] == ""
+    assert state["runtime"]["ready"] is False
+    assert state["runtime"]["websocketConnected"] is False
+
+
 def test_register_runtime_rejects_invalid_identity_before_backend_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -926,6 +1310,46 @@ def test_repair_invalid_runtime_identity_clears_stale_runtime_and_pairing_truth(
     assert state["pairing"]["qrText"] == ""
     assert state["pairing"]["realtimeReady"] is False
     assert state["pairing"]["lastErrorCode"] == "runtime_register_invalid_identity"
+
+
+def test_register_runtime_repairs_backend_device_not_found_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "runtimeToken": "stale-runtime-token",
+            },
+            "pairing": {"desktopDeviceId": VALID_DEVICE_ID, "pairingToken": "stale-pairing-token"},
+        }
+    )
+    client = BackendClient("http://backend.example")
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *_args, **_kwargs: BackendResult(
+            ok=False,
+            request_id="req_device_not_found",
+            status_code=404,
+            data={"error": "not_found", "message": "Desktop runtime device not found"},
+            error="Desktop runtime device not found",
+        ),
+    )
+
+    result = client.register_runtime({"capabilities": ["runtime.status"]})
+
+    state = state_store.snapshot()
+    assert result.ok is False
+    assert result.error == "desktop_runtime_device_not_found"
+    assert state["runtime"]["deviceId"] == ""
+    assert state["runtime"]["deviceSecret"] == ""
+    assert state["runtime"]["runtimeToken"] == ""
+    assert state["pairing"]["desktopDeviceId"] == ""
+    assert state["pairing"]["pairingToken"] == ""
 
 
 def test_tasks_list_uses_user_auth_surface(

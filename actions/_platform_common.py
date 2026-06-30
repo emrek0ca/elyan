@@ -11,6 +11,7 @@ _PERMISSION_MARKERS = (
     "not authorized",
     "not permitted",
     "screen recording",
+    "ekran kaydi izni",
     "accessibility",
     "apple events",
     "mach error 4099",

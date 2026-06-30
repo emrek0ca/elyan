@@ -1,33 +1,67 @@
 import type { ScreenshotItem } from '@/content/site.types';
+import type { SiteLocale } from '@/lib/locales';
 
-const desktopShots: readonly ScreenshotItem[] = [
-  {
-    kind: 'desktop',
-    src: '/screenshots/desktop/desktop-auth.png',
-    alt: 'Elyan desktop sign-in surface with mascot artwork and warm neutral background.',
-    caption: 'Desktop sign-in surface keeps the same calm palette and clear operator entry point.'
-  },
-  {
-    kind: 'desktop',
-    src: '/screenshots/desktop/desktop-home.png',
-    alt: 'Elyan desktop signed-in landing surface with the left rail and unified composer.',
-    caption: 'Signed-in desktop surface keeps navigation, workspace, and task entry in one quiet layout.'
-  }
+type ShotCopy = { alt: string; caption: string };
+
+const desktopCopy: Record<SiteLocale, ShotCopy[]> = {
+  tr: [
+    {
+      alt: 'Elyan masaüstü giriş ekranı, sıcak nötr arka plan.',
+      caption: 'Bilgisayarında giriş — telefonunla aynı hesap.'
+    },
+    {
+      alt: 'Elyan masaüstü ana ekranı; yan menü ve birleşik görev alanı.',
+      caption: 'İş burada yapılır: sohbet, görevler ve sonuçlar tek ekranda.'
+    }
+  ],
+  en: [
+    {
+      alt: 'Elyan desktop sign-in screen on a warm neutral background.',
+      caption: 'Sign in on your computer — the same account as your phone.'
+    },
+    {
+      alt: 'Elyan desktop home screen with the side rail and unified task area.',
+      caption: 'The work happens here: chat, tasks and results in one place.'
+    }
+  ]
+};
+
+const mobileCopy: Record<SiteLocale, ShotCopy[]> = {
+  tr: [
+    {
+      alt: 'Elyan mobil giriş ekranı, sıcak nötr arka plan.',
+      caption: 'Telefonda giriş — gerisini bilgisayarın halleder.'
+    }
+  ],
+  en: [
+    {
+      alt: 'Elyan mobile sign-in screen on a warm neutral background.',
+      caption: 'Sign in on your phone — your computer does the rest.'
+    }
+  ]
+};
+
+const desktopSrc = [
+  '/screenshots/desktop/desktop-auth.png',
+  '/screenshots/desktop/desktop-home.png'
 ] as const;
 
-const mobileShots: readonly ScreenshotItem[] = [
-  {
-    kind: 'mobile',
-    src: '/screenshots/mobile/mobile-login.png',
-    alt: 'Elyan mobile sign-in screen on a warm neutral background.',
-    caption: 'Mobile keeps the same quiet visual system while remaining a control surface, not a local agent runtime.'
-  }
-] as const;
+const mobileSrc = ['/screenshots/mobile/mobile-login.png'] as const;
 
-export function getDesktopScreenshots(): readonly ScreenshotItem[] {
-  return desktopShots;
+export function getDesktopScreenshots(locale: SiteLocale): readonly ScreenshotItem[] {
+  return desktopSrc.map((src, index) => ({
+    kind: 'desktop' as const,
+    src,
+    alt: desktopCopy[locale][index].alt,
+    caption: desktopCopy[locale][index].caption
+  }));
 }
 
-export function getMobileScreenshots(): readonly ScreenshotItem[] {
-  return mobileShots;
+export function getMobileScreenshots(locale: SiteLocale): readonly ScreenshotItem[] {
+  return mobileSrc.map((src, index) => ({
+    kind: 'mobile' as const,
+    src,
+    alt: mobileCopy[locale][index].alt,
+    caption: mobileCopy[locale][index].caption
+  }));
 }

@@ -738,18 +738,13 @@ describe('workspace', () => {
     });
   });
 
-  it('renders desktop task shell readiness and approval actions', async () => {
+  it('keeps the desktop task shell out of the composer surface', async () => {
     const { container, root } = await renderTaskShellWorkspace();
 
-    expect(container.textContent).toContain('Mac Studio');
-    expect(container.textContent).toContain('1 bekleyen görev');
-    expect(container.textContent).toContain('Elyan Quantum');
-    expect(container.textContent).toContain('42 yetenek');
-    expect(container.textContent).toContain('2 bloke');
-    expect(container.textContent).toContain('Onay bekliyor');
-    expect(container.textContent).toContain('Mail gönder');
-    expect(container.textContent).toContain('email_send');
-    expect(container.textContent).toContain('Kuyruğu Al');
+    expect(container.querySelector('.desktop-task-shell')).toBeNull();
+    expect(container.querySelector('.desktop-approval-card')).toBeNull();
+    expect(container.querySelector('.composer')).not.toBeNull();
+    expect(container.textContent).not.toContain('Kuyruğu Al');
 
     await act(async () => {
       root.unmount();
