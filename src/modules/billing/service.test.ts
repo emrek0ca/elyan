@@ -720,13 +720,25 @@ test("createUpgradeOrByokRequiredError keeps the failure user-safe", () => {
   );
 });
 
-test("decideAppleSubscriptionOwnership reassigns when appAccountToken is absent (StoreKit 1)", () => {
-  // En yaygın gerçek senaryo: aynı Apple ID, yeni app oturumu; JWS'te
-  // appAccountToken yok. Engellenmemeli (kullanıcı kendi makbuzunu sunuyor).
+test("decideAppleSubscriptionOwnership blocks a new account when token is absent and the period is locked (no Pro leakage)", () => {
+  // Açık kapatma: A hesabı Pro aldı, aynı cihazda B hesabı açıldı. JWS'te
+  // appAccountToken yok → sahiplik kanıtlanamaz → abonelik A'da kalır, B Pro
+  // OLAMAZ. (Bu fonksiyona yalnızca makbuz farklı bir userId'ye kayıtlıyken
+  // gelinir; aynı hesabın restore'u dış kontrolde zaten geçer.)
   const decision = decideAppleSubscriptionOwnership({
     appAccountToken: "",
     currentUserId: "11111111-1111-1111-1111-111111111111",
     lockedByActiveStorePeriod: true,
+  });
+  assert.equal(decision.blocked, true);
+});
+
+test("decideAppleSubscriptionOwnership still reassigns an absent-token receipt once the period has expired", () => {
+  // Süresi dolmuş/iptal abonelik kilitli değil → yeni hesap devralabilir.
+  const decision = decideAppleSubscriptionOwnership({
+    appAccountToken: "",
+    currentUserId: "11111111-1111-1111-1111-111111111111",
+    lockedByActiveStorePeriod: false,
   });
   assert.equal(decision.blocked, false);
 });

@@ -433,16 +433,20 @@ export function isStoreSubscriptionClaimLocked(
 /**
  * App Store abonelik sahiplik kararı (saf fonksiyon, test edilebilir).
  *
- * appAccountToken, Apple imzalı JWS içinde taşınan ve satın almayı başlatan
- * app-kullanıcısını (UUID) tanımlayan TEK güvenilir kanıttır. Kararı yalnızca
- * bu pozitif kanıta dayandırırız:
- *   • token mevcut kullanıcıya aitse → kendi aboneliği (blocked: false).
- *   • token BAŞKA kullanıcıya aitse ve aktif dönem kilitliyse → gerçekten
- *     başkasınınki (blocked: true).
- *   • token YOKSA → StoreKit 1 `applicationUsername` çoğu zaman JWS'e
- *     appAccountToken olarak yansımaz; yokluğu "başkasının" anlamına GELMEZ.
- *     Geçerli Apple imzalı makbuzu sunan cihaz o Apple ID'nin sahibidir →
- *     engelleme yok, abonelik mevcut kullanıcıya taşınır.
+ * Bu fonksiyona YALNIZCA makbuz (originalTransactionId) BAŞKA bir userId'ye
+ * kayıtlıyken gelinir — yani aynı cihaz/Apple ID üzerinde farklı bir app hesabı
+ * aynı aboneliği talep ediyor. Kural: abonelik onu SATIN ALAN hesaba kilitlidir;
+ * başka hesap aktif/kilitli dönemde Pro'yu DEVRALAMAZ.
+ *   • appAccountToken mevcut kullanıcıya aitse → pozitif kanıt, gerçekten onun
+ *     aboneliği (örn. StoreKit 2 ile UUID set edilmiş) → izin ver.
+ *   • token mevcut kullanıcıya AİT DEĞİLSE (farklı UUID VEYA token yok) ve dönem
+ *     aktif/kilitliyse → engelle. Token yokluğu sahipliği KANITLAMAZ; güvenli
+ *     varsayım abonelik orijinal sahibinde kalmasıdır (hesaplar arası sızıntı yok).
+ *   • dönem kilitli değilse (süresi dolmuş/iptal) → engelleme yok, devredilebilir.
+ *
+ * NOT: Aynı hesabın yeniden doğrulaması (reinstall / restore) bu fonksiyona
+ * HİÇ gelmez — userId eşleştiği için dış kontrol (ownedTransactions.userId ===
+ * userId) zaten geçer. Yani meşru "satın almayı geri yükle" her zaman çalışır.
  */
 export function decideAppleSubscriptionOwnership(input: {
   appAccountToken: string;
@@ -451,10 +455,10 @@ export function decideAppleSubscriptionOwnership(input: {
 }): { blocked: boolean } {
   const normalizeId = (id: string) => id.toLowerCase().replace(/-/g, "");
   const token = (input.appAccountToken ?? "").trim();
-  const tokenOwnedByDifferentUser =
-    token.length > 0 && normalizeId(token) !== normalizeId(input.currentUserId);
+  const tokenOwnedByCurrentUser =
+    token.length > 0 && normalizeId(token) === normalizeId(input.currentUserId);
   return {
-    blocked: tokenOwnedByDifferentUser && input.lockedByActiveStorePeriod,
+    blocked: !tokenOwnedByCurrentUser && input.lockedByActiveStorePeriod,
   };
 }
 
