@@ -48,6 +48,11 @@ export type BenchmarkCase = {
   input: string;
   expected: BenchmarkExpected;
   source?: string;
+  // Desktop routing is toggle-gated (metadata.desktopDispatch) by design — there
+  // is no message-content heuristic. A desktop-boundary case must set this to
+  // simulate the user having the dispatch toggle on, otherwise the request
+  // correctly stays on server_brain.
+  desktop_dispatch?: boolean;
 };
 
 export type BenchmarkCaseResult = {
@@ -491,6 +496,9 @@ export async function runJsonlBenchmarks(
       message: testCase.input,
       source: (testCase.source as "mobile" | "desktop") ?? "mobile",
       requestedCapabilities: [],
+      ...(testCase.desktop_dispatch
+        ? { metadata: { desktopDispatch: true } }
+        : {}),
     });
     const reply = await generateGovernedSharedBrainReply(app, {
       userId: benchmarkUserId,
