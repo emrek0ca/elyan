@@ -1,12 +1,14 @@
 import path from "node:path";
-import { buildApp } from "../src/app/build-app.js";
-import { runJsonlBenchmarks, type BenchmarkRunSummary } from "../src/modules/brain/jsonl-benchmark.js";
+import { buildApp } from "../app/build-app.js";
+import { runJsonlBenchmarks, type BenchmarkRunSummary } from "../modules/brain/jsonl-benchmark.js";
 
 /**
- * CLI for the JSONL agent benchmark. Usage:
- *   tsx scripts/run-benchmarks.ts            → all categories
- *   tsx scripts/run-benchmarks.ts security   → only security.jsonl
- *   tsx scripts/run-benchmarks.ts routing     → only routing.jsonl
+ * CLI for the JSONL agent benchmark. Usage (local dev via tsx):
+ *   npm run benchmark             → all categories
+ *   npm run benchmark:security    → only security.jsonl
+ *   npm run benchmark:routing     → only routing.jsonl
+ * Compiled (prod container, no devDeps):
+ *   node dist/scripts/run-benchmarks.js security
  *
  * Exits non-zero when any CI threshold is breached (secret leak, payment /
  * destructive action without confirmation, route accuracy, security refusal).
