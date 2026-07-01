@@ -2,18 +2,18 @@ import { getDesktopScreenshots, getMobileScreenshots } from '@/lib/screenshots';
 import type { SiteContent } from '@/content/site.types';
 
 const desktopVisual = {
-  eyebrow: 'Masaüstü',
-  title: 'İşi yapan taraf bilgisayarın.',
+  eyebrow: 'Desktop',
+  title: 'Yerel runtime sakin bir operatör yüzeyinde kalır.',
   body:
-    'Elyan Desktop özel dosyalarını bilgisayarında tutar, görevi güvenle alır ve dosya, takvim, belge gibi işleri senin yerine yürütür.',
+    'Elyan Desktop özel bağlamı cihazda tutar, görevi control-plane üzerinden alır ve yerel yetenekleri güvenli sınırlar içinde yürütür.',
   screenshots: getDesktopScreenshots('tr')
 } as const;
 
 const mobileVisual = {
-  eyebrow: 'Telefon',
-  title: 'Cebindeki kumanda.',
+  eyebrow: 'Mobil',
+  title: 'Mobil yüzey görev kontrolü içindir.',
   body:
-    'Telefonundan konuşur, görevi başlatır ve her adımı canlı izlersin. Ağır iş bilgisayarında çalışır; telefonun hafif kalır.',
+    'Mobil uygulama görevi gönderir, durumu izler ve sonucu gösterir. Yerel agent runtime burada çalışmaz.',
   screenshots: getMobileScreenshots('tr')
 } as const;
 
@@ -22,19 +22,19 @@ const content: SiteContent = {
   language: 'Türkçe',
   direction: 'ltr',
   siteName: 'Elyan',
-  siteTitle: 'Elyan — Telefonundan konuş, bilgisayarın yapsın',
+  siteTitle: 'Elyan | Agent Control Surface',
   siteDescription:
-    'Elyan, Türkçe konuşan kişisel yapay zekân. Sohbet eder, araştırır, belge üretir — ve istediğinde eşleştirdiğin bilgisayarda işi senin için gerçekten yapar.',
-  heroStatement: 'Kişisel yapay zekâ',
+    'Elyan, desktop runtime, control-plane ve mobil görev akışını tek sakin ürün yüzeyinde birleştiren Agent Control Surface.',
+  heroStatement: 'Agent Control Surface',
   nav: [
-    { href: '/tr/desktop', label: 'Masaüstü' },
+    { href: '/tr', label: 'Ana sayfa' },
+    { href: '/tr/desktop', label: 'Desktop' },
     { href: '/tr/mobile', label: 'Mobil' },
-    { href: '/tr/download', label: 'İndir' },
     { href: '/tr/support', label: 'Destek' }
   ],
   footer: {
     note:
-      'Elyan Türkçe konuşan kişisel yapay zekân. Konuş, üret ve istediğinde bilgisayarına komut ver. Özel işlerin cihazında kalır.',
+      'Elyan, kişisel veriler ve cihaz görevleri için yerel runtime sınırını temel alır.',
     legal: [
       { href: '/tr/privacy', label: 'Gizlilik' },
       { href: '/tr/terms', label: 'Koşullar' },
@@ -42,7 +42,7 @@ const content: SiteContent = {
     ],
     support: [
       { href: '/tr/support', label: 'Destek' },
-      { href: '/tr/ai', label: 'Zekâ bildirimi' }
+      { href: '/tr/ai', label: 'Zeka bildirimi' }
     ]
   },
   messages: {
@@ -52,165 +52,197 @@ const content: SiteContent = {
       switchToTurkish: 'Türkçe',
       openPage: 'Aç',
       backHome: 'Ana sayfaya dön',
-      screenshotLabel: 'Gerçek ürün ekranı',
-      previousScreenshot: 'Önceki ekran',
-      nextScreenshot: 'Sonraki ekran',
-      controlLoopTitle: 'Nasıl çalışır',
+      screenshotLabel: 'Gerçek ürün yüzeyi',
+      previousScreenshot: 'Önceki ekran görüntüsü',
+      nextScreenshot: 'Sonraki ekran görüntüsü',
+      controlLoopTitle: 'Çalışma döngüsü',
       legalTitle: 'Resmî bilgi',
-      finalCtaLabel: 'Başla',
+      finalCtaLabel: 'Yolunu seç',
       footerLegalLabel: 'Yasal',
       footerSupportLabel: 'Destek',
       primaryNavigationLabel: 'Ana menü'
     }
   },
   home: {
-    title: 'Telefonundan konuş, bilgisayarın yapsın.',
-    description:
-      'Elyan, Türkçe konuşan kişisel yapay zekân. Sorularını yanıtlar, araştırır, belge üretir — ve istediğinde eşleştirdiğin bilgisayarda işi senin için gerçekten yapar.',
-    eyebrow: 'Kişisel yapay zekâ',
+    title: 'Kendi AI ajan sistemini başlat.',
+    description: 'Elyan; sohbet, belge, görev ve cihaz akışlarını tek bir kişisel çalışma alanında birleştirir. Özel verin cihazında kalır, kontrol sende olur.',
+    eyebrow: 'Kişisel AI Ajan Sistemi',
     intro:
-      'Çoğu yapay zekâ cevap verir ve orada durur. Elyan bir adım öteye geçer: telefonundan bir şey iste, eşleştirdiğin bilgisayar senin yerine yapsın.',
+      'Elyan; sohbet, belge, görev ve cihaz akışlarını tek bir kişisel çalışma alanında birleştirir. Özel verin cihazında kalır, kontrol sende olur.',
     ctas: [
-      { href: '/tr/desktop', label: 'Nasıl çalışır' },
-      { href: '/tr/download', label: 'İndir' }
+      { href: '/tr/desktop', label: 'Elyan\'ı dene' },
+      { href: '/tr/mobile', label: 'Sistemi keşfet' }
     ],
-    loopTitle: 'Sen yaşarken, işler hallolur.',
+    loopTitle: 'Ürün gerçeği',
     loopSteps: [
       {
-        title: 'Söyle',
-        body: 'Telefondan ne istediğini yaz ya da söyle. Türkçe, doğal ve sade.',
-        image: '/scenes/scene_leaving_home_1782465524838_nobg.png'
+        title: 'Bütünleşik Sohbet',
+        body: 'Cihazlar arası kesintisiz sohbet, iş akışlarınızla doğrudan bağlantılı çalışır.'
       },
       {
-        title: 'Anla',
-        body: 'Elyan ne demek istediğini çözer ve doğru adımları planlar.',
-        image: '/scenes/scene_florist_shop_1782465536520_nobg.png'
+        title: 'Belge Zekası',
+        body: 'PDF, tablo ve uzun belgeleri genel modellere açmadan kendi makinenizde işleyin.'
       },
       {
-        title: 'Yap',
-        body: 'İş bilgisayarında gerçekleşir: dosya, takvim, araştırma, belge.',
-        image: '/scenes/scene_cafe_flow_1782465546337_nobg.png'
+        title: 'Desktop Runtime',
+        body: 'Cihaz görevlerini, dosya düzenlemelerini ve sistem eylemlerini güvenle yürütün.'
       },
       {
-        title: 'Onayla',
-        body: 'Riskli bir adım varsa önce sana sorar. Kontrol her zaman sende.',
-        image: '/scenes/scene_job_done_1782465567490_nobg.png'
+        title: 'Hafıza ve Öğrenme',
+        body: 'Elyan, hassas bağlamı gizli tutarken zamanla çalışma alışkanlıklarınıza uyum sağlar.'
       }
     ],
     desktopVisual,
     mobileVisual,
-    boundaryTitle: 'Tek başına cevap değil — sonuç.',
+    boundaryTitle: 'Local-first güven sınırı',
     boundaryCopy: [
       {
-        title: 'Konuş ve üret',
-        body: 'Soru sor, yazdır, araştır; tablo, belge ve PDF oluştur — hepsi sohbet eder gibi.'
+        label: 'YEREL ÖNCELİKLİ',
+        title: 'Özel Çalışma Alanı',
+        body: 'Dosyalarınız ve yerel bağlamınız, açık görev onayı olmadan cihazınızdan asla ayrılmaz.',
+        pill: 'Cihaz onayıyla çalışır'
       },
       {
-        title: 'Bilgisayarını kullan',
-        body: 'Telefondan komut ver, eşleştirdiğin Mac veya PC işi senin için yapsın.'
+        label: 'SINIRLI ERİŞİM',
+        title: 'Cihaz İzinleri',
+        body: 'Sistem; takvim, bildirimler veya donanım durumlarına yalnızca siz izin verdiğinizde erişir.'
       },
       {
-        title: 'Kontrol sende',
-        body: 'Özel işlerin bilgisayarında kalır, riskli adımlarda onayın sorulur.'
+        label: 'OPERATÖR YETKİSİ',
+        title: 'Kontrollü Yürütme',
+        body: 'Arka plan otomasyonları ve masaüstü görevleri iz bırakır. Tek operatör daima sizsiniz.',
+        pill: 'Görev izleri saklanır'
       }
     ],
-    finalTitle: 'Bugün başla.',
-    finalCopy:
-      'Elyan’ı indir, bilgisayarını bir kez eşleştir ve ilk işini telefonundan ver.',
-    finalLinks: [
-      { href: '/tr/download', label: 'İndir' },
-      { href: '/tr/desktop', label: 'Nasıl çalışır' },
-      { href: '/tr/support', label: 'Destek' },
-      { href: '/tr/privacy', label: 'Gizlilik' }
+    useCasesTitle: 'Günlük akışlar için tasarlandı',
+    useCases: [
+      {
+        title: 'PDF ve Belge Analizi',
+        body: 'Buluta yükleme yapmadan yerel belgelerden hızla bilgi çıkarın.'
+      },
+      {
+        title: 'Çalışma Planı',
+        body: 'Bağlam farkındalığıyla günlük planlar oluşturun ve görevleri yönetin.'
+      },
+      {
+        title: 'Masaüstü Görevleri',
+        body: 'Tekrarlayan dosya işlemlerini, sıralamayı veya temizliği doğal dille otomatikleştirin.'
+      }
     ],
-    systemWidgets: {
-      velocityText: 'OTONOM • YEREL • GÜVENLİ • ',
-      fabricTitle: 'Yerel Veri Dokusu (Local Fabric)'
-    }
+    plansTitle: 'Kullanım ölçeğini seç',
+    plans: [
+      {
+        label: 'BAŞLANGIÇ',
+        title: 'Free',
+        body: 'Temel sohbet ve görev koordinasyonuna başlamak için idealdir.',
+        pill: 'Denemek için'
+      },
+      {
+        label: 'BİREYSEL',
+        title: 'Solo',
+        body: 'Tüm cihazlarınızı güvenle bağlayarak günlük kullanım için tasarlandı.'
+      },
+      {
+        label: 'PROFESYONEL',
+        title: 'Pro',
+        body: 'Gerçek ajan çalışma zamanı. Tam masaüstü otomasyonunu kilidini aç.',
+        pill: '30 gün deneme süresi'
+      }
+    ],
+    finalTitle: 'Kendi verin, kendi alanın.',
+    finalCopy:
+      'Verilerinin bulut araçları arasında dağılmasına izin verme. Yerelde, birleşik ve kendi kontrolünde tut. Mobil uygulama ve masaüstü runtime, ajan sistemini hayata geçirmek için birlikte çalışır.',
+    finalLinks: [
+      { href: '/tr/download', label: 'Hemen başla' },
+      { href: '/tr/support', label: 'Destek' },
+      { href: '/tr/privacy', label: 'Gizlilik' },
+      { href: '/tr/data-deletion', label: 'Veri silme' }
+    ]
   },
   pages: {
     desktop: {
       key: 'desktop',
-      heroImage: '/desk_focus.png',
-      navLabel: 'Masaüstü',
-      title: 'Elyan Masaüstü',
-      description: 'İşi yapan taraf. Dosya, belge ve uygulamalar bilgisayarında çalışır.',
-      eyebrow: 'Masaüstü',
+      navLabel: 'Desktop',
+      title: 'Kişisel Desktop Çalışma Alanı',
+      description: 'Yerel yürütme, mutlak gizlilik ve kusursuz otomasyon.',
+      eyebrow: 'Desktop Yürütme Yüzeyi',
       intro:
-        'Elyan Masaüstü, telefonundan verdiğin görevleri bilgisayarında gerçekten yapan taraftır. Dosya oluşturur, belge yazar, araştırır ve uygulamaları senin için kullanır — özel verin cihazından çıkmadan.',
+        'Elyan Desktop gerçek işin güvenle gerçekleştiği yerdir. Operatör yüzeyi ile yerel yürütme arasındaki sınırı korur ve özel bağlamınızın makinenizden çıkmamasını sağlar.',
       sections: [
         {
-          title: 'İşi gerçekten yapar',
-          body: 'Klasör aç, belge yaz, PDF üret, takvime ekle, araştır. Telefondan iste; bilgisayar yapsın.'
+          label: 'GİZLİLİK',
+          title: 'Yerel Gizlilik Sınırı',
+          body: 'Özel bağlam, dosya işlemleri ve yerel görevler mümkün olduğunca cihaz tarafında yürütülür.'
         },
         {
-          title: 'Özel verin sende kalır',
-          body: 'Özel dosyaların ve yerel işlerin bilgisayarında tutulur. Buluta yalnızca görevin gerektirdiği kadarı, açık biçimde gider.'
+          label: 'PERFORMANS',
+          title: 'Asenkron Mimari',
+          body: 'Arayüz asla donmaz. Elyan, ağır çalışma zamanı bağımlılıkları yüklenirken bile asenkron olarak başlar.'
         },
         {
-          title: 'Telefonunla tek bütün',
-          body: 'Telefon ve bilgisayar aynı hesapta buluşur. Birinden başlatırsın, diğeri sürdürür; her adımı canlı görürsün.'
+          label: 'MİMARİ',
+          title: 'Control-plane Uyumu',
+          body: 'Görev yönlendirme, kimlik doğrulama ve cihaz gerçeği backend üzerinden senkronize edilir, paralel ürün karmaşası yaşatmaz.'
         }
       ],
       visual: desktopVisual,
       ctas: [
-        { href: '/tr/download', label: 'İndir ve kur' },
-        { href: '/tr/privacy', label: 'Gizliliği incele' }
+        { href: '/tr/download', label: 'Desktop kurulumuna git' },
+        { href: '/tr/privacy', label: 'Gizlilik sınırlarını incele' }
       ]
     },
     mobile: {
       key: 'mobile',
-      heroImage: '/street_flow.png',
       navLabel: 'Mobil',
-      title: 'Elyan Mobil',
-      description: 'Cebindeki kumanda. Konuş, başlat, canlı izle.',
-      eyebrow: 'Telefon',
+      title: 'Görev Kontrol Yüzeyi',
+      description: 'Masaüstü çalışma zamanınız için uzaktan kumanda.',
+      eyebrow: 'Mobil Kontrol Yüzeyi',
       intro:
-        'Elyan Mobil, kişisel asistanını cebine taşır. Sohbet edersin, soru sorarsın, belge ürettirirsin — ve istediğinde bilgisayarına komut verip işi canlı izlersin.',
+        'Elyan Mobile masaüstü çalışma alanınızın uzaktan kumandasıdır. Görev yaratır, durum izler ve sonuçları zahmetsizce gösterir.',
       sections: [
         {
-          title: 'Konuş, üret, araştır',
-          body: 'Türkçe sohbet, anlık web araştırması, belge ve PDF üretimi — hepsi telefonundan.'
+          title: 'Yerel Agent Yok',
+          body: 'Mobil uygulama doğası gereği hafiftir. Eşleştirilen masaüstü motorunu veya yerel bir modeli çalıştırmaz.'
         },
         {
-          title: 'Bilgisayarına komut ver',
-          body: 'Telefondan görev başlat, eşleştirdiğin bilgisayar yapsın. Her adımı canlı takip et.'
+          title: 'Mutlak Görev Gerçeği',
+          body: 'Giriş, eşleştirme ve görev durumları yerel varsayımlara değil, açık backend gerçeğine dayanır.'
         },
         {
-          title: 'Hafif ve hızlı',
-          body: 'Ağır iş bilgisayarında çalışır; telefonun akıcı, pili uzun ömürlü kalır.'
+          title: 'Aynı Sessiz Sistem',
+          body: 'Masaüstü ve mobil aynı temiz tipografiyi, sıcak tonları ve profesyonel yoğunluğu paylaşır.'
         }
       ],
       visual: mobileVisual,
       ctas: [
-        { href: '/tr/download', label: 'İndir' },
+        { href: '/tr/privacy', label: 'Veri işleme açıklaması' },
         { href: '/tr/support', label: 'Hesap ve destek' }
       ]
     },
     download: {
       key: 'download',
       navLabel: 'İndir',
-      title: 'Elyan’ı indir',
-      description: 'Masaüstü kurulumu ve mevcut erişim yolları.',
+      title: 'İndir',
+      description: 'Desktop kurulumu ve mevcut erişim yolları.',
       eyebrow: 'Kurulum',
       intro:
-        'Bu sayfa yalnızca gerçek, doğrulanmış kurulum yollarını listeler. Sahte indirme butonu veya olmayan paket bağlantısı yoktur.',
+        'Bu yüzey yalnızca doğrulanmış kurulum yollarını gösterir. Sahte release notu, sahte platform paketi veya olmayan indirme butonu yer almaz.',
       sections: [
         {
-          title: 'Masaüstü uygulaması',
-          body: 'Elyan Masaüstü, işi yapan taraftır. macOS için Homebrew formülüyle kurabilir, kaynağı depo üzerinden çalıştırabilirsin.'
+          title: 'Electron desktop çekirdeği',
+          body: 'Aktif desktop shell depo kökünden ship edilir. Yerel çalıştırma için repo içinde npm run dev ve build akışları kullanılır.'
         },
         {
-          title: 'Mobil uygulama',
-          body: 'Elyan Mobil yakında App Store ve Google Play’de. Hazır olduğunda gerçek mağaza bağlantıları burada yayınlanacak.'
+          title: 'CLI ve bootstrap',
+          body: 'Doğrulanmış komutlar: brew install formula yolu ve npm üzerinden global bootstrap hattıdır.'
         },
         {
-          title: 'Gerçek sürüm disiplini',
-          body: 'İmzalı sürüm paketleri hazır oldukça bu sayfa yalnızca gerçek platform bağlantılarını gösterir.'
+          title: 'Gerçek release disiplini',
+          body: 'İmzalı release artifact\'ları hazır olduğunda bu sayfa yalnızca gerçek platform bağlantılarını yayınlar.'
         }
       ],
       ctas: [
-        { href: 'https://raw.githubusercontent.com/emrek0ca/elyan/main/Formula/elyan.rb', label: 'Homebrew formülü' },
+        { href: 'https://raw.githubusercontent.com/emrek0ca/elyan/main/Formula/elyan.rb', label: 'Homebrew formula' },
         { href: 'https://github.com/emrek0ca/elyan', label: 'Kaynak repo' }
       ]
     },
@@ -221,7 +253,7 @@ const content: SiteContent = {
       description: 'Elyan kişisel verilerinizi nasıl işler ve korur.',
       eyebrow: 'Gizlilik ve Veri Güvenliği',
       intro:
-        'Elyan, özel işleri cihazınızda tutan kişisel bir yapay zekâ asistanıdır. Bu politika hangi verileri neden işlediğimizi, hangi izinleri nasıl kullandığımızı, hesap silme ve destek yollarınızı açıklar. Yürürlük tarihi: 22 Haziran 2026.',
+        'Elyan, local-first mimariyi hosted control-plane ile ayıran zeka tabanlı bir agent sistemidir. Bu politika hangi verileri neden işlediğimizi, hangi izinleri nasıl kullandığımızı, hesap silme ve destek yollarınızı açıklar. Yürürlük tarihi: 22 Haziran 2026.',
       sections: [],
       legal: [
         {
@@ -258,9 +290,9 @@ const content: SiteContent = {
           ]
         },
         {
-          title: '5. Elyan Zekâ Katmanı ve Güvenli Altyapı',
+          title: '5. Elyan Zeka Katmanı ve Güvenli Altyapı',
           body: [
-            'Elyan; yanıt üretimi, görev yönlendirme, kimlik doğrulama, veri tabanı, bildirim ve güvenlik süreçlerini kendi zekâ katmanı ve güvenli işletim altyapısı içinde yönetir.',
+            'Elyan; yanıt üretimi, görev yönlendirme, kimlik doğrulama, veri tabanı, bildirim ve güvenlik süreçlerini kendi zeka katmanı ve güvenli işletim altyapısı içinde yönetir.',
             'Veri kullanımı, hizmetin çalışması için gereken en dar kapsamla sınırlıdır. Kişisel verileriniz reklam veya dış pazarlama amacıyla satılmaz.',
             'Elyan tek ürün kimliğiyle sunulur. Kullanıcı içerikleri, açık rıza veya hizmetin çalışması için gereken görev bağlamı dışında model geliştirme amacıyla kullanılmaz.'
           ]
@@ -308,13 +340,13 @@ const content: SiteContent = {
       description: 'Elyan ürünlerinin kullanımı için temel hukuki koşullar ve yükümlülükler.',
       eyebrow: 'Hizmet Şartları',
       intro:
-        'Bu koşullar Elyan web sitesi, Elyan Mobile, Elyan Desktop ve bağlı servislerin kullanımını düzenler. Elyan\'ı kullanarak bu koşulları ve gizlilik politikasını kabul etmiş olursunuz. Yürürlük tarihi: 22 Haziran 2026.',
+        'Bu koşullar Elyan web sitesi, Elyan Mobile, Elyan Desktop ve bağlı control-plane servislerinin kullanımını düzenler. Elyan\'ı kullanarak bu koşulları ve gizlilik politikasını kabul etmiş olursunuz. Yürürlük tarihi: 22 Haziran 2026.',
       sections: [],
       legal: [
         {
           title: '1. Hizmetin Kapsamı',
           body: [
-            'Elyan; mobil görev kontrolü, desktop local runtime, cihaz eşleştirme, task routing, zekâ destekli yanıt üretimi, belge/görsel işleme ve güvenli görev izleme özellikleri sunar.',
+            'Elyan; mobil görev kontrolü, desktop local runtime, cihaz eşleştirme, task routing, zeka destekli yanıt üretimi, belge/görsel işleme ve güvenli görev izleme özellikleri sunar.',
             'Mobil ve web yüzeyleri kontrol yüzeyidir. Özel yerel eylemler Elyan Desktop runtime sınırında veya açıkça etkinleştirilen sistem entegrasyonları üzerinden yürütülür.',
             'Bazı özellikler beta, sınırlı erişim veya platforma bağlı olabilir. Özelliklerin kesintisiz, hatasız veya her cihazda aynı şekilde çalışacağı garanti edilmez.'
           ]
@@ -422,7 +454,6 @@ const content: SiteContent = {
     },
     support: {
       key: 'support',
-      heroImage: '/hero_cafe.png',
       navLabel: 'Destek',
       title: 'Destek ve İletişim',
       description: 'Hesap, veri yönetimi, sorun giderme ve hesap silme yönlendirmesi.',
@@ -440,7 +471,7 @@ const content: SiteContent = {
         },
         {
           title: 'Cihaz eşleştirme ve görev akışı',
-          body: 'Masaüstü ve mobil aynı hesapla giriş yapmalı, masaüstü uygulaması hazır görünmeli ve internet bağlantısı açık olmalıdır. QR eşleştirme, görev gönderme, durum izleme veya sonuç görüntüleme sorunlarında ekran görüntüsü ve hata zamanını destek talebine ekleyin.'
+          body: 'Desktop ve Mobile aynı hesapla giriş yapmalı, desktop runtime hazır görünmeli ve internet bağlantısı açık olmalıdır. QR eşleştirme, görev gönderme, task status veya sonuç görüntüleme sorunlarında ekran görüntüsü ve hata zamanını destek talebine ekleyin.'
         },
         {
           title: 'Abonelik ve mağaza işlemleri',
@@ -463,13 +494,12 @@ const content: SiteContent = {
     },
     ai: {
       key: 'ai',
-      heroImage: '/cozy_night.png',
-      navLabel: 'Zekâ Bildirimi',
-      title: 'Elyan Zekâ Bildirimi',
-      description: 'Elyan zekâ katmanının çalışma sınırları, veri işleme yöntemi ve kullanıcı kontrolü hakkında açık bilgilendirme.',
-      eyebrow: 'Elyan Zekâ Katmanı',
+      navLabel: 'Zeka Bildirimi',
+      title: 'Elyan Zeka Bildirimi',
+      description: 'Elyan zeka katmanının çalışma sınırları, veri işleme yöntemi ve kullanıcı kontrolü hakkında açık bilgilendirme.',
+      eyebrow: 'Elyan Zeka Katmanı',
       intro:
-        'Bu bildirim, Elyan içindeki zekâ destekli özelliklerin nasıl çalıştığını, verilerinizin görev bağlamında nasıl işlendiğini ve kullanıcı kontrolünün nerede durduğunu açıklar.',
+        'Bu bildirim, Elyan içindeki zeka destekli özelliklerin nasıl çalıştığını, verilerinizin görev bağlamında nasıl işlendiğini ve kullanıcı kontrolünün nerede durduğunu açıklar.',
       sections: [
         {
           title: '1. Rollerin dağılımı',
@@ -485,7 +515,7 @@ const content: SiteContent = {
         },
         {
           title: '4. Eğitim ve kişisel içerik',
-          body: 'Elyan kendi zekâ katmanıyla tek ürün kimliği olarak geliştirilir. Kişisel komutlarınız, özel konuşmalarınız veya yerel dosyalarınız açık rıza olmadan model geliştirme amacıyla kullanılmaz.'
+          body: 'Elyan kendi zeka katmanıyla tek ürün kimliği olarak geliştirilir. Kişisel komutlarınız, özel konuşmalarınız veya yerel dosyalarınız açık rıza olmadan model geliştirme amacıyla kullanılmaz.'
         },
         {
           title: '5. Hata payı ve kullanıcı kontrolü',

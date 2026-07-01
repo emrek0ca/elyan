@@ -28,9 +28,10 @@ export type VisualSection = {
 };
 
 export type NarrativeBlock = {
+  label?: string;
   title: string;
   body: string;
-  image?: string;
+  pill?: string;
 };
 
 export type LegalSection = {
@@ -45,12 +46,12 @@ export type HeroLink = {
 
 export type SitePage = {
   key: Exclude<PageKey, 'home'>;
+  heroImage?: string;
   navLabel: string;
   title: string;
   description: string;
   eyebrow: string;
   intro: string;
-  heroImage?: string;
   sections: readonly NarrativeBlock[];
   visual?: VisualSection;
   legal?: readonly LegalSection[];
@@ -69,13 +70,13 @@ export type HomeContent = {
   mobileVisual?: VisualSection;
   boundaryTitle: string;
   boundaryCopy: readonly NarrativeBlock[];
+  useCasesTitle: string;
+  useCases: readonly NarrativeBlock[];
+  plansTitle: string;
+  plans: readonly NarrativeBlock[];
   finalTitle: string;
   finalCopy: string;
   finalLinks: readonly HeroLink[];
-  systemWidgets?: {
-    velocityText: string;
-    fabricTitle: string;
-  };
 };
 
 export type SiteContent = {

@@ -1,24 +1,13 @@
 import Link from 'next/link';
 
-import { ParallaxImage } from '@/components/parallax-image';
-import { TextReveal } from '@/components/text-reveal';
 import { AnimatedBlock } from '@/components/animated-block';
 import { SiteShell } from '@/components/site-shell';
-import { CommandDemo } from '@/components/command-demo';
-import { CapabilityMarquee } from '@/components/capability-marquee';
-import { PromptTyper } from '@/components/prompt-typer';
+import { ScrollSequence } from '@/components/scroll-sequence';
 import { getSiteContent } from '@/lib/content';
 import { buildMetadata } from '@/lib/metadata';
 import { isSiteLocale, type SiteLocale } from '@/lib/locales';
 import { canonicalUrl } from '@/lib/routes';
 import { setRequestLocale } from 'next-intl/server';
-
-// New Waow Components
-import { MagneticButton } from '@/components/magnetic-button';
-import { BentoGrid, BentoCard } from '@/components/bento-grid';
-import { KineticFabric } from '@/components/kinetic-fabric';
-import { ScrollPath } from '@/components/scroll-path';
-import { VelocityScroll } from '@/components/velocity-scroll';
 
 export async function generateMetadata({
   params
@@ -41,144 +30,133 @@ export default async function HomePage({
 }) {
   const { locale } = await params;
   const safeLocale: SiteLocale = isSiteLocale(locale) ? locale : 'tr';
-
+  
   setRequestLocale(safeLocale);
 
   const site = getSiteContent(safeLocale);
   const home = site.home;
-  const isEnglish = safeLocale === 'en';
 
   return (
     <SiteShell locale={safeLocale}>
-      <ScrollPath className="z-0 mix-blend-difference" />
       
-      <section className="home-hero relative z-10" aria-labelledby="home-title">
-        <KineticFabric className="absolute top-[-10%] left-[50%] w-[100vw] -translate-x-1/2 h-[120%] -z-10 overflow-hidden flex flex-col group cursor-crosshair select-none opacity-40 mix-blend-screen pointer-events-auto" />
-        <AnimatedBlock className="home-hero__copy">
-          <span className="eyebrow">{home.eyebrow}</span>
-          <TextReveal as="h1" id="home-title" text={home.title} className="home-hero__title" />
-          <p className="home-hero__lede">{home.description}</p>
-          <div className="home-hero__actions">
+      {/* Hero & Scroll Sequence */}
+      <section className="w-full mb-16">
+        <ScrollSequence 
+          title={home.title} 
+          subtitle={home.eyebrow} 
+        />
+      </section>
+
+      {/* Intro Text */}
+      <section className="content-section text-center max-w-4xl mx-auto mb-24">
+        <AnimatedBlock>
+          <p className="lede text-2xl md:text-3xl font-medium" style={{ color: 'var(--text)', maxWidth: '100%' }}>
+            {home.intro}
+          </p>
+          <div className="hero-actions justify-center mt-10">
             {home.ctas.map((item, index) => (
-              index === 0 ? (
-                <MagneticButton
-                  key={item.href}
-                  as="link"
-                  href={item.href}
-                  className="btn btn--primary"
-                >
-                  {item.label}
-                </MagneticButton>
-              ) : (
-                <MagneticButton
-                  key={item.href}
-                  as="link"
-                  href={item.href}
-                  className="btn btn--ghost"
-                >
-                  {item.label}
-                </MagneticButton>
-              )
+              <Link
+                className={index === 0 ? 'pill-link pill-link--primary' : 'pill-link pill-link--soft'}
+                href={item.href}
+                key={item.href}
+              >
+                {item.label}
+              </Link>
             ))}
           </div>
         </AnimatedBlock>
-
-        <AnimatedBlock className="home-hero__visual" delay={0.12}>
-          <figure className="home-hero__frame">
-            <ParallaxImage src="/desk_focus.png" alt="Elyan" priority />
-            <PromptTyper locale={safeLocale} />
-          </figure>
-        </AnimatedBlock>
       </section>
 
-      <section className="home-marquee relative z-10" aria-label={isEnglish ? 'What Elyan can do' : 'Elyan neler yapabilir'}>
-        <span className="eyebrow">{isEnglish ? 'What Elyan can do' : 'Elyan neler yapabilir'}</span>
-        <CapabilityMarquee locale={safeLocale} />
-      </section>
-
-      {/* Cinematic Velocity Scroll Background */}
-      <div className="relative w-full py-12 md:py-24 -my-12 z-0 opacity-5 pointer-events-none overflow-hidden">
-        <VelocityScroll text={home.systemWidgets?.velocityText || 'AUTONOMOUS • LOCAL • SECURE • '} className="font-display text-[8rem] md:text-[14rem] tracking-tighter text-[var(--text)]" />
-      </div>
-
-      <section className="home-value relative z-10" aria-labelledby="value-title">
-        <AnimatedBlock className="home-value__head">
-          <TextReveal as="h2" id="value-title" text={home.boundaryTitle} className="section-title" />
-          <p className="home-value__lede">{home.intro}</p>
+      {/* Features Grid */}
+      <section className="content-section">
+        <AnimatedBlock>
+          <span className="eyebrow">{site.messages.ui.controlLoopTitle}</span>
+          <h2>{home.loopTitle}</h2>
         </AnimatedBlock>
-        
-        {/* Replaced static list with 3D Bento Grid */}
-        <BentoGrid className="mt-12 md:mt-20">
-          {home.boundaryCopy.map((item, index) => (
-            <BentoCard
-              key={item.title}
-              title={item.title}
-              description={item.body}
-              delay={index * 0.1}
-              header={
-                <div className="w-12 h-12 rounded-2xl bg-[var(--surface-2)] border border-[var(--outline)] flex items-center justify-center font-mono text-[var(--secondary)] font-bold text-lg shadow-inner">
-                  {String(index + 1).padStart(2, '0')}
-                </div>
-              }
-            />
+        <div className="feature-grid mt-6">
+          {home.loopSteps.map((step, index) => (
+            <AnimatedBlock className="surface-card h-full" delay={index * 0.05} key={step.title}>
+              {step.label && <span className="surface-card__label">{step.label}</span>}
+              <span className="surface-card__index mb-3 block text-[var(--secondary)]">0{index + 1}</span>
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+              {step.pill && <span className="surface-card__pill">{step.pill}</span>}
+            </AnimatedBlock>
           ))}
-        </BentoGrid>
-      </section>
-
-
-
-      <section className="home-flow relative z-10" aria-labelledby="flow-title">
-        <div className="home-flow__grid">
-          <AnimatedBlock className="home-flow__head">
-            <span className="eyebrow">{site.messages.ui.controlLoopTitle}</span>
-            <h2 id="flow-title" className="section-title">{home.loopTitle}</h2>
-            <ol className="home-flow__steps">
-              {home.loopSteps.map((step, index) => (
-                <li key={step.title}>
-                  <span className="home-flow__step-index">{String(index + 1).padStart(2, '0')}</span>
-                  <div>
-                    <h3>{step.title}</h3>
-                    <p>{step.body}</p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </AnimatedBlock>
-          <AnimatedBlock className="home-flow__demo" delay={0.1}>
-            <CommandDemo locale={safeLocale} />
-          </AnimatedBlock>
         </div>
       </section>
 
-      <section className="home-cta relative z-10" aria-labelledby="cta-title">
-        <div className="home-cta__image" aria-hidden="true">
-          <ParallaxImage src="/cozy_night.png" alt="" />
+      {/* Legal & Boundaries */}
+      <section className="content-section mt-32">
+        <AnimatedBlock>
+          <span className="eyebrow">{site.messages.ui.legalTitle}</span>
+          <h2>{home.boundaryTitle}</h2>
+        </AnimatedBlock>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
+          {home.boundaryCopy.map((item, index) => (
+            <AnimatedBlock 
+              className={`surface-card h-full ${index === 0 ? 'md:col-span-2 lg:col-span-1' : ''}`}
+              delay={index * 0.05} 
+              key={item.title}
+            >
+              {item.label && <span className="surface-card__label">{item.label}</span>}
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+              {item.pill && <span className="surface-card__pill">{item.pill}</span>}
+            </AnimatedBlock>
+          ))}
         </div>
-        <AnimatedBlock className="home-cta__copy">
+      </section>
+
+      {/* Use Cases */}
+      <section className="content-section mt-32">
+        <AnimatedBlock>
+          <h2>{home.useCasesTitle}</h2>
+        </AnimatedBlock>
+        <div className="feature-grid mt-6">
+          {home.useCases.map((step, index) => (
+            <AnimatedBlock className="surface-card h-full" delay={index * 0.05} key={step.title}>
+              {step.label && <span className="surface-card__label">{step.label}</span>}
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+              {step.pill && <span className="surface-card__pill">{step.pill}</span>}
+            </AnimatedBlock>
+          ))}
+        </div>
+      </section>
+
+      {/* Plans */}
+      <section className="content-section mt-32">
+        <AnimatedBlock>
+          <h2>{home.plansTitle}</h2>
+        </AnimatedBlock>
+        <div className="feature-grid mt-6">
+          {home.plans.map((plan, index) => (
+            <AnimatedBlock className="surface-card h-full" delay={index * 0.05} key={plan.title}>
+              {plan.label && <span className="surface-card__label">{plan.label}</span>}
+              <h3>{plan.title}</h3>
+              <p>{plan.body}</p>
+              {plan.pill && <span className="surface-card__pill">{plan.pill}</span>}
+            </AnimatedBlock>
+          ))}
+        </div>
+      </section>
+
+      {/* Final CTA */}
+      <section className="cta-section text-center py-20 mt-16 border-t border-[var(--outline)]">
+        <AnimatedBlock className="cta-card max-w-2xl mx-auto">
           <span className="eyebrow">{site.messages.ui.finalCtaLabel}</span>
-          <TextReveal as="h2" id="cta-title" text={home.finalTitle} className="home-cta__title" />
-          <p className="home-cta__lede">{home.finalCopy}</p>
-          <div className="home-cta__actions">
+          <h2 style={{ fontSize: 'clamp(36px, 5vw, 56px)' }}>{home.finalTitle}</h2>
+          <p className="lede mx-auto mb-8">{home.finalCopy}</p>
+          <div className="hero-actions justify-center">
             {home.finalLinks.map((item, index) => (
-              index === 0 ? (
-                <MagneticButton
-                  key={item.href}
-                  as="link"
-                  href={item.href}
-                  className="btn btn--primary"
-                >
-                  {item.label}
-                </MagneticButton>
-              ) : (
-                <MagneticButton
-                  key={item.href}
-                  as="link"
-                  href={item.href}
-                  className="btn btn--ghost"
-                >
-                  {item.label}
-                </MagneticButton>
-              )
+              <Link
+                className={index === 0 ? 'pill-link pill-link--primary' : 'pill-link pill-link--soft'}
+                href={item.href}
+                key={item.href}
+              >
+                {item.label}
+              </Link>
             ))}
           </div>
         </AnimatedBlock>

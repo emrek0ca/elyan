@@ -3,17 +3,17 @@ import type { SiteContent } from '@/content/site.types';
 
 const desktopVisual = {
   eyebrow: 'Desktop',
-  title: 'Your computer does the work.',
+  title: 'The local runtime stays inside a quiet operator shell.',
   body:
-    'Elyan Desktop keeps your private files on your machine, accepts the task, and carries it out for you — files, calendar, documents, and more.',
+    'Elyan Desktop keeps private context on device, accepts work through the control-plane, and executes local capabilities behind a clean runtime boundary.',
   screenshots: getDesktopScreenshots('en')
 } as const;
 
 const mobileVisual = {
-  eyebrow: 'Phone',
-  title: 'The remote in your pocket.',
+  eyebrow: 'Mobile',
+  title: 'Mobile is for task control, not local execution.',
   body:
-    'Talk from your phone, start the task, and watch every step live. The heavy work runs on your computer; your phone stays light.',
+    'The mobile app sends work, watches task truth, and surfaces results. It does not run a local agent runtime.',
   screenshots: getMobileScreenshots('en')
 } as const;
 
@@ -22,19 +22,19 @@ const content: SiteContent = {
   language: 'English',
   direction: 'ltr',
   siteName: 'Elyan',
-  siteTitle: 'Elyan — Talk from your phone, your computer gets it done',
+  siteTitle: 'Elyan | Agent Control Surface',
   siteDescription:
-    'Elyan is your personal AI assistant. It chats, researches, and generates documents — and when you ask, your paired computer actually gets the work done for you.',
-  heroStatement: 'Personal AI assistant',
+    'Elyan is an Agent Control Surface that unifies desktop runtime, control-plane truth, and mobile task flow without collapsing privacy boundaries.',
+  heroStatement: 'Agent Control Surface',
   nav: [
+    { href: '/en', label: 'Home' },
     { href: '/en/desktop', label: 'Desktop' },
     { href: '/en/mobile', label: 'Mobile' },
-    { href: '/en/download', label: 'Download' },
     { href: '/en/support', label: 'Support' }
   ],
   footer: {
     note:
-      'Elyan is your personal AI assistant. Chat, create, and command your computer when you need to. Your private work stays on your device.',
+      'Elyan establishes a local runtime boundary for personal data and device tasks.',
     legal: [
       { href: '/en/privacy', label: 'Privacy' },
       { href: '/en/terms', label: 'Terms' },
@@ -52,161 +52,195 @@ const content: SiteContent = {
       switchToTurkish: 'Türkçe',
       openPage: 'Open',
       backHome: 'Back home',
-      screenshotLabel: 'Real product screen',
-      previousScreenshot: 'Previous screen',
-      nextScreenshot: 'Next screen',
-      controlLoopTitle: 'How it works',
+      screenshotLabel: 'Real product surface',
+      previousScreenshot: 'Previous screenshot',
+      nextScreenshot: 'Next screenshot',
+      controlLoopTitle: 'Control loop',
       legalTitle: 'Official information',
-      finalCtaLabel: 'Get started',
+      finalCtaLabel: 'Choose your route',
       footerLegalLabel: 'Legal',
       footerSupportLabel: 'Support',
       primaryNavigationLabel: 'Primary navigation'
     }
   },
   home: {
-    title: 'Talk from your phone, your computer gets it done.',
-    description:
-      'Elyan is your personal AI assistant. It answers, researches, and generates documents — and when you ask, your paired computer actually gets the work done for you.',
-    eyebrow: 'Personal AI assistant',
+    title: 'Start your personal AI agent system.',
+    description: 'Elyan brings chat, documents, tasks, and device workflows into one private AI workspace. Your data stays under your control.',
+    eyebrow: 'Personal AI Agent System',
     intro:
-      'Most AI gives you an answer and stops there. Elyan goes one step further: ask from your phone, and your paired computer does it for you.',
+      'Elyan brings chat, documents, tasks, and device workflows into one private AI workspace. Your data stays under your control.',
     ctas: [
-      { href: '/en/desktop', label: 'How it works' },
-      { href: '/en/download', label: 'Download' }
+      { href: '/en/desktop', label: 'Try Elyan' },
+      { href: '/en/mobile', label: 'Explore the system' }
     ],
-    loopTitle: 'You live your day — the work gets done.',
+    loopTitle: 'Product proof',
     loopSteps: [
       {
-        title: 'Say it',
-        body: 'Type or speak what you want from your phone. Natural and simple.',
-        image: '/scenes/scene_leaving_home_1782465524838_nobg.png'
+        title: 'Unified Chat',
+        body: 'Your conversation continuity across devices, seamlessly linked to your workflows.'
       },
       {
-        title: 'Understand',
-        body: 'Elyan works out what you mean and plans the right steps.',
-        image: '/scenes/scene_florist_shop_1782465536520_nobg.png'
+        title: 'Document Intelligence',
+        body: 'Process PDFs, tables, and long-form documents without exposing them to public models.'
       },
       {
-        title: 'Do it',
-        body: 'The work happens on your computer: files, calendar, research, documents.',
-        image: '/scenes/scene_cafe_flow_1782465546337_nobg.png'
+        title: 'Desktop Runtime',
+        body: 'Execute device tasks, file edits, and system actions safely on your local machine.'
       },
       {
-        title: 'Approve',
-        body: 'If a step is risky, it asks you first. Control always stays with you.',
-        image: '/scenes/scene_job_done_1782465567490_nobg.png'
+        title: 'Memory & Learning',
+        body: 'Elyan adapts to your work patterns over time while keeping sensitive context private.'
       }
     ],
     desktopVisual,
     mobileVisual,
-    boundaryTitle: 'Not just an answer — a result.',
+    boundaryTitle: 'Local-first trust boundary',
     boundaryCopy: [
       {
-        title: 'Chat and create',
-        body: 'Ask, write, research; generate tables, documents and PDFs — all in a natural chat.'
+        label: 'LOCAL FIRST',
+        title: 'Private Workspace',
+        body: 'Your files and local context never leave your device without explicit task-based approval.',
+        pill: 'Requires device consent'
       },
       {
-        title: 'Use your computer',
-        body: 'Command from your phone and let your paired Mac or PC do the work for you.'
+        label: 'LIMITED ACCESS',
+        title: 'Device Permissions',
+        body: 'The system only accesses calendar, notifications, or hardware states when you explicitly grant access.'
       },
       {
-        title: 'You stay in control',
-        body: 'Your private work stays on your computer, and risky steps ask for your approval.'
+        label: 'OPERATOR AUTHORITY',
+        title: 'Controlled Execution',
+        body: 'Background automation and desktop tasks require trace visibility. You remain the sole operator.',
+        pill: 'Task traces stored'
       }
     ],
-    finalTitle: 'Start today.',
-    finalCopy:
-      'Download Elyan, pair your computer once, and send your first task from your phone.',
-    finalLinks: [
-      { href: '/en/download', label: 'Download' },
-      { href: '/en/desktop', label: 'How it works' },
-      { href: '/en/support', label: 'Support' },
-      { href: '/en/privacy', label: 'Privacy' }
+    useCasesTitle: 'Designed for daily workflows',
+    useCases: [
+      {
+        title: 'PDF & Document Analysis',
+        body: 'Quickly extract information from local documents without cloud uploads.'
+      },
+      {
+        title: 'Work Planning',
+        body: 'Generate daily plans and manage tasks with context-aware intelligence.'
+      },
+      {
+        title: 'Desktop Tasks',
+        body: 'Automate repetitive desktop files, sorting, or cleanup through natural language.'
+      }
     ],
-    systemWidgets: {
-      velocityText: 'AUTONOMOUS • LOCAL • SECURE • ',
-      fabricTitle: 'Local Data Fabric'
-    }
+    plansTitle: 'Choose your scale',
+    plans: [
+      {
+        label: 'STARTER',
+        title: 'Free',
+        body: 'Perfect for getting started with basic chat and task coordination.',
+        pill: 'To try'
+      },
+      {
+        label: 'PERSONAL',
+        title: 'Solo',
+        body: 'Designed for daily use, connecting all your devices securely.'
+      },
+      {
+        label: 'PROFESSIONAL',
+        title: 'Pro',
+        body: 'The real agent runtime. Unlock full desktop automation.',
+        pill: '30 day trial'
+      }
+    ],
+    finalTitle: 'Your data, your workspace.',
+    finalCopy:
+      'Don\'t let your data scatter across cloud tools. Keep it local, unified, and under your control. The mobile app and desktop runtime work together to bring your agent system to life.',
+    finalLinks: [
+      { href: '/en/download', label: 'Start now' },
+      { href: '/en/support', label: 'Support' },
+      { href: '/en/privacy', label: 'Privacy' },
+      { href: '/en/data-deletion', label: 'Data deletion' }
+    ]
   },
   pages: {
     desktop: {
       key: 'desktop',
       heroImage: '/desk_focus.png',
       navLabel: 'Desktop',
-      title: 'Elyan Desktop',
-      description: 'The side that does the work. Files, documents and apps run on your computer.',
-      eyebrow: 'Desktop',
+      title: 'Your Private Desktop Runtime',
+      description: 'Local execution, absolute privacy, and seamless automation.',
+      eyebrow: 'Desktop Execution Surface',
       intro:
-        'Elyan Desktop is the side that actually carries out the tasks you send from your phone. It creates files, writes documents, researches, and uses apps for you — without your private data leaving the machine.',
+        'Elyan Desktop is where real work happens safely. It protects the line between the operator shell and the local runtime, ensuring your private context never leaves your machine.',
       sections: [
         {
-          title: 'It actually does the work',
-          body: 'Create folders, write documents, generate PDFs, add to your calendar, research. Ask from your phone; let the computer do it.'
+          label: 'PRIVACY',
+          title: 'Absolute Privacy',
+          body: 'Private context, local tools, file operations, and device-side execution stay strictly on the desktop side.'
         },
         {
-          title: 'Your private data stays with you',
-          body: 'Private files and local work stay on your computer. Only what the task explicitly needs goes to the cloud.'
+          label: 'PERFORMANCE',
+          title: 'Asynchronous Architecture',
+          body: 'The interface never freezes. Elyan loads asynchronously even when heavy runtime dependencies are initializing.'
         },
         {
-          title: 'One whole with your phone',
-          body: 'Phone and computer meet in the same account. Start on one, continue on the other, and watch every step live.'
+          label: 'ARCHITECTURE',
+          title: 'Control-plane Alignment',
+          body: 'Task routing, auth, and device truth coordinate seamlessly through the backend, removing parallel friction.'
         }
       ],
       visual: desktopVisual,
       ctas: [
-        { href: '/en/download', label: 'Download and set up' },
-        { href: '/en/privacy', label: 'Review privacy' }
+        { href: '/en/download', label: 'Go to desktop setup' },
+        { href: '/en/privacy', label: 'Inspect privacy boundaries' }
       ]
     },
     mobile: {
       key: 'mobile',
       heroImage: '/street_flow.png',
       navLabel: 'Mobile',
-      title: 'Elyan Mobile',
-      description: 'The remote in your pocket. Talk, start, watch live.',
-      eyebrow: 'Phone',
+      title: 'The Task Control Surface',
+      description: 'Your remote control for the desktop runtime.',
+      eyebrow: 'Mobile Control Surface',
       intro:
-        'Elyan Mobile puts your personal assistant in your pocket. Chat, ask questions, generate documents — and when you want, command your computer and watch the work happen live.',
+        'Elyan Mobile is your remote control for the desktop runtime. It behaves as a task control center: create work, watch status, and surface results effortlessly.',
       sections: [
         {
-          title: 'Chat, create, research',
-          body: 'Natural conversation, live web research, document and PDF generation — all from your phone.'
+          title: 'No Local Agent Runtime',
+          body: 'The mobile app is lightweight by design. It does not run the paired desktop engine or a local model.'
         },
         {
-          title: 'Command your computer',
-          body: 'Start a task from your phone and let your paired computer do it. Track every step live.'
+          title: 'Absolute Task Truth',
+          body: 'Login, pairing, and task status flows follow explicit backend truth rather than local guesswork.'
         },
         {
-          title: 'Light and fast',
-          body: 'The heavy work runs on your computer, so your phone stays smooth and your battery lasts.'
+          title: 'The Same Quiet System',
+          body: 'Desktop and mobile share the same clean typography, warm neutrals, and restrained professional density.'
         }
       ],
       visual: mobileVisual,
       ctas: [
-        { href: '/en/download', label: 'Download' },
+        { href: '/en/privacy', label: 'Data processing disclosure' },
         { href: '/en/support', label: 'Account and support' }
       ]
     },
     download: {
       key: 'download',
       navLabel: 'Download',
-      title: 'Download Elyan',
-      description: 'Desktop setup and current access routes.',
+      title: 'Download',
+      description: 'Desktop setup and verified access routes.',
       eyebrow: 'Setup',
       intro:
-        'This page lists only real, verified install paths. There are no fake download buttons or package links that do not exist.',
+        'This surface only shows verified installation paths. There are no fake release notes, fake platform buttons, or package links that do not exist.',
       sections: [
         {
-          title: 'Desktop app',
-          body: 'Elyan Desktop is the side that does the work. On macOS you can install it with the Homebrew formula or run the source from the repository.'
+          title: 'Electron desktop core',
+          body: 'The active desktop shell ships from the repository root. The repository already exposes verified dev and build flows.'
         },
         {
-          title: 'Mobile app',
-          body: 'Elyan Mobile is coming soon to the App Store and Google Play. Real store links will appear here once it is ready.'
+          title: 'CLI and bootstrap',
+          body: 'The verified install paths today are the Homebrew formula route and npm-based bootstrap flow.'
         },
         {
-          title: 'Real release discipline',
-          body: 'As signed release packages become available, this page will only show real platform links.'
+          title: 'Release discipline',
+          body: 'When signed platform artifacts are available, this page should publish only those real release targets.'
         }
       ],
       ctas: [
@@ -221,7 +255,7 @@ const content: SiteContent = {
       description: 'How Elyan processes and protects your personal data.',
       eyebrow: 'Privacy & Data Security',
       intro:
-        'Elyan is a personal AI assistant that keeps private work on your device. This policy explains what data we process, why we process it, how permissions work, and how you can delete your account or request support. Effective date: June 22, 2026.',
+        'Elyan is an intelligence-based agent system that separates a local-first desktop runtime from a hosted control-plane. This policy explains what data we process, why we process it, how permissions work, and how you can delete your account or request support. Effective date: June 22, 2026.',
       sections: [],
       legal: [
         {
@@ -308,7 +342,7 @@ const content: SiteContent = {
       description: 'Core legal terms and obligations for using Elyan products.',
       eyebrow: 'Terms of Service',
       intro:
-        'These Terms govern your use of the Elyan website, Elyan Mobile, Elyan Desktop, and related services. By using Elyan, you agree to these Terms and the Privacy Policy. Effective date: June 22, 2026.',
+        'These Terms govern your use of the Elyan website, Elyan Mobile, Elyan Desktop, and related control-plane services. By using Elyan, you agree to these Terms and the Privacy Policy. Effective date: June 22, 2026.',
       sections: [],
       legal: [
         {
@@ -440,7 +474,7 @@ const content: SiteContent = {
         },
         {
           title: 'Device pairing and task flow',
-          body: 'Desktop and Mobile should be signed in with the same account, the desktop app should show ready, and both devices should have internet access. For QR pairing, task submission, task status, or result display issues, include a screenshot and approximate time in your support request.'
+          body: 'Desktop and Mobile should be signed in with the same account, the desktop runtime should show ready, and both devices should have internet access. For QR pairing, task submission, task status, or result display issues, include a screenshot and approximate time in your support request.'
         },
         {
           title: 'Subscriptions and store billing',
