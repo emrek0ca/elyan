@@ -3407,6 +3407,122 @@ test("prompt gating: short followup profile is strictly smaller than full profil
   );
 });
 
+// ── STRUCTURED CONTINUITY FENCE ─────────────────────────────────────────
+// compactContextBlock, key=value slot bloklarına çevrildi. Bu fence'ler
+// nesir formatına regresyonu yakalar.
+
+test("compact context: emits STATE section with goal/stage/open key=value slots", () => {
+  const prompt = buildStructuredSystemPrompt("BASE", {
+    userId: "u",
+    prompt: "detaylı analiz",
+    workload: "mobile_chat_balanced" as const,
+    route: "shared_brain" as const,
+    requestMetadata: {
+      compactContext: {
+        rollingSummary: {
+          userGoal: "Haftalık plan çıkarmak",
+          assistantState: "Kaba taslak hazır",
+          openLoops: ["Günlük plan", "Detay"],
+        },
+        lastAssistantBlocksDigest: "Checklist olusuyor.",
+        recentMessages: [{ role: "user", content: "..." }],
+      },
+    },
+  });
+  assert.ok(prompt.includes("[STATE]"), "STATE section missing");
+  assert.ok(prompt.includes("goal: Haftalık plan çıkarmak"));
+  assert.ok(prompt.includes("stage: Kaba taslak hazır"));
+  assert.ok(prompt.includes("open: Günlük plan | Detay"));
+  assert.ok(prompt.includes("digest: Checklist olusuyor."));
+  assert.ok(prompt.includes("window: 1 recent turns"));
+  // Eski nesir label'ları kalmamalı:
+  assert.ok(
+    !prompt.includes("Current user goal:"),
+    "legacy prose 'Current user goal:' label leaked",
+  );
+  assert.ok(
+    !prompt.includes("Last assistant state:"),
+    "legacy prose 'Last assistant state:' label leaked",
+  );
+  assert.ok(
+    !prompt.includes("Open follow-ups:"),
+    "legacy prose 'Open follow-ups:' label leaked",
+  );
+  assert.ok(
+    !prompt.includes("Session continuity context:"),
+    "legacy prose header leaked",
+  );
+});
+
+test("compact context: SHORT_FOLLOWUP rule references STATE when state exists", () => {
+  const prompt = buildStructuredSystemPrompt("BASE", {
+    userId: "u",
+    prompt: "devam et",
+    workload: "mobile_chat_fast" as const,
+    route: "shared_brain" as const,
+    requestMetadata: {
+      compactContext: {
+        rollingSummary: {
+          userGoal: "Rapor yazmak",
+          assistantState: "İlk taslak",
+          openLoops: [],
+        },
+      },
+    },
+  });
+  // Kısa takip lean profil kullanıyor — compactContextBlock hâlâ dahil.
+  assert.ok(prompt.includes("[STATE]"));
+  assert.ok(prompt.includes("goal: Rapor yazmak"));
+  assert.ok(prompt.includes("[FOLLOWUP]"));
+  assert.ok(prompt.includes("short_followup: interpret against [STATE]"));
+});
+
+test("compact context: FOLLOWUP without prior state instructs asking briefly", () => {
+  const prompt = buildStructuredSystemPrompt("BASE", {
+    userId: "u",
+    prompt: "devam et",
+    workload: "mobile_chat_fast" as const,
+    route: "shared_brain" as const,
+  });
+  assert.ok(prompt.includes("[FOLLOWUP]"));
+  assert.ok(prompt.includes("no prior state"));
+  assert.ok(!prompt.includes("[STATE]"));
+});
+
+test("compact context: structured format is meaningfully smaller than prose", () => {
+  const input = {
+    userId: "u",
+    prompt: "detaylı analiz",
+    workload: "mobile_chat_balanced" as const,
+    route: "shared_brain" as const,
+    requestMetadata: {
+      compactContext: {
+        rollingSummary: {
+          userGoal: "Haftalık plan çıkarmak",
+          assistantState: "Kaba taslak hazır",
+          openLoops: ["Günlük plan çıkarmak", "Detayları netleştirmek"],
+          contextNotes: ["Kullanıcı zamana dayalı", "Kullanıcı odaklı"],
+        },
+        lastAssistantBlocksDigest: "Checklist olusuyor, ilk 3 madde tamam.",
+        recentMessages: [
+          { role: "user", content: "..." },
+          { role: "assistant", content: "..." },
+        ],
+      },
+    },
+  };
+  const prompt = buildStructuredSystemPrompt("BASE", input);
+  const stateBlockMatch = prompt.match(/\[STATE\][\s\S]*?(?=\n\n\[|\n\nusage:|$)/);
+  assert.ok(stateBlockMatch, "STATE section not found");
+  // Yeni STATE bloğu tüm bu bilgiyi 400 char'ın altında taşımalı (eski
+  // prose format 700-900 char aralığındaydı çünkü her satırda "- Current
+  // user goal:" gibi ~24 char etiket overhead'i vardı).
+  assert.ok(
+    stateBlockMatch[0].length < 500,
+    `STATE block too large: ${stateBlockMatch[0].length}`,
+  );
+});
+
 test("prompt gating: helpers export stable signatures", () => {
   // Regression fence: refactor sırasında yanlışlıkla iç kullanıma çevrilmesin.
   const social = buildSocialChatSystemPrompt(

@@ -2381,6 +2381,39 @@ export function buildStructuredSystemPrompt(
     .join("\n\n");
 }
 
+function dedupeAndTrim(values: string[], max = 4): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values) {
+    const value = String(raw ?? "").trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/**
+ * Continuity + retrieval + directives context'ini nesir bullet listesi
+ * yerine STRUCTURED SLOT bloklarına çevirir. Eski format ("- Current user
+ * goal: X ... - Open follow-ups: A | B ...") her satırda ~20 karakter etiket
+ * overhead'i taşıyordu ve state ile policy iç içeydi ("...Prefer the latest
+ * intent and avoid rehashing older turns"). Yeni format ise:
+ *
+ *   [STATE]
+ *   goal: X
+ *   stage: Y
+ *   open: A | B
+ *   digest: Z
+ *   window: 3
+ *   boundary: shift/weak_topic_overlap
+ *
+ * — bu daha az token, daha net sinyal, sızıntı yüzeyi küçük. gpt-oss modeller
+ * key=value formatını "The user's goal is X" tarzı prose'dan sonra daha net
+ * hatırlıyor ve "goal was X" olarak referans veriyor, "The compact context
+ * says the user's goal..." gibi sızdırma denemesi yapmıyor.
+ */
 function buildCompactContextPromptBlock(
   input: SharedBrainInferenceInput,
 ): string | null {
@@ -2400,7 +2433,6 @@ function buildCompactContextPromptBlock(
     readMetadataString(chatContext, "lastAssistantBlocksDigest");
   const recentMessages = readMetadataArray(compactContext, "recentMessages");
   const contextPackets = input.understandingContext?.contextPackets ?? [];
-  const lines: string[] = [];
   const continuitySummary = input.understandingContext?.continuitySummary;
   const continuityBoundary = input.understandingContext?.continuityBoundary;
   const clarificationDiagnostics =
@@ -2414,181 +2446,168 @@ function buildCompactContextPromptBlock(
   const speakingStyleDirectives =
     input.understandingContext?.speakingStyleDirectives ?? [];
 
-  if (
-    continuitySummary?.userGoal &&
-    !lines.some((line) => line.includes("Current user goal:"))
-  ) {
-    lines.push(`- Current user goal: ${continuitySummary.userGoal}`);
-  }
-  if (
-    continuitySummary?.assistantState &&
-    !lines.some((line) => line.includes("Last assistant state:"))
-  ) {
-    lines.push(`- Last assistant state: ${continuitySummary.assistantState}`);
-  }
-  if (
-    (continuitySummary?.openLoops.length ?? 0) > 0 &&
-    !lines.some((line) => line.includes("Open follow-ups:"))
-  ) {
-    lines.push(
-      `- Open follow-ups: ${continuitySummary!.openLoops.join(" | ")}`,
-    );
-  }
-
-  if (rollingSummary) {
-    const goal = readMetadataString(rollingSummary, "userGoal");
-    const assistantState = readMetadataString(rollingSummary, "assistantState");
-    const openLoops = readMetadataArray(rollingSummary, "openLoops")
-      .map((item) => String(item ?? "").trim())
-      .filter(Boolean)
-      .slice(0, 4);
-    const contextNotes = readMetadataArray(rollingSummary, "contextNotes")
-      .map((item) => String(item ?? "").trim())
-      .filter(Boolean)
-      .slice(0, 4);
-    if (goal) {
-      lines.push(`- Current user goal: ${goal}`);
-    }
-    if (assistantState) {
-      lines.push(`- Last assistant state: ${assistantState}`);
-    }
-    if (openLoops.length > 0) {
-      lines.push(`- Open follow-ups: ${openLoops.join(" | ")}`);
-    }
-    if (contextNotes.length > 0) {
-      lines.push(`- Context notes: ${contextNotes.join(" | ")}`);
-    }
-  }
-
-  if (attachmentDigest) {
-    const summaries = readMetadataArray(attachmentDigest, "summaries")
-      .map((item) => String(item ?? "").trim())
-      .filter(Boolean)
-      .slice(0, 3);
-    const intentHints = readMetadataArray(attachmentDigest, "intentHints")
-      .map((item) => String(item ?? "").trim())
-      .filter(Boolean)
-      .slice(0, 4);
-    if (summaries.length > 0) {
-      lines.push(`- Attachment digest: ${summaries.join(" | ")}`);
-    }
-    if (intentHints.length > 0) {
-      lines.push(`- Attachment intents: ${intentHints.join(", ")}`);
-    }
-  }
-
-  if (contextPackets.length > 0) {
-    const explicitPackets = contextPackets
-      .filter((packet) => packet.mentionPolicy === "explicit_when_relevant")
-      .slice(0, 4);
-    const implicitPackets = contextPackets
-      .filter((packet) => packet.mentionPolicy === "implicit")
-      .slice(0, 4);
-    const silentPackets = contextPackets
-      .filter((packet) => packet.mentionPolicy === "silent")
-      .slice(0, 4);
-    if (explicitPackets.length > 0) {
-      lines.push(
-        `- Relevant packaged context packets: ${explicitPackets
-          .map((packet) => `${packet.kind}: ${packet.summary}`)
-          .join(" | ")}`,
-      );
-    }
-    if (implicitPackets.length > 0) {
-      lines.push(
-        `- Implicit packaged context available: ${implicitPackets
-          .map(
-            (packet) =>
-              `${packet.kind}: ${packet.summary}; use silently for ${(packet.allowedUse ?? []).join(", ") || "adaptation only"}`,
-          )
-          .join(" | ")}`,
-      );
-    }
-    if (silentPackets.length > 0) {
-      lines.push(
-        `- Suppressed private context packets: ${silentPackets
-          .map(
-            (packet) =>
-              `${packet.kind}/${packet.relevanceReason ?? "not_relevant"}`,
-          )
-          .join(" | ")}. Do not mention these unless the user asks.`,
-      );
-    }
-  } else if (derivedContext) {
-    const worldSignals = readMetadataArray(derivedContext, "worldSignals")
-      .map((item) => readMetadataRecord(item))
-      .filter((item): item is Record<string, unknown> => item != null)
-      .map((item) => {
-        const kind = readMetadataString(item, "kind");
-        const summary = readMetadataString(item, "summary");
-        return kind && summary ? `${kind}: ${summary}` : null;
-      })
-      .filter((item): item is string => item != null)
-      .slice(0, 4);
-    if (worldSignals.length > 0) {
-      lines.push(`- Fresh derived context: ${worldSignals.join(" | ")}`);
-    }
-  }
-
+  // ── STATE (goal / stage / open / digest / window / boundary / clarify) ──
+  const stateLines: string[] = [];
+  const goal =
+    continuitySummary?.userGoal ||
+    readMetadataString(rollingSummary, "userGoal");
+  const stage =
+    continuitySummary?.assistantState ||
+    readMetadataString(rollingSummary, "assistantState");
+  const open = dedupeAndTrim(
+    [
+      ...(continuitySummary?.openLoops ?? []),
+      ...readMetadataArray(rollingSummary, "openLoops").map(String),
+    ],
+    4,
+  );
+  const contextNotes = dedupeAndTrim(
+    readMetadataArray(rollingSummary, "contextNotes").map(String),
+    4,
+  );
+  if (goal) stateLines.push(`goal: ${goal}`);
+  if (stage) stateLines.push(`stage: ${stage}`);
+  if (open.length) stateLines.push(`open: ${open.join(" | ")}`);
+  if (contextNotes.length) stateLines.push(`notes: ${contextNotes.join(" | ")}`);
   if (lastAssistantBlocksDigest) {
-    lines.push(`- Last assistant reply digest: ${lastAssistantBlocksDigest}`);
+    stateLines.push(`digest: ${lastAssistantBlocksDigest}`);
   }
-
   if (recentMessages.length > 0) {
-    lines.push(
-      `- Recent mobile window available: ${Math.min(recentMessages.length, 6)} message(s). Prefer the latest intent and avoid rehashing older turns.`,
+    stateLines.push(`window: ${Math.min(recentMessages.length, 6)} recent turns`);
+  }
+  if (continuityBoundary) {
+    stateLines.push(
+      `boundary: ${continuityBoundary.mode}/${continuityBoundary.reason} (${continuityBoundary.carryContinuity ? "carry" : "shift"})`,
     );
   }
-
   if (clarificationDiagnostics?.shouldClarify) {
-    lines.push(
-      `- Clarification diagnostic: ${clarificationDiagnostics.ambiguityKind} (${clarificationDiagnostics.reason}). Ask one short question only if the missing detail changes the outcome.`,
+    stateLines.push(
+      `clarify: ${clarificationDiagnostics.ambiguityKind}/${clarificationDiagnostics.reason}`,
     );
   }
 
+  // ── MEMORY (retrieval shortlist + relationship digest) ──
+  const memoryLines: string[] = [];
   if (memoryRelevanceSummary.length > 0) {
-    lines.push(
-      `- Relevant user memory shortlist: ${memoryRelevanceSummary.slice(0, 3).join(" | ")}`,
+    memoryLines.push(
+      `shortlist: ${memoryRelevanceSummary.slice(0, 3).join(" | ")}`,
     );
   }
   if (relationshipContextDigest.length > 0) {
-    lines.push(
-      `- User continuity digest: ${relationshipContextDigest.slice(0, 4).join(" | ")}`,
+    memoryLines.push(
+      `digest: ${relationshipContextDigest.slice(0, 4).join(" | ")}`,
     );
   }
-  if (continuityBoundary) {
-    lines.push(
-      `- Continuity boundary: ${continuityBoundary.mode} (${continuityBoundary.reason}); ${continuityBoundary.carryContinuity ? "relevant prior context may be reused" : "do not assume prior chat state still applies"}`,
-    );
-  }
+
+  // ── DIRECTIVES (reasoning + speaking style hints) ──
+  const directiveLines: string[] = [];
   if (reasoningDirectives.length > 0) {
-    lines.push(
-      `- Reasoning directives: ${reasoningDirectives.slice(0, 4).join(" | ")}`,
+    directiveLines.push(
+      `reasoning: ${reasoningDirectives.slice(0, 4).join(" | ")}`,
     );
   }
   if (speakingStyleDirectives.length > 0) {
-    lines.push(
-      `- Speaking style directives: ${speakingStyleDirectives.slice(0, 4).join(" | ")}`,
+    directiveLines.push(
+      `style: ${speakingStyleDirectives.slice(0, 4).join(" | ")}`,
     );
   }
 
-  // Kısa takip mesajları ("anlamadım", "devam et", "onu düzelt") önceki tura
-  // referans verir; önceki tur bağlamı MUTLAKA yorumlamaya dahil edilmeli.
-  // Bağlam hiç yoksa bile modele bunun bir takip mesajı olduğunu söyle ki
-  // sıfırdan alakasız bir cevaba başlamasın.
+  // ── ATTACH (attachment digest fallback derived context) ──
+  const attachLines: string[] = [];
+  if (attachmentDigest) {
+    const summaries = dedupeAndTrim(
+      readMetadataArray(attachmentDigest, "summaries").map(String),
+      3,
+    );
+    const intents = dedupeAndTrim(
+      readMetadataArray(attachmentDigest, "intentHints").map(String),
+      4,
+    );
+    if (summaries.length) attachLines.push(`summary: ${summaries.join(" | ")}`);
+    if (intents.length) attachLines.push(`intent: ${intents.join(", ")}`);
+  } else if (derivedContext) {
+    const worldSignals = dedupeAndTrim(
+      readMetadataArray(derivedContext, "worldSignals")
+        .map((item) => readMetadataRecord(item))
+        .filter((item): item is Record<string, unknown> => item != null)
+        .map((item) => {
+          const kind = readMetadataString(item, "kind");
+          const summary = readMetadataString(item, "summary");
+          return kind && summary ? `${kind}: ${summary}` : "";
+        }),
+      4,
+    );
+    if (worldSignals.length) {
+      attachLines.push(`world: ${worldSignals.join(" | ")}`);
+    }
+  }
+
+  // ── PACKETS (context packets — explicit/implicit/silent) ──
+  const packetLines: string[] = [];
+  if (contextPackets.length > 0) {
+    const explicit = contextPackets
+      .filter((p) => p.mentionPolicy === "explicit_when_relevant")
+      .slice(0, 4);
+    const implicit = contextPackets
+      .filter((p) => p.mentionPolicy === "implicit")
+      .slice(0, 4);
+    const silent = contextPackets
+      .filter((p) => p.mentionPolicy === "silent")
+      .slice(0, 4);
+    if (explicit.length) {
+      packetLines.push(
+        `explicit: ${explicit.map((p) => `${p.kind}=${p.summary}`).join(" | ")}`,
+      );
+    }
+    if (implicit.length) {
+      packetLines.push(
+        `implicit: ${implicit
+          .map(
+            (p) =>
+              `${p.kind}=${p.summary} (silent adapt for ${(p.allowedUse ?? []).join(",") || "pacing"})`,
+          )
+          .join(" | ")}`,
+      );
+    }
+    if (silent.length) {
+      packetLines.push(
+        `suppressed: ${silent.map((p) => `${p.kind}/${p.relevanceReason ?? "not_relevant"}`).join(", ")}`,
+      );
+    }
+  }
+
+  // ── Compose sections ──
+  const sections: string[] = [];
+  if (stateLines.length) sections.push(`[STATE]\n${stateLines.join("\n")}`);
+  if (memoryLines.length) sections.push(`[MEMORY]\n${memoryLines.join("\n")}`);
+  if (directiveLines.length)
+    sections.push(`[DIRECTIVES]\n${directiveLines.join("\n")}`);
+  if (attachLines.length) sections.push(`[ATTACH]\n${attachLines.join("\n")}`);
+  if (packetLines.length) sections.push(`[PACKETS]\n${packetLines.join("\n")}`);
+
+  // ── Kısa takip mesajları için tek-cümlelik kural ──
+  // "anlamadım", "devam et", "onu düzelt" → önceki turu referans al. State
+  // yoksa modele bunun bir takip mesajı olduğunu söyle.
   if (isShortFollowUpPrompt(input.prompt)) {
-    lines.push(
-      lines.length > 0
-        ? "- SHORT FOLLOW-UP RULE (mandatory): the user's message refers to the PREVIOUS turn. Interpret it strictly against the current user goal, last assistant state/reply digest, and open follow-ups above. Do not treat it as a new standalone question, and do not answer without using that context. \"devam et\" continues the previous answer; \"anlamadım\" re-explains the previous answer more simply; \"onu düzelt\" revises the previous output."
-        : "- SHORT FOLLOW-UP RULE: the user's message refers to a previous turn, but no prior-turn context is available in this request. Say briefly that you need a short reminder of what to continue or fix, instead of answering something unrelated.",
+    sections.push(
+      sections.length > 0
+        ? '[FOLLOWUP] short_followup: interpret against [STATE] above ("devam et"→continue previous answer, "anlamadım"→re-explain simpler, "onu düzelt"→revise last output). Do not answer as a new standalone question.'
+        : "[FOLLOWUP] short_followup: no prior state in this request; ask briefly what to continue.",
     );
   }
 
-  if (!lines.length) {
-    return null;
-  }
+  if (sections.length === 0) return null;
 
-  return ["Session continuity context:", ...lines].join("\n");
+  // Bir tek satırlık usage note ekle — state=data, policy=rule ayrımı net.
+  // Bunu tek yerden koy ki inference'ta ayrıca "state usage policy" ekleme
+  // ihtiyacı olmasın.
+  const usageNote =
+    packetLines.some((line) => line.startsWith("suppressed"))
+      ? "usage: interpret STATE for reference; do not mention suppressed packets unless asked; on clarify=<kind>, ask ONE short question only when missing detail changes outcome."
+      : "usage: interpret STATE for reference; on clarify=<kind>, ask ONE short question only when missing detail changes outcome.";
+  sections.push(usageNote);
+
+  return sections.join("\n\n");
 }
 
 function shouldPreferExpandedMobileReply(
