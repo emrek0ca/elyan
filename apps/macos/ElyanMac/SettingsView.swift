@@ -33,6 +33,9 @@ struct SettingsView: View {
 
             // Kategoriler
             Section("Uygulama") {
+                NavigationLink(destination: BillingView().environmentObject(appState)) {
+                    Label("Abonelik", systemImage: "creditcard")
+                }
                 NavigationLink(destination: AppearanceSettingsView()) {
                     Label("Görünüm", systemImage: "paintbrush")
                 }

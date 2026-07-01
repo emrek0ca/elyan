@@ -1,5 +1,6 @@
 import SwiftUI
 import AuthenticationServices
+import GoogleSignIn
 
 /// First-run authentication gate. Email/password login + register, against the
 /// same /v1/auth endpoints the mobile app uses, so credentials, account, and
@@ -34,6 +35,7 @@ struct LoginView: View {
                         .frame(width: max(320, proxy.size.width * 0.45))
                     heroImage
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .ignoresSafeArea(.container, edges: .top)
                 }
             }
         }
@@ -276,8 +278,50 @@ struct LoginView: View {
     }
 
     private func loginWithGoogle() {
-        // macOS native Google Sign-In için Google SDK (SPM ile) kurulumu gereklidir.
-        // Şimdilik e-posta/şifre ile giriş desteklenmektedir.
-        error = "Google girişi için yakında güncelleme gelecek. Lütfen e-posta ile giriş yapın."
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else {
+            error = "Google giriş penceresi açılamadı."
+            return
+        }
+
+        error = ""
+        isWorking = true
+        GIDSignIn.sharedInstance.configuration = GIDConfiguration(
+            clientID: DesktopAppConfig.googleClientID,
+            serverClientID: DesktopAppConfig.googleServerClientID
+        )
+        GIDSignIn.sharedInstance.signIn(withPresenting: window) { result, signInError in
+            Task { @MainActor in
+                defer { isWorking = false }
+
+                if let signInError {
+                    self.error = signInError.localizedDescription
+                    return
+                }
+
+                guard let result else {
+                    self.error = "Google hesabı doğrulanamadı."
+                    return
+                }
+
+                let idToken = result.user.idToken?.tokenString ?? ""
+                guard !idToken.isEmpty else {
+                    self.error = "Google kimlik belirteci alınamadı."
+                    return
+                }
+
+                do {
+                    _ = try await appState.backend.loginWithOAuth(
+                        provider: "google",
+                        idToken: idToken,
+                        email: result.user.profile?.email,
+                        displayName: result.user.profile?.name,
+                        termsAccepted: termsAccepted,
+                        privacyAccepted: privacyAccepted
+                    )
+                } catch {
+                    self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        }
     }
 }

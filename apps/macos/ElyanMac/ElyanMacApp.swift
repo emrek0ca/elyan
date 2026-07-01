@@ -1,17 +1,24 @@
 import SwiftUI
+import GoogleSignIn
 
 @main
 struct ElyanApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
     var body: some Scene {
         WindowGroup {
             RootView(backend: appState.backend)
                 .environmentObject(appState)
+                .onOpenURL { url in
+                    _ = GIDSignIn.sharedInstance.handle(url)
+                }
         }
         .windowStyle(.hiddenTitleBar)
     }
 }
+
+final class AppDelegate: NSObject, NSApplicationDelegate {}
 
 /// Routes between login and the main app surface. The backend client publishes
 /// the signed-in session, so signing in/out automatically swaps the view.

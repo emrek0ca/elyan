@@ -303,6 +303,21 @@ final class ElyanBackend: ObservableObject {
         }
     }
 
+    func putJSON(path: String, body: [String: Any], requireAuth: Bool) async throws -> Any {
+        var attemptedRefresh = false
+        while true {
+            let raw = try await performRequest(method: "PUT", path: path, bodyJSON: body, requireAuth: requireAuth, extraHeaders: [:])
+            switch raw {
+            case .success(let value): return value
+            case .unauthorized:
+                guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
+                attemptedRefresh = true
+                _ = try await refresh()
+                continue
+            }
+        }
+    }
+
     @discardableResult
     func deleteJSON(path: String, requireAuth: Bool) async throws -> Any {
         var attemptedRefresh = false
@@ -426,15 +441,7 @@ final class ElyanBackend: ObservableObject {
     private static func parseAuthSession(_ raw: Any, refreshTokenFallback: String = "") throws -> ElyanAuthSession {
         // The backend may wrap the payload as { data: {...} } — unwrap that the
         // same way the mobile `unwrapData` helper does.
-        let unwrapped: [String: Any] = {
-            if let payload = raw as? [String: Any] {
-                if let nested = payload["data"] as? [String: Any] {
-                    return nested
-                }
-                return payload
-            }
-            return [:]
-        }()
+        let unwrapped = unwrap(raw)
 
         let tokens = (unwrapped["tokens"] as? [String: Any])
             ?? (unwrapped["token"] as? [String: Any])
