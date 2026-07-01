@@ -804,6 +804,43 @@ export async function getBrainMemoryStatus(app: FastifyInstance, userId: string)
   }
 }
 
+/**
+ * Total wall-clock budget for the DB portion of memory retrieval. Beyond this,
+ * we return an empty lexical fallback so the inference path is never blocked
+ * by a slow Postgres — memory is best-effort context, never a critical
+ * dependency. 800ms is generous vs the typical <30ms actual query time; only
+ * pathological cases (locked table, primary failover, pool exhaustion) can
+ * cross it, and we should degrade fast when they do.
+ */
+const MEMORY_SEARCH_BUDGET_MS = 800;
+const MEMORY_BUDGET_EXPIRED = Symbol("memory_search_budget_expired");
+
+function withMemoryBudget<T>(work: Promise<T>, budgetMs: number): Promise<T | typeof MEMORY_BUDGET_EXPIRED> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(MEMORY_BUDGET_EXPIRED);
+    }, budgetMs);
+    timer.unref?.();
+    work.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(MEMORY_BUDGET_EXPIRED);
+      },
+    );
+  });
+}
+
 export async function searchBrainMemory(
   app: FastifyInstance,
   input: {
@@ -821,10 +858,34 @@ export async function searchBrainMemory(
   }
 
   try {
-    const hybridReady = await canUseHybridRetrieval(app);
+    const startedAt = Date.now();
+    // hybridReady is cached, but the first call in a fresh process hits the DB
+    // (pgvector + column checks). Include it in the total budget so a slow
+    // Postgres never blocks retrieval even before the main queries start.
+    const hybridProbe = await withMemoryBudget(
+      canUseHybridRetrieval(app),
+      MEMORY_SEARCH_BUDGET_MS,
+    );
+    if (hybridProbe === MEMORY_BUDGET_EXPIRED) {
+      return {
+        retrievalMode: "lexical_fallback" as const,
+        results: [] as MemorySearchHit[],
+        degradedReason: "memory_search_budget_expired" as const,
+      };
+    }
+    const hybridReady = hybridProbe;
+    const remainingBudget = Math.max(
+      50,
+      MEMORY_SEARCH_BUDGET_MS - (Date.now() - startedAt),
+    );
     const queryVector = buildVectorSql(buildHashedKnowledgeEmbedding(input.query));
 
-    const lexicalFacts = await app.db.execute(sql`
+    // Lexical + (optionally) semantic queries all run in parallel: they hit
+    // independent rows via independent indices, and the total wall-clock is
+    // dominated by the slowest query instead of the sum. `withMemoryBudget`
+    // caps the whole retrieval at MEMORY_SEARCH_BUDGET_MS so a pathologically
+    // slow query returns "budget expired" rather than blocking the caller.
+    const lexicalFactsQuery = app.db.execute(sql`
       select
         id,
         fact_type as "memoryType",
@@ -848,7 +909,7 @@ export async function searchBrainMemory(
       order by updated_at desc
       limit ${Math.max(input.limit * 4, 20)}
     `);
-    const lexicalEpisodes = await app.db.execute(sql`
+    const lexicalEpisodesQuery = app.db.execute(sql`
       select
         id,
         episode_type as "memoryType",
@@ -872,6 +933,83 @@ export async function searchBrainMemory(
       order by updated_at desc
       limit ${Math.max(input.limit * 4, 20)}
     `);
+
+    // Semantic queries only fire when hybrid retrieval is ready. Starting them
+    // OUTSIDE the parallel block keeps a lexical-only path (no pgvector) from
+    // paying for phantom semantic waits.
+    const semanticFactsQuery = hybridReady
+      ? app.db.execute(sql`
+      select
+        id,
+        fact_type as "memoryType",
+        canonical_key as "title",
+        value as "content",
+        confidence,
+        importance_score as "importanceScore",
+        is_pinned as "isPinned",
+        scope,
+        conflict_status as "conflictStatus",
+        lifecycle_status as "lifecycleStatus",
+        deleted_at as "deletedAt",
+        deleted_reason as "deletedReason",
+        stale_at as "staleAt",
+        last_verified_at as "lastVerifiedAt",
+        metadata,
+        updated_at as "updatedAt",
+        1 - (embedding <=> ${queryVector}) as "semanticScore"
+      from brain_memory_facts
+      where user_id = ${input.userId}
+        and embedding_model is not null
+        and coalesce(lifecycle_status, 'active') <> 'soft_deleted'
+      order by embedding <=> ${queryVector}
+      limit ${Math.max(input.limit * 2, 10)}
+    `)
+      : Promise.resolve(null);
+    const semanticEpisodesQuery = hybridReady
+      ? app.db.execute(sql`
+      select
+        id,
+        episode_type as "memoryType",
+        episode_type as "title",
+        summary as "content",
+        confidence,
+        importance_score as "importanceScore",
+        is_pinned as "isPinned",
+        scope,
+        lifecycle_status as "lifecycleStatus",
+        deleted_at as "deletedAt",
+        deleted_reason as "deletedReason",
+        stale_at as "staleAt",
+        null::timestamp as "lastVerifiedAt",
+        metadata,
+        updated_at as "updatedAt",
+        1 - (embedding <=> ${queryVector}) as "semanticScore"
+      from brain_memory_episodes
+      where user_id = ${input.userId}
+        and embedding_model is not null
+        and coalesce(lifecycle_status, 'active') <> 'soft_deleted'
+      order by embedding <=> ${queryVector}
+      limit ${Math.max(input.limit * 2, 10)}
+    `)
+      : Promise.resolve(null);
+
+    const budgetResult = await withMemoryBudget(
+      Promise.all([
+        lexicalFactsQuery,
+        lexicalEpisodesQuery,
+        semanticFactsQuery,
+        semanticEpisodesQuery,
+      ]),
+      remainingBudget,
+    );
+    if (budgetResult === MEMORY_BUDGET_EXPIRED) {
+      return {
+        retrievalMode: "lexical_fallback" as const,
+        results: [] as MemorySearchHit[],
+        degradedReason: "memory_search_budget_expired" as const,
+      };
+    }
+    const [lexicalFacts, lexicalEpisodes, semanticFactsRaw, semanticEpisodesRaw] = budgetResult;
 
     const lexicalResults = [
       ...toRows(lexicalFacts).map((row) =>
@@ -942,57 +1080,9 @@ export async function searchBrainMemory(
       };
     }
 
-    const semanticFacts = await app.db.execute(sql`
-      select
-        id,
-        fact_type as "memoryType",
-        canonical_key as "title",
-        value as "content",
-        confidence,
-        importance_score as "importanceScore",
-        is_pinned as "isPinned",
-        scope,
-        conflict_status as "conflictStatus",
-        lifecycle_status as "lifecycleStatus",
-        deleted_at as "deletedAt",
-        deleted_reason as "deletedReason",
-        stale_at as "staleAt",
-        last_verified_at as "lastVerifiedAt",
-        metadata,
-        updated_at as "updatedAt",
-        1 - (embedding <=> ${queryVector}) as "semanticScore"
-      from brain_memory_facts
-      where user_id = ${input.userId}
-        and embedding_model is not null
-        and coalesce(lifecycle_status, 'active') <> 'soft_deleted'
-      order by embedding <=> ${queryVector}
-      limit ${Math.max(input.limit * 2, 10)}
-    `);
-    const semanticEpisodes = await app.db.execute(sql`
-      select
-        id,
-        episode_type as "memoryType",
-        episode_type as "title",
-        summary as "content",
-        confidence,
-        importance_score as "importanceScore",
-        is_pinned as "isPinned",
-        scope,
-        lifecycle_status as "lifecycleStatus",
-        deleted_at as "deletedAt",
-        deleted_reason as "deletedReason",
-        stale_at as "staleAt",
-        null::timestamp as "lastVerifiedAt",
-        metadata,
-        updated_at as "updatedAt",
-        1 - (embedding <=> ${queryVector}) as "semanticScore"
-      from brain_memory_episodes
-      where user_id = ${input.userId}
-        and embedding_model is not null
-        and coalesce(lifecycle_status, 'active') <> 'soft_deleted'
-      order by embedding <=> ${queryVector}
-      limit ${Math.max(input.limit * 2, 10)}
-    `);
+    // Hybrid path: reuse the already-awaited semantic query results.
+    const semanticFacts = semanticFactsRaw ?? [];
+    const semanticEpisodes = semanticEpisodesRaw ?? [];
 
     const semanticResults = [
       ...toRows(semanticFacts).map((row) =>

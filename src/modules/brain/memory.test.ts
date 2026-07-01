@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   listBrainMemory,
   scoreMemoryRecallCandidate,
+  searchBrainMemory,
   softDeleteBrainMemory,
   updateBrainMemory,
 } from "./memory.js";
@@ -364,4 +365,50 @@ test("updateBrainMemory edits fact content and clears deleted state", async () =
 
   assert.equal((app.db as FakeMemoryDb).updates[0]?.values["value"], "Backend ve auth yerine backend ve routing");
   assert.equal(result.content, "Backend ve auth yerine backend ve routing");
+});
+
+test("searchBrainMemory returns lexical_fallback when db.execute is unavailable", async () => {
+  // Guard: without an execute() method (e.g. an in-memory fake missing that
+  // API) retrieval must degrade silently — never throw and never block
+  // inference. This is the fast fail-open path.
+  const app = { db: {}, log: { warn() {} }, config: {} } as unknown as Parameters<typeof searchBrainMemory>[0];
+  const result = await searchBrainMemory(app, {
+    userId: "user-1",
+    query: "test",
+    limit: 5,
+  });
+  assert.equal(result.retrievalMode, "lexical_fallback");
+  assert.equal(result.degradedReason, "memory_execute_unavailable");
+  assert.deepEqual(result.results, []);
+});
+
+test("searchBrainMemory degrades to budget_expired on a slow db (never blocks the caller)", async () => {
+  // Simulate a stuck Postgres: execute() takes far longer than the budget
+  // to resolve. The retrieval must give up within the shared budget rather
+  // than freezing the inference path. Using a settleable slow promise (not a
+  // never-resolving one) keeps the test process cleanly exitable while still
+  // exercising the timeout race.
+  const slowApp = {
+    db: {
+      execute() {
+        return new Promise((resolve) => {
+          const t = setTimeout(() => resolve({ rows: [] }), 5_000);
+          (t as unknown as { unref?: () => void }).unref?.();
+        });
+      },
+    },
+    log: { warn() {} },
+    config: {},
+  } as unknown as Parameters<typeof searchBrainMemory>[0];
+  const startedAt = Date.now();
+  const result = await searchBrainMemory(slowApp, {
+    userId: "user-1",
+    query: "test",
+    limit: 5,
+  });
+  const elapsed = Date.now() - startedAt;
+  assert.equal(result.retrievalMode, "lexical_fallback");
+  assert.equal(result.degradedReason, "memory_search_budget_expired");
+  // 800ms budget + generous slack for test scheduling.
+  assert.ok(elapsed < 2_000, `retrieval hung for ${elapsed}ms`);
 });
