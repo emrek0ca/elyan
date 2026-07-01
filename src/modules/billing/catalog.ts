@@ -191,6 +191,22 @@ export function getBillingPlan(code?: string | null): BillingPlan {
   return BILLING_PLAN_CATALOG[normalized] ?? BILLING_PLAN_CATALOG.free;
 }
 
+/**
+ * Ordering of the sellable tiers. Higher rank supersedes lower — used for
+ * upgrade-vs-downgrade decisions (an upgrade applies immediately, a downgrade
+ * is deferred to the end of the paid period). "pro_max" is a *quality
+ * profile*, not a plan, and deliberately has no rank here.
+ */
+const BILLING_PLAN_TIER_RANK: Record<BillingPlanCode, number> = {
+  free: 0,
+  solo: 1,
+  pro: 2,
+};
+
+export function planTierRank(code?: string | null): number {
+  return BILLING_PLAN_TIER_RANK[normalizeBillingPlanCode(code)] ?? 0;
+}
+
 export function listSellableBillingPlans(): BillingPlan[] {
   return Object.values(BILLING_PLAN_CATALOG).filter((plan) => plan.visible);
 }

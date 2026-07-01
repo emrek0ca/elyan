@@ -537,6 +537,10 @@ export const subscriptions = pgTable(
     trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
     canceledAt: timestamp("canceled_at", { withTimezone: true }),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+    // Deferred downgrade: the lower plan the user already bought, applied when
+    // the current paid period ends (Claude-style — paid days are never lost).
+    pendingPlanCode: varchar("pending_plan_code", { length: 64 }),
+    pendingPlanEffectiveAt: timestamp("pending_plan_effective_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

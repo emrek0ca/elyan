@@ -10,8 +10,14 @@ import {
   isSellablePlanCode,
   listSellableBillingPlans,
   normalizeBillingPlanCode,
+  planTierRank,
   type BillingPlanCode,
 } from "./catalog.js";
+import {
+  normalizeSubscriptionStatus,
+  resolveSubscriptionLifecycle,
+  type SubscriptionLifecycle,
+} from "./subscription-lifecycle.js";
 import { buildIyzicoCustomer, IyzicoClient, type IyzicoCatalogPlanInput } from "./iyzico.js";
 import {
   aiProviderInvocations,
@@ -97,14 +103,8 @@ function readObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-function subscriptionStatusAllowsUsage(status?: string | null): boolean {
-  const normalized = String(status || "").trim().toLowerCase();
-  return normalized === "free" || normalized === "trialing" || normalized === "active";
-}
-
-function normalizeSubscriptionStatus(status?: string | null): string {
-  return String(status || "free").trim().toLowerCase() || "free";
-}
+// Status normalization + usage rules now live in subscription-lifecycle.ts —
+// the single decision table for what a subscription row means right now.
 
 export type UsageAccessTruth = {
   mode: "free" | "trial" | "paid";
@@ -181,44 +181,36 @@ export function resolveUsageAccessTruth(
     status?: string | null;
     trialEndsAt?: Date | null;
     periodEndsAt?: Date | null;
+    billingProvider?: string | null;
+    pendingPlanCode?: string | null;
+    pendingPlanEffectiveAt?: Date | null;
   } | null,
   currentTime: Date = now(),
 ): UsageAccessTruth {
-  const planCode = normalizeBillingPlanCode(subscription?.planCode);
-  const status = normalizeSubscriptionStatus(subscription?.status);
-  const trialEndsAt = subscription?.trialEndsAt ?? null;
-  const hasActiveTrialWindow =
-    status === "trialing" &&
-    trialEndsAt instanceof Date &&
-    trialEndsAt.getTime() > currentTime.getTime();
-  const hasExpiredTrialWindow =
-    status === "trialing" &&
-    trialEndsAt instanceof Date &&
-    trialEndsAt.getTime() <= currentTime.getTime();
-  const trialActive = hasActiveTrialWindow;
-  const periodStillActive =
-    subscription?.periodEndsAt instanceof Date &&
-    subscription.periodEndsAt.getTime() > currentTime.getTime();
-  const paidActive =
-    planCode !== "free" &&
-    (
-      status === "active" ||
-      (status === "trialing" && !hasExpiredTrialWindow) ||
-      (status === "canceled" && periodStillActive)
-    );
-  const freeActive = planCode === "free" && subscriptionStatusAllowsUsage(status);
-  const serverBrainAllowed = trialActive || paidActive || freeActive;
+  const lifecycle = resolveSubscriptionLifecycle(subscription, currentTime);
 
+  // Everything downstream keys off the EFFECTIVE plan, not the stored one.
+  // For the expired-trial zombie row (pro/trialing with a lapsed window) this
+  // is the whole fix: effective plan is free, so the user gets free-tier
+  // access + the free brain profile instead of "premium profile but fully
+  // blocked" — the prod state where trial expiry locked chat entirely until
+  // the billing screen happened to run its lazy repair.
   return {
-    mode: trialActive ? "trial" : paidActive ? "paid" : "free",
-    planCode,
-    status,
-    brainProfile: getBillingPlan(planCode).brainProfile,
-    serverBrainAllowed,
+    mode:
+      lifecycle.phase === "trial_active"
+        ? "trial"
+        : (lifecycle.phase === "paid_active" || lifecycle.phase === "canceled_grace") &&
+            lifecycle.effectivePlanCode !== "free"
+          ? "paid"
+          : "free",
+    planCode: lifecycle.effectivePlanCode,
+    status: lifecycle.status,
+    brainProfile: getBillingPlan(lifecycle.effectivePlanCode).brainProfile,
+    serverBrainAllowed: lifecycle.accessAllowed,
     localByokAllowed: true,
-    trialActive,
-    trialEndsAt,
-    upgradeRequiredForServerBrain: !serverBrainAllowed,
+    trialActive: lifecycle.trialActive,
+    trialEndsAt: lifecycle.trialEndsAt,
+    upgradeRequiredForServerBrain: !lifecycle.accessAllowed,
   };
 }
 
@@ -508,18 +500,6 @@ async function currentAndOwnerShareAppleIdentity(
     !!ownerSubject &&
     currentSubject === ownerSubject
   );
-}
-
-/** Plan tier rank — higher rank = paid-tier that supersedes lower tiers. */
-const BILLING_PLAN_TIER_RANK: Record<string, number> = {
-  free: 0,
-  solo: 1,
-  pro: 2,
-  pro_max: 3,
-};
-
-function planTierRank(code?: string | null): number {
-  return BILLING_PLAN_TIER_RANK[normalizeBillingPlanCode(code)] ?? 0;
 }
 
 export function shouldIgnoreStaleStoreVerification(
@@ -1093,6 +1073,10 @@ async function persistSubscriptionState(
       trialEndsAt: input.trialEndsAt ?? null,
       cancelAtPeriodEnd: input.cancelAtPeriodEnd ?? input.status === "canceled",
       canceledAt: input.status === "canceled" ? now() : null,
+      // An authoritative plan write supersedes any deferred downgrade the
+      // user had queued — the provider's fresh truth always wins.
+      pendingPlanCode: null,
+      pendingPlanEffectiveAt: null,
       updatedAt: now(),
     })
     .where(eq(subscriptions.userId, userId))
@@ -1100,6 +1084,62 @@ async function persistSubscriptionState(
 
   invalidateBrainProfileCache(app, userId);
   return rows[0];
+}
+
+/**
+ * Persist the downgrade an expired subscription row is owed, as decided by
+ * `resolveSubscriptionLifecycle`. Two shapes:
+ *
+ * - Plain expiry → free plan with the standard 5-hour usage window.
+ * - Due pending downgrade → the lower PAID plan the user already bought
+ *   (Claude-style deferred downgrade); it starts a fresh 30-day period at the
+ *   moment the higher period ended. If a real store verification for that
+ *   plan arrives later it simply overwrites this row with provider truth.
+ */
+async function applyLifecycleDowngrade(
+  app: FastifyInstance,
+  userId: string,
+  subscription: SubscriptionRow,
+  lifecycle: SubscriptionLifecycle,
+  currentTime: Date,
+): Promise<SubscriptionRow> {
+  const targetPlanCode = lifecycle.effectivePlanCode;
+  const defaults = applyBillingPlanDefaults(targetPlanCode);
+  const isPaidTarget = targetPlanCode !== "free";
+  const effectiveAt =
+    lifecycle.pendingPlanEffectiveAt ?? subscription.periodEndsAt ?? currentTime;
+  const periodEndsAt = isPaidTarget
+    ? new Date(effectiveAt.getTime() + 30 * 24 * 60 * 60 * 1000)
+    : new Date(currentTime.getTime() + 5 * 60 * 60 * 1000);
+
+  const repairedRows = await app.db
+    .update(subscriptions)
+    .set({
+      planCode: targetPlanCode,
+      status: isPaidTarget ? "active" : "free",
+      billingProvider: isPaidTarget ? subscription.billingProvider : "internal",
+      providerCustomerReferenceCode: isPaidTarget
+        ? subscription.providerCustomerReferenceCode
+        : null,
+      providerSubscriptionReferenceCode: isPaidTarget
+        ? subscription.providerSubscriptionReferenceCode
+        : null,
+      providerPricingPlanReferenceCode: null,
+      taskLimitMonthly: defaults.taskLimitMonthly,
+      aiCreditsMonthly: defaults.aiCreditsMonthly,
+      currentPeriodStartedAt: isPaidTarget ? effectiveAt : currentTime,
+      periodEndsAt,
+      cancelAtPeriodEnd: false,
+      canceledAt: isPaidTarget ? null : subscription.canceledAt,
+      pendingPlanCode: null,
+      pendingPlanEffectiveAt: null,
+      updatedAt: currentTime,
+    })
+    .where(eq(subscriptions.userId, userId))
+    .returning();
+
+  invalidateBrainProfileCache(app, userId);
+  return repairedRows[0] ?? subscription;
 }
 
 export async function claimWelcomeProTrial(app: FastifyInstance, userId: string) {
@@ -1135,6 +1175,8 @@ export async function claimWelcomeProTrial(app: FastifyInstance, userId: string)
       trialEndsAt,
       cancelAtPeriodEnd: false,
       canceledAt: null,
+      pendingPlanCode: null,
+      pendingPlanEffectiveAt: null,
       updatedAt: claimedAt,
     })
     .where(
@@ -1898,21 +1940,57 @@ export async function verifyStorePurchase(
       periodEndsAt: verification.periodEndsAt,
     })
   ) {
-    app.log.warn(
-      {
-        userId,
-        platform,
-        provider,
-        currentPlanCode: existingSubscription?.planCode ?? null,
-        currentStatus: existingSubscription?.status ?? null,
-        currentPeriodEndsAt: existingSubscription?.periodEndsAt ?? null,
-        incomingPlanCode: planCode,
-        incomingStatus: verification.status,
-        incomingPeriodEndsAt: verification.periodEndsAt,
-        incomingReferenceId: verification.referenceId,
-      },
-      "Ignoring stale store verification that would downgrade an active subscription period",
-    );
+    // Deferred downgrade, made durable. Previously this branch just IGNORED
+    // the verification: nothing recorded that the user had bought the lower
+    // tier, so when the higher period lapsed they fell to FREE instead of
+    // the plan they paid for. Record the pending plan so the lifecycle
+    // repair lands on it. Only a genuine live receipt for a lower paid tier
+    // qualifies — stale replays of the same plan or dead receipts don't.
+    const incomingStatus = normalizeSubscriptionStatus(verification.status);
+    const isGenuineDeferredDowngrade =
+      existingSubscription != null &&
+      (incomingStatus === "active" || incomingStatus === "trialing") &&
+      planCode !== "free" &&
+      planCode !== normalizeBillingPlanCode(existingSubscription.planCode) &&
+      planTierRank(planCode) < planTierRank(existingSubscription.planCode) &&
+      existingSubscription.periodEndsAt instanceof Date;
+    if (isGenuineDeferredDowngrade) {
+      await app.db
+        .update(subscriptions)
+        .set({
+          pendingPlanCode: planCode,
+          pendingPlanEffectiveAt: existingSubscription.periodEndsAt,
+          updatedAt: now(),
+        })
+        .where(eq(subscriptions.userId, userId));
+      app.log.info(
+        {
+          userId,
+          platform,
+          provider,
+          currentPlanCode: existingSubscription.planCode,
+          pendingPlanCode: planCode,
+          pendingPlanEffectiveAt: existingSubscription.periodEndsAt,
+        },
+        "Recorded deferred store downgrade; applies when the current paid period ends",
+      );
+    } else {
+      app.log.warn(
+        {
+          userId,
+          platform,
+          provider,
+          currentPlanCode: existingSubscription?.planCode ?? null,
+          currentStatus: existingSubscription?.status ?? null,
+          currentPeriodEndsAt: existingSubscription?.periodEndsAt ?? null,
+          incomingPlanCode: planCode,
+          incomingStatus: verification.status,
+          incomingPeriodEndsAt: verification.periodEndsAt,
+          incomingReferenceId: verification.referenceId,
+        },
+        "Ignoring stale store verification that would downgrade an active subscription period",
+      );
+    }
     return getBillingSummary(app, userId);
   }
 
@@ -2186,40 +2264,19 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
   }
   let subscription = loadedSubscription;
   const currentTime = now();
-  const welcomeProExpired =
-    subscription?.billingProvider === "welcome_trial" &&
-    subscription.status === "trialing" &&
-    subscription.periodEndsAt instanceof Date &&
-    subscription.periodEndsAt.getTime() <= currentTime.getTime();
-  const canceledPaidPeriodEnded =
-    subscription?.billingProvider === "apple_store" &&
-    subscription.status === "canceled" &&
-    subscription.periodEndsAt instanceof Date &&
-    subscription.periodEndsAt.getTime() <= currentTime.getTime();
-  if (subscription && (welcomeProExpired || canceledPaidPeriodEnded)) {
-    const freeDefaults = applyBillingPlanDefaults("free");
-    const nextPeriodEnd = new Date(currentTime.getTime() + 5 * 60 * 60 * 1000);
-    const repairedRows = await app.db
-      .update(subscriptions)
-      .set({
-        planCode: "free",
-        status: "free",
-        billingProvider: "internal",
-        providerCustomerReferenceCode: null,
-        providerSubscriptionReferenceCode: null,
-        providerPricingPlanReferenceCode: null,
-        taskLimitMonthly: freeDefaults.taskLimitMonthly,
-        aiCreditsMonthly: freeDefaults.aiCreditsMonthly,
-        currentPeriodStartedAt: currentTime,
-        periodEndsAt: nextPeriodEnd,
-        cancelAtPeriodEnd: false,
-        canceledAt: canceledPaidPeriodEnded ? subscription.canceledAt : null,
-        updatedAt: currentTime,
-      })
-      .where(eq(subscriptions.userId, userId))
-      .returning();
-    subscription = repairedRows[0] ?? subscription;
-    invalidateBrainProfileCache(app, userId);
+  // One rule for every expiry shape — welcome trial, canceled Apple period,
+  // lapsed active period, past_due, iyzico — instead of the previous
+  // hand-enumerated pair that missed most of them. When a deferred downgrade
+  // is due, the repair lands on the plan the user paid for, not on free.
+  const loadedLifecycle = resolveSubscriptionLifecycle(subscription, currentTime);
+  if (subscription && loadedLifecycle.needsDowngradeRepair) {
+    subscription = await applyLifecycleDowngrade(
+      app,
+      userId,
+      subscription,
+      loadedLifecycle,
+      currentTime,
+    );
   }
 
   const [desktopCountRows, usageSummary, invocationRows, recentCheckouts, recentEvents, recentStoreTransactions, trialQuota] = await Promise.all([
@@ -2278,6 +2335,9 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
   });
   const trialOffer = shapeWelcomeProTrialOffer(activeSubscription);
   const planCode = normalizeBillingPlanCode(activeSubscription?.planCode);
+  // Recompute on the (possibly repaired) row so the surfaced pending plan is
+  // never a stale leftover the repair just consumed.
+  const lifecycle = resolveSubscriptionLifecycle(activeSubscription, currentTime);
   const billingSource =
     activeSubscription?.billingProvider === "welcome_trial"
       ? "welcome_pro"
@@ -2299,8 +2359,8 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
         periodStartsAt,
         periodEndsAt,
         cancelAtPeriodEnd: activeSubscription?.cancelAtPeriodEnd ?? false,
-        pendingPlanCode: null,
-        pendingPlanEffectiveAt: null,
+        pendingPlanCode: lifecycle.pendingPlanCode,
+        pendingPlanEffectiveAt: lifecycle.pendingPlanEffectiveAt,
       },
       entitlements: {
         desktopLimit: plan.desktopLimit,
@@ -2348,8 +2408,10 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
       },
       actions: {
         canClaimWelcomePro: trialOffer.eligible,
-        canUpgrade: planCode !== "pro",
-        canDowngrade: planCode === "pro" && billingSource === "apple",
+        // Tier-aware: solo can upgrade to pro; pro (top tier) cannot upgrade.
+        // Downgrade covers every store-managed paid tier, not just pro.
+        canUpgrade: planTierRank(planCode) < planTierRank("pro"),
+        canDowngrade: planTierRank(planCode) > planTierRank("free") && billingSource === "apple",
         canCancel: billingSource === "apple" && planCode !== "free",
         manageSubscriptionHint,
       },
@@ -2508,7 +2570,11 @@ export async function assertDesktopPairingAllowed(
     Number(desktopCountRows[0]?.count ?? 0) - (currentDesktopDeviceId ? 1 : 0),
   );
 
-  if (!subscriptionStatusAllowsUsage(access.status)) {
+  // Lifecycle-derived: access.serverBrainAllowed already encodes "is this
+  // subscription in a usable state" (free/trial/paid/canceled-grace all
+  // allowed; only truly broken rows are not). The plan gate right after it
+  // keeps free/expired users away from desktop connections.
+  if (!access.serverBrainAllowed) {
     throw conflict("subscription_inactive");
   }
 

@@ -479,15 +479,24 @@ test("resolveUsageAccessTruth treats claimed pro trials as premium trial access"
   assert.equal(truth.brainProfile.reasoningMultiplier, 5);
 });
 
-test("resolveUsageAccessTruth blocks explicitly expired pro trials", () => {
+test("resolveUsageAccessTruth drops expired pro trials to free-tier access (not a lockout)", () => {
+  // Intentional behavior change: an expired welcome trial used to leave a
+  // zombie pro/trialing row that blocked chat entirely on every non-billing
+  // path (while keeping the premium brain profile) until the billing screen
+  // lazily repaired it. Correct: the user falls to FREE limits immediately —
+  // free plan, free brain profile, access allowed.
   const truth = resolveUsageAccessTruth({
     planCode: "pro",
     status: "trialing",
     trialEndsAt: new Date(Date.now() - 60_000),
   });
 
-  assert.equal(truth.serverBrainAllowed, false);
-  assert.equal(truth.upgradeRequiredForServerBrain, true);
+  assert.equal(truth.mode, "free");
+  assert.equal(truth.planCode, "free");
+  assert.equal(truth.serverBrainAllowed, true);
+  assert.equal(truth.upgradeRequiredForServerBrain, false);
+  assert.equal(truth.trialActive, false);
+  assert.equal(truth.brainProfile.tier, "standard");
 });
 
 test("resolveUsageAccessTruth keeps provider trialing paid plans active when no expiry was sent", () => {
