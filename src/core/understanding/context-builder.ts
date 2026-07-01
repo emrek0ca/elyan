@@ -7,6 +7,7 @@ import { buildMemoryProfileSnapshot, EPISODIC_LABELS } from "./memory-profile.js
 import { filterRetrievedMemory } from "./personalization-policy.js";
 import { extractProjectHints } from "./project-context.js";
 import { buildDerivedHintBuckets, deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "./world-signal-derived.js";
+import { isShortFollowUpPrompt } from "../../modules/brain/chat-heuristics.js";
 import type {
   ContextPacket,
   ContinuityBoundary,
@@ -903,6 +904,30 @@ function deriveClarificationDiagnostics(input: {
   continuity: { userGoal: string | null; assistantState: string | null; openLoops: string[] };
 }): UserUnderstandingContext["clarificationDiagnostics"] {
   const text = compactText(input.message).toLowerCase();
+  // Short follow-ups ("anlamadım", "onu düzelt", "devam et") are ambiguous
+  // ONLY when there is no prior-turn context to resolve them against. When we
+  // DO have userGoal / assistantState / openLoops the answer is well-defined
+  // (continue / re-explain / revise the previous turn) — asking for
+  // clarification there just frustrates the user.
+  if (isShortFollowUpPrompt(input.message)) {
+    const hasPriorContext = Boolean(
+      input.continuity.userGoal ||
+        input.continuity.assistantState ||
+        input.continuity.openLoops.length > 0,
+    );
+    if (!hasPriorContext) {
+      return {
+        shouldClarify: true,
+        ambiguityKind: "ambiguous_followup",
+        reason: "short_followup_without_prior_turn_context",
+      };
+    }
+    return {
+      shouldClarify: false,
+      ambiguityKind: "none",
+      reason: "short_followup_resolved_by_prior_turn_context",
+    };
+  }
   if (!input.intent.taskFrame.shouldClarify) {
     return {
       shouldClarify: false,

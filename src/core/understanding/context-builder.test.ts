@@ -926,3 +926,56 @@ test("buildUserContextFromMemory carries explicit user personalization prompt fr
     ),
   );
 });
+
+test("clarificationDiagnostics: short follow-up with prior turn context resolves silently", () => {
+  // "onu düzelt" tek başına belirsiz, ama önceki turun userGoal +
+  // assistantState + openLoops'u varsa cevap iyi tanımlı (önceki çıktıyı
+  // revize et) — modelden gereksiz yere netleştirme sorusu istenmemeli.
+  const intent = classifyIntent({ userId: "u1", message: "onu düzelt" });
+  const context = buildUserContextFromMemory({
+    userId: "u1",
+    accountId: "u1",
+    intent,
+    task: {
+      userId: "u1",
+      message: "onu düzelt",
+      metadata: {
+        compactContext: {
+          rollingSummary: {
+            userGoal: "Kısa release notu hazırlamak",
+            assistantState: "İlk taslak çıkarıldı",
+            openLoops: ["Başlık ve maddeleri netleştirmek"],
+          },
+        },
+      },
+    },
+    memory: [],
+    profile: { displayName: "Emre" },
+  });
+
+  assert.equal(context.clarificationDiagnostics.shouldClarify, false);
+  assert.equal(
+    context.clarificationDiagnostics.reason,
+    "short_followup_resolved_by_prior_turn_context",
+  );
+});
+
+test("clarificationDiagnostics: short follow-up WITHOUT prior context flags ambiguous_followup", () => {
+  // Aynı mesaj bağlam yokken belirsiz — model kısa hatırlatma istemeli.
+  const intent = classifyIntent({ userId: "u1", message: "devam et" });
+  const context = buildUserContextFromMemory({
+    userId: "u1",
+    accountId: "u1",
+    intent,
+    task: { userId: "u1", message: "devam et", metadata: {} },
+    memory: [],
+    profile: { displayName: "Emre" },
+  });
+
+  assert.equal(context.clarificationDiagnostics.shouldClarify, true);
+  assert.equal(context.clarificationDiagnostics.ambiguityKind, "ambiguous_followup");
+  assert.equal(
+    context.clarificationDiagnostics.reason,
+    "short_followup_without_prior_turn_context",
+  );
+});

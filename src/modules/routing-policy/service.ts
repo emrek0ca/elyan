@@ -7,7 +7,7 @@ import {
   isExplicitTableRequest,
 } from "../../core/understanding/structured-output-policy.js";
 import type { UnderstandingIntent } from "../../core/understanding/types.js";
-import { isMateriallyAmbiguousUserPrompt, isSocialChatPrompt, selectHybridMobileChatWorkload } from "../brain/chat-heuristics.js";
+import { isMateriallyAmbiguousUserPrompt, isShortFollowUpPrompt, isSocialChatPrompt, selectHybridMobileChatWorkload } from "../brain/chat-heuristics.js";
 import { normalizePlanBrainProfile, type PlanBrainProfile } from "../billing/catalog.js";
 import type { SharedBrainWorkload } from "../brain/workloads.js";
 import { generateSharedBrainReply } from "../brain/inference.js";
@@ -754,14 +754,17 @@ function deriveSelectedWorkload(input: {
     primaryIntent: input.primaryIntent,
     brainProfile: input.brainProfile ?? undefined,
   });
-  // Belirsizlik → bir kademe yukarı: düşük güvenli intent'te fast model mesajı
-  // yanlış okuyup bağlamsız/yüzeysel yanıt veriyor. Balanced profil belirsiz
-  // referansları (rolling summary + digest bağlamıyla) çok daha iyi taşıyor.
-  // Selamlaşma/small-talk bilerek muaf — orada belirsizlik zaten zararsız.
+  // Belirsizlik → bir kademe yukarı: düşük güvenli intent, ambigüz referans
+  // veya kısa takip mesajlarında ("anlamadım", "onu düzelt", "devam et") fast
+  // model mesajı bağlamsız yorumlayıp yeni ve alakasız bir cevap üretiyor.
+  // Balanced profil rolling summary + last-reply digest bağlamıyla önceki turu
+  // çok daha iyi taşıyor. Selamlaşma/small-talk muaf.
   if (
     hybrid === "mobile_chat_fast" &&
-    (input.intent === "ambiguous_request" || input.confidence < 0.5) &&
-    !isSocialChatPrompt(input.message)
+    !isSocialChatPrompt(input.message) &&
+    (input.intent === "ambiguous_request" ||
+      input.confidence < 0.5 ||
+      isShortFollowUpPrompt(input.message))
   ) {
     return "mobile_chat_balanced";
   }

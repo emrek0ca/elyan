@@ -288,6 +288,35 @@ test("decideCommandRoute upgrades short Turkish document work to the balanced pr
   assert.equal(decision.selectedWorkload, "mobile_chat_balanced");
 });
 
+test("decideCommandRoute upgrades short follow-ups to balanced so prior turn is used", async () => {
+  const app = createApp([]);
+  // "anlamadım", "devam et", "onu düzelt" gibi kısa takipler önceki tura
+  // referans veriyor; fast modelde bağlamsız yorumlanınca alakasız cevap
+  // çıkıyor. Balanced modelde rolling summary + digest bağlamıyla doğru
+  // yorumlanıyor.
+  for (const message of ["anlamadım", "devam et", "onu düzelt", "daha kısa yaz"]) {
+    const decision = await decideCommandRoute(app as never, {
+      userId: "user-1",
+      message,
+      source: "mobile",
+    });
+    assert.equal(decision.selectedWorkload, "mobile_chat_balanced", message);
+  }
+});
+
+test("decideCommandRoute still keeps greetings on the fast path even if short", async () => {
+  // Kısa takip yükseltmesi selamlaşmaya sızmamalı.
+  const app = createApp([]);
+  for (const message of ["Selam", "Merhaba", "teşekkürler"]) {
+    const decision = await decideCommandRoute(app as never, {
+      userId: "user-1",
+      message,
+      source: "mobile",
+    });
+    assert.equal(decision.selectedWorkload, "mobile_chat_fast", message);
+  }
+});
+
 test("decideCommandRoute keeps vague referential prompts in clarification mode", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
