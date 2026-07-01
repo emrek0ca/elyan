@@ -37,7 +37,12 @@ const REASONING_DUMP_OPENING_PATTERN =
   /^\s*(?:the user(?:'s)?\b|the request\b|user request\b|i (?:should|will|'ll|need to|am going to|want to|can (?:just|simply))\b|we (?:need|should|will|must)\b|let'?s (?:go with|say|think|see|stick|provide|start by)\b|okay,? (?:the user|so)\b|ok,? (?:the user|so)\b|hmm+[,.]|wait[,.]|alright[,.]|first,? i (?:should|will|need)\b|my (?:goal|task|job) (?:is|here)\b|analysis\s*:|reasoning\s*:|thinking process\b|thought process\b|kullanıcı(?:nın|nin)? (?:istediği|amacı|hedefi|dili|mesajı|isteği)\b|önce kullanıcı\b)/iu;
 
 /* Satır-bazlı meta işaretleri: dump'ların gövdesindeki kendi kendine konuşma
- * kalıpları. Tek tek zararsız görünen satırlar toplamda dump'ı ele verir. */
+ * kalıpları. Tek tek zararsız görünen satırlar toplamda dump'ı ele verir.
+ *
+ * Not: dump dedektörü artık RETRY'ı tetiklemiyor — sadece dump içinden GERÇEK
+ * cevabı KURTARMAK için kullanılıyor (extractFinalAnswerFromReasoningDump).
+ * Yanlış pozitif kullanıcıya stub göstermez; en kötü ihtimalle model çıktısı
+ * ham verilir. Bu yüzden geniş desen kabul edilebilir. */
 const META_LINE_PATTERNS: RegExp[] = [
   /^(?:the user(?:'s)?|user request|the request)\b/i,
   /^i\s*(?:'ll|will|should|can|need to|am going to|want to|think)\b/i,

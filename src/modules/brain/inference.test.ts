@@ -9,6 +9,7 @@ import {
   generateGovernedSharedBrainReply,
   generateSharedBrainReply,
   isReasoningOnlyReply,
+  resolveCleanVisibleAnswer,
   resolveEffectiveWorkload,
   resolveReasoningEffort,
 } from "./inference.js";
@@ -45,6 +46,50 @@ test("isReasoningOnlyReply keeps answers where reasoning leaked above a real rep
     ),
     false,
   );
+});
+
+// ── STUB REGRESSION FENCE ────────────────────────────────────────────────
+// Prod'da "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar
+// deneyelim." metni kullanıcıya sürekli çıkıyordu çünkü aşırı-strict dump
+// dedektörü normal cevap açılışlarını da dump sanıp stub'a düşürüyordu. Kural
+// artık: model gerçekten metin ürettiyse HER zaman o metnin bir varyantı
+// dönmeli — stub asla dönmemeli.
+
+test("resolveCleanVisibleAnswer never returns the legacy stub for any real model output", () => {
+  const LEGACY_STUB_PREFIX = "Yanıtı temiz";
+  for (const raw of [
+    // Düz cevap açılışı — meta gibi görünen "I'll" ile başlayan didaktik metin
+    "I'll walk you through the setup step by step. First, install Node.js.",
+    // "Let's" ile başlayan cevap
+    "Let's start with the basics: React uses components as building blocks.",
+    // "The user" ile başlayan planlama görünümlü ama gerçekte cevap
+    "The user asked about kübit; briefly, kübit süperpozisyondaki bit'tir.",
+    // Türkçe "Kullanıcının..." ile başlayan cevap
+    "Kullanıcının sorusuna göre en pratik yol şudur: docker compose up.",
+    // Reasoning dökümü — kurtarma yollarından hiçbiri çalışmasa bile ham
+    // metin dönmeli, stub değil.
+    "The user wants a color. I should think about it. Blue or red?",
+  ]) {
+    const result = resolveCleanVisibleAnswer({ candidates: [raw], raw });
+    assert.ok(
+      result.trim(),
+      `stub returned for input: ${raw.slice(0, 40)}...`,
+    );
+    assert.ok(
+      !result.startsWith(LEGACY_STUB_PREFIX),
+      `legacy stub returned for input: ${raw.slice(0, 40)}...`,
+    );
+  }
+});
+
+test("resolveCleanVisibleAnswer returns empty string only when model produced nothing", () => {
+  const empty = resolveCleanVisibleAnswer({ candidates: [""], raw: "" });
+  assert.equal(empty, "");
+  const whitespace = resolveCleanVisibleAnswer({
+    candidates: ["   \n  "],
+    raw: "   \n  ",
+  });
+  assert.equal(whitespace, "");
 });
 
 class FakeQuery<T> {

@@ -848,9 +848,12 @@ export function resolveVisibleAssistantResponse(input: {
   if (hasStructuredBlocks) {
     return "";
   }
+  // Sanitize her şeyi süzse bile ham response'u fallback yap: stub yerine
+  // kullanıcı modelin ürettiği ham metni görür. Aşırı-strict dump dedektörü
+  // yüzünden düz cevaplar sürekli "temiz biçimde hazırlayamadım" oluyordu.
   return sanitizeAssistantVisibleText(input.responseText, {
     ...visibleTextSanitizerOptions,
-    fallback: "Yanıtı temiz biçimde hazırlayamadım. İstersen aynı isteği tekrar deneyelim.",
+    fallback: input.responseText ?? "",
   });
 }
 
