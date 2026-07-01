@@ -1138,45 +1138,48 @@ function reorderCandidateChunksForPrompt(
   };
 }
 
-async function scoreChunksSemantically(
-  prompt: string,
-  contents: string[],
-): Promise<number[] | null> {
-  if (isStorageEmbedderDisabled() || contents.length === 0) {
-    return null;
+function cosineDot(a: Float32Array | number[] | ReadonlyArray<number>, b: Float32Array | number[] | ReadonlyArray<number>): number {
+  let dot = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i += 1) {
+    dot += a[i] * b[i];
   }
-  const bounded = contents.slice(0, MAX_CHUNKS_TO_EMBED);
-  try {
-    const run = (async () => {
-      const [queryVector, chunkVectors] = await Promise.all([
-        embedQueryForStorage(prompt),
-        embedTextsForStorage(bounded),
-      ]);
-      if (!queryVector || !chunkVectors) {
-        return null;
-      }
-      return chunkVectors.map((vector) => {
-        let dot = 0;
-        for (let i = 0; i < vector.length && i < queryVector.length; i += 1) {
-          dot += vector[i] * queryVector[i];
-        }
-        return dot;
-      });
-    })();
-    const timeout = new Promise<null>((resolve) => {
-      const timer = setTimeout(() => resolve(null), SEMANTIC_CHUNK_SCORE_TIMEOUT_MS);
-      timer.unref?.();
-    });
-    const scores = await Promise.race([run, timeout]);
-    if (!scores) {
-      return null;
-    }
-    // Pad truncated tail with -1 so unembedded chunks rank below embedded ones
-    // but can still win via the lexical tiebreak path when scores are absent.
-    return contents.map((_, index) => (index < scores.length ? scores[index] : -1));
-  } catch {
-    return null;
+  return dot;
+}
+
+/**
+ * Race a promise against a shared deadline. When the deadline has already
+ * elapsed, resolves to null without even awaiting the underlying work. Used
+ * so the semantic-ranking budget is spent per REQUEST, not per candidate: 3
+ * attachments never blow past a single 2.5s budget.
+ */
+function raceDeadline<T>(work: Promise<T>, remainingMs: number): Promise<T | null> {
+  if (remainingMs <= 0) {
+    return Promise.resolve(null);
   }
+  return new Promise<T | null>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, remainingMs);
+    timer.unref?.();
+    work.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
 }
 
 function rankCandidatesForPrompt(
@@ -1190,27 +1193,89 @@ function rankCandidatesForPrompt(
   );
 }
 
+/**
+ * Rank candidates with e5-small storage embeddings. Optimized vs the earlier
+ * per-candidate-sequential path:
+ *   1. Query embedding is computed ONCE per request (not per candidate).
+ *   2. Chunk-vector calls for every candidate that needs ranking are launched
+ *      in parallel — the total wall-clock is dominated by the slowest
+ *      candidate, not the sum.
+ *   3. The 2.5s timeout is a SHARED per-request budget, not per-candidate:
+ *      three attachments can never spend 7.5s of caller time waiting.
+ * When the embedder is disabled, times out, or throws, every candidate falls
+ * back to the lexical ranker — same behavior as before, just cheaper.
+ */
 async function rankCandidatesForPromptWithEmbeddings(
   prompt: string,
   candidates: PreparedAttachmentCandidate[],
   maxChunks: number,
   maxChars: number,
 ): Promise<PreparedAttachmentCandidate[]> {
-  const ranked: PreparedAttachmentCandidate[] = [];
-  for (const candidate of candidates) {
-    if (!candidateNeedsChunkRanking(candidate, maxChunks, maxChars)) {
-      ranked.push(candidate);
-      continue;
-    }
-    const contents = (candidate.prepared.chunks as RankableChunk[]).map((chunk) =>
-      String(chunk.content ?? ""),
-    );
-    const semanticScores = await scoreChunksSemantically(prompt, contents);
-    ranked.push(
-      reorderCandidateChunksForPrompt(prompt, candidate, maxChunks, maxChars, semanticScores),
+  if (candidates.length === 0) {
+    return candidates;
+  }
+  const rankable = candidates.map((candidate) =>
+    candidateNeedsChunkRanking(candidate, maxChunks, maxChars),
+  );
+  if (!rankable.some(Boolean) || isStorageEmbedderDisabled()) {
+    return candidates.map((candidate, index) =>
+      rankable[index]
+        ? reorderCandidateChunksForPrompt(prompt, candidate, maxChunks, maxChars, null)
+        : candidate,
     );
   }
-  return ranked;
+
+  const deadlineAt = Date.now() + SEMANTIC_CHUNK_SCORE_TIMEOUT_MS;
+  const remaining = () => deadlineAt - Date.now();
+
+  // Query embedding is a single call; every candidate reuses this vector.
+  const queryVector = await raceDeadline(embedQueryForStorage(prompt), remaining()).catch(
+    () => null,
+  );
+
+  // Kick off chunk-vector requests for all rankable candidates in parallel.
+  const chunkContents = candidates.map((candidate, index) =>
+    rankable[index]
+      ? (candidate.prepared.chunks as RankableChunk[])
+          .map((chunk) => String(chunk.content ?? ""))
+          .slice(0, MAX_CHUNKS_TO_EMBED)
+      : null,
+  );
+  const vectorPromises = chunkContents.map((contents) =>
+    contents && queryVector
+      ? embedTextsForStorage(contents).catch(() => null)
+      : Promise.resolve(null),
+  );
+  const chunkVectorsByCandidate = await Promise.all(
+    vectorPromises.map((promise) => raceDeadline(promise, remaining())),
+  );
+
+  return candidates.map((candidate, index) => {
+    if (!rankable[index]) {
+      return candidate;
+    }
+    const contents = chunkContents[index]!;
+    const totalChunks = (candidate.prepared.chunks as RankableChunk[]).length;
+    const chunkVectors = chunkVectorsByCandidate[index];
+    let semanticScores: number[] | null = null;
+    if (queryVector && chunkVectors) {
+      const raw = chunkVectors.map((vector) => cosineDot(queryVector, vector));
+      // Pad the truncated tail (chunks past MAX_CHUNKS_TO_EMBED) with -1 so
+      // unembedded chunks rank below embedded ones while lexical scoring can
+      // still surface them via the tiebreak.
+      semanticScores = Array.from({ length: totalChunks }, (_, i) =>
+        i < raw.length ? raw[i] : -1,
+      );
+      void contents;
+    }
+    return reorderCandidateChunksForPrompt(
+      prompt,
+      candidate,
+      maxChunks,
+      maxChars,
+      semanticScores,
+    );
+  });
 }
 
 function buildPromptBlock(input: {
