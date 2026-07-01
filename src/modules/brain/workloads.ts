@@ -60,7 +60,11 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
     workload: "mobile_chat_balanced",
     timeoutMs: 7_000,
     firstDeltaBudgetMs: 2_100,
-    maxTokens: 384,
+    // Bumped 384 → 512: prod users on this workload were hitting the ceiling
+    // mid-LaTeX (\begin{cases}…\end{cases}) and the response ended with a
+    // dangling backslash. 512 covers a math example + short solution plan
+    // without pushing timeoutMs.
+    maxTokens: 512,
     streamingEnabled: true,
     cachePolicy: "safe_ephemeral",
     fallbackWorkload: "mobile_chat_fast",
@@ -69,7 +73,9 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
     workload: "mobile_chat_deep_refine",
     timeoutMs: 9_500,
     firstDeltaBudgetMs: 2_400,
-    maxTokens: 640,
+    // Bumped 640 → 800: refine path handles long-form / math / plan-heavy
+    // outputs where 640 was cutting the closing paragraph.
+    maxTokens: 800,
     streamingEnabled: true,
     cachePolicy: "off",
     fallbackWorkload: "mobile_chat_balanced",

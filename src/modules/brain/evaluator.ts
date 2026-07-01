@@ -19,6 +19,7 @@ export type BrainEvalFailureType =
   | "weak_reasoning_depth"
   | "overcompressed_answer"
   | "style_mismatch_mobile"
+  | "stiff_or_performative_tone"
   | "missed_personalization_opportunity"
   | "memory_misuse"
   | "weak_continuity"
@@ -223,6 +224,31 @@ function analyzeOutputQuality(input: BrainEvalInput) {
   ) {
     style = 0.6;
     flags.push("style_mismatch_mobile");
+  }
+
+  // Detect stiff or performative tone the aliveness uplift is meant to route
+  // around — empty openers ("Harika bir soru!", "Elbette!"), filler support
+  // phrases ("umarım yardımcı olur"), meta-narration ("sana şunu söyleyebilirim
+  // ki"), robotic sign-offs ("başka bir sorunuz varsa lütfen sorun"). Flagging
+  // these routes the reply into the refinement pass, which rewrites more
+  // naturally without needing extra system-prompt scolding.
+  if (
+    /^\s*(harika bir soru|çok güzel bir soru|güzel soru|great question|iyi soru|elbette|kesinlikle|tabii ki|tabi ki)[!.,\s]/i.test(
+      normalizedAnswer,
+    ) ||
+    /(umarım yardımcı olur|umarım işine yarar|başka bir sorun(uz)? (varsa|olursa) lütfen sor|sormaktan çekinme|hope this helps)/i.test(
+      loweredAnswer,
+    ) ||
+    /(sana şunu söyleyebilirim ki|şunu belirtmek isterim|aslında şu şekilde|temelde şu şekilde|genel olarak şunu söyleyebilirim)/i.test(
+      loweredAnswer,
+    ) ||
+    /(size yardımcı olmaya çalışacağım|sana yardımcı olmaya çalışacağım|yardımcı olmaktan mutluluk duyarım|elimden geleni yapacağım)/i.test(
+      loweredAnswer,
+    )
+  ) {
+    style = Math.min(style, 0.5);
+    usefulness = Math.min(usefulness, 0.7);
+    flags.push("stiff_or_performative_tone");
   }
   if (
     containsProtectedElyanDisclosure(normalizedAnswer) &&
@@ -496,6 +522,9 @@ export function evaluateBrainAnswer(input: BrainEvalInput): BrainEvalResult {
   }
   if (outputQuality.flags.includes("style_mismatch_mobile")) {
     failureTypes.push("style_mismatch_mobile");
+  }
+  if (outputQuality.flags.includes("stiff_or_performative_tone")) {
+    failureTypes.push("stiff_or_performative_tone");
   }
   for (const leakType of [
     "provider_disclosure",

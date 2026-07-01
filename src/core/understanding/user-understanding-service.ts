@@ -31,9 +31,9 @@ const fallbackIntent: IntentClassification = {
   reason: "understanding_disabled_or_failed",
   taskFrame: {
     goal: "answer or route safely",
-    likelyAnswerShape: "direct answer with caution",
+    likelyAnswerShape: "direct answer",
     reasoningMode: "fast",
-    shouldClarify: true,
+    shouldClarify: false,
   },
   ecosystemHints: [],
   routingHints: {
@@ -45,9 +45,9 @@ const fallbackIntent: IntentClassification = {
 };
 
 const fallbackClarificationDiagnostics: ClarificationDiagnostics = {
-  shouldClarify: true,
-  ambiguityKind: "insufficient_evidence",
-  reason: "understanding_disabled_or_failed",
+  shouldClarify: false,
+  ambiguityKind: "none",
+  reason: "understanding_unavailable_continue_best_effort",
 };
 
 export function emptyUnderstanding(input: TaskUnderstandingInput): UserUnderstandingResult {
@@ -60,9 +60,9 @@ export function emptyUnderstanding(input: TaskUnderstandingInput): UserUnderstan
       intent: "unknown",
       taskFrame: {
         goal: "answer or route safely",
-        likelyAnswerShape: "direct answer with caution",
+        likelyAnswerShape: "direct answer",
         reasoningMode: "fast",
-        shouldClarify: true,
+        shouldClarify: false,
       },
       ecosystemHints: [],
       personalizationHints: [],

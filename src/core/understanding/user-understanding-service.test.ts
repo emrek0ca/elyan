@@ -1,11 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  emptyUnderstanding,
   persistLearningSignals,
   recordBridgeLearningSignals,
   recordTaskFeedback,
   recordTaskLearningFromCompletion,
 } from "./user-understanding-service.js";
+
+test("emptyUnderstanding keeps best-effort answering enabled instead of forcing clarification", () => {
+  const result = emptyUnderstanding({
+    userId: "00000000-0000-0000-0000-000000000001",
+    accountId: "00000000-0000-0000-0000-000000000001",
+    message: "z = x^5 - y^2 fonksiyonunun 3 boyutlu grafiğini çiz",
+    metadata: {},
+  });
+
+  assert.equal(result.intent.taskFrame.shouldClarify, false);
+  assert.equal(result.context.taskFrame.shouldClarify, false);
+  assert.equal(result.context.clarificationDiagnostics.shouldClarify, false);
+  assert.equal(result.context.clarificationDiagnostics.ambiguityKind, "none");
+});
 
 test("persistLearningSignals stores only policy-approved safe events", async () => {
   const inserted: unknown[] = [];

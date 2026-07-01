@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { devices, runtimeConnections, tasks } from "../../db/schema.js";
+import { devices, pairSessions, runtimeConnections, tasks } from "../../db/schema.js";
 import { getBaseUrlReachability } from "../../config/env.js";
 import { conflict, notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
@@ -427,7 +427,11 @@ export async function listUserDevices(app: FastifyInstance, userId: string) {
       updatedAt: devices.updatedAt,
     })
     .from(devices)
-    .where(eq(devices.userId, userId))
+    // Deactivated devices are kept in the DB for audit / task history reasons
+    // but must NOT leak into the user-facing list — that's exactly the bug
+    // that made deleted desktops "resurrect" days later on the client. Only
+    // active rows are user-visible.
+    .where(and(eq(devices.userId, userId), eq(devices.isActive, true)))
     .orderBy(desc(devices.pairedAt), desc(devices.createdAt));
 
   const desktopIds = deviceRows
@@ -835,11 +839,19 @@ export async function deactivateUserDevice(
       ),
     );
 
-  // 3. Force-close any live WebSocket with a specific close code so the desktop
+  // 3. Delete any pending pair sessions bound to this device so the desktop
+  //    can't complete a stale claim or reuse an old pairing code after being
+  //    removed. Ghost pair sessions were part of the "deleted device came
+  //    back" bug class.
+  await app.db
+    .delete(pairSessions)
+    .where(eq(pairSessions.desktopDeviceId, device.id));
+
+  // 4. Force-close any live WebSocket with a specific close code so the desktop
   //    bridge knows it was deactivated (not a transient drop) and clears creds.
   app.services.realtimeHub.closeRuntime(device.id, 4003, "device_deactivated");
 
-  // 4. Notify mobile via SSE so it refreshes device status immediately without
+  // 5. Notify mobile via SSE so it refreshes device status immediately without
   //    waiting for the next bootstrap poll.
   await app.services.eventBus.publishVolatile({
     topic: "device.status_changed",

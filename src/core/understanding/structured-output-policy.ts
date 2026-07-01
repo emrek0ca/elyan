@@ -39,6 +39,12 @@ const EXPLICIT_MATH_SURFACE_3D_REQUEST_PATTERNS = [
 const EXPLICIT_MATH_LATEX_REQUEST_PATTERNS = [
   /(?<!\p{L})(matematik|math|denklem|equation|integral|türev|turev|limit|ispat|proof|çöz|coz|solve)(?!\p{L})/iu,
   /(?<!\p{L})(latex|tex|ka?tex|formula|formül|formul)(?!\p{L})/iu,
+  // Objects whose canonical answer *is* a math expression. Real prod hit:
+  // "Bana bir polinom yaz" got its math block dropped by
+  // `filterAssistantBlocksByIntent` because none of these nouns were treated
+  // as math intent, and the user only saw "İşte örnek bir polinom:" with an
+  // empty tail. Same reasoning for fonksiyon / matris / seri / dizi …
+  /(?<!\p{L})(polinom|polynomial|fonksiyon|function|matris|matrix|vekt[öo]r(?:\s+alan[ıi])?|dizi|series?|serisi|seri|kesir|fraction|kompleks\s+say[ıi]|karma[şs][ıi]k\s+say[ıi]|complex\s+number|kalk[üu]l[üu]s|calculus|cebir|algebra|geometri|geometry|trigonometri|trigonometry|logaritma|logarithm)(?!\p{L})/iu,
 ];
 
 const EXPLICIT_SVG_REQUEST_PATTERNS = [

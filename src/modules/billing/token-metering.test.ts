@@ -61,6 +61,41 @@ test("calculateBillablePlanTokens charges server tasks more than chat for the sa
   assert.equal(task.surface, "task");
 });
 
+test("calculateBillablePlanTokens keeps heavy generation workloads above normal chat", () => {
+  const chat = calculateBillablePlanTokens({
+    surface: "chat",
+    workload: "mobile_chat_balanced",
+    userInputTokens: 320,
+    promptTokens: 1_200,
+    completionTokens: 360,
+  });
+  const document = calculateBillablePlanTokens({
+    surface: "task",
+    workload: "document_generate",
+    userInputTokens: 320,
+    promptTokens: 1_200,
+    completionTokens: 360,
+  });
+  const table = calculateBillablePlanTokens({
+    surface: "task",
+    workload: "table_generate",
+    userInputTokens: 320,
+    promptTokens: 1_200,
+    completionTokens: 360,
+  });
+  const vision = calculateBillablePlanTokens({
+    surface: "task",
+    workload: "vision_reasoning",
+    userInputTokens: 320,
+    promptTokens: 1_200,
+    completionTokens: 360,
+  });
+
+  assert.equal(document.weightedTokenPoints > chat.weightedTokenPoints, true);
+  assert.equal(table.weightedTokenPoints > chat.weightedTokenPoints, true);
+  assert.equal(vision.weightedTokenPoints > chat.weightedTokenPoints, true);
+});
+
 test("resolveAdaptiveInferenceBudget expands explicit long-form requests without changing normal chat", () => {
   const normal = resolveAdaptiveInferenceBudget({
     workload: "mobile_chat_balanced",

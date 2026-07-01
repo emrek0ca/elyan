@@ -756,8 +756,8 @@ test("registerUser seeds a claimable welcome pro trial offer for a new user", as
     expiresAt: trialEndsAt,
   });
   assert.equal(insertedSubscriptions.length, 1);
-  assert.equal(insertedSubscriptions[0].planCode, "free");
-  assert.equal(insertedSubscriptions[0].status, "free");
+  assert.equal(insertedSubscriptions[0].planCode, "pro");
+  assert.equal(insertedSubscriptions[0].status, "trialing");
   assert.ok(insertedSubscriptions[0].currentPeriodStartedAt instanceof Date);
   assert.ok(insertedSubscriptions[0].trialEndsAt instanceof Date);
   assert.ok(insertedSubscriptions[0].periodEndsAt instanceof Date);
@@ -956,7 +956,7 @@ test("loginWithGoogle seeds a claimable welcome pro trial offer for first-time s
   assert.equal(result.subscription.trialOffer.status, "available");
   assert.equal(result.subscription.trialOffer.eligible, true);
   assert.equal(insertedSubscriptions.length, 1);
-  assert.equal(insertedSubscriptions[0].planCode, "free");
-  assert.equal(insertedSubscriptions[0].status, "free");
+  assert.equal(insertedSubscriptions[0].planCode, "pro");
+  assert.equal(insertedSubscriptions[0].status, "trialing");
   assert.ok(insertedSubscriptions[0].trialEndsAt instanceof Date);
 });

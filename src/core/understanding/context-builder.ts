@@ -26,9 +26,79 @@ const PLANNING_TOPIC_PATTERN =
   /\b(plan|planla|planning|program|schedule|günlük|gunluk|haftalık|haftalik|çalışma|calisma|task|görev|gorev|roadmap|routine|rutin)\b/i;
 const DEBUG_TOPIC_PATTERN =
   /\b(auth|login|oauth|session|token|bug|hata|error|debug|fix|backend|api|pipeline|refresh|403|401)\b/i;
+const SOCIAL_CHAT_FAST_PATH_PATTERN =
+  /^(selam|merhaba|slm|hey|hi|hello|günaydın|gunaydin|iyi sabahlar|iyi akşamlar|iyi aksamlar)\b|\b(nasılsın|nasilsin|naber|napıyorsun|napiyorsun|how are you|what'?s up|whats up)\b/i;
+const EXPLICIT_NAME_PATTERNS = [
+  /\b(?:benim adım|adım)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü'-]+){0,2})/iu,
+  /\bmy name is\s+([A-Za-z][A-Za-z' -]{1,60})/iu,
+];
+const SUSPICIOUS_NAME_TOKENS = new Set([
+  "adım",
+  "benim",
+  "merhaba",
+  "selam",
+  "hey",
+  "hello",
+  "bugün",
+  "neden",
+  "niye",
+  "kaç",
+  "nasılsın",
+  "nasilsin",
+  "yardım",
+  "yardim",
+  "lütfen",
+  "lutfen",
+  "artık",
+  "artik",
+]);
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function isLikelySocialChatMessage(value: string): boolean {
+  return SOCIAL_CHAT_FAST_PATH_PATTERN.test(compactText(value));
+}
+
+function normalizePersonalNameCandidate(value: string | null | undefined): string | null {
+  const compact = compactText(String(value ?? ""))
+    .replace(/[.,;:!?]+$/g, "")
+    .trim();
+  if (!compact || compact.length > 48) {
+    return null;
+  }
+  const parts = compact.split(/\s+/).filter(Boolean);
+  if (parts.length === 0 || parts.length > 3) {
+    return null;
+  }
+  for (const part of parts) {
+    const lowered = part.toLocaleLowerCase("tr-TR");
+    if (!/^[A-Za-zÇĞİÖŞÜçğıöşü'-]+$/u.test(part)) {
+      return null;
+    }
+    if (part.length < 2 || part.length > 24) {
+      return null;
+    }
+    if (SUSPICIOUS_NAME_TOKENS.has(lowered)) {
+      return null;
+    }
+  }
+  return parts
+    .map((part) => part.charAt(0).toLocaleUpperCase("tr-TR") + part.slice(1).toLocaleLowerCase("tr-TR"))
+    .join(" ");
+}
+
+function extractExplicitSelfIdentifiedName(message: string): string | null {
+  const text = compactText(message);
+  for (const pattern of EXPLICIT_NAME_PATTERNS) {
+    const match = text.match(pattern);
+    const normalized = normalizePersonalNameCandidate(match?.[1]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -540,10 +610,10 @@ function buildUserProfileSnapshot(input: {
   profile?: Partial<UserProfileSnapshot> | null;
   memorySnapshot?: MemoryProfileSnapshot;
 }): UserProfileSnapshot | undefined {
-  const displayName = compactText(String(input.profile?.displayName ?? ""));
+  const displayName = normalizePersonalNameCandidate(String(input.profile?.displayName ?? ""));
   const preferredName =
-    readFactValue(input.memorySnapshot, ["preferred_name", "name"]) ??
-    compactText(String(input.profile?.preferredName ?? ""));
+    normalizePersonalNameCandidate(readFactValue(input.memorySnapshot, ["preferred_name", "name"])) ??
+    normalizePersonalNameCandidate(String(input.profile?.preferredName ?? ""));
   const preferredLanguage =
     readFactValue(input.memorySnapshot, ["preferred_language", "language"]) ??
     compactText(String(input.profile?.preferredLanguage ?? ""));
@@ -590,8 +660,8 @@ async function loadSafeUserProfile(
     }
 
     const displayName =
-      compactText(String(row.displayName ?? "")) ||
-      compactText(String(identityRows[0]?.displayName ?? "")) ||
+      normalizePersonalNameCandidate(String(row.displayName ?? "")) ||
+      normalizePersonalNameCandidate(String(identityRows[0]?.displayName ?? "")) ||
       null;
 
     return {
@@ -1174,6 +1244,8 @@ export async function buildUserContext(
   const query        = `${input.title ?? ""} ${input.message ?? ""} ${input.intent.primaryIntent}`;
   const queryTokens  = tokenize(query);
   const now          = new Date();
+  const isSocialTurn =
+    input.intent.primaryIntent === "chat" && isLikelySocialChatMessage(input.message);
 
   const contextPackets = app.config.ELYAN_WORLD_CONTEXT_PACKETS_ENABLED
     ? buildContextPacketsFromMetadata(input.metadata, {
@@ -1185,19 +1257,24 @@ export async function buildUserContext(
 
   /* Run all async ops in parallel for minimum latency */
   const [memorySearch, userProfile, quickFacts, freshWorldSignals] = await Promise.all([
-    memoryEnabled
+    memoryEnabled && !isSocialTurn
       ? searchBrainMemory(app, { userId: input.userId, query, limit: MAX_HINTS }).catch(() => ({ results: [] }))
       : Promise.resolve({ results: [] }),
     loadSafeUserProfile(app, input.userId),
     /* Quick C-based fact extraction from the current message */
-    nlpDaemon.isAvailable() ? extractQuickFacts(input.message).catch(() => ({ name: undefined, city: undefined })) : Promise.resolve({ name: undefined, city: undefined }),
-    listFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 72 }).catch(() => []),
+    !isSocialTurn && nlpDaemon.isAvailable()
+      ? extractQuickFacts(input.message).catch(() => ({ name: undefined, city: undefined }))
+      : Promise.resolve({ name: undefined, city: undefined }),
+    !isSocialTurn
+      ? listFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 72 }).catch(() => [])
+      : Promise.resolve([]),
   ]);
 
-  /* Enrich profile: if user name is unknown, try name extracted from this message */
+  /* Enrich profile only from explicit self-identification, never from arbitrary message fragments. */
   let enrichedProfile = userProfile;
-  if (!userProfile?.displayName && quickFacts.name) {
-    enrichedProfile = { ...userProfile, displayName: quickFacts.name };
+  const explicitName = extractExplicitSelfIdentifiedName(input.message);
+  if (!userProfile?.displayName && explicitName) {
+    enrichedProfile = { ...userProfile, displayName: explicitName };
   }
 
   const stableMemory = memorySearch.results.map((result) => ({

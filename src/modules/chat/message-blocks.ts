@@ -15,6 +15,7 @@ import type {
   ElyanAssistantImageAnalysisBlock,
   ElyanAssistantInfoCardBlock,
   ElyanAssistantMathBlock,
+  ElyanAssistantMathSurface3DBlock,
   ElyanAssistantNextStepsBlock,
   ElyanAssistantSecurityDecisionBlock,
   ElyanAssistantStatusBlock,
@@ -57,7 +58,13 @@ const fencePattern = /^\s*(```|~~~)/;
 const bulletPrefixPattern = /^\s*(?:[-*•]|\d+\.)\s+/;
 const hiddenAssistantTagPattern = /<\/?(?:think|analysis)>/i;
 const internalAssistantPattern =
-  /^(?:analyze user input|check attachment context|system prompt|developer message|looking at the system prompt|we need to|user says|the user says|the user is|the user wants|language:|given the attachment context|attachment context(?: shows| provided)?|ocr\/summary text|page \d+ content|summary\/content|detected text|extracted text|visible text|the ocr output|context:|i started answering|prompt continuation|analysis:|reasoning:|plan:|thinking:|<think>|<\/think>|<analysis>|<\/analysis>)/i;
+  /^(?:analyze user input|check attachment context|system prompt|developer message|looking at the system prompt|we need to|user says|the user says|the user is|the user wants|language:|given the attachment context|attachment context(?: shows| provided)?|ocr\/summary text|page \d+ content|summary\/content|detected text|extracted text|visible text|the ocr output|context:|i started answering|prompt continuation|analysis:|reasoning:|plan:|thinking:|intent:|constraint check|check constraints|output format:|data source:|user-? ?language|<think>|<\/think>|<analysis>|<\/analysis>)/i;
+// Reasoning-dump preambles that some models write INTO the content channel
+// (e.g. "Here's a thinking process:" repeated through the reply). Matched as a
+// substring because streaming concat can glue them mid-line
+// ("…User- LanguageHere's a thinking process:").
+const reasoningDumpPattern =
+  /\b(?:here'?s (?:a|the|my) thinking process|here is (?:a|the|my) thinking process|thinking process\s*:|thought process\s*:|check constraints\s*&\s*policies|düşünme süreci\s*:)/i;
 const finalAnswerPrefixPattern =
   /^(?:final answer|answer|cevap|son cevap)\s*:\s*/i;
 const publicProviderTopicPattern =
@@ -347,12 +354,22 @@ function isAnalysisValueLabel(value: string) {
   return analysisValueLabelPatterns.some((pattern) => pattern.test(value));
 }
 
+function stripInlineMarkers(value: string) {
+  // "2. **Check Constraints & Policies:**" → "check constraints & policies:"
+  return value.replace(/^[#>*_`~\s]+/, "").replace(/\*\*|__|`/g, "");
+}
+
 function looksLikeInternalAssistantLine(value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
     return false;
   }
-  const lowered = stripBulletPrefix(trimmed).toLowerCase();
+  if (reasoningDumpPattern.test(trimmed)) {
+    return true;
+  }
+  const lowered = stripInlineMarkers(
+    stripBulletPrefix(trimmed),
+  ).toLowerCase();
   return (
     internalAssistantPattern.test(lowered) ||
     lowered.includes("system prompt") ||
@@ -371,6 +388,100 @@ function containsInternalAssistantSignals(value: string) {
   return value
     .split("\n")
     .some((line) => looksLikeInternalAssistantLine(line));
+}
+
+function collapseDuplicatedConversationalRestart(value: string): string {
+  const normalized = normalizeMarkdown(value);
+  if (!normalized) {
+    return "";
+  }
+  const openingMatch = normalized.match(/^\s*(Merhaba|Selam|Hey|Hello|Hi)\b/iu);
+  if (!openingMatch) {
+    return normalized;
+  }
+  const duplicateOpening = /([.!?…])\s*(Merhaba|Selam|Hey|Hello|Hi)\b/giu;
+  const first = duplicateOpening.exec(normalized);
+  if (!first || typeof first.index !== "number") {
+    return normalized;
+  }
+  const duplicateIndex = first.index + first[1]!.length;
+  const head = normalized.slice(0, duplicateIndex).trim();
+  return head || normalized;
+}
+
+/**
+ * When the model wraps its entire answer inside a hidden `<think>` /
+ * `<analysis>` section (or never closes one), the paragraph loop strips
+ * everything and the sanitizer would otherwise fall through to the terminal
+ * "Yanıtı temiz biçimde oluşturamadım" fallback.
+ *
+ * This recovers the section body, drops the lines that read as reasoning meta
+ * (`internalAssistantPattern`, `analysis-value labels`, nested hidden tags),
+ * and returns whatever is left. In practice that IS the answer the model
+ * intended to give — just misfiled inside a reasoning wrapper.
+ */
+function extractHiddenSectionAnswerFallback(source: string): string | null {
+  const captures: string[] = [];
+
+  const openPattern = /<\s*(think|analysis)\s*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = openPattern.exec(source))) {
+    const start = match.index + match[0].length;
+    const closePattern = new RegExp(`<\\s*/\\s*${match[1]}\\s*>`, "i");
+    closePattern.lastIndex = start;
+    const closeInRest = source.slice(start).search(closePattern);
+    const end = closeInRest === -1 ? source.length : start + closeInRest;
+    const body = source.slice(start, end).trim();
+    if (body) {
+      captures.push(body);
+    }
+  }
+
+  if (captures.length === 0) {
+    return null;
+  }
+
+  const cleanedParagraphs: string[] = [];
+  for (const body of captures) {
+    for (const paragraph of body.split(/\n{2,}/)) {
+      const trimmedParagraph = paragraph.trim();
+      if (!trimmedParagraph) {
+        continue;
+      }
+      const cleanedLines: string[] = [];
+      for (const rawLine of trimmedParagraph.split("\n")) {
+        const line = rawLine.trim();
+        if (!line) {
+          if (
+            cleanedLines.length > 0 &&
+            cleanedLines[cleanedLines.length - 1] !== ""
+          ) {
+            cleanedLines.push("");
+          }
+          continue;
+        }
+        if (hiddenAssistantTagPattern.test(line)) {
+          continue;
+        }
+        if (looksLikeInternalAssistantLine(line)) {
+          continue;
+        }
+        if (isAnalysisValueLabel(line)) {
+          continue;
+        }
+        cleanedLines.push(
+          line.replace(finalAnswerPrefixPattern, "").trimStart(),
+        );
+      }
+      const cleaned = cleanedLines.join("\n").trim();
+      if (cleaned) {
+        cleanedParagraphs.push(cleaned);
+      }
+    }
+  }
+
+  const joined = cleanedParagraphs.join("\n\n").trim();
+  return joined || null;
 }
 
 function extractAnalysisValueFallback(source: string): string | null {
@@ -483,6 +594,19 @@ export function sanitizeAssistantVisibleText(
       : sanitized;
   }
 
+  // Recovery pass: if the paragraph loop stripped everything because the model
+  // stuffed the answer inside `<think>` / `<analysis>` (or left the tag
+  // unclosed), pull the section body back out and treat what survives after
+  // reasoning-meta removal as the real answer. Without this, honest answers
+  // wrapped in a reasoning frame collapse to the "Yanıtı temiz biçimde
+  // oluşturamadım" fallback and the user sees a stub instead of the response.
+  const hiddenSectionAnswer = extractHiddenSectionAnswerFallback(source);
+  if (hiddenSectionAnswer) {
+    return shouldRedactProtectedElyanDisclosure(hiddenSectionAnswer, options)
+      ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
+      : hiddenSectionAnswer;
+  }
+
   const analysisFallback = extractAnalysisValueFallback(source);
   if (analysisFallback) {
     return shouldRedactProtectedElyanDisclosure(analysisFallback, options)
@@ -540,6 +664,8 @@ export function polishAssistantVisibleText(
       polished = paragraphs.join("\n\n").trim();
     }
   }
+
+  polished = collapseDuplicatedConversationalRestart(polished);
 
   return shouldRedactProtectedElyanDisclosure(polished, options)
     ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
@@ -709,7 +835,7 @@ function normalizeTableRows(value: unknown, columnCount: number): string[][] {
     return [];
   }
 
-  return value
+  const rows = value
     .map((row) => {
       const cells = Array.isArray(row)
         ? row
@@ -726,6 +852,56 @@ function normalizeTableRows(value: unknown, columnCount: number): string[][] {
     })
     .filter((row) => row.some((cell) => cell.trim()))
     .slice(0, 80);
+
+  return rejectBledTableRows(rows, columnCount);
+}
+
+/**
+ * Drops rows whose cell content clearly bled in from an adjoining paragraph.
+ *
+ * Real prod incident: model wrote `| 6 | 200İleri Analiz Dersi Örnek Soru |`
+ * because the next-paragraph heading had no line break before it. The mobile
+ * mirrors this heuristic client-side; enforcing it at the server means broken
+ * rows never even leave the backend.
+ *
+ * Signal: a cell is 3× the column median AND contains 3+ Title Case tokens.
+ * If both trigger, the row is discarded before it can reach the widget.
+ */
+function rejectBledTableRows(rows: string[][], columnCount: number): string[][] {
+  if (rows.length < 2 || columnCount <= 0) {
+    return rows;
+  }
+  const medians: number[] = [];
+  for (let col = 0; col < columnCount; col += 1) {
+    const lengths: number[] = [];
+    for (const row of rows) {
+      if (col >= row.length) continue;
+      const len = row[col].trim().length;
+      if (len > 0) lengths.push(len);
+    }
+    if (lengths.length === 0) {
+      medians.push(0);
+      continue;
+    }
+    lengths.sort((a, b) => a - b);
+    medians.push(lengths[Math.floor(lengths.length / 2)]);
+  }
+  const titleTokenPattern = /^[A-ZÇĞİÖŞÜ][a-zçğıöşü]+/;
+  return rows.filter((row) => {
+    for (let col = 0; col < row.length && col < columnCount; col += 1) {
+      const cell = row[col].trim();
+      if (cell.length < 20) continue;
+      const median = medians[col];
+      if (median <= 0) continue;
+      if (cell.length < median * 3) continue;
+      const tokens = cell.split(/\s+/).filter(Boolean);
+      const titleTokens = tokens.filter((t) => titleTokenPattern.test(t)).length;
+      if (titleTokens >= 3) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 export function buildAssistantCodeBlock(
@@ -775,21 +951,33 @@ export function buildAssistantTableBlock(
   if (columns.length === 0 || rows.length === 0) {
     return null;
   }
+  const title = normalizeTextValue(input.title, 120);
+  const caption = normalizeTextValue(input.caption, 240);
+  // Pass the *content* payload to withAssistantBlockDefaults so the
+  // cache-digest actually reflects the columns/rows/title. Passing `{}`
+  // (as this used to) meant two tables with different rows but the same
+  // renderHints hashed to the same digest and one was silently dropped by
+  // exact-key dedup — before subset-aware dedup could ever run.
   return {
     type: "table",
-    columns,
-    rows,
-    ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
-    ...(normalizeTextValue(input.caption, 240) ? { caption: normalizeTextValue(input.caption, 240)! } : {}),
-    ...withAssistantBlockDefaults("table", {}, {
-      priority: options.priority ?? 1,
-      renderHints: {
-        sectionRole: "data_table",
-        density: "regular",
-        ...(options.renderHints ?? {}),
+    ...withAssistantBlockDefaults(
+      "table",
+      {
+        columns,
+        rows,
+        ...(title ? { title } : {}),
+        ...(caption ? { caption } : {}),
       },
-      ...options,
-    }),
+      {
+        priority: options.priority ?? 1,
+        renderHints: {
+          sectionRole: "data_table",
+          density: "regular",
+          ...(options.renderHints ?? {}),
+        },
+        ...options,
+      },
+    ),
   };
 }
 
@@ -950,6 +1138,113 @@ export function buildAssistantMathBlock(
       priority: options.priority ?? 2,
       renderHints: {
         sectionRole: "math",
+        ...(options.renderHints ?? {}),
+      },
+      ...options,
+    }),
+  };
+}
+
+export function buildAssistantMathSurface3DBlock(
+  input: {
+    expression?: string | null;
+    title?: string | null;
+    variables?: unknown;
+    range?: unknown;
+    resolution?: unknown;
+    zLabel?: string | null;
+    colorBy?: string | null;
+    mode?: string | null;
+    interactive?: unknown;
+    renderer?: string | null;
+    cacheKey?: string | null;
+    caption?: string | null;
+    error?: unknown;
+  },
+  options: AssistantBlockCommon = {},
+): ElyanAssistantMathSurface3DBlock | null {
+  const expression = normalizeTextValue(input.expression, 2_000);
+  if (!expression) {
+    return null;
+  }
+  const variables = normalizeStringList(input.variables, {
+    min: 2,
+    max: 4,
+    itemMaxLength: 24,
+  }).slice(0, 2);
+  const normalizedVariables =
+    variables.length === 2 &&
+    variables[0]?.toLowerCase() === "x" &&
+    variables[1]?.toLowerCase() === "y"
+      ? ["x", "y"] as ["x", "y"]
+      : undefined;
+  const rawRange =
+    input.range && typeof input.range === "object" && !Array.isArray(input.range)
+      ? (input.range as Record<string, unknown>)
+      : null;
+  const normalizeAxis = (value: unknown): [number, number] | null => {
+    if (!Array.isArray(value) || value.length < 2) return null;
+    const [start, end] = value;
+    if (
+      typeof start !== "number" ||
+      !Number.isFinite(start) ||
+      typeof end !== "number" ||
+      !Number.isFinite(end)
+    ) {
+      return null;
+    }
+    return [start, end];
+  };
+  const xRange = normalizeAxis(rawRange?.x);
+  const yRange = normalizeAxis(rawRange?.y);
+  const resolution =
+    typeof input.resolution === "number" &&
+    Number.isInteger(input.resolution) &&
+    input.resolution >= 10 &&
+    input.resolution <= 120
+      ? input.resolution
+      : undefined;
+  const colorByRaw = normalizeTextValue(input.colorBy, 40);
+  const colorBy =
+    colorByRaw === "z" || colorByRaw === "gradientMagnitude" ? colorByRaw : undefined;
+  const modeRaw = normalizeTextValue(input.mode, 40);
+  const mode = modeRaw === "surface" ? modeRaw : undefined;
+  const rendererRaw = normalizeTextValue(input.renderer, 80);
+  const renderer = rendererRaw === "plotly_local_webview" ? rendererRaw : undefined;
+  const cacheKey = normalizeTextValue(input.cacheKey, 128);
+  const rawError =
+    input.error && typeof input.error === "object" && !Array.isArray(input.error)
+      ? (input.error as Record<string, unknown>)
+      : null;
+  const error =
+    rawError &&
+    typeof rawError.code === "string" &&
+    typeof rawError.message === "string"
+      ? {
+          code: rawError.code,
+          message: rawError.message,
+        }
+      : undefined;
+  return {
+    type: "math_surface_3d",
+    expression,
+    ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
+    ...(normalizedVariables ? { variables: normalizedVariables } : {}),
+    ...(xRange && yRange ? { range: { x: xRange, y: yRange } } : {}),
+    ...(resolution ? { resolution } : {}),
+    ...(normalizeTextValue(input.zLabel, 120) ? { zLabel: normalizeTextValue(input.zLabel, 120)! } : {}),
+    ...(colorBy ? { colorBy } : {}),
+    ...(mode ? { mode } : {}),
+    ...(typeof input.interactive === "boolean" ? { interactive: input.interactive } : {}),
+    ...(renderer ? { renderer } : {}),
+    ...(cacheKey ? { cacheKey } : {}),
+    ...(normalizeTextValue(input.caption, 240) ? { caption: normalizeTextValue(input.caption, 240)! } : {}),
+    ...(error ? { error } : {}),
+    ...withAssistantBlockDefaults("math_surface_3d", {}, {
+      priority: options.priority ?? 2,
+      renderHints: {
+        sectionRole: "math_surface_3d",
+        interactiveSurface: true,
         ...(options.renderHints ?? {}),
       },
       ...options,
@@ -1353,7 +1648,82 @@ function dedupeAssistantBlocks(blocks: AssistantMessageBlock[]): AssistantMessag
     seen.add(key);
     result.push(block);
   }
-  return result;
+  return dedupeSubsetTables(result);
+}
+
+/**
+ * Subset-aware dedup for `table` blocks.
+ *
+ * The model sometimes emits the same data twice — once as a full canonical
+ * table and once as a truncated/streaming-artifact fragment (fewer rows,
+ * occasionally corrupted). Exact-key dedup misses these because their row
+ * signatures differ. Here two tables with matching columns collapse when
+ * one row set is a subset of the other: the smaller one is dropped, the
+ * larger is kept in its earlier position.
+ */
+function dedupeSubsetTables(blocks: AssistantMessageBlock[]): AssistantMessageBlock[] {
+  const output = [...blocks];
+  const tableIndices: number[] = [];
+  for (let i = 0; i < output.length; i += 1) {
+    if (output[i].type === "table") {
+      tableIndices.push(i);
+    }
+  }
+  if (tableIndices.length < 2) {
+    return output;
+  }
+  const removals = new Set<number>();
+  for (let a = 0; a < tableIndices.length; a += 1) {
+    const idxA = tableIndices[a];
+    if (removals.has(idxA)) continue;
+    const tableA = output[idxA] as ElyanAssistantTableBlock;
+    for (let b = a + 1; b < tableIndices.length; b += 1) {
+      const idxB = tableIndices[b];
+      if (removals.has(idxB)) continue;
+      const tableB = output[idxB] as ElyanAssistantTableBlock;
+      if (!tableColumnsEqual(tableA.columns, tableB.columns)) continue;
+      const rowsA = tableRowSignatureSet(tableA.rows);
+      const rowsB = tableRowSignatureSet(tableB.rows);
+      if (rowsA.size === 0 || rowsB.size === 0) continue;
+      if (isSubset(rowsB, rowsA)) {
+        removals.add(idxB);
+        continue;
+      }
+      if (isSubset(rowsA, rowsB)) {
+        // Replace the earlier table with the later, more complete one, then
+        // drop the later slot so surrounding order is preserved.
+        output[idxA] = tableB;
+        removals.add(idxB);
+      }
+    }
+  }
+  return output.filter((_, i) => !removals.has(i));
+}
+
+function tableColumnsEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i].trim().toLowerCase() !== b[i].trim().toLowerCase()) return false;
+  }
+  return true;
+}
+
+function tableRowSignatureSet(rows: string[][]): Set<string> {
+  const set = new Set<string>();
+  for (const row of rows) {
+    const signature = row.map((cell) => cell.trim()).join("|");
+    if (signature.replace(/\|/g, "").length === 0) continue;
+    set.add(signature);
+  }
+  return set;
+}
+
+function isSubset(candidate: Set<string>, container: Set<string>): boolean {
+  if (candidate.size > container.size) return false;
+  for (const value of candidate) {
+    if (!container.has(value)) return false;
+  }
+  return true;
 }
 
 function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
@@ -1605,6 +1975,44 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
               ? record.display_mode
               : undefined,
         format: typeof record.format === "string" ? record.format : undefined,
+      },
+      parseCommonMetadata(record),
+    );
+  }
+  if (type === "math_surface_3d") {
+    return buildAssistantMathSurface3DBlock(
+      {
+        expression: typeof record.expression === "string"
+          ? record.expression
+          : typeof record.formula === "string"
+            ? record.formula
+            : typeof record.content === "string"
+              ? record.content
+              : undefined,
+        title: typeof record.title === "string" ? record.title : undefined,
+        variables: record.variables,
+        range: record.range,
+        resolution: record.resolution,
+        zLabel: typeof record.zLabel === "string"
+          ? record.zLabel
+          : typeof record.z_label === "string"
+            ? record.z_label
+            : undefined,
+        colorBy: typeof record.colorBy === "string"
+          ? record.colorBy
+          : typeof record.color_by === "string"
+            ? record.color_by
+            : undefined,
+        mode: typeof record.mode === "string" ? record.mode : undefined,
+        interactive: record.interactive,
+        renderer: typeof record.renderer === "string" ? record.renderer : undefined,
+        cacheKey: typeof record.cacheKey === "string"
+          ? record.cacheKey
+          : typeof record.cache_key === "string"
+            ? record.cache_key
+            : undefined,
+        caption: typeof record.caption === "string" ? record.caption : undefined,
+        error: record.error,
       },
       parseCommonMetadata(record),
     );

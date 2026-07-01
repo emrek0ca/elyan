@@ -17,6 +17,7 @@ import {
   aiProviderInvocations,
   billingCreditLedger,
   billingCheckoutSessions,
+  authIdentities,
   billingEntitlementEvents,
   billingPlanMappings,
   billingProfiles,
@@ -463,6 +464,64 @@ export function decideAppleSubscriptionOwnership(input: {
   };
 }
 
+/**
+ * Returns true when the current user and the store transaction's original
+ * owner have both signed in with the SAME Apple `sub` claim — i.e. it's the
+ * same real Apple ID owner, using two different Elyan accounts. App Store
+ * subscriptions belong to an Apple ID, so this counts as "same person" and
+ * ownership should transfer instead of surfacing the scary
+ * `apple_subscription_owned_by_another_user` error.
+ *
+ * Returns false when either side has no linked Apple identity, or the two
+ * Apple subjects differ — that IS a different owner, and blocking is right.
+ */
+async function currentAndOwnerShareAppleIdentity(
+  app: FastifyInstance,
+  input: {
+    currentUserId: string;
+    ownerUserId: string;
+  },
+): Promise<boolean> {
+  const subjects = await app.db
+    .select({
+      userId: authIdentities.userId,
+      providerSubject: authIdentities.providerSubject,
+    })
+    .from(authIdentities)
+    .where(
+      and(
+        eq(authIdentities.provider, "apple"),
+        or(
+          eq(authIdentities.userId, input.currentUserId),
+          eq(authIdentities.userId, input.ownerUserId),
+        ),
+      ),
+    );
+  const currentSubject = subjects
+    .find((row) => row.userId === input.currentUserId)
+    ?.providerSubject?.trim();
+  const ownerSubject = subjects
+    .find((row) => row.userId === input.ownerUserId)
+    ?.providerSubject?.trim();
+  return (
+    !!currentSubject &&
+    !!ownerSubject &&
+    currentSubject === ownerSubject
+  );
+}
+
+/** Plan tier rank — higher rank = paid-tier that supersedes lower tiers. */
+const BILLING_PLAN_TIER_RANK: Record<string, number> = {
+  free: 0,
+  solo: 1,
+  pro: 2,
+  pro_max: 3,
+};
+
+function planTierRank(code?: string | null): number {
+  return BILLING_PLAN_TIER_RANK[normalizeBillingPlanCode(code)] ?? 0;
+}
+
 export function shouldIgnoreStaleStoreVerification(
   existing?: {
     billingProvider?: string | null;
@@ -472,6 +531,7 @@ export function shouldIgnoreStaleStoreVerification(
   } | null,
   incoming?: {
     billingProvider?: string | null;
+    planCode?: string | null;
     status?: string | null;
     periodEndsAt?: Date | null;
   } | null,
@@ -498,6 +558,17 @@ export function shouldIgnoreStaleStoreVerification(
     existingPeriodEndsAt.getTime() <= currentTime.getTime() ||
     (existingStatus !== "active" && existingStatus !== "trialing" && existingStatus !== "canceled")
   ) {
+    return false;
+  }
+  // Plan-tier aware: an UPGRADE (Solo → Pro, Pro → Pro Max) must always
+  // apply immediately even if the incoming period is shorter — Apple
+  // pro-rates the switch. Only DOWNGRADES within an active paid period are
+  // deferred until the current period ends, which is the Claude/ChatGPT
+  // behavior users expect: money isn't wasted, the higher plan runs out its
+  // remaining time, then the lower plan takes over.
+  const existingRank = planTierRank(existing.planCode);
+  const incomingRank = planTierRank(incoming.planCode);
+  if (incomingRank > existingRank) {
     return false;
   }
   const incomingPeriodEndsAt = incoming.periodEndsAt;
@@ -1796,7 +1867,21 @@ export async function verifyStorePurchase(
           lockedByActiveStorePeriod:
             isStoreSubscriptionClaimLocked(existingSubscription),
         });
+        // Same-Apple-ID reassignment: the App Store subscription belongs to
+        // an Apple ID, not to a specific Elyan account. When the current
+        // user and the transaction's original owner have both signed in
+        // with the SAME Apple `sub` claim, this is the same real person
+        // switching between their own Elyan accounts (e.g. anonymous →
+        // Sign in with Apple, or one email account → another). Transfer
+        // silently instead of throwing "owned by another user".
+        let sameAppleIdOwner = false;
         if (ownership.blocked) {
+          sameAppleIdOwner = await currentAndOwnerShareAppleIdentity(app, {
+            currentUserId: userId,
+            ownerUserId: ownedTransactions[0].userId,
+          });
+        }
+        if (ownership.blocked && !sameAppleIdOwner) {
           throw conflict("apple_subscription_owned_by_another_user");
         }
         allowStoreTransactionUserReassignment = true;
@@ -1808,6 +1893,7 @@ export async function verifyStorePurchase(
   if (
     shouldIgnoreStaleStoreVerification(existingSubscription, {
       billingProvider: verification.billingProvider || provider,
+      planCode,
       status: verification.status,
       periodEndsAt: verification.periodEndsAt,
     })

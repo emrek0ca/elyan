@@ -8,8 +8,43 @@ import {
   extractTypedJsonBlocksFromText,
   generateGovernedSharedBrainReply,
   generateSharedBrainReply,
+  isReasoningOnlyReply,
   resolveReasoningEffort,
 } from "./inference.js";
+
+test("isReasoningOnlyReply flags a pure thinking-process dump as retryable", () => {
+  assert.equal(
+    isReasoningOnlyReply(
+      `Here's a thinking process:\n\n- Intent: Request for a chart showing current gold prices\n- Data source: PUBLIC WEB GROUNDING is available.\n\n2. **Check Constraints & Policies:**\n- Constraint check: "For current/live values, extract the numeric series"`,
+    ),
+    true,
+  );
+});
+
+test("isReasoningOnlyReply keeps real answers and pure block replies", () => {
+  assert.equal(
+    isReasoningOnlyReply(
+      "Güncel gram altın verisini canlı kaynaklardan çekemedim.",
+    ),
+    false,
+  );
+  assert.equal(
+    isReasoningOnlyReply(
+      '{"type":"chart","chartType":"line","title":"Gram Altın","labels":["1 Haz"],"values":[2450]}',
+    ),
+    false,
+  );
+  assert.equal(isReasoningOnlyReply(""), false);
+});
+
+test("isReasoningOnlyReply keeps answers where reasoning leaked above a real reply", () => {
+  assert.equal(
+    isReasoningOnlyReply(
+      "Here's a thinking process:\n- Intent: greeting\n\nMerhaba! Bugün sana nasıl yardımcı olabilirim?",
+    ),
+    false,
+  );
+});
 
 class FakeQuery<T> {
   constructor(private readonly result: T) {}
@@ -230,6 +265,25 @@ test("generateSharedBrainReply uses gradientMagnitude color channel for 4d surfa
     : [];
   assert.equal(blocks[0]?.type, "math_surface_3d");
   assert.equal(blocks[0]?.colorBy, "gradientMagnitude");
+});
+
+test("generateGovernedSharedBrainReply preserves math_surface_3d blocks instead of flattening them into fallback text", async () => {
+  const result = await generateGovernedSharedBrainReply({} as never, {
+    userId: "user-1",
+    prompt: "Z= x^5 - y^2 fonksiyonunun 3 boyutlu grafiğini çiz",
+    internalEvaluation: {
+      skipUsageValidation: true,
+      skipInvocationLogging: true,
+      skipReviewLogging: true,
+    },
+  });
+
+  const blocks = Array.isArray(result.metadata.blocks)
+    ? (result.metadata.blocks as Array<Record<string, unknown>>)
+    : [];
+  assert.equal(result.text, "");
+  assert.equal(blocks[0]?.type, "math_surface_3d");
+  assert.equal(blocks[0]?.expression, "x^5-y^2");
 });
 
 test("calculateBillableAiCredits keeps short chat prompts from draining the monthly token balance", () => {
@@ -793,23 +847,24 @@ test("generateSharedBrainReply keeps a bounded recent ten-message context and us
 
   assert.equal(result.text, "Merhaba dunya");
   assert.equal(requestedGenerateBodies.length, 1);
-  assert.equal((requestedGenerateBodies[0].options as Record<string, unknown>).num_predict, 384);
+  assert.equal((requestedGenerateBodies[0].options as Record<string, unknown>).num_predict, 512);
   const prompt = String(requestedGenerateBodies[0].prompt ?? "");
   assert.equal(prompt.includes("older-1"), true);
   assert.equal(prompt.includes("older-2"), true);
   assert.equal(prompt.includes("recent-10"), true);
-  assert.equal(prompt.includes("Humor policy:"), true);
-  assert.equal(prompt.includes("Mobile reply policy:"), true);
+  assert.equal(prompt.includes("Greeting policy:"), true);
+  assert.equal(prompt.includes("Humor policy:"), false);
+  assert.equal(prompt.includes("Mobile reply policy:"), false);
   assert.equal(prompt.includes("Language policy:"), true);
   assert.equal(prompt.includes("match the user's language by default"), true);
   assert.equal(prompt.includes("prefer native Turkish wording"), true);
-  assert.equal(prompt.includes("proofread the response before sending"), true);
-  assert.equal(prompt.includes("Reasoning protocol:"), true);
-  assert.equal(prompt.includes("Elyan ecosystem model:"), true);
-  assert.equal(prompt.includes("Data understanding and quality protocol:"), true);
-  assert.equal(prompt.includes("personal answers may use only the current user's relevant memory block"), true);
-  assert.equal(prompt.includes("never claim unseen pages, files, images, users, or facts"), true);
-  assert.equal(prompt.includes("Public web policy:"), true);
+  assert.equal(prompt.includes("proofread the response before sending"), false);
+  assert.equal(prompt.includes("Reasoning protocol:"), false);
+  assert.equal(prompt.includes("Elyan ecosystem model:"), false);
+  assert.equal(prompt.includes("Data understanding and quality protocol:"), false);
+  assert.equal(prompt.includes("personal answers may use only the current user's relevant memory block"), false);
+  assert.equal(prompt.includes("never claim unseen pages, files, images, users, or facts"), false);
+  assert.equal(prompt.includes("Public web policy:"), false);
   assert.equal(prompt.includes("Anti-hallucination policy:"), true);
   assert.equal(prompt.includes("Do not mirror the user's typos"), true);
   assert.equal(result.metadata.brainMode, "fast_mobile_chat");
@@ -1232,7 +1287,7 @@ test("generateSharedBrainReply scales token budget for premium plans", async () 
   );
 
   assert.equal(requestedBodies.length, 1);
-  assert.equal(requestedBodies[0].max_tokens, 744);
+  assert.equal(requestedBodies[0].max_tokens, 760);
 });
 
 test("generateSharedBrainReply expands complete-answer budget for packaged context packets", async () => {
@@ -1341,11 +1396,12 @@ test("generateSharedBrainReply expands complete-answer budget for packaged conte
   );
 
   assert.equal(requestedBodies.length, 1);
-  assert.equal(requestedBodies[0].max_tokens, 1_440);
+  assert.equal(requestedBodies[0].max_tokens, 1_600);
   const systemMessage = (requestedBodies[0].messages as Array<{ role: string; content: string }>).find(
     (message) => message.role === "system",
   );
   assert.equal(systemMessage?.content.includes("use explicit packet summaries only when mentionPolicy is explicit_when_relevant"), true);
+  assert.equal(systemMessage?.content.includes("Greeting policy:"), false);
   assert.equal(result.metadata.contextPacketCount, 1);
   assert.equal(result.metadata.responseBudgetReason, "long_form_expanded");
 });
@@ -1497,8 +1553,9 @@ test("generateSharedBrainReply keeps irrelevant world context silent for greetin
     .map((message) => String(message.content ?? ""))
     .join("\n");
   assert.doesNotMatch(messageText, /Enerji orta|adım sayısı|Pil düşük|ağ wifi|Konum: Kayseri/i);
-  assert.match(messageText, /Do not mention situational context unless the user asks/i);
-  assert.match(messageText, /Never mention battery, network, device state, health, steps, notifications, or location during greetings/i);
+  assert.match(messageText, /Greeting policy:/i);
+  assert.match(messageText, /Do NOT mention health metrics, steps, battery, calendar, weather, location, device state, memory contents, or any system context/i);
+  assert.doesNotMatch(messageText, /Relevant user memory shortlist|Suppressed private context packets/i);
   assert.deepEqual(result.metadata.contextPacketMentionPolicies, ["silent", "silent", "silent"]);
 });
 
@@ -1887,6 +1944,91 @@ test("generateGovernedSharedBrainReply does not force clarification for greeting
 
   assert.equal(result.answerSource, "model");
   assert.equal(result.text.includes("yardımcı"), true);
+});
+
+test("generateGovernedSharedBrainReply keeps fast chat out of refinement passes", async () => {
+  let chatCalls = 0;
+  const app = {
+    db: createQuotaReadyDb([
+      [],
+      [],
+      [{ planCode: "free", status: "trialing", taskLimitMonthly: 10, aiCreditsMonthly: 1000, currentPeriodStartedAt: new Date("2030-01-01T00:00:00.000Z"), periodEndsAt: new Date("2030-02-01T00:00:00.000Z"), trialEndsAt: new Date("2099-02-01T00:00:00.000Z") }],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [],
+    ]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "ollama",
+      ELYAN_SHARED_BRAIN_BASE_URL: "http://127.0.0.1:11434",
+      ELYAN_SHARED_BRAIN_MODEL: "qwen2.5:7b-instruct-q5_K_M",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/tags")) {
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/chat")) {
+        chatCalls += 1;
+        return new Response(
+          JSON.stringify({
+            model: "qwen2.5:7b-instruct-q5_K_M",
+            message: {
+              role: "assistant",
+              content: "Gecikme için özür dilerim. Şimdi buradayım ve yardımcı olabilirim.",
+            },
+            done: true,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "neden bu kadar geç cevap verdin",
+        route: "shared_brain",
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "short chat follow-up",
+          intent: "normal_chat",
+          confidence: 0.9,
+          requiredRuntime: "server",
+          privacyLevel: "low",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
+        internalEvaluation: { skipReviewLogging: true, skipUsageValidation: true },
+      }),
+  );
+
+  assert.equal(chatCalls >= 1, true);
+  assert.match(result.text, /Gecikme için özür dilerim/i);
+  assert.equal(result.metadata.refinementApplied, false);
 });
 
 test("generateGovernedSharedBrainReply refuses unsupported identity claims without retrieval", async () => {

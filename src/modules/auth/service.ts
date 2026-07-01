@@ -292,11 +292,24 @@ function readJwtString(claims: JWTPayload, keys: string[]): string | null {
 }
 
 function socialAuthAudiences(app: FastifyInstance, provider: SocialAuthProvider): string[] {
-  const values =
+  const rawValues =
     provider === "google"
       ? [app.config.GOOGLE_CLIENT_ID, app.config.GOOGLE_SERVER_CLIENT_ID]
       : [app.config.APPLE_CLIENT_ID, app.config.APPLE_SERVICE_ID];
-  return values.map((value) => value.trim()).filter((value) => value.length > 0);
+  // Each env slot accepts a comma-separated list of accepted audiences so a
+  // single deployment can serve the iOS bundle, the macOS bundle, and the
+  // web service ID at the same time — otherwise every new client platform
+  // would need its own env variable and a code change.
+  const flattened: string[] = [];
+  for (const value of rawValues) {
+    if (!value) continue;
+    for (const token of value.split(",")) {
+      const trimmed = token.trim();
+      if (trimmed) flattened.push(trimmed);
+    }
+  }
+  // Dedupe while preserving order — jose accepts a single string or array.
+  return Array.from(new Set(flattened));
 }
 
 async function verifySocialIdentityToken(

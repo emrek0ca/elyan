@@ -298,6 +298,60 @@ test("stale store verification cannot downgrade a newer active store period", ()
   );
 });
 
+test("stale store verification lets a plan UPGRADE apply immediately even when the incoming period is shorter", () => {
+  // Prod bug: user on Solo tapped Pro. Apple pro-rated the crossgrade and
+  // returned a Pro receipt with a period end earlier than the running Solo
+  // period. Old logic ignored the incoming verification as "stale" and left
+  // the user on Solo. Upgrades must always take effect right away.
+  const now = new Date("2026-06-30T00:00:00.000Z");
+  assert.equal(
+    shouldIgnoreStaleStoreVerification(
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "active",
+        periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+      },
+      {
+        billingProvider: "apple_store",
+        planCode: "pro",
+        status: "active",
+        // Pro period end BEFORE the current Solo period end — pro-rated
+        // upgrade — must still take effect.
+        periodEndsAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+      now,
+    ),
+    false,
+  );
+});
+
+test("stale store verification defers a DOWNGRADE within an active paid period (Claude-style)", () => {
+  // Symmetric case: user on Pro tapped Solo. Solo shouldn't kick in until
+  // the paid Pro period expires — otherwise the user loses days they paid
+  // for. Backend state stays on Pro; UI shows "Pro, X gün sonra Solo'ya
+  // geçecek".
+  const now = new Date("2026-06-30T00:00:00.000Z");
+  assert.equal(
+    shouldIgnoreStaleStoreVerification(
+      {
+        billingProvider: "apple_store",
+        planCode: "pro",
+        status: "active",
+        periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+      },
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "active",
+        periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+      },
+      now,
+    ),
+    true,
+  );
+});
+
 test("upsertStoreTransaction can reassign an expired App Store original transaction after ownership check", async () => {
   const existingRow = {
     id: "store-tx-1",
@@ -555,7 +609,7 @@ test("resolveUsageAccessTruth normalizes legacy team rows to pro", () => {
   assert.equal(truth.brainProfile.tier, "premium");
 });
 
-test("billing catalog keeps desktop connections pro-only", () => {
+test("billing catalog keeps desktop connections aligned with plan limits", () => {
   const free = getBillingPlan("free");
   const solo = getBillingPlan("solo");
   const pro = getBillingPlan("pro");
@@ -566,7 +620,7 @@ test("billing catalog keeps desktop connections pro-only", () => {
   assert.equal(free.aiCreditsMonthly, 120);
   assert.equal(free.fiveHourBudgetUnits, 4);
   assert.equal(free.byokRequired, false);
-  assert.equal(solo.desktopLimit, 0);
+  assert.equal(solo.desktopLimit, 1);
   assert.equal(solo.monthlyPrice, 6.99);
   assert.equal(solo.fiveHourBudgetUnits, 18);
   assert.equal(
@@ -577,7 +631,7 @@ test("billing catalog keeps desktop connections pro-only", () => {
     solo.providerProducts.google?.productId,
     "com.elyan.elyanMobile.solo.monthly",
   );
-  assert.equal(pro.desktopLimit > 0, true);
+  assert.equal(pro.desktopLimit, 2);
   assert.equal(pro.monthlyPrice, 17.99);
   assert.equal(pro.fiveHourBudgetUnits, 60);
   assert.equal(
@@ -589,7 +643,7 @@ test("billing catalog keeps desktop connections pro-only", () => {
     "com.elyan.elyanMobile.pro.monthly",
   );
   assert.equal(canUseDesktopConnections("free"), false);
-  assert.equal(canUseDesktopConnections("solo"), false);
+  assert.equal(canUseDesktopConnections("solo"), true);
   assert.equal(canUseDesktopConnections("pro"), true);
 });
 

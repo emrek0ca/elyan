@@ -49,7 +49,7 @@ function createBrainProfile(input: PlanBrainProfile): PlanBrainProfile {
 }
 
 export function canUseDesktopConnections(code?: string | null): boolean {
-  return normalizeBillingPlanCode(code) === "pro";
+  return getBillingPlan(code).desktopLimit > 0;
 }
 
 const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
@@ -91,7 +91,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     monthlyPrice: 6.99,
     currencyCode: "USD",
     interval: "MONTHLY",
-    desktopLimit: 0,
+    desktopLimit: 1,
     taskLimitMonthly: 200,
     aiCreditsMonthly: 600,
     fiveHourBudgetUnits: 18,
@@ -122,7 +122,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
       },
     },
     features: [
-      "No desktop connection",
+      "1 desktop connection",
       "Expanded 5-hour and weekly usage",
       "Best for light daily use",
     ],
@@ -133,7 +133,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     monthlyPrice: 17.99,
     currencyCode: "USD",
     interval: "MONTHLY",
-    desktopLimit: 3,
+    desktopLimit: 2,
     taskLimitMonthly: 2_000,
     aiCreditsMonthly: 2_000,
     fiveHourBudgetUnits: 60,
@@ -165,7 +165,7 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
       },
     },
     features: [
-      "3 desktops",
+      "2 desktops",
       "Highest 5-hour and weekly usage",
       "Priority queue and richer history",
     ],

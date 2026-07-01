@@ -712,15 +712,26 @@ export function resolveCompletionAssistantBlocks(input: {
   let text = String(input.responseText ?? "").replace(/\r\n?/g, "\n");
   const sourcesToStrip: string[] = [];
 
-  // Extract markdown table if model didn't produce a typed table block
+  // Extract markdown table if model didn't produce a typed table block.
+  // The model sometimes emits more than one markdown table in a single reply
+  // (e.g. a full data table followed by a truncated variant). Loop until no
+  // further table shows up so none stays as raw markdown that would render
+  // as a second, duplicate-looking table on the client.
   if (!hasTableBlock && shouldPromoteMarkdownTableToWidget({
     prompt: input.prompt,
     selectedWorkload: input.selectedWorkload,
   })) {
-    const parsedTable = extractMarkdownTableBlock(text);
-    if (parsedTable) {
+    let scan = text;
+    while (true) {
+      const parsedTable = extractMarkdownTableBlock(scan);
+      if (!parsedTable) break;
       assistantBlocks.push(parsedTable.block);
       sourcesToStrip.push(parsedTable.source);
+      // Continue scanning after the extracted span so a second table on the
+      // same page is picked up too, without re-matching the first one.
+      const idx = scan.indexOf(parsedTable.source);
+      if (idx < 0) break;
+      scan = scan.slice(idx + parsedTable.source.length);
     }
   }
 
@@ -2688,10 +2699,19 @@ async function processSharedBrainChatTask(
             if (!contentChanged && !reasoningChanged) {
               return;
             }
+            // Monotonic delta rule: only emit an append-delta when the new
+            // sanitized snapshot EXTENDS what was already streamed. The
+            // sanitizer can legitimately shrink/reshape the snapshot mid-stream
+            // (a line becomes "internal-looking" only once it completes, or a
+            // provider retry restarts the stream). Re-sending the full snapshot
+            // as a delta made mobile append it after the old text — the
+            // "…User- LanguageHere's a thinking process:…" duplication. On
+            // divergence we send delta:"" and let assistantMessage.content
+            // carry the authoritative snapshot instead.
             const visibleDelta = contentChanged
               ? visibleContent.startsWith(lastVisibleStreamingContent)
                 ? visibleContent.slice(lastVisibleStreamingContent.length)
-                : visibleContent
+                : ""
               : "";
             if (contentChanged) {
               lastVisibleStreamingContent = visibleContent;

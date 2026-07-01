@@ -643,7 +643,7 @@ test("decideCommandRoute routes PDF important-item extraction through mobile_loc
   assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
-test("resolvePendingDesktopQueueTarget ignores plan-restricted desktops", async () => {
+test("resolvePendingDesktopQueueTarget ignores desktops when the plan does not allow desktop access", async () => {
   const now = new Date("2030-01-01T00:00:00.000Z");
   const app = createApp([
     [
@@ -676,7 +676,7 @@ test("resolvePendingDesktopQueueTarget ignores plan-restricted desktops", async 
   ], [
     [
       {
-        planCode: "solo",
+        planCode: "free",
         status: "active",
         trialEndsAt: null,
       },

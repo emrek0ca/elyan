@@ -699,7 +699,7 @@ export function assertOwnedDesktopTaskTarget(device: OwnedDesktopTaskTarget, tar
     throw new AppError(
       409,
       "desktop_plan_required",
-      "Desktop connection is available on Pro plan only",
+      "Desktop connection is available on Solo and Pro plans",
       {
         targetDeviceId,
         canReceiveTasks: device.canReceiveTasks,

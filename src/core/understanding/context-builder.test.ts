@@ -214,6 +214,44 @@ test("buildUserContextFromMemory derives preferred name and language from safe m
   assert.ok((context.speakingStyleDirectives ?? []).some((item) => item.includes("Türkçe")));
 });
 
+test("buildUserContextFromMemory ignores suspicious memory-derived names", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "hey",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "hey",
+    },
+    memory: [
+      {
+        id: "bad-name",
+        type: "identity",
+        key: "preferred_name",
+        value: "Attım Bugün Kaç",
+        confidence: 0.96,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 95,
+        isPinned: true,
+      },
+    ],
+    profile: null,
+  });
+
+  assert.equal(context.userProfile?.preferredName ?? null, null);
+  assert.equal(context.relationshipContextDigest.some((item) => item.includes("Attım Bugün Kaç")), false);
+});
+
 test("buildUserContextFromMemory promotes derived world-signal memory into situational and behavioral hints", () => {
   const intent = classifyIntent({
     userId: "user_1",

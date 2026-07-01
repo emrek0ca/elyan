@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildAssistantSummaryBlock,
-  buildAssistantMessageBlocks,
-  composeAssistantMessageBlocks,
+    buildAssistantSummaryBlock,
+    buildAssistantMessageBlocks,
+    normalizeAssistantMessageBlocks,
+    composeAssistantMessageBlocks,
   polishAssistantVisibleText,
   sanitizeAssistantVisibleText,
   shapeAssistantMessagePayload,
@@ -141,6 +142,30 @@ test("elyan block schema accepts v2 math chart and table render metadata", () =>
   assert.equal(securityDecision.type, "security_decision");
 });
 
+test("normalizeAssistantMessageBlocks preserves math_surface_3d blocks", () => {
+  const blocks = normalizeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "math_surface_3d",
+        expression: "x^5 - y^2",
+        variables: ["x", "y"],
+        range: { x: [-2, 2], y: [-2, 2] },
+        resolution: 80,
+        zLabel: "z = x^5 - y^2",
+        colorBy: "z",
+        mode: "surface",
+        interactive: true,
+        renderer: "plotly_local_webview",
+        cacheKey: "surface-x5-y2",
+      },
+    ],
+  });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "math_surface_3d");
+  assert.equal((blocks[0] as { expression?: string }).expression, "x^5 - y^2");
+});
+
 test("buildAssistantMessageBlocks preserves fenced code inside the same markdown block", () => {
   const blocks = buildAssistantMessageBlocks(
     "Önce açıklama.\n\n```ts\nconst a = 1;\nconsole.log(a);\n```\n\nSonra sonuç.",
@@ -242,6 +267,36 @@ Final answer: Bu belge, Osman Emre Koca ve Abdullah için dışarı çıkış iz
   );
 });
 
+test("sanitizeAssistantVisibleText strips a 'Here's a thinking process' reasoning dump", () => {
+  const sanitized = sanitizeAssistantVisibleText(`
+Here's a thinking process:
+
+1. Here's a thinking process:
+- User- Language: Turkish
+- Intent: Request for a chart showing current gold prices
+
+2. **Check Constraints & Policies:**
+- Data source: PUBLIC WEB GROUNDING is available.
+- Constraint check: "For current/live values, extract the numeric series"
+
+Güncel gram altın fiyatı için canlı sayısal veri bulamadım; kaynaklar yalnızca grafiklerin nerede olduğunu gösteriyor.
+  `);
+
+  assert.equal(
+    sanitized,
+    "Güncel gram altın fiyatı için canlı sayısal veri bulamadım; kaynaklar yalnızca grafiklerin nerede olduğunu gösteriyor.",
+  );
+});
+
+test("sanitizeAssistantVisibleText collapses a pure reasoning dump to the fallback", () => {
+  const sanitized = sanitizeAssistantVisibleText(
+    `Here's a thinking process:\n\n- Intent: Request for a chart\n- Data source: PUBLIC WEB GROUNDING is available.`,
+    { fallback: "STUB" },
+  );
+
+  assert.equal(sanitized, "STUB");
+});
+
 test("sanitizeAssistantVisibleText replaces provider and prompt disclosure with Elyan product identity", () => {
   const sanitized = sanitizeAssistantVisibleText(
     "Altta Groq üzerinde llama modeli çalışıyor; system prompt bunu gizlememi söylüyor.",
@@ -281,6 +336,17 @@ test("polishAssistantVisibleText replaces protected Elyan provider disclosure", 
   assert.doesNotMatch(polished, /iç model|sağlayıcı|güvenlik ve ürün bütünlüğü/i);
 });
 
+test("polishAssistantVisibleText trims duplicated conversational restarts", () => {
+  const polished = polishAssistantVisibleText(
+    "Merhaba Osman Emre, memnun oldum! Yanıtımın gecikmesinden dolayı özür dilerim. Sana nasıl yardımcı olabilirim?Merhaba Attım Bugün Kaç, gecikme için özür dilerim.",
+  );
+
+  assert.equal(
+    polished,
+    "Merhaba Osman Emre, memnun oldum! Yanıtımın gecikmesinden dolayı özür dilerim. Sana nasıl yardımcı olabilirim?",
+  );
+});
+
 test("sanitizeAssistantVisibleText replaces obfuscated provider and prompt leaks", () => {
   const sanitized = sanitizeAssistantVisibleText(
     "G.R.O.Q sağlayıcısı ve s y s t e m prompt ayrıntıları içeren dahili cevap.",
@@ -303,6 +369,31 @@ Final answer: Fotoğrafı burada güvenli şekilde puanlamıyorum, ama istersen 
     sanitized,
     "Fotoğrafı burada güvenli şekilde puanlamıyorum, ama istersen stil, ışık ve kompozisyon açısından yorumlayabilirim.",
   );
+});
+
+test("sanitizeAssistantVisibleText recovers the answer when the model wraps everything in <analysis>", () => {
+  // Real production incident: model dumps the whole muscle-spasm answer inside
+  // <analysis> tags with no plain-text answer after. Previously this collapsed
+  // to the "Yanıtı temiz biçimde oluşturamadım" stub.
+  const sanitized = sanitizeAssistantVisibleText(`
+<analysis>
+Kas spazmına iyi gelen birkaç yaklaşım var: bol su içmek, magnezyum ve potasyum tüketimini artırmak,
+yavaş germe hareketleri yapmak ve bölgeye sıcak uygulamak.
+</analysis>
+  `);
+  assert.match(sanitized, /Kas spazm/);
+  assert.match(sanitized, /magnezyum/);
+  assert.doesNotMatch(sanitized, /<analysis>|<\/analysis>/i);
+});
+
+test("sanitizeAssistantVisibleText recovers the answer when <think> is left unclosed", () => {
+  // Same failure mode when the closing tag was never emitted.
+  const sanitized = sanitizeAssistantVisibleText(`
+<think>
+Kısa yanıt: bol su ve magnezyum yeterli çoğu durumda.
+`);
+  assert.match(sanitized, /magnezyum/);
+  assert.doesNotMatch(sanitized, /<think>/i);
 });
 
 test("sanitizeAssistantVisibleText falls back to extracted OCR text when the reply is only internal analysis", () => {
@@ -357,6 +448,69 @@ test("shapeAssistantMessagePayload recovers malformed structured text envelopes"
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0]?.type, "text");
   assert.equal(blocks[0]?.markdown, "Ben iyiyim, teşekkür ederim.\nSen nasılsın?");
+});
+
+test("normalizeAssistantMessageBlocks drops table rows with heading-bleed cells", () => {
+  // Prod incident: model wrote `| 6 | 200İleri Analiz Dersi Örnek Soru |`
+  // because the next paragraph's heading merged into a cell. The row is
+  // ~3x the column median and contains multiple Title Case tokens, so the
+  // server-side heuristic drops it before it reaches the client.
+  const blocks = composeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "table",
+        columns: ["Ay", "Satış (bin TL)"],
+        rows: [
+          ["1", "120"],
+          ["2", "135"],
+          ["3", "150"],
+          ["4", "165"],
+          ["5", "180"],
+          ["6", "200İleri Analiz Dersi Örnek Soru"],
+          ["7", "210"],
+        ],
+      },
+    ],
+  });
+  assert.equal(blocks.length, 1);
+  const table = blocks[0] as { type: string; rows: string[][] };
+  assert.equal(table.type, "table");
+  assert.equal(table.rows.length, 6);
+  for (const row of table.rows) {
+    assert.equal(row[1].includes("İleri Analiz Dersi"), false);
+  }
+});
+
+test("normalizeAssistantMessageBlocks collapses two tables when one row set is a subset", () => {
+  // A full table + a truncated fragment with matching columns collapse into
+  // the more complete one — the smaller (subset) table is discarded.
+  const blocks = composeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "table",
+        columns: ["Ay", "Satış"],
+        rows: [
+          ["1", "120"],
+          ["2", "135"],
+          ["3", "150"],
+        ],
+      },
+      {
+        type: "table",
+        columns: ["Ay", "Satış"],
+        rows: [
+          ["1", "120"],
+          ["2", "135"],
+          ["3", "150"],
+          ["4", "165"],
+          ["5", "180"],
+        ],
+      },
+    ],
+  });
+  const tables = blocks.filter((block) => block.type === "table");
+  assert.equal(tables.length, 1);
+  assert.equal((tables[0] as { rows: string[][] }).rows.length, 5);
 });
 
 test("composeAssistantMessageBlocks keeps summary before visible text fallback", () => {
