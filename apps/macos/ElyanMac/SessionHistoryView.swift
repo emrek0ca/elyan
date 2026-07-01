@@ -206,7 +206,8 @@ struct SessionDetailView: View {
         isLoading = true
         error = ""
         do {
-            messages = try await appState.backend.getSessionMessages(sessionId: session.id)
+            let result = try await appState.backend.getSessionMessages(sessionId: session.id)
+            messages = result.messages
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

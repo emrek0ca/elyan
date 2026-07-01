@@ -7,6 +7,9 @@ import CoreImage.CIFilterBuiltins
 struct PairingView: View {
     @EnvironmentObject var appState: AppState
     @State private var pairingCode: String = ""
+    @State private var pairingSessionId: String = ""
+    @State private var pairingToken: String = ""
+    @State private var pairingQrText: String = ""
     @State private var isLoading = false
     @State private var isClaimed = false
     @State private var claimInfo: String = ""
@@ -35,7 +38,7 @@ struct PairingView: View {
                 devicesTab
             }
         }
-        .onChange(of: tab) { loadForTab($0) }
+        .onChange(of: tab) { _, newValue in loadForTab(newValue) }
         .task { loadForTab(tab) }
         .onDisappear { pollTask?.cancel() }
         .navigationTitle("Masaüstü Eşleştirme")
@@ -71,7 +74,7 @@ struct PairingView: View {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 72))
                             .foregroundStyle(.green)
-                            .symbolEffect(.bounce)
+                            .symbolEffect(.bounce, value: isClaimed)
                         Text("Eşleştirme tamamlandı!")
                             .font(.title3.bold())
                         if !claimInfo.isEmpty {
@@ -99,8 +102,10 @@ struct PairingView: View {
                     .padding(20)
                 } else {
                     VStack(spacing: 16) {
-                        // QR Code
-                        if let qrImage = generateQRCode(from: pairingCode) {
+                        // QR Code — use the deep-link the backend built
+                        // (`elyan://pair?sessionId=…&pairingCode=…`) so the
+                        // mobile scanner receives both fields at once.
+                        if let qrImage = generateQRCode(from: pairingQrText.isEmpty ? pairingCode : pairingQrText) {
                             Image(qrImage, scale: 1, label: Text("QR Kod"))
                                 .interpolation(.none)
                                 .resizable()
@@ -263,24 +268,43 @@ struct PairingView: View {
     private func createPairingCode() async {
         pollTask?.cancel()
         pairingCode = ""
+        pairingSessionId = ""
+        pairingToken = ""
+        pairingQrText = ""
         isClaimed = false
         claimInfo = ""
         error = ""
         isLoading = true
 
         do {
-            let raw = try await appState.backend.internalGetJSON(
+            // Backend contract: POST /v1/pairing/sessions returns
+            //   { sessionId, pairingCode, pairingToken, qrText, qrPayload, ... }
+            // Body requires deviceLabel + platform (createPairSessionBodySchema),
+            // otherwise it 400s with "deviceLabel: Required · platform: Required".
+            // The pairingToken is required by GET /sessions/:sessionId via the
+            // x-pairing-token header, so we hold on to it for polling.
+            let hostName = Host.current().localizedName ?? "Elyan Mac"
+            let raw = try await appState.backend.postJSON(
                 path: "/v1/pairing/sessions",
+                body: [
+                    "deviceLabel": hostName,
+                    "platform": "macos",
+                    "runtimeVersion": "1.0.0"
+                ],
                 requireAuth: true
             )
             let payload = ElyanBackend.unwrap(raw)
-            pairingCode = (payload["code"] as? String)
-                ?? (payload["pairingCode"] as? String)
-                ?? (payload["token"] as? String)
+            pairingSessionId = (payload["sessionId"] as? String) ?? ""
+            pairingCode = (payload["pairingCode"] as? String)
+                ?? (payload["manualEntryCode"] as? String)
                 ?? ""
-            if pairingCode.isEmpty {
-                error = "Sunucu geçerli bir kod döndürmedi."
+            pairingToken = (payload["pairingToken"] as? String) ?? ""
+            pairingQrText = (payload["qrText"] as? String) ?? ""
+
+            if pairingSessionId.isEmpty || pairingCode.isEmpty || pairingToken.isEmpty {
+                error = "Sunucu geçerli bir eşleştirme oturumu döndürmedi."
             } else {
+                appState.backend.invalidateGetCache()
                 startPolling()
             }
         } catch {
@@ -310,17 +334,43 @@ struct PairingView: View {
     }
 
     private func checkPairingClaim() async -> String? {
-        guard !pairingCode.isEmpty else { return nil }
+        guard !pairingSessionId.isEmpty, !pairingToken.isEmpty else { return nil }
         do {
+            // Backend: GET /v1/pairing/sessions/:sessionId  (auth NOT required —
+            // pairing token in header authenticates the poll). Status is a plain
+            // string ("pending" / "claimed" / "expired"), not a boolean flag.
             let raw = try await appState.backend.internalGetJSON(
-                path: "/v1/pairing/sessions/\(pairingCode)/status",
-                requireAuth: true
+                path: "/v1/pairing/sessions/\(pairingSessionId)",
+                queryItems: [],
+                requireAuth: false,
+                cacheTTL: 0,
+                extraHeaders: ["x-pairing-token": pairingToken]
             )
             let payload = ElyanBackend.unwrap(raw)
-            let claimed = (payload["claimed"] as? Bool) ?? false
-            if claimed {
-                let deviceName = (payload["deviceName"] as? String) ?? ""
-                return deviceName.isEmpty ? "Cihaz başarıyla eşleştirildi." : "\(deviceName) eşleştirildi."
+            let status = (payload["status"] as? String) ?? ""
+            if status.lowercased() == "claimed" {
+                // Backend hands us runtimeAuth = {deviceId, deviceSecret} the
+                // moment the mobile side claims. Register the runtime right
+                // away so mobile immediately sees this desktop as online
+                // instead of "eşleştirildi ama çevrimdışı" purgatory.
+                if let runtimeAuth = payload["runtimeAuth"] as? [String: Any],
+                   let deviceId = runtimeAuth["deviceId"] as? String,
+                   let deviceSecret = runtimeAuth["deviceSecret"] as? String,
+                   !deviceId.isEmpty, !deviceSecret.isEmpty {
+                    _ = try? await appState.backend.registerRuntime(
+                        deviceId: deviceId,
+                        deviceSecret: deviceSecret
+                    )
+                    await appState.backend.runtimeHeartbeat(status: "online")
+                }
+                let mobile = payload["mobileDevice"] as? [String: Any] ?? [:]
+                let deviceName = (mobile["displayName"] as? String)
+                    ?? (mobile["name"] as? String)
+                    ?? (payload["deviceName"] as? String)
+                    ?? ""
+                return deviceName.isEmpty
+                    ? "Cihaz başarıyla eşleştirildi."
+                    : "\(deviceName) eşleştirildi."
             }
         } catch { }
         return nil

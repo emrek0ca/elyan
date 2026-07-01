@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 46;
+	objectVersion = 54;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -11,21 +11,20 @@
 		13F799C98E68C275E1217FC7 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00ABF0B11195B7260D4B4FF8 /* AppState.swift */; };
 		159BC6F6DA3DEEE0993CF7A4 /* WindowTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1046C5B2DBC040C01611107 /* WindowTools.swift */; };
 		2897D157067A312078EA7BE3 /* TaskInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D68479A969BDDD2030AA79 /* TaskInboxView.swift */; };
+		3A57EEC7CDDDF73CD4EC10F2 /* SessionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FAAC9A00EEA315B1765386 /* SessionHistoryView.swift */; };
+		57971A2D2989DE26E85D375A /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E08E6E2D93AFCF872061357 /* PairingView.swift */; };
 		804336107997A413D04A8CA6 /* RuntimeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA5D192D4784FE7AEBC3D99 /* RuntimeModels.swift */; };
 		83A414A1C7E4D3FB15CFD9CA /* RuntimeBridgeSwift.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B5F833000C00A51BA6C17D /* RuntimeBridgeSwift.swift */; };
 		90EDB3FC04680033CE9721DA /* BlockViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF32D9114D668C52985F9F1 /* BlockViews.swift */; };
 		94C9591F641E23698A6E3C7B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61AC165473B573A1A75E7B30 /* SettingsView.swift */; };
+		A3FECACC0E19CAEFF06EFA4B /* AppearanceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 588F228D0CFCFA8126E5CE5F /* AppearanceSettingsView.swift */; };
 		AB08C8F134CD787916FAF156 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2719DA9829A7A096CA7C71FB /* ContentView.swift */; };
 		AB9C001B2C86DCE50EF5F8BA /* PermissionPolicyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18143CFB85250B21C65CF250 /* PermissionPolicyViewModel.swift */; };
 		B808C8C278D0C4E1E83BED2B /* ElyanMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED0A20B919425FEA3D2BC1FE /* ElyanMacApp.swift */; };
+		CDA89C9231E113F22F62195E /* ProfileSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3960080CFD03A5277B4C15 /* ProfileSettingsView.swift */; };
 		D122943727A020FB3E9EC5DC /* PythonRuntimeSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D08FBD095AC3C5E0AC18A9CC /* PythonRuntimeSupervisor.swift */; };
 		D9B7BA0F713E94B65E097EEA /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 75A59607E2D3C68DFEF1037C /* Cocoa.framework */; };
 		EA260B28D29F5CDBCD3388D8 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010A88620D7B5D097564A0C3 /* ChatView.swift */; };
-		3A57EEC7CDDDF73CD4EC10F2 /* SessionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18FAAC9A00EEA315B1765386 /* SessionHistoryView.swift */; };
-		57971A2D2989DE26E85D375A /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E08E6E2D93AFCF872061357 /* PairingView.swift */; };
-		CDA89C9231E113F22F62195E /* ProfileSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3960080CFD03A5277B4C15 /* ProfileSettingsView.swift */; };
-		A3FECACC0E19CAEFF06EFA4B /* AppearanceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 588F228D0CFCFA8126E5CE5F /* AppearanceSettingsView.swift */; };
-		FC00760127B34681BAF4C84C /* TaskApprovalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BAAA4705B4D31D2F7D321B /* TaskApprovalView.swift */; };
 		EB10000000000000ELYAN001 /* ElyanBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB10000000000000FILE001 /* ElyanBackend.swift */; };
 		EB10000000000000ELYAN002 /* ElyanSSE.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB10000000000000FILE002 /* ElyanSSE.swift */; };
 		EB10000000000000ELYAN003 /* ChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB10000000000000FILE003 /* ChatStore.swift */; };
@@ -33,29 +32,30 @@
 		EB10000000000000ELYAN005 /* DesktopAppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB10000000000000FILE005 /* DesktopAppConfig.swift */; };
 		EB10000000000000ELYAN006 /* BillingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB10000000000000FILE006 /* BillingView.swift */; };
 		EB10000000000000ELYAN007 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = EB10000000000000PKG002 /* GoogleSignIn */; };
+		EB30000000000000BUID001 /* ChatBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB30000000000000FILE001 /* ChatBlock.swift */; };
+		EB30000000000000BUID002 /* ElyanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB30000000000000FILE002 /* ElyanCache.swift */; };
+		FC00760127B34681BAF4C84C /* TaskApprovalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0BAAA4705B4D31D2F7D321B /* TaskApprovalView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		00ABF0B11195B7260D4B4FF8 /* AppState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		00D68479A969BDDD2030AA79 /* TaskInboxView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskInboxView.swift; sourceTree = "<group>"; };
 		010A88620D7B5D097564A0C3 /* ChatView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
-		18FAAC9A00EEA315B1765386 /* SessionHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHistoryView.swift; sourceTree = "<group>"; };
-		9E08E6E2D93AFCF872061357 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
-		7E3960080CFD03A5277B4C15 /* ProfileSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSettingsView.swift; sourceTree = "<group>"; };
-		588F228D0CFCFA8126E5CE5F /* AppearanceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceSettingsView.swift; sourceTree = "<group>"; };
 		18143CFB85250B21C65CF250 /* PermissionPolicyViewModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PermissionPolicyViewModel.swift; sourceTree = "<group>"; };
+		18FAAC9A00EEA315B1765386 /* SessionHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHistoryView.swift; sourceTree = "<group>"; };
 		2719DA9829A7A096CA7C71FB /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		2C6E2A8B3E70C4EBD48A2E3F /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4DF32D9114D668C52985F9F1 /* BlockViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BlockViews.swift; sourceTree = "<group>"; };
 		573305C5E86DAAF7023F6FF0 /* Elyan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Elyan.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		588F228D0CFCFA8126E5CE5F /* AppearanceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceSettingsView.swift; sourceTree = "<group>"; };
 		61AC165473B573A1A75E7B30 /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		75A59607E2D3C68DFEF1037C /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		7E3960080CFD03A5277B4C15 /* ProfileSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSettingsView.swift; sourceTree = "<group>"; };
 		94B5F833000C00A51BA6C17D /* RuntimeBridgeSwift.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RuntimeBridgeSwift.swift; sourceTree = "<group>"; };
+		9E08E6E2D93AFCF872061357 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		9EA5D192D4784FE7AEBC3D99 /* RuntimeModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RuntimeModels.swift; sourceTree = "<group>"; };
 		C1046C5B2DBC040C01611107 /* WindowTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WindowTools.swift; sourceTree = "<group>"; };
 		D08FBD095AC3C5E0AC18A9CC /* PythonRuntimeSupervisor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PythonRuntimeSupervisor.swift; sourceTree = "<group>"; };
-		ED0A20B919425FEA3D2BC1FE /* ElyanMacApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ElyanMacApp.swift; sourceTree = "<group>"; };
-		F0BAAA4705B4D31D2F7D321B /* TaskApprovalView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskApprovalView.swift; sourceTree = "<group>"; };
 		EB10000000000000FILE001 /* ElyanBackend.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ElyanBackend.swift; sourceTree = "<group>"; };
 		EB10000000000000FILE002 /* ElyanSSE.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ElyanSSE.swift; sourceTree = "<group>"; };
 		EB10000000000000FILE003 /* ChatStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatStore.swift; sourceTree = "<group>"; };
@@ -63,6 +63,10 @@
 		EB10000000000000FILE005 /* DesktopAppConfig.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DesktopAppConfig.swift; sourceTree = "<group>"; };
 		EB10000000000000FILE006 /* BillingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BillingView.swift; sourceTree = "<group>"; };
 		EB10000000000000FILE007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		EB30000000000000FILE001 /* ChatBlock.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatBlock.swift; sourceTree = "<group>"; };
+		EB30000000000000FILE002 /* ElyanCache.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ElyanCache.swift; sourceTree = "<group>"; };
+		ED0A20B919425FEA3D2BC1FE /* ElyanMacApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ElyanMacApp.swift; sourceTree = "<group>"; };
+		F0BAAA4705B4D31D2F7D321B /* TaskApprovalView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskApprovalView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,7 +110,7 @@
 		CB4D5A18EC226200805E275E /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				573305C5E86DAAF7023F6FF0 /* ElyanMac.app */,
+				573305C5E86DAAF7023F6FF0 /* Elyan.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -117,6 +121,8 @@
 				00ABF0B11195B7260D4B4FF8 /* AppState.swift */,
 				4DF32D9114D668C52985F9F1 /* BlockViews.swift */,
 				EB10000000000000FILE006 /* BillingView.swift */,
+				EB30000000000000FILE001 /* ChatBlock.swift */,
+				EB30000000000000FILE002 /* ElyanCache.swift */,
 				EB10000000000000FILE003 /* ChatStore.swift */,
 				010A88620D7B5D097564A0C3 /* ChatView.swift */,
 				EB10000000000000FILE005 /* DesktopAppConfig.swift */,
@@ -184,11 +190,9 @@
 				Base,
 			);
 			mainGroup = C01A95C63CA34F8BF6F746CA;
-			minimizedProjectReferenceProxies = 0;
 			packageReferences = (
 				EB10000000000000PKG001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 			);
-			preferredProjectObjectVersion = 77;
 			productRefGroup = CB4D5A18EC226200805E275E /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -217,6 +221,8 @@
 				13F799C98E68C275E1217FC7 /* AppState.swift in Sources */,
 				EB10000000000000ELYAN006 /* BillingView.swift in Sources */,
 				90EDB3FC04680033CE9721DA /* BlockViews.swift in Sources */,
+				EB30000000000000BUID001 /* ChatBlock.swift in Sources */,
+				EB30000000000000BUID002 /* ElyanCache.swift in Sources */,
 				EB10000000000000ELYAN003 /* ChatStore.swift in Sources */,
 				EA260B28D29F5CDBCD3388D8 /* ChatView.swift in Sources */,
 				EB10000000000000ELYAN005 /* DesktopAppConfig.swift in Sources */,
@@ -251,10 +257,13 @@
 				CODE_SIGN_ENTITLEMENTS = ElyanMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = CPL6TU3Z8R;
+				DEVELOPMENT_TEAM = 7SRKKF75MC;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.elyan.mac;
 				PRODUCT_NAME = Elyan;
@@ -271,10 +280,13 @@
 				CODE_SIGN_ENTITLEMENTS = ElyanMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = CPL6TU3Z8R;
+				DEVELOPMENT_TEAM = 7SRKKF75MC;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.elyan.mac;
 				PRODUCT_NAME = Elyan;
@@ -400,25 +412,6 @@
 		};
 /* End XCBuildConfiguration section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		EB10000000000000PKG001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 9.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		EB10000000000000PKG002 /* GoogleSignIn */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = EB10000000000000PKG001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
-			productName = GoogleSignIn;
-		};
-/* End XCSwiftPackageProductDependency section */
-
 /* Begin XCConfigurationList section */
 		659AD02BBBCC4BC41730617C /* Build configuration list for PBXNativeTarget "ElyanMac" */ = {
 			isa = XCConfigurationList;
@@ -439,6 +432,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		EB10000000000000PKG001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		EB10000000000000PKG002 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EB10000000000000PKG001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 591AB4A966A185F338CAC9D2 /* Project object */;
 }

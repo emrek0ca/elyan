@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Security
 
@@ -138,18 +139,32 @@ final class ElyanBackend: ObservableObject {
     // MARK: - Sessions / History
 
     /// GET /v1/chat/sessions — list of conversation sessions, newest first.
-    func getSessions(limit: Int = 40, cursor: String? = nil) async throws -> [ElyanSession] {
-        var queryItems = ["limit=\(max(1, min(limit, 20)))"]
+    func getSessions(limit: Int = 40, cursor: String? = nil, forceRefresh: Bool = false) async throws -> [ElyanSession] {
+        var query: [URLQueryItem] = [URLQueryItem(name: "limit", value: "\(max(1, min(limit, 20)))")]
         if let cursor, !cursor.isEmpty {
-            queryItems.append("cursor=\(cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cursor)")
+            query.append(URLQueryItem(name: "cursor", value: cursor))
         }
-        let raw = try await internalGetJSON(path: "/v1/chat/sessions?\(queryItems.joined(separator: "&"))", requireAuth: true)
+        let raw = try await internalGetJSON(
+            path: "/v1/chat/sessions",
+            queryItems: query,
+            requireAuth: true,
+            cacheTTL: forceRefresh ? 0 : 30
+        )
         return Self.parseSessions(raw)
     }
 
     /// GET /v1/chat/sessions/{id}/messages
-    func getSessionMessages(sessionId: String) async throws -> [ElyanSessionMessage] {
-        let raw = try await internalGetJSON(path: "/v1/chat/sessions/\(sessionId)/messages", requireAuth: true)
+    func getSessionMessages(sessionId: String, limit: Int = 50, cursor: String? = nil, forceRefresh: Bool = false) async throws -> (messages: [ElyanSessionMessage], hasMore: Bool, nextCursor: String?) {
+        var queryItems: [URLQueryItem] = [URLQueryItem(name: "limit", value: "\(limit)")]
+        if let cursor = cursor {
+            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        let raw = try await internalGetJSON(
+            path: "/v1/chat/sessions/\(sessionId)/messages",
+            queryItems: queryItems,
+            requireAuth: true,
+            cacheTTL: forceRefresh ? 0 : 300
+        )
         return Self.parseSessionMessages(raw)
     }
 
@@ -159,6 +174,23 @@ final class ElyanBackend: ObservableObject {
     }
 
     // MARK: - Profile
+
+    /// GET /v1/auth/avatar as an NSImage. Returns nil if the user has no
+    /// avatar or the request fails — caller should fall back to initials.
+    func fetchAvatarImage() async throws -> NSImage? {
+        guard let token = session?.accessToken, !token.isEmpty else { return nil }
+        var request = makeRequest(path: "/v1/auth/avatar", method: "GET")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return nil
+            }
+            return NSImage(data: data)
+        } catch {
+            throw ElyanBackendError.transport(error.localizedDescription)
+        }
+    }
 
     /// PATCH /v1/auth/me — update displayName
     @discardableResult
@@ -178,6 +210,142 @@ final class ElyanBackend: ObservableObject {
         return updated
     }
 
+    // MARK: - Runtime (this desktop declaring itself online)
+
+    /// Runtime bearer token — obtained from POST /v1/runtime/register with the
+    /// deviceId + deviceSecret we get out of the pairing claim. This is
+    /// distinct from the user access token; the runtime uses it to identify
+    /// itself for heartbeats and task pulls, so mobile can show the desktop
+    /// as "online".
+    @Published private(set) var runtimeToken: String?
+    private static let runtimeKeychainAccount = "runtime.v1"
+
+    /// POST /v1/runtime/register — swaps a paired deviceId/deviceSecret for a
+    /// runtime bearer token. Called by the pairing view once the claim has
+    /// gone through and the backend returned the runtimeAuth block.
+    @discardableResult
+    func registerRuntime(deviceId: String, deviceSecret: String) async throws -> String {
+        let body: [String: Any] = [
+            "deviceId": deviceId,
+            "deviceSecret": deviceSecret,
+            "runtimeVersion": "1.0.0",
+            "capabilities": [],
+            "capabilityStates": [:]
+        ]
+        let raw = try await postJSON(path: "/v1/runtime/register", body: body, requireAuth: false)
+        let payload = Self.unwrap(raw)
+        let tokens = (payload["tokens"] as? [String: Any]) ?? [:]
+        let token = (tokens["accessToken"] as? String)
+            ?? (payload["accessToken"] as? String)
+            ?? ""
+        guard !token.isEmpty else {
+            throw ElyanBackendError.malformedResponse("Runtime register response had no accessToken.")
+        }
+        runtimeToken = token
+        Self.writeRuntimeTokenKeychain(token)
+        return token
+    }
+
+    /// POST /v1/runtime/heartbeat — must be called every ~30s using the
+    /// runtime bearer token; otherwise the backend/mobile shows this desktop
+    /// as offline (isOnline computed from lastSeenAt).
+    func runtimeHeartbeat(status: String = "online") async {
+        guard let token = runtimeToken, !token.isEmpty else { return }
+        var request = makeRequest(path: "/v1/runtime/heartbeat", method: "POST")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["status": status], options: [])
+        _ = try? await urlSession.data(for: request)
+    }
+
+    /// GET /v1/runtime/tasks/assigned — pulls the queue of tasks the mobile
+    /// side has dispatched to this desktop. Uses the runtime bearer token,
+    /// not the user access token.
+    func getAssignedRuntimeTasks() async throws -> [ElyanRuntimeTask] {
+        guard let token = runtimeToken, !token.isEmpty else { return [] }
+        var request = makeRequest(path: "/v1/runtime/tasks/assigned", method: "GET")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            if (response as? HTTPURLResponse)?.statusCode == 401 {
+                // Runtime token expired — drop it so we re-register next pairing.
+                runtimeToken = nil
+                Self.deleteRuntimeTokenKeychain()
+            }
+            return []
+        }
+        let decoded = (try? JSONSerialization.jsonObject(with: data, options: [])) as? [String: Any] ?? [:]
+        let items = (decoded["tasks"] as? [[String: Any]]) ?? []
+        return items.compactMap(ElyanRuntimeTask.init(dictionary:))
+    }
+
+    /// POST /v1/runtime/tasks/:taskId/status — reports back what happened to
+    /// a task so the mobile side unblocks. Only tell the truth: "accepted"
+    /// when the desktop has picked it up, "completed" when done, "failed"
+    /// with an error message otherwise.
+    @discardableResult
+    func updateRuntimeTaskStatus(
+        taskId: String,
+        status: String,
+        message: String? = nil,
+        error: String? = nil
+    ) async throws -> Bool {
+        guard let token = runtimeToken, !token.isEmpty else { return false }
+        var request = makeRequest(path: "/v1/runtime/tasks/\(taskId)/status", method: "POST")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["status": status, "artifacts": []]
+        if let message, !message.isEmpty { body["message"] = message }
+        if let error, !error.isEmpty { body["error"] = error }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        let (_, response) = try await urlSession.data(for: request)
+        return ((response as? HTTPURLResponse)?.statusCode ?? 0) < 300
+    }
+
+    private static func deleteRuntimeTokenKeychain() {
+        SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: runtimeKeychainAccount
+        ] as CFDictionary)
+    }
+
+    /// Restores the runtime token from Keychain on launch so we don't have to
+    /// re-pair after every relaunch.
+    func restoreRuntimeToken() {
+        if let token = Self.readRuntimeTokenKeychain(), !token.isEmpty {
+            runtimeToken = token
+        }
+    }
+
+    private static func writeRuntimeTokenKeychain(_ token: String) {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: runtimeKeychainAccount
+        ]
+        SecItemDelete(query as CFDictionary)
+        query[kSecValueData as String] = Data(token.utf8)
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private static func readRuntimeTokenKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: runtimeKeychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let str = String(data: data, encoding: .utf8) else { return nil }
+        _ = query
+        return str
+    }
+
     // MARK: - Devices
 
     /// GET /v1/devices — list of paired desktop devices.
@@ -186,9 +354,15 @@ final class ElyanBackend: ObservableObject {
         return Self.parseDevices(raw)
     }
 
-    /// DELETE /v1/devices/{id} — unpair a device.
+    /// Backend expects POST /v1/devices/:id/deactivate — there is no DELETE
+    /// endpoint. Using DELETE silently 404'd, which is why stale devices
+    /// stayed in the list forever.
     func removeDevice(deviceId: String) async throws {
-        _ = try await deleteJSON(path: "/v1/devices/\(deviceId)", requireAuth: true)
+        _ = try await postJSON(
+            path: "/v1/devices/\(deviceId)/deactivate",
+            body: [:],
+            requireAuth: true
+        )
     }
 
     // MARK: - Chat
@@ -263,6 +437,10 @@ final class ElyanBackend: ObservableObject {
             )
             switch raw {
             case .success(let value):
+                // A POST usually mutates something the user is about to look at
+                // (send message → session list, create pairing → devices, etc).
+                // Drop cache so the next GET returns fresh state.
+                invalidateGetCache()
                 return value
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
@@ -273,12 +451,42 @@ final class ElyanBackend: ObservableObject {
         }
     }
 
+    /// Legacy convenience wrapper — defaults to a 30-second cache so a tab
+    /// re-open doesn't hit the server for something the user just saw. Pass
+    /// `cacheTTL: 0` when a caller needs fresh data (e.g. auth/me refresh).
     func internalGetJSON(path: String, requireAuth: Bool) async throws -> Any {
+        try await internalGetJSON(path: path, queryItems: [], requireAuth: requireAuth, cacheTTL: 30, extraHeaders: [:])
+    }
+
+    /// GET with URLComponents-safe query building, optional TTL cache, and
+    /// optional custom headers (e.g. `x-pairing-token`).
+    func internalGetJSON(
+        path: String,
+        queryItems: [URLQueryItem],
+        requireAuth: Bool,
+        cacheTTL: TimeInterval = 0,
+        extraHeaders: [String: String] = [:]
+    ) async throws -> Any {
+        let key = cacheKey(path: path, queryItems: queryItems)
+        if cacheTTL > 0, let hit = cachedValue(forKey: key) {
+            return hit
+        }
         var attemptedRefresh = false
         while true {
-            let raw = try await performRequest(method: "GET", path: path, bodyJSON: nil, requireAuth: requireAuth, extraHeaders: [:])
+            let raw = try await performRequest(
+                method: "GET",
+                path: path,
+                bodyJSON: nil,
+                requireAuth: requireAuth,
+                extraHeaders: extraHeaders,
+                queryItems: queryItems
+            )
             switch raw {
-            case .success(let value): return value
+            case .success(let value):
+                if cacheTTL > 0 {
+                    storeCached(value, forKey: key, ttl: cacheTTL)
+                }
+                return value
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -293,7 +501,9 @@ final class ElyanBackend: ObservableObject {
         while true {
             let raw = try await performRequest(method: "PATCH", path: path, bodyJSON: body, requireAuth: requireAuth, extraHeaders: [:])
             switch raw {
-            case .success(let value): return value
+            case .success(let value):
+                invalidateGetCache() // list/summary GETs must reflect this write
+                return value
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -308,7 +518,9 @@ final class ElyanBackend: ObservableObject {
         while true {
             let raw = try await performRequest(method: "PUT", path: path, bodyJSON: body, requireAuth: requireAuth, extraHeaders: [:])
             switch raw {
-            case .success(let value): return value
+            case .success(let value):
+                invalidateGetCache()
+                return value
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -324,7 +536,9 @@ final class ElyanBackend: ObservableObject {
         while true {
             let raw = try await performRequest(method: "DELETE", path: path, bodyJSON: nil, requireAuth: requireAuth, extraHeaders: [:])
             switch raw {
-            case .success(let value): return value
+            case .success(let value):
+                invalidateGetCache()
+                return value
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -351,10 +565,14 @@ final class ElyanBackend: ObservableObject {
             case .success(let value):
                 var updated = session ?? current
                 if let payload = value as? [String: Any] {
-                    let userMap = (payload["user"] as? [String: Any]) ?? payload
+                    let root = (payload["data"] as? [String: Any]) ?? payload
+                    let userMap = (root["user"] as? [String: Any]) ?? root
                     if let name = userMap["displayName"] as? String { updated.displayName = name }
                     if let mail = userMap["email"] as? String { updated.email = mail }
                     if let id = userMap["id"] as? String { updated.id = id }
+                    if let has = userMap["hasAvatar"] as? Bool { updated.hasAvatar = has }
+                    if let v = userMap["avatarVersion"] as? Int { updated.avatarVersion = v }
+                    else if let v = userMap["avatarVersion"] as? Double { updated.avatarVersion = Int(v) }
                 }
                 try persistSession(updated)
                 return updated
@@ -377,9 +595,10 @@ final class ElyanBackend: ObservableObject {
         path: String,
         bodyJSON: [String: Any]?,
         requireAuth: Bool,
-        extraHeaders: [String: String]
+        extraHeaders: [String: String],
+        queryItems: [URLQueryItem] = []
     ) async throws -> HTTPOutcome {
-        var request = makeRequest(path: path, method: method)
+        var request = makeRequest(path: path, method: method, queryItems: queryItems)
         if requireAuth {
             guard let token = session?.accessToken, !token.isEmpty else {
                 throw ElyanBackendError.notAuthenticated
@@ -419,8 +638,22 @@ final class ElyanBackend: ObservableObject {
         return .success(decoded ?? [:])
     }
 
-    private func makeRequest(path: String, method: String) -> URLRequest {
-        let url = Self.baseURL.appendingPathComponent(path.hasPrefix("/") ? String(path.dropFirst()) : path)
+    /// Builds a URLRequest using URLComponents so `?query=…` and other reserved
+    /// characters are encoded correctly. The old `appendingPathComponent`
+    /// approach percent-encoded `?` (turning /v1/chat/sessions?limit=20 into
+    /// /v1/chat/sessions%3Flimit=20 → hard 404).
+    private func makeRequest(path: String, method: String, queryItems: [URLQueryItem] = []) -> URLRequest {
+        var components = URLComponents(
+            url: Self.baseURL,
+            resolvingAgainstBaseURL: false
+        ) ?? URLComponents()
+        // Preserve any base path (there isn't one today but keeps this defensive).
+        let normalizedPath = path.hasPrefix("/") ? path : "/\(path)"
+        components.path = normalizedPath
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
+        }
+        let url = components.url ?? Self.baseURL.appendingPathComponent(normalizedPath)
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -428,12 +661,71 @@ final class ElyanBackend: ObservableObject {
         return request
     }
 
+    // MARK: - GET cache
+    //
+    // Tab-switch flows (history, plans, summary, devices) were re-fetching on
+    // every appearance, freezing the UI on network latency. A tiny in-memory
+    // TTL cache makes navigation feel instant; `forceRefresh` bypasses it for
+    // pull-to-refresh or after a mutation.
+    private struct CacheEntry {
+        let value: Any
+        let expiresAt: Date
+    }
+    private var getCache: [String: CacheEntry] = [:]
+
+    private func cacheKey(path: String, queryItems: [URLQueryItem]) -> String {
+        let userId = session?.id ?? "anon"
+        let query = queryItems.map { "\($0.name)=\($0.value ?? "")" }.sorted().joined(separator: "&")
+        return "\(userId)|\(path)|\(query)"
+    }
+
+    private func cachedValue(forKey key: String) -> Any? {
+        guard let entry = getCache[key], entry.expiresAt > Date() else { return nil }
+        return entry.value
+    }
+
+    private func storeCached(_ value: Any, forKey key: String, ttl: TimeInterval) {
+        guard ttl > 0 else { return }
+        getCache[key] = CacheEntry(value: value, expiresAt: Date().addingTimeInterval(ttl))
+    }
+
+    /// Drop everything cached for the signed-in user — call after mutations
+    /// (send message, save profile, checkout, remove device, sign out).
+    func invalidateGetCache() {
+        getCache.removeAll()
+    }
+
     private static func extractErrorMessage(_ decoded: Any?) -> String? {
         guard let dict = decoded as? [String: Any] else { return nil }
-        if let nested = dict["error"] as? [String: Any], let msg = nested["message"] as? String { return msg }
-        if let msg = dict["error"] as? String { return msg }
-        if let msg = dict["message"] as? String { return msg }
-        return nil
+        // Root-level "message" (fastify + our badRequest/unauthorized helpers).
+        let baseMessage: String? = {
+            if let msg = dict["message"] as? String, !msg.isEmpty { return msg }
+            if let nested = dict["error"] as? [String: Any], let msg = nested["message"] as? String, !msg.isEmpty { return msg }
+            if let msg = dict["error"] as? String, !msg.isEmpty { return msg }
+            return nil
+        }()
+
+        // Backend validation errors carry a zod-style `details` array with
+        // per-field paths — surface them so the user sees which field is
+        // actually invalid instead of a generic "Invalid request payload".
+        let details: String? = {
+            guard let items = dict["details"] as? [[String: Any]], !items.isEmpty else { return nil }
+            let lines = items.compactMap { item -> String? in
+                let path = ((item["path"] as? [Any])?.map { "\($0)" }.joined(separator: ".")
+                    ?? (item["path"] as? String))
+                let msg = (item["message"] as? String) ?? (item["code"] as? String) ?? ""
+                if let path, !path.isEmpty { return "\(path): \(msg)" }
+                return msg.isEmpty ? nil : msg
+            }
+            return lines.isEmpty ? nil : lines.joined(separator: " · ")
+        }()
+
+        switch (baseMessage, details) {
+        case (let msg?, let det?): return "\(msg) — \(det)"
+        case (let msg?, nil):      return msg
+        case (nil, let det?):      return det
+        case (nil, nil):           return nil
+        }
     }
 
     // MARK: - Session parsing (mirrors mobile _parseAuthSession)
@@ -460,12 +752,21 @@ final class ElyanBackend: ObservableObject {
         }
 
         let user = (unwrapped["user"] as? [String: Any]) ?? unwrapped
+        let hasAvatar = (user["hasAvatar"] as? Bool) ?? false
+        let avatarVersion: Int = {
+            if let n = user["avatarVersion"] as? Int { return n }
+            if let n = user["avatarVersion"] as? Double { return Int(n) }
+            if let s = user["avatarVersion"] as? String, let n = Int(s) { return n }
+            return 0
+        }()
         return ElyanAuthSession(
             id: (user["id"] as? String) ?? (user["userId"] as? String) ?? "elyan-user",
             displayName: (user["displayName"] as? String) ?? (user["name"] as? String) ?? "",
             email: (user["email"] as? String) ?? "",
             accessToken: accessToken,
-            refreshToken: refreshToken
+            refreshToken: refreshToken,
+            hasAvatar: hasAvatar,
+            avatarVersion: avatarVersion
         )
     }
 
@@ -528,6 +829,8 @@ struct ElyanAuthSession: Codable, Equatable {
     var email: String
     var accessToken: String
     var refreshToken: String
+    var hasAvatar: Bool = false
+    var avatarVersion: Int = 0
 }
 
 /// Minimal parse of POST /v1/chat/messages, enough to drive the SSE subscription.
@@ -597,6 +900,23 @@ struct ElyanSessionMessage: Identifiable, Equatable, Hashable {
 
 // MARK: - Device Models
 
+struct ElyanRuntimeTask: Identifiable, Equatable, Hashable {
+    let id: String
+    let title: String
+    let status: String
+    let summary: String
+    let error: String
+
+    init?(dictionary: [String: Any]) {
+        guard let id = dictionary["id"] as? String, !id.isEmpty else { return nil }
+        self.id = id
+        self.title = (dictionary["title"] as? String) ?? "Yeni görev"
+        self.status = (dictionary["status"] as? String) ?? "queued"
+        self.summary = (dictionary["summary"] as? String) ?? ""
+        self.error = (dictionary["error"] as? String) ?? ""
+    }
+}
+
 struct ElyanDevice: Identifiable, Equatable {
     let id: String
     let name: String
@@ -635,15 +955,19 @@ extension ElyanBackend {
         }
     }
 
-    static func parseSessionMessages(_ raw: Any) -> [ElyanSessionMessage] {
+    static func parseSessionMessages(_ raw: Any) -> (messages: [ElyanSessionMessage], hasMore: Bool, nextCursor: String?) {
         let payload = unwrap(raw)
         let items: [[String: Any]] = {
             if let arr = payload["messages"] as? [[String: Any]] { return arr }
             if let arr = raw as? [[String: Any]] { return arr }
             return []
         }()
+        let meta = payload["meta"] as? [String: Any]
+        let hasMore = (meta?["hasMore"] as? Bool) ?? false
+        let nextCursor = meta?["nextCursor"] as? String
+        
         let iso = ISO8601DateFormatter()
-        return items.compactMap { item in
+        let messages = items.compactMap { item -> ElyanSessionMessage? in
             guard let id = item["id"] as? String else { return nil }
             let role = (item["role"] as? String) ?? "assistant"
             // Support blocks-style messages
@@ -659,6 +983,7 @@ extension ElyanBackend {
             let createdAt = iso.date(from: createdStr) ?? Date()
             return ElyanSessionMessage(id: id, role: role, text: text, createdAt: createdAt)
         }
+        return (messages, hasMore, nextCursor)
     }
 
     static func parseDevices(_ raw: Any) -> [ElyanDevice] {

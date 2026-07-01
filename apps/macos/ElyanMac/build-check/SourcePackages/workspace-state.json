@@ -1,0 +1,149 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "app-check",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/google/app-check.git",
+          "name" : "app-check"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "bb4002485ff867768dec13bf904a2ddb050bd1b1",
+            "version" : "11.3.0"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "app-check"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "appauth-ios",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/openid/AppAuth-iOS.git",
+          "name" : "AppAuth-iOS"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "a7caeda164dc5108bf4649472b28a5af65dc6f33",
+            "version" : "2.1.0"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "AppAuth-iOS"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "googlesignin-ios",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/google/GoogleSignIn-iOS",
+          "name" : "GoogleSignIn-iOS"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "08d8dcecafb575f98879ffdbb8302c1b9ad65d19",
+            "version" : "9.2.0"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "GoogleSignIn-iOS"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "googleutilities",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/google/GoogleUtilities.git",
+          "name" : "GoogleUtilities"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "9f183ae842be978784f2963a343682e0c46d8fb3",
+            "version" : "8.1.2"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "GoogleUtilities"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "gtm-session-fetcher",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/google/gtm-session-fetcher.git",
+          "name" : "gtm-session-fetcher"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "a2ab612cb980066ee56d90d60d8462992c07f24b",
+            "version" : "3.5.0"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "gtm-session-fetcher"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "gtmappauth",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/google/GTMAppAuth.git",
+          "name" : "GTMAppAuth"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "56e0ccf09a6dd29dc7e68bdf729598240ca8aa16",
+            "version" : "5.0.0"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "GTMAppAuth"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "interop-ios-for-google-sdks",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/google/interop-ios-for-google-sdks.git",
+          "name" : "interop-ios-for-google-sdks"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "040d087ac2267d2ddd4cca36c757d1c6a05fdbfe",
+            "version" : "101.0.0"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "interop-ios-for-google-sdks"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "promises",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/google/promises.git",
+          "name" : "promises"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "f4a19a3c313dc2616c70bb49d29a799fb16be837",
+            "version" : "2.4.1"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "promises"
+      }
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

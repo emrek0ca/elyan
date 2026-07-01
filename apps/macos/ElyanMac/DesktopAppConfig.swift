@@ -1,9 +1,13 @@
 import Foundation
 
 enum DesktopAppConfig {
-    static let googleClientID = "762420924659-8necsbtt40deelcpo797ald54o50q0uo.apps.googleusercontent.com"
+    // macOS-specific OAuth client (Google Cloud Console → OAuth 2.0 Client IDs
+    // → iOS type, Bundle ID: com.elyan.mac). Distinct from the iOS/mobile
+    // client used by elyan-mobile; both audiences are whitelisted in the
+    // backend's GOOGLE_CLIENT_ID env so a single deployment serves both apps.
+    static let googleClientID = "378810502396-pu2sfs4rb17e1usrh55vkjm9p5c0ivd1.apps.googleusercontent.com"
     static let googleServerClientID = "762420924659-heq7v2qm19kqt9tj8tt14fef9u7s4dgh.apps.googleusercontent.com"
-    static let googleReversedClientID = "com.googleusercontent.apps.762420924659-8necsbtt40deelcpo797ald54o50q0uo"
+    static let googleReversedClientID = "com.googleusercontent.apps.378810502396-pu2sfs4rb17e1usrh55vkjm9p5c0ivd1"
     static let appScheme = "elyan"
 
     static let appleManageSubscriptionsURL = URL(string: "https://apps.apple.com/account/subscriptions")
