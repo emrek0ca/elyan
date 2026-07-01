@@ -8,6 +8,9 @@ import {
   extractTypedJsonBlocksFromText,
   generateGovernedSharedBrainReply,
   generateSharedBrainReply,
+  buildShortFollowUpSystemPrompt,
+  buildSocialChatSystemPrompt,
+  buildStructuredSystemPrompt,
   isReasoningOnlyReply,
   resolveCleanVisibleAnswer,
   resolveEffectiveWorkload,
@@ -3291,4 +3294,129 @@ test("publishReplacement is a no-op after real deltas were already published", a
   const published = deltas.length;
   await publisher.publishReplacement("Bunu asla göndermemeli");
   assert.equal(deltas.length, published);
+});
+
+// ── PROMPT GATING FENCE ──────────────────────────────────────────────────
+// System prompt intent'e göre boyut+içerik değiştirmeli. Bu fence'ler
+// regresyon olduğunda yakalar: kısa takip mesajları için full prompt geri
+// gelirse ya da memory yokken "memory recall policy" leak ederse.
+
+function baseInput(overrides: Record<string, unknown> = {}) {
+  return {
+    userId: "u",
+    prompt: "test",
+    workload: "mobile_chat_fast" as const,
+    route: "shared_brain" as const,
+    ...overrides,
+  };
+}
+
+test("prompt gating: greeting turns get the lean social profile", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    // greeting fast-path
+    baseInput({ prompt: "Selam nasılsın?" }),
+  );
+  assert.ok(prompt.length < 2000, `greeting prompt too long: ${prompt.length}`);
+  assert.ok(!prompt.includes("Memory recall policy"));
+  assert.ok(!prompt.includes("Task-routing policy"));
+  assert.ok(!prompt.includes("Public web policy"));
+  assert.ok(prompt.includes("Core identity"));
+  assert.ok(prompt.includes("Language policy") || prompt.includes("Language"));
+});
+
+test("prompt gating: short followups drop non load-bearing policies", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "devam et" }),
+  );
+  // Kısa takip lean profili — social'dan biraz büyük olabilir (continuity
+  // bloğu var) ama full path'in çok altında.
+  assert.ok(prompt.length < 2500, `short followup prompt too long: ${prompt.length}`);
+  assert.ok(!prompt.includes("Task-routing policy"));
+  assert.ok(!prompt.includes("Public web policy"));
+  assert.ok(!prompt.includes("Humor policy"));
+  assert.ok(!prompt.includes("Memory recall policy"));
+  assert.ok(prompt.includes("Anti-hallucination policy"));
+  assert.ok(prompt.includes("Completion policy"));
+});
+
+test("prompt gating: normal chat without memory drops the memory recall policy", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({
+      prompt: "React'te useEffect döngüsü nasıl kırılır?",
+      // Ne memory ne context packet ne canlı-veri sinyali → policy'lerin
+      // çoğu gereksiz.
+    }),
+  );
+  assert.ok(!prompt.includes("Memory recall policy"));
+  assert.ok(!prompt.includes("Communication style adaptation"));
+  assert.ok(!prompt.includes("Relational tone policy"));
+  assert.ok(!prompt.includes("Context awareness policy"));
+  assert.ok(!prompt.includes("Public web policy"));
+  assert.ok(!prompt.includes("Research answer policy"));
+  assert.ok(!prompt.includes("Project identity rule"));
+  assert.ok(prompt.includes("Anti-hallucination policy"));
+  assert.ok(prompt.includes("Identity disclosure policy"));
+  assert.ok(prompt.includes("Task-routing policy"));
+});
+
+test("prompt gating: currentness signal reactivates web-grounding policies", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "güncel altın fiyatını söyle" }),
+  );
+  assert.ok(prompt.includes("Current date policy"));
+  assert.ok(prompt.includes("Public web policy"));
+  assert.ok(prompt.includes("Research answer policy"));
+});
+
+test("prompt gating: elyan/founder keyword activates project identity rule", () => {
+  const withKeyword = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "Elyan'ı kim yazdı?" }),
+  );
+  const withoutKeyword = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "Kuantum bilgisayar nedir?" }),
+  );
+  assert.ok(withKeyword.includes("Project identity rule"));
+  assert.ok(!withoutKeyword.includes("Project identity rule"));
+});
+
+test("prompt gating: short followup profile is strictly smaller than full profile", () => {
+  const short = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "devam et" }),
+  );
+  // Full profile — canlı-veri + memory-bağımlı policy'ler aktif olsun diye
+  // both signals uydur:
+  const full = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({
+      prompt: "güncel altın fiyatları hakkında detaylı analiz ver",
+      understandingContext: {
+        memoryRelevanceSummary: ["kullanıcı finans takip ediyor"],
+      } as never,
+    }),
+  );
+  assert.ok(
+    short.length < full.length * 0.6,
+    `short (${short.length}) not meaningfully smaller than full (${full.length})`,
+  );
+});
+
+test("prompt gating: helpers export stable signatures", () => {
+  // Regression fence: refactor sırasında yanlışlıkla iç kullanıma çevrilmesin.
+  const social = buildSocialChatSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "Selam" }),
+  );
+  const shortFollowup = buildShortFollowUpSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "devam et" }),
+  );
+  assert.ok(social.startsWith("BASE"));
+  assert.ok(shortFollowup.startsWith("BASE"));
 });
