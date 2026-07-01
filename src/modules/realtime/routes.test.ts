@@ -8,6 +8,7 @@ import {
   realtimeStreamChannelForUser,
   realtimeRoutes,
   shapeRealtimeEventEnvelope,
+  shouldDropSlowSseClient,
   shouldDispatchAssignedRuntimeTask,
 } from "./routes.js";
 
@@ -173,4 +174,12 @@ test("realtime stream rejects unowned task scopes", async () => {
 
   assert.equal(response.statusCode, 404);
   await app.close();
+});
+
+test("shouldDropSlowSseClient drops connections whose write buffer exceeds the limit", () => {
+  assert.equal(shouldDropSlowSseClient({ writableLength: 0 }, 1_048_576), false);
+  assert.equal(shouldDropSlowSseClient({ writableLength: 512_000 }, 1_048_576), false);
+  assert.equal(shouldDropSlowSseClient({ writableLength: 1_048_577 }, 1_048_576), true);
+  // writableLength bilinmiyorsa (test mock'ları) asla düşürme
+  assert.equal(shouldDropSlowSseClient({}, 1_048_576), false);
 });

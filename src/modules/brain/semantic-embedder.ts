@@ -28,6 +28,31 @@ type Extractor = (
 let extractorPromise: Promise<Extractor | null> | null = null;
 let modelDisabled = false;
 
+/* In-process devre kesici: art arda batch hataları (ör. ONNX runtime'ın
+ * geçici belleği tükenmesi) her isteği yeniden model çağrısıyla bekletmesin.
+ * Eşik aşılırsa kısa bir cooldown boyunca embed çağrıları anında null döner
+ * ve çağıranlar lexical/hash fallback'e düşer. */
+const EMBEDDER_FAILURE_THRESHOLD = 5;
+const EMBEDDER_COOLDOWN_MS = 60_000;
+let consecutiveEmbedderFailures = 0;
+let embedderCooldownUntil = 0;
+
+function isEmbedderInCooldown(): boolean {
+  return Date.now() < embedderCooldownUntil;
+}
+
+function recordEmbedderSuccess(): void {
+  consecutiveEmbedderFailures = 0;
+}
+
+function recordEmbedderFailure(): void {
+  consecutiveEmbedderFailures += 1;
+  if (consecutiveEmbedderFailures >= EMBEDDER_FAILURE_THRESHOLD) {
+    embedderCooldownUntil = Date.now() + EMBEDDER_COOLDOWN_MS;
+    consecutiveEmbedderFailures = 0;
+  }
+}
+
 function compactText(value: string): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -102,6 +127,7 @@ export async function embedTextsForStorage(
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">,
 ): Promise<number[][] | null> {
   if (texts.length === 0) return [];
+  if (isEmbedderInCooldown()) return null;
   const extractor = await getExtractor(logger);
   if (!extractor) return null;
   try {
@@ -112,8 +138,10 @@ export async function embedTextsForStorage(
     for (const v of vectors) {
       if (v.length !== STORAGE_SEMANTIC_DIMENSIONS) return null;
     }
+    recordEmbedderSuccess();
     return vectors;
   } catch (error) {
+    recordEmbedderFailure();
     logger?.warn?.({ error }, "storage semantic embedding batch failed");
     return null;
   }
@@ -127,6 +155,7 @@ export async function embedQueryForStorage(
   query: string,
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">,
 ): Promise<number[] | null> {
+  if (isEmbedderInCooldown()) return null;
   const extractor = await getExtractor(logger);
   if (!extractor) return null;
   try {
@@ -137,8 +166,10 @@ export async function embedQueryForStorage(
     if (vectors.length !== 1 || vectors[0].length !== STORAGE_SEMANTIC_DIMENSIONS) {
       return null;
     }
+    recordEmbedderSuccess();
     return vectors[0];
   } catch (error) {
+    recordEmbedderFailure();
     logger?.warn?.({ error }, "storage semantic query embedding failed");
     return null;
   }

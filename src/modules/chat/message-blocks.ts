@@ -64,7 +64,7 @@ const internalAssistantPattern =
 // substring because streaming concat can glue them mid-line
 // ("…User- LanguageHere's a thinking process:").
 const reasoningDumpPattern =
-  /\b(?:here'?s (?:a|the|my) thinking process|here is (?:a|the|my) thinking process|thinking process\s*:|thought process\s*:|check constraints\s*&\s*policies|düşünme süreci\s*:)/i;
+  /\b(?:here'?s (?:a|the|my) thinking process|here is (?:a|the|my) thinking process|thinking process\s*:|thought process\s*:|check constraints\s*&\s*policies|düşünme süreci\s*:|let me think through this|step-by-step reasoning\s*:|internal reasoning\s*:|reasoning trace\s*:|akıl yürütme süreci\s*:|akil yurutme sureci\s*:|iç değerlendirme\s*:|ic degerlendirme\s*:)/i;
 const finalAnswerPrefixPattern =
   /^(?:final answer|answer|cevap|son cevap)\s*:\s*/i;
 const publicProviderTopicPattern =
@@ -2171,6 +2171,111 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
   };
 }
 
+/* ── Şema doğrulama + onarım katmanı ─────────────────────────────────────
+ * parseAssistantBlock eksik zorunlu alanlı blokları null'a düşürür; eskiden bu
+ * bloklar SESSİZCE kayboluyordu (mobilde "cevap geldi ama içerik yok" ya da
+ * model metni fence içinde bıraktıysa boş gri kutu). Onarım kuralı:
+ *   eksik zorunlu alan → bloğu düşür, okunabilir metin alanlarını tek bir
+ *   text bloğuna çevir. Ham JSON asla kullanıcıya sızmaz; kurtarılacak metin
+ *   yoksa blok tamamen atılır (boş kutu render edilmez).                     */
+
+const SALVAGEABLE_BLOCK_TYPES = new Set([
+  "chart",
+  "table",
+  "math",
+  "latex",
+  "formula",
+  "equation",
+  "math_surface_3d",
+  "svg",
+  "vector",
+  "diagram",
+  "document_block",
+  "code",
+  "image_analysis",
+  "file",
+  "text",
+  "summary",
+  "next_steps",
+]);
+
+function looksLikeRawStructuredPayload(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    /"type"\s*:/.test(trimmed) ||
+    /```(?:json)?/.test(trimmed)
+  );
+}
+
+function salvageInvalidBlockToText(value: unknown): AssistantTextMessageBlock | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const type = String(record.type ?? "").trim().toLowerCase();
+  // Meta/iç blok tipleri (status, security_decision, task_trace…) kullanıcıya
+  // metin olarak da gösterilmez — sessizce düşmeleri doğru davranış.
+  if (!SALVAGEABLE_BLOCK_TYPES.has(type)) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  for (const key of ["title", "summary", "caption", "description", "detail", "content", "markdown", "text"]) {
+    const raw = record[key];
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const compact = raw.replace(/\s+/g, " ").trim();
+    if (!compact || compact.length > 2_400 || looksLikeRawStructuredPayload(compact)) {
+      continue;
+    }
+    const dedupe = compact.toLowerCase();
+    if (seen.has(dedupe)) {
+      continue;
+    }
+    seen.add(dedupe);
+    parts.push(compact);
+  }
+
+  const markdown = sanitizeAssistantVisibleText(parts.join("\n\n"), { fallback: "" });
+  if (!markdown.trim()) {
+    return null;
+  }
+
+  return {
+    type: "text",
+    markdown,
+    ...withAssistantBlockDefaults("text", {}, {
+      renderHints: {
+        sectionRole: "detail",
+        salvagedFromBlockType: type,
+      },
+    }),
+  };
+}
+
+function parseAssistantBlocksWithSalvage(blocks: unknown): AssistantMessageBlock[] {
+  if (!Array.isArray(blocks)) {
+    return [];
+  }
+  const output: AssistantMessageBlock[] = [];
+  for (const raw of blocks) {
+    const parsed = parseAssistantBlock(raw);
+    if (parsed) {
+      output.push(parsed);
+      continue;
+    }
+    const salvaged = salvageInvalidBlockToText(raw);
+    if (salvaged) {
+      output.push(salvaged);
+    }
+  }
+  return output;
+}
+
 function mergeAssistantBlocks(blocks: AssistantMessageBlock[]): AssistantMessageBlock[] {
   if (blocks.length === 0) {
     return [];
@@ -2261,11 +2366,7 @@ export function composeAssistantMessageBlocks(input: {
   content?: string | null | undefined;
   streaming?: boolean;
 }): AssistantMessageBlock[] {
-  const normalizedBlocks = Array.isArray(input.blocks)
-    ? input.blocks
-        .map(parseAssistantBlock)
-        .filter((value): value is AssistantMessageBlock => value != null)
-    : [];
+  const normalizedBlocks = parseAssistantBlocksWithSalvage(input.blocks);
   const textBlocks = buildAssistantMessageBlocks(input.content, {
     streaming: input.streaming,
   });
@@ -2287,11 +2388,7 @@ export function normalizeAssistantMessageBlocks(input: {
   content?: string | null | undefined;
   streaming?: boolean;
 }): AssistantMessageBlock[] {
-  const normalizedBlocks = Array.isArray(input.blocks)
-    ? input.blocks
-        .map(parseAssistantBlock)
-        .filter((value): value is AssistantMessageBlock => value != null)
-    : [];
+  const normalizedBlocks = parseAssistantBlocksWithSalvage(input.blocks);
   if (normalizedBlocks.length > 0) {
     return dedupeAssistantBlocks(mergeAssistantBlocks(normalizedBlocks));
   }

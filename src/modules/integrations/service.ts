@@ -154,6 +154,7 @@ async function refreshGoogleOAuthAccessToken(
   }
 
   const response = await fetch(provider.oauth.tokenUrl, {
+    signal: AbortSignal.timeout(12_000),
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -309,6 +310,7 @@ async function exchangeOAuthCode(
 
   const response = await fetch(entry.oauth.tokenUrl, {
     ...requestInit,
+    signal: AbortSignal.timeout(12_000),
   });
   const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
 
@@ -324,6 +326,7 @@ async function fetchProviderIdentity(provider: ConnectionProvider, accessToken: 
     case "google": {
       const response = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(10_000),
       });
       const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
       return {
@@ -334,6 +337,7 @@ async function fetchProviderIdentity(provider: ConnectionProvider, accessToken: 
     }
     case "github": {
       const response = await fetch("https://api.github.com/user", {
+        signal: AbortSignal.timeout(10_000),
         headers: {
           Authorization: `Bearer ${accessToken}`,
           Accept: "application/vnd.github+json",
@@ -349,6 +353,7 @@ async function fetchProviderIdentity(provider: ConnectionProvider, accessToken: 
     case "discord": {
       const response = await fetch("https://discord.com/api/users/@me", {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(10_000),
       });
       const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
       return {
@@ -360,6 +365,7 @@ async function fetchProviderIdentity(provider: ConnectionProvider, accessToken: 
     case "dropbox": {
       const response = await fetch("https://api.dropboxapi.com/2/users/get_current_account", {
         method: "POST",
+        signal: AbortSignal.timeout(10_000),
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
@@ -741,6 +747,7 @@ export async function sendGmailMessage(
   });
 
   const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    signal: AbortSignal.timeout(15_000),
     method: "POST",
     headers: {
       Authorization: `Bearer ${token.accessToken}`,

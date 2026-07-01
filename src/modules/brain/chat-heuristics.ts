@@ -96,7 +96,49 @@ const BALANCED_PROFILE_PATTERNS = [
   /\b(pdf|docx|xlsx|pptx|belge|dokuman|döküman|dosya|görsel|gorsel|metin|içerik|icerik|özetini çıkar|ozetini cikar|bunda ne yazıyor|bunda ne yaziyo|içinde ne var|icinde ne var|tarat|tarama|ocr|çeviri|ceviri|tercüme|tercume|gramer|grammar|lehçe|lehce|alfabe|söz varlığı|soz varligi|kelime hazinesi)\b/i,
   /\b(türk dünyası|turkic|oğuz|oguz|kıpçak|kipchak|karluk|qipchak|qarluq|azerbaijani|kazakh|kyrgyz|uzbek|turkmen|uyghur|tatar|bashkir|gagauz|karakalpak|sakha|chuvash)\b/i,
   /\b(yarım bırakma|yarim birakma|yarım kalmasın|yarim kalmasin|tamamla|tamamlanmış|bitir|bozma|daha akıllı|daha zeki|net sonuç|uzatma ama eksik bırakma)\b/i,
+  // Türkçe ek/çekim toleransı: "karşılaştırmanı", "özetler misin", "açıklar
+  // mısın", "değerlendirmeni", "inceler misin" gibi çekimli analiz fiilleri
+  // \b tabanlı desenlerden kaçıyordu (JS \b ASCII'dir: kökten sonra gelen ek
+  // ASCII harfle başlayınca sınır oluşmaz ve eşleşme düşer). Kök + \p{L}* ile
+  // tüm ek zincirine izin ver; (?<!\p{L}) kök başlangıcını kelime başına
+  // sabitler.
+  /(?<!\p{L})(karşılaştır|karsilastir|kıyasla|kiyasla|özetle|ozetle|açıkla|acikla|anlat|değerlendir|degerlendir|incele|analiz|detaylandır|detaylandir)\p{L}*/iu,
 ];
+
+/* ── Kısa takip mesajları ──────────────────────────────────────────────────
+ * "anlamadım", "devam et", "onu düzelt" gibi mesajlar önceki tura referans
+ * verir; bağlamsız yorumlanınca model alakasız yeni bir cevap üretiyor.
+ * Bu tespit inference tarafında rollingSummary + lastAssistantBlocksDigest'i
+ * zorunlu bağlam yapmak için kullanılır. */
+const SHORT_FOLLOWUP_PATTERNS = [
+  // \b yerine (?!\p{L}): Türkçe harfle biten köklerde ("olmadı", "anlamadım")
+  // ASCII \b satır sonunda sınır üretmez ve desen sessizce kaçar.
+  /^(anlamadım|anlamadim|anlayamadım|anlayamadim|anlamıyorum|anlamiyorum)(?!\p{L})/iu,
+  /^(devam|devam et|devam eder misin|kaldığın yerden devam|kaldigin yerden devam|continue|go on)(?!\p{L})/iu,
+  /^(onu|bunu|şunu|sunu)\s+(düzelt|duzelt|kısalt|kisalt|uzat|değiştir|degistir|düzenle|duzenle|çevir|cevir|tamamla|iyileştir|iyilestir|yeniden yaz|tekrar yaz|fix|redo|improve)\p{L}*$/iu,
+  /^(tekrar|yeniden|bir daha)( dene| yap| yaz| dener misin| yapar mısın| yapar misin)?$/iu,
+  /^daha (kısa|kisa|uzun|detaylı|detayli|basit|net|iyi|sade)( yaz| yap| anlat| olsun| açıkla| acikla)?$/iu,
+  /^(olmadı|olmadi|olmamış|olmamis|beğenmedim|begenmedim)(?!\p{L})/iu,
+  /^(yanlış|yanlis|hatalı|hatali)( oldu| olmuş| olmus| bu)?$/iu,
+  /^(evet devam|tamam devam|peki devam)(?!\p{L})/iu,
+];
+
+export function isShortFollowUpPrompt(prompt: string): boolean {
+  const normalized = compactText(prompt)
+    .toLocaleLowerCase("tr-TR")
+    .replace(/[?!.…]+$/u, "")
+    .trim();
+  if (!normalized || normalized.length > 40) {
+    return false;
+  }
+  if (normalized.split(/\s+/).length > 5) {
+    return false;
+  }
+  if (isSocialChatPrompt(normalized)) {
+    return false;
+  }
+  return SHORT_FOLLOWUP_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 
 export function compactText(value: string): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();

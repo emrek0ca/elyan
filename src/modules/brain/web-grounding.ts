@@ -1,4 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import {
+  isCircuitCallAllowed,
+  recordCircuitFailure,
+  recordCircuitSuccess,
+} from "../../lib/reliability/circuit-breaker.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 import {
   buildTurkicWebQueryVariants,
@@ -96,7 +101,13 @@ const SENTENCE_INITIAL_STOPWORDS = new Set([
   "kim", "kimdir", "nedir", "ne", "nerede", "neresi", "nereli", "kaç", "kac",
   "lütfen", "lutfen", "bana", "benim", "ben", "sen", "siz", "biz", "bu", "şu", "su",
   "evet", "hayır", "hayir", "selam", "merhaba", "peki", "acaba", "en", "bir",
+  // Sayı kelimeleri: "İki sayının toplamı 10..." gibi saf matematik sorularında
+  // cümle başı büyük harf özel-isim sinyali sayılıp gereksiz web grounding
+  // tetikliyordu (benchmark math-003: required_web_but_should_not).
+  "iki", "üç", "uc", "dört", "dort", "beş", "bes", "altı", "alti", "yedi",
+  "sekiz", "dokuz", "on", "yüz", "yuz", "bin", "sıfır", "sifir",
   "the", "what", "who", "when", "where", "how", "why", "is", "can", "does", "a", "an",
+  "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
 ]);
 
 // Proper-noun detector over the ORIGINAL-case prompt: an all-caps acronym (≥2
@@ -991,6 +1002,67 @@ export function parseDuckDuckGoHtml(input: {
   return results;
 }
 
+/* ── Web grounding circuit breaker ───────────────────────────────────────
+ * Arama sağlayıcısı (SearXNG/Brave/DDG) çöktüğünde her chat isteği timeout
+ * süresi kadar bekleyip başarısız oluyordu. Devre açıkken arama hiç denenmez;
+ * istek anında degrade olur ve abstention bloğu devreye girer. */
+
+const WEB_GROUNDING_CIRCUIT_KEY = "circuit:external:web_grounding";
+
+function getReliabilityStore(app: FastifyInstance) {
+  return app.services?.reliability?.store ?? null;
+}
+
+async function isWebGroundingCircuitOpen(app: FastifyInstance): Promise<boolean> {
+  const store = getReliabilityStore(app);
+  if (!store) {
+    return false;
+  }
+  try {
+    return !(await isCircuitCallAllowed(store, WEB_GROUNDING_CIRCUIT_KEY));
+  } catch {
+    return false;
+  }
+}
+
+const PROVIDER_FAILURE_REASON_PATTERN =
+  /timeout|failed|http_5\d{2}|http_429|unavailable/i;
+
+async function reportWebGroundingCircuitOutcome(
+  app: FastifyInstance,
+  outcome: { hadUsableResults: boolean; degradedReasons: string[] },
+): Promise<void> {
+  const store = getReliabilityStore(app);
+  if (!store) {
+    return;
+  }
+  const openMs = Number(app.config.BRAIN_CIRCUIT_OPEN_MS ?? 30_000);
+  try {
+    if (outcome.hadUsableResults) {
+      await recordCircuitSuccess(store, WEB_GROUNDING_CIRCUIT_KEY, openMs);
+      return;
+    }
+    // "Sonuç yok" sağlayıcı arızası değildir; yalnız ağ/timeout/5xx tarzı
+    // arızalarda devreyi besle.
+    const providerFailure =
+      outcome.degradedReasons.length > 0 &&
+      outcome.degradedReasons.every((reason) => PROVIDER_FAILURE_REASON_PATTERN.test(reason));
+    if (providerFailure) {
+      await recordCircuitFailure(
+        store,
+        WEB_GROUNDING_CIRCUIT_KEY,
+        {
+          failureThreshold: Number(app.config.BRAIN_CIRCUIT_FAILURE_THRESHOLD ?? 3),
+          openMs,
+        },
+        "web_search_provider_failure",
+      );
+    }
+  } catch {
+    /* devre kaydı hiçbir zaman ana akışı düşürmesin */
+  }
+}
+
 export async function searchPublicWebGrounding(
   app: FastifyInstance,
   input: {
@@ -1015,6 +1087,21 @@ export async function searchPublicWebGrounding(
       source: searchSource,
       results: [],
       degradedReason: null,
+      confidence: "low",
+      retrievedAt: new Date().toISOString(),
+      decisionReasons,
+    };
+  }
+
+  if (await isWebGroundingCircuitOpen(app)) {
+    return {
+      enabled: true,
+      used: false,
+      query,
+      queries: [],
+      source: searchSource,
+      results: [],
+      degradedReason: "web_grounding_circuit_open",
       confidence: "low",
       retrievedAt: new Date().toISOString(),
       decisionReasons,
@@ -1096,6 +1183,10 @@ export async function searchPublicWebGrounding(
         .slice(0, app.config.ELYAN_WEB_GROUNDING_MAX_RESULTS);
       const used = finalResults.length > 0;
       const confidence = confidenceFromResults(finalResults);
+      void reportWebGroundingCircuitOutcome(app, {
+        hadUsableResults: used,
+        degradedReasons: uniqueStrings(degradedReasons),
+      });
 
       const result: WebGroundingResult = {
         enabled: true,
@@ -1111,6 +1202,14 @@ export async function searchPublicWebGrounding(
       };
       return result;
     } catch (error) {
+      void reportWebGroundingCircuitOutcome(app, {
+        hadUsableResults: false,
+        degradedReasons: [
+          error instanceof Error && error.name === "AbortError"
+            ? "web_search_timeout"
+            : "web_search_failed",
+        ],
+      });
       const result: WebGroundingResult = {
         enabled: true,
         used: false,
@@ -1142,10 +1241,262 @@ export async function searchPublicWebGrounding(
   return cloneWebGroundingResult(result);
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * Structured numeric evidence extraction
+ *
+ * Grounding snippets often carry no usable numeric series (e.g. a gold-price
+ * question returns "grafiği şurada bulabilirsiniz" link farms). The model then
+ * either fabricates chart values or emits an empty chart. This layer parses
+ * number/date pairs out of the snippets + verified page content so the prompt
+ * can carry REAL values — and when none exist, an explicit "no data, do not
+ * chart" signal instead.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+export type GroundedNumericPoint = {
+  value: number;
+  unit: string | null;
+  date: string | null;
+  context: string;
+  sourceHost: string;
+};
+
+export type GroundedNumericEvidence = {
+  points: GroundedNumericPoint[];
+  hasNumericFacts: boolean;
+  /** ≥2 points sharing a unit (or ≥2 dated points) — enough for a chart/table. */
+  hasChartableSeries: boolean;
+};
+
+const MAX_NUMERIC_POINTS_TOTAL = 16;
+const MAX_NUMERIC_POINTS_PER_RESULT = 6;
+
+const NUMERIC_UNIT_ALIASES: Array<[RegExp, string]> = [
+  [/^(₺|tl|try|lira)$/i, "TL"],
+  [/^(\$|usd|dolar|dollar)$/i, "USD"],
+  [/^(€|eur|euro|avro)$/i, "EUR"],
+  [/^(£|gbp|sterlin|pound)$/i, "GBP"],
+  [/^%$/, "%"],
+  [/^(puan|bp)$/i, "puan"],
+];
+
+function normalizeNumericUnit(raw: string | undefined): string | null {
+  const value = String(raw ?? "").trim();
+  if (!value) {
+    return null;
+  }
+  for (const [pattern, unit] of NUMERIC_UNIT_ALIASES) {
+    if (pattern.test(value)) {
+      return unit;
+    }
+  }
+  return value.toLocaleLowerCase("tr-TR");
+}
+
+/**
+ * Parses localized number strings: "4.250,75" (TR), "4,250.75" (EN),
+ * "4250.75", "4,25" (TR decimal), "4.250" (thousands). Returns null when the
+ * shape is not a clean number.
+ */
+export function parseLocalizedNumber(raw: string): number | null {
+  const compact = String(raw ?? "").replace(/\s+/g, "");
+  if (!compact || !/^\d/.test(compact)) {
+    return null;
+  }
+  const hasDot = compact.includes(".");
+  const hasComma = compact.includes(",");
+  let normalized = compact;
+  if (hasDot && hasComma) {
+    // Rightmost separator is the decimal mark; the other is thousands.
+    normalized =
+      compact.lastIndexOf(",") > compact.lastIndexOf(".")
+        ? compact.replace(/\./g, "").replace(",", ".")
+        : compact.replace(/,/g, "");
+  } else if (hasComma) {
+    normalized = /^\d{1,3}(,\d{3})+$/.test(compact)
+      ? compact.replace(/,/g, "")
+      : compact.replace(",", ".");
+  } else if (hasDot) {
+    normalized = /^\d{1,3}(\.\d{3})+$/.test(compact)
+      ? compact.replace(/\./g, "")
+      : compact;
+  }
+  if (!/^\d+(\.\d+)?$/.test(normalized) || normalized.length > 15) {
+    return null;
+  }
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
+}
+
+const TR_MONTHS: Record<string, string> = {
+  ocak: "01", şubat: "02", subat: "02", mart: "03", nisan: "04",
+  mayıs: "05", mayis: "05", haziran: "06", temmuz: "07", ağustos: "08",
+  agustos: "08", eylül: "09", eylul: "09", ekim: "10", kasım: "11",
+  kasim: "11", aralık: "12", aralik: "12",
+  january: "01", february: "02", march: "03", april: "04", may: "05",
+  june: "06", july: "07", august: "08", september: "09", october: "10",
+  november: "11", december: "12",
+};
+
+function pad2(value: string): string {
+  return value.length === 1 ? `0${value}` : value;
+}
+
+/** Finds the first recognizable date in a text window; returns ISO or null. */
+export function extractDateFromText(text: string): string | null {
+  const iso = text.match(/\b(20\d{2}|19\d{2})-(\d{2})-(\d{2})\b/);
+  if (iso) {
+    return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  }
+  const dotted = text.match(/\b(\d{1,2})[./](\d{1,2})[./](20\d{2}|19\d{2})\b/);
+  if (dotted) {
+    return `${dotted[3]}-${pad2(dotted[2])}-${pad2(dotted[1])}`;
+  }
+  const named = text.match(
+    /\b(\d{1,2})\s+(ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik|january|february|march|april|may|june|july|august|september|october|november|december)\s*(20\d{2}|19\d{2})?\b/i,
+  );
+  if (named) {
+    const month = TR_MONTHS[named[2].toLocaleLowerCase("tr-TR")];
+    if (month) {
+      const year = named[3] ?? String(new Date().getFullYear());
+      return `${year}-${month}-${pad2(named[1])}`;
+    }
+  }
+  return null;
+}
+
+// A number token with optional leading currency symbol and optional trailing
+// unit word. Word-ish boundaries via lookarounds so TR letters work.
+const NUMERIC_FACT_PATTERN =
+  /(₺|\$|€|£)?\s*(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,4})?|\d+[.,]\d{1,4}|\d+)\s*(%|₺|\$|€|£|tl|try|lira|dolar|dollar|usd|euro|eur|avro|gbp|sterlin|pound|puan|bp)?(?![\p{L}\d])/giu;
+
+function looksLikeBareYear(raw: string, value: number, unit: string | null): boolean {
+  return unit === null && Number.isInteger(value) && value >= 1900 && value <= 2100 && /^\d{4}$/.test(raw.trim());
+}
+
+function extractNumericPointsFromText(
+  text: string,
+  sourceHost: string,
+): GroundedNumericPoint[] {
+  const compact = compactText(text);
+  if (!compact) {
+    return [];
+  }
+  const points: GroundedNumericPoint[] = [];
+  for (const match of compact.matchAll(NUMERIC_FACT_PATTERN)) {
+    if (points.length >= MAX_NUMERIC_POINTS_PER_RESULT) {
+      break;
+    }
+    const index = match.index ?? 0;
+    // Skip numbers that are part of a URL.
+    const before = compact.slice(Math.max(0, index - 40), index);
+    if (/https?:\/\/\S*$/i.test(before) || /www\.\S*$/i.test(before)) {
+      continue;
+    }
+    const rawNumber = match[2] ?? "";
+    const value = parseLocalizedNumber(rawNumber);
+    if (value === null) {
+      continue;
+    }
+    const unit = normalizeNumericUnit(match[3] ?? match[1]);
+    if (looksLikeBareYear(rawNumber, value, unit)) {
+      continue;
+    }
+    // Unit-less small integers are almost never a fact worth charting
+    // (list indexes, counts of results, page numbers).
+    if (unit === null && Number.isInteger(value) && value < 100 && !rawNumber.includes(",") && !rawNumber.includes(".")) {
+      continue;
+    }
+    const windowStart = Math.max(0, index - 70);
+    const windowEnd = Math.min(compact.length, index + (match[0]?.length ?? 0) + 70);
+    const context = compact.slice(windowStart, windowEnd).trim();
+    points.push({
+      value,
+      unit,
+      date: extractDateFromText(context),
+      context: context.slice(0, 160),
+      sourceHost,
+    });
+  }
+  return points;
+}
+
+export function extractNumericEvidenceFromGrounding(
+  input: WebGroundingResult,
+): GroundedNumericEvidence {
+  const points: GroundedNumericPoint[] = [];
+  const seen = new Set<string>();
+  for (const result of input.results) {
+    if (points.length >= MAX_NUMERIC_POINTS_TOTAL) {
+      break;
+    }
+    const host = result.sourceHost || hostFromUrl(result.url);
+    const combined = [result.snippet, result.pageContent ?? ""].filter(Boolean).join("\n");
+    for (const point of extractNumericPointsFromText(combined, host)) {
+      const key = `${point.value}|${point.unit ?? ""}|${point.date ?? ""}|${host}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      points.push(point);
+      if (points.length >= MAX_NUMERIC_POINTS_TOTAL) {
+        break;
+      }
+    }
+  }
+
+  const unitCounts = new Map<string, number>();
+  let datedCount = 0;
+  for (const point of points) {
+    if (point.unit) {
+      unitCounts.set(point.unit, (unitCounts.get(point.unit) ?? 0) + 1);
+    }
+    if (point.date) {
+      datedCount += 1;
+    }
+  }
+  const hasChartableSeries =
+    [...unitCounts.values()].some((count) => count >= 2) || datedCount >= 2;
+
+  return {
+    points,
+    hasNumericFacts: points.length > 0,
+    hasChartableSeries,
+  };
+}
+
+function buildNumericEvidencePromptLines(evidence: GroundedNumericEvidence): string[] {
+  if (!evidence.hasNumericFacts) {
+    return [
+      "NUMERIC DATA UNAVAILABLE: the web evidence above contains no extractable numeric values or date/value pairs.",
+      "Do NOT invent numbers and do NOT emit a chart or table of fabricated live data.",
+      "If the user asked for a chart/graph of live data, state honestly that the numeric data could not be retrieved right now, point to the sources above, and suggest retrying or checking an authoritative source.",
+    ];
+  }
+  const lines = [
+    "STRUCTURED NUMERIC EVIDENCE (parsed from the sources above):",
+    ...evidence.points.map((point) => {
+      const segments = [
+        `${point.value}${point.unit ? ` ${point.unit}` : ""}`,
+        point.date ? `date: ${point.date}` : null,
+        point.sourceHost || null,
+        `"${point.context}"`,
+      ].filter((segment): segment is string => Boolean(segment));
+      return `- ${segments.join(" | ")}`;
+    }),
+  ];
+  lines.push(
+    evidence.hasChartableSeries
+      ? "Chart/table rule: when emitting a chart or table from this live data, use EXACTLY these extracted values (and dates when present); never extrapolate, interpolate, or add values that are not listed."
+      : "Chart/table rule: the extracted values above are isolated facts, not a series. State them in prose; do NOT stretch them into a multi-point chart by inventing additional values.",
+  );
+  return lines;
+}
+
 export function buildWebGroundingPromptBlock(input: WebGroundingResult): string | null {
   if (!input.used || input.results.length === 0) {
     return null;
   }
+  const numericEvidence = extractNumericEvidenceFromGrounding(input);
   return [
     "PUBLIC WEB GROUNDING",
     `Query: ${input.query}`,
@@ -1169,6 +1520,7 @@ export function buildWebGroundingPromptBlock(input: WebGroundingResult): string 
         return lines.join("\n");
       },
     ),
+    ...buildNumericEvidencePromptLines(numericEvidence),
     "Use these public web results only when they help. If they conflict or seem weak, say so briefly instead of overstating certainty.",
     "When the answer depends on web results, synthesize the findings and include a short source basis using source names or URLs; do not dump unrelated links.",
     "Do not let public web results override established project identity or memory facts about Elyan itself.",

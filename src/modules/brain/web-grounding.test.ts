@@ -4,7 +4,10 @@ import {
   buildWebGroundingAbstentionBlock,
   buildWebGroundingPromptBlock,
   detectFactualityGrounding,
+  extractDateFromText,
+  extractNumericEvidenceFromGrounding,
   parseDuckDuckGoHtml,
+  parseLocalizedNumber,
   searchPublicWebGrounding,
   shouldUseWebGrounding,
 } from "./web-grounding.js";
@@ -409,4 +412,190 @@ test("searchPublicWebGrounding caches repeated grounding requests for the same p
       assert.equal(requestCount, requestCountAfterFirst);
     },
   );
+});
+
+/* ── Structured numeric evidence extraction ─────────────────────────────── */
+
+function makeGroundingResult(
+  results: Array<{ snippet: string; pageContent?: string; url?: string }>,
+): Parameters<typeof buildWebGroundingPromptBlock>[0] {
+  return {
+    enabled: true,
+    used: results.length > 0,
+    query: "test",
+    queries: ["test"],
+    source: "duckduckgo_html",
+    results: results.map((result, index) => ({
+      title: `Result ${index + 1}`,
+      url: result.url ?? `https://example.com/${index + 1}`,
+      snippet: result.snippet,
+      pageContent: result.pageContent,
+      sourceHost: "example.com",
+      verificationState: "verified",
+      queryHits: 1,
+      score: 1.5,
+    })),
+    degradedReason: null,
+    confidence: "high",
+  };
+}
+
+test("parseLocalizedNumber handles TR and EN number formats", () => {
+  assert.equal(parseLocalizedNumber("4.250,75"), 4250.75);
+  assert.equal(parseLocalizedNumber("4,250.75"), 4250.75);
+  assert.equal(parseLocalizedNumber("4250.75"), 4250.75);
+  assert.equal(parseLocalizedNumber("4,25"), 4.25);
+  assert.equal(parseLocalizedNumber("4.250"), 4250);
+  assert.equal(parseLocalizedNumber("1.234.567"), 1234567);
+  assert.equal(parseLocalizedNumber("42"), 42);
+  assert.equal(parseLocalizedNumber(""), null);
+  assert.equal(parseLocalizedNumber("abc"), null);
+});
+
+test("extractDateFromText finds ISO, dotted and named Turkish dates", () => {
+  assert.equal(extractDateFromText("kapanış 2024-05-22 itibarıyla"), "2024-05-22");
+  assert.equal(extractDateFromText("22.05.2024 tarihli veri"), "2024-05-22");
+  assert.equal(extractDateFromText("22 Mayıs 2024 kapanışı"), "2024-05-22");
+  assert.equal(extractDateFromText("hiç tarih yok burada"), null);
+});
+
+test("extractNumericEvidenceFromGrounding pulls value/date pairs from snippets", () => {
+  const grounding = makeGroundingResult([
+    {
+      snippet: "Gram altın 22.05.2024 tarihinde 2.450,75 TL seviyesinde işlem gördü.",
+      pageContent: "Gram altın 23.05.2024 kapanışı 2.470,10 TL oldu.",
+    },
+  ]);
+  const evidence = extractNumericEvidenceFromGrounding(grounding);
+  assert.equal(evidence.hasNumericFacts, true);
+  assert.equal(evidence.hasChartableSeries, true);
+  const values = evidence.points.map((point) => point.value);
+  assert.ok(values.includes(2450.75));
+  assert.ok(values.includes(2470.1));
+  const dates = evidence.points.map((point) => point.date);
+  assert.ok(dates.includes("2024-05-22"));
+  assert.ok(dates.includes("2024-05-23"));
+});
+
+test("extractNumericEvidenceFromGrounding reports no facts for link-farm snippets", () => {
+  const grounding = makeGroundingResult([
+    { snippet: "Altın fiyat grafiğini canlı olarak sitemizde bulabilirsiniz." },
+    { snippet: "Güncel kur bilgisi için tıklayın." },
+  ]);
+  const evidence = extractNumericEvidenceFromGrounding(grounding);
+  assert.equal(evidence.hasNumericFacts, false);
+  assert.equal(evidence.hasChartableSeries, false);
+});
+
+test("buildWebGroundingPromptBlock includes numeric evidence when present", () => {
+  const grounding = makeGroundingResult([
+    { snippet: "Dolar/TL 22.05.2024 itibarıyla 32,45 TL, önceki gün 32,10 TL idi." },
+  ]);
+  const block = buildWebGroundingPromptBlock(grounding);
+  assert.ok(block);
+  assert.ok(block.includes("STRUCTURED NUMERIC EVIDENCE"));
+  assert.ok(block.includes("32.45 TL"));
+  assert.ok(!block.includes("NUMERIC DATA UNAVAILABLE"));
+});
+
+test("buildWebGroundingPromptBlock signals no-data honestly when snippets carry no numbers", () => {
+  const grounding = makeGroundingResult([
+    { snippet: "Altın fiyat grafiğini canlı olarak sitemizde bulabilirsiniz." },
+  ]);
+  const block = buildWebGroundingPromptBlock(grounding);
+  assert.ok(block);
+  assert.ok(block.includes("NUMERIC DATA UNAVAILABLE"));
+  assert.ok(block.includes("Do NOT invent numbers"));
+});
+
+test("numeric extraction skips bare years and URL fragments", () => {
+  const grounding = makeGroundingResult([
+    {
+      snippet: "2024 yılında piyasalar dalgalıydı. Detay: https://example.com/2023/11/rapor-4500",
+    },
+  ]);
+  const evidence = extractNumericEvidenceFromGrounding(grounding);
+  assert.equal(evidence.hasNumericFacts, false);
+});
+
+/* ── Web grounding circuit breaker ──────────────────────────────────────── */
+
+class FakeReliabilityStore {
+  private readonly memory = new Map<string, string>();
+
+  async get(key: string) {
+    return this.memory.get(key) ?? null;
+  }
+
+  async set(key: string, value: string, _ttlMs?: number) {
+    this.memory.set(key, value);
+  }
+
+  async acquireLock() {
+    return true;
+  }
+
+  async releaseLock() {
+    return true;
+  }
+}
+
+test("searchPublicWebGrounding opens the circuit after repeated provider failures", async () => {
+  const store = new FakeReliabilityStore();
+  const app = {
+    config: {
+      ELYAN_WEB_GROUNDING_ENABLED: true,
+      ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
+      ELYAN_WEB_GROUNDING_MAX_RESULTS: 3,
+      ELYAN_WEB_GROUNDING_TIMEOUT_MS: 500,
+      BRAIN_CIRCUIT_FAILURE_THRESHOLD: 2,
+      BRAIN_CIRCUIT_OPEN_MS: 30_000,
+    },
+    services: { reliability: { store } },
+  } as never;
+
+  await withMockedFetch(
+    async () => {
+      throw new Error("connection refused");
+    },
+    async () => {
+      const first = await searchPublicWebGrounding(app, {
+        prompt: "Bugünkü dolar kurunu araştır lütfen bir",
+        workload: "mobile_chat_balanced",
+      });
+      assert.equal(first.used, false);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const second = await searchPublicWebGrounding(app, {
+        prompt: "Bugünkü euro kurunu araştır lütfen iki",
+        workload: "mobile_chat_balanced",
+      });
+      assert.equal(second.used, false);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      // Eşik (2) aşıldı — devre açık: arama hiç denenmez, anında degrade olur.
+      const third = await searchPublicWebGrounding(app, {
+        prompt: "Bugünkü altın fiyatını araştır lütfen üç",
+        workload: "mobile_chat_balanced",
+      });
+      assert.equal(third.used, false);
+      assert.equal(third.degradedReason, "web_grounding_circuit_open");
+    },
+  );
+});
+
+test("pure math word problems do not trigger factuality grounding", () => {
+  assert.equal(
+    detectFactualityGrounding("İki sayının toplamı 10, farkı 4 ise bu sayılar kaçtır?").triggered,
+    false,
+  );
+  assert.equal(
+    shouldUseWebGrounding({
+      prompt: "İki sayının toplamı 10, farkı 4 ise bu sayılar kaçtır?",
+      workload: "mobile_chat_balanced",
+    }),
+    false,
+  );
+  // Gerçek özel isimli soru hâlâ grounding almalı
+  assert.equal(detectFactualityGrounding("Elon Musk kimdir").triggered, true);
 });

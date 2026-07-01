@@ -142,6 +142,21 @@ function writeSseEvent(
   return raw.write(`${lines.join("\n")}\n\n`);
 }
 
+/**
+ * Backpressure gate: yavaş client'ın soket yazma buffer'ı sınırsız büyürse
+ * her açık stream sunucu belleğini rehin alır. Buffer sınırı aşıldığında
+ * bağlantıyı KESMEK doğru politika (drop-oldest değil): SSE zaten
+ * Last-Event-ID + replay ile kayıpsız devam edebildiği için client yeniden
+ * bağlanınca kaldığı yerden alır; olay atlamak ise sözleşmeyi bozar.
+ */
+export function shouldDropSlowSseClient(
+  raw: { writableLength?: number },
+  maxBufferedBytes: number,
+): boolean {
+  const buffered = typeof raw.writableLength === "number" ? raw.writableLength : 0;
+  return buffered > Math.max(1, maxBufferedBytes);
+}
+
 export const realtimeRoutes: FastifyPluginAsync = async (app) => {
   app.get("/stream", async (request, reply) => {
     await app.authenticateUser(request, reply);
@@ -214,6 +229,16 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
 
     const writeOrClose = (input: { event: string; data: unknown; id?: number }) => {
       if (closed) {
+        return false;
+      }
+      // Yavaş client: yazma buffer'ı sınırı aştıysa bağlantıyı kes; client
+      // Last-Event-ID ile yeniden bağlanıp replay'den devam eder.
+      if (shouldDropSlowSseClient(reply.raw, app.config.SSE_MAX_BUFFERED_BYTES)) {
+        app.log.warn(
+          { channel, bufferedBytes: reply.raw.writableLength },
+          "sse client too slow; dropping connection (resume via replay)",
+        );
+        closeStream();
         return false;
       }
       const writable = writeSseEvent(reply.raw, input);

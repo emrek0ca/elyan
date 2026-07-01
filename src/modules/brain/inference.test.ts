@@ -9,6 +9,7 @@ import {
   generateGovernedSharedBrainReply,
   generateSharedBrainReply,
   isReasoningOnlyReply,
+  resolveEffectiveWorkload,
   resolveReasoningEffort,
 } from "./inference.js";
 
@@ -563,8 +564,11 @@ test("createDeltaPublisher batches rapid streaming deltas without losing order",
   await publisher.publish("", finalContent, { force: true });
 
   assert.equal(deltas.length < 6, true);
-  assert.equal(deltas[0].delta, "Mer");
-  assert.equal(deltas[0].content, "Mer");
+  // Reasoning-dump gate ilk pencereyi (≥24 görünür karakter) sınıflandırmadan
+  // yayınlamaz; ilk delta artık tek heceli değil, finalContent'in bir ön eki.
+  const firstDelta = String(deltas[0]?.delta ?? "");
+  assert.ok(firstDelta.length >= 3, "first delta carries the held first window");
+  assert.ok(finalContent.startsWith(firstDelta), "first delta is a prefix of the final content");
   assert.equal(deltas.at(-1)?.content, finalContent);
   assert.equal(deltas.map((delta) => String(delta.delta ?? "")).join(""), finalContent);
 });
@@ -3076,4 +3080,170 @@ test("generateGovernedSharedBrainReply reuses the previous assistant answer for 
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test("resolveEffectiveWorkload escalates fast workload when clarification diagnostics flag ambiguity", () => {
+  const base = {
+    userId: "user-1",
+    prompt: "onu düzelt",
+    workload: "mobile_chat_fast",
+  } as never;
+  assert.equal(resolveEffectiveWorkload(base), "mobile_chat_fast");
+
+  const withAmbiguity = {
+    userId: "user-1",
+    prompt: "onu düzelt",
+    workload: "mobile_chat_fast",
+    understandingContext: {
+      clarificationDiagnostics: {
+        shouldClarify: true,
+        ambiguityKind: "ambiguous_followup",
+        reason: "short referential prompt",
+      },
+    },
+  } as never;
+  assert.equal(resolveEffectiveWorkload(withAmbiguity), "mobile_chat_balanced");
+});
+
+test("resolveEffectiveWorkload keeps greetings and non-fast workloads untouched", () => {
+  const greeting = {
+    userId: "user-1",
+    prompt: "selam",
+    workload: "mobile_chat_fast",
+    understandingContext: {
+      clarificationDiagnostics: {
+        shouldClarify: true,
+        ambiguityKind: "insufficient_evidence",
+        reason: "short greeting",
+      },
+    },
+  } as never;
+  assert.equal(resolveEffectiveWorkload(greeting), "mobile_chat_fast");
+
+  const planning = {
+    userId: "user-1",
+    prompt: "onu düzelt",
+    workload: "planning",
+    understandingContext: {
+      clarificationDiagnostics: {
+        shouldClarify: true,
+        ambiguityKind: "ambiguous_followup",
+        reason: "short referential prompt",
+      },
+    },
+  } as never;
+  assert.equal(resolveEffectiveWorkload(planning), "planning");
+});
+
+test("isReasoningOnlyReply flags newly added reasoning-dump preambles", () => {
+  assert.equal(
+    isReasoningOnlyReply(
+      "Let me think through this. Step-by-step reasoning: the user asks about pricing. Check Constraints & Policies.",
+    ),
+    true,
+  );
+  assert.equal(
+    isReasoningOnlyReply("Akıl yürütme süreci: önce planları listele, sonra fiyatı söyle."),
+    true,
+  );
+  assert.equal(isReasoningOnlyReply("Pro plan aylık 199 TL'dir."), false);
+});
+
+test("createDeltaPublisher enforces the streaming memory cap (512KB)", async () => {
+  const published: string[] = [];
+  const publisher = createDeltaPublisher({
+    startedAt: Date.now(),
+    provider: "groq",
+    model: "test-model",
+    onDelta: async (delta) => {
+      published.push(delta.content);
+    },
+  });
+
+  const bigChunk = "a".repeat(300 * 1024);
+  await publisher.publish(bigChunk, bigChunk, { force: true });
+  await publisher.publish(bigChunk, bigChunk + bigChunk, { force: true });
+  const contentAfterCap = published[published.length - 1] ?? "";
+  assert.ok(
+    contentAfterCap.length <= 512 * 1024,
+    `published content must stay under the cap, got ${contentAfterCap.length}`,
+  );
+
+  // Sınır dolduktan sonra yeni delta yayınlanmaz
+  const publishCountAtCap = published.length;
+  await publisher.publish("x", bigChunk + bigChunk + "x", { force: true });
+  assert.equal(published.length, publishCountAtCap);
+});
+
+test("createDeltaPublisher suppresses reasoning-dump openings and supports replacement delivery", async () => {
+  const deltas: Array<Record<string, unknown>> = [];
+  const publisher = createDeltaPublisher({
+    startedAt: 0,
+    provider: "groq",
+    model: "test-model",
+    onDelta(delta) {
+      deltas.push(delta as never);
+    },
+  });
+
+  // Prod vakası: dump content kanalından akıyor
+  const dump =
+    "The user's preferred language is Turkish. I should provide a single animal name. Let's say \"Kurt\". Response: \"Kurt.\"";
+  let cumulative = "";
+  for (const chunk of dump.match(/.{1,12}/g) ?? []) {
+    cumulative += chunk;
+    await publisher.publish(chunk, cumulative);
+  }
+  await publisher.publish("", cumulative, { force: true });
+
+  assert.equal(deltas.length, 0, "dump deltas must never reach the client");
+  assert.equal(publisher.suppressedAsReasoningDump, true);
+  assert.equal(publisher.hasPublished, false);
+
+  // Kurtarılan cevap tek temiz delta olarak gider
+  await publisher.publishReplacement("Kurt. Başka bir hayvan türü mü aklında var?");
+  assert.equal(deltas.length, 1);
+  assert.equal(deltas[0].content, "Kurt. Başka bir hayvan türü mü aklında var?");
+});
+
+test("createDeltaPublisher releases normal Turkish answers after the first window", async () => {
+  const deltas: Array<Record<string, unknown>> = [];
+  const publisher = createDeltaPublisher({
+    startedAt: 0,
+    provider: "groq",
+    model: "test-model",
+    onDelta(delta) {
+      deltas.push(delta as never);
+    },
+  });
+
+  const answer = "Kurt! Kurtlar sürü halinde yaşar ve çok zeki hayvanlardır.";
+  let cumulative = "";
+  for (const chunk of answer.match(/.{1,10}/g) ?? []) {
+    cumulative += chunk;
+    await publisher.publish(chunk, cumulative);
+  }
+  await publisher.publish("", answer, { force: true });
+
+  assert.equal(publisher.suppressedAsReasoningDump, false);
+  assert.ok(deltas.length >= 1);
+  assert.equal(deltas.at(-1)?.content, answer);
+});
+
+test("publishReplacement is a no-op after real deltas were already published", async () => {
+  const deltas: Array<Record<string, unknown>> = [];
+  const publisher = createDeltaPublisher({
+    startedAt: 0,
+    provider: "groq",
+    model: "test-model",
+    onDelta(delta) {
+      deltas.push(delta as never);
+    },
+  });
+
+  const answer = "Normal bir cevap metni akıyor burada, gayet uzun ve düzgün.";
+  await publisher.publish(answer, answer, { force: true });
+  const published = deltas.length;
+  await publisher.publishReplacement("Bunu asla göndermemeli");
+  assert.equal(deltas.length, published);
 });

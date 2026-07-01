@@ -72,6 +72,14 @@ const envSchema = z.object({
   SSE_MAX_STREAMS_PER_USER: z.coerce.number().int().positive().default(4),
   SSE_REPLAY_LIMIT: z.coerce.number().int().positive().max(2_000).default(500),
   SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
+  /* Yavaş SSE client backpressure sınırı: soket yazma buffer'ı bu bayt
+   * sınırını aşarsa bağlantı kapatılır (client Last-Event-ID ile replay'den
+   * kaldığı yerden devam eder). Sınırsız buffer = bellek sızıntısı. */
+  SSE_MAX_BUFFERED_BYTES: z.coerce.number().int().positive().default(1_048_576),
+  /* PostgreSQL bağlantı havuzu ve zaman aşımı sınırları. */
+  DB_POOL_MAX: z.coerce.number().int().positive().max(200).default(20),
+  DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(10),
+  DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(30),
   BRAIN_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(3),
   BRAIN_CIRCUIT_OPEN_MS: z.coerce.number().int().positive().default(30_000),
   TASK_DISPATCH_LOCK_TTL_MS: z.coerce.number().int().positive().default(120_000),
@@ -224,6 +232,10 @@ export type AppEnv = ParsedEnv & {
   SSE_MAX_STREAMS_PER_USER: number;
   SSE_REPLAY_LIMIT: number;
   SSE_HEARTBEAT_MS: number;
+  SSE_MAX_BUFFERED_BYTES: number;
+  DB_POOL_MAX: number;
+  DB_CONNECT_TIMEOUT_SECONDS: number;
+  DB_IDLE_TIMEOUT_SECONDS: number;
   BRAIN_CIRCUIT_FAILURE_THRESHOLD: number;
   BRAIN_CIRCUIT_OPEN_MS: number;
   TASK_DISPATCH_LOCK_TTL_MS: number;

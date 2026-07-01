@@ -12,6 +12,7 @@
 import type { FastifyInstance } from "fastify";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
+import { tryAcquireLoadSheddingPermit } from "../../lib/reliability/load-shedding.js";
 
 const URL_PATTERN = /https?:\/\/[^\s\])"'>]{8,}/gi;
 const MAX_URLS = 2;
@@ -199,6 +200,29 @@ export async function buildUrlContextBlock(
   const urls = extractUrlsFromPrompt(prompt);
   if (urls.length === 0) return null;
 
+  // Load shedding: URL fetch zenginleştirmesi opsiyoneldir. Sunucu doygunken
+  // permit alınamazsa cevabı bloklamak yerine URL bağlamı atlanır.
+  const permit = await tryAcquireLoadSheddingPermit(app, {
+    namespace: "url_context_fetch",
+    maxConcurrent: 16,
+    ttlMs: 20_000,
+    salt: prompt.slice(0, 64),
+  }).catch(() => null);
+  if (!permit) {
+    return null;
+  }
+
+  try {
+    return await buildUrlContextBlockWithPermit(app, urls);
+  } finally {
+    await permit.release().catch(() => undefined);
+  }
+}
+
+async function buildUrlContextBlockWithPermit(
+  app: FastifyInstance,
+  urls: string[],
+): Promise<string | null> {
   const results = await Promise.all(urls.map((url) => fetchUrlContext(app, url)));
   const usable = results.filter((r) => r.content.length > 40);
   if (usable.length === 0) return null;

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   resolveAttachmentContext,
   resolveAttachmentContextWithCache,
+  selectPromptRelevantChunkIndices,
   type AttachmentContextCandidate,
 } from "./attachment-context.js";
 
@@ -384,4 +385,97 @@ test("resolveAttachmentContextWithCache reuses prepared attachment payloads with
       needsClarification: uncached?.needsClarification,
     })),
   );
+});
+
+/* ── Question-relevant chunk selection ──────────────────────────────────── */
+
+test("selectPromptRelevantChunkIndices favors question-relevant chunks in document order", () => {
+  const contents = [
+    "Giriş bölümü: şirket tarihçesi ve genel bilgiler.",
+    "İkinci bölüm: organizasyon şeması ve roller.",
+    "Üçüncü bölüm: 2024 bütçe tablosu ve fatura ödemeleri detayı.",
+    "Dördüncü bölüm: gelecek planları ve vizyon.",
+  ];
+  const selected = selectPromptRelevantChunkIndices({
+    prompt: "2024 bütçe ve fatura ödemeleri ne kadar?",
+    contents,
+    maxChunks: 2,
+  });
+  assert.ok(selected.includes(2), "budget/invoice chunk must be selected");
+  assert.deepEqual(selected, [...selected].sort((a, b) => a - b), "selection stays in document order");
+});
+
+test("selectPromptRelevantChunkIndices keeps document head when there is no relevance signal", () => {
+  const contents = ["Bölüm bir metni.", "Bölüm iki metni.", "Bölüm üç metni."];
+  const selected = selectPromptRelevantChunkIndices({
+    prompt: "xyzq qwerty",
+    contents,
+    maxChunks: 2,
+  });
+  assert.deepEqual(selected, [0, 1]);
+});
+
+test("selectPromptRelevantChunkIndices prefers semantic scores when provided", () => {
+  const contents = ["alakasız metin bir", "alakasız metin iki", "alakasız metin üç"];
+  const selected = selectPromptRelevantChunkIndices({
+    prompt: "soru",
+    contents,
+    maxChunks: 1,
+    semanticScores: [0.1, 0.9, 0.3],
+  });
+  assert.deepEqual(selected, [1]);
+});
+
+test("resolveAttachmentContext surfaces question-relevant chunks from deep in a long document", () => {
+  const chunks = Array.from({ length: 12 }, (_, index) =>
+    index === 10
+      ? "Sayfa 11: KVKK uyumluluk maddesi ve veri ihlali ceza hükümleri bu bölümde açıklanır."
+      : `Sayfa ${index + 1}: genel açıklama metni, tarihçe ve idari süreç anlatımı bölüm ${index + 1}.`,
+  );
+  const context = resolveAttachmentContext({
+    prompt: "KVKK uyumluluk maddesi ne diyor?",
+    metadata: {
+      attachments: [
+        {
+          documentId: "doc-long",
+          fileName: "sozlesme.pdf",
+          mimeType: "application/pdf",
+          document_analysis: {
+            documentId: "doc-long",
+            summary: "Uzun sözleşme dökümanı",
+            chunks,
+          },
+        },
+      ],
+    },
+    maxChunks: 3,
+  });
+
+  assert.ok(context);
+  assert.equal(context?.used, true);
+  assert.match(context?.promptBlock ?? "", /KVKK uyumluluk maddesi/);
+});
+
+test("resolveAttachmentContext keeps short documents untouched (no reranking)", () => {
+  const context = resolveAttachmentContext({
+    prompt: "KVKK maddesi ne diyor?",
+    metadata: {
+      attachments: [
+        {
+          documentId: "doc-short",
+          fileName: "kisa.pdf",
+          mimeType: "application/pdf",
+          document_analysis: {
+            documentId: "doc-short",
+            summary: "Kısa belge",
+            chunks: ["Birinci bölüm metni.", "İkinci bölüm KVKK metni."],
+          },
+        },
+      ],
+    },
+  });
+
+  assert.ok(context);
+  assert.match(context?.promptBlock ?? "", /Birinci bölüm metni/);
+  assert.match(context?.promptBlock ?? "", /KVKK metni/);
 });

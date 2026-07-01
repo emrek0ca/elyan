@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSharedBrainAckText, selectHybridMobileChatWorkload } from "./chat-heuristics.js";
+import { buildSharedBrainAckText, isShortFollowUpPrompt, selectHybridMobileChatWorkload } from "./chat-heuristics.js";
 
 test("buildSharedBrainAckText returns empty string so frontend loading indicator handles pending state", () => {
   // All workloads must return empty — no "Bir saniye bakıyorum" injected into
@@ -26,5 +26,100 @@ test("selectHybridMobileChatWorkload keeps only greetings on fast and upgrades e
       brainProfile: null,
     }),
     "mobile_chat_balanced",
+  );
+});
+
+/* ── Türkçe ek/çekim varyasyonları: intent regex kaçırma vakaları ───────── */
+
+test("selectHybridMobileChatWorkload catches Turkish suffixed analysis verbs (test-önce vakalar)", () => {
+  // "karşılaştır" kökü çekimli halde: -ma, -manı, -ır mısın
+  assert.equal(
+    selectHybridMobileChatWorkload({
+      message: "Bu iki telefonu karşılaştırmanı istiyorum",
+      primaryIntent: "chat",
+      brainProfile: null,
+    }),
+    "mobile_chat_balanced",
+  );
+  // "özetle" kökü: "özetler misin" (\b sınırı r harfinde kaçırıyordu)
+  assert.equal(
+    selectHybridMobileChatWorkload({
+      message: "Şu metni özetler misin",
+      primaryIntent: "chat",
+      brainProfile: null,
+    }),
+    "mobile_chat_balanced",
+  );
+  // "açıkla" kökü: "açıklar mısın"
+  assert.equal(
+    selectHybridMobileChatWorkload({
+      message: "Bunu bana açıklar mısın",
+      primaryIntent: "chat",
+      brainProfile: null,
+    }),
+    "mobile_chat_balanced",
+  );
+  // "değerlendir" kökü: "değerlendirmeni istiyorum"
+  assert.equal(
+    selectHybridMobileChatWorkload({
+      message: "Şu planı değerlendirmeni istiyorum",
+      primaryIntent: "chat",
+      brainProfile: null,
+    }),
+    "mobile_chat_balanced",
+  );
+  // "incele" kökü: "inceler misin"
+  assert.equal(
+    selectHybridMobileChatWorkload({
+      message: "Şu kodu inceler misin",
+      primaryIntent: "chat",
+      brainProfile: null,
+    }),
+    "mobile_chat_balanced",
+  );
+});
+
+test("suffix handling does not break greetings or unrelated short chat", () => {
+  assert.equal(
+    selectHybridMobileChatWorkload({
+      message: "Selam, naber?",
+      primaryIntent: "chat",
+      brainProfile: null,
+    }),
+    "mobile_chat_fast",
+  );
+  assert.equal(
+    selectHybridMobileChatWorkload({
+      message: "Bugün hava güzel",
+      primaryIntent: "chat",
+      brainProfile: null,
+    }),
+    "mobile_chat_fast",
+  );
+});
+
+/* ── Kısa takip mesajı tespiti ──────────────────────────────────────────── */
+
+test("isShortFollowUpPrompt detects short follow-up turns", () => {
+  assert.equal(isShortFollowUpPrompt("anlamadım"), true);
+  assert.equal(isShortFollowUpPrompt("Anlamadım?"), true);
+  assert.equal(isShortFollowUpPrompt("devam et"), true);
+  assert.equal(isShortFollowUpPrompt("devam"), true);
+  assert.equal(isShortFollowUpPrompt("onu düzelt"), true);
+  assert.equal(isShortFollowUpPrompt("bunu kısalt"), true);
+  assert.equal(isShortFollowUpPrompt("tekrar dene"), true);
+  assert.equal(isShortFollowUpPrompt("daha kısa yaz"), true);
+  assert.equal(isShortFollowUpPrompt("olmadı"), true);
+  assert.equal(isShortFollowUpPrompt("yanlış oldu"), true);
+});
+
+test("isShortFollowUpPrompt does not flag full standalone questions", () => {
+  assert.equal(isShortFollowUpPrompt("Atatürk kimdir?"), false);
+  assert.equal(isShortFollowUpPrompt("Bana kuantum bilgisayarları detaylıca anlatır mısın"), false);
+  assert.equal(isShortFollowUpPrompt("Selam"), false);
+  assert.equal(isShortFollowUpPrompt(""), false);
+  assert.equal(
+    isShortFollowUpPrompt("Bu raporu düzeltmeni istiyorum çünkü üçüncü bölümde hatalar var ve tablolar eksik kalmış durumda"),
+    false,
   );
 });

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { ArtifactInput } from "../../contracts/domain.js";
+import { tryAcquireLoadSheddingPermit } from "../../lib/reliability/load-shedding.js";
 
 type HostedImageArtifactInput = {
   prompt: string;
@@ -144,6 +145,32 @@ export async function maybeGenerateHostedImageArtifact(
     return null;
   }
 
+  // Load shedding: görsel üretimi opsiyonel ve pahalı bir dış çağrı (45s'e
+  // kadar). Sunucu doygunken permit yoksa üretim atlanır; metin cevabı akmaya
+  // devam eder.
+  const imagePermit = await tryAcquireLoadSheddingPermit(app, {
+    namespace: "hosted_image_generation",
+    maxConcurrent: 4,
+    ttlMs: 60_000,
+    salt: input.prompt.slice(0, 64),
+  }).catch(() => null);
+  if (!imagePermit) {
+    app.log.warn("hosted image generation shed due to load");
+    return null;
+  }
+
+  try {
+    return await generateHostedImageArtifactWithPermit(app, input, apiKey);
+  } finally {
+    await imagePermit.release().catch(() => undefined);
+  }
+}
+
+async function generateHostedImageArtifactWithPermit(
+  app: FastifyInstance,
+  input: HostedImageArtifactInput,
+  apiKey: string,
+): Promise<HostedImageArtifactResult | null> {
   const baseUrl = String(app.config.OPENAI_BASE_URL ?? "https://api.openai.com/v1").trim();
   const model = "gpt-image-1";
   const size = inferImageSize(input.prompt);

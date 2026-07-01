@@ -299,7 +299,9 @@ test("decideCommandRoute keeps vague referential prompts in clarification mode",
   assert.equal(decision.route, "server_brain");
   assert.equal(decision.shouldAskClarification, true);
   assert.equal(decision.intent, "ambiguous_request");
-  assert.equal(decision.selectedWorkload, "mobile_chat_fast");
+  // Belirsiz intent artık fast'ta bırakılmıyor: bir kademe yukarı (balanced)
+  // çıkar ki önceki tur bağlamıyla doğru yorumlanabilsin.
+  assert.equal(decision.selectedWorkload, "mobile_chat_balanced");
 });
 
 test("decideCommandRoute keeps document generation on the shared brain", async () => {
@@ -1112,4 +1114,31 @@ test("decideCommandRoute fails closed when dispatch is on but the plan forbids d
     decision.userFacingMessage,
     "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
   );
+});
+
+test("decideCommandRoute escalates low-confidence ambiguous prompts to the balanced profile", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "bunu düzelt",
+    source: "mobile",
+  });
+
+  assert.equal(decision.intent, "ambiguous_request");
+  assert.equal(decision.shouldAskClarification, true);
+  // Belirsiz kısa referans fast modele düşmemeli: balanced, önceki tur
+  // bağlamını (rolling summary + digest) taşıyabilen kademe.
+  assert.equal(decision.selectedWorkload, "mobile_chat_balanced");
+});
+
+test("decideCommandRoute keeps confident simple questions on the fast profile", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Atatürk kimdir?",
+    source: "mobile",
+  });
+
+  assert.equal(decision.intent, "normal_chat");
+  assert.equal(decision.selectedWorkload, "mobile_chat_fast");
 });

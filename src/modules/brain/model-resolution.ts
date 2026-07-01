@@ -171,7 +171,9 @@ function pickPreferredInstalledModel(
 }
 
 async function loadOllamaModelNames(baseUrl: string): Promise<string[]> {
-  const response = await fetch(`${baseUrl}/api/tags`);
+  const response = await fetch(`${baseUrl}/api/tags`, {
+    signal: AbortSignal.timeout(4_000),
+  });
   if (!response.ok) {
     return [];
   }

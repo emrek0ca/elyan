@@ -7,7 +7,7 @@ import {
   isExplicitTableRequest,
 } from "../../core/understanding/structured-output-policy.js";
 import type { UnderstandingIntent } from "../../core/understanding/types.js";
-import { isMateriallyAmbiguousUserPrompt, selectHybridMobileChatWorkload } from "../brain/chat-heuristics.js";
+import { isMateriallyAmbiguousUserPrompt, isSocialChatPrompt, selectHybridMobileChatWorkload } from "../brain/chat-heuristics.js";
 import { normalizePlanBrainProfile, type PlanBrainProfile } from "../billing/catalog.js";
 import type { SharedBrainWorkload } from "../brain/workloads.js";
 import { generateSharedBrainReply } from "../brain/inference.js";
@@ -727,6 +727,7 @@ function deriveSelectedWorkload(input: {
   message: string;
   primaryIntent: UnderstandingIntent;
   brainProfile?: PlanBrainProfile | null;
+  confidence: number;
 }): SharedBrainWorkload {
   if (input.route === "desktop_runtime" || input.route === "pairing_required" || input.route === "unavailable") {
     return "desktop_handoff";
@@ -748,11 +749,23 @@ function deriveSelectedWorkload(input: {
   if (isExplicitMathSurface3DRequest(input.message) || isExplicitChartRequest(input.message) || isExplicitMathOrLatexRequest(input.message)) {
     return "mobile_chat_balanced";
   }
-  return selectHybridMobileChatWorkload({
+  const hybrid = selectHybridMobileChatWorkload({
     message: input.message,
     primaryIntent: input.primaryIntent,
     brainProfile: input.brainProfile ?? undefined,
   });
+  // Belirsizlik → bir kademe yukarı: düşük güvenli intent'te fast model mesajı
+  // yanlış okuyup bağlamsız/yüzeysel yanıt veriyor. Balanced profil belirsiz
+  // referansları (rolling summary + digest bağlamıyla) çok daha iyi taşıyor.
+  // Selamlaşma/small-talk bilerek muaf — orada belirsizlik zaten zararsız.
+  if (
+    hybrid === "mobile_chat_fast" &&
+    (input.intent === "ambiguous_request" || input.confidence < 0.5) &&
+    !isSocialChatPrompt(input.message)
+  ) {
+    return "mobile_chat_balanced";
+  }
+  return hybrid;
 }
 
 function buildDecision(input: {
@@ -818,6 +831,7 @@ function buildDecision(input: {
         message: input.message,
         primaryIntent: input.primaryIntent,
         brainProfile: normalizePlanBrainProfile(input.brainProfile),
+        confidence: input.confidence,
       }),
   };
 }

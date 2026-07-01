@@ -4,6 +4,11 @@ import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import type { ReliabilityStore } from "../../lib/reliability/redis.js";
 import { prepareKnowledgeDocument } from "./service.js";
 import {
+  embedQueryForStorage,
+  embedTextsForStorage,
+  isStorageEmbedderDisabled,
+} from "./semantic-embedder.js";
+import {
   buildAssistantFileBlock,
   buildAssistantInfoCardBlock,
   buildAssistantTableBlock,
@@ -989,6 +994,225 @@ function buildClarificationMessage(candidates: PreparedAttachmentCandidate[]): s
     : "Birden fazla belge veya görsel görüyorum. Hangisini kullanmamı istediğini belirtir misin?";
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * Question-relevant chunk selection
+ *
+ * Long documents used to be blindly truncated: chunks were consumed in file
+ * order until the char/chunk budget ran out, so a question about page 40 got
+ * pages 1-3 as context. When a document does not fit the budget we now rank
+ * its chunks against the user's question — semantically via the e5-small
+ * storage embedder when available, lexically otherwise — keep the top-K, and
+ * re-sort the survivors back into document order so the excerpt still reads
+ * coherently. Documents that fit the budget are left untouched.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+const CHUNK_RELEVANCE_STOPWORDS = new Set([
+  "acaba", "ama", "ancak", "bana", "belge", "ben", "bir", "biz", "bunu", "bunun",
+  "daha", "dosya", "gibi", "hangi", "için", "icin", "ile", "kadar", "nasıl",
+  "nasil", "nedir", "olan", "olarak", "sen", "şey", "sey", "var", "veya",
+  "the", "and", "for", "with", "what", "this", "that", "from", "about",
+]);
+
+const SEMANTIC_CHUNK_SCORE_TIMEOUT_MS = 2_500;
+const MAX_CHUNKS_TO_EMBED = 80;
+
+type RankableChunk = ReturnType<typeof prepareKnowledgeDocument>["chunks"][number];
+
+function buildPromptTokenSet(prompt: string): Set<string> {
+  const tokens = normalizeToken(prompt).split(" ");
+  const set = new Set<string>();
+  for (const token of tokens) {
+    if (token.length >= 3 && !CHUNK_RELEVANCE_STOPWORDS.has(token)) {
+      set.add(token);
+    }
+  }
+  return set;
+}
+
+function lexicalChunkScore(promptTokens: Set<string>, content: string): number {
+  if (promptTokens.size === 0) {
+    return 0;
+  }
+  const chunkTokens = new Set(normalizeToken(content).split(" ").filter(Boolean));
+  if (chunkTokens.size === 0) {
+    return 0;
+  }
+  let hits = 0;
+  for (const token of promptTokens) {
+    if (chunkTokens.has(token)) {
+      hits += 1;
+      continue;
+    }
+    // Turkish suffixation: "faturalar", "faturanın" should still match "fatura".
+    for (const chunkToken of chunkTokens) {
+      if (chunkToken.length >= 4 && (chunkToken.startsWith(token) || token.startsWith(chunkToken))) {
+        hits += 0.7;
+        break;
+      }
+    }
+  }
+  return hits / promptTokens.size;
+}
+
+function candidateNeedsChunkRanking(
+  candidate: PreparedAttachmentCandidate,
+  maxChunks: number,
+  maxChars: number,
+): boolean {
+  const chunks = candidate.prepared.chunks;
+  if (chunks.length > maxChunks) {
+    return true;
+  }
+  let totalChars = 0;
+  for (const chunk of chunks) {
+    totalChars += Math.min(compactText(chunk.content).length, MAX_EXCERPT_CHARS);
+  }
+  return totalChars > maxChars;
+}
+
+/**
+ * Picks the most question-relevant chunk indices (in original document order).
+ * `semanticScores` — when provided (one per chunk, higher is better) — is the
+ * primary signal, with lexical overlap as tiebreak; otherwise lexical only.
+ * Exported for tests.
+ */
+export function selectPromptRelevantChunkIndices(input: {
+  prompt: string;
+  contents: string[];
+  maxChunks: number;
+  semanticScores?: number[] | null;
+}): number[] {
+  const promptTokens = buildPromptTokenSet(input.prompt);
+  const scored = input.contents.map((content, index) => {
+    const lexical = lexicalChunkScore(promptTokens, content);
+    const semantic =
+      input.semanticScores && Number.isFinite(input.semanticScores[index])
+        ? Number(input.semanticScores[index])
+        : null;
+    return {
+      index,
+      score: semantic !== null ? semantic + lexical * 0.1 : lexical,
+    };
+  });
+
+  const hasSignal = scored.some((item) => item.score > 0);
+  if (!hasSignal) {
+    // No relevance signal at all — keep the document head (original behavior).
+    return scored.slice(0, input.maxChunks).map((item) => item.index);
+  }
+
+  return scored
+    .slice()
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, Math.max(1, input.maxChunks))
+    .map((item) => item.index)
+    .sort((left, right) => left - right);
+}
+
+function reorderCandidateChunksForPrompt(
+  prompt: string,
+  candidate: PreparedAttachmentCandidate,
+  maxChunks: number,
+  maxChars: number,
+  semanticScores: number[] | null,
+): PreparedAttachmentCandidate {
+  if (!candidateNeedsChunkRanking(candidate, maxChunks, maxChars)) {
+    return candidate;
+  }
+  const chunks = candidate.prepared.chunks as RankableChunk[];
+  const selected = selectPromptRelevantChunkIndices({
+    prompt,
+    contents: chunks.map((chunk) => String(chunk.content ?? "")),
+    maxChunks,
+    semanticScores,
+  });
+  if (selected.length === chunks.length) {
+    return candidate;
+  }
+  return {
+    ...candidate,
+    prepared: {
+      ...candidate.prepared,
+      chunks: selected.map((index) => chunks[index]),
+    },
+  };
+}
+
+async function scoreChunksSemantically(
+  prompt: string,
+  contents: string[],
+): Promise<number[] | null> {
+  if (isStorageEmbedderDisabled() || contents.length === 0) {
+    return null;
+  }
+  const bounded = contents.slice(0, MAX_CHUNKS_TO_EMBED);
+  try {
+    const run = (async () => {
+      const [queryVector, chunkVectors] = await Promise.all([
+        embedQueryForStorage(prompt),
+        embedTextsForStorage(bounded),
+      ]);
+      if (!queryVector || !chunkVectors) {
+        return null;
+      }
+      return chunkVectors.map((vector) => {
+        let dot = 0;
+        for (let i = 0; i < vector.length && i < queryVector.length; i += 1) {
+          dot += vector[i] * queryVector[i];
+        }
+        return dot;
+      });
+    })();
+    const timeout = new Promise<null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), SEMANTIC_CHUNK_SCORE_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    const scores = await Promise.race([run, timeout]);
+    if (!scores) {
+      return null;
+    }
+    // Pad truncated tail with -1 so unembedded chunks rank below embedded ones
+    // but can still win via the lexical tiebreak path when scores are absent.
+    return contents.map((_, index) => (index < scores.length ? scores[index] : -1));
+  } catch {
+    return null;
+  }
+}
+
+function rankCandidatesForPrompt(
+  prompt: string,
+  candidates: PreparedAttachmentCandidate[],
+  maxChunks: number,
+  maxChars: number,
+): PreparedAttachmentCandidate[] {
+  return candidates.map((candidate) =>
+    reorderCandidateChunksForPrompt(prompt, candidate, maxChunks, maxChars, null),
+  );
+}
+
+async function rankCandidatesForPromptWithEmbeddings(
+  prompt: string,
+  candidates: PreparedAttachmentCandidate[],
+  maxChunks: number,
+  maxChars: number,
+): Promise<PreparedAttachmentCandidate[]> {
+  const ranked: PreparedAttachmentCandidate[] = [];
+  for (const candidate of candidates) {
+    if (!candidateNeedsChunkRanking(candidate, maxChunks, maxChars)) {
+      ranked.push(candidate);
+      continue;
+    }
+    const contents = (candidate.prepared.chunks as RankableChunk[]).map((chunk) =>
+      String(chunk.content ?? ""),
+    );
+    const semanticScores = await scoreChunksSemantically(prompt, contents);
+    ranked.push(
+      reorderCandidateChunksForPrompt(prompt, candidate, maxChunks, maxChars, semanticScores),
+    );
+  }
+  return ranked;
+}
+
 function buildPromptBlock(input: {
   candidates: PreparedAttachmentCandidate[];
   source: AttachmentContextSource;
@@ -1321,9 +1545,19 @@ export function resolveAttachmentContext(input: {
   const maxChunks = input.maxChunks ?? DEFAULT_MAX_CHUNKS;
   const maxChars = input.maxChars ?? DEFAULT_MAX_CHARS;
   const requestCarrier = extractAttachmentMetadataCarrier(input.metadata);
-  const requestCandidates = buildPreparedCandidates(input.metadata, "request");
+  const requestCandidates = rankCandidatesForPrompt(
+    input.prompt,
+    buildPreparedCandidates(input.metadata, "request"),
+    maxChunks,
+    maxChars,
+  );
   const sessionCandidates = !requestCarrier
-    ? extractSessionCandidates(input.sessionAttachmentCandidates)
+    ? rankCandidatesForPrompt(
+        input.prompt,
+        extractSessionCandidates(input.sessionAttachmentCandidates),
+        maxChunks,
+        maxChars,
+      )
     : [];
   return resolveAttachmentContextFromCandidates({
     prompt: input.prompt,
@@ -1351,13 +1585,19 @@ export async function resolveAttachmentContextWithCache(
   const maxChunks = input.maxChunks ?? DEFAULT_MAX_CHUNKS;
   const maxChars = input.maxChars ?? DEFAULT_MAX_CHARS;
   const requestCarrier = extractAttachmentMetadataCarrier(input.metadata);
-  const requestCandidates = await buildPreparedCandidatesWithCache(
-    store,
-    input.metadata,
-    "request",
+  const requestCandidates = await rankCandidatesForPromptWithEmbeddings(
+    input.prompt,
+    await buildPreparedCandidatesWithCache(store, input.metadata, "request"),
+    maxChunks,
+    maxChars,
   );
   const sessionCandidates = !requestCarrier
-    ? await extractSessionCandidatesWithCache(store, input.sessionAttachmentCandidates)
+    ? await rankCandidatesForPromptWithEmbeddings(
+        input.prompt,
+        await extractSessionCandidatesWithCache(store, input.sessionAttachmentCandidates),
+        maxChunks,
+        maxChars,
+      )
     : [];
 
   return resolveAttachmentContextFromCandidates({

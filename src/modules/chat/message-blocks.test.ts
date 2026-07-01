@@ -629,3 +629,175 @@ test("shapeAssistantMessagePayload prefers top-level blocks over empty metadata 
   assert.equal(blocks[0]?.type, "attachment_ack");
   assert.equal((blocks[0] as { summary?: string }).summary, "1 belge alındı.");
 });
+
+/* ── Şema doğrulama + onarım (salvage) katmanı ──────────────────────────── */
+
+test("invalid chart block with missing values is salvaged into a text block, never raw JSON", () => {
+  const blocks = composeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "chart",
+        title: "Gram Altın (TL)",
+        caption: "Son 3 günün kapanış değerleri",
+        // values/labels/expression eksik → chart şeması geçersiz
+      },
+    ],
+    content: "",
+  });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "text");
+  const markdown = (blocks[0] as { markdown?: string }).markdown ?? "";
+  assert.match(markdown, /Gram Altın/);
+  assert.ok(!markdown.includes("{"), "salvaged text must not contain raw JSON braces");
+});
+
+test("invalid table block (rows as markdown string) is salvaged, not silently dropped", () => {
+  const blocks = composeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "table",
+        title: "Plan Karşılaştırma",
+        summary: "Free ve Pro planların temel farkları",
+        rows: "| Plan | Fiyat |\n|---|---|\n| Free | 0 |",
+      },
+    ],
+    content: "",
+  });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "text");
+  const markdown = (blocks[0] as { markdown?: string }).markdown ?? "";
+  assert.match(markdown, /Plan Karşılaştırma/);
+  assert.ok(!markdown.includes("|---|"), "raw markdown table payload must not leak");
+});
+
+test("invalid meta blocks (status with bad enum) are dropped without salvage", () => {
+  const blocks = composeAssistantMessageBlocks({
+    blocks: [
+      { type: "status", status: "unknown_status", title: "İç durum", detail: "internal" },
+    ],
+    content: "Normal cevap metni.",
+  });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "text");
+  assert.match((blocks[0] as { markdown?: string }).markdown ?? "", /Normal cevap metni/);
+  assert.ok(!JSON.stringify(blocks).includes("İç durum"));
+});
+
+test("salvage never resurrects blocks whose only content is structured payload", () => {
+  const blocks = composeAssistantMessageBlocks({
+    blocks: [
+      { type: "chart", content: '{"labels":[1,2,3],"values":[4,5,6]}' },
+    ],
+    content: "",
+  });
+  assert.equal(blocks.length, 0);
+});
+
+/* ── Yeni reasoning sızıntı desenleri ───────────────────────────────────── */
+
+test("sanitizeAssistantVisibleText strips newly observed reasoning-dump preambles", () => {
+  const dirty = [
+    "Let me think through this carefully before answering the user's question about pricing.",
+    "",
+    "Cevap: Pro plan aylık 199 TL'dir.",
+  ].join("\n");
+  const clean = sanitizeAssistantVisibleText(dirty);
+  assert.ok(!/let me think through this/i.test(clean));
+  assert.match(clean, /Pro plan aylık 199 TL/);
+
+  const trDirty = [
+    "Akıl yürütme süreci: kullanıcı fiyat soruyor, önce planları listelemeliyim.",
+    "",
+    "Pro plan aylık 199 TL'dir.",
+  ].join("\n");
+  const trClean = sanitizeAssistantVisibleText(trDirty);
+  assert.ok(!/akıl yürütme süreci/i.test(trClean));
+  assert.match(trClean, /Pro plan aylık 199 TL/);
+});
+
+/* ── Mobil blok render fixture'ları (elyan_blocks.v2 sözleşme örnekleri) ── */
+
+const MOBILE_RENDER_FIXTURES: Array<{ name: string; blocks: unknown[]; content: string; expectTypes: string[] }> = [
+  {
+    name: "chart + explanatory text",
+    blocks: [
+      {
+        type: "chart",
+        chartType: "line",
+        title: "Gram Altın (TL)",
+        labels: ["20 May", "21 May", "22 May"],
+        values: [2431.2, 2445.8, 2450.75],
+        xLabel: "Tarih",
+        yLabel: "TL",
+      },
+    ],
+    content: "Son üç günün kapanış değerleri yukarıdaki grafikte.",
+    expectTypes: ["chart", "text"],
+  },
+  {
+    name: "table + text",
+    blocks: [
+      {
+        type: "table",
+        title: "Plan Karşılaştırma",
+        columns: ["Plan", "Fiyat", "Limit"],
+        rows: [["Free", "0 TL", "5 saat"], ["Pro", "199 TL", "Sınırsız"]],
+      },
+    ],
+    content: "İki planın temel farkları tabloda.",
+    expectTypes: ["table", "text"],
+  },
+  {
+    name: "math block",
+    blocks: [
+      { type: "math", content: "\\frac{dy}{dx} = 2x", displayMode: true, format: "latex" },
+    ],
+    content: "Türev kuralı uygulanınca sonuç aşağıda.",
+    expectTypes: ["math", "text"],
+  },
+  {
+    name: "document block",
+    blocks: [
+      {
+        type: "document_block",
+        title: "Haftalık Rapor",
+        format: "report",
+        sections: [
+          { heading: "Özet", content: "Bu hafta üç görev tamamlandı.", level: 1 },
+          { heading: "Detaylar", content: "Görev listesi ve durumları.", level: 2 },
+        ],
+        wordCount: 12,
+      },
+    ],
+    content: "Raporu hazırladım.",
+    expectTypes: ["document_block", "text"],
+  },
+];
+
+test("mobile render fixtures produce schema-valid elyan_blocks.v2 payloads", () => {
+  for (const fixture of MOBILE_RENDER_FIXTURES) {
+    const blocks = composeAssistantMessageBlocks({
+      blocks: fixture.blocks,
+      content: fixture.content,
+    });
+    assert.deepEqual(
+      blocks.map((block) => block.type),
+      fixture.expectTypes,
+      `fixture "${fixture.name}" block order`,
+    );
+    for (const block of blocks) {
+      const parsed = elyanAssistantBlockSchema.safeParse(block);
+      assert.ok(
+        parsed.success,
+        `fixture "${fixture.name}" block ${block.type} must satisfy the mobile contract: ${
+          parsed.success ? "" : JSON.stringify(parsed.error.issues.slice(0, 2))
+        }`,
+      );
+      assert.ok((block as { stableBlockId?: string }).stableBlockId, "stableBlockId present");
+      assert.equal((block as { visibility?: string }).visibility, "user_visible");
+    }
+  }
+});

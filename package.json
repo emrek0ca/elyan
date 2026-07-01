@@ -17,6 +17,7 @@
     "benchmark": "tsx src/scripts/run-benchmarks.ts",
     "benchmark:security": "tsx src/scripts/run-benchmarks.ts security",
     "benchmark:routing": "tsx src/scripts/run-benchmarks.ts routing",
+    "soak:sse": "node benchmarks/sse-soak.mjs",
     "benchmark:dist": "node dist/scripts/run-benchmarks.js",
     "brain:seed-corpus": "node dist/scripts/seed-brain-corpus.js",
     "brain:seed-corpus:src": "tsx src/scripts/seed-brain-corpus.ts",

@@ -75,7 +75,12 @@ import {
   extractClientAttachments,
   type ClientAttachment,
 } from "./document-types.js";
-import { isSocialChatPrompt } from "./chat-heuristics.js";
+import { isShortFollowUpPrompt, isSocialChatPrompt } from "./chat-heuristics.js";
+import {
+  classifyReasoningDump,
+  extractFinalAnswerFromReasoningDump,
+  looksLikeReasoningDumpOpening,
+} from "./reasoning-guard.js";
 import {
   listSharedBrainProviderCandidates,
   getBrainCircuitKey,
@@ -1983,6 +1988,26 @@ function buildReasoningProtocolPromptBlock(input: {
     );
   }
 
+  /* ── Chart/table few-shot: 1 doğru + 1 yanlış örnek. Şema hatalarının en
+   * sık iki kaynağı: (a) values içine formül/etiket string'i yazmak,
+   * (b) rows'u string[][] yerine markdown string'i olarak vermek. ───────── */
+  const canEmitChartOrTable =
+    input.workload === "mobile_chat_balanced" ||
+    input.workload === "planning" ||
+    input.workload === "table_generate" ||
+    input.workload === "mobile_chat_deep_refine";
+  if (canEmitChartOrTable) {
+    lines.push(
+      [
+        "- BLOCK SCHEMA EXAMPLES (follow the CORRECT shape exactly; never emit the WRONG shape):",
+        '  CORRECT chart: {"type":"chart","chartType":"line","title":"Gram Altın (TL)","labels":["20 May","21 May","22 May"],"values":[2431.2,2445.8,2450.75],"xLabel":"Tarih","yLabel":"TL","unit":"TL","caption":"Kaynak: web grounding"}',
+        '  WRONG chart (do NOT do this): {"type":"chart","chartType":"line","values":["2400+31.2","yaklaşık 2450","?"],"title":"Altın"} — values must be REAL numbers (never arithmetic strings, ranges, or placeholders) and sampled charts need matching labels; a chart missing real numeric data must not be emitted at all — say the data is unavailable instead.',
+        '  CORRECT table: {"type":"table","title":"Plan Karşılaştırma","columns":["Plan","Fiyat","Limit"],"rows":[["Free","0 TL","5 saat"],["Pro","199 TL","Sınırsız"]]}',
+        '  WRONG table (do NOT do this): {"type":"table","title":"Planlar","rows":"| Plan | Fiyat |\\n|---|---|\\n| Free | 0 |"} — rows must be a string[][] array aligned with columns; never markdown table text, never missing columns, never <br> tags inside cells.',
+      ].join("\n"),
+    );
+  }
+
   /* ── Image analysis ──────────────────────────────────────────────── */
   if (
     input.workload === "image_analyze" ||
@@ -2242,6 +2267,9 @@ function buildCompactContextPromptBlock(
       chatContext?.lastDerivedContextDigest,
   );
   const attachmentDigest = readMetadataRecord(compactContext?.attachmentDigest);
+  const lastAssistantBlocksDigest =
+    readMetadataString(compactContext, "lastAssistantBlocksDigest") ??
+    readMetadataString(chatContext, "lastAssistantBlocksDigest");
   const recentMessages = readMetadataArray(compactContext, "recentMessages");
   const contextPackets = input.understandingContext?.contextPackets ?? [];
   const lines: string[] = [];
@@ -2374,6 +2402,10 @@ function buildCompactContextPromptBlock(
     }
   }
 
+  if (lastAssistantBlocksDigest) {
+    lines.push(`- Last assistant reply digest: ${lastAssistantBlocksDigest}`);
+  }
+
   if (recentMessages.length > 0) {
     lines.push(
       `- Recent mobile window available: ${Math.min(recentMessages.length, 6)} message(s). Prefer the latest intent and avoid rehashing older turns.`,
@@ -2409,6 +2441,18 @@ function buildCompactContextPromptBlock(
   if (speakingStyleDirectives.length > 0) {
     lines.push(
       `- Speaking style directives: ${speakingStyleDirectives.slice(0, 4).join(" | ")}`,
+    );
+  }
+
+  // Kısa takip mesajları ("anlamadım", "devam et", "onu düzelt") önceki tura
+  // referans verir; önceki tur bağlamı MUTLAKA yorumlamaya dahil edilmeli.
+  // Bağlam hiç yoksa bile modele bunun bir takip mesajı olduğunu söyle ki
+  // sıfırdan alakasız bir cevaba başlamasın.
+  if (isShortFollowUpPrompt(input.prompt)) {
+    lines.push(
+      lines.length > 0
+        ? "- SHORT FOLLOW-UP RULE (mandatory): the user's message refers to the PREVIOUS turn. Interpret it strictly against the current user goal, last assistant state/reply digest, and open follow-ups above. Do not treat it as a new standalone question, and do not answer without using that context. \"devam et\" continues the previous answer; \"anlamadım\" re-explains the previous answer more simply; \"onu düzelt\" revises the previous output."
+        : "- SHORT FOLLOW-UP RULE: the user's message refers to a previous turn, but no prior-turn context is available in this request. Say briefly that you need a short reminder of what to continue or fix, instead of answering something unrelated.",
     );
   }
 
@@ -3938,6 +3982,81 @@ export function isReasoningOnlyReply(text: string): boolean {
   return !visible.trim();
 }
 
+const CLEAN_ANSWER_FALLBACK_STUB =
+  "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.";
+
+type VisibleAnswerSanitizerOptions = Parameters<
+  typeof sanitizeAssistantVisibleText
+>[1];
+
+/**
+ * Dump içinden kurtarılan cevabı sanitize edip döner; kurtarılamazsa null.
+ */
+function rescueVisibleAnswerFromRawText(
+  raw: string,
+  options: VisibleAnswerSanitizerOptions = {},
+): string | null {
+  const visible = computeStreamVisibleText(String(raw ?? ""));
+  const extracted = extractFinalAnswerFromReasoningDump(visible || String(raw ?? ""));
+  if (!extracted) {
+    return null;
+  }
+  const sanitized = sanitizeAssistantVisibleText(extracted, {
+    ...options,
+    fallback: extracted,
+  });
+  return sanitized.trim() ? sanitized : extracted;
+}
+
+/**
+ * Nihai görünür cevabı TEK yerden çözer (eskiden iki ayrı yerde kopyalanmış
+ * iç içe sanitize/fallback zinciri vardı; ham metni fallback olarak geri
+ * püskürtüp dump sızdırabiliyordu). Sıra:
+ *   1. adaylar (onarılmış → ham) sanitize edilir; dump DEĞİLSE kullanılır,
+ *   2. dump ise içindeki gerçek cevap kurtarılır,
+ *   3. sanitize her şeyi sildiyse ham görünür metne yalnız dump değilse izin
+ *      verilir (eski kurtarma davranışı, artık dump korumalı),
+ *   4. en son çare stub.
+ */
+function resolveCleanVisibleAnswer(input: {
+  candidates: Array<string | null | undefined>;
+  raw: string;
+  options?: VisibleAnswerSanitizerOptions;
+}): string {
+  const options = input.options ?? {};
+  for (const candidate of input.candidates) {
+    if (!candidate?.trim()) {
+      continue;
+    }
+    const sanitized = polishAssistantVisibleText(
+      sanitizeAssistantVisibleText(candidate, { ...options, fallback: "" }),
+      options,
+    );
+    if (sanitized.trim() && !classifyReasoningDump(sanitized).isDump) {
+      return sanitized;
+    }
+  }
+
+  const rescued = rescueVisibleAnswerFromRawText(input.raw, options);
+  if (rescued) {
+    return rescued;
+  }
+
+  const rawVisible = computeStreamVisibleText(String(input.raw ?? "")).trim();
+  if (
+    rawVisible &&
+    !classifyReasoningDump(rawVisible).isDump &&
+    !looksLikeReasoningDumpOpening(rawVisible)
+  ) {
+    const polished = polishAssistantVisibleText(rawVisible, options);
+    if (polished.trim()) {
+      return polished;
+    }
+  }
+
+  return CLEAN_ANSWER_FALLBACK_STUB;
+}
+
 function extractResponseText(provider: string, payload: unknown): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return "";
@@ -4104,6 +4223,13 @@ function supportsNativeStreamingAttempt(
   );
 }
 
+/* Streaming bellek üst sınırları: kaçak/uzayan bir stream tek istekte yüzlerce
+ * MB string biriktirmesin. Sınır aşıldığında yeni delta'lar düşürülür ve yanıt
+ * o noktada tamamlanmış sayılır. Publisher state'i closure-scoped'tur — istek
+ * bitince referanslarla birlikte serbest kalır, modül-seviyesi state yoktur. */
+export const STREAM_MAX_CONTENT_CHARS = 512 * 1024;
+export const STREAM_MAX_REASONING_CHARS = 128 * 1024;
+
 export function createDeltaPublisher(input: {
   startedAt: number;
   provider: SharedBrainProvider;
@@ -4118,6 +4244,30 @@ export function createDeltaPublisher(input: {
   let pendingContent = "";
   let lastFlushAt = input.startedAt;
   let emittedFirstChunk = false;
+
+  // REASONING-DUMP GATE: ilk görünür pencereyi (≥24 karakter) yayınlamadan
+  // önce dump açılışına karşı test et. Dump ise bu attempt'in TÜM delta'ları
+  // bastırılır — kullanıcı iç düşünme sürecini asla canlı izlemez; stream
+  // sonundaki kontrol retry/kurtarma kararını verir. Dump değilse tutulan
+  // pencere normal akışla yayınlanır (ilk delta ~24-64 karakter gecikir).
+  const DUMP_GATE_MIN_CHARS = 24;
+  const DUMP_GATE_RELEASE_CHARS = 64;
+  let holdingFirstWindow = true;
+  let suppressedAsReasoningDump = false;
+
+  function evaluateFirstWindow(force: boolean): "hold" | "suppress" | "release" {
+    const opening = lastVisibleContent.trimStart();
+    if (!force && opening.length < DUMP_GATE_MIN_CHARS) {
+      return "hold";
+    }
+    if (looksLikeReasoningDumpOpening(opening)) {
+      return "suppress";
+    }
+    if (force || opening.length >= DUMP_GATE_RELEASE_CHARS || /[.!?…\n]/.test(opening)) {
+      return "release";
+    }
+    return "hold";
+  }
 
   // Reasoning-channel ("düşünüyor") state, parallel to content. Throttled
   // separately because reasoning typically arrives as a steady stream of short
@@ -4158,6 +4308,43 @@ export function createDeltaPublisher(input: {
     get firstDeltaMs() {
       return firstDeltaMs;
     },
+    /** Dump gate bu attempt'in yayınını bastırdı mı? */
+    get suppressedAsReasoningDump() {
+      return suppressedAsReasoningDump;
+    },
+    /** Kullanıcıya en az bir delta yayınlandı mı? */
+    get hasPublished() {
+      return lastPublishedContent.length > 0;
+    },
+    /**
+     * Bastırılmış/hiç yayın yapmamış bir attempt için nihai metni TEK delta
+     * olarak yayınlar (dump'tan kurtarılan cevap ya da yanlış-pozitif gate
+     * sonrası tam görünür metin). Daha önce delta yayınlandıysa no-op —
+     * yayınlanmış içerik geri alınamaz, monotonluk bozulmaz.
+     */
+    async publishReplacement(text: string) {
+      if (!input.onDelta) {
+        return;
+      }
+      const replacement = normalizeDelta(String(text ?? "")).trim();
+      if (!replacement || lastPublishedContent.length > 0) {
+        return;
+      }
+      suppressedAsReasoningDump = false;
+      holdingFirstWindow = false;
+      pendingContent = "";
+      lastPublishedContent = replacement;
+      emittedFirstChunk = true;
+      firstDeltaMs ??= Math.max(0, Date.now() - input.startedAt);
+      lastFlushAt = Date.now();
+      await input.onDelta({
+        delta: replacement,
+        content: replacement,
+        provider: input.provider,
+        model: input.model,
+        firstDeltaMs,
+      });
+    },
     async publish(
       delta: string,
       content: string,
@@ -4167,7 +4354,17 @@ export function createDeltaPublisher(input: {
         return;
       }
 
-      const normalizedContent = normalizeDelta(content);
+      // Bellek sınırı: yayınlanan içerik üst sınıra ulaştıysa yeni delta'ları
+      // düşür — istek yolunda sınırsız string büyümesi olmasın.
+      if (lastPublishedContent.length >= STREAM_MAX_CONTENT_CHARS) {
+        return;
+      }
+
+      const normalizedContent = normalizeDelta(
+        content.length > STREAM_MAX_CONTENT_CHARS
+          ? content.slice(0, STREAM_MAX_CONTENT_CHARS)
+          : content,
+      );
 
       if (!normalizedContent.trim() && !options.force) {
         return;
@@ -4188,6 +4385,25 @@ export function createDeltaPublisher(input: {
           lastVisibleContent = visibleContent;
           pendingContent += appended;
         }
+      }
+
+      // Dump gate: bastırılmış attempt hiçbir şey yayınlamaz; ilk pencere
+      // henüz karara bağlanmadıysa yayın bekletilir.
+      if (suppressedAsReasoningDump) {
+        pendingContent = "";
+        return;
+      }
+      if (holdingFirstWindow) {
+        const verdict = evaluateFirstWindow(options.force === true);
+        if (verdict === "hold") {
+          return;
+        }
+        if (verdict === "suppress") {
+          suppressedAsReasoningDump = true;
+          pendingContent = "";
+          return;
+        }
+        holdingFirstWindow = false;
       }
 
       // force, bekleyen görünür metni (örn. bir blok bölgesinin gölgesinde
@@ -4222,7 +4438,12 @@ export function createDeltaPublisher(input: {
       options: { force?: boolean } = {},
     ) {
       if (!input.onDelta) return;
-      const normalized = normalizeDelta(fullReasoning);
+      if (lastReasoningContent.length >= STREAM_MAX_REASONING_CHARS) return;
+      const normalized = normalizeDelta(
+        fullReasoning.length > STREAM_MAX_REASONING_CHARS
+          ? fullReasoning.slice(0, STREAM_MAX_REASONING_CHARS)
+          : fullReasoning,
+      );
       if (normalized === lastReasoningContent) return;
 
       const grew = normalized.length - lastReasoningContent.length;
@@ -4485,12 +4706,33 @@ export async function probeSharedBrainInference(
   }
 }
 
+/**
+ * Nihai workload kararı. Route kararındaki workload'a ek olarak anlama
+ * katmanının belirsizlik teşhisini (clarificationDiagnostics) gerçek bir
+ * karara bağlar: düşük güvenli/belirsiz intent'te fast profil bir kademe
+ * yukarı (mobile_chat_balanced) çıkar. Selamlaşma muaf — orada belirsizlik
+ * zararsız ve fast düşük gecikme için doğru seçim.
+ */
+export function resolveEffectiveWorkload(
+  input: SharedBrainInferenceInput,
+): SharedBrainWorkload {
+  const base =
+    input.workload ?? input.routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD;
+  if (
+    base === "mobile_chat_fast" &&
+    input.understandingContext?.clarificationDiagnostics?.shouldClarify === true &&
+    !isSocialChatPrompt(input.prompt)
+  ) {
+    return "mobile_chat_balanced";
+  }
+  return base;
+}
+
 export async function generateSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
 ): Promise<SharedBrainInferenceResult> {
-  const workload =
-    input.workload ?? input.routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD;
+  const workload = resolveEffectiveWorkload(input);
   const workloadProfile = getSharedBrainWorkloadProfile(workload);
   const deterministicMathSurfaceResult = buildMathSurface3DResult(input, workload);
   if (deterministicMathSurfaceResult) {
@@ -4996,13 +5238,22 @@ export async function generateSharedBrainReply(
                       // both have to be handled in the same loop.
                       if (reasoningPolicy === "visible") {
                         const reasoningChunk = extractResponseReasoning(chunk);
-                        if (reasoningChunk) {
+                        if (
+                          reasoningChunk &&
+                          streamedReasoning.length < STREAM_MAX_REASONING_CHARS
+                        ) {
                           streamedReasoning += reasoningChunk;
                           await deltaPublisher.publishReasoning(streamedReasoning);
                         }
                       }
                       const delta = extractResponseDelta(chunk);
                       if (!delta) {
+                        return;
+                      }
+                      // Üst sınır: kaçak stream tek istekte sınırsız string
+                      // biriktirmesin; sınırdan sonrası düşürülür ve yanıt
+                      // mevcut haliyle tamamlanır.
+                      if (streamedText.length >= STREAM_MAX_CONTENT_CHARS) {
                         return;
                       }
                       streamedText += delta;
@@ -5031,24 +5282,49 @@ export async function generateSharedBrainReply(
                     // model gets us a real answer instead of leaking the
                     // filler back to the user.
                     const placeholderHallucination = isPlaceholderRefusal(text);
-                    const reasoningOnly =
-                      !placeholderHallucination && isReasoningOnlyReply(text);
-                    if (!text || placeholderHallucination || reasoningOnly) {
+                    // Bütüncül dump kontrolü: sanitizer'ın satır satır
+                    // silemediği reasoning dökümlerini de yakala; dump ise
+                    // içindeki gerçek cevabı kurtarmayı dene (retry israfı ve
+                    // stub yerine temiz cevap).
+                    const visibleForGuard = computeStreamVisibleText(text);
+                    const reasoningDump =
+                      !placeholderHallucination &&
+                      (isReasoningOnlyReply(text) ||
+                        classifyReasoningDump(visibleForGuard).isDump);
+                    const rescuedAnswer = reasoningDump
+                      ? extractFinalAnswerFromReasoningDump(visibleForGuard || text)
+                      : null;
+                    if (
+                      !text ||
+                      placeholderHallucination ||
+                      (reasoningDump && !rescuedAnswer)
+                    ) {
                       lastError = {
                         status: 503,
                         provider: candidate.provider,
                         path: attempt.path,
                         reason: placeholderHallucination
                           ? "placeholder_refusal_hallucination"
-                          : reasoningOnly
+                          : reasoningDump
                             ? "reasoning_only_reply"
                             : "empty_stream_response",
                       };
                       attemptRetryable = true;
                     } else {
-                      await deltaPublisher.publish("", streamedText, {
-                        force: true,
-                      });
+                      const deliveredText = rescuedAnswer ?? text;
+                      if (rescuedAnswer) {
+                        // Dump'tan kurtarılan cevap: gate yayını bastırdığı
+                        // için tek temiz delta olarak gider.
+                        await deltaPublisher.publishReplacement(rescuedAnswer);
+                      } else if (deltaPublisher.suppressedAsReasoningDump) {
+                        // Gate yanlış pozitifti (açılış dump gibi görünüp
+                        // cevap çıktı): tam görünür metni tek seferde teslim et.
+                        await deltaPublisher.publishReplacement(visibleForGuard);
+                      } else {
+                        await deltaPublisher.publish("", streamedText, {
+                          force: true,
+                        });
+                      }
                       firstDeltaMs = deltaPublisher.firstDeltaMs;
                       successfulProvider = candidate.provider;
                       successfulModel = attemptedModel;
@@ -5066,11 +5342,14 @@ export async function generateSharedBrainReply(
                         );
                       }
                       payload = {
-                        response: text,
+                        response: deliveredText,
                         provider: candidate.provider,
                         model: attemptedModel,
                         path: attempt.path,
                         streamed: true,
+                        ...(rescuedAnswer
+                          ? { rescuedFromReasoningDump: true }
+                          : {}),
                         ...(firstDeltaMs != null ? { firstDeltaMs } : {}),
                       };
                       attemptSucceeded = true;
@@ -5119,16 +5398,26 @@ export async function generateSharedBrainReply(
                       payload,
                     );
                     const placeholderHallucination = isPlaceholderRefusal(text);
-                    const reasoningOnly =
-                      !placeholderHallucination && isReasoningOnlyReply(text);
-                    if (!text || placeholderHallucination || reasoningOnly) {
+                    const visibleForGuard = computeStreamVisibleText(text);
+                    const reasoningDump =
+                      !placeholderHallucination &&
+                      (isReasoningOnlyReply(text) ||
+                        classifyReasoningDump(visibleForGuard).isDump);
+                    const rescuedAnswer = reasoningDump
+                      ? extractFinalAnswerFromReasoningDump(visibleForGuard || text)
+                      : null;
+                    if (
+                      !text ||
+                      placeholderHallucination ||
+                      (reasoningDump && !rescuedAnswer)
+                    ) {
                       lastError = {
                         status: 503,
                         provider: candidate.provider,
                         path: attempt.path,
                         reason: placeholderHallucination
                           ? "placeholder_refusal_hallucination"
-                          : reasoningOnly
+                          : reasoningDump
                             ? "reasoning_only_reply"
                             : "empty_response",
                       };
@@ -5149,17 +5438,29 @@ export async function generateSharedBrainReply(
                           app.config.BRAIN_CIRCUIT_OPEN_MS,
                         );
                       }
-                      payload = {
-                        ...((payload &&
-                        typeof payload === "object" &&
-                        !Array.isArray(payload)
-                          ? payload
-                          : {}) as Record<string, unknown>),
-                        provider: candidate.provider,
-                        model: attemptedModel,
-                        path: attempt.path,
-                        streamed: false,
-                      };
+                      payload = rescuedAnswer
+                        ? {
+                            // Dump'tan kurtarılan cevap: ham choices yerine
+                            // temiz metni taşı (extractResponseText `response`
+                            // alanını okur), ham dump asla aşağı akmaz.
+                            response: rescuedAnswer,
+                            rescuedFromReasoningDump: true,
+                            provider: candidate.provider,
+                            model: attemptedModel,
+                            path: attempt.path,
+                            streamed: false,
+                          }
+                        : {
+                            ...((payload &&
+                            typeof payload === "object" &&
+                            !Array.isArray(payload)
+                              ? payload
+                              : {}) as Record<string, unknown>),
+                            provider: candidate.provider,
+                            model: attemptedModel,
+                            path: attempt.path,
+                            streamed: false,
+                          };
                       attemptSucceeded = true;
                     }
                   }
@@ -6211,14 +6512,10 @@ async function tryGenerateSkillReply(
     retrievalUsed: true,
     retrievalSufficiency: "strong",
   });
-  const displayText =
-    sanitizeAssistantVisibleText(
-      evaluation.correctedAnswer ?? skillResult.text,
-    ) ||
-    sanitizeAssistantVisibleText(skillResult.text, {
-      fallback:
-        "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
-    });
+  const displayText = resolveCleanVisibleAnswer({
+    candidates: [evaluation.correctedAnswer ?? skillResult.text, skillResult.text],
+    raw: skillResult.text,
+  });
   const displayCompletionTokens = estimateTokens(displayText);
   const responseBytes = estimateResponseBytes(displayText);
   const attachmentInsightBlocks =
@@ -6618,22 +6915,11 @@ export async function generateGovernedSharedBrainReply(
       DEFAULT_WORKLOAD) as SharedBrainWorkload,
     visibleTextSanitizerOptions,
   );
-  const visibleAnswer =
-    polishAssistantVisibleText(
-      sanitizeAssistantVisibleText(finalized.text, {
-        ...visibleTextSanitizerOptions,
-        fallback: inference.text,
-      }),
-      visibleTextSanitizerOptions,
-    ) ||
-    polishAssistantVisibleText(
-      sanitizeAssistantVisibleText(inference.text, {
-        ...visibleTextSanitizerOptions,
-        fallback:
-          "Yanıtı temiz biçimde oluşturamadım. İstersen aynı isteği tekrar deneyelim.",
-      }),
-      visibleTextSanitizerOptions,
-    );
+  const visibleAnswer = resolveCleanVisibleAnswer({
+    candidates: [finalized.text, inference.text],
+    raw: inference.text,
+    options: visibleTextSanitizerOptions,
+  });
   const evaluation = evaluateBrainAnswer({
     prompt: input.prompt,
     modelAnswer: visibleAnswer,
