@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyIntent } from "./intent-classifier.js";
 import {
+  buildUserContext,
   buildUserContextFromMemory,
   selectContinuityMemory,
   selectMemoryByRelevance,
@@ -9,6 +10,87 @@ import {
   MEMORY_RELEVANCE_STRONG_THRESHOLD,
 } from "./context-builder.js";
 import { buildContextPacketsFromMetadata } from "./context-packets.js";
+
+class FakeUnderstandingCacheStore {
+  public readonly values = new Map<string, string>();
+  public readonly ttlMs = new Map<string, number | undefined>();
+
+  async get(key: string) {
+    return this.values.get(key) ?? null;
+  }
+
+  async set(key: string, value: string, ttlMs?: number) {
+    this.values.set(key, value);
+    this.ttlMs.set(key, ttlMs);
+  }
+}
+
+class FakeUnderstandingDb {
+  public profileSelects = 0;
+  public identitySelects = 0;
+  public worldSelects = 0;
+
+  select(fields: Record<string, unknown>) {
+    const kind =
+      "signalId" in fields
+        ? "world"
+        : "planCode" in fields || "subscriptionStatus" in fields
+          ? "profile"
+          : "displayName" in fields
+            ? "identity"
+            : "learning";
+    const self = this;
+    const builder = {
+      from() {
+        return builder;
+      },
+      leftJoin() {
+        return builder;
+      },
+      where() {
+        return builder;
+      },
+      orderBy() {
+        return builder;
+      },
+      limit() {
+        if (kind === "profile") {
+          self.profileSelects += 1;
+          return Promise.resolve([
+            {
+              displayName: "Emre",
+              planCode: "solo",
+              subscriptionStatus: "active",
+            },
+          ]);
+        }
+        if (kind === "identity") {
+          self.identitySelects += 1;
+          return Promise.resolve([{ displayName: "Identity Name" }]);
+        }
+        if (kind === "world") {
+          self.worldSelects += 1;
+          return Promise.resolve([
+            {
+              signalId: "signal-1",
+              source: "mobile",
+              kind: "time_context",
+              summary: "Morning focus window",
+              confidenceBps: 900,
+              facts: {},
+              privacy: "safe",
+              renderHints: {},
+              visibility: "assistant_context",
+              createdAt: new Date("2030-01-01T08:00:00.000Z"),
+            },
+          ]);
+        }
+        return Promise.resolve([]);
+      },
+    };
+    return builder;
+  }
+}
 
 test("buildUserContextFromMemory deduplicates and caps prompt hints", () => {
   const intent = classifyIntent({
@@ -66,6 +148,64 @@ test("buildUserContextFromMemory deduplicates and caps prompt hints", () => {
   assert.equal(context.userProfile?.displayName, "Osman Emre");
   assert.equal(context.userProfile?.planCode, "pro");
   assert.equal(context.userProfile?.subscriptionStatus, "active");
+});
+
+test("buildUserContext caches profile and world signals per user", async () => {
+  const db = new FakeUnderstandingDb();
+  const cache = new FakeUnderstandingCacheStore();
+  const app = {
+    db,
+    config: {
+      ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: true,
+    },
+    services: {
+      reliability: {
+        store: cache,
+      },
+    },
+  };
+  const intent = classifyIntent({
+    userId: "user-a",
+    message: "Kuantum konusunu açıkla",
+  });
+
+  await buildUserContext(app as never, {
+    userId: "user-a",
+    message: "Kuantum konusunu açıkla",
+    metadata: { memoryEnabled: false },
+    intent,
+  });
+  await buildUserContext(app as never, {
+    userId: "user-a",
+    message: "Kuantum konusunu açıkla",
+    metadata: { memoryEnabled: false },
+    intent,
+  });
+
+  assert.equal(db.profileSelects, 1);
+  assert.equal(db.identitySelects, 1);
+  assert.equal(db.worldSelects, 1);
+  assert.equal(cache.ttlMs.get("understanding:profile:user-a"), 60_000);
+  assert.equal(cache.ttlMs.get("understanding:world:user-a"), 30_000);
+
+  const intentB = classifyIntent({
+    userId: "user-b",
+    message: "Kuantum konusunu açıkla",
+  });
+  await buildUserContext(app as never, {
+    userId: "user-b",
+    message: "Kuantum konusunu açıkla",
+    metadata: { memoryEnabled: false },
+    intent: intentB,
+  });
+
+  assert.equal(db.profileSelects, 2);
+  assert.equal(db.identitySelects, 2);
+  assert.equal(db.worldSelects, 2);
+  assert.equal(cache.values.has("understanding:profile:user-a"), true);
+  assert.equal(cache.values.has("understanding:profile:user-b"), true);
+  assert.equal(cache.values.has("understanding:world:user-a"), true);
+  assert.equal(cache.values.has("understanding:world:user-b"), true);
 });
 
 test("buildUserContextFromMemory keeps only one correction-style memory and suppresses contested noise", () => {

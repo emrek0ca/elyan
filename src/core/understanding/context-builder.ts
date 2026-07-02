@@ -29,6 +29,8 @@ const DEBUG_TOPIC_PATTERN =
   /\b(auth|login|oauth|session|token|bug|hata|error|debug|fix|backend|api|pipeline|refresh|403|401)\b/i;
 const SOCIAL_CHAT_FAST_PATH_PATTERN =
   /^(selam|merhaba|slm|hey|hi|hello|günaydın|gunaydin|iyi sabahlar|iyi akşamlar|iyi aksamlar)\b|\b(nasılsın|nasilsin|naber|napıyorsun|napiyorsun|how are you|what'?s up|whats up)\b/i;
+const UNDERSTANDING_PROFILE_CACHE_TTL_MS = 60_000;
+const UNDERSTANDING_WORLD_CACHE_TTL_MS = 30_000;
 const EXPLICIT_NAME_PATTERNS = [
   /\b(?:benim adım|adım)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü'-]+){0,2})/iu,
   /\bmy name is\s+([A-Za-z][A-Za-z' -]{1,60})/iu,
@@ -56,6 +58,66 @@ const SUSPICIOUS_NAME_TOKENS = new Set([
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+type UnderstandingCacheStore = {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, ttlMs?: number): Promise<void>;
+};
+
+function getUnderstandingCacheStore(app: FastifyInstance): UnderstandingCacheStore | null {
+  const store = (app.services as { reliability?: { store?: unknown } } | undefined)
+    ?.reliability?.store;
+  if (
+    store &&
+    typeof (store as UnderstandingCacheStore).get === "function" &&
+    typeof (store as UnderstandingCacheStore).set === "function"
+  ) {
+    return store as UnderstandingCacheStore;
+  }
+  return null;
+}
+
+function readCachedEnvelope<T>(
+  raw: string | null,
+  revive?: (value: unknown) => T,
+): T | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { value?: unknown };
+    return revive ? revive(parsed.value) : (parsed.value as T);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readUnderstandingCache<T>(
+  app: FastifyInstance,
+  key: string,
+  revive?: (value: unknown) => T,
+): Promise<T | undefined> {
+  const store = getUnderstandingCacheStore(app);
+  if (!store) {
+    return undefined;
+  }
+  return readCachedEnvelope<T>(await store.get(key).catch(() => null), revive);
+}
+
+async function writeUnderstandingCache(
+  app: FastifyInstance,
+  key: string,
+  value: unknown,
+  ttlMs: number,
+) {
+  const store = getUnderstandingCacheStore(app);
+  if (!store) {
+    return;
+  }
+  await store
+    .set(key, JSON.stringify({ value }), ttlMs)
+    .catch(() => undefined);
 }
 
 function isLikelySocialChatMessage(value: string): boolean {
@@ -750,6 +812,86 @@ async function loadSafeUserProfile(
   }
 }
 
+async function loadCachedSafeUserProfile(
+  app: FastifyInstance,
+  userId: string,
+): Promise<Partial<UserProfileSnapshot> | null> {
+  const cacheKey = `understanding:profile:${userId}`;
+  const cached = await readUnderstandingCache<Partial<UserProfileSnapshot> | null>(
+    app,
+    cacheKey,
+  );
+  if (cached !== undefined) {
+    return cached;
+  }
+  const profile = await loadSafeUserProfile(app, userId);
+  await writeUnderstandingCache(
+    app,
+    cacheKey,
+    profile,
+    UNDERSTANDING_PROFILE_CACHE_TTL_MS,
+  );
+  return profile;
+}
+
+type FreshWorldSignals = Awaited<ReturnType<typeof listFreshWorldSignals>>;
+
+function reviveFreshWorldSignals(value: unknown): FreshWorldSignals {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => {
+    const record = item && typeof item === "object" && !Array.isArray(item)
+      ? (item as Record<string, unknown>)
+      : {};
+    return {
+      signalId: String(record.signalId ?? ""),
+      source: String(record.source ?? ""),
+      kind: String(record.kind ?? ""),
+      summary: String(record.summary ?? ""),
+      confidence:
+        typeof record.confidence === "number" && Number.isFinite(record.confidence)
+          ? record.confidence
+          : 0,
+      facts: record.facts,
+      privacy: record.privacy,
+      renderHints: record.renderHints,
+      visibility: record.visibility,
+      createdAt:
+        record.createdAt instanceof Date
+          ? record.createdAt
+          : new Date(String(record.createdAt ?? Date.now())),
+    };
+  }) as FreshWorldSignals;
+}
+
+async function listCachedFreshWorldSignals(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    limit: number;
+    maxAgeHours: number;
+  },
+): Promise<FreshWorldSignals> {
+  const cacheKey = `understanding:world:${input.userId}`;
+  const cached = await readUnderstandingCache<FreshWorldSignals>(
+    app,
+    cacheKey,
+    reviveFreshWorldSignals,
+  );
+  if (cached !== undefined) {
+    return cached;
+  }
+  const signals = await listFreshWorldSignals(app, input);
+  await writeUnderstandingCache(
+    app,
+    cacheKey,
+    signals,
+    UNDERSTANDING_WORLD_CACHE_TTL_MS,
+  );
+  return signals;
+}
+
 function extractEcosystemHints(input: {
   title?: string;
   message?: string;
@@ -1360,13 +1502,13 @@ export async function buildUserContext(
     memoryEnabled && !isSocialTurn
       ? searchBrainMemory(app, { userId: input.userId, query, limit: MAX_HINTS }).catch(() => ({ results: [] }))
       : Promise.resolve({ results: [] }),
-    loadSafeUserProfile(app, input.userId),
+    loadCachedSafeUserProfile(app, input.userId),
     /* Quick C-based fact extraction from the current message */
     !isSocialTurn && nlpDaemon.isAvailable()
       ? extractQuickFacts(input.message).catch(() => ({ name: undefined, city: undefined }))
       : Promise.resolve({ name: undefined, city: undefined }),
     !isSocialTurn
-      ? listFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 72 }).catch(() => [])
+      ? listCachedFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 72 }).catch(() => [])
       : Promise.resolve([]),
   ]);
 
