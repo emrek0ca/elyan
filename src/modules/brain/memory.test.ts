@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   listBrainMemory,
+  processMemoryImportanceDecay,
+  resolveDecayedMemoryImportance,
+  resolveMemoryImportanceBaseline,
   scoreMemoryRecallCandidate,
   searchBrainMemory,
   softDeleteBrainMemory,
@@ -117,6 +120,155 @@ test("scoreMemoryRecallCandidate penalizes stale and contested memory aggressive
 
   assert.equal(active > stale, true);
   assert.equal(stale > contested, true);
+});
+
+test("resolveDecayedMemoryImportance applies baselines, weekly decay, and verified boost", () => {
+  const now = new Date("2030-02-01T00:00:00.000Z");
+  assert.equal(
+    resolveMemoryImportanceBaseline({
+      factType: "semantic",
+      key: "safety_boundary",
+      isPinned: false,
+    }),
+    90,
+  );
+  assert.equal(
+    resolveMemoryImportanceBaseline({
+      factType: "self_model",
+      key: "self_model_recent_topics",
+      isPinned: false,
+    }),
+    80,
+  );
+  assert.equal(
+    resolveMemoryImportanceBaseline({
+      factType: "semantic",
+      key: "response_style_preference",
+      isPinned: false,
+    }),
+    60,
+  );
+  assert.equal(
+    resolveMemoryImportanceBaseline({
+      factType: "semantic",
+      key: "project_context",
+      isPinned: false,
+    }),
+    50,
+  );
+  assert.equal(resolveMemoryImportanceBaseline({ isPinned: true }), 100);
+
+  assert.equal(
+    resolveDecayedMemoryImportance({
+      factType: "semantic",
+      key: "ordinary_fact",
+      importanceScore: 80,
+      confidence: 70,
+      isPinned: false,
+      updatedAt: "2030-01-04T00:00:00.000Z",
+      lastVerifiedAt: null,
+      now,
+    }).importanceScore,
+    78,
+  );
+  assert.equal(
+    resolveDecayedMemoryImportance({
+      factType: "semantic",
+      key: "ordinary_fact",
+      importanceScore: 70,
+      confidence: 90,
+      isPinned: false,
+      updatedAt: "2030-01-18T00:00:00.000Z",
+      lastVerifiedAt: "2030-01-30T00:00:00.000Z",
+      now,
+    }).importanceScore,
+    72,
+  );
+  assert.equal(
+    resolveDecayedMemoryImportance({
+      factType: "semantic",
+      key: "ordinary_fact",
+      importanceScore: 25,
+      confidence: 70,
+      isPinned: false,
+      updatedAt: "2029-01-01T00:00:00.000Z",
+      lastVerifiedAt: null,
+      now,
+    }).importanceScore,
+    30,
+  );
+});
+
+test("processMemoryImportanceDecay updates a bounded batch with decay metadata", async () => {
+  const db = new FakeMemoryDb([
+    {
+      rows: [
+        {
+          id: "fact-1",
+          factType: "semantic",
+          key: "ordinary_fact",
+          canonicalKey: "ordinary_fact",
+          confidence: 70,
+          importanceScore: 80,
+          isPinned: false,
+          updatedAt: "2030-01-04T00:00:00.000Z",
+          lastVerifiedAt: null,
+          metadata: { source: "test" },
+        },
+        {
+          id: "fact-2",
+          factType: "semantic",
+          key: "response_style_preference",
+          canonicalKey: "response_style_preference",
+          confidence: 95,
+          importanceScore: 62,
+          isPinned: false,
+          updatedAt: "2030-01-18T00:00:00.000Z",
+          lastVerifiedAt: "2030-01-30T00:00:00.000Z",
+          metadata: {},
+        },
+      ],
+    },
+  ]);
+  const result = await processMemoryImportanceDecay(
+    { db, log: { debug() {}, info() {}, warn() {} } } as never,
+    { now: new Date("2030-02-01T00:00:00.000Z") },
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.processedCount, 2);
+  assert.equal(result.updatedCount, 2);
+  assert.equal(db.updates[0]?.values["importanceScore"], 78);
+  assert.equal(db.updates[1]?.values["importanceScore"], 64);
+  assert.equal(
+    (db.updates[0]?.values["metadata"] as Record<string, unknown>)["lastImportanceDecayedAt"],
+    "2030-02-01T00:00:00.000Z",
+  );
+});
+
+test("processMemoryImportanceDecay skips when the DB budget expires", async () => {
+  const slowApp = {
+    db: {
+      execute() {
+        return new Promise((resolve) => {
+          const t = setTimeout(() => resolve({ rows: [] }), 5_000);
+          (t as unknown as { unref?: () => void }).unref?.();
+        });
+      },
+      update() {
+        throw new Error("update should not run after budget expiry");
+      },
+    },
+    log: { warn() {}, debug() {}, info() {} },
+  } as unknown as Parameters<typeof processMemoryImportanceDecay>[0];
+  const startedAt = Date.now();
+  const result = await processMemoryImportanceDecay(slowApp, {
+    now: new Date("2030-02-01T00:00:00.000Z"),
+  });
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "memory_decay_budget_expired");
+  assert.ok(Date.now() - startedAt < 2_000);
 });
 
 test("listBrainMemory hides soft-deleted records for user-safe views by default", async () => {

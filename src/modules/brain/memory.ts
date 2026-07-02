@@ -31,6 +31,10 @@ const MEMORY_FACT_RETENTION_DAYS = 365;
 const MEMORY_EPISODE_RETENTION_DAYS = 120;
 const MEMORY_STALE_FACT_RETENTION_DAYS = 45;
 const MEMORY_STALE_EPISODE_RETENTION_DAYS = 60;
+const MEMORY_IMPORTANCE_DECAY_BATCH = 500;
+const MEMORY_IMPORTANCE_DECAY_BUDGET_MS = 800;
+const MEMORY_IMPORTANCE_DECAY_PER_WEEK = 0.5;
+const MEMORY_IMPORTANCE_VERIFIED_BOOST = 3;
 
 type ExecuteRow = Record<string, unknown>;
 type MemoryRunKind = "memory_extraction" | "memory_consolidation" | "memory_reconsolidation" | "memory_index";
@@ -78,6 +82,94 @@ type BrainMemoryRecord = {
   sourceRunId: string | null;
   metadata: Record<string, unknown>;
 };
+
+export type MemoryImportanceDecayInput = {
+  factType?: string | null;
+  key?: string | null;
+  canonicalKey?: string | null;
+  importanceScore: number;
+  confidence?: number | null;
+  isPinned?: boolean | null;
+  updatedAt: string | Date;
+  lastVerifiedAt?: string | Date | null;
+  now?: string | Date;
+};
+
+export function resolveMemoryImportanceBaseline(input: {
+  factType?: string | null;
+  key?: string | null;
+  canonicalKey?: string | null;
+  isPinned?: boolean | null;
+}): number {
+  if (input.isPinned === true) {
+    return 100;
+  }
+  const factType = String(input.factType ?? "").toLowerCase();
+  const key = `${input.key ?? ""} ${input.canonicalKey ?? ""}`.toLowerCase();
+  if (
+    factType === "safety" ||
+    ["safety", "security", "boundary", "guardrail"].some((token) =>
+      key.includes(token),
+    )
+  ) {
+    return 90;
+  }
+  if (factType === "self_model" || key.startsWith("self_model_")) {
+    return 80;
+  }
+  if (
+    factType === "preference" ||
+    ["preference", "preferred", "tone", "style"].some((token) =>
+      key.includes(token),
+    )
+  ) {
+    return 60;
+  }
+  if (
+    factType === "project_context" ||
+    ["project", "stack", "architecture", "constraint", "repo", "route"].some(
+      (token) => key.includes(token),
+    )
+  ) {
+    return 50;
+  }
+  return 30;
+}
+
+export function resolveDecayedMemoryImportance(input: MemoryImportanceDecayInput) {
+  const now = input.now instanceof Date ? input.now : new Date(input.now ?? Date.now());
+  const updatedAt = input.updatedAt instanceof Date ? input.updatedAt : new Date(input.updatedAt);
+  const lastVerifiedAt =
+    input.lastVerifiedAt == null
+      ? null
+      : input.lastVerifiedAt instanceof Date
+        ? input.lastVerifiedAt
+        : new Date(input.lastVerifiedAt);
+  const ageDays = Number.isFinite(updatedAt.getTime())
+    ? Math.max(0, (now.getTime() - updatedAt.getTime()) / 86_400_000)
+    : 0;
+  const decay = (ageDays / 7) * MEMORY_IMPORTANCE_DECAY_PER_WEEK;
+  const recentlyVerified =
+    lastVerifiedAt != null &&
+    Number.isFinite(lastVerifiedAt.getTime()) &&
+    now.getTime() - lastVerifiedAt.getTime() <= 7 * 86_400_000;
+  const verifiedBoost =
+    Number(input.confidence ?? 0) >= 80 && recentlyVerified
+      ? MEMORY_IMPORTANCE_VERIFIED_BOOST
+      : 0;
+  const baseline = resolveMemoryImportanceBaseline(input);
+  const next = Math.max(
+    baseline,
+    Math.min(100, Math.round(Number(input.importanceScore) - decay + verifiedBoost)),
+  );
+
+  return {
+    importanceScore: next,
+    baseline,
+    decay,
+    verifiedBoost,
+  };
+}
 
 const SYNTHETIC_MEMORY_PRESENTATION: Record<string, { title: string; description: string }> = {
   self_model_recent_topics: {
@@ -839,6 +931,109 @@ function withMemoryBudget<T>(work: Promise<T>, budgetMs: number): Promise<T | ty
       },
     );
   });
+}
+
+export async function processMemoryImportanceDecay(
+  app: FastifyInstance,
+  input: { now?: Date } = {},
+) {
+  if (typeof (app.db as { execute?: unknown }).execute !== "function") {
+    return {
+      status: "skipped" as const,
+      processedCount: 0,
+      updatedCount: 0,
+      reason: "memory_execute_unavailable" as const,
+    };
+  }
+
+  const now = input.now ?? new Date();
+  const nowIso = now.toISOString();
+  const result = await withMemoryBudget(
+    (async () => {
+      const rows = toRows(
+        await app.db.execute(sql`
+          select
+            id,
+            fact_type as "factType",
+            key,
+            canonical_key as "canonicalKey",
+            confidence,
+            importance_score as "importanceScore",
+            is_pinned as "isPinned",
+            updated_at as "updatedAt",
+            last_verified_at as "lastVerifiedAt",
+            metadata
+          from brain_memory_facts
+          where coalesce(lifecycle_status, 'active') = 'active'
+            and deleted_at is null
+            and (
+              metadata->>'lastImportanceDecayedAt' is null
+              or (metadata->>'lastImportanceDecayedAt')::timestamptz < ${new Date(now.getTime() - 7 * 86_400_000)}
+            )
+          order by updated_at asc
+          limit ${MEMORY_IMPORTANCE_DECAY_BATCH}
+        `),
+      );
+
+      let updatedCount = 0;
+      for (const row of rows) {
+        const computed = resolveDecayedMemoryImportance({
+          factType: typeof row.factType === "string" ? row.factType : null,
+          key: typeof row.key === "string" ? row.key : null,
+          canonicalKey:
+            typeof row.canonicalKey === "string" ? row.canonicalKey : null,
+          importanceScore: Number(row.importanceScore ?? 50),
+          confidence: Number(row.confidence ?? 0),
+          isPinned: parseBoolean(row.isPinned),
+          updatedAt:
+            row.updatedAt instanceof Date || typeof row.updatedAt === "string"
+              ? row.updatedAt
+              : now,
+          lastVerifiedAt:
+            row.lastVerifiedAt instanceof Date ||
+            typeof row.lastVerifiedAt === "string"
+              ? row.lastVerifiedAt
+              : null,
+          now,
+        });
+        const metadata = {
+          ...safeMetadata(row.metadata),
+          lastImportanceDecayedAt: nowIso,
+          importanceDecay: {
+            baseline: computed.baseline,
+            decay: Number(computed.decay.toFixed(4)),
+            verifiedBoost: computed.verifiedBoost,
+          },
+        };
+        await app.db
+          .update(brainMemoryFacts)
+          .set({
+            importanceScore: computed.importanceScore,
+            metadata,
+          })
+          .where(eq(brainMemoryFacts.id, String(row.id)));
+        updatedCount += 1;
+      }
+
+      return {
+        status: "completed" as const,
+        processedCount: rows.length,
+        updatedCount,
+      };
+    })(),
+    MEMORY_IMPORTANCE_DECAY_BUDGET_MS,
+  );
+
+  if (result === MEMORY_BUDGET_EXPIRED) {
+    return {
+      status: "skipped" as const,
+      processedCount: 0,
+      updatedCount: 0,
+      reason: "memory_decay_budget_expired" as const,
+    };
+  }
+
+  return result;
 }
 
 export async function searchBrainMemory(

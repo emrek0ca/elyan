@@ -9,7 +9,10 @@ import {
   type BrainQualityGateSnapshot,
   type BrainQualitySignalSummary,
 } from "./quality-gate.js";
-import { processMemoryTrainingJob } from "./memory.js";
+import {
+  processMemoryImportanceDecay,
+  processMemoryTrainingJob,
+} from "./memory.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
 
 type TrainingJobRow = typeof trainingJobs.$inferSelect;
@@ -767,6 +770,18 @@ export function startInProcessMemoryWorker(app: FastifyInstance): () => void {
           break;
         }
         processed += 1;
+      }
+      if (processed === 0 && !state.stopped) {
+        const decay = await processMemoryImportanceDecay(app);
+        if (decay.updatedCount > 0) {
+          app.log.info?.(
+            {
+              processed: decay.processedCount,
+              updated: decay.updatedCount,
+            },
+            "in-process memory worker decayed fact importance",
+          );
+        }
       }
       if (processed > 0) {
         app.log.info?.({ processed }, "in-process memory worker drained jobs");
