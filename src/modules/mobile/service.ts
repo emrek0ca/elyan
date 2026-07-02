@@ -23,6 +23,10 @@ import {
   toDerivedSignalInput,
 } from "../../core/understanding/world-signal-derived.js";
 import { filterLearningSignals } from "../../core/understanding/personalization-policy.js";
+import {
+  sanitizeInboundContextRecord,
+  sanitizeInboundContextText,
+} from "../../lib/context-text-sanitizer.js";
 
 const MAX_WORLD_SIGNAL_PAYLOAD_BYTES = 24 * 1024;
 const BLOCKED_SECRET_KEYS = new Set([
@@ -433,10 +437,25 @@ export async function ingestWorldSignals(
   const scopedSessionId = scopedSession?.id ?? null;
 
   const payloadBytes = Buffer.byteLength(JSON.stringify(input.body), "utf8");
+  // GÜVENLİK ÇEKİRDEĞİ: summary + string fact değerleri buradan sonra memory
+  // fact'lerine, context packet'lerine ve SİSTEM PROMPT'una akar. Tek arınma
+  // noktası burasıdır — prompt-injection kalıpları, rol etiketleri, model
+  // kontrol tokenleri ve zero-width karakterler girişte etkisizleştirilir;
+  // downstream her zaman temiz metinle çalışır.
+  const sanitizedSignals = input.body.signals.map((signal) => ({
+    ...signal,
+    summary: sanitizeInboundContextText(signal.summary, 480).text,
+    facts: sanitizeInboundContextRecord(signal.facts),
+    privacy: sanitizeInboundContextRecord(signal.privacy),
+    renderHints: signal.renderHints
+      ? sanitizeInboundContextRecord(signal.renderHints)
+      : undefined,
+  }));
+
   await app.db
     .insert(worldSignals)
     .values(
-      input.body.signals.map((signal) => ({
+      sanitizedSignals.map((signal) => ({
         userId: input.userId,
         deviceId: ownedDevice.id,
         sessionId: scopedSessionId,
@@ -462,7 +481,7 @@ export async function ingestWorldSignals(
 
   const derivedLearningSignals = filterLearningSignals(
     deriveLearningSignalsFromWorldSignals(
-      input.body.signals.map((signal) =>
+      sanitizedSignals.map((signal) =>
         toDerivedSignalInput({
           signalId: signal.signalId,
           kind: signal.kind,
