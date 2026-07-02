@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AppError } from "../../lib/errors.js";
+import { getCircuitState } from "../../lib/reliability/circuit-breaker.js";
+import { ReliabilityStore } from "../../lib/reliability/redis.js";
 import {
   calculateBillableAiCredits,
   computeStreamVisibleText,
@@ -11,7 +13,10 @@ import {
   buildShortFollowUpSystemPrompt,
   buildSocialChatSystemPrompt,
   buildStructuredSystemPrompt,
+  getGroqProviderCircuitKey,
   isReasoningOnlyReply,
+  isGroqProviderCircuitAllowed,
+  recordGroqProviderModelFailure,
   resolveCleanVisibleAnswer,
   resolveEffectiveWorkload,
   resolveReasoningEffort,
@@ -2697,6 +2702,37 @@ test("generateSharedBrainReply marks provider failures as transient", async () =
       return true;
     },
   );
+});
+
+test("Groq provider circuit opens after three distinct model outage failures", async () => {
+  const store = new ReliabilityStore({
+    REDIS_URL: "",
+    RELIABILITY_REDIS_REQUIRED: false,
+  });
+  const app = {
+    config: {
+      BRAIN_CIRCUIT_OPEN_MS: 60_000,
+    },
+    services: {
+      reliability: { store },
+    },
+  };
+
+  try {
+    assert.equal(await isGroqProviderCircuitAllowed(app as never), true);
+    assert.equal(await recordGroqProviderModelFailure(app as never, "openai/gpt-oss-120b"), false);
+    assert.equal(await recordGroqProviderModelFailure(app as never, "openai/gpt-oss-20b"), false);
+    assert.equal(await recordGroqProviderModelFailure(app as never, "openai/gpt-oss-20b"), false);
+    assert.equal(await isGroqProviderCircuitAllowed(app as never), true);
+
+    assert.equal(await recordGroqProviderModelFailure(app as never, "qwen/qwen3.6-27b"), true);
+    const state = await getCircuitState(store, getGroqProviderCircuitKey());
+    assert.equal(state.state, "open");
+    assert.equal(state.lastFailureCode, "groq_provider_unavailable");
+    assert.equal(await isGroqProviderCircuitAllowed(app as never), false);
+  } finally {
+    await store.close();
+  }
 });
 
 test("generateSharedBrainReply injects attachment context into the governed system prompt", async () => {

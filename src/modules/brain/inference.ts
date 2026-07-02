@@ -144,6 +144,10 @@ type SharedBrainProviderCandidate = {
 
 type HostedSharedBrainProvider = "openai" | "claude" | "groq" | "openrouter";
 
+const GROQ_PROVIDER_CIRCUIT_KEY = "circuit:brain:groq:*";
+const GROQ_PROVIDER_FAILURE_WINDOW_KEY = "circuit:brain:groq:failed-models";
+const GROQ_PROVIDER_FAILURE_MODEL_THRESHOLD = 3;
+
 type SharedBrainInferenceDelta = {
   delta: string;
   content: string;
@@ -3965,7 +3969,10 @@ function buildInferenceProviderCandidates(input: {
     return buildCandidateOrder(localCandidates, preferredLocalCandidate);
   }
 
-  return buildCandidateOrder(hostedCandidates, hostedCandidates[0]);
+  return buildCandidateOrder(
+    [...hostedCandidates, ...localCandidates],
+    hostedCandidates[0],
+  );
 }
 
 function getChatTimeoutMs(
@@ -4038,6 +4045,10 @@ function isRetryableProviderStatus(status: number): boolean {
   return [408, 425, 429, 500, 502, 503, 504].includes(status);
 }
 
+function isProviderOutageStatus(status: number): boolean {
+  return [408, 425, 500, 502, 503, 504].includes(status);
+}
+
 function isRetryableProviderFailure(error: unknown): boolean {
   if (error instanceof DOMException && error.name === "AbortError") {
     return true;
@@ -4062,6 +4073,90 @@ function isRetryableProviderFailure(error: unknown): boolean {
   }
 
   return false;
+}
+
+function isProviderOutageFailure(error: unknown): boolean {
+  return isRetryableProviderFailure(error);
+}
+
+export function getGroqProviderCircuitKey(): string {
+  return GROQ_PROVIDER_CIRCUIT_KEY;
+}
+
+function parseGroqFailedModels(raw: string | null): string[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
+
+export async function isGroqProviderCircuitAllowed(app: FastifyInstance): Promise<boolean> {
+  const reliability = app.services?.reliability;
+  if (!reliability) {
+    return true;
+  }
+  return isCircuitCallAllowed(reliability.store, GROQ_PROVIDER_CIRCUIT_KEY);
+}
+
+export async function recordGroqProviderModelFailure(
+  app: FastifyInstance,
+  model: string,
+): Promise<boolean> {
+  const reliability = app.services?.reliability;
+  const normalizedModel = compactText(model);
+  if (!reliability || !normalizedModel) {
+    return false;
+  }
+
+  const windowTtlMs = Math.max(app.config.BRAIN_CIRCUIT_OPEN_MS, 60_000);
+  const raw = await reliability.store.get(GROQ_PROVIDER_FAILURE_WINDOW_KEY);
+  const failedModels = parseGroqFailedModels(raw);
+  if (!failedModels.includes(normalizedModel)) {
+    failedModels.push(normalizedModel);
+  }
+  await reliability.store.set(
+    GROQ_PROVIDER_FAILURE_WINDOW_KEY,
+    JSON.stringify(failedModels.slice(-GROQ_PROVIDER_FAILURE_MODEL_THRESHOLD)),
+    windowTtlMs,
+  );
+
+  if (failedModels.length < GROQ_PROVIDER_FAILURE_MODEL_THRESHOLD) {
+    return false;
+  }
+
+  await recordCircuitFailure(
+    reliability.store,
+    GROQ_PROVIDER_CIRCUIT_KEY,
+    {
+      failureThreshold: 1,
+      openMs: app.config.BRAIN_CIRCUIT_OPEN_MS,
+    },
+    "groq_provider_unavailable",
+  );
+  return true;
+}
+
+async function recordGroqProviderSuccess(app: FastifyInstance): Promise<void> {
+  const reliability = app.services?.reliability;
+  if (!reliability) {
+    return;
+  }
+  await Promise.all([
+    recordCircuitSuccess(
+      reliability.store,
+      GROQ_PROVIDER_CIRCUIT_KEY,
+      app.config.BRAIN_CIRCUIT_OPEN_MS,
+    ),
+    reliability.store.del(GROQ_PROVIDER_FAILURE_WINDOW_KEY),
+  ]);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -5365,6 +5460,13 @@ export async function generateSharedBrainReply(
         const reliability = app.services?.reliability;
         const circuitKey = getBrainCircuitKey(candidate);
         if (
+          candidate.provider === "groq" &&
+          !(await isGroqProviderCircuitAllowed(app))
+        ) {
+          lastError = "groq_provider_circuit_open";
+          continue;
+        }
+        if (
           reliability &&
           !(await isCircuitCallAllowed(reliability.store, circuitKey))
         ) {
@@ -5378,6 +5480,7 @@ export async function generateSharedBrainReply(
         );
 
         for (const attemptedModel of candidateModelAttempts) {
+          let modelHadProviderOutageFailure = false;
           const candidateAttempts: SharedBrainRequestAttempt[] =
             candidate.provider === "ollama"
               ? [
@@ -5508,6 +5611,9 @@ export async function generateSharedBrainReply(
                     attemptRetryable = isRetryableProviderStatus(
                       streamResponse.status,
                     );
+                    if (isProviderOutageStatus(streamResponse.status)) {
+                      modelHadProviderOutageFailure = true;
+                    }
                   } else {
                     let continuationHops = 0;
                     let continuationTokensUsed = 0;
@@ -5648,6 +5754,9 @@ export async function generateSharedBrainReply(
                           app.config.BRAIN_CIRCUIT_OPEN_MS,
                         );
                       }
+                      if (candidate.provider === "groq") {
+                        await recordGroqProviderSuccess(app);
+                      }
                       payload = {
                         response: deliveredText,
                         provider: candidate.provider,
@@ -5701,6 +5810,9 @@ export async function generateSharedBrainReply(
                     attemptRetryable = isRetryableProviderStatus(
                       candidateResponse.status,
                     );
+                    if (isProviderOutageStatus(candidateResponse.status)) {
+                      modelHadProviderOutageFailure = true;
+                    }
                   } else {
                     const text = extractResponseText(
                       candidate.provider,
@@ -5736,6 +5848,9 @@ export async function generateSharedBrainReply(
                           app.config.BRAIN_CIRCUIT_OPEN_MS,
                         );
                       }
+                      if (candidate.provider === "groq") {
+                        await recordGroqProviderSuccess(app);
+                      }
                       payload = {
                         ...((payload &&
                         typeof payload === "object" &&
@@ -5754,6 +5869,9 @@ export async function generateSharedBrainReply(
               } catch (error) {
                 lastError = error;
                 attemptRetryable = isRetryableProviderFailure(error);
+                if (isProviderOutageFailure(error)) {
+                  modelHadProviderOutageFailure = true;
+                }
               }
 
               if (attemptSucceeded) {
@@ -5777,6 +5895,14 @@ export async function generateSharedBrainReply(
           }
 
           if (successfulProvider) {
+            break;
+          }
+          if (
+            candidate.provider === "groq" &&
+            modelHadProviderOutageFailure &&
+            (await recordGroqProviderModelFailure(app, attemptedModel))
+          ) {
+            lastError = "groq_provider_circuit_open";
             break;
           }
         }
