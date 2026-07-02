@@ -105,6 +105,35 @@ const BALANCED_PROFILE_PATTERNS = [
   /(?<!\p{L})(karşılaştır|karsilastir|kıyasla|kiyasla|özetle|ozetle|açıkla|acikla|anlat|değerlendir|degerlendir|incele|analiz|detaylandır|detaylandir)\p{L}*/iu,
 ];
 
+const REFERENTIAL_PRONOUN_PATTERN =
+  /(?<!\p{L})(bunu|şunu|sunu|onu|buna|şuna|suna|ona|bundan|şundan|sundan|ondan|this|that|it)\p{L}*/iu;
+
+const COMPARATIVE_STRUCTURE_PATTERNS = [
+  /\b[\p{L}\d][^?\n]{0,48}\s+(?:vs\.?|versus)\s+[\p{L}\d]/iu,
+  /(?<!\p{L})(hangisi|hangisini)\s+daha\p{L}*/iu,
+  /(?<!\p{L})(farkı|farki|farkları|farklari)\s+(?:nedir|ne|neler|nelerdir)\b/iu,
+  /(?<!\p{L})(arasında|arasinda)\s+(?:ne\s+)?fark\p{L}*/iu,
+];
+
+const CODE_CONTEXT_PATTERNS = [
+  /```[\s\S]*?```/,
+  /`[^`\n]+`/,
+  /\.(?:ts|tsx|js|jsx|py|swift|dart|go|rs|java|kt|sql|json|yaml|yml|html|css)\b/i,
+  /(?<!\p{L})(code|kod\p{L}*|function|class|const|let|var|import|export|async|await|return|try|catch|interface|type|enum|struct|widget|component)\b/iu,
+];
+
+function hasReferentialPronoun(prompt: string): boolean {
+  return REFERENTIAL_PRONOUN_PATTERN.test(prompt);
+}
+
+function hasComparativeStructure(prompt: string): boolean {
+  return COMPARATIVE_STRUCTURE_PATTERNS.some((pattern) => pattern.test(prompt));
+}
+
+function hasCodeContext(prompt: string): boolean {
+  return CODE_CONTEXT_PATTERNS.some((pattern) => pattern.test(prompt));
+}
+
 /* ── Kısa takip mesajları ──────────────────────────────────────────────────
  * "anlamadım", "devam et", "onu düzelt" gibi mesajlar önceki tura referans
  * verir; bağlamsız yorumlanınca model alakasız yeni bir cevap üretiyor.
@@ -240,6 +269,9 @@ export function selectHybridMobileChatWorkload(input: {
   const hasMultiClauseQuestion =
     questionCount >= 1 &&
     (/\b(ve|ama|çünkü|how|why|neden|nasıl|acikla|açıkla)\b/i.test(normalized) || wordCount >= 16);
+  const referentialPronoun = hasReferentialPronoun(normalized);
+  const comparativeStructure = hasComparativeStructure(normalized);
+  const codeContext = hasCodeContext(normalized);
   const isPremiumReasoningProfile =
     input.brainProfile?.tier === "premium" || Number(input.brainProfile?.reasoningMultiplier ?? 1) >= 5;
   const isEnhancedReasoningProfile =
@@ -295,6 +327,24 @@ export function selectHybridMobileChatWorkload(input: {
     }
   }
 
+  const calibrationScore =
+    (referentialPronoun ? 2 : 0) +
+    (comparativeStructure ? 2 : 0) +
+    (hasListStructure ? 1 : 0) +
+    (hasMultiClauseQuestion ? 1 : 0) -
+    (codeContext ? 2 : 0);
+  const smallCodeContext =
+    codeContext &&
+    normalized.length < 180 &&
+    wordCount < 32 &&
+    questionCount <= 1 &&
+    sentenceCount <= 2 &&
+    !hasListStructure;
+
+  if (smallCodeContext && calibrationScore <= 0) {
+    return "mobile_chat_fast";
+  }
+
   const isBalancedByStructure =
     normalized.length >= 110 ||
     wordCount >= 18 ||
@@ -304,7 +354,7 @@ export function selectHybridMobileChatWorkload(input: {
     hasLongSingleSentence ||
     hasMultiClauseQuestion;
 
-  if (isBalancedByStructure) {
+  if (isBalancedByStructure || calibrationScore >= 2) {
     return "mobile_chat_balanced";
   }
 

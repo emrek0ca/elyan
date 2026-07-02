@@ -1,0 +1,15 @@
+{"id":"workload-001","message":"Selam, bugün hızlıca bir şey soracağım","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
+{"id":"workload-002","message":"Fransa'nın başkenti neresi?","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
+{"id":"workload-003","message":"Bunu önceki cevaba göre açıklar mısın?","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-004","message":"Onu daha kısa ama aynı anlamla yeniden yaz","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-005","message":"REST API vs GraphQL hangisi daha mantıklı?","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-006","message":"iPhone ile Pixel arasındaki farkı nedir?","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-007","message":"Bu fonksiyon neden yanlış sonuç veriyor: `return total / items.length`","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
+{"id":"workload-008","message":"Şu kodu inceler misin: const total = items.reduce((a, b) => a + b, 0)","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
+{"id":"workload-009","message":"Python'da try catch örneği yaz","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
+{"id":"workload-010","message":"Kuantum dolanıklığı nedir, iki kısa örnekle açıkla","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-011","message":"Bana ileri analiz dersinden örnek soru yaz","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-012","message":"Z = x^5 - y^2 fonksiyonunun 3 boyutlu grafiğini çiz","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-013","message":"Bir startup için pazara giriş stratejisini değerlendir ve öner","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-014","message":"Bugün hava güzel","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
+{"id":"workload-015","message":"Bir e-ticaret uygulaması için veritabanı şeması nasıl tasarlanır, adımları planla","primaryIntent":"planning","expectedWorkload":"planning"}

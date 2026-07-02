@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildSharedBrainAckText, isShortFollowUpPrompt, selectHybridMobileChatWorkload } from "./chat-heuristics.js";
+import type { SharedBrainWorkload } from "./workloads.js";
 
 test("buildSharedBrainAckText returns empty string so frontend loading indicator handles pending state", () => {
   // All workloads must return empty — no "Bir saniye bakıyorum" injected into
@@ -75,7 +77,39 @@ test("selectHybridMobileChatWorkload catches Turkish suffixed analysis verbs (te
       primaryIntent: "chat",
       brainProfile: null,
     }),
-    "mobile_chat_balanced",
+    "mobile_chat_fast",
+  );
+});
+
+test("selectHybridMobileChatWorkload matches workload routing benchmark fixtures", () => {
+  const path = `${process.cwd()}/benchmarks/workload-routing.jsonl`;
+  const cases = readFileSync(path, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as {
+      id: string;
+      message: string;
+      primaryIntent: string;
+      expectedWorkload: Extract<SharedBrainWorkload, "mobile_chat_fast" | "mobile_chat_balanced" | "planning">;
+    });
+  const mismatches: string[] = [];
+
+  for (const fixture of cases) {
+    const actual = selectHybridMobileChatWorkload({
+      message: fixture.message,
+      primaryIntent: fixture.primaryIntent,
+      brainProfile: null,
+    });
+    if (actual !== fixture.expectedWorkload) {
+      mismatches.push(`${fixture.id}: expected ${fixture.expectedWorkload}, got ${actual}`);
+    }
+  }
+
+  const accuracy = (cases.length - mismatches.length) / cases.length;
+  assert.ok(
+    accuracy >= 0.9,
+    `workload routing accuracy ${accuracy}; mismatches: ${mismatches.join(", ")}`,
   );
 });
 
