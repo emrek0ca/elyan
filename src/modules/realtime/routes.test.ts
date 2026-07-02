@@ -5,10 +5,12 @@ import { errorHandlerPlugin } from "../../plugins/error-handler.js";
 import {
   acquireRealtimeStreamSlot,
   activeRealtimeStreamCountForUser,
+  createSsePendingWriteState,
   realtimeStreamChannelForUser,
   realtimeRoutes,
   shapeRealtimeEventEnvelope,
   shouldDropSlowSseClient,
+  shouldDropSsePendingWrite,
   shouldDispatchAssignedRuntimeTask,
 } from "./routes.js";
 
@@ -182,4 +184,24 @@ test("shouldDropSlowSseClient drops connections whose write buffer exceeds the l
   assert.equal(shouldDropSlowSseClient({ writableLength: 1_048_577 }, 1_048_576), true);
   // writableLength bilinmiyorsa (test mock'ları) asla düşürme
   assert.equal(shouldDropSlowSseClient({}, 1_048_576), false);
+});
+
+test("shouldDropSsePendingWrite drops slow writers after 64 pending events", () => {
+  const state = createSsePendingWriteState(64);
+  for (let index = 0; index < 64; index += 1) {
+    assert.equal(shouldDropSsePendingWrite(state, false), false);
+  }
+  assert.equal(state.pendingEvents, 64);
+  assert.equal(shouldDropSsePendingWrite(state, false), true);
+
+  assert.equal(shouldDropSsePendingWrite(state, true), false);
+  assert.equal(state.pendingEvents, 0);
+});
+
+test("shouldDropSsePendingWrite keeps normal writers open", () => {
+  const state = createSsePendingWriteState(64);
+  for (let index = 0; index < 1_000; index += 1) {
+    assert.equal(shouldDropSsePendingWrite(state, true), false);
+  }
+  assert.equal(state.pendingEvents, 0);
 });

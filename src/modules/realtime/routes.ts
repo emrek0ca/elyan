@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
-import type { FastifyPluginAsync, FastifyRequest } from "fastify";
+import { and, eq, sql } from "drizzle-orm";
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import { z } from "zod";
 import type { RawData } from "ws";
-import { devices, tasks } from "../../db/schema.js";
+import { chatSessions, devices, tasks } from "../../db/schema.js";
 import { recordMobileSyncRecoverySignals } from "../../core/understanding/user-understanding-service.js";
 import { AppError, badRequest, notFound, unauthorized } from "../../lib/errors.js";
 import { extractBearerToken, getUserAuth } from "../../lib/request-auth.js";
@@ -76,6 +76,9 @@ export function shouldDispatchAssignedRuntimeTask(
 }
 
 const activeRealtimeStreamsByUser = new Map<string, number>();
+const SSE_MAX_PENDING_EVENTS = 64;
+const SSE_DROPPED_BACKPRESSURE_METRIC_KEY =
+  "metrics:sse_dropped_connections_total:reason:backpressure";
 
 export function realtimeStreamChannelForUser(userId: string, query: RealtimeStreamQuery): string {
   return query.taskId ? `task:${query.taskId}` : query.deviceId ? `device:${query.deviceId}` : `user:${userId}`;
@@ -157,6 +160,95 @@ export function shouldDropSlowSseClient(
   return buffered > Math.max(1, maxBufferedBytes);
 }
 
+export type SsePendingWriteState = {
+  pendingEvents: number;
+  maxPendingEvents: number;
+  waitingDrain: boolean;
+};
+
+export function createSsePendingWriteState(
+  maxPendingEvents = SSE_MAX_PENDING_EVENTS,
+): SsePendingWriteState {
+  return {
+    pendingEvents: 0,
+    maxPendingEvents,
+    waitingDrain: false,
+  };
+}
+
+export function shouldDropSsePendingWrite(
+  state: SsePendingWriteState,
+  writeAccepted: boolean,
+): boolean {
+  if (writeAccepted) {
+    state.pendingEvents = 0;
+    return false;
+  }
+  state.pendingEvents += 1;
+  return state.pendingEvents > state.maxPendingEvents;
+}
+
+function readSessionIdFromSseData(data: unknown): string | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return null;
+  }
+  const record = data as Record<string, unknown>;
+  const direct = record.sessionId;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+  const payload = record.payload;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const nested = (payload as Record<string, unknown>).sessionId;
+    if (typeof nested === "string" && nested.trim()) {
+      return nested.trim();
+    }
+  }
+  return null;
+}
+
+function recordSseDroppedBackpressure(app: FastifyInstance) {
+  void app.services?.reliability?.store
+    ?.increment?.(SSE_DROPPED_BACKPRESSURE_METRIC_KEY, 86_400_000)
+    .catch(() => 0);
+  app.log.warn(
+    {
+      metric: 'sse_dropped_connections_total{reason="backpressure"}',
+      reason: "backpressure",
+    },
+    "sse dropped connection metric recorded",
+  );
+}
+
+async function markChatSessionReconnectPending(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId: string | null;
+  },
+) {
+  if (!input.sessionId) {
+    return;
+  }
+  const now = new Date();
+  await app.db
+    .update(chatSessions)
+    .set({
+      metadata: sql`coalesce(${chatSessions.metadata}, '{}'::jsonb) || ${JSON.stringify({
+        realtimeDeliveryState: "reconnect-pending",
+        realtimeReconnectPendingAt: now.toISOString(),
+      })}::jsonb`,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(chatSessions.id, input.sessionId),
+        eq(chatSessions.userId, input.userId),
+      ),
+    )
+    .catch(() => undefined);
+}
+
 export const realtimeRoutes: FastifyPluginAsync = async (app) => {
   app.get("/stream", async (request, reply) => {
     await app.authenticateUser(request, reply);
@@ -211,6 +303,8 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
     let heartbeat: NodeJS.Timeout | undefined;
     let unsubscribe: () => void = () => undefined;
     const bufferedEvents: DomainEvent[] = [];
+    const pendingWriteState = createSsePendingWriteState();
+    let lastChatSessionId: string | null = null;
 
     const closeStream = () => {
       if (closed) {
@@ -234,6 +328,11 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       // Yavaş client: yazma buffer'ı sınırı aştıysa bağlantıyı kes; client
       // Last-Event-ID ile yeniden bağlanıp replay'den devam eder.
       if (shouldDropSlowSseClient(reply.raw, app.config.SSE_MAX_BUFFERED_BYTES)) {
+        recordSseDroppedBackpressure(app);
+        void markChatSessionReconnectPending(app, {
+          userId: auth.sub,
+          sessionId: lastChatSessionId,
+        });
         app.log.warn(
           { channel, bufferedBytes: reply.raw.writableLength },
           "sse client too slow; dropping connection (resume via replay)",
@@ -241,7 +340,31 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         closeStream();
         return false;
       }
+      lastChatSessionId = readSessionIdFromSseData(input.data) ?? lastChatSessionId;
       const writable = writeSseEvent(reply.raw, input);
+      if (!writable && !pendingWriteState.waitingDrain) {
+        pendingWriteState.waitingDrain = true;
+        reply.raw.once?.("drain", () => {
+          pendingWriteState.pendingEvents = 0;
+          pendingWriteState.waitingDrain = false;
+        });
+      }
+      if (shouldDropSsePendingWrite(pendingWriteState, writable)) {
+        recordSseDroppedBackpressure(app);
+        void markChatSessionReconnectPending(app, {
+          userId: auth.sub,
+          sessionId: lastChatSessionId,
+        });
+        app.log.warn(
+          {
+            channel,
+            pendingEvents: pendingWriteState.pendingEvents,
+          },
+          "sse client pending queue exceeded; dropping connection (resume via replay)",
+        );
+        closeStream();
+        return false;
+      }
       if (!writable && reply.raw.destroyed) {
         closeStream();
         return false;
