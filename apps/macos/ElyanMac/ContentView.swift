@@ -17,6 +17,9 @@ struct ContentView: View {
     // Navigation history for back/forward toolbar buttons
     @State private var navHistory: [SidebarItem] = [.chat]
     @State private var historyIndex: Int = 0
+    // Geri/ileri ile gezinirken .onChange'in aynı hedefi geçmişe TEKRAR
+    // eklemesini engeller — yoksa geri/ileri geçmişi kendini çoğaltıp bozardı.
+    @State private var isHistoryNavigating = false
 
     enum SidebarItem: Hashable {
         case chat
@@ -31,38 +34,26 @@ struct ContentView: View {
     private var canGoBack: Bool { historyIndex > 0 }
     private var canGoForward: Bool { historyIndex < navHistory.count - 1 }
 
+    /// Programatik gezinme — selection'ı set eder; geçmiş senkronizasyonunu
+    /// `.onChange(of: selection)` TEK noktadan yapar (sidebar tıklaması da aynı
+    /// yoldan geçtiği için geri/ileri geçmişi artık tutarlı).
     private func navigate(to item: SidebarItem) {
         guard item != selection else { return }
-        // Truncate forward history when branching
-        navHistory = Array(navHistory.prefix(historyIndex + 1))
-        navHistory.append(item)
-        historyIndex = navHistory.count - 1
         selection = item
     }
 
     private func goBack() {
         guard canGoBack else { return }
+        isHistoryNavigating = true
         historyIndex -= 1
         selection = navHistory[historyIndex]
     }
 
     private func goForward() {
         guard canGoForward else { return }
+        isHistoryNavigating = true
         historyIndex += 1
         selection = navHistory[historyIndex]
-    }
-
-    // A stable string key for the current selection — used to give ChatView
-    // a fresh identity whenever the session or page changes so SwiftUI
-    // re-creates it instead of keeping stale state.
-    private var selectionKey: String {
-        switch selection ?? .chat {
-        case .chat:          return "chat-new"
-        case .session(let id): return "session-\(id)"
-        case .pairing:       return "pairing"
-        case .taskInbox:     return "inbox"
-        case .settings:      return "settings"
-        }
     }
 
     var body: some View {
@@ -71,7 +62,6 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 280)
         } detail: {
             detailView
-                .id(selectionKey)      // Force view recreation on navigation
                 .frame(minWidth: 560)
         }
         .navigationSplitViewStyle(.balanced)
@@ -104,6 +94,15 @@ struct ContentView: View {
         }
         .onChange(of: selection) { _, newValue in
             guard let item = newValue else { return }
+            // Geçmiş senkronizasyonu — TEK nokta. Geri/ileri ise historyIndex
+            // zaten ayarlandı, tekrar ekleme; yeni bir hedefse dalı buda+ekle.
+            if isHistoryNavigating {
+                isHistoryNavigating = false
+            } else if !navHistory.indices.contains(historyIndex) || navHistory[historyIndex] != item {
+                navHistory = Array(navHistory.prefix(historyIndex + 1))
+                navHistory.append(item)
+                historyIndex = navHistory.count - 1
+            }
             switch item {
             case .chat:
                 appState.chat.reset()
