@@ -51,7 +51,7 @@ struct LoginView: View {
     
     private var formContainer: some View {
         ZStack {
-            Color(NSColor.windowBackgroundColor).ignoresSafeArea()
+            ElyanTheme.canvas.ignoresSafeArea()
             
             ScrollView {
                 VStack(spacing: 24) {
@@ -149,7 +149,7 @@ struct LoginView: View {
                                 .font(.system(size: 14, weight: .medium))
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 40)
-                                .background(Color(NSColor.controlBackgroundColor))
+                                .background(ElyanTheme.composerField)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -192,7 +192,7 @@ struct LoginView: View {
         TextField(placeholder, text: text)
             .textFieldStyle(.plain)
             .padding(12)
-            .background(Color(NSColor.controlBackgroundColor))
+            .background(ElyanTheme.composerField)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -206,7 +206,7 @@ struct LoginView: View {
         SecureField(placeholder, text: text)
             .textFieldStyle(.plain)
             .padding(12)
-            .background(Color(NSColor.controlBackgroundColor))
+            .background(ElyanTheme.composerField)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
