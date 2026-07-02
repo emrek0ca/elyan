@@ -3606,7 +3606,14 @@ async function postJson(
   }
 }
 
-async function postStreamingJson(
+/**
+ * Runaway guard: aktif akan bir stream'in mutlak üst sınırı. Stall timer'ı
+ * sürekli resetleyen ama hiç bitmeyen bir stream (provider bug'ı) sunucu
+ * kaynaklarını sonsuza kadar tutamasın.
+ */
+const STREAMING_HARD_CAP_MS = 120_000;
+
+export async function postStreamingJson(
   app: FastifyInstance,
   provider: SharedBrainProvider,
   url: string,
@@ -3616,7 +3623,29 @@ async function postStreamingJson(
   onPayload: (payload: unknown) => void | Promise<void>,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // TIMEOUT SEMANTİĞİ (kritik): timeoutMs artık "toplam süre" değil, "STALL
+  // süresi" — son chunk'tan bu yana geçen sessizlik. Eski davranış aktif
+  // olarak token akıtan uzun bir cevabı 7sn'de ortasından kesiyordu (prod'da
+  // "uzun cevap yarıda kesiliyor" şikayetinin kök nedeni). Yeni davranış:
+  //   • firstPayloadTimeoutMs: ilk chunk bütçesi (değişmedi) — cevap hiç
+  //     başlamıyorsa hızlı fail → retry/fallback → ilk-token gecikmesi düşük.
+  //   • Sonrasında her chunk stall timer'ı resetler. timeoutMs boyunca HİÇ
+  //     chunk gelmezse stream gerçekten takılıdır → abort → retry.
+  //   • STREAMING_HARD_CAP_MS mutlak runaway guard'ı.
+  let stallTimer: ReturnType<typeof setTimeout> | null = setTimeout(
+    () => controller.abort(),
+    timeoutMs,
+  );
+  const resetStallTimer = () => {
+    if (stallTimer) {
+      clearTimeout(stallTimer);
+    }
+    stallTimer = setTimeout(() => controller.abort(), timeoutMs);
+  };
+  const hardCapTimer = setTimeout(
+    () => controller.abort(),
+    STREAMING_HARD_CAP_MS,
+  );
   let firstPayloadTimer: ReturnType<typeof setTimeout> | null =
     typeof firstPayloadTimeoutMs === "number" && firstPayloadTimeoutMs > 0
       ? setTimeout(() => controller.abort(), firstPayloadTimeoutMs)
@@ -3639,6 +3668,7 @@ async function postStreamingJson(
 
     while (true) {
       const { done, value } = await reader.read();
+      resetStallTimer();
       buffer += decoder.decode(value, { stream: !done });
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? "";
@@ -3691,7 +3721,10 @@ async function postStreamingJson(
 
     return response;
   } finally {
-    clearTimeout(timer);
+    if (stallTimer) {
+      clearTimeout(stallTimer);
+    }
+    clearTimeout(hardCapTimer);
     if (firstPayloadTimer) {
       clearTimeout(firstPayloadTimer);
     }

@@ -1100,7 +1100,9 @@ test("generateSharedBrainReply keeps a bounded recent ten-message context and us
 
   assert.equal(result.text, "Merhaba dunya");
   assert.equal(requestedGenerateBodies.length, 1);
-  assert.equal((requestedGenerateBodies[0].options as Record<string, unknown>).num_predict, 512);
+  // mobile_chat_balanced base tavanı 512 → 768 (stall-bazlı timeout fix'i
+  // aktif akan stream'i artık kesmediği için güvenli).
+  assert.equal((requestedGenerateBodies[0].options as Record<string, unknown>).num_predict, 768);
   const prompt = String(requestedGenerateBodies[0].prompt ?? "");
   assert.equal(prompt.includes("older-1"), true);
   assert.equal(prompt.includes("older-2"), true);
@@ -1540,7 +1542,10 @@ test("generateSharedBrainReply scales token budget for premium plans", async () 
   );
 
   assert.equal(requestedBodies.length, 1);
-  assert.equal(requestedBodies[0].max_tokens, 760);
+  // Base tavan 512 → 768'e yükseldi (stall-bazlı timeout aktif akan stream'i
+  // artık kesmediği için güvenli); premium ölçekli nihai bütçe de eşiğe
+  // oturuyor.
+  assert.equal(requestedBodies[0].max_tokens, 768);
 });
 
 test("generateSharedBrainReply expands complete-answer budget for packaged context packets", async () => {
@@ -3807,4 +3812,87 @@ test("prompt gating: helpers export stable signatures", () => {
   );
   assert.ok(social.startsWith("BASE"));
   assert.ok(shortFollowup.startsWith("BASE"));
+});
+
+// ── STALL-BASED STREAMING TIMEOUT FENCE ─────────────────────────────────
+// timeoutMs artık "toplam süre" değil "stall süresi". Aktif olarak chunk
+// akıtan uzun bir stream, toplam süre timeoutMs'i aşsa bile ASLA kesilmez;
+// timeoutMs boyunca hiç chunk gelmeyen takılı stream ise kesilir. Prod'daki
+// "uzun cevaplar yarıda kesiliyor" şikayetinin kök fix'i.
+
+import { createServer } from "node:http";
+import { postStreamingJson } from "./inference.js";
+
+function listenEphemeral(server: ReturnType<typeof createServer>): Promise<number> {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      resolve(typeof address === "object" && address ? address.port : 0);
+    });
+  });
+}
+
+test("postStreamingJson keeps an actively flowing stream alive past timeoutMs", async () => {
+  // 6 chunk × 150ms aralık = ~900ms toplam; timeoutMs=400. Eski total-abort
+  // 400ms'de keserdi; stall-timer her chunk'ta resetlendiği için tamamlanmalı.
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    let sent = 0;
+    const timer = setInterval(() => {
+      sent += 1;
+      res.write(`data: {"chunk":${sent}}\n\n`);
+      if (sent >= 6) {
+        clearInterval(timer);
+        res.end();
+      }
+    }, 150);
+  });
+  const port = await listenEphemeral(server);
+  try {
+    const payloads: unknown[] = [];
+    const response = await postStreamingJson(
+      { config: {} } as never,
+      "vllm",
+      `http://127.0.0.1:${port}/stream`,
+      {},
+      400,
+      null,
+      (payload) => {
+        payloads.push(payload);
+      },
+    );
+    assert.equal(response.ok, true);
+    assert.equal(payloads.length, 6);
+  } finally {
+    server.close();
+  }
+});
+
+test("postStreamingJson aborts a stalled stream after timeoutMs of silence", async () => {
+  // İlk chunk gelir, sonra sessizlik: stall timer 300ms'de kesmeli — istek
+  // sonsuza kadar asılı kalmamalı.
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write('data: {"chunk":1}\n\n');
+    // Kasıtlı: bir daha hiç yazma, bağlantıyı da kapatma.
+  });
+  const port = await listenEphemeral(server);
+  try {
+    const startedAt = Date.now();
+    await assert.rejects(
+      postStreamingJson(
+        { config: {} } as never,
+        "vllm",
+        `http://127.0.0.1:${port}/stream`,
+        {},
+        300,
+        null,
+        () => {},
+      ),
+    );
+    const elapsed = Date.now() - startedAt;
+    assert.ok(elapsed < 5_000, `stalled stream hung for ${elapsed}ms`);
+  } finally {
+    server.close();
+  }
 });

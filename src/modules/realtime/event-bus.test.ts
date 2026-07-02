@@ -157,3 +157,71 @@ test("EventBus publishes volatile stream events without calling the persistor", 
   ]);
   assert.deepEqual(seen, ["message.delta"]);
 });
+
+// ── Connect-race recovery: volatile snapshot layer ─────────────────────────
+// SSE client'ı yayından SONRA bağlanınca aktif stream'in son durumunu
+// alabilmeli. publishVolatile chat topic'lerinde kanal başına SON event'i
+// TTL'li saklar; recentVolatileSnapshots bağlantı anında teslim eder.
+
+test("EventBus keeps the latest volatile snapshot per chat topic for late subscribers", async () => {
+  const bus = new EventBus();
+
+  await bus.publishVolatile({
+    topic: "message.delta",
+    userId: "user-1",
+    taskId: "task-1",
+    payload: { content: "ilk parça" },
+  });
+  await bus.publishVolatile({
+    topic: "message.delta",
+    userId: "user-1",
+    taskId: "task-1",
+    payload: { content: "ilk parça ve devamı — kümülatif snapshot" },
+  });
+  await bus.publishVolatile({
+    topic: "message.completed",
+    userId: "user-1",
+    taskId: "task-1",
+    payload: { content: "final" },
+  });
+
+  // Geç bağlanan client: kanalda topic başına SON event, yayın sırasıyla.
+  const snapshots = bus.recentVolatileSnapshots("user:user-1");
+  assert.equal(snapshots.length, 2);
+  assert.equal(snapshots[0]?.topic, "message.delta");
+  assert.deepEqual(snapshots[0]?.payload, {
+    content: "ilk parça ve devamı — kümülatif snapshot",
+  });
+  assert.equal(snapshots[1]?.topic, "message.completed");
+
+  // Task kanalı da aynı snapshot'ları taşır.
+  assert.equal(bus.recentVolatileSnapshots("task:task-1").length, 2);
+  // Alakasız kanal boş.
+  assert.deepEqual(bus.recentVolatileSnapshots("user:user-2"), []);
+});
+
+test("EventBus volatile snapshots expire after their TTL window", async () => {
+  const bus = new EventBus();
+  await bus.publishVolatile({
+    topic: "message.delta",
+    userId: "user-1",
+    payload: { content: "eski" },
+  });
+
+  // Kısa bekleme sonrası dar pencere → süresi dolmuş sayılır (aynı-ms
+  // yarışını önlemek için gerçek gecikme kullanıyoruz).
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.deepEqual(bus.recentVolatileSnapshots("user:user-1", 5), []);
+  // Varsayılan pencerede hâlâ görünür.
+  assert.equal(bus.recentVolatileSnapshots("user:user-1").length, 1);
+});
+
+test("EventBus does not snapshot non-chat volatile topics", async () => {
+  const bus = new EventBus();
+  await bus.publishVolatile({
+    topic: "heartbeat",
+    userId: "user-1",
+    payload: {},
+  });
+  assert.deepEqual(bus.recentVolatileSnapshots("user:user-1"), []);
+});

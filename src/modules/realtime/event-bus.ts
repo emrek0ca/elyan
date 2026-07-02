@@ -41,6 +41,30 @@ export type EventBusOptions = {
   onFanoutError?: (error: unknown) => void;
 };
 
+/**
+ * Chat stream topic'leri volatile yayınlanır (persist yok) — SSE client'ı
+ * yayın ANINDA bağlı değilse event kaybolur. İlk mesaj senaryosu: kullanıcı
+ * uygulamayı açar açmaz yazar; SSE bağlantısı (auth + replay DB sorguları)
+ * kurulurken cevap stream'lenir ve kaybolurdu. Bu snapshot katmanı kanal
+ * başına topic'in SON event'ini kısa TTL ile tutar; SSE bağlanınca replay
+ * sonrasında client'a verilir. `message.delta` payload'ı kümülatif otoriter
+ * snapshot taşıdığı için topic başına SON event yeterlidir — ring buffer'a
+ * gerek yok, bellek maliyeti kanal başına birkaç event.
+ */
+const VOLATILE_SNAPSHOT_TOPICS = new Set([
+  "message.created",
+  "message.delta",
+  "block.preview",
+  "message.completed",
+  "message.error",
+  "usage.final",
+]);
+const VOLATILE_SNAPSHOT_TTL_MS = 45_000;
+const VOLATILE_SNAPSHOT_SWEEP_EVERY = 500;
+const VOLATILE_SNAPSHOT_MAX_CHANNELS = 20_000;
+
+type VolatileSnapshotEntry = { event: DomainEvent; at: number };
+
 export class EventBus {
   constructor(
     private readonly persist?: DomainEventPersistor,
@@ -49,6 +73,72 @@ export class EventBus {
 
   private readonly emitter = new EventEmitter();
   private fanoutStarted = false;
+  private readonly volatileSnapshots = new Map<
+    string,
+    Map<string, VolatileSnapshotEntry>
+  >();
+  private volatilePublishCount = 0;
+
+  private recordVolatileSnapshot(channels: string[], event: DomainEvent): void {
+    if (!VOLATILE_SNAPSHOT_TOPICS.has(event.topic)) {
+      return;
+    }
+    const at = Date.now();
+    for (const channel of channels) {
+      let byTopic = this.volatileSnapshots.get(channel);
+      if (!byTopic) {
+        // Kanal tavanı: patolojik durumda (ör. bir sızıntı) map sınırsız
+        // büyümesin. Tavana gelince en eski kanalı at (Map insertion order).
+        if (this.volatileSnapshots.size >= VOLATILE_SNAPSHOT_MAX_CHANNELS) {
+          const oldest = this.volatileSnapshots.keys().next().value;
+          if (oldest !== undefined) {
+            this.volatileSnapshots.delete(oldest);
+          }
+        }
+        byTopic = new Map();
+        this.volatileSnapshots.set(channel, byTopic);
+      }
+      byTopic.set(event.topic, { event, at });
+    }
+
+    this.volatilePublishCount += 1;
+    if (this.volatilePublishCount % VOLATILE_SNAPSHOT_SWEEP_EVERY === 0) {
+      this.sweepVolatileSnapshots(at);
+    }
+  }
+
+  private sweepVolatileSnapshots(now: number): void {
+    for (const [channel, byTopic] of this.volatileSnapshots) {
+      for (const [topic, entry] of byTopic) {
+        if (now - entry.at > VOLATILE_SNAPSHOT_TTL_MS) {
+          byTopic.delete(topic);
+        }
+      }
+      if (byTopic.size === 0) {
+        this.volatileSnapshots.delete(channel);
+      }
+    }
+  }
+
+  /**
+   * SSE bağlantısı kurulduğunda aktif stream'in kaçırılan son durumunu geri
+   * vermek için: kanaldaki taze (TTL içi) son volatile event'ler, yayın
+   * sırasına göre. Boş dizi = kaçırılan aktif stream yok.
+   */
+  public recentVolatileSnapshots(
+    channel: string,
+    maxAgeMs: number = VOLATILE_SNAPSHOT_TTL_MS,
+  ): DomainEvent[] {
+    const byTopic = this.volatileSnapshots.get(channel);
+    if (!byTopic) {
+      return [];
+    }
+    const now = Date.now();
+    return [...byTopic.values()]
+      .filter((entry) => now - entry.at <= maxAgeMs)
+      .sort((a, b) => a.at - b.at)
+      .map((entry) => entry.event);
+  }
 
   public async startFanout(): Promise<void> {
     if (!this.options.fanout || this.fanoutStarted) {
@@ -98,6 +188,7 @@ export class EventBus {
     };
     const channels = this.channelsFor(storedEvent);
 
+    this.recordVolatileSnapshot(channels, storedEvent);
     this.emitter.emit("event", storedEvent);
 
     for (const channel of channels) {

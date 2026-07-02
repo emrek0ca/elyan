@@ -58,13 +58,14 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
   },
   mobile_chat_balanced: {
     workload: "mobile_chat_balanced",
+    // timeoutMs artık STALL süresi (postStreamingJson): aktif akan stream'i
+    // kesmez, sadece 7sn sessizlikte takılı stream'i düşürür. Bu yüzden token
+    // tavanını yükseltmek timeout riski taşımıyor.
     timeoutMs: 7_000,
     firstDeltaBudgetMs: 2_100,
-    // Bumped 384 → 512: prod users on this workload were hitting the ceiling
-    // mid-LaTeX (\begin{cases}…\end{cases}) and the response ended with a
-    // dangling backslash. 512 covers a math example + short solution plan
-    // without pushing timeoutMs.
-    maxTokens: 512,
+    // 512 → 768: uzun cevaplar timeout yerine length'e takılıp continuation
+    // turu tüketiyordu; base tavanı yükselince tek turda tamamlanıyor.
+    maxTokens: 768,
     streamingEnabled: true,
     cachePolicy: "safe_ephemeral",
     fallbackWorkload: "mobile_chat_fast",

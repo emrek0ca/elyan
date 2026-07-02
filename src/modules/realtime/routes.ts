@@ -459,6 +459,23 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         lastSentEventId = event.id;
       }
 
+      // Connect-race recovery: chat stream event'leri volatile — client bu
+      // bağlantı kurulmadan ÖNCE stream'lenmeye başlamış bir cevabın delta /
+      // completed'ını kaçırmış olabilir (ilk mesaj senaryosu: uygulama açılır
+      // açılmaz yazınca SSE auth+replay penceresinde cevap akar). Event bus
+      // kanal başına son snapshot'ları kısa TTL ile tutuyor; burada teslim
+      // ediyoruz. delta payload'ı kümülatif otoriter snapshot taşıdığı ve
+      // mobil bunu idempotent uyguladığı için duplicate zararsızdır.
+      const missedSnapshots = app.services.eventBus.recentVolatileSnapshots(channel);
+      for (const event of missedSnapshots) {
+        if (!writeOrClose({
+          event: event.topic,
+          data: shapeRealtimeEventEnvelope(event),
+        })) {
+          return;
+        }
+      }
+
       if (cursor != null) {
         void recordMobileSyncRecoverySignals(app, {
           userId: auth.sub,
@@ -467,20 +484,21 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      while (!closed) {
+      // KRİTİK: volatile chat event'lerinin (message.delta / message.completed
+      // — publishVolatile ile yayınlanır) `id`'si YOKTUR. Eski drain filtresi
+      // `typeof event.id === "number"` bu event'lerin hepsini sessizce
+      // düşürüyordu: replay penceresi sırasında stream'lenen bir cevabın tüm
+      // delta'ları VE completed'ı kayboluyordu — "ilk mesajda cevap hiç
+      // gelmiyor" şikayetinin kök nedeni. Id'li (persisted) event'ler dedup +
+      // sıra ile, id'siz (volatile) event'ler geliş sırasıyla geçer.
+      while (!closed && bufferedEvents.length > 0) {
         const pending = bufferedEvents.splice(0);
-        const eligible = pending
+        const persisted = pending
           .filter((event): event is DomainEvent & { id: number } => typeof event.id === "number" && event.id > lastSentEventId)
           .sort((a, b) => a.id - b.id);
+        const volatile = pending.filter((event) => typeof event.id !== "number");
 
-        if (eligible.length === 0) {
-          if (bufferedEvents.length === 0) {
-            break;
-          }
-          continue;
-        }
-
-        for (const event of eligible) {
+        for (const event of persisted) {
           if (!writeOrClose({
             event: event.topic,
             id: event.id,
@@ -489,6 +507,14 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
             return;
           }
           lastSentEventId = event.id;
+        }
+        for (const event of volatile) {
+          if (!writeOrClose({
+            event: event.topic,
+            data: shapeRealtimeEventEnvelope(event),
+          })) {
+            return;
+          }
         }
       }
 
@@ -496,18 +522,12 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
 
       while (!closed && bufferedEvents.length > 0) {
         const pending = bufferedEvents.splice(0);
-        const eligible = pending
-          .filter((event): event is DomainEvent & { id: number } => typeof event.id === "number")
+        const persisted = pending
+          .filter((event): event is DomainEvent & { id: number } => typeof event.id === "number" && event.id > lastSentEventId)
           .sort((a, b) => a.id - b.id);
+        const volatile = pending.filter((event) => typeof event.id !== "number");
 
-        if (!eligible.length) {
-          continue;
-        }
-
-        for (const event of eligible) {
-          if (event.id <= lastSentEventId) {
-            continue;
-          }
+        for (const event of persisted) {
           if (!writeOrClose({
             event: event.topic,
             id: event.id,
@@ -516,6 +536,14 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
             return;
           }
           lastSentEventId = event.id;
+        }
+        for (const event of volatile) {
+          if (!writeOrClose({
+            event: event.topic,
+            data: shapeRealtimeEventEnvelope(event),
+          })) {
+            return;
+          }
         }
       }
 
