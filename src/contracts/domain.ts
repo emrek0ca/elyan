@@ -168,6 +168,18 @@ export const chatMessageStatusValues = [
   "failed",
   "canceled",
 ] as const;
+export const sessionGoalStatusValues = [
+  "draft",
+  "active",
+  "paused",
+  "done",
+  "canceled",
+] as const;
+export const sessionGoalScheduleHintValues = [
+  "on_next_message",
+  "daily_08_00",
+  "every_15m",
+] as const;
 export const elyanTaskTraceStatusValues = [
   "running",
   "completed",
@@ -195,6 +207,7 @@ export const elyanAssistantBlockTypeValues = [
   "document_block",
   "attachment_ack",
   "image_analysis",
+  "goal_progress",
 ] as const;
 export const elyanAssistantBlockVisibilityValues = [
   "user_visible",
@@ -715,6 +728,17 @@ export const elyanAssistantImageAnalysisBlockSchema =
     language: z.string().max(20).optional(),
   });
 
+export const elyanAssistantGoalProgressBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("goal_progress"),
+    goalId: z.string().min(1).max(120),
+    step: z.number().int().min(0).max(10_000),
+    ofSteps: z.number().int().min(1).max(10_000),
+    advancedTo: z.string().min(1).max(400),
+    blocker: z.string().min(1).max(400).nullable(),
+    done: z.boolean(),
+  });
+
 export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantTextBlockSchema,
   elyanAssistantSummaryBlockSchema,
@@ -736,6 +760,7 @@ export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantDocumentBlockSchema,
   elyanAssistantAttachmentAckBlockSchema,
   elyanAssistantImageAnalysisBlockSchema,
+  elyanAssistantGoalProgressBlockSchema,
 ]);
 
 export type DeviceType = z.infer<typeof deviceTypeSchema>;
@@ -775,6 +800,8 @@ export type ChatSessionSource = z.infer<typeof chatSessionSourceSchema>;
 export type ChatSessionStatus = z.infer<typeof chatSessionStatusSchema>;
 export type ChatMessageRole = z.infer<typeof chatMessageRoleSchema>;
 export type ChatMessageStatus = z.infer<typeof chatMessageStatusSchema>;
+export type SessionGoalStatus = (typeof sessionGoalStatusValues)[number];
+export type SessionGoalScheduleHint = (typeof sessionGoalScheduleHintValues)[number];
 export type ElyanTaskTraceStatus = z.infer<typeof elyanTaskTraceStatusSchema>;
 export type ElyanAssistantBlockType = z.infer<
   typeof elyanAssistantBlockTypeSchema
@@ -854,6 +881,9 @@ export type ElyanAssistantAttachmentAckBlock = z.infer<
 >;
 export type ElyanAssistantImageAnalysisBlock = z.infer<
   typeof elyanAssistantImageAnalysisBlockSchema
+>;
+export type ElyanAssistantGoalProgressBlock = z.infer<
+  typeof elyanAssistantGoalProgressBlockSchema
 >;
 export type ElyanAssistantSecurityDecisionBlock = z.infer<
   typeof elyanAssistantSecurityDecisionBlockSchema

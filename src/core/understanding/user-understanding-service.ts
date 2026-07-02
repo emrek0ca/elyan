@@ -80,6 +80,7 @@ export function emptyUnderstanding(input: TaskUnderstandingInput): UserUnderstan
         assistantState: null,
         openLoops: [],
       },
+      activeGoal: null,
       continuityBoundary: {
         mode: "new_topic",
         reason: "no_prior_context",

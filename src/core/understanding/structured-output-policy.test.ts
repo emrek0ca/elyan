@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   decideStructuredResponseDecision,
   isExplicitTableRequest,
+  isPlanOrStepRequest,
 } from "./structured-output-policy.js";
 
 test("decideStructuredResponseDecision defaults ordinary explanation prompts to prose", () => {
@@ -66,3 +67,28 @@ test("decideStructuredResponseDecision keeps a brief-explanation prompt as prose
   assert.equal(decision.widgetPolicy, "none");
 });
 
+test("decideStructuredResponseDecision keeps planning prompts out of table widgets", () => {
+  const decision = decideStructuredResponseDecision({
+    prompt: "Bana 5 adımlık Teknofest çalışma planı çıkar",
+    selectedWorkload: "planning",
+  });
+
+  assert.equal(isExplicitTableRequest("Bana 5 adımlık Teknofest çalışma planı çıkar"), false);
+  assert.equal(isPlanOrStepRequest("Bana 5 adımlık Teknofest çalışma planı çıkar"), true);
+  assert.equal(decision.primaryShape, "list");
+  assert.equal(decision.primaryBlockType, "text");
+  assert.equal(decision.tablePolicy, "forbidden");
+  assert.equal(decision.widgetPolicy, "none");
+  assert.equal(decision.reasons.includes("plan_request_prefers_list"), true);
+});
+
+test("decideStructuredResponseDecision still allows explicit table plans", () => {
+  const decision = decideStructuredResponseDecision({
+    prompt: "5 adımlık Teknofest çalışma planını tablo olarak ver",
+    selectedWorkload: "planning",
+  });
+
+  assert.equal(isExplicitTableRequest("5 adımlık Teknofest çalışma planını tablo olarak ver"), true);
+  assert.equal(decision.primaryBlockType, "table");
+  assert.equal(decision.widgetPolicy, "single_primary_widget");
+});

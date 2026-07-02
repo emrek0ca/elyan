@@ -218,6 +218,24 @@ test("decideCommandRoute keeps ordinary factual lists out of table_generate", as
   assert.notEqual(decision.selectedWorkload, "table_generate");
 });
 
+test("decideCommandRoute keeps plan requests out of table_generate", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Bana 5 adımlık Teknofest çalışma planı çıkar",
+    source: "mobile",
+    brainProfile: {
+      tier: "premium",
+      reasoningMultiplier: 5,
+      retrievalFanout: 5,
+      memoryFanout: 6,
+      maxTokenScale: 1.25,
+    },
+  });
+
+  assert.equal(decision.selectedWorkload, "planning");
+});
+
 test("decideCommandRoute upgrades complex public chat to the balanced profile", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {

@@ -3686,6 +3686,46 @@ test("compact context: emits STATE section with goal/stage/open key=value slots"
   );
 });
 
+test("compact context: emits durable GOAL section with one-step progress directive", () => {
+  const prompt = buildStructuredSystemPrompt("BASE", {
+    userId: "u",
+    prompt: "devam et",
+    workload: "mobile_chat_balanced" as const,
+    route: "shared_brain" as const,
+    understandingContext: {
+      activeGoal: {
+        id: "goal-123",
+        title: "Haftalık çalışma planı",
+        description: "Planı gün gün tamamla",
+        status: "active",
+        currentStep: 3,
+        maxSteps: 8,
+        progress: {
+          completedSteps: ["gün 1-2 çıkarıldı", "ek listesi hazır"],
+          nextAction: "gün 3 aktivite blokları",
+          blockers: [],
+        },
+        scheduleHint: "on_next_message",
+        dueAt: null,
+      },
+      continuitySummary: {
+        userGoal: null,
+        assistantState: null,
+        openLoops: [],
+      },
+    } as never,
+  });
+
+  assert.ok(prompt.includes("[GOAL]"), "GOAL section missing");
+  assert.ok(prompt.includes("id: goal-123"));
+  assert.ok(prompt.includes("title: Haftalık çalışma planı"));
+  assert.ok(prompt.includes("step: 3/8"));
+  assert.ok(prompt.includes("next: gün 3 aktivite blokları"));
+  assert.ok(prompt.includes("blocker: null"));
+  assert.ok(prompt.includes("Advance [GOAL] by ONE step per turn."));
+  assert.ok(prompt.includes("Emit a goal_progress block"));
+});
+
 test("compact context: SHORT_FOLLOWUP rule references STATE when state exists", () => {
   const prompt = buildStructuredSystemPrompt("BASE", {
     userId: "u",

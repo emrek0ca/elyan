@@ -41,6 +41,8 @@ import {
   oauthStateStatusValues,
   pairSessionStatusValues,
   runtimeConnectionStatusValues,
+  sessionGoalScheduleHintValues,
+  sessionGoalStatusValues,
   subscriptionStatusValues,
   taskStatusValues,
   trainingJobKindValues,
@@ -79,6 +81,11 @@ export const chatSessionSourceEnum = pgEnum("chat_session_source", chatSessionSo
 export const chatSessionStatusEnum = pgEnum("chat_session_status", chatSessionStatusValues);
 export const chatMessageRoleEnum = pgEnum("chat_message_role", chatMessageRoleValues);
 export const chatMessageStatusEnum = pgEnum("chat_message_status", chatMessageStatusValues);
+export const sessionGoalStatusEnum = pgEnum("session_goal_status", sessionGoalStatusValues);
+export const sessionGoalScheduleHintEnum = pgEnum(
+  "session_goal_schedule_hint",
+  sessionGoalScheduleHintValues,
+);
 export const usageWindowTypeEnum = pgEnum("usage_window_type", ["daily", "weekly"]);
 
 export const users = pgTable(
@@ -1125,6 +1132,36 @@ export const chatSessions = pgTable(
   }),
 );
 
+export const sessionGoals = pgTable(
+  "session_goals",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id").references(() => chatSessions.id, {
+      onDelete: "cascade",
+    }),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    title: varchar("title", { length: 200 }).notNull(),
+    description: text("description").notNull().default(""),
+    status: sessionGoalStatusEnum("status").notNull().default("active"),
+    currentStep: integer("current_step").notNull().default(0),
+    maxSteps: integer("max_steps").notNull().default(20),
+    progress: jsonb("progress").notNull().default(sql`'{}'::jsonb`),
+    scheduleHint: sessionGoalScheduleHintEnum("schedule_hint"),
+    dueAt: timestamp("due_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userStatusIdx: index("session_goals_user_status_idx").on(table.userId, table.status),
+    sessionStatusIdx: index("session_goals_session_status_idx").on(table.sessionId, table.status),
+    taskIdx: index("session_goals_task_idx").on(table.taskId),
+    dueIdx: index("session_goals_due_idx").on(table.dueAt),
+  }),
+);
+
 export const chatMessages = pgTable(
   "chat_messages",
   {
@@ -1424,6 +1461,7 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   knowledgeChunks: many(knowledgeChunks),
   chatSessions: many(chatSessions),
   chatMessages: many(chatMessages),
+  sessionGoals: many(sessionGoals),
   integrationConnections: many(integrationConnections),
   mcpServers: many(mcpServers),
   subscription: one(subscriptions, {

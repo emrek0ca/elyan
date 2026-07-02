@@ -7,6 +7,7 @@ import {
   extractTaskRouteDecision,
   shapeTaskFeedItem,
 } from "../tasks/service-helpers.js";
+import { applyGoalProgressBlocks } from "../goals/service.js";
 import {
   type AssistantMessageBlock,
   buildAssistantActionableBlock,
@@ -378,6 +379,12 @@ export async function syncChatTaskLifecycle(
       resultBlocks: extractResultAssistantBlocks(input.updatedTask),
     }),
   });
+  if (input.updatedTask.status === "completed") {
+    void applyGoalProgressBlocks(app, {
+      userId: input.updatedTask.userId,
+      blocks: assistantBlocks,
+    });
+  }
   const contentBlob = await app.services?.blobs?.storeText({
     ownerType: "chat_message",
     ownerId: metadata.assistantMessageId,

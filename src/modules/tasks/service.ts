@@ -48,6 +48,7 @@ import { chatMessages } from "../../db/schema.js";
 import { syncChatTaskLifecycle, compactMessagePreview } from "../chat/task-sync.js";
 import { buildTaskTraceBlock } from "../chat/task-trace.js";
 import { persistRollingSummaryToSession, listChatSessionMessages } from "../chat/service.js";
+import { applyGoalProgressBlocks } from "../goals/service.js";
 import { getUserDevice, RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { decideCommandRoute, resolveCommandTarget, resolvePendingDesktopQueueTarget } from "../routing-policy/service.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
@@ -2214,6 +2215,10 @@ async function completeServerBrainTask(
     updatedAt: now,
     queuePosition: 0,
   };
+  void applyGoalProgressBlocks(app, {
+    userId: input.userId,
+    blocks: resolvedAssistantBlocks,
+  });
 
   const artifactsToPersist: PersistableArtifactInput[] = [];
   if (renderRecipe) {
@@ -2836,6 +2841,10 @@ async function processSharedBrainChatTask(
       const finalBlocks = composeAssistantMessageBlocks({
         content: visibleText,
         blocks: [...ackBlock, taskTrace, ...inferenceBlocks],
+      });
+      void applyGoalProgressBlocks(app, {
+        userId: input.userId,
+        blocks: finalBlocks,
       });
       // Persist final blocks + cleaned content to the chat_messages row so a
       // later GET /messages (user leaves and reopens) returns the same

@@ -876,6 +876,75 @@ export function extractTypedJsonBlocksFromText(text: string): {
   return { visibleText, blocks };
 }
 
+function compactInlineText(value: unknown, maxLength = 160): string {
+  return String(value ?? "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function tableBlockToPlainFallback(block: Record<string, unknown>): string {
+  const columns = Array.isArray(block.columns)
+    ? block.columns.map((column) => compactInlineText(column, 80)).filter(Boolean)
+    : [];
+  const rows = Array.isArray(block.rows) ? block.rows.slice(0, 12) : [];
+  if (columns.length === 0 || rows.length === 0) {
+    return "";
+  }
+  const title = compactInlineText(block.title, 120);
+  const lines = title ? [`${title}:`] : [];
+  for (const rawRow of rows) {
+    const row = Array.isArray(rawRow)
+      ? rawRow
+      : rawRow && typeof rawRow === "object" && !Array.isArray(rawRow)
+        ? Object.values(rawRow as Record<string, unknown>)
+        : [];
+    const cells = row.map((cell) => compactInlineText(cell, 140));
+    const head = cells[0];
+    if (!head) continue;
+    const details = cells
+      .slice(1, columns.length)
+      .map((cell, index) => {
+        const label = columns[index + 1] ?? "";
+        return cell ? `${label ? `${label}: ` : ""}${cell}` : "";
+      })
+      .filter(Boolean)
+      .join("; ");
+    lines.push(`- ${head}${details ? `: ${details}` : ""}`);
+  }
+  return lines.join("\n");
+}
+
+function shouldAcceptExtractedTypedBlock(input: {
+  block: unknown;
+  prompt: string;
+  selectedWorkload: SharedBrainWorkload;
+}): boolean {
+  if (!input.block || typeof input.block !== "object" || Array.isArray(input.block)) {
+    return true;
+  }
+  const type = String((input.block as Record<string, unknown>).type ?? "").trim().toLowerCase();
+  if (type === "table") {
+    return input.selectedWorkload === "table_generate" || isExplicitTableRequest(input.prompt);
+  }
+  if (type === "chart") {
+    return isExplicitChartRequest(input.prompt);
+  }
+  if (type === "svg") {
+    return isExplicitSvgRequest(input.prompt);
+  }
+  if (type === "math" || type === "math_surface_3d") {
+    return isExplicitMathOrLatexRequest(input.prompt) || isExplicitMathSurface3DRequest(input.prompt);
+  }
+  if (type === "document_block") {
+    return input.selectedWorkload === "document_generate";
+  }
+  return true;
+}
+
 // braceIdx'teki `{` ile başlayan dengeli objenin kapanış `}` indeksini bulur,
 // string ve kaçış karakterlerini dikkate alır. Bulunamazsa -1.
 function findBalancedObjectEnd(text: string, braceIdx: number): number {
@@ -1600,7 +1669,7 @@ function buildStructuredDataPromptBlock(
         responseDecision.primaryBlockType !== "text"
           ? `Render as one primary ${responseDecision.primaryBlockType} typed block. Do not duplicate the same content as prose, markdown, or a second JSON block.`
           : responseDecision.widgetPolicy === "proactive_optional"
-            ? "Default to one clean text block of prose or short bullets. BUT when your actual answer is genuinely visual — a multi-row dataset, a numeric series/trend/distribution, a plottable function, an equation/derivation, or a process/architecture — emit ONE matching typed block (table/chart/math/math_surface_3d/svg) instead of describing it in words. At most one widget; never duplicate its content as prose; never expose raw JSON as the visible answer. Simple, factual, or conversational answers stay prose."
+            ? "Default to one clean text block of prose or short bullets. BUT when your actual answer is genuinely visual — a numeric series/trend/distribution, a plottable function, an equation/derivation, or a process/architecture — emit ONE matching typed block (chart/math/math_surface_3d/svg) instead of describing it in words. Tables are opt-in only: use table blocks only when the user explicitly asks for a table/spreadsheet/CSV. At most one widget; never duplicate its content as prose; never expose raw JSON as the visible answer. Simple, factual, planning, or conversational answers stay prose."
             : "Render as one clean text block worth of prose or short bullets. Do not create a table/widget, and never expose raw JSON as the visible answer.",
     },
     conversationContinuity:
@@ -1789,7 +1858,7 @@ function buildDataUnderstandingQualityPromptBlock(
     `- response presentation decision: shape=${responseDecision.primaryShape}; primary_block=${responseDecision.primaryBlockType}; table_policy=${responseDecision.tablePolicy}; widget_policy=${responseDecision.widgetPolicy}; reasons=${responseDecision.reasons.join("|") || "default_prose"}`,
     "- obey the response presentation decision unless the user explicitly changes the requested output type in the current turn",
     proactiveVisuals
-      ? "- PROACTIVE VISUAL POLICY (balanced): you are NOT limited to prose. When your answer is genuinely better as a visual, emit ONE primary typed block on your own initiative — a chart for numeric series/trends/distributions/comparisons or a plottable function, a table for a real multi-row/multi-column dataset, a math block for an equation/derivation/step solution, math_surface_3d for a z=f(x,y) surface, or an svg for a process/flow/architecture/geometry. Choose based on the ACTUAL content of your answer, not on keywords in the question. Hard limits: at most ONE widget per reply; never duplicate the widget's content as prose; if the answer is simple, factual, opinion, or conversational, stay prose. Quality over quantity — a visual must add real understanding."
+      ? "- PROACTIVE VISUAL POLICY (balanced): you are NOT limited to prose. When your answer is genuinely better as a visual, emit ONE primary typed block on your own initiative — a chart for numeric series/trends/distributions/comparisons or a plottable function, a math block for an equation/derivation/step solution, math_surface_3d for a z=f(x,y) surface, or an svg for a process/flow/architecture/geometry. Do NOT proactively use table blocks; tables require an explicit table/spreadsheet/CSV request. Choose based on the ACTUAL content of your answer, not on keywords in the question. Hard limits: at most ONE widget per reply; never duplicate the widget's content as prose; if the answer is simple, factual, planning, opinion, or conversational, stay prose. Quality over quantity — a visual must add real understanding."
       : "- response stays prose-only for this turn (the user asked for plain text or a list); do not emit chart/table/math/svg/document widgets.",
     "- mobile render contract: every user-visible answer is block-first. Ordinary prose becomes one clean text block; rich output becomes exactly one primary typed block plus at most one short explanatory text block. Never show raw JSON, schema labels, or duplicate markdown copies to the user.",
     '- typed block v2 contract: rich content must be emitted as valid JSON-compatible block objects only. Never put arithmetic expressions in numeric fields such as y/value; either compute the number before emitting points/series, use chartType "function" for 2D functions, or use math_surface_3d for z=f(x,y) surfaces.',
@@ -2490,6 +2559,22 @@ function buildCompactContextPromptBlock(
     );
   }
 
+  // ── GOAL (durable session goal, advanced at most one step per turn) ──
+  const goalLines: string[] = [];
+  const activeGoal = input.understandingContext?.activeGoal;
+  if (activeGoal?.status === "active") {
+    const completed = dedupeAndTrim(activeGoal.progress.completedSteps ?? [], 3);
+    const blockers = dedupeAndTrim(activeGoal.progress.blockers ?? [], 2);
+    goalLines.push(`id: ${activeGoal.id}`);
+    goalLines.push(`title: ${activeGoal.title}`);
+    goalLines.push(`step: ${activeGoal.currentStep}/${activeGoal.maxSteps}`);
+    if (completed.length > 0) goalLines.push(`done: ${completed.join(" | ")}`);
+    if (activeGoal.progress.nextAction) {
+      goalLines.push(`next: ${activeGoal.progress.nextAction}`);
+    }
+    goalLines.push(`blocker: ${blockers[0] ?? "null"}`);
+  }
+
   // ── MEMORY (retrieval shortlist + relationship digest) ──
   const memoryLines: string[] = [];
   if (memoryRelevanceSummary.length > 0) {
@@ -2583,6 +2668,11 @@ function buildCompactContextPromptBlock(
   // ── Compose sections ──
   const sections: string[] = [];
   if (stateLines.length) sections.push(`[STATE]\n${stateLines.join("\n")}`);
+  if (goalLines.length) {
+    sections.push(
+      `[GOAL]\n${goalLines.join("\n")}\nAdvance [GOAL] by ONE step per turn. Emit a goal_progress block with your progress; do not retry or restart.`,
+    );
+  }
   if (memoryLines.length) sections.push(`[MEMORY]\n${memoryLines.join("\n")}`);
   if (directiveLines.length)
     sections.push(`[DIRECTIVES]\n${directiveLines.join("\n")}`);
@@ -6253,8 +6343,24 @@ export async function generateSharedBrainReply(
       });
       const extracted = extractTypedJsonBlocksFromText(text);
       if (extracted.blocks.length > 0) {
-        extractedTypedBlocks.push(...extracted.blocks);
         finalText = extracted.visibleText;
+        const fallbackText: string[] = [];
+        for (const block of extracted.blocks) {
+          if (shouldAcceptExtractedTypedBlock({ block, prompt: input.prompt, selectedWorkload: workload })) {
+            extractedTypedBlocks.push(block);
+            continue;
+          }
+          if (block && typeof block === "object" && !Array.isArray(block)) {
+            const type = String((block as Record<string, unknown>).type ?? "").trim().toLowerCase();
+            if (type === "table") {
+              const fallback = tableBlockToPlainFallback(block as Record<string, unknown>);
+              if (fallback) fallbackText.push(fallback);
+            }
+          }
+        }
+        if (fallbackText.length > 0) {
+          finalText = [finalText, ...fallbackText].map((part) => part.trim()).filter(Boolean).join("\n\n");
+        }
       }
 
       const finalTextBlocks = buildAssistantMessageBlocks(finalText);

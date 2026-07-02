@@ -9,6 +9,7 @@ import { extractProjectHints } from "./project-context.js";
 import { buildDerivedHintBuckets, deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "./world-signal-derived.js";
 import { isShortFollowUpPrompt } from "../../modules/brain/chat-heuristics.js";
 import type {
+  ActiveGoalContext,
   ContextPacket,
   ContinuityBoundary,
   IntentClassification,
@@ -19,6 +20,7 @@ import type {
   UserUnderstandingContext,
 } from "./types.js";
 import { listFreshWorldSignals } from "../../modules/mobile/service.js";
+import { getActiveGoalForContext } from "../../modules/goals/service.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
 
 const MAX_HINTS = 12;
@@ -1188,6 +1190,7 @@ export function buildUserContextFromMemory(input: {
   memory: RetrievedMemory[];
   profile?: Partial<UserProfileSnapshot> | null;
   contextPackets?: ContextPacket[];
+  activeGoal?: ActiveGoalContext | null;
 }): UserUnderstandingContext {
   const filteredMemory = filterRetrievedMemory(input.memory).slice(0, MAX_HINTS);
   const memorySnapshot = buildMemoryProfileSnapshot(filteredMemory);
@@ -1386,6 +1389,7 @@ export function buildUserContextFromMemory(input: {
     behavioralHints,
     environmentHints,
     continuitySummary,
+    activeGoal: input.activeGoal ?? null,
     continuityBoundary,
     relationshipContextDigest,
     clarificationDiagnostics,
@@ -1666,6 +1670,13 @@ export async function buildUserContext(
     .slice(0, 3);
   const promptMemory = [...selectedContinuityMemory, ...derivedPromptMemory];
 
+  const activeGoal = await getActiveGoalForContext(app, {
+    userId: input.userId,
+    sessionId: typeof input.metadata?.chat === "object" && input.metadata.chat !== null
+      ? String((input.metadata.chat as Record<string, unknown>).sessionId ?? "")
+      : null,
+  }).catch(() => null);
+
   const ctx = buildUserContextFromMemory({
     userId:      input.userId,
     accountId,
@@ -1674,6 +1685,7 @@ export async function buildUserContext(
     memory:      promptMemory,
     profile:     enrichedProfile,
     contextPackets,
+    activeGoal,
   });
 
   /* Merge C-derived hints into the context (deduplicated, bounded) */

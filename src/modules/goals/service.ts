@@ -1,0 +1,333 @@
+import { and, asc, desc, eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
+import { chatSessions, sessionGoals } from "../../db/schema.js";
+import type {
+  SessionGoalScheduleHint,
+  SessionGoalStatus,
+} from "../../contracts/domain.js";
+import { elyanAssistantGoalProgressBlockSchema } from "../../contracts/domain.js";
+import { forbidden, notFound } from "../../lib/errors.js";
+
+const DEFAULT_MAX_STEPS = 20;
+const ACTIVE_GOAL_LIMIT = 5;
+
+export type GoalProgress = {
+  completedSteps?: string[];
+  nextAction?: string | null;
+  blockers?: string[];
+};
+
+export type ActiveGoalContext = {
+  id: string;
+  title: string;
+  description: string;
+  status: SessionGoalStatus;
+  currentStep: number;
+  maxSteps: number;
+  progress: GoalProgress;
+  scheduleHint: SessionGoalScheduleHint | null;
+  dueAt: Date | null;
+};
+
+function compactText(value: string, max: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trimEnd()}…`;
+}
+
+function clampMaxSteps(value: number | undefined): number {
+  if (!Number.isInteger(value)) {
+    return DEFAULT_MAX_STEPS;
+  }
+  return Math.max(1, Math.min(DEFAULT_MAX_STEPS, value ?? DEFAULT_MAX_STEPS));
+}
+
+function normalizeProgress(value: unknown): GoalProgress {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    completedSteps: Array.isArray(record.completedSteps)
+      ? record.completedSteps.map(String).filter(Boolean).slice(0, DEFAULT_MAX_STEPS)
+      : undefined,
+    nextAction:
+      typeof record.nextAction === "string" && record.nextAction.trim()
+        ? compactText(record.nextAction, 400)
+        : null,
+    blockers: Array.isArray(record.blockers)
+      ? record.blockers.map(String).filter(Boolean).slice(0, DEFAULT_MAX_STEPS)
+      : undefined,
+  };
+}
+
+function shapeGoal(row: typeof sessionGoals.$inferSelect): ActiveGoalContext {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    currentStep: row.currentStep,
+    maxSteps: row.maxSteps,
+    progress: normalizeProgress(row.progress),
+    scheduleHint: row.scheduleHint,
+    dueAt: row.dueAt,
+  };
+}
+
+async function assertOwnedSession(
+  app: FastifyInstance,
+  input: { userId: string; sessionId: string },
+) {
+  const rows = await app.db
+    .select({ id: chatSessions.id })
+    .from(chatSessions)
+    .where(and(eq(chatSessions.id, input.sessionId), eq(chatSessions.userId, input.userId)))
+    .limit(1);
+  if (!rows[0]) {
+    throw forbidden("Chat session is not available for this user.");
+  }
+}
+
+async function pauseOverflowActiveGoals(app: FastifyInstance, userId: string) {
+  const activeRows = await app.db
+    .select({ id: sessionGoals.id })
+    .from(sessionGoals)
+    .where(and(eq(sessionGoals.userId, userId), eq(sessionGoals.status, "active")))
+    .orderBy(desc(sessionGoals.updatedAt))
+    .limit(ACTIVE_GOAL_LIMIT + 1);
+
+  const overflow = activeRows.slice(ACTIVE_GOAL_LIMIT);
+  if (overflow.length === 0) return;
+  const now = new Date();
+  for (const row of overflow) {
+    await app.db
+      .update(sessionGoals)
+      .set({
+        status: "paused",
+        updatedAt: now,
+      })
+      .where(and(eq(sessionGoals.id, row.id), eq(sessionGoals.userId, userId)));
+  }
+}
+
+export async function createGoal(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId?: string;
+    taskId?: string;
+    title: string;
+    description?: string;
+    maxSteps?: number;
+    scheduleHint?: SessionGoalScheduleHint | null;
+    dueAt?: Date | null;
+  },
+) {
+  if (input.sessionId) {
+    await assertOwnedSession(app, { userId: input.userId, sessionId: input.sessionId });
+  }
+  const rows = await app.db
+    .insert(sessionGoals)
+    .values({
+      userId: input.userId,
+      sessionId: input.sessionId ?? null,
+      taskId: input.taskId ?? null,
+      title: compactText(input.title, 200),
+      description: compactText(input.description ?? "", 4_000),
+      status: "active",
+      currentStep: 0,
+      maxSteps: clampMaxSteps(input.maxSteps),
+      progress: {
+        completedSteps: [],
+        nextAction: null,
+        blockers: [],
+      },
+      scheduleHint: input.scheduleHint ?? "on_next_message",
+      dueAt: input.dueAt ?? null,
+    })
+    .returning();
+
+  await pauseOverflowActiveGoals(app, input.userId);
+  return { goal: shapeGoal(rows[0]) };
+}
+
+export async function listGoals(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    status?: SessionGoalStatus;
+    sessionId?: string;
+    limit: number;
+  },
+) {
+  const conditions = [eq(sessionGoals.userId, input.userId)];
+  if (input.status) conditions.push(eq(sessionGoals.status, input.status));
+  if (input.sessionId) conditions.push(eq(sessionGoals.sessionId, input.sessionId));
+
+  const rows = await app.db
+    .select()
+    .from(sessionGoals)
+    .where(and(...conditions))
+    .orderBy(desc(sessionGoals.updatedAt))
+    .limit(input.limit);
+  return { goals: rows.map(shapeGoal) };
+}
+
+export async function getActiveGoalForContext(
+  app: FastifyInstance,
+  input: { userId: string; sessionId?: string | null },
+): Promise<ActiveGoalContext | null> {
+  const sessionScoped = input.sessionId
+    ? await app.db
+        .select()
+        .from(sessionGoals)
+        .where(
+          and(
+            eq(sessionGoals.userId, input.userId),
+            eq(sessionGoals.sessionId, input.sessionId),
+            eq(sessionGoals.status, "active"),
+          ),
+        )
+        .orderBy(desc(sessionGoals.updatedAt))
+        .limit(1)
+    : [];
+  if (sessionScoped[0]) return shapeGoal(sessionScoped[0]);
+
+  const rows = await app.db
+    .select()
+    .from(sessionGoals)
+    .where(and(eq(sessionGoals.userId, input.userId), eq(sessionGoals.status, "active")))
+    .orderBy(desc(sessionGoals.updatedAt))
+    .limit(1);
+  return rows[0] ? shapeGoal(rows[0]) : null;
+}
+
+export async function updateGoal(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    goalId: string;
+    status?: SessionGoalStatus;
+    title?: string;
+    description?: string;
+    scheduleHint?: SessionGoalScheduleHint | null;
+    dueAt?: Date | null;
+  },
+) {
+  const values: Partial<typeof sessionGoals.$inferInsert> = {
+    updatedAt: new Date(),
+  };
+  if (input.status) values.status = input.status;
+  if (input.title) values.title = compactText(input.title, 200);
+  if (input.description != null) values.description = compactText(input.description, 4_000);
+  if ("scheduleHint" in input) values.scheduleHint = input.scheduleHint ?? null;
+  if ("dueAt" in input) values.dueAt = input.dueAt ?? null;
+
+  const rows = await app.db
+    .update(sessionGoals)
+    .set(values)
+    .where(and(eq(sessionGoals.id, input.goalId), eq(sessionGoals.userId, input.userId)))
+    .returning();
+  if (!rows[0]) {
+    throw notFound("Goal not found.");
+  }
+  return { goal: shapeGoal(rows[0]) };
+}
+
+export async function advanceGoal(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    goalId: string;
+    step: number;
+    ofSteps: number;
+    advancedTo: string;
+    blocker?: string | null;
+    done?: boolean;
+  },
+) {
+  const rows = await app.db
+    .select()
+    .from(sessionGoals)
+    .where(and(eq(sessionGoals.id, input.goalId), eq(sessionGoals.userId, input.userId)))
+    .limit(1);
+  const existing = rows[0];
+  if (!existing) {
+    throw notFound("Goal not found.");
+  }
+
+  const maxSteps = clampMaxSteps(Math.min(existing.maxSteps, input.ofSteps));
+  const nextStep = Math.max(existing.currentStep, Math.min(input.step, maxSteps));
+  const progress = normalizeProgress(existing.progress);
+  const advancedTo = compactText(input.advancedTo, 400);
+  const completedSteps = Array.from(
+    new Set([...(progress.completedSteps ?? []), advancedTo]),
+  ).slice(-maxSteps);
+  const blockers = input.blocker
+    ? [...(progress.blockers ?? []), compactText(input.blocker, 400)].slice(-maxSteps)
+    : (progress.blockers ?? []);
+  const status: SessionGoalStatus = input.done
+    ? "done"
+    : input.blocker
+      ? "paused"
+      : nextStep >= maxSteps
+        ? "canceled"
+        : "active";
+
+  const updated = await app.db
+    .update(sessionGoals)
+    .set({
+      currentStep: nextStep,
+      maxSteps,
+      status,
+      progress: {
+        completedSteps,
+        nextAction: input.done ? null : advancedTo,
+        blockers,
+      },
+      updatedAt: new Date(),
+    })
+    .where(and(eq(sessionGoals.id, input.goalId), eq(sessionGoals.userId, input.userId)))
+    .returning();
+
+  return { goal: shapeGoal(updated[0]) };
+}
+
+function flattenBlocks(blocks: unknown[]): unknown[] {
+  const flattened: unknown[] = [];
+  for (const block of blocks) {
+    flattened.push(block);
+    if (block && typeof block === "object" && !Array.isArray(block)) {
+      const children = (block as Record<string, unknown>).children;
+      if (Array.isArray(children)) {
+        flattened.push(...flattenBlocks(children));
+      }
+    }
+  }
+  return flattened;
+}
+
+export async function applyGoalProgressBlocks(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    blocks: unknown[];
+  },
+) {
+  const block = flattenBlocks(input.blocks)
+    .map((item) => elyanAssistantGoalProgressBlockSchema.safeParse(item))
+    .find((result) => result.success)?.data;
+  if (!block) {
+    return null;
+  }
+
+  return advanceGoal(app, {
+    userId: input.userId,
+    goalId: block.goalId,
+    step: block.step,
+    ofSteps: block.ofSteps,
+    advancedTo: block.advancedTo,
+    blocker: block.blocker,
+    done: block.done,
+  }).catch(() => null);
+}

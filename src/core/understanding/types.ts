@@ -185,6 +185,22 @@ export type UserProfileSnapshot = {
   preferredLanguage: string | null;
 };
 
+export type ActiveGoalContext = {
+  id: string;
+  title: string;
+  description: string;
+  status: "draft" | "active" | "paused" | "done" | "canceled";
+  currentStep: number;
+  maxSteps: number;
+  progress: {
+    completedSteps?: string[];
+    nextAction?: string | null;
+    blockers?: string[];
+  };
+  scheduleHint: "on_next_message" | "daily_08_00" | "every_15m" | null;
+  dueAt: Date | null;
+};
+
 export type UserUnderstandingContext = {
   userId: string;
   accountId: string;
@@ -206,6 +222,7 @@ export type UserUnderstandingContext = {
     assistantState: string | null;
     openLoops: string[];
   };
+  activeGoal: ActiveGoalContext | null;
   continuityBoundary?: ContinuityBoundary;
   relationshipContextDigest: string[];
   clarificationDiagnostics: ClarificationDiagnostics;

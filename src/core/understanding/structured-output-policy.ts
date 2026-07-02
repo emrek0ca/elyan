@@ -22,6 +22,12 @@ const NON_TABLE_PREFERENCE_PATTERNS = [
   /\b(liste|list|madde madde|bullet|paragraf|paragraflar|düz yazı|duz yazi|özet|ozet|açıkla|acikla|anlat|kısa bilgi|kisa bilgi)\b/i,
 ];
 
+const PLAN_OR_STEP_REQUEST_PATTERNS = [
+  /\b(plan|planı|plani|planını|planini|planla|roadmap|yol haritası|yol haritasi|program|takvim|schedule|routine|rutin)\b/i,
+  /\b(çalışma|calisma|ders|hazırlık|hazirlik|teknofest|proje|öğrenme|ogrenme)\b.{0,60}\b(plan|program|takvim|rutini|rutini|roadmap|yol haritası|yol haritasi)\b/i,
+  /\b(\d+\s*(adım|adim|günlük|gunluk|haftalık|haftalik|aşamalı|asamali)|adım adım|adim adim)\b.{0,80}\b(plan|program|çıkar|cikar|hazırla|hazirla|oluştur|olustur)\b/i,
+];
+
 const EXPLICIT_CHART_REQUEST_PATTERNS = [
   /(?<!\p{L})(grafik|grafiği|grafiğini|grafigi|grafigini|chart|graph|plot|çiz|ciz|çizim|cizim|visualize|visualise|görselleştir|gorsellestir)(?!\p{L})/iu,
   /(?<!\p{L})(fonksiyon grafiği|fonksiyon grafigi|function graph|function plot|scatter|line chart|bar chart|pie chart)(?!\p{L})/iu,
@@ -106,6 +112,14 @@ export function shouldPreferPlainListOrProse(prompt: string): boolean {
     return false;
   }
   return NON_TABLE_PREFERENCE_PATTERNS.some((pattern) => pattern.test(normalized)) || !isExplicitTableRequest(normalized);
+}
+
+export function isPlanOrStepRequest(prompt: string): boolean {
+  const normalized = compactText(prompt);
+  if (!normalized || isExplicitTableRequest(normalized)) {
+    return false;
+  }
+  return PLAN_OR_STEP_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 export function shouldPromoteMarkdownTableToWidget(input: {
@@ -237,6 +251,17 @@ export function decideStructuredResponseDecision(input: {
     reasons.push("explicit_prose_preference");
     return {
       primaryShape: "prose",
+      primaryBlockType: "text",
+      tablePolicy: "forbidden",
+      widgetPolicy: "none",
+      reasons,
+    };
+  }
+
+  if (isPlanOrStepRequest(prompt) || selectedWorkload === "planning") {
+    reasons.push(isPlanOrStepRequest(prompt) ? "plan_request_prefers_list" : "planning_workload_prefers_list");
+    return {
+      primaryShape: "list",
       primaryBlockType: "text",
       tablePolicy: "forbidden",
       widgetPolicy: "none",

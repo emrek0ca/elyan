@@ -140,6 +140,18 @@ test("elyan block schema accepts v2 math chart and table render metadata", () =>
     risk: "critical",
   });
   assert.equal(securityDecision.type, "security_decision");
+
+  const goalProgress = elyanAssistantBlockSchema.parse({
+    type: "goal_progress",
+    goalId: "goal_123",
+    step: 4,
+    ofSteps: 8,
+    advancedTo: "Gün 4 aktivite blokları hazırlandı.",
+    blocker: null,
+    done: false,
+  });
+  assert.equal(goalProgress.type, "goal_progress");
+  assert.equal(goalProgress.step, 4);
 });
 
 test("normalizeAssistantMessageBlocks preserves math_surface_3d blocks", () => {
