@@ -247,13 +247,14 @@ test("processMemoryImportanceDecay updates a bounded batch with decay metadata",
 });
 
 test("processMemoryImportanceDecay skips when the DB budget expires", async () => {
+  let releaseSlowQuery: (value: { rows: [] }) => void = () => undefined;
+  const slowQuery = new Promise<{ rows: [] }>((resolve) => {
+    releaseSlowQuery = resolve;
+  });
   const slowApp = {
     db: {
       execute() {
-        return new Promise((resolve) => {
-          const t = setTimeout(() => resolve({ rows: [] }), 5_000);
-          (t as unknown as { unref?: () => void }).unref?.();
-        });
+        return slowQuery;
       },
       update() {
         throw new Error("update should not run after budget expiry");
@@ -269,6 +270,8 @@ test("processMemoryImportanceDecay skips when the DB budget expires", async () =
   assert.equal(result.status, "skipped");
   assert.equal(result.reason, "memory_decay_budget_expired");
   assert.ok(Date.now() - startedAt < 2_000);
+  releaseSlowQuery({ rows: [] });
+  await slowQuery;
 });
 
 test("listBrainMemory hides soft-deleted records for user-safe views by default", async () => {
