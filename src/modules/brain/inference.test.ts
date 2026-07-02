@@ -7,6 +7,7 @@ import {
   calculateBillableAiCredits,
   computeStreamVisibleText,
   createDeltaPublisher,
+  extractAntiRepeatSignatures,
   extractTypedJsonBlocksFromText,
   generateGovernedSharedBrainReply,
   generateSharedBrainReply,
@@ -19,6 +20,7 @@ import {
   recordGroqProviderModelFailure,
   resolveCleanVisibleAnswer,
   resolveEffectiveWorkload,
+  resolveGenerationTemperature,
   resolveReasoningEffort,
 } from "./inference.js";
 
@@ -3895,4 +3897,56 @@ test("postStreamingJson aborts a stalled stream after timeoutMs of silence", asy
   } finally {
     server.close();
   }
+});
+
+test("resolveGenerationTemperature keeps analytical workloads cold and warms conversational turns", () => {
+  // Analitik/kesin işler soğuk kalmalı
+  assert.equal(resolveGenerationTemperature({ workload: "planning", prompt: "5 adımlık plan" }), 0.25);
+  assert.equal(resolveGenerationTemperature({ workload: "document_generate", prompt: "rapor yaz" }), 0.25);
+  assert.equal(resolveGenerationTemperature({ workload: "table_generate", prompt: "tablo" }), 0.25);
+  // Math/chart sinyali sohbet workload'ında bile soğuk tutar
+  assert.equal(
+    resolveGenerationTemperature({ workload: "mobile_chat_fast", prompt: "x^2 türevini al" }),
+    0.25,
+  );
+  assert.equal(
+    resolveGenerationTemperature({ workload: "mobile_chat_balanced", prompt: "f(x)=x^2 grafiğini çiz" }),
+    0.25,
+  );
+  // Selamlaşma → en sıcak
+  assert.equal(resolveGenerationTemperature({ workload: "mobile_chat_fast", prompt: "selam" }), 0.6);
+  assert.equal(resolveGenerationTemperature({ workload: "fast_route", prompt: "nasılsın" }), 0.6);
+  // Genel sohbet → dengeli
+  assert.equal(
+    resolveGenerationTemperature({ workload: "mobile_chat_balanced", prompt: "yapay zeka nedir kısaca anlat" }),
+    0.4,
+  );
+});
+
+test("extractAntiRepeatSignatures surfaces repeated openers and closing questions", () => {
+  const recent = [
+    { role: "user", content: "Merhaba" },
+    { role: "assistant", content: "Tabii ki! Sana yardımcı olabilirim. Başka bir şey ister misin?" },
+    { role: "user", content: "Peki bunu anlat" },
+    { role: "assistant", content: "Tabii ki! Hemen açıklıyorum. Başka bir sorun var mı?" },
+  ];
+  const sigs = extractAntiRepeatSignatures(recent);
+  // Açılış imzası "Tabii ki!" yakalanmalı
+  assert.ok(sigs.some((s) => /Tabii ki/i.test(s)), `openers: ${JSON.stringify(sigs)}`);
+  // Kapanış sorusu yakalanmalı
+  assert.ok(sigs.some((s) => /ister misin|sorun var/i.test(s)), `closers: ${JSON.stringify(sigs)}`);
+  assert.ok(sigs.length <= 4);
+});
+
+test("extractAntiRepeatSignatures ignores user turns and short/empty content", () => {
+  assert.deepEqual(extractAntiRepeatSignatures([]), []);
+  assert.deepEqual(
+    extractAntiRepeatSignatures([{ role: "user", content: "sadece kullanıcı mesajı" }]),
+    [],
+  );
+  // Kapanış düz cümle (soru değil) → closer eklenmez
+  const sigs = extractAntiRepeatSignatures([
+    { role: "assistant", content: "İşte cevabın. Umarım işine yarar." },
+  ]);
+  assert.ok(sigs.every((s) => !s.includes("?")));
 });

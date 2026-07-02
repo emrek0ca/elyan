@@ -75,7 +75,7 @@ import {
   extractClientAttachments,
   type ClientAttachment,
 } from "./document-types.js";
-import { isShortFollowUpPrompt, isSocialChatPrompt } from "./chat-heuristics.js";
+import { hasMathReasoningSignal, isShortFollowUpPrompt, isSocialChatPrompt } from "./chat-heuristics.js";
 import {
   classifyReasoningDump,
   extractFinalAnswerFromReasoningDump,
@@ -1951,6 +1951,14 @@ function buildReasoningProtocolPromptBlock(input: {
     hasOpenLoops
       ? `- open loops from prior turn: ${continuitySummary!.openLoops.join(" | ")}; acknowledge or resolve them if this message addresses them`
       : null,
+    // Proaktif takip (A3): konu devam ediyorsa (carry boundary) ve kullanıcı
+    // açık döngüye değinmediyse bile, EN FAZLA bir tanesini doğal biçimde
+    // kontrol edebilir ("geçen sefer ... bakıyordun, o tarafta bir gelişme
+    // oldu mu?"). Zorlama yok, her turda tekrar yok — sadece gerçekten
+    // ilgiliyse. Bu "beni takip ediyor" hissini verir.
+    hasOpenLoops && continuityBoundary?.carryContinuity
+      ? `- proactive follow-up: if it feels natural and the topic is still related, you MAY briefly check in on ONE open loop the user did not mention this turn — like a person who remembers. At most once, never force it, never list them mechanically.`
+      : null,
   ].filter((line): line is string => line !== null);
 
   if (ecosystemHints.length > 0) {
@@ -2448,6 +2456,7 @@ export function buildStructuredSystemPrompt(
       ? null
       : "Conversation policy: for greetings or casual small talk, respond warmly and use the user's name if you know it. Sound genuinely glad to be talking with them — not performatively, but naturally. Ask one short, useful follow-up when it would help. Never mention device state, battery, health metrics, notifications, or location during greetings or unrelated small talk. If the user asks who they are or what you know about them, answer from their verified profile — name, plan, and remembered preferences — accurately and without embellishment.",
     "Quality policy: reduce over-explaining, reduce repetitive endings, prefer natural Turkish, and offer a short confirmation step only when uncertainty is real. If you are unsure, say so plainly instead of fabricating a confident answer.",
+    "Freshness policy: if the session state above lists `avoid_reopen` signatures, they are your OWN recent openings/closings — do not start or end this reply with those same phrasings. Vary your wording naturally so consecutive replies never feel templated (no repeated \"Tabii ki!\", no identical closing question every turn). Never mention this policy.",
     preferenceBlock,
   ]
     .filter((section): section is string => Boolean(section && section.trim()))
@@ -2487,6 +2496,51 @@ function dedupeAndTrim(values: string[], max = 4): string[] {
  * hatırlıyor ve "goal was X" olarak referans veriyor, "The compact context
  * says the user's goal..." gibi sızdırma denemesi yapmıyor.
  */
+/**
+ * Anti-tekrar imzaları — son asistan cevaplarının açılış ve (soru ise)
+ * kapanış kalıplarını çıkarır. Model aynı "Tabii ki!" açılışını ve aynı
+ * "Başka bir şey ister misin?" kapanışını her turda tekrarlıyordu; mekanik
+ * hissin en büyük kaynağı buydu. Bu imzaları modele VERİ değil TALİMAT olarak
+ * geçiyoruz: "bunları tekrarlama, ifadeni çeşitlendir". Yüksek temperature ile
+ * sinerjik — biri çeşitliliği artırır, öteki tekrarı bastırır.
+ */
+export function extractAntiRepeatSignatures(recentMessages: unknown[]): string[] {
+  const assistantContents = recentMessages
+    .map((item) => readMetadataRecord(item))
+    .filter((r): r is Record<string, unknown> => r != null)
+    .filter((r) => String(r.role ?? "").trim().toLowerCase() === "assistant")
+    .map((r) => compactText(String(r.content ?? "")))
+    .filter((text) => text.length > 0)
+    .slice(-3);
+
+  const signatures: string[] = [];
+  const seen = new Set<string>();
+  const pushSignature = (raw: string) => {
+    const value = raw.trim().replace(/\s+/g, " ");
+    if (value.length < 4) return;
+    const key = value.toLocaleLowerCase("tr-TR");
+    if (seen.has(key)) return;
+    seen.add(key);
+    signatures.push(value.length > 48 ? `${value.slice(0, 47)}…` : value);
+  };
+
+  for (const content of assistantContents) {
+    // Açılış imzası: ilk cümlenin ilk ~6 kelimesi.
+    const firstSentence = content.split(/(?<=[.!?…])\s/)[0] ?? content;
+    const opener = firstSentence.split(/\s+/).slice(0, 6).join(" ");
+    pushSignature(opener);
+    // Kapanış imzası: yalnız son cümle bir SORU ise (mekanik "…ister misin?"
+    // kalıbı) — düz kapanışlar zaten çeşitli.
+    const sentences = content.split(/(?<=[.!?…])\s/).filter(Boolean);
+    const last = sentences[sentences.length - 1] ?? "";
+    if (last.includes("?") && last !== firstSentence) {
+      pushSignature(last.split(/\s+/).slice(0, 8).join(" "));
+    }
+  }
+
+  return signatures.slice(0, 4);
+}
+
 function buildCompactContextPromptBlock(
   input: SharedBrainInferenceInput,
 ): string | null {
@@ -2547,6 +2601,12 @@ function buildCompactContextPromptBlock(
   }
   if (recentMessages.length > 0) {
     stateLines.push(`window: ${Math.min(recentMessages.length, 6)} recent turns`);
+  }
+  // Anti-tekrar: son cevapların açılış/kapanış imzaları — modele "bunları
+  // tekrarlama, ifadeni çeşitlendir" sinyali (talimat, veri değil).
+  const antiRepeat = extractAntiRepeatSignatures(recentMessages);
+  if (antiRepeat.length > 0) {
+    stateLines.push(`avoid_reopen: ${antiRepeat.join(" | ")}`);
   }
   if (continuityBoundary) {
     stateLines.push(
@@ -3944,6 +4004,7 @@ function buildRequestBody(
   visionImages: ResolvedAttachmentContextVisionImage[] = [],
   reasoningPolicy: "hidden" | "visible" = "hidden",
   reasoningEffort: "low" | "medium" | "high" = "low",
+  temperature: number = ANALYTICAL_GENERATION_TEMPERATURE,
 ) {
   if (provider === "ollama") {
     return {
@@ -3952,7 +4013,7 @@ function buildRequestBody(
       stream,
       ...(keepAlive ? { keep_alive: keepAlive } : {}),
       options: {
-        temperature: 0.25,
+        temperature,
         num_predict: maxTokens,
       },
     };
@@ -3966,7 +4027,7 @@ function buildRequestBody(
   return {
     model,
     messages: outMessages,
-    temperature: 0.25,
+    temperature,
     max_tokens: maxTokens,
     stream,
     // gpt-oss reasoning models emit a separate `reasoning` channel before any
@@ -4025,12 +4086,74 @@ function isReasoningChannelModel(model: string): boolean {
   return normalized.includes("gpt-oss");
 }
 
+/**
+ * Sampling temperature dial — workload-aware so Elyan sounds ALIVE in
+ * conversation without ever loosening analytical accuracy.
+ *
+ * Why: temperature was pinned at 0.25 for every request. That is right for
+ * math/code/document work (deterministic, exact) but makes casual chat feel
+ * robotic and repetitive — the same greeting, the same closers, the same
+ * phrasing every turn. Higher temperature on conversational turns restores
+ * natural variation and warmth (and reinforces the anti-repetition work),
+ * while precision workloads stay cold and reliable.
+ *
+ * Bands:
+ *   • 0.25 — analytical/exact: planning, documents, tables, math, vision,
+ *     code (accuracy must not drift).
+ *   • 0.40 — balanced: substantive Q&A where some phrasing freedom helps.
+ *   • 0.60 — conversational/social: greetings, small talk, warmth-first turns.
+ */
+export const ANALYTICAL_GENERATION_TEMPERATURE = 0.25;
+export const BALANCED_GENERATION_TEMPERATURE = 0.4;
+export const CONVERSATIONAL_GENERATION_TEMPERATURE = 0.6;
+
+export function resolveGenerationTemperature(input: {
+  workload: SharedBrainWorkload | undefined;
+  prompt: string;
+}): number {
+  const workload = input.workload;
+  // Exact/structured work must stay deterministic.
+  if (
+    workload === "planning" ||
+    workload === "document_generate" ||
+    workload === "document_analysis" ||
+    workload === "table_generate" ||
+    workload === "image_analyze" ||
+    workload === "vision_reasoning" ||
+    workload === "mobile_chat_deep_refine"
+  ) {
+    return ANALYTICAL_GENERATION_TEMPERATURE;
+  }
+  // Math/code/LaTeX signalled prompts: keep cold even on a chat workload so a
+  // "çöz"/"grafiğini çiz" turn does not drift.
+  if (
+    hasMathReasoningSignal(input.prompt) ||
+    isExplicitMathOrLatexRequest(input.prompt) ||
+    isExplicitChartRequest(input.prompt) ||
+    isExplicitTableRequest(input.prompt) ||
+    isExplicitMathSurface3DRequest(input.prompt)
+  ) {
+    return ANALYTICAL_GENERATION_TEMPERATURE;
+  }
+  // Greetings + small talk: warmest, most varied.
+  if (isSocialChatPrompt(input.prompt)) {
+    return CONVERSATIONAL_GENERATION_TEMPERATURE;
+  }
+  // Fast route is almost always light conversational chat.
+  if (workload === "mobile_chat_fast" || workload === "fast_route") {
+    return CONVERSATIONAL_GENERATION_TEMPERATURE;
+  }
+  // Everything else (balanced substantive chat): a little phrasing freedom.
+  return BALANCED_GENERATION_TEMPERATURE;
+}
+
 function buildGenerateRequestBody(
   model: string,
   prompt: string,
   maxTokens: number,
   keepAlive?: string,
   stream = false,
+  temperature: number = ANALYTICAL_GENERATION_TEMPERATURE,
 ) {
   return {
     model,
@@ -4038,7 +4161,7 @@ function buildGenerateRequestBody(
     stream,
     ...(keepAlive ? { keep_alive: keepAlive } : {}),
     options: {
-      temperature: 0.25,
+      temperature,
       num_predict: maxTokens,
     },
   };
@@ -5599,6 +5722,13 @@ export async function generateSharedBrainReply(
         input.workload,
         input.understandingContext?.taskFrame?.reasoningMode,
       );
+      // Canlılık dial'i: sohbet turlarında daha yüksek temperature (doğal,
+      // çeşitli, sıcak), analitik/kod/math turlarında 0.25 (kesin). reasoning
+      // effort'tan bağımsız — biri derinlik, öteki ifade çeşitliliği.
+      const generationTemperature = resolveGenerationTemperature({
+        workload: input.workload,
+        prompt: input.prompt,
+      });
 
       for (const candidate of providerCandidates) {
         if (!candidate) {
@@ -5638,6 +5768,8 @@ export async function generateSharedBrainReply(
                       prompt,
                       maxTokens,
                       app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+                      false,
+                      generationTemperature,
                     ),
                   },
                   {
@@ -5655,6 +5787,7 @@ export async function generateSharedBrainReply(
                       ],
                       reasoningPolicy,
                       reasoningEffort,
+                      generationTemperature,
                     ),
                   },
                 ]
@@ -5674,6 +5807,7 @@ export async function generateSharedBrainReply(
                       ],
                       reasoningPolicy,
                       reasoningEffort,
+                      generationTemperature,
                     ),
                   },
                 ];
@@ -5808,6 +5942,7 @@ export async function generateSharedBrainReply(
                         ],
                         "hidden",
                         reasoningEffort,
+                        generationTemperature,
                       );
 
                       const continuationResponse = await postStreamingJson(
