@@ -289,22 +289,22 @@ final class ChatStore: ObservableObject {
     private func handle(event: ElyanSSEEvent) async {
         switch event.event {
         case "chat.message.delta":
-            if let (text, blocks) = Self.extractContent(from: event.data) {
-                if !blocks.isEmpty { applyAssistantBlocks(blocks) }
-                else if !text.isEmpty { appendDelta(text) }
-            }
+            let (text, blocks) = Self.extractContent(from: event.data)
+            // Delta ve blocks AYNI event'te gelebilir (ör. ack: delta metni +
+            // task-trace blokları). İkisini de uygula — eskiden `else if` biri
+            // atlanıyordu.
+            if !blocks.isEmpty { applyAssistantBlocks(blocks) }
+            if !text.isEmpty { appendDelta(text) }
         case "chat.message.updated":
-            if let (text, blocks) = Self.extractContent(from: event.data) {
-                replaceAssistant(text: text, blocks: blocks)
-            }
+            let (text, blocks) = Self.extractContent(from: event.data)
+            replaceAssistant(text: text, blocks: blocks)
             finishStreamingSuccessfully()
         case "chat.heartbeat", "chat.message.created":
             break
         default:
-            if let (text, blocks) = Self.extractContent(from: event.data) {
-                if !blocks.isEmpty { applyAssistantBlocks(blocks) }
-                else if !text.isEmpty { appendDelta(text) }
-            }
+            let (text, blocks) = Self.extractContent(from: event.data)
+            if !blocks.isEmpty { applyAssistantBlocks(blocks) }
+            if !text.isEmpty { appendDelta(text) }
         }
     }
 
@@ -413,23 +413,41 @@ final class ChatStore: ObservableObject {
 
     // MARK: - Content extraction (SSE)
 
-    static func extractContent(from data: [String: Any]) -> (text: String, blocks: [ChatBlock])? {
-        // Try assistant sub-object first (standard backend envelope)
-        let sources: [[String: Any]] = [
-            (data["assistant"] as? [String: Any]) ?? [:],
-            data
-        ]
-        for source in sources {
-            let rawBlocks = (source["blocks"] as? [[String: Any]]) ?? []
-            let blocks = ChatBlock.parseArray(from: rawBlocks)
-            let text = (source["delta"] as? String)
-                ?? (source["content"] as? String)
-                ?? (source["message"] as? String)
-                ?? ""
-            if !blocks.isEmpty || !text.isEmpty {
-                return (text, blocks)
-            }
-        }
-        return nil
+    /// SSE envelope'undan görünür metni ve blokları çıkarır.
+    ///
+    /// KRİTİK: backend `buildChatStreamEnvelope` içeriği `data.payload` altına
+    /// koyuyor; delta metni `payload.delta`, bloklar `payload.assistantMessage.blocks`
+    /// içinde. Eski sürüm yalnız top-level `data`/`data.assistant`'a bakıyordu —
+    /// bu yüzden CANLI streaming'de delta hiç parse edilemiyor, cevap sonsuza
+    /// dek "Düşünüyor…"da takılıyordu (geçmiş cevaplar REST'ten geldiği için
+    /// çalışıyordu, canlı SSE değil). Artık payload + assistantMessage + eski
+    /// top-level varyantlarının hepsi taranıyor.
+    static func extractContent(from data: [String: Any]) -> (text: String, blocks: [ChatBlock]) {
+        let payload = (data["payload"] as? [String: Any]) ?? data
+
+        // Blok taşıyıcı objesi: assistantMessage (yeni sözleşme) > assistant (eski)
+        let assistantMessage = (payload["assistantMessage"] as? [String: Any])
+            ?? (payload["assistant"] as? [String: Any])
+            ?? (data["assistantMessage"] as? [String: Any])
+            ?? (data["assistant"] as? [String: Any])
+
+        // Metin: delta (incremental parça) > content (kümülatif) > markdown/message.
+        let text = (payload["delta"] as? String)
+            ?? (payload["content"] as? String)
+            ?? (assistantMessage?["content"] as? String)
+            ?? (payload["markdown"] as? String)
+            ?? (payload["message"] as? String)
+            ?? (data["delta"] as? String)
+            ?? (data["content"] as? String)
+            ?? ""
+
+        // Bloklar: assistantMessage.blocks > payload.blocks > data.blocks
+        let rawBlocks = (assistantMessage?["blocks"] as? [[String: Any]])
+            ?? (payload["blocks"] as? [[String: Any]])
+            ?? (data["blocks"] as? [[String: Any]])
+            ?? []
+        let blocks = ChatBlock.parseArray(from: rawBlocks)
+
+        return (text, blocks)
     }
 }
