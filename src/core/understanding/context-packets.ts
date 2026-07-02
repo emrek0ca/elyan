@@ -18,40 +18,40 @@ const WORLD_CONTEXT_TTL_HOURS = 12;
 
 const SAFE_HEALTH_FACT_LABELS = new Map<string, string>([
   // Qualitative derived
-  ["activitylevel", "aktivite seviyesi"],
-  ["activityband", "aktivite bandı"],
-  ["energy", "enerji"],
-  ["energylevel", "enerji durumu"],
-  ["fatigue", "yorgunluk"],
-  ["focus", "odak"],
-  ["hydration", "hidrasyon"],
-  ["mood", "ruh hali"],
-  ["movementtrend", "hareket eğilimi"],
-  ["readiness", "hazırlık"],
-  ["readinesslevel", "hazırlık"],
-  ["recovery", "toparlanma"],
-  ["sleepquality", "uyku kalitesi"],
-  ["stress", "stres"],
-  ["stresslevel", "stres"],
-  ["timeframe", "zaman aralığı"],
-  ["trend", "eğilim"],
-  ["wellbeing", "iyi oluş"],
+  ["activitylevel", "activity"],
+  ["activityband", "activity_band"],
+  ["energy", "energy"],
+  ["energylevel", "energy"],
+  ["fatigue", "fatigue"],
+  ["focus", "focus"],
+  ["hydration", "hydration"],
+  ["mood", "mood"],
+  ["movementtrend", "movement_trend"],
+  ["readiness", "readiness"],
+  ["readinesslevel", "readiness"],
+  ["recovery", "recovery"],
+  ["sleepquality", "sleep_quality"],
+  ["stress", "stress"],
+  ["stresslevel", "stress"],
+  ["timeframe", "timeframe"],
+  ["trend", "trend"],
+  ["wellbeing", "wellbeing"],
   // Step counts (mobile-derived)
-  ["stepstoday", "adım (bugün)"],
-  ["stepsyesterday", "adım (dün)"],
-  ["stepsthisweek", "adım (bu hafta)"],
+  ["stepstoday", "steps_today"],
+  ["stepsyesterday", "steps_yesterday"],
+  ["stepsthisweek", "steps_week"],
   // Sleep hours (mobile-derived)
-  ["sleephourstoday", "uyku (bu gece, saat)"],
-  ["sleephoursyesterday", "uyku (önceki gece, saat)"],
-  ["sleepremhours", "REM uykusu (saat)"],
-  ["sleeprempercent", "REM uykusu (%)"],
-  ["sleepdeephours", "derin uyku (saat)"],
-  ["sleepdeeppercent", "derin uyku (%)"],
+  ["sleephourstoday", "sleep_h_today"],
+  ["sleephoursyesterday", "sleep_h_yesterday"],
+  ["sleepremhours", "sleep_rem_h"],
+  ["sleeprempercent", "sleep_rem_pct"],
+  ["sleepdeephours", "sleep_deep_h"],
+  ["sleepdeeppercent", "sleep_deep_pct"],
   // Energy & workouts
-  ["activeenergykcal", "aktif enerji (kcal)"],
-  ["workoutcount", "egzersiz sayısı"],
-  ["workoutdurationminutes", "egzersiz süresi (dk)"],
-  ["workouttype", "egzersiz türü"],
+  ["activeenergykcal", "active_kcal"],
+  ["workoutcount", "workouts"],
+  ["workoutdurationminutes", "workout_min"],
+  ["workouttype", "workout_type"],
 ]);
 
 const RAW_HEALTH_TEXT_PATTERN =
@@ -62,75 +62,75 @@ const PRIVATE_DERIVED_TEXT_PATTERN =
   /(?:https?:\/\/|file:\/\/|\/Users\/|[A-Za-z]:\\|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:\+?\d[\d\s().-]{7,}\d)|\b(attendee|attendees|body|description|event\s*title|invitee|meeting\s*link|message\s*body|notification\s*body|raw|sample|secret|token)\b|\b(bildirim\s+gövdesi|bildirim\s+govdesi|mesaj\s+içeriği|mesaj\s+icerigi|özel\s+içerik|ozel\s+icerik)\b)/i;
 
 const SAFE_CALENDAR_FACT_LABELS = new Map<string, string>([
-  ["availability", "uygunluk"],
-  ["busyness", "takvim yoğunluğu"],
-  ["busylevel", "yoğunluk seviyesi"],
-  ["dayload", "gün yoğunluğu"],
-  ["calendardensity", "takvim dolulugu"],
-  ["deadlineload", "son tarih baskısı"],
-  ["hasdeadlinelikeevent", "deadline var mı"],
-  ["eventcount", "etkinlik sayısı"],
-  ["focuswindow", "odak penceresi"],
-  ["freeminutestoday", "bugün boş süre (dk)"],
-  ["longestfreeblockminutes", "en uzun boş blok (dk)"],
-  ["freewindow", "boş zaman penceresi"],
-  ["meetingload", "toplantı yükü"],
-  ["nexteventminutes", "sonraki etkinliğe kalan (dk)"],
-  ["nexteventdurationminutes", "sonraki etkinlik süresi (dk)"],
-  ["nexteventwindow", "sonraki etkinlik penceresi"],
-  ["nextwindow", "sonraki uygun aralık"],
-  ["schedulepressure", "program baskısı"],
-  ["timeframe", "zaman aralığı"],
+  ["availability", "availability"],
+  ["busyness", "busyness"],
+  ["busylevel", "busy_level"],
+  ["dayload", "day_load"],
+  ["calendardensity", "calendar_density"],
+  ["deadlineload", "deadline_load"],
+  ["hasdeadlinelikeevent", "has_deadline"],
+  ["eventcount", "events"],
+  ["focuswindow", "focus_window"],
+  ["freeminutestoday", "free_min_today"],
+  ["longestfreeblockminutes", "longest_free_min"],
+  ["freewindow", "free_window"],
+  ["meetingload", "meeting_load"],
+  ["nexteventminutes", "next_event_min"],
+  ["nexteventdurationminutes", "next_event_duration_min"],
+  ["nexteventwindow", "next_event_window"],
+  ["nextwindow", "next_window"],
+  ["schedulepressure", "schedule_pressure"],
+  ["timeframe", "timeframe"],
 ]);
 
 const SAFE_DEVICE_FACT_LABELS = new Map<string, string>([
-  ["appversion", "uygulama sürümü"],
-  ["battery", "pil"],
-  ["batterylevel", "pil"],
-  ["charging", "şarj"],
-  ["connectivity", "bağlantı"],
-  ["devicestate", "cihaz durumu"],
-  ["focusmode", "odak modu"],
-  ["lowpowermode", "düşük güç modu"],
-  ["network", "ağ"],
-  ["online", "çevrimiçi durum"],
-  ["osversion", "işletim sistemi"],
+  ["appversion", "app_version"],
+  ["battery", "battery"],
+  ["batterylevel", "battery"],
+  ["charging", "charging"],
+  ["connectivity", "connectivity"],
+  ["devicestate", "device_state"],
+  ["focusmode", "focus_mode"],
+  ["lowpowermode", "low_power"],
+  ["network", "network"],
+  ["online", "online"],
+  ["osversion", "os"],
   ["platform", "platform"],
-  ["storage", "depolama"],
+  ["storage", "storage"],
 ]);
 
 const SAFE_NOTIFICATION_FACT_LABELS = new Map<string, string>([
-  ["authorization", "bildirim izni"],
-  ["attentionload", "dikkat yükü"],
-  ["countbucket", "bildirim yoğunluğu"],
-  ["digest", "bildirim özeti"],
-  ["focusimpact", "odak etkisi"],
-  ["notificationload", "bildirim yükü"],
-  ["priority", "öncelik"],
-  ["urgency", "aciliyet"],
+  ["authorization", "notif_permission"],
+  ["attentionload", "attention_load"],
+  ["countbucket", "notif_density"],
+  ["digest", "notif_digest"],
+  ["focusimpact", "focus_impact"],
+  ["notificationload", "notif_load"],
+  ["priority", "priority"],
+  ["urgency", "urgency"],
 ]);
 
 const SAFE_TIME_FACT_LABELS = new Map<string, string>([
-  ["daypart", "günün bölümü"],
-  ["localeday", "yerel gün"],
-  ["localtime", "yerel saat"],
-  ["localtimeofday", "yerel saat"],
-  ["timezone", "saat dilimi"],
-  ["weekday", "hafta günü"],
-  ["workinghours", "çalışma saatleri"],
+  ["daypart", "daypart"],
+  ["localeday", "local_day"],
+  ["localtime", "local_time"],
+  ["localtimeofday", "local_time"],
+  ["timezone", "timezone"],
+  ["weekday", "weekday"],
+  ["workinghours", "working_hours"],
 ]);
 
 const SAFE_LOCATION_FACT_LABELS = new Map<string, string>([
-  ["city", "şehir"],
-  ["district", "ilçe"],
-  ["country", "ülke"],
-  ["countrycode", "ülke kodu"],
-  ["region", "bölge"],
-  ["timezone", "saat dilimi"],
-  ["zone", "bölge"],
-  ["mobility", "hareket durumu"],
-  ["cityknown", "şehir bilinuyor"],
-  ["precision", "konum hassasiyeti"],
+  ["city", "city"],
+  ["district", "district"],
+  ["country", "country"],
+  ["countrycode", "country_code"],
+  ["region", "region"],
+  ["timezone", "timezone"],
+  ["zone", "zone"],
+  ["mobility", "mobility"],
+  ["cityknown", "city_known"],
+  ["precision", "precision"],
 ]);
 
 const GREETING_PATTERN =
@@ -353,12 +353,12 @@ function normalizeConfidence(value: number | null): number {
 function qualitativeScore(value: number): string {
   const normalized = value > 1 ? value / 100 : value;
   if (normalized >= 0.74) {
-    return "yüksek";
+    return "high";
   }
   if (normalized >= 0.42) {
-    return "orta";
+    return "medium";
   }
-  return "düşük";
+  return "low";
 }
 
 function safeFactValue(value: unknown, options: { allowPlaintext?: boolean } = {}): string | null {
@@ -370,7 +370,7 @@ function safeFactValue(value: unknown, options: { allowPlaintext?: boolean } = {
     return qualitativeScore(value);
   }
   if (typeof value === "boolean") {
-    return value ? "var" : "yok";
+    return value ? "yes" : "no";
   }
   if (typeof value !== "string") {
     return null;
@@ -390,7 +390,7 @@ function safeDerivedFactValue(value: unknown): string | null {
     return qualitativeScore(value);
   }
   if (typeof value === "boolean") {
-    return value ? "var" : "yok";
+    return value ? "yes" : "no";
   }
   if (typeof value !== "string") {
     return null;
@@ -415,7 +415,7 @@ function scrubHealthSummary(value: string, options: { allowPlaintext?: boolean }
     return "";
   }
   if (RAW_HEALTH_TEXT_PATTERN.test(compact)) {
-    return "Yakın dönem sağlık sinyali yüksek seviyeli bağlam olarak mevcut.";
+    return "health_signal=recent detail=high_level";
   }
   return compact;
 }
@@ -452,7 +452,7 @@ function buildHealthFactsSummary(facts: Record<string, unknown> | null, options:
     if (!safeValue) {
       continue;
     }
-    parts.push(`${label}: ${safeValue}`);
+    parts.push(`${label}=${safeValue}`);
     if (parts.length >= 8) {
       break;
     }
@@ -477,7 +477,7 @@ function buildDerivedFactsSummary(
     if (!safeValue) {
       continue;
     }
-    parts.push(`${label}: ${safeValue}`);
+    parts.push(`${label}=${safeValue}`);
     if (parts.length >= 4) {
       break;
     }
@@ -674,7 +674,7 @@ export function buildContextPacketsFromMetadata(
             ttlHours: CALENDAR_CONTEXT_TTL_HOURS,
             privacyClass: "ephemeral",
             factLabels: SAFE_CALENDAR_FACT_LABELS,
-            summaryFallback: "Yakın dönem takvim yoğunluğu güvenli özet olarak mevcut.",
+            summaryFallback: "calendar_signal=recent detail=safe_summary",
             signalKind: "calendar",
           })
         : kind === "device"
@@ -684,7 +684,7 @@ export function buildContextPacketsFromMetadata(
               ttlHours: DEVICE_CONTEXT_TTL_HOURS,
               privacyClass: "safe_derived",
               factLabels: SAFE_DEVICE_FACT_LABELS,
-              summaryFallback: "Cihaz durumu güvenli özet olarak mevcut.",
+              summaryFallback: "device_signal=recent detail=safe_summary",
               signalKind: "device",
             })
           : kind === "notification"
@@ -694,7 +694,7 @@ export function buildContextPacketsFromMetadata(
                 ttlHours: NOTIFICATION_CONTEXT_TTL_HOURS,
                 privacyClass: "ephemeral",
                 factLabels: SAFE_NOTIFICATION_FACT_LABELS,
-                summaryFallback: "Bildirim yoğunluğu güvenli özet olarak mevcut.",
+                summaryFallback: "notification_signal=recent detail=safe_summary",
                 signalKind: "notification",
               })
             : kind === "location"
@@ -704,7 +704,7 @@ export function buildContextPacketsFromMetadata(
                   ttlHours: WORLD_CONTEXT_TTL_HOURS,
                   privacyClass: "ephemeral",
                   factLabels: SAFE_LOCATION_FACT_LABELS,
-                  summaryFallback: "Konum bağlamı güvenli özet olarak mevcut.",
+                  summaryFallback: "location_signal=recent detail=safe_summary",
                   signalKind: "location",
                 })
               : kind === "time"
@@ -714,7 +714,7 @@ export function buildContextPacketsFromMetadata(
                   ttlHours: TIME_CONTEXT_TTL_HOURS,
                   privacyClass: "safe_derived",
                   factLabels: SAFE_TIME_FACT_LABELS,
-                  summaryFallback: "Yerel zaman bağlamı güvenli özet olarak mevcut.",
+                  summaryFallback: "time_signal=recent detail=safe_summary",
                   signalKind: "time",
                 })
                 : buildWorldPacket(signal, now);

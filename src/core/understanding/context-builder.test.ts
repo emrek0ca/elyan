@@ -781,8 +781,8 @@ test("buildContextPacketsFromMetadata packages health signals without raw measur
   assert.equal(packets[0]?.kind, "health_context");
   assert.equal(packets[0]?.privacyClass, "health_ephemeral");
   assert.equal(packets[0]?.freshness, "fresh");
-  assert.match(packets[0]?.summary ?? "", /hazırlık: yüksek/);
-  assert.match(packets[0]?.summary ?? "", /stres: orta/);
+  assert.match(packets[0]?.summary ?? "", /readiness=high/);
+  assert.match(packets[0]?.summary ?? "", /stress=orta/);
   assert.doesNotMatch(packets[0]?.summary ?? "", /90|bpm|7 saat|heartRate|sleepDuration|teşhis|diagnosis/i);
 });
 
@@ -852,10 +852,10 @@ test("buildContextPacketsFromMetadata packages calendar device notification and 
     packets.map((packet) => packet.kind),
     ["time_context", "notification_context", "device_context", "calendar_context"],
   );
-  assert.match(packets.find((packet) => packet.kind === "calendar_context")?.summary ?? "", /toplantı yükü: orta/);
-  assert.match(packets.find((packet) => packet.kind === "device_context")?.summary ?? "", /pil: düşük/);
-  assert.match(packets.find((packet) => packet.kind === "notification_context")?.summary ?? "", /Bildirim yoğunluğu güvenli özet/);
-  assert.match(packets.find((packet) => packet.kind === "time_context")?.summary ?? "", /saat dilimi: Europe\/Istanbul/);
+  assert.match(packets.find((packet) => packet.kind === "calendar_context")?.summary ?? "", /meeting_load=orta/);
+  assert.match(packets.find((packet) => packet.kind === "device_context")?.summary ?? "", /battery=low/);
+  assert.match(packets.find((packet) => packet.kind === "notification_context")?.summary ?? "", /notification_signal=recent/);
+  assert.match(packets.find((packet) => packet.kind === "time_context")?.summary ?? "", /timezone=Europe\/Istanbul/);
   assert.doesNotMatch(
     packets.map((packet) => packet.summary).join("\n"),
     /Gizli toplantı başlığı|özel mesaj|banka mesajı|messageBody|eventTitle/i,
@@ -969,7 +969,7 @@ test("buildContextPacketsFromMetadata exposes only relevant world context", () =
     intent: "chat",
   });
   assert.equal(localPackets.find((packet) => packet.kind === "world_context")?.mentionPolicy, "explicit_when_relevant");
-  assert.match(localPackets.find((packet) => packet.kind === "world_context")?.summary ?? "", /şehir: Kayseri/);
+  assert.match(localPackets.find((packet) => packet.kind === "world_context")?.summary ?? "", /city=Kayseri/);
 });
 
 test("buildContextPacketsFromMetadata reads world signals from mobile memory snapshots", () => {
@@ -998,7 +998,7 @@ test("buildContextPacketsFromMetadata reads world signals from mobile memory sna
   assert.equal(packets[0]?.kind, "world_context");
   assert.equal(packets[0]?.mentionPolicy, "explicit_when_relevant");
   assert.match(packets[0]?.summary ?? "", /İstanbul/);
-  assert.match(packets[0]?.summary ?? "", /ilçe: Kadıköy/);
+  assert.match(packets[0]?.summary ?? "", /district=Kadıköy/);
 });
 
 test("buildUserContextFromMemory exposes packet flags and health safety hint", () => {

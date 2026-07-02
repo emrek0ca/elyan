@@ -147,12 +147,18 @@ function deriveFromHealth(signal: FreshWorldSignal): LearningSignal[] {
   const stepsYesterday = readNumber(facts, "stepsYesterday");
   const energyLow = readiness != null ? readiness < 0.45 : energy === "low" || sleepQuality === "low";
   const energyHigh = readiness != null ? readiness >= 0.72 : energy === "high" || (sleepQuality === "good" && activityBand === "high");
+  // DİL-NÖTR TOKEN DEĞERLERİ: türetilmiş değerler İngilizce nesir yerine
+  // makine-okur key=value token'ları taşır. Nesir hâli (örn. "low energy
+  // window; prefer shorter, lower-friction steps") Türkçe sohbetlere İngilizce
+  // parça sızdırıyordu ve model bunu policy cümlesi gibi aynalıyordu.
+  // Token'lar (`energy=low pace=light`) modelde veri alanı muamelesi görür —
+  // model kavramı KENDİ cevap dilinde, kendi samimi ifadesiyle söyler.
   const rhythm = energyLow
-    ? "low energy window; prefer shorter, lower-friction steps"
+    ? "energy=low pace=light"
     : energyHigh
-      ? "high energy window; deeper focus blocks are suitable"
+      ? "energy=high focus=deep"
       : energy
-        ? `${energy} energy band; keep pacing adaptive`
+        ? `energy=${energy} pace=adaptive`
         : null;
   const signals: LearningSignal[] = [];
   const energySignal = rhythm
@@ -171,9 +177,9 @@ function deriveFromHealth(signal: FreshWorldSignal): LearningSignal[] {
   // useful situational nudge even without a clinical reading.
   const stepsTrend =
     trend === "better" || (stepsToday != null && stepsYesterday != null && stepsToday - stepsYesterday > 2000)
-      ? "activity trending up vs yesterday; momentum is available to build on"
+      ? "activity_trend=up momentum=build"
       : trend === "worse" || (stepsToday != null && stepsYesterday != null && stepsYesterday - stepsToday > 2000)
-        ? "activity lower than yesterday; keep suggestions gentle and restorative"
+        ? "activity_trend=down pace=gentle"
         : null;
   const trendSignal = stepsTrend
     ? buildSignal("energy_rhythm", stepsTrend, {
@@ -188,9 +194,9 @@ function deriveFromHealth(signal: FreshWorldSignal): LearningSignal[] {
     signals.push(trendSignal);
   }
   const planningStyle = (energyHigh && (focus || activityBand === "high"))
-    ? "deep work friendly; use fewer, larger focus blocks when planning"
+    ? "focus_blocks=large depth=deep"
     : (fatigue || energyLow)
-      ? "fatigue-sensitive; prefer smaller steps and faster wins"
+      ? "steps=small wins=fast"
       : null;
   const planningSignal = planningStyle
     ? buildSignal("planning_style", planningStyle, {
@@ -213,16 +219,16 @@ function deriveFromCalendar(signal: FreshWorldSignal): LearningSignal[] {
   const longestBlock = readNumber(facts, "longestFreeBlockMinutes");
   const busyness = readString(facts, "busyness") ?? readString(facts, "busyLevel");
   const schedulePressure = busyness
-    ? `${busyness} schedule load`
+    ? `schedule=${busyness}`
     : longestBlock != null && longestBlock >= 90
-      ? "has a meaningful focus window available today"
+      ? `focus_window_min=${Math.round(longestBlock)}`
       : freeMinutes != null && freeMinutes < 45
-        ? "time-constrained schedule; compress plans"
+        ? `free_min=${Math.round(freeMinutes)} plan=compact`
         : null;
   const planningGranularity = longestBlock != null && longestBlock >= 90
-    ? "prefers larger uninterrupted blocks when available"
+    ? "blocks=large uninterrupted=preferred"
     : freeMinutes != null && freeMinutes < 45
-      ? "prefers compact time-boxed steps on busy days"
+      ? "steps=timeboxed density=compact"
       : null;
   return [
     buildSignal("schedule_pressure_pattern", schedulePressure ?? "", {
@@ -257,7 +263,7 @@ function deriveFromLocation(signal: FreshWorldSignal): LearningSignal[] {
   const mobility = readString(facts, "mobility");
   const environment = [city, region].filter(Boolean).join(", ");
   return [
-    buildSignal("mobility_context", mobility ? `${mobility} mobility pattern` : "", {
+    buildSignal("mobility_context", mobility ? `mobility=${mobility}` : "", {
       confidence: signal.confidence,
       ttlDays: 3,
       signalId: signal.signalId,
@@ -266,7 +272,7 @@ function deriveFromLocation(signal: FreshWorldSignal): LearningSignal[] {
     }),
     buildSignal(
       "local_preference_context",
-      environment ? `local context anchored around ${environment}` : timezone ? `local context uses timezone ${timezone}` : "",
+      environment ? `locale=${environment}` : timezone ? `timezone=${timezone}` : "",
       {
         confidence: signal.confidence,
         ttlDays: 14,
@@ -290,9 +296,9 @@ function deriveFromNotification(signal: FreshWorldSignal): LearningSignal[] {
   const attention = readString(facts, "attentionLoad") ?? readString(facts, "notificationLoad");
   const urgency = readString(facts, "urgency");
   const value = attention
-    ? `${attention} attention load${urgency ? ` with ${urgency} urgency` : ""}`
+    ? `attention=${attention}${urgency ? ` urgency=${urgency}` : ""}`
     : urgency
-      ? `${urgency} urgency interruptions`
+      ? `urgency=${urgency}`
       : "";
   return [
     buildSignal("notification_attention_pattern", value, {
@@ -432,20 +438,22 @@ export function buildDerivedContextSummary(signals: FreshWorldSignal[]): string[
       const sleepQuality = normalizeKey(readString(signal.facts, "sleepQuality") ?? "");
       const lowEnergy = (readiness != null && readiness < 0.45) || energyLevel === "low" || sleepQuality === "low";
       const highEnergy = (readiness != null && readiness >= 0.72) || energyLevel === "high";
+      // Dil-nötr token'lar: model kavramı kendi cevap dilinde ifade eder;
+      // İngilizce coaching cümleleri Türkçe cevaplara sızmaz.
       if (lowEnergy) {
-        maybePush(hints, "Current energy looks limited; keep the answer friction-light and concise.");
+        maybePush(hints, "energy=low reply_pace=light");
       } else if (highEnergy) {
-        maybePush(hints, "Energy looks strong right now; deeper or more ambitious suggestions are welcome.");
+        maybePush(hints, "energy=high ambition=welcome");
       }
     } else if (signal.kind === "calendar") {
       const freeMinutes = readNumber(signal.facts, "freeMinutesToday");
       if (freeMinutes != null && freeMinutes < 45) {
-        maybePush(hints, "The user's schedule looks compressed; prefer fewer steps and tighter plans.");
+        maybePush(hints, `free_min=${Math.round(freeMinutes)} plan=tight`);
       }
     } else if (signal.kind === "notification") {
       const attention = normalizeKey(readString(signal.facts, "attentionLoad") ?? "");
       if (attention === "high") {
-        maybePush(hints, "The user appears interruption-prone right now; avoid noisy or sprawling suggestions.");
+        maybePush(hints, "attention=fragmented suggestions=low_noise");
       }
     }
   }
