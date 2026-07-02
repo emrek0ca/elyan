@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { elyanAssistantBlockSchema } from "../../contracts/domain.js";
 import {
   containsProtectedElyanDisclosure,
   ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT,
@@ -43,6 +44,45 @@ type AssistantRenderContract = {
   hasVisibleBlocks: boolean;
   visibleBlockTypes: string[];
   textIsBlockWrapped: boolean;
+};
+
+export type AssistantBlockContractValidationMode = "compose" | "normalize";
+
+export type AssistantBlockContractValidationResult = {
+  version: "elyan_blocks.v2";
+  blocks: AssistantMessageBlock[];
+  renderContract: AssistantRenderContract;
+  blockQuality: AssistantBlockQualityReport;
+  modelFeedbackSignals: string[];
+};
+
+export type AssistantBlockQualityIssue =
+  | "duplicate_block"
+  | "schema_invalid_block"
+  | "malformed_structured_json"
+  | "raw_json_leak_prevented"
+  | "fallback_to_text"
+  | "unrequested_table_block"
+  | "content_block_overlap";
+
+export type AssistantBlockQualityReport = {
+  version: "elyan_block_quality.v1";
+  score: number;
+  issues: AssistantBlockQualityIssue[];
+  feedbackSignals: string[];
+  blockTypes: string[];
+  metrics: {
+    inputBlockCount: number;
+    normalizedBlockCount: number;
+    duplicateBlockCount: number;
+    duplicateTableBlockCount: number;
+    schemaInvalidBlockCount: number;
+    malformedStructuredJsonCount: number;
+    rawJsonLeakPreventedCount: number;
+    fallbackToTextCount: number;
+    unrequestedTableBlockCount: number;
+    contentBlockOverlapCount: number;
+  };
 };
 
 type AssistantBlockCommon = {
@@ -179,9 +219,10 @@ function withAssistantBlockDefaults<T extends Record<string, unknown>>(
   options: AssistantBlockCommon = {},
 ): T & Required<Pick<AssistantBlockCommon, "stableBlockId" | "visibility" | "cacheDigest">> & AssistantBlockCommon {
   const visibility = options.visibility ?? "user_visible";
+  const renderHints = options.renderHints ?? { sectionRole: type };
   const withMeta = {
     ...payload,
-    ...(options.renderHints ? { renderHints: options.renderHints } : {}),
+    renderHints,
     ...(options.confidence != null ? { confidence: options.confidence } : {}),
     ...(options.priority != null ? { priority: options.priority } : {}),
     visibility,
@@ -1625,6 +1666,10 @@ function parseInfoItems(value: unknown): ElyanAssistantInfoCardBlock["items"] {
 }
 
 function stableBlockDedupeKey(block: AssistantMessageBlock): string {
+  const contentKey = assistantBlockContentDedupeKey(block);
+  if (contentKey) {
+    return contentKey;
+  }
   const record = block as Record<string, unknown>;
   const stableBlockId = typeof record.stableBlockId === "string" ? record.stableBlockId.trim() : "";
   if (stableBlockId) {
@@ -1635,6 +1680,57 @@ function stableBlockDedupeKey(block: AssistantMessageBlock): string {
     return `${block.type}:cache:${cacheDigest}`;
   }
   return `${block.type}:body:${JSON.stringify(block)}`;
+}
+
+function assistantBlockSchemaValid(block: AssistantMessageBlock): boolean {
+  return elyanAssistantBlockSchema.safeParse(block).success;
+}
+
+function assistantBlockContentDedupeKey(block: AssistantMessageBlock): string | null {
+  if (block.type === "text") {
+    const markdown = normalizeMarkdown((block as ElyanAssistantTextBlock).markdown)
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    return markdown ? `text:content:${markdown}` : null;
+  }
+  if (block.type === "table") {
+    const table = block as ElyanAssistantTableBlock;
+    const columns = table.columns
+      .map((column) => column.trim().replace(/\s+/g, " ").toLowerCase())
+      .join("\u001F");
+    const rows = table.rows
+      .map((row) =>
+        row
+          .map((cell) => cell.trim().replace(/\s+/g, " ").toLowerCase())
+          .join("\u001F"),
+      )
+      .filter((row) => row.replace(/\u001F/g, "").length > 0)
+      .join("\u001E");
+    return columns && rows ? `table:content:${columns}\u001D${rows}` : null;
+  }
+  return null;
+}
+
+function countDuplicateAssistantBlocks(blocks: AssistantMessageBlock[]): number {
+  const seen = new Set<string>();
+  let duplicateCount = 0;
+  for (const block of blocks) {
+    const key = stableBlockDedupeKey(block);
+    if (seen.has(key)) {
+      duplicateCount += 1;
+      continue;
+    }
+    seen.add(key);
+  }
+  return duplicateCount;
+}
+
+function countDuplicateAssistantBlocksOfType(
+  blocks: AssistantMessageBlock[],
+  type: AssistantMessageBlock["type"],
+): number {
+  return countDuplicateAssistantBlocks(blocks.filter((block) => block.type === type));
 }
 
 function dedupeAssistantBlocks(blocks: AssistantMessageBlock[]): AssistantMessageBlock[] {
@@ -2209,6 +2305,20 @@ function looksLikeRawStructuredPayload(value: string): boolean {
   );
 }
 
+function looksLikeMarkdownTable(value: string): boolean {
+  const lines = value.split("\n").map((line) => line.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    if (
+      lines[i].startsWith("|") &&
+      lines[i].endsWith("|") &&
+      /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(lines[i + 1] ?? "")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function salvageInvalidBlockToText(value: unknown): AssistantTextMessageBlock | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -2254,6 +2364,129 @@ function salvageInvalidBlockToText(value: unknown): AssistantTextMessageBlock | 
         salvagedFromBlockType: type,
       },
     }),
+  };
+}
+
+export function evaluateAssistantBlockQuality(input: {
+  blocks?: unknown;
+  content?: string | null | undefined;
+  normalizedBlocks?: AssistantMessageBlock[];
+  tablePolicy?: "forbidden" | "explicit_only";
+}): AssistantBlockQualityReport {
+  const rawBlocks = Array.isArray(input.blocks) ? input.blocks : [];
+  const parsedOrSalvaged: AssistantMessageBlock[] = [];
+  let schemaInvalidBlockCount = 0;
+  let malformedStructuredJsonCount = 0;
+  let rawJsonLeakPreventedCount = 0;
+  let fallbackToTextCount = 0;
+
+  for (const raw of rawBlocks) {
+    const parsed = parseAssistantBlock(raw);
+    if (parsed) {
+      parsedOrSalvaged.push(parsed);
+      if (!assistantBlockSchemaValid(parsed)) {
+        schemaInvalidBlockCount += 1;
+      }
+      continue;
+    }
+
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      schemaInvalidBlockCount += 1;
+      const record = raw as Record<string, unknown>;
+      if (typeof record.type === "string" && record.type.trim()) {
+        malformedStructuredJsonCount += 1;
+      }
+      if (
+        Object.values(record).some(
+          (value) => typeof value === "string" && looksLikeRawStructuredPayload(value),
+        )
+      ) {
+        rawJsonLeakPreventedCount += 1;
+      }
+    }
+
+    const salvaged = salvageInvalidBlockToText(raw);
+    if (salvaged) {
+      fallbackToTextCount += 1;
+      parsedOrSalvaged.push(salvaged);
+    }
+  }
+
+  const normalizedBlocks =
+    input.normalizedBlocks ??
+    composeAssistantMessageBlocks({
+      blocks: input.blocks,
+      content: input.content,
+  });
+  const duplicateBlockCount = countDuplicateAssistantBlocks(parsedOrSalvaged);
+  const duplicateTableBlockCount = countDuplicateAssistantBlocksOfType(
+    parsedOrSalvaged,
+    "table",
+  );
+  const normalizedSchemaInvalidCount = normalizedBlocks.filter(
+    (block) => !assistantBlockSchemaValid(block),
+  ).length;
+  schemaInvalidBlockCount += normalizedSchemaInvalidCount;
+
+  const unrequestedTableBlockCount =
+    input.tablePolicy === "forbidden"
+      ? normalizedBlocks.filter((block) => block.type === "table").length
+      : 0;
+  const contentBlockOverlapCount =
+    normalizedBlocks.some((block) => block.type === "table") &&
+    looksLikeMarkdownTable(input.content ?? "")
+      ? 1
+      : 0;
+
+  const issueSet = new Set<AssistantBlockQualityIssue>();
+  if (duplicateBlockCount > 0) issueSet.add("duplicate_block");
+  if (schemaInvalidBlockCount > 0) issueSet.add("schema_invalid_block");
+  if (malformedStructuredJsonCount > 0) issueSet.add("malformed_structured_json");
+  if (rawJsonLeakPreventedCount > 0) issueSet.add("raw_json_leak_prevented");
+  if (fallbackToTextCount > 0) issueSet.add("fallback_to_text");
+  if (unrequestedTableBlockCount > 0) issueSet.add("unrequested_table_block");
+  if (contentBlockOverlapCount > 0) issueSet.add("content_block_overlap");
+
+  const feedbackSignals: string[] = [...issueSet].filter((issue) =>
+    [
+      "unrequested_table_block",
+      "malformed_structured_json",
+      "raw_json_leak_prevented",
+      "fallback_to_text",
+    ].includes(issue),
+  );
+  if (duplicateTableBlockCount > 0) {
+    feedbackSignals.unshift("duplicate_table_block");
+  } else if (duplicateBlockCount > 0) {
+    feedbackSignals.unshift("duplicate_block");
+  }
+  const penalty =
+    duplicateBlockCount * 8 +
+    schemaInvalidBlockCount * 12 +
+    malformedStructuredJsonCount * 10 +
+    rawJsonLeakPreventedCount * 8 +
+    fallbackToTextCount * 6 +
+    unrequestedTableBlockCount * 14 +
+    contentBlockOverlapCount * 10;
+
+  return {
+    version: "elyan_block_quality.v1",
+    score: Math.max(0, Math.min(100, 100 - penalty)),
+    issues: [...issueSet],
+    feedbackSignals,
+    blockTypes: normalizedBlocks.map((block) => block.type),
+    metrics: {
+      inputBlockCount: rawBlocks.length,
+      normalizedBlockCount: normalizedBlocks.length,
+      duplicateBlockCount,
+      duplicateTableBlockCount,
+      schemaInvalidBlockCount,
+      malformedStructuredJsonCount,
+      rawJsonLeakPreventedCount,
+      fallbackToTextCount,
+      unrequestedTableBlockCount,
+      contentBlockOverlapCount,
+    },
   };
 }
 
@@ -2397,25 +2630,7 @@ export function normalizeAssistantMessageBlocks(input: {
   });
 }
 
-export function withAssistantBlocksMetadata(
-  metadata: Record<string, unknown> | undefined,
-  input: {
-    content?: string | null | undefined;
-    blocks?: unknown;
-    streaming?: boolean;
-  },
-) {
-  const next = {
-    ...(metadata && typeof metadata === "object" && !Array.isArray(metadata)
-      ? metadata
-      : {}),
-  } as Record<string, unknown>;
-  const blocks = composeAssistantMessageBlocks(input);
-  if (blocks.length > 0) {
-    next.blocks = blocks;
-  } else {
-    delete next.blocks;
-  }
+function buildAssistantRenderContract(blocks: AssistantMessageBlock[]): AssistantRenderContract {
   const visibleBlockTypes = blocks
     .filter(
       (block) =>
@@ -2423,7 +2638,8 @@ export function withAssistantBlocksMetadata(
         "assistant_internal_by_default",
     )
     .map((block) => block.type);
-  const renderContract: AssistantRenderContract = {
+
+  return {
     version: "elyan_blocks.v2",
     mode: "block_first",
     canonicalSurface: "blocks",
@@ -2432,7 +2648,64 @@ export function withAssistantBlocksMetadata(
     visibleBlockTypes,
     textIsBlockWrapped: blocks.some((block) => block.type === "text"),
   };
-  next.renderContract = renderContract;
+}
+
+export function validateAssistantBlockContract(input: {
+  blocks?: unknown;
+  content?: string | null | undefined;
+  streaming?: boolean;
+  mode?: AssistantBlockContractValidationMode;
+  tablePolicy?: "forbidden" | "explicit_only";
+  qualityBlocks?: unknown;
+}): AssistantBlockContractValidationResult {
+  const blocks =
+    input.mode === "normalize"
+      ? normalizeAssistantMessageBlocks(input)
+      : composeAssistantMessageBlocks(input);
+  const blockQuality = evaluateAssistantBlockQuality({
+    blocks: input.qualityBlocks ?? input.blocks,
+    content: input.content,
+    normalizedBlocks: blocks,
+    tablePolicy: input.tablePolicy,
+  });
+
+  return {
+    version: "elyan_blocks.v2",
+    blocks,
+    renderContract: buildAssistantRenderContract(blocks),
+    blockQuality,
+    modelFeedbackSignals: blockQuality.feedbackSignals,
+  };
+}
+
+export function withAssistantBlocksMetadata(
+  metadata: Record<string, unknown> | undefined,
+  input: {
+    content?: string | null | undefined;
+    blocks?: unknown;
+    streaming?: boolean;
+    tablePolicy?: "forbidden" | "explicit_only";
+  },
+) {
+  const next = {
+    ...(metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? metadata
+      : {}),
+  } as Record<string, unknown>;
+  const validation = validateAssistantBlockContract(input);
+  const blocks = validation.blocks;
+  if (blocks.length > 0) {
+    next.blocks = blocks;
+  } else {
+    delete next.blocks;
+  }
+  next.renderContract = validation.renderContract;
+  next.blockQuality = validation.blockQuality;
+  if (validation.modelFeedbackSignals.length > 0) {
+    next.modelFeedbackSignals = validation.modelFeedbackSignals;
+  } else {
+    delete next.modelFeedbackSignals;
+  }
   return next;
 }
 

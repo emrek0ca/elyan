@@ -88,8 +88,10 @@ const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = 
   {
     intent: "planning",
     patterns: [
-      /\b(plan|roadmap|strategy|steps|scope|architecture|ecosystem|system design|workflow)\b/i,
-      /\b(plan|yol haritasi|yol haritası|strateji|mimari|ekosistem|iş akışı|is akisi)\b/i,
+      /\b(plan|planla|planning|roadmap|strategy|steps|scope|architecture|ecosystem|system design|workflow)\b/i,
+      /\b(plan|planla|yol haritasi|yol haritası|strateji|mimari|ekosistem|iş akışı|is akisi)\b/i,
+      /(?<!\p{L})(?:\d+\s*)?(?:ad[ıi]ml[ıi]k|g[üu]nl[üu]k|haftal[ıi]k|a[şs]amal[ıi])[\s\S]{0,80}?(?:program|takvim|rutin|plan)[\s\S]{0,40}?(?:[çc][ıi]kar|haz[ıi]rla|olu[şs]tur|yaz|[öo]ner)(?!\p{L})/iu,
+      /(?<!\p{L})(?:[çc]al[ıi][şs]ma|ders|haz[ıi]rl[ıi]k|[öo][ğg]renme|proje)[\s\S]{0,80}?(?:program|takvim|rutin|plan|yol haritas[ıi])[\s\S]{0,40}?(?:[çc][ıi]kar|haz[ıi]rla|olu[şs]tur|yaz|[öo]ner)(?!\p{L})/iu,
     ],
   },
 ];
@@ -136,6 +138,18 @@ function calculateRoutingHints(intent: UnderstandingIntent, requiresLocalRuntime
 
 function isProofreadingRequest(text: string): boolean {
   return /\b(imla|yazım|yazim|noktalama|dil bilgisi|dilbilgisi|gramer|grammar|spelling|orthography|punctuation|proofread|proof-read|copyedit|copy-edit|redaksiyon)\b/i.test(
+    text,
+  );
+}
+
+function isExplicitBriefProseRequest(text: string): boolean {
+  return /\b(kısaca|kisaca|özetle|ozetle|özet halinde|ozet halinde|paragraf halinde|paragraf olarak|tek c[üu]mle\p{L}*|düz yazı|duz yazi)\b/iu.test(
+    text,
+  );
+}
+
+function isExplicitPlanningRequest(text: string): boolean {
+  return /(?<!\p{L})(planla|plan|program|takvim|roadmap|yol haritas[ıi]|strateji|strategy|ad[ıi]mlara b[öo]l|ad[ıi]m ad[ıi]m|[çc][ıi]kar|haz[ıi]rla|olu[şs]tur)(?!\p{L})/iu.test(
     text,
   );
 }
@@ -231,8 +245,9 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     const lower = text.toLowerCase();
     const matched: UnderstandingIntent[] = [];
     const architecturePrompt = /\b(architecture|system design|ecosystem|ekosistem|mimari|how.*fit together|nasıl.*birlikte|ekosystem)\b/i.test(text);
+    const briefProseRequest = isExplicitBriefProseRequest(text);
 
-    if (architecturePrompt) {
+    if (architecturePrompt && (!briefProseRequest || isExplicitPlanningRequest(text))) {
       matched.push("planning");
     }
     if (isProofreadingRequest(text)) {
@@ -242,6 +257,13 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     for (const rule of intentRules) {
       if (rule.patterns.some((pattern) => pattern.test(text))) {
         matched.push(rule.intent);
+      }
+    }
+    if (briefProseRequest && !isExplicitPlanningRequest(text)) {
+      for (let index = matched.length - 1; index >= 0; index -= 1) {
+        if (matched[index] === "planning") {
+          matched.splice(index, 1);
+        }
       }
     }
 
@@ -263,7 +285,7 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     const secondaryIntents = unique(matched.filter((intent) => intent !== primaryIntent));
     const requiresLocalRuntime =
       ["automation", "browser", "computer"].includes(primaryIntent) ||
-      /\b(local|desktop|file system|screenshot|click|type|hotkey|browser|terminal|shell|keyboard shortcut|mouse|window management|screen record|screen capture|open app|launch app|quit app|close app|finder|dock)\b/i.test(text) ||
+      /\b(local(?!-first)|desktop|file system|screenshot|click|type|hotkey|browser|terminal|shell|keyboard shortcut|mouse|window management|screen record|screen capture|open app|launch app|quit app|close app|finder|dock)\b/i.test(text) ||
       Boolean(/(?<!\p{L})(yerel|masaustu|masaüstü|dosya|klasör|klasor|terminal|tarayıcı|tarayici|ekran|pencere|uygulama aç|safari|chrome|firefox|finder|tuş kısayolu|tus kisayolu|ekran görüntüsü|ekran goruntusu|ekran kaydı|ekran kaydi|ses kayıt|ses kayit|bildirim gönder|takvim aç|kamera|mikrofon)(?!\p{L})/iu.test(text)) ||
       Boolean(/(?<!\p{L})(aç|ac|kapat|çalıştır|calistir|başlat|indir|kaydet|taşı|tasi|sil|kopyala)(?!\p{L}).{0,60}(?<!\p{L})(dosya|klasör|klasor|uygulama|safari|chrome|firefox|finder|terminal|masaüstü|masaustu)(?!\p{L})/iu.test(text));
     const requiresRetrieval =

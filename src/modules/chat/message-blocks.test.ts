@@ -5,9 +5,11 @@ import {
     buildAssistantMessageBlocks,
     normalizeAssistantMessageBlocks,
     composeAssistantMessageBlocks,
+  evaluateAssistantBlockQuality,
   polishAssistantVisibleText,
   sanitizeAssistantVisibleText,
   shapeAssistantMessagePayload,
+  validateAssistantBlockContract,
   withAssistantBlocksMetadata,
 } from "./message-blocks.js";
 import { elyanAssistantBlockSchema } from "../../contracts/domain.js";
@@ -44,6 +46,99 @@ test("withAssistantBlocksMetadata marks assistant replies as block-first contrac
   assert.equal(contract.hasVisibleBlocks, true);
   assert.deepEqual(contract.visibleBlockTypes, ["text"]);
   assert.equal(contract.textIsBlockWrapped, true);
+  assert.equal((metadata.blockQuality as Record<string, unknown>).version, "elyan_block_quality.v1");
+});
+
+test("validateAssistantBlockContract is the canonical block gate", () => {
+  const validation = validateAssistantBlockContract({
+    blocks: [
+      {
+        type: "table",
+        columns: ["Yıl", "Gelir"],
+        rows: [["2025", "420.000 TL"]],
+      },
+    ],
+    content: "| Yıl | Gelir |\n| --- | ---: |\n| 2025 | 420.000 TL |",
+    tablePolicy: "explicit_only",
+    qualityBlocks: [
+      {
+        type: "table",
+        columns: ["Yıl", "Gelir"],
+        rows: [["2025", "420.000 TL"]],
+      },
+      {
+        type: "table",
+        columns: ["Yıl", "Gelir"],
+        rows: [["2025", "420.000 TL"]],
+      },
+      {
+        type: "chart",
+        content: '{"type":"chart","series":[',
+      },
+    ],
+  });
+
+  assert.equal(validation.version, "elyan_blocks.v2");
+  assert.equal(validation.blocks[0]?.type, "table");
+  assert.equal(validation.renderContract.canonicalSurface, "blocks");
+  assert.equal(validation.renderContract.legacyContent, "none");
+  assert.ok((validation.blocks[0] as Record<string, unknown>).stableBlockId);
+  assert.ok((validation.blocks[0] as Record<string, unknown>).cacheDigest);
+  assert.ok((validation.blocks[0] as Record<string, unknown>).renderHints);
+  assert.ok(validation.blockQuality.feedbackSignals.includes("duplicate_table_block"));
+  assert.ok(validation.blockQuality.feedbackSignals.includes("raw_json_leak_prevented"));
+});
+
+test("evaluateAssistantBlockQuality reports duplicate, malformed, and fallback signals safely", () => {
+  const rawBlocks = [
+    {
+      type: "table",
+      stableBlockId: "table-a",
+      columns: ["Yıl", "Gelir"],
+      rows: [["2024", "360.000 TL"]],
+    },
+    {
+      type: "table",
+      stableBlockId: "table-b",
+      columns: ["Yıl", "Gelir"],
+      rows: [["2024", "360.000 TL"]],
+    },
+    {
+      type: "chart",
+      title: "Trend",
+      content: '{"type":"chart","values":[',
+    },
+    {
+      type: "document_block",
+      title: "Kısa rapor",
+      summary: "Schema eksik ama okunabilir.",
+    },
+  ];
+
+  const blocks = composeAssistantMessageBlocks({
+    blocks: rawBlocks,
+    content: "| Yıl | Gelir |\n| --- | ---: |\n| 2024 | 360.000 TL |",
+  });
+  const report = evaluateAssistantBlockQuality({
+    blocks: rawBlocks,
+    content: "| Yıl | Gelir |\n| --- | ---: |\n| 2024 | 360.000 TL |",
+    normalizedBlocks: blocks,
+    tablePolicy: "forbidden",
+  });
+
+  assert.equal(report.version, "elyan_block_quality.v1");
+  assert.equal(report.metrics.duplicateBlockCount, 1);
+  assert.equal(report.metrics.unrequestedTableBlockCount, 1);
+  assert.equal(report.metrics.contentBlockOverlapCount, 1);
+  assert.ok(report.metrics.schemaInvalidBlockCount >= 2);
+  assert.ok(report.metrics.fallbackToTextCount >= 1);
+  assert.equal(report.metrics.duplicateTableBlockCount, 1);
+  assert.ok(report.issues.includes("duplicate_block"));
+  assert.ok(report.issues.includes("unrequested_table_block"));
+  assert.ok(report.issues.includes("content_block_overlap"));
+  assert.ok(report.feedbackSignals.includes("duplicate_table_block"));
+  assert.ok(report.feedbackSignals.includes("fallback_to_text"));
+  assert.ok(report.score < 100);
 });
 
 test("elyan block schema accepts v2 math chart and table render metadata", () => {
@@ -523,6 +618,40 @@ test("normalizeAssistantMessageBlocks collapses two tables when one row set is a
   const tables = blocks.filter((block) => block.type === "table");
   assert.equal(tables.length, 1);
   assert.equal((tables[0] as { rows: string[][] }).rows.length, 5);
+});
+
+test("normalizeAssistantMessageBlocks collapses identical table blocks with different ids", () => {
+  const blocks = composeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "table",
+        stableBlockId: "table-a",
+        cacheDigest: "cache-a",
+        columns: ["Yıl", "Gelir"],
+        rows: [
+          ["2024", "360.000 TL"],
+          ["2025", "470.000 TL"],
+        ],
+      },
+      {
+        type: "table",
+        stableBlockId: "table-b",
+        cacheDigest: "cache-b",
+        columns: [" Yıl ", "Gelir"],
+        rows: [
+          ["2024", "360.000  TL"],
+          ["2025", "470.000 TL"],
+        ],
+      },
+    ],
+  });
+
+  const tables = blocks.filter((block) => block.type === "table");
+  assert.equal(tables.length, 1);
+  assert.deepEqual((tables[0] as { rows: string[][] }).rows, [
+    ["2024", "360.000 TL"],
+    ["2025", "470.000 TL"],
+  ]);
 });
 
 test("composeAssistantMessageBlocks keeps summary before visible text fallback", () => {

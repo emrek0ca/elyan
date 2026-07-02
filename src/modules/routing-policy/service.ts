@@ -160,7 +160,7 @@ const MOBILE_DOCUMENT_EXPORT_PATTERNS = [
 // Unicode-aware lookaround (?<!\p{L})...(?!\p{L}) kullanılıyor (bkz. memory:
 // "TÜRKÇE \b REGEX TUZAĞI"). "raporla"/"yazılım" gibi kelimelerin yanlış
 // eşleşmesini engeller.
-const DOC_NOUN = String.raw`(?:rapor|makale|belge|d[öo]k[üu]man|deneme|kompozisyon|dilek[çc]e|mektup|essay|article|report|bülten|bulten|kılavuz|kilavuz|sunum metni|köşe yaz[ıi]s[ıi]|kose yaz[ıi]s[ıi]|blog yaz[ıi]s[ıi]|blog post|taslak)`;
+const DOC_NOUN = String.raw`(?:rapor\p{L}{0,8}|makale\p{L}{0,8}|belge\p{L}{0,8}|d[öo]k[üu]man\p{L}{0,8}|deneme\p{L}{0,8}|kompozisyon\p{L}{0,8}|dilek[çc]e\p{L}{0,8}|mektup\p{L}{0,8}|essay|article|report|bülten|bulten|kılavuz|kilavuz|sunum metni|köşe yaz[ıi]s[ıi]|kose yaz[ıi]s[ıi]|blog yaz[ıi]s[ıi]|blog post|taslak)`;
 const DOC_VERB = String.raw`(?:yaz|haz[ıi]rla|olu[şs]tur|[üu]ret|d[üu]zenle|kaleme al|derle|haz[ıi]rlay)`;
 const DOCUMENT_GENERATE_PATTERNS = [
   new RegExp(`(?<!\\p{L})${DOC_NOUN}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_VERB}`, "iu"),
@@ -732,9 +732,6 @@ function deriveSelectedWorkload(input: {
   if (input.route === "desktop_runtime" || input.route === "pairing_required" || input.route === "unavailable") {
     return "desktop_handoff";
   }
-  if (input.intent === "planning_request") {
-    return "planning";
-  }
   if (isExplicitTableRequest(input.message)) {
     return "table_generate";
   }
@@ -745,6 +742,9 @@ function deriveSelectedWorkload(input: {
   // üretme fiilleri (yaz/hazırla/oluştur/üret) + belge-türü isim eşleşince tetiklenir.
   if (matchesAny(input.message, DOCUMENT_GENERATE_PATTERNS) || matchesAny(input.message, DOCUMENT_OUTPUT_GENERATE_PATTERNS)) {
     return "document_generate";
+  }
+  if (input.intent === "planning_request") {
+    return "planning";
   }
   if (isExplicitMathSurface3DRequest(input.message) || isExplicitChartRequest(input.message) || isExplicitMathOrLatexRequest(input.message)) {
     return "mobile_chat_balanced";

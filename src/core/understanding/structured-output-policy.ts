@@ -18,6 +18,11 @@ const TABLE_ACTION_PATTERNS = [
   /(?<!\p{L})(karşılaştır|karsilastir|compare|listele|list|sırala|sirala|özetle|ozetle)(?!\p{L})/iu,
 ];
 
+const NEGATED_TABLE_REQUEST_PATTERNS = [
+  /\b(tablo|table|matris|matrix|csv|xlsx|excel|spreadsheet)\b.{0,48}\b(istemiyorum|isteme|olmas[ıi]n|kullanma|ekleme|yapma|kurma|çıkarma|cikarma|no|without)\b/iu,
+  /\b(istemiyorum|isteme|olmas[ıi]n|kullanma|ekleme|yapma|kurma|çıkarma|cikarma|no|without)\b.{0,48}\b(tablo|table|matris|matrix|csv|xlsx|excel|spreadsheet)\b/iu,
+];
+
 const NON_TABLE_PREFERENCE_PATTERNS = [
   /\b(liste|list|madde madde|bullet|paragraf|paragraflar|düz yazı|duz yazi|özet|ozet|açıkla|acikla|anlat|kısa bilgi|kisa bilgi)\b/i,
 ];
@@ -32,6 +37,11 @@ const EXPLICIT_CHART_REQUEST_PATTERNS = [
   /(?<!\p{L})(grafik|grafiği|grafiğini|grafigi|grafigini|chart|graph|plot|çiz|ciz|çizim|cizim|visualize|visualise|görselleştir|gorsellestir)(?!\p{L})/iu,
   /(?<!\p{L})(fonksiyon grafiği|fonksiyon grafigi|function graph|function plot|scatter|line chart|bar chart|pie chart)(?!\p{L})/iu,
   /(?<!\p{L})(3d|3 boyutlu|üç boyutlu|uc boyutlu|surface|mesh|yüzey grafiği|yuzey grafigi)(?!\p{L})/iu,
+];
+
+const NEGATED_CHART_REQUEST_PATTERNS = [
+  /\b(grafik|chart|graph|plot|diagram|diyagram)\b.{0,40}\b(istemiyorum|isteme|olmas[ıi]n|kullanma|ekleme|no|without)\b/iu,
+  /\b(istemiyorum|isteme|olmas[ıi]n|kullanma|ekleme|no|without)\b.{0,40}\b(grafik|chart|graph|plot|diagram|diyagram)\b/iu,
 ];
 
 const EXPLICIT_MATH_SURFACE_3D_REQUEST_PATTERNS = [
@@ -73,7 +83,8 @@ export type StructuredResponseDecision = {
 // Strong signals that the user explicitly wants plain prose / a bullet list, so
 // we should NOT proactively reach for a widget even if the topic looks visual.
 const EXPLICIT_PROSE_PREFERENCE_PATTERNS = [
-  /\b(düz yazı|duz yazi|paragraf olarak|paragraf halinde|madde madde|bullet|kısaca|kisaca|kısa(ca)? (anlat|açıkla|özetle)|tek c[uü]mle|sadece (yaz|anlat|söyle|soyle))\b/i,
+  /\b(düz yazı|duz yazi|paragraf olarak|paragraf halinde|madde madde|bullet|kısaca|kisaca|kısa(ca)? (anlat|açıkla|özetle)|kısa (bir )?özet|kisa (bir )?ozet|özet halinde|ozet halinde|tek c[uü]mle\p{L}*|sadece (yaz|anlat|söyle|soyle))\b/iu,
+  /(?<!\p{L})(d[üu]z yaz[ıi]|plain text)(?:\s+olarak)?(?!\p{L})/iu,
   /\b(in plain text|as prose|in a paragraph|just explain|in words only|no (table|chart|diagram|graph))\b/i,
 ];
 
@@ -82,12 +93,18 @@ export function prefersPlainProseExplicitly(prompt: string): boolean {
   if (!normalized) {
     return false;
   }
+  if (NEGATED_TABLE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
   return EXPLICIT_PROSE_PREFERENCE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 export function isExplicitTableRequest(prompt: string): boolean {
   const normalized = compactText(prompt);
   if (!normalized) {
+    return false;
+  }
+  if (NEGATED_TABLE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return false;
   }
 
@@ -135,6 +152,9 @@ export function shouldPromoteMarkdownTableToWidget(input: {
 export function isExplicitChartRequest(prompt: string): boolean {
   const normalized = compactText(prompt);
   if (!normalized) {
+    return false;
+  }
+  if (NEGATED_CHART_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return false;
   }
   return EXPLICIT_CHART_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));

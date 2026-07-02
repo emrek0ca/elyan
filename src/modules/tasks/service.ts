@@ -14,6 +14,7 @@ import {
   recordTaskLearningFromCompletion,
   recordTaskLearningFromCreation,
   recordConversationExchangeLearning,
+  recordBlockQualityLearning,
 } from "../../core/understanding/user-understanding-service.js";
 import type { FeedbackType } from "../../core/understanding/types.js";
 import {
@@ -42,6 +43,7 @@ import {
   normalizeAssistantMessageBlocks,
   sanitizeAssistantVisibleText,
   shapeAssistantMessagePayload,
+  validateAssistantBlockContract,
   withAssistantBlocksMetadata,
 } from "../chat/message-blocks.js";
 import { chatMessages } from "../../db/schema.js";
@@ -690,6 +692,32 @@ function structuredBlockToPlainFallback(block: Record<string, unknown>): string 
   return lines.join("\n");
 }
 
+function stripDanglingStructuredJsonTail(text: string): string {
+  const value = String(text ?? "");
+  const lastBrace = Math.max(value.lastIndexOf("{"), value.lastIndexOf("["));
+  if (lastBrace < 0) {
+    return value;
+  }
+
+  const tail = value.slice(lastBrace).trim();
+  if (!tail || /[}\]]$/.test(tail)) {
+    return value;
+  }
+  const opener = value[lastBrace];
+  if ((opener === "{" && tail.includes("}")) || (opener === "[" && tail.includes("]"))) {
+    return value;
+  }
+
+  try {
+    JSON.parse(tail);
+    return value;
+  } catch {
+    const prefix = value.slice(0, lastBrace).trimEnd();
+    const cleaned = prefix.replace(/[,\s:;]+$/u, "").trimEnd();
+    return cleaned || prefix;
+  }
+}
+
 export function resolveCompletionAssistantBlocks(input: {
   responseText: string;
   assistantBlocks?: unknown[];
@@ -781,7 +809,7 @@ export function resolveCompletionAssistantBlocks(input: {
     text = text.split(span).join("");
   }
   // Collapse leftover blank lines from the strips.
-  text = text.replace(/\n{3,}/g, "\n\n").trim();
+  text = stripDanglingStructuredJsonTail(text.replace(/\n{3,}/g, "\n\n").trim());
 
   const blocks = normalizeAssistantMessageBlocks({
     blocks: filterAssistantBlocksByIntent({
@@ -2094,7 +2122,24 @@ async function completeServerBrainTask(
     selectedWorkload:
       typeof payloadMetadata.selectedWorkload === "string" ? payloadMetadata.selectedWorkload : null,
   });
-  const resolvedAssistantBlocks = resolved.blocks;
+  const tablePolicy = shouldPromoteMarkdownTableToWidget({
+    prompt,
+    selectedWorkload:
+      typeof payloadMetadata.selectedWorkload === "string"
+        ? payloadMetadata.selectedWorkload
+        : input.workload,
+  })
+    ? "explicit_only"
+    : "forbidden";
+  const blockValidation = validateAssistantBlockContract({
+    blocks: resolved.blocks,
+    content: resolved.text,
+    mode: "normalize",
+    tablePolicy,
+    qualityBlocks: input.assistantBlocks,
+  });
+  const resolvedAssistantBlocks = blockValidation.blocks;
+  const blockQuality = blockValidation.blockQuality;
   const visibleResponseText = resolveVisibleAssistantResponse({
     responseText: resolved.text,
     assistantBlocks: resolvedAssistantBlocks,
@@ -2180,6 +2225,7 @@ async function completeServerBrainTask(
     healthContextUsed: input.healthContextUsed ?? false,
     contextFreshness: input.contextFreshness ?? null,
     assistantBlocks: resolvedAssistantBlocks,
+    blockQuality,
     imageArtifactGenerated: Boolean(generatedImageArtifact),
     ...(renderRecipe ? { renderRecipe } : {}),
   };
@@ -2290,6 +2336,7 @@ async function completeServerBrainTask(
       contextPacketKinds: input.contextPacketKinds ?? [],
       healthContextUsed: input.healthContextUsed ?? false,
       contextFreshness: input.contextFreshness ?? null,
+      blockQuality,
       artifactCount: structuredOutputArtifacts.length,
       ...(renderRecipe ? { renderRecipe } : {}),
       ...(structuredOutputArtifacts.length > 0 ? { artifacts: structuredOutputArtifacts } : {}),
@@ -2324,6 +2371,12 @@ async function completeServerBrainTask(
         : {},
     ),
     status: "completed",
+  });
+  await recordBlockQualityLearning(app, {
+    userId: updatedTask.userId,
+    accountId: updatedTask.userId,
+    taskId: updatedTask.id,
+    quality: blockQuality,
   });
   void maybeQueueAutomaticSharedBrainRefresh(app, {
     userId: updatedTask.userId,

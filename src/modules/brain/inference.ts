@@ -4311,7 +4311,13 @@ export function isReasoningOnlyReply(text: string): boolean {
     return false;
   }
   const visible = sanitizeAssistantVisibleText(prose, { fallback: "" });
-  return !visible.trim();
+  if (!visible.trim()) {
+    return true;
+  }
+  // Sanitizer'ın satır satır süzemediği protokol-yansıması dump'ları
+  // ("Here's a thinking… Topic:… Format:… Constraint:…") bütüncül
+  // sınıflayıcıyla yakala — bunlar da retry edilmesi gereken cevaplardır.
+  return classifyReasoningDump(visible).isDump;
 }
 
 // CLEAN_ANSWER_FALLBACK_STUB sabiti kaldırıldı. Kural: sanitize her şeyi
@@ -4373,9 +4379,25 @@ export function resolveCleanVisibleAnswer(input: {
       sanitizeAssistantVisibleText(candidate, { ...options, fallback: "" }),
       options,
     );
-    if (sanitized.trim()) {
-      return sanitized;
+    if (!sanitized.trim()) {
+      continue;
     }
+    // Sanitize'dan geçen metin hâlâ bir reasoning dump'ı olabilir — satır
+    // satır masum görünen "Etiket: değer" protokol yansımaları sanitizer'ı
+    // aşıyor (prod 08:33 vakası). Dump ise içinden gerçek cevabı kurtarmayı
+    // dene; kurtarılamazsa bu adayı ATLA — dump'ı "temiz cevap" diye
+    // döndürmek buradaki ikinci sızıntı yoluydu.
+    if (classifyReasoningDump(sanitized).isDump) {
+      const rescuedFromCandidate = rescueVisibleAnswerFromRawText(
+        candidate,
+        options,
+      );
+      if (rescuedFromCandidate) {
+        return rescuedFromCandidate;
+      }
+      continue;
+    }
+    return sanitized;
   }
 
   const rescued = rescueVisibleAnswerFromRawText(input.raw, options);
@@ -4384,12 +4406,14 @@ export function resolveCleanVisibleAnswer(input: {
   }
 
   // Son çare: sanitize edilemedi ama model gerçek metin üretti. Stub yerine
-  // ham görünür metni (typed JSON blokları hariç tutulmuş haliyle) ver.
-  // Kullanıcı bir şey görür ve kendi karar verir; bizim aşırı-strict dump
-  // dedektörümüzün yanlış pozitifi yüzünden "Yanıtı temiz biçimde
-  // oluşturamadım" yazısını görmez.
+  // ham görünür metni (typed JSON blokları hariç tutulmuş haliyle) ver —
+  // AMA yalnızca dump DEĞİLSE. Yüksek-kesinlikli bir reasoning dump'ını ham
+  // geri püskürtmek, kullanıcının ekranında iç düşünme sürecini görmesi
+  // demek (prod 08:33 vakası). Dump + kurtarma başarısız → boş dön; dış
+  // katman bunu empty_response olarak ele alır (stream'de retry, non-stream
+  // yolunda üst katman hata/yeniden deneme kararını verir).
   const rawVisible = computeStreamVisibleText(String(input.raw ?? "")).trim();
-  if (rawVisible) {
+  if (rawVisible && !classifyReasoningDump(rawVisible).isDump) {
     const polished = polishAssistantVisibleText(rawVisible, options);
     return polished.trim() || rawVisible;
   }
@@ -5803,14 +5827,27 @@ export async function generateSharedBrainReply(
                     const rescuedAnswer = deltaPublisher.suppressedAsReasoningDump
                       ? extractFinalAnswerFromReasoningDump(visibleForGuard || text)
                       : null;
-                    if (!text || placeholderHallucination) {
+                    // Gate bastırdı + kurtarma başarısız + bütüncül sınıflayıcı
+                    // da dump diyor → bu attempt'in metni kullanıcıya ASLA
+                    // gitmemeli. Önceki davranış "yanlış pozitif" varsayıp tam
+                    // metni yayınlıyordu — prod'da dump'ın ta kendisini geri
+                    // sızdıran yol buydu. Hiç delta yayınlanmadığı için retry
+                    // hâlâ serbest: boş-cevap gibi ele al, sıradaki deneme
+                    // temiz cevabı üretir.
+                    const confirmedDumpNoRescue =
+                      deltaPublisher.suppressedAsReasoningDump &&
+                      !rescuedAnswer &&
+                      classifyReasoningDump(visibleForGuard || text).isDump;
+                    if (!text || placeholderHallucination || confirmedDumpNoRescue) {
                       lastError = {
                         status: 503,
                         provider: candidate.provider,
                         path: attempt.path,
                         reason: placeholderHallucination
                           ? "placeholder_refusal_hallucination"
-                          : "empty_stream_response",
+                          : confirmedDumpNoRescue
+                            ? "reasoning_dump_stream_response"
+                            : "empty_stream_response",
                       };
                       attemptRetryable = true;
                     } else {
@@ -5821,7 +5858,8 @@ export async function generateSharedBrainReply(
                         await deltaPublisher.publishReplacement(rescuedAnswer);
                       } else if (deltaPublisher.suppressedAsReasoningDump) {
                         // Gate yanlış pozitifti (açılış dump gibi görünüp
-                        // cevap çıktı): tam görünür metni tek seferde teslim et.
+                        // sınıflayıcı da temiz dedi): tam görünür metni tek
+                        // seferde teslim et.
                         await deltaPublisher.publishReplacement(visibleForGuard);
                       } else {
                         await deltaPublisher.publish("", streamedText, {

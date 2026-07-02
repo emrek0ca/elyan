@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   emptyUnderstanding,
   persistLearningSignals,
+  recordBlockQualityLearning,
   recordBridgeLearningSignals,
   recordTaskFeedback,
   recordTaskLearningFromCompletion,
@@ -142,6 +143,62 @@ test("recordTaskLearningFromCompletion stores terminal and completion state sign
   assert.equal(count, inserted.length);
   assert.ok(inserted.some((item) => (item as { key?: string }).key === "task_completed"));
   assert.ok(inserted.some((item) => (item as { key?: string }).key === "task_completion_state"));
+});
+
+test("recordBlockQualityLearning stores safe block quality feedback signals", async () => {
+  const inserted: unknown[] = [];
+  const app = {
+    config: {
+      ELYAN_LEARNING_EXTRACTION_ENABLED: true,
+    },
+    db: {
+      insert: () => ({
+        values: async (values: unknown[]) => {
+          inserted.push(...values);
+        },
+      }),
+    },
+    log: {
+      info: () => undefined,
+      warn: () => undefined,
+    },
+  };
+
+  const count = await recordBlockQualityLearning(app as never, {
+    userId: "00000000-0000-0000-0000-000000000001",
+    taskId: "00000000-0000-0000-0000-000000000002",
+    quality: {
+      version: "elyan_block_quality.v1",
+      score: 66,
+      feedbackSignals: [
+        "duplicate_table_block",
+        "raw_json_leak_prevented",
+        "unsupported_signal",
+      ],
+      blockTypes: ["table", "text"],
+      metrics: {
+        duplicateTableBlockCount: 1,
+        rawJsonLeakPreventedCount: 1,
+      },
+    },
+    requestId: "req_block_quality",
+  });
+
+  assert.equal(count, 3);
+  assert.equal(inserted.length, 3);
+  assert.ok(
+    inserted.every((item) => (item as { key?: string }).key === "block_output_quality"),
+  );
+  assert.deepEqual(
+    inserted.map((item) => (item as { value?: string }).value).sort(),
+    ["duplicate_table_block", "needs_repair", "raw_json_leak_prevented"],
+  );
+  assert.ok(
+    inserted.every(
+      (item) =>
+        ((item as { metadata?: Record<string, unknown> }).metadata?.score as number) === 66,
+    ),
+  );
 });
 
 test("recordTaskFeedback stores a compact workflow outcome signal", async () => {

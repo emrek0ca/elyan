@@ -117,3 +117,53 @@ test("extractFinalAnswerFromReasoningDump returns null when no answer candidate 
   );
   assert.equal(extractFinalAnswerFromReasoningDump(""), null);
 });
+
+/* Prod 08:33 ekran görüntüsünden birebir ikinci dump şekli ("İos ve android
+ * geliştirmeyi karşılaştır ama tablo yapma" vakası): "Here's a thinking"
+ * açılışı + numaralı/bullet'lı "Etiket: değer" protokol yansıması satırları.
+ * İlk guard sürümü bunu kaçırdı — açılış deseni "here's a thinking"i
+ * tanımıyordu ve `^` anchor'lu meta desenler "2.- Format: ..." satırlarında
+ * liste önekine takılıyordu. */
+const PROD_DUMP_PROTOCOL_MIRROR = [
+  "Here's a thinking1.- User- Topic: iOS vs Android development- Constraint: No tables",
+  "- Topic: iOS vs Android development comparison",
+  "2.- Format: Prose/bullet list, explicitly NO tables- Tone: Warm, professional, concise- Constraint: No tables",
+  "- Topic: iOS vs Android development comparison",
+  "- Format: Prose/bullet list, explicitly NO tables",
+  "- Tone: Warm, professional, concise, grounded",
+  "- Identity: Elyan",
+  "- No hallucination, stick to knownfacts about iOS/Android development- Use web grounding if helpful, but general knowledge is sufficient- Constraint: No tables",
+  "- Topic: iOS vs Android development comparison",
+  "2. **Check Constraints & Policies:**- Data source: PUBLIC WEB GROUNDING is available.",
+  "- Use web grounding if helpful, but general knowledge is sufficient here.",
+].join("\n");
+
+test("looksLikeReasoningDumpOpening catches the Here's-a-thinking protocol mirror", () => {
+  assert.equal(looksLikeReasoningDumpOpening(PROD_DUMP_PROTOCOL_MIRROR), true);
+  assert.equal(looksLikeReasoningDumpOpening("Here's a thinking process:"), true);
+  assert.equal(looksLikeReasoningDumpOpening("Here is my thought process on this:"), true);
+  // Gerçek cevaplar "Here's ..." ile başlayabilir — dump saymamalı.
+  assert.equal(looksLikeReasoningDumpOpening("Here's a quick comparison of iOS and Android development."), false);
+  assert.equal(looksLikeReasoningDumpOpening("Here's the recipe you asked for."), false);
+});
+
+test("classifyReasoningDump flags the protocol-mirror dump despite list prefixes", () => {
+  const result = classifyReasoningDump(PROD_DUMP_PROTOCOL_MIRROR);
+  assert.equal(result.isDump, true);
+  assert.ok(result.score >= 0.5, `expected high meta score, got ${result.score}`);
+});
+
+test("classifyReasoningDump keeps real label-styled answers when meta ratio is low", () => {
+  // Gerçek bir cevapta tek tük "Dil: Swift" gibi satırlar olabilir; oran
+  // düşük kaldığı sürece dump sayılmamalı.
+  const realAnswer = [
+    "iOS ve Android geliştirme arasındaki temel farklar şunlar:",
+    "iOS tarafında Swift ve Xcode kullanırsın; Apple'ın kapalı ekosistemi",
+    "daha öngörülebilir cihaz çeşitliliği sunar.",
+    "Android tarafında Kotlin ve Android Studio standarttır; cihaz",
+    "çeşitliliği fazladır, test yükü buna göre artar.",
+    "Yayınlama süreçlerinde App Store incelemesi genelde daha katıdır.",
+    "Hangi tarafa odaklanacağın hedef kitlene bağlı.",
+  ].join("\n");
+  assert.equal(classifyReasoningDump(realAnswer).isDump, false);
+});

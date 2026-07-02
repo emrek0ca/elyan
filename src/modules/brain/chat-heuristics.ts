@@ -111,8 +111,8 @@ const REFERENTIAL_PRONOUN_PATTERN =
 const COMPARATIVE_STRUCTURE_PATTERNS = [
   /\b[\p{L}\d][^?\n]{0,48}\s+(?:vs\.?|versus)\s+[\p{L}\d]/iu,
   /(?<!\p{L})(hangisi|hangisini)\s+daha\p{L}*/iu,
-  /(?<!\p{L})(farkı|farki|farkları|farklari)\s+(?:nedir|ne|neler|nelerdir)\b/iu,
-  /(?<!\p{L})(arasında|arasinda)\s+(?:ne\s+)?fark\p{L}*/iu,
+  /(?<!\p{L})fark\p{L}{0,8}\s+(?:nedir|ne|neler|nelerdir|a[çc][ıi]kla|anlat)\b/iu,
+  /(?<!\p{L})(arasında|arasinda|arasındaki|arasindaki)\s+(?:ne\s+)?fark\p{L}*/iu,
 ];
 
 const CODE_CONTEXT_PATTERNS = [
@@ -120,6 +120,12 @@ const CODE_CONTEXT_PATTERNS = [
   /`[^`\n]+`/,
   /\.(?:ts|tsx|js|jsx|py|swift|dart|go|rs|java|kt|sql|json|yaml|yml|html|css)\b/i,
   /(?<!\p{L})(code|kod\p{L}*|function|class|const|let|var|import|export|async|await|return|try|catch|interface|type|enum|struct|widget|component)\b/iu,
+];
+const BRIEF_PROSE_PATTERNS = [
+  /(?<!\p{L})(k[ıi]saca|[öo]zetle|[öo]zet halinde|paragraf halinde|paragraf olarak|tek c[üu]mle\p{L}*)(?!\p{L})/iu,
+];
+const CONTEXT_HEAVY_PROSE_PATTERNS = [
+  /(?<!\p{L})(pdf|docx|xlsx|pptx|belge|dokuman|d[öo]k[üu]man|dosya|ekli|metin|i[çc]erik|ocr|tarama|profesyonel\p{L}*|d[üu]zenli|redakte|imla|gramer|grammar)(?!\p{L})/iu,
 ];
 
 function hasReferentialPronoun(prompt: string): boolean {
@@ -132,6 +138,14 @@ function hasComparativeStructure(prompt: string): boolean {
 
 function hasCodeContext(prompt: string): boolean {
   return CODE_CONTEXT_PATTERNS.some((pattern) => pattern.test(prompt));
+}
+
+function hasBriefProsePreference(prompt: string): boolean {
+  return BRIEF_PROSE_PATTERNS.some((pattern) => pattern.test(prompt));
+}
+
+function hasContextHeavyProseWork(prompt: string): boolean {
+  return CONTEXT_HEAVY_PROSE_PATTERNS.some((pattern) => pattern.test(prompt));
 }
 
 /* ── Kısa takip mesajları ──────────────────────────────────────────────────
@@ -272,6 +286,8 @@ export function selectHybridMobileChatWorkload(input: {
   const referentialPronoun = hasReferentialPronoun(normalized);
   const comparativeStructure = hasComparativeStructure(normalized);
   const codeContext = hasCodeContext(normalized);
+  const briefProsePreference = hasBriefProsePreference(normalized);
+  const contextHeavyProseWork = hasContextHeavyProseWork(normalized);
   const isPremiumReasoningProfile =
     input.brainProfile?.tier === "premium" || Number(input.brainProfile?.reasoningMultiplier ?? 1) >= 5;
   const isEnhancedReasoningProfile =
@@ -339,9 +355,24 @@ export function selectHybridMobileChatWorkload(input: {
     wordCount < 32 &&
     questionCount <= 1 &&
     sentenceCount <= 2 &&
-    !hasListStructure;
+    !hasListStructure &&
+    !comparativeStructure;
 
   if (smallCodeContext && calibrationScore <= 0) {
+    return "mobile_chat_fast";
+  }
+
+  if (
+    briefProsePreference &&
+    wordCount <= 14 &&
+    questionCount <= 1 &&
+    sentenceCount <= 2 &&
+    !referentialPronoun &&
+    !comparativeStructure &&
+    !codeContext &&
+    !contextHeavyProseWork &&
+    !hasListStructure
+  ) {
     return "mobile_chat_fast";
   }
 

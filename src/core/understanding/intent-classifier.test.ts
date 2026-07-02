@@ -97,6 +97,23 @@ test("classifyIntent does not misclassify Turkish 'bugün' as debugging", () => 
   assert.equal(result.primaryIntent, "chat");
 });
 
+test("classifyIntent recognizes Turkish step program requests as planning", () => {
+  const result = classifyIntent({
+    userId: "user_1",
+    message: "5 adımlık Teknofest hazırlık programı çıkar",
+  });
+  assert.equal(result.primaryIntent, "planning");
+});
+
+test("classifyIntent keeps brief architecture explanations out of local planning", () => {
+  const result = classifyIntent({
+    userId: "user_1",
+    message: "Kısaca özetle: local-first mimari neden önemli?",
+  });
+  assert.notEqual(result.primaryIntent, "planning");
+  assert.equal(result.requiresLocalRuntime, false);
+});
+
 test("classifyIntent recovers intent semantically when no regex rule matches", () => {
   // Lexically overlaps the planning seed phrases without hitting a planning regex.
   const result = classifyIntent({

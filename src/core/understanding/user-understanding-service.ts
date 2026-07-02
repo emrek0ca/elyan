@@ -552,6 +552,87 @@ export async function recordTaskLearningFromCompletion(
   });
 }
 
+export async function recordBlockQualityLearning(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    accountId?: string;
+    taskId?: string;
+    quality: {
+      version: string;
+      score: number;
+      feedbackSignals: string[];
+      blockTypes: string[];
+      metrics: Record<string, unknown>;
+    };
+    requestId?: string;
+  },
+): Promise<number> {
+  const feedbackSignals = input.quality.feedbackSignals
+    .map((signal) => signal.trim().toLowerCase())
+    .filter((signal) =>
+      [
+        "unrequested_table_block",
+        "duplicate_table_block",
+        "duplicate_block",
+        "malformed_structured_json",
+        "raw_json_leak_prevented",
+        "fallback_to_text",
+      ].includes(signal),
+    );
+  if (feedbackSignals.length === 0 && input.quality.score >= 95) {
+    return 0;
+  }
+
+  const scoreBucket =
+    input.quality.score >= 95
+      ? "excellent"
+      : input.quality.score >= 80
+        ? "needs_watch"
+        : input.quality.score >= 60
+          ? "needs_repair"
+          : "bad";
+  const baseMetadata = {
+    qualityVersion: input.quality.version,
+    score: Math.round(input.quality.score),
+    scoreBucket,
+    blockTypes: input.quality.blockTypes.slice(0, 12),
+    metrics: input.quality.metrics,
+  };
+  const signals: LearningSignal[] = [
+    {
+      type: "workflow",
+      key: "block_output_quality",
+      value: scoreBucket,
+      confidence: 0.74,
+      scope: "user",
+      source: "system",
+      ttlDays: 30,
+      metadata: baseMetadata,
+    },
+    ...feedbackSignals.map(
+      (signal): LearningSignal => ({
+        type: "workflow",
+        key: "block_output_quality",
+        value: signal,
+        confidence: 0.78,
+        scope: "user",
+        source: "system",
+        ttlDays: 30,
+        metadata: baseMetadata,
+      }),
+    ),
+  ];
+
+  return persistLearningSignals(app, {
+    userId: input.userId,
+    accountId: input.accountId,
+    taskId: input.taskId,
+    signals,
+    requestId: input.requestId,
+  });
+}
+
 export async function recordTaskFeedback(
   app: FastifyInstance,
   input: {

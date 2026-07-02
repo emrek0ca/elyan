@@ -53,9 +53,21 @@ test("decideStructuredResponseDecision stays prose-only when the user asks for p
     prompt: "Bunu sadece duz yazi olarak anlat, tablo kullanma",
   });
 
+  assert.equal(isExplicitTableRequest("Bunu sadece duz yazi olarak anlat, tablo kullanma"), false);
   assert.equal(decision.primaryBlockType, "text");
   assert.equal(decision.widgetPolicy, "none");
   assert.equal(decision.reasons.includes("explicit_prose_preference"), true);
+});
+
+test("decideStructuredResponseDecision respects explicit no-table comparison requests", () => {
+  const prompt = "ios ve android geliştirmeyi karşılaştır ama tablo yapma";
+  const decision = decideStructuredResponseDecision({ prompt });
+
+  assert.equal(isExplicitTableRequest(prompt), false);
+  assert.equal(decision.primaryShape, "prose");
+  assert.equal(decision.primaryBlockType, "text");
+  assert.equal(decision.tablePolicy, "forbidden");
+  assert.equal(decision.widgetPolicy, "none");
 });
 
 test("decideStructuredResponseDecision keeps a brief-explanation prompt as prose-only", () => {
@@ -64,6 +76,27 @@ test("decideStructuredResponseDecision keeps a brief-explanation prompt as prose
     prompt: "Turk matematikcileri kisaca anlat",
   });
 
+  assert.equal(decision.widgetPolicy, "none");
+});
+
+test("decideStructuredResponseDecision keeps summary prompts prose-only", () => {
+  const decision = decideStructuredResponseDecision({
+    prompt: "Bu metni kısa bir özet halinde yaz",
+  });
+
+  assert.equal(decision.primaryShape, "prose");
+  assert.equal(decision.primaryBlockType, "text");
+  assert.equal(decision.tablePolicy, "forbidden");
+  assert.equal(decision.widgetPolicy, "none");
+});
+
+test("decideStructuredResponseDecision respects explicit no-chart prose requests", () => {
+  const decision = decideStructuredResponseDecision({
+    prompt: "Bunu düz yazı olarak anlat, grafik istemiyorum",
+  });
+
+  assert.equal(decision.primaryShape, "prose");
+  assert.equal(decision.primaryBlockType, "text");
   assert.equal(decision.widgetPolicy, "none");
 });
 

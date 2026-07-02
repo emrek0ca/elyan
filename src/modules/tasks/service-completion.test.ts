@@ -174,6 +174,22 @@ test("resolveCompletionAssistantBlocks converts unrequested table JSON to a plai
   );
 });
 
+test("resolveCompletionAssistantBlocks strips dangling structured JSON tails", () => {
+  const result = resolveCompletionAssistantBlocks({
+    prompt: "PDF olarak ver bunu",
+    responseText:
+      "Rapor hazırlanıyor, birkaç saniye...Bu tablo, iki platformun geliştirme süreçleri,{",
+    assistantBlocks: [],
+    selectedWorkload: "document_generate",
+  });
+
+  assert.equal(
+    result.text,
+    "Rapor hazırlanıyor, birkaç saniye...Bu tablo, iki platformun geliştirme süreçleri",
+  );
+  assert.ok(!result.text.includes("{"));
+});
+
 test("resolveCompletionAssistantBlocks deduplicates repeated typed blocks", () => {
   const repeatedTable = {
     type: "table",

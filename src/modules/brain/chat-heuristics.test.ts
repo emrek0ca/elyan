@@ -43,6 +43,14 @@ test("selectHybridMobileChatWorkload catches Turkish suffixed analysis verbs (te
     }),
     "mobile_chat_balanced",
   );
+  assert.equal(
+    selectHybridMobileChatWorkload({
+      message: "Node.js ve Python farkını açıkla",
+      primaryIntent: "chat",
+      brainProfile: null,
+    }),
+    "mobile_chat_balanced",
+  );
   // "özetle" kökü: "özetler misin" (\b sınırı r harfinde kaçırıyordu)
   assert.equal(
     selectHybridMobileChatWorkload({

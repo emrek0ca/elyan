@@ -236,6 +236,17 @@ test("decideCommandRoute keeps plan requests out of table_generate", async () =>
   assert.equal(decision.selectedWorkload, "planning");
 });
 
+test("decideCommandRoute selects document_generate for suffixed Turkish report requests", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Toplantı notlarından yönetici özeti raporu üret",
+    source: "mobile",
+  });
+
+  assert.equal(decision.selectedWorkload, "document_generate");
+});
+
 test("decideCommandRoute upgrades complex public chat to the balanced profile", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {

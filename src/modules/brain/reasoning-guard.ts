@@ -34,7 +34,7 @@ export type ReasoningDumpClassification = {
  * test edilir; muhafazakâr tutulmalı (yanlış pozitif = o cevapta canlı akış
  * yerine tek seferde teslim — zararsız ama animasyonsuz). */
 const REASONING_DUMP_OPENING_PATTERN =
-  /^\s*(?:the user(?:'s)?\b|the request\b|user request\b|i (?:should|will|'ll|need to|am going to|want to|can (?:just|simply))\b|we (?:need|should|will|must)\b|let'?s (?:go with|say|think|see|stick|provide|start by)\b|okay,? (?:the user|so)\b|ok,? (?:the user|so)\b|hmm+[,.]|wait[,.]|alright[,.]|first,? i (?:should|will|need)\b|my (?:goal|task|job) (?:is|here)\b|analysis\s*:|reasoning\s*:|thinking process\b|thought process\b|kullanıcı(?:nın|nin)? (?:istediği|amacı|hedefi|dili|mesajı|isteği)\b|önce kullanıcı\b)/iu;
+  /^\s*(?:here'?s (?:a |my |the )?(?:thinking|thought|analysis|plan|reasoning)(?![a-z])|here is (?:a |my |the )?(?:thinking|thought|analysis|plan|reasoning)(?![a-z])|thinking\s*:|the user(?:'s)?\b|the request\b|user request\b|i (?:should|will|'ll|need to|am going to|want to|can (?:just|simply))\b|we (?:need|should|will|must)\b|let'?s (?:go with|say|think|see|stick|provide|start by)\b|let me think\b|okay,? (?:the user|so)\b|ok,? (?:the user|so)\b|hmm+[,.]|wait[,.]|alright[,.]|first,? (?:i (?:should|will|need)|let'?s analyze)\b|my (?:goal|task|job) (?:is|here)\b|analysis\s*:|reasoning\s*:|thinking process\b|thought process\b|\d+\s*[.)-]+\s*(?:analyze|user|intent|topic|constraint)\b|[-•*]\s*user\s*[-:]|kullanıcı(?:nın|nin)? (?:istediği|amacı|hedefi|dili|mesajı|isteği)\b|önce kullanıcı\b|düş[üu]n(?:ce|me) süreci\b|işte düş[üu]nce\b)/iu;
 
 /* Satır-bazlı meta işaretleri: dump'ların gövdesindeki kendi kendine konuşma
  * kalıpları. Tek tek zararsız görünen satırlar toplamda dump'ı ele verir.
@@ -60,7 +60,24 @@ const META_LINE_PATTERNS: RegExp[] = [
   /\bmight be testing\b/i,
   /^kullanıcı(?:nın|nin)?\b/i,
   /(?:yapmalıyım|etmeliyim|söylemeliyim|listelemeliyim|vermeliyim|seçmeliyim|secmeliyim)[.\s]*$/iu,
+  // Protokol-yansıması dump'ları (prod 08:33 vakası): model, prompt'taki
+  // analiz şablonunu "Etiket: değer" satırları hâlinde içeriğe yazıyor.
+  // Bunlar tek başına masum görünür — bir arada dump'ın parmak izidir.
+  /^(?:topic|intent|format|tone|identity|constraint|language|data source|persona|goal|style|task|plan|approach|structure|user|audience)\s*:/i,
+  /^(?:konu|niyet|amaç|amac|biçim|bicim|ton|kimlik|kısıt|kisit|dil|kaynak|hedef|görev|gorev|yaklaşım|yaklasim)\s*:/i,
+  /^here'?s (?:a |my |the )?(?:thinking|thought|analysis|plan|reasoning)\b/i,
+  /^analyz(?:e|ing)\s+(?:the\s+)?user\b/i,
+  /^check\s+constraints\b/i,
+  /^no hallucination\b/i,
+  /^use web grounding\b/i,
+  /^stick to known\s?facts\b/i,
 ];
+
+/** "2.-", "3)", "•", "- " gibi liste/numara öneklerini soyar — dump satırları
+ * neredeyse her zaman bullet'lıdır ve `^` anchor'lu desenleri kaçırıyordu. */
+function stripListPrefix(line: string): string {
+  return line.replace(/^[\s>]*(?:[-•*–—]+|\d+\s*[.)-]+|\(\d+\)|[a-z]\))\s*/i, "").trim();
+}
 
 function splitNonEmptyLines(text: string): string[] {
   return text
@@ -70,7 +87,11 @@ function splitNonEmptyLines(text: string): string[] {
 }
 
 function isMetaLine(line: string): boolean {
-  return META_LINE_PATTERNS.some((pattern) => pattern.test(line));
+  const stripped = stripListPrefix(line);
+  const candidate = stripped || line;
+  return META_LINE_PATTERNS.some(
+    (pattern) => pattern.test(candidate) || pattern.test(line),
+  );
 }
 
 /**
