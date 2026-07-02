@@ -9,6 +9,11 @@ import Foundation
 ///
 /// Mobile normalizes some legacy aliases (`message.delta` -> `chat.message.delta`,
 /// etc.) — we do the same so the chat layer only deals with one set of names.
+///
+/// Dayanıklılık: bağlantı yanıt ortasında koparsa (ağ geçişi, uyku, proxy)
+/// istemci `Last-Event-ID` ile OTOMATİK yeniden bağlanır — backend replay
+/// desteklediği için kaçan delta'lar kayıpsız geri gelir. Eskiden tek kopuş
+/// tüm cevabı öldürüyor ve kullanıcı "Yanıt alınamadı." görüyordu.
 struct ElyanSSEEvent {
     let id: String?
     let event: String
@@ -18,6 +23,9 @@ struct ElyanSSEEvent {
 actor ElyanSSEClient {
     private let urlSession: URLSession
     private var currentTask: Task<Void, Never>?
+
+    private static let maxReconnectAttempts = 4
+    private static let reconnectBaseDelayNs: UInt64 = 800_000_000 // 0.8s, üstel artar
 
     init() {
         let config = URLSessionConfiguration.default
@@ -44,52 +52,100 @@ actor ElyanSSEClient {
         let session = urlSession
 
         currentTask = Task.detached(priority: .utility) {
-            var components = URLComponents(
-                url: baseURL.appendingPathComponent("v1/realtime/stream"),
-                resolvingAgainstBaseURL: false
-            )!
-            components.queryItems = [URLQueryItem(name: "taskId", value: taskId)]
-            guard let url = components.url else { return }
+            var lastEventId: String?
+            var attempt = 0
 
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-            request.setValue("Elyan/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
-
-            do {
-                let (bytes, response) = try await session.bytes(for: request)
-                if Task.isCancelled { await onClose(); return }
-
-                if let http = response as? HTTPURLResponse,
-                   !(200..<300).contains(http.statusCode) {
-                    await onError(ElyanBackendError.server(
-                        status: http.statusCode,
-                        message: "Realtime stream HTTP \(http.statusCode)"
-                    ))
-                    await onClose()
-                    return
-                }
-
-                var pending = SSEFrame()
-                for try await line in bytes.lines {
-                    if Task.isCancelled { break }
-                    if line.isEmpty {
-                        if let event = pending.flush() {
+            while !Task.isCancelled {
+                do {
+                    let sawEvent = try await Self.connectOnce(
+                        session: session,
+                        accessToken: accessToken,
+                        taskId: taskId,
+                        baseURL: baseURL,
+                        lastEventId: lastEventId,
+                        onEvent: { event in
+                            if let id = event.id, !id.isEmpty { lastEventId = id }
                             await onEvent(event)
                         }
-                        continue
+                    )
+                    // Sunucu akışı normal kapattı (görev bitti ya da idle) —
+                    // yeniden bağlanma, üst katman terminal olayı zaten aldı.
+                    _ = sawEvent
+                    break
+                } catch {
+                    if Task.isCancelled { break }
+                    attempt += 1
+                    if attempt > Self.maxReconnectAttempts {
+                        await onError(error)
+                        break
                     }
-                    pending.consume(line: line)
+                    // Üstel geri çekilme: 0.8s, 1.6s, 3.2s, 6.4s
+                    let delay = Self.reconnectBaseDelayNs << UInt64(min(attempt - 1, 4))
+                    try? await Task.sleep(nanoseconds: delay)
+                    continue
                 }
-                await onClose()
-            } catch {
-                if Task.isCancelled { await onClose(); return }
-                await onError(error)
-                await onClose()
             }
+            await onClose()
         }
+    }
+
+    /// Tek bir bağlantı denemesi: açar, frame'leri akıtır, sunucu kapatınca
+    /// döner. HTTP hata durumları ve ağ kopmaları throw eder (retry kararını
+    /// çağıran döngü verir).
+    private static func connectOnce(
+        session: URLSession,
+        accessToken: String,
+        taskId: String,
+        baseURL: URL,
+        lastEventId: String?,
+        onEvent: @escaping @Sendable (ElyanSSEEvent) async -> Void
+    ) async throws -> Bool {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("v1/realtime/stream"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "taskId", value: taskId)]
+        guard let url = components.url else {
+            throw ElyanBackendError.malformedResponse("Realtime stream URL oluşturulamadı.")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("Elyan/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
+        if let lastEventId, !lastEventId.isEmpty {
+            // Backend Last-Event-ID'den replay yapar; kopuşta kaçan olaylar
+            // kayıpsız geri gelir.
+            request.setValue(lastEventId, forHTTPHeaderField: "Last-Event-ID")
+        }
+
+        let (bytes, response) = try await session.bytes(for: request)
+        if Task.isCancelled { return false }
+
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw ElyanBackendError.server(
+                status: http.statusCode,
+                message: "Realtime stream HTTP \(http.statusCode)"
+            )
+        }
+
+        var sawEvent = false
+        var pending = SSEFrame()
+        for try await line in bytes.lines {
+            if Task.isCancelled { break }
+            if line.isEmpty {
+                if let event = pending.flush() {
+                    sawEvent = true
+                    await onEvent(event)
+                }
+                continue
+            }
+            pending.consume(line: line)
+        }
+        return sawEvent
     }
 
     func cancel() {

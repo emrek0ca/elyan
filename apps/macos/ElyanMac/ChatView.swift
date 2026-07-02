@@ -1,5 +1,43 @@
 import SwiftUI
 
+// MARK: - ElyanTheme
+//
+// Mobil tasarım dilinin masaüstü karşılığı: sıcak krem zemin, asistan cevabı
+// balonsuz doğrudan zeminde, kullanıcı mesajı yumuşak krem balonda, hap
+// biçimli composer. Karanlık modda sistem koyu tonlarına düşer. Renkler
+// mobil ekranın (flutter) zemininden örneklendi.
+enum ElyanTheme {
+    /// Sohbet zemini — açıkta sıcak krem, koyuda nötr koyu.
+    static let canvas = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.106, green: 0.106, blue: 0.098, alpha: 1)
+            : NSColor(calibratedRed: 0.949, green: 0.933, blue: 0.898, alpha: 1)
+    })
+
+    /// Kullanıcı balonu — zeminden bir tık koyu krem.
+    static let userBubble = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.180, green: 0.180, blue: 0.168, alpha: 1)
+            : NSColor(calibratedRed: 0.898, green: 0.875, blue: 0.827, alpha: 1)
+    })
+
+    /// Composer alanı — zeminden hafif açık, hap biçim.
+    static let composerField = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.145, green: 0.145, blue: 0.137, alpha: 1)
+            : NSColor(calibratedRed: 0.984, green: 0.976, blue: 0.957, alpha: 1)
+    })
+
+    /// Kart/ikincil yüzey (blok kartları, düşünme göstergesi).
+    static let surface = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.157, green: 0.157, blue: 0.149, alpha: 1)
+            : NSColor(calibratedRed: 0.973, green: 0.961, blue: 0.937, alpha: 1)
+    })
+
+    static let hairline = Color.primary.opacity(0.08)
+}
+
 // MARK: - ChatView
 
 struct ChatView: View {
@@ -14,10 +52,9 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             messageScrollArea
-            Divider()
             inputArea
         }
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(ElyanTheme.canvas)
     }
 
     // MARK: - Message Scroll Area
@@ -59,7 +96,9 @@ struct ChatView: View {
                         emptyState
                     }
 
-                    // Messages
+                    // Messages — .equatable(): streaming sırasında yalnız
+                    // değişen (kuyruk) baloncuğun body'si koşar; tarihçe
+                    // satırları ChatMessage == sayesinde atlanır.
                     ForEach(chat.messages) { message in
                         ChatBubble(
                             message: message,
@@ -68,6 +107,7 @@ struct ChatView: View {
                             compact: compactBubbles,
                             fontSize: chatFontSize
                         )
+                        .equatable()
                         .id(message.id)
                     }
 
@@ -134,13 +174,13 @@ struct ChatView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: chatFontSize))
                 .lineLimit(1...8)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(ElyanTheme.composerField)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(ElyanTheme.hairline, lineWidth: 1)
                 )
                 .onSubmit(send)
 
@@ -155,7 +195,7 @@ struct ChatView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Material.bar)
+        .background(ElyanTheme.canvas)
     }
 
     private var canSend: Bool {
@@ -172,7 +212,7 @@ struct ChatView: View {
 
 // MARK: - ChatBubble
 
-private struct ChatBubble: View {
+private struct ChatBubble: View, Equatable {
     let message: ChatMessage
     let isStreamingTail: Bool
     var showTimestamp: Bool = false
@@ -217,17 +257,17 @@ private struct ChatBubble: View {
             }
             .padding(.horizontal, compact ? 10 : 14)
             .padding(.vertical, compact ? 6 : 10)
-            .background(Color(NSColor.controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: compact ? 8 : 14, style: .continuous))
+            .background(ElyanTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: compact ? 12 : 16, style: .continuous))
         } else if message.role == .user {
             // User: always plain text
             Text(message.text)
                 .font(.system(size: fontSize))
                 .textSelection(.enabled)
-                .padding(.horizontal, compact ? 10 : 14)
-                .padding(.vertical, compact ? 6 : 10)
-                .background(Color.accentColor.opacity(0.18))
-                .clipShape(RoundedRectangle(cornerRadius: compact ? 8 : 14, style: .continuous))
+                .padding(.horizontal, compact ? 12 : 16)
+                .padding(.vertical, compact ? 7 : 11)
+                .background(ElyanTheme.userBubble)
+                .clipShape(RoundedRectangle(cornerRadius: compact ? 12 : 18, style: .continuous))
         } else if !message.blocks.isEmpty {
             // Assistant: block-first rendering
             BlocksRenderer(blocks: message.blocks, fontSize: fontSize, compact: compact)

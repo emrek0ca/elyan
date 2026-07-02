@@ -1989,6 +1989,20 @@ def _desktop_document_route(text: str, selected_artifacts: list[dict[str, Any]] 
     q = _normalise(text)
     if not any(tok in q for tok in ("ozetle", "özetle", "oku", "cikar", "çıkar", "analiz", "incele", "summary", "summarize")):
         return None
+    # Kaynağı gömülü ek olan istekleri kapma: "bunu özetleyip masaüstüne
+    # kaydet" + ekli belge geldiğinde konum SÖZDE kaynak değil KAYIT HEDEFİ.
+    # Eskiden buradan document_read'e gidip masaüstünde var olmayan
+    # "rapor.pdf"i okumaya çalışıyor, özet+kaydet zinciri hiç çalışmıyordu.
+    embedded_text, _embedded_labels = _embedded_attachment_payload(text)
+    if embedded_text:
+        return None
+    # Konum sadece kayıt hedefi olarak geçiyorsa (kaydet/save + "-e/-a" yönelme
+    # hali) bu rota kaynak-okuma rotası olarak yanlış eşleşir; sonraki
+    # summary_save rotasına bırak.
+    if any(tok in q for tok in _DOCUMENT_SAVE_TOKENS) and re.search(
+        r"(masaustune|masaüstüne|desktopa|desktop'a|klasorune|klasörüne|belgelerime)", q
+    ):
+        return None
     # Try to extract file name from text
     file_name = _extract_file_name(text)
     if not file_name:

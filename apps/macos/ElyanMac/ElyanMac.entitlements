@@ -4,8 +4,6 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
-	<key>com.apple.security.get-task-allow</key>
-	<true/>
 	<key>com.apple.developer.applesignin</key>
 	<array>
 		<string>Default</string>

@@ -112,20 +112,46 @@ final class ElyanBackend: ObservableObject {
         return parsed
     }
 
+    /// Tek-uçuş refresh: eş zamanlı 401 alan istekler AYNI refresh çağrısını
+    /// bekler. Eskiden her 401 kendi /v1/auth/refresh çağrısını yapıyordu;
+    /// refresh token rotasyonu yüzünden ikinci paralel çağrı geçersiz token'la
+    /// gidip başarısız oluyor ve kullanıcı rastgele oturumdan düşüyordu.
+    private var inflightRefresh: Task<ElyanAuthSession, Error>?
+
     /// POST /v1/auth/refresh
     @discardableResult
     func refresh() async throws -> ElyanAuthSession {
+        if let inflight = inflightRefresh {
+            return try await inflight.value
+        }
         guard let current = session, !current.refreshToken.isEmpty else {
             throw ElyanBackendError.notAuthenticated
         }
-        let raw = try await postJSON(
-            path: "/v1/auth/refresh",
-            body: ["refreshToken": current.refreshToken],
-            requireAuth: false
-        )
-        let parsed = try Self.parseAuthSession(raw, refreshTokenFallback: current.refreshToken)
-        try persistSession(parsed)
-        return parsed
+        let task = Task<ElyanAuthSession, Error> { [weak self] in
+            guard let self else { throw ElyanBackendError.notAuthenticated }
+            do {
+                let raw = try await self.postJSON(
+                    path: "/v1/auth/refresh",
+                    body: ["refreshToken": current.refreshToken],
+                    requireAuth: false
+                )
+                let parsed = try Self.parseAuthSession(raw, refreshTokenFallback: current.refreshToken)
+                try self.persistSession(parsed)
+                return parsed
+            } catch {
+                // Refresh token'ın kendisi geçersizse oturumu yerelde de bitir:
+                // aksi hâlde kullanıcı "girişli ama hiçbir istek çalışmıyor"
+                // limbosunda kalıyordu (RootView yalnız açılışta doğruluyor).
+                if case ElyanBackendError.server(let status, _) = error,
+                   status == 401 || status == 403 {
+                    try? self.clearSession()
+                }
+                throw error
+            }
+        }
+        inflightRefresh = task
+        defer { inflightRefresh = nil }
+        return try await task.value
     }
 
     /// POST /v1/auth/logout (best-effort) then clear local session.
@@ -927,6 +953,24 @@ struct ElyanDevice: Identifiable, Equatable {
 
 // MARK: - Parse Helpers (extension on ElyanBackend)
 
+/// Backend JS `toISOString()` milisaniyeli tarih üretir ("…T12:34:56.789Z");
+/// varsayılan ISO8601DateFormatter bunu PARSE EDEMEZ ve her tarih sessizce
+/// `Date()`'e (şimdi) düşüyordu — oturum geçmişi sıralaması ve "son mesaj"
+/// zamanları bu yüzden bozuktu. Fractional destekli formatter + fallback.
+enum ElyanDateParser {
+    static let isoWithFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    static let iso = ISO8601DateFormatter()
+
+    static func parse(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        return isoWithFractional.date(from: value) ?? iso.date(from: value)
+    }
+}
+
 extension ElyanBackend {
 
     static func unwrap(_ raw: Any) -> [String: Any] {
@@ -943,13 +987,12 @@ extension ElyanBackend {
             if let arr = raw as? [[String: Any]] { return arr }
             return []
         }()
-        let iso = ISO8601DateFormatter()
         return items.compactMap { item in
             guard let id = item["id"] as? String else { return nil }
             let title = (item["title"] as? String) ?? (item["name"] as? String) ?? "Sohbet"
             let lastMessage = (item["lastMessage"] as? String) ?? (item["summary"] as? String) ?? ""
             let updatedStr = (item["updatedAt"] as? String) ?? (item["lastMessageAt"] as? String) ?? ""
-            let updatedAt = iso.date(from: updatedStr) ?? Date()
+            let updatedAt = ElyanDateParser.parse(updatedStr) ?? Date()
             let count = (item["messageCount"] as? Int) ?? 0
             return ElyanSession(id: id, title: title, lastMessage: lastMessage, updatedAt: updatedAt, messageCount: count)
         }
@@ -966,7 +1009,6 @@ extension ElyanBackend {
         let hasMore = (meta?["hasMore"] as? Bool) ?? false
         let nextCursor = meta?["nextCursor"] as? String
         
-        let iso = ISO8601DateFormatter()
         let messages = items.compactMap { item -> ElyanSessionMessage? in
             guard let id = item["id"] as? String else { return nil }
             let role = (item["role"] as? String) ?? "assistant"
@@ -980,7 +1022,7 @@ extension ElyanBackend {
                 return ""
             }()
             let createdStr = (item["createdAt"] as? String) ?? ""
-            let createdAt = iso.date(from: createdStr) ?? Date()
+            let createdAt = ElyanDateParser.parse(createdStr) ?? Date()
             return ElyanSessionMessage(id: id, role: role, text: text, createdAt: createdAt)
         }
         return (messages, hasMore, nextCursor)
@@ -993,13 +1035,11 @@ extension ElyanBackend {
             if let arr = raw as? [[String: Any]] { return arr }
             return []
         }()
-        let iso = ISO8601DateFormatter()
         return items.compactMap { item in
             guard let id = item["id"] as? String else { return nil }
             let name = (item["name"] as? String) ?? (item["hostname"] as? String) ?? "Bilinmeyen Cihaz"
             let platform = (item["platform"] as? String) ?? "macos"
-            let lastSeenStr = item["lastSeenAt"] as? String
-            let lastSeenAt = lastSeenStr.flatMap { iso.date(from: $0) }
+            let lastSeenAt = ElyanDateParser.parse(item["lastSeenAt"] as? String)
             let isCurrent = (item["isCurrentDevice"] as? Bool) ?? false
             return ElyanDevice(id: id, name: name, platform: platform, lastSeenAt: lastSeenAt, isCurrentDevice: isCurrent)
         }

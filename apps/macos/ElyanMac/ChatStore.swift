@@ -20,8 +20,16 @@ struct ChatMessage: Identifiable {
 }
 
 extension ChatMessage: Equatable {
+    // Anlamlı eşitlik: SwiftUI'nin değişmeyen baloncukları atlayabilmesi için
+    // içerik de karşılaştırılır (salt id karşılaştırması, streaming'de tüm
+    // satırların "değişmedi" sayılıp yine de body'lerinin koşmasına ya da
+    // .equatable() kullanımında hiç güncellenmemesine yol açıyordu).
+    // blocks.count ucuz bir vekildir: blok içeriği değişimlerine pratikte hep
+    // text fallback değişimi eşlik eder.
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id
+            && lhs.text == rhs.text
+            && lhs.blocks.count == rhs.blocks.count
     }
 }
 
@@ -49,6 +57,16 @@ final class ChatStore: ObservableObject {
     private var streamingAssistantId: UUID?
     private var prefetchTasks: [String: Task<Void, Never>] = [:]
 
+    // Delta birleştirme: her SSE chunk'ında `messages` dizisini mutasyona
+    // uğratmak @Published'ı saniyede onlarca kez tetikliyor ve TÜM sohbet
+    // listesi (markdown parse dahil) yeniden değerlendiriliyordu — "chat
+    // arayüzü kasıyor" şikayetinin ana kaynağı. Gelen delta/bloklar burada
+    // birikir, ~33ms'de bir tek seferde uygulanır (mobildeki 16ms flush'ın
+    // masaüstü karşılığı).
+    private var pendingDeltaText = ""
+    private var pendingBlocks: [ChatBlock]?
+    private var deltaFlushTask: Task<Void, Never>?
+
     init(backend: ElyanBackend) {
         self.backend = backend
     }
@@ -57,6 +75,10 @@ final class ChatStore: ObservableObject {
 
     func reset() {
         Task { await sseClient.cancel() }
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        pendingDeltaText = ""
+        pendingBlocks = nil
         messages.removeAll()
         streamingAssistantId = nil
         isStreaming = false
@@ -75,6 +97,10 @@ final class ChatStore: ObservableObject {
         let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         await sseClient.cancel()
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        pendingDeltaText = ""
+        pendingBlocks = nil
         streamingAssistantId = nil
         isStreaming = false
         lastError = ""
@@ -282,28 +308,68 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    // MARK: - Message mutation helpers
+    // MARK: - Message mutation helpers (delta coalescing)
 
     private func appendDelta(_ delta: String) {
-        guard let id = streamingAssistantId,
-              let idx = messages.firstIndex(where: { $0.id == id }) else { return }
-        messages[idx].text.append(delta)
+        guard !delta.isEmpty else { return }
+        pendingDeltaText.append(delta)
+        scheduleStreamFlush()
     }
 
     private func applyAssistantBlocks(_ blocks: [ChatBlock]) {
+        // Bloklar kümülatif snapshot'tır: sonuncusu kazanır.
+        pendingBlocks = blocks
+        scheduleStreamFlush()
+    }
+
+    private func scheduleStreamFlush() {
+        guard deltaFlushTask == nil else { return }
+        deltaFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 33_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.deltaFlushTask = nil
+            self.flushPendingStream()
+        }
+    }
+
+    /// Biriken delta + blok snapshot'ını TEK dizi mutasyonuyla uygular.
+    private func flushPendingStream() {
         guard let id = streamingAssistantId,
-              let idx = messages.firstIndex(where: { $0.id == id }) else { return }
-        messages[idx].blocks = blocks
-        // Update text from blocks as fallback
-        let textFallback = blocks.compactMap { block -> String? in
-            if case .text(let b) = block { return b.markdown }
-            if case .summary(let b) = block { return b.summary }
-            return nil
-        }.joined(separator: "\n\n")
-        if !textFallback.isEmpty { messages[idx].text = textFallback }
+              let idx = messages.firstIndex(where: { $0.id == id }) else {
+            pendingDeltaText = ""
+            pendingBlocks = nil
+            return
+        }
+        var changed = false
+        if !pendingDeltaText.isEmpty {
+            messages[idx].text.append(pendingDeltaText)
+            pendingDeltaText = ""
+            changed = true
+        }
+        if let blocks = pendingBlocks {
+            pendingBlocks = nil
+            messages[idx].blocks = blocks
+            let textFallback = blocks.compactMap { block -> String? in
+                if case .text(let b) = block { return b.markdown }
+                if case .summary(let b) = block { return b.summary }
+                return nil
+            }.joined(separator: "\n\n")
+            if !textFallback.isEmpty { messages[idx].text = textFallback }
+            changed = true
+        }
+        _ = changed
+    }
+
+    /// Flush zamanlayıcısını iptal edip bekleyeni hemen uygular — stream
+    /// biterken son parça asla kaybolmasın.
+    private func drainPendingStream() {
+        deltaFlushTask?.cancel()
+        deltaFlushTask = nil
+        flushPendingStream()
     }
 
     private func replaceAssistant(text: String, blocks: [ChatBlock]) {
+        drainPendingStream()
         guard let id = streamingAssistantId,
               let idx = messages.firstIndex(where: { $0.id == id }) else { return }
         if !blocks.isEmpty { messages[idx].blocks = blocks }
@@ -311,12 +377,17 @@ final class ChatStore: ObservableObject {
     }
 
     private func finishStreamingSuccessfully() {
+        drainPendingStream()
         isStreaming = false
         streamingAssistantId = nil
+        // Terminal olay geldi — akışı kapat ki SSE istemcisinin otomatik
+        // yeniden bağlanması tamamlanmış bir stream'i yeniden açmasın.
+        Task { await sseClient.cancel() }
     }
 
     private func finishStreaming(withFailure error: Error) async {
         await sseClient.cancel()
+        drainPendingStream()
         let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         lastError = msg
         if let id = streamingAssistantId,
@@ -330,6 +401,7 @@ final class ChatStore: ObservableObject {
 
     private func streamDidClose() async {
         guard isStreaming else { return }
+        drainPendingStream()
         if let id = streamingAssistantId,
            let idx = messages.firstIndex(where: { $0.id == id }),
            messages[idx].text.isEmpty, messages[idx].blocks.isEmpty {

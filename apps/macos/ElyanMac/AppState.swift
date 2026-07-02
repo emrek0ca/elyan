@@ -41,14 +41,21 @@ final class AppState: ObservableObject {
         startDispatchPollLoop()
     }
 
-    /// Fires an online heartbeat every 25s. The backend flips a paired
-    /// desktop to "offline" if it hasn't heard from it recently, so this loop
-    /// keeps mobile's device chip green as long as the app is running.
+    /// Fires an online heartbeat every 25s — ama YALNIZ Python runtime
+    /// çalışmıyorken. Runtime operasyonelken kendi kayıt/heartbeat/WS hattı
+    /// cihaz varlığının tek sahibidir; buradaki ikinci HTTP heartbeat ayrı bir
+    /// runtime bağlantısı gibi görünüp backend'in task lease dağıtımını
+    /// şaşırtıyordu (görevlerin mobilde "sırada" takılı kalmasının bir nedeni).
+    /// Swift HTTP heartbeat sadece degraded fallback'te devrede kalır ki
+    /// Python başlatılamasa bile cihaz çevrimdışı görünmesin.
     private func startRuntimeHeartbeatLoop() {
         heartbeatTask?.cancel()
-        heartbeatTask = Task { [backend] in
+        heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
-                await backend.runtimeHeartbeat(status: "online")
+                guard let self else { return }
+                if !self.supervisor.isOperational {
+                    await self.backend.runtimeHeartbeat(status: "online")
+                }
                 try? await Task.sleep(nanoseconds: 25_000_000_000)
             }
         }
@@ -76,10 +83,22 @@ final class AppState: ObservableObject {
             assignedTasks = fresh
             lastDispatchError = ""
 
-            // Auto-ack newly seen queued tasks so mobile's spinner advances
-            // to "kabul edildi / işleniyor" instead of stalling on "sırada".
-            for task in fresh where !previouslyKnown.contains(task.id) {
-                if task.status.lowercased() == "queued" {
+            let newQueued = fresh.filter {
+                !previouslyKnown.contains($0.id) && $0.status.lowercased() == "queued"
+            }
+            guard !newQueued.isEmpty else { return }
+
+            if supervisor.isOperational {
+                // Görev yürütmenin tek sahibi Python runtime'dır (AGENTS.md
+                // sınırı). Buradan ayrıca "running" ack'lemek, runtime'ın kendi
+                // lease/ack akışıyla çakışıp görevleri iki durum arasında
+                // sıkıştırıyordu. Yeni görev görüldüğünde bir sonraki 3sn poll
+                // tick'ini beklemeden yürütmeyi hemen tetikle.
+                await supervisor.executeAssignedTasks()
+            } else {
+                // Degraded fallback: runtime yoksa mobil spinner'ı "sırada"da
+                // bırakma — manuel inbox akışı için kabul et.
+                for task in newQueued {
                     _ = try? await backend.updateRuntimeTaskStatus(
                         taskId: task.id,
                         status: "running",

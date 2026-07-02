@@ -97,27 +97,58 @@ private struct BlockDispatch: View {
 
 // MARK: - MarkdownBubble
 
+/// AttributedString(markdown:) parse'ı pahalıdır ve eskiden HER render'da
+/// (her SSE flush'ında listedeki TÜM mesajlar için) yeniden koşuyordu.
+/// Parse sonucu içerik hash'iyle önbelleklenir; tarihçe mesajları artık
+/// streaming sırasında bedava render edilir. NSCache bellek baskısında
+/// kendini boşaltır, sınır 400 giriş.
+private final class MarkdownParseCache {
+    static let shared = MarkdownParseCache()
+    private final class Box {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+    private let cache: NSCache<NSString, AnyObject> = {
+        let cache = NSCache<NSString, AnyObject>()
+        cache.countLimit = 400
+        return cache
+    }()
+
+    func attributed(for markdown: String) -> AttributedString {
+        let key = markdown as NSString
+        if let hit = cache.object(forKey: key) as? Box {
+            return hit.value
+        }
+        let parsed = (try? AttributedString(
+            markdown: markdown,
+            options: .init(allowsExtendedAttributes: true, interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(markdown)
+        // Streaming kuyruğu her flush'ta değişir; devasa ara metinlerle
+        // cache'i kirletme — makul boyutları önbellekle, kalanı geçici parse et.
+        if markdown.utf8.count <= 64_000 {
+            cache.setObject(Box(parsed), forKey: key)
+        }
+        return parsed
+    }
+}
+
 struct MarkdownBubble: View {
     let markdown: String
     var fontSize: Double = 14
     var compact: Bool = false
 
     private var attributed: AttributedString {
-        (try? AttributedString(
-            markdown: markdown,
-            options: .init(allowsExtendedAttributes: true, interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(markdown)
+        MarkdownParseCache.shared.attributed(for: markdown)
     }
 
     var body: some View {
+        // Mobil tasarım dili: asistan metni balonsuz, doğrudan krem zeminde.
         Text(attributed)
             .font(.system(size: fontSize))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, compact ? 10 : 14)
-            .padding(.vertical, compact ? 6 : 10)
-            .background(Color(NSColor.controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: compact ? 8 : 14, style: .continuous))
+            .padding(.horizontal, 4)
+            .padding(.vertical, compact ? 2 : 4)
     }
 }
 

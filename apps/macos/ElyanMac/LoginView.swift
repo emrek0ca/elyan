@@ -159,6 +159,12 @@ struct LoginView: View {
                             .buttonStyle(.plain)
                         }
                         .frame(maxWidth: 300)
+
+                        Text("Apple veya Google ile devam ederek Kullanım Koşulları'nı ve Gizlilik Politikası'nı kabul etmiş olursun.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 300)
                     }
                     .padding(.top, 4)
 
@@ -261,14 +267,19 @@ struct LoginView: View {
             Task {
                 defer { isWorking = false }
                 do {
+                    // Mobil ile aynı sözleşme: OAuth butonuna basmak, altındaki
+                    // açıklama metniyle birlikte koşulların kabulü sayılır.
+                    // false gönderilirse backend yeni kullanıcıda
+                    // legal_acceptance_required ile kaydı reddediyor ve Apple
+                    // ile ilk giriş HİÇ çalışmıyordu.
                     _ = try await appState.backend.loginWithOAuth(
                         provider: "apple",
                         idToken: idToken,
                         email: email,
                         displayName: name?.isEmpty == false ? name : nil,
                         authorizationCode: authCode.isEmpty ? nil : authCode,
-                        termsAccepted: termsAccepted,
-                        privacyAccepted: privacyAccepted
+                        termsAccepted: true,
+                        privacyAccepted: true
                     )
                 } catch {
                     self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -310,13 +321,18 @@ struct LoginView: View {
                 }
 
                 do {
+                    // Mobil ile aynı sözleşme (login_screen.dart): OAuth girişte
+                    // kabul true gönderilir; buton altındaki açıklama metni
+                    // kullanıcıyı bilgilendirir. false gönderim yeni Google
+                    // kullanıcısının kaydını legal_acceptance_required ile
+                    // kalıcı olarak engelliyordu.
                     _ = try await appState.backend.loginWithOAuth(
                         provider: "google",
                         idToken: idToken,
                         email: result.user.profile?.email,
                         displayName: result.user.profile?.name,
-                        termsAccepted: termsAccepted,
-                        privacyAccepted: privacyAccepted
+                        termsAccepted: true,
+                        privacyAccepted: true
                     )
                 } catch {
                     self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
