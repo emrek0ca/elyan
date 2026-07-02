@@ -589,6 +589,202 @@ test("generateSharedBrainReply sends max_tokens to Groq and trims stale mobile c
   assert.equal(messageContents.includes("old-b"), false);
 });
 
+test("generateSharedBrainReply continues Groq streams cut mid-sentence by max tokens", async () => {
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  const deltas: Array<Record<string, unknown>> = [];
+  const app = {
+    db: createQuotaReadyDb([[], [], [], [], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (!url.endsWith("/chat/completions")) {
+        throw new Error(`Unexpected request: ${url}`);
+      }
+
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestedBodies.push(body);
+      const encoder = new TextEncoder();
+      const payloads =
+        requestedBodies.length === 1
+          ? [
+              {
+                choices: [
+                  {
+                    delta: {
+                      content:
+                        "Bu yanıt mobilde yarıda kalmadan tamamlanma",
+                    },
+                    finish_reason: null,
+                  },
+                ],
+              },
+              { choices: [{ delta: {}, finish_reason: "length" }] },
+            ]
+          : [
+              {
+                choices: [
+                  {
+                    delta: {
+                      content: "lıdır.",
+                    },
+                    finish_reason: "stop",
+                  },
+                ],
+              },
+            ];
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const payload of payloads) {
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
+            );
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Kısa cevap ver",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        onDelta(delta) {
+          deltas.push(delta);
+        },
+        internalEvaluation: {
+          skipUsageValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.text, "Bu yanıt mobilde yarıda kalmadan tamamlanmalıdır.");
+  assert.equal(requestedBodies.length, 2);
+  assert.equal(requestedBodies[0].max_tokens, 224);
+  assert.equal(requestedBodies[1].max_tokens, 200);
+  const continuationMessages = requestedBodies[1].messages as Array<Record<string, unknown>>;
+  assert.equal(
+    continuationMessages.some(
+      (message) =>
+        message.role === "system" &&
+        String(message.content).includes("Continue from exactly where you stopped"),
+    ),
+    true,
+  );
+  assert.equal(result.metadata.streamContinuationHops, 1);
+  assert.equal(result.metadata.streamContinuationFinishReason, "stop");
+  assert.equal(String(deltas.at(-1)?.content ?? ""), result.text);
+});
+
+test("generateSharedBrainReply does not continue Groq streams that finish with stop", async () => {
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  const app = {
+    db: createQuotaReadyDb([[], [], [], [], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (!url.endsWith("/chat/completions")) {
+        throw new Error(`Unexpected request: ${url}`);
+      }
+
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestedBodies.push(body);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                choices: [
+                  {
+                    delta: { content: "Tam cevap geldi." },
+                    finish_reason: "stop",
+                  },
+                ],
+              })}\n\n`,
+            ),
+          );
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Kısa cevap ver",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        onDelta() {},
+        internalEvaluation: {
+          skipUsageValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.text, "Tam cevap geldi.");
+  assert.equal(requestedBodies.length, 1);
+  assert.equal(result.metadata.streamContinuationHops, 0);
+  assert.equal(result.metadata.streamContinuationFinishReason, "stop");
+});
+
 test("createDeltaPublisher batches rapid streaming deltas without losing order", async () => {
   const deltas: Array<Record<string, unknown>> = [];
   const publisher = createDeltaPublisher({

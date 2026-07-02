@@ -4384,6 +4384,82 @@ function supportsNativeStreamingAttempt(
  * bitince referanslarla birlikte serbest kalır, modül-seviyesi state yoktur. */
 export const STREAM_MAX_CONTENT_CHARS = 512 * 1024;
 export const STREAM_MAX_REASONING_CHARS = 128 * 1024;
+const STREAM_CONTINUATION_DIRECTIVE =
+  "Continue from exactly where you stopped, without repeating.";
+const STREAM_CONTINUATION_MAX_HOPS = 2;
+const STREAM_CONTINUATION_MIN_TOKENS = 200;
+
+function extractResponseFinishReason(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  for (const key of ["finish_reason", "finishReason", "done_reason"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim().toLowerCase();
+    }
+  }
+
+  const choices = record.choices;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
+        continue;
+      }
+      const value = (choice as Record<string, unknown>).finish_reason;
+      if (typeof value === "string" && value.trim()) {
+        return value.trim().toLowerCase();
+      }
+    }
+  }
+
+  return null;
+}
+
+function shouldAttemptStreamContinuation(input: {
+  finishReason: string | null;
+  text: string;
+}): boolean {
+  const reason = input.finishReason?.toLowerCase();
+  if (reason !== "length" && reason !== "max_tokens") {
+    return false;
+  }
+
+  const text = input.text.trimEnd();
+  if (!text) {
+    return false;
+  }
+
+  return !/[.!?…]$/.test(text);
+}
+
+function resolveStreamContinuationTokenBudget(input: {
+  maxTokens: number;
+  usedContinuationTokens: number;
+}): number {
+  const remaining = Math.max(0, input.maxTokens - input.usedContinuationTokens);
+  if (remaining < STREAM_CONTINUATION_MIN_TOKENS) {
+    return 0;
+  }
+  return Math.min(remaining, Math.max(STREAM_CONTINUATION_MIN_TOKENS, Math.floor(input.maxTokens / 2)));
+}
+
+function stripRepeatedContinuationPrefix(previous: string, next: string): string {
+  const normalizedNext = String(next ?? "");
+  if (!previous || !normalizedNext) {
+    return normalizedNext;
+  }
+
+  const maxOverlap = Math.min(previous.length, normalizedNext.length, 1_000);
+  for (let size = maxOverlap; size >= 12; size -= 1) {
+    if (previous.endsWith(normalizedNext.slice(0, size))) {
+      return normalizedNext.slice(size);
+    }
+  }
+  return normalizedNext;
+}
 
 export function createDeltaPublisher(input: {
   startedAt: number;
@@ -5266,6 +5342,8 @@ export async function generateSharedBrainReply(
       let firstDeltaMs: number | null = null;
       let fallbackUsed = false;
       let fallbackState: string | null = null;
+      let streamContinuationHops = 0;
+      let streamContinuationFinishReason: string | null = null;
       // Visible "düşünüyor" trace only when we have a streaming consumer AND the
       // workload genuinely involves thinking. Chit-chat keeps reasoning hidden.
       const reasoningPolicy: "hidden" | "visible" =
@@ -5371,6 +5449,7 @@ export async function generateSharedBrainReply(
                 ) {
                   let streamedText = "";
                   let streamedReasoning = "";
+                  let streamFinishReason: string | null = null;
                   const deltaPublisher = createDeltaPublisher({
                     startedAt,
                     provider: candidate.provider,
@@ -5401,6 +5480,8 @@ export async function generateSharedBrainReply(
                           await deltaPublisher.publishReasoning(streamedReasoning);
                         }
                       }
+                      streamFinishReason =
+                        extractResponseFinishReason(chunk) ?? streamFinishReason;
                       const delta = extractResponseDelta(chunk);
                       if (!delta) {
                         return;
@@ -5428,6 +5509,91 @@ export async function generateSharedBrainReply(
                       streamResponse.status,
                     );
                   } else {
+                    let continuationHops = 0;
+                    let continuationTokensUsed = 0;
+                    while (
+                      shouldAttemptStreamContinuation({
+                        finishReason: streamFinishReason,
+                        text: streamedText,
+                      }) &&
+                      continuationHops < STREAM_CONTINUATION_MAX_HOPS
+                    ) {
+                      const continuationMaxTokens =
+                        resolveStreamContinuationTokenBudget({
+                          maxTokens,
+                          usedContinuationTokens: continuationTokensUsed,
+                        });
+                      if (continuationMaxTokens <= 0) {
+                        break;
+                      }
+
+                      continuationHops += 1;
+                      continuationTokensUsed += continuationMaxTokens;
+                      streamFinishReason = null;
+                      const beforeContinuation = streamedText;
+                      const continuationMessages: SharedBrainConversationMessage[] = [
+                        {
+                          role: "system",
+                          content: STREAM_CONTINUATION_DIRECTIVE,
+                        },
+                        ...messages,
+                        {
+                          role: "assistant",
+                          content: beforeContinuation,
+                        },
+                      ];
+                      const continuationBody = buildRequestBody(
+                        candidate.provider,
+                        attemptedModel,
+                        continuationMessages,
+                        continuationMaxTokens,
+                        app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+                        true,
+                        [
+                          ...(input.attachmentContext?.visionImages ?? []),
+                          ...clientVisionImages,
+                        ],
+                        "hidden",
+                        reasoningEffort,
+                      );
+
+                      const continuationResponse = await postStreamingJson(
+                        app,
+                        candidate.provider,
+                        joinProviderUrl(candidate.baseUrl, attempt.path),
+                        continuationBody,
+                        timeoutMs,
+                        null,
+                        async (chunk) => {
+                          streamFinishReason =
+                            extractResponseFinishReason(chunk) ??
+                            streamFinishReason;
+                          const delta = stripRepeatedContinuationPrefix(
+                            streamedText,
+                            extractResponseDelta(chunk),
+                          );
+                          if (!delta) {
+                            return;
+                          }
+                          if (streamedText.length >= STREAM_MAX_CONTENT_CHARS) {
+                            return;
+                          }
+                          streamedText += delta;
+                          await deltaPublisher.publish(delta, streamedText);
+                        },
+                      );
+
+                      if (!continuationResponse.ok) {
+                        break;
+                      }
+
+                      if (streamedText === beforeContinuation) {
+                        break;
+                      }
+                    }
+
+                    streamContinuationHops = continuationHops;
+                    streamContinuationFinishReason = streamFinishReason;
                     const text = streamedText.trim();
                     // Retry SADECE gerçekten boş metin veya "yardımcı olamam"
                     // türü kısa placeholder cevaplarda. Reasoning dump'ı olduğu
@@ -5488,6 +5654,8 @@ export async function generateSharedBrainReply(
                         model: attemptedModel,
                         path: attempt.path,
                         streamed: true,
+                        continuationHops,
+                        continuationFinishReason: streamFinishReason,
                         ...(rescuedAnswer
                           ? { rescuedFromReasoningDump: true }
                           : {}),
@@ -5798,6 +5966,8 @@ export async function generateSharedBrainReply(
                 streamed: Boolean(
                   (payload as Record<string, unknown> | null)?.streamed,
                 ),
+                streamContinuationHops,
+                streamContinuationFinishReason,
                 firstDeltaMs,
                 completionLatencyMs: latencyMs,
                 responseBytes,
@@ -5991,6 +6161,8 @@ export async function generateSharedBrainReply(
           streamed: Boolean(
             (payload as Record<string, unknown> | null)?.streamed,
           ),
+          streamContinuationHops,
+          streamContinuationFinishReason,
           firstDeltaMs,
           completionLatencyMs: latencyMs,
           responseBytes,
