@@ -915,7 +915,6 @@ function withMemoryBudget<T>(work: Promise<T>, budgetMs: number): Promise<T | ty
       settled = true;
       resolve(MEMORY_BUDGET_EXPIRED);
     }, budgetMs);
-    timer.unref?.();
     work.then(
       (value) => {
         if (settled) return;
