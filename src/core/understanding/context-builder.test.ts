@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyIntent } from "./intent-classifier.js";
-import { buildUserContextFromMemory, selectContinuityMemory } from "./context-builder.js";
+import {
+  buildUserContextFromMemory,
+  selectContinuityMemory,
+  selectMemoryByRelevance,
+  MEMORY_RELEVANCE_MODERATE_THRESHOLD,
+  MEMORY_RELEVANCE_STRONG_THRESHOLD,
+} from "./context-builder.js";
 import { buildContextPacketsFromMetadata } from "./context-packets.js";
 
 test("buildUserContextFromMemory deduplicates and caps prompt hints", () => {
@@ -978,4 +984,56 @@ test("clarificationDiagnostics: short follow-up WITHOUT prior context flags ambi
     context.clarificationDiagnostics.reason,
     "short_followup_without_prior_turn_context",
   );
+});
+
+// ── Retrieval-triggered memory injection ───────────────────────────────
+// Turla alakasız memory fact'lerinin prompt'a hiç enjekte edilmemesi
+// pin'leniyor. Bu "gerçekten hatırlama"nın motoru: alakalıysa geç, değilse
+// düşür. Pinned/güvenlik fact'leri her modda sağlam kalır.
+
+test("selectMemoryByRelevance: broad mode passes results through when top score is strong", () => {
+  const results = [
+    { score: 1.5, isPinned: false, importanceScore: 60 },
+    { score: 1.0, isPinned: false, importanceScore: 40 },
+    { score: 0.4, isPinned: false, importanceScore: 20 },
+  ];
+  const outcome = selectMemoryByRelevance(results);
+  assert.equal(outcome.mode, "broad");
+  assert.equal(outcome.results.length, 3);
+});
+
+test("selectMemoryByRelevance: surgical mode keeps top-3 plus pinned when score is moderate", () => {
+  const results = [
+    { score: 0.9, isPinned: false, importanceScore: 40 },
+    { score: 0.85, isPinned: false, importanceScore: 40 },
+    { score: 0.8, isPinned: false, importanceScore: 40 },
+    { score: 0.7, isPinned: true, importanceScore: 20 }, // pinned — sızdırılmalı
+    { score: 0.6, isPinned: false, importanceScore: 90 }, // yüksek importance ama pinned değil, düşer
+  ];
+  assert.ok(MEMORY_RELEVANCE_MODERATE_THRESHOLD < 0.9);
+  assert.ok(0.9 < MEMORY_RELEVANCE_STRONG_THRESHOLD);
+  const outcome = selectMemoryByRelevance(results);
+  assert.equal(outcome.mode, "surgical");
+  assert.ok(outcome.results.length <= 4);
+  assert.ok(outcome.results.some((r) => r.isPinned), "pinned dropped");
+});
+
+test("selectMemoryByRelevance: off mode drops non-pinned low-importance facts", () => {
+  const results = [
+    { score: 0.5, isPinned: false, importanceScore: 40 }, // alakasız fact
+    { score: 0.4, isPinned: false, importanceScore: 30 }, // alakasız fact
+    { score: 0.4, isPinned: true, importanceScore: 30 }, // pinned güvenlik faktı — kal
+    { score: 0.3, isPinned: false, importanceScore: 92 }, // yüksek importance kimlik — kal
+  ];
+  const outcome = selectMemoryByRelevance(results);
+  assert.equal(outcome.mode, "off");
+  // Sadece pinned + high-importance kalmalı
+  assert.equal(outcome.results.length, 2);
+  assert.ok(outcome.results.every((r) => r.isPinned || (r.importanceScore ?? 0) >= 85));
+});
+
+test("selectMemoryByRelevance: empty results yields off mode with empty list", () => {
+  const outcome = selectMemoryByRelevance([]);
+  assert.equal(outcome.mode, "off");
+  assert.equal(outcome.results.length, 0);
 });

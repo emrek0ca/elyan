@@ -466,6 +466,81 @@ function scoreContinuityCandidate(input: {
   );
 }
 
+/* ─────────────────────────────────────────────────────────────────────
+ * Retrieval-tetikli memory injection
+ *
+ * Şu ana kadar davranış: her turda searchBrainMemory sonucu (12'ye kadar
+ * fact) tamamen memory profile'a dökülüp prompt'a giriyordu. Sonuç: bir
+ * "React'te useEffect nasıl kırılır?" sorusuna kullanıcı profilinin tam
+ * dökümü ekleniyordu — alakasız veri, sızıntı yüzeyi, model dikkati dağılır.
+ *
+ * Yeni davranış: retrieval skoruna göre ÜÇ MOD:
+ *
+ *   • broad    — top-1 score >= 1.2:  turla güçlü alakalı bir fact var,
+ *                mevcut sonuç setini olduğu gibi geçir (eski davranış).
+ *
+ *   • surgical — top-1 score 0.7..1.2: sadece top-3 fact + pinned tut.
+ *                Alakalı ama daha az güçlü sinyal; profil dökümü yerine
+ *                cerrahi ekleme.
+ *
+ *   • off      — top-1 score < 0.7:   turla alakalı fact yok. Memory
+ *                enjeksiyonu kesilir; sadece pinned + kritik importance
+ *                (>=85) fact'ler geçer (güvenlik/kimlik gibi her zaman
+ *                doğru olması gereken sabitler).
+ *
+ * scoreMemoryRecallCandidate (memory.ts) blended score dönüyor: semantic
+ * (weight 0.32) + lexical (0.22) + confidence (0.18) + importance (0.14)
+ * + pin/verified/recency bonuslar. Alakasız bir fact intrinsik özellikleri
+ * ile ~0.4-0.6 puan alabilir; RELEVANCE_MODERATE=0.7 bu seviyeyi biraz
+ * geçiyor, gerçek query overlap'i olmadan geçemez.
+ */
+type RelevanceMode = "off" | "surgical" | "broad";
+export const MEMORY_RELEVANCE_STRONG_THRESHOLD = 1.2;
+export const MEMORY_RELEVANCE_MODERATE_THRESHOLD = 0.7;
+
+type ScoredMemoryHit = {
+  score: number;
+  isPinned: boolean;
+  importanceScore?: number;
+};
+
+export function selectMemoryByRelevance<T extends ScoredMemoryHit>(
+  results: readonly T[],
+): { mode: RelevanceMode; results: T[] } {
+  const topScore = results[0]?.score ?? 0;
+  const mode: RelevanceMode =
+    topScore >= MEMORY_RELEVANCE_STRONG_THRESHOLD
+      ? "broad"
+      : topScore >= MEMORY_RELEVANCE_MODERATE_THRESHOLD
+        ? "surgical"
+        : "off";
+  if (mode === "broad") {
+    return { mode, results: [...results] };
+  }
+  if (mode === "surgical") {
+    // İlk 3 + pinned (topluca 4'ü geçmesin, sızıntı yüzeyi minimal kalsın).
+    const surgical: T[] = [];
+    const seen = new Set<T>();
+    for (let i = 0; i < results.length && surgical.length < 4; i += 1) {
+      const item = results[i];
+      if (i < 3 || item.isPinned) {
+        if (!seen.has(item)) {
+          seen.add(item);
+          surgical.push(item);
+        }
+      }
+    }
+    return { mode, results: surgical };
+  }
+  // "off": pinned + high-importance koru; kalanları düşür.
+  return {
+    mode,
+    results: results.filter(
+      (r) => r.isPinned || (r.importanceScore ?? 0) >= 85,
+    ),
+  };
+}
+
 export function selectContinuityMemory(input: {
   memory: RetrievedMemory[];
   queryTokens: Set<string>;
@@ -1302,7 +1377,12 @@ export async function buildUserContext(
     enrichedProfile = { ...userProfile, displayName: explicitName };
   }
 
-  const stableMemory = memorySearch.results.map((result) => ({
+  const { mode: relevanceMode, results: filteredResults } = selectMemoryByRelevance(
+    memorySearch.results,
+  );
+  void relevanceMode; // gelecek observability için; bırakıyoruz.
+
+  const stableMemory = filteredResults.map((result) => ({
     id:             result.id,
     type:           result.memoryType,
     key:            result.title,
