@@ -42,7 +42,7 @@ actor ElyanSSEClient {
     /// events. Mirrors mobile-elyan's RealtimeRepository.connect(...).
     func open(
         accessToken: String,
-        taskId: String,
+        taskId: String? = nil,
         baseURL: URL = ElyanBackend.baseURL,
         onEvent: @escaping @Sendable (ElyanSSEEvent) async -> Void,
         onError: @escaping @Sendable (Error) async -> Void,
@@ -95,7 +95,7 @@ actor ElyanSSEClient {
     private static func connectOnce(
         session: URLSession,
         accessToken: String,
-        taskId: String,
+        taskId: String?,
         baseURL: URL,
         lastEventId: String?,
         onEvent: @escaping @Sendable (ElyanSSEEvent) async -> Void
@@ -104,7 +104,9 @@ actor ElyanSSEClient {
             url: baseURL.appendingPathComponent("v1/realtime/stream"),
             resolvingAgainstBaseURL: false
         )!
-        components.queryItems = [URLQueryItem(name: "taskId", value: taskId)]
+        if let taskId {
+            components.queryItems = [URLQueryItem(name: "taskId", value: taskId)]
+        }
         guard let url = components.url else {
             throw ElyanBackendError.malformedResponse("Realtime stream URL oluşturulamadı.")
         }

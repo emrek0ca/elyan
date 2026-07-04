@@ -38,12 +38,28 @@ enum ChatBlock: Identifiable {
     case attachmentAck(AttachmentAckBlock)
     case imageAnalysis(ImageAnalysisBlock)
 
+    // Goals (loop/goal engine — mobile parity)
+    case goalProgress(GoalProgressBlock)
+
     // UX
     case actionable(ActionableBlock)
     case blockGroup(BlockGroupBlock)
     case document(DocumentBlock)
 
     // Unknown / future-proof fallback
+    case reasoningTrace(ReasoningTraceBlock)
+    case terminal(TerminalBlock)
+    case automation(AutomationBlock)
+    case pdfGenerate(PdfGenerateBlock)
+    case pdfViewer(PdfViewerBlock)
+    case desktopSuggestion(DesktopSuggestionBlock)
+    case memoryEcho(MemoryEchoBlock)
+    case proactiveTouch(ProactiveTouchBlock)
+    case artifact(ArtifactBlock)
+    case documentSkeleton(DocumentSkeletonBlock)
+    // Future-proof: any unrecognized block type with readable fields renders
+    // from its common fields (title / body / items / link) instead of raw JSON.
+    case generic(GenericBlock)
     case unknown(type: String, rawText: String)
 
     // MARK: Identifiable
@@ -66,9 +82,21 @@ enum ChatBlock: Identifiable {
         case .file(let b):           return b.stableBlockId ?? "file-\(b.fileName)"
         case .attachmentAck(let b):  return b.stableBlockId ?? "ack"
         case .imageAnalysis(let b):  return b.stableBlockId ?? "imganalysis"
+        case .goalProgress(let b):   return b.stableBlockId ?? "goal-\(b.goalId)"
         case .actionable(let b):     return b.stableBlockId ?? "act-\(b.kind.rawValue)"
         case .blockGroup(let b):     return b.stableBlockId ?? "group"
         case .document(let b):       return b.stableBlockId ?? "doc"
+        case .reasoningTrace(let b): return b.stableBlockId ?? "reasoning"
+        case .terminal(let b):       return b.stableBlockId ?? "term-\(b.command ?? "")"
+        case .automation(let b):     return b.stableBlockId ?? "auto-\(b.automationId ?? b.title)"
+        case .pdfGenerate(let b):    return b.stableBlockId ?? "pdfgen-\(b.title ?? "")"
+        case .pdfViewer(let b):      return b.stableBlockId ?? "pdfview-\(b.fileId ?? b.title ?? "")"
+        case .desktopSuggestion(let b): return b.stableBlockId ?? "desktop-\(b.detectedIntent ?? "")"
+        case .memoryEcho(let b):     return b.stableBlockId ?? "memory-\(b.question.prefix(16))"
+        case .proactiveTouch(let b): return b.stableBlockId ?? "proactive-\(b.cta.prefix(16))"
+        case .artifact(let b):       return b.stableBlockId ?? "artifact-\(b.artifactId ?? b.url.prefix(24).description)"
+        case .documentSkeleton(let b): return b.stableBlockId ?? "doc-skeleton"
+        case .generic(let b):        return b.stableBlockId ?? "generic-\(b.rawType)"
         case .unknown(let t, _):     return "unknown-\(t)"
         }
     }
@@ -249,6 +277,25 @@ enum ChatBlock: Identifiable {
                 tags: dict["tags"] as? [String]
             ))
 
+        case "goal_progress":
+            guard let goalId = dict["goalId"] as? String ?? dict["goal_id"] as? String, !goalId.isEmpty else { return nil }
+            let ofSteps = max(1, min(10_000, (dict["ofSteps"] as? Int) ?? (dict["of_steps"] as? Int) ?? 1))
+            let step = max(0, min(ofSteps, (dict["step"] as? Int) ?? 0))
+            let advancedTo = (dict["advancedTo"] as? String)
+                ?? (dict["advanced_to"] as? String)
+                ?? (dict["summary"] as? String)
+                ?? (dict["markdown"] as? String)
+                ?? ""
+            return .goalProgress(GoalProgressBlock(
+                stableBlockId: stable,
+                goalId: goalId,
+                step: step,
+                ofSteps: ofSteps,
+                advancedTo: advancedTo,
+                blocker: dict["blocker"] as? String,
+                done: dict["done"] as? Bool ?? false
+            ))
+
         case "actionable":
             guard let kindStr = dict["kind"] as? String,
                   let title = dict["title"] as? String else { return nil }
@@ -279,7 +326,111 @@ enum ChatBlock: Identifiable {
                 summary: dict["summary"] as? String
             ))
 
+        case "reasoning_trace":
+            return .reasoningTrace(ReasoningTraceBlock(
+                stableBlockId: stable,
+                status: dict["status"] as? String ?? "completed",
+                content: (dict["content"] as? String) ?? (dict["markdown"] as? String) ?? ""
+            ))
+
+        case "terminal":
+            let exit = (dict["exitCode"] as? Int) ?? (dict["exit_code"] as? Int)
+            return .terminal(TerminalBlock(
+                stableBlockId: stable,
+                output: (dict["output"] as? String) ?? (dict["content"] as? String) ?? "",
+                command: (dict["command"] as? String) ?? (dict["cmd"] as? String),
+                exitCode: exit,
+                truncated: (dict["truncated"] as? Bool) ?? false
+            ))
+
+        case "automation":
+            return .automation(AutomationBlock(
+                stableBlockId: stable,
+                title: dict["title"] as? String ?? "Otomasyon",
+                description: (dict["description"] as? String) ?? (dict["summary"] as? String) ?? "",
+                schedule: dict["schedule"] as? String,
+                triggerType: (dict["triggerType"] as? String) ?? (dict["trigger_type"] as? String),
+                steps: (dict["steps"] as? [Any])?.compactMap { $0 as? String } ?? [],
+                automationId: (dict["automationId"] as? String) ?? (dict["automation_id"] as? String)
+            ))
+
+        case "pdf_generate":
+            let pages = (dict["estimatedPages"] as? Int) ?? (dict["pages"] as? Int) ?? 1
+            let sections = (dict["sections"] as? [[String: Any]])?.map {
+                PdfGenerateSection(
+                    title: $0["title"] as? String,
+                    content: ($0["content"] as? String) ?? ($0["markdown"] as? String) ?? ""
+                )
+            } ?? []
+            return .pdfGenerate(PdfGenerateBlock(
+                stableBlockId: stable,
+                title: dict["title"] as? String,
+                estimatedPages: pages,
+                language: dict["language"] as? String ?? "tr",
+                sections: sections
+            ))
+
+        case "pdf_viewer":
+            let pageCount = (dict["pageCount"] as? Int) ?? (dict["page_count"] as? Int)
+            return .pdfViewer(PdfViewerBlock(
+                stableBlockId: stable,
+                title: (dict["title"] as? String) ?? (dict["name"] as? String),
+                fileId: (dict["fileId"] as? String) ?? (dict["file_id"] as? String) ?? (dict["id"] as? String),
+                localPath: (dict["localPath"] as? String) ?? (dict["local_path"] as? String),
+                remoteUrl: (dict["remoteUrl"] as? String) ?? (dict["remote_url"] as? String) ?? (dict["url"] as? String),
+                pageCount: pageCount,
+                thumbnailUrl: (dict["thumbnailUrl"] as? String) ?? (dict["thumbnail_url"] as? String)
+            ))
+
+        case "desktop_suggestion":
+            return .desktopSuggestion(DesktopSuggestionBlock(
+                stableBlockId: stable,
+                reason: (dict["reason"] as? String) ?? (dict["summary"] as? String) ?? "",
+                requiredCapabilities: (dict["requiredCapabilities"] as? [Any])?.compactMap { $0 as? String }
+                    ?? (dict["required_capabilities"] as? [Any])?.compactMap { $0 as? String } ?? [],
+                detectedIntent: (dict["detectedIntent"] as? String) ?? (dict["detected_intent"] as? String)
+            ))
+
+        case "memory_echo":
+            return .memoryEcho(MemoryEchoBlock(
+                stableBlockId: stable,
+                recall: (dict["recall"] as? String) ?? (dict["content"] as? String) ?? "",
+                question: (dict["question"] as? String) ?? "",
+                confidence: (dict["confidence"] as? Double) ?? 0
+            ))
+
+        case "proactive_touch":
+            return .proactiveTouch(ProactiveTouchBlock(
+                stableBlockId: stable,
+                suggestion: (dict["suggestion"] as? String) ?? (dict["content"] as? String) ?? "",
+                cta: (dict["cta"] as? String) ?? "",
+                context: (dict["context"] as? String) ?? (dict["reason"] as? String)
+            ))
+
+        case "artifact":
+            return .artifact(ArtifactBlock(
+                stableBlockId: stable,
+                artifactType: (dict["artifactType"] as? String) ?? (dict["artifact_type"] as? String) ?? "image",
+                url: (dict["url"] as? String) ?? (dict["uri"] as? String) ?? (dict["src"] as? String) ?? "",
+                artifactId: (dict["artifactId"] as? String) ?? (dict["artifact_id"] as? String),
+                title: dict["title"] as? String,
+                mime: (dict["mime"] as? String) ?? (dict["mimeType"] as? String),
+                summary: dict["summary"] as? String,
+                preview: dict["preview"] as? String
+            ))
+
+        case "document_block_skeleton":
+            return .documentSkeleton(DocumentSkeletonBlock(
+                stableBlockId: stable,
+                title: dict["title"] as? String
+            ))
+
         default:
+            // Future-proof: extract common fields so a new/unknown backend block
+            // still renders readably instead of leaking raw JSON.
+            if let generic = GenericBlock.parse(rawType: rawType, dict: dict, stableBlockId: stable) {
+                return .generic(generic)
+            }
             let text = (dict["markdown"] as? String)
                 ?? (dict["text"] as? String)
                 ?? (dict["content"] as? String)
@@ -554,6 +705,21 @@ struct ImageAnalysisBlock: Equatable {
     var tags: [String]?
 }
 
+struct GoalProgressBlock: Equatable {
+    var stableBlockId: String?
+    var goalId: String
+    var step: Int
+    var ofSteps: Int
+    var advancedTo: String
+    var blocker: String?
+    var done: Bool
+
+    var progressRatio: Double {
+        guard ofSteps > 0 else { return 0 }
+        return min(1, max(0, Double(step) / Double(ofSteps)))
+    }
+}
+
 struct ActionableBlock: Equatable {
     enum Kind: String, Equatable {
         case approval_needed, choose_device, retry_option = "retryOption", openHistory = "open_history", restoreContext = "restore_context"
@@ -602,6 +768,146 @@ struct DocumentBlock: Equatable {
     var sections: [DocumentSection]
     var format: String?
     var summary: String?
+}
+
+// MARK: - Widget block data types ported from mobile (elyan_blocks.v2)
+
+struct ReasoningTraceBlock: Equatable {
+    var stableBlockId: String?
+    var status: String   // "running" | "completed"
+    var content: String
+    var isRunning: Bool { status.lowercased() == "running" }
+}
+
+struct TerminalBlock: Equatable {
+    var stableBlockId: String?
+    var output: String
+    var command: String?
+    var exitCode: Int?
+    var truncated: Bool
+}
+
+struct AutomationBlock: Equatable {
+    var stableBlockId: String?
+    var title: String
+    var description: String
+    var schedule: String?
+    var triggerType: String?
+    var steps: [String]
+    var automationId: String?
+}
+
+struct PdfGenerateSection: Equatable {
+    var title: String?
+    var content: String
+}
+
+struct PdfGenerateBlock: Equatable {
+    var stableBlockId: String?
+    var title: String?
+    var estimatedPages: Int
+    var language: String
+    var sections: [PdfGenerateSection]
+}
+
+struct PdfViewerBlock: Equatable {
+    var stableBlockId: String?
+    var title: String?
+    var fileId: String?
+    var localPath: String?
+    var remoteUrl: String?
+    var pageCount: Int?
+    var thumbnailUrl: String?
+}
+
+struct DesktopSuggestionBlock: Equatable {
+    var stableBlockId: String?
+    var reason: String
+    var requiredCapabilities: [String]
+    var detectedIntent: String?
+}
+
+struct MemoryEchoBlock: Equatable {
+    var stableBlockId: String?
+    var recall: String
+    var question: String
+    var confidence: Double
+}
+
+struct ProactiveTouchBlock: Equatable {
+    var stableBlockId: String?
+    var suggestion: String
+    var cta: String
+    var context: String?
+}
+
+struct ArtifactBlock: Equatable {
+    var stableBlockId: String?
+    var artifactType: String  // "chart_image" | "image" | "svg"
+    var url: String
+    var artifactId: String?
+    var title: String?
+    var mime: String?
+    var summary: String?
+    var preview: String?
+}
+
+struct DocumentSkeletonBlock: Equatable {
+    var stableBlockId: String?
+    var title: String?
+}
+
+/// Future-proof generic view of any unrecognized block: pulls the common field
+/// aliases so a new backend block type renders readably instead of raw JSON.
+struct GenericBlock: Equatable {
+    var stableBlockId: String?
+    var rawType: String
+    var title: String?
+    var body: String?
+    var bullets: [String]
+    var link: String?
+
+    var isEmpty: Bool {
+        (title?.isEmpty ?? true) && (body?.isEmpty ?? true) && bullets.isEmpty && (link?.isEmpty ?? true)
+    }
+
+    static func parse(rawType: String, dict: [String: Any], stableBlockId: String?) -> GenericBlock? {
+        func firstString(_ keys: [String]) -> String? {
+            for key in keys {
+                if let value = dict[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return value
+                }
+            }
+            return nil
+        }
+        func bullets(_ keys: [String]) -> [String] {
+            for key in keys {
+                if let list = dict[key] as? [Any], !list.isEmpty {
+                    let items: [String] = list.compactMap { item in
+                        if let s = item as? String { return s }
+                        if let map = item as? [String: Any] {
+                            let label = map["label"] as? String ?? map["title"] as? String ?? map["name"] as? String
+                            let value = map["value"] as? String ?? map["text"] as? String ?? map["content"] as? String
+                            if let l = label, let v = value { return "\(l): \(v)" }
+                            return label ?? value
+                        }
+                        return nil
+                    }
+                    if !items.isEmpty { return items }
+                }
+            }
+            return []
+        }
+        let block = GenericBlock(
+            stableBlockId: stableBlockId,
+            rawType: rawType,
+            title: firstString(["title", "heading", "header", "label", "name", "caption", "subject"]),
+            body: firstString(["content", "text", "markdown", "body", "message", "summary", "description", "detail", "note", "answer"]),
+            bullets: bullets(["items", "steps", "points", "bullets", "lines", "list", "entries", "rows", "values"]),
+            link: firstString(["url", "href", "link", "source", "sourceUrl"])
+        )
+        return block.isEmpty ? nil : block
+    }
 }
 
 // MARK: - ChatBlock Equatable (id-based to avoid recursive Equatable issue)

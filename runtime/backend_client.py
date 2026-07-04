@@ -890,9 +890,22 @@ class BackendClient:
         )
 
     def _expire_user_session(self) -> None:
-        if self._runtime_token():
-            self.disconnect_runtime()
-        self._clear_session()
+        import sys
+        import json
+        event_id = _request_id()
+        sys.stdout.write(json.dumps({
+            "id": event_id,
+            "taskId": event_id,
+            "ok": True,
+            "capability": "backend.auth_refresh_needed",
+            "result": {},
+            "events": [],
+            "artifacts": [],
+            "error": None,
+            "durationMs": 0,
+            "requestId": event_id
+        }) + "\n")
+        sys.stdout.flush()
 
     def _refresh_user_session_after_unauthorized(self, stale_access_token: str) -> BackendResult:
         with self._user_refresh_lock:
@@ -904,7 +917,14 @@ class BackendClient:
                     status_code=200,
                     data={"reusedRotatedSession": True},
                 )
-            return self.refresh_session()
+            self._expire_user_session()
+            return BackendResult(
+                ok=False,
+                request_id=_request_id(),
+                status_code=401,
+                error={"code": "UNAUTHORIZED", "message": "Token refresh delegated to Swift."},
+                data=None,
+            )
 
     def _authorized_request(
         self,

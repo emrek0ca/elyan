@@ -13,7 +13,8 @@ final class AppState: ObservableObject {
     @Published private(set) var lastDispatchError: String = ""
 
     private var heartbeatTask: Task<Void, Never>?
-    private var dispatchPollTask: Task<Void, Never>?
+    private let realtimeClient = ElyanSSEClient()
+    private var realtimeTask: Task<Void, Never>?
 
     var pendingTaskCount: Int {
         assignedTasks.filter { !["completed", "failed", "canceled"].contains($0.status.lowercased()) }.count
@@ -31,14 +32,26 @@ final class AppState: ObservableObject {
         // manual pairing.
         backend.restoreRuntimeToken()
 
-        backend.onSessionChanged = { session in
+        backend.onSessionChanged = { [weak self] session in
             Task { @MainActor in
-                await supervisor.syncAuthSession(session)
+                guard let self else { return }
+                await self.supervisor.syncAuthSession(session)
+                self.startRealtimeSubscription()
+            }
+        }
+
+        supervisor.onAuthRefreshNeeded = { [weak backend, weak supervisor] in
+            guard let backend, let supervisor else { return }
+            do {
+                _ = try await backend.refresh()
+                await supervisor.syncAuthSession(backend.session)
+            } catch {
+                await backend.logout()
             }
         }
 
         startRuntimeHeartbeatLoop()
-        startDispatchPollLoop()
+        startRealtimeSubscription()
     }
 
     /// Fires an online heartbeat every 25s — ama YALNIZ Python runtime
@@ -61,19 +74,51 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Polls mobile-dispatched tasks every 10s and immediately reports back
-    /// "accepted" for anything we haven't seen yet, so the mobile UI moves
-    /// out of "queued" the moment the desktop picks the task up. Actual
-    /// capability execution is not implemented on the native app yet; the
-    /// user completes/fails tasks manually from the inbox.
-    private func startDispatchPollLoop() {
-        dispatchPollTask?.cancel()
-        dispatchPollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.refreshAssignedTasks()
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
-            }
+    /// Subscribes to the backend's realtime SSE stream to get notified of newly
+    /// dispatched tasks immediately, instead of polling every 10 seconds.
+    ///
+    /// KRİTİK: taskId'siz açılan bu akış backend'in `user:<userId>` kanalına
+    /// bağlanır — bu kanal, aktif bir chat task'ının `task:<taskId>` kanalıyla
+    /// BİRLİKTE her `message.delta`'sını da alır (event-bus.ts channelsFor()
+    /// her event'i userId VE taskId varsa ikisine birden fan-out ediyor; bu
+    /// backend tasarımı kasıtlı — mobile de aynı geniş kanalı device/pairing
+    /// bildirimleri için kullanıyor). Mobile bunu event tipine göre filtreleyip
+    /// yalnız task/command/runtime/device/pairing olaylarında liste yeniliyor
+    /// (realtime_controller.dart); burada bu filtre YOKTU — her chat delta'sında
+    /// (streaming sırasında saniyede ~30 kez) tam bir REST round-trip
+    /// tetikleniyordu. Bu, "chat yüzeyi ağır donuyor" şikayetinin en büyük
+    /// kaynağıydı: render maliyetinden bağımsız, ağ+ana thread üzerinde saniyede
+    /// onlarca gereksiz istek. Mobile'daki AYNI filtre burada da uygulanıyor.
+    private func startRealtimeSubscription() {
+        realtimeTask?.cancel()
+        realtimeTask = Task { [weak self] in
+            guard let self, let token = self.backend.session?.accessToken else { return }
+            await self.realtimeClient.open(
+                accessToken: token,
+                taskId: nil,
+                onEvent: { [weak self] event in
+                    guard Self.isTaskRelevantEvent(event.event.lowercased()) else { return }
+                    await self?.refreshAssignedTasks()
+                },
+                onError: { _ in
+                    // If it errors, we can just let it backoff/retry which is handled inside ElyanSSEClient
+                },
+                onClose: {
+                }
+            )
         }
+    }
+
+    /// Mobile'ın realtime_controller.dart'ıyla aynı sınıflandırma: yalnız
+    /// görev/cihaz/eşleştirme yaşam döngüsü olayları — chat/message/block
+    /// olayları kasıtlı olarak dışarıda (onlar ChatStore'un kendi task-scoped
+    /// akışının işi).
+    nonisolated private static func isTaskRelevantEvent(_ type: String) -> Bool {
+        type.hasPrefix("task.")
+            || type.hasPrefix("command.")
+            || type.hasPrefix("runtime.")
+            || type == "device.status_changed"
+            || type == "pairing.claimed"
     }
 
     func refreshAssignedTasks() async {

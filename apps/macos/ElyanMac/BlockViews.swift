@@ -75,6 +75,9 @@ private struct BlockDispatch: View {
         case .imageAnalysis(let b):
             ImageAnalysisBlockView(block: b)
 
+        case .goalProgress(let b):
+            GoalProgressBlockView(block: b)
+
         case .actionable(let b):
             ActionableBlockView(block: b)
 
@@ -83,6 +86,39 @@ private struct BlockDispatch: View {
 
         case .document(let b):
             DocumentBlockView(block: b, fontSize: fontSize)
+
+        case .reasoningTrace(let b):
+            ReasoningTraceBlockView(block: b, fontSize: fontSize)
+
+        case .terminal(let b):
+            TerminalBlockView(block: b)
+
+        case .automation(let b):
+            AutomationBlockView(block: b, fontSize: fontSize)
+
+        case .pdfGenerate(let b):
+            PdfGenerateBlockView(block: b)
+
+        case .pdfViewer(let b):
+            PdfViewerBlockView(block: b)
+
+        case .desktopSuggestion(let b):
+            DesktopSuggestionBlockView(block: b)
+
+        case .memoryEcho(let b):
+            MemoryEchoBlockView(block: b, fontSize: fontSize)
+
+        case .proactiveTouch(let b):
+            ProactiveTouchBlockView(block: b, fontSize: fontSize)
+
+        case .artifact(let b):
+            ArtifactBlockView(block: b)
+
+        case .documentSkeleton:
+            DocumentSkeletonBlockView()
+
+        case .generic(let b):
+            GenericBlockView(block: b, fontSize: fontSize, compact: compact)
 
         case .unknown(_, let text):
             if !text.isEmpty {
@@ -137,18 +173,60 @@ struct MarkdownBubble: View {
     var fontSize: Double = 14
     var compact: Bool = false
 
-    private var attributed: AttributedString {
-        MarkdownParseCache.shared.attributed(for: markdown)
-    }
+    // Streaming sırasında `markdown` her ~33ms'de bir büyüyerek değişir
+    // (kümülatif snapshot) — cache her seferinde ıskalanır ve TÜM metin
+    // yeniden parse edilir. Uzun cevaplarda bu, akış süresince O(n²) toplam
+    // maliyete yol açıp arayüzü kasıyordu (kısa mesajlarda fark edilmiyordu,
+    // uzun cevaplarda "ağırlaşma" şikayetinin kaynağıydı). Küçük içerikte
+    // (< 800 byte) hep anında parse ederiz — gecikme yok. Büyüdükçe parse'ı
+    // en fazla 120ms'de bir yaparız (trailing-edge debounce): araya giren
+    // flush'lar son parse'ı gösterir, akış duraklarsa bile bekleyen bir
+    // "yakalama" görevi son değeri kısa süre içinde işler — hiçbir içerik
+    // kalıcı olarak eski kalmaz.
+    private static let alwaysParseBelowBytes = 800
+    private static let minReparseInterval: TimeInterval = 0.12
+
+    @State private var displayed: AttributedString?
+    @State private var lastParsedSource: String = ""
+    @State private var lastParseAt: Date = .distantPast
+    @State private var pendingCatchUp: Task<Void, Never>?
 
     var body: some View {
         // Mobil tasarım dili: asistan metni balonsuz, doğrudan krem zeminde.
-        Text(attributed)
+        Text(displayed ?? MarkdownParseCache.shared.attributed(for: markdown))
             .font(.system(size: fontSize))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 4)
             .padding(.vertical, compact ? 2 : 4)
+            .onAppear { reparseIfNeeded(for: markdown) }
+            .onChange(of: markdown) { _, newValue in reparseIfNeeded(for: newValue) }
+            .onDisappear { pendingCatchUp?.cancel() }
+    }
+
+    private func reparseIfNeeded(for newValue: String) {
+        guard newValue != lastParsedSource else { return }
+        let now = Date()
+        let elapsed = now.timeIntervalSince(lastParseAt)
+        if newValue.utf8.count <= Self.alwaysParseBelowBytes || elapsed >= Self.minReparseInterval {
+            pendingCatchUp?.cancel()
+            pendingCatchUp = nil
+            commitParse(newValue, at: now)
+        } else {
+            let delay = Self.minReparseInterval - elapsed
+            pendingCatchUp?.cancel()
+            pendingCatchUp = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                commitParse(newValue, at: Date())
+            }
+        }
+    }
+
+    private func commitParse(_ text: String, at time: Date) {
+        lastParseAt = time
+        lastParsedSource = text
+        displayed = MarkdownParseCache.shared.attributed(for: text)
     }
 }
 
@@ -1085,6 +1163,106 @@ private struct ImageAnalysisBlockView: View {
     }
 }
 
+// MARK: - GoalProgressBlockView (loop/goal engine — mobile parity)
+
+private struct GoalProgressBlockView: View {
+    let block: GoalProgressBlock
+    @EnvironmentObject var appState: AppState
+    @State private var pendingStatus: String?
+
+    private var isBusy: Bool { pendingStatus != nil }
+    private var blocked: Bool { !(block.blocker ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var terminal: Bool { block.done || block.step >= block.ofSteps }
+
+    private var accent: Color {
+        terminal ? .green : (blocked ? .orange : .accentColor)
+    }
+
+    private var title: String {
+        terminal ? "Hedef tamamlandı" : (blocked ? "Hedef durakladı" : "Hedef ilerliyor")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 9) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(accent.opacity(0.10))
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(accent)
+                }
+                .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .bold))
+                    if !block.advancedTo.isEmpty {
+                        Text(block.advancedTo)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+                Text("\(block.step)/\(block.ofSteps)")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(accent)
+            }
+
+            ProgressView(value: block.progressRatio)
+                .tint(accent)
+
+            if blocked, let blocker = block.blocker {
+                Text(blocker)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.orange)
+            }
+
+            HStack(spacing: 8) {
+                goalActionButton(icon: "pause.fill", label: "Duraklat", status: "paused")
+                goalActionButton(icon: "hand.raised.fill", label: "Bitir", status: "done")
+            }
+        }
+        .padding(12)
+        .background(Material.regular)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func goalActionButton(icon: String, label: String, status: String) -> some View {
+        Button(action: { setGoalStatus(status) }) {
+            HStack(spacing: 5) {
+                if pendingStatus == status {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: icon).font(.system(size: 10))
+                }
+                Text(label).font(.system(size: 11, weight: .bold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.primary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy || terminal)
+    }
+
+    private func setGoalStatus(_ status: String) {
+        guard !isBusy else { return }
+        pendingStatus = status
+        Task {
+            _ = try? await appState.backend.updateGoalStatus(goalId: block.goalId, status: status)
+            pendingStatus = nil
+        }
+    }
+}
+
 // MARK: - ActionableBlockView
 
 struct ActionableBlockView: View {
@@ -1232,11 +1410,7 @@ private struct DocumentSectionView: View {
                 Text(heading)
                     .font(.system(size: fontSize + (section.level == 1 ? 2 : section.level == 2 ? 1 : 0), weight: .semibold))
             }
-            let attributed = (try? AttributedString(
-                markdown: section.content,
-                options: .init(allowsExtendedAttributes: true, interpretedSyntax: .inlineOnlyPreservingWhitespace)
-            )) ?? AttributedString(section.content)
-            Text(attributed)
+            Text(MarkdownParseCache.shared.attributed(for: section.content))
                 .font(.system(size: fontSize - 1))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1276,5 +1450,307 @@ struct BlockView: View {
         } else {
             Text(content).padding()
         }
+    }
+}
+
+// MARK: - Ported widget block views (mobile parity)
+
+private struct BlockCard<Content: View>: View {
+    var cornerRadius: CGFloat = 12
+    @ViewBuilder var content: Content
+    var body: some View {
+        content
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Material.regular)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+    }
+}
+
+private struct ReasoningTraceBlockView: View {
+    let block: ReasoningTraceBlock
+    var fontSize: Double
+    @State private var expanded: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    if block.isRunning {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "brain").font(.system(size: 11))
+                    }
+                    Text(block.isRunning ? "Düşünüyor…" : "Düşünce süreci")
+                        .font(.system(size: 12, weight: .medium))
+                    Spacer(minLength: 0)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            if expanded && !block.content.isEmpty {
+                Text(block.content)
+                    .font(.system(size: fontSize - 1))
+                    .italic()
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .modifier(_CardBG())
+    }
+}
+
+private struct TerminalBlockView: View {
+    let block: TerminalBlock
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "terminal").font(.system(size: 11)).foregroundStyle(.secondary)
+                if let cmd = block.command {
+                    Text(cmd).font(.system(size: 11, weight: .semibold, design: .monospaced)).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let code = block.exitCode {
+                    Text("exit \(code)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(code == 0 ? .green : .red)
+                }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(block.output.isEmpty ? "(çıktı yok)" : block.output)
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            if block.truncated {
+                Text("… çıktı kısaltıldı").font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.black.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .foregroundStyle(Color.white.opacity(0.92))
+    }
+}
+
+private struct AutomationBlockView: View {
+    let block: AutomationBlock
+    var fontSize: Double
+    var body: some View {
+        BlockCard {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "wand.and.stars").foregroundStyle(.tint)
+                    Text(block.title).font(.system(size: 13, weight: .semibold))
+                }
+                if !block.description.isEmpty {
+                    Text(block.description).font(.system(size: fontSize - 1)).foregroundStyle(.secondary)
+                }
+                if let schedule = block.schedule {
+                    Label(schedule, systemImage: "clock").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                if !block.steps.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(block.steps.enumerated()), id: \.offset) { idx, step in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("\(idx + 1).").font(.system(size: 11, weight: .medium)).foregroundStyle(.tertiary)
+                                Text(step).font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                        }
+                    }.padding(.top, 2)
+                }
+            }
+        }
+    }
+}
+
+private struct PdfGenerateBlockView: View {
+    let block: PdfGenerateBlock
+    var body: some View {
+        BlockCard {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.richtext").font(.system(size: 22)).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(block.title ?? "PDF Belgesi").font(.system(size: 13, weight: .semibold))
+                    Text("~\(block.estimatedPages) sayfa · \(block.sections.count) bölüm")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+}
+
+private struct PdfViewerBlockView: View {
+    let block: PdfViewerBlock
+    var body: some View {
+        BlockCard {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text.magnifyingglass").font(.system(size: 22)).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(block.title ?? "PDF").font(.system(size: 13, weight: .semibold)).lineLimit(2)
+                    if let pages = block.pageCount {
+                        Text("\(pages) sayfa").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                if let urlStr = block.remoteUrl ?? block.localPath, let url = URL(string: urlStr) {
+                    Link(destination: url) {
+                        Image(systemName: "arrow.up.right.square").font(.system(size: 16))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct DesktopSuggestionBlockView: View {
+    let block: DesktopSuggestionBlock
+    var body: some View {
+        BlockCard {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "desktopcomputer").foregroundStyle(.blue)
+                    Text("Masaüstünde çalıştır").font(.system(size: 12, weight: .semibold))
+                }
+                if !block.reason.isEmpty {
+                    Text(block.reason).font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                if !block.requiredCapabilities.isEmpty {
+                    Text(block.requiredCapabilities.joined(separator: " · "))
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+}
+
+private struct MemoryEchoBlockView: View {
+    let block: MemoryEchoBlock
+    var fontSize: Double
+    var body: some View {
+        BlockCard {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles").font(.system(size: 11)).foregroundStyle(.purple)
+                    Text("Hatırlıyorum").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                }
+                Text(block.recall).font(.system(size: fontSize - 1))
+            }
+        }
+    }
+}
+
+private struct ProactiveTouchBlockView: View {
+    let block: ProactiveTouchBlock
+    var fontSize: Double
+    var body: some View {
+        BlockCard {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(block.suggestion).font(.system(size: fontSize - 1))
+                if !block.cta.isEmpty {
+                    Text(block.cta)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tint)
+                }
+            }
+        }
+    }
+}
+
+private struct ArtifactBlockView: View {
+    let block: ArtifactBlock
+    var body: some View {
+        BlockCard {
+            VStack(alignment: .leading, spacing: 6) {
+                if let title = block.title {
+                    Text(title).font(.system(size: 13, weight: .semibold))
+                }
+                if (block.artifactType == "image" || block.artifactType == "chart_image"),
+                   let url = URL(string: block.url), url.scheme?.hasPrefix("http") == true {
+                    AsyncImage(url: url) { image in
+                        image.resizable().scaledToFit()
+                    } placeholder: {
+                        ProgressView().frame(maxWidth: .infinity, minHeight: 80)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } else if let summary = block.summary ?? block.preview {
+                    Text(summary).font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+private struct DocumentSkeletonBlockView: View {
+    @State private var shimmer = false
+    var body: some View {
+        BlockCard {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(0..<3, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 10)
+                        .frame(maxWidth: i == 2 ? 160 : .infinity)
+                }
+            }
+            .opacity(shimmer ? 0.5 : 1.0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { shimmer = true }
+            }
+        }
+    }
+}
+
+private struct GenericBlockView: View {
+    let block: GenericBlock
+    var fontSize: Double
+    var compact: Bool
+    var body: some View {
+        BlockCard {
+            VStack(alignment: .leading, spacing: 6) {
+                if let title = block.title, !title.isEmpty {
+                    Text(title).font(.system(size: 14, weight: .semibold))
+                }
+                if let body = block.body, !body.isEmpty {
+                    MarkdownBubble(markdown: body, fontSize: fontSize, compact: compact)
+                }
+                if !block.bullets.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(block.bullets.enumerated()), id: \.offset) { _, item in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("•").foregroundStyle(.tertiary)
+                                Text(item).font(.system(size: fontSize - 1)).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                if let link = block.link, !link.isEmpty, let url = URL(string: link) {
+                    Link(destination: url) {
+                        Label(link, systemImage: "link").font(.system(size: 11)).lineLimit(1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Subtle card background used by inline (non-boxed) blocks like reasoning.
+private struct _CardBG: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }

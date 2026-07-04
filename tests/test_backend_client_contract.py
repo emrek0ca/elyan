@@ -113,9 +113,22 @@ def test_runtime_unauthorized_clears_runtime_without_user_session(
     assert state["account"]["refreshToken"] == "refresh-token"
 
 
-def test_user_session_expiry_disconnects_runtime_before_clearing_local_session(
+# Ownership note (post refactor): Python no longer decides the fate of a
+# stale user session on its own. `_refresh_user_session_after_unauthorized`
+# never calls `refresh_session()` anymore — it immediately emits a
+# `backend.auth_refresh_needed` capability event over stdout and returns a
+# fixed delegated-401, leaving the actual refresh (and any decision to log
+# out) entirely to the Swift host (see AppState.onAuthRefreshNeeded /
+# PythonRuntimeSupervisor). Local session/runtime state is intentionally
+# left untouched here in every case — Swift re-syncs it via
+# `syncAuthSession` once it knows the real outcome. The three scenarios
+# below (definitive session expiry, network failure, and an unrelated
+# refresh rejection) used to diverge; now they must converge identically on
+# the delegated contract, which is itself the regression these tests guard.
+def test_user_session_expiry_delegates_refresh_to_swift_without_clearing_local_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
@@ -170,17 +183,21 @@ def test_user_session_expiry_disconnects_runtime_before_clearing_local_session(
 
     state = state_store.snapshot()
     assert result.ok is False
-    assert result.error == "session_expired"
-    assert disconnected["called"] is True
-    assert state["account"]["accessToken"] == ""
-    assert state["account"]["refreshToken"] == ""
-    assert state["runtime"]["runtimeToken"] == ""
-    assert state["runtime"]["ready"] is False
+    assert result.status_code == 401
+    assert result.error == {"code": "UNAUTHORIZED", "message": "Token refresh delegated to Swift."}
+    assert disconnected["called"] is False
+    assert state["account"]["accessToken"] == "user-token"
+    assert state["account"]["refreshToken"] == "refresh-token"
+    assert state["runtime"]["runtimeToken"] == "runtime-token"
+    assert state["runtime"]["ready"] is True
+    emitted = capsys.readouterr().out
+    assert '"capability": "backend.auth_refresh_needed"' in emitted
 
 
-def test_user_refresh_network_failure_preserves_local_session(
+def test_user_refresh_network_failure_still_delegates_to_swift(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
@@ -235,17 +252,21 @@ def test_user_refresh_network_failure_preserves_local_session(
 
     state = state_store.snapshot()
     assert result.ok is False
-    assert result.error == "network_timeout"
+    assert result.status_code == 401
+    assert result.error == {"code": "UNAUTHORIZED", "message": "Token refresh delegated to Swift."}
     assert disconnected["called"] is False
     assert state["account"]["accessToken"] == "user-token"
     assert state["account"]["refreshToken"] == "refresh-token"
     assert state["runtime"]["runtimeToken"] == "runtime-token"
     assert state["runtime"]["ready"] is True
+    emitted = capsys.readouterr().out
+    assert '"capability": "backend.auth_refresh_needed"' in emitted
 
 
-def test_generic_refresh_unauthorized_preserves_local_session(
+def test_generic_refresh_unauthorized_still_delegates_to_swift(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
@@ -300,12 +321,15 @@ def test_generic_refresh_unauthorized_preserves_local_session(
 
     state = state_store.snapshot()
     assert result.ok is False
-    assert result.error == "forbidden"
+    assert result.status_code == 401
+    assert result.error == {"code": "UNAUTHORIZED", "message": "Token refresh delegated to Swift."}
     assert disconnected["called"] is False
     assert state["account"]["accessToken"] == "user-token"
     assert state["account"]["refreshToken"] == "refresh-token"
     assert state["runtime"]["runtimeToken"] == "runtime-token"
     assert state["runtime"]["ready"] is True
+    emitted = capsys.readouterr().out
+    assert '"capability": "backend.auth_refresh_needed"' in emitted
 
 
 def test_stale_concurrent_unauthorized_reuses_already_rotated_user_session(

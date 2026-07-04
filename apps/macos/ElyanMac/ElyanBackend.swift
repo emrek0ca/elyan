@@ -403,28 +403,28 @@ final class ElyanBackend: ObservableObject {
     ) async throws -> ChatDispatch {
         guard let current = session else { throw ElyanBackendError.notAuthenticated }
 
+        // Mobile'ın task_repository.dart sendChatMessage'ıyla birebir aynı gövde:
+        // yalnız `blocks` (metin bloğu) + `metadata.renderContract` + `metadata.userBlocks`.
+        // Üstte ayrı bir `content` alanı YOK — backend `content`'i varsa onu,
+        // yoksa blocks[].markdown'dan türetir (schemas.ts); ikisini birden
+        // göndermek zararsız olsa da mobille birebir aynı sözleşmeyi korumak
+        // için tek kanal (blocks) kullanılıyor.
         let userBlock: [String: Any] = [
             "type": "text",
             "markdown": prompt,
             "visibility": "user_visible"
         ]
         var body: [String: Any] = [
-            "content": prompt,
             "blocks": [userBlock],
             "source": source,
             "requestedCapabilities": [],
             "metadata": [
                 "source": source,
-                "desktopTransport": [
-                    "rawPrivateDataUploaded": false,
-                    "derivedContextOnly": true,
-                    "scope": "user_chat_session"
-                ],
                 "renderContract": [
                     "version": "elyan_blocks.v2",
                     "mode": "block_first",
                     "canonicalSurface": "blocks",
-                    "legacyContent": "content"
+                    "legacyContent": "none"
                 ],
                 "userBlocks": [userBlock]
             ]
@@ -442,6 +442,18 @@ final class ElyanBackend: ObservableObject {
             extraHeaders: extraHeaders
         )
         return try ChatDispatch.parse(raw)
+    }
+
+    /// PATCH /v1/goals/{goalId} — mirrors mobile's TaskRepository.updateGoalStatus.
+    /// Used by the goal_progress block's pause/finish actions.
+    @discardableResult
+    func updateGoalStatus(goalId: String, status: String) async throws -> Any {
+        let encodedId = goalId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? goalId
+        return try await patchJSON(
+            path: "/v1/goals/\(encodedId)",
+            body: ["status": status],
+            requireAuth: true
+        )
     }
 
     // MARK: - Request plumbing

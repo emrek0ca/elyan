@@ -40,10 +40,8 @@ final class PythonRuntimeSupervisor: ObservableObject {
         return lifecycleState
     }
 
-    private var pollLoopTask: Task<Void, Never>?
     private var pairingPollTask: Task<Void, Never>?
-    private let pollIntervalNanoseconds: UInt64 = 3_000_000_000
-    private let fullRefreshEveryNTicks = 5
+    var onAuthRefreshNeeded: (() async -> Void)?
 
     init() {
         bridge.onUnsolicitedResponse = { [weak self] response in
@@ -68,7 +66,6 @@ final class PythonRuntimeSupervisor: ObservableObject {
                 pendingAuthSync = true
                 _ = await flushPendingAuthSync()
                 await refreshAll()
-                startPollLoop()
             } catch {
                 isRunning = false
                 runtimeReady = false
@@ -80,8 +77,6 @@ final class PythonRuntimeSupervisor: ObservableObject {
     }
 
     func stop() {
-        pollLoopTask?.cancel()
-        pollLoopTask = nil
         pairingPollTask?.cancel()
         pairingPollTask = nil
         bridge.stopProcess()
@@ -98,32 +93,6 @@ final class PythonRuntimeSupervisor: ObservableObject {
         _ = await flushPendingAuthSync()
     }
 
-    /// Mobile-dispatched tasks are normally picked up automatically by the
-    /// bridge's own background relay thread (WebSocket push, or polling
-    /// fallback) once this runtime is paired and registered. This loop is the
-    /// visible, Swift-owned heartbeat on top of that: it (a) guarantees tasks
-    /// are still fetched-and-executed even if that background thread stalls,
-    /// and (b) keeps the UI's connection/task state from ever going stale,
-    /// since nothing else here was re-polling after the initial launch.
-    private func startPollLoop() {
-        pollLoopTask?.cancel()
-        pollLoopTask = Task { [weak self] in
-            var tick = 0
-            while !Task.isCancelled {
-                guard let self else { return }
-                if self.canQueryRuntimeSession {
-                    await self.executeAssignedTasks()
-                } else {
-                    await self.refreshConnectionAndTasks()
-                }
-                if tick > 0 && tick % self.fullRefreshEveryNTicks == 0 {
-                    await self.refreshAll()
-                }
-                tick += 1
-                try? await Task.sleep(nanoseconds: self.pollIntervalNanoseconds)
-            }
-        }
-    }
 
     /// Fetches and directly executes any tasks the mobile app has dispatched
     /// to this desktop, then refreshes the local task inbox so the UI reflects
@@ -347,6 +316,10 @@ final class PythonRuntimeSupervisor: ObservableObject {
         if response.capability == "bridge.ready" {
             runtimeReady = response.ok
             lifecycleState = response.ok ? "runtime_started" : "degraded"
+        } else if response.capability == "backend.auth_refresh_needed" {
+            Task { @MainActor in
+                await onAuthRefreshNeeded?()
+            }
         }
     }
 
