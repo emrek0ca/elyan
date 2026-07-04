@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type {
   ChatSessionSource,
@@ -72,6 +72,9 @@ const OLDER_CHAT_MESSAGE_PAGE_LIMIT = 10;
 const CHAT_MESSAGE_PAGE_LIMIT_MAX = 50;
 const GENERIC_CHAT_TITLES = new Set(["yeni görev", "yeni sohbet"]);
 const RECENT_DUPLICATE_CHAT_TURN_WINDOW_MS = 20_000;
+const CHAT_TURN_ADMISSION_LOCK_TTL_MS = 30_000;
+const CHAT_TURN_ADMISSION_WAIT_MS = 2_500;
+const CHAT_TURN_ADMISSION_POLL_MS = 125;
 
 type ChatSessionCursor = {
   timestamp: string;
@@ -87,6 +90,30 @@ function normalizeChatTitle(title: string | null | undefined) {
   return String(title ?? "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function buildChatTurnAdmissionLockKey(input: {
+  userId: string;
+  sessionId: string;
+  content: string;
+}): string | null {
+  const normalizedContent = normalizeChatTitle(input.content).toLowerCase();
+  if (!normalizedContent) {
+    return null;
+  }
+  const digest = createHash("sha256")
+    .update(input.userId)
+    .update("\0")
+    .update(input.sessionId)
+    .update("\0")
+    .update(normalizedContent)
+    .digest("hex")
+    .slice(0, 32);
+  return `lock:chat-turn:${digest}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isGenericChatTitle(title: string | undefined) {
@@ -192,6 +219,73 @@ async function findRecentDuplicateChatTurn(
   }
 
   return null;
+}
+
+async function shapeDuplicateChatTurnResponse(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    targetDeviceId?: string;
+    content: string;
+  },
+  session: Awaited<ReturnType<typeof createChatSession>>,
+  routeDecision: Awaited<ReturnType<typeof routeChatTurn>>,
+  duplicateTurn: NonNullable<Awaited<ReturnType<typeof findRecentDuplicateChatTurn>>>,
+) {
+  const billing = await getBillingSummary(app, input.userId);
+  const shapedTask = shapeTaskFeedItem(duplicateTurn.task);
+  const shapedAssistantMessage = {
+    ...shapeChatMessageForResponse(duplicateTurn.assistantMessage),
+    taskId: duplicateTurn.assistantMessage.taskId,
+    status: duplicateTurn.assistantMessage.status,
+    content: duplicateTurn.assistantMessage.content,
+  };
+  const taskBrainRecord = readRecord((shapedTask as Record<string, unknown>).brain);
+  const resultRecord = readRecord((duplicateTurn.task as Record<string, unknown>).result);
+  const pendingTokenDebit = estimatePendingChatTokenDebit({
+    route: routeDecision.route,
+    reused: true,
+    taskStatus: duplicateTurn.task.status,
+    content: input.content,
+    workload: routeDecision.selectedWorkload ?? "mobile_chat_fast",
+    brainProfile: billing.subscription.brainProfile,
+  });
+  return {
+    session,
+    userMessage: shapeChatMessageForResponse(duplicateTurn.userMessage),
+    assistantMessage: shapedAssistantMessage,
+    task: shapedTask,
+    renderRecipe: resultRecord?.renderRecipe ?? null,
+    routeDecision,
+    delivery: buildChatDispatchDeliverySnapshot({
+      task: shapedTask,
+      routeDecision,
+      requestedTargetDeviceId: input.targetDeviceId,
+    }),
+    brain: {
+      selectedProfile: routeDecision.selectedWorkload ?? "mobile_chat_fast",
+      profileMode: "elyan_managed",
+      serverBrainReady: routeDecision.route === "server_brain",
+      firstDeltaMs: readNumber(taskBrainRecord, "firstDeltaMs"),
+      fallbackUsed: readBoolean(taskBrainRecord, "fallbackUsed"),
+      groundingUsed: readBoolean(taskBrainRecord, "groundingUsed"),
+      documentSourceCount: readNumber(taskBrainRecord, "documentSourceCount"),
+      webGroundingUsed: readBoolean(taskBrainRecord, "webGroundingUsed"),
+      webSourceCount: readNumber(taskBrainRecord, "webSourceCount"),
+      modelCallCount: 0,
+      reasoningPasses: 0,
+      dedupedInflight: true,
+      estimatedCostBucket: "deduped_inflight",
+    },
+    usage: shapePublicUsageSnapshot({
+      usage: billing.usage,
+      subscription: billing.subscription,
+      pendingTokens: pendingTokenDebit,
+    }),
+    dispatched: false,
+    reused: true,
+    deduped: true,
+  };
 }
 
 function titleFromChatPreview(title: string | undefined, preview: string) {
@@ -1545,62 +1639,71 @@ export async function createChatMessage(
     targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
     metadata: routingMetadata,
   });
+  const admissionLockKey = buildChatTurnAdmissionLockKey({
+    userId: input.userId,
+    sessionId: session.id,
+    content: input.content,
+  });
+  const admissionLockOwner = randomUUID();
+  let admissionLockAcquired = false;
+  if (admissionLockKey && app.services?.reliability?.store) {
+    admissionLockAcquired = await app.services.reliability.store.acquireLock(
+      admissionLockKey,
+      admissionLockOwner,
+      CHAT_TURN_ADMISSION_LOCK_TTL_MS,
+    );
+    if (!admissionLockAcquired) {
+      const deadline = Date.now() + CHAT_TURN_ADMISSION_WAIT_MS;
+      do {
+        const lockedDuplicateTurn = await findRecentDuplicateChatTurn(app, {
+          userId: input.userId,
+          sessionId: session.id,
+          content: input.content,
+        });
+        if (lockedDuplicateTurn) {
+          return shapeDuplicateChatTurnResponse(
+            app,
+            input,
+            session,
+            routeDecision,
+            lockedDuplicateTurn,
+          );
+        }
+        await sleep(CHAT_TURN_ADMISSION_POLL_MS);
+      } while (Date.now() < deadline);
+
+      throw new AppError(
+        429,
+        "rate_limited",
+        "Elyan bu sohbet turunu zaten işliyor. Birkaç saniye sonra tekrar dene.",
+        {
+          retryAfterMs: 2_000,
+          transient: true,
+          dedupedInflight: true,
+        },
+      );
+    }
+  }
   const duplicateTurn = await findRecentDuplicateChatTurn(app, {
     userId: input.userId,
     sessionId: session.id,
     content: input.content,
   });
   if (duplicateTurn) {
-    const billing = await getBillingSummary(app, input.userId);
-    const shapedTask = shapeTaskFeedItem(duplicateTurn.task);
-    const shapedAssistantMessage = {
-      ...shapeChatMessageForResponse(duplicateTurn.assistantMessage),
-      taskId: duplicateTurn.assistantMessage.taskId,
-      status: duplicateTurn.assistantMessage.status,
-      content: duplicateTurn.assistantMessage.content,
-    };
-    const taskBrainRecord = readRecord((shapedTask as Record<string, unknown>).brain);
-    const resultRecord = readRecord((duplicateTurn.task as Record<string, unknown>).result);
-    const pendingTokenDebit = estimatePendingChatTokenDebit({
-      route: routeDecision.route,
-      reused: true,
-      taskStatus: duplicateTurn.task.status,
-      content: input.content,
-      workload: routeDecision.selectedWorkload ?? "mobile_chat_fast",
-      brainProfile: billing.subscription.brainProfile,
-    });
-    return {
+    if (admissionLockAcquired && admissionLockKey) {
+      await app.services.reliability.store.releaseLock(
+        admissionLockKey,
+        admissionLockOwner,
+      );
+      admissionLockAcquired = false;
+    }
+    return shapeDuplicateChatTurnResponse(
+      app,
+      input,
       session,
-      userMessage: shapeChatMessageForResponse(duplicateTurn.userMessage),
-      assistantMessage: shapedAssistantMessage,
-      task: shapedTask,
-      renderRecipe: resultRecord?.renderRecipe ?? null,
       routeDecision,
-      delivery: buildChatDispatchDeliverySnapshot({
-        task: shapedTask,
-        routeDecision,
-        requestedTargetDeviceId: input.targetDeviceId,
-      }),
-      brain: {
-        selectedProfile: routeDecision.selectedWorkload ?? "mobile_chat_fast",
-        profileMode: "elyan_managed",
-        serverBrainReady: routeDecision.route === "server_brain",
-        firstDeltaMs: readNumber(taskBrainRecord, "firstDeltaMs"),
-        fallbackUsed: readBoolean(taskBrainRecord, "fallbackUsed"),
-        groundingUsed: readBoolean(taskBrainRecord, "groundingUsed"),
-        documentSourceCount: readNumber(taskBrainRecord, "documentSourceCount"),
-        webGroundingUsed: readBoolean(taskBrainRecord, "webGroundingUsed"),
-        webSourceCount: readNumber(taskBrainRecord, "webSourceCount"),
-      },
-      usage: shapePublicUsageSnapshot({
-        usage: billing.usage,
-        subscription: billing.subscription,
-        pendingTokens: pendingTokenDebit,
-      }),
-      dispatched: false,
-      reused: true,
-      deduped: true,
-    };
+      duplicateTurn,
+    );
   }
   const priorChatContext = await loadChatConversation(app, {
     userId: input.userId,
@@ -1893,6 +1996,13 @@ export async function createChatMessage(
     brainProfile: billing.subscription.brainProfile,
   });
   const taskBrainRecord = readRecord((taskResult.task as Record<string, unknown>).brain);
+  if (admissionLockAcquired && admissionLockKey) {
+    await app.services.reliability.store.releaseLock(
+      admissionLockKey,
+      admissionLockOwner,
+    );
+    admissionLockAcquired = false;
+  }
   return {
     session: {
       ...responseSession,

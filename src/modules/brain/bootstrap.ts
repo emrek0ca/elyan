@@ -121,7 +121,9 @@ export async function ensureElyanServerBrainBootstrap(app: FastifyInstance) {
         learningTargets: ["chat", "tasks", "personalization", "mobile_desktop_sync"],
         providerStrategy: {
           primary: "groq",
-          fallback: [],
+          learningProvider: "elyan",
+          fallback: ["elyan_shadow_until_quality_gate"],
+          retirementPolicy: "operator_approval_after_eval_benchmark_latency_gates",
         },
         trainingPlan: SHARED_TRAINING_PLAN,
       },

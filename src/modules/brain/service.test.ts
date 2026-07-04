@@ -1272,8 +1272,44 @@ test("queueContinuousBrainTrainingJob queues only with approved correction linea
     assert.equal(result.created, true);
     assert.equal(result.reason, "queued_shared_refresh");
     assert.equal(result.job?.id, "queued-training-job-1");
+    assert.equal(result.elyanModel?.modelName, "Elyan");
+    assert.equal(result.elyanModel?.stage, "shadow_evaluation");
+    assert.equal(result.elyanProviderPlan?.logicalProvider, "elyan");
+    assert.equal(result.elyanProviderPlan?.liveRoutingEnabled, false);
+    assert.equal(result.elyanProviderPlan?.traffic.elyanShadowPercent, 100);
     assert.equal(inserted.some((entry) => entry.values["name"] === "Elyan shared LoRA training set"), false);
     assert.equal(inserted.some((entry) => entry.values["name"] === "Elyan continuous brain refresh"), true);
+    const trainingInsert = inserted.find((entry) => entry.values["name"] === "Elyan continuous brain refresh");
+    const trainingConfig =
+      trainingInsert?.values["config"] && typeof trainingInsert.values["config"] === "object"
+        ? (trainingInsert.values["config"] as Record<string, unknown>)
+        : {};
+    const providerStrategy =
+      trainingConfig["providerStrategy"] && typeof trainingConfig["providerStrategy"] === "object"
+        ? (trainingConfig["providerStrategy"] as Record<string, unknown>)
+        : {};
+    assert.equal(providerStrategy["learningProvider"], "elyan");
+    assert.equal(providerStrategy["servingStrategy"], "groq_primary_elyan_shadow");
+    assert.equal(providerStrategy["liveRoutingEnabled"], false);
+    assert.equal(providerStrategy["routeReason"], "shadow_eval_only");
+    assert.equal(providerStrategy["retirementPolicy"], "operator_approval_after_eval_benchmark_latency_gates");
+    assert.equal(
+      Array.isArray(providerStrategy["fallback"]) &&
+        providerStrategy["fallback"].includes("elyan_shadow_until_quality_gate"),
+      true,
+    );
+    assert.equal(
+      trainingConfig["elyanModel"] &&
+        typeof trainingConfig["elyanModel"] === "object" &&
+        (trainingConfig["elyanModel"] as Record<string, unknown>)["nextAction"] === "run_shadow_evaluation",
+      true,
+    );
+    assert.equal(
+      trainingConfig["elyanProviderPlan"] &&
+        typeof trainingConfig["elyanProviderPlan"] === "object" &&
+        (trainingConfig["elyanProviderPlan"] as Record<string, unknown>)["routeReason"] === "shadow_eval_only",
+      true,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

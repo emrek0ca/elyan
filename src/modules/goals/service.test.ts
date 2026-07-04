@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { goalEvents } from "../../db/schema.js";
 import {
   applyGoalProgressBlocks,
   createGoal,
   getActiveGoalForContext,
   listGoals,
+  updateGoal,
 } from "./service.js";
 
 class Query<T> {
@@ -57,15 +59,21 @@ type GoalRow = {
 
 class GoalsDb {
   readonly rows: GoalRow[] = [];
+  readonly events: Array<Record<string, unknown>> = [];
 
   select() {
     return new Query(this.rows);
   }
 
-  insert() {
+  insert(table?: unknown) {
     const rows = this.rows;
+    const events = this.events;
     return {
       values(values: Partial<GoalRow>) {
+        if (table === goalEvents) {
+          events.push(values as Record<string, unknown>);
+          return Promise.resolve();
+        }
         const now = new Date("2030-01-01T00:00:00.000Z");
         const row = {
           id: `goal-${rows.length + 1}`,
@@ -111,7 +119,7 @@ class GoalsDb {
 
 test("goals service creates, reads, and advances a durable session goal", async () => {
   const db = new GoalsDb();
-  const app = { db } as never;
+  const app = { db, config: { ELYAN_GOAL_STATE_V2_ENABLED: true } } as never;
 
   const created = await createGoal(app, {
     userId: "user-1",
@@ -154,11 +162,12 @@ test("goals service creates, reads, and advances a durable session goal", async 
   assert.equal(db.rows[0]?.currentStep, 1);
   assert.equal(db.rows[0]?.status, "active");
   assert.deepEqual(db.rows[0]?.progress.completedSteps, ["Gün 1 planı tamamlandı."]);
+  assert.deepEqual(db.events.map((event) => event.eventType), ["goal.opened", "goal.advanced"]);
 });
 
 test("goals service bounds steps and maps progress blocks to terminal statuses", async () => {
   const db = new GoalsDb();
-  const app = { db } as never;
+  const app = { db, config: { ELYAN_GOAL_STATE_V2_ENABLED: true } } as never;
 
   const created = await createGoal(app, {
     userId: "user-1",
@@ -218,4 +227,23 @@ test("goals service bounds steps and maps progress blocks to terminal statuses",
   });
   assert.equal(db.rows[0]?.status, "done");
   assert.equal(db.rows[0]?.progress.nextAction, null);
+});
+
+test("goal state v2 flag off preserves legacy writes without event records", async () => {
+  const db = new GoalsDb();
+  const app = { db, config: { ELYAN_GOAL_STATE_V2_ENABLED: false } } as never;
+  await createGoal(app, { userId: "user-1", title: "Legacy goal" });
+  assert.equal(db.rows[0]?.status, "active");
+  assert.deepEqual(db.events, []);
+});
+
+test("updateGoal records terminal transitions in the append-only event stream", async () => {
+  const db = new GoalsDb();
+  const app = { db, config: { ELYAN_GOAL_STATE_V2_ENABLED: true } } as never;
+  const created = await createGoal(app, { userId: "user-1", title: "Ship" });
+  await updateGoal(app, { userId: "user-1", goalId: created.goal.id, status: "done" });
+  assert.equal(db.rows[0]?.status, "done");
+  assert.equal(db.rows[0]?.progress.engineState, "completed");
+  assert.equal(db.events.at(-1)?.eventType, "goal.completed");
+  assert.equal(db.events.at(-1)?.fromState, "open");
 });

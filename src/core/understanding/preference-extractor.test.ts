@@ -97,6 +97,31 @@ test("extractPreferenceSignals captures explicit identity facts with provenance 
   );
 });
 
+test("extractPreferenceSignals captures natural preferred-name corrections", () => {
+  const result = extractPreferenceSignals({
+    userId: "user_1",
+    taskId: "task_2",
+    message: "Bundan sonra bana Emre de, benim adım Emre.",
+  });
+
+  assert.ok(result.signals.some((signal) => signal.key === "preferred_name" && signal.value === "Emre"));
+  assert.ok(result.signals.some((signal) => signal.key === "name" && signal.value === "Emre"));
+  assert.ok(
+    result.signals
+      .filter((signal) => signal.key === "preferred_name" || signal.key === "name")
+      .every((signal) => signal.metadata?.explicit === true && signal.metadata?.sourceTurnId === "task_2"),
+  );
+});
+
+test("extractPreferenceSignals does not treat ordinary instructions as preferred names", () => {
+  const result = extractPreferenceSignals({
+    userId: "user_1",
+    message: "Bana kısa cevap ver ve gereksiz uzatma.",
+  });
+
+  assert.equal(result.signals.some((signal) => signal.key === "preferred_name"), false);
+});
+
 test("extractPreferenceSignals does not infer identity from non-explicit wording", () => {
   const result = extractPreferenceSignals({
     userId: "user_1",

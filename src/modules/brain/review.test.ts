@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildApprovedCorrectionDatasetExport, getApprovedCorrectionDatasetState } from "./review.js";
+import {
+  buildApprovedCorrectionDatasetExport,
+  exportSftReadyCorrectionsDataset,
+  getApprovedCorrectionDatasetState,
+} from "./review.js";
 
 class FakeSelectQuery<T> {
   constructor(private readonly result: T) {}
@@ -22,6 +26,36 @@ class FakeSelectQuery<T> {
     reject?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ) {
     return Promise.resolve(this.result).then(resolve, reject);
+  }
+}
+
+class FakeInsertBuilder {
+  private currentValues: Record<string, unknown> = {};
+
+  constructor(private readonly inserted: Array<Record<string, unknown>>) {}
+
+  values(values: Record<string, unknown>) {
+    this.currentValues = values;
+    this.inserted.push(values);
+    return this;
+  }
+
+  returning() {
+    return Promise.resolve([
+      {
+        id: this.currentValues.name === "Elyan SFT-ready approved corrections export" ? "dataset-sft-1" : "inserted-1",
+        createdAt: new Date("2030-01-04T00:00:00.000Z"),
+        updatedAt: new Date("2030-01-04T00:00:00.000Z"),
+        ...this.currentValues,
+      },
+    ]);
+  }
+
+  then<TResult1 = unknown[], TResult2 = never>(
+    resolve?: ((value: unknown[]) => TResult1 | PromiseLike<TResult1>) | null,
+    reject?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ) {
+    return Promise.resolve([] as unknown[]).then(resolve, reject);
   }
 }
 
@@ -66,6 +100,33 @@ function makeApprovedReview(input: {
       constitutionVersion: "v1",
       promptProfileVersion: "v1",
     } as never,
+  };
+}
+
+function makeApprovedLearningEvent(input: Parameters<typeof makeApprovedReview>[0]) {
+  const approved = makeApprovedReview(input);
+  return {
+    id: input.id,
+    userId: "user-1",
+    accountId: "user-1",
+    taskId: null,
+    type: "brain_interaction",
+    key: "response_scored",
+    value: input.modelResponse,
+    confidence: Math.round(input.evaluatorScore * 100),
+    scope: "user",
+    source: "brain_eval",
+    privacyLevel: "safe",
+    metadata: {
+      reviewedBy: "reviewer-1",
+      reviewedAt: input.reviewedAt,
+      review: approved.review,
+      approvalState: "approved",
+      approvedByHuman: true,
+      correctedAnswer: input.correctedAnswer,
+    },
+    expiresAt: null,
+    createdAt: new Date(input.reviewedAt),
   };
 }
 
@@ -158,4 +219,80 @@ test("getApprovedCorrectionDatasetState exposes additive compaction metadata", a
   assert.equal(state.compactionQualityScore, 0.8221);
   assert.equal(state.approvedCorrectionCount, 3);
   assert.equal(state.compactedRecordCount, 2);
+});
+
+test("exportSftReadyCorrectionsDataset creates a safe manifest from approved corrections", async () => {
+  const inserted: Array<Record<string, unknown>> = [];
+  const app = {
+    db: {
+      select() {
+        return new FakeSelectQuery([
+          makeApprovedLearningEvent({
+            id: "event-1",
+            prompt: "Kısa cevap ver ve mevcut mimariyi bozma.",
+            modelResponse: "Uzun bir cevap verelim.",
+            correctedAnswer: "Kısa cevap ver; mevcut mimariyi bozma.",
+            evaluatorScore: 0.92,
+            boundaryScore: 0.9,
+            reviewedAt: "2030-01-03T00:00:00.000Z",
+          }),
+        ]);
+      },
+      insert() {
+        return new FakeInsertBuilder(inserted);
+      },
+    },
+  };
+
+  const result = await exportSftReadyCorrectionsDataset(app as never, {
+    actorUserId: "admin-1",
+    requestId: "req-export",
+  });
+
+  const manifestInsert = inserted.find((entry) => entry.name === "Elyan SFT-ready approved corrections export");
+  assert.ok(manifestInsert);
+  assert.equal(result.manifest?.id, "dataset-sft-1");
+  assert.equal(result.manifest?.recordCount, 1);
+  assert.equal(result.manifest?.format, "instruction_jsonl");
+  assert.equal((manifestInsert.metadata as Record<string, unknown>).datasetRole, "sft_ready_corrections_jsonl");
+  assert.equal((manifestInsert.metadata as Record<string, unknown>).approvedCorrectionsOnly, true);
+  assert.equal((manifestInsert.metadata as Record<string, unknown>).sourceLineage, "approved_corrections");
+  assert.equal((manifestInsert.metadata as Record<string, unknown>).compactDatasetEligible, true);
+
+  const [line] = result.jsonl.trim().split("\n").map((item) => JSON.parse(item) as Record<string, unknown>);
+  assert.equal(line.instruction, "Follow Elyan Constitution and return the corrected bounded answer.");
+  assert.equal(line.expected_output, "Kısa cevap ver; mevcut mimariyi bozma.");
+  assert.equal("modelResponse" in line, false);
+  assert.equal("prompt" in line, false);
+  assert.equal((line.dataset_quality as Record<string, unknown>).sourceLineage, "approved_corrections");
+
+  const auditInsert = inserted.find((entry) => entry.action === "brain.dataset.export");
+  assert.ok(auditInsert);
+  assert.equal((auditInsert.payload as Record<string, unknown>).datasetRole, "sft_ready_corrections_jsonl");
+});
+
+test("exportSftReadyCorrectionsDataset keeps empty exports draft so training cannot consume them", async () => {
+  const inserted: Array<Record<string, unknown>> = [];
+  const app = {
+    db: {
+      select() {
+        return new FakeSelectQuery([]);
+      },
+      insert() {
+        return new FakeInsertBuilder(inserted);
+      },
+    },
+  };
+
+  const result = await exportSftReadyCorrectionsDataset(app as never, {
+    actorUserId: "admin-1",
+    requestId: "req-empty-export",
+  });
+
+  assert.equal(result.manifest?.status, "draft");
+  assert.equal(result.manifest?.recordCount, 0);
+  assert.equal(result.jsonl, "");
+  const manifestInsert = inserted.find((entry) => entry.name === "Elyan SFT-ready approved corrections export");
+  assert.equal(manifestInsert?.status, "draft");
+  assert.equal((manifestInsert?.metadata as Record<string, unknown>).compactDatasetEligible, false);
 });

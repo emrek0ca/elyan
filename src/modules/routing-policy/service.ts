@@ -1,11 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
-import {
-  isExplicitChartRequest,
-  isExplicitMathSurface3DRequest,
-  isExplicitMathOrLatexRequest,
-  isExplicitTableRequest,
-} from "../../core/understanding/structured-output-policy.js";
+import { selectPolicyWorkload } from "../../core/understanding/policy-rules.js";
 import type { UnderstandingIntent } from "../../core/understanding/types.js";
 import { isMateriallyAmbiguousUserPrompt, isShortFollowUpPrompt, isSocialChatPrompt, selectHybridMobileChatWorkload } from "../brain/chat-heuristics.js";
 import { normalizePlanBrainProfile, type PlanBrainProfile } from "../billing/catalog.js";
@@ -153,24 +148,6 @@ const MOBILE_DOCUMENT_EXPORT_PATTERNS = [
   /\b(pdf|word|docx|doc|belge|png|jpg|jpeg|webp|afiş|afis|poster|banner|kapak|thumbnail|screenshot|görsel|gorsel|resim|image)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i,
   /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(pdf|word|docx|doc|belge|png|jpg|jpeg|webp|afiş|afis|poster|banner|kapak|thumbnail|screenshot|görsel|gorsel|resim|image)\b/i,
   /\b(pdf olarak ver|pdf'e çevir|pdfe çevir|pdf yap|pdf oluştur|pdf üret|word olarak ver|word olarak hazırla|word yap|word oluştur|word üret|docx olarak hazırla|docx yap|docx oluştur|docx üret|görsel üret|görsel yap|görsel oluştur|resim üret|resim yap|image üret|image yap|png oluştur|png üret|jpg oluştur|jpg üret|jpeg oluştur|jpeg üret|webp oluştur|webp üret|afiş oluştur|afiş üret|afis oluştur|afis üret|poster oluştur|poster üret|banner oluştur|banner üret|kapak oluştur|kapak üret|thumbnail oluştur|thumbnail üret|screenshot oluştur|screenshot üret)\b/i,
-];
-// Yeni bir çok bölümlü belge/rapor ÜRETME niyeti (mevcut içeriği export değil).
-// document_generate workload'unu tetikler → model {"type":"document_block"} üretir.
-// NOT: Türkçe karakterler JS `\b` (ASCII word-boundary) ile çalışmadığından
-// Unicode-aware lookaround (?<!\p{L})...(?!\p{L}) kullanılıyor (bkz. memory:
-// "TÜRKÇE \b REGEX TUZAĞI"). "raporla"/"yazılım" gibi kelimelerin yanlış
-// eşleşmesini engeller.
-const DOC_NOUN = String.raw`(?:rapor\p{L}{0,8}|makale\p{L}{0,8}|belge\p{L}{0,8}|d[öo]k[üu]man\p{L}{0,8}|deneme\p{L}{0,8}|kompozisyon\p{L}{0,8}|dilek[çc]e\p{L}{0,8}|mektup\p{L}{0,8}|essay|article|report|bülten|bulten|kılavuz|kilavuz|sunum metni|köşe yaz[ıi]s[ıi]|kose yaz[ıi]s[ıi]|blog yaz[ıi]s[ıi]|blog post|taslak)`;
-const DOC_VERB = String.raw`(?:yaz|haz[ıi]rla|olu[şs]tur|[üu]ret|d[üu]zenle|kaleme al|derle|haz[ıi]rlay)`;
-const DOCUMENT_GENERATE_PATTERNS = [
-  new RegExp(`(?<!\\p{L})${DOC_NOUN}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_VERB}`, "iu"),
-  new RegExp(`(?<!\\p{L})${DOC_VERB}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_NOUN}(?!\\p{L})`, "iu"),
-];
-const DOCUMENT_OUTPUT_GENERATE_PATTERNS = [
-  /\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b.*\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|yap)\b/i,
-  /\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|yap)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b/i,
-  /\b(tasarım|tasarim|layout|şablon|sablon)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum metni)\b/i,
-  /\b(pdf olarak|word olarak|docx olarak)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle)\b/i,
 ];
 const QUANTUM_TOPIC_PATTERNS = [
   /\b(quantum|kuantum|qubo|ising|qaoa|vqe|qiskit|ocean sdk|dwave|d-wave|hamiltonian)\b/i,
@@ -732,22 +709,18 @@ function deriveSelectedWorkload(input: {
   if (input.route === "desktop_runtime" || input.route === "pairing_required" || input.route === "unavailable") {
     return "desktop_handoff";
   }
-  if (isExplicitTableRequest(input.message)) {
-    return "table_generate";
-  }
-  // Belge/rapor ÜRETME isteği → document_generate workload (model document_block
-  // üretir). Bu olmadan mobildeki document_block / pdf kartları HİÇ veri almıyordu
-  // çünkü hiçbir kod bu workload'u seçmiyordu. Mevcut içeriği export eden istekler
-  // (MOBILE_DOCUMENT_EXPORT) ve ek-okuma istekleri buraya düşmez; sadece açık
-  // üretme fiilleri (yaz/hazırla/oluştur/üret) + belge-türü isim eşleşince tetiklenir.
-  if (matchesAny(input.message, DOCUMENT_GENERATE_PATTERNS) || matchesAny(input.message, DOCUMENT_OUTPUT_GENERATE_PATTERNS)) {
-    return "document_generate";
+  // Structured workload rules live in a data-backed policy table so examples
+  // can become fixtures instead of hidden routing branches.
+  const prePlanningPolicyWorkload = selectPolicyWorkload(input.message, { phase: "pre_planning" });
+  if (prePlanningPolicyWorkload) {
+    return prePlanningPolicyWorkload;
   }
   if (input.intent === "planning_request") {
     return "planning";
   }
-  if (isExplicitMathSurface3DRequest(input.message) || isExplicitChartRequest(input.message) || isExplicitMathOrLatexRequest(input.message)) {
-    return "mobile_chat_balanced";
+  const postPlanningPolicyWorkload = selectPolicyWorkload(input.message, { phase: "post_planning" });
+  if (postPlanningPolicyWorkload) {
+    return postPlanningPolicyWorkload;
   }
   const hybrid = selectHybridMobileChatWorkload({
     message: input.message,

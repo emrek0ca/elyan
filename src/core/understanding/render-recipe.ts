@@ -1,6 +1,8 @@
-export type RenderRecipeFormat = "pdf" | "png" | "jpg" | "jpeg" | "webp" | "svg" | "docx" | "xlsx";
+export type RenderRecipeFormat =
+  "pdf" | "png" | "jpg" | "jpeg" | "webp" | "svg" | "docx" | "xlsx";
 export type RenderRecipeTarget = "mobile" | "desktop";
-export type RenderRecipeOutputType = "document_render_recipe" | "image_render_recipe";
+export type RenderRecipeOutputType =
+  "document_render_recipe" | "image_render_recipe";
 
 export type RenderRecipeBlock = {
   type: "title" | "heading" | "paragraph" | "bullet" | "list" | "table";
@@ -62,6 +64,15 @@ export type LocalRenderRecipe = {
   metadata: Record<string, unknown>;
 };
 
+type DocumentIntentHints = {
+  document_style: "formal" | "minimal" | "modern" | "standard";
+  document_kind:
+    "quote" | "invoice" | "receipt" | "report" | "letter" | "generic";
+  footer_text?: string;
+  signature_text?: string;
+  layout_template: "business_document" | "plain_document" | "visual_canvas";
+};
+
 const IMAGE_EXPORT_PATTERNS = [
   /\b(görsel|gorsel|resim|image|png|jpg|jpeg|webp|svg|afiş|afis|poster|banner|kapak|thumbnail|screenshot)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i,
   /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(görsel|gorsel|resim|image|png|jpg|jpeg|webp|svg|afiş|afis|poster|banner|kapak|thumbnail|screenshot)\b/i,
@@ -115,14 +126,19 @@ function mimeTypeForFormat(format: RenderRecipeFormat): string {
   }
 }
 
-function detectLanguage(value: string): LocalRenderRecipe["content_model"]["language"] {
+function detectLanguage(
+  value: string,
+): LocalRenderRecipe["content_model"]["language"] {
   const compact = compactText(value);
   if (!compact) {
     return "unknown";
   }
   const lowered = compact.toLocaleLowerCase("tr-TR");
-  const hasTurkish = /[çğıöşü]/i.test(compact) || /\b(selam|merhaba|ve|ile|için|bunu|belge|görsel|özet)\b/i.test(lowered);
-  const hasEnglish = /\b(the|and|for|with|document|image|summary|report)\b/i.test(lowered);
+  const hasTurkish =
+    /[çğıöşü]/i.test(compact) ||
+    /\b(selam|merhaba|ve|ile|için|bunu|belge|görsel|özet)\b/i.test(lowered);
+  const hasEnglish =
+    /\b(the|and|for|with|document|image|summary|report)\b/i.test(lowered);
   if (hasTurkish && hasEnglish) {
     return "mixed";
   }
@@ -143,25 +159,39 @@ function normalizeValue(value: unknown): string {
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
-function readString(record: Record<string, unknown> | null, key: string): string | null {
+function readString(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function readArray(record: Record<string, unknown> | null, key: string): unknown[] {
+function readArray(
+  record: Record<string, unknown> | null,
+  key: string,
+): unknown[] {
   const value = record?.[key];
   return Array.isArray(value) ? value : [];
 }
 
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+function readBoolean(
+  record: Record<string, unknown> | null,
+  key: string,
+): boolean | null {
   const value = record?.[key];
   return typeof value === "boolean" ? value : null;
 }
 
-function detectFormat(prompt: string, metadata?: Record<string, unknown>): RenderRecipeFormat | null {
+function detectFormat(
+  prompt: string,
+  metadata?: Record<string, unknown>,
+): RenderRecipeFormat | null {
   const metadataRecord = readRecord(metadata);
   const explicitFormat = normalizeValue(
     readString(metadataRecord, "exportFormat") ??
@@ -185,10 +215,19 @@ function detectFormat(prompt: string, metadata?: Record<string, unknown>): Rende
   if (explicitFormat === "svg") {
     return "svg";
   }
-  if (explicitFormat === "docx" || explicitFormat === "word" || explicitFormat === "doc") {
+  if (
+    explicitFormat === "docx" ||
+    explicitFormat === "word" ||
+    explicitFormat === "doc"
+  ) {
     return "docx";
   }
-  if (explicitFormat === "xlsx" || explicitFormat === "excel" || explicitFormat === "spreadsheet" || explicitFormat === "csv") {
+  if (
+    explicitFormat === "xlsx" ||
+    explicitFormat === "excel" ||
+    explicitFormat === "spreadsheet" ||
+    explicitFormat === "csv"
+  ) {
     return "xlsx";
   }
   if (explicitFormat === "pdf") {
@@ -220,7 +259,11 @@ function detectFormat(prompt: string, metadata?: Record<string, unknown>): Rende
     return "png";
   }
 
-  if (DOCUMENT_WORD_EXPORT_PATTERNS.some((pattern) => pattern.test(normalizedPrompt))) {
+  if (
+    DOCUMENT_WORD_EXPORT_PATTERNS.some((pattern) =>
+      pattern.test(normalizedPrompt),
+    )
+  ) {
     if (/\b(word|docx|doc)\b/i.test(normalizedPrompt)) {
       return "docx";
     }
@@ -230,7 +273,9 @@ function detectFormat(prompt: string, metadata?: Record<string, unknown>): Rende
     return "pdf";
   }
 
-  if (DOCUMENT_EXPORT_PATTERNS.some((pattern) => pattern.test(normalizedPrompt))) {
+  if (
+    DOCUMENT_EXPORT_PATTERNS.some((pattern) => pattern.test(normalizedPrompt))
+  ) {
     if (/\b(xlsx|excel|spreadsheet|csv)\b/i.test(normalizedPrompt)) {
       return "xlsx";
     }
@@ -240,7 +285,9 @@ function detectFormat(prompt: string, metadata?: Record<string, unknown>): Rende
   return null;
 }
 
-function detectRenderTarget(metadata?: Record<string, unknown>): RenderRecipeTarget {
+function detectRenderTarget(
+  metadata?: Record<string, unknown>,
+): RenderRecipeTarget {
   const metadataRecord = readRecord(metadata);
   const renderTarget = normalizeValue(
     readString(metadataRecord, "renderOn") ??
@@ -267,7 +314,11 @@ function collectAssetsNeeded(metadata?: Record<string, unknown>): string[] {
       if (typeof candidate === "string") {
         return candidate.trim();
       }
-      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      if (
+        !candidate ||
+        typeof candidate !== "object" ||
+        Array.isArray(candidate)
+      ) {
         return "";
       }
       const record = candidate as Record<string, unknown>;
@@ -284,6 +335,123 @@ function collectAssetsNeeded(metadata?: Record<string, unknown>): string[] {
     .filter(Boolean);
 
   return [...new Set(collected)].slice(0, 12);
+}
+
+function cleanInlineIntentText(value: string): string {
+  return cleanMarkdownText(value)
+    .replace(/^["'“”‘’]+|["'“”‘’.,;:\s]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
+
+function extractTrailingRequestedText(
+  prompt: string,
+  patterns: RegExp[],
+): string | null {
+  for (const pattern of patterns) {
+    const match = pattern.exec(prompt);
+    if (!match) {
+      continue;
+    }
+    const candidate = cleanInlineIntentText(match[1] ?? "");
+    if (candidate.length >= 2) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function detectDocumentIntentHints(
+  prompt: string,
+  metadata: Record<string, unknown>,
+  format: RenderRecipeFormat,
+): DocumentIntentHints {
+  const normalizedPrompt = compactText(prompt).toLocaleLowerCase("tr-TR");
+  const explicitStyle = normalizeValue(
+    readString(metadata, "document_style") ??
+      readString(metadata, "documentStyle") ??
+      readString(metadata, "style") ??
+      readString(metadata, "tone"),
+  );
+  const explicitKind = normalizeValue(
+    readString(metadata, "document_kind") ??
+      readString(metadata, "documentKind") ??
+      readString(metadata, "template") ??
+      readString(metadata, "layout_template"),
+  );
+
+  const document_style: DocumentIntentHints["document_style"] =
+    explicitStyle === "formal" ||
+    explicitStyle === "resmi" ||
+    /\b(resmi|kurumsal|profesyonel|teklif|fatura|makbuz)\b/i.test(
+      normalizedPrompt,
+    )
+      ? "formal"
+      : explicitStyle === "minimal" ||
+          /\b(minimal|sade|temiz)\b/i.test(normalizedPrompt)
+        ? "minimal"
+        : explicitStyle === "modern" ||
+            /\b(modern|şık|sik|tasarımlı|tasarimli)\b/i.test(normalizedPrompt)
+          ? "modern"
+          : "standard";
+
+  const document_kind: DocumentIntentHints["document_kind"] =
+    explicitKind === "quote" ||
+    explicitKind === "teklif" ||
+    /\b(teklif|proforma)\b/i.test(normalizedPrompt)
+      ? "quote"
+      : explicitKind === "invoice" ||
+          explicitKind === "fatura" ||
+          /\b(fatura)\b/i.test(normalizedPrompt)
+        ? "invoice"
+        : explicitKind === "receipt" ||
+            explicitKind === "makbuz" ||
+            /\b(makbuz|fiş|fis)\b/i.test(normalizedPrompt)
+          ? "receipt"
+          : explicitKind === "report" ||
+              explicitKind === "rapor" ||
+              /\b(rapor|analiz)\b/i.test(normalizedPrompt)
+            ? "report"
+            : explicitKind === "letter" ||
+                explicitKind === "dilekce" ||
+                /\b(dilekçe|dilekce|mektup)\b/i.test(normalizedPrompt)
+              ? "letter"
+              : "generic";
+
+  const footer_text =
+    readString(metadata, "footer_text") ??
+    readString(metadata, "footerText") ??
+    extractTrailingRequestedText(prompt, [
+      /(?:en\s+alt(?:\s+kısmında|\s+kisminda)?|alt(?:ına|ina|ta|ta\s+kısmında|ta\s+kisminda))\s+(.+?)\s+(?:yazsın|yazsin|yaz|olsun|ekle)(?:\b|$)/i,
+      /(?:footer|dipnot)\s+(?:olarak\s+)?(.+?)\s+(?:yazsın|yazsin|yaz|olsun|ekle)(?:\b|$)/i,
+    ]) ??
+    undefined;
+
+  const signature_text =
+    readString(metadata, "signature_text") ??
+    readString(metadata, "signatureText") ??
+    extractTrailingRequestedText(prompt, [
+      /(?:imza|imzası|imzasi|signed\s+by)\s*(?:olarak\s+)?(.+?)(?:\s+(?:yazsın|yazsin|yaz|olsun|ekle))?(?:\b|$)/i,
+    ]) ??
+    undefined;
+
+  return {
+    document_style,
+    document_kind,
+    ...(footer_text ? { footer_text } : {}),
+    ...(signature_text ? { signature_text } : {}),
+    layout_template:
+      format === "png" ||
+      format === "jpg" ||
+      format === "jpeg" ||
+      format === "webp" ||
+      format === "svg"
+        ? "visual_canvas"
+        : document_kind === "generic" && document_style === "standard"
+          ? "plain_document"
+          : "business_document",
+  };
 }
 
 function cleanMarkdownText(value: string): string {
@@ -310,7 +478,10 @@ function isMarkdownTableDivider(line: string): boolean {
   return /^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?$/.test(normalized);
 }
 
-function parseMarkdownTable(lines: string[], startIndex: number): { headers: string[]; rows: string[][]; nextIndex: number } | null {
+function parseMarkdownTable(
+  lines: string[],
+  startIndex: number,
+): { headers: string[]; rows: string[][]; nextIndex: number } | null {
   const headerLine = lines[startIndex]?.trim() ?? "";
   const dividerLine = lines[startIndex + 1]?.trim() ?? "";
   if (!headerLine.includes("|") || !isMarkdownTableDivider(dividerLine)) {
@@ -339,7 +510,12 @@ function parseMarkdownTable(lines: string[], startIndex: number): { headers: str
   return rows.length > 0 ? { headers, rows, nextIndex } : null;
 }
 
-function pushParagraphBlock(blocks: RenderRecipeBlock[], text: string, type: RenderRecipeBlock["type"] = "paragraph", level?: number) {
+function pushParagraphBlock(
+  blocks: RenderRecipeBlock[],
+  text: string,
+  type: RenderRecipeBlock["type"] = "paragraph",
+  level?: number,
+) {
   const normalized = cleanMarkdownText(text);
   if (!normalized) {
     return;
@@ -353,7 +529,9 @@ function pushParagraphBlock(blocks: RenderRecipeBlock[], text: string, type: Ren
 }
 
 function pushListBlock(blocks: RenderRecipeBlock[], items: string[]) {
-  const normalizedItems = items.map((item) => cleanMarkdownText(item).trim()).filter(Boolean);
+  const normalizedItems = items
+    .map((item) => cleanMarkdownText(item).trim())
+    .filter(Boolean);
   if (normalizedItems.length === 0) {
     return;
   }
@@ -366,7 +544,12 @@ function pushListBlock(blocks: RenderRecipeBlock[], items: string[]) {
   }
 }
 
-function pushTableBlock(blocks: RenderRecipeBlock[], headers: string[], rows: string[][], title?: string | null) {
+function pushTableBlock(
+  blocks: RenderRecipeBlock[],
+  headers: string[],
+  rows: string[][],
+  title?: string | null,
+) {
   if (headers.length === 0 || rows.length === 0) {
     return;
   }
@@ -374,7 +557,9 @@ function pushTableBlock(blocks: RenderRecipeBlock[], headers: string[], rows: st
     type: "table",
     text: cleanMarkdownText(title ?? ""),
     tableHeaders: headers.map((header) => cleanMarkdownText(header).trim()),
-    tableRows: rows.map((row) => row.map((cell) => cleanMarkdownText(cell).trim())),
+    tableRows: rows.map((row) =>
+      row.map((cell) => cleanMarkdownText(cell).trim()),
+    ),
     order: blocks.length,
   });
 }
@@ -406,7 +591,10 @@ function buildTextBlocks(responseText: string): RenderRecipeBlock[] {
     const bulletLines = lines
       .map((line) => compactText(line).replace(/^([-*•]|\d+\.)\s*/, ""))
       .filter(Boolean);
-    if (lines.every((line) => /^\s*([-*•]|\d+\.)\s+/.test(line.trim())) && bulletLines.length > 0) {
+    if (
+      lines.every((line) => /^\s*([-*•]|\d+\.)\s+/.test(line.trim())) &&
+      bulletLines.length > 0
+    ) {
       pushListBlock(blocks, bulletLines);
       continue;
     }
@@ -417,7 +605,12 @@ function buildTextBlocks(responseText: string): RenderRecipeBlock[] {
       compactSegment.length <= 96 &&
       !/[.!?…]$/.test(compactSegment) &&
       /^[A-ZÇĞİÖŞÜ0-9][\wÇĞİÖŞÜçğıöşü\s:,-]+$/u.test(compactSegment);
-    pushParagraphBlock(blocks, compactSegment, blocks.length === 0 ? "title" : isHeading ? "heading" : "paragraph", isHeading ? 2 : undefined);
+    pushParagraphBlock(
+      blocks,
+      compactSegment,
+      blocks.length === 0 ? "title" : isHeading ? "heading" : "paragraph",
+      isHeading ? 2 : undefined,
+    );
   }
 
   return blocks.slice(0, 18);
@@ -429,7 +622,9 @@ function readObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function buildTextBlocksFromAssistantBlocks(blocks: unknown[]): RenderRecipeBlock[] {
+function buildTextBlocksFromAssistantBlocks(
+  blocks: unknown[],
+): RenderRecipeBlock[] {
   const textBlocks: RenderRecipeBlock[] = [];
   for (const rawBlock of blocks) {
     const block = readObject(rawBlock);
@@ -470,12 +665,18 @@ function buildTextBlocksFromAssistantBlocks(blocks: unknown[]): RenderRecipeBloc
 
     if (type === "table") {
       const headers = Array.isArray(block.columns)
-        ? block.columns.map((value) => cleanMarkdownText(String(value ?? "")).trim()).filter(Boolean)
+        ? block.columns
+            .map((value) => cleanMarkdownText(String(value ?? "")).trim())
+            .filter(Boolean)
         : [];
       const rows = Array.isArray(block.rows)
         ? block.rows
             .map((row) =>
-              Array.isArray(row) ? row.map((cell) => cleanMarkdownText(String(cell ?? "")).trim()) : [],
+              Array.isArray(row)
+                ? row.map((cell) =>
+                    cleanMarkdownText(String(cell ?? "")).trim(),
+                  )
+                : [],
             )
             .filter((row) => row.length > 0)
         : [];
@@ -491,7 +692,13 @@ function buildTextBlocksFromAssistantBlocks(blocks: unknown[]): RenderRecipeBloc
 }
 
 function buildLayout(format: RenderRecipeFormat): RenderRecipeLayout {
-  if (format === "png" || format === "jpg" || format === "jpeg" || format === "webp" || format === "svg") {
+  if (
+    format === "png" ||
+    format === "jpg" ||
+    format === "jpeg" ||
+    format === "webp" ||
+    format === "svg"
+  ) {
     return {
       kind: "canvas",
       widthPx: 1080,
@@ -515,7 +722,10 @@ function buildLayout(format: RenderRecipeFormat): RenderRecipeLayout {
   };
 }
 
-function hasRenderRequest(prompt: string, metadata?: Record<string, unknown>): boolean {
+function hasRenderRequest(
+  prompt: string,
+  metadata?: Record<string, unknown>,
+): boolean {
   const format = detectFormat(prompt, metadata);
   if (format) {
     return true;
@@ -562,12 +772,22 @@ export function buildLocalRenderRecipe(input: {
   const format = detectFormat(input.prompt, input.metadata) ?? "pdf";
   const renderOn = input.renderOn ?? detectRenderTarget(input.metadata);
   const metadata = readRecord(input.metadata) ?? {};
+  const documentIntentHints = detectDocumentIntentHints(
+    input.prompt,
+    metadata,
+    format,
+  );
   const structuredTextBlocks =
     Array.isArray(input.assistantBlocks) && input.assistantBlocks.length > 0
       ? buildTextBlocksFromAssistantBlocks(input.assistantBlocks)
       : [];
-  const textBlocks = structuredTextBlocks.length > 0 ? structuredTextBlocks : buildTextBlocks(input.responseText);
-  const titleBlock = textBlocks.find((block) => block.type === "title" && compactText(block.text));
+  const textBlocks =
+    structuredTextBlocks.length > 0
+      ? structuredTextBlocks
+      : buildTextBlocks(input.responseText);
+  const titleBlock = textBlocks.find(
+    (block) => block.type === "title" && compactText(block.text),
+  );
   const title = titleBlock ? compactText(titleBlock.text).slice(0, 120) : null;
   const mimeType = mimeTypeForFormat(format);
   const extension = format === "jpeg" ? "jpg" : format;
@@ -577,8 +797,10 @@ export function buildLocalRenderRecipe(input: {
           .flatMap((block) => {
             if (block.type === "table") {
               return [
-                ...(block.tableHeaders ?? []).length > 0 ? [(block.tableHeaders ?? []).join(" | ")] : [],
-                ...((block.tableRows ?? []).map((row) => row.join(" | "))),
+                ...((block.tableHeaders ?? []).length > 0
+                  ? [(block.tableHeaders ?? []).join(" | ")]
+                  : []),
+                ...(block.tableRows ?? []).map((row) => row.join(" | ")),
               ];
             }
             if (Array.isArray(block.items) && block.items.length > 0) {
@@ -592,9 +814,21 @@ export function buildLocalRenderRecipe(input: {
     readString(metadata, "title") ?? title ?? input.prompt,
   )}.${extension}`;
   const outputType =
-    format === "png" || format === "jpg" || format === "jpeg" || format === "webp" || format === "svg"
+    format === "png" ||
+    format === "jpg" ||
+    format === "jpeg" ||
+    format === "webp" ||
+    format === "svg"
       ? "image_render_recipe"
       : "document_render_recipe";
+  const requiredMarkers = [
+    title,
+    documentIntentHints.footer_text ?? null,
+    documentIntentHints.signature_text ?? null,
+  ].filter(
+    (value): value is string =>
+      typeof value === "string" && compactText(value).length > 0,
+  );
   const recipe: LocalRenderRecipe = {
     schema_version: "2026-06-mobile-render-recipe-v2",
     output_type: outputType,
@@ -607,7 +841,13 @@ export function buildLocalRenderRecipe(input: {
       title,
       language: detectLanguage(`${input.prompt}\n${input.responseText}`),
       plain_text: compactText(plainTextSource),
-      estimated_pages: Math.max(1, Math.ceil(compactText(plainTextSource).length / (format === "pdf" ? 2400 : format === "xlsx" ? 1600 : 900))),
+      estimated_pages: Math.max(
+        1,
+        Math.ceil(
+          compactText(plainTextSource).length /
+            (format === "pdf" ? 2400 : format === "xlsx" ? 1600 : 900),
+        ),
+      ),
       block_count: textBlocks.length,
     },
     render_hints: {
@@ -623,6 +863,7 @@ export function buildLocalRenderRecipe(input: {
     render_on: renderOn,
     metadata: {
       ...metadata,
+      ...documentIntentHints,
       schema_version: "2026-06-mobile-render-recipe-v2",
       response_length: input.responseText.length,
       prompt_length: compactText(input.prompt).length,
@@ -630,9 +871,17 @@ export function buildLocalRenderRecipe(input: {
       output_format: format,
       mime_type: mimeType,
       file_name: fileName,
+      preflight_required: true,
+      required_markers: requiredMarkers,
       structured_block_count: structuredTextBlocks.length,
       preferred_export_family:
-        format === "xlsx" ? "spreadsheet" : format === "docx" ? "document" : outputType === "image_render_recipe" ? "image" : "document",
+        format === "xlsx"
+          ? "spreadsheet"
+          : format === "docx"
+            ? "document"
+            : outputType === "image_render_recipe"
+              ? "image"
+              : "document",
       render_intent:
         format === "pdf" || format === "docx" || format === "xlsx"
           ? "document_export"

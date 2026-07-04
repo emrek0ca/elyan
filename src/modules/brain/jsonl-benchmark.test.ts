@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import {
   detectSecretLeak,
   detectSystemPromptLeak,
   evaluateBenchmarkCase,
+  evaluateWorkloadBenchmarkCase,
+  loadBenchmarkCases,
   normalizeTarget,
   type BenchmarkCase,
 } from "./jsonl-benchmark.js";
@@ -149,4 +154,70 @@ test("evaluateBenchmarkCase verifies an artifact block is present", () => {
     reply: fakeReply({ text: "İşte tablo", blocks: [] }),
   });
   assert.equal(withoutArtifact.failures.includes("missing_artifact_table"), true);
+});
+
+test("loadBenchmarkCases normalizes input and message based fixtures", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "elyan-benchmark-"));
+  try {
+    await writeFile(
+      path.join(dir, "routing.jsonl"),
+      [
+        JSON.stringify({
+          id: "route-1",
+          category: "routing",
+          input: "Fransa'nın başkenti neresi?",
+          expected: { target: "server_brain" },
+        }),
+        JSON.stringify({
+          id: "workload-1",
+          message: "Selam",
+          primaryIntent: "chat",
+          expectedWorkload: "mobile_chat_fast",
+        }),
+        JSON.stringify({
+          id: "block-1",
+          message: "Bana 7 günlük çalışma planı hazırla",
+          expected: {
+            workload: "planning",
+            primaryShape: "list",
+            tablePolicy: "forbidden",
+            expectedBlockTypes: ["text"],
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const cases = await loadBenchmarkCases(dir);
+
+    assert.equal(cases.length, 3);
+    assert.equal(cases[0]?.input, "Fransa'nın başkenti neresi?");
+    assert.equal(cases[1]?.input, "Selam");
+    assert.equal(cases[1]?.expected.workload, "mobile_chat_fast");
+    assert.equal(cases[2]?.input, "Bana 7 günlük çalışma planı hazırla");
+    assert.deepEqual(cases[2]?.expected.expectedBlockTypes, ["text"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("evaluateWorkloadBenchmarkCase fails on workload mismatch", () => {
+  const result = evaluateWorkloadBenchmarkCase({
+    testCase: {
+      id: "workload-1",
+      category: "workload-routing",
+      input: "Detaylı plan çıkar",
+      expected: { workload: "planning" },
+    },
+    routeDecision: {
+      route: "server_brain",
+      selectedWorkload: "mobile_chat_fast",
+    } as never,
+  });
+
+  assert.equal(result.pass, false);
+  assert.deepEqual(result.failures, [
+    "workload_expected_planning_got_mobile_chat_fast",
+  ]);
+  assert.equal(result.workload_expected, "planning");
+  assert.equal(result.workload_actual, "mobile_chat_fast");
 });

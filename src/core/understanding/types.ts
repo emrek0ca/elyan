@@ -185,6 +185,50 @@ export type UserProfileSnapshot = {
   preferredLanguage: string | null;
 };
 
+export type DialogueUserMemorySnapshot = {
+  name: string | null;
+  preferredName: string | null;
+  preferredLanguage: string | null;
+  preferredTone: string | null;
+  responseStyle: string | null;
+  timezone: string | null;
+  updatedAt: string | null;
+};
+
+export type UserModelEvidence = {
+  key: string;
+  value: string;
+  source: "explicit_user" | "verified_memory" | "inferred";
+  confidence: number;
+  updatedAt: string;
+};
+
+export type CanonicalUserModel = {
+  revision: 1;
+  identity: {
+    displayName: string | null;
+    preferredName: string | null;
+  };
+  communication: {
+    preferredLanguage: string | null;
+    preferredTone: string | null;
+    responseStyle: string | null;
+  };
+  locale: { timezone: string | null };
+  evidence: UserModelEvidence[];
+};
+
+export type MemoryRecallPackage = {
+  facts: Array<{ key: string; value: string; confidence: number; ageDays: number }>;
+  episodes: Array<{ topic: string; when: string; summary: string }>;
+  style: {
+    preferredName: string | null;
+    preferredLanguage: string | null;
+    preferredTone: string | null;
+    responseStyle: string | null;
+  };
+};
+
 export type ActiveGoalContext = {
   id: string;
   title: string;
@@ -236,6 +280,9 @@ export type UserUnderstandingContext = {
   retrievedMemory: RetrievedMemory[];
   memorySnapshot?: MemoryProfileSnapshot;
   userProfile?: UserProfileSnapshot;
+  dialogueUserMemory?: DialogueUserMemorySnapshot;
+  userModel?: CanonicalUserModel;
+  memoryRecall?: MemoryRecallPackage;
   tokenBudget: {
     maxHints: number;
     maxChars: number;

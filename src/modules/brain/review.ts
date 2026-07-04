@@ -757,7 +757,7 @@ async function createDatasetExportManifest(
           : "Elyan SFT-ready approved corrections export",
       source: "manual_curation",
       format: "instruction_jsonl",
-      status: "ready",
+      status: input.lines.length > 0 ? "ready" : "draft",
       description:
         input.datasetRole === "approved_corrections_jsonl"
           ? "Versioned export of human-approved Elyan correction reviews."

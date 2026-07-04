@@ -20,6 +20,8 @@
  *   extract_facts   — name / city extraction from user text
  *   derive_hints    — world signal → behavioural/situational hints
  *   classify_intent — fast Turkish/English intent label
+ *   normalize_text   — strip control/zero-width/bidi chars + collapse spaces
+ *   tokenize_retrieval — lowercase retrieval tokens without stemming
  */
 
 #include <stdio.h>
@@ -844,6 +846,76 @@ static void h_tokenize(const char *json, const char *id) {
   printf("]}\n");
 }
 
+static int is_zero_width_or_bidi(const char *p) {
+  const unsigned char *u = (const unsigned char *)p;
+  if (u[0] == 0xEF && u[1] == 0xBB && u[2] == 0xBF) return 3; /* FEFF */
+  if (u[0] == 0xE2 && u[1] == 0x80 && u[2] >= 0x8B && u[2] <= 0x8F) return 3; /* 200B-200F */
+  if (u[0] == 0xE2 && u[1] == 0x80 && u[2] >= 0xAA && u[2] <= 0xAE) return 3; /* 202A-202E */
+  if (u[0] == 0xE2 && u[1] == 0x81 && u[2] >= 0xA6 && u[2] <= 0xA9) return 3; /* 2066-2069 */
+  return 0;
+}
+
+static int normalize_text_core(const char *src, char *dst, int dmax) {
+  int d = 0, modified = 0, pending_space = 0;
+  const char *p = src;
+  while (*p && d < dmax - 4) {
+    unsigned char c = (unsigned char)*p;
+    int zw = is_zero_width_or_bidi(p);
+    if (zw > 0) {
+      p += zw;
+      modified = 1;
+      continue;
+    }
+    if ((c < 0x20 && c != '\t' && c != '\n' && c != '\r') || c == 0x7F) {
+      p++;
+      modified = 1;
+      continue;
+    }
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      pending_space = d > 0;
+      if (c != ' ') modified = 1;
+      p++;
+      continue;
+    }
+    if (pending_space && d < dmax - 2) {
+      dst[d++] = ' ';
+      pending_space = 0;
+    }
+    int step = utf8_step(p);
+    for (int i = 0; i < step && p[i] && d < dmax - 1; i++) {
+      dst[d++] = p[i];
+    }
+    p += step;
+  }
+  if (pending_space) modified = 1;
+  dst[d] = '\0';
+  return modified || strcmp(src, dst) != 0;
+}
+
+static void h_normalize_text(const char *json, const char *id) {
+  char text[MAX_LINE]={0};
+  if (!jstr(json,"text",text,sizeof(text))) { write_err(id,"missing text"); return; }
+  char normalized[MAX_LINE]={0};
+  int modified = normalize_text_core(text, normalized, sizeof(normalized));
+  char escaped[MAX_LINE*2]={0};
+  json_esc(normalized, escaped, sizeof(escaped));
+  write_ok(id); printf(",\"text\":\"%s\",\"modified\":%s}\n", escaped, modified ? "true" : "false");
+}
+
+static void h_tokenize_retrieval(const char *json, const char *id) {
+  char text[MAX_LINE]={0};
+  if (!jstr(json,"text",text,sizeof(text))) { write_err(id,"missing text"); return; }
+  char toks[120][MAX_TOKEN_LEN];
+  int n = tokenize_retrieval(text, toks, 120);
+  write_ok(id); printf(",\"tokens\":[");
+  for (int i=0;i<n;i++) {
+    char esc[MAX_TOKEN_LEN*2]; json_esc(toks[i],esc,sizeof(esc));
+    if (i) putchar(',');
+    printf("\"%s\"", esc);
+  }
+  printf("]}\n");
+}
+
 static void h_score_bm25(const char *json, const char *id) {
   char q[MAX_LINE]={0}, d[MAX_LINE]={0};
   jstr(json,"query",q,sizeof(q)); jstr(json,"doc",d,sizeof(d));
@@ -1432,6 +1504,8 @@ int main(void) {
     jstr(line,"type",type,sizeof(type)); jstr(line,"_id",req_id,sizeof(req_id));
     if      (!strcmp(type,"ping"))            h_ping(req_id);
     else if (!strcmp(type,"tokenize"))        h_tokenize(line,req_id);
+    else if (!strcmp(type,"normalize_text"))  h_normalize_text(line,req_id);
+    else if (!strcmp(type,"tokenize_retrieval")) h_tokenize_retrieval(line,req_id);
     else if (!strcmp(type,"score_bm25"))      h_score_bm25(line,req_id);
     else if (!strcmp(type,"bm25_batch"))      h_bm25_batch(line,req_id);
     else if (!strcmp(type,"embed_256"))       h_embed_256(line,req_id);

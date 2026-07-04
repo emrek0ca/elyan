@@ -34,6 +34,8 @@ test("loadEnv derives iyzico public base url from app base url", () => {
   assert.equal(env.ELYAN_SHARED_BRAIN_BALANCED_MODEL, "qwen2.5:7b-instruct-q5_K_M");
   assert.equal(env.ELYAN_SHARED_BRAIN_PLANNING_MODEL, "qwen2.5:7b-instruct-q5_K_M");
   assert.equal(env.ELYAN_WORLD_CONTEXT_PACKETS_ENABLED, true);
+  assert.equal(env.ELYAN_MODEL_CANARY_ENABLED, false);
+  assert.equal(env.ELYAN_MODEL_PRIMARY_ENABLED, false);
 });
 
 test("getBaseUrlReachability flags loopback origins as unreachable for other devices", () => {

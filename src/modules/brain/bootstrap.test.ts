@@ -155,10 +155,16 @@ test("ensureElyanServerBrainBootstrap seeds a shared brain device and shared tra
         (entry.values["config"] as Record<string, unknown>).providerStrategy &&
         typeof (entry.values["config"] as Record<string, unknown>).providerStrategy === "object" &&
         !Array.isArray((entry.values["config"] as Record<string, unknown>).providerStrategy) &&
+        ((entry.values["config"] as Record<string, unknown>).providerStrategy as Record<string, unknown>)
+          .learningProvider === "elyan" &&
         Array.isArray(
           ((entry.values["config"] as Record<string, unknown>).providerStrategy as Record<string, unknown>).fallback,
         ) &&
-        (((entry.values["config"] as Record<string, unknown>).providerStrategy as Record<string, unknown>).fallback as Array<unknown>).length === 0,
+        (((entry.values["config"] as Record<string, unknown>).providerStrategy as Record<string, unknown>).fallback as Array<unknown>).includes(
+          "elyan_shadow_until_quality_gate",
+        ) &&
+        ((entry.values["config"] as Record<string, unknown>).providerStrategy as Record<string, unknown>)
+          .retirementPolicy === "operator_approval_after_eval_benchmark_latency_gates",
     ),
     true,
   );

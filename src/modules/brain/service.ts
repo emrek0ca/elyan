@@ -24,6 +24,8 @@ import {
 import { badRequest, conflict, forbidden, notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
 import { getSharedBrainTargetDevice, listUserDevices } from "../devices/service.js";
+import { buildElyanModelLearningPolicy } from "./elyan-model-learning-policy.js";
+import { buildElyanModelProviderPlan } from "./elyan-model-provider-plan.js";
 import { probeSharedBrainInference } from "./inference.js";
 import { getBrainLatencySummary, type BrainLatencySummary } from "./latency-summary.js";
 import { resolveSharedBrainModel } from "./model-resolution.js";
@@ -1707,6 +1709,32 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     },
     hostedConfigured,
   };
+  const elyanModelLearningPolicy = buildElyanModelLearningPolicy({
+    groqConfigured,
+    costGuardEnabled: Boolean(app.config.ELYAN_COST_GUARD_ENABLED),
+    activeSharedModelId: activeSharedModel?.id ?? null,
+    activeUserModelId: activeUserModel?.id ?? null,
+    warmupJobId: warmupJob?.id ?? null,
+    warmupJobStatus: warmupJob?.status ?? null,
+    qualityGateStatus: qualityGate.status,
+    qualityGateReasons: qualityGate.reasons,
+    promotionGateStatus: promotionEligibility.status,
+    promotionGateReasons: promotionEligibility.reasons,
+    approvedCorrectionDatasetReady: approvedCorrectionDataset.ready,
+    compactDatasetEligible: approvedCorrectionDataset.compactDatasetEligible,
+    evaluationScore: readNumberMetadata(activeSharedModel?.metadata, "evaluationScore"),
+    benchmarkScore: benchmarkSummary.latestOverallScore,
+    recentTimeoutCount: brainLatency.recentBrainTimeoutCount,
+  });
+  const elyanModelProviderPlan = buildElyanModelProviderPlan({
+    policy: elyanModelLearningPolicy,
+    artifact: activeArtifact,
+    workload: "mobile_chat_fast",
+    runtimeProvider: runtimeSnapshot.provider,
+    runtimeReady: runtimeSnapshot.ready,
+    canaryEnabled: Boolean(app.config.ELYAN_MODEL_CANARY_ENABLED),
+    primaryEnabled: Boolean(app.config.ELYAN_MODEL_PRIMARY_ENABLED),
+  });
   const skills = await getPublicSkillCatalog();
 
   const profile = {
@@ -1806,6 +1834,7 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         lastBrainResponseAt: brainLatency.lastBrainResponseAt,
       },
       currentServingPolicy,
+      elyanProviderPlan: elyanModelProviderPlan,
       activeArtifact,
       activeKnowledgeCorpus,
       recentLatencyPressure,
@@ -1869,6 +1898,8 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       qualityGate,
       signalFreshness,
       correctionDatasetStatus: approvedCorrectionDataset,
+      elyanModel: elyanModelLearningPolicy,
+      elyanProviderPlan: elyanModelProviderPlan,
     },
     memory: {
       workingMemoryBudget: {
@@ -2014,6 +2045,8 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         inferenceReady,
         runtimeReady,
       },
+      elyanModel: elyanModelLearningPolicy,
+      elyanProviderPlan: elyanModelProviderPlan,
       brainLatency,
     },
   };
@@ -2160,6 +2193,9 @@ export async function queueContinuousBrainTrainingJob(
 ) {
   const profile = await getBrainProfile(app, input.userId);
   const activeSharedJob = profile.training.pipeline.continuousImprovement.activeSharedJobId;
+  const elyanModelPolicy = profile.training.elyanModel ?? profile.learning.elyanModel ?? null;
+  const elyanProviderPlan =
+    profile.training.elyanProviderPlan ?? profile.learning.elyanProviderPlan ?? profile.chat.elyanProviderPlan ?? null;
 
   if (activeSharedJob) {
     const rows = await app.db
@@ -2172,6 +2208,8 @@ export async function queueContinuousBrainTrainingJob(
       job: rows[0] ?? null,
       created: false,
       reason: "active_shared_job_exists" as const,
+      elyanModel: elyanModelPolicy,
+      elyanProviderPlan,
     };
   }
 
@@ -2210,6 +2248,8 @@ export async function queueContinuousBrainTrainingJob(
         queueQualityGate.status === "blocked_quality_regression"
           ? ("quality_gate_regression" as const)
           : ("quality_gate_low_signal" as const),
+      elyanModel: elyanModelPolicy,
+      elyanProviderPlan,
     };
   }
 
@@ -2237,6 +2277,8 @@ export async function queueContinuousBrainTrainingJob(
       job: null,
       created: false,
       reason: "approved_correction_dataset_required" as const,
+      elyanModel: elyanModelPolicy,
+      elyanProviderPlan,
     };
   }
 
@@ -2261,6 +2303,8 @@ export async function queueContinuousBrainTrainingJob(
       job: null,
       created: false,
       reason: "benchmark_baseline_required" as const,
+      elyanModel: elyanModelPolicy,
+      elyanProviderPlan,
     };
   }
 
@@ -2311,6 +2355,8 @@ export async function queueContinuousBrainTrainingJob(
       job: null,
       created: false,
       reason: "approved_correction_lineage_required" as const,
+      elyanModel: elyanModelPolicy,
+      elyanProviderPlan,
     };
   }
 
@@ -2371,6 +2417,8 @@ export async function queueContinuousBrainTrainingJob(
         qualitySignalSummary: profile.training.qualitySignalSummary,
         personaTarget: profile.training.pipeline.personaTarget,
         mobileChatFocus: profile.training.pipeline.mobileChatFocus,
+        elyanModel: elyanModelPolicy,
+        elyanProviderPlan,
         signalFreshness: profile.training.signalFreshness,
         datasetSnapshot: {
           datasetManifestId: approvedDataset.id,
@@ -2380,7 +2428,20 @@ export async function queueContinuousBrainTrainingJob(
         },
         providerStrategy: {
           primary: app.config.ELYAN_SHARED_BRAIN_PROVIDER,
-          fallback: [],
+          learningProvider: "elyan",
+          servingStrategy: elyanModelPolicy?.servingStrategy ?? "groq_primary_elyan_learning",
+          groqRole: elyanModelPolicy?.groqRole ?? "primary",
+          elyanRole: elyanModelPolicy?.elyanRole ?? "learning",
+          liveRoutingEnabled: elyanProviderPlan?.liveRoutingEnabled ?? false,
+          routeReason: elyanProviderPlan?.routeReason ?? "no_ready_elyan_model",
+          traffic: elyanProviderPlan?.traffic ?? {
+            groqPercent: 100,
+            elyanShadowPercent: 0,
+            elyanCanaryPercent: 0,
+            elyanPrimaryPercent: 0,
+          },
+          fallback: ["elyan_shadow_until_quality_gate"],
+          retirementPolicy: "operator_approval_after_eval_benchmark_latency_gates",
         },
         constitutionVersion: ELYAN_CONSTITUTION_VERSION,
         promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
@@ -2395,6 +2456,8 @@ export async function queueContinuousBrainTrainingJob(
         approvedCorrectionDatasetVersion: approvedDatasetVersion,
         datasetLineage: approvedDatasetCompaction.sourceLineage ?? "approved_corrections",
         datasetCompaction: approvedDatasetCompaction,
+        elyanModel: elyanModelPolicy,
+        elyanProviderPlan,
       },
     })
     .returning();
@@ -2428,6 +2491,8 @@ export async function queueContinuousBrainTrainingJob(
         approvedCorrectionDatasetId: approvedDataset.id,
         approvedCorrectionDatasetVersion: approvedDatasetVersion,
         latestBenchmarkScore: benchmarkSummary.latestOverallScore,
+        elyanModel: elyanModelPolicy,
+        elyanProviderPlan,
       },
     });
   }
@@ -2436,6 +2501,8 @@ export async function queueContinuousBrainTrainingJob(
     job,
     created: true,
     reason: "queued_shared_refresh" as const,
+    elyanModel: elyanModelPolicy,
+    elyanProviderPlan,
   };
 }
 

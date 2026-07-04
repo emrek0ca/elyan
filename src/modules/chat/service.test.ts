@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildChatDispatchDeliverySnapshot,
+  buildChatTurnAdmissionLockKey,
   enrichChatMetadataForRequest,
   extractAttachmentCandidatesFromChatRows,
   getChatSessionDetail,
@@ -11,6 +12,35 @@ import {
   resolveChatSessionTargetDeviceId,
   trimConversationForSharedBrain,
 } from "./service.js";
+
+test("buildChatTurnAdmissionLockKey normalizes same prompt for admission dedupe", () => {
+  const first = buildChatTurnAdmissionLockKey({
+    userId: "user-1",
+    sessionId: "session-1",
+    content: "  Selam   Zeynep  ",
+  });
+  const second = buildChatTurnAdmissionLockKey({
+    userId: "user-1",
+    sessionId: "session-1",
+    content: "selam zeynep",
+  });
+  const otherSession = buildChatTurnAdmissionLockKey({
+    userId: "user-1",
+    sessionId: "session-2",
+    content: "selam zeynep",
+  });
+
+  assert.equal(first, second);
+  assert.notEqual(first, otherSession);
+  assert.equal(
+    buildChatTurnAdmissionLockKey({
+      userId: "user-1",
+      sessionId: "session-1",
+      content: "   ",
+    }),
+    null,
+  );
+});
 
 class FakeQuery<T> {
   private readonly result: T;

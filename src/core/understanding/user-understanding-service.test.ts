@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildSynchronousMemoryOpsFromLearningSignals,
   emptyUnderstanding,
   persistLearningSignals,
   recordBlockQualityLearning,
@@ -8,6 +9,68 @@ import {
   recordTaskFeedback,
   recordTaskLearningFromCompletion,
 } from "./user-understanding-service.js";
+
+function createLearningMemoryFakeApp() {
+  const learningRows: unknown[] = [];
+  const memoryFacts: Array<Record<string, unknown>> = [];
+
+  const db: any = {
+    transaction<T>(fn: (tx: typeof db) => Promise<T>) {
+      return fn(db);
+    },
+    insert() {
+      return {
+        values: async (values: unknown[] | Record<string, unknown>) => {
+          if (Array.isArray(values)) {
+            learningRows.push(...values);
+            return;
+          }
+          memoryFacts.push(values);
+        },
+      };
+    },
+    update() {
+      return {
+        set(values: Record<string, unknown>) {
+          for (const row of memoryFacts) {
+            Object.assign(row, values);
+          }
+          return {
+            where: async () => [],
+          };
+        },
+      };
+    },
+    select() {
+      return {
+        from() {
+          return this;
+        },
+        where() {
+          return this;
+        },
+        limit: async () => [],
+      };
+    },
+  };
+
+  return {
+    app: {
+      config: {
+        ELYAN_LEARNING_EXTRACTION_ENABLED: true,
+        ELYAN_MEMORY_FABRIC_V2_ENABLED: true,
+      },
+      db,
+      log: {
+        info: () => undefined,
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+    } as never,
+    learningRows,
+    memoryFacts,
+  };
+}
 
 test("emptyUnderstanding keeps best-effort answering enabled instead of forcing clarification", () => {
   const result = emptyUnderstanding({
@@ -71,6 +134,81 @@ test("persistLearningSignals stores only policy-approved safe events", async () 
   assert.equal(count, 1);
   assert.equal(inserted.length, 1);
   assert.equal((inserted[0] as { key: string }).key, "answer_length");
+});
+
+test("buildSynchronousMemoryOpsFromLearningSignals keeps only explicit durable profile facts", () => {
+  const ops = buildSynchronousMemoryOpsFromLearningSignals([
+    {
+      type: "identity",
+      key: "preferred_name",
+      value: "Emre",
+      confidence: 0.96,
+      scope: "user",
+      source: "interaction",
+      ttlDays: null,
+      metadata: { explicit: true },
+    },
+    {
+      type: "style",
+      key: "answer_length",
+      value: "concise",
+      confidence: 0.82,
+      scope: "user",
+      source: "interaction",
+      ttlDays: null,
+      metadata: { explicit: true },
+    },
+    {
+      type: "identity",
+      key: "preferred_language",
+      value: "turkish",
+      confidence: 0.82,
+      scope: "user",
+      source: "interaction",
+      ttlDays: null,
+    },
+  ]);
+
+  assert.deepEqual(ops, [
+    {
+      op: "write",
+      kind: "preference",
+      key: "preferred_name",
+      value: "Emre",
+      confidence: 0.96,
+      ttl_days: undefined,
+    },
+  ]);
+});
+
+test("persistLearningSignals synchronously writes explicit preferred name into memory fabric", async () => {
+  const fake = createLearningMemoryFakeApp();
+
+  const count = await persistLearningSignals(fake.app, {
+    userId: "00000000-0000-0000-0000-000000000001",
+    taskId: "00000000-0000-0000-0000-000000000002",
+    signals: [
+      {
+        type: "identity",
+        key: "preferred_name",
+        value: "Emre",
+        confidence: 0.96,
+        scope: "user",
+        source: "interaction",
+        ttlDays: null,
+        metadata: { explicit: true, sourceTurnId: "00000000-0000-0000-0000-000000000002" },
+      },
+    ],
+    requestId: "req_2",
+  });
+
+  assert.equal(count, 1);
+  assert.equal(fake.learningRows.length, 1);
+  assert.equal(fake.memoryFacts.length, 1);
+  assert.equal(fake.memoryFacts[0]?.canonicalKey, "preferred_name");
+  assert.equal(fake.memoryFacts[0]?.value, "Emre");
+  assert.equal(fake.memoryFacts[0]?.confidence, 96);
+  assert.equal((fake.memoryFacts[0]?.metadata as { source?: string } | undefined)?.source, "turn_envelope");
 });
 
 test("recordBridgeLearningSignals stores safe routing and bridge outcome signals", async () => {

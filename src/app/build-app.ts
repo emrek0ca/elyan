@@ -32,6 +32,7 @@ import { billingRoutes } from "../modules/billing/routes.js";
 import { brainRoutes } from "../modules/brain/routes.js";
 import { chatRoutes } from "../modules/chat/routes.js";
 import { goalRoutes } from "../modules/goals/routes.js";
+import { consentRoutes } from "../modules/consents/routes.js";
 import { adminRoutes } from "../modules/admin/routes.js";
 import { trainPanelRoutes } from "../modules/admin/train-panel.js";
 import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
@@ -411,6 +412,7 @@ export async function buildApp(envInput?: AppEnv) {
   await app.register(brainRoutes, { prefix: "/v1/brain" });
   await app.register(chatRoutes, { prefix: "/v1/chat" });
   await app.register(goalRoutes, { prefix: "/v1/goals" });
+  await app.register(consentRoutes, { prefix: "/v1/consents" });
   await app.register(adminRoutes, { prefix: "/v1/admin" });
   await app.register(trainPanelRoutes);
   return app;

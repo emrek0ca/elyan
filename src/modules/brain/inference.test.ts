@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AppError } from "../../lib/errors.js";
+import { brainMemoryEpisodes, proactiveTriggers } from "../../db/schema.js";
 import { getCircuitState } from "../../lib/reliability/circuit-breaker.js";
 import { ReliabilityStore } from "../../lib/reliability/redis.js";
 import {
@@ -22,7 +23,22 @@ import {
   resolveEffectiveWorkload,
   resolveGenerationTemperature,
   resolveReasoningEffort,
+  shouldUseLegacyMemoryPrompt,
 } from "./inference.js";
+
+test("legacy memory prompt remains selected when structured user model is disabled", () => {
+  assert.equal(shouldUseLegacyMemoryPrompt(undefined), true);
+  assert.equal(shouldUseLegacyMemoryPrompt({ memoryRecall: undefined } as never), true);
+  assert.equal(
+    shouldUseLegacyMemoryPrompt({
+      memoryRecall: {
+        facts: [], episodes: [],
+        style: { preferredName: null, preferredLanguage: null, preferredTone: null, responseStyle: null },
+      },
+    } as never),
+    false,
+  );
+});
 
 test("isReasoningOnlyReply flags a pure thinking-process dump as retryable", () => {
   assert.equal(
@@ -249,7 +265,7 @@ test("generateSharedBrainReply returns deterministic math_surface_3d block for z
     userId: "user-1",
     prompt: "z = x^3 + y^2 fonksiyonunun 3 boyutlu yüzey grafiğini çiz",
     internalEvaluation: {
-      skipUsageValidation: true,
+      skipUsageValidation: true, skipConsentValidation: true,
       skipInvocationLogging: true,
       skipReviewLogging: true,
     },
@@ -270,7 +286,7 @@ test("generateSharedBrainReply chooses a default polynomial for open-ended 3d gr
     userId: "user-1",
     prompt: "Bir polinom yaz ve 3 boyutlu grafiğini çiz",
     internalEvaluation: {
-      skipUsageValidation: true,
+      skipUsageValidation: true, skipConsentValidation: true,
       skipInvocationLogging: true,
       skipReviewLogging: true,
     },
@@ -291,7 +307,7 @@ test("generateSharedBrainReply normalizes unicode powers and implicit multiplica
     userId: "user-1",
     prompt: "z = x³ - 3xy² + 3x²y - y³ fonksiyonunun 3 boyutlu yüzey grafiğini çiz",
     internalEvaluation: {
-      skipUsageValidation: true,
+      skipUsageValidation: true, skipConsentValidation: true,
       skipInvocationLogging: true,
       skipReviewLogging: true,
     },
@@ -310,7 +326,7 @@ test("generateSharedBrainReply uses gradientMagnitude color channel for 4d surfa
     userId: "user-1",
     prompt: "4 boyutlu grafik çiz: z = x^3 + y^2",
     internalEvaluation: {
-      skipUsageValidation: true,
+      skipUsageValidation: true, skipConsentValidation: true,
       skipInvocationLogging: true,
       skipReviewLogging: true,
     },
@@ -328,7 +344,7 @@ test("generateGovernedSharedBrainReply preserves math_surface_3d blocks instead 
     userId: "user-1",
     prompt: "Z= x^5 - y^2 fonksiyonunun 3 boyutlu grafiğini çiz",
     internalEvaluation: {
-      skipUsageValidation: true,
+      skipUsageValidation: true, skipConsentValidation: true,
       skipInvocationLogging: true,
       skipReviewLogging: true,
     },
@@ -462,7 +478,7 @@ test("generateSharedBrainReply warms Ollama and serves chat without a promoted s
         userId: "user-1",
         prompt: "Selam",
         route: "shared_brain",
-        internalEvaluation: { skipUsageValidation: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
@@ -575,7 +591,7 @@ test("generateSharedBrainReply sends max_tokens to Groq and trims stale mobile c
         workload: "mobile_chat_fast",
         conversation,
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
         },
       }),
   );
@@ -594,6 +610,753 @@ test("generateSharedBrainReply sends max_tokens to Groq and trims stale mobile c
   assert.equal(messageContents.includes("recent-e"), true);
   assert.equal(messageContents.includes("old-a"), false);
   assert.equal(messageContents.includes("old-b"), false);
+});
+
+test("generateSharedBrainReply uses TurnEnvelope response_format behind the flag", async () => {
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      assert.equal(url.endsWith("/chat/completions"), true);
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestedBodies.push(body);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  reply: { text: "Selam Emre.", lang: "tr", tone: "warm" },
+                  blocks: [{ type: "summary", summary: "Kısa özet" }],
+                  memory_ops: [
+                    {
+                      op: "write",
+                      kind: "preference",
+                      key: "address_name",
+                      value: "Emre",
+                      confidence: 0.9,
+                    },
+                  ],
+                  goal_ops: [],
+                  follow_ups: [{ due: "tomorrow", topic: "F2", nudge: "F2 nasıl gitti?" }],
+                  tool_requests: [],
+                  affect: { user_mood_guess: "focused", energy: "high", register: "technical" },
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Selam",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.text, "Selam Emre.");
+  assert.equal(result.metadata.turnEnvelopeMode, true);
+  assert.equal(result.metadata.turnEnvelopeParseOk, true);
+  assert.equal(result.metadata.memoryOpsCount, 1);
+  assert.equal(result.metadata.followUpsCount, 1);
+  assert.equal((requestedBodies[0].response_format as Record<string, unknown>).type, "json_schema");
+  assert.ok(
+    ((requestedBodies[0].messages as Array<{ content: string }>)[0]?.content ?? "").includes(
+      "TurnEnvelope",
+    ),
+  );
+  const blocks = result.metadata.blocks as Array<Record<string, unknown>>;
+  assert.equal(blocks.some((block) => block.type === "summary"), true);
+});
+
+test("generateSharedBrainReply records TurnEnvelope memory ops behind the memory fabric flag", async () => {
+  const inserted: unknown[] = [];
+  const app = {
+    db: createQuotaReadyDb([[], []], inserted),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+      ELYAN_MEMORY_FABRIC_V2_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  reply: { text: "Kaydettim.", lang: "tr", tone: "warm" },
+                  blocks: [],
+                  memory_ops: [
+                    {
+                      op: "write",
+                      kind: "episode",
+                      key: "deploy_followup",
+                      value: "User asked for a deploy follow-up tomorrow.",
+                      confidence: 0.8,
+                    },
+                  ],
+                  goal_ops: [],
+                  follow_ups: [],
+                  tool_requests: [],
+                  affect: {
+                    user_mood_guess: "focused",
+                    energy: "mid",
+                    register: "technical",
+                  },
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Yarın deployu takip et",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        requestMetadata: {
+          sessionId: "11111111-1111-4111-8111-111111111111",
+        },
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+        },
+      }),
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.text, "Kaydettim.");
+  assert.equal(result.metadata.memoryOpsCount, 1);
+  const memoryInsert = inserted.find(
+    (entry) =>
+      (entry as { table?: unknown }).table === brainMemoryEpisodes,
+  ) as { values?: Record<string, unknown> } | undefined;
+  assert.equal(memoryInsert?.values?.episodeType, "deploy_followup");
+  assert.equal(memoryInsert?.values?.sourceSessionId, "11111111-1111-4111-8111-111111111111");
+  assert.equal(JSON.stringify(memoryInsert?.values?.metadata).includes("Yarın deployu takip et"), false);
+});
+
+test("generateSharedBrainReply records TurnEnvelope follow_ups behind the proactive engine flag", async () => {
+  const inserted: unknown[] = [];
+  const app = {
+    db: createQuotaReadyDb([[], []], inserted),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+      ELYAN_PROACTIVE_ENGINE_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  reply: { text: "Takibe aldım.", lang: "tr", tone: "warm" },
+                  blocks: [],
+                  memory_ops: [],
+                  goal_ops: [],
+                  follow_ups: [
+                    {
+                      due: "tomorrow",
+                      topic: "deploy",
+                      nudge: "Deploy nasil gitti?",
+                    },
+                  ],
+                  tool_requests: [],
+                  affect: {
+                    user_mood_guess: "focused",
+                    energy: "mid",
+                    register: "technical",
+                  },
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Yarın bunu takip et",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        requestMetadata: {
+          sessionId: "22222222-2222-4222-8222-222222222222",
+        },
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+        },
+      }),
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.text, "Takibe aldım.");
+  assert.equal(result.metadata.followUpsCount, 1);
+  const triggerInsert = inserted.find(
+    (entry) =>
+      (entry as { table?: unknown }).table === proactiveTriggers,
+  ) as { values?: Record<string, unknown> } | undefined;
+  assert.equal(triggerInsert?.values?.kind, "follow_up");
+  assert.equal(triggerInsert?.values?.sessionId, "22222222-2222-4222-8222-222222222222");
+  assert.equal(JSON.stringify(triggerInsert?.values?.payload).includes("Yarın bunu takip et"), false);
+});
+
+test("generateSharedBrainReply runs tool requests through the agent loop flag", async () => {
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+      ELYAN_AGENT_LOOP_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  reply: { text: "Hedefi güncellemeyi deniyorum.", lang: "tr", tone: "neutral" },
+                  blocks: [],
+                  memory_ops: [],
+                  goal_ops: [],
+                  follow_ups: [],
+                  tool_requests: [
+                    {
+                      tool: "goals.update",
+                      args: {
+                        action: "complete",
+                        goalId: "11111111-1111-4111-8111-111111111111",
+                      },
+                    },
+                  ],
+                  affect: {
+                    user_mood_guess: "focused",
+                    energy: "mid",
+                    register: "technical",
+                  },
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Bu hedefi tamamla",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.metadata.toolRequestCount, 1);
+  assert.equal(result.metadata.toolLoopIterations, 1);
+  const toolResults = result.metadata.toolResults as Array<Record<string, unknown>>;
+  assert.equal(toolResults[0]?.tool, "goals.update");
+  assert.equal(toolResults[0]?.ok, false);
+  assert.equal(toolResults[0]?.errorCode, "tool_failed");
+});
+
+test("generateSharedBrainReply feeds successful tool results into a bounded second model pass", async () => {
+  let providerCallCount = 0;
+  let sawToolResultContext = false;
+  const app = {
+    db: createQuotaReadyDb([[], [], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+      ELYAN_AGENT_LOOP_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (request: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof request === "string" ? request : request instanceof URL ? request.toString() : request.url;
+      if (!url.endsWith("/chat/completions")) {
+        return new Response("", { status: 200 });
+      }
+      providerCallCount += 1;
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body.messages)
+        ? (body.messages as Array<{ content: string }>)
+        : [];
+      sawToolResultContext ||= messages.some((message) =>
+        message.content.includes("Typed tool results"),
+      );
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                  content: JSON.stringify(
+                  providerCallCount === 1
+                    ? {
+                        reply: { text: "Hafızaya bakıyorum.", lang: "tr", tone: "neutral" },
+                        blocks: [],
+                        memory_ops: [],
+                        goal_ops: [],
+                        follow_ups: [],
+                        tool_requests: [
+                          {
+                            tool: "memory.query",
+                            args: { query: "preferred_tone", limit: 3 },
+                          },
+                        ],
+                        affect: {
+                          user_mood_guess: "focused",
+                          energy: "mid",
+                          register: "technical",
+                        },
+                      }
+                    : {
+                        reply: {
+                          text: "Hafızada bu konuda kayıt bulamadım.",
+                          lang: "tr",
+                          tone: "neutral",
+                        },
+                        blocks: [],
+                        memory_ops: [],
+                        goal_ops: [],
+                        follow_ups: [],
+                        tool_requests: [],
+                        affect: {
+                          user_mood_guess: "focused",
+                          energy: "mid",
+                          register: "technical",
+                        },
+                      },
+                ),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Tercihimi hatırlıyor musun?",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: false,
+        },
+      }),
+  );
+
+  assert.equal(result.metadata.toolRequestCount, 1);
+  assert.equal(result.metadata.toolLoopIterations, 1);
+  assert.equal(providerCallCount >= 2, true, JSON.stringify(result.metadata));
+  assert.equal(sawToolResultContext, true, JSON.stringify(result.metadata));
+  assert.equal(result.text, "Hafızada bu konuda kayıt bulamadım.");
+  assert.equal(result.metadata.toolRefinementApplied, true);
+});
+
+test("generateSharedBrainReply falls back to legacy text when TurnEnvelope JSON is malformed", async () => {
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      assert.equal(url.endsWith("/chat/completions"), true);
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestedBodies.push(body);
+      const content = body.response_format
+        ? '{"reply":{"text":"Bu JSON yarım"},"memory_ops":['
+        : "Legacy temiz cevap.";
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Selam",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.text, "Legacy temiz cevap.");
+  assert.equal(result.text.includes("memory_ops"), false);
+  assert.equal(result.metadata.turnEnvelopeMode, false);
+  assert.equal(result.metadata.turnEnvelopeParseOk, null);
+  assert.ok(requestedBodies.some((body) => body.response_format));
+  assert.ok(requestedBodies.some((body) => !body.response_format));
+});
+
+test("generateSharedBrainReply streams only TurnEnvelope reply.text deltas", async () => {
+  const deltas: string[] = [];
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      assert.equal(url.endsWith("/chat/completions"), true);
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestedBodies.push(body);
+      const encoder = new TextEncoder();
+      const chunks = [
+        '{"reply":{"text":"Sel',
+        'am Emre","lang":"tr","tone":"warm"},"blocks":[],"memory_ops":[],"goal_ops":[],"follow_ups":[],"tool_requests":[],"affect":{"user_mood_guess":"focused","energy":"mid","register":"neutral"}}',
+      ];
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`,
+              ),
+            );
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Selam",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        onDelta(delta) {
+          deltas.push(delta.delta);
+        },
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.text, "Selam Emre");
+  assert.equal(result.metadata.turnEnvelopeParseOk, true);
+  assert.equal(deltas.join(""), "Selam Emre");
+  assert.equal(deltas.join("").includes("memory_ops"), false);
+  assert.equal((requestedBodies[0].response_format as Record<string, unknown>).type, "json_schema");
+});
+
+test("generateSharedBrainReply retries an empty structured stream as structured non-streaming", async () => {
+  const deltas: string[] = [];
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  const app = {
+    db: createQuotaReadyDb([[], [], [], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      assert.equal(url.endsWith("/chat/completions"), true);
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestedBodies.push(body);
+      assert.ok(body.response_format, "legacy text fallback must not run");
+
+      if (body.stream === true) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  choices: [
+                    {
+                      delta: {
+                        content:
+                          '{"affect":{"user_mood_guess":"neutral","energy":"mid","register":"casual"}}',
+                      },
+                    },
+                  ],
+                })}\n\n`,
+              ),
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  reply: {
+                    text: "Yarın soracağım.",
+                    lang: "tr",
+                    tone: "warm",
+                  },
+                  blocks: [],
+                  memory_ops: [],
+                  goal_ops: [],
+                  follow_ups: [
+                    {
+                      due: "2030-01-02",
+                      topic: "altyapı testi",
+                      nudge: "Altyapı testi nasıl gitti?",
+                    },
+                  ],
+                  tool_requests: [],
+                  affect: {
+                    user_mood_guess: "focused",
+                    energy: "mid",
+                    register: "neutral",
+                  },
+                }),
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Yarın altyapı testini sor.",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        onDelta(delta) {
+          deltas.push(delta.delta);
+        },
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.text, "Yarın soracağım.");
+  assert.equal(result.metadata.turnEnvelopeMode, true);
+  assert.equal(result.metadata.turnEnvelopeParseOk, true);
+  assert.equal(result.metadata.followUpsCount, 1);
+  assert.equal(deltas.join(""), "Yarın soracağım.");
+  assert.ok(requestedBodies.some((body) => body.stream === true));
+  assert.ok(requestedBodies.some((body) => body.stream === false));
 });
 
 test("generateSharedBrainReply continues Groq streams cut mid-sentence by max tokens", async () => {
@@ -687,7 +1450,7 @@ test("generateSharedBrainReply continues Groq streams cut mid-sentence by max to
           deltas.push(delta);
         },
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
           skipInvocationLogging: true,
           skipReviewLogging: true,
         },
@@ -779,7 +1542,7 @@ test("generateSharedBrainReply does not continue Groq streams that finish with s
         workload: "mobile_chat_fast",
         onDelta() {},
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
           skipInvocationLogging: true,
           skipReviewLogging: true,
         },
@@ -1008,7 +1771,7 @@ test("generateSharedBrainReply streams Ollama deltas before final completion", a
         onDelta(delta) {
           deltas.push(delta);
         },
-        internalEvaluation: { skipUsageValidation: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
@@ -1094,7 +1857,7 @@ test("generateSharedBrainReply keeps a bounded recent ten-message context and us
         conversation,
         onDelta() {},
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
           skipReviewLogging: true,
         },
       }),
@@ -1223,7 +1986,7 @@ test("generateSharedBrainReply reuses the safe fast-path cache for repeated mobi
         route: "shared_brain",
         routeDecision,
         workload: "mobile_chat_fast",
-        internalEvaluation: { skipUsageValidation: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
@@ -1236,7 +1999,7 @@ test("generateSharedBrainReply reuses the safe fast-path cache for repeated mobi
     route: "shared_brain",
     routeDecision,
     workload: "mobile_chat_fast",
-    internalEvaluation: { skipUsageValidation: true },
+    internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
   });
 
   assert.equal(second.text, "Önbellek cevabı.");
@@ -1342,7 +2105,7 @@ test("generateSharedBrainReply uses web grounding for short research prompts", a
         userId: "user-1",
         prompt: "Apple news?",
         route: "shared_brain",
-        internalEvaluation: { skipUsageValidation: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
@@ -1459,7 +2222,7 @@ test("generateGovernedSharedBrainReply preserves public provider names in web re
           failClosedReason: null,
           selectedWorkload: "mobile_chat_balanced",
         },
-        internalEvaluation: { skipUsageValidation: true, skipReviewLogging: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true, skipReviewLogging: true },
       }),
   );
 
@@ -1538,7 +2301,7 @@ test("generateSharedBrainReply scales token budget for premium plans", async () 
           maxTokenScale: 1.25,
         },
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
         },
       }),
   );
@@ -1650,7 +2413,7 @@ test("generateSharedBrainReply expands complete-answer budget for packaged conte
           environmentHints: [],
         } as never,
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
         },
       }),
   );
@@ -1803,7 +2566,7 @@ test("generateSharedBrainReply keeps irrelevant world context silent for greetin
           environmentHints: [],
         } as never,
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
         },
       }),
   );
@@ -1922,7 +2685,7 @@ test("generateSharedBrainReply includes explicit local context but guards live w
           environmentHints: ["local context anchored around Kayseri"],
         } as never,
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
         },
       }),
   );
@@ -2011,7 +2774,7 @@ test("generateSharedBrainReply keeps response cache isolated across plan profile
         routeDecision,
         workload: "mobile_chat_fast" as const,
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
         },
       };
 
@@ -2118,7 +2881,7 @@ test("generateSharedBrainReply falls back to Ollama generate when chat returns a
         userId: "user-1",
         prompt: "Selam",
         route: "shared_brain",
-        internalEvaluation: { skipUsageValidation: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
@@ -2198,12 +2961,95 @@ test("generateGovernedSharedBrainReply does not force clarification for greeting
           failClosedReason: null,
           selectedWorkload: "mobile_chat_fast",
         },
-        internalEvaluation: { skipUsageValidation: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
   assert.equal(result.answerSource, "model");
   assert.equal(result.text.includes("yardımcı"), true);
+});
+
+test("generateGovernedSharedBrainReply serves cheap social turns without a provider call when cost guard is enabled", async () => {
+  const inserted: unknown[] = [];
+  const app = {
+    db: createQuotaReadyDb([], inserted),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "ollama",
+      ELYAN_SHARED_BRAIN_BASE_URL: "http://127.0.0.1:11434",
+      ELYAN_SHARED_BRAIN_MODEL: "qwen2.5:7b-instruct-q5_K_M",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_COST_GUARD_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      throw new Error(`Unexpected provider request: ${url}`);
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "11111111-1111-4111-8111-111111111111",
+        prompt: "Selam",
+        route: "shared_brain",
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "safe chat",
+          intent: "normal_chat",
+          confidence: 0.92,
+          requiredRuntime: "server",
+          privacyLevel: "low",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
+        understandingContext: {
+          userProfile: {
+            displayName: null,
+            preferredName: "Zeynep",
+          },
+        } as never,
+        requestMetadata: {
+          chat: { sessionId: "22222222-2222-4222-8222-222222222222" },
+        },
+        internalEvaluation: { skipReviewLogging: true, skipUsageValidation: true, skipConsentValidation: true },
+      }),
+  );
+
+  assert.equal(result.answerSource, "backend_gate");
+  assert.equal(result.provider, "backend_gate");
+  assert.equal(result.model, "elyan.cheap_social_turn");
+  assert.equal(result.text, "Merhaba Zeynep, buradayım.");
+  assert.equal(result.metadata.modelCallCount, 0);
+  assert.equal(result.metadata.cheapSocialTurn, true);
+  assert.equal(result.metadata.estimatedCostBucket, "zero_model_call");
+  const turnMetricInsert = inserted.find((item) => {
+    const record = item as { values?: Record<string, unknown> };
+    return record.values?.turnId === "task_123" || record.values?.workload === "mobile_chat_fast";
+  }) as { values?: Record<string, unknown> } | undefined;
+  assert.equal(
+    ((turnMetricInsert?.values?.quality as Record<string, unknown> | undefined)
+      ?.cheap_social_turn),
+    true,
+  );
 });
 
 test("generateGovernedSharedBrainReply keeps fast chat out of refinement passes", async () => {
@@ -2282,7 +3128,7 @@ test("generateGovernedSharedBrainReply keeps fast chat out of refinement passes"
           failClosedReason: null,
           selectedWorkload: "mobile_chat_fast",
         },
-        internalEvaluation: { skipReviewLogging: true, skipUsageValidation: true },
+        internalEvaluation: { skipReviewLogging: true, skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
@@ -2348,7 +3194,7 @@ test("generateGovernedSharedBrainReply refuses unsupported identity claims witho
         prompt: "osman emre koca kim",
         route: "shared_brain",
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
         },
         routeDecision: {
           route: "server_brain",
@@ -2431,7 +3277,7 @@ test("generateGovernedSharedBrainReply pins Elyan developer identity to the cano
         prompt: "seni kim geliştirdi",
         route: "shared_brain",
         internalEvaluation: {
-          skipUsageValidation: true,
+          skipUsageValidation: true, skipConsentValidation: true,
         },
         routeDecision: {
           route: "server_brain",
@@ -2697,7 +3543,7 @@ test("generateSharedBrainReply marks provider failures as transient", async () =
             userId: "user-1",
             prompt: "Selam",
             route: "shared_brain",
-            internalEvaluation: { skipUsageValidation: true },
+            internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
           }),
       ),
     (error: unknown) => {
@@ -2737,6 +3583,93 @@ test("Groq provider circuit opens after three distinct model outage failures", a
     assert.equal(state.state, "open");
     assert.equal(state.lastFailureCode, "groq_provider_unavailable");
     assert.equal(await isGroqProviderCircuitAllowed(app as never), false);
+  } finally {
+    await store.close();
+  }
+});
+
+test("generateSharedBrainReply skips a cooling Groq model before opening the provider circuit", async () => {
+  const store = new ReliabilityStore({
+    REDIS_URL: "",
+    RELIABILITY_REDIS_REQUIRED: false,
+  });
+  const requestedModels: string[] = [];
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      BRAIN_CIRCUIT_OPEN_MS: 60_000,
+      BRAIN_CIRCUIT_FAILURE_THRESHOLD: 3,
+    },
+    services: {
+      reliability: { store },
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  try {
+    assert.equal(
+      await recordGroqProviderModelFailure(app as never, "openai/gpt-oss-20b"),
+      false,
+    );
+
+    const result = await withMockedFetch(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        assert.equal(url.endsWith("/chat/completions"), true);
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        requestedModels.push(String(body.model));
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: "Merhaba, buradayım.",
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+      async () =>
+        generateSharedBrainReply(app as never, {
+          userId: "user-1",
+          prompt: "Selam",
+          route: "shared_brain",
+          workload: "mobile_chat_fast",
+          internalEvaluation: {
+            skipUsageValidation: true, skipConsentValidation: true,
+            skipInvocationLogging: true,
+            skipReviewLogging: true,
+          },
+        }),
+    );
+
+    assert.equal(result.text, "Merhaba, buradayım.");
+    assert.deepEqual(requestedModels, ["openai/gpt-oss-120b"]);
   } finally {
     await store.close();
   }
@@ -2839,7 +3772,7 @@ test("generateSharedBrainReply injects attachment context into the governed syst
           chunkCount: 1,
           needsClarification: false,
         },
-        internalEvaluation: { skipUsageValidation: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
@@ -3099,7 +4032,7 @@ test("generateGovernedSharedBrainReply falls back to brain when skill execution 
           chunkCount: 1,
           needsClarification: false,
         },
-        internalEvaluation: { skipUsageValidation: true, skipReviewLogging: true, skipInvocationLogging: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true, skipReviewLogging: true, skipInvocationLogging: true },
       }),
   );
 
@@ -3188,7 +4121,7 @@ test("generateGovernedSharedBrainReply honors a valid skillHint with attachment 
           chunkCount: 1,
           needsClarification: false,
         },
-        internalEvaluation: { skipUsageValidation: true, skipReviewLogging: true, skipInvocationLogging: true },
+        internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true, skipReviewLogging: true, skipInvocationLogging: true },
       }),
   );
 
@@ -3657,7 +4590,11 @@ test("compact context: emits STATE section with goal/stage/open key=value slots"
     workload: "mobile_chat_balanced" as const,
     route: "shared_brain" as const,
     requestMetadata: {
+      dialogueStateSource: "server_dialogue_state.v1",
+      dialogueStateUserId: "u",
       compactContext: {
+        source: "server_dialogue_state.v1",
+        ownerUserId: "u",
         rollingSummary: {
           userGoal: "Haftalık plan çıkarmak",
           assistantState: "Kaba taslak hazır",
@@ -3740,7 +4677,11 @@ test("compact context: SHORT_FOLLOWUP rule references STATE when state exists", 
     workload: "mobile_chat_fast" as const,
     route: "shared_brain" as const,
     requestMetadata: {
+      dialogueStateSource: "server_dialogue_state.v1",
+      dialogueStateUserId: "u",
       compactContext: {
+        source: "server_dialogue_state.v1",
+        ownerUserId: "u",
         rollingSummary: {
           userGoal: "Rapor yazmak",
           assistantState: "İlk taslak",
@@ -3754,6 +4695,31 @@ test("compact context: SHORT_FOLLOWUP rule references STATE when state exists", 
   assert.ok(prompt.includes("goal: Rapor yazmak"));
   assert.ok(prompt.includes("[FOLLOWUP]"));
   assert.ok(prompt.includes("short_followup: interpret against [STATE]"));
+});
+
+test("compact context: ignores untrusted client cached state", () => {
+  const prompt = buildStructuredSystemPrompt("BASE", {
+    userId: "u2",
+    prompt: "devam et",
+    workload: "mobile_chat_fast" as const,
+    route: "shared_brain" as const,
+    requestMetadata: {
+      compactContext: {
+        rollingSummary: {
+          userGoal: "Other account private plan",
+          assistantState: "Other account state",
+          openLoops: ["Other account loop"],
+        },
+        lastAssistantBlocksDigest: "Other account digest",
+        recentMessages: [{ role: "user", content: "Other account message" }],
+      },
+    },
+  });
+
+  assert.ok(!prompt.includes("Other account private plan"));
+  assert.ok(!prompt.includes("Other account digest"));
+  assert.ok(!prompt.includes("[STATE]"));
+  assert.ok(prompt.includes("no prior state"));
 });
 
 test("compact context: FOLLOWUP without prior state instructs asking briefly", () => {
@@ -3775,7 +4741,11 @@ test("compact context: structured format is meaningfully smaller than prose", ()
     workload: "mobile_chat_balanced" as const,
     route: "shared_brain" as const,
     requestMetadata: {
+      dialogueStateSource: "server_dialogue_state.v1",
+      dialogueStateUserId: "u",
       compactContext: {
+        source: "server_dialogue_state.v1",
+        ownerUserId: "u",
         rollingSummary: {
           userGoal: "Haftalık plan çıkarmak",
           assistantState: "Kaba taslak hazır",
@@ -3814,6 +4784,38 @@ test("prompt gating: helpers export stable signatures", () => {
   );
   assert.ok(social.startsWith("BASE"));
   assert.ok(shortFollowup.startsWith("BASE"));
+});
+
+test("prompt gating: dialogue state preferred name overrides stale profile name", () => {
+  const social = buildSocialChatSystemPrompt(
+    "BASE",
+    baseInput({
+      prompt: "Selam",
+      understandingContext: {
+        userProfile: {
+          displayName: "Zeynep",
+          preferredName: "Zeynep",
+          planCode: null,
+          subscriptionStatus: null,
+          preferredLanguage: null,
+        },
+        dialogueUserMemory: {
+          name: null,
+          preferredName: "Emre",
+          preferredLanguage: "tr",
+          preferredTone: null,
+          responseStyle: null,
+          timezone: null,
+          updatedAt: "2026-07-04T10:00:00.000Z",
+        },
+        contextPackets: [],
+      },
+    }),
+  );
+
+  assert.match(social, /casual greeting from Emre/);
+  assert.match(social, /speaking with Emre/);
+  assert.equal(social.includes("casual greeting from Zeynep"), false);
 });
 
 // ── STALL-BASED STREAMING TIMEOUT FENCE ─────────────────────────────────

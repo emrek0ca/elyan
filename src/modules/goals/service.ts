@@ -1,12 +1,18 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { chatSessions, sessionGoals } from "../../db/schema.js";
+import { chatSessions, goalEvents, sessionGoals } from "../../db/schema.js";
 import type {
   SessionGoalScheduleHint,
   SessionGoalStatus,
 } from "../../contracts/domain.js";
 import { elyanAssistantGoalProgressBlockSchema } from "../../contracts/domain.js";
 import { forbidden, notFound } from "../../lib/errors.js";
+import {
+  assertGoalTransition,
+  mergeGoalEngineState,
+  readGoalEngineState,
+  type GoalEngineState,
+} from "./state-machine.js";
 
 const DEFAULT_MAX_STEPS = 20;
 const ACTIVE_GOAL_LIMIT = 5;
@@ -72,6 +78,24 @@ function shapeGoal(row: typeof sessionGoals.$inferSelect): ActiveGoalContext {
     scheduleHint: row.scheduleHint,
     dueAt: row.dueAt,
   };
+}
+
+async function appendGoalEvent(app: FastifyInstance, input: {
+  goalId: string;
+  userId: string;
+  eventType: string;
+  fromState: GoalEngineState | null;
+  toState: GoalEngineState;
+  payload?: Record<string, unknown>;
+}) {
+  await app.db.insert(goalEvents).values({
+    goalId: input.goalId,
+    userId: input.userId,
+    eventType: input.eventType,
+    fromState: input.fromState,
+    toState: input.toState,
+    payload: input.payload ?? {},
+  });
 }
 
 async function assertOwnedSession(
@@ -141,6 +165,7 @@ export async function createGoal(
         completedSteps: [],
         nextAction: null,
         blockers: [],
+        engineState: "open",
       },
       scheduleHint: input.scheduleHint ?? "on_next_message",
       dueAt: input.dueAt ?? null,
@@ -148,6 +173,12 @@ export async function createGoal(
     .returning();
 
   await pauseOverflowActiveGoals(app, input.userId);
+  if (app.config?.ELYAN_GOAL_STATE_V2_ENABLED === true) {
+    await appendGoalEvent(app, {
+      goalId: rows[0].id, userId: input.userId, eventType: "goal.opened",
+      fromState: null, toState: "open",
+    });
+  }
   return { goal: shapeGoal(rows[0]) };
 }
 
@@ -214,6 +245,15 @@ export async function updateGoal(
     dueAt?: Date | null;
   },
 ) {
+  const existingRows = await app.db
+    .select()
+    .from(sessionGoals)
+    .where(and(eq(sessionGoals.id, input.goalId), eq(sessionGoals.userId, input.userId)))
+    .limit(1);
+  const existing = existingRows[0];
+  if (!existing) {
+    throw notFound("Goal not found.");
+  }
   const values: Partial<typeof sessionGoals.$inferInsert> = {
     updatedAt: new Date(),
   };
@@ -223,13 +263,35 @@ export async function updateGoal(
   if ("scheduleHint" in input) values.scheduleHint = input.scheduleHint ?? null;
   if ("dueAt" in input) values.dueAt = input.dueAt ?? null;
 
+  let transition: { from: GoalEngineState; to: GoalEngineState; eventType: string } | null = null;
+  if (app.config?.ELYAN_GOAL_STATE_V2_ENABLED === true && input.status) {
+    const from = readGoalEngineState(existing.progress);
+    const to: GoalEngineState = input.status === "done" || input.status === "canceled"
+      ? "completed"
+      : input.status === "paused"
+        ? "waiting"
+        : input.status === "draft"
+          ? "planned"
+          : "executing";
+    assertGoalTransition(from, to);
+    values.progress = mergeGoalEngineState(existing.progress, to);
+    transition = { from, to, eventType: `goal.${to}` };
+  }
+
   const rows = await app.db
     .update(sessionGoals)
     .set(values)
     .where(and(eq(sessionGoals.id, input.goalId), eq(sessionGoals.userId, input.userId)))
     .returning();
-  if (!rows[0]) {
-    throw notFound("Goal not found.");
+  if (transition) {
+    await appendGoalEvent(app, {
+      goalId: input.goalId,
+      userId: input.userId,
+      eventType: transition.eventType,
+      fromState: transition.from,
+      toState: transition.to,
+      payload: { status: input.status },
+    });
   }
   return { goal: shapeGoal(rows[0]) };
 }
@@ -259,6 +321,7 @@ export async function advanceGoal(
   const maxSteps = clampMaxSteps(Math.min(existing.maxSteps, input.ofSteps));
   const nextStep = Math.max(existing.currentStep, Math.min(input.step, maxSteps));
   const progress = normalizeProgress(existing.progress);
+  const previousEngineState = readGoalEngineState(existing.progress);
   const advancedTo = compactText(input.advancedTo, 400);
   const completedSteps = Array.from(
     new Set([...(progress.completedSteps ?? []), advancedTo]),
@@ -273,6 +336,14 @@ export async function advanceGoal(
       : nextStep >= maxSteps
         ? "canceled"
         : "active";
+  const nextEngineState: GoalEngineState = input.done
+    ? "completed"
+    : input.blocker
+      ? "blocked"
+      : "executing";
+  if (app.config?.ELYAN_GOAL_STATE_V2_ENABLED === true) {
+    assertGoalTransition(previousEngineState, nextEngineState);
+  }
 
   const updated = await app.db
     .update(sessionGoals)
@@ -280,15 +351,24 @@ export async function advanceGoal(
       currentStep: nextStep,
       maxSteps,
       status,
-      progress: {
+      progress: mergeGoalEngineState({
         completedSteps,
         nextAction: input.done ? null : advancedTo,
         blockers,
-      },
+      }, nextEngineState),
       updatedAt: new Date(),
     })
     .where(and(eq(sessionGoals.id, input.goalId), eq(sessionGoals.userId, input.userId)))
     .returning();
+
+  if (app.config?.ELYAN_GOAL_STATE_V2_ENABLED === true) {
+    await appendGoalEvent(app, {
+      goalId: input.goalId, userId: input.userId,
+      eventType: input.done ? "goal.completed" : input.blocker ? "goal.blocked" : "goal.advanced",
+      fromState: previousEngineState, toState: nextEngineState,
+      payload: { step: nextStep, advancedTo, blocker: input.blocker ?? null },
+    });
+  }
 
   return { goal: shapeGoal(updated[0]) };
 }

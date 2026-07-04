@@ -20,6 +20,7 @@ import {
   chatSessions,
   datasetManifests,
   devices,
+  dialogueStates,
   integrationConnections,
   knowledgeChunks,
   knowledgeDocuments,
@@ -29,12 +30,14 @@ import {
   oauthStates,
   operatorRuns,
   pairSessions,
+  proactiveTriggers,
   realtimeEvents,
   runtimeConnections,
   sessions,
   subscriptions,
   tasks,
   trainingJobs,
+  turnMetrics,
   usageRecords,
   userAvatars,
   users,
@@ -52,6 +55,7 @@ import {
 } from "../billing/service.js";
 import { shapeSubscriptionTruth } from "../billing/subscription-truth.js";
 import { getBrainProfile, shapePublicBrainProfile } from "../brain/service.js";
+import { seedRegistrationConsents } from "../consents/service.js";
 import {
   ensureUserIdentity,
   getTrialQuotaPolicy,
@@ -86,9 +90,11 @@ type LegalAcceptanceInput = {
   legalAcceptance?: {
     termsAccepted?: boolean;
     privacyAccepted?: boolean;
+    aiDataSharingAccepted?: boolean;
   };
   termsAccepted?: boolean;
   privacyAccepted?: boolean;
+  aiDataSharingAccepted?: boolean;
 };
 
 type VerifiedSocialIdentity = {
@@ -128,6 +134,11 @@ function assertRequiredLegalAcceptance(input?: LegalAcceptanceInput) {
       reason: "legal_acceptance_required",
     });
   }
+}
+
+function readAiDataSharingAcceptance(input?: LegalAcceptanceInput): boolean | undefined {
+  const nested = input?.legalAcceptance;
+  return nested?.aiDataSharingAccepted ?? input?.aiDataSharingAccepted;
 }
 
 async function ensureUserSubscriptionSeed(app: FastifyInstance, userId: string) {
@@ -436,6 +447,15 @@ async function getOrCreateSocialUser(
       userId: user.id,
       email: user.email,
     });
+    if (hasRequiredLegalAcceptance(legalAcceptance)) {
+      await seedRegistrationConsents(app, {
+        userId: user.id,
+        termsAccepted: true,
+        privacyAccepted: true,
+        aiDataSharingAccepted: readAiDataSharingAcceptance(legalAcceptance),
+        source: `${identity.provider}_login`,
+      });
+    }
 
     return user;
   }
@@ -507,6 +527,15 @@ async function getOrCreateSocialUser(
     userId: user.id,
     email: user.email,
   });
+  if (hasRequiredLegalAcceptance(legalAcceptance)) {
+    await seedRegistrationConsents(app, {
+      userId: user.id,
+      termsAccepted: true,
+      privacyAccepted: true,
+      aiDataSharingAccepted: readAiDataSharingAcceptance(legalAcceptance),
+      source: `${identity.provider}_login`,
+    });
+  }
 
   await app.db.insert(authIdentities).values({
     userId: user.id,
@@ -609,6 +638,13 @@ export async function registerUser(
   await ensureUserIdentity(app.db, {
     userId: user.id,
     email: user.email,
+  });
+  await seedRegistrationConsents(app, {
+    userId: user.id,
+    termsAccepted: true,
+    privacyAccepted: true,
+    aiDataSharingAccepted: readAiDataSharingAcceptance(input),
+    source: "register",
   });
 
   const tokens = await createUserSession(app, user, context);
@@ -867,6 +903,9 @@ export async function deleteCurrentUserAccount(
     });
 
     await tx.delete(pairSessions).where(eq(pairSessions.claimedByUserId, input.userId));
+    await tx.delete(proactiveTriggers).where(eq(proactiveTriggers.userId, input.userId));
+    await tx.delete(dialogueStates).where(eq(dialogueStates.userId, input.userId));
+    await tx.delete(turnMetrics).where(eq(turnMetrics.userId, input.userId));
     await tx.delete(worldSignals).where(eq(worldSignals.userId, input.userId));
     await tx.delete(chatSessions).where(eq(chatSessions.userId, input.userId));
     await tx.delete(tasks).where(eq(tasks.userId, input.userId));

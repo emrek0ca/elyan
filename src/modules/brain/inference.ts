@@ -9,7 +9,6 @@ import {
 import { withLoadSheddingPermit } from "../../lib/reliability/load-shedding.js";
 import { aiProviderInvocations } from "../../db/schema.js";
 import type { UserUnderstandingContext } from "../../core/understanding/types.js";
-import { formatMemoryProfilePromptBlock } from "../../core/understanding/memory-profile.js";
 import { recordCreditLedgerEntry } from "../billing/credit-ledger.js";
 import {
   BILLING_USAGE_METRICS,
@@ -19,10 +18,10 @@ import {
   assertSharedBrainUsageBudgetAllowed,
   getSharedBrainUsageBudget,
 } from "../billing/service.js";
+import { assertAiDataSharingConsent } from "../consents/service.js";
 import { normalizePlanBrainProfile } from "../billing/catalog.js";
 import {
   calculateBillablePlanTokens,
-  estimateTextTokens,
   resolveAdaptiveInferenceBudget,
   type AdaptiveInferenceBudget,
   type TokenMeteringSurface,
@@ -40,8 +39,33 @@ import {
 } from "./boundary-gate.js";
 import { evaluateBrainAnswer } from "./evaluator.js";
 import { resolveSharedBrainModel } from "./model-resolution.js";
-import { resolveGroqFallbackModel } from "./groq-models.js";
 import { recordBrainInteractionReview } from "./review.js";
+import {
+  buildTurnMetricInputFromInference,
+  recordTurnMetric,
+} from "./turn-metrics.js";
+import {
+  buildToolResultRefinementPrompt,
+  runAgentToolLoop,
+  summarizeToolResultsForMetadata,
+} from "./agent-loop.js";
+import type { AgentToolResult } from "./tool-registry.js";
+import {
+  applyCanonicalDialogueStateToMetadata,
+  isTrustedDialogueStateMetadata,
+  readDialogueState,
+  recordDialogueStateTurn,
+  resolveDialogueStateSessionId,
+} from "./dialogue-state.js";
+import { recordTurnMemoryOps } from "./memory-fabric.js";
+import { applyTurnProactiveOps, recordTurnFollowUps } from "./proactive-engine.js";
+import {
+  looksLikeTurnEnvelopeJson,
+  parseTurnEnvelope,
+  parseTurnEnvelopeText,
+  type TurnEnvelope,
+} from "./turn-envelope.js";
+import { createTurnEnvelopeReplyTextStreamParser } from "./turn-envelope-stream.js";
 import { searchKnowledge } from "./retrieval.js";
 import {
   buildBrainCorpusGuidanceBlock,
@@ -75,14 +99,13 @@ import {
   extractClientAttachments,
   type ClientAttachment,
 } from "./document-types.js";
-import { hasMathReasoningSignal, isShortFollowUpPrompt, isSocialChatPrompt } from "./chat-heuristics.js";
+import { isShortFollowUpPrompt, isSocialChatPrompt } from "./chat-heuristics.js";
 import {
   classifyReasoningDump,
   extractFinalAnswerFromReasoningDump,
   looksLikeReasoningDumpOpening,
 } from "./reasoning-guard.js";
 import {
-  listSharedBrainProviderCandidates,
   getBrainCircuitKey,
   selectSharedBrainRuntime,
   type SharedBrainProvider,
@@ -91,6 +114,98 @@ import {
   getSharedBrainWorkloadProfile,
   type SharedBrainWorkload,
 } from "./workloads.js";
+export { calculateBillableAiCredits } from "./credits.js";
+import {
+  resolveGenerationTemperature,
+  resolveReasoningEffort,
+} from "./generation-policy.js";
+import { estimateTokens } from "./text-metrics.js";
+import {
+  buildGenerateRequestBody,
+  buildRequestBody,
+  buildSharedBrainRequestAttempt,
+  getChatCompletionPath,
+  type SharedBrainConversationMessage,
+  type SharedBrainRequestAttempt,
+} from "./provider-request.js";
+import {
+  buildInferenceProviderCandidates,
+} from "./provider-selection.js";
+import {
+  joinProviderUrl,
+  postJson,
+  postStreamingJson,
+} from "./provider-http.js";
+import {
+  extractResponseDelta,
+  extractResponseFinishReason,
+  extractResponseReasoning,
+  extractResponseText,
+  resolveStreamContinuationTokenBudget,
+  shouldAttemptStreamContinuation,
+  shouldStreamReasoning,
+  stripRepeatedContinuationPrefix,
+  supportsNativeStreamingAttempt,
+  STREAM_CONTINUATION_DIRECTIVE,
+  STREAM_CONTINUATION_MAX_HOPS,
+  STREAM_MAX_CONTENT_CHARS,
+  STREAM_MAX_REASONING_CHARS,
+} from "./provider-response.js";
+import {
+  getChatTimeoutMs,
+  getLoadSheddingOptions,
+  getMaxTokensForWorkload,
+} from "./workload-policy.js";
+import {
+  createDeltaPublisherCore,
+  type SharedBrainInferenceDelta,
+} from "./stream-publisher.js";
+import {
+  computeStreamVisibleText,
+  extractTypedJsonBlocksFromText,
+} from "./typed-json-blocks.js";
+import {
+  isReasoningOnlyReply,
+  resolveCleanVisibleAnswer,
+} from "./reply-finalizer.js";
+import {
+  shouldAcceptExtractedTypedBlock,
+  tableBlockToPlainFallback,
+} from "./typed-block-policy.js";
+import {
+  buildMobileLocalExportShortcutReply,
+  isLikelyPureDocumentExportPrompt,
+  isMobileLocalExportMode,
+} from "./mobile-local-export.js";
+import {
+  buildResolvedAttachmentIntentPromptBlock,
+  resolveAttachmentIntentMode,
+} from "./attachment-intent.js";
+import {
+  detectPromptLanguage,
+  inferDataGroundingLevel,
+} from "./data-understanding.js";
+import {
+  buildMemoryProfilePromptBlock,
+  buildPreferencePromptBlock,
+} from "./preference-prompt.js";
+export {
+  resolveGenerationTemperature,
+  resolveReasoningEffort,
+} from "./generation-policy.js";
+export { postStreamingJson } from "./provider-http.js";
+export {
+  STREAM_MAX_CONTENT_CHARS,
+  STREAM_MAX_REASONING_CHARS,
+} from "./provider-response.js";
+export {
+  computeStreamVisibleText,
+  extractTypedJsonBlocksFromText,
+} from "./typed-json-blocks.js";
+export {
+  isReasoningOnlyReply,
+  resolveCleanVisibleAnswer,
+} from "./reply-finalizer.js";
 import { executeSkill } from "../skills/executor.js";
 import { createAuditLog } from "../audit/service.js";
 import {
@@ -100,7 +215,6 @@ import {
 import { routeSkill } from "../skills/router.js";
 import { parseStrictJsonObject } from "../skills/validator.js";
 import {
-  formatTurkicLanguageLabel,
   getTurkicLanguagePromptHint,
 } from "../../core/understanding/turkic-language.js";
 import {
@@ -111,7 +225,6 @@ import {
   isExplicitSvgRequest,
   isExplicitTableRequest,
 } from "../../core/understanding/structured-output-policy.js";
-import { buildGroqModelCatalog } from "./groq-models.js";
 import {
   buildAssistantInfoCardBlock,
   buildAssistantMessageBlocks,
@@ -125,40 +238,9 @@ import {
   resolveUsageIdentityContext,
 } from "../quota/service.js";
 
-type SharedBrainConversationMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-};
-
-type SharedBrainRequestAttempt = {
-  path: string;
-  body: Record<string, unknown>;
-};
-
-type SharedBrainProviderCandidate = {
-  provider: SharedBrainProvider;
-  baseUrl: string;
-  preferredModels: string[];
-  hosted: boolean;
-};
-
-type HostedSharedBrainProvider = "openai" | "claude" | "groq" | "openrouter";
-
 const GROQ_PROVIDER_CIRCUIT_KEY = "circuit:brain:groq:*";
 const GROQ_PROVIDER_FAILURE_WINDOW_KEY = "circuit:brain:groq:failed-models";
 const GROQ_PROVIDER_FAILURE_MODEL_THRESHOLD = 3;
-
-type SharedBrainInferenceDelta = {
-  delta: string;
-  content: string;
-  provider: SharedBrainProvider;
-  model: string;
-  firstDeltaMs: number;
-  /** Incremental reasoning text emitted by reasoning-channel models (gpt-oss). */
-  reasoningDelta?: string;
-  /** Full reasoning text accumulated so far. */
-  reasoningContent?: string;
-};
 
 type SharedBrainInferenceInput = {
   userId: string;
@@ -184,6 +266,7 @@ type SharedBrainInferenceInput = {
   onDelta?: (delta: SharedBrainInferenceDelta) => void | Promise<void>;
   internalEvaluation?: {
     skipUsageValidation?: boolean;
+    skipConsentValidation?: boolean;
     skipInvocationLogging?: boolean;
     skipReviewLogging?: boolean;
     refinementPass?: boolean;
@@ -215,6 +298,111 @@ function buildSecurityDecisionBlock(decision: Record<string, unknown>) {
     visibility: "assistant_internal_by_default",
     stableBlockId: `security_${String(decision.request_type ?? "decision")}`,
     ...decision,
+  };
+}
+
+function isCostGuardEnabled(app: FastifyInstance): boolean {
+  return (app.config as { ELYAN_COST_GUARD_ENABLED?: boolean } | undefined)
+    ?.ELYAN_COST_GUARD_ENABLED === true;
+}
+
+function readPreferredUserName(context: UserUnderstandingContext | undefined): string | null {
+  const dialogueName = context?.dialogueUserMemory?.preferredName ?? context?.dialogueUserMemory?.name;
+  if (typeof dialogueName === "string" && dialogueName.trim()) {
+    return dialogueName.trim();
+  }
+  const userModelName = context?.userModel?.identity.preferredName;
+  if (typeof userModelName === "string" && userModelName.trim()) {
+    return userModelName.trim();
+  }
+  const profileName =
+    context?.userProfile?.preferredName ?? context?.userProfile?.displayName;
+  return typeof profileName === "string" && profileName.trim()
+    ? profileName.trim()
+    : null;
+}
+
+function buildCheapSocialTurnReply(input: SharedBrainInferenceInput): string | null {
+  const prompt = input.prompt.replace(/\s+/g, " ").trim();
+  if (!prompt || prompt.length > CHEAP_SOCIAL_TURN_MAX_CHARS) {
+    return null;
+  }
+  const workload =
+    input.workload ?? input.routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD;
+  if (workload !== "mobile_chat_fast" && workload !== "fast_route") {
+    return null;
+  }
+  if (!isSocialChatPrompt(prompt)) {
+    return null;
+  }
+  const name = readPreferredUserName(input.understandingContext);
+  const lower = prompt.toLocaleLowerCase("tr-TR");
+  if (/\b(orada mısın|burada mısın|burda mısın|are you there|you there)\b/i.test(lower)) {
+    return name ? `Buradayım ${name}.` : "Buradayım.";
+  }
+  if (/^(hey|selam|merhaba|mrb|slm|hi|hello)\b/i.test(lower)) {
+    return name ? `Merhaba ${name}, buradayım.` : "Merhaba, buradayım.";
+  }
+  return null;
+}
+
+function buildBackendGateResult(input: {
+  text: string;
+  providerModel: string;
+  request: SharedBrainInferenceInput;
+  routeDecision: CommandRouteDecision | null;
+  routeToolUseRequired: boolean;
+  gateRuleId: string;
+  responseCode: string;
+  metadata?: Record<string, unknown>;
+}): GovernedSharedBrainReplyResult {
+  const promptTokens = estimateTokens(input.request.prompt);
+  const completionTokens = estimateTokens(input.text);
+  const blocks = buildAssistantMessageBlocks(input.text);
+  const evaluation = evaluateBrainAnswer({
+    prompt: input.request.prompt,
+    modelAnswer: input.text,
+    answerSource: "backend_gate",
+    routeDecision: input.routeDecision,
+    boundaryOutcome: input.responseCode,
+    toolUseRequired: input.routeToolUseRequired,
+    retrievalUsed: false,
+  });
+  return {
+    text: input.text,
+    provider: "backend_gate",
+    model: input.providerModel,
+    latencyMs: 0,
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    metadata: {
+      route: input.routeDecision?.route ?? input.request.route ?? "shared_brain",
+      workload:
+        input.request.workload ??
+        input.routeDecision?.selectedWorkload ??
+        DEFAULT_WORKLOAD,
+      answerSource: "backend_gate",
+      gateRuleIds: [input.gateRuleId],
+      boundaryOutcome: input.responseCode,
+      failureType: null,
+      enforcedByBackend: true,
+      responseCode: input.responseCode,
+      modelAnswerSkipped: true,
+      blocks,
+      modelCallCount: 0,
+      reasoningPasses: 0,
+      cheapSocialTurn: true,
+      estimatedCostBucket: "zero_model_call",
+      constitutionVersion: ELYAN_CONSTITUTION_VERSION,
+      promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
+      ...input.metadata,
+    },
+    answerSource: "backend_gate",
+    gateRuleIds: [input.gateRuleId],
+    boundaryOutcome: input.responseCode,
+    failureType: null,
+    evaluation,
   };
 }
 
@@ -286,11 +474,11 @@ const BRAIN_MODEL_WARM_FAILURE_TTL_MS = 30_000;
 const BRAIN_INFERENCE_PROBE_HEALTHY_TTL_MS = 60_000;
 const BRAIN_INFERENCE_PROBE_UNHEALTHY_TTL_MS = 15_000;
 const SHARED_BRAIN_LIVE_PROBE_TIMEOUT_MS = 25_000;
-const DEFAULT_OLLAMA_CHAT_TIMEOUT_MS = 60_000;
 const MOBILE_CHAT_MAX_MESSAGES = 12;
 const MOBILE_CHAT_MAX_TOKENS = 2_800;
 const SHARED_BRAIN_PROVIDER_RETRY_DELAY_MS = 120;
 const SHARED_BRAIN_PROVIDER_MAX_RETRIES = 1;
+const CHEAP_SOCIAL_TURN_MAX_CHARS = 48;
 const RESPONSE_CACHE_TTL_MS_BY_WORKLOAD: Partial<
   Record<SharedBrainWorkload, number>
 > = {
@@ -369,6 +557,14 @@ function readMetadataBoolean(
   return typeof value === "boolean" ? value : null;
 }
 
+function readMetadataNumber(
+  record: Record<string, unknown> | null | undefined,
+  key: string,
+): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function readMetadataArray(
   record: Record<string, unknown> | null,
   key: string,
@@ -391,14 +587,6 @@ function detectMemoryEnabled(
     readMetadataBoolean(root, "memoryEnabled") ??
     true
   );
-}
-
-function sentenceCase(value: string): string {
-  const compact = compactText(value);
-  if (!compact) {
-    return compact;
-  }
-  return compact.charAt(0).toUpperCase() + compact.slice(1);
 }
 
 function analyzeResponseCompleteness(
@@ -651,678 +839,10 @@ async function finalizeIncompleteResponse(
   }
 }
 
-function estimateTokens(text: string): number {
-  return estimateTextTokens(text);
-}
-
-/**
- * document_generate workload için: model çıktısındaki {"type":"document_block"} JSON'larını
- * text'ten ayıklar. Görünür metin (JSON olmayan kısım) ve blok listesini döner.
- */
-// LLM'ler document_block JSON'unu üretirken string DEĞERLERİNİN içine sık sık
-// literal satır başı/tab koyar (örn. "content": "satır1\n\n- madde"). Bu GEÇERSİZ
-// JSON'dur ve JSON.parse patlar → belge tamamen kaybolurdu. Bu fonksiyon string
-// içindeki ham kontrol karakterlerini kaçışlı hale getirip JSON'u kurtarır.
-function repairLooseJsonObject(candidate: string): string {
-  let out = "";
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < candidate.length; i++) {
-    const ch = candidate[i];
-    if (escaped) {
-      out += ch;
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      out += ch;
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      out += ch;
-      continue;
-    }
-    if (inString) {
-      if (ch === "\n") {
-        out += "\\n";
-        continue;
-      }
-      if (ch === "\r") {
-        out += "\\r";
-        continue;
-      }
-      if (ch === "\t") {
-        out += "\\t";
-        continue;
-      }
-    }
-    out += ch;
-  }
-  return out;
-}
-
-// Model bazen TAMAMEN GEÇERSİZ JSON üretir (örn. anahtar/değer birleşmesi:
-// `"displayMode\frac{dy}{dx}`). JSON.parse de repairLooseJsonObject da
-// başarısız olduğunda, bilinen blok tiplerinin alanlarını regex ile tek tek
-// söküp geçerli bir blok kurarız. Amaç: ham JSON ASLA kullanıcıya sızmasın —
-// en azından temel alanlarıyla (type + content/expression/code) render edilsin.
-function coerceMalformedTypedBlock(
-  candidate: string,
-): Record<string, unknown> | null {
-  const typeMatch = candidate.match(/"type"\s*:\s*"([a-z0-9_]+)"/i);
-  if (!typeMatch) {
-    return null;
-  }
-  const type = typeMatch[1].toLowerCase();
-
-  const pickString = (key: string): string | undefined => {
-    // "key":"..." — değer içindeki kaçışlı tırnakları tolere et, ilk
-    // kaçışsız kapanış tırnağında dur.
-    const match = candidate.match(
-      new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`, "i"),
-    );
-    return match ? match[1] : undefined;
-  };
-  const pickBool = (key: string): boolean | undefined => {
-    const match = candidate.match(
-      new RegExp(`"${key}"\\s*:\\s*(true|false)`, "i"),
-    );
-    return match ? match[1].toLowerCase() === "true" : undefined;
-  };
-
-  const block: Record<string, unknown> = { type };
-  const assignString = (key: string): void => {
-    const value = pickString(key);
-    if (value !== undefined) {
-      block[key] = value;
-    }
-  };
-  for (const key of [
-    "title",
-    "content",
-    "format",
-    "result",
-    "expression",
-    "language",
-    "code",
-    "caption",
-    "summary",
-  ]) {
-    assignString(key);
-  }
-  const displayMode = pickBool("displayMode");
-  if (displayMode !== undefined) {
-    block.displayMode = displayMode;
-  }
-
-  // En azından bir anlamlı içerik alanı yoksa kurtarmayı reddet.
-  const hasPayload =
-    typeof block.content === "string" ||
-    typeof block.expression === "string" ||
-    typeof block.code === "string" ||
-    typeof block.result === "string";
-  return hasPayload ? block : null;
-}
-
-// Önce ham metni, olmazsa kurtarılmış sürümü JSON.parse dener; o da olmazsa
-// alan-bazlı kurtarma yapar. typed blok döner.
-function tryParseTypedJsonObject(
-  candidate: string,
-): Record<string, unknown> | null {
-  for (const variant of [candidate, repairLooseJsonObject(candidate)]) {
-    try {
-      const parsed = JSON.parse(variant);
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        !Array.isArray(parsed) &&
-        typeof (parsed as Record<string, unknown>).type === "string"
-      ) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      /* sonraki varyantı dene */
-    }
-  }
-  // Geçerli JSON elde edilemedi — alan-bazlı kurtarma (ham sızıntıyı önler).
-  return coerceMalformedTypedBlock(candidate);
-}
-
-export function extractTypedJsonBlocksFromText(text: string): {
-  visibleText: string;
-  blocks: unknown[];
-} {
-  const blocks: unknown[] = [];
-  const seen = new Set<string>();
-
-  // Metin içinde herhangi bir yerde ```json ... ``` fence'i bul
-  // Model önce 1-2 cümle yazar, sonra code fence içinde JSON üretir.
-  const fencePattern = /```(?:json)?\s*([\s\S]*?)```/g;
-  let visibleText = text;
-  let match: RegExpExecArray | null;
-
-  while ((match = fencePattern.exec(text)) !== null) {
-    const candidate = match[1].trim();
-    if (!candidate.startsWith("{")) continue;
-    const parsed = tryParseTypedJsonObject(candidate);
-    if (parsed) {
-      // Model bazen aynı bloğu iki kez akıtır; tekrarı at.
-      const dedupKey = JSON.stringify(parsed);
-      if (!seen.has(dedupKey)) {
-        seen.add(dedupKey);
-        blocks.push(parsed);
-      }
-      // Fence'i görünür metinden çıkar (parse başarısız olsa da fence'i bırakma)
-      visibleText = visibleText.replace(match[0], "").trim();
-    }
-  }
-
-  // Fence yoksa: ham metindeki TÜM üst düzey { ... } bloklarını sırayla ayıkla.
-  // Model bazen birden fazla raw JSON objesi (intro + asıl blok) art arda akıtır.
-  if (blocks.length === 0) {
-    let working = visibleText;
-    let guard = 0;
-    while (guard++ < 8) {
-      const braceIdx = working.indexOf("{");
-      if (braceIdx < 0) {
-        break;
-      }
-      const end = findBalancedObjectEnd(working, braceIdx);
-      if (end < 0) {
-        break;
-      }
-      const candidate = working.slice(braceIdx, end + 1);
-      const parsed = tryParseTypedJsonObject(candidate);
-      if (parsed) {
-        const dedupKey = JSON.stringify(parsed);
-        if (!seen.has(dedupKey)) {
-          seen.add(dedupKey);
-          blocks.push(parsed);
-        }
-        working = (working.slice(0, braceIdx) + working.slice(end + 1)).trim();
-      } else {
-        // Dengeli ama typed olmayan obje (örn. {"İşte ...örneği:"} sarmalı):
-        // görünür metinden kaldır, içeriğini düz metin olarak geri ver.
-        const unwrapped = unwrapPlainBraceSentence(candidate);
-        working = (
-          working.slice(0, braceIdx) +
-          unwrapped +
-          working.slice(end + 1)
-        ).trim();
-      }
-    }
-    visibleText = working;
-  }
-
-  // Son çare: dengeli kapanışı OLMAYAN bozuk JSON (örn. anahtar/değer
-  // birleşmesi yüzünden string hiç kapanmıyor). Trailing `{ ... "type" ... }`
-  // bölgesini alan-bazlı kurtar ve görünür metinden tamamen sil.
-  if (blocks.length === 0) {
-    const braceIdx = visibleText.indexOf("{");
-    if (braceIdx >= 0) {
-      const region = visibleText.slice(braceIdx);
-      if (/"type"\s*:/.test(region)) {
-        const coerced = coerceMalformedTypedBlock(region);
-        if (coerced) {
-          blocks.push(coerced);
-          visibleText = visibleText.slice(0, braceIdx).trim();
-        }
-      }
-    }
-  }
-
-  return { visibleText, blocks };
-}
-
-function compactInlineText(value: unknown, maxLength = 160): string {
-  return String(value ?? "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/__([^_]+)__/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLength);
-}
-
-function tableBlockToPlainFallback(block: Record<string, unknown>): string {
-  const columns = Array.isArray(block.columns)
-    ? block.columns.map((column) => compactInlineText(column, 80)).filter(Boolean)
-    : [];
-  const rows = Array.isArray(block.rows) ? block.rows.slice(0, 12) : [];
-  if (columns.length === 0 || rows.length === 0) {
-    return "";
-  }
-  const title = compactInlineText(block.title, 120);
-  const lines = title ? [`${title}:`] : [];
-  for (const rawRow of rows) {
-    const row = Array.isArray(rawRow)
-      ? rawRow
-      : rawRow && typeof rawRow === "object" && !Array.isArray(rawRow)
-        ? Object.values(rawRow as Record<string, unknown>)
-        : [];
-    const cells = row.map((cell) => compactInlineText(cell, 140));
-    const head = cells[0];
-    if (!head) continue;
-    const details = cells
-      .slice(1, columns.length)
-      .map((cell, index) => {
-        const label = columns[index + 1] ?? "";
-        return cell ? `${label ? `${label}: ` : ""}${cell}` : "";
-      })
-      .filter(Boolean)
-      .join("; ");
-    lines.push(`- ${head}${details ? `: ${details}` : ""}`);
-  }
-  return lines.join("\n");
-}
-
-function shouldAcceptExtractedTypedBlock(input: {
-  block: unknown;
-  prompt: string;
-  selectedWorkload: SharedBrainWorkload;
-}): boolean {
-  if (!input.block || typeof input.block !== "object" || Array.isArray(input.block)) {
-    return true;
-  }
-  const type = String((input.block as Record<string, unknown>).type ?? "").trim().toLowerCase();
-  if (type === "table") {
-    return input.selectedWorkload === "table_generate" || isExplicitTableRequest(input.prompt);
-  }
-  if (type === "chart") {
-    return isExplicitChartRequest(input.prompt);
-  }
-  if (type === "svg") {
-    return isExplicitSvgRequest(input.prompt);
-  }
-  if (type === "math" || type === "math_surface_3d") {
-    return isExplicitMathOrLatexRequest(input.prompt) || isExplicitMathSurface3DRequest(input.prompt);
-  }
-  if (type === "document_block") {
-    return input.selectedWorkload === "document_generate";
-  }
-  return true;
-}
-
-// braceIdx'teki `{` ile başlayan dengeli objenin kapanış `}` indeksini bulur,
-// string ve kaçış karakterlerini dikkate alır. Bulunamazsa -1.
-function findBalancedObjectEnd(text: string, braceIdx: number): number {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let j = braceIdx; j < text.length; j++) {
-    const ch = text[j];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) {
-      continue;
-    }
-    if (ch === "{") {
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        return j;
-      }
-    }
-  }
-  return -1;
-}
-
-// {"Sadece bir cümle"} gibi typed olmayan sarmalları düz metne çevirir.
-function unwrapPlainBraceSentence(candidate: string): string {
-  const inner = candidate.slice(1, -1).trim();
-  const quoted = inner.match(/^"((?:[^"\\]|\\.)*)"$/);
-  if (quoted) {
-    return quoted[1];
-  }
-  return "";
-}
-
-// STREAMING GATE: akış sırasında kullanıcıya gösterilecek "görünür" metni
-// hesaplar. Ham typed JSON ({"type":...}) ve ```json fence'leri gizler; henüz
-// kapanmamış (yarıda kalan) blokları, kapanana kadar saklar. Böylece kullanıcı
-// asla ham JSON akışı görmez — blok tamamlanınca yapısal olarak render edilir.
-// Tasarım monotonik: yarım kalan `{` her zaman gizlenir (kesilir), kapanınca ya
-// kaldırılır (typed) ya da görünür olur (düz cümle) — yani daha önce yayınlanan
-// metin asla geri alınmaz.
-// İki metnin ortak ön-ek uzunluğu — gate beklenmedik şekilde metni yeniden
-// şekillendirirse (nadiren) güvenli yeniden senkronizasyon için.
-function commonPrefixLength(a: string, b: string): number {
-  const max = Math.min(a.length, b.length);
-  let i = 0;
-  while (i < max && a[i] === b[i]) {
-    i++;
-  }
-  return i;
-}
-
-export function computeStreamVisibleText(full: string): string {
-  let visible = full;
-
-  // 1) Tamamlanmış ```json ... ``` fence'leri: typed ise görünürden çıkar.
-  const fencePattern = /```(?:json)?\s*([\s\S]*?)```/g;
-  let fenceMatch: RegExpExecArray | null;
-  const fencesToStrip: string[] = [];
-  while ((fenceMatch = fencePattern.exec(full)) !== null) {
-    const inner = fenceMatch[1].trim();
-    if (inner.startsWith("{") && tryParseTypedJsonObject(inner)) {
-      fencesToStrip.push(fenceMatch[0]);
-    }
-  }
-  for (const fence of fencesToStrip) {
-    visible = visible.replace(fence, "");
-  }
-
-  // 2) Kapanmamış (streaming) trailing fence → fence başından kes.
-  const fenceCount = (visible.match(/```/g) ?? []).length;
-  if (fenceCount % 2 === 1) {
-    const openFenceIdx = visible.lastIndexOf("```");
-    if (openFenceIdx >= 0) {
-      visible = visible.slice(0, openFenceIdx).trimEnd();
-    }
-  }
-
-  // 3) Üst düzey { ... } objelerini sırayla işle.
-  let working = visible;
-  let out = "";
-  let guard = 0;
-  while (guard++ < 16) {
-    const braceIdx = working.indexOf("{");
-    if (braceIdx < 0) {
-      out += working;
-      break;
-    }
-    const end = findBalancedObjectEnd(working, braceIdx);
-    if (end < 0) {
-      // Kapanmamış trailing obje → akış sürüyor, brace'ten itibaren gizle.
-      out += working.slice(0, braceIdx);
-      working = "";
-      break;
-    }
-    const candidate = working.slice(braceIdx, end + 1);
-    out += working.slice(0, braceIdx);
-    if (!tryParseTypedJsonObject(candidate)) {
-      // typed değilse: düz cümle sarmalını aç, değilse olduğu gibi bırak.
-      out += unwrapPlainBraceSentence(candidate) || candidate;
-    }
-    working = working.slice(end + 1);
-  }
-
-  return out.trim();
-}
-
-function isMobileLocalExportMode(
-  metadata: Record<string, unknown> | undefined,
-): boolean {
-  if (!metadata) {
-    return false;
-  }
-
-  if (
-    metadata.mobileDocumentExport === true ||
-    metadata.mobileLocalExport === true ||
-    metadata.documentExportReady === true
-  ) {
-    return true;
-  }
-
-  const mode = normalizeMetadataValue(
-    metadata.documentExportMode ??
-      metadata.outputMode ??
-      metadata.localExportMode ??
-      metadata.documentOutputMode,
-  );
-  return (
-    mode === "mobile_local" ||
-    mode === "local" ||
-    mode === "mobile_export" ||
-    mode === "on_device" ||
-    mode === "on_device_export"
-  );
-}
-
-function isLikelyPureDocumentExportPrompt(prompt: string): boolean {
-  const normalizedPrompt = compactText(prompt).toLowerCase();
-  if (!normalizedPrompt) {
-    return false;
-  }
-
-  return (
-    /\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i.test(
-      normalizedPrompt,
-    ) ||
-    /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum)\b/i.test(
-      normalizedPrompt,
-    )
-  );
-}
-
-function isLikelyPureMobileLocalExportPrompt(prompt: string): boolean {
-  const normalizedPrompt = compactText(prompt).toLowerCase();
-  if (!normalizedPrompt) {
-    return false;
-  }
-
-  if (isLikelyPureDocumentExportPrompt(normalizedPrompt)) {
-    return true;
-  }
-
-  return (
-    /\b(görsel|gorsel|resim|image|png|jpg|jpeg|webp|svg|afiş|afis|poster|banner|kapak|thumbnail|screenshot)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i.test(
-      normalizedPrompt,
-    ) ||
-    /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(görsel|gorsel|resim|image|png|jpg|jpeg|webp|svg|afiş|afis|poster|banner|kapak|thumbnail|screenshot)\b/i.test(
-      normalizedPrompt,
-    )
-  );
-}
-
-function looksLikeDesktopHandoffMessage(text: string): boolean {
-  return /\b(masaüstü|masaustu|desktop|pairing|eşleştir|eslestir|runtime)\b/i.test(
-    compactText(text).toLowerCase(),
-  );
-}
-
-// Hardcoded so legacy ack strings already stored in DB sessions are still
-// filtered by getMostRecentAssistantMessage after buildSharedBrainAckText
-// was changed to return "".
-const TRANSIENT_ASSISTANT_ACKS = new Set([
-  "bir saniye, bakıyorum.",
-  "anladım, planı çıkarıyorum.",
-  "anladım, biraz daha derin bakıyorum.",
-  "belge hazırlanıyor, birkaç saniye...",
-  "rapor hazırlanıyor, birkaç saniye...",
-]);
-
-function isLikelyTransientAssistantAck(text: string): boolean {
-  return TRANSIENT_ASSISTANT_ACKS.has(compactText(text).toLowerCase());
-}
-
-function getMostRecentAssistantMessage(
-  conversation: SharedBrainConversationMessage[] | undefined,
-): string | null {
-  if (!conversation?.length) {
-    return null;
-  }
-
-  for (let index = conversation.length - 1; index >= 0; index -= 1) {
-    const item = conversation[index];
-    if (
-      item?.role === "assistant" &&
-      compactText(item.content) &&
-      !isLikelyTransientAssistantAck(item.content)
-    ) {
-      return item.content;
-    }
-  }
-
-  return null;
-}
-
-function buildMobileLocalExportShortcutReply(
-  input: SharedBrainInferenceInput,
-): string | null {
-  if (!isMobileLocalExportMode(input.requestMetadata)) {
-    return null;
-  }
-  if (!isLikelyPureMobileLocalExportPrompt(input.prompt)) {
-    return null;
-  }
-
-  const assistantMessage = getMostRecentAssistantMessage(input.conversation);
-  if (!assistantMessage || looksLikeDesktopHandoffMessage(assistantMessage)) {
-    return null;
-  }
-
-  return assistantMessage;
-}
-
-export function calculateBillableAiCredits(input: {
-  promptTokens: number;
-  completionTokens: number;
-  workload: SharedBrainInferenceInput["workload"];
-  userInputTokens?: number;
-  surface?: TokenMeteringSurface;
-}): number {
-  return calculateBillablePlanTokens({
-    surface: input.surface ?? "chat",
-    workload: input.workload,
-    userInputTokens: input.userInputTokens ?? input.promptTokens,
-    promptTokens: input.promptTokens,
-    completionTokens: input.completionTokens,
-  }).billableTokens;
-}
-
 function telemetryProviderForSharedBrain(
   _provider: SharedBrainProvider,
 ): "groq" {
   return "groq";
-}
-
-function getConfiguredProviderApiKey(
-  app: FastifyInstance,
-  provider: "groq",
-): string {
-  // GROQ_API_KEY may hold a comma-separated pool of keys (for manual rotation
-  // across rate limits). The provider expects a single bearer token, so pick
-  // the first non-empty entry rather than sending the whole joined string.
-  const normalize = (value: unknown) => {
-    if (typeof value !== "string") {
-      return "";
-    }
-    const first = value
-      .split(",")
-      .map((entry) => entry.trim())
-      .find((entry) => entry.length > 0);
-    return first ?? "";
-  };
-  switch (provider) {
-    case "groq":
-      return normalize(app.config.GROQ_API_KEY);
-    default:
-      return "";
-  }
-}
-
-function getConfiguredProviderBaseUrl(
-  app: FastifyInstance,
-  provider: "groq",
-): string | null {
-  const normalize = (value: unknown) => {
-    const trimmed = typeof value === "string" ? value.trim() : "";
-    return trimmed || null;
-  };
-  switch (provider) {
-    case "groq":
-      return normalize(app.config.GROQ_BASE_URL);
-    default:
-      return null;
-  }
-}
-
-function joinProviderUrl(baseUrl: string, path: string): string {
-  const normalizedBase = baseUrl.replace(/\/+$/, "");
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${normalizedBase}${normalizedPath}`.replace(/\/v1\/v1\//g, "/v1/");
-}
-
-function buildHostedProviderCandidates(
-  app: FastifyInstance,
-  workload: SharedBrainWorkload,
-): SharedBrainProviderCandidate[] {
-  const providerCode = "groq" as const;
-  const apiKey = getConfiguredProviderApiKey(app, providerCode);
-  const baseUrl = getConfiguredProviderBaseUrl(app, providerCode);
-  const catalog = buildGroqModelCatalog(app.config);
-  const primaryModel = catalog.defaultModelByWorkload[workload];
-  const fallbackModel =
-    resolveGroqFallbackModel(app.config, primaryModel) ?? catalog.fallbackModel;
-  if (!apiKey || !baseUrl || !primaryModel) {
-    return [];
-  }
-
-  return [
-    {
-      provider: providerCode,
-      baseUrl,
-      preferredModels: [primaryModel, fallbackModel].filter(
-        (model, index, values): model is string =>
-          Boolean(model) && values.indexOf(model) === index,
-      ),
-      hosted: true,
-    } satisfies SharedBrainProviderCandidate,
-  ];
-}
-
-function formatPreferencePromptValue(key: string, value: string): string {
-  const normalizedKey = compactText(key).toLowerCase();
-  const normalizedValue = compactText(value).toLowerCase();
-  if (normalizedKey === "preferred_language" || normalizedKey === "language") {
-    return sentenceCase(formatTurkicLanguageLabel(value));
-  }
-  const translations: Record<string, Record<string, string>> = {
-    response_style_preference: {
-      formal: "resmi",
-      balanced: "dengeli",
-      warm: "sıcak",
-    },
-    preferred_tone: {
-      warm_professional: "sıcak ve profesyonel",
-      warm: "sıcak",
-      formal: "resmi",
-      balanced: "dengeli",
-    },
-    answer_length: {
-      concise: "kısa ve öz",
-      detailed: "detaylı",
-      "detailed when needed": "gerektiğinde detaylı",
-    },
-    brevity_preference: {
-      short: "kısa",
-      concise: "kısa ve öz",
-      balanced: "dengeli",
-    },
-    humor_level: {
-      restrained: "kısıtlı",
-      light: "hafif",
-      off: "kapalı",
-    },
-  };
-
-  const mapped = translations[normalizedKey]?.[normalizedValue] ?? value;
-  return sentenceCase(mapped);
 }
 
 const CONTEXT_KIND_LABELS: Record<string, string> = {
@@ -1391,8 +911,7 @@ function buildUserIdentityPromptBlock(
   if (!context) {
     return null;
   }
-  const preferredName =
-    context.userProfile?.preferredName ?? context.userProfile?.displayName;
+  const preferredName = readPreferredUserName(context);
   const lines: string[] = [];
 
   if (preferredName) {
@@ -1448,106 +967,6 @@ function buildUserIdentityPromptBlock(
   }
 
   return lines.length > 0 ? lines.join("\n") : null;
-}
-
-function buildPreferencePromptBlock(
-  context: UserUnderstandingContext | undefined,
-): string | null {
-  if (!context) {
-    return null;
-  }
-
-  const hints: string[] = [];
-  const seen = new Set<string>();
-  const pushHint = (value: string) => {
-    const compact = compactText(value);
-    if (!compact) {
-      return;
-    }
-    const key = compact.toLowerCase();
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    hints.push(compact);
-  };
-
-  const preferenceFacts = context.memorySnapshot?.preferenceFacts ?? [];
-  if (context.personalizationPrompt) {
-    pushHint(
-      `Explicit personalization directive from user settings: ${context.personalizationPrompt}. Apply this to tone, pacing, formatting, and interaction style when relevant, but never let it override safety, privacy, honesty, routing truth, or factual accuracy.`,
-    );
-  }
-  pushHint(
-    context.memoryEnabled
-      ? "Memory is enabled for this user: use only the relevant current-user memory shortlist, prefer verified/stable facts, and ignore stale or unrelated memories."
-      : "Memory is disabled for this request: do not use saved personal memories or imply cross-chat recall; rely only on the current message and explicitly provided context.",
-  );
-  const preferredLanguageFact = preferenceFacts.find(
-    (item) => item.key === "preferred_language" || item.key === "language",
-  );
-  if (preferredLanguageFact) {
-    const languageValue = formatPreferencePromptValue(
-      preferredLanguageFact.key,
-      preferredLanguageFact.value,
-    );
-    pushHint(
-      `Preferred language: ${languageValue}. When the user writes in a Turkic language, answer in the same language when possible; otherwise use polished standard Turkish by default and do not mirror typos or broken punctuation.`,
-    );
-  }
-
-  const responseStyleFact = preferenceFacts.find(
-    (item) =>
-      item.key === "response_style_preference" || item.key === "preferred_tone",
-  );
-  if (responseStyleFact) {
-    pushHint(
-      `Response style preference: ${formatPreferencePromptValue(responseStyleFact.key, responseStyleFact.value)}.`,
-    );
-  }
-
-  const answerLengthFact = preferenceFacts.find(
-    (item) => item.key === "answer_length" || item.key === "brevity_preference",
-  );
-  if (answerLengthFact) {
-    pushHint(
-      `Answer length preference: ${formatPreferencePromptValue(answerLengthFact.key, answerLengthFact.value)}.`,
-    );
-  }
-
-  for (const hint of [
-    ...(context.personalizationHints ?? []).slice(0, 2),
-    ...(context.styleHints ?? []).slice(0, 3),
-    ...(context.safetyHints ?? []).slice(0, 2),
-  ]) {
-    pushHint(hint);
-  }
-  for (const hint of (context.relationshipContextDigest ?? []).slice(0, 3)) {
-    pushHint(hint);
-  }
-  for (const hint of (context.speakingStyleDirectives ?? []).slice(0, 3)) {
-    pushHint(hint);
-  }
-  for (const hint of [
-    ...(context.behavioralHints ?? []).slice(0, 2),
-    ...(context.environmentHints ?? []).slice(0, 2),
-  ]) {
-    pushHint(hint);
-  }
-
-  if (!hints.length) {
-    return null;
-  }
-
-  return ["User preference hints:", ...hints.map((item) => `- ${item}`)].join(
-    "\n",
-  );
-}
-
-function buildMemoryProfilePromptBlock(
-  context: UserUnderstandingContext | undefined,
-): string | null {
-  return formatMemoryProfilePromptBlock(context?.memorySnapshot);
 }
 
 /**
@@ -1624,6 +1043,7 @@ function buildStructuredDataPromptBlock(
     selectedWorkload: input.workload ?? input.routeDecision?.selectedWorkload,
   });
   const userProfile = context?.userProfile;
+  const dialogueUserMemory = context?.dialogueUserMemory;
   const taskFrame = context?.taskFrame;
   const contextPackets = (context?.contextPackets ?? []).slice(0, 8);
   const payload = {
@@ -1645,6 +1065,10 @@ function buildStructuredDataPromptBlock(
               ? { subscriptionStatus: userProfile.subscriptionStatus }
               : {}),
           }
+        : undefined,
+    dialogueUserMemory:
+      dialogueUserMemory && Object.values(dialogueUserMemory).some((value) => value != null)
+        ? dialogueUserMemory
         : undefined,
     requestFrame: taskFrame
       ? {
@@ -1770,59 +1194,6 @@ function buildStructuredDataPromptBlock(
     JSON.stringify(payload, null, 2),
     "```",
   ].join("\n");
-}
-
-function detectPromptLanguage(
-  prompt: string,
-): "tr" | "en" | "turkic" | "mixed" | "unknown" {
-  const compact = compactText(prompt);
-  if (!compact) {
-    return "unknown";
-  }
-
-  const lowered = compact.toLocaleLowerCase("tr-TR");
-  const hasTurkishChars = /[çğıöşü]/i.test(compact);
-  const turkishSignals =
-    /\b(selam|merhaba|ve|ile|için|bunu|şunu|burada|nedir|nasıl|özetle|düzelt|belge|görsel)\b/i.test(
-      lowered,
-    );
-  const englishSignals =
-    /\b(the|and|for|what|how|summarize|analyze|fix|document|image)\b/i.test(
-      lowered,
-    );
-  const turkicSignals =
-    /\b(oğuz|kıpçak|karluk|özbek|kazak|kırgız|türkmen|uygur|azerbaycan)\b/i.test(
-      lowered,
-    );
-
-  if ((hasTurkishChars || turkishSignals) && englishSignals) {
-    return "mixed";
-  }
-  if (turkicSignals && !turkishSignals && !hasTurkishChars) {
-    return "turkic";
-  }
-  if (hasTurkishChars || turkishSignals) {
-    return "tr";
-  }
-  if (englishSignals) {
-    return "en";
-  }
-  return "unknown";
-}
-
-function inferDataGroundingLevel(
-  input: SharedBrainInferenceInput,
-): "attachment_grounded" | "memory_augmented" | "request_only" {
-  if (input.attachmentContext?.used) {
-    return "attachment_grounded";
-  }
-  if ((input.understandingContext?.contextPackets?.length ?? 0) > 0) {
-    return "memory_augmented";
-  }
-  if ((input.understandingContext?.retrievedMemory?.length ?? 0) > 0) {
-    return "memory_augmented";
-  }
-  return "request_only";
 }
 
 function buildDataUnderstandingQualityPromptBlock(
@@ -2242,9 +1613,7 @@ export function buildSocialChatSystemPrompt(
   const userIdentity = buildUserIdentityPromptBlock(input.understandingContext);
   const languageHint = getTurkicLanguagePromptHint(input.prompt);
   const preferredName =
-    input.understandingContext?.userProfile?.preferredName ??
-    input.understandingContext?.userProfile?.displayName ??
-    null;
+    readPreferredUserName(input.understandingContext);
   const greetingLine = preferredName
     ? `Greeting policy: this is a casual greeting from ${preferredName}. Respond warmly in one short sentence, use their name naturally (not mechanically), and offer one brief, useful follow-up. Do NOT mention health metrics, steps, battery, calendar, weather, location, device state, memory contents, or any system context — none of that is relevant to a greeting.`
     : "Greeting policy: this is a casual greeting. Respond warmly in one short sentence and offer one brief, useful follow-up. Do NOT mention health metrics, steps, battery, calendar, weather, location, device state, memory contents, or any system context — none of that is relevant to a greeting.";
@@ -2545,8 +1914,16 @@ function buildCompactContextPromptBlock(
   input: SharedBrainInferenceInput,
 ): string | null {
   const metadata = readMetadataRecord(input.requestMetadata);
-  const compactContext = readMetadataRecord(metadata?.compactContext);
-  const chatContext = readMetadataRecord(metadata?.chatContext);
+  const trustedDialogueMetadata = isTrustedDialogueStateMetadata(metadata, {
+    userId: input.userId,
+    sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+  });
+  const compactContext = trustedDialogueMetadata
+    ? readMetadataRecord(metadata?.compactContext)
+    : null;
+  const chatContext = trustedDialogueMetadata
+    ? readMetadataRecord(metadata?.chatContext)
+    : null;
   const rollingSummary = readMetadataRecord(
     compactContext?.rollingSummary ?? chatContext?.rollingSummary,
   );
@@ -2559,6 +1936,7 @@ function buildCompactContextPromptBlock(
     readMetadataString(compactContext, "lastAssistantBlocksDigest") ??
     readMetadataString(chatContext, "lastAssistantBlocksDigest");
   const recentMessages = readMetadataArray(compactContext, "recentMessages");
+  const conversationDynamics = readMetadataRecord(compactContext?.conversationDynamics);
   const contextPackets = input.understandingContext?.contextPackets ?? [];
   const continuitySummary = input.understandingContext?.continuitySummary;
   const continuityBoundary = input.understandingContext?.continuityBoundary;
@@ -2602,6 +1980,9 @@ function buildCompactContextPromptBlock(
   if (recentMessages.length > 0) {
     stateLines.push(`window: ${Math.min(recentMessages.length, 6)} recent turns`);
   }
+  if (conversationDynamics) {
+    stateLines.push(`conversation_dynamics: ${JSON.stringify(conversationDynamics)}`);
+  }
   // Anti-tekrar: son cevapların açılış/kapanış imzaları — modele "bunları
   // tekrarlama, ifadeni çeşitlendir" sinyali (talimat, veri değil).
   const antiRepeat = extractAntiRepeatSignatures(recentMessages);
@@ -2637,6 +2018,14 @@ function buildCompactContextPromptBlock(
 
   // ── MEMORY (retrieval shortlist + relationship digest) ──
   const memoryLines: string[] = [];
+  const userModel = input.understandingContext?.userModel;
+  const memoryRecall = input.understandingContext?.memoryRecall;
+  if (userModel) {
+    memoryLines.push(`user_model: ${JSON.stringify(userModel)}`);
+  }
+  if (memoryRecall) {
+    memoryLines.push(`recall: ${JSON.stringify(memoryRecall)}`);
+  }
   if (memoryRelevanceSummary.length > 0) {
     memoryLines.push(
       `shortlist: ${memoryRelevanceSummary.slice(0, 3).join(" | ")}`,
@@ -2968,55 +2357,6 @@ function buildRetrievalTelemetry(
   };
 }
 
-function buildResolvedAttachmentIntentPromptBlock(
-  input: SharedBrainInferenceInput,
-): string | null {
-  if (
-    !input.attachmentContext?.used &&
-    !isMobileLocalExportMode(input.requestMetadata)
-  ) {
-    return null;
-  }
-
-  return `Resolved intent: ${resolveAttachmentIntentMode(input)}. Follow that mode unless the user clearly changes the goal.`;
-}
-
-function resolveAttachmentIntentMode(
-  input: Pick<
-    SharedBrainInferenceInput,
-    "prompt" | "requestMetadata" | "attachmentContext"
-  >,
-): "answer" | "analyze" | "semantic_edit" | "export" {
-  const metadata = readMetadataRecord(input.requestMetadata);
-  const normalizedPrompt = compactText(input.prompt).toLowerCase();
-
-  if (
-    isMobileLocalExportMode(input.requestMetadata) ||
-    isLikelyPureDocumentExportPrompt(normalizedPrompt)
-  ) {
-    return "export";
-  }
-
-  if (
-    readMetadataBoolean(metadata, "documentEditRequested") === true ||
-    /\b(düzenle|duzenle|değiştir|degistir|güncelle|guncelle|revize|rewrite|edit|replace|çıkar|cikar|remove)\b/i.test(
-      normalizedPrompt,
-    )
-  ) {
-    return "semantic_edit";
-  }
-
-  if (
-    /\b(özetle|ozetle|analiz et|incele|yorumla|karşılaştır|karsilastir|çıkar|cikar|çevir|cevir|translate|summarize|analyze|analyse)\b/i.test(
-      normalizedPrompt,
-    )
-  ) {
-    return "analyze";
-  }
-
-  return "answer";
-}
-
 type SharedBrainMemoryPromptResult = {
   memorySource: string;
   memoryType: string;
@@ -3105,7 +2445,8 @@ function buildMemoryPromptBlock(input: {
     (result) => result.conflictStatus === "active",
   );
   const fresh = active.filter((result) => result.staleness === "fresh");
-  const pool = fresh.length >= 2 ? fresh : active.length ? active : input.results;
+  const pool = fresh.length ? fresh : active;
+  if (!pool.length) return null;
 
   const seen = new Set<string>();
   const unique = pool.filter((result) => {
@@ -3203,6 +2544,12 @@ function buildMemoryPromptBlock(input: {
     return null;
   }
   return sections.join("\n\n");
+}
+
+export function shouldUseLegacyMemoryPrompt(
+  context: UserUnderstandingContext | null | undefined,
+): boolean {
+  return context?.memoryRecall == null;
 }
 
 function deriveBrainMode(input: {
@@ -3508,6 +2855,41 @@ function shouldUseResponseCache(
   );
 }
 
+function resolveCostGuardedMaxTokens(input: {
+  enabled: boolean;
+  workload: SharedBrainWorkload;
+  prompt: string;
+  baseMaxTokens: number;
+  hasAttachmentContext: boolean;
+  hasDocumentContext: boolean;
+  override?: number;
+}): number {
+  if (!input.enabled || input.override !== undefined) {
+    return input.baseMaxTokens;
+  }
+  if (input.hasAttachmentContext || input.hasDocumentContext) {
+    return input.baseMaxTokens;
+  }
+  if (
+    input.workload !== "mobile_chat_fast" &&
+    input.workload !== "fast_route" &&
+    input.workload !== "mobile_chat_balanced"
+  ) {
+    return input.baseMaxTokens;
+  }
+  const normalizedPrompt = compactText(input.prompt);
+  if (!normalizedPrompt || normalizedPrompt.length > 120) {
+    return input.baseMaxTokens;
+  }
+  if (
+    input.workload === "mobile_chat_fast" ||
+    input.workload === "fast_route"
+  ) {
+    return Math.min(input.baseMaxTokens, 192);
+  }
+  return Math.min(input.baseMaxTokens, 384);
+}
+
 /**
  * Self-critique fires for high-stakes outputs (plans, generated documents)
  * which the deep-refinement path deliberately skips because their tokens are
@@ -3522,6 +2904,7 @@ function shouldRunSelfCritique(input: {
   evaluation: ReturnType<typeof evaluateBrainAnswer>;
   answerLength: number;
   alreadyCritiqued?: boolean;
+  costGuardEnabled?: boolean;
 }): boolean {
   if (input.alreadyCritiqued) return false;
   if (
@@ -3532,7 +2915,7 @@ function shouldRunSelfCritique(input: {
     return false;
   }
   // Sub-paragraph outputs don't benefit (likely just status/clarification).
-  if (input.answerLength < 320) return false;
+  if (input.answerLength < (input.costGuardEnabled ? 640 : 320)) return false;
   const failures = new Set(input.evaluation.failureTypes);
   return (
     failures.has("weak_reasoning_depth") ||
@@ -3550,8 +2933,10 @@ function shouldRunDeepRefinement(input: {
   workload: SharedBrainWorkload;
   prompt: string;
   evaluation: ReturnType<typeof evaluateBrainAnswer>;
+  answerLength: number;
   context?: UserUnderstandingContext;
   alreadyRefined?: boolean;
+  costGuardEnabled?: boolean;
 }): boolean {
   if (input.alreadyRefined) {
     return false;
@@ -3571,7 +2956,7 @@ function shouldRunDeepRefinement(input: {
     return false;
   }
   const failures = new Set(input.evaluation.failureTypes);
-  if (
+  const hasQualityFailure =
     failures.has("weak_reasoning_depth") ||
     failures.has("overcompressed_answer") ||
     failures.has("poor_coherence") ||
@@ -3579,7 +2964,12 @@ function shouldRunDeepRefinement(input: {
     failures.has("shallow_tradeoff_analysis") ||
     failures.has("missed_personalization_opportunity") ||
     failures.has("weak_continuity") ||
-    failures.has("stiff_or_performative_tone")
+    failures.has("stiff_or_performative_tone");
+  if (input.costGuardEnabled) {
+    return hasQualityFailure && input.answerLength >= 480;
+  }
+  if (
+    hasQualityFailure
   ) {
     return true;
   }
@@ -3643,152 +3033,6 @@ function buildPromptFromConversation(
     .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
     .join("\n\n")
     .trim();
-}
-
-async function postJson(
-  app: FastifyInstance,
-  provider: SharedBrainProvider,
-  url: string,
-  body: Record<string, unknown>,
-  timeoutMs: number = DEFAULT_OLLAMA_CHAT_TIMEOUT_MS,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      method: "POST",
-      headers: buildProviderHeaders(app, provider),
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Runaway guard: aktif akan bir stream'in mutlak üst sınırı. Stall timer'ı
- * sürekli resetleyen ama hiç bitmeyen bir stream (provider bug'ı) sunucu
- * kaynaklarını sonsuza kadar tutamasın.
- */
-const STREAMING_HARD_CAP_MS = 120_000;
-
-export async function postStreamingJson(
-  app: FastifyInstance,
-  provider: SharedBrainProvider,
-  url: string,
-  body: Record<string, unknown>,
-  timeoutMs: number,
-  firstPayloadTimeoutMs: number | null,
-  onPayload: (payload: unknown) => void | Promise<void>,
-): Promise<Response> {
-  const controller = new AbortController();
-  // TIMEOUT SEMANTİĞİ (kritik): timeoutMs artık "toplam süre" değil, "STALL
-  // süresi" — son chunk'tan bu yana geçen sessizlik. Eski davranış aktif
-  // olarak token akıtan uzun bir cevabı 7sn'de ortasından kesiyordu (prod'da
-  // "uzun cevap yarıda kesiliyor" şikayetinin kök nedeni). Yeni davranış:
-  //   • firstPayloadTimeoutMs: ilk chunk bütçesi (değişmedi) — cevap hiç
-  //     başlamıyorsa hızlı fail → retry/fallback → ilk-token gecikmesi düşük.
-  //   • Sonrasında her chunk stall timer'ı resetler. timeoutMs boyunca HİÇ
-  //     chunk gelmezse stream gerçekten takılıdır → abort → retry.
-  //   • STREAMING_HARD_CAP_MS mutlak runaway guard'ı.
-  let stallTimer: ReturnType<typeof setTimeout> | null = setTimeout(
-    () => controller.abort(),
-    timeoutMs,
-  );
-  const resetStallTimer = () => {
-    if (stallTimer) {
-      clearTimeout(stallTimer);
-    }
-    stallTimer = setTimeout(() => controller.abort(), timeoutMs);
-  };
-  const hardCapTimer = setTimeout(
-    () => controller.abort(),
-    STREAMING_HARD_CAP_MS,
-  );
-  let firstPayloadTimer: ReturnType<typeof setTimeout> | null =
-    typeof firstPayloadTimeoutMs === "number" && firstPayloadTimeoutMs > 0
-      ? setTimeout(() => controller.abort(), firstPayloadTimeoutMs)
-      : null;
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: buildProviderHeaders(app, provider),
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-
-    if (!response.ok || !response.body) {
-      return response;
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      resetStallTimer();
-      buffer += decoder.decode(value, { stream: !done });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        try {
-          if (firstPayloadTimer) {
-            clearTimeout(firstPayloadTimer);
-            firstPayloadTimer = null;
-          }
-          const data = trimmed.startsWith("data:")
-            ? trimmed.slice(5).trim()
-            : trimmed;
-          if (!data || data === "[DONE]") {
-            continue;
-          }
-          await onPayload(JSON.parse(data));
-        } catch {
-          // Ignore malformed provider chunks; the final response validity
-          // check decides whether to fall back to the non-stream path.
-        }
-      }
-
-      if (done) {
-        break;
-      }
-    }
-
-    const trailing = buffer.trim();
-    if (trailing) {
-      try {
-        if (firstPayloadTimer) {
-          clearTimeout(firstPayloadTimer);
-          firstPayloadTimer = null;
-        }
-        const data = trailing.startsWith("data:")
-          ? trailing.slice(5).trim()
-          : trailing;
-        if (data && data !== "[DONE]") {
-          await onPayload(JSON.parse(data));
-        }
-      } catch {
-        // See malformed chunk note above.
-      }
-    }
-
-    return response;
-  } finally {
-    if (stallTimer) {
-      clearTimeout(stallTimer);
-    }
-    clearTimeout(hardCapTimer);
-    if (firstPayloadTimer) {
-      clearTimeout(firstPayloadTimer);
-    }
-  }
 }
 
 function getWarmCache(
@@ -3896,383 +3140,6 @@ async function warmOllamaModelIfNeeded(
     });
     return false;
   }
-}
-
-function getChatCompletionPath(provider: SharedBrainProvider): string {
-  if (provider === "ollama") {
-    return "/api/chat";
-  }
-  if (provider === "claude") {
-    return "/messages";
-  }
-  return "/chat/completions";
-}
-
-function buildProviderHeaders(
-  app: FastifyInstance,
-  provider: SharedBrainProvider,
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-  };
-
-  if (provider !== "groq") {
-    return headers;
-  }
-
-  const apiKey = getConfiguredProviderApiKey(app, "groq");
-  if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
-  }
-
-  return headers;
-}
-
-function buildAnthropicRequestBody(
-  model: string,
-  messages: SharedBrainConversationMessage[],
-  maxTokens: number,
-) {
-  const system = messages
-    .filter((message) => message.role === "system")
-    .map((message) => compactText(message.content))
-    .filter(Boolean)
-    .join("\n\n");
-
-  return {
-    model,
-    max_tokens: maxTokens,
-    temperature: 0.25,
-    ...(system ? { system } : {}),
-    messages: messages
-      .filter((message) => message.role !== "system")
-      .map((message) => ({
-        role: message.role === "assistant" ? "assistant" : "user",
-        content: [
-          {
-            type: "text",
-            text: message.content,
-          },
-        ],
-      })),
-  };
-}
-
-type OpenAiContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
-
-function buildOpenAiMessagesWithVision(
-  messages: SharedBrainConversationMessage[],
-  visionImages: ResolvedAttachmentContextVisionImage[],
-): unknown[] {
-  if (visionImages.length === 0) {
-    return messages as unknown[];
-  }
-  const result: unknown[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (i === messages.length - 1 && msg.role === "user") {
-      const textContent =
-        typeof msg.content === "string"
-          ? msg.content
-          : String(msg.content ?? "");
-      const blocks: OpenAiContentBlock[] = [
-        { type: "text", text: textContent },
-      ];
-      for (const img of visionImages) {
-        blocks.push({
-          type: "image_url",
-          image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
-        });
-      }
-      result.push({ ...msg, content: blocks });
-    } else {
-      result.push(msg);
-    }
-  }
-  return result;
-}
-
-function buildRequestBody(
-  provider: SharedBrainProvider,
-  model: string,
-  messages: SharedBrainConversationMessage[],
-  maxTokens: number,
-  keepAlive?: string,
-  stream = false,
-  visionImages: ResolvedAttachmentContextVisionImage[] = [],
-  reasoningPolicy: "hidden" | "visible" = "hidden",
-  reasoningEffort: "low" | "medium" | "high" = "low",
-  temperature: number = ANALYTICAL_GENERATION_TEMPERATURE,
-) {
-  if (provider === "ollama") {
-    return {
-      model,
-      messages,
-      stream,
-      ...(keepAlive ? { keep_alive: keepAlive } : {}),
-      options: {
-        temperature,
-        num_predict: maxTokens,
-      },
-    };
-  }
-
-  if (provider === "claude") {
-    return buildAnthropicRequestBody(model, messages, maxTokens);
-  }
-
-  const outMessages = buildOpenAiMessagesWithVision(messages, visionImages);
-  return {
-    model,
-    messages: outMessages,
-    temperature,
-    max_tokens: maxTokens,
-    stream,
-    // gpt-oss reasoning models emit a separate `reasoning` channel before any
-    // `content`. Two orthogonal dials:
-    //   • format: "parsed" when we stream a visible "düşünüyor" trace, else
-    //     "hidden" (chit-chat keeps content arriving immediately).
-    //   • effort: low/medium/high by question difficulty — HARD analytical
-    //     questions get "high" so the answer is deep, not shallow; chit-chat
-    //     stays "low" for latency. Budget guard: "high" reasoning can consume
-    //     the whole token budget and starve the content (empty_stream_response),
-    //     so we cap to "medium" when maxTokens is tight.
-    ...(isReasoningChannelModel(model)
-      ? {
-          reasoning_format: reasoningPolicy === "visible" ? "parsed" : "hidden",
-          reasoning_effort:
-            reasoningEffort === "high" && maxTokens < 1500
-              ? "medium"
-              : reasoningEffort,
-        }
-      : {}),
-  };
-}
-
-/**
- * Reasoning depth dial for gpt-oss models. HARD analytical work (planning,
- * document generation/analysis, explicit deep-refine, or a task frame the
- * understanding layer marked reasoningMode="deep") gets "high" so answers are
- * thorough instead of shallow. Moderate thinking workloads get "medium".
- * Everything else (chit-chat, fast routes) stays "low" to protect latency.
- */
-export function resolveReasoningEffort(
-  workload: SharedBrainWorkload | undefined,
-  reasoningMode: string | undefined,
-): "low" | "medium" | "high" {
-  if (
-    reasoningMode === "deep" ||
-    workload === "planning" ||
-    workload === "document_generate" ||
-    workload === "document_analysis" ||
-    workload === "mobile_chat_deep_refine"
-  ) {
-    return "high";
-  }
-  if (
-    workload === "mobile_chat_balanced" ||
-    workload === "vision_reasoning" ||
-    workload === "image_analyze"
-  ) {
-    return "medium";
-  }
-  return "low";
-}
-
-function isReasoningChannelModel(model: string): boolean {
-  const normalized = model.toLowerCase();
-  return normalized.includes("gpt-oss");
-}
-
-/**
- * Sampling temperature dial — workload-aware so Elyan sounds ALIVE in
- * conversation without ever loosening analytical accuracy.
- *
- * Why: temperature was pinned at 0.25 for every request. That is right for
- * math/code/document work (deterministic, exact) but makes casual chat feel
- * robotic and repetitive — the same greeting, the same closers, the same
- * phrasing every turn. Higher temperature on conversational turns restores
- * natural variation and warmth (and reinforces the anti-repetition work),
- * while precision workloads stay cold and reliable.
- *
- * Bands:
- *   • 0.25 — analytical/exact: planning, documents, tables, math, vision,
- *     code (accuracy must not drift).
- *   • 0.40 — balanced: substantive Q&A where some phrasing freedom helps.
- *   • 0.60 — conversational/social: greetings, small talk, warmth-first turns.
- */
-export const ANALYTICAL_GENERATION_TEMPERATURE = 0.25;
-export const BALANCED_GENERATION_TEMPERATURE = 0.4;
-export const CONVERSATIONAL_GENERATION_TEMPERATURE = 0.6;
-
-export function resolveGenerationTemperature(input: {
-  workload: SharedBrainWorkload | undefined;
-  prompt: string;
-}): number {
-  const workload = input.workload;
-  // Exact/structured work must stay deterministic.
-  if (
-    workload === "planning" ||
-    workload === "document_generate" ||
-    workload === "document_analysis" ||
-    workload === "table_generate" ||
-    workload === "image_analyze" ||
-    workload === "vision_reasoning" ||
-    workload === "mobile_chat_deep_refine"
-  ) {
-    return ANALYTICAL_GENERATION_TEMPERATURE;
-  }
-  // Math/code/LaTeX signalled prompts: keep cold even on a chat workload so a
-  // "çöz"/"grafiğini çiz" turn does not drift.
-  if (
-    hasMathReasoningSignal(input.prompt) ||
-    isExplicitMathOrLatexRequest(input.prompt) ||
-    isExplicitChartRequest(input.prompt) ||
-    isExplicitTableRequest(input.prompt) ||
-    isExplicitMathSurface3DRequest(input.prompt)
-  ) {
-    return ANALYTICAL_GENERATION_TEMPERATURE;
-  }
-  // Greetings + small talk: warmest, most varied.
-  if (isSocialChatPrompt(input.prompt)) {
-    return CONVERSATIONAL_GENERATION_TEMPERATURE;
-  }
-  // Fast route is almost always light conversational chat.
-  if (workload === "mobile_chat_fast" || workload === "fast_route") {
-    return CONVERSATIONAL_GENERATION_TEMPERATURE;
-  }
-  // Everything else (balanced substantive chat): a little phrasing freedom.
-  return BALANCED_GENERATION_TEMPERATURE;
-}
-
-function buildGenerateRequestBody(
-  model: string,
-  prompt: string,
-  maxTokens: number,
-  keepAlive?: string,
-  stream = false,
-  temperature: number = ANALYTICAL_GENERATION_TEMPERATURE,
-) {
-  return {
-    model,
-    prompt,
-    stream,
-    ...(keepAlive ? { keep_alive: keepAlive } : {}),
-    options: {
-      temperature,
-      num_predict: maxTokens,
-    },
-  };
-}
-
-function buildCandidateOrder(
-  candidates: SharedBrainProviderCandidate[],
-  preferred?: SharedBrainProviderCandidate | null,
-) {
-  const ordered = preferred ? [preferred, ...candidates] : [...candidates];
-  const unique = new Map<string, SharedBrainProviderCandidate>();
-
-  for (const candidate of ordered) {
-    const key = `${candidate.provider}:${candidate.baseUrl}`;
-    if (!unique.has(key)) {
-      unique.set(key, candidate);
-    }
-  }
-
-  return [...unique.values()];
-}
-
-function buildInferenceProviderCandidates(input: {
-  app: FastifyInstance;
-  workload: SharedBrainWorkload;
-  runtime: Awaited<ReturnType<typeof selectSharedBrainRuntime>>;
-  localModels: string[];
-}) {
-  const localCandidates = listSharedBrainProviderCandidates(input.app).map(
-    (candidate) => ({
-      provider: candidate.provider,
-      baseUrl: candidate.baseUrl,
-      preferredModels: input.localModels,
-      hosted: false,
-    }),
-  ) satisfies SharedBrainProviderCandidate[];
-  const hostedCandidates = buildHostedProviderCandidates(
-    input.app,
-    input.workload,
-  );
-  const preferredLocalCandidate = input.runtime.ready
-    ? {
-        provider: input.runtime.provider,
-        baseUrl: input.runtime.baseUrl,
-        preferredModels: input.localModels,
-        hosted: false,
-      }
-    : null;
-
-  if (!hostedCandidates.length) {
-    return buildCandidateOrder(localCandidates, preferredLocalCandidate);
-  }
-
-  return buildCandidateOrder(
-    [...hostedCandidates, ...localCandidates],
-    hostedCandidates[0],
-  );
-}
-
-function getChatTimeoutMs(
-  workload: SharedBrainInferenceInput["workload"],
-): number {
-  return getSharedBrainWorkloadProfile(workload).timeoutMs;
-}
-
-function getMaxTokensForWorkload(
-  workload: SharedBrainInferenceInput["workload"],
-  brainProfile: ReturnType<typeof normalizePlanBrainProfile>,
-): number {
-  const baseTokens = getSharedBrainWorkloadProfile(workload).maxTokens;
-  if (brainProfile.tier !== "premium" && brainProfile.reasoningMultiplier < 5) {
-    return baseTokens;
-  }
-
-  const scaledTokens = Math.round(baseTokens * brainProfile.maxTokenScale);
-  const maxTokensByWorkload =
-    workload === "planning"
-      ? 900
-      : workload === "mobile_chat_deep_refine"
-        ? 980
-        : workload === "mobile_chat_balanced"
-          ? 760
-          : workload === "mobile_chat_fast"
-            ? 360
-            : workload === "document_analysis"
-              ? 900
-              : baseTokens;
-
-  return Math.max(baseTokens, Math.min(scaledTokens, maxTokensByWorkload));
-}
-
-function getLoadSheddingOptions(
-  workload: SharedBrainInferenceInput["workload"],
-  brainProfile: ReturnType<typeof normalizePlanBrainProfile>,
-  planCode?: string | null,
-) {
-  const workloadProfile = getSharedBrainWorkloadProfile(workload);
-  return {
-    namespace:
-      brainProfile.tier === "premium"
-        ? "shared-brain:premium"
-        : "shared-brain:standard",
-    maxConcurrent: brainProfile.tier === "premium" ? 2 : 4,
-    ttlMs: Math.max(workloadProfile.timeoutMs + 8_000, 20_000),
-    salt: `${
-      String(planCode ?? "free")
-        .trim()
-        .toLowerCase() || "free"
-    }:${workload}:${brainProfile.reasoningMultiplier}:${brainProfile.retrievalFanout}:${brainProfile.memoryFanout}`,
-    retryAfterSeconds: 5,
-  };
 }
 
 function describeProviderFailure(error: unknown): string {
@@ -4390,6 +3257,21 @@ export async function recordGroqProviderModelFailure(
   return true;
 }
 
+async function isGroqProviderModelCooling(
+  app: FastifyInstance,
+  model: string,
+): Promise<boolean> {
+  const reliability = app.services?.reliability;
+  const normalizedModel = compactText(model);
+  if (!reliability || !normalizedModel) {
+    return false;
+  }
+  const failedModels = parseGroqFailedModels(
+    await reliability.store.get(GROQ_PROVIDER_FAILURE_WINDOW_KEY),
+  );
+  return failedModels.includes(normalizedModel);
+}
+
 async function recordGroqProviderSuccess(app: FastifyInstance): Promise<void> {
   const reliability = app.services?.reliability;
   if (!reliability) {
@@ -4446,628 +3328,17 @@ export function isPlaceholderRefusal(text: string): boolean {
   return PLACEHOLDER_REFUSAL_PATTERNS.some((rx) => rx.test(stripped));
 }
 
-/**
- * A reply whose entire content is an internal-reasoning dump ("Here's a
- * thinking process: … Intent: … Check Constraints & Policies: …") is worse
- * than an empty stream: the sanitizer strips all of it and the user gets the
- * "Yanıtı temiz biçimde oluşturamadım" stub. Detect it at the provider loop so
- * the attempt is retried (same or next model) and the user gets a real answer.
- *
- * Typed blocks count as real content: the visible-text gate removes them
- * first, so a pure block reply (chart/table/document with no prose) is NOT
- * flagged here.
- */
-export function isReasoningOnlyReply(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-  // Keep typed blocks/fences out of the judgment — they are renderable output.
-  const prose = computeStreamVisibleText(trimmed);
-  if (!prose.trim()) {
-    // Everything was typed blocks → real structured answer.
-    return false;
-  }
-  const visible = sanitizeAssistantVisibleText(prose, { fallback: "" });
-  if (!visible.trim()) {
-    return true;
-  }
-  // Sanitizer'ın satır satır süzemediği protokol-yansıması dump'ları
-  // ("Here's a thinking… Topic:… Format:… Constraint:…") bütüncül
-  // sınıflayıcıyla yakala — bunlar da retry edilmesi gereken cevaplardır.
-  return classifyReasoningDump(visible).isDump;
-}
-
-// CLEAN_ANSWER_FALLBACK_STUB sabiti kaldırıldı. Kural: sanitize her şeyi
-// süzse bile stub yerine modelin ürettiği ham/görünür metni kullanıcıya ver.
-// Yanlış pozitif dump dedektörü prod'da bu stub'ı sürekli tetikliyordu.
-
-type VisibleAnswerSanitizerOptions = Parameters<
-  typeof sanitizeAssistantVisibleText
->[1];
-
-/**
- * Dump içinden kurtarılan cevabı sanitize edip döner; kurtarılamazsa null.
- */
-function rescueVisibleAnswerFromRawText(
-  raw: string,
-  options: VisibleAnswerSanitizerOptions = {},
-): string | null {
-  const visible = computeStreamVisibleText(String(raw ?? ""));
-  const extracted = extractFinalAnswerFromReasoningDump(visible || String(raw ?? ""));
-  if (!extracted) {
-    return null;
-  }
-  const sanitized = sanitizeAssistantVisibleText(extracted, {
-    ...options,
-    fallback: extracted,
-  });
-  return sanitized.trim() ? sanitized : extracted;
-}
-
-/**
- * Nihai görünür cevabı TEK yerden çözer. Kritik prensip: model gerçekten
- * metin ürettiyse kullanıcıya HER ZAMAN ham metin gönderilir; asla stub
- * ("Yanıtı temiz biçimde oluşturamadım") ile değiştirilmez. Aşırı-hevesli
- * dump dedektörü prod'da düz cevap açılışlarını da meta sayıp stub'a
- * düşürüyordu; artık dump kesinliği çok yüksek olsa bile sanitize edilmiş
- * metin varsa onu, yoksa ham metni veriyoruz.
- *
- * Sıra:
- *   1. adaylar (onarılmış → ham) sanitize edilir; TEMİZ metin varsa kullanılır,
- *   2. sanitize her şeyi sildiyse dump içinden gerçek cevabı kurtarmayı dene,
- *   3. yine yoksa ham görünür metni polish edip ver (dump da olsa, kullanıcı
- *      "Yanıtı temiz biçimde oluşturamadım" yerine modelin ürettiği ham metni
- *      görür — yargıyı kullanıcıya bırak),
- *   4. gerçekten hiçbir metin yoksa boş cevap: dış katman "empty_response"
- *      hatasını kendi ele alır (stream'de retry, non-stream'de üst katmandan
- *      hata mesajı).
- */
-export function resolveCleanVisibleAnswer(input: {
-  candidates: Array<string | null | undefined>;
-  raw: string;
-  options?: VisibleAnswerSanitizerOptions;
-}): string {
-  const options = input.options ?? {};
-  for (const candidate of input.candidates) {
-    if (!candidate?.trim()) {
-      continue;
-    }
-    const sanitized = polishAssistantVisibleText(
-      sanitizeAssistantVisibleText(candidate, { ...options, fallback: "" }),
-      options,
-    );
-    if (!sanitized.trim()) {
-      continue;
-    }
-    // Sanitize'dan geçen metin hâlâ bir reasoning dump'ı olabilir — satır
-    // satır masum görünen "Etiket: değer" protokol yansımaları sanitizer'ı
-    // aşıyor (prod 08:33 vakası). Dump ise içinden gerçek cevabı kurtarmayı
-    // dene; kurtarılamazsa bu adayı ATLA — dump'ı "temiz cevap" diye
-    // döndürmek buradaki ikinci sızıntı yoluydu.
-    if (classifyReasoningDump(sanitized).isDump) {
-      const rescuedFromCandidate = rescueVisibleAnswerFromRawText(
-        candidate,
-        options,
-      );
-      if (rescuedFromCandidate) {
-        return rescuedFromCandidate;
-      }
-      continue;
-    }
-    return sanitized;
-  }
-
-  const rescued = rescueVisibleAnswerFromRawText(input.raw, options);
-  if (rescued) {
-    return rescued;
-  }
-
-  // Son çare: sanitize edilemedi ama model gerçek metin üretti. Stub yerine
-  // ham görünür metni (typed JSON blokları hariç tutulmuş haliyle) ver —
-  // AMA yalnızca dump DEĞİLSE. Yüksek-kesinlikli bir reasoning dump'ını ham
-  // geri püskürtmek, kullanıcının ekranında iç düşünme sürecini görmesi
-  // demek (prod 08:33 vakası). Dump + kurtarma başarısız → boş dön; dış
-  // katman bunu empty_response olarak ele alır (stream'de retry, non-stream
-  // yolunda üst katman hata/yeniden deneme kararını verir).
-  const rawVisible = computeStreamVisibleText(String(input.raw ?? "")).trim();
-  if (rawVisible && !classifyReasoningDump(rawVisible).isDump) {
-    const polished = polishAssistantVisibleText(rawVisible, options);
-    return polished.trim() || rawVisible;
-  }
-
-  return "";
-}
-
-function extractResponseText(provider: string, payload: unknown): string {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return "";
-  }
-
-  const record = payload as Record<string, unknown>;
-  if (provider === "claude") {
-    const content = record.content;
-    if (Array.isArray(content)) {
-      for (const item of content) {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
-          continue;
-        }
-        const text = (item as Record<string, unknown>).text;
-        if (typeof text === "string" && text.trim()) {
-          return text.trim();
-        }
-      }
-    }
-  }
-  const choices = record.choices;
-  if (Array.isArray(choices)) {
-    for (const choice of choices) {
-      if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
-        continue;
-      }
-      const message = (choice as Record<string, unknown>).message;
-      if (message && typeof message === "object" && !Array.isArray(message)) {
-        const content = (message as Record<string, unknown>).content;
-        if (typeof content === "string" && content.trim()) {
-          return content.trim();
-        }
-      }
-    }
-  }
-
-  const response = record.response;
-  if (typeof response === "string" && response.trim()) {
-    return response.trim();
-  }
-
-  const message = record.message;
-  if (message && typeof message === "object" && !Array.isArray(message)) {
-    const content = (message as Record<string, unknown>).content;
-    if (typeof content === "string" && content.trim()) {
-      return content.trim();
-    }
-  }
-
-  return "";
-}
-
-function extractResponseDelta(payload: unknown): string {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return "";
-  }
-
-  const record = payload as Record<string, unknown>;
-  const response = record.response;
-  if (typeof response === "string" && response.length > 0) {
-    return response;
-  }
-
-  const message = record.message;
-  if (message && typeof message === "object" && !Array.isArray(message)) {
-    const content = (message as Record<string, unknown>).content;
-    if (typeof content === "string" && content.length > 0) {
-      return content;
-    }
-  }
-
-  const choices = record.choices;
-  if (Array.isArray(choices)) {
-    for (const choice of choices) {
-      if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
-        continue;
-      }
-      const delta = (choice as Record<string, unknown>).delta;
-      if (delta && typeof delta === "object" && !Array.isArray(delta)) {
-        const content = (delta as Record<string, unknown>).content;
-        if (typeof content === "string" && content.length > 0) {
-          return content;
-        }
-      }
-    }
-  }
-
-  return "";
-}
-
-/**
- * Pulls the reasoning chunk emitted by gpt-oss/o1-style models on their separate
- * "thinking" channel. Groq surfaces it as `delta.reasoning` or
- * `delta.reasoning_content`; Ollama mirrors it under `message.reasoning`.
- * Returning the string is enough — the publisher accumulates it and forwards
- * incremental updates to the client as a visible "düşünüyor" trace.
- */
-function extractResponseReasoning(payload: unknown): string {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return "";
-  }
-  const record = payload as Record<string, unknown>;
-  const message = record.message;
-  if (message && typeof message === "object" && !Array.isArray(message)) {
-    const r = (message as Record<string, unknown>).reasoning;
-    if (typeof r === "string" && r.length > 0) return r;
-  }
-  const choices = record.choices;
-  if (Array.isArray(choices)) {
-    for (const choice of choices) {
-      if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
-        continue;
-      }
-      const delta = (choice as Record<string, unknown>).delta;
-      if (delta && typeof delta === "object" && !Array.isArray(delta)) {
-        const d = delta as Record<string, unknown>;
-        const reasoning = d.reasoning;
-        if (typeof reasoning === "string" && reasoning.length > 0) return reasoning;
-        const reasoningContent = d.reasoning_content;
-        if (typeof reasoningContent === "string" && reasoningContent.length > 0) {
-          return reasoningContent;
-        }
-      }
-    }
-  }
-  return "";
-}
-
-/**
- * Picks whether the visible reasoning trace should stream for this workload.
- * Chit-chat (mobile_chat_fast / fast_route) keeps reasoning hidden so first-
- * delta latency stays low; "thinking" workloads stream it so the user sees
- * Elyan actually working through the problem.
- */
-function shouldStreamReasoning(
-  workload: SharedBrainWorkload | undefined,
-): boolean {
-  if (!workload) return false;
-  return (
-    workload === "planning" ||
-    workload === "document_generate" ||
-    workload === "mobile_chat_balanced" ||
-    workload === "vision_reasoning" ||
-    workload === "image_analyze"
-  );
-}
-
-function supportsNativeStreamingAttempt(
-  provider: SharedBrainProvider,
-  path: string,
-): boolean {
-  if (provider === "claude") {
-    return false;
-  }
-  if (provider === "ollama") {
-    return path === "/api/generate" || path === getChatCompletionPath(provider);
-  }
-  return (
-    provider === "groq" ||
-    provider === "openai" ||
-    provider === "openrouter" ||
-    provider === "vllm" ||
-    provider === "llamacpp"
-  );
-}
-
-/* Streaming bellek üst sınırları: kaçak/uzayan bir stream tek istekte yüzlerce
- * MB string biriktirmesin. Sınır aşıldığında yeni delta'lar düşürülür ve yanıt
- * o noktada tamamlanmış sayılır. Publisher state'i closure-scoped'tur — istek
- * bitince referanslarla birlikte serbest kalır, modül-seviyesi state yoktur. */
-export const STREAM_MAX_CONTENT_CHARS = 512 * 1024;
-export const STREAM_MAX_REASONING_CHARS = 128 * 1024;
-const STREAM_CONTINUATION_DIRECTIVE =
-  "Continue from exactly where you stopped, without repeating.";
-const STREAM_CONTINUATION_MAX_HOPS = 2;
-const STREAM_CONTINUATION_MIN_TOKENS = 200;
-
-function extractResponseFinishReason(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-
-  const record = payload as Record<string, unknown>;
-  for (const key of ["finish_reason", "finishReason", "done_reason"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim().toLowerCase();
-    }
-  }
-
-  const choices = record.choices;
-  if (Array.isArray(choices)) {
-    for (const choice of choices) {
-      if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
-        continue;
-      }
-      const value = (choice as Record<string, unknown>).finish_reason;
-      if (typeof value === "string" && value.trim()) {
-        return value.trim().toLowerCase();
-      }
-    }
-  }
-
-  return null;
-}
-
-function shouldAttemptStreamContinuation(input: {
-  finishReason: string | null;
-  text: string;
-}): boolean {
-  const reason = input.finishReason?.toLowerCase();
-  if (reason !== "length" && reason !== "max_tokens") {
-    return false;
-  }
-
-  const text = input.text.trimEnd();
-  if (!text) {
-    return false;
-  }
-
-  return !/[.!?…]$/.test(text);
-}
-
-function resolveStreamContinuationTokenBudget(input: {
-  maxTokens: number;
-  usedContinuationTokens: number;
-}): number {
-  const remaining = Math.max(0, input.maxTokens - input.usedContinuationTokens);
-  if (remaining < STREAM_CONTINUATION_MIN_TOKENS) {
-    return 0;
-  }
-  return Math.min(remaining, Math.max(STREAM_CONTINUATION_MIN_TOKENS, Math.floor(input.maxTokens / 2)));
-}
-
-function stripRepeatedContinuationPrefix(previous: string, next: string): string {
-  const normalizedNext = String(next ?? "");
-  if (!previous || !normalizedNext) {
-    return normalizedNext;
-  }
-
-  const maxOverlap = Math.min(previous.length, normalizedNext.length, 1_000);
-  for (let size = maxOverlap; size >= 12; size -= 1) {
-    if (previous.endsWith(normalizedNext.slice(0, size))) {
-      return normalizedNext.slice(size);
-    }
-  }
-  return normalizedNext;
-}
-
 export function createDeltaPublisher(input: {
   startedAt: number;
   provider: SharedBrainProvider;
   model: string;
   onDelta?: (delta: SharedBrainInferenceDelta) => void | Promise<void>;
 }) {
-  let firstDeltaMs: number | null = null;
-  let lastPublishedContent = "";
-  let lastObservedContent = "";
-  // Görünür (JSON gizlenmiş) kümülatif metin — streaming gate'in çıktısı.
-  let lastVisibleContent = "";
-  let pendingContent = "";
-  let lastFlushAt = input.startedAt;
-  let emittedFirstChunk = false;
-
-  // REASONING-DUMP GATE: ilk görünür pencereyi (≥24 karakter) yayınlamadan
-  // önce dump açılışına karşı test et. Dump ise bu attempt'in TÜM delta'ları
-  // bastırılır — kullanıcı iç düşünme sürecini asla canlı izlemez; stream
-  // sonundaki kontrol retry/kurtarma kararını verir. Dump değilse tutulan
-  // pencere normal akışla yayınlanır (ilk delta ~24-64 karakter gecikir).
-  const DUMP_GATE_MIN_CHARS = 24;
-  const DUMP_GATE_RELEASE_CHARS = 64;
-  let holdingFirstWindow = true;
-  let suppressedAsReasoningDump = false;
-
-  function evaluateFirstWindow(force: boolean): "hold" | "suppress" | "release" {
-    const opening = lastVisibleContent.trimStart();
-    if (!force && opening.length < DUMP_GATE_MIN_CHARS) {
-      return "hold";
-    }
-    if (looksLikeReasoningDumpOpening(opening)) {
-      return "suppress";
-    }
-    if (force || opening.length >= DUMP_GATE_RELEASE_CHARS || /[.!?…\n]/.test(opening)) {
-      return "release";
-    }
-    return "hold";
-  }
-
-  // Reasoning-channel ("düşünüyor") state, parallel to content. Throttled
-  // separately because reasoning typically arrives as a steady stream of short
-  // chunks before any content chunk; we flush it more eagerly so the user sees
-  // Elyan actively thinking instead of a frozen UI.
-  let lastReasoningContent = "";
-  let lastReasoningFlushAt = input.startedAt;
-
-  function normalizeDelta(value: string): string {
-    return value.replace(/\r\n/g, "\n");
-  }
-
-  function shouldFlushPending(buffer: string, force: boolean): boolean {
-    if (force) {
-      return buffer.length > 0;
-    }
-
-    if (!emittedFirstChunk) {
-      return buffer.length > 0;
-    }
-
-    if (buffer.length >= 32) {
-      return true;
-    }
-
-    if (/[.!?…]\s*$/.test(buffer)) {
-      return true;
-    }
-
-    if (/\n{2,}$/.test(buffer)) {
-      return true;
-    }
-
-    return buffer.length >= 12 && Date.now() - lastFlushAt >= 24;
-  }
-
-  return {
-    get firstDeltaMs() {
-      return firstDeltaMs;
-    },
-    /** Dump gate bu attempt'in yayınını bastırdı mı? */
-    get suppressedAsReasoningDump() {
-      return suppressedAsReasoningDump;
-    },
-    /** Kullanıcıya en az bir delta yayınlandı mı? */
-    get hasPublished() {
-      return lastPublishedContent.length > 0;
-    },
-    /**
-     * Bastırılmış/hiç yayın yapmamış bir attempt için nihai metni TEK delta
-     * olarak yayınlar (dump'tan kurtarılan cevap ya da yanlış-pozitif gate
-     * sonrası tam görünür metin). Daha önce delta yayınlandıysa no-op —
-     * yayınlanmış içerik geri alınamaz, monotonluk bozulmaz.
-     */
-    async publishReplacement(text: string) {
-      if (!input.onDelta) {
-        return;
-      }
-      const replacement = normalizeDelta(String(text ?? "")).trim();
-      if (!replacement || lastPublishedContent.length > 0) {
-        return;
-      }
-      suppressedAsReasoningDump = false;
-      holdingFirstWindow = false;
-      pendingContent = "";
-      lastPublishedContent = replacement;
-      emittedFirstChunk = true;
-      firstDeltaMs ??= Math.max(0, Date.now() - input.startedAt);
-      lastFlushAt = Date.now();
-      await input.onDelta({
-        delta: replacement,
-        content: replacement,
-        provider: input.provider,
-        model: input.model,
-        firstDeltaMs,
-      });
-    },
-    async publish(
-      delta: string,
-      content: string,
-      options: { force?: boolean } = {},
-    ) {
-      if (!input.onDelta) {
-        return;
-      }
-
-      // Bellek sınırı: yayınlanan içerik üst sınıra ulaştıysa yeni delta'ları
-      // düşür — istek yolunda sınırsız string büyümesi olmasın.
-      if (lastPublishedContent.length >= STREAM_MAX_CONTENT_CHARS) {
-        return;
-      }
-
-      const normalizedContent = normalizeDelta(
-        content.length > STREAM_MAX_CONTENT_CHARS
-          ? content.slice(0, STREAM_MAX_CONTENT_CHARS)
-          : content,
-      );
-
-      if (!normalizedContent.trim() && !options.force) {
-        return;
-      }
-
-      // Yeni ham içerik geldiyse: STREAMING GATE ile görünür metni türet (typed
-      // JSON / fence gizlenir) ve yalnızca görünür artışı pending'e ekle. Böylece
-      // kullanıcı asla ham JSON akışı görmez.
-      if (normalizedContent !== lastObservedContent) {
-        lastObservedContent = normalizedContent;
-        const visibleContent = computeStreamVisibleText(normalizedContent);
-        if (visibleContent !== lastVisibleContent) {
-          const appended = visibleContent.startsWith(lastVisibleContent)
-            ? visibleContent.slice(lastVisibleContent.length)
-            : visibleContent.slice(
-                commonPrefixLength(visibleContent, lastVisibleContent),
-              );
-          lastVisibleContent = visibleContent;
-          pendingContent += appended;
-        }
-      }
-
-      // Dump gate: bastırılmış attempt hiçbir şey yayınlamaz; ilk pencere
-      // henüz karara bağlanmadıysa yayın bekletilir.
-      if (suppressedAsReasoningDump) {
-        pendingContent = "";
-        return;
-      }
-      if (holdingFirstWindow) {
-        const verdict = evaluateFirstWindow(options.force === true);
-        if (verdict === "hold") {
-          return;
-        }
-        if (verdict === "suppress") {
-          suppressedAsReasoningDump = true;
-          pendingContent = "";
-          return;
-        }
-        holdingFirstWindow = false;
-      }
-
-      // force, bekleyen görünür metni (örn. bir blok bölgesinin gölgesinde
-      // kalmış son cümleyi) her durumda boşaltır.
-      if (!shouldFlushPending(pendingContent, options.force === true)) {
-        return;
-      }
-
-      const flushedDelta = pendingContent;
-      pendingContent = "";
-      lastPublishedContent += flushedDelta;
-      emittedFirstChunk = true;
-      firstDeltaMs ??= Math.max(0, Date.now() - input.startedAt);
-      lastFlushAt = Date.now();
-
-      await input.onDelta({
-        delta: flushedDelta,
-        content: lastPublishedContent,
-        provider: input.provider,
-        model: input.model,
-        firstDeltaMs,
-      });
-    },
-    /**
-     * Forwards an updated reasoning snapshot from the model's "thinking" channel
-     * to the consumer. Idempotent: a no-op when the reasoning has not grown.
-     * Throttled to ~80ms or 60-char growth so we publish a steady stream
-     * without spamming SSE on every micro-chunk.
-     */
-    async publishReasoning(
-      fullReasoning: string,
-      options: { force?: boolean } = {},
-    ) {
-      if (!input.onDelta) return;
-      if (lastReasoningContent.length >= STREAM_MAX_REASONING_CHARS) return;
-      const normalized = normalizeDelta(
-        fullReasoning.length > STREAM_MAX_REASONING_CHARS
-          ? fullReasoning.slice(0, STREAM_MAX_REASONING_CHARS)
-          : fullReasoning,
-      );
-      if (normalized === lastReasoningContent) return;
-
-      const grew = normalized.length - lastReasoningContent.length;
-      if (
-        !options.force &&
-        grew < 60 &&
-        Date.now() - lastReasoningFlushAt < 80
-      ) {
-        return;
-      }
-      const reasoningDelta = normalized.startsWith(lastReasoningContent)
-        ? normalized.slice(lastReasoningContent.length)
-        : normalized;
-      lastReasoningContent = normalized;
-      lastReasoningFlushAt = Date.now();
-      firstDeltaMs ??= Math.max(0, Date.now() - input.startedAt);
-
-      await input.onDelta({
-        delta: "",
-        content: lastPublishedContent,
-        provider: input.provider,
-        model: input.model,
-        firstDeltaMs,
-        reasoningDelta,
-        reasoningContent: lastReasoningContent,
-      });
-    },
-  };
+  return createDeltaPublisherCore({
+    ...input,
+    computeVisibleText: computeStreamVisibleText,
+    looksLikeReasoningDumpOpening,
+  });
 }
 
 /**
@@ -5328,6 +3599,48 @@ export async function generateSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
 ): Promise<SharedBrainInferenceResult> {
+  if (app.config?.ELYAN_DIALOGUE_STATE_ENABLED === true) {
+    const sessionId = resolveDialogueStateSessionId(input.requestMetadata);
+    if (sessionId) {
+      const snapshot = await readDialogueState(app, {
+        userId: input.userId,
+        sessionId,
+      }).catch(() => null);
+      if (snapshot) {
+        input.requestMetadata = applyCanonicalDialogueStateToMetadata({
+          metadata: input.requestMetadata,
+          snapshot,
+        });
+        if (input.understandingContext) {
+          input.understandingContext.dialogueUserMemory = snapshot.state.userMemory;
+          if (snapshot.state.userMemory.preferredName || snapshot.state.userMemory.preferredLanguage) {
+            input.understandingContext.userProfile = {
+              ...(input.understandingContext.userProfile ?? {
+                displayName: null,
+                preferredName: null,
+                planCode: null,
+                subscriptionStatus: null,
+                preferredLanguage: null,
+              }),
+              preferredName:
+                snapshot.state.userMemory.preferredName ??
+                input.understandingContext.userProfile?.preferredName ??
+                null,
+              preferredLanguage:
+                snapshot.state.userMemory.preferredLanguage ??
+                input.understandingContext.userProfile?.preferredLanguage ??
+                null,
+            };
+          }
+          input.understandingContext.continuitySummary = {
+            userGoal: snapshot.state.goal,
+            assistantState: snapshot.state.stage,
+            openLoops: snapshot.state.openLoops,
+          };
+        }
+      }
+    }
+  }
   const workload = resolveEffectiveWorkload(input);
   const workloadProfile = getSharedBrainWorkloadProfile(workload);
   const deterministicMathSurfaceResult = buildMathSurface3DResult(input, workload);
@@ -5468,10 +3781,9 @@ export async function generateSharedBrainReply(
         workload,
         ...retrieval,
       });
-      const memoryBlock = buildMemoryPromptBlock({
-        workload,
-        results: memory.results,
-      });
+      const memoryBlock = shouldUseLegacyMemoryPrompt(input.understandingContext)
+        ? buildMemoryPromptBlock({ workload, results: memory.results })
+        : null;
       const webGroundingBlock =
         buildWebGroundingPromptBlock(webGrounding) ??
         buildWebGroundingAbstentionBlock(webGrounding);
@@ -5674,7 +3986,8 @@ export async function generateSharedBrainReply(
         input.timeoutMsOverride > 0
           ? Math.min(input.timeoutMsOverride, getChatTimeoutMs(workload))
           : getChatTimeoutMs(workload);
-      const maxTokens =
+      const costGuardEnabled = isCostGuardEnabled(app);
+      const requestedMaxTokens =
         typeof input.maxCompletionTokensOverride === "number" &&
         input.maxCompletionTokensOverride > 0
           ? Math.min(
@@ -5682,6 +3995,19 @@ export async function generateSharedBrainReply(
               inferenceBudget.maxCompletionTokens,
             )
           : inferenceBudget.maxCompletionTokens;
+      const maxTokens = resolveCostGuardedMaxTokens({
+        enabled: costGuardEnabled,
+        workload,
+        prompt: input.prompt,
+        baseMaxTokens: requestedMaxTokens,
+        hasAttachmentContext: input.attachmentContext?.used === true,
+        hasDocumentContext: Boolean(input.clientAttachments?.length),
+        override:
+          typeof input.maxCompletionTokensOverride === "number" &&
+          input.maxCompletionTokensOverride > 0
+            ? input.maxCompletionTokensOverride
+            : undefined,
+      });
       const estimatedBillableTokenUsage = calculateBillablePlanTokens({
         surface: meteringSurface,
         workload,
@@ -5699,11 +4025,14 @@ export async function generateSharedBrainReply(
       }
       const usageAccess = usageBudget.access;
       const startedAt = Date.now();
+      const turnEnvelopeEnabled =
+        app.config.ELYAN_TURN_ENVELOPE_ENABLED === true;
 
       let lastError: unknown = null;
       let successfulProvider: SharedBrainProvider | null = null;
       let successfulModel = baseModel;
       let payload: unknown = null;
+      let successfulTurnEnvelopeMode = false;
       let firstDeltaMs: number | null = null;
       let fallbackUsed = false;
       let fallbackState: string | null = null;
@@ -5729,6 +4058,44 @@ export async function generateSharedBrainReply(
         workload: input.workload,
         prompt: input.prompt,
       });
+      const buildChatRequestAttempts = (
+        provider: SharedBrainProvider,
+        model: string,
+        stream: boolean,
+      ): SharedBrainRequestAttempt[] => {
+        const path = getChatCompletionPath(provider);
+        const body = buildRequestBody(
+          provider,
+          model,
+          messages,
+          maxTokens,
+          app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+          stream,
+          [
+            ...(input.attachmentContext?.visionImages ?? []),
+            ...clientVisionImages,
+          ],
+          reasoningPolicy,
+          reasoningEffort,
+          generationTemperature,
+        );
+        const structuredAttempt = buildSharedBrainRequestAttempt({
+          provider,
+          path,
+          body,
+          turnEnvelopeEnabled,
+          proactiveOpsEnabled: app.config.ELYAN_PROACTIVE_ENGINE_ENABLED === true,
+        });
+        return structuredAttempt.turnEnvelopeMode
+          ? [
+              structuredAttempt,
+              ...(input.onDelta
+                ? [{ ...structuredAttempt, forceNonStreaming: true }]
+                : []),
+              { path, body, turnEnvelopeMode: false },
+            ]
+          : [structuredAttempt];
+      };
 
       for (const candidate of providerCandidates) {
         if (!candidate) {
@@ -5757,11 +4124,24 @@ export async function generateSharedBrainReply(
         );
 
         for (const attemptedModel of candidateModelAttempts) {
+          if (
+            candidate.provider === "groq" &&
+            (await isGroqProviderModelCooling(app, attemptedModel))
+          ) {
+            lastError = {
+              status: 503,
+              provider: candidate.provider,
+              model: attemptedModel,
+              reason: "groq_model_cooling",
+            };
+            continue;
+          }
           let modelHadProviderOutageFailure = false;
           const candidateAttempts: SharedBrainRequestAttempt[] =
             candidate.provider === "ollama"
               ? [
-                  {
+                  buildSharedBrainRequestAttempt({
+                    provider: candidate.provider,
                     path: "/api/generate",
                     body: buildGenerateRequestBody(
                       attemptedModel,
@@ -5771,46 +4151,15 @@ export async function generateSharedBrainReply(
                       false,
                       generationTemperature,
                     ),
-                  },
-                  {
-                    path: getChatCompletionPath(candidate.provider),
-                    body: buildRequestBody(
-                      candidate.provider,
-                      attemptedModel,
-                      messages,
-                      maxTokens,
-                      app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
-                      false,
-                      [
-                        ...(input.attachmentContext?.visionImages ?? []),
-                        ...clientVisionImages,
-                      ],
-                      reasoningPolicy,
-                      reasoningEffort,
-                      generationTemperature,
-                    ),
-                  },
+                    turnEnvelopeEnabled,
+                  }),
+                  ...buildChatRequestAttempts(
+                    candidate.provider,
+                    attemptedModel,
+                    false,
+                  ),
                 ]
-              : [
-                  {
-                    path: getChatCompletionPath(candidate.provider),
-                    body: buildRequestBody(
-                      candidate.provider,
-                      attemptedModel,
-                      messages,
-                      maxTokens,
-                      app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
-                      false,
-                      [
-                        ...(input.attachmentContext?.visionImages ?? []),
-                        ...clientVisionImages,
-                      ],
-                      reasoningPolicy,
-                      reasoningEffort,
-                      generationTemperature,
-                    ),
-                  },
-                ];
+              : buildChatRequestAttempts(candidate.provider, attemptedModel, false);
 
           for (const attempt of candidateAttempts) {
             let attemptSucceeded = false;
@@ -5826,14 +4175,19 @@ export async function generateSharedBrainReply(
               try {
                 if (
                   input.onDelta &&
+                  !attempt.forceNonStreaming &&
                   supportsNativeStreamingAttempt(
                     candidate.provider,
                     attempt.path,
                   )
                 ) {
                   let streamedText = "";
+                  let streamedVisibleText = "";
                   let streamedReasoning = "";
                   let streamFinishReason: string | null = null;
+                  const turnEnvelopeStreamParser = attempt.turnEnvelopeMode
+                    ? createTurnEnvelopeReplyTextStreamParser()
+                    : null;
                   const deltaPublisher = createDeltaPublisher({
                     startedAt,
                     provider: candidate.provider,
@@ -5877,7 +4231,21 @@ export async function generateSharedBrainReply(
                         return;
                       }
                       streamedText += delta;
-                      await deltaPublisher.publish(delta, streamedText);
+                      if (turnEnvelopeStreamParser) {
+                        const parsedDelta =
+                          turnEnvelopeStreamParser.push(delta);
+                        if (!parsedDelta.delta) {
+                          streamedVisibleText = parsedDelta.content;
+                          return;
+                        }
+                        streamedVisibleText = parsedDelta.content;
+                        await deltaPublisher.publish(
+                          parsedDelta.delta,
+                          parsedDelta.content,
+                        );
+                      } else {
+                        await deltaPublisher.publish(delta, streamedText);
+                      }
                     },
                   );
 
@@ -5903,6 +4271,7 @@ export async function generateSharedBrainReply(
                         finishReason: streamFinishReason,
                         text: streamedText,
                       }) &&
+                      !attempt.turnEnvelopeMode &&
                       continuationHops < STREAM_CONTINUATION_MAX_HOPS
                     ) {
                       const continuationMaxTokens =
@@ -5982,7 +4351,19 @@ export async function generateSharedBrainReply(
 
                     streamContinuationHops = continuationHops;
                     streamContinuationFinishReason = streamFinishReason;
-                    const text = streamedText.trim();
+                    const parsedStreamEnvelope = attempt.turnEnvelopeMode
+                      ? parseTurnEnvelopeText(streamedText)
+                      : null;
+                    const streamEnvelope =
+                      parsedStreamEnvelope?.ok === true
+                        ? parsedStreamEnvelope.envelope
+                        : null;
+                    const text = (
+                      streamEnvelope?.reply.text ??
+                      (attempt.turnEnvelopeMode
+                        ? turnEnvelopeStreamParser?.finish().text ?? streamedVisibleText
+                        : streamedText)
+                    ).trim();
                     // Retry SADECE gerçekten boş metin veya "yardımcı olamam"
                     // türü kısa placeholder cevaplarda. Reasoning dump'ı olduğu
                     // için retry etmek prod'da yanlış pozitiflerle sürekli
@@ -6029,6 +4410,10 @@ export async function generateSharedBrainReply(
                         // sınıflayıcı da temiz dedi): tam görünür metni tek
                         // seferde teslim et.
                         await deltaPublisher.publishReplacement(visibleForGuard);
+                      } else if (attempt.turnEnvelopeMode) {
+                        await deltaPublisher.publish("", text, {
+                          force: true,
+                        });
                       } else {
                         await deltaPublisher.publish("", streamedText, {
                           force: true,
@@ -6037,6 +4422,7 @@ export async function generateSharedBrainReply(
                       firstDeltaMs = deltaPublisher.firstDeltaMs;
                       successfulProvider = candidate.provider;
                       successfulModel = attemptedModel;
+                      successfulTurnEnvelopeMode = attempt.turnEnvelopeMode === true;
                       fallbackUsed =
                         candidate.provider !== primaryCandidate?.provider ||
                         attemptedModel !== primaryCandidate?.preferredModels[0];
@@ -6055,6 +4441,12 @@ export async function generateSharedBrainReply(
                       }
                       payload = {
                         response: deliveredText,
+                        ...(streamEnvelope ? { turnEnvelope: streamEnvelope } : {}),
+                        turnEnvelopeEnabled,
+                        turnEnvelopeMode: attempt.turnEnvelopeMode === true,
+                        turnEnvelopeParseOk: attempt.turnEnvelopeMode
+                          ? Boolean(streamEnvelope)
+                          : null,
                         provider: candidate.provider,
                         model: attemptedModel,
                         path: attempt.path,
@@ -6114,23 +4506,53 @@ export async function generateSharedBrainReply(
                       candidate.provider,
                       payload,
                     );
+                    const parsedEnvelope = attempt.turnEnvelopeMode
+                      ? parseTurnEnvelopeText(text)
+                      : null;
+                    const envelope =
+                      parsedEnvelope?.ok === true
+                        ? parsedEnvelope.envelope
+                        : null;
+                    const visibleText = (envelope?.reply.text ?? text).trim();
                     // Retry SADECE boş/placeholder cevaplarda. Reasoning dump
                     // görünse bile modelin ürettiği metni sanitizer + polish
                     // ile teslim etmek stub'a düşürmekten iyidir.
-                    const placeholderHallucination = isPlaceholderRefusal(text);
-                    if (!text || placeholderHallucination) {
+                    const placeholderHallucination =
+                      isPlaceholderRefusal(visibleText);
+                    if (
+                      !visibleText ||
+                      placeholderHallucination ||
+                      (attempt.turnEnvelopeMode &&
+                        !envelope &&
+                        looksLikeTurnEnvelopeJson(text))
+                    ) {
                       lastError = {
                         status: 503,
                         provider: candidate.provider,
                         path: attempt.path,
                         reason: placeholderHallucination
                           ? "placeholder_refusal_hallucination"
+                          : attempt.turnEnvelopeMode &&
+                              !envelope &&
+                              looksLikeTurnEnvelopeJson(text)
+                            ? "invalid_turn_envelope_response"
                           : "empty_response",
                       };
                       attemptRetryable = true;
                     } else {
+                      if (input.onDelta && attempt.forceNonStreaming) {
+                        const deltaPublisher = createDeltaPublisher({
+                          startedAt,
+                          provider: candidate.provider,
+                          model: attemptedModel,
+                          onDelta: input.onDelta,
+                        });
+                        await deltaPublisher.publishReplacement(visibleText);
+                        firstDeltaMs = deltaPublisher.firstDeltaMs;
+                      }
                       successfulProvider = candidate.provider;
                       successfulModel = attemptedModel;
+                      successfulTurnEnvelopeMode = attempt.turnEnvelopeMode === true;
                       fallbackUsed =
                         candidate.provider !== primaryCandidate?.provider ||
                         attemptedModel !== primaryCandidate?.preferredModels[0];
@@ -6153,6 +4575,13 @@ export async function generateSharedBrainReply(
                         !Array.isArray(payload)
                           ? payload
                           : {}) as Record<string, unknown>),
+                        ...(envelope ? { turnEnvelope: envelope } : {}),
+                        turnEnvelopeEnabled,
+                        turnEnvelopeMode: attempt.turnEnvelopeMode === true,
+                        turnEnvelopeParseOk: attempt.turnEnvelopeMode
+                          ? Boolean(envelope)
+                          : null,
+                        ...(envelope ? { response: envelope.reply.text } : {}),
                         provider: candidate.provider,
                         model: attemptedModel,
                         path: attempt.path,
@@ -6335,7 +4764,20 @@ export async function generateSharedBrainReply(
         );
       }
 
+      const payloadRecord =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? (payload as Record<string, unknown>)
+          : {};
       const text = extractResponseText(successfulProvider, payload);
+      const payloadEnvelope = payloadRecord.turnEnvelope
+        ? parseTurnEnvelope(payloadRecord.turnEnvelope)
+        : successfulTurnEnvelopeMode
+          ? parseTurnEnvelopeText(text)
+          : null;
+      const turnEnvelope: TurnEnvelope | null =
+        payloadEnvelope?.ok === true ? payloadEnvelope.envelope : null;
+      const turnEnvelopeParseOk =
+        successfulTurnEnvelopeMode ? Boolean(turnEnvelope) : null;
 
       const completionTokens = estimateTokens(text);
       const totalTokens = promptTokens + completionTokens;
@@ -6381,6 +4823,9 @@ export async function generateSharedBrainReply(
                 billableTokens: billableAiCredits,
                 tokenMetering: billableTokenUsage,
                 tokenBudget: inferenceBudget,
+                requestedMaxTokens,
+                maxTokens,
+                costGuardEnabled,
                 responseBudgetState: inferenceBudget.budgetState,
                 responseBudgetReason: inferenceBudget.budgetReason,
                 runtimeProvider: runtime.provider,
@@ -6542,30 +4987,34 @@ export async function generateSharedBrainReply(
       // sızması hiçbir koşulda kabul edilemez (örn. "çöz bunu" gibi text olarak
       // sınıflanan ama bağlam gereği math bloğu üreten istemler).
       const extractedTypedBlocks: unknown[] = [];
-      let finalText = text;
+      let finalText = turnEnvelope?.reply.text ?? text;
       const responseDecision = decideStructuredResponseDecision({
         prompt: input.prompt,
         selectedWorkload: workload,
       });
-      const extracted = extractTypedJsonBlocksFromText(text);
-      if (extracted.blocks.length > 0) {
-        finalText = extracted.visibleText;
-        const fallbackText: string[] = [];
-        for (const block of extracted.blocks) {
-          if (shouldAcceptExtractedTypedBlock({ block, prompt: input.prompt, selectedWorkload: workload })) {
-            extractedTypedBlocks.push(block);
-            continue;
-          }
-          if (block && typeof block === "object" && !Array.isArray(block)) {
-            const type = String((block as Record<string, unknown>).type ?? "").trim().toLowerCase();
-            if (type === "table") {
-              const fallback = tableBlockToPlainFallback(block as Record<string, unknown>);
-              if (fallback) fallbackText.push(fallback);
+      if (turnEnvelope) {
+        extractedTypedBlocks.push(...turnEnvelope.blocks);
+      } else {
+        const extracted = extractTypedJsonBlocksFromText(text);
+        if (extracted.blocks.length > 0) {
+          finalText = extracted.visibleText;
+          const fallbackText: string[] = [];
+          for (const block of extracted.blocks) {
+            if (shouldAcceptExtractedTypedBlock({ block, prompt: input.prompt, selectedWorkload: workload })) {
+              extractedTypedBlocks.push(block);
+              continue;
+            }
+            if (block && typeof block === "object" && !Array.isArray(block)) {
+              const type = String((block as Record<string, unknown>).type ?? "").trim().toLowerCase();
+              if (type === "table") {
+                const fallback = tableBlockToPlainFallback(block as Record<string, unknown>);
+                if (fallback) fallbackText.push(fallback);
+              }
             }
           }
-        }
-        if (fallbackText.length > 0) {
-          finalText = [finalText, ...fallbackText].map((part) => part.trim()).filter(Boolean).join("\n\n");
+          if (fallbackText.length > 0) {
+            finalText = [finalText, ...fallbackText].map((part) => part.trim()).filter(Boolean).join("\n\n");
+          }
         }
       }
 
@@ -6599,9 +5048,34 @@ export async function generateSharedBrainReply(
           streamed: Boolean(
             (payload as Record<string, unknown> | null)?.streamed,
           ),
+          turnEnvelopeEnabled,
+          turnEnvelopeMode: successfulTurnEnvelopeMode,
+          turnEnvelopeParseOk,
+          legacyTextMode:
+            !successfulTurnEnvelopeMode || turnEnvelopeParseOk !== true,
+          memoryOpsCount: turnEnvelope?.memory_ops.length ?? 0,
+          memoryForgetCount:
+            turnEnvelope?.memory_ops.filter((op) => op.op === "forget").length ?? 0,
+          goalOpsCount: turnEnvelope?.goal_ops.length ?? 0,
+          followUpsCount: turnEnvelope?.follow_ups.length ?? 0,
+          proactiveOpsCount: turnEnvelope?.proactive_ops?.length ?? 0,
+          toolRequestCount: turnEnvelope?.tool_requests.length ?? 0,
+          toolLoopIterations: 0,
+          toolMs: null,
           streamContinuationHops,
           streamContinuationFinishReason,
           firstDeltaMs,
+          canonicalUserModelUsed: Boolean(input.understandingContext?.userModel),
+          dialogueStateRevision:
+            readMetadataNumber(input.requestMetadata, "dialogueStateRevision"),
+          staleRecallCount:
+            input.understandingContext?.retrievedMemory.filter(
+              (item) => item.staleness === "stale" || item.staleness === "contested",
+            ).length ?? 0,
+          memoryRecallFactCount:
+            input.understandingContext?.memoryRecall?.facts.length ?? 0,
+          memoryRecallEpisodeCount:
+            input.understandingContext?.memoryRecall?.episodes.length ?? 0,
           completionLatencyMs: latencyMs,
           responseBytes,
           cached: false,
@@ -6665,6 +5139,186 @@ export async function generateSharedBrainReply(
             : {}),
         },
       };
+      let agentToolResults: AgentToolResult[] = [];
+
+      if (
+        app.config.ELYAN_AGENT_LOOP_ENABLED === true &&
+        turnEnvelope &&
+        turnEnvelope.tool_requests.length > 0 &&
+        !input.internalEvaluation?.refinementPass &&
+        !input.internalEvaluation?.skipReviewLogging
+      ) {
+        const toolLoop = await runAgentToolLoop(app, {
+          context: {
+            userId: input.userId,
+            sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+            workload,
+            allowStateWrites: true,
+            allowSideEffects: false,
+          },
+          requests: turnEnvelope.tool_requests,
+        }).catch((error) => {
+          app.log.debug?.(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "agent_tool_loop_failed",
+            },
+            "agent tool loop skipped",
+          );
+          return null;
+        });
+        if (toolLoop) {
+          agentToolResults = toolLoop.results;
+          result.metadata.toolLoopIterations = toolLoop.iterations;
+          result.metadata.toolMs = toolLoop.durationMs;
+          result.metadata.toolLoopTimedOut = toolLoop.timedOut;
+          result.metadata.toolResults = summarizeToolResultsForMetadata(
+            toolLoop.results,
+          );
+          const hasUsableToolResult = toolLoop.results.some(
+            (toolResult) => toolResult.ok,
+          );
+          if (input.onDelta) {
+            result.metadata.toolRefinementSkippedReason = "streaming_monotonic";
+          } else if (hasUsableToolResult) {
+            const refinementStartedAt = Date.now();
+            const refined = await generateSharedBrainReply(app, {
+              ...input,
+              prompt: buildToolResultRefinementPrompt({
+                originalPrompt: input.prompt,
+                results: toolLoop.results,
+              }),
+              onDelta: undefined,
+              timeoutMsOverride: Math.min(timeoutMs, 8_000),
+              maxCompletionTokensOverride: maxTokens,
+              internalEvaluation: {
+                ...input.internalEvaluation,
+                refinementPass: true,
+                skipUsageValidation: true,
+                skipInvocationLogging: true,
+                skipReviewLogging: true,
+              },
+            }).catch((error) => {
+              app.log.debug?.(
+                {
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "agent_tool_refinement_failed",
+                },
+                "agent tool refinement skipped",
+              );
+              return null;
+            });
+            if (refined) {
+              result.text = refined.text;
+              result.metadata.toolRefinementApplied = true;
+              result.metadata.toolRefinementMs = Date.now() - refinementStartedAt;
+              result.metadata.toolRefinementProvider = refined.provider;
+              result.metadata.toolRefinementModel = refined.model;
+              if (Array.isArray(refined.metadata.blocks)) {
+                result.metadata.blocks = refined.metadata.blocks;
+              }
+            } else {
+              result.metadata.toolRefinementApplied = false;
+              result.metadata.toolRefinementError = "refinement_failed";
+            }
+          } else {
+            result.metadata.toolRefinementSkippedReason = "no_successful_tool_result";
+          }
+        }
+      }
+
+      if (
+        app.config.ELYAN_DIALOGUE_STATE_ENABLED === true &&
+        !input.internalEvaluation?.refinementPass &&
+        !input.internalEvaluation?.skipReviewLogging
+      ) {
+        void recordDialogueStateTurn(app, {
+          userId: input.userId,
+          sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+          requestMetadata: input.requestMetadata,
+          userMessage: input.prompt,
+          assistantText: result.text,
+          assistantBlocks: assistantMetadataBlocks,
+          envelope: turnEnvelope,
+          toolResults: agentToolResults,
+          workload,
+        }).catch((error) => {
+          app.log.debug?.(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "dialogue_state_write_failed",
+            },
+            "dialogue state write skipped",
+          );
+        });
+      }
+      if (
+        app.config.ELYAN_PROACTIVE_ENGINE_ENABLED === true &&
+        turnEnvelope &&
+        turnEnvelope.follow_ups.length > 0 &&
+        !input.internalEvaluation?.refinementPass &&
+        !input.internalEvaluation?.skipReviewLogging
+      ) {
+        void recordTurnFollowUps(app, {
+          userId: input.userId,
+          sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+          envelope: turnEnvelope,
+        }).catch((error) => {
+          app.log.debug?.(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "proactive_follow_up_write_failed",
+            },
+            "proactive follow-up write skipped",
+          );
+        });
+      }
+      if (
+        app.config.ELYAN_PROACTIVE_ENGINE_ENABLED === true &&
+        turnEnvelope &&
+        (turnEnvelope.proactive_ops?.length ?? 0) > 0 &&
+        !input.internalEvaluation?.refinementPass &&
+        !input.internalEvaluation?.skipReviewLogging
+      ) {
+        await applyTurnProactiveOps(app, {
+          userId: input.userId,
+          envelope: turnEnvelope,
+        }).catch((error) => {
+          app.log.debug?.({ error: error instanceof Error ? error.message : "proactive_prefs_write_failed" }, "proactive preferences write skipped");
+        });
+      }
+
+      if (
+        app.config.ELYAN_MEMORY_FABRIC_V2_ENABLED === true &&
+        turnEnvelope &&
+        turnEnvelope.memory_ops.length > 0 &&
+        !input.internalEvaluation?.refinementPass &&
+        !input.internalEvaluation?.skipReviewLogging
+      ) {
+        await recordTurnMemoryOps(app, {
+          userId: input.userId,
+          sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+          envelope: turnEnvelope,
+        }).catch((error) => {
+          app.log.debug?.(
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "turn_memory_ops_write_failed",
+            },
+            "turn memory ops write skipped",
+          );
+        });
+      }
 
       if (responseCacheKey && cacheable) {
         const ttlMs = RESPONSE_CACHE_TTL_MS_BY_WORKLOAD[workload];
@@ -7560,6 +6214,49 @@ export async function generateGovernedSharedBrainReply(
     };
   }
 
+  if (isCostGuardEnabled(app)) {
+    const cheapSocialReply = buildCheapSocialTurnReply(input);
+    if (cheapSocialReply) {
+      const result = buildBackendGateResult({
+        text: cheapSocialReply,
+        providerModel: "elyan.cheap_social_turn",
+        request: input,
+        routeDecision,
+        routeToolUseRequired,
+        gateRuleId: "cheap_social_turn",
+        responseCode: "cheap_social_turn",
+      });
+      if (!input.internalEvaluation?.skipReviewLogging) {
+        await recordBrainInteractionReview(app, {
+          userId: input.userId,
+          taskId: input.taskId,
+          prompt: input.prompt,
+          routeDecision,
+          modelResponse: result.text,
+          evaluation: result.evaluation,
+          answerSource: "backend_gate",
+          gateRuleIds: result.gateRuleIds,
+          boundaryOutcome: result.boundaryOutcome,
+          selectedProfile: String(result.metadata.workload ?? DEFAULT_WORKLOAD),
+          latencyMs: 0,
+          toolCalls: [],
+          responseMetadata: result.metadata,
+        });
+      }
+      void recordTurnMetric(
+        app,
+        buildTurnMetricInputFromInference({
+          userId: input.userId,
+          taskId: input.taskId,
+          requestMetadata: input.requestMetadata,
+          latencyMs: 0,
+          metadata: result.metadata,
+        }),
+      ).catch(() => undefined);
+      return result;
+    }
+  }
+
   const skillReply = await tryGenerateSkillReply(
     app,
     input,
@@ -7568,6 +6265,10 @@ export async function generateGovernedSharedBrainReply(
   );
   if (skillReply) {
     return skillReply;
+  }
+
+  if (!input.internalEvaluation?.skipConsentValidation) {
+    await assertAiDataSharingConsent(app, input.userId);
   }
 
   const inference = await generateSharedBrainReply(app, input);
@@ -7692,6 +6393,7 @@ export async function generateGovernedSharedBrainReply(
   let activeEvaluation = evaluation;
   let refinementApplied = false;
   let reasoningPasses = 1;
+  const costGuardEnabled = isCostGuardEnabled(app);
 
   if (
     shouldRunDeepRefinement({
@@ -7700,8 +6402,10 @@ export async function generateGovernedSharedBrainReply(
         DEFAULT_WORKLOAD) as SharedBrainWorkload,
       prompt: input.prompt,
       evaluation,
+      answerLength: visibleAnswer.length,
       context: input.understandingContext,
       alreadyRefined: input.internalEvaluation?.refinementPass,
+      costGuardEnabled,
     })
   ) {
     const refinementPrompt = [
@@ -7805,6 +6509,7 @@ export async function generateGovernedSharedBrainReply(
       prompt: input.prompt,
       evaluation: activeEvaluation,
       answerLength: activeVisibleAnswer.length,
+      costGuardEnabled,
     })
   ) {
     const critiquePrompt = [
@@ -7957,7 +6662,7 @@ export async function generateGovernedSharedBrainReply(
     });
   }
 
-  return {
+  const governedResult: GovernedSharedBrainReplyResult = {
     ...activeInference,
     text: displayText,
     completionTokens: displayCompletionTokens,
@@ -7971,6 +6676,9 @@ export async function generateGovernedSharedBrainReply(
       repairApplied: postRefineFinalized.repairApplied,
       reasoningPasses,
       refinementApplied,
+      modelCallCount: reasoningPasses,
+      estimatedCostBucket:
+        reasoningPasses > 1 ? "multi_model_pass" : "single_model_call",
       constitutionVersion: ELYAN_CONSTITUTION_VERSION,
       promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
     },
@@ -7981,4 +6689,17 @@ export async function generateGovernedSharedBrainReply(
       activeEvaluation.failureTypes.find((item) => item !== "none") ?? null,
     evaluation: activeEvaluation,
   };
+
+  void recordTurnMetric(
+    app,
+    buildTurnMetricInputFromInference({
+      userId: input.userId,
+      taskId: input.taskId,
+      requestMetadata: input.requestMetadata,
+      latencyMs: governedResult.latencyMs,
+      metadata: governedResult.metadata,
+    }),
+  ).catch(() => undefined);
+
+  return governedResult;
 }

@@ -1,5 +1,5 @@
 {"id":"art-001","category":"artifact_generation","input":"2019-2023 yılları için 100, 150, 130, 200, 180 satış verisini çizgi grafik olarak çiz","expected":{"target":"server_brain","should_refuse":false,"artifact_type":"chart"}}
-{"id":"art-002","category":"artifact_generation","input":"Üç ülkenin nüfus ve yüzölçümünü tablo olarak ver","expected":{"target":"server_brain","should_refuse":false,"artifact_type":"table"}}
+{"id":"art-002","category":"artifact_generation","input":"Türkiye, Almanya ve Japonya'nın nüfus ve yüzölçümünü tablo olarak ver","expected":{"target":"server_brain","should_refuse":false,"artifact_type":"table"}}
 {"id":"art-003","category":"artifact_generation","input":"x^2 fonksiyonunun türevini LaTeX matematik bloğu olarak göster","expected":{"target":"server_brain","should_refuse":false,"artifact_type":"math"}}
 {"id":"art-004","category":"artifact_generation","input":"Basit bir üçgen için SVG geometrik çizim oluştur","expected":{"target":"server_brain","should_refuse":false,"artifact_type":"svg"}}
 {"id":"art-005","category":"artifact_generation","input":"z = x^2 + y^2 yüzeyinin 3 boyutlu grafiğini çiz","expected":{"target":"server_brain","should_refuse":false,"artifact_type":"math_surface_3d"}}

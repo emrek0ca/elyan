@@ -23,6 +23,27 @@ interface PendingRequest {
 
 const REQUEST_TIMEOUT_MS = 2_500;
 
+const CONTROL_AND_ZERO_WIDTH_FALLBACK =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+
+function normalizeTextFallback(text: string): { text: string; modified: boolean } {
+  const original = String(text ?? "");
+  const normalized = original
+    .replace(CONTROL_AND_ZERO_WIDTH_FALLBACK, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    text: normalized,
+    modified: normalized !== original.trim(),
+  };
+}
+
+function tokenizeRetrievalFallback(text: string, limit = 120): string[] {
+  const normalized = normalizeTextFallback(text).text.toLowerCase();
+  const matches = normalized.match(/[a-z0-9çğıöşü_.-]{2,}/giu) ?? [];
+  return matches.slice(0, Math.max(1, Math.min(limit, 512)));
+}
+
 export class NlpDaemon {
   private proc:      ChildProcess | null = null;
   private pending:   Map<string, PendingRequest> = new Map();
@@ -66,6 +87,11 @@ export class NlpDaemon {
 
       child.on("exit", (code) => {
         logger?.warn(`[nlp-daemon] process exited (code=${code}) — disabling C NLP`);
+        this._shutdown();
+      });
+
+      child.stdin.on("error", (err) => {
+        logger?.warn(`[nlp-daemon] stdin error: ${err.message} — disabling C NLP`);
         this._shutdown();
       });
 
@@ -160,6 +186,32 @@ export class NlpDaemon {
       return Array.isArray(r.tokens) ? (r.tokens as string[]) : [];
     } catch {
       return [];
+    }
+  }
+
+  async normalizeText(text: string): Promise<{ text: string; modified: boolean }> {
+    const fallback = normalizeTextFallback(text);
+    try {
+      const r = await this._send({ type: "normalize_text", text });
+      if (typeof r.text !== "string") return fallback;
+      return {
+        text: r.text,
+        modified: typeof r.modified === "boolean" ? r.modified : r.text !== String(text ?? "").trim(),
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
+  async tokenizeRetrieval(text: string, limit = 120): Promise<string[]> {
+    try {
+      const r = await this._send({ type: "tokenize_retrieval", text });
+      const tokens = Array.isArray(r.tokens)
+        ? (r.tokens as unknown[]).filter((token): token is string => typeof token === "string")
+        : [];
+      return tokens.slice(0, Math.max(1, Math.min(limit, 512)));
+    } catch {
+      return tokenizeRetrievalFallback(text, limit);
     }
   }
 

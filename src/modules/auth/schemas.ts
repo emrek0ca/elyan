@@ -4,6 +4,7 @@ import { connectionProviderSchema } from "../../contracts/domain.js";
 const legalAcceptanceSchema = z.object({
   termsAccepted: z.boolean().optional(),
   privacyAccepted: z.boolean().optional(),
+  aiDataSharingAccepted: z.boolean().optional(),
 });
 
 export const registerBodySchema = z.object({
@@ -13,6 +14,7 @@ export const registerBodySchema = z.object({
   legalAcceptance: legalAcceptanceSchema.optional(),
   termsAccepted: z.boolean().optional(),
   privacyAccepted: z.boolean().optional(),
+  aiDataSharingAccepted: z.boolean().optional(),
 });
 
 export const loginBodySchema = z.object({
@@ -62,4 +64,5 @@ export const oauthLoginBodySchema = z.object({
   legalAcceptance: legalAcceptanceSchema.optional(),
   termsAccepted: z.boolean().optional(),
   privacyAccepted: z.boolean().optional(),
+  aiDataSharingAccepted: z.boolean().optional(),
 });

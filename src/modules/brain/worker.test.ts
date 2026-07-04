@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { processNextQueuedTrainingJob } from "./worker.js";
+import { chatMessages, chatSessions, proactiveTriggers } from "../../db/schema.js";
+import {
+  processBrainWorkerIteration,
+  processDueProactiveTriggers,
+  processNextQueuedTrainingJob,
+} from "./worker.js";
 
 class FakeSelectQuery<T> {
   constructor(private readonly result: T) {}
@@ -79,6 +84,93 @@ class FakeDb {
       },
     } as const;
 
+    return builder;
+  }
+}
+
+class FakeProactiveDb {
+  readonly insertedRows: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+  readonly updates: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+  private claimConsumed = false;
+
+  constructor(
+    private readonly trigger: Record<string, unknown> | null,
+    private readonly session: Record<string, unknown> | null,
+  ) {}
+
+  select() {
+    const db = this;
+    return {
+      from(table: unknown) {
+        return {
+          where() {
+            return this;
+          },
+          orderBy() {
+            return this;
+          },
+          limit() {
+            if (table === proactiveTriggers) {
+              if (db.claimConsumed || !db.trigger) return Promise.resolve([]);
+              return Promise.resolve([db.trigger]);
+            }
+            if (table === chatSessions) {
+              return Promise.resolve(db.session ? [db.session] : []);
+            }
+            return Promise.resolve([]);
+          },
+        };
+      },
+    };
+  }
+
+  update(table: unknown) {
+    const db = this;
+    let values: Record<string, unknown> = {};
+    const builder = {
+      set(next: Record<string, unknown>) {
+        values = next;
+        db.updates.push({ table, values });
+        return builder;
+      },
+      where() {
+        return builder;
+      },
+      returning() {
+        if (table === proactiveTriggers && db.trigger && values.status === "running") {
+          db.claimConsumed = true;
+          return Promise.resolve([{ ...db.trigger, ...values }]);
+        }
+        return Promise.resolve([]);
+      },
+      then<TResult1 = unknown, TResult2 = never>(
+        resolve?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,
+        reject?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+      ) {
+        return Promise.resolve([]).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  insert(table: unknown) {
+    const db = this;
+    const builder = {
+      values(values: Record<string, unknown>) {
+        db.insertedRows.push({ table, values });
+        return builder;
+      },
+      returning() {
+        const values = db.insertedRows[db.insertedRows.length - 1]?.values ?? {};
+        return Promise.resolve([
+          {
+            id: values.id,
+            createdAt: values.createdAt,
+            updatedAt: values.updatedAt,
+          },
+        ]);
+      },
+    };
     return builder;
   }
 }
@@ -341,4 +433,144 @@ test("processNextQueuedTrainingJob completes memory extraction jobs and queues f
 
   assert.equal(processed, true);
   assert.equal((app.db as FakeDb).insertedRows.length > 0, true);
+});
+
+test("processDueProactiveTriggers is inert while the proactive engine flag is disabled", async () => {
+  let composeCalls = 0;
+  const result = await processDueProactiveTriggers(
+    {
+      config: { ELYAN_PROACTIVE_ENGINE_ENABLED: false },
+    } as never,
+    {
+      compose: async () => {
+        composeCalls += 1;
+        return { text: "should not run" };
+      },
+    },
+  );
+
+  assert.deepEqual(result, { processed: 0, fired: 0, expired: 0, deferred: 0, failed: 0 });
+  assert.equal(composeCalls, 0);
+});
+
+test("processDueProactiveTriggers composes and publishes a due proactive chat message", async () => {
+  const now = new Date("2030-01-01T09:00:00.000Z");
+  const userId = "22222222-2222-4222-8222-222222222222";
+  const sessionId = "11111111-1111-4111-8111-111111111111";
+  const db = new FakeProactiveDb(
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      userId,
+      sessionId,
+      kind: "follow_up",
+      due: now,
+      payload: {
+        source: "turn_envelope",
+        topic: "deploy",
+        nudge: "Deploy nasil gitti?",
+        dueHint: "tomorrow",
+      },
+      status: "pending",
+      createdBy: "model",
+      firedAt: null,
+      canceledAt: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: sessionId,
+      userId,
+      targetDeviceId: "33333333-3333-4333-8333-333333333333",
+    },
+  );
+  const events: Array<Record<string, unknown>> = [];
+  const app = {
+    config: { ELYAN_PROACTIVE_ENGINE_ENABLED: true },
+    db,
+    services: {
+      eventBus: {
+        publishVolatile(event: Record<string, unknown>) {
+          events.push(event);
+          return Promise.resolve(event);
+        },
+      },
+    },
+  };
+
+  const result = await processDueProactiveTriggers(app as never, {
+    limit: 1,
+    now,
+    compose: async () => ({
+      text: "Dunku deploy nasil gitti? Bir sorun varsa beraber toparlayalim.",
+    }),
+  });
+
+  assert.deepEqual(result, { processed: 1, fired: 1, expired: 0, deferred: 0, failed: 0 });
+  assert.equal(db.insertedRows[0]?.table, chatMessages);
+  assert.equal(db.insertedRows[0]?.values.userId, userId);
+  assert.equal(db.insertedRows[0]?.values.sessionId, sessionId);
+  assert.equal(db.insertedRows[0]?.values.role, "assistant");
+  assert.equal(
+    db.updates.some((entry) => entry.table === proactiveTriggers && entry.values.status === "fired"),
+    true,
+  );
+  assert.deepEqual(
+    events.map((event) => event.topic),
+    ["message.created", "message.completed"],
+  );
+});
+
+test("processBrainWorkerIteration drains memory jobs before decay and still processes proactive triggers", async () => {
+  let memoryCalls = 0;
+  let decayCalls = 0;
+  let proactiveCalls = 0;
+
+  const result = await processBrainWorkerIteration({} as never, {
+    memoryBatch: 5,
+    processMemoryJob: async () => {
+      memoryCalls += 1;
+      return memoryCalls <= 2;
+    },
+    processDecay: async () => {
+      decayCalls += 1;
+      return {
+        status: "completed" as const,
+        processedCount: 10,
+        updatedCount: 10,
+      };
+    },
+    processProactive: async () => {
+      proactiveCalls += 1;
+      return { processed: 1, fired: 1, expired: 0, deferred: 0, failed: 0 };
+    },
+  });
+
+  assert.equal(memoryCalls, 3);
+  assert.equal(decayCalls, 0);
+  assert.equal(proactiveCalls, 1);
+  assert.deepEqual(result, {
+    memoryJobsProcessed: 2,
+    memoryDecayProcessed: 0,
+    memoryDecayUpdated: 0,
+    proactive: { processed: 1, fired: 1, expired: 0, deferred: 0, failed: 0 },
+  });
+});
+
+test("processBrainWorkerIteration runs decay when no memory job is queued", async () => {
+  const result = await processBrainWorkerIteration({} as never, {
+    processMemoryJob: async () => false,
+    processDecay: async () => ({
+      status: "completed" as const,
+      processedCount: 8,
+      updatedCount: 3,
+    }),
+    processProactive: async () => ({ processed: 0, fired: 0, expired: 0, deferred: 0, failed: 0 }),
+  });
+
+  assert.deepEqual(result, {
+    memoryJobsProcessed: 0,
+    memoryDecayProcessed: 8,
+    memoryDecayUpdated: 3,
+    proactive: { processed: 0, fired: 0, expired: 0, deferred: 0, failed: 0 },
+  });
 });

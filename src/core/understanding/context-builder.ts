@@ -1,7 +1,11 @@
 import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { authIdentities, learningEvents, subscriptions, users } from "../../db/schema.js";
-import { searchBrainMemory } from "../../modules/brain/memory.js";
+import {
+  prioritizeCanonicalMemoryState,
+  readCanonicalMemoryState,
+  searchBrainMemory,
+} from "../../modules/brain/memory.js";
 import { buildContextPacketsFromMetadata, summarizeContextFreshness } from "./context-packets.js";
 import { buildMemoryProfileSnapshot, EPISODIC_LABELS } from "./memory-profile.js";
 import { filterRetrievedMemory } from "./personalization-policy.js";
@@ -22,6 +26,11 @@ import type {
 import { listFreshWorldSignals } from "../../modules/mobile/service.js";
 import { getActiveGoalForContext } from "../../modules/goals/service.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
+import {
+  buildCanonicalUserModel,
+  buildMemoryRecallPackage,
+} from "../../modules/brain/user-model.js";
+import { isTrustedDialogueStateMetadata } from "../../modules/brain/dialogue-state.js";
 
 const MAX_HINTS = 12;
 const MAX_CHARS = 4000;
@@ -988,10 +997,16 @@ function deriveGoalFromRecentMessages(
   return text.length > 180 ? `${text.slice(0, 177)}…` : text;
 }
 
-function deriveContinuitySummary(metadata: Record<string, unknown> | undefined) {
+function deriveContinuitySummary(
+  metadata: Record<string, unknown> | undefined,
+  input?: { userId: string; sessionId?: string | null },
+) {
   const root = readRecord(metadata);
-  const compactContext = readRecord(root?.compactContext);
-  const chatContext = readRecord(root?.chatContext);
+  const trustedDialogueMetadata = input
+    ? isTrustedDialogueStateMetadata(metadata, input)
+    : false;
+  const compactContext = trustedDialogueMetadata ? readRecord(root?.compactContext) : null;
+  const chatContext = trustedDialogueMetadata ? readRecord(root?.chatContext) : null;
 
   // Önce mevcut rollingSummary'ye bak (mobil veya önceki backend geçişinden)
   const rollingSummary = readRecord(
@@ -1037,6 +1052,8 @@ function deriveContinuityBoundary(input: {
   message: string;
   continuitySummary: UserUnderstandingContext["continuitySummary"];
   intent: IntentClassification;
+  userId: string;
+  sessionId?: string | null;
 }): ContinuityBoundary {
   const current = compactText(input.message);
   if (!current || (!input.continuitySummary.userGoal && input.continuitySummary.openLoops.length === 0)) {
@@ -1048,7 +1065,12 @@ function deriveContinuityBoundary(input: {
   }
 
   const root = readRecord(input.metadata);
-  const compactContext = readRecord(root?.compactContext);
+  const compactContext = isTrustedDialogueStateMetadata(input.metadata, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+  })
+    ? readRecord(root?.compactContext)
+    : null;
   const recentRaw = Array.isArray(compactContext?.recentMessages)
     ? (compactContext.recentMessages as unknown[])
     : [];
@@ -1208,12 +1230,15 @@ export function buildUserContextFromMemory(input: {
   const situationalHints: string[] = [];
   const behavioralHints: string[] = [];
   const environmentHints: string[] = [];
-  const continuitySummary = deriveContinuitySummary(input.task.metadata);
+  const continuitySummary = deriveContinuitySummary(input.task.metadata, {
+    userId: input.userId,
+  });
   const continuityBoundary = deriveContinuityBoundary({
     metadata: input.task.metadata,
     message: input.task.message,
     continuitySummary,
     intent: input.intent,
+    userId: input.userId,
   });
   const clarificationDiagnostics = deriveClarificationDiagnostics({
     intent: input.intent,
@@ -1502,10 +1527,13 @@ export async function buildUserContext(
     : [];
 
   /* Run all async ops in parallel for minimum latency */
-  const [memorySearch, userProfile, quickFacts, freshWorldSignals] = await Promise.all([
+  const [memorySearch, canonicalMemory, userProfile, quickFacts, freshWorldSignals] = await Promise.all([
     memoryEnabled && !isSocialTurn
       ? searchBrainMemory(app, { userId: input.userId, query, limit: MAX_HINTS }).catch(() => ({ results: [] }))
       : Promise.resolve({ results: [] }),
+    memoryEnabled
+      ? readCanonicalMemoryState(app, input.userId).catch(() => [])
+      : Promise.resolve([]),
     loadCachedSafeUserProfile(app, input.userId),
     /* Quick C-based fact extraction from the current message */
     !isSocialTurn && nlpDaemon.isAvailable()
@@ -1523,8 +1551,12 @@ export async function buildUserContext(
     enrichedProfile = { ...userProfile, displayName: explicitName };
   }
 
+  const mergedMemory = prioritizeCanonicalMemoryState(
+    [...canonicalMemory, ...memorySearch.results],
+    MAX_HINTS,
+  );
   const { mode: relevanceMode, results: filteredResults } = selectMemoryByRelevance(
-    memorySearch.results,
+    mergedMemory,
   );
   void relevanceMode; // gelecek observability için; bırakıyoruz.
 
@@ -1542,6 +1574,7 @@ export async function buildUserContext(
     lastVerifiedAt: result.lastVerifiedAt ? new Date(result.lastVerifiedAt) : null,
     importanceScore: result.importanceScore,
     isPinned:       result.isPinned,
+    metadata:       result.metadata,
   }));
 
   const fallbackRows =
@@ -1650,12 +1683,24 @@ export async function buildUserContext(
     situational: [], behavioral: [], environmental: [],
   }));
 
-  const continuitySummary = deriveContinuitySummary(input.metadata);
+  const metadataChat = readRecord(input.metadata?.chat);
+  const continuitySummary = deriveContinuitySummary(input.metadata, {
+    userId: input.userId,
+    sessionId:
+      typeof metadataChat?.sessionId === "string" && metadataChat.sessionId.trim()
+        ? metadataChat.sessionId.trim()
+        : null,
+  });
   const continuityBoundary = deriveContinuityBoundary({
     metadata: input.metadata,
     message: input.message,
     continuitySummary,
     intent: input.intent,
+    userId: input.userId,
+    sessionId:
+      typeof metadataChat?.sessionId === "string" && metadataChat.sessionId.trim()
+        ? metadataChat.sessionId.trim()
+        : null,
   });
   const selectedContinuityMemory = selectContinuityMemory({
     memory: memory as RetrievedMemory[],
@@ -1687,6 +1732,18 @@ export async function buildUserContext(
     contextPackets,
     activeGoal,
   });
+  if (app.config.ELYAN_USER_MODEL_V2_ENABLED === true) {
+    const userModel = buildCanonicalUserModel({
+      memory: stableMemory as RetrievedMemory[],
+      profile: enrichedProfile,
+    });
+    ctx.userModel = userModel;
+    ctx.memoryRecall = buildMemoryRecallPackage({
+      memory: memory as RetrievedMemory[],
+      userModel,
+      now,
+    });
+  }
 
   /* Merge C-derived hints into the context (deduplicated, bounded) */
   const mergeHints = (target: string[], incoming: string[]) => {

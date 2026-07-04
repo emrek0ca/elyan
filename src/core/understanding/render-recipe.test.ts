@@ -115,7 +115,8 @@ test("buildLocalRenderRecipe preserves explicit JPG image export format", () => 
 test("buildLocalRenderRecipe exposes structured blocks for mobile canvas rendering", () => {
   const recipe = buildLocalRenderRecipe({
     prompt: "Bunu PNG görsel olarak oluştur",
-    responseText: "Veri Akışı\n\n- Girdi alınır\n- Anlam çıkarılır\n- Çıktı üretilir",
+    responseText:
+      "Veri Akışı\n\n- Girdi alınır\n- Anlam çıkarılır\n- Çıktı üretilir",
     metadata: {
       documentExportMode: "mobile_local",
       title: "Veri Akışı",
@@ -126,7 +127,10 @@ test("buildLocalRenderRecipe exposes structured blocks for mobile canvas renderi
   assert.equal(recipe?.file_name, "veri-akışı.png");
   assert.equal(recipe?.content_model.title, "Veri Akışı");
   assert.equal(recipe?.content_model.block_count, 4);
-  assert.equal(recipe?.text_blocks.filter((block) => block.type === "bullet").length, 3);
+  assert.equal(
+    recipe?.text_blocks.filter((block) => block.type === "bullet").length,
+    3,
+  );
   assert.equal(recipe?.metadata.render_intent, "raster_image_export");
 });
 
@@ -182,7 +186,37 @@ test("buildLocalRenderRecipe prefers structured assistant blocks over preface pr
   assert.equal(recipe?.content_model.title, "Yapay Zeka Raporu");
   assert.equal(recipe?.text_blocks[0]?.type, "title");
   assert.equal(recipe?.text_blocks[0]?.text, "Yapay Zeka Raporu");
-  assert.equal(recipe?.text_blocks.some((block) => block.type === "table"), true);
-  assert.equal(recipe?.content_model.plain_text.includes("Raporu hazırladım"), false);
+  assert.equal(
+    recipe?.text_blocks.some((block) => block.type === "table"),
+    true,
+  );
+  assert.equal(
+    recipe?.content_model.plain_text.includes("Raporu hazırladım"),
+    false,
+  );
   assert.equal(recipe?.content_model.plain_text.includes("Tanım"), true);
+});
+
+test("buildLocalRenderRecipe carries PDF footer and business style as typed metadata", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt:
+      "Toplam 18 kapı tamiri 18.000 TL. Bunu resmi teklif PDF yap, en alt kısmında Metin cam Metin koca yazsın",
+    responseText:
+      "Kapı tamiri: 18.000 TL\nMenteşe: 3.000 TL\nGenel toplam: 21.000 TL",
+    metadata: {
+      documentExportMode: "mobile_local",
+    },
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.format, "pdf");
+  assert.equal(recipe?.metadata.document_style, "formal");
+  assert.equal(recipe?.metadata.document_kind, "quote");
+  assert.equal(recipe?.metadata.layout_template, "business_document");
+  assert.equal(recipe?.metadata.footer_text, "Metin cam Metin koca");
+  assert.equal(recipe?.metadata.preflight_required, true);
+  assert.deepEqual(recipe?.metadata.required_markers, [
+    "Kapı tamiri: 18.000 TL Menteşe: 3.000 TL Genel toplam: 21.000 TL",
+    "Metin cam Metin koca",
+  ]);
 });

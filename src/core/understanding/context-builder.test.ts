@@ -360,6 +360,71 @@ test("buildUserContextFromMemory derives preferred name and language from safe m
   assert.ok((context.speakingStyleDirectives ?? []).some((item) => item.includes("Türkçe")));
 });
 
+test("buildUserContextFromMemory keeps the latest preferred name and suppresses stale aliases", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Selam",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Selam",
+    },
+    profile: {
+      displayName: "Zeynep",
+    },
+    memory: [
+      {
+        id: "old-preferred-name",
+        type: "identity",
+        key: "preferred_name",
+        value: "Zeynep",
+        confidence: 0.99,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date("2026-07-04T00:00:00.000Z"),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date("2026-07-04T00:00:00.000Z"),
+        importanceScore: 100,
+        isPinned: true,
+      },
+      {
+        id: "latest-preferred-name",
+        type: "identity",
+        key: "hitap şekli",
+        value: "Emre",
+        confidence: 0.91,
+        scope: "user",
+        source: "explicit_user",
+        createdAt: new Date("2026-07-04T00:03:00.000Z"),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date("2026-07-04T00:03:00.000Z"),
+        importanceScore: 70,
+        isPinned: false,
+      },
+    ],
+  });
+
+  assert.equal(context.userProfile?.displayName, "Zeynep");
+  assert.equal(context.userProfile?.preferredName, "Emre");
+  assert.deepEqual(
+    context.retrievedMemory
+      .filter((item) => item.key === "preferred_name" || item.key === "name")
+      .map((item) => item.value),
+    ["Emre"],
+  );
+  assert.equal(context.personalizationHints.some((hint) => hint.includes("Zeynep")), false);
+  assert.ok(context.personalizationHints.some((hint) => hint.includes("preferred_name: Emre")));
+  assert.ok(context.relationshipContextDigest.some((item) => item.includes("Emre")));
+  assert.equal(context.relationshipContextDigest.some((item) => item.includes("Zeynep")), false);
+});
+
 test("buildUserContextFromMemory ignores suspicious memory-derived names", () => {
   const intent = classifyIntent({
     userId: "user_1",
@@ -473,7 +538,11 @@ test("buildUserContextFromMemory builds a clean continuity digest and memory sho
       userId: "user_1",
       message: "Bugünkü planımı kısa ve net çıkar.",
       metadata: {
+        dialogueStateSource: "server_dialogue_state.v1",
+        dialogueStateUserId: "user_1",
         compactContext: {
+          source: "server_dialogue_state.v1",
+          ownerUserId: "user_1",
           rollingSummary: {
             userGoal: "Haftalık çalışma sistemini toparlamak",
             assistantState: "Önceki turda kaba plan çıkarıldı",
@@ -707,7 +776,11 @@ test("buildUserContextFromMemory suppresses stale continuity when the user clear
       userId: "user_1",
       message: "Bana kısa bir şiir yaz.",
       metadata: {
+        dialogueStateSource: "server_dialogue_state.v1",
+        dialogueStateUserId: "user_1",
         compactContext: {
+          source: "server_dialogue_state.v1",
+          ownerUserId: "user_1",
           rollingSummary: {
             userGoal: "Backend auth bugını düzeltmek",
             assistantState: "Root cause aranıyordu",
@@ -1086,7 +1159,11 @@ test("clarificationDiagnostics: short follow-up with prior turn context resolves
       userId: "u1",
       message: "onu düzelt",
       metadata: {
+        dialogueStateSource: "server_dialogue_state.v1",
+        dialogueStateUserId: "u1",
         compactContext: {
+          source: "server_dialogue_state.v1",
+          ownerUserId: "u1",
           rollingSummary: {
             userGoal: "Kısa release notu hazırlamak",
             assistantState: "İlk taslak çıkarıldı",
@@ -1104,6 +1181,35 @@ test("clarificationDiagnostics: short follow-up with prior turn context resolves
     context.clarificationDiagnostics.reason,
     "short_followup_resolved_by_prior_turn_context",
   );
+});
+
+test("clarificationDiagnostics ignores untrusted compactContext from another account", () => {
+  const intent = classifyIntent({ userId: "u2", message: "onu düzelt" });
+  const context = buildUserContextFromMemory({
+    userId: "u2",
+    accountId: "u2",
+    intent,
+    task: {
+      userId: "u2",
+      message: "onu düzelt",
+      metadata: {
+        compactContext: {
+          rollingSummary: {
+            userGoal: "Other account release notes",
+            assistantState: "Other account draft exists",
+            openLoops: ["Other account private loop"],
+          },
+        },
+      },
+    },
+    memory: [],
+    profile: { displayName: "Ayşe" },
+  });
+
+  assert.equal(context.continuitySummary.userGoal, null);
+  assert.deepEqual(context.continuitySummary.openLoops, []);
+  assert.equal(context.clarificationDiagnostics.shouldClarify, true);
+  assert.equal(context.clarificationDiagnostics.ambiguityKind, "ambiguous_followup");
 });
 
 test("clarificationDiagnostics: short follow-up WITHOUT prior context flags ambiguous_followup", () => {

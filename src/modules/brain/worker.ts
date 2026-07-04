@@ -13,6 +13,14 @@ import {
   processMemoryImportanceDecay,
   processMemoryTrainingJob,
 } from "./memory.js";
+import {
+  buildProactiveComposePrompt,
+  sweepDueProactiveTriggers,
+  type ProactiveComposeResult,
+  type ProactiveTriggerRow,
+  type ProactiveTriggerSweepResult,
+} from "./proactive-engine.js";
+import { generateSharedBrainReply } from "./inference.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
 
 type TrainingJobRow = typeof trainingJobs.$inferSelect;
@@ -722,9 +730,171 @@ type MemoryWorkerState = {
   stopped: boolean;
 };
 
+export type BrainWorkerIterationResult = {
+  memoryJobsProcessed: number;
+  memoryDecayProcessed: number;
+  memoryDecayUpdated: number;
+  proactive: ProactiveTriggerSweepResult;
+};
+
+type BrainWorkerIterationOptions = {
+  memoryBatch?: number;
+  processMemoryJob?: (app: FastifyInstance) => Promise<boolean>;
+  processDecay?: typeof processMemoryImportanceDecay;
+  processProactive?: typeof processDueProactiveTriggers;
+};
+
 const activeMemoryWorkers = new WeakMap<FastifyInstance, MemoryWorkerState>();
 const MEMORY_WORKER_INTERVAL_MS = 30_000;
 const MEMORY_WORKER_BATCH = 25;
+const PROACTIVE_WORKER_BATCH = 5;
+
+function emptyProactiveSweep(): ProactiveTriggerSweepResult {
+  return {
+    processed: 0,
+    fired: 0,
+    expired: 0,
+    deferred: 0,
+    failed: 0,
+  };
+}
+
+export async function composeProactiveTriggerMessage(
+  app: FastifyInstance,
+  trigger: ProactiveTriggerRow,
+): Promise<ProactiveComposeResult> {
+  const reply = await generateSharedBrainReply(app, {
+    userId: trigger.userId,
+    prompt: buildProactiveComposePrompt(trigger),
+    workload: "mobile_chat_fast",
+    route: "proactive_follow_up",
+    requestMetadata: {
+      chatSessionId: trigger.sessionId,
+      proactiveTriggerId: trigger.id,
+      proactiveKind: trigger.kind,
+    },
+    maxCompletionTokensOverride: 180,
+    timeoutMsOverride: 10_000,
+    internalEvaluation: {
+      skipUsageValidation: true,
+      skipInvocationLogging: true,
+      skipReviewLogging: true,
+    },
+  });
+
+  return {
+    text: reply.text,
+    blocks: Array.isArray(reply.metadata.blocks)
+      ? reply.metadata.blocks.slice(0, 12)
+      : [],
+  };
+}
+
+export async function processDueProactiveTriggers(
+  app: FastifyInstance,
+  input: {
+    limit?: number;
+    now?: Date;
+    compose?: (trigger: ProactiveTriggerRow) => Promise<ProactiveComposeResult>;
+  } = {},
+): Promise<ProactiveTriggerSweepResult> {
+  if (app.config?.ELYAN_PROACTIVE_ENGINE_ENABLED !== true) {
+    return emptyProactiveSweep();
+  }
+
+  return sweepDueProactiveTriggers(app, {
+    limit: input.limit ?? PROACTIVE_WORKER_BATCH,
+    now: input.now,
+    compose:
+      input.compose ??
+      ((trigger) => composeProactiveTriggerMessage(app, trigger)),
+  });
+}
+
+export async function processBrainWorkerIteration(
+  app: FastifyInstance,
+  options: BrainWorkerIterationOptions = {},
+): Promise<BrainWorkerIterationResult> {
+  const memoryBatch = Math.max(1, Math.min(options.memoryBatch ?? MEMORY_WORKER_BATCH, 100));
+  const processMemoryJob = options.processMemoryJob ?? processNextQueuedMemoryJob;
+  const processDecay = options.processDecay ?? processMemoryImportanceDecay;
+  const processProactive = options.processProactive ?? processDueProactiveTriggers;
+
+  let memoryJobsProcessed = 0;
+  while (memoryJobsProcessed < memoryBatch) {
+    const did = await processMemoryJob(app);
+    if (!did) break;
+    memoryJobsProcessed += 1;
+  }
+
+  let memoryDecayProcessed = 0;
+  let memoryDecayUpdated = 0;
+  if (memoryJobsProcessed === 0) {
+    const decay = await processDecay(app);
+    memoryDecayProcessed = decay.processedCount;
+    memoryDecayUpdated = decay.updatedCount;
+  }
+
+  const proactive = await processProactive(app);
+
+  return {
+    memoryJobsProcessed,
+    memoryDecayProcessed,
+    memoryDecayUpdated,
+    proactive,
+  };
+}
+
+export async function runBrainWorker(
+  app: FastifyInstance,
+  options: {
+    idleDelayMs?: number;
+    once?: boolean;
+  } = {},
+) {
+  const idleDelayMs = options.idleDelayMs ?? MEMORY_WORKER_INTERVAL_MS;
+
+  while (true) {
+    let processed = false;
+
+    try {
+      const result = await processBrainWorkerIteration(app);
+      processed =
+        result.memoryJobsProcessed > 0 ||
+        result.memoryDecayUpdated > 0 ||
+        result.proactive.processed > 0;
+      if (result.memoryJobsProcessed > 0) {
+        app.log.info?.(
+          { processed: result.memoryJobsProcessed },
+          "brain worker drained memory jobs",
+        );
+      }
+      if (result.memoryDecayUpdated > 0) {
+        app.log.info?.(
+          {
+            processed: result.memoryDecayProcessed,
+            updated: result.memoryDecayUpdated,
+          },
+          "brain worker decayed fact importance",
+        );
+      }
+      if (result.proactive.processed > 0) {
+        app.log.info?.(result.proactive, "brain worker processed proactive triggers");
+      }
+    } catch (error) {
+      app.log.error(
+        { error: describePostgresError(error) },
+        "brain worker iteration failed",
+      );
+    }
+
+    if (options.once) {
+      return;
+    }
+
+    await sleep(processed ? 0 : idleDelayMs);
+  }
+}
 
 /// Starts the periodic in-process memory-job drainer. Returns a stop callback.
 export function startInProcessMemoryWorker(app: FastifyInstance): () => void {
@@ -763,28 +933,24 @@ export function startInProcessMemoryWorker(app: FastifyInstance): () => void {
     }
     state.running = true;
     try {
-      let processed = 0;
-      while (processed < MEMORY_WORKER_BATCH && !state.stopped) {
-        const did = await processNextQueuedMemoryJob(app);
-        if (!did) {
-          break;
-        }
-        processed += 1;
+      const result = await processBrainWorkerIteration(app);
+      if (result.memoryDecayUpdated > 0) {
+        app.log.info?.(
+          {
+            processed: result.memoryDecayProcessed,
+            updated: result.memoryDecayUpdated,
+          },
+          "in-process memory worker decayed fact importance",
+        );
       }
-      if (processed === 0 && !state.stopped) {
-        const decay = await processMemoryImportanceDecay(app);
-        if (decay.updatedCount > 0) {
-          app.log.info?.(
-            {
-              processed: decay.processedCount,
-              updated: decay.updatedCount,
-            },
-            "in-process memory worker decayed fact importance",
-          );
-        }
+      if (result.memoryJobsProcessed > 0) {
+        app.log.info?.(
+          { processed: result.memoryJobsProcessed },
+          "in-process memory worker drained jobs",
+        );
       }
-      if (processed > 0) {
-        app.log.info?.({ processed }, "in-process memory worker drained jobs");
+      if (result.proactive.processed > 0) {
+        app.log.info?.(result.proactive, "in-process brain worker processed proactive triggers");
       }
     } catch (error) {
       app.log.error(

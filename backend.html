@@ -2,68 +2,31 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Elyan Backend Architecture</title>
-
 <style>
-*{
-  margin:0;
-  padding:0;
-  box-sizing:border-box;
-}
-
+*{margin:0;padding:0;box-sizing:border-box}
 body{
   background:#0c0d10;
   color:#f4f4f4;
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif;
   padding:48px;
 }
-
-h1{
-  font-size:42px;
-  margin-bottom:12px;
-}
-
-.subtitle{
-  color:#8f949d;
-  font-size:18px;
-  margin-bottom:60px;
-}
-
-.section{
-  margin-bottom:70px;
-}
-
-.section-title{
-  font-size:28px;
-  margin-bottom:24px;
-}
-
-.diagram{
-  display:flex;
-  flex-direction:column;
-  gap:24px;
-}
-
-.row{
-  display:flex;
-  gap:20px;
-  align-items:center;
-  justify-content:center;
-  flex-wrap:wrap;
-}
-
-.box{
-  width:280px;
-  min-height:140px;
+h1{font-size:42px;margin-bottom:12px}
+.subtitle{color:#9da3ad;font-size:18px;line-height:1.5;margin-bottom:56px;max-width:980px}
+.section{margin-bottom:64px}
+.section-title{font-size:28px;margin-bottom:22px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}
+.wide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
+.box,.stack-item{
   background:#14171c;
   border:1px solid #252a33;
-  border-radius:24px;
-  padding:22px;
+  border-radius:18px;
+  padding:20px;
   position:relative;
+  overflow:hidden;
 }
-
-.box::before{
+.box::before,.stack-item::before{
   content:"";
   position:absolute;
   top:0;
@@ -72,391 +35,158 @@ h1{
   height:2px;
   background:#8ea67d;
 }
-
-.box h3{
-  font-size:20px;
-  margin-bottom:14px;
+.box h3,.stack-item strong{display:block;font-size:18px;margin-bottom:10px;color:#fff}
+.box p,.stack-item span{color:#aab1bd;font-size:14px;line-height:1.55}
+.flow{display:flex;flex-direction:column;gap:16px}
+.row{display:flex;gap:14px;align-items:stretch;justify-content:center;flex-wrap:wrap}
+.node{width:260px;min-height:124px}
+.arrow{display:flex;align-items:center;color:#8ea67d;font-size:28px}
+.stack{display:flex;flex-direction:column;gap:14px}
+.tagline{
+  display:inline-block;
+  color:#d8e7c9;
+  background:#1b2319;
+  border:1px solid #30402b;
+  border-radius:999px;
+  padding:8px 12px;
+  font-size:13px;
+  margin-bottom:18px;
 }
-
-.box p{
-  color:#a7adb7;
-  font-size:14px;
+.code{
+  font-family:"SF Mono",Menlo,Consolas,monospace;
+  color:#d7dde7;
+  background:#101318;
+  border:1px solid #252a33;
+  border-radius:12px;
+  padding:14px;
+  white-space:pre-wrap;
+  font-size:13px;
   line-height:1.5;
 }
-
-.arrow{
-  font-size:34px;
-  color:#8ea67d;
-}
-
-.stack{
-  display:flex;
-  flex-direction:column;
-  gap:18px;
-}
-
-.stack-item{
-  background:#14171c;
-  border:1px solid #252a33;
-  border-radius:18px;
-  padding:18px;
-}
-
-.stack-item strong{
-  display:block;
-  margin-bottom:8px;
-  font-size:18px;
-}
-
-.stack-item span{
-  color:#9ea5b0;
-  font-size:14px;
-}
-
-.grid{
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
-  gap:20px;
-}
-
-.footer{
-  margin-top:70px;
-  padding-top:24px;
-  border-top:1px solid #20242c;
-  color:#666;
-  font-size:14px;
-}
+.ok{color:#b8d8a2}
+.warn{color:#e7c16f}
+.footer{margin-top:70px;padding-top:24px;border-top:1px solid #20242c;color:#737985;font-size:14px}
+@media (max-width:720px){body{padding:28px}h1{font-size:34px}.arrow{transform:rotate(90deg)}}
 </style>
 </head>
-
 <body>
 
 <h1>Elyan Backend System</h1>
 <p class="subtitle">
-Lightweight realtime control-plane for mobile ↔ desktop AI runtime orchestration
+Elyan backend artık sadece ince bir chat proxy değil; auth, billing, realtime, routing,
+memory, dialogue state, telemetry, learning events ve server-brain agent foundation
+yöneten data-first control-plane katmanıdır.
 </p>
 
-<!-- FLOW -->
 <div class="section">
-  <div class="section-title">Main System Flow</div>
-
-  <div class="diagram">
-
+  <span class="tagline">Ana ilke: düz metin son yüzeydir, arka planda tipli veri çalışır.</span>
+  <div class="section-title">Current Production Flow</div>
+  <div class="flow">
     <div class="row">
-      <div class="box">
-        <h3>Mobile App</h3>
-        <p>
-          Kullanıcı görev verir.<br><br>
-          Görevler backend API’ye gönderilir.
-        </p>
-      </div>
-
+      <div class="box node"><h3>Mobile / Desktop</h3><p>Kullanıcı mesajı, task isteği, selected device, compact metadata ve SSE subscription gönderir.</p></div>
       <div class="arrow">→</div>
-
-      <div class="box">
-        <h3>Backend API</h3>
-        <p>
-          Auth doğrular.<br>
-          Kullanıcıyı ve cihazı eşler.<br>
-          Görevi sıraya alır.
-        </p>
-      </div>
-
+      <div class="box node"><h3>Fastify API</h3><p>Auth, quota, rate limit, idempotency, plan ve request safety kontrolleri yapılır.</p></div>
       <div class="arrow">→</div>
-
-      <div class="box">
-        <h3>Desktop Runtime</h3>
-        <p>
-          Görevleri gerçek bilgisayarda çalıştırır.<br><br>
-          Browser, dosya sistemi ve uygulamaları kontrol eder.
-        </p>
-      </div>
+      <div class="box node"><h3>Routing Policy</h3><p>Server brain, mobile local, desktop runtime veya blocked kararını verir.</p></div>
     </div>
-
     <div class="row">
-      <div class="box">
-        <h3>AI Layer</h3>
-        <p>
-          AI burada sadece yardımcıdır.<br><br>
-          Niyeti anlar.<br>
-          Görevi parçalara ayırır.<br>
-          Sırayla uygular.
-        </p>
-      </div>
-
+      <div class="box node"><h3>Server Brain</h3><p>Memory recall, dialogue state, web grounding, tool registry ve provider inference katmanını orkestre eder.</p></div>
       <div class="arrow">→</div>
-
-      <div class="box">
-        <h3>Capability Layer</h3>
-        <p>
-          MCP tools<br>
-          Browser automation<br>
-          File operations<br>
-          App control
-        </p>
-      </div>
-
+      <div class="box node"><h3>Typed Output</h3><p>`elyan_blocks.v2`, safe text, state ops, memory ops, tool results ve metrics ayrıştırılır.</p></div>
       <div class="arrow">→</div>
-
-      <div class="box">
-        <h3>Artifacts & Status</h3>
-        <p>
-          Sonuç üretir.<br>
-          Artifact teslim eder.<br>
-          Durumu mobile realtime gönderir.
-        </p>
-      </div>
+      <div class="box node"><h3>SSE / REST</h3><p>Mevcut mobile/desktop contract korunarak `message.created/delta/completed` yayınlanır.</p></div>
     </div>
-
   </div>
 </div>
 
-<!-- RESPONSIBILITIES -->
 <div class="section">
-  <div class="section-title">Backend Responsibilities</div>
-
-  <div class="stack">
-
-    <div class="stack-item">
-      <strong>Authentication</strong>
-      <span>
-        Kullanıcı oturumları, JWT, refresh token, cihaz eşleşmesi
-      </span>
+  <div class="section-title">What Changed Recently</div>
+  <div class="wide-grid">
+    <div class="box">
+      <h3>Server-Owned Dialogue State</h3>
+      <p>`dialogue_states` tablosu eklendi. State artık server tarafından damgalanır ve session/user owner doğrulaması olmadan prompt'a girmez.</p>
     </div>
-
-    <div class="stack-item">
-      <strong>Device Management</strong>
-      <span>
-        Mobile ↔ Desktop eşleşmesi, runtime heartbeat, reconnect
-      </span>
+    <div class="box">
+      <h3>Cross-User Leak Fix</h3>
+      <p>Mobil cache kaynaklı `compactContext/userMemory/recentMessages` artık authoritative değildir. Başka user/session metadata'sı prompt, continuity veya fallback state'e alınmaz.</p>
     </div>
-
-    <div class="stack-item">
-      <strong>Realtime Communication</strong>
-      <span>
-        WebSocket / SSE üzerinden canlı görev ve status aktarımı
-      </span>
+    <div class="box">
+      <h3>Turn Metrics</h3>
+      <p>`turn_metrics` fire-and-forget telemetry eklendi. Prompt/private content yazmadan latency, block, fallback, tool ve quality sinyalleri ölçülür.</p>
     </div>
-
-    <div class="stack-item">
-      <strong>Task Queue</strong>
-      <span>
-        Görevleri sıraya alma, durum yönetimi, cancel/resume
-      </span>
+    <div class="box">
+      <h3>Memory Fabric Direction</h3>
+      <p>Preferred-name gibi tek değerli memory key'lerinde en son açık kullanıcı isteği kazanır; stale alias prompt'a karışmaz.</p>
     </div>
-
-    <div class="stack-item">
-      <strong>Billing & Plans</strong>
-      <span>
-        Subscription, usage tracking, hosted AI limits
-      </span>
+    <div class="box">
+      <h3>Agent Tool Foundation</h3>
+      <p>`tool-registry` ve sınırlı `agent-loop` eklendi. `web.search`, `memory.query`, `memory.write`, `goals.update` typed tool olarak paketlenmeye başladı.</p>
     </div>
-
-    <div class="stack-item">
-      <strong>QR Pairing</strong>
-      <span>
-        Mobil uygulama ile desktop runtime bağlantısı
-      </span>
+    <div class="box">
+      <h3>Proactive Foundation</h3>
+      <p>`proactive_triggers` ve user proactive prefs temeli eklendi. Follow-up, mute, daily cap ve quiet-hour policy veriyle yönetilecek.</p>
     </div>
-
   </div>
 </div>
 
-<!-- QR -->
 <div class="section">
-  <div class="section-title">QR Pairing Flow</div>
-
-  <div class="diagram">
-
-    <div class="row">
-
-      <div class="box">
-        <h3>Desktop Runtime</h3>
-        <p>
-          Temporary pairing token üretir.
-        </p>
-      </div>
-
-      <div class="arrow">→</div>
-
-      <div class="box">
-        <h3>Backend</h3>
-        <p>
-          Pair session oluşturur.
-        </p>
-      </div>
-
-      <div class="arrow">→</div>
-
-      <div class="box">
-        <h3>QR Code</h3>
-        <p>
-          Mobil uygulama QR kodu okur.
-        </p>
-      </div>
-
-    </div>
-
-    <div class="row">
-
-      <div class="box">
-        <h3>Mobile Device</h3>
-        <p>
-          Kullanıcı hesabı doğrulanır.
-        </p>
-      </div>
-
-      <div class="arrow">→</div>
-
-      <div class="box">
-        <h3>Realtime Link</h3>
-        <p>
-          Mobile ↔ Desktop canlı bağlanır.
-        </p>
-      </div>
-
-    </div>
-
-  </div>
-</div>
-
-<!-- DATABASE -->
-<div class="section">
-  <div class="section-title">Database Structure</div>
-
+  <div class="section-title">Canonical Data Stores</div>
   <div class="grid">
-
-    <div class="box">
-      <h3>users</h3>
-      <p>
-        Kullanıcı hesapları
-      </p>
-    </div>
-
-    <div class="box">
-      <h3>devices</h3>
-      <p>
-        Desktop ve mobile cihazlar
-      </p>
-    </div>
-
-    <div class="box">
-      <h3>pair_sessions</h3>
-      <p>
-        QR bağlantı oturumları
-      </p>
-    </div>
-
-    <div class="box">
-      <h3>tasks</h3>
-      <p>
-        Görevler ve durumları
-      </p>
-    </div>
-
-    <div class="box">
-      <h3>artifacts</h3>
-      <p>
-        Üretilen çıktılar
-      </p>
-    </div>
-
-    <div class="box">
-      <h3>subscriptions</h3>
-      <p>
-        Billing ve plan yönetimi
-      </p>
-    </div>
-
+    <div class="box"><h3>users / auth_identities</h3><p>Account, social identity, deletion and ownership truth.</p></div>
+    <div class="box"><h3>devices / pair_sessions</h3><p>Mobile/desktop registration, pairing and runtime heartbeat truth.</p></div>
+    <div class="box"><h3>chat_sessions / messages</h3><p>Conversation surface, assistant blocks and SSE replay truth.</p></div>
+    <div class="box"><h3>brain_memory_facts</h3><p>User-scoped facts, preferences, corrections and memory fabric source.</p></div>
+    <div class="box"><h3>dialogue_states</h3><p>Canonical per-session state: goal, stage, loops, style, user memory and tool history.</p></div>
+    <div class="box"><h3>turn_metrics</h3><p>Non-blocking latency and quality telemetry for every brain turn.</p></div>
+    <div class="box"><h3>session_goals / goal_events</h3><p>Goal loop state and append-only progress history.</p></div>
+    <div class="box"><h3>proactive_triggers</h3><p>Future follow-ups, reminders and task nudges.</p></div>
+    <div class="box"><h3>learning_events / artifacts</h3><p>Approved correction dataset and Elyan model learning pipeline input.</p></div>
   </div>
 </div>
 
-<!-- STACK -->
 <div class="section">
-  <div class="section-title">Recommended Stack</div>
-
+  <div class="section-title">Security Boundary</div>
   <div class="stack">
-
-    <div class="stack-item">
-      <strong>Backend</strong>
-      <span>Node.js + Fastify + TypeScript</span>
-    </div>
-
-    <div class="stack-item">
-      <strong>Database</strong>
-      <span>PostgreSQL</span>
-    </div>
-
-    <div class="stack-item">
-      <strong>Realtime</strong>
-      <span>WebSocket + SSE</span>
-    </div>
-
-    <div class="stack-item">
-      <strong>Desktop</strong>
-      <span>Tauri + React</span>
-    </div>
-
-    <div class="stack-item">
-      <strong>Mobile</strong>
-      <span>Flutter</span>
-    </div>
-
-    <div class="stack-item">
-      <strong>AI Providers</strong>
-      <span>OpenAI + Claude + Ollama + Groq</span>
-    </div>
-
+    <div class="stack-item"><strong>User Scope Is Mandatory</strong><span>Every memory/state/context path must be scoped by authenticated `userId`; session-scoped data must also match `sessionId` when available.</span></div>
+    <div class="stack-item"><strong>Client Cache Is Untrusted</strong><span>Client metadata can be a hint only. Server-owned state must carry `server_dialogue_state.v1` and matching owner fields.</span></div>
+    <div class="stack-item"><strong>No Private Local Execution</strong><span>Backend never controls the user's computer directly. Private execution stays on desktop runtime behind permissions.</span></div>
+    <div class="stack-item"><strong>No Provider Disclosure</strong><span>Provider/model/system prompt names are sanitized from visible replies and benchmarked for leak rate.</span></div>
   </div>
 </div>
 
-<!-- RULES -->
 <div class="section">
-  <div class="section-title">Engineering Principles</div>
-
-  <div class="stack">
-
-    <div class="stack-item">
-      <strong>Thin Backend</strong>
-      <span>
-        Backend sadece koordinasyon yapar.
-      </span>
-    </div>
-
-    <div class="stack-item">
-      <strong>Local Execution</strong>
-      <span>
-        Gerçek işler desktop runtime üzerinde çalışır.
-      </span>
-    </div>
-
-    <div class="stack-item">
-      <strong>AI = Assistant</strong>
-      <span>
-        AI karar verici değil, yardımcı yorumlayıcıdır.
-      </span>
-    </div>
-
-    <div class="stack-item">
-      <strong>No Agent Chaos</strong>
-      <span>
-        Recursive agent sistemleri yok.
-      </span>
-    </div>
-
-    <div class="stack-item">
-      <strong>Readable Code</strong>
-      <span>
-        Stabilite ve okunabilirlik önceliklidir.
-      </span>
-    </div>
-
+  <div class="section-title">Verification Snapshot</div>
+  <div class="grid">
+    <div class="box"><h3 class="ok">npm test</h3><p>855 / 855 passing.</p></div>
+    <div class="box"><h3 class="ok">TypeScript</h3><p>`npx tsc --noEmit` clean.</p></div>
+    <div class="box"><h3 class="ok">Block Output</h3><p>50 / 50 passing, raw JSON leak 0%.</p></div>
+    <div class="box"><h3 class="ok">Security Benchmark</h3><p>20 / 20 passing, secret leak 0%, system prompt leak 0%.</p></div>
+    <div class="box"><h3 class="ok">Routing Benchmark</h3><p>15 / 15 passing.</p></div>
+    <div class="box"><h3 class="warn">Full Benchmark</h3><p>Can require live provider access; `shared brain inference unavailable` indicates provider/env availability, not necessarily code regression.</p></div>
   </div>
 </div>
 
-<div class="footer">
-Elyan — Connected AI Runtime Architecture
+<div class="section">
+  <div class="section-title">Deploy Path</div>
+  <div class="code">bash scripts/deploy-v1-release.sh
+
+Local gate -> remote backup -> rsync -> remote install/build/test
+-> schema bootstrap -> Docker Compose rebuild -> /healthz and /readyz probe</div>
 </div>
+
+<div class="section">
+  <div class="section-title">Next Architecture Work</div>
+  <div class="stack">
+    <div class="stack-item"><strong>Turn Envelope</strong><span>Move model I/O to typed JSON envelope behind flag; stream only growing `reply.text`.</span></div>
+    <div class="stack-item"><strong>Agent Loop</strong><span>Execute typed tool requests with max iteration, timeout, permission and audit boundaries.</span></div>
+    <div class="stack-item"><strong>Memory Fabric v2</strong><span>Synchronous preference writes, conflict/forget semantics and typed recall package.</span></div>
+    <div class="stack-item"><strong>Proactive Engine</strong><span>Start with follow-up triggers, then reminders and goal nudges after safety caps are proven.</span></div>
+    <div class="stack-item"><strong>Compute Separation</strong><span>Move embedding/rerank/extraction CPU work out of the API process with timeout and fallback.</span></div>
+    <div class="stack-item"><strong>God-File Split</strong><span>Split `inference.ts` into provider client, stream publisher, finalizer, prompt composer and credits modules without behavior drift.</span></div>
+  </div>
+</div>
+
+<div class="footer">Elyan Backend — Data-first agent control-plane, July 2026</div>
 
 </body>
 </html>

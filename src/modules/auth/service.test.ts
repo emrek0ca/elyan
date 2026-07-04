@@ -6,9 +6,13 @@ import {
   billingStoreTransactions,
   chatSessions,
   devices,
+  dialogueStates,
+  proactiveTriggers,
   runtimeConnections,
   subscriptions,
   tasks,
+  turnMetrics,
+  userConsents,
   worldSignals,
 } from "../../db/schema.js";
 import {
@@ -32,6 +36,9 @@ function createSelectBuilder(result: unknown) {
       return this;
     },
     where() {
+      return this;
+    },
+    orderBy() {
       return this;
     },
     limit: async () => result,
@@ -196,7 +203,7 @@ test("loginWithGoogle links identities and returns a session", async () => {
       select() {
         return createSelectBuilder(selectResults.shift() ?? []);
       },
-      insert(table: Record<string, unknown>) {
+      insert(table: unknown) {
         return {
           values(values: Record<string, unknown>) {
             insertCallIndex += 1;
@@ -505,6 +512,9 @@ test("deleteCurrentUserAccount revokes sessions, audits, and removes account-own
   });
   assert.ok(deletedTables.length >= 20);
   assert.ok(deletedTables.includes(worldSignals));
+  assert.ok(deletedTables.includes(proactiveTriggers));
+  assert.ok(deletedTables.includes(dialogueStates));
+  assert.ok(deletedTables.includes(turnMetrics));
   assert.ok(deletedTables.includes(chatSessions));
   assert.ok(deletedTables.includes(tasks));
   assert.ok(deletedTables.includes(runtimeConnections));
@@ -663,9 +673,15 @@ test("registerUser seeds a claimable welcome pro trial offer for a new user", as
       select() {
         return createSelectBuilder(selectResults.shift() ?? []);
       },
-      insert() {
+      insert(table: unknown) {
         return {
           values(values: Record<string, unknown>) {
+            if (table === userConsents) {
+              return {
+                onConflictDoUpdate: async () => [],
+                returning: async () => [],
+              };
+            }
             insertCallIndex += 1;
             if (insertCallIndex === 1) {
               return {
@@ -850,9 +866,15 @@ test("loginWithGoogle seeds a claimable welcome pro trial offer for first-time s
       select() {
         return createSelectBuilder(selectResults.shift() ?? []);
       },
-      insert() {
+      insert(table: unknown) {
         return {
           values(values: Record<string, unknown>) {
+            if (table === userConsents) {
+              return {
+                onConflictDoUpdate: async () => [],
+                returning: async () => [],
+              };
+            }
             insertCallIndex += 1;
             if (insertCallIndex === 1) {
               return {

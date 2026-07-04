@@ -7,9 +7,51 @@ import {
   resolveMemoryImportanceBaseline,
   scoreMemoryRecallCandidate,
   searchBrainMemory,
+  prioritizeCanonicalMemoryState,
+  readCanonicalMemoryState,
   softDeleteBrainMemory,
   updateBrainMemory,
+  upsertMemoryFact,
 } from "./memory.js";
+
+test("async memory extraction cannot resurrect an explicitly forgotten key", async () => {
+  let insertCalls = 0;
+  let updateCalls = 0;
+  const app = {
+    db: {
+      select() {
+        return {
+          from() { return this; },
+          where() { return this; },
+          limit() { return Promise.resolve([{ id: "forget-tombstone" }]); },
+        };
+      },
+      insert() {
+        insertCalls += 1;
+        return { values() { return { returning: async () => [{ id: "new" }] }; } };
+      },
+      update() {
+        updateCalls += 1;
+        return { set() { return { where: async () => [] }; } };
+      },
+    },
+  };
+
+  const result = await upsertMemoryFact(app as never, {
+    userId: "11111111-1111-4111-8111-111111111111",
+    key: "preferred_name",
+    value: "Kaptan",
+    scope: "user",
+    factType: "semantic",
+    confidence: 90,
+    importanceScore: 90,
+    metadata: { source: "async_extraction" },
+  });
+
+  assert.equal(result, null);
+  assert.equal(insertCalls, 0);
+  assert.equal(updateCalls, 0);
+});
 
 class FakeMemoryDb {
   public readonly updates: Array<{ values: Record<string, unknown> }> = [];
@@ -120,6 +162,75 @@ test("scoreMemoryRecallCandidate penalizes stale and contested memory aggressive
 
   assert.equal(active > stale, true);
   assert.equal(stale > contested, true);
+});
+
+test("prioritizeCanonicalMemoryState keeps the active preferred name ahead of reranked noise", () => {
+  const base = {
+    memorySource: "semantic_memory" as const,
+    memoryType: "semantic",
+    confidence: 90,
+    staleness: "fresh" as const,
+    importanceScore: 80,
+    isPinned: false,
+    conflictStatus: "active" as const,
+    lifecycleStatus: "active" as const,
+    scope: "user" as const,
+    score: 1,
+    lastVerifiedAt: null,
+    deletedAt: null,
+    deletedReason: null,
+    metadata: {},
+  };
+  const results = prioritizeCanonicalMemoryState(
+    [
+      {
+        ...base,
+        id: "noise",
+        title: "self_model_recent_topics",
+        content: "recent topics",
+        updatedAt: "2026-07-04T10:01:00.000Z",
+      },
+      {
+        ...base,
+        id: "preferred",
+        title: "preferred_name",
+        content: "Reis",
+        updatedAt: "2026-07-04T10:00:00.000Z",
+      },
+    ],
+    1,
+  );
+
+  assert.equal(results[0]?.id, "preferred");
+});
+
+test("readCanonicalMemoryState returns durable preferences as pinned state", async () => {
+  const row = {
+    id: "preferred",
+    memoryType: "semantic",
+    title: "preferred_name",
+    content: "Reis",
+    confidence: 95,
+    importanceScore: 88,
+    scope: "user",
+    lastVerifiedAt: new Date("2026-07-04T10:00:00.000Z"),
+    updatedAt: new Date("2026-07-04T10:00:00.000Z"),
+    metadata: {},
+  };
+  const builder = {
+    from() { return this; },
+    where() { return this; },
+    orderBy() { return this; },
+    limit() { return Promise.resolve([row]); },
+  };
+  const app = {
+    db: { select: () => builder },
+  } as unknown as Parameters<typeof readCanonicalMemoryState>[0];
+
+  const results = await readCanonicalMemoryState(app, "user-1");
+  assert.equal(results[0]?.title, "preferred_name");
+  assert.equal(results[0]?.content, "Reis");
+  assert.equal(results[0]?.isPinned, true);
 });
 
 test("resolveDecayedMemoryImportance applies baselines, weekly decay, and verified boost", () => {

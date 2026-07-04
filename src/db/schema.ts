@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -49,6 +50,12 @@ import {
   trainingJobStatusValues,
   userRoleValues,
 } from "../contracts/domain.js";
+
+const vector384 = customType<{ data: string | null }>({
+  dataType() {
+    return "vector(384)";
+  },
+});
 
 export const deviceTypeEnum = pgEnum("device_type", deviceTypeValues);
 export const pairSessionStatusEnum = pgEnum("pair_session_status", pairSessionStatusValues);
@@ -1006,6 +1013,8 @@ export const brainMemoryEpisodes = pgTable(
     deletedReason: varchar("deleted_reason", { length: 240 }),
     supersedesEpisodeId: uuid("supersedes_episode_id"),
     embeddingModel: varchar("embedding_model", { length: 160 }),
+    embeddingV2: vector384("embedding_v2"),
+    embeddingV2Model: varchar("embedding_v2_model", { length: 96 }),
     staleAt: timestamp("stale_at", { withTimezone: true }),
     metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1046,6 +1055,8 @@ export const brainMemoryFacts = pgTable(
     staleAt: timestamp("stale_at", { withTimezone: true }),
     supersedesFactId: uuid("supersedes_fact_id"),
     embeddingModel: varchar("embedding_model", { length: 160 }),
+    embeddingV2: vector384("embedding_v2"),
+    embeddingV2Model: varchar("embedding_v2_model", { length: 96 }),
     metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1054,6 +1065,9 @@ export const brainMemoryFacts = pgTable(
     userIdx: index("brain_memory_facts_user_idx").on(table.userId),
     scopeIdx: index("brain_memory_facts_scope_idx").on(table.scope),
     canonicalIdx: index("brain_memory_facts_canonical_idx").on(table.userId, table.canonicalKey),
+    singleValueActiveIdx: uniqueIndex("brain_memory_facts_single_value_active_uidx")
+      .on(table.userId, table.canonicalKey, table.factType)
+      .where(sql`${table.conflictStatus} = 'active' and ${table.lifecycleStatus} = 'active' and ${table.deletedAt} is null and ${table.canonicalKey} in ('name', 'preferred_name', 'preferred_language', 'preferred_tone', 'response_style_preference', 'timezone')`),
     conflictIdx: index("brain_memory_facts_conflict_idx").on(table.conflictStatus),
     staleIdx: index("brain_memory_facts_stale_idx").on(table.staleAt),
     pinnedIdx: index("brain_memory_facts_pinned_idx").on(table.isPinned),
@@ -1132,6 +1146,94 @@ export const chatSessions = pgTable(
   }),
 );
 
+export const dialogueStates = pgTable(
+  "dialogue_states",
+  {
+    sessionId: uuid("session_id")
+      .primaryKey()
+      .references(() => chatSessions.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    revision: integer("revision").notNull().default(0),
+    state: jsonb("state").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userUpdatedIdx: index("dialogue_states_user_updated_idx").on(table.userId, table.updatedAt),
+  }),
+);
+
+export const proactiveTriggers = pgTable(
+  "proactive_triggers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id").references(() => chatSessions.id, {
+      onDelete: "cascade",
+    }),
+    kind: varchar("kind", { length: 40 }).notNull().default("follow_up"),
+    due: timestamp("due", { withTimezone: true }).notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    status: varchar("status", { length: 32 }).notNull().default("pending"),
+    createdBy: varchar("created_by", { length: 32 }).notNull().default("model"),
+    firedAt: timestamp("fired_at", { withTimezone: true }),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userDueIdx: index("proactive_triggers_user_due_idx").on(table.userId, table.due),
+    sessionDueIdx: index("proactive_triggers_session_due_idx").on(table.sessionId, table.due),
+    statusDueIdx: index("proactive_triggers_status_due_idx").on(table.status, table.due),
+    kindStatusIdx: index("proactive_triggers_kind_status_idx").on(table.kind, table.status),
+  }),
+);
+
+export const userProactivePrefs = pgTable("user_proactive_prefs", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(true),
+  maxDaily: integer("max_daily").notNull().default(3),
+  quietStartHour: integer("quiet_start_hour").notNull().default(22),
+  quietEndHour: integer("quiet_end_hour").notNull().default(8),
+  timezone: varchar("timezone", { length: 80 }).notNull().default("Europe/Istanbul"),
+  mutedKinds: jsonb("muted_kinds").notNull().default(sql`'[]'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const userConsents = pgTable(
+  "user_consents",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    consentType: text("consent_type").notNull(),
+    consentVersion: text("consent_version").notNull(),
+    granted: boolean("granted").notNull(),
+    grantedAt: timestamp("granted_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    source: text("source"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userTypeVersionIdx: uniqueIndex("user_consents_user_type_version_uidx").on(
+      table.userId,
+      table.consentType,
+      table.consentVersion,
+    ),
+    userTypeIdx: index("user_consents_user_type_idx").on(table.userId, table.consentType),
+  }),
+);
+
 export const sessionGoals = pgTable(
   "session_goals",
   {
@@ -1162,6 +1264,28 @@ export const sessionGoals = pgTable(
   }),
 );
 
+export const goalEvents = pgTable(
+  "goal_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    goalId: uuid("goal_id")
+      .notNull()
+      .references(() => sessionGoals.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    eventType: varchar("event_type", { length: 48 }).notNull(),
+    fromState: varchar("from_state", { length: 32 }),
+    toState: varchar("to_state", { length: 32 }).notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    goalCreatedIdx: index("goal_events_goal_created_idx").on(table.goalId, table.createdAt),
+    userCreatedIdx: index("goal_events_user_created_idx").on(table.userId, table.createdAt),
+  }),
+);
+
 export const chatMessages = pgTable(
   "chat_messages",
   {
@@ -1189,6 +1313,28 @@ export const chatMessages = pgTable(
     userIdx: index("chat_messages_user_idx").on(table.userId),
     taskIdx: index("chat_messages_task_idx").on(table.taskId),
     statusIdx: index("chat_messages_status_idx").on(table.status),
+  }),
+);
+
+export const turnMetrics = pgTable(
+  "turn_metrics",
+  {
+    turnId: varchar("turn_id", { length: 160 }).primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id").references(() => chatSessions.id, {
+      onDelete: "set null",
+    }),
+    workload: varchar("workload", { length: 80 }).notNull(),
+    timings: jsonb("timings").notNull().default(sql`'{}'::jsonb`),
+    quality: jsonb("quality").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userCreatedIdx: index("turn_metrics_user_created_idx").on(table.userId, table.createdAt),
+    sessionCreatedIdx: index("turn_metrics_session_created_idx").on(table.sessionId, table.createdAt),
+    workloadCreatedIdx: index("turn_metrics_workload_created_idx").on(table.workload, table.createdAt),
   }),
 );
 

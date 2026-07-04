@@ -1,5 +1,9 @@
-import { and, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import {
+  isSingleValueMemoryKey,
+  resolveCanonicalMemoryKey,
+} from "./memory-key-policy.js";
 import {
   brainMemoryEpisodes,
   brainMemoryFacts,
@@ -17,6 +21,11 @@ import {
   getRetrievalStatus,
   RETRIEVAL_EMBEDDING_MODEL,
 } from "./retrieval.js";
+import {
+  embedQueryForStorage,
+  embedTextsForStorage,
+  STORAGE_SEMANTIC_MODEL_TAG,
+} from "./semantic-embedder.js";
 import { rerankSemanticCandidates } from "./semantic-rerank.js";
 import {
   buildContinuityEnrichmentBaseline,
@@ -264,6 +273,36 @@ export function buildVectorSql(vector: number[]) {
   return sql`${vectorLiteral(vector)}::vector`;
 }
 
+const memorySemanticV2Ready = new WeakMap<FastifyInstance, Promise<boolean>>();
+
+async function ensureMemorySemanticV2Columns(app: FastifyInstance): Promise<boolean> {
+  const cached = memorySemanticV2Ready.get(app);
+  if (cached) return cached;
+  const pending = (async () => {
+    try {
+      await app.db.execute(sql`
+        create extension if not exists vector
+      `);
+      await app.db.execute(sql`
+        alter table brain_memory_facts
+          add column if not exists embedding_v2 vector(384),
+          add column if not exists embedding_v2_model varchar(96)
+      `);
+      await app.db.execute(sql`
+        alter table brain_memory_episodes
+          add column if not exists embedding_v2 vector(384),
+          add column if not exists embedding_v2_model varchar(96)
+      `);
+      return true;
+    } catch (error) {
+      app.log?.warn?.({ error }, "memory semantic v2 columns unavailable");
+      return false;
+    }
+  })();
+  memorySemanticV2Ready.set(app, pending);
+  return pending;
+}
+
 function lexicalOverlapScore(query: string, text: string): number {
   const haystack = compactText(text).toLowerCase();
   const tokens = tokenize(query);
@@ -488,6 +527,59 @@ function buildMemoryHit(input: {
   };
 }
 
+export async function readCanonicalMemoryState(
+  app: FastifyInstance,
+  userId: string,
+): Promise<MemorySearchHit[]> {
+  const rows = await app.db
+    .select({
+      id: brainMemoryFacts.id,
+      memoryType: brainMemoryFacts.factType,
+      title: brainMemoryFacts.canonicalKey,
+      content: brainMemoryFacts.value,
+      confidence: brainMemoryFacts.confidence,
+      importanceScore: brainMemoryFacts.importanceScore,
+      scope: brainMemoryFacts.scope,
+      lastVerifiedAt: brainMemoryFacts.lastVerifiedAt,
+      updatedAt: brainMemoryFacts.updatedAt,
+      metadata: brainMemoryFacts.metadata,
+    })
+    .from(brainMemoryFacts)
+    .where(
+      and(
+        eq(brainMemoryFacts.userId, userId),
+        eq(brainMemoryFacts.conflictStatus, "active"),
+        eq(brainMemoryFacts.lifecycleStatus, "active"),
+        isNull(brainMemoryFacts.deletedAt),
+        inArray(brainMemoryFacts.canonicalKey, [
+          "name",
+          "preferred_name",
+          "preferred_language",
+          "preferred_tone",
+          "response_style_preference",
+          "timezone",
+        ]),
+      ),
+    )
+    .orderBy(desc(brainMemoryFacts.updatedAt))
+    .limit(8);
+
+  return rows.map((row) =>
+    buildMemoryHit({
+      ...row,
+      memorySource: normalizeMemorySource(row.memoryType),
+      staleness: "fresh",
+      isPinned: true,
+      conflictStatus: "active",
+      lifecycleStatus: "active",
+      lexicalScore: 12,
+      semanticScore: 1,
+      deletedAt: null,
+      deletedReason: null,
+    }),
+  );
+}
+
 function dedupeMemoryHits(results: MemorySearchHit[]): MemorySearchHit[] {
   const bestByKey = new Map<string, MemorySearchHit>();
   for (const result of results) {
@@ -498,6 +590,31 @@ function dedupeMemoryHits(results: MemorySearchHit[]): MemorySearchHit[] {
     }
   }
   return [...bestByKey.values()];
+}
+
+export function prioritizeCanonicalMemoryState(
+  results: MemorySearchHit[],
+  limit: number,
+): MemorySearchHit[] {
+  const deduped = dedupeMemoryHits(results);
+  const canonical = deduped
+    .filter(
+      (result) =>
+        result.memorySource !== "episodic_memory" &&
+        result.conflictStatus === "active" &&
+        result.lifecycleStatus === "active" &&
+        isSingleValueMemoryKey(result.title),
+    )
+    .sort(
+      (left, right) =>
+        Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
+        right.confidence - left.confidence,
+    );
+  const canonicalIds = new Set(canonical.map((result) => result.id));
+  return [
+    ...canonical,
+    ...deduped.filter((result) => !canonicalIds.has(result.id)),
+  ].slice(0, Math.max(1, limit));
 }
 
 function isHighValueLearningKey(key: string): boolean {
@@ -1073,6 +1190,15 @@ export async function searchBrainMemory(
       MEMORY_SEARCH_BUDGET_MS - (Date.now() - startedAt),
     );
     const queryVector = buildVectorSql(buildHashedKnowledgeEmbedding(input.query));
+    const semanticV2Ready = hybridReady
+      ? await ensureMemorySemanticV2Columns(app)
+      : false;
+    const semanticQueryVector = semanticV2Ready
+      ? await embedQueryForStorage(input.query, app.log).catch(() => null)
+      : null;
+    const semanticV2QueryVector = semanticQueryVector
+      ? buildVectorSql(semanticQueryVector)
+      : null;
 
     // Lexical + (optionally) semantic queries all run in parallel: they hit
     // independent rows via independent indices, and the total wall-clock is
@@ -1099,8 +1225,12 @@ export async function searchBrainMemory(
         updated_at as "updatedAt"
       from brain_memory_facts
       where user_id = ${input.userId}
-        and coalesce(lifecycle_status, 'active') <> 'soft_deleted'
-      order by updated_at desc
+        and conflict_status = 'active'
+        and lifecycle_status = 'active'
+        and deleted_at is null
+      order by
+        case when canonical_key in ('name', 'preferred_name', 'preferred_language', 'preferred_tone', 'response_style_preference', 'timezone') then 0 else 1 end,
+        updated_at desc
       limit ${Math.max(input.limit * 4, 20)}
     `);
     const lexicalEpisodesQuery = app.db.execute(sql`
@@ -1123,7 +1253,8 @@ export async function searchBrainMemory(
         updated_at as "updatedAt"
       from brain_memory_episodes
       where user_id = ${input.userId}
-        and coalesce(lifecycle_status, 'active') <> 'soft_deleted'
+        and lifecycle_status = 'active'
+        and deleted_at is null
       order by updated_at desc
       limit ${Math.max(input.limit * 4, 20)}
     `);
@@ -1132,7 +1263,43 @@ export async function searchBrainMemory(
     // OUTSIDE the parallel block keeps a lexical-only path (no pgvector) from
     // paying for phantom semantic waits.
     const semanticFactsQuery = hybridReady
-      ? app.db.execute(sql`
+      ? semanticV2QueryVector
+        ? app.db.execute(sql`
+      select
+        id,
+        fact_type as "memoryType",
+        canonical_key as "title",
+        value as "content",
+        confidence,
+        importance_score as "importanceScore",
+        is_pinned as "isPinned",
+        scope,
+        conflict_status as "conflictStatus",
+        lifecycle_status as "lifecycleStatus",
+        deleted_at as "deletedAt",
+        deleted_reason as "deletedReason",
+        stale_at as "staleAt",
+        last_verified_at as "lastVerifiedAt",
+        metadata,
+        updated_at as "updatedAt",
+        case
+          when embedding_v2 is not null then 1 - (embedding_v2 <=> ${semanticV2QueryVector})
+          else 1 - (embedding <=> ${queryVector})
+        end as "semanticScore"
+      from brain_memory_facts
+      where user_id = ${input.userId}
+        and (embedding_v2 is not null or embedding_model is not null)
+        and conflict_status = 'active'
+        and lifecycle_status = 'active'
+        and deleted_at is null
+      order by
+        case
+          when embedding_v2 is not null then embedding_v2 <=> ${semanticV2QueryVector}
+          else embedding <=> ${queryVector}
+        end
+      limit ${Math.max(input.limit * 2, 10)}
+    `)
+        : app.db.execute(sql`
       select
         id,
         fact_type as "memoryType",
@@ -1154,13 +1321,49 @@ export async function searchBrainMemory(
       from brain_memory_facts
       where user_id = ${input.userId}
         and embedding_model is not null
-        and coalesce(lifecycle_status, 'active') <> 'soft_deleted'
+        and conflict_status = 'active'
+        and lifecycle_status = 'active'
+        and deleted_at is null
       order by embedding <=> ${queryVector}
       limit ${Math.max(input.limit * 2, 10)}
     `)
       : Promise.resolve(null);
     const semanticEpisodesQuery = hybridReady
-      ? app.db.execute(sql`
+      ? semanticV2QueryVector
+        ? app.db.execute(sql`
+      select
+        id,
+        episode_type as "memoryType",
+        episode_type as "title",
+        summary as "content",
+        confidence,
+        importance_score as "importanceScore",
+        is_pinned as "isPinned",
+        scope,
+        lifecycle_status as "lifecycleStatus",
+        deleted_at as "deletedAt",
+        deleted_reason as "deletedReason",
+        stale_at as "staleAt",
+        null::timestamp as "lastVerifiedAt",
+        metadata,
+        updated_at as "updatedAt",
+        case
+          when embedding_v2 is not null then 1 - (embedding_v2 <=> ${semanticV2QueryVector})
+          else 1 - (embedding <=> ${queryVector})
+        end as "semanticScore"
+      from brain_memory_episodes
+      where user_id = ${input.userId}
+        and (embedding_v2 is not null or embedding_model is not null)
+        and lifecycle_status = 'active'
+        and deleted_at is null
+      order by
+        case
+          when embedding_v2 is not null then embedding_v2 <=> ${semanticV2QueryVector}
+          else embedding <=> ${queryVector}
+        end
+      limit ${Math.max(input.limit * 2, 10)}
+    `)
+        : app.db.execute(sql`
       select
         id,
         episode_type as "memoryType",
@@ -1181,7 +1384,8 @@ export async function searchBrainMemory(
       from brain_memory_episodes
       where user_id = ${input.userId}
         and embedding_model is not null
-        and coalesce(lifecycle_status, 'active') <> 'soft_deleted'
+        and lifecycle_status = 'active'
+        and deleted_at is null
       order by embedding <=> ${queryVector}
       limit ${Math.max(input.limit * 2, 10)}
     `)
@@ -1269,7 +1473,10 @@ export async function searchBrainMemory(
       });
       return {
         retrievalMode: "lexical_fallback" as const,
-        results: rerankedLexical.results.slice(0, input.limit),
+        results: prioritizeCanonicalMemoryState(
+          [...lexicalResults, ...rerankedLexical.results],
+          input.limit,
+        ),
         degradedReason: "hybrid_retrieval_unavailable" as const,
       };
     }
@@ -1346,7 +1553,10 @@ export async function searchBrainMemory(
 
     return {
       retrievalMode: "hybrid" as const,
-      results: reranked.results.slice(0, input.limit),
+      results: prioritizeCanonicalMemoryState(
+        [...lexicalResults, ...reranked.results],
+        input.limit,
+      ),
       degradedReason: null,
     };
   } catch {
@@ -1978,7 +2188,7 @@ async function extractMemoryCandidates(app: FastifyInstance, userId: string) {
   };
 }
 
-async function upsertMemoryFact(
+export async function upsertMemoryFact(
   app: FastifyInstance,
   input: {
     userId: string;
@@ -1992,8 +2202,23 @@ async function upsertMemoryFact(
     sourceRunId?: string | null;
   },
 ) {
-  const canonicalKey = input.key;
+  const canonicalKey = resolveCanonicalMemoryKey(input.key);
   const normalizedValue = normalizeMemoryValue(input.value);
+  const forgetTombstones = await app.db
+    .select({ id: brainMemoryFacts.id })
+    .from(brainMemoryFacts)
+    .where(
+      and(
+        eq(brainMemoryFacts.userId, input.userId),
+        eq(brainMemoryFacts.canonicalKey, canonicalKey),
+        eq(brainMemoryFacts.lifecycleStatus, "soft_deleted"),
+        sql`${brainMemoryFacts.metadata}->>'forgetTombstone' = 'true'`,
+      ),
+    )
+    .limit(1);
+  if (forgetTombstones[0]) {
+    return null;
+  }
   const existingRows = await app.db
     .select({
       id: brainMemoryFacts.id,
@@ -2011,6 +2236,27 @@ async function upsertMemoryFact(
       ),
     )
     .limit(1);
+
+  if (isSingleValueMemoryKey(canonicalKey)) {
+    const currentId = existingRows[0]?.id;
+    await app.db
+      .update(brainMemoryFacts)
+      .set({
+        conflictStatus: "superseded",
+        lifecycleStatus: "superseded",
+        staleAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(brainMemoryFacts.userId, input.userId),
+          eq(brainMemoryFacts.canonicalKey, canonicalKey),
+          eq(brainMemoryFacts.factType, input.factType),
+          eq(brainMemoryFacts.conflictStatus, "active"),
+          ...(currentId ? [ne(brainMemoryFacts.id, currentId)] : []),
+        ),
+      );
+  }
 
   if (existingRows[0]) {
     await app.db
@@ -2079,6 +2325,21 @@ async function insertMemoryEpisode(
   },
 ) {
   const normalizedSummary = normalizeMemoryValue(input.summary);
+  const forgetTombstones = await app.db
+    .select({ id: brainMemoryEpisodes.id })
+    .from(brainMemoryEpisodes)
+    .where(
+      and(
+        eq(brainMemoryEpisodes.userId, input.userId),
+        eq(brainMemoryEpisodes.episodeType, input.episodeType),
+        eq(brainMemoryEpisodes.lifecycleStatus, "soft_deleted"),
+        sql`${brainMemoryEpisodes.metadata}->>'forgetTombstone' = 'true'`,
+      ),
+    )
+    .limit(1);
+  if (forgetTombstones[0]) {
+    return null;
+  }
   const existingRows = await app.db
     .select({
       id: brainMemoryEpisodes.id,
@@ -2976,16 +3237,20 @@ async function processMemoryIndexJob(app: FastifyInstance, job: typeof trainingJ
     };
   }
 
+  const semanticV2Ready = await ensureMemorySemanticV2Columns(app);
   const facts = await app.db
     .select({
       id: brainMemoryFacts.id,
       text: brainMemoryFacts.value,
+      embeddingModel: brainMemoryFacts.embeddingModel,
     })
     .from(brainMemoryFacts)
     .where(
       and(
         eq(brainMemoryFacts.userId, userId),
-        isNull(brainMemoryFacts.embeddingModel),
+        semanticV2Ready
+          ? or(isNull(brainMemoryFacts.embeddingModel), isNull(brainMemoryFacts.embeddingV2))
+          : isNull(brainMemoryFacts.embeddingModel),
         sql`coalesce(${brainMemoryFacts.lifecycleStatus}, 'active') <> 'soft_deleted'`,
       ),
     )
@@ -2994,18 +3259,33 @@ async function processMemoryIndexJob(app: FastifyInstance, job: typeof trainingJ
     .select({
       id: brainMemoryEpisodes.id,
       text: brainMemoryEpisodes.summary,
+      embeddingModel: brainMemoryEpisodes.embeddingModel,
     })
     .from(brainMemoryEpisodes)
     .where(
       and(
         eq(brainMemoryEpisodes.userId, userId),
-        isNull(brainMemoryEpisodes.embeddingModel),
+        semanticV2Ready
+          ? or(isNull(brainMemoryEpisodes.embeddingModel), isNull(brainMemoryEpisodes.embeddingV2))
+          : isNull(brainMemoryEpisodes.embeddingModel),
         sql`coalesce(${brainMemoryEpisodes.lifecycleStatus}, 'active') <> 'soft_deleted'`,
       ),
     )
     .limit(MEMORY_INDEX_BATCH);
 
   const indexedAt = new Date().toISOString();
+  const factV2Vectors = semanticV2Ready
+    ? await embedTextsForStorage(
+        facts.map((fact) => fact.text),
+        app.log,
+      ).catch(() => null)
+    : null;
+  const episodeV2Vectors = semanticV2Ready
+    ? await embedTextsForStorage(
+        episodes.map((episode) => episode.text),
+        app.log,
+      ).catch(() => null)
+    : null;
   for (const fact of facts) {
     const embedding = buildVectorSql(buildHashedKnowledgeEmbedding(fact.text));
     await app.db.execute(sql`
@@ -3017,6 +3297,19 @@ async function processMemoryIndexJob(app: FastifyInstance, job: typeof trainingJ
         updated_at = now()
       where id = ${fact.id}
     `);
+    const v2Index = facts.findIndex((candidate) => candidate.id === fact.id);
+    if (factV2Vectors?.[v2Index]) {
+      const v2 = buildVectorSql(factV2Vectors[v2Index]!);
+      await app.db.execute(sql`
+        update brain_memory_facts
+        set
+          embedding_v2 = ${v2},
+          embedding_v2_model = ${STORAGE_SEMANTIC_MODEL_TAG},
+          metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{semanticIndexedAt}', to_jsonb(${indexedAt}::text), true),
+          updated_at = now()
+        where id = ${fact.id}
+      `);
+    }
   }
   for (const episode of episodes) {
     const embedding = buildVectorSql(buildHashedKnowledgeEmbedding(episode.text));
@@ -3029,6 +3322,19 @@ async function processMemoryIndexJob(app: FastifyInstance, job: typeof trainingJ
         updated_at = now()
       where id = ${episode.id}
     `);
+    const v2Index = episodes.findIndex((candidate) => candidate.id === episode.id);
+    if (episodeV2Vectors?.[v2Index]) {
+      const v2 = buildVectorSql(episodeV2Vectors[v2Index]!);
+      await app.db.execute(sql`
+        update brain_memory_episodes
+        set
+          embedding_v2 = ${v2},
+          embedding_v2_model = ${STORAGE_SEMANTIC_MODEL_TAG},
+          metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{semanticIndexedAt}', to_jsonb(${indexedAt}::text), true),
+          updated_at = now()
+        where id = ${episode.id}
+      `);
+    }
   }
 
   return {
@@ -3038,6 +3344,9 @@ async function processMemoryIndexJob(app: FastifyInstance, job: typeof trainingJ
       indexedFactCount: facts.length,
       indexedEpisodeCount: episodes.length,
       retrievalMode: "hybrid",
+      semanticV2Ready,
+      semanticV2FactCount: factV2Vectors?.filter(Boolean).length ?? 0,
+      semanticV2EpisodeCount: episodeV2Vectors?.filter(Boolean).length ?? 0,
     },
   };
 }

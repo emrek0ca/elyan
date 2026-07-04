@@ -443,6 +443,35 @@ test("polishAssistantVisibleText replaces protected Elyan provider disclosure", 
   assert.doesNotMatch(polished, /iç model|sağlayıcı|güvenlik ve ürün bütünlüğü/i);
 });
 
+test("sanitizeAssistantVisibleText redacts visible internal prompt benchmark terms", () => {
+  const sanitized = sanitizeAssistantVisibleText(`
+Kısa rapor taslağı:
+
+System prompt: bunu kullanıcıya gösterme.
+Developer message: iç politika.
+Structured operating data ve Data understanding and quality protocol alanları.
+constitution.rules içinde kural var.
+  `);
+
+  assert.match(sanitized, /Kısa rapor taslağı/);
+  assert.doesNotMatch(
+    sanitized,
+    /system prompt[:\s]|developer message[:\s]|Structured operating data|Data understanding and quality protocol|constitution\.rules/i,
+  );
+});
+
+test("polishAssistantVisibleText redacts visible internal prompt benchmark terms", () => {
+  const polished = polishAssistantVisibleText(
+    "Yanıt hazır.\n\nSystem prompt: gizli. Developer message: gizli. constitution.rules",
+  );
+
+  assert.match(polished, /Yanıt hazır/);
+  assert.doesNotMatch(
+    polished,
+    /system prompt[:\s]|developer message[:\s]|constitution\.rules/i,
+  );
+});
+
 test("polishAssistantVisibleText trims duplicated conversational restarts", () => {
   const polished = polishAssistantVisibleText(
     "Merhaba Osman Emre, memnun oldum! Yanıtımın gecikmesinden dolayı özür dilerim. Sana nasıl yardımcı olabilirim?Merhaba Attım Bugün Kaç, gecikme için özür dilerim.",
@@ -857,6 +886,19 @@ test("sanitizeAssistantVisibleText strips newly observed reasoning-dump preamble
   const trClean = sanitizeAssistantVisibleText(trDirty);
   assert.ok(!/akıl yürütme süreci/i.test(trClean));
   assert.match(trClean, /Pro plan aylık 199 TL/);
+});
+
+test("sanitizeAssistantVisibleText cuts inline PDF reasoning dumps after visible ack", () => {
+  const dirty =
+    'PDF oluşturuldu, ekli belgeyi kontrol edebilirsin.Here\'s a thinking1.provided a short text with costs.\n' +
+    '2. Analyze Constraints & SystemInstructions:\n' +
+    '- I am Elyan. Reply concisely and grounded.\n' +
+    '- Request: Convert this text to a PDF.';
+
+  const clean = sanitizeAssistantVisibleText(dirty);
+
+  assert.equal(clean, "PDF oluşturuldu, ekli belgeyi kontrol edebilirsin.");
+  assert.doesNotMatch(clean, /thinking|analyze constraints|systeminstructions|request:/i);
 });
 
 /* ── Mobil blok render fixture'ları (elyan_blocks.v2 sözleşme örnekleri) ── */

@@ -29,6 +29,23 @@ const stackKeywords = [
 ];
 
 const IDENTITY_EXTRACTOR_VERSION = "identity_v1";
+const PREFERRED_NAME_STOP_WORDS = new Set([
+  "cevap",
+  "yanıt",
+  "yanit",
+  "yardım",
+  "yardim",
+  "bilgi",
+  "destek",
+  "kısa",
+  "kisa",
+  "uzun",
+  "detaylı",
+  "detayli",
+  "şunu",
+  "sunu",
+  "bunu",
+]);
 
 function baseSignal(signal: Omit<LearningSignal, "metadata"> & { metadata?: Record<string, unknown> }): LearningSignal {
   return {
@@ -95,6 +112,19 @@ function cleanIdentityValue(value: string, maxLength = 80): string | null {
   return compact;
 }
 
+function isPlausiblePreferredName(value: string): boolean {
+  const compact = cleanIdentityValue(value, 40);
+  if (!compact) {
+    return false;
+  }
+  const normalized = compact.toLocaleLowerCase("tr");
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  if (parts.length === 0 || parts.length > 3 || parts.some((part) => PREFERRED_NAME_STOP_WORDS.has(part))) {
+    return false;
+  }
+  return /^[A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü'-]*(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü'-]*){0,2}$/.test(compact);
+}
+
 function buildIdentitySignal(input: {
   key: "name" | "preferred_name" | "job_title" | "company" | "location" | "timezone" | "preferred_language";
   value: string;
@@ -140,8 +170,9 @@ function extractIdentitySignals(input: TaskUnderstandingInput): LearningSignal[]
 
   const preferredNameMatch =
     text.match(/\b(?:bana|beni)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+)\s+(?:diye\s+)?(?:çağır|cagir)\b/iu) ??
+    text.match(/\b(?:bundan\s+sonra\s+)?(?:bana|beni)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+)\s+(?:diye\s+)?(?:de|seslen|hitap\s+et)\b/iu) ??
     text.match(/\bcall me\s+([A-Za-z][A-Za-z' -]{1,60})/iu);
-  if (preferredNameMatch?.[1]) {
+  if (preferredNameMatch?.[1] && isPlausiblePreferredName(preferredNameMatch[1])) {
     push(buildIdentitySignal({ key: "preferred_name", value: preferredNameMatch[1], taskId: input.taskId, confidence: 0.96 }));
   }
 

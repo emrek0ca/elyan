@@ -1,4 +1,5 @@
 import type { FastifyBaseLogger } from "fastify";
+import { embedTextsWithSemanticWorker } from "./semantic-compute-client.js";
 
 export type SemanticRerankCandidate = {
   title: string;
@@ -28,8 +29,6 @@ export type SemanticRerankResult<T extends SemanticRerankCandidate> = {
 
 const DEFAULT_SEMANTIC_MODEL = "Xenova/multilingual-e5-small";
 const MAX_TEXT_LENGTH = 1_200;
-
-const embedderCache = new Map<string, Promise<SemanticEmbedder | null>>();
 
 function compactText(value: string): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -82,87 +81,31 @@ function buildCandidateText(input: SemanticRerankCandidate): string {
   return compactText([input.title, input.content].filter(Boolean).join("\n\n")).slice(0, MAX_TEXT_LENGTH);
 }
 
-function tensorOutputToVectors(output: unknown): number[][] {
-  const tensor = output as {
-    data?: ArrayLike<number>;
-    dims?: number[];
-    shape?: number[];
-    tolist?: () => unknown;
-  } | null;
-
-  const dims = Array.isArray(tensor?.dims) ? tensor.dims : Array.isArray(tensor?.shape) ? tensor.shape : [];
-  const data = tensor?.data ? Array.from(tensor.data, (value) => Number(value)) : null;
-
-  if (dims.length >= 1 && data && data.length > 0) {
-    if (dims.length === 1) {
-      return [data.slice(0, dims[0])];
-    }
-
-    if (dims.length === 2) {
-      const [, columns] = dims;
-      if (columns > 0) {
-        const rows = Math.min(dims[0], Math.floor(data.length / columns));
-        return Array.from({ length: rows }, (_, rowIndex) =>
-          data.slice(rowIndex * columns, rowIndex * columns + columns),
-        );
-      }
-    }
-  }
-
-  if (tensor && typeof tensor.tolist === "function") {
-    const listed = tensor.tolist();
-    if (Array.isArray(listed)) {
-      if (listed.length > 0 && Array.isArray(listed[0])) {
-        return (listed as number[][]).map((row) => row.map((value) => Number(value)));
-      }
-      if (listed.length > 0) {
-        return [listed.map((value) => Number(value))];
-      }
-    }
-  }
-
-  if (Array.isArray(output)) {
-    if (output.length > 0 && Array.isArray(output[0])) {
-      return (output as unknown[]).map((row) => (Array.isArray(row) ? row.map((value) => Number(value)) : []));
-    }
-    return [output.map((value) => Number(value))];
-  }
-
-  return [];
-}
-
 async function loadSemanticEmbedder(
   modelName: string,
   logger?: Pick<FastifyBaseLogger, "warn" | "debug">,
 ): Promise<SemanticEmbedder | null> {
   const modelKey = compactText(modelName) || DEFAULT_SEMANTIC_MODEL;
-  const cached = embedderCache.get(modelKey);
-  if (cached) {
-    return cached;
-  }
-
-  const pending = (async () => {
-    try {
-      const { pipeline } = await import("@huggingface/transformers");
-      const extractor = await pipeline("feature-extraction", modelKey, { device: "cpu" });
-      return {
-        async embedBatch(texts: string[]) {
-          const promptBatch = texts.map((text, index) => (index === 0 ? formatQueryText(text) : `passage: ${compactText(text).slice(0, MAX_TEXT_LENGTH)}`));
-          const output = await extractor(promptBatch, { pooling: "mean", normalize: true });
-          return tensorOutputToVectors(output);
-        },
-      } satisfies SemanticEmbedder;
-    } catch (error) {
-      logger?.warn(
-        { error, modelName: modelKey },
-        "Semantic rerank model unavailable; continuing with lexical and hashed retrieval only.",
+  return {
+    async embedBatch(texts: string[]) {
+      const promptBatch = texts.map((text, index) =>
+        index === 0 ? formatQueryText(text) : `passage: ${compactText(text).slice(0, MAX_TEXT_LENGTH)}`,
       );
-      return null;
-    }
-  })();
-
-  embedderCache.set(modelKey, pending);
-  return pending;
+      const vectors = await embedTextsWithSemanticWorker({
+        modelName: modelKey,
+        texts: promptBatch,
+        logger,
+      });
+      if (!vectors) {
+        logger?.warn?.(
+          { modelName: modelKey },
+          "Semantic rerank model unavailable; continuing with lexical and hashed retrieval only.",
+        );
+        return [];
+      }
+      return vectors;
+    },
+  } satisfies SemanticEmbedder;
 }
 
 export async function rerankSemanticCandidates<T extends SemanticRerankCandidate>(

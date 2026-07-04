@@ -406,6 +406,77 @@ test("reconcileStaleRuntimeTasks returns old active desktop tasks to the queue w
   assert.equal(published[0]?.topic, "command.queued");
 });
 
+test("reconcileStaleRuntimeTasks fails stale server-brain chat tasks instead of requeueing forever", async () => {
+  const now = new Date("2030-01-01T00:05:00.000Z");
+  const oldDate = new Date("2030-01-01T00:00:00.000Z");
+  const db = new SequenceDb([
+    [
+      {
+        id: "task-stale-1",
+        userId: "user-1",
+        targetDeviceId: "server-brain",
+        title: "Chat task",
+        payload: {
+          prompt: "Selam",
+          metadata: {
+            channel: "chat",
+            presentation: "chat",
+            chat: {
+              sessionId: "session-1",
+              assistantMessageId: "message-1",
+            },
+            routeDecision: {
+              route: "server_brain",
+            },
+          },
+        },
+        requestedCapabilities: [],
+        runtimeConnectionId: null,
+        status: "running",
+        queuePosition: 1,
+        summary: null,
+        error: null,
+        approvalRequest: null,
+        result: null,
+        createdAt: oldDate,
+        startedAt: oldDate,
+        completedAt: null,
+        canceledAt: null,
+        updatedAt: oldDate,
+      },
+    ],
+    [],
+  ]);
+  const published: Array<Record<string, unknown>> = [];
+  const app = {
+    db,
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      HOST: "0.0.0.0",
+      PORT: 4000,
+    },
+    services: {
+      eventBus: {
+        publish(event: Record<string, unknown>) {
+          published.push(event);
+        },
+      },
+    },
+  };
+
+  const result = await reconcileStaleRuntimeTasks(app as never, {
+    userId: "user-1",
+    now,
+  });
+
+  assert.equal(result.reconciled.length, 1);
+  assert.equal(result.reconciled[0]?.status, "failed");
+  assert.equal(db.updates[0]?.status, "failed");
+  assert.equal(db.inserts[0]?.status, "failed");
+  assert.equal((db.inserts[0]?.payload as { reason?: string }).reason, "server_brain_chat_stale");
+  assert.equal(published[0]?.topic, "task.updated");
+});
+
 test("updateTaskFromRuntime ignores duplicate terminal updates from the same runtime", async () => {
   const now = new Date("2030-01-01T00:00:00.000Z");
   const task = {

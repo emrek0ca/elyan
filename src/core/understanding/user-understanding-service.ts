@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
 import { maybeQueueMemoryExtractionJob } from "../../modules/brain/memory.js";
+import { recordTurnMemoryOps } from "../../modules/brain/memory-fabric.js";
+import type { TurnEnvelope } from "../../modules/brain/turn-envelope.js";
 import {
   classifyIntent,
   enhanceIntentWithTransformer,
@@ -49,6 +51,15 @@ const fallbackClarificationDiagnostics: ClarificationDiagnostics = {
   ambiguityKind: "none",
   reason: "understanding_unavailable_continue_best_effort",
 };
+
+const SYNCHRONOUS_MEMORY_KEYS = new Set([
+  "name",
+  "preferred_name",
+  "preferred_language",
+  "preferred_tone",
+  "response_style_preference",
+  "timezone",
+]);
 
 export function emptyUnderstanding(input: TaskUnderstandingInput): UserUnderstandingResult {
   return {
@@ -233,6 +244,23 @@ export async function persistLearningSignals(
       "understanding learning persisted",
     );
 
+    if (app.config.ELYAN_MEMORY_FABRIC_V2_ENABLED === true) {
+      await recordExplicitLearningSignalsAsMemory(app, {
+        userId: input.userId,
+        taskId: input.taskId,
+        signals,
+      }).catch((error) => {
+        app.log.debug?.(
+          {
+            userId: input.userId,
+            taskId: input.taskId,
+            reason: error instanceof Error ? error.message : "unknown",
+          },
+          "understanding synchronous memory write skipped",
+        );
+      });
+    }
+
     void maybeQueueMemoryExtractionJob(app, {
       userId: input.userId,
       persistedSignals: signals.length,
@@ -260,6 +288,63 @@ export async function persistLearningSignals(
     );
     return 0;
   }
+}
+
+export function buildSynchronousMemoryOpsFromLearningSignals(
+  signals: LearningSignal[],
+): TurnEnvelope["memory_ops"] {
+  const memoryOps: TurnEnvelope["memory_ops"] = [];
+
+  for (const signal of signals) {
+    if (!SYNCHRONOUS_MEMORY_KEYS.has(signal.key)) {
+      continue;
+    }
+    if (signal.metadata?.explicit !== true) {
+      continue;
+    }
+
+    memoryOps.push({
+      op: "write",
+      kind:
+        signal.key === "name" || signal.key === "timezone"
+          ? "fact"
+          : "preference",
+      key: signal.key,
+      value: signal.value,
+      confidence: signal.confidence,
+      ttl_days: signal.ttlDays ?? undefined,
+    });
+  }
+
+  return memoryOps;
+}
+
+async function recordExplicitLearningSignalsAsMemory(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    taskId?: string;
+    signals: LearningSignal[];
+  },
+): Promise<void> {
+  const memoryOps = buildSynchronousMemoryOpsFromLearningSignals(input.signals);
+  if (!memoryOps.length) {
+    return;
+  }
+
+  await recordTurnMemoryOps(app, {
+    userId: input.userId,
+    sessionId: input.taskId ?? null,
+    envelope: {
+      reply: { text: "", lang: "tr", tone: "neutral" },
+      blocks: [],
+      memory_ops: memoryOps,
+      goal_ops: [],
+      follow_ups: [],
+      tool_requests: [],
+      affect: { user_mood_guess: "unknown", energy: "mid", register: "neutral" },
+    },
+  });
 }
 
 export async function recordTaskLearningFromCreation(

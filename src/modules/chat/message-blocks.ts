@@ -98,13 +98,13 @@ const fencePattern = /^\s*(```|~~~)/;
 const bulletPrefixPattern = /^\s*(?:[-*•]|\d+\.)\s+/;
 const hiddenAssistantTagPattern = /<\/?(?:think|analysis)>/i;
 const internalAssistantPattern =
-  /^(?:analyze user input|check attachment context|system prompt|developer message|looking at the system prompt|we need to|user says|the user says|the user is|the user wants|language:|given the attachment context|attachment context(?: shows| provided)?|ocr\/summary text|page \d+ content|summary\/content|detected text|extracted text|visible text|the ocr output|context:|i started answering|prompt continuation|analysis:|reasoning:|plan:|thinking:|intent:|constraint check|check constraints|output format:|data source:|user-? ?language|<think>|<\/think>|<analysis>|<\/analysis>)/i;
+  /^(?:analyze user input|analyze constraints|check attachment context|system prompt|developer message|looking at the system prompt|we need to|user says|the user says|the user is|the user wants|request:|language:|given the attachment context|attachment context(?: shows| provided)?|ocr\/summary text|page \d+ content|summary\/content|detected text|extracted text|visible text|the ocr output|context:|i am elyan|i started answering|prompt continuation|analysis:|reasoning:|plan:|thinking:|intent:|constraint check|check constraints|systeminstructions|system instructions|output format:|data source:|user-? ?language|<think>|<\/think>|<analysis>|<\/analysis>)/i;
 // Reasoning-dump preambles that some models write INTO the content channel
 // (e.g. "Here's a thinking process:" repeated through the reply). Matched as a
 // substring because streaming concat can glue them mid-line
 // ("…User- LanguageHere's a thinking process:").
 const reasoningDumpPattern =
-  /\b(?:here'?s (?:a|the|my) thinking process|here is (?:a|the|my) thinking process|thinking process\s*:|thought process\s*:|check constraints\s*&\s*policies|düşünme süreci\s*:|let me think through this|step-by-step reasoning\s*:|internal reasoning\s*:|reasoning trace\s*:|akıl yürütme süreci\s*:|akil yurutme sureci\s*:|iç değerlendirme\s*:|ic degerlendirme\s*:)/i;
+  /\b(?:here'?s (?:a|the|my)?\s*(?:thinking|thought|analysis|reasoning)(?:\s+process)?|here is (?:a|the|my)?\s*(?:thinking|thought|analysis|reasoning)(?:\s+process)?|thinking process\s*:|thought process\s*:|analyze constraints\s*&\s*system\s*instructions|analyze constraints\s*&\s*systeminstructions|check constraints\s*&\s*policies|düşünme süreci\s*:|let me think through this|step-by-step reasoning\s*:|internal reasoning\s*:|reasoning trace\s*:|akıl yürütme süreci\s*:|akil yurutme sureci\s*:|iç değerlendirme\s*:|ic degerlendirme\s*:)/i;
 const finalAnswerPrefixPattern =
   /^(?:final answer|answer|cevap|son cevap)\s*:\s*/i;
 const publicProviderTopicPattern =
@@ -117,6 +117,17 @@ const englishSelfImplementationDisclosurePattern =
   /\b(i use|i run on|i am powered by|my provider|my underlying model|elyan runs on)\b.{0,90}\b(openai|anthropic|groq|ollama|openrouter|gpt|llama|claude|qwen|deepseek)\b/i;
 const internalConfigurationDisclosurePattern =
   /\b(system prompt|developer message|sistem promptu|geliştirici mesajı|hidden instruction|gizli talimat|iç model|ic model|underlying model|provider metadata|routeDecision|selectedWorkload|token budget)\b/i;
+const visibleInternalConfigurationTerms = [
+  [/\bsystem prompt\b/gi, "iç talimat"],
+  [/\bdeveloper message\b/gi, "geliştirici talimatı"],
+  [/\bsistem promptu\b/gi, "iç talimat"],
+  [/\bgeliştirici mesajı\b/gi, "geliştirici talimatı"],
+  [/\bhidden instruction\b/gi, "gizli olmayan çalışma talimatı"],
+  [/\bgizli talimat\b/gi, "çalışma talimatı"],
+  [/\bStructured operating data\b/gi, "çalışma verisi"],
+  [/\bData understanding and quality protocol\b/gi, "veri kalite protokolü"],
+  [/\bconstitution\.rules\b/gi, "güvenlik kuralları"],
+] as const;
 
 type VisibleTextSanitizerOptions = {
   fallback?: string | null | undefined;
@@ -253,6 +264,23 @@ function shouldRedactProtectedElyanDisclosure(
     englishSelfImplementationDisclosurePattern.test(value) ||
     internalConfigurationDisclosurePattern.test(value)
   );
+}
+
+function redactVisibleInternalConfigurationTerms(value: string): string {
+  return visibleInternalConfigurationTerms.reduce(
+    (current, [pattern, replacement]) => current.replace(pattern, replacement),
+    value,
+  );
+}
+
+function sanitizeVisibleCandidate(
+  value: string,
+  options: Pick<VisibleTextSanitizerOptions, "allowPublicProviderReferences"> = {},
+): string {
+  const redactedTerms = redactVisibleInternalConfigurationTerms(value).trim();
+  return shouldRedactProtectedElyanDisclosure(redactedTerms, options)
+    ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
+    : redactedTerms;
 }
 
 function normalizeMarkdown(value: string | null | undefined) {
@@ -423,6 +451,14 @@ function looksLikeInternalAssistantLine(value: string) {
     lowered.includes("prompt continuation") ||
     lowered.includes("i started answering")
   );
+}
+
+function stripInlineInternalAssistantTail(value: string): string {
+  const markerIndex = value.search(reasoningDumpPattern);
+  if (markerIndex <= 0) {
+    return value;
+  }
+  return value.slice(0, markerIndex).replace(/[-–—:;,\s]+$/u, "").trimEnd();
 }
 
 function containsInternalAssistantSignals(value: string) {
@@ -616,10 +652,17 @@ export function sanitizeAssistantVisibleText(
         }
         continue;
       }
-      if (looksLikeInternalAssistantLine(line)) {
+      const visibleLine = stripInlineInternalAssistantTail(line);
+      if (!visibleLine.trim()) {
         continue;
       }
-      cleanedLines.push(line.replace(finalAnswerPrefixPattern, "").trimStart());
+      if (/^\s*(?:[-*•]|\d+[.)-])\s*[*_`#\s]*$/u.test(visibleLine)) {
+        continue;
+      }
+      if (looksLikeInternalAssistantLine(visibleLine)) {
+        continue;
+      }
+      cleanedLines.push(visibleLine.replace(finalAnswerPrefixPattern, "").trimStart());
     }
 
     const cleaned = cleanedLines.join("\n").trim();
@@ -630,9 +673,7 @@ export function sanitizeAssistantVisibleText(
 
   const sanitized = retainedParagraphs.join("\n\n").trim();
   if (sanitized) {
-    return shouldRedactProtectedElyanDisclosure(sanitized, options)
-      ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
-      : sanitized;
+    return sanitizeVisibleCandidate(sanitized, options);
   }
 
   // Recovery pass: if the paragraph loop stripped everything because the model
@@ -643,23 +684,17 @@ export function sanitizeAssistantVisibleText(
   // oluşturamadım" fallback and the user sees a stub instead of the response.
   const hiddenSectionAnswer = extractHiddenSectionAnswerFallback(source);
   if (hiddenSectionAnswer) {
-    return shouldRedactProtectedElyanDisclosure(hiddenSectionAnswer, options)
-      ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
-      : hiddenSectionAnswer;
+    return sanitizeVisibleCandidate(hiddenSectionAnswer, options);
   }
 
   const analysisFallback = extractAnalysisValueFallback(source);
   if (analysisFallback) {
-    return shouldRedactProtectedElyanDisclosure(analysisFallback, options)
-      ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
-      : analysisFallback;
+    return sanitizeVisibleCandidate(analysisFallback, options);
   }
 
   const normalizedFallback = normalizeMarkdown(options.fallback);
   if (normalizedFallback) {
-    return shouldRedactProtectedElyanDisclosure(normalizedFallback, options)
-      ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
-      : normalizedFallback;
+    return sanitizeVisibleCandidate(normalizedFallback, options);
   }
 
   if (shouldRedactProtectedElyanDisclosure(source, options)) {
@@ -668,7 +703,7 @@ export function sanitizeAssistantVisibleText(
   if (containsInternalAssistantSignals(source)) {
     return "";
   }
-  return source;
+  return redactVisibleInternalConfigurationTerms(source).trim();
 }
 
 export function polishAssistantVisibleText(
@@ -708,9 +743,7 @@ export function polishAssistantVisibleText(
 
   polished = collapseDuplicatedConversationalRestart(polished);
 
-  return shouldRedactProtectedElyanDisclosure(polished, options)
-    ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
-    : polished;
+  return sanitizeVisibleCandidate(polished, options);
 }
 
 export function buildAssistantSummaryBlock(

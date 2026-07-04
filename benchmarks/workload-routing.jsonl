@@ -4,7 +4,7 @@
 {"id":"workload-004","message":"Onu daha kısa ama aynı anlamla yeniden yaz","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
 {"id":"workload-005","message":"REST API vs GraphQL hangisi daha mantıklı?","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
 {"id":"workload-006","message":"iPhone ile Pixel arasındaki farkı nedir?","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
-{"id":"workload-007","message":"Bu fonksiyon neden yanlış sonuç veriyor: `return total / items.length`","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
+{"id":"workload-007","message":"Bu fonksiyon neden yanlış sonuç veriyor: `return total / items.length`","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
 {"id":"workload-008","message":"Şu kodu inceler misin: const total = items.reduce((a, b) => a + b, 0)","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
 {"id":"workload-009","message":"Python'da try catch örneği yaz","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
 {"id":"workload-010","message":"Kuantum dolanıklığı nedir, iki kısa örnekle açıkla","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}

@@ -1904,6 +1904,31 @@ function staleRuntimeFailureForTarget(target: Awaited<ReturnType<typeof getUserD
   };
 }
 
+function isSharedBrainChatTask(task: Pick<typeof tasks.$inferSelect, "payload" | "runtimeConnectionId">): boolean {
+  const payload =
+    task.payload && typeof task.payload === "object" && !Array.isArray(task.payload)
+      ? (task.payload as Record<string, unknown>)
+      : {};
+  const metadata = getPayloadMetadata(payload);
+  const presentation = typeof metadata.presentation === "string" ? metadata.presentation.trim().toLowerCase() : "";
+  const channel = typeof metadata.channel === "string" ? metadata.channel.trim().toLowerCase() : "";
+  const routeDecision =
+    metadata.routeDecision && typeof metadata.routeDecision === "object" && !Array.isArray(metadata.routeDecision)
+      ? (metadata.routeDecision as Record<string, unknown>)
+      : metadata.routingDecision && typeof metadata.routingDecision === "object" && !Array.isArray(metadata.routingDecision)
+        ? (metadata.routingDecision as Record<string, unknown>)
+        : {};
+  const route = typeof routeDecision.route === "string" ? routeDecision.route.trim().toLowerCase() : "";
+  return (
+    task.runtimeConnectionId == null &&
+    (extractTaskChatSessionId(payload) !== null ||
+      presentation === "chat" ||
+      channel === "chat" ||
+      route === "server_brain" ||
+      route === "shared_brain")
+  );
+}
+
 export async function reconcileStaleRuntimeTasks(
   app: FastifyInstance,
   input: {
@@ -1959,6 +1984,69 @@ export async function reconcileStaleRuntimeTasks(
       const targetStatus = target?.targetStatus ?? "missing";
       const lease = getTaskDispatchLeaseSnapshot(task);
       const reason = task.status === "running" ? "runtime_execution_stale" : "dispatch_lease_expired";
+
+      if (task.status === "running" && isSharedBrainChatTask(task)) {
+        const message = "Bu sohbet yanıtı tamamlanamadı. Lütfen tekrar deneyin.";
+        const rows = await app.db
+          .update(tasks)
+          .set({
+            status: "failed",
+            summary: message,
+            error: message,
+            completedAt: now,
+            updatedAt: now,
+            queuePosition: 0,
+            dispatchLeaseId: null,
+            dispatchLeaseIssuedAt: null,
+            dispatchLeaseExpiresAt: null,
+            dispatchAckAt: null,
+            runtimeConnectionId: null,
+          })
+          .where(eq(tasks.id, task.id))
+          .returning();
+        const failedTask = rows[0] ?? {
+          ...task,
+          status: "failed" as TaskStatus,
+          summary: message,
+          error: message,
+          completedAt: now,
+          updatedAt: now,
+          queuePosition: 0,
+          dispatchLeaseId: null,
+          dispatchLeaseIssuedAt: null,
+          dispatchLeaseExpiresAt: null,
+          dispatchAckAt: null,
+          runtimeConnectionId: null,
+        };
+
+        await insertTaskEvent(app, {
+          taskId: failedTask.id,
+          status: "failed",
+          message,
+          payload: {
+            reconciled: true,
+            reason: "server_brain_chat_stale",
+            previousReason: reason,
+            targetStatus,
+            lease,
+          },
+        });
+        await publishTaskEvent(app, failedTask, "task.updated", {
+          task: shapeTaskFeedItem(failedTask),
+          reconciled: true,
+          reason: "server_brain_chat_stale",
+          targetStatus,
+          lease,
+        });
+        await syncChatTaskLifecycle(app, {
+          originalTask: task,
+          updatedTask: failedTask,
+          message,
+        });
+        await reliability?.clearTaskDispatchLock(failedTask.id);
+        reconciled.push(shapeTaskFeedItem(failedTask));
+        continue;
+      }
 
       if (task.status === "running") {
         const owningConnection = await getRuntimeConnectionSnapshot(app, task.runtimeConnectionId ?? null);
