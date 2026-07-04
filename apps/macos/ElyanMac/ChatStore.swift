@@ -254,6 +254,16 @@ final class ChatStore: ObservableObject {
         isStreaming = true
         lastError = ""
 
+        // SwiftUI'nin @Published mutasyonlarını bir render'a çevirmesi için
+        // RunLoop'a bir "nefes" verilmeden hemen ağ çağrısına geçiliyordu —
+        // kullanıcının kendi mesajı, sonraki @Published mutasyonu (cevap ya
+        // da hata) gelene kadar ekranda hiç görünmüyordu (canlı testte
+        // doğrulandı: messages.append hemen çalışıyor ama arayüz ancak
+        // stream/hata sonucunu da alınca "birden" doluyormuş gibi
+        // güncelleniyordu). Tek bir yield, optimistic baloncuğun ağ
+        // çağrısından ÖNCE ekrana çizilmesini garantiler.
+        await Task.yield()
+
         do {
             let dispatch = try await backend.sendChatMessage(
                 prompt: trimmed,
