@@ -114,11 +114,49 @@ const memoryWriteOutputSchema = z.object({
 const goalOutputSchema = z.object({ goal: z.record(z.string(), z.unknown()).nullable() }).passthrough();
 const goalContextOutputSchema = z.object({ goal: z.record(z.string(), z.unknown()).nullable(), events: z.array(z.unknown()) }).passthrough();
 
+/**
+ * Model kaynaklı yaygın argüman bozulmalarını deterministik onarır (tek
+ * "retry" budur — ikinci model çağrısı yok, maliyet sıfır):
+ * 1. args JSON string geldiyse parse et
+ * 2. args {arguments:{...}} / {input:{...}} / {params:{...}} sarmalandıysa aç
+ * Onarım şemayı ASLA gevşetmez; parse yine schema'dan geçer.
+ */
+function normalizeToolArgs(raw: unknown): unknown {
+  let args = raw;
+  if (typeof args === "string") {
+    const trimmed = args.trim();
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        args = JSON.parse(trimmed);
+      } catch {
+        return raw;
+      }
+    }
+  }
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    const record = args as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length === 1 && ["arguments", "input", "params"].includes(keys[0])) {
+      const inner = record[keys[0]];
+      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+        return inner;
+      }
+    }
+  }
+  return args;
+}
+
 function compactError(error: unknown): { code: string; message: string } {
   if (error instanceof z.ZodError) {
+    // Alan yolu + beklenen tip: refinement prompt'u bu mesajı modele geri
+    // taşıyor — "Invalid arguments" yerine düzeltilebilir bir tarif ver.
+    const detail = error.issues
+      .slice(0, 3)
+      .map((issue) => `${issue.path.join(".") || "args"}: ${issue.message}`)
+      .join("; ");
     return {
       code: "invalid_tool_args",
-      message: error.issues[0]?.message ?? "Invalid tool arguments.",
+      message: detail || "Invalid tool arguments.",
     };
   }
   if (error && typeof error === "object") {
@@ -482,7 +520,7 @@ export async function executeAgentTool(
     return stateWriteBlocked(tool);
   }
   try {
-    const args = tool.argsSchema.parse(request.args);
+    const args = tool.argsSchema.parse(normalizeToolArgs(request.args));
     const timeoutMs = Math.max(100, Math.min(tool.timeoutMs ?? 8_000, 30_000));
     const timeout = new Promise<never>((_, reject) => {
       const timer = setTimeout(() => reject(Object.assign(new Error("Tool timed out."), { code: "tool_timeout" })), timeoutMs);

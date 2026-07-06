@@ -20,6 +20,7 @@ import { createAuditLog } from "../audit/service.js";
 import { invalidateBrainProfileCache } from "./profile-cache.js";
 import { filterRowsToTenant } from "../../lib/tenant-guard.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
+import { startStage } from "../../lib/perf-telemetry.js";
 import {
   buildHashedKnowledgeEmbedding,
   canUseHybridRetrieval,
@@ -1215,6 +1216,7 @@ export async function searchBrainMemory(
     };
   }
 
+  const endStage = startStage("memory_search");
   try {
     const startedAt = Date.now();
     // hybridReady is cached, but the first call in a fresh process hits the DB
@@ -1624,6 +1626,8 @@ export async function searchBrainMemory(
       results: [] as MemorySearchHit[],
       degradedReason: "memory_retrieval_failed" as const,
     };
+  } finally {
+    endStage();
   }
 }
 

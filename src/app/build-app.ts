@@ -41,6 +41,7 @@ import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
 import { startInProcessMemoryWorker } from "../modules/brain/worker.js";
 import { maybeStartSemanticV2Backfill } from "../modules/brain/retrieval.js";
 import { nlpDaemon } from "../lib/nlp-daemon.js";
+import { getPerfSnapshot, startPerfTelemetry } from "../lib/perf-telemetry.js";
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -316,6 +317,20 @@ export async function buildApp(envInput?: AppEnv) {
     info: (msg) => app.log.info(msg),
     warn: (msg) => app.log.warn(msg),
   });
+
+  /* Event loop lag + stage p95 telemetrisi. 60sn'de bir snapshot loglanır;
+   * p95 lag > 50ms sürekli görülüyorsa bir şey event loop'u blokluyordur —
+   * tahminle değil bu metrikle optimize edilir. */
+  startPerfTelemetry();
+  const perfLogTimer = setInterval(() => {
+    const snapshot = getPerfSnapshot({ resetLoop: true });
+    if (snapshot.eventLoop && snapshot.eventLoop.p95Ms > 20) {
+      app.log.warn({ perf: snapshot }, "event loop lag yüksek");
+    } else {
+      app.log.info({ perf: snapshot }, "perf snapshot");
+    }
+  }, 60_000);
+  perfLogTimer.unref?.();
 
   await ensureTaskDispatchWorker(app);
   const stopTaskLeaseSweeper = startTaskLeaseSweeper(app);

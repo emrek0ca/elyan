@@ -56,6 +56,7 @@ import { syncChatTaskLifecycle, compactMessagePreview } from "../chat/task-sync.
 import { buildTaskTraceBlock } from "../chat/task-trace.js";
 import { persistRollingSummaryToSession, listChatSessionMessages } from "../chat/service.js";
 import { applyGoalProgressBlocks } from "../goals/service.js";
+import { startStage } from "../../lib/perf-telemetry.js";
 import {
   detectGoalChatCommand,
   executeGoalChatCommand,
@@ -3111,6 +3112,7 @@ async function processSharedBrainChatTask(
       }, 5_000);
     }
 
+    const endInferenceStage = startStage("inference_total");
     const inference = await generateGovernedSharedBrainReply(app, {
       userId: input.userId,
       taskId: runningTask.id,
@@ -3215,6 +3217,7 @@ async function processSharedBrainChatTask(
           }
         : undefined,
     });
+    endInferenceStage();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     const agentRunState = readAgentRunState(inference.metadata);
     if (agentRunState && agentRunState !== "completed") {

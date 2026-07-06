@@ -247,3 +247,35 @@ test("executeAgentTool returns typed errors for unknown tools", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.error?.code, "unknown_tool");
 });
+
+test("executeAgentTool: JSON-string args deterministik onarılır", async () => {
+  const fake = createFakeMemoryApp();
+  const result = await executeAgentTool(
+    fake.app,
+    { userId: "user-1", sessionId: null, workload: "mobile_chat_balanced", allowStateWrites: true, allowSideEffects: false },
+    { tool: "memory.query", args: '{"query":"kahve tercihi","limit":3}' as never },
+  );
+  assert.equal(result.ok, true);
+});
+
+test("executeAgentTool: {arguments:{...}} sarmalaması açılır", async () => {
+  const fake = createFakeMemoryApp();
+  const result = await executeAgentTool(
+    fake.app,
+    { userId: "user-1", sessionId: null, workload: "mobile_chat_balanced", allowStateWrites: true, allowSideEffects: false },
+    { tool: "memory.query", args: { arguments: { query: "kahve", limit: 2 } } as never },
+  );
+  assert.equal(result.ok, true);
+});
+
+test("executeAgentTool: geçersiz argümanda alan yollu hata mesajı döner", async () => {
+  const fake = createFakeMemoryApp();
+  const result = await executeAgentTool(
+    fake.app,
+    { userId: "user-1", sessionId: null, workload: "mobile_chat_balanced", allowStateWrites: true, allowSideEffects: false },
+    { tool: "memory.query", args: { limit: 3 } as never },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.code, "invalid_tool_args");
+  assert.match(result.error?.message ?? "", /query/);
+});

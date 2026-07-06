@@ -18,6 +18,7 @@ import { buildModelFallbackUnderstandingEnvelope } from "./understanding-model-f
 import { extractFeedbackSignals, extractPreferenceSignals } from "./preference-extractor.js";
 import { filterLearningSignals } from "./personalization-policy.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
+import { startStage } from "../../lib/perf-telemetry.js";
 import type {
   ClarificationDiagnostics,
   FeedbackType,
@@ -153,8 +154,10 @@ export async function buildTaskUnderstanding(
   input: TaskUnderstandingInput,
 ): Promise<UserUnderstandingResult> {
   const startedAt = Date.now();
+  const endStage = startStage("understanding");
 
   if (!app.config.ELYAN_USER_UNDERSTANDING_ENABLED) {
+    endStage();
     return emptyUnderstanding(input, {
       includeEnvelope: shouldBuildUnderstandingEnvelope(app),
     });
@@ -254,6 +257,7 @@ export async function buildTaskUnderstanding(
       );
     }
 
+    endStage();
     return {
       intent,
       context,
@@ -275,6 +279,7 @@ export async function buildTaskUnderstanding(
       },
       "understanding failed open",
     );
+    endStage();
     return emptyUnderstanding(input, {
       includeEnvelope: shouldBuildUnderstandingEnvelope(app),
     });

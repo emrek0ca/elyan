@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { getReadiness } from "./service.js";
+import { getPerfSnapshot } from "../../lib/perf-telemetry.js";
 
 export const healthRoutes: FastifyPluginAsync = async (app) => {
   const shapePublicHealthPayload = (readiness: Awaited<ReturnType<typeof getReadiness>>) => ({
@@ -35,6 +36,10 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
 
     return reply.send(payload);
   };
+
+  // İç gözlem: event loop lag + stage p95. Kimlik verisi içermez, yalnız
+  // süre istatistikleri — operasyonel teşhis için.
+  app.get("/internal/perf", async () => getPerfSnapshot());
 
   app.get("/livez", async () => ({
     status: "ok",

@@ -248,7 +248,7 @@ export function buildTurnEnvelopeResponseFormat(includeProactiveOps = false): Re
           tool_requests: {
             type: "array",
             description:
-              "Typed server tools: web.search, web.numeric_facts, memory.query, memory.write, goals.get, goals.update. Read current goal state with goals.get before continuing a multi-turn goal; use write tools only for explicit durable state changes.",
+              'Typed server tools with exact arg contracts: web.search {query:string} | web.numeric_facts {query:string} | memory.query {query:string, limit?:1..10} | memory.write {op:"write"|"update"|"contest"|"forget", kind:"fact"|"preference"|"episode"|"self_model", key:string, value:string, confidence?:0..1} | goals.get {goalId?:uuid} | goals.update {action:"open"|"advance"|"complete"|"block", goalId?:uuid, title?:string, step?:int, ofSteps?:int, advancedTo?:string, blocker?:string}. Args must be a flat object exactly matching the contract — no extra nesting, no stringified JSON. Read current goal state with goals.get before continuing a multi-turn goal; use write tools only for explicit durable state changes.',
             items: {
               type: "object",
               additionalProperties: false,
