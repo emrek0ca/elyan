@@ -42,13 +42,17 @@ const WEB_RESEARCH_PATTERNS = [
   /\b(internet|web|online|çevrim içi|cevrim ici|internetten|webden)\b/i,
   /\b(araştır|arastir|araştırma|arastirma|research)\b/i,
   /\b(güncel|guncel|latest|recent|son durum|bugün|today|news|haber)\b/i,
-  /\b(karşılaştır|karsilastir|compare|benchmark|farkı|farki|difference|artı eksi|arti eksi)\b/i,
+  /\b(karşılaştır|karsilastir|compare|benchmark|farkı|farki|difference|artı eksi|arti eksi|avantaj|dezavantaj|pros|cons)\b/i,
   /\b(resmi|official|dokümantasyon|documentation|kaynak|source)\b/i,
   /\b(fiyat|price|kur|rate|release note|release notes?|changelog|son sürüm|son surum|duyuru|announcement)\b/i,
   /\b(veri|veriler|data|istatistik|istatistikler|statistics?|rapor|report|anket|survey|trend|piyasa|market)\b/i,
   /\b(yasa|kanun|mevzuat|regulation|legal|uyumluluk|compliance|standart|standard|kılavuz|kilavuz|guideline)\b/i,
   /\b(dil|lehçe|lehce|gramer|grammar|etimoloji|etymology|alfabe|alphabet|çeviri|ceviri|transliteration|kelime hazinesi|söz varlığı|soz varligi)\b/i,
   /\b(türk dünyası|turkic|oğuz|oguz|kıpçak|kipchak|karluk|qipchak|qarluq|azerbaijani|kazakh|kyrgyz|uzbek|turkmen|uyghur|tatar|bashkir|gagauz|karakalpak|sakha|chuvash)\b/i,
+  /\b(tarih|tarihsel|historical|olaylar|events|kronoloji|chronolog|tarihçe|tarihce)\b/i,
+  /\b(nüfus|nufus|population|gdp|gsyih|gsyh|büyüme|buyume|growth|ekonomi|economy|ihracat|ithalat|export|import)\b/i,
+  /\b(film|dizi|series|yönetmen|yonetmen|oyuncu|actor|imdb|rotten|metacritic|vizyonda|gösterimde|gosterimde)\b/i,
+  /\b(api|sdk|framework|library|kütüphane|kutuphane|paket|package|npm|pip|pub\.dev|crate|gem)\b/i,
 ];
 
 const PERSONAL_ONLY_PATTERNS = [
@@ -81,12 +85,20 @@ const VOLATILE_MARKET_PATTERN =
 const VOLATILE_RELEASE_PATTERN =
   /(?<!\p{L})(çıktı mı|cikti mi|çıkacak mı|cikacak mi|ne zaman çık|ne zaman cik|yayınlandı mı|yayinlandi mi|piyasaya|vizyon tarihi|release date|çıkış tarihi|cikis tarihi|son sürüm|son surum|en son sürüm|latest version|kaçıncı sürüm|kacinci surum)(?!\p{L})/iu;
 
-// Live events / scores / weather — always fresh.
+// Live events / scores / weather / politics / science — always fresh.
 const VOLATILE_EVENT_PATTERN =
-  /(?<!\p{L})(hava durumu|hava nasıl|hava nasil|kaç derece|kac derece|yağmur yağ|yagmur yag|maç sonucu|mac sonucu|skor kaç|skor kac|kim kazandı|kim kazandi|kaç kaç|kac kac|puan durumu|şampiyon oldu|sampiyon oldu|son dakika|seçim sonuc|secim sonuc|deprem oldu|kaç şiddet|kac siddet)(?!\p{L})/iu;
+  /(?<!\p{L})(hava durumu|hava nasıl|hava nasil|kaç derece|kac derece|yağmur yağ|yagmur yag|maç sonucu|mac sonucu|skor kaç|skor kac|kim kazandı|kim kazandi|kaç kaç|kac kac|puan durumu|şampiyon oldu|sampiyon oldu|son dakika|seçim sonuc|secim sonuc|deprem oldu|kaç şiddet|kac siddet|cumhurbaşkan|baskan|başbakan|basbakan|bakan oldu|atandı|atandi|istifa|görevden|gorevden|savaş|savas|ateşkes|ateskes|çatışma|catisma|olimpiyat|dünya kupası|dunya kupasi|şampiyonlar ligi|sampiyonlar ligi|formula 1|f1 yarış|nobel|ödül kazandı|odul kazandi)(?!\p{L})/iu;
 
 // Quantity questions about external entities: "X kaç TL", "Y ne kadar".
 const VOLATILE_QUANTITY_PATTERN = /(?<!\p{L})(kaç|kac|ne kadar)(?!\p{L})/iu;
+
+// Technology/science questions that need current facts (frameworks, languages, tools, specs).
+const VOLATILE_TECH_PATTERN =
+  /(?<!\p{L})(son sürüm|son surum|latest version|yeni özellik|yeni ozellik|new feature|deprecated|kullanımdan kaldır|kullanimdan kaldir|end of life|eol|lts|stable release|beta|alpha|roadmap|breaking change|migration guide|güncelleme|guncelleme|update|upgrade|patch|security fix|vulnerability|cve|zero.?day)(?!\p{L})/iu;
+
+// "How to" / tutorial / best practice questions — often need current best practices.
+const VOLATILE_HOWTO_PATTERN =
+  /(?<!\p{L})(en iyi yöntem|en iyi yontem|best practice|önerilen|onerilen|recommended|nasıl yapılır|nasil yapilir|how to|step by step|adım adım|adim adim|rehber|guide|tutorial|örnek|ornek|example)(?!\p{L})/iu;
 
 // Turkish/English factual interrogatives. Combined with a proper-noun entity
 // these flag "who/what/when is <NamedEntity>" questions where parametric
@@ -165,8 +177,14 @@ export function detectFactualityGrounding(prompt: string): {
   if (VOLATILE_EVENT_PATTERN.test(lower)) {
     return { triggered: true, reason: "live_event_fact" };
   }
+  if (VOLATILE_TECH_PATTERN.test(lower) && (isQuestion || hasProperNounEntity(normalized))) {
+    return { triggered: true, reason: "technology_freshness_fact" };
+  }
   if (isQuestion && hasProperNounEntity(normalized)) {
     return { triggered: true, reason: "named_entity_factual_question" };
+  }
+  if (VOLATILE_HOWTO_PATTERN.test(lower) && hasProperNounEntity(normalized)) {
+    return { triggered: true, reason: "howto_with_named_entity" };
   }
   return { triggered: false, reason: null };
 }

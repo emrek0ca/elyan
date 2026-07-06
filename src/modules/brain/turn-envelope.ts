@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { elyanAssistantBlockSchema } from "../../contracts/domain.js";
 import type { AssistantMessageBlock } from "../chat/message-blocks.js";
+import { agentPlanEnvelopeSchema } from "./agent-plan.js";
 
 const turnEnvelopeReplySchema = z.object({
   text: z.string().default(""),
@@ -72,6 +73,7 @@ export const turnEnvelopeSchema = z
     goal_ops: z.array(goalOpSchema).max(20).default([]),
     follow_ups: z.array(followUpSchema).max(20).default([]),
     tool_requests: z.array(toolRequestSchema).max(20).default([]),
+    agent_plan: agentPlanEnvelopeSchema.nullish(),
     affect: affectSchema.default({}),
     proactive_ops: z.array(proactiveOpSchema).max(10).default([]),
   })
@@ -140,6 +142,7 @@ export const TURN_ENVELOPE_SYSTEM_INSTRUCTION = [
   "Return one TurnEnvelope JSON object without markdown or hidden reasoning.",
   "Keep visible prose only in reply.text and renderable UI only in blocks.",
   "Encode explicit preferences and corrections in memory_ops; use op=forget when the user asks to forget a memory key. Use the other typed arrays for goals, follow-ups, and tools, or [] when absent.",
+  "For multi-step tool tasks, emit agent_plan.v2 with explicit dependencies and evidence rules; never mark execution complete in prose.",
 ].join(" ");
 
 export function buildTurnEnvelopeSystemInstruction(includeProactiveOps = false): string {
@@ -244,6 +247,8 @@ export function buildTurnEnvelopeResponseFormat(includeProactiveOps = false): Re
           },
           tool_requests: {
             type: "array",
+            description:
+              "Typed server tools: web.search, web.numeric_facts, memory.query, memory.write, goals.get, goals.update. Read current goal state with goals.get before continuing a multi-turn goal; use write tools only for explicit durable state changes.",
             items: {
               type: "object",
               additionalProperties: false,
@@ -251,6 +256,70 @@ export function buildTurnEnvelopeResponseFormat(includeProactiveOps = false): Re
               properties: {
                 tool: { type: "string" },
                 args: { type: "object", additionalProperties: true },
+              },
+            },
+          },
+          agent_plan: {
+            type: ["object", "null"],
+            description: "Optional typed DAG for task execution. The server validates and owns all transitions.",
+            additionalProperties: false,
+            required: ["version", "goal", "steps"],
+            properties: {
+              version: { type: "string", enum: ["agent_plan.v2"] },
+              goal: {
+                type: "object",
+                additionalProperties: false,
+                required: ["title", "success_criteria"],
+                properties: {
+                  title: { type: "string" },
+                  success_criteria: { type: "array", minItems: 1, maxItems: 8, items: { type: "string" } },
+                },
+              },
+              steps: {
+                type: "array",
+                minItems: 1,
+                maxItems: 8,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["id", "title", "depends_on", "tool_request", "expected_outcome", "max_attempts"],
+                  properties: {
+                    id: { type: "string" },
+                    title: { type: "string" },
+                    depends_on: { type: "array", maxItems: 7, items: { type: "string" } },
+                    tool_request: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["tool", "args"],
+                      properties: { tool: { type: "string" }, args: { type: "object", additionalProperties: true } },
+                    },
+                    expected_outcome: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["description", "rules"],
+                      properties: {
+                        description: { type: "string" },
+                        rules: {
+                          type: "array",
+                          minItems: 1,
+                          maxItems: 8,
+                          items: {
+                            type: "object",
+                            additionalProperties: false,
+                            required: ["source", "path", "operator"],
+                            properties: {
+                              source: { type: "string", enum: ["tool_result", "artifact", "state_readback"] },
+                              path: { type: "string" },
+                              operator: { type: "string", enum: ["exists", "equals", "not_equals", "non_empty", "gte", "lte", "sha256"] },
+                              value: {},
+                            },
+                          },
+                        },
+                      },
+                    },
+                    max_attempts: { type: "integer", minimum: 1, maximum: 3 },
+                  },
+                },
               },
             },
           },

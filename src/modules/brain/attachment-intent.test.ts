@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildResolvedAttachmentIntentPromptBlock,
+  resolveAttachmentIntentSpec,
   resolveAttachmentIntentMode,
 } from "./attachment-intent.js";
 
@@ -57,6 +58,31 @@ test("buildResolvedAttachmentIntentPromptBlock only emits when attachment/export
       requestMetadata: {},
       attachmentContext: { used: true },
     }),
-    "Resolved intent: answer. Follow that mode unless the user clearly changes the goal.",
+    [
+      "Resolved attachment/document intent:",
+      "- mode: answer",
+      "- output_format: unknown",
+      "- preserve_numbers: false",
+      "- preserve_user_phrases: false",
+      "- requires_structured_document: false",
+      "Follow this resolved intent unless the user clearly changes the goal.",
+    ].join("\n"),
+  );
+});
+
+test("resolveAttachmentIntentSpec captures spreadsheet export requirements", () => {
+  assert.deepEqual(
+    resolveAttachmentIntentSpec({
+      prompt: "Toplamları koru ve bunu Excel tablo olarak oluştur",
+      requestMetadata: { documentExportMode: "mobile_local" },
+      attachmentContext: { used: true },
+    }),
+    {
+      mode: "export",
+      outputFormat: "xlsx",
+      preserveNumbers: true,
+      preserveUserPhrases: false,
+      requiresStructuredDocument: true,
+    },
   );
 });

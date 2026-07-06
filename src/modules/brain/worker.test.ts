@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { chatMessages, chatSessions, proactiveTriggers } from "../../db/schema.js";
 import {
+  BRAIN_WORKER_HEARTBEAT_KEY,
   processBrainWorkerIteration,
   processDueProactiveTriggers,
   processNextQueuedTrainingJob,
+  startInProcessMemoryWorker,
 } from "./worker.js";
 
 class FakeSelectQuery<T> {
@@ -32,6 +34,12 @@ class FakeSelectQuery<T> {
   ) {
     return Promise.resolve(this.result).then(resolve, reject);
   }
+}
+
+function waitForWorkerTick(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
 }
 
 class FakeDb {
@@ -174,6 +182,157 @@ class FakeProactiveDb {
     return builder;
   }
 }
+
+test("startInProcessMemoryWorker skips API drainer when brain-worker heartbeat is fresh", async () => {
+  const logs: string[] = [];
+  const stop = startInProcessMemoryWorker({
+    services: {
+      reliability: {
+        store: {
+          get: async (key: string) =>
+            key === BRAIN_WORKER_HEARTBEAT_KEY
+              ? JSON.stringify({
+                  timestamp: new Date().toISOString(),
+                  mode: "brain_worker",
+                })
+              : null,
+        },
+      },
+    },
+    log: {
+      info: (message: string) => {
+        logs.push(message);
+      },
+      error: () => {
+        throw new Error("in-process drainer should not run");
+      },
+    },
+  } as never);
+
+  await waitForWorkerTick();
+  stop();
+
+  assert.ok(
+    logs.some((message) =>
+      message.includes("external brain worker heartbeat is fresh"),
+    ),
+  );
+});
+
+test("processBrainWorkerIteration runs continuous learning only behind its flags", async () => {
+  const result = await processBrainWorkerIteration(
+    {
+      config: {
+        ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED: false,
+        ELYAN_COGNITIVE_FOUNDATION_ROLLOUT_PERCENT: 0,
+        ELYAN_CONTINUOUS_LEARNING_V2_ENABLED: false,
+        ELYAN_CONTINUOUS_LEARNING_SHADOW_ENABLED: false,
+      },
+    } as never,
+    {
+      processMemoryJob: async () => false,
+      processDecay: async () => ({ status: "completed", processedCount: 0, updatedCount: 0 }),
+      processProactive: async () => ({
+        processed: 0,
+        fired: 0,
+        expired: 0,
+        deferred: 0,
+        failed: 0,
+      }),
+      processContinuousLearning: async () => {
+        throw new Error("continuous learning should be flag-gated");
+      },
+    },
+  );
+
+  assert.equal(result.continuousLearning, undefined);
+
+  const enabledResult = await processBrainWorkerIteration(
+    {
+      config: {
+        ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED: false,
+        ELYAN_COGNITIVE_FOUNDATION_ROLLOUT_PERCENT: 0,
+        ELYAN_CONTINUOUS_LEARNING_V2_ENABLED: true,
+        ELYAN_CONTINUOUS_LEARNING_SHADOW_ENABLED: false,
+      },
+    } as never,
+    {
+      processMemoryJob: async () => false,
+      processDecay: async () => ({ status: "completed", processedCount: 0, updatedCount: 0 }),
+      processProactive: async () => ({
+        processed: 0,
+        fired: 0,
+        expired: 0,
+        deferred: 0,
+        failed: 0,
+      }),
+      processContinuousLearning: async () => ({
+        processed: true,
+        runId: "run-1",
+        datasetManifestId: "dataset-1",
+        shadow: false,
+        candidate: {
+          status: "ready",
+          sourceEventCount: 40,
+          acceptedEventCount: 36,
+          rejectedEventCount: 4,
+          dedupedEventCount: 0,
+          replayRecordCount: 9,
+          trainRecordCount: 32,
+          validationRecordCount: 4,
+          tokenEstimate: 120,
+          datasetFingerprint: "abc",
+          acceptedIdentityHashes: [],
+          privacyReport: {
+            rawEventValuesIncluded: false,
+            promptContentIncluded: false,
+            rejectedByReason: {
+              privacy_level_not_safe: 0,
+              expired: 0,
+              metadata_not_training_eligible: 0,
+              sensitive_value_detected: 0,
+              low_confidence: 4,
+              duplicate: 0,
+            },
+            privacyRejectedCount: 0,
+            sensitiveRejectedCount: 0,
+          },
+          qualityReport: {
+            qualityScore: 0.7,
+            averageConfidence: 82,
+            minConfidence: 60,
+            validationRatio: 0.1,
+            acceptedTypes: { task_feedback: 36 },
+            acceptedSources: { task_feedback: 36 },
+          },
+          replayReport: {
+            replayRatio: 20,
+            replayRecordCount: 9,
+            policy: "preserve_previous_capabilities",
+          },
+        },
+        promotionReport: {
+          status: "training_eligible",
+          nextAction: "run_candidate_training",
+          reasons: ["candidate_training_required_before_security_benchmarks"],
+          gates: {
+            minAcceptedEvents: 32,
+            minReplayRatio: 10,
+            minValidationRecords: 3,
+            minQualityScore: 0.62,
+            minBenchmarkScoreForCanary: 0.78,
+            minEvaluationScoreForCanary: 0.72,
+            minBenchmarkScoreForPromotion: 0.9,
+            minEvaluationScoreForPromotion: 0.88,
+            maxCanaryErrorRate: 0.02,
+          },
+        },
+      }),
+    },
+  );
+
+  assert.equal(enabledResult.continuousLearning?.processed, true);
+});
 
 test("processNextQueuedTrainingJob completes shared jobs with bounded neural evaluation metadata", async () => {
   const trainingJobsRows = [

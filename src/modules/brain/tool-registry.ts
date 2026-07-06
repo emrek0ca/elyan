@@ -4,10 +4,13 @@ import {
   advanceGoal,
   createGoal,
   getActiveGoalForContext,
+  getGoalExecutionContext,
   updateGoal,
 } from "../goals/service.js";
 import { searchBrainMemory } from "./memory.js";
 import { recordTurnMemoryOps } from "./memory-fabric.js";
+import { cognitiveMemoryRepository } from "./cognitive-memory-repository.js";
+import { isCognitiveFoundationEnabled } from "./cognitive-foundation-policy.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
 import {
   extractNumericEvidenceFromGrounding,
@@ -24,6 +27,7 @@ export type AgentToolRequest = {
 
 export type AgentToolContext = {
   userId: string;
+  taskId?: string | null;
   sessionId?: string | null;
   workload: SharedBrainWorkload;
   allowStateWrites?: boolean;
@@ -42,6 +46,9 @@ export type AgentToolResult = {
 type AgentToolDefinition<TArgs extends z.ZodTypeAny> = {
   name: string;
   permission: AgentToolPermission;
+  outputSchema?: z.ZodType<Record<string, unknown>>;
+  timeoutMs?: number;
+  idempotency?: "read_only" | "idempotent_write" | "non_idempotent";
   argsSchema: TArgs;
   execute: (
     app: FastifyInstance,
@@ -84,6 +91,28 @@ const goalsUpdateArgsSchema = z.object({
   note: z.string().trim().min(1).max(400).optional(),
   blocker: z.string().trim().min(1).max(400).optional(),
 });
+
+const goalsGetArgsSchema = z.object({
+  goalId: z.string().uuid().optional(),
+  eventLimit: z.coerce.number().int().min(1).max(50).default(12),
+});
+
+const webSearchOutputSchema = z.object({
+  used: z.boolean(),
+  query: z.string(),
+  results: z.array(z.object({ title: z.string(), url: z.string() }).passthrough()),
+}).passthrough();
+const numericFactsOutputSchema = z.object({
+  query: z.string(), hasNumericFacts: z.boolean(), hasChartableSeries: z.boolean(), points: z.array(z.unknown()),
+}).passthrough();
+const memoryQueryOutputSchema = z.object({
+  retrievalMode: z.string(), results: z.array(z.object({ id: z.string(), confidence: z.number() }).passthrough()),
+}).passthrough();
+const memoryWriteOutputSchema = z.object({
+  processed: z.number().int().nonnegative(), factsWritten: z.number().int().nonnegative(), episodesWritten: z.number().int().nonnegative(),
+}).passthrough();
+const goalOutputSchema = z.object({ goal: z.record(z.string(), z.unknown()).nullable() }).passthrough();
+const goalContextOutputSchema = z.object({ goal: z.record(z.string(), z.unknown()).nullable(), events: z.array(z.unknown()) }).passthrough();
 
 function compactError(error: unknown): { code: string; message: string } {
   if (error instanceof z.ZodError) {
@@ -161,6 +190,9 @@ const toolDefinitions = [
   {
     name: "web.search",
     permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 7_000,
+    outputSchema: webSearchOutputSchema,
     argsSchema: webSearchArgsSchema,
     async execute(app, context, args) {
       const grounding = await searchPublicWebGrounding(app, {
@@ -188,6 +220,9 @@ const toolDefinitions = [
   {
     name: "web.numeric_facts",
     permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 7_000,
+    outputSchema: numericFactsOutputSchema,
     argsSchema: webSearchArgsSchema,
     async execute(app, context, args) {
       const grounding = await searchPublicWebGrounding(app, {
@@ -207,6 +242,9 @@ const toolDefinitions = [
   {
     name: "memory.query",
     permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 4_000,
+    outputSchema: memoryQueryOutputSchema,
     argsSchema: memoryQueryArgsSchema,
     async execute(app, context, args) {
       const memory = await searchBrainMemory(app, {
@@ -233,6 +271,9 @@ const toolDefinitions = [
   {
     name: "memory.write",
     permission: "write",
+    idempotency: "non_idempotent",
+    timeoutMs: 5_000,
+    outputSchema: memoryWriteOutputSchema,
     argsSchema: memoryWriteArgsSchema,
     async execute(app, context, args) {
       const envelope = {
@@ -244,17 +285,51 @@ const toolDefinitions = [
         tool_requests: [],
         affect: { user_mood_guess: "unknown", energy: "mid", register: "neutral" },
       } satisfies TurnEnvelope;
-      const result = await recordTurnMemoryOps(app, {
+      const result = isCognitiveFoundationEnabled(app, context.userId)
+        ? await cognitiveMemoryRepository(app).writeTurn({
+            userId: context.userId,
+            sessionId: context.sessionId ?? null,
+            sourceKind: "turn_envelope",
+            sourceId: context.sessionId ?? null,
+            envelope,
+          })
+        : await recordTurnMemoryOps(app, {
+            userId: context.userId,
+            sessionId: context.sessionId ?? null,
+            envelope,
+          });
+      return result;
+    },
+  },
+  {
+    name: "goals.get",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 3_000,
+    outputSchema: goalContextOutputSchema,
+    argsSchema: goalsGetArgsSchema,
+    async execute(app, context, args) {
+      const execution = await getGoalExecutionContext(app, {
         userId: context.userId,
         sessionId: context.sessionId ?? null,
-        envelope,
+        goalId: args.goalId,
+        eventLimit: args.eventLimit,
       });
-      return result;
+      return {
+        goal: execution.goal,
+        events: execution.events.map((event) => ({
+          ...event,
+          createdAt: event.createdAt.toISOString(),
+        })),
+      };
     },
   },
   {
     name: "goals.update",
     permission: "write",
+    idempotency: "non_idempotent",
+    timeoutMs: 5_000,
+    outputSchema: goalOutputSchema,
     argsSchema: goalsUpdateArgsSchema,
     async execute(app, context, args) {
       if (args.action === "open") {
@@ -309,6 +384,50 @@ export function listAgentTools(): Array<{ name: string; permission: AgentToolPer
   }));
 }
 
+export type AgentToolMetadata = {
+  name: string;
+  permission: AgentToolPermission;
+  timeoutMs: number;
+  idempotency: "read_only" | "idempotent_write" | "non_idempotent";
+  parallelSafe: boolean;
+};
+
+export function getAgentToolMetadata(name: string): AgentToolMetadata | null {
+  const tool = registry.get(name);
+  if (!tool) return null;
+  const idempotency = tool.idempotency ?? (tool.permission === "read" ? "read_only" : "non_idempotent");
+  return {
+    name: tool.name,
+    permission: tool.permission,
+    timeoutMs: Math.max(100, Math.min(tool.timeoutMs ?? 8_000, 30_000)),
+    idempotency,
+    parallelSafe: tool.permission === "read" && idempotency === "read_only",
+  };
+}
+
+// ── Per-user tool rate limiting ──────────────────────────────────────
+const toolRateLimits = new Map<string, { count: number; windowStart: number }>();
+const TOOL_RATE_WINDOW_MS = 60_000;
+const TOOL_RATE_MAX_CALLS = 30;
+const WRITE_TOOL_RATE_MAX_CALLS = 10;
+
+function checkToolRateLimit(userId: string, permission: AgentToolPermission): { allowed: boolean; retryAfterMs: number } {
+  const now = Date.now();
+  const key = `${userId}:${permission === "write" || permission === "side_effect" ? "write" : "all"}`;
+  const limit = permission === "write" || permission === "side_effect" ? WRITE_TOOL_RATE_MAX_CALLS : TOOL_RATE_MAX_CALLS;
+
+  const entry = toolRateLimits.get(key);
+  if (!entry || now - entry.windowStart > TOOL_RATE_WINDOW_MS) {
+    toolRateLimits.set(key, { count: 1, windowStart: now });
+    return { allowed: true, retryAfterMs: 0 };
+  }
+  if (entry.count >= limit) {
+    return { allowed: false, retryAfterMs: Math.max(1000, TOOL_RATE_WINDOW_MS - (now - entry.windowStart)) };
+  }
+  entry.count += 1;
+  return { allowed: true, retryAfterMs: 0 };
+}
+
 export async function executeAgentTool(
   app: FastifyInstance,
   context: AgentToolContext,
@@ -329,6 +448,33 @@ export async function executeAgentTool(
       },
     };
   }
+  if (!context.userId || typeof context.userId !== "string" || context.userId.trim().length === 0) {
+    return {
+      tool: tool.name,
+      ok: false,
+      permission: tool.permission,
+      durationMs: 0,
+      output: null,
+      error: {
+        code: "missing_user_context",
+        message: "Tool execution requires a valid userId scope.",
+      },
+    };
+  }
+  const rateCheck = checkToolRateLimit(context.userId, tool.permission);
+  if (!rateCheck.allowed) {
+    return {
+      tool: tool.name,
+      ok: false,
+      permission: tool.permission,
+      durationMs: 0,
+      output: null,
+      error: {
+        code: "tool_rate_limited",
+        message: `Too many tool calls. Retry after ${Math.ceil(rateCheck.retryAfterMs / 1000)}s.`,
+      },
+    };
+  }
   if (tool.permission === "side_effect" && context.allowSideEffects !== true) {
     return sideEffectBlocked(tool);
   }
@@ -337,7 +483,19 @@ export async function executeAgentTool(
   }
   try {
     const args = tool.argsSchema.parse(request.args);
-    const output = await tool.execute(app, context, args);
+    const timeoutMs = Math.max(100, Math.min(tool.timeoutMs ?? 8_000, 30_000));
+    const timeout = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(Object.assign(new Error("Tool timed out."), { code: "tool_timeout" })), timeoutMs);
+      timer.unref?.();
+    });
+    const rawOutput = await Promise.race([tool.execute(app, context, args), timeout]);
+    const parsedOutput = (tool.outputSchema ?? z.record(z.string(), z.unknown())).safeParse(rawOutput);
+    if (!parsedOutput.success) {
+      throw Object.assign(new Error("Tool returned an invalid typed result."), {
+        code: "invalid_tool_output",
+      });
+    }
+    const output = parsedOutput.data;
     return {
       tool: tool.name,
       ok: true,

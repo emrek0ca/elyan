@@ -41,7 +41,7 @@ export type CommandPrivacyClass = "public_text" | "local_private" | "side_effect
 export type NormalizedCommandIntent =
   | "normal_chat"
   | "planning_request"
-  | "desktop_required"
+  | "desktop_cowork"
   | "local_file_request"
   | "private_data_request"
   | "device_control_request"
@@ -687,7 +687,7 @@ function deriveNormalizedIntent(input: {
     if (input.capabilities.includes("document_read")) {
       return "private_data_request";
     }
-    return "desktop_required";
+    return "desktop_cowork";
   }
   if (input.primaryIntent === "planning") {
     return "planning_request";
@@ -1075,29 +1075,6 @@ async function resolveAmbiguousTaskRouteFallback(
   return parsed;
 }
 
-// Strong, explicit signals that a message needs the LOCAL desktop machine.
-// Used ONLY to decide, when the dispatch toggle is on, whether to hand a message
-// off to desktop vs answer it normally on the server. Intentionally conservative
-// — it looks for possessive/local markers (bilgisayarım, masaüstüm, yerel),
-// screen/terminal/shell, or explicit app/device control, not generic words.
-const DESKTOP_TASK_PATTERNS: RegExp[] = [
-  /(bilgisayar[ıi]m|masa[üu]st[üu]|yerel|local\b|finder|explorer)/i,
-  /(klas[öo]r|indirilenler|belgelerim|downloads folder|my files?)/i,
-  /(ekran g[öo]r[üu]nt[üu]s[üu]|screenshot|ekran[ıi]m)/i,
-  /(terminal|komut sat[ıi]r|\bshell\b|command line|komut[ıi]? [çc]al[ıi][şs]t[ıi]r|run a command)/i,
-  /(uygulamay[ıi]|program[ıi]|vs ?code|visual studio code|chrome'?u|safari'?yi)\s*\w*\s*(a[çc]|ba[şs]lat|kapat)/i,
-  /(ekran parlakl[ıi]|sistem ayar|wifi|bluetooth)/i,
-  /(open|read|list|delete|index|move|rename)\b.{0,24}\b(file|folder|directory|app|screenshot|terminal)/i,
-];
-
-function messageLikelyNeedsDesktop(message: string): boolean {
-  const normalized = String(message ?? "").toLocaleLowerCase("tr-TR");
-  if (!normalized.trim()) {
-    return false;
-  }
-  return DESKTOP_TASK_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-
 export async function decideCommandRoute(
   app: FastifyInstance,
   input: CommandRouteInput,
@@ -1121,43 +1098,37 @@ export async function decideCommandRoute(
     },
   });
 
-  // `desktopDispatch` (the laptop toggle) means "I have a desktop available for
-  // tasks that need it" — NOT "send literally everything to the desktop". With
-  // the toggle on we still answer normal chat / knowledge questions on the
-  // server brain, and only hand off messages that genuinely need the local
-  // machine (files, screen, terminal, app control). Otherwise toggling the
-  // button silently broke ordinary conversation. The check is conservative:
-  // bias toward answering normally, since blocking chat is worse than running a
-  // clearly-local task on the server (which will just say it lacks local access).
+  // `desktopDispatch` is the explicit cowork switch from the mobile laptop icon.
+  // When it is on and a ready desktop exists, the turn is a desktop-runtime
+  // chat task. If no desktop is ready, chat must continue on the server brain
+  // instead of surfacing a blocking "desktop required" failure.
   const userWantsDesktop = metadata.desktopDispatch === true;
-  const dispatchToDesktop = userWantsDesktop && messageLikelyNeedsDesktop(message);
 
-  if (dispatchToDesktop) {
+  if (userWantsDesktop) {
     if (!desktopAllowed) {
-      const taskRoute = buildTaskRoute({
-        target: "desktop_runtime",
-        operationalRoute: "desktop_runtime",
-        executionPlan: ["desktop_runtime"],
-        reason: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
-        needsDesktop: true,
-        needsPrivateDesktopData: false,
-        needsUserApproval: false,
-        requiredCapabilities: [],
-      });
       return buildDecision({
-        route: "pairing_required",
-        taskRoute,
-        mode: "executable_task",
+        route: "server_brain",
+        taskRoute: buildTaskRoute({
+          target: "server_brain",
+          operationalRoute: "server_brain",
+          executionPlan: ["server_brain"],
+          reason: "Masaüstü dispatch açık fakat plan masaüstü yürütmeye izin vermiyor; sohbet sunucu beyninde devam edecek.",
+          needsDesktop: false,
+          needsPrivateDesktopData: false,
+          needsUserApproval: false,
+          requiredCapabilities: [],
+        }),
+        mode: "chat",
         capabilities: [],
-        privacyClass: "local_private",
+        privacyClass: "public_text",
         requiresApproval: false,
-        reason: "Masaüstü dispatch açık ama plan izin vermiyor.",
-        userFacingMessage: "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
+        reason: "Masaüstü dispatch açık fakat plan masaüstü yürütmeye izin vermiyor; sohbet sunucu beyninde devam edecek.",
+        userFacingMessage: "Masaüstü bağlantısı bu planda kapalı; sohbet burada devam ediyor.",
         primaryIntent: classification.primaryIntent,
         confidence: classification.confidence,
-        requiresLocalRuntime: true,
+        requiresLocalRuntime: false,
         message,
-        failClosedReason: "desktop_plan_required",
+        failClosedReason: null,
       });
     }
 
@@ -1168,13 +1139,16 @@ export async function decideCommandRoute(
       input.selectedDeviceId,
     );
     if (candidates.selectedDevice && candidates.canUseSelectedDevice) {
+      const dispatchPrivacyClass: CommandPrivacyClass = hasDesktopActionSignal(message)
+        ? "local_private"
+        : "public_text";
       const taskRoute = buildTaskRoute({
         target: "desktop_runtime",
         operationalRoute: "desktop_runtime",
         executionPlan: ["desktop_runtime"],
         reason: "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
         needsDesktop: true,
-        needsPrivateDesktopData: false,
+        needsPrivateDesktopData: dispatchPrivacyClass === "local_private",
         needsUserApproval: false,
         requiredCapabilities: input.requestedCapabilities ?? [],
       });
@@ -1183,7 +1157,7 @@ export async function decideCommandRoute(
         taskRoute,
         mode: "executable_task",
         capabilities: input.requestedCapabilities ?? [],
-        privacyClass: "local_private",
+        privacyClass: dispatchPrivacyClass,
         requiresApproval: false,
         reason: "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
         userFacingMessage: "Bu görev masaüstünde çalışacak.",
@@ -1195,31 +1169,32 @@ export async function decideCommandRoute(
       });
     }
 
-    // Toggle ON but no ready desktop — surface a friendly pairing prompt.
-    const taskRoute = buildTaskRoute({
-      target: "desktop_runtime",
-      operationalRoute: "desktop_runtime",
-      executionPlan: ["desktop_runtime"],
-      reason: "Dispatch açık ama bağlı bir masaüstü bulunamadı.",
-      needsDesktop: true,
-      needsPrivateDesktopData: false,
-      needsUserApproval: false,
-      requiredCapabilities: input.requestedCapabilities ?? [],
-    });
+    // Toggle ON but no ready desktop: do not block chat. The server brain keeps
+    // answering, while metadata tells the clients why desktop execution did not
+    // attach for this turn.
     return buildDecision({
-      route: "pairing_required",
-      taskRoute,
-      mode: "executable_task",
-      capabilities: input.requestedCapabilities ?? [],
-      privacyClass: "local_private",
+      route: "server_brain",
+      taskRoute: buildTaskRoute({
+        target: "server_brain",
+        operationalRoute: "server_brain",
+        executionPlan: ["server_brain"],
+        reason: "Masaüstü dispatch açık fakat hazır bir masaüstü yok; sohbet sunucu beyninde devam edecek.",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+      }),
+      mode: "chat",
+      capabilities: [],
+      privacyClass: "public_text",
       requiresApproval: false,
-      reason: "Dispatch açık ama bağlı bir masaüstü bulunamadı.",
+      reason: "Masaüstü dispatch açık fakat hazır bir masaüstü yok; sohbet sunucu beyninde devam edecek.",
       userFacingMessage: resolveDesktopUnavailableMessage(candidates),
       primaryIntent: classification.primaryIntent,
       confidence: classification.confidence,
-      requiresLocalRuntime: true,
+      requiresLocalRuntime: false,
       message,
-      failClosedReason: "pairing_required",
+      failClosedReason: null,
     });
   }
 

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
 import { maybeQueueMemoryExtractionJob } from "../../modules/brain/memory.js";
+import { cognitiveMemoryRepository } from "../../modules/brain/cognitive-memory-repository.js";
+import { isCognitiveFoundationEnabled } from "../../modules/brain/cognitive-foundation-policy.js";
 import { recordTurnMemoryOps } from "../../modules/brain/memory-fabric.js";
 import type { TurnEnvelope } from "../../modules/brain/turn-envelope.js";
 import {
@@ -8,6 +10,11 @@ import {
   enhanceIntentWithTransformer,
 } from "./intent-classifier.js";
 import { buildUserContext } from "./context-builder.js";
+import {
+  buildEmptyUnderstandingEnvelope,
+  buildTypedUnderstandingEnvelope,
+} from "./understanding-envelope.js";
+import { buildModelFallbackUnderstandingEnvelope } from "./understanding-model-fallback.js";
 import { extractFeedbackSignals, extractPreferenceSignals } from "./preference-extractor.js";
 import { filterLearningSignals } from "./personalization-policy.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
@@ -61,10 +68,31 @@ const SYNCHRONOUS_MEMORY_KEYS = new Set([
   "timezone",
 ]);
 
-export function emptyUnderstanding(input: TaskUnderstandingInput): UserUnderstandingResult {
+function shouldBuildUnderstandingEnvelope(app: FastifyInstance): boolean {
+  return (
+    app.config.ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED === true ||
+    app.config.ELYAN_UNDERSTANDING_ENVELOPE_SHADOW_ENABLED === true ||
+    app.config.ELYAN_UNDERSTANDING_ENVELOPE_MODEL_FALLBACK_ENABLED === true
+  );
+}
+
+export function emptyUnderstanding(
+  input: TaskUnderstandingInput,
+  options: { includeEnvelope?: boolean } = {},
+): UserUnderstandingResult {
+  const envelope = options.includeEnvelope
+    ? buildEmptyUnderstandingEnvelope(input, fallbackIntent)
+    : undefined;
   return {
     intent: fallbackIntent,
     routingHints: fallbackIntent.routingHints,
+    ...(envelope
+      ? {
+          envelope,
+          envelopeSource: envelope.source,
+          envelopeConfidence: envelope.confidence,
+        }
+      : {}),
     context: {
       userId: input.userId,
       accountId: input.accountId ?? input.userId,
@@ -127,7 +155,9 @@ export async function buildTaskUnderstanding(
   const startedAt = Date.now();
 
   if (!app.config.ELYAN_USER_UNDERSTANDING_ENABLED) {
-    return emptyUnderstanding(input);
+    return emptyUnderstanding(input, {
+      includeEnvelope: shouldBuildUnderstandingEnvelope(app),
+    });
   }
 
   try {
@@ -174,10 +204,67 @@ export async function buildTaskUnderstanding(
       "understanding context built",
     );
 
+    let envelope = shouldBuildUnderstandingEnvelope(app)
+      ? buildTypedUnderstandingEnvelope({
+          ...input,
+          intent,
+          source: "typed_extractor",
+        })
+      : undefined;
+
+    if (envelope && app.config.ELYAN_UNDERSTANDING_ENVELOPE_MODEL_FALLBACK_ENABLED) {
+      try {
+        const modeledEnvelope = await buildModelFallbackUnderstandingEnvelope(app, {
+          request: input,
+          intent,
+          typedEnvelope: envelope,
+        });
+        if (modeledEnvelope) {
+          envelope = modeledEnvelope;
+        }
+      } catch (fallbackError) {
+        app.log.warn(
+          {
+            requestId: input.metadata?.requestId,
+            userId: input.userId,
+            reason:
+              fallbackError instanceof Error
+                ? fallbackError.message
+                : "unknown",
+          },
+          "understanding envelope model fallback failed open",
+        );
+      }
+    }
+
+    if (envelope) {
+      app.log.info(
+        {
+          requestId: input.metadata?.requestId,
+          userId: input.userId,
+          envelopeSource: envelope.source,
+          envelopeConfidence: envelope.confidence,
+          desiredOutputCount: envelope.desired_outputs.length,
+          constraintCount: envelope.constraints.length,
+          ambiguityCount: envelope.ambiguities.length,
+          memoryCandidateCount: envelope.memory_candidates.length,
+          durationMs: Date.now() - startedAt,
+        },
+        "understanding envelope built",
+      );
+    }
+
     return {
       intent,
       context,
       routingHints: intent.routingHints,
+      ...(envelope
+        ? {
+            envelope,
+            envelopeSource: envelope.source,
+            envelopeConfidence: envelope.confidence,
+          }
+        : {}),
     };
   } catch (error) {
     app.log.warn(
@@ -188,7 +275,9 @@ export async function buildTaskUnderstanding(
       },
       "understanding failed open",
     );
-    return emptyUnderstanding(input);
+    return emptyUnderstanding(input, {
+      includeEnvelope: shouldBuildUnderstandingEnvelope(app),
+    });
   }
 }
 
@@ -215,6 +304,38 @@ export async function persistLearningSignals(
   const now = Date.now();
 
   try {
+    if (isCognitiveFoundationEnabled(app, input.userId)) {
+      const memoryOps = buildSynchronousMemoryOpsFromLearningSignals(signals);
+      await cognitiveMemoryRepository(app).writeTurn({
+        userId: input.userId,
+        accountId: input.accountId,
+        taskId: input.taskId,
+        requestId: input.requestId,
+        sourceKind: "explicit_signal",
+        sourceId: input.taskId ?? input.requestId ?? null,
+        envelope: memoryOps.length > 0 ? buildMemoryOnlyEnvelope(memoryOps) : null,
+        evidence: signals.map((signal) => ({
+          type: signal.type,
+          key: signal.key,
+          value: signal.value,
+          confidence: signal.confidence,
+          scope: signal.scope,
+          source: signal.source,
+          privacyLevel: "safe" as const,
+          ttlDays: signal.ttlDays ?? undefined,
+          metadata: signal.metadata ?? {},
+        })),
+      });
+
+      void maybeQueueMemoryExtractionJob(app, {
+        userId: input.userId,
+        persistedSignals: signals.length,
+        trigger: "learning_events_persisted",
+        requestId: input.requestId,
+      }).catch(() => undefined);
+      return signals.length;
+    }
+
     await app.db.insert(learningEvents).values(
       signals.map((signal) => ({
         userId: input.userId,
@@ -319,6 +440,20 @@ export function buildSynchronousMemoryOpsFromLearningSignals(
   return memoryOps;
 }
 
+function buildMemoryOnlyEnvelope(
+  memoryOps: TurnEnvelope["memory_ops"],
+): TurnEnvelope {
+  return {
+    reply: { text: "", lang: "tr", tone: "neutral" },
+    blocks: [],
+    memory_ops: memoryOps,
+    goal_ops: [],
+    follow_ups: [],
+    tool_requests: [],
+    affect: { user_mood_guess: "unknown", energy: "mid", register: "neutral" },
+  };
+}
+
 async function recordExplicitLearningSignalsAsMemory(
   app: FastifyInstance,
   input: {
@@ -335,15 +470,7 @@ async function recordExplicitLearningSignalsAsMemory(
   await recordTurnMemoryOps(app, {
     userId: input.userId,
     sessionId: input.taskId ?? null,
-    envelope: {
-      reply: { text: "", lang: "tr", tone: "neutral" },
-      blocks: [],
-      memory_ops: memoryOps,
-      goal_ops: [],
-      follow_ups: [],
-      tool_requests: [],
-      affect: { user_mood_guess: "unknown", energy: "mid", register: "neutral" },
-    },
+    envelope: buildMemoryOnlyEnvelope(memoryOps),
   });
 }
 

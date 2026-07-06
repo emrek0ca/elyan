@@ -16,7 +16,11 @@ import {
   recordConversationExchangeLearning,
   recordBlockQualityLearning,
 } from "../../core/understanding/user-understanding-service.js";
-import type { FeedbackType } from "../../core/understanding/types.js";
+import type { FeedbackType, UnderstandingEnvelope, UserUnderstandingResult } from "../../core/understanding/types.js";
+import {
+  envelopeTelemetrySummary,
+  preferredWorkloadFromUnderstandingEnvelope,
+} from "../../core/understanding/understanding-envelope.js";
 import {
   isExplicitChartRequest,
   isExplicitMathOrLatexRequest,
@@ -35,6 +39,7 @@ import { buildDocumentContextBlock, buildAttachmentAckText } from "../brain/docu
 import { buildAssistantAttachmentAckBlock, buildAssistantCodeBlock, buildAssistantDocumentBlock, buildAssistantTableBlock } from "../chat/message-blocks.js";
 import { maybeGenerateHostedImageArtifact } from "../brain/image-generation.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
+import { cancelAgentRunForTask, resumeAgentRunAfterApproval } from "../brain/agent-engine.js";
 import { maybeQueueAutomaticSharedBrainRefresh } from "../brain/service.js";
 import { resolveAttachmentAwareSharedBrainWorkload } from "../brain/workloads.js";
 import {
@@ -89,11 +94,19 @@ import {
   buildTaskRuntimeOwnershipUpdate,
   buildTaskRuntimeUpdate,
 } from "./service-lifecycle.js";
+import { buildDesktopWorkOrder } from "./desktop-work-order.js";
 import { enqueueTaskDispatch } from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
 import { canUseDesktopConnections } from "../billing/catalog.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import { buildLocalRenderRecipe, type LocalRenderRecipe } from "../../core/understanding/render-recipe.js";
+import { understandingEnvelopeSchema } from "../../core/understanding/types.js";
+import {
+  artifactResultForTask,
+  buildArtifactPipeline,
+  recordArtifactLearningEvent,
+} from "../artifacts/service.js";
+import type { ArtifactOutput } from "../artifacts/types.js";
 export { canonicalTaskTitle, shapeTaskFeedItem } from "./service-helpers.js";
 
 type ShapedTaskFeedItem = ReturnType<typeof shapeTaskFeedItem>;
@@ -349,6 +362,16 @@ export function readServerBrainCompletionMetadata(metadata: Record<string, unkno
     evidenceSufficiency: readInferenceString(metadata, "evidenceSufficiency"),
     dataConfidence: readInferenceString(metadata, "dataConfidence"),
     dataQualityWarnings: readInferenceStringList(metadata, "dataQualityWarnings"),
+    claimConfidence: readInferenceNumber(metadata, "claimConfidence"),
+    claimSourceCounts: readRecord(metadata.claimSourceCounts) ?? null,
+    uncertaintyAction: readInferenceString(metadata, "uncertaintyAction"),
+    missingEvidenceCount: readInferenceNumber(metadata, "missingEvidenceCount"),
+    verifiedEvidenceCount: readInferenceNumber(metadata, "verifiedEvidenceCount"),
+    contestedMemoryCount: readInferenceNumber(metadata, "contestedMemoryCount"),
+    lowConfidenceClaims: readInferenceNumber(metadata, "lowConfidenceClaims"),
+    selfCheckApplied: readInferenceBoolean(metadata, "selfCheckApplied"),
+    toolCalledForUncertainty: readInferenceBoolean(metadata, "toolCalledForUncertainty"),
+    clarificationRequested: readInferenceBoolean(metadata, "clarificationRequested"),
     responseBudgetState: readInferenceString(metadata, "responseBudgetState"),
     responseBudgetReason: readInferenceString(metadata, "responseBudgetReason"),
     contextPacketCount: readInferenceNumber(metadata, "contextPacketCount"),
@@ -1131,6 +1154,7 @@ async function storeTaskJsonBlob(
   app: FastifyInstance,
   input: {
     taskId: string;
+    userId: string;
     slot: "payload" | "result" | "approval_request";
     scope: "task_payload" | "task_result" | "task_approval_request";
     value: unknown;
@@ -1139,6 +1163,7 @@ async function storeTaskJsonBlob(
   return app.services?.blobs?.storeJson({
     ownerType: "task",
     ownerId: input.taskId,
+    userId: input.userId,
     slot: input.slot,
     scope: input.scope,
     value: input.value,
@@ -1147,6 +1172,12 @@ async function storeTaskJsonBlob(
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function extractUnderstandingEnvelopeFromMetadata(metadata: Record<string, unknown>) {
+  const understanding = readRecord(metadata.understanding);
+  const parsed = understandingEnvelopeSchema.safeParse(understanding?.envelope);
+  return parsed.success ? parsed.data : null;
 }
 
 function readSafeString(record: Record<string, unknown> | null, key: string): string | null {
@@ -1293,6 +1324,7 @@ async function insertTaskEvent(
   app: FastifyInstance,
   input: {
     taskId: string;
+    userId?: string;
     status: TaskStatus;
     message?: string;
     payload?: Record<string, unknown>;
@@ -1303,6 +1335,7 @@ async function insertTaskEvent(
     ? await app.services?.blobs?.storeJson({
         ownerType: "task_event",
         ownerId: eventId,
+        userId: input.userId,
         slot: "payload",
         scope: "task_event_payload",
         value: input.payload,
@@ -1339,7 +1372,12 @@ function getTaskDispatchLeaseSnapshot(task: typeof tasks.$inferSelect) {
   };
 }
 
-async function persistArtifacts(app: FastifyInstance, taskId: string, items: PersistableArtifactInput[]) {
+async function persistArtifacts(
+  app: FastifyInstance,
+  taskId: string,
+  userId: string,
+  items: PersistableArtifactInput[],
+) {
   if (!items.length) {
     return [];
   }
@@ -1355,6 +1393,7 @@ async function persistArtifacts(app: FastifyInstance, taskId: string, items: Per
       bodyBlob = await app.services?.blobs?.storeBinary({
         ownerType: "artifact",
         ownerId: artifactId,
+        userId,
         slot: "body",
         scope: "artifact_body",
         value: item.binaryBody,
@@ -1364,6 +1403,7 @@ async function persistArtifacts(app: FastifyInstance, taskId: string, items: Per
       bodyBlob = await app.services?.blobs?.storeJson({
         ownerType: "artifact",
         ownerId: artifactId,
+        userId,
         slot: "body",
         scope: "artifact_body",
         value: {
@@ -1435,6 +1475,27 @@ function buildStructuredOutputArtifact(
   };
 }
 
+function buildArtifactOutputArtifact(
+  taskId: string,
+  output: ArtifactOutput,
+): ArtifactInput {
+  return {
+    kind: "structured_output",
+    name: `artifact-${output.type}.json`,
+    contentType: "application/json",
+    textContent: JSON.stringify(output, null, 2),
+    payload: output as unknown as Record<string, unknown>,
+    metadata: normalizeLocalDerivedMetadata({
+      taskId,
+      artifact_type: output.type,
+      artifact_id: output.artifactId,
+      validation_ok: output.validation.ok,
+      error_codes: output.validation.errors.map((error) => error.code).slice(0, 16),
+      structured_output: true,
+    }),
+  };
+}
+
 async function getTaskForUser(app: FastifyInstance, taskId: string, userId: string) {
   const rows = await app.db.select().from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.userId, userId))).limit(1);
   const task = rows[0];
@@ -1471,24 +1532,48 @@ async function hydrateTaskJsonValue<T>(
   app: FastifyInstance,
   inlineValue: T,
   blobId?: string | null,
+  owner?: {
+    userId: string;
+    ownerType: "task" | "task_event";
+    ownerId: string;
+  },
 ): Promise<T> {
   if (!blobId) {
     return inlineValue;
   }
 
-  return ((await app.services?.blobs?.hydrateJson<T>(blobId)) ?? inlineValue) as T;
+  const hydrated = owner
+    ? await app.services?.blobs?.hydrateJsonForOwner<T>({
+        blobId,
+        userId: owner.userId,
+        ownerType: owner.ownerType,
+        ownerId: owner.ownerId,
+      })
+    : await app.services?.blobs?.hydrateJson<T>(blobId);
+
+  return (hydrated ?? inlineValue) as T;
 }
 
 async function shapePublicArtifactRecord(
   app: FastifyInstance,
   artifact: typeof artifacts.$inferSelect,
+  userId?: string,
 ) {
   const downloadUrl = artifact.bodyBlobId
-    ? await app.services?.blobs?.createDownloadUrl({
-        blobId: artifact.bodyBlobId,
-        fileName: artifact.name,
-        contentType: artifact.contentType,
-      })
+    ? userId
+      ? await app.services?.blobs?.createDownloadUrlForOwner({
+          blobId: artifact.bodyBlobId,
+          userId,
+          ownerType: "artifact",
+          ownerId: artifact.id,
+          fileName: artifact.name,
+          contentType: artifact.contentType,
+        })
+      : await app.services?.blobs?.createDownloadUrl({
+          blobId: artifact.bodyBlobId,
+          fileName: artifact.name,
+          contentType: artifact.contentType,
+        })
     : null;
 
   return shapeTaskArtifact({
@@ -1717,6 +1802,7 @@ export async function issueTaskDispatchLease(
 
   await insertTaskEvent(app, {
     taskId: updatedTask.id,
+    userId: updatedTask.userId,
     status: updatedTask.status,
     message: "Runtime lease issued",
     payload: {
@@ -1778,6 +1864,7 @@ export async function acknowledgeTaskDispatchLease(
 
   await insertTaskEvent(app, {
     taskId: updatedTask.id,
+    userId: updatedTask.userId,
     status: "running",
     message: "Runtime lease accepted after local journal persistence",
     payload: {
@@ -1929,6 +2016,10 @@ function isSharedBrainChatTask(task: Pick<typeof tasks.$inferSelect, "payload" |
   );
 }
 
+function readAgentRunState(metadata: Record<string, unknown>): string | null {
+  return typeof metadata.agentRunState === "string" ? metadata.agentRunState : null;
+}
+
 export async function reconcileStaleRuntimeTasks(
   app: FastifyInstance,
   input: {
@@ -2021,6 +2112,7 @@ export async function reconcileStaleRuntimeTasks(
 
         await insertTaskEvent(app, {
           taskId: failedTask.id,
+          userId: failedTask.userId,
           status: "failed",
           message,
           payload: {
@@ -2094,6 +2186,7 @@ export async function reconcileStaleRuntimeTasks(
 
       await insertTaskEvent(app, {
         taskId: updatedTask.id,
+        userId: updatedTask.userId,
         status: "queued",
         message: "Task returned to queue",
         payload: {
@@ -2183,6 +2276,16 @@ async function completeServerBrainTask(
     evidenceSufficiency?: string | null;
     dataConfidence?: string | null;
     dataQualityWarnings?: string[];
+    claimConfidence?: number | null;
+    claimSourceCounts?: Record<string, unknown> | null;
+    uncertaintyAction?: string | null;
+    missingEvidenceCount?: number | null;
+    verifiedEvidenceCount?: number | null;
+    contestedMemoryCount?: number | null;
+    lowConfidenceClaims?: number | null;
+    selfCheckApplied?: boolean | null;
+    toolCalledForUncertainty?: boolean | null;
+    clarificationRequested?: boolean | null;
     responseBudgetState?: string | null;
     responseBudgetReason?: string | null;
     contextPacketCount?: number | null;
@@ -2226,19 +2329,71 @@ async function completeServerBrainTask(
     tablePolicy,
     qualityBlocks: input.assistantBlocks,
   });
-  const resolvedAssistantBlocks = blockValidation.blocks;
-  const blockQuality = blockValidation.blockQuality;
-  const visibleResponseText = resolveVisibleAssistantResponse({
+  let resolvedAssistantBlocks = blockValidation.blocks;
+  let blockQuality = blockValidation.blockQuality;
+  let visibleResponseText = resolveVisibleAssistantResponse({
     responseText: resolved.text,
     assistantBlocks: resolvedAssistantBlocks,
     allowPublicProviderReferences:
       input.webGroundingUsed === true || (input.webSourceCount ?? 0) > 0,
   });
+  const artifactPipeline = await buildArtifactPipeline({
+    userRequest: prompt,
+    responseText: visibleResponseText,
+    metadata: payloadMetadata,
+    understandingEnvelope: extractUnderstandingEnvelopeFromMetadata(payloadMetadata),
+    userId: input.userId,
+    taskId: input.taskId,
+    model: input.model,
+  });
+  if (artifactPipeline.kind === "rendered") {
+    const suppressBlockTypes = new Set<string>(
+      artifactPipeline.output.type === "pdf"
+        ? ["document_block", "table"]
+        : artifactPipeline.output.type === "table"
+          ? ["table"]
+          : artifactPipeline.output.type === "chart"
+            ? ["chart"]
+            : artifactPipeline.output.type === "svg"
+              ? ["svg"]
+              : artifactPipeline.output.type === "document"
+                ? ["document_block"]
+                : artifactPipeline.output.type === "image_prompt"
+                  ? ["code"]
+                  : [],
+    );
+    const mergedBlocks = [
+      ...resolvedAssistantBlocks.filter((block) => !suppressBlockTypes.has(block.type)),
+      ...artifactPipeline.assistantBlocks,
+    ];
+    visibleResponseText = artifactPipeline.visibleText || visibleResponseText;
+    const mergedValidation = validateAssistantBlockContract({
+      blocks: mergedBlocks,
+      content: visibleResponseText,
+      mode: "normalize",
+      tablePolicy,
+      qualityBlocks: [...(input.assistantBlocks ?? []), ...artifactPipeline.assistantBlocks],
+    });
+    resolvedAssistantBlocks = mergedValidation.blocks;
+    blockQuality = mergedValidation.blockQuality;
+  }
   const generatedImageArtifact = await maybeGenerateHostedImageArtifact(app, {
     prompt,
     responseText: visibleResponseText,
     metadata: payloadMetadata,
   });
+  const renderRecipeMetadata =
+    artifactPipeline.kind === "rendered"
+      ? {
+          ...payloadMetadata,
+          artifact: {
+            artifactId: artifactPipeline.output.artifactId,
+            type: artifactPipeline.output.type,
+            validationOk: artifactPipeline.output.validation.ok,
+            errorCodes: artifactPipeline.output.validation.errors.map((error) => error.code).slice(0, 16),
+          },
+        }
+      : payloadMetadata;
   const renderRecipe = generatedImageArtifact
     ? null
     : visibleResponseText
@@ -2246,7 +2401,7 @@ async function completeServerBrainTask(
         prompt,
         responseText: visibleResponseText,
         assistantBlocks: resolvedAssistantBlocks,
-        metadata: payloadMetadata,
+        metadata: renderRecipeMetadata,
         renderOn:
           typeof payload.source === "string" && payload.source.trim().toLowerCase() === "desktop"
             ? "desktop"
@@ -2306,6 +2461,16 @@ async function completeServerBrainTask(
     evidenceSufficiency: input.evidenceSufficiency ?? null,
     dataConfidence: input.dataConfidence ?? null,
     dataQualityWarnings: input.dataQualityWarnings ?? [],
+    claimConfidence: input.claimConfidence ?? null,
+    claimSourceCounts: input.claimSourceCounts ?? null,
+    uncertaintyAction: input.uncertaintyAction ?? null,
+    missingEvidenceCount: input.missingEvidenceCount ?? 0,
+    verifiedEvidenceCount: input.verifiedEvidenceCount ?? 0,
+    contestedMemoryCount: input.contestedMemoryCount ?? 0,
+    lowConfidenceClaims: input.lowConfidenceClaims ?? 0,
+    selfCheckApplied: input.selfCheckApplied ?? false,
+    toolCalledForUncertainty: input.toolCalledForUncertainty ?? false,
+    clarificationRequested: input.clarificationRequested ?? false,
     responseBudgetState: input.responseBudgetState ?? null,
     responseBudgetReason: input.responseBudgetReason ?? null,
     contextPacketCount: input.contextPacketCount ?? 0,
@@ -2314,11 +2479,29 @@ async function completeServerBrainTask(
     contextFreshness: input.contextFreshness ?? null,
     assistantBlocks: resolvedAssistantBlocks,
     blockQuality,
+    ...(artifactPipeline.kind === "rendered"
+      ? {
+          artifact: artifactResultForTask(
+            artifactPipeline.output,
+            artifactPipeline.rendererUsed,
+            artifactPipeline.latencyMs,
+          ),
+        }
+      : artifactPipeline.kind === "desktop_required"
+        ? {
+            artifact: {
+              type: artifactPipeline.intent.type,
+              requiresDesktopRuntime: true,
+              reason: artifactPipeline.intent.privateDataReason,
+            },
+          }
+        : {}),
     imageArtifactGenerated: Boolean(generatedImageArtifact),
     ...(renderRecipe ? { renderRecipe } : {}),
   };
   const resultBlob = await storeTaskJsonBlob(app, {
     taskId: task.id,
+    userId: input.userId,
     slot: "result",
     scope: "task_result",
     value: result,
@@ -2355,6 +2538,9 @@ async function completeServerBrainTask(
   });
 
   const artifactsToPersist: PersistableArtifactInput[] = [];
+  if (artifactPipeline.kind === "rendered") {
+    artifactsToPersist.push(buildArtifactOutputArtifact(updatedTask.id, artifactPipeline.output));
+  }
   if (renderRecipe) {
     artifactsToPersist.push(buildStructuredOutputArtifact(updatedTask.id, renderRecipe));
   }
@@ -2367,14 +2553,15 @@ async function completeServerBrainTask(
 
   let structuredOutputArtifacts: Array<ReturnType<typeof shapeTaskArtifact>> = [];
   if (artifactsToPersist.length > 0) {
-    const storedArtifacts = await persistArtifacts(app, updatedTask.id, artifactsToPersist);
+    const storedArtifacts = await persistArtifacts(app, updatedTask.id, input.userId, artifactsToPersist);
     structuredOutputArtifacts = await Promise.all(
-      storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact)),
+      storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact, input.userId)),
     );
   }
 
   await insertTaskEvent(app, {
     taskId: updatedTask.id,
+    userId: updatedTask.userId,
     status: "completed",
     message: "Elyan yanıtı hazır",
     payload: {
@@ -2418,6 +2605,16 @@ async function completeServerBrainTask(
       evidenceSufficiency: input.evidenceSufficiency ?? null,
       dataConfidence: input.dataConfidence ?? null,
       dataQualityWarnings: input.dataQualityWarnings ?? [],
+      claimConfidence: input.claimConfidence ?? null,
+      claimSourceCounts: input.claimSourceCounts ?? null,
+      uncertaintyAction: input.uncertaintyAction ?? null,
+      missingEvidenceCount: input.missingEvidenceCount ?? 0,
+      verifiedEvidenceCount: input.verifiedEvidenceCount ?? 0,
+      contestedMemoryCount: input.contestedMemoryCount ?? 0,
+      lowConfidenceClaims: input.lowConfidenceClaims ?? 0,
+      selfCheckApplied: input.selfCheckApplied ?? false,
+      toolCalledForUncertainty: input.toolCalledForUncertainty ?? false,
+      clarificationRequested: input.clarificationRequested ?? false,
       responseBudgetState: input.responseBudgetState ?? null,
       responseBudgetReason: input.responseBudgetReason ?? null,
       contextPacketCount: input.contextPacketCount ?? 0,
@@ -2425,6 +2622,26 @@ async function completeServerBrainTask(
       healthContextUsed: input.healthContextUsed ?? false,
       contextFreshness: input.contextFreshness ?? null,
       blockQuality,
+      ...(artifactPipeline.kind === "rendered"
+        ? {
+            artifact: {
+              artifactId: artifactPipeline.output.artifactId,
+              type: artifactPipeline.output.type,
+              validationOk: artifactPipeline.output.validation.ok,
+              errorCodes: artifactPipeline.output.validation.errors.map((error) => error.code).slice(0, 16),
+              rendererUsed: artifactPipeline.rendererUsed,
+              latencyMs: artifactPipeline.latencyMs,
+            },
+          }
+        : artifactPipeline.kind === "desktop_required"
+          ? {
+              artifact: {
+                type: artifactPipeline.intent.type,
+                requiresDesktopRuntime: true,
+                reason: artifactPipeline.intent.privateDataReason,
+              },
+            }
+          : {}),
       artifactCount: structuredOutputArtifacts.length,
       ...(renderRecipe ? { renderRecipe } : {}),
       ...(structuredOutputArtifacts.length > 0 ? { artifacts: structuredOutputArtifacts } : {}),
@@ -2434,6 +2651,7 @@ async function completeServerBrainTask(
   if (structuredOutputArtifacts.length > 0) {
     await insertTaskEvent(app, {
       taskId: updatedTask.id,
+      userId: updatedTask.userId,
       status: "completed",
       message: "Structured render recipe ready",
       payload: {
@@ -2466,6 +2684,15 @@ async function completeServerBrainTask(
     taskId: updatedTask.id,
     quality: blockQuality,
   });
+  if (artifactPipeline.kind === "rendered") {
+    void recordArtifactLearningEvent(app, {
+      userId: updatedTask.userId,
+      taskId: updatedTask.id,
+      output: artifactPipeline.output,
+      rendererUsed: artifactPipeline.rendererUsed,
+      latencyMs: artifactPipeline.latencyMs,
+    }).catch(() => undefined);
+  }
   void maybeQueueAutomaticSharedBrainRefresh(app, {
     userId: updatedTask.userId,
     source: "task_completed",
@@ -2527,6 +2754,7 @@ async function markServerBrainTaskRunning(
 
   await insertTaskEvent(app, {
     taskId: updatedTask.id,
+    userId: updatedTask.userId,
     status: "running",
     message: "running",
     payload: {
@@ -2580,14 +2808,61 @@ function extractChatStreamingMetadata(task: typeof tasks.$inferSelect): {
   };
 }
 
-function resolveSharedBrainWorkloadForRouteDecision(
-  routeDecision: CommandRouteDecision | null | undefined,
-  attachmentContextUsed = false,
+function buildUnderstandingMetadataForTask(
+  understanding: UserUnderstandingResult,
 ) {
+  return {
+    intent: understanding.intent,
+    context: understanding.context,
+    routingHints: understanding.routingHints,
+    ...(understanding.envelope
+      ? {
+          envelope: understanding.envelope,
+          envelopeSource: understanding.envelopeSource ?? understanding.envelope.source,
+          envelopeConfidence:
+            understanding.envelopeConfidence ?? understanding.envelope.confidence,
+        }
+      : {}),
+  };
+}
+
+function summarizeUnderstandingForSafeTelemetry(
+  understanding: UserUnderstandingResult,
+) {
+  return {
+    intent: understanding.intent.primaryIntent,
+    confidence: understanding.intent.confidence,
+    privacyRisk: understanding.intent.privacyRisk,
+    routingMode: understanding.routingHints.mode,
+    hintCount:
+      understanding.context.personalizationHints.length +
+      understanding.context.projectHints.length +
+      understanding.context.styleHints.length +
+      understanding.context.technicalHints.length +
+      understanding.context.safetyHints.length,
+    ...envelopeTelemetrySummary(understanding.envelope),
+  };
+}
+
+function resolveSharedBrainWorkloadForUnderstanding(input: {
+  routeDecision: CommandRouteDecision | null | undefined;
+  attachmentContextUsed?: boolean;
+  envelope?: UnderstandingEnvelope | null;
+}) {
+  const envelopeWorkload = preferredWorkloadFromUnderstandingEnvelope(input.envelope);
+  const selectedWorkload =
+    envelopeWorkload &&
+    (!input.routeDecision?.selectedWorkload ||
+      input.routeDecision.selectedWorkload === "mobile_chat_fast" ||
+      input.routeDecision.selectedWorkload === "mobile_chat_balanced" ||
+      input.routeDecision.selectedWorkload === "fast_route")
+      ? envelopeWorkload
+      : input.routeDecision?.selectedWorkload;
+
   return resolveAttachmentAwareSharedBrainWorkload({
-    route: routeDecision?.route,
-    selectedWorkload: routeDecision?.selectedWorkload,
-    attachmentContextUsed,
+    route: input.routeDecision?.route,
+    selectedWorkload,
+    attachmentContextUsed: input.attachmentContextUsed,
   });
 }
 
@@ -2690,10 +2965,11 @@ async function processSharedBrainChatTask(
         ? ({ selectedWorkload: metadataSelectedWorkload, route: "server_brain" } as CommandRouteDecision)
         : null);
 
-    const selectedWorkload = resolveSharedBrainWorkloadForRouteDecision(
-      effectiveRouteDecision,
-      attachmentContext?.used === true || (clientDocCtx?.hasContent === true),
-    );
+    const selectedWorkload = resolveSharedBrainWorkloadForUnderstanding({
+      routeDecision: effectiveRouteDecision,
+      attachmentContextUsed: attachmentContext?.used === true || (clientDocCtx?.hasContent === true),
+      envelope: input.understanding.envelope,
+    });
     const ackText = buildSharedBrainAckText(selectedWorkload);
     const ackTaskTrace = buildTaskTraceBlock({
       task: runningTask,
@@ -2919,6 +3195,14 @@ async function processSharedBrainChatTask(
         : undefined,
     });
     if (heartbeatTimer) clearInterval(heartbeatTimer);
+    const agentRunState = readAgentRunState(inference.metadata);
+    if (agentRunState && agentRunState !== "completed") {
+      app.log.info?.(
+        { taskId: runningTask.id, agentRunState },
+        "task completion deferred until agent verification passes",
+      );
+      return;
+    }
     const completedTask = await completeServerBrainTask(app, {
       taskId: input.currentTask.id,
       userId: input.userId,
@@ -2963,20 +3247,28 @@ async function processSharedBrainChatTask(
     }
     if (chatStreaming) {
       const completionMetadata = readServerBrainCompletionMetadata(inference.metadata);
+      const completedResultRecord = readRecord((completedTask as { result?: unknown }).result);
+      const completedResultText =
+        typeof completedResultRecord?.text === "string" && completedResultRecord.text.trim()
+          ? completedResultRecord.text.trim()
+          : inference.text;
       const taskTrace = buildTaskTraceBlock({
         task: completedTask,
-        assistantContent: inference.text,
+        assistantContent: completedResultText,
       });
+      const completedResultBlocks = Array.isArray(completedResultRecord?.assistantBlocks)
+        ? completedResultRecord.assistantBlocks
+        : completionMetadata.assistantBlocks;
       const inferenceResolved = resolveCompletionAssistantBlocks({
-        responseText: inference.text,
-        assistantBlocks: completionMetadata.assistantBlocks,
+        responseText: completedResultText,
+        assistantBlocks: completedResultBlocks,
         prompt: input.prompt,
         selectedWorkload,
       });
       const inferenceBlocks = inferenceResolved.blocks;
       // Use the cleaned text everywhere so the inline prose doesn't repeat a
       // table/code/document that a widget block is already rendering.
-      const visibleText = inferenceResolved.text || inference.text;
+      const visibleText = inferenceResolved.text || completedResultText;
       // attachmentAck varsa tüm blokların önüne ekle (belge alındı kartı)
       const ackBlock = attachmentAckBlock ? [attachmentAckBlock] : [];
       const finalBlocks = composeAssistantMessageBlocks({
@@ -3065,6 +3357,7 @@ async function processSharedBrainChatTask(
     const failedTask = rows[0] ?? input.currentTask;
     await insertTaskEvent(app, {
       taskId: failedTask.id,
+      userId: failedTask.userId,
       status: "failed",
       message: fallbackMessage,
       payload: {
@@ -3266,16 +3559,37 @@ export async function createTask(
   const isDesktopRoute =
     routeDecision.route === "desktop_runtime" ||
     routeDecision.taskRoute?.operationalRoute === "desktop_runtime";
+  const desktopWorkOrder = isDesktopRoute
+    ? buildDesktopWorkOrder({
+        message: prompt,
+        title: canonicalTitle,
+        routeDecision,
+        requestedCapabilities: routeCapabilities,
+        understandingEnvelope: understanding.envelope,
+        source: typeof payloadMetadata.chat === "object" && payloadMetadata.chat !== null
+          ? "mobile_chat_dispatch"
+          : "backend_task_route",
+      })
+    : null;
+  const taskTitle = desktopWorkOrder?.goal.summary ?? canonicalTitle;
   const desktopContext = isDesktopRoute
     ? {
-        intent: routeDecision.taskRoute?.target ?? "desktop_runtime",
-        requiresCapabilities: routeCapabilities,
-        naturalLanguageGoal: prompt,
-        structuredSteps: null,
-      }
+      intent: routeDecision.taskRoute?.target ?? "desktop_runtime",
+      requiresCapabilities: desktopWorkOrder?.requiredCapabilities ?? routeCapabilities,
+      naturalLanguageGoal: taskTitle,
+      workOrderSchema: desktopWorkOrder?.schema ?? null,
+      structuredSteps: desktopWorkOrder?.planPreview.steps ?? null,
+    }
     : null;
   const enrichedPayload = {
     ...input.payload,
+    ...(desktopWorkOrder
+      ? {
+          prompt: desktopWorkOrder.goal.summary,
+          desktopWorkOrder,
+          planPreview: desktopWorkOrder.planPreview,
+        }
+      : {}),
     ...(buildQuantumTaskSnapshot({ capabilities: routeCapabilities, status: "pending", ready: !routeBlocked })
       ? { quantum: buildQuantumTaskSnapshot({ capabilities: routeCapabilities, status: "pending", ready: !routeBlocked }) }
       : {}),
@@ -3294,9 +3608,7 @@ export async function createTask(
           }
         : {}),
       understanding: {
-        intent: understanding.intent,
-        context: understanding.context,
-        routingHints: understanding.routingHints,
+        ...buildUnderstandingMetadataForTask(understanding),
       },
     },
   };
@@ -3342,6 +3654,7 @@ export async function createTask(
       };
       const blockedPayloadBlob = await storeTaskJsonBlob(app, {
         taskId: blockedTaskId,
+        userId: input.userId,
         slot: "payload",
         scope: "task_payload",
         value: blockedPayload,
@@ -3352,7 +3665,7 @@ export async function createTask(
           id: blockedTaskId,
           userId: input.userId,
           targetDeviceId,
-          title: canonicalTitle,
+          title: taskTitle,
           payload: blockedPayload,
           payloadBlobId: blockedPayloadBlob?.blobId ?? null,
           requestedCapabilities: routeCapabilities,
@@ -3409,6 +3722,7 @@ export async function createTask(
     });
     await insertTaskEvent(app, {
       taskId: blockedTask.id,
+      userId: blockedTask.userId,
       status: "queued",
       message: blockedReason,
       payload: {
@@ -3511,6 +3825,7 @@ export async function createTask(
     const createdTaskId = randomUUID();
     const payloadBlob = await storeTaskJsonBlob(app, {
       taskId: createdTaskId,
+      userId: input.userId,
       slot: "payload",
       scope: "task_payload",
       value: enrichedPayload,
@@ -3521,7 +3836,7 @@ export async function createTask(
           id: createdTaskId,
           userId: input.userId,
           targetDeviceId,
-          title: canonicalTitle,
+          title: taskTitle,
           payload: enrichedPayload,
           payloadBlobId: payloadBlob?.blobId ?? null,
           requestedCapabilities: routeCapabilities,
@@ -3627,8 +3942,8 @@ export async function createTask(
     userId: input.userId,
     accountId: input.userId,
     taskId: currentTask.id,
-    title: canonicalTitle,
-    message: prompt,
+    title: taskTitle,
+    message: desktopWorkOrder?.goal.summary ?? prompt,
     routeContext: "tasks.create",
     source: typeof input.payload.source === "string" ? input.payload.source : undefined,
     deviceId: targetDeviceId,
@@ -3652,21 +3967,11 @@ export async function createTask(
 
   await insertTaskEvent(app, {
     taskId: currentTask.id,
+    userId: currentTask.userId,
     status: "queued",
     message: "Task queued",
     payload: {
-      understanding: {
-        intent: understanding.intent.primaryIntent,
-        confidence: understanding.intent.confidence,
-        privacyRisk: understanding.intent.privacyRisk,
-        routingMode: understanding.routingHints.mode,
-        hintCount:
-          understanding.context.personalizationHints.length +
-          understanding.context.projectHints.length +
-          understanding.context.styleHints.length +
-          understanding.context.technicalHints.length +
-          understanding.context.safetyHints.length,
-      },
+      understanding: summarizeUnderstandingForSafeTelemetry(understanding),
     },
   });
 
@@ -3685,16 +3990,7 @@ export async function createTask(
       targetDeviceId,
       requestedCapabilities: routeCapabilities,
       idempotencyKey: input.idempotencyKey ?? null,
-      understanding: {
-        intent: understanding.intent.primaryIntent,
-        routingMode: understanding.routingHints.mode,
-        hintCount:
-          understanding.context.personalizationHints.length +
-          understanding.context.projectHints.length +
-          understanding.context.styleHints.length +
-          understanding.context.technicalHints.length +
-          understanding.context.safetyHints.length,
-      },
+      understanding: summarizeUnderstandingForSafeTelemetry(understanding),
     },
   });
 
@@ -3726,15 +4022,27 @@ export async function createTask(
         requestMetadata: runningMetadata,
         route: "shared_brain",
         routeDecision,
-        workload: resolveSharedBrainWorkloadForRouteDecision(
+        workload: resolveSharedBrainWorkloadForUnderstanding({
           routeDecision,
-          attachmentContext?.used === true,
-        ),
+          attachmentContextUsed: attachmentContext?.used === true,
+          envelope: understanding.envelope,
+        }),
         meteringSurface: runningMetadata.channel === "chat" ? "chat" : "task",
         planCode: usageAccess.planCode,
         understandingContext: understanding.context,
         brainProfile: usageAccess.brainProfile,
       });
+      const agentRunState = readAgentRunState(inference.metadata);
+      if (agentRunState && agentRunState !== "completed") {
+        const deferredTask = (await getTaskById(app, runningTask.id)) ?? runningTask;
+        return {
+          task: shapeTaskFeedItem(deferredTask, { selectedDesktopOnline }),
+          dispatched: true,
+          reused: false,
+          selectedDesktopOnline,
+          renderRecipe: null,
+        };
+      }
       const completedTask = await completeServerBrainTask(app, {
         taskId: runningTask.id,
         userId: input.userId,
@@ -3784,6 +4092,7 @@ export async function createTask(
       const failedTask = rows[0] ?? currentTask;
       await insertTaskEvent(app, {
         taskId: failedTask.id,
+        userId: failedTask.userId,
         status: "failed",
         message: fallbackMessage,
         payload: {
@@ -3866,6 +4175,7 @@ export async function createTask(
       const releasedTask = rows[0] ?? currentTask;
       await insertTaskEvent(app, {
         taskId: releasedTask.id,
+        userId: releasedTask.userId,
         status: "queued",
         message: "Runtime offline; task returned to queue",
         payload: {
@@ -3981,11 +4291,17 @@ export async function getTaskDetail(app: FastifyInstance, taskId: string, userId
   });
 
   const task = await getTaskForUser(app, taskId, userId);
-  const events = await app.db
+  const scalableStateReads = app.config.ELYAN_SCALABLE_STATE_READS_ENABLED === true;
+  const eventQuery = app.db
     .select()
     .from(taskEvents)
-    .where(eq(taskEvents.taskId, task.id))
-    .orderBy(taskEvents.createdAt);
+    .where(eq(taskEvents.taskId, task.id));
+  const eventWindowRows = scalableStateReads
+    ? await eventQuery.orderBy(desc(taskEvents.createdAt)).limit(201)
+    : null;
+  const events = scalableStateReads
+    ? (eventWindowRows ?? []).slice(0, 200).reverse()
+    : await eventQuery.orderBy(taskEvents.createdAt);
   const taskArtifacts = await app.db
     .select()
     .from(artifacts)
@@ -3993,9 +4309,21 @@ export async function getTaskDetail(app: FastifyInstance, taskId: string, userId
     .orderBy(artifacts.createdAt);
   const hydratedTask = {
     ...task,
-    payload: await hydrateTaskJsonValue(app, task.payload, task.payloadBlobId),
-    result: await hydrateTaskJsonValue(app, task.result, task.resultBlobId),
-    approvalRequest: await hydrateTaskJsonValue(app, task.approvalRequest, task.approvalRequestBlobId),
+    payload: await hydrateTaskJsonValue(app, task.payload, task.payloadBlobId, {
+      userId,
+      ownerType: "task",
+      ownerId: task.id,
+    }),
+    result: await hydrateTaskJsonValue(app, task.result, task.resultBlobId, {
+      userId,
+      ownerType: "task",
+      ownerId: task.id,
+    }),
+    approvalRequest: await hydrateTaskJsonValue(app, task.approvalRequest, task.approvalRequestBlobId, {
+      userId,
+      ownerType: "task",
+      ownerId: task.id,
+    }),
   };
 
   return {
@@ -4008,11 +4336,23 @@ export async function getTaskDetail(app: FastifyInstance, taskId: string, userId
       events.map(async (event) => ({
         ...event,
         payload: sanitizePublicInferenceValue(
-          await hydrateTaskJsonValue(app, event.payload, event.payloadBlobId),
+          await hydrateTaskJsonValue(app, event.payload, event.payloadBlobId, {
+            userId,
+            ownerType: "task_event",
+            ownerId: event.id,
+          }),
         ),
       })),
     ),
-    artifacts: await Promise.all(taskArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact))),
+    eventWindow: scalableStateReads
+      ? {
+          limit: 200,
+          returned: events.length,
+          truncated: (eventWindowRows?.length ?? 0) > 200,
+          order: "ascending",
+        }
+      : undefined,
+    artifacts: await Promise.all(taskArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact, userId))),
   };
 }
 
@@ -4024,7 +4364,7 @@ export async function getTaskArtifact(
 ) {
   const artifact = await getTaskArtifactRecordForUser(app, taskId, artifactId, userId);
   return {
-    artifact: await shapePublicArtifactRecord(app, artifact),
+    artifact: await shapePublicArtifactRecord(app, artifact, userId),
   };
 }
 
@@ -4035,9 +4375,14 @@ export async function getTaskArtifactContent(
   userId: string,
 ) {
   const artifact = await getTaskArtifactRecordForUser(app, taskId, artifactId, userId);
-  const shapedArtifact = await shapePublicArtifactRecord(app, artifact);
+  const shapedArtifact = await shapePublicArtifactRecord(app, artifact, userId);
   const hydratedBody = artifact.bodyBlobId
-    ? await app.services?.blobs?.hydrateJson<Record<string, unknown>>(artifact.bodyBlobId)
+    ? await app.services?.blobs?.hydrateJsonForOwner<Record<string, unknown>>({
+        blobId: artifact.bodyBlobId,
+        userId,
+        ownerType: "artifact",
+        ownerId: artifact.id,
+      })
     : null;
   const bodyRecord =
     hydratedBody && typeof hydratedBody === "object" && !Array.isArray(hydratedBody)
@@ -4085,6 +4430,7 @@ export async function cancelTask(
 
   await insertTaskEvent(app, {
     taskId: task.id,
+    userId: task.userId,
     status: "canceled",
     message: "Task canceled by user",
   });
@@ -4115,6 +4461,7 @@ export async function cancelTask(
     message: "Task canceled by user",
   });
   await app.services.reliability.clearTaskDispatchLock(updatedTask.id);
+  await cancelAgentRunForTask({ app, userId, taskId: updatedTask.id }).catch(() => false);
 
   app.services.realtimeHub.sendToRuntime(updatedTask.targetDeviceId, {
     type: "task.cancel",
@@ -4162,6 +4509,7 @@ export async function resolveTaskApproval(
 
   await insertTaskEvent(app, {
     taskId: task.id,
+    userId: task.userId,
     status: "waiting_approval",
     message: "Onay alındı. Görev devam ediyor.",
     payload: {
@@ -4205,6 +4553,12 @@ export async function resolveTaskApproval(
     approved: true,
     notes: input.notes,
   });
+
+  await resumeAgentRunAfterApproval({
+    app,
+    userId: input.userId,
+    taskId: updatedTask.id,
+  }).catch(() => false);
 
   return {
     taskId: updatedTask.id,
@@ -4250,6 +4604,7 @@ export async function updateTaskFromRuntime(
       ? null
       : await storeTaskJsonBlob(app, {
           taskId: ownedTask.id,
+          userId: ownedTask.userId,
           slot: "approval_request",
           scope: "task_approval_request",
           value: input.approvalRequest,
@@ -4259,6 +4614,7 @@ export async function updateTaskFromRuntime(
       ? null
       : await storeTaskJsonBlob(app, {
           taskId: ownedTask.id,
+          userId: ownedTask.userId,
           slot: "result",
           scope: "task_result",
           value: runtimeResult,
@@ -4279,14 +4635,15 @@ export async function updateTaskFromRuntime(
 
   const rows = await app.db.update(tasks).set(updates).where(eq(tasks.id, ownedTask.id)).returning();
   const updatedTask = rows[0];
-  const storedArtifacts = await persistArtifacts(app, ownedTask.id, input.artifacts);
+  const storedArtifacts = await persistArtifacts(app, ownedTask.id, ownedTask.userId, input.artifacts);
   const shapedArtifacts = await Promise.all(
-    storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact)),
+    storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact, ownedTask.userId)),
   );
   await resequenceDeviceQueue(app, updatedTask.targetDeviceId);
 
   await insertTaskEvent(app, {
     taskId: ownedTask.id,
+    userId: ownedTask.userId,
     status: input.status,
     message: input.message,
     payload: {
@@ -4385,6 +4742,7 @@ export async function submitTaskFeedback(
 
   await insertTaskEvent(app, {
     taskId: task.id,
+    userId: task.userId,
     status: task.status,
     message: "Task feedback received",
     payload: {
@@ -4427,13 +4785,14 @@ export async function appendTaskArtifacts(
 ) {
   const task = await getTaskForRuntime(app, taskId, auth);
   const ownedTask = await ensureTaskRuntimeOwnership(app, task, auth);
-  const storedArtifacts = await persistArtifacts(app, ownedTask.id, items);
+  const storedArtifacts = await persistArtifacts(app, ownedTask.id, ownedTask.userId, items);
   const shapedArtifacts = await Promise.all(
-    storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact)),
+    storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact, ownedTask.userId)),
   );
 
   await insertTaskEvent(app, {
     taskId: ownedTask.id,
+    userId: ownedTask.userId,
     status: ownedTask.status,
     message: "Artifacts appended",
     payload: {

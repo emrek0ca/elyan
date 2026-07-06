@@ -293,6 +293,21 @@ export function resolveSecurityDecisionGate(prompt: string): BrainBoundaryGateRe
     );
   }
 
+  // Cross-user data access attempt
+  if (/(^|[^\p{L}])(başka kullanıcı\p{L}*|baska kullanici\p{L}*|diğer kullanıcı\p{L}*|diger kullanici\p{L}*|other user\p{L}*|another user\p{L}*|someone else\p{L}*|başkasının|baskasinin|birinin verisi\p{L}*|birinin mesaj\p{L}*|birinin bellek\p{L}*|birinin hafıza\p{L}*|birinin hafiza\p{L}*|all users?|tüm kullanıcı\p{L}*|tum kullanici\p{L}*|kullanıcı listesi\p{L}*|kullanici listesi\p{L}*|user list\p{L}*|dump.*user\p{L}*)([^\p{L}]|$)/iu.test(securityHaystack)) {
+    return buildSecurityGateResult(
+      decision({
+        requestType: "secret_extraction_attempt",
+        blockedFields: ["cross_user_data", "user_list", "other_user_memory"],
+        reason: "Cross-user data access is not permitted. Each user's data is strictly isolated.",
+        safeAlternative: "Başka kullanıcıların verilerine erişemem. Her kullanıcının bilgileri tamamen izole ve gizlidir. Sadece senin verilerini görebilirim.",
+        requiresVerifiedAdminChannel: true,
+        risk: "critical",
+      }),
+      prompt,
+    );
+  }
+
   if (/(^|[^\p{L}])(send email|send message|post to|dm|sms|slack|whatsapp|telegram|tweet|publish|email gönder\p{L}*|e-posta olarak gönder\p{L}*|e posta olarak gönder\p{L}*|mail gönder\p{L}*|mesaj gönder\p{L}*|sms gönder\p{L}*|slack'e yaz\p{L}*|whatsapp'tan yaz\p{L}*|yayınla\p{L}*|paylaş\p{L}*)([^\p{L}]|$)/iu.test(securityHaystack)) {
     return buildSecurityGateResult(
       decision({
@@ -358,9 +373,19 @@ export function isDirectElyanIdentityPrompt(prompt: string): boolean {
     /\bwhat is elyan\b/,
     /\bwho is elyan\b/,
     /\bwho are you\b/,
+    /\bwho (made|built|created|developed) you\b/,
+    /\bwho('?s| is) your (creator|developer|founder|maker)\b/,
     /\bchatgpt misin\b/,
     /\bopenai mısın\b/,
     /\bopenai misin\b/,
+    /\bseni kim (üretti|uretti|yaptı|yapti|geliştirdi|gelistirdi|yarattı|yaratti|kurdu|kodladı|kodladi|tasarladı|tasarladi|programladı|programladi)\b/,
+    /\bseni kim (yapmış|yapmis|üretmiş|uretmis|geliştirmiş|gelistirmis|yaratmış|yaratmis)\b/,
+    /\belyan['ıi]?\s*(kim|ne)\s*(yaptı|yapti|üretti|uretti|geliştirdi|gelistirdi|yarattı|yaratti|kurdu)\b/,
+    /\belyan['ıi]?n?\s*(geliştiricisi|gelistiricisi|yapımcısı|yapimcisi|yaratıcısı|yaraticisi|kurucusu|sahibi)\s*(kim|ne)\b/,
+    /\byapımcın\s*(kim|ne)\b/,
+    /\bgeliştirici(n|niz)\s*(kim|ne)\b/,
+    /\bkurucun\s*(kim|ne)\b/,
+    /\byaratıcın\s*(kim|ne)\b/,
   ].some((pattern) => pattern.test(normalized));
 }
 

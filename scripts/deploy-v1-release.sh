@@ -63,7 +63,7 @@ npm run build
 npm test
 
 echo "==> Remote backup to ${BACKUP_DIR}"
-ssh "${REMOTE_HOST}" "mkdir -p '${BACKUP_DIR}' && cd '${REMOTE_DIR}' && cp -a package.json package-lock.json ${COMPOSE_FILE} .env src scripts drizzle '${BACKUP_DIR}/' && if [ -d ml-worker ]; then cp -a ml-worker '${BACKUP_DIR}/'; fi"
+ssh "${REMOTE_HOST}" "mkdir -p '${BACKUP_DIR}' && cd '${REMOTE_DIR}' && cp -a package.json package-lock.json ${COMPOSE_FILE} .env src scripts drizzle '${BACKUP_DIR}/' && if [ -d ops ]; then cp -a ops '${BACKUP_DIR}/'; fi && if [ -d ml-worker ]; then cp -a ml-worker '${BACKUP_DIR}/'; fi"
 
 echo "==> Sync release candidate"
 rsync -az --delete \
@@ -96,7 +96,7 @@ echo "==> Remote install and test"
 ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && npm ci && npm run compile:nlp && npm run build && npm test"
 
 echo "==> Remote schema bootstrap and restart"
-ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d postgres redis && bash scripts/bootstrap-v1-social-auth-schema.sh && bash scripts/bootstrap-v1-device-schema.sh && bash scripts/bootstrap-v2-apple-billing-schema.sh && bash scripts/bootstrap-v3-blob-memory-schema.sh && bash scripts/bootstrap-v4-identity-quota-schema.sh && bash scripts/bootstrap-v5-world-signals-schema.sh && bash scripts/bootstrap-v6-operator-schema.sh && bash scripts/bootstrap-v7-subscription-lifecycle-schema.sh && bash scripts/bootstrap-v8-session-goals-schema.sh && bash scripts/bootstrap-v9-agent-foundation-schema.sh && docker compose -f '${COMPOSE_FILE}' up -d --build backend training-worker ml-worker"
+ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d postgres redis && bash scripts/bootstrap-v1-social-auth-schema.sh && bash scripts/bootstrap-v1-device-schema.sh && bash scripts/bootstrap-v2-apple-billing-schema.sh && bash scripts/bootstrap-v3-blob-memory-schema.sh && bash scripts/bootstrap-v4-identity-quota-schema.sh && bash scripts/bootstrap-v5-world-signals-schema.sh && bash scripts/bootstrap-v6-operator-schema.sh && bash scripts/bootstrap-v7-subscription-lifecycle-schema.sh && bash scripts/bootstrap-v8-session-goals-schema.sh && bash scripts/bootstrap-v9-agent-foundation-schema.sh && bash scripts/bootstrap-v10-cognitive-foundation-schema.sh && docker compose -f '${COMPOSE_FILE}' up -d --build backend training-worker brain-worker document-worker proactive-scheduler ml-worker"
 
 echo "==> Post-deploy probe"
 probe_with_retry 6 5

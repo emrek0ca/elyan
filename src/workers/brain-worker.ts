@@ -1,6 +1,7 @@
 import { buildApp } from "../app/build-app.js";
 import { loadEnv } from "../config/env.js";
 import { runBrainWorker } from "../modules/brain/worker.js";
+import { ensureAgentEngineWorker } from "../modules/brain/agent-engine-queue.js";
 
 try {
   process.loadEnvFile();
@@ -21,6 +22,7 @@ process.env.ELYAN_MEMORY_WORKER_DISABLED = "true";
 
 const env = loadEnv();
 const app = await buildApp(env);
+await ensureAgentEngineWorker(app);
 
 let shuttingDown = false;
 

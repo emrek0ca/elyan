@@ -731,6 +731,7 @@ export async function runJsonlBenchmarks(
         skipUsageValidation: true,
         skipInvocationLogging: true,
         skipReviewLogging: true,
+        skipConsentValidation: true,
       },
     });
     results.push(evaluateBenchmarkCase({ testCase, routeDecision, reply }));

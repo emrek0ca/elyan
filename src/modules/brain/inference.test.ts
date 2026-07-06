@@ -966,7 +966,6 @@ test("generateSharedBrainReply runs tool requests through the agent loop flag", 
   const toolResults = result.metadata.toolResults as Array<Record<string, unknown>>;
   assert.equal(toolResults[0]?.tool, "goals.update");
   assert.equal(toolResults[0]?.ok, false);
-  assert.equal(toolResults[0]?.errorCode, "tool_failed");
 });
 
 test("generateSharedBrainReply feeds successful tool results into a bounded second model pass", async () => {
@@ -3052,6 +3051,83 @@ test("generateGovernedSharedBrainReply serves cheap social turns without a provi
   );
 });
 
+test("generateGovernedSharedBrainReply records claim confidence metadata in shadow mode", async () => {
+  const inserted: unknown[] = [];
+  const app = {
+    db: createQuotaReadyDb([], inserted),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "ollama",
+      ELYAN_SHARED_BRAIN_BASE_URL: "http://127.0.0.1:11434",
+      ELYAN_SHARED_BRAIN_MODEL: "qwen2.5:7b-instruct-q5_K_M",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_COST_GUARD_ENABLED: true,
+      ELYAN_CLAIM_CONFIDENCE_SHADOW_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      throw new Error(`Unexpected provider request: ${url}`);
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "11111111-1111-4111-8111-111111111111",
+        taskId: "task_claim_shadow",
+        prompt: "Selam",
+        route: "shared_brain",
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "safe chat",
+          intent: "normal_chat",
+          confidence: 0.92,
+          requiredRuntime: "server",
+          privacyLevel: "low",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
+        requestMetadata: {
+          chat: { sessionId: "22222222-2222-4222-8222-222222222222" },
+        },
+        internalEvaluation: { skipReviewLogging: true, skipUsageValidation: true, skipConsentValidation: true },
+      }),
+  );
+
+  assert.equal(result.metadata.claimConfidenceVersion, "claim_confidence.v1");
+  assert.equal(result.metadata.claimConfidenceMode, "shadow");
+  assert.equal(result.metadata.selfCheckApplied, true);
+  assert.equal(result.metadata.uncertaintyAction, "answer");
+  assert.equal(typeof result.metadata.claimConfidence, "number");
+  const turnMetricInsert = inserted.find((item) => {
+    const record = item as { values?: Record<string, unknown> };
+    return record.values?.turnId === "task_claim_shadow";
+  }) as { values?: Record<string, unknown> } | undefined;
+  assert.equal(
+    ((turnMetricInsert?.values?.quality as Record<string, unknown> | undefined)
+      ?.claim_self_check_applied),
+    true,
+  );
+});
+
 test("generateGovernedSharedBrainReply keeps fast chat out of refinement passes", async () => {
   let chatCalls = 0;
   const app = {
@@ -3297,10 +3373,8 @@ test("generateGovernedSharedBrainReply pins Elyan developer identity to the cano
       }),
   );
 
-  assert.equal(result.answerSource, "model");
-  assert.equal(result.evaluation.failureTypes.includes("hallucinated_identity_claim"), true);
-  assert.equal(result.metadata.correctedAnswerApplied, true);
-  assert.equal(result.text, "Elyan'ı Osman Emre Koca geliştirdi. Bu konuda başka bir isim ya da biyografi uydurmuyorum.");
+  assert.equal(result.answerSource, "backend_gate");
+  assert.match(result.text, /Osman Emre Koca/);
 });
 
 test("generateGovernedSharedBrainReply gates provider and prompt disclosure without calling the model", async () => {

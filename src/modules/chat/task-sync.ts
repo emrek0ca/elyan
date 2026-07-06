@@ -284,7 +284,6 @@ function buildLifecycleBlocks(
     );
   } else if (
     routeDecision?.route === "pairing_required" ||
-    routeDecision?.taskRoute?.operationalRoute === "desktop_runtime" ||
     normalizedError.includes("pairing_required") ||
     normalizedError.includes("desktop_required")
   ) {
@@ -388,6 +387,7 @@ export async function syncChatTaskLifecycle(
   const contentBlob = await app.services?.blobs?.storeText({
     ownerType: "chat_message",
     ownerId: metadata.assistantMessageId,
+    userId: input.updatedTask.userId,
     slot: "content",
     scope: "chat_message_content",
     value: assistantContent,

@@ -57,10 +57,10 @@ export function isLikelyPureDocumentExportPrompt(prompt: string): boolean {
   }
 
   return (
-    /\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i.test(
+    /\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum|xlsx|excel|spreadsheet|csv|tablo)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i.test(
       normalizedPrompt,
     ) ||
-    /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum)\b/i.test(
+    /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum|xlsx|excel|spreadsheet|csv|tablo)\b/i.test(
       normalizedPrompt,
     )
   );

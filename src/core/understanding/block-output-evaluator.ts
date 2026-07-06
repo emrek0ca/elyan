@@ -357,7 +357,7 @@ export async function evaluateBlockOutputPolicyFixtures(
   const passCount = cases.filter((item) => item.pass).length;
   const ciViolations: string[] = [];
 
-  if (fixtureCount !== 50) ciViolations.push(`fixture count expected 50, got ${fixtureCount}`);
+  if (fixtureCount !== 55) ciViolations.push(`fixture count expected 55, got ${fixtureCount}`);
   if (routeAccuracy < 1) ciViolations.push(`route accuracy ${(routeAccuracy * 100).toFixed(1)}% < 100%`);
   if (shapeAccuracy < 1) ciViolations.push(`shape accuracy ${(shapeAccuracy * 100).toFixed(1)}% < 100%`);
   if (schemaValidRate < 0.95) ciViolations.push(`schema valid rate ${(schemaValidRate * 100).toFixed(1)}% < 95%`);

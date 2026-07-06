@@ -18,6 +18,7 @@ test("isMobileLocalExportMode accepts boolean flags and normalized modes", () =>
 test("isLikelyPureDocumentExportPrompt detects document export intents", () => {
   assert.equal(isLikelyPureDocumentExportPrompt("Bunu PDF olarak hazırla"), true);
   assert.equal(isLikelyPureDocumentExportPrompt("Word raporu oluştur"), true);
+  assert.equal(isLikelyPureDocumentExportPrompt("Bunu Excel tablo olarak oluştur"), true);
   assert.equal(isLikelyPureDocumentExportPrompt("Bu konuyu kısaca açıkla"), false);
 });
 

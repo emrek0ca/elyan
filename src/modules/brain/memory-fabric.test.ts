@@ -151,6 +151,10 @@ test("recordTurnMemoryOps writes preference facts without prompt content", async
   assert.equal(fake.facts[0]?.canonicalKey, "preferred_tone");
   assert.equal(fake.facts[0]?.factType, "semantic");
   assert.equal(fake.facts[0]?.confidence, 82);
+  assert.equal(fake.facts[0]?.revision, 1);
+  assert.equal(fake.facts[0]?.sourceKind, "turn_envelope");
+  assert.ok(fake.facts[0]?.validFrom instanceof Date);
+  assert.equal(typeof fake.facts[0]?.contentHash, "string");
   assert.equal(JSON.stringify(fake.facts[0]?.metadata).includes("Bana"), false);
 });
 
@@ -195,6 +199,12 @@ test("recordTurnMemoryOps writes episode ops to episodic memory", async () => {
   assert.equal(fake.episodes[0]?.episodeType, "deploy_followup");
   assert.equal(fake.episodes[0]?.sourceSessionId, "22222222-2222-4222-8222-222222222222");
   assert.ok(fake.episodes[0]?.staleAt instanceof Date);
+  assert.ok(fake.episodes[0]?.expiresAt instanceof Date);
+  assert.ok(
+    (fake.episodes[0]?.expiresAt as Date).getTime() -
+      (fake.episodes[0]?.observedAt as Date).getTime() <=
+      90 * 86_400_000,
+  );
 });
 
 test("recordTurnMemoryOps creates a tombstone for explicit forget operations", async () => {

@@ -131,3 +131,26 @@ test("turn envelope helpers detect envelope-shaped JSON and expose provider sche
   const proactiveSchema = (proactiveFormat.json_schema as Record<string, unknown>).schema as Record<string, unknown>;
   assert.equal((proactiveSchema.required as string[]).includes("proactive_ops"), true);
 });
+
+test("parseTurnEnvelope accepts a typed agent plan without treating it as completion", () => {
+  const parsed = parseTurnEnvelope({
+    reply: { text: "Plan hazır", lang: "tr", tone: "technical" },
+    agent_plan: {
+      version: "agent_plan.v2",
+      goal: { title: "Araştır", success_criteria: ["Kaynak doğrulandı"] },
+      steps: [{
+        id: "research",
+        title: "Kaynak ara",
+        depends_on: [],
+        tool_request: { tool: "web.search", args: { query: "Elyan" } },
+        expected_outcome: {
+          description: "Arama başarılı",
+          rules: [{ source: "tool_result", path: "ok", operator: "equals", value: true }],
+        },
+        max_attempts: 3,
+      }],
+    },
+  });
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.ok ? parsed.envelope.agent_plan?.steps[0]?.id : null, "research");
+});

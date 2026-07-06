@@ -12,6 +12,9 @@ import {
   learningEvents,
   trainingJobs,
 } from "../../db/schema.js";
+import { cognitiveMemoryRepository } from "./cognitive-memory-repository.js";
+import { isCognitiveFoundationEnabled } from "./cognitive-foundation-policy.js";
+import type { TurnEnvelope } from "./turn-envelope.js";
 import { notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
 import { invalidateBrainProfileCache } from "./profile-cache.js";
@@ -2204,6 +2207,25 @@ export async function upsertMemoryFact(
 ) {
   const canonicalKey = resolveCanonicalMemoryKey(input.key);
   const normalizedValue = normalizeMemoryValue(input.value);
+  if (isCognitiveFoundationEnabled(app, input.userId)) {
+    const kind: TurnEnvelope["memory_ops"][number]["kind"] =
+      input.factType === "semantic" ? "fact" : "self_model";
+    const write = await cognitiveMemoryRepository(app).writeTurn({
+      userId: input.userId,
+      taskId:
+        typeof input.metadata.taskId === "string" ? input.metadata.taskId : undefined,
+      sourceKind: "async_extraction",
+      sourceId: input.sourceRunId ?? null,
+      envelope: buildRepositoryMemoryEnvelope([{
+        op: isSingleValueMemoryKey(canonicalKey) ? "update" : "write",
+        kind,
+        key: canonicalKey,
+        value: input.value,
+        confidence: Math.max(0.01, Math.min(0.99, input.confidence / 100)),
+      }]),
+    });
+    return write.factIds[0] ?? null;
+  }
   const forgetTombstones = await app.db
     .select({ id: brainMemoryFacts.id })
     .from(brainMemoryFacts)
@@ -2325,6 +2347,24 @@ async function insertMemoryEpisode(
   },
 ) {
   const normalizedSummary = normalizeMemoryValue(input.summary);
+  if (isCognitiveFoundationEnabled(app, input.userId)) {
+    const write = await cognitiveMemoryRepository(app).writeTurn({
+      userId: input.userId,
+      taskId: input.sourceTaskId ?? undefined,
+      sessionId: input.sourceSessionId,
+      sourceKind: "async_extraction",
+      sourceId: input.sourceRunId ?? input.sourceTaskId,
+      envelope: buildRepositoryMemoryEnvelope([{
+        op: "write",
+        kind: "episode",
+        key: input.episodeType,
+        value: input.summary,
+        confidence: Math.max(0.01, Math.min(0.99, input.confidence / 100)),
+        ttl_days: 90,
+      }]),
+    });
+    return write.episodeIds[0] ?? null;
+  }
   const forgetTombstones = await app.db
     .select({ id: brainMemoryEpisodes.id })
     .from(brainMemoryEpisodes)
@@ -2386,6 +2426,20 @@ async function insertMemoryEpisode(
     });
 
   return insertedRows[0]?.id ?? null;
+}
+
+function buildRepositoryMemoryEnvelope(
+  memoryOps: TurnEnvelope["memory_ops"],
+): TurnEnvelope {
+  return {
+    reply: { text: "", lang: "tr", tone: "neutral" },
+    blocks: [],
+    memory_ops: memoryOps,
+    goal_ops: [],
+    follow_ups: [],
+    tool_requests: [],
+    affect: { user_mood_guess: "unknown", energy: "mid", register: "neutral" },
+  };
 }
 
 async function queueFollowUpMemoryJobs(app: FastifyInstance, userId: string) {

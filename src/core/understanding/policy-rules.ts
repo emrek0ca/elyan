@@ -29,7 +29,7 @@ export type PolicyRuleMatch = {
 };
 
 const DOC_NOUN = String.raw`(?:rapor\p{L}{0,8}|makale\p{L}{0,8}|belge\p{L}{0,8}|d[öo]k[üu]man\p{L}{0,8}|deneme\p{L}{0,8}|kompozisyon\p{L}{0,8}|dilek[çc]e\p{L}{0,8}|mektup\p{L}{0,8}|essay|article|report|bülten|bulten|kılavuz|kilavuz|sunum metni|köşe yaz[ıi]s[ıi]|kose yaz[ıi]s[ıi]|blog yaz[ıi]s[ıi]|blog post|taslak)`;
-const DOC_VERB = String.raw`(?:yaz|haz[ıi]rla|olu[şs]tur|[üu]ret|d[üu]zenle|kaleme al|derle|haz[ıi]rlay)`;
+const DOC_VERB = String.raw`(?:yaz|haz[ıi]rla|olu[şs]tur|[üu]ret|d[üu]zenle|d[öo]n[üu][şs]t[üu]r|[çc]evir|kaleme al|derle|haz[ıi]rlay)`;
 
 const TABLE_NOUN_PATTERN = /(?<!\p{L})(tablo|table|matris|matrix|csv|xlsx|excel|spreadsheet)(?!\p{L})/iu;
 const TABLE_ACTION_PATTERN = /(?<!\p{L})(ver|göster|goster|sun|hazırla|hazirla|oluştur|olustur|üret|uret|çıkar|cikar|dışa aktar|disa aktar|export|düzenle|duzenle|çevir|cevir|karşılaştır|karsilastir|compare|listele|list|sırala|sirala|özetle|ozetle)(?!\p{L})/iu;
@@ -67,8 +67,8 @@ export const policyRules: PolicyRule[] = [
       patterns: [
         new RegExp(`(?<!\\p{L})${DOC_NOUN}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_VERB}`, "iu"),
         new RegExp(`(?<!\\p{L})${DOC_VERB}(?!\\p{L})[\\s\\S]{0,48}?(?<!\\p{L})${DOC_NOUN}(?!\\p{L})`, "iu"),
-        /\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b.*\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|yap)\b/i,
-        /\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|yap)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b/i,
+        /\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b.*\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|dönüştür|donustur|çevir|cevir|yap)\b/i,
+        /\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|dönüştür|donustur|çevir|cevir|yap)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b/i,
         /\b(tasarım|tasarim|layout|şablon|sablon)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum metni)\b/i,
         /\b(pdf olarak|word olarak|docx olarak)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle)\b/i,
       ],
@@ -95,6 +95,7 @@ export const policyRules: PolicyRule[] = [
       ],
       patterns: [
         /(?<!\p{L})(grafik|grafiği|grafiğini|grafigi|grafigini|chart|graph|plot|çiz|ciz|çizim|cizim|visualize|visualise|görselleştir|gorsellestir)(?!\p{L})/iu,
+        /(?<!\p{L})(svg|vektör|vektor|vector|diagram|diyagram|geometrik çizim|geometrik cizim)(?!\p{L})/iu,
         /(?<!\p{L})(fonksiyon grafiği|fonksiyon grafigi|function graph|function plot|scatter|line chart|bar chart|pie chart)(?!\p{L})/iu,
         /(?<!\p{L})(3d|3 boyutlu|üç boyutlu|uc boyutlu|surface|mesh|yüzey grafiği|yuzey grafigi)(?!\p{L})/iu,
         /\b(3d|3 boyutlu|üç boyutlu|uc boyutlu)\b.{0,80}\b(yüzey grafiği|yuzey grafigi|surface plot|surface|mesh|grafiğini çiz|grafigini ciz|grafik|plot)\b/i,

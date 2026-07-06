@@ -35,6 +35,15 @@ export type ActiveGoalContext = {
   dueAt: Date | null;
 };
 
+export type GoalExecutionEvent = {
+  id: string;
+  eventType: string;
+  fromState: string | null;
+  toState: string;
+  payload: Record<string, unknown>;
+  createdAt: Date;
+};
+
 function compactText(value: string, max: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trimEnd()}…`;
@@ -231,6 +240,68 @@ export async function getActiveGoalForContext(
     .orderBy(desc(sessionGoals.updatedAt))
     .limit(1);
   return rows[0] ? shapeGoal(rows[0]) : null;
+}
+
+export async function getGoalExecutionContext(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    goalId?: string;
+    sessionId?: string | null;
+    eventLimit?: number;
+  },
+): Promise<{ goal: ActiveGoalContext | null; events: GoalExecutionEvent[] }> {
+  const eventLimit = Math.max(1, Math.min(input.eventLimit ?? 12, 50));
+  const goalRows = input.goalId
+    ? await app.db
+        .select()
+        .from(sessionGoals)
+        .where(and(eq(sessionGoals.id, input.goalId), eq(sessionGoals.userId, input.userId)))
+        .limit(1)
+    : input.sessionId
+      ? await app.db
+          .select()
+          .from(sessionGoals)
+          .where(
+            and(
+              eq(sessionGoals.userId, input.userId),
+              eq(sessionGoals.sessionId, input.sessionId),
+              eq(sessionGoals.status, "active"),
+            ),
+          )
+          .orderBy(desc(sessionGoals.updatedAt))
+          .limit(1)
+      : await app.db
+          .select()
+          .from(sessionGoals)
+          .where(and(eq(sessionGoals.userId, input.userId), eq(sessionGoals.status, "active")))
+          .orderBy(desc(sessionGoals.updatedAt))
+          .limit(1);
+  const goal = goalRows[0];
+  if (!goal) {
+    return { goal: null, events: [] };
+  }
+
+  const eventRows = await app.db
+    .select()
+    .from(goalEvents)
+    .where(and(eq(goalEvents.goalId, goal.id), eq(goalEvents.userId, input.userId)))
+    .orderBy(desc(goalEvents.createdAt))
+    .limit(eventLimit);
+  return {
+    goal: shapeGoal(goal),
+    events: eventRows.reverse().map((event) => ({
+      id: event.id,
+      eventType: event.eventType,
+      fromState: event.fromState,
+      toState: event.toState,
+      payload:
+        event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+          ? event.payload as Record<string, unknown>
+          : {},
+      createdAt: event.createdAt,
+    })),
+  };
 }
 
 export async function updateGoal(

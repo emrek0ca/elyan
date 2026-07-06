@@ -37,12 +37,28 @@ export function getLoadSheddingOptions(
   planCode?: string | null,
 ) {
   const workloadProfile = getSharedBrainWorkloadProfile(workload);
+  const heavyWorkload =
+    workload === "document_generate" ||
+    workload === "table_generate" ||
+    workload === "document_analysis";
+  const fastWorkload = workload === "mobile_chat_fast";
+  const maxConcurrent = heavyWorkload
+    ? brainProfile.tier === "premium"
+      ? 2
+      : 2
+    : fastWorkload
+      ? brainProfile.tier === "premium"
+        ? 4
+        : 6
+      : brainProfile.tier === "premium"
+        ? 2
+        : 4;
   return {
     namespace:
       brainProfile.tier === "premium"
         ? "shared-brain:premium"
         : "shared-brain:standard",
-    maxConcurrent: brainProfile.tier === "premium" ? 2 : 4,
+    maxConcurrent,
     ttlMs: Math.max(workloadProfile.timeoutMs + 8_000, 20_000),
     salt: `${
       String(planCode ?? "free")

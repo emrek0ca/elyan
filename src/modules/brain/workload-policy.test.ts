@@ -45,3 +45,21 @@ test("getLoadSheddingOptions derives stable namespace ttl and salt", () => {
   assert.match(options.salt, /^pro:planning:5:5:6$/);
   assert.ok(options.ttlMs >= getChatTimeoutMs("planning"));
 });
+
+test("getLoadSheddingOptions uses tighter slots for heavy document workloads", () => {
+  assert.equal(
+    getLoadSheddingOptions("mobile_chat_fast", standardProfile, "free")
+      .maxConcurrent,
+    6,
+  );
+  assert.equal(
+    getLoadSheddingOptions("document_generate", standardProfile, "free")
+      .maxConcurrent,
+    2,
+  );
+  assert.equal(
+    getLoadSheddingOptions("table_generate", premiumProfile, "pro")
+      .maxConcurrent,
+    2,
+  );
+});

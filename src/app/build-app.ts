@@ -243,6 +243,7 @@ export async function buildApp(envInput?: AppEnv) {
           const blob = await blobs.storeJson({
             ownerType: "realtime_event",
             ownerId: String(row.id),
+            userId: row.userId ?? undefined,
             slot: "payload",
             scope: "realtime_event_payload",
             value: event.payload,

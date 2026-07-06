@@ -627,6 +627,8 @@ function readChatSessionPreview(metadata: unknown, title: string | null | undefi
 async function hydrateMessageContent(
   app: FastifyInstance,
   input: {
+    id: string;
+    userId: string;
     content: string;
     contentBlobId?: string | null;
   },
@@ -635,7 +637,14 @@ async function hydrateMessageContent(
     return input.content;
   }
 
-  return (await app.services?.blobs?.hydrateText(input.contentBlobId)) ?? input.content;
+  return (
+    (await app.services?.blobs?.hydrateTextForOwner({
+      blobId: input.contentBlobId,
+      userId: input.userId,
+      ownerType: "chat_message",
+      ownerId: input.id,
+    })) ?? input.content
+  );
 }
 
 function shapeChatMessageForResponse<T extends typeof chatMessages.$inferSelect>(
@@ -732,7 +741,8 @@ function placeholderMobileChatTaskCondition(before?: Date) {
 function presentationForRoute(
   routeDecision: { route?: string } | null | undefined,
 ): "chat" | "task" {
-  return routeDecision?.route === "server_brain" ? "chat" : "task";
+  void routeDecision;
+  return "chat";
 }
 
 export function buildChatDispatchDeliverySnapshot(input: {
@@ -994,7 +1004,8 @@ async function loadChatConversation(
   const hydratedRows = await Promise.all(
     rows.map(async (row) => ({
       ...row,
-      content: await hydrateMessageContent(app, row),
+      userId: input.userId,
+      content: await hydrateMessageContent(app, { ...row, userId: input.userId }),
     })),
   );
 
@@ -1735,6 +1746,7 @@ export async function createChatMessage(
   const userMessageBlob = await app.services?.blobs?.storeText({
     ownerType: "chat_message",
     ownerId: userMessageId,
+    userId: input.userId,
     slot: "content",
     scope: "chat_message_content",
     value: input.content,
@@ -1743,6 +1755,7 @@ export async function createChatMessage(
   const assistantAckBlob = await app.services?.blobs?.storeText({
     ownerType: "chat_message",
     ownerId: assistantMessageId,
+    userId: input.userId,
     slot: "content",
     scope: "chat_message_content",
     value: assistantAckText,

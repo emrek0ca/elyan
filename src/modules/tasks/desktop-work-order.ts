@@ -1,0 +1,407 @@
+import { createHash } from "node:crypto";
+import type { CommandRouteDecision } from "../routing-policy/service.js";
+import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
+
+export type DesktopWorkOrderStep = {
+  id: string;
+  capability: string;
+  description: string;
+  args: Record<string, unknown>;
+};
+
+export type DesktopWorkOrder = {
+  schema: "elyan.desktop_work_order.v1";
+  source: "mobile_chat_dispatch" | "backend_task_route";
+  goal: {
+    kind: string;
+    summary: string;
+    language: "tr" | "en" | "unknown";
+    sourceTextHash: string;
+  };
+  entities: Array<{
+    type: "url" | "email" | "file_hint" | "app_hint" | "topic";
+    value: string;
+  }>;
+  constraints: string[];
+  requiredCapabilities: string[];
+  localContextNeeded: string[];
+  expectedOutputs: Array<{
+    kind: "chat_result" | "artifact" | "file_update" | "browser_state" | "system_state";
+    format: string;
+    required: boolean;
+  }>;
+  verificationRules: Array<{
+    id: string;
+    description: string;
+    evidence: "runtime_status" | "tool_result" | "artifact" | "state_readback";
+  }>;
+  execution: {
+    mode: "cowork_dispatch";
+    approvalPolicy: "capability_policy";
+    maxSteps: number;
+  };
+  planPreview: {
+    summary: string;
+    privacyClass: "public_text" | "local_private" | "side_effect";
+    steps: DesktopWorkOrderStep[];
+  };
+  understanding?: {
+    schemaVersion: UnderstandingEnvelope["schema_version"];
+    intent: UnderstandingEnvelope["intent"];
+    entities: UnderstandingEnvelope["entities"];
+    constraints: UnderstandingEnvelope["constraints"];
+    desiredOutputs: UnderstandingEnvelope["desired_outputs"];
+    successCriteria: UnderstandingEnvelope["success_criteria"];
+    ambiguities: UnderstandingEnvelope["ambiguities"];
+    risk: UnderstandingEnvelope["risk"];
+    confidence: number;
+  };
+};
+
+function compactText(value: unknown, maxLength = 1_000): string {
+  const normalized = String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trimEnd()}…` : normalized;
+}
+
+function sourceHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
+
+function detectLanguage(value: string): "tr" | "en" | "unknown" {
+  if (!value.trim()) return "unknown";
+  return /[çğıöşü]/i.test(value) || /\b(bunu|şunu|dosya|masaüstü|bilgisayar|yap|hazırla|özetle)\b/i.test(value)
+    ? "tr"
+    : "en";
+}
+
+function extractEntities(message: string): DesktopWorkOrder["entities"] {
+  const entities: DesktopWorkOrder["entities"] = [];
+  const seen = new Set<string>();
+  const add = (type: DesktopWorkOrder["entities"][number]["type"], value: string) => {
+    const normalized = compactText(value, 240);
+    const key = `${type}:${normalized.toLocaleLowerCase("tr-TR")}`;
+    if (!normalized || seen.has(key)) return;
+    seen.add(key);
+    entities.push({ type, value: normalized });
+  };
+
+  for (const match of message.matchAll(/https?:\/\/\S+/gi)) add("url", match[0]);
+  for (const match of message.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)) add("email", match[0]);
+  for (const match of message.matchAll(/\b[\wÇĞİÖŞÜçğıöşü ._-]{1,80}\.(?:pdf|docx|xlsx|csv|txt|png|jpg|jpeg|svg)\b/giu)) {
+    add("file_hint", match[0]);
+  }
+  for (const match of message.matchAll(/\b(vs ?code|visual studio code|chrome|safari|finder|terminal|excel|word|numbers|pages)\b/gi)) {
+    add("app_hint", match[0]);
+  }
+
+  const topic = compactText(
+    message
+      .replace(/https?:\/\/\S+/gi, " ")
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " "),
+    180,
+  );
+  if (topic) add("topic", topic);
+  return entities.slice(0, 16);
+}
+
+function inferLocalContext(message: string, capabilities: string[]): string[] {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  const contexts = new Set<string>();
+  if (/\b(masaüstü|masaustu|desktop|indirilenler|downloads|klasör|klasor|dosya|belge|pdf)\b/i.test(normalized)) {
+    contexts.add("filesystem");
+  }
+  if (/\b(ekran|screenshot|görüntü|goruntu)\b/i.test(normalized) || capabilities.includes("screen_context")) {
+    contexts.add("screen");
+  }
+  if (/\b(chrome|safari|browser|tarayıcı|tarayici)\b/i.test(normalized) || capabilities.includes("browser_control")) {
+    contexts.add("browser");
+  }
+  if (/\b(terminal|komut|shell)\b/i.test(normalized) || capabilities.includes("shell_run")) {
+    contexts.add("terminal");
+  }
+  if (capabilities.includes("email_send") || capabilities.includes("email_draft")) {
+    contexts.add("email");
+  }
+  return [...contexts];
+}
+
+function inferKind(routeDecision: CommandRouteDecision, message: string): string {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  if (routeDecision.capabilities.includes("email_send")) return "email_send";
+  if (routeDecision.capabilities.includes("email_draft")) return "email_draft";
+  if (/\b(pdf|docx|xlsx|excel|belge|doküman|dokuman|rapor)\b/i.test(normalized)) return "document_task";
+  if (/\b(browser|chrome|safari|web|site|url|link)\b/i.test(normalized)) return "browser_task";
+  if (/\b(terminal|komut|shell)\b/i.test(normalized)) return "terminal_task";
+  if (/\b(ekran|screenshot|uygulama|program|app)\b/i.test(normalized)) return "computer_task";
+  return "desktop_cowork";
+}
+
+function canonicalRuntimeCapability(value: string): string | null {
+  const normalized = value.trim().toLocaleLowerCase("en-US").replace(/\s+/g, "_");
+  const aliases: Record<string, string | null> = {
+    "chat.reply": null,
+    "document.read": "document_read",
+    "document.write": "document_write",
+    "document.export": "document_write",
+    "spreadsheet.write": "spreadsheet_write",
+    "table.generate": "spreadsheet_write",
+    "chart.generate": "chart_generate",
+    "image.read": "image_read",
+    "image.generate": "image_generate",
+    "svg.generate": "canvas_write",
+    "browser.read": "browser_control",
+    "desktop.file_access": "document_read",
+    "desktop.runtime": "desktop_operator.run",
+    filesystem_read: "document_read",
+    filesystem_write: "document_write",
+    screen_context: "desktop_operator.observe_screen",
+    app_control: "desktop_operator.run",
+    computer_control: "desktop_operator.run",
+    "computer.control": "desktop_operator.run",
+  };
+  if (Object.prototype.hasOwnProperty.call(aliases, normalized)) return aliases[normalized] ?? null;
+  if (normalized.startsWith("desktop.operator.")) {
+    return `desktop_operator.${normalized.slice("desktop.operator.".length)}`;
+  }
+  return normalized.replaceAll(".", "_");
+}
+
+function inferCapabilities(
+  routeDecision: CommandRouteDecision,
+  message: string,
+  envelope?: UnderstandingEnvelope,
+): string[] {
+  const capabilities = new Set<string>();
+  for (const capability of routeDecision.capabilities) {
+    const canonical = canonicalRuntimeCapability(capability);
+    if (canonical) capabilities.add(canonical);
+  }
+  for (const capability of envelope?.required_capabilities ?? []) {
+    const canonical = canonicalRuntimeCapability(capability.name);
+    if (canonical) capabilities.add(canonical);
+  }
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  if (/\b(masaüstü|masaustu|desktop|indirilenler|downloads|klasör|klasor|dosya|belge|pdf)\b/i.test(normalized)) {
+    capabilities.add("document_read");
+  }
+  if (/\b(kaydet|save|yaz|oluştur|olustur|düzenle|duzenle|export|dışa aktar|disa aktar)\b/i.test(normalized)) {
+    if (/\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b/i.test(normalized)) capabilities.add("spreadsheet_write");
+    else if (/\b(pdf|svg|canvas|görsel|gorsel)\b/i.test(normalized)) capabilities.add("canvas_write");
+    else capabilities.add("document_write");
+  }
+  if (/\b(browser|chrome|safari|web|site|url|link)\b/i.test(normalized) || /https?:\/\//i.test(message)) {
+    capabilities.add("browser_control");
+  }
+  if (/\b(terminal|komut|shell)\b/i.test(normalized)) capabilities.add("shell_run");
+  if (/\b(ekran|screenshot|görüntü|goruntu)\b/i.test(normalized)) capabilities.add("desktop_operator.observe_screen");
+  return [...capabilities].slice(0, 16);
+}
+
+function inferExpectedOutputs(
+  message: string,
+  envelope?: UnderstandingEnvelope,
+): DesktopWorkOrder["expectedOutputs"] {
+  const outputs: DesktopWorkOrder["expectedOutputs"] = [{ kind: "chat_result", format: "elyan_blocks.v2", required: true }];
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  const typedArtifactRequested = envelope?.desired_outputs.some(
+    (output) => output.target === "artifact" || ["pdf", "docx", "xlsx", "svg", "artifact"].includes(output.kind),
+  ) ?? false;
+  const explicitArtifactCreation =
+    /\b(pdf|docx|xlsx|csv|svg|dosya|belge|rapor)\b/i.test(normalized) &&
+    /\b(oluştur|olustur|hazırla|hazirla|dönüştür|donustur|export|dışa aktar|disa aktar|kaydet|yap)\b/i.test(normalized);
+  if (typedArtifactRequested || explicitArtifactCreation) {
+    outputs.push({ kind: "artifact", format: "artifact_reference", required: true });
+  }
+  if (/\b(kaydet|save|düzenle|duzenle|yaz|oluştur|olustur)\b/i.test(normalized)) {
+    outputs.push({ kind: "file_update", format: "state_readback", required: true });
+  }
+  if (/\b(browser|chrome|safari|site|url|link)\b/i.test(normalized)) {
+    outputs.push({ kind: "browser_state", format: "tool_result", required: false });
+  }
+  return outputs;
+}
+
+function buildSteps(input: {
+  title: string;
+  summary: string;
+  kind: string;
+  capabilities: string[];
+  entities: DesktopWorkOrder["entities"];
+  envelope?: UnderstandingEnvelope;
+}): DesktopWorkOrderStep[] {
+  const steps: DesktopWorkOrderStep[] = [];
+  const url = input.entities.find((entity) => entity.type === "url")?.value;
+  const fileHint = input.entities.find((entity) => entity.type === "file_hint")?.value;
+  const semanticBrief = compactText([
+    input.envelope?.intent.topic,
+    ...(input.envelope?.entities ?? []).map((entity) => `${entity.type}: ${entity.normalized ?? entity.value}`),
+    ...(input.envelope?.constraints ?? [])
+      .filter((constraint) => constraint.explicit)
+      .map((constraint) => `${constraint.kind}: ${JSON.stringify(constraint.value)}`),
+    ...(input.envelope?.success_criteria ?? []).map((criterion) => criterion.description),
+  ].filter(Boolean).join("\n"), 3_000) || input.summary;
+  if (input.capabilities.includes("browser_control")) {
+    steps.push({
+      id: "step_browser",
+      capability: "browser_control",
+      description: url ? `${url} adresi açılacak.` : "Tarayıcı bağlamı görev için hazırlanacak.",
+      args: url ? { action: "open_url", url } : { action: "search", query: input.summary },
+    });
+  }
+  if (input.capabilities.includes("document_read") && fileHint) {
+    steps.push({
+      id: "step_document_read",
+      capability: "document_read",
+      description: "Belge yerel ve izinli çalışma alanında okunacak.",
+      args: { path: fileHint, mode: "read" },
+    });
+  }
+  for (const capability of ["document_write", "spreadsheet_write", "canvas_write"] as const) {
+    if (!input.capabilities.includes(capability)) continue;
+    const args: Record<string, unknown> = {
+      title: compactText(input.title, 160),
+      prompt: semanticBrief,
+      sourceContext: semanticBrief,
+    };
+    if (capability === "canvas_write") {
+      const wantsPdf = input.envelope?.desired_outputs.some((output) => output.kind === "pdf") ?? false;
+      if (wantsPdf) args.output_format = "pdf";
+    }
+    steps.push({
+      id: `step_${capability}`,
+      capability,
+      description: "Tipli kullanıcı gereksinimlerinden deterministik çıktı üretilecek.",
+      args,
+    });
+  }
+  if (
+    input.capabilities.some((capability) =>
+      ["desktop_operator.observe_screen", "shell_run", "desktop_operator.run"].includes(capability),
+    )
+  ) {
+    steps.push({
+      id: "step_desktop_execute",
+      capability: "desktop_operator.run",
+      description: "Yerel masaüstü bağlamında görev yürütülecek.",
+      args: {
+        action: "run",
+        goal: semanticBrief,
+        workOrderKind: input.kind,
+      },
+    });
+  }
+  if (steps.length === 0) {
+    steps.push({
+      id: "step_desktop_execute",
+      capability: "desktop_operator.run",
+      description: "Tipli görev yerel masaüstü bağlamında yürütülecek.",
+      args: {
+        action: "run",
+        goal: semanticBrief,
+        workOrderKind: input.kind,
+      },
+    });
+  }
+  return steps.slice(0, 8);
+}
+
+export function buildDesktopWorkOrder(input: {
+  message: string;
+  title: string;
+  routeDecision: CommandRouteDecision;
+  requestedCapabilities: string[];
+  understandingEnvelope?: UnderstandingEnvelope;
+  source?: "mobile_chat_dispatch" | "backend_task_route";
+}): DesktopWorkOrder {
+  const message = compactText(input.message, 4_000);
+  const kind = inferKind(input.routeDecision, message);
+  const capabilities = inferCapabilities(
+    {
+      ...input.routeDecision,
+      capabilities: [...input.routeDecision.capabilities, ...input.requestedCapabilities],
+    },
+    message,
+    input.understandingEnvelope,
+  );
+  const summary = compactText(
+    [
+      kind === "desktop_cowork" ? "Masaüstü cowork görevi" : "Masaüstü görevi",
+      input.title,
+      inferLocalContext(message, capabilities).length > 0 ? `Bağlam: ${inferLocalContext(message, capabilities).join(", ")}` : "",
+    ].filter(Boolean).join(" — "),
+    280,
+  );
+  const entities = extractEntities(message);
+  const localContextNeeded = inferLocalContext(message, capabilities);
+  const expectedOutputs = inferExpectedOutputs(message, input.understandingEnvelope);
+  const constraints = [
+    "Private/local data stays on the desktop runtime.",
+    "Do not claim completion without runtime/tool evidence.",
+    "Return user-visible output through existing Elyan block/task result contracts.",
+  ];
+  const verificationRules: DesktopWorkOrder["verificationRules"] = [
+    { id: "runtime_completed", description: "Runtime reports a terminal completed status.", evidence: "runtime_status" },
+    { id: "tool_or_state_evidence", description: "Any local action is backed by tool result or state read-back.", evidence: "tool_result" },
+    { id: "artifact_reference", description: "Generated files/artifacts are returned as artifact references, not local paths.", evidence: "artifact" },
+  ];
+  const steps = buildSteps({
+    title: input.title,
+    summary,
+    kind,
+    capabilities,
+    entities,
+    envelope: input.understandingEnvelope,
+  });
+  for (const step of steps) {
+    if (!capabilities.includes(step.capability)) capabilities.push(step.capability);
+  }
+  return {
+    schema: "elyan.desktop_work_order.v1",
+    source: input.source ?? "mobile_chat_dispatch",
+    goal: {
+      kind,
+      summary,
+      language: detectLanguage(message),
+      sourceTextHash: sourceHash(message),
+    },
+    entities,
+    constraints,
+    requiredCapabilities: capabilities,
+    localContextNeeded,
+    expectedOutputs,
+    verificationRules,
+    execution: {
+      mode: "cowork_dispatch",
+      approvalPolicy: "capability_policy",
+      maxSteps: 8,
+    },
+    planPreview: {
+      summary,
+      privacyClass: input.understandingEnvelope?.risk.side_effect
+        ? "side_effect"
+        : localContextNeeded.length > 0 || input.understandingEnvelope?.risk.local_private
+          ? "local_private"
+          : "public_text",
+      steps,
+    },
+    ...(input.understandingEnvelope
+      ? {
+          understanding: {
+            schemaVersion: input.understandingEnvelope.schema_version,
+            intent: input.understandingEnvelope.intent,
+            entities: input.understandingEnvelope.entities,
+            constraints: input.understandingEnvelope.constraints,
+            desiredOutputs: input.understandingEnvelope.desired_outputs,
+            successCriteria: input.understandingEnvelope.success_criteria,
+            ambiguities: input.understandingEnvelope.ambiguities,
+            risk: input.understandingEnvelope.risk,
+            confidence: input.understandingEnvelope.confidence,
+          },
+        }
+      : {}),
+  };
+}

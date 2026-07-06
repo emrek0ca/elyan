@@ -63,7 +63,8 @@ export type AssistantBlockQualityIssue =
   | "raw_json_leak_prevented"
   | "fallback_to_text"
   | "unrequested_table_block"
-  | "content_block_overlap";
+  | "content_block_overlap"
+  | "document_preflight_enriched";
 
 export type AssistantBlockQualityReport = {
   version: "elyan_block_quality.v1";
@@ -82,6 +83,7 @@ export type AssistantBlockQualityReport = {
     fallbackToTextCount: number;
     unrequestedTableBlockCount: number;
     contentBlockOverlapCount: number;
+    documentPreflightEnrichedCount: number;
   };
 };
 
@@ -199,6 +201,40 @@ function normalizeRenderHints(value: unknown): Record<string, unknown> | undefin
   return value && typeof value === "object" && !Array.isArray(value)
     ? { ...(value as Record<string, unknown>) }
     : undefined;
+}
+
+function mergeRenderHints(
+  base: Record<string, unknown>,
+  next: unknown,
+): Record<string, unknown> {
+  return {
+    ...base,
+    ...(normalizeRenderHints(next) ?? {}),
+  };
+}
+
+function normalizeStringArray(
+  value: unknown,
+  allowed: readonly string[],
+  max: number,
+): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const item of value) {
+    const normalized = typeof item === "string" ? item.trim().toLowerCase() : "";
+    if (!normalized || !allowed.includes(normalized) || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    output.push(normalized);
+    if (output.length >= max) {
+      break;
+    }
+  }
+  return output;
 }
 
 function normalizeDigestPayload(value: unknown): unknown {
@@ -1017,6 +1053,7 @@ export function buildAssistantTableBlock(
     rows: unknown;
     title?: string | null;
     caption?: string | null;
+    summary?: string | null;
   },
   options: AssistantBlockCommon = {},
 ): ElyanAssistantTableBlock | null {
@@ -1027,6 +1064,7 @@ export function buildAssistantTableBlock(
   }
   const title = normalizeTextValue(input.title, 120);
   const caption = normalizeTextValue(input.caption, 240);
+  const summary = normalizeTextValue(input.summary, 240);
   // Pass the *content* payload to withAssistantBlockDefaults so the
   // cache-digest actually reflects the columns/rows/title. Passing `{}`
   // (as this used to) meant two tables with different rows but the same
@@ -1040,16 +1078,28 @@ export function buildAssistantTableBlock(
         columns,
         rows,
         ...(title ? { title } : {}),
+        ...(summary ? { summary } : {}),
         ...(caption ? { caption } : {}),
+        previewRows: rows.slice(0, 20),
+        totalRowCount: rows.length,
+        density: (rows.length > 12 ? "compact" : "comfortable") as
+          | "compact"
+          | "comfortable",
+        interactions: ["sort", "copy", "share", "fullscreen"] as Array<
+          "sort" | "copy" | "share" | "fullscreen"
+        >,
       },
       {
-        priority: options.priority ?? 1,
-        renderHints: {
-          sectionRole: "data_table",
-          density: "regular",
-          ...(options.renderHints ?? {}),
-        },
         ...options,
+        priority: options.priority ?? 1,
+        renderHints: mergeRenderHints({
+          sectionRole: "data_table",
+          renderer: "native_table",
+          exportFamily: "spreadsheet",
+          exportFormats: ["xlsx", "csv"],
+          density: rows.length > 12 ? "compact" : "regular",
+          preflightRequired: true,
+        }, options.renderHints),
       },
     ),
   };
@@ -1347,14 +1397,17 @@ export function buildAssistantSvgBlock(
     ...(url ? { url } : {}),
     ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
     ...(normalizeTextValue(input.caption, 240) ? { caption: normalizeTextValue(input.caption, 240)! } : {}),
+    exportFormats: ["svg", "png", "pdf"],
     ...withAssistantBlockDefaults("svg", {}, {
-      priority: options.priority ?? 2,
-      renderHints: {
-        sectionRole: "svg",
-        vectorSafe: true,
-        ...(options.renderHints ?? {}),
-      },
       ...options,
+      priority: options.priority ?? 2,
+      renderHints: mergeRenderHints({
+        sectionRole: "svg",
+        renderer: "mobile_local",
+        exportFamily: "image",
+        vectorSafe: true,
+        preflightRequired: true,
+      }, options.renderHints),
     }),
   };
 }
@@ -1400,6 +1453,9 @@ export function buildAssistantDocumentBlock(
     sections: Array<{ heading?: string | null; content: string; level?: number | null }>;
     format?: string | null;
     wordCount?: number | null;
+    summary?: string | null;
+    exportFormats?: unknown;
+    design?: unknown;
   },
   options: AssistantBlockCommon = {},
 ): ElyanAssistantDocumentBlock | null {
@@ -1414,16 +1470,45 @@ export function buildAssistantDocumentBlock(
   if (sections.length === 0) return null;
   const validFormats = ["report", "letter", "outline", "notes"] as const;
   const format = validFormats.find((f) => f === input.format) ?? undefined;
+  const exportFormats = normalizeStringArray(
+    input.exportFormats,
+    ["pdf", "docx", "xlsx"],
+    3,
+  );
+  const designRecord =
+    input.design && typeof input.design === "object" && !Array.isArray(input.design)
+      ? (input.design as Record<string, unknown>)
+      : {};
+  const theme = ["system", "report", "editorial", "minimal"].includes(String(designRecord.theme))
+    ? String(designRecord.theme)
+    : "report";
+  const density = ["compact", "comfortable", "spacious"].includes(String(designRecord.density))
+    ? String(designRecord.density)
+    : "comfortable";
+  const pageSize = String(designRecord.pageSize).toLowerCase() === "letter" ? "Letter" : "A4";
   return {
     type: "document_block",
     sections,
     ...(normalizeTextValue(input.title, 200) ? { title: normalizeTextValue(input.title, 200)! } : {}),
     ...(format ? { format } : {}),
+    ...(normalizeTextValue(input.summary, 300) ? { summary: normalizeTextValue(input.summary, 300)! } : {}),
+    exportFormats: exportFormats.length > 0 ? exportFormats as ["pdf" | "docx" | "xlsx", ...("pdf" | "docx" | "xlsx")[]] : ["pdf", "docx"],
+    design: {
+      theme: theme as "system" | "report" | "editorial" | "minimal",
+      density: density as "compact" | "comfortable" | "spacious",
+      pageSize: pageSize as "A4" | "Letter",
+    },
     ...(typeof input.wordCount === "number" && input.wordCount >= 0 ? { wordCount: input.wordCount } : {}),
     ...withAssistantBlockDefaults("document_block", {}, {
-      priority: options.priority ?? 2,
-      renderHints: { sectionRole: "document", density: "full", ...(options.renderHints ?? {}) },
       ...options,
+      priority: options.priority ?? 2,
+      renderHints: mergeRenderHints({
+        sectionRole: "document",
+        renderer: "mobile_local",
+        exportFamily: "document",
+        density: "full",
+        preflightRequired: true,
+      }, options.renderHints),
     }),
   };
 }
@@ -2038,6 +2123,7 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
         columns: record.columns,
         rows: record.rows,
         title: typeof record.title === "string" ? record.title : undefined,
+        summary: typeof record.summary === "string" ? record.summary : undefined,
         caption: typeof record.caption === "string" ? record.caption : undefined,
       },
       parseCommonMetadata(record),
@@ -2233,6 +2319,9 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
         sections,
         format: typeof record.format === "string" ? record.format : undefined,
         wordCount: typeof record.wordCount === "number" ? record.wordCount : undefined,
+        summary: typeof record.summary === "string" ? record.summary : undefined,
+        exportFormats: record.exportFormats ?? record.export_formats,
+        design: record.design,
       },
       parseCommonMetadata(record),
     );
@@ -2350,6 +2439,20 @@ function looksLikeMarkdownTable(value: string): boolean {
     }
   }
   return false;
+}
+
+function countPreflightEnrichedBlocks(blocks: AssistantMessageBlock[]): number {
+  return blocks.filter((block) => {
+    const hints = (block as { renderHints?: unknown }).renderHints;
+    if (!hints || typeof hints !== "object" || Array.isArray(hints)) {
+      return false;
+    }
+    const record = hints as Record<string, unknown>;
+    return (
+      record.preflightRequired === true &&
+      ["document_block", "table", "svg", "file"].includes(block.type)
+    );
+  }).length;
 }
 
 function salvageInvalidBlockToText(value: unknown): AssistantTextMessageBlock | null {
@@ -2470,6 +2573,7 @@ export function evaluateAssistantBlockQuality(input: {
     looksLikeMarkdownTable(input.content ?? "")
       ? 1
       : 0;
+  const documentPreflightEnrichedCount = countPreflightEnrichedBlocks(normalizedBlocks);
 
   const issueSet = new Set<AssistantBlockQualityIssue>();
   if (duplicateBlockCount > 0) issueSet.add("duplicate_block");
@@ -2479,6 +2583,7 @@ export function evaluateAssistantBlockQuality(input: {
   if (fallbackToTextCount > 0) issueSet.add("fallback_to_text");
   if (unrequestedTableBlockCount > 0) issueSet.add("unrequested_table_block");
   if (contentBlockOverlapCount > 0) issueSet.add("content_block_overlap");
+  if (documentPreflightEnrichedCount > 0) issueSet.add("document_preflight_enriched");
 
   const feedbackSignals: string[] = [...issueSet].filter((issue) =>
     [
@@ -2519,6 +2624,7 @@ export function evaluateAssistantBlockQuality(input: {
       fallbackToTextCount,
       unrequestedTableBlockCount,
       contentBlockOverlapCount,
+      documentPreflightEnrichedCount,
     },
   };
 }
@@ -2734,6 +2840,8 @@ export function withAssistantBlocksMetadata(
   }
   next.renderContract = validation.renderContract;
   next.blockQuality = validation.blockQuality;
+  next.blockSchemaValid = validation.blockQuality.metrics.schemaInvalidBlockCount === 0;
+  next.blockFallbackUsed = validation.blockQuality.metrics.fallbackToTextCount > 0;
   if (validation.modelFeedbackSignals.length > 0) {
     next.modelFeedbackSignals = validation.modelFeedbackSignals;
   } else {

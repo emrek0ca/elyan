@@ -62,7 +62,7 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 4000
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/elyan_backend
+      DATABASE_URL: ${DATABASE_APP_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
       REDIS_URL: redis://redis:6379
       RELIABILITY_REDIS_REQUIRED: "true"
       RATE_LIMIT_REDIS_ENABLED: "true"
@@ -94,6 +94,7 @@ services:
       ELYAN_MEMORY_FABRIC_V2_ENABLED: "true"
       ELYAN_AGENT_LOOP_ENABLED: "true"
       ELYAN_PROACTIVE_ENGINE_ENABLED: "true"
+      ELYAN_MEMORY_WORKER_DISABLED: "true"
       ELYAN_SEARCH_PROVIDER: "searxng"
       SEARXNG_BASE_URL: "http://searxng:8080"
     ports:
@@ -124,7 +125,7 @@ services:
       - .env
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/elyan_backend
+      DATABASE_URL: ${DATABASE_APP_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
       REDIS_URL: redis://redis:6379
       RELIABILITY_REDIS_REQUIRED: "true"
       RATE_LIMIT_REDIS_ENABLED: "true"
@@ -154,6 +155,65 @@ services:
       NODE_TRAINING_WORKER_ENABLED: "false"
     command: ["sh", "-lc", "echo 'node training worker disabled; ml-worker owns training job execution'; sleep infinity"]
 
+  brain-worker:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_WORKER_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
+      REDIS_URL: redis://redis:6379
+      RELIABILITY_REDIS_REQUIRED: "true"
+      ELYAN_MEMORY_WORKER_DISABLED: "true"
+      ELYAN_PROACTIVE_ENGINE_ENABLED: "false"
+    command: ["node", "dist/workers/brain-worker.js"]
+
+  document-worker:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_WORKER_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
+      REDIS_URL: redis://redis:6379
+      RELIABILITY_REDIS_REQUIRED: "true"
+      ELYAN_MEMORY_WORKER_DISABLED: "true"
+    command: ["node", "dist/workers/document-worker.js"]
+
+  proactive-scheduler:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_WORKER_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
+      REDIS_URL: redis://redis:6379
+      RELIABILITY_REDIS_REQUIRED: "true"
+      ELYAN_MEMORY_WORKER_DISABLED: "true"
+      ELYAN_PROACTIVE_ENGINE_ENABLED: "true"
+    command: ["node", "dist/workers/proactive-scheduler.js"]
+
   ml-worker:
     build:
       context: ./ml-worker
@@ -165,7 +225,7 @@ services:
         condition: service_healthy
     environment:
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/elyan_backend
+      DATABASE_URL: ${DATABASE_APP_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
       ML_WORKER_HEARTBEAT_SECONDS: 15
       ML_WORKER_MODE: runner
       ML_WORKER_POLL_SECONDS: 5

@@ -1,6 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildLocalRenderRecipe } from "./render-recipe.js";
+import type { IntentClassification } from "./types.js";
+import { buildTypedUnderstandingEnvelope } from "./understanding-envelope.js";
+
+function testIntent(primaryIntent: IntentClassification["primaryIntent"]): IntentClassification {
+  return {
+    primaryIntent,
+    secondaryIntents: [],
+    requiresLocalRuntime: false,
+    requiresRetrieval: false,
+    requiresToolUse: false,
+    requiresCitation: false,
+    requiresLongRunningTask: false,
+    privacyRisk: "low",
+    confidence: 0.86,
+    reason: "test",
+    taskFrame: {
+      goal: "answer",
+      likelyAnswerShape: "direct answer",
+      reasoningMode: "balanced",
+      shouldClarify: false,
+    },
+    ecosystemHints: [],
+    routingHints: {
+      mode: "fast",
+      preferredCapabilities: [],
+      avoidCloud: false,
+      requiresLocalRuntime: false,
+    },
+  };
+}
 
 test("buildLocalRenderRecipe returns null for plain chat", () => {
   assert.equal(
@@ -152,6 +182,16 @@ test("buildLocalRenderRecipe preserves explicit XLSX export format", () => {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   );
   assert.match(recipe?.file_name ?? "", /\.xlsx$/);
+  assert.equal(recipe?.metadata.preferred_export_family, "spreadsheet");
+  assert.equal(
+    (recipe?.metadata.document_requirements as Record<string, unknown>)?.kind,
+    "spreadsheet",
+  );
+  assert.deepEqual(
+    ((recipe?.metadata.document_requirements as Record<string, unknown>)
+      ?.spreadsheet as Record<string, unknown>)?.suggested_columns,
+    ["İsim", "Değer"],
+  );
 });
 
 test("buildLocalRenderRecipe prefers structured assistant blocks over preface prose for document exports", () => {
@@ -215,8 +255,107 @@ test("buildLocalRenderRecipe carries PDF footer and business style as typed meta
   assert.equal(recipe?.metadata.layout_template, "business_document");
   assert.equal(recipe?.metadata.footer_text, "Metin cam Metin koca");
   assert.equal(recipe?.metadata.preflight_required, true);
-  assert.deepEqual(recipe?.metadata.required_markers, [
-    "Kapı tamiri: 18.000 TL Menteşe: 3.000 TL Genel toplam: 21.000 TL",
-    "Metin cam Metin koca",
-  ]);
+  assert.ok(
+    (recipe?.metadata.required_markers as string[]).includes(
+      "Kapı tamiri: 18.000 TL Menteşe: 3.000 TL Genel toplam: 21.000 TL",
+    ),
+  );
+  assert.ok(
+    (recipe?.metadata.required_markers as string[]).includes(
+      "Metin cam Metin koca",
+    ),
+  );
+  assert.ok((recipe?.metadata.required_markers as string[]).includes("18.000 TL"));
+  assert.equal(
+    (recipe?.metadata.document_requirements as Record<string, unknown>)
+      ?.preserve_numbers,
+    true,
+  );
+  assert.equal(
+    ((recipe?.metadata.document_requirements as Record<string, unknown>)
+      ?.quality_checks as Record<string, unknown>)?.no_assistant_chatter,
+    true,
+  );
+});
+
+test("buildLocalRenderRecipe captures Excel totals as typed document requirements", () => {
+  const recipe = buildLocalRenderRecipe({
+    prompt:
+      "Kapı tamiri 18.000 TL, menteşe 3.000 TL, genel toplam 21.000 TL. Bunu Excel tablo olarak oluştur",
+    responseText:
+      "| Kalem | Tutar |\n| --- | --- |\n| Kapı tamiri | 18.000 TL |\n| Menteşe | 3.000 TL |\n| Genel toplam | 21.000 TL |",
+    metadata: {
+      documentExportMode: "mobile_local",
+      title: "Kapı Masraf Tablosu",
+    },
+  });
+
+  const requirements = recipe?.metadata
+    .document_requirements as Record<string, unknown>;
+
+  assert.ok(recipe);
+  assert.equal(recipe?.format, "xlsx");
+  assert.equal(requirements?.export_family, "spreadsheet");
+  assert.equal(requirements?.table_required, true);
+  assert.equal(
+    (requirements?.money_amounts as Array<Record<string, unknown>>).length,
+    3,
+  );
+  assert.equal(
+    (requirements?.spreadsheet as Record<string, unknown>)?.include_totals,
+    true,
+  );
+  assert.ok((requirements?.must_include as string[]).includes("21.000 TL"));
+});
+
+test("buildLocalRenderRecipe can be driven by UnderstandingEnvelope output format", () => {
+  const understandingEnvelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message:
+      "Toplam 18 kapı tamiri 18.000 TL. Bunu resmi teklif PDF yap, en alt kısmında Metin cam Metin koca yazsın",
+    intent: testIntent("document"),
+  });
+
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bunu hazırla",
+    responseText:
+      "Kapı tamiri: 18.000 TL\nMenteşe: 3.000 TL\nGenel toplam: 21.000 TL",
+    understandingEnvelope,
+  });
+
+  assert.ok(recipe);
+  assert.equal(recipe?.format, "pdf");
+  assert.equal(recipe?.metadata.footer_text, "Metin cam Metin koca");
+  assert.equal(recipe?.metadata.document_style, "formal");
+  assert.equal(recipe?.metadata.understanding_envelope_source, "typed_extractor");
+});
+
+test("buildLocalRenderRecipe maps UnderstandingEnvelope Excel columns into requirements", () => {
+  const understandingEnvelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message:
+      "Kapı tamiri 18.000 TL, menteşe 3.000 TL, genel toplam 21.000 TL. Excel tablo oluştur. Kolonlar: Kalem, Tutar",
+    intent: testIntent("document"),
+  });
+
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bunu hazırla",
+    responseText:
+      "| Kalem | Tutar |\n| --- | --- |\n| Kapı tamiri | 18.000 TL |\n| Genel toplam | 21.000 TL |",
+    understandingEnvelope,
+  });
+
+  const requirements = recipe?.metadata
+    .document_requirements as Record<string, unknown>;
+
+  assert.ok(recipe);
+  assert.equal(recipe?.format, "xlsx");
+  assert.deepEqual(
+    (requirements?.spreadsheet as Record<string, unknown>)?.suggested_columns,
+    ["Kalem", "Tutar"],
+  );
+  assert.equal(
+    (requirements?.spreadsheet as Record<string, unknown>)?.include_totals,
+    true,
+  );
 });

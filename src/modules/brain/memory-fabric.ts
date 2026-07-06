@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
@@ -12,7 +13,7 @@ import {
 import type { TurnEnvelope } from "./turn-envelope.js";
 
 type MemoryOp = TurnEnvelope["memory_ops"][number];
-type MemoryDb = FastifyInstance["db"];
+export type MemoryDb = FastifyInstance["db"];
 
 export type TurnMemoryOpsWriteResult = {
   processed: number;
@@ -38,6 +39,39 @@ export function canonicalizeMemoryKey(key: string): string {
 
 function normalizeMemoryValue(value: string): string {
   return compactText(value).toLowerCase();
+}
+
+// Injection-safe patterns: memory values that look like system/developer
+// message injections or persona overrides. These get sanitized before storage
+// so poisoned memories can't act as prompt injections when recalled.
+const MEMORY_INJECTION_PATTERNS = [
+  /\b(system|developer|hidden|admin|root)\s*:\s*/gi,
+  /\[\s*(system|developer|admin|root|instruction)\s*\]/gi,
+  /\b(ignore|disregard|forget|override|bypass)\b.{0,40}\b(instructions?|rules?|prompts?|constraints?)\b/gi,
+  /\b(you are now|act as|pretend|new persona|new identity)\b/gi,
+  /\b(reveal|output|print|echo)\b.{0,30}\b(system|prompt|instruction|secret|credential)\b/gi,
+  /\b(from now on|henceforth|bundan sonra|bundan böyle)\b.{0,40}\b(you are|you will|sen|siz)\b/gi,
+];
+
+function sanitizeMemoryValue(value: string): string {
+  let safe = value
+    // Strip zero-width / invisible unicode
+    .replace(/[\u200B-\u200F\u2028-\u202F\u2060-\u2069\uFEFF\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E]/g, "");
+
+  for (const pattern of MEMORY_INJECTION_PATTERNS) {
+    safe = safe.replace(pattern, "[redacted]");
+  }
+
+  // Cap individual memory value size
+  if (safe.length > 2_000) {
+    safe = safe.slice(0, 2_000);
+  }
+
+  return safe;
+}
+
+function contentHash(value: string): string {
+  return createHash("sha256").update(compactText(value)).digest("hex");
 }
 
 function confidenceToPercent(confidence: number): number {
@@ -89,6 +123,21 @@ async function executeWithDb<T>(
   return run(app.db);
 }
 
+async function lockMemoryKey(
+  db: MemoryDb,
+  input: { userId: string; canonicalKey: string },
+): Promise<void> {
+  const executable = db as MemoryDb & {
+    execute?: (query: ReturnType<typeof sql>) => Promise<unknown>;
+  };
+  if (typeof executable.execute !== "function") {
+    return;
+  }
+  await executable.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${`${input.userId}:${input.canonicalKey}`}, 0))`,
+  );
+}
+
 async function writeFactOp(
   db: MemoryDb,
   input: {
@@ -96,10 +145,13 @@ async function writeFactOp(
     sessionId: string | null;
     op: MemoryOp;
     now: Date;
+    revision?: number;
+    sourceKind?: string;
+    sourceId?: string | null;
   },
 ): Promise<"written" | "contested" | "forgotten" | "skipped"> {
   const key = canonicalizeMemoryKey(input.op.key);
-  const value = compactText(input.op.value).slice(0, 2_000);
+  const value = sanitizeMemoryValue(compactText(input.op.value));
   if (!key || (input.op.op !== "forget" && !value)) return "skipped";
 
   const factType = factTypeForOp(input.op.kind);
@@ -112,6 +164,13 @@ async function writeFactOp(
     now: input.now,
   });
   const singleValue = isSingleValueMemoryKey(key);
+  const revision = input.revision ?? 1;
+  const sourceKind = input.sourceKind ?? "turn_envelope";
+  const sourceId = input.sourceId ?? input.sessionId;
+
+  // Serialize updates for the same user's canonical fact. This keeps a pair of
+  // concurrent turns from producing two active values or losing the correction.
+  await lockMemoryKey(db, { userId: input.userId, canonicalKey: key });
 
   if (input.op.op === "forget") {
     await db
@@ -122,6 +181,10 @@ async function writeFactOp(
         deletedAt: input.now,
         deletedReason: "explicit_user_forget",
         staleAt: input.now,
+        validTo: input.now,
+        revision,
+        sourceKind,
+        sourceId,
         updatedAt: input.now,
       })
       .where(
@@ -147,6 +210,13 @@ async function writeFactOp(
       deletedAt: input.now,
       deletedReason: "explicit_user_forget",
       staleAt: input.now,
+      validFrom: input.now,
+      validTo: input.now,
+      observedAt: input.now,
+      revision,
+      sourceKind,
+      sourceId,
+      contentHash: contentHash("__forgotten__"),
       metadata: { ...metadata, forgetTombstone: true },
       updatedAt: input.now,
     });
@@ -177,6 +247,10 @@ async function writeFactOp(
         conflictStatus: "contested",
         lifecycleStatus: "contested",
         staleAt: input.now,
+        validTo: input.now,
+        revision,
+        sourceKind,
+        sourceId,
         metadata,
         updatedAt: input.now,
       })
@@ -203,6 +277,13 @@ async function writeFactOp(
       conflictStatus: "contested",
       lifecycleStatus: "contested",
       staleAt: input.now,
+      validFrom: input.now,
+      validTo: input.now,
+      observedAt: input.now,
+      revision,
+      sourceKind,
+      sourceId,
+      contentHash: contentHash(value),
       lastVerifiedAt: input.now,
       metadata,
       updatedAt: input.now,
@@ -228,6 +309,22 @@ async function writeFactOp(
     )
     .limit(1);
 
+  const activeRows = singleValue || input.op.op === "update"
+    ? await db
+        .select({ id: brainMemoryFacts.id })
+        .from(brainMemoryFacts)
+        .where(
+          and(
+            eq(brainMemoryFacts.userId, input.userId),
+            eq(brainMemoryFacts.canonicalKey, key),
+            eq(brainMemoryFacts.factType, factType),
+            eq(brainMemoryFacts.conflictStatus, "active"),
+            eq(brainMemoryFacts.lifecycleStatus, "active"),
+          ),
+        )
+        .limit(1)
+    : [];
+
   if (singleValue || input.op.op === "update") {
     const currentId = existingRows[0]?.id;
     await db
@@ -236,6 +333,8 @@ async function writeFactOp(
         conflictStatus: "superseded",
         lifecycleStatus: "superseded",
         staleAt: input.now,
+        validTo: input.now,
+        revision,
         updatedAt: input.now,
       })
       .where(
@@ -259,6 +358,12 @@ async function writeFactOp(
           importanceScore,
         ),
         staleAt,
+        validTo: null,
+        observedAt: input.now,
+        revision,
+        sourceKind,
+        sourceId,
+        contentHash: contentHash(value),
         deletedAt: null,
         deletedReason: null,
         conflictStatus: "active",
@@ -290,6 +395,14 @@ async function writeFactOp(
     conflictStatus: "active",
     lifecycleStatus: "active",
     staleAt,
+    supersedesFactId: activeRows[0]?.id ?? null,
+    validFrom: input.now,
+    validTo: null,
+    observedAt: input.now,
+    revision,
+    sourceKind,
+    sourceId,
+    contentHash: contentHash(value),
     lastVerifiedAt: input.now,
     metadata,
     updatedAt: input.now,
@@ -304,11 +417,17 @@ async function writeEpisodeOp(
     sessionId: string | null;
     op: MemoryOp;
     now: Date;
+    revision?: number;
+    sourceKind?: string;
+    sourceId?: string | null;
   },
 ): Promise<"written" | "forgotten" | "skipped"> {
   const episodeType = canonicalizeMemoryKey(input.op.key);
-  const summary = compactText(input.op.value).slice(0, 2_000);
+  const summary = sanitizeMemoryValue(compactText(input.op.value));
   if (!episodeType || (input.op.op !== "forget" && !summary)) return "skipped";
+  const revision = input.revision ?? 1;
+  const sourceKind = input.sourceKind ?? "turn_envelope";
+  const sourceId = input.sourceId ?? input.sessionId;
 
   if (input.op.op === "forget") {
     await db
@@ -342,6 +461,12 @@ async function writeEpisodeOp(
       deletedAt: input.now,
       deletedReason: "explicit_user_forget",
       staleAt: input.now,
+      observedAt: input.now,
+      expiresAt: input.now,
+      revision,
+      sourceKind,
+      sourceId,
+      contentHash: contentHash("__forgotten__"),
       metadata: {
         ...metadataForOp({ op: input.op, sessionId: input.sessionId, now: input.now }),
         forgetTombstone: true,
@@ -364,6 +489,14 @@ async function writeEpisodeOp(
     privacyLevel: "safe",
     lifecycleStatus: input.op.op === "contest" ? "contested" : "active",
     staleAt: staleAtFromTtl(input.op.ttl_days, input.now),
+    observedAt: input.now,
+    expiresAt: new Date(
+      input.now.getTime() + Math.min(input.op.ttl_days ?? 90, 90) * 86_400_000,
+    ),
+    revision,
+    sourceKind,
+    sourceId,
+    contentHash: contentHash(summary),
     metadata: metadataForOp({
       op: input.op,
       sessionId: input.sessionId,
@@ -396,14 +529,47 @@ export async function recordTurnMemoryOps(
 
   const now = input.now ?? new Date();
   return executeWithDb(app, async (db) => {
-    for (const op of ops) {
+    return recordTurnMemoryOpsOnDb(db, {
+      ...input,
+      now,
+    });
+  });
+}
+
+export async function recordTurnMemoryOpsOnDb(
+  db: MemoryDb,
+  input: {
+    userId: string;
+    sessionId?: string | null;
+    envelope: TurnEnvelope | null | undefined;
+    now: Date;
+    revision?: number;
+    sourceKind?: string;
+    sourceId?: string | null;
+  },
+): Promise<TurnMemoryOpsWriteResult> {
+  const ops = input.envelope?.memory_ops ?? [];
+  const summary: TurnMemoryOpsWriteResult = {
+    processed: 0,
+    factsWritten: 0,
+    episodesWritten: 0,
+    contested: 0,
+    forgotten: 0,
+    skipped: 0,
+  };
+  if (ops.length === 0) return summary;
+
+  for (const op of ops) {
       summary.processed += 1;
       if (op.kind === "episode") {
         const result = await writeEpisodeOp(db, {
           userId: input.userId,
           sessionId: input.sessionId ?? null,
           op,
-          now,
+          now: input.now,
+          revision: input.revision,
+          sourceKind: input.sourceKind,
+          sourceId: input.sourceId,
         });
         if (result === "written") summary.episodesWritten += 1;
         else if (result === "forgotten") summary.forgotten += 1;
@@ -415,13 +581,15 @@ export async function recordTurnMemoryOps(
         userId: input.userId,
         sessionId: input.sessionId ?? null,
         op,
-        now,
+        now: input.now,
+        revision: input.revision,
+        sourceKind: input.sourceKind,
+        sourceId: input.sourceId,
       });
       if (result === "written") summary.factsWritten += 1;
       else if (result === "contested") summary.contested += 1;
       else if (result === "forgotten") summary.forgotten += 1;
       else summary.skipped += 1;
-    }
-    return summary;
-  });
+  }
+  return summary;
 }

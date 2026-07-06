@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const intentValues = [
   "coding",
   "debugging",
@@ -83,6 +85,188 @@ export type RoutingHints = {
   avoidCloud: boolean;
   requiresLocalRuntime: boolean;
 };
+
+export const understandingEnvelopeSourceValues = [
+  "typed_extractor",
+  "model_fallback",
+  "legacy_fallback",
+] as const;
+
+export const understandingDesiredOutputKindValues = [
+  "chat_reply",
+  "pdf",
+  "docx",
+  "xlsx",
+  "table",
+  "chart",
+  "image",
+  "svg",
+  "task_result",
+  "artifact",
+  "action",
+] as const;
+
+export const understandingConstraintKindValues = [
+  "output_format",
+  "document_style",
+  "document_kind",
+  "layout_template",
+  "footer_text",
+  "signature_text",
+  "sheet_name",
+  "columns",
+  "include_totals",
+  "preserve_numbers",
+  "exact_text_required",
+  "language",
+  "deadline",
+  "approval_required",
+  "execution_surface",
+] as const;
+
+export const understandingCapabilityKindValues = [
+  "chat.reply",
+  "document.read",
+  "document.write",
+  "document.export",
+  "spreadsheet.write",
+  "table.generate",
+  "chart.generate",
+  "image.read",
+  "image.generate",
+  "svg.generate",
+  "browser.read",
+  "desktop.file_access",
+  "desktop.runtime",
+  "automation.schedule",
+  "memory.write",
+  "goal.update",
+] as const;
+
+export const understandingMemoryCandidateKindValues = [
+  "fact",
+  "preference",
+  "episode",
+  "self_model",
+] as const;
+
+export const understandingRiskLevelValues = ["low", "medium", "high"] as const;
+
+export const understandingIntentSchema = z.object({
+  name: z.enum(intentValues),
+  action: z.string().min(1).max(64),
+  topic: z.string().max(160).optional(),
+  confidence: z.number().min(0).max(1),
+  source: z.enum(["typed_extractor", "semantic_classifier", "policy_rules", "legacy_fallback"]),
+});
+
+export const understandingEntitySchema = z.object({
+  type: z.string().min(1).max(48),
+  value: z.string().min(1).max(240),
+  normalized: z.string().min(1).max(240).optional(),
+  confidence: z.number().min(0).max(1),
+  source: z.enum(["typed_extractor", "metadata", "attachment"]),
+});
+
+export const understandingConstraintSchema = z.object({
+  kind: z.enum(understandingConstraintKindValues),
+  value: z.union([
+    z.string().max(500),
+    z.number(),
+    z.boolean(),
+    z.array(z.string().max(120)).max(24),
+    z.record(z.unknown()),
+  ]),
+  confidence: z.number().min(0).max(1),
+  source: z.enum(["typed_extractor", "metadata", "attachment", "policy_rule"]),
+  explicit: z.boolean(),
+});
+
+export const understandingDesiredOutputSchema = z.object({
+  kind: z.enum(understandingDesiredOutputKindValues),
+  format: z.string().max(32).nullable().optional(),
+  target: z.enum(["chat", "artifact", "widget", "desktop"]).default("chat"),
+  confidence: z.number().min(0).max(1),
+  constraints: z.array(z.string().max(80)).max(24).default([]),
+});
+
+export const understandingSuccessCriterionSchema = z.object({
+  kind: z.string().min(1).max(64),
+  description: z.string().min(1).max(240),
+  evidenceRequired: z.enum(["none", "typed_output", "artifact", "state_readback", "tool_result"]),
+  confidence: z.number().min(0).max(1),
+});
+
+export const understandingAmbiguitySchema = z.object({
+  kind: z.enum(["conflicting_outputs", "missing_target", "missing_format", "unclear_scope", "risk_conflict"]),
+  description: z.string().min(1).max(240),
+  options: z.array(z.string().min(1).max(120)).max(8).default([]),
+  severity: z.enum(["low", "medium", "high"]),
+});
+
+export const understandingRiskSchema = z.object({
+  privacy: z.enum(understandingRiskLevelValues),
+  safety: z.enum(understandingRiskLevelValues),
+  cost: z.enum(understandingRiskLevelValues),
+  latency: z.enum(understandingRiskLevelValues),
+  local_private: z.boolean(),
+  side_effect: z.boolean(),
+  prompt_injection: z.boolean(),
+  reasons: z.array(z.string().min(1).max(120)).max(12).default([]),
+});
+
+export const understandingRequiredCapabilitySchema = z.object({
+  name: z.enum(understandingCapabilityKindValues),
+  executionSurface: z.enum(["server", "desktop", "mobile_local"]),
+  permission: z.enum(["none", "read", "write", "side_effect"]),
+  reason: z.string().max(180).optional(),
+  confidence: z.number().min(0).max(1),
+});
+
+export const understandingMemoryCandidateSchema = z.object({
+  op: z.enum(["write", "update", "forget", "none"]),
+  kind: z.enum(understandingMemoryCandidateKindValues),
+  key: z.string().min(1).max(80),
+  value: z.string().min(1).max(500),
+  confidence: z.number().min(0).max(1),
+  explicit: z.boolean(),
+  source: z.enum(["user_statement", "correction", "preference_request"]),
+  ttlDays: z.number().int().positive().max(3650).nullable().optional(),
+});
+
+export const understandingEnvelopeSchema = z.object({
+  schema_version: z.literal("2026-07-understanding-envelope-v2"),
+  intent: understandingIntentSchema,
+  entities: z.array(understandingEntitySchema).max(32),
+  constraints: z.array(understandingConstraintSchema).max(48),
+  desired_outputs: z.array(understandingDesiredOutputSchema).max(12),
+  success_criteria: z.array(understandingSuccessCriterionSchema).max(16),
+  ambiguities: z.array(understandingAmbiguitySchema).max(12),
+  risk: understandingRiskSchema,
+  required_capabilities: z.array(understandingRequiredCapabilitySchema).max(24),
+  memory_candidates: z.array(understandingMemoryCandidateSchema).max(12),
+  confidence: z.number().min(0).max(1),
+  source: z.enum(understandingEnvelopeSourceValues),
+});
+
+export type UnderstandingEnvelopeSource =
+  (typeof understandingEnvelopeSourceValues)[number];
+export type UnderstandingDesiredOutputKind =
+  (typeof understandingDesiredOutputKindValues)[number];
+export type UnderstandingConstraintKind =
+  (typeof understandingConstraintKindValues)[number];
+export type UnderstandingRequiredCapabilityName =
+  (typeof understandingCapabilityKindValues)[number];
+export type UnderstandingIntentEnvelope = z.infer<typeof understandingIntentSchema>;
+export type UnderstandingEntity = z.infer<typeof understandingEntitySchema>;
+export type UnderstandingConstraint = z.infer<typeof understandingConstraintSchema>;
+export type UnderstandingDesiredOutput = z.infer<typeof understandingDesiredOutputSchema>;
+export type UnderstandingSuccessCriterion = z.infer<typeof understandingSuccessCriterionSchema>;
+export type UnderstandingAmbiguity = z.infer<typeof understandingAmbiguitySchema>;
+export type UnderstandingRisk = z.infer<typeof understandingRiskSchema>;
+export type UnderstandingRequiredCapability = z.infer<typeof understandingRequiredCapabilitySchema>;
+export type UnderstandingMemoryCandidate = z.infer<typeof understandingMemoryCandidateSchema>;
+export type UnderstandingEnvelope = z.infer<typeof understandingEnvelopeSchema>;
 
 export type ReasoningMode = "fast" | "balanced" | "deep";
 
@@ -283,6 +467,14 @@ export type UserUnderstandingContext = {
   dialogueUserMemory?: DialogueUserMemorySnapshot;
   userModel?: CanonicalUserModel;
   memoryRecall?: MemoryRecallPackage;
+  cognitiveContext?: import("../../modules/brain/cognitive-context.js").CognitiveContextPacket;
+  cognitiveShadow?: {
+    legacyFactCount: number;
+    cognitiveFactCount: number;
+    keyMismatchCount: number;
+    cognitiveRevision: number;
+  };
+  cognitiveReadMs?: number;
   tokenBudget: {
     maxHints: number;
     maxChars: number;
@@ -293,6 +485,9 @@ export type UserUnderstandingResult = {
   intent: IntentClassification;
   context: UserUnderstandingContext;
   routingHints: RoutingHints;
+  envelope?: UnderstandingEnvelope;
+  envelopeSource?: UnderstandingEnvelopeSource;
+  envelopeConfidence?: number;
 };
 
 export type TaskUnderstandingInput = {

@@ -5,6 +5,11 @@ import {
   type AgentToolRequest,
   type AgentToolResult,
 } from "./tool-registry.js";
+import { createAgentRun } from "./agent-engine.js";
+import { enqueueAgentRun } from "./agent-engine-queue.js";
+import { agentEngineRepository } from "./agent-engine-repository.js";
+import { isAgentEngineShadowEnabled, isAgentEngineV2Enabled } from "./agent-engine-policy.js";
+import { agentPlanEnvelopeSchema, buildAgentPlanFromToolRequests, type AgentPlanEnvelope } from "./agent-plan.js";
 
 const DEFAULT_MAX_TOOL_REQUESTS = 4;
 const DEFAULT_TOOL_BUDGET_MS = 8_000;
@@ -14,6 +19,9 @@ export type AgentToolLoopResult = {
   durationMs: number;
   timedOut: boolean;
   results: AgentToolResult[];
+  engineVersion?: "agent_engine.v2";
+  runId?: string;
+  runState?: string;
 };
 
 function elapsed(startedAt: number): number {
@@ -27,6 +35,7 @@ export async function runAgentToolLoop(
     requests: AgentToolRequest[];
     maxRequests?: number;
     budgetMs?: number;
+    plan?: AgentPlanEnvelope | null;
   },
 ): Promise<AgentToolLoopResult> {
   const startedAt = Date.now();
@@ -43,6 +52,68 @@ export async function runAgentToolLoop(
       timedOut: false,
       results: [],
     };
+  }
+
+  const taskId = input.context.taskId ?? null;
+  const v2Enabled = taskId ? isAgentEngineV2Enabled(app, input.context.userId) : false;
+  const shadowEnabled = taskId ? isAgentEngineShadowEnabled(app) : false;
+  if (taskId && (v2Enabled || shadowEnabled)) {
+    const plan = input.plan
+      ? agentPlanEnvelopeSchema.parse(input.plan)
+      : buildAgentPlanFromToolRequests({ goal: `Execute ${requests.length} typed tool request(s)`, requests });
+    const snapshot = await createAgentRun({
+      app,
+      userId: input.context.userId,
+      taskId,
+      sessionId: input.context.sessionId,
+      plan,
+      shadow: !v2Enabled,
+    });
+    if (v2Enabled) {
+      const queued = await enqueueAgentRun(app, {
+        runId: snapshot.run.id,
+        userId: input.context.userId,
+        revision: snapshot.run.revision,
+        workload: input.context.workload,
+        allowSideEffects: input.context.allowSideEffects,
+      });
+      if (!queued) {
+        return { iterations: 0, durationMs: elapsed(startedAt), timedOut: true, results: [] };
+      }
+      const deadline = startedAt + budgetMs;
+      let latest = snapshot;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        latest = await agentEngineRepository(app).loadRun(input.context.userId, snapshot.run.id);
+        if (["completed", "waiting_approval", "waiting_evidence", "blocked", "failed", "canceled"].includes(latest.run.state)) break;
+      }
+      const results = latest.steps.flatMap((step): AgentToolResult[] => {
+        const value = step.toolResult;
+        if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+        const result = value as Record<string, unknown>;
+        return [{
+          tool: typeof result.tool === "string" ? result.tool : String((step.toolRequest as Record<string, unknown>).tool ?? "unknown"),
+          ok: result.ok === true,
+          permission: result.permission === "write" || result.permission === "side_effect" ? result.permission : "read",
+          durationMs: typeof result.durationMs === "number" ? result.durationMs : 0,
+          output: result.output && typeof result.output === "object" && !Array.isArray(result.output)
+            ? result.output as Record<string, unknown>
+            : null,
+          error: result.error && typeof result.error === "object" && !Array.isArray(result.error)
+            ? result.error as { code: string; message: string }
+            : null,
+        }];
+      });
+      return {
+        iterations: results.length > 0 ? 1 : 0,
+        durationMs: elapsed(startedAt),
+        timedOut: !["completed", "waiting_approval", "waiting_evidence", "blocked", "failed", "canceled"].includes(latest.run.state),
+        results,
+        engineVersion: "agent_engine.v2",
+        runId: latest.run.id,
+        runState: latest.run.state,
+      };
+    }
   }
 
   const wrapped = Promise.all(

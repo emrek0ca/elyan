@@ -26,9 +26,11 @@ const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = 
   {
     intent: "research",
     patterns: [
-      /\b(research|sources?|cite|citation|latest|compare|look up|verify|fact check|validate)\b/i,
-      /\b(araştır|kaynak|alıntı|güncel|karsilastir|karşılaştır|doğrula|dogrula|kanıtla|kanitla)\b/i,
+      /\b(research|sources?|cite|citation|latest|compare|look up|verify|fact check|validate|investigate|analyze|analysis|evaluate|assessment|review|survey|overview)\b/i,
+      /\b(araştır|kaynak|alıntı|güncel|karsilastir|karşılaştır|doğrula|dogrula|kanıtla|kanitla|incele|analiz|değerlendir|degerlendir|anket|genel bakış|genel bakis)\b/i,
       /\b(türk dünyası|turkic|oğuz|oguz|kıpçak|kipchak|karluk|qipchak|qarluq|azerbaijani|kazakh|kyrgyz|uzbek|turkmen|uyghur|tatar|bashkir|gagauz|karakalpak|sakha|chuvash)\b.*\b(araştır|arastir|incele|study|learn|öğren|ogren|compare|karşılaştır|karsilastir|gramer|grammar|lehçe|lehce|etimoloji|etymology|kaynak|source)\b/i,
+      /\b(tarih|tarihsel|tarihçe|tarihce|historical|kronoloji|chronolog)\b/i,
+      /\b(nüfus|nufus|population|gdp|gsyih|ekonomi|economy|istatistik|statistic|trend|büyüme|buyume|growth)\b/i,
     ],
   },
   {
@@ -164,6 +166,10 @@ function calculateReasoningMode(input: {
   if (input.primaryIntent === "planning" || input.requiresRetrieval) {
     return "deep";
   }
+  // Research intent always gets deep reasoning for thorough analysis
+  if (input.primaryIntent === "research") {
+    return "deep";
+  }
   if (
     input.requiresLongRunningTask &&
     !["coding", "debugging", "document", "image", "automation", "browser", "computer"].includes(input.primaryIntent)
@@ -171,6 +177,10 @@ function calculateReasoningMode(input: {
     return "deep";
   }
   if (input.requiresToolUse || ["coding", "debugging", "document", "browser", "computer", "automation", "image"].includes(input.primaryIntent)) {
+    return "balanced";
+  }
+  // Math gets balanced reasoning for step-by-step solutions
+  if (input.primaryIntent === "math") {
     return "balanced";
   }
   if (input.confidence < 0.45) {

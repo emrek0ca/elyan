@@ -1078,13 +1078,14 @@ test("resolveCommandTarget keeps chat routing on the shared brain by default", a
 // keyword/path heuristic any more. These tests lock that contract in place.
 // ---------------------------------------------------------------------------
 
-test("decideCommandRoute routes to the desktop when dispatch is on AND the task needs the local machine", async () => {
-  // Toggle on (metadata.desktopDispatch === true) + a clearly-local task →
-  // desktop. The toggle means "I have a desktop for tasks that need it".
+test("decideCommandRoute routes to the desktop when dispatch is on and a desktop is ready", async () => {
+  // The laptop toggle is explicit cowork dispatch. When a ready desktop exists,
+  // the backend hands the chat turn to the desktop instead of re-running local
+  // keyword heuristics.
   const app = createDesktopReadyApp();
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
-    message: "masaüstümdeki dosyaları aç",
+    message: "Fransa'nın başkenti neresidir?",
     source: "mobile",
     metadata: { desktopDispatch: true },
   });
@@ -1094,23 +1095,7 @@ test("decideCommandRoute routes to the desktop when dispatch is on AND the task 
   assert.equal(decision.requiredRuntime, "desktop");
   assert.equal(decision.taskRoute?.target, "desktop_runtime");
   assert.equal(decision.taskRoute?.needsDesktop, true);
-});
-
-test("decideCommandRoute still answers normal chat on the server even when dispatch is on", async () => {
-  // The user complaint: toggling the desktop button broke ordinary conversation
-  // because EVERY message was forced to desktop. A normal question must still be
-  // answered by the brain even with the toggle on — only local tasks hand off.
-  const app = createDesktopReadyApp();
-  const decision = await decideCommandRoute(app as never, {
-    userId: "user-1",
-    message: "Fransa'nın başkenti neresidir?",
-    source: "mobile",
-    metadata: { desktopDispatch: true },
-  });
-
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.mode, "chat");
-  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(decision.intent, "desktop_cowork");
 });
 
 test("decideCommandRoute ignores legacy routePreference/desktopDispatchOnce signals", async () => {
@@ -1142,7 +1127,7 @@ test("decideCommandRoute keeps everything on the shared brain when the toggle is
   assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
-test("decideCommandRoute asks for pairing when dispatch is on but no desktop is ready", async () => {
+test("decideCommandRoute keeps chat on the server when dispatch is on but no desktop is ready", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
@@ -1151,12 +1136,13 @@ test("decideCommandRoute asks for pairing when dispatch is on but no desktop is 
     metadata: { desktopDispatch: true },
   });
 
-  assert.equal(decision.route, "pairing_required");
-  assert.equal(decision.requiredRuntime, "desktop");
-  assert.equal(decision.failClosedReason, "pairing_required");
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.requiredRuntime, "server");
+  assert.equal(decision.failClosedReason, null);
+  assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
-test("decideCommandRoute fails closed when dispatch is on but the plan forbids desktop", async () => {
+test("decideCommandRoute keeps chat on the server when dispatch is on but the plan forbids desktop", async () => {
   const app = createDesktopReadyApp();
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
@@ -1166,11 +1152,11 @@ test("decideCommandRoute fails closed when dispatch is on but the plan forbids d
     metadata: { desktopDispatch: true },
   });
 
-  assert.equal(decision.route, "pairing_required");
-  assert.equal(decision.failClosedReason, "desktop_plan_required");
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.failClosedReason, null);
   assert.equal(
     decision.userFacingMessage,
-    "Masaüstü bağlantısı yalnızca Pro planında kullanılabilir.",
+    "Masaüstü bağlantısı bu planda kapalı; sohbet burada devam ediyor.",
   );
 });
 

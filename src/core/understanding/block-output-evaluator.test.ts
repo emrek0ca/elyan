@@ -5,7 +5,7 @@ import { evaluateBlockOutputPolicyFixtures } from "./block-output-evaluator.js";
 test("block output evaluator reports deploy-ready quality score for fixture set", async () => {
   const summary = await evaluateBlockOutputPolicyFixtures();
 
-  assert.equal(summary.fixtureCount, 50);
+  assert.equal(summary.fixtureCount, 55);
   assert.equal(summary.ciPass, true, summary.ciViolations.join("\n"));
   assert.equal(summary.routeAccuracy, 1);
   assert.equal(summary.shapeAccuracy, 1);

@@ -481,6 +481,7 @@ export const taskEvents = pgTable(
   },
   (table) => ({
     taskIdx: index("task_events_task_idx").on(table.taskId),
+    taskCreatedIdx: index("task_events_task_created_idx").on(table.taskId, table.createdAt),
   }),
 );
 
@@ -875,6 +876,13 @@ export const datasetManifests = pgTable(
     languageTags: jsonb("language_tags").notNull().default(sql`'[]'::jsonb`),
     recordCount: integer("record_count").notNull().default(0),
     tokenEstimate: integer("token_estimate").notNull().default(0),
+    lineage: varchar("lineage", { length: 80 }).notNull().default("legacy"),
+    privacyReport: jsonb("privacy_report").notNull().default(sql`'{}'::jsonb`),
+    qualityReport: jsonb("quality_report").notNull().default(sql`'{}'::jsonb`),
+    replayRatio: integer("replay_ratio").notNull().default(0),
+    candidateStatus: varchar("candidate_status", { length: 32 }).notNull().default("not_candidate"),
+    sourceWindowStart: timestamp("source_window_start", { withTimezone: true }),
+    sourceWindowEnd: timestamp("source_window_end", { withTimezone: true }),
     metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -883,6 +891,41 @@ export const datasetManifests = pgTable(
     ownerIdx: index("dataset_manifests_owner_idx").on(table.ownerUserId),
     scopeIdx: index("dataset_manifests_scope_idx").on(table.scope),
     statusIdx: index("dataset_manifests_status_idx").on(table.status),
+    lineageIdx: index("dataset_manifests_lineage_idx").on(table.lineage),
+    candidateIdx: index("dataset_manifests_candidate_status_idx").on(table.candidateStatus),
+  }),
+);
+
+export const continuousLearningRuns = pgTable(
+  "continuous_learning_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ownerUserId: uuid("owner_user_id").references(() => users.id, { onDelete: "set null" }),
+    scope: brainScopeEnum("scope").notNull().default("shared"),
+    status: varchar("status", { length: 32 }).notNull().default("draft"),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+    datasetManifestId: uuid("dataset_manifest_id").references(() => datasetManifests.id, { onDelete: "set null" }),
+    sourceEventCount: integer("source_event_count").notNull().default(0),
+    acceptedEventCount: integer("accepted_event_count").notNull().default(0),
+    rejectedEventCount: integer("rejected_event_count").notNull().default(0),
+    dedupedEventCount: integer("deduped_event_count").notNull().default(0),
+    replayRecordCount: integer("replay_record_count").notNull().default(0),
+    trainRecordCount: integer("train_record_count").notNull().default(0),
+    validationRecordCount: integer("validation_record_count").notNull().default(0),
+    privacyReport: jsonb("privacy_report").notNull().default(sql`'{}'::jsonb`),
+    qualityReport: jsonb("quality_report").notNull().default(sql`'{}'::jsonb`),
+    replayReport: jsonb("replay_report").notNull().default(sql`'{}'::jsonb`),
+    promotionReport: jsonb("promotion_report").notNull().default(sql`'{}'::jsonb`),
+    config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    ownerIdx: index("continuous_learning_runs_owner_idx").on(table.ownerUserId),
+    scopeStatusIdx: index("continuous_learning_runs_scope_status_idx").on(table.scope, table.status),
+    windowIdx: index("continuous_learning_runs_window_idx").on(table.windowStart, table.windowEnd),
+    datasetIdx: index("continuous_learning_runs_dataset_idx").on(table.datasetManifestId),
   }),
 );
 
@@ -911,6 +954,9 @@ export const trainingJobs = pgTable(
     scopeIdx: index("training_jobs_scope_idx").on(table.scope),
     statusIdx: index("training_jobs_status_idx").on(table.status),
     datasetIdx: index("training_jobs_dataset_idx").on(table.datasetManifestId),
+    activeMemoryJobIdx: uniqueIndex("training_jobs_active_memory_user_kind_uidx")
+      .on(table.ownerUserId, table.kind)
+      .where(sql`${table.ownerUserId} is not null and ${table.kind} in ('memory_extraction', 'memory_consolidation', 'memory_index', 'memory_decay') and ${table.status} in ('queued', 'running')`),
   }),
 );
 
@@ -1016,6 +1062,14 @@ export const brainMemoryEpisodes = pgTable(
     embeddingV2: vector384("embedding_v2"),
     embeddingV2Model: varchar("embedding_v2_model", { length: 96 }),
     staleAt: timestamp("stale_at", { withTimezone: true }),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now() + interval '90 days'`),
+    revision: integer("revision").notNull().default(1),
+    sourceKind: varchar("source_kind", { length: 48 }).notNull().default("legacy"),
+    sourceId: varchar("source_id", { length: 160 }),
+    contentHash: varchar("content_hash", { length: 64 }),
     metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1028,6 +1082,10 @@ export const brainMemoryEpisodes = pgTable(
     staleIdx: index("brain_memory_episodes_stale_idx").on(table.staleAt),
     pinnedIdx: index("brain_memory_episodes_pinned_idx").on(table.isPinned),
     lifecycleIdx: index("brain_memory_episodes_lifecycle_idx").on(table.lifecycleStatus),
+    activeExpiryIdx: index("brain_memory_episodes_user_expiry_idx").on(
+      table.userId,
+      table.expiresAt,
+    ),
   }),
 );
 
@@ -1054,6 +1112,13 @@ export const brainMemoryFacts = pgTable(
     deletedReason: varchar("deleted_reason", { length: 240 }),
     staleAt: timestamp("stale_at", { withTimezone: true }),
     supersedesFactId: uuid("supersedes_fact_id"),
+    validFrom: timestamp("valid_from", { withTimezone: true }).notNull().defaultNow(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+    revision: integer("revision").notNull().default(1),
+    sourceKind: varchar("source_kind", { length: 48 }).notNull().default("legacy"),
+    sourceId: varchar("source_id", { length: 160 }),
+    contentHash: varchar("content_hash", { length: 64 }),
     embeddingModel: varchar("embedding_model", { length: 160 }),
     embeddingV2: vector384("embedding_v2"),
     embeddingV2Model: varchar("embedding_v2_model", { length: 96 }),
@@ -1072,6 +1137,67 @@ export const brainMemoryFacts = pgTable(
     staleIdx: index("brain_memory_facts_stale_idx").on(table.staleAt),
     pinnedIdx: index("brain_memory_facts_pinned_idx").on(table.isPinned),
     lifecycleIdx: index("brain_memory_facts_lifecycle_idx").on(table.lifecycleStatus),
+    temporalIdx: index("brain_memory_facts_user_temporal_idx").on(
+      table.userId,
+      table.canonicalKey,
+      table.validFrom,
+    ),
+  }),
+);
+
+export const cognitiveMemoryRevisions = pgTable("cognitive_memory_revisions", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  revision: integer("revision").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const cognitiveMutationOutbox = pgTable(
+  "cognitive_mutation_outbox",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id"),
+    revision: integer("revision").notNull(),
+    eventType: varchar("event_type", { length: 64 }).notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    status: varchar("status", { length: 24 }).notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    lastErrorCode: varchar("last_error_code", { length: 96 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pendingIdx: index("cognitive_mutation_outbox_pending_idx").on(
+      table.status,
+      table.availableAt,
+    ),
+    userRevisionIdx: uniqueIndex("cognitive_mutation_outbox_user_revision_uidx").on(
+      table.userId,
+      table.revision,
+    ),
+  }),
+);
+
+export const tenantIntegrityQuarantine = pgTable(
+  "tenant_integrity_quarantine",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tableName: varchar("table_name", { length: 96 }).notNull(),
+    rowIdHash: varchar("row_id_hash", { length: 64 }).notNull(),
+    reasonCode: varchar("reason_code", { length: 96 }).notNull(),
+    detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => ({
+    unresolvedIdx: index("tenant_integrity_quarantine_unresolved_idx").on(
+      table.tableName,
+      table.resolvedAt,
+    ),
   }),
 );
 
@@ -1140,6 +1266,7 @@ export const chatSessions = pgTable(
   },
   (table) => ({
     userIdx: index("chat_sessions_user_idx").on(table.userId),
+    ownerIdx: uniqueIndex("chat_sessions_id_user_uidx").on(table.id, table.userId),
     targetDeviceIdx: index("chat_sessions_target_device_idx").on(table.targetDeviceId),
     statusIdx: index("chat_sessions_status_idx").on(table.status),
     lastMessageIdx: index("chat_sessions_last_message_idx").on(table.lastMessageAt),
@@ -1282,9 +1409,104 @@ export const goalEvents = pgTable(
   },
   (table) => ({
     goalCreatedIdx: index("goal_events_goal_created_idx").on(table.goalId, table.createdAt),
+    goalUserCreatedIdx: index("goal_events_goal_user_created_idx").on(
+      table.goalId,
+      table.userId,
+      table.createdAt,
+    ),
     userCreatedIdx: index("goal_events_user_created_idx").on(table.userId, table.createdAt),
   }),
 );
+
+export const agentRuns = pgTable("agent_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }).unique(),
+  sessionId: uuid("session_id").references(() => chatSessions.id, { onDelete: "set null" }),
+  goalId: uuid("goal_id").references(() => sessionGoals.id, { onDelete: "set null" }),
+  state: varchar("state", { length: 32 }).notNull().default("understanding"),
+  revision: integer("revision").notNull().default(1),
+  plan: jsonb("plan").notNull().default(sql`'{}'::jsonb`),
+  maxSteps: integer("max_steps").notNull().default(8),
+  maxToolCalls: integer("max_tool_calls").notNull().default(12),
+  maxReplans: integer("max_replans").notNull().default(2),
+  toolCallCount: integer("tool_call_count").notNull().default(0),
+  replanCount: integer("replan_count").notNull().default(0),
+  activeComputeMs: integer("active_compute_ms").notNull().default(0),
+  activeComputeBudgetMs: integer("active_compute_budget_ms").notNull().default(120_000),
+  leaseOwner: varchar("lease_owner", { length: 160 }),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  waitingExpiresAt: timestamp("waiting_expires_at", { withTimezone: true }),
+  terminalResult: jsonb("terminal_result"),
+  failureCode: varchar("failure_code", { length: 96 }),
+  shadow: boolean("shadow").notNull().default(false),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  idUserUnique: uniqueIndex("agent_runs_id_user_uidx").on(table.id, table.userId),
+  userStateIdx: index("agent_runs_user_state_idx").on(table.userId, table.state, table.updatedAt),
+  leaseIdx: index("agent_runs_lease_idx").on(table.state, table.leaseExpiresAt),
+}));
+
+export const agentSteps = pgTable("agent_steps", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  stepKey: varchar("step_key", { length: 80 }).notNull(),
+  sequence: integer("sequence").notNull(),
+  state: varchar("state", { length: 32 }).notNull().default("pending"),
+  dependsOn: jsonb("depends_on").notNull().default(sql`'[]'::jsonb`),
+  expectedOutcome: jsonb("expected_outcome").notNull().default(sql`'{}'::jsonb`),
+  toolRequest: jsonb("tool_request").notNull().default(sql`'{}'::jsonb`),
+  toolResult: jsonb("tool_result"),
+  verification: jsonb("verification"),
+  attempt: integer("attempt").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  idempotencyKey: varchar("idempotency_key", { length: 160 }).notNull().unique(),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  observedAt: timestamp("observed_at", { withTimezone: true }),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  runStepUnique: uniqueIndex("agent_steps_run_step_uidx").on(table.runId, table.stepKey),
+  runStateIdx: index("agent_steps_run_state_idx").on(table.runId, table.state, table.sequence),
+}));
+
+export const agentEvidence = pgTable("agent_evidence", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  stepId: uuid("step_id").notNull().references(() => agentSteps.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  kind: varchar("kind", { length: 32 }).notNull(),
+  sourceRef: varchar("source_ref", { length: 200 }),
+  contentHash: varchar("content_hash", { length: 64 }),
+  payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+  valid: boolean("valid").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  stepIdx: index("agent_evidence_step_idx").on(table.stepId, table.createdAt),
+  runIdx: index("agent_evidence_run_idx").on(table.runId, table.createdAt),
+}));
+
+export const agentEvents = pgTable("agent_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  runId: uuid("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  stepId: uuid("step_id").references(() => agentSteps.id, { onDelete: "set null" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  revision: integer("revision").notNull(),
+  eventType: varchar("event_type", { length: 64 }).notNull(),
+  fromState: varchar("from_state", { length: 32 }),
+  toState: varchar("to_state", { length: 32 }).notNull(),
+  payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  runRevisionIdx: index("agent_events_run_revision_idx").on(table.runId, table.revision, table.createdAt),
+  userCreatedIdx: index("agent_events_user_created_idx").on(table.userId, table.createdAt),
+}));
 
 export const chatMessages = pgTable(
   "chat_messages",

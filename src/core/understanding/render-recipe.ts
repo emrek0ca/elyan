@@ -1,3 +1,10 @@
+import type { UnderstandingEnvelope } from "./types.js";
+import {
+  findUnderstandingEnvelope,
+  hasRenderableDesiredOutput,
+  preferredFormatFromUnderstandingEnvelope,
+} from "./understanding-envelope.js";
+
 export type RenderRecipeFormat =
   "pdf" | "png" | "jpg" | "jpeg" | "webp" | "svg" | "docx" | "xlsx";
 export type RenderRecipeTarget = "mobile" | "desktop";
@@ -73,14 +80,48 @@ type DocumentIntentHints = {
   layout_template: "business_document" | "plain_document" | "visual_canvas";
 };
 
+type ExtractedMoneyAmount = {
+  raw: string;
+  currency: "TRY" | "USD" | "EUR" | "unknown";
+  label?: string;
+};
+
+type DocumentRequirementSpec = {
+  output_format: RenderRecipeFormat;
+  export_family: "document" | "spreadsheet" | "image";
+  kind: DocumentIntentHints["document_kind"] | "spreadsheet";
+  style: DocumentIntentHints["document_style"];
+  layout_template:
+    | DocumentIntentHints["layout_template"]
+    | "spreadsheet_workbook";
+  preserve_numbers: boolean;
+  table_required: boolean;
+  exact_text_required: boolean;
+  must_include: string[];
+  money_amounts: ExtractedMoneyAmount[];
+  quality_checks: {
+    preserve_numbers: boolean;
+    preserve_user_phrases: boolean;
+    no_assistant_chatter: boolean;
+    preflight_required: boolean;
+  };
+  spreadsheet?: {
+    sheet_name: string;
+    suggested_columns: string[];
+    include_totals: boolean;
+  };
+  footer_text?: string;
+  signature_text?: string;
+};
+
 const IMAGE_EXPORT_PATTERNS = [
   /\b(görsel|gorsel|resim|image|png|jpg|jpeg|webp|svg|afiş|afis|poster|banner|kapak|thumbnail|screenshot)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i,
   /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(görsel|gorsel|resim|image|png|jpg|jpeg|webp|svg|afiş|afis|poster|banner|kapak|thumbnail|screenshot)\b/i,
 ];
 
 const DOCUMENT_EXPORT_PATTERNS = [
-  /\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i,
-  /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum)\b/i,
+  /\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum|xlsx|excel|spreadsheet|csv|tablo)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b/i,
+  /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|düzenle|duzenle|yap|üret|uret)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum|xlsx|excel|spreadsheet|csv|tablo)\b/i,
 ];
 
 const DOCUMENT_WORD_EXPORT_PATTERNS = [
@@ -186,6 +227,82 @@ function readBoolean(
 ): boolean | null {
   const value = record?.[key];
   return typeof value === "boolean" ? value : null;
+}
+
+function isRenderRecipeFormat(value: string | null): value is RenderRecipeFormat {
+  return (
+    value === "pdf" ||
+    value === "png" ||
+    value === "jpg" ||
+    value === "jpeg" ||
+    value === "webp" ||
+    value === "svg" ||
+    value === "docx" ||
+    value === "xlsx"
+  );
+}
+
+function readEnvelopeConstraint(
+  envelope: UnderstandingEnvelope | null | undefined,
+  kind: string,
+): unknown {
+  return envelope?.constraints.find((constraint) => constraint.kind === kind)?.value;
+}
+
+function mergeEnvelopeRenderMetadata(
+  metadata: Record<string, unknown>,
+  envelope: UnderstandingEnvelope | null,
+): Record<string, unknown> {
+  if (!envelope) {
+    return metadata;
+  }
+
+  const footerText = readEnvelopeConstraint(envelope, "footer_text");
+  const signatureText = readEnvelopeConstraint(envelope, "signature_text");
+  const documentStyle = readEnvelopeConstraint(envelope, "document_style");
+  const documentKind = readEnvelopeConstraint(envelope, "document_kind");
+  const layoutTemplate = readEnvelopeConstraint(envelope, "layout_template");
+  const sheetName = readEnvelopeConstraint(envelope, "sheet_name");
+  const columns = readEnvelopeConstraint(envelope, "columns");
+  const includeTotals = readEnvelopeConstraint(envelope, "include_totals");
+  const envelopeFormat = preferredFormatFromUnderstandingEnvelope(envelope);
+
+  const derived: Record<string, unknown> = {
+    understanding_envelope_source: envelope.source,
+    understanding_envelope_confidence: envelope.confidence,
+    understanding_desired_outputs: envelope.desired_outputs.map((output) => output.kind),
+    understanding_constraint_count: envelope.constraints.length,
+    ...(envelopeFormat ? { outputFormat: envelopeFormat } : {}),
+    ...(typeof footerText === "string" && footerText.trim()
+      ? { footer_text: footerText }
+      : {}),
+    ...(typeof signatureText === "string" && signatureText.trim()
+      ? { signature_text: signatureText }
+      : {}),
+    ...(typeof documentStyle === "string" && documentStyle.trim()
+      ? { document_style: documentStyle }
+      : {}),
+    ...(typeof documentKind === "string" && documentKind.trim()
+      ? { document_kind: documentKind }
+      : {}),
+    ...(typeof layoutTemplate === "string" && layoutTemplate.trim()
+      ? { layout_template: layoutTemplate }
+      : {}),
+    ...(typeof sheetName === "string" && sheetName.trim()
+      ? { title: sheetName, sheet_name: sheetName }
+      : {}),
+    ...(Array.isArray(columns) && columns.every((item) => typeof item === "string")
+      ? { spreadsheet_columns: columns }
+      : {}),
+    ...(typeof includeTotals === "boolean"
+      ? { includeTotals, include_totals: includeTotals }
+      : {}),
+  };
+
+  return {
+    ...derived,
+    ...metadata,
+  };
 }
 
 function detectFormat(
@@ -451,6 +568,197 @@ function detectDocumentIntentHints(
         : document_kind === "generic" && document_style === "standard"
           ? "plain_document"
           : "business_document",
+  };
+}
+
+function exportFamilyForFormat(
+  format: RenderRecipeFormat,
+  outputType: RenderRecipeOutputType,
+): DocumentRequirementSpec["export_family"] {
+  if (format === "xlsx") {
+    return "spreadsheet";
+  }
+  if (outputType === "image_render_recipe") {
+    return "image";
+  }
+  return "document";
+}
+
+function mapCurrency(value: string | undefined): ExtractedMoneyAmount["currency"] {
+  const normalized = normalizeValue(value ?? "");
+  if (normalized === "tl" || normalized === "try" || normalized === "₺") {
+    return "TRY";
+  }
+  if (normalized === "usd" || normalized === "$") {
+    return "USD";
+  }
+  if (normalized === "eur" || normalized === "€") {
+    return "EUR";
+  }
+  return "unknown";
+}
+
+function extractMoneyAmounts(text: string): ExtractedMoneyAmount[] {
+  const normalized = String(text ?? "");
+  const matches: ExtractedMoneyAmount[] = [];
+  const pattern =
+    /(?:(?<label>[\p{L}\p{N}\s%.,/()-]{2,48}?)[=:]\s*)?(?<raw>(?:₺|\$|€)?\s*\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|\d+(?:[.,]\d+)?)\s*(?<currency>tl|try|₺|usd|\$|eur|€)\b/giu;
+
+  for (const match of normalized.matchAll(pattern)) {
+    const raw = compactText(match.groups?.raw ?? match[0] ?? "");
+    const currencyRaw = match.groups?.currency ?? "";
+    const label = cleanInlineIntentText(match.groups?.label ?? "");
+    if (!raw) {
+      continue;
+    }
+    matches.push({
+      raw: compactText(`${raw}${currencyRaw ? ` ${currencyRaw}` : ""}`),
+      currency: mapCurrency(currencyRaw),
+      ...(label ? { label } : {}),
+    });
+    if (matches.length >= 12) {
+      break;
+    }
+  }
+
+  const seen = new Set<string>();
+  return matches.filter((item) => {
+    const key = `${item.raw}:${item.currency}:${item.label ?? ""}`.toLocaleLowerCase(
+      "tr-TR",
+    );
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function hasTableBlock(blocks: RenderRecipeBlock[]): boolean {
+  return blocks.some((block) => block.type === "table");
+}
+
+function detectSpreadsheetColumns(blocks: RenderRecipeBlock[]): string[] {
+  const table = blocks.find(
+    (block) => block.type === "table" && (block.tableHeaders?.length ?? 0) > 0,
+  );
+  if (table?.tableHeaders?.length) {
+    return table.tableHeaders.slice(0, 12);
+  }
+  return ["Kalem", "Açıklama", "Tutar"];
+}
+
+function buildRequiredMarkers(input: {
+  title: string | null;
+  plainTextSource: string;
+  documentIntentHints: DocumentIntentHints;
+  moneyAmounts: ExtractedMoneyAmount[];
+}): string[] {
+  const markers = [
+    input.title,
+    compactText(input.plainTextSource).slice(0, 240),
+    input.documentIntentHints.footer_text ?? null,
+    input.documentIntentHints.signature_text ?? null,
+    ...input.moneyAmounts.map((amount) => amount.raw),
+  ].filter(
+    (value): value is string =>
+      typeof value === "string" && compactText(value).length > 0,
+  );
+
+  const seen = new Set<string>();
+  return markers
+    .map((marker) => compactText(marker).slice(0, 240))
+    .filter((marker) => {
+      const key = marker.toLocaleLowerCase("tr-TR");
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 16);
+}
+
+function buildDocumentRequirementSpec(input: {
+  format: RenderRecipeFormat;
+  outputType: RenderRecipeOutputType;
+  prompt: string;
+  plainTextSource: string;
+  title: string | null;
+  textBlocks: RenderRecipeBlock[];
+  documentIntentHints: DocumentIntentHints;
+  metadata: Record<string, unknown>;
+}): DocumentRequirementSpec {
+  const promptAndBody = `${input.prompt}\n${input.plainTextSource}`;
+  const normalizedPrompt = compactText(input.prompt).toLocaleLowerCase("tr-TR");
+  const moneyAmounts = extractMoneyAmounts(promptAndBody);
+  const tableRequired =
+    input.format === "xlsx" ||
+    hasTableBlock(input.textBlocks) ||
+    /\b(tablo|excel|xlsx|spreadsheet|csv|satır|sutun|sütun)\b/i.test(
+      normalizedPrompt,
+    );
+  const exportFamily = exportFamilyForFormat(input.format, input.outputType);
+  const mustInclude = buildRequiredMarkers({
+    title: input.title,
+    plainTextSource: input.plainTextSource,
+    documentIntentHints: input.documentIntentHints,
+    moneyAmounts,
+  });
+  const kind =
+    input.format === "xlsx"
+      ? "spreadsheet"
+      : input.documentIntentHints.document_kind;
+  const layoutTemplate =
+    input.format === "xlsx"
+      ? "spreadsheet_workbook"
+      : input.documentIntentHints.layout_template;
+  const metadataColumns = readArray(input.metadata, "spreadsheet_columns")
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim())
+    .slice(0, 12);
+
+  return {
+    output_format: input.format,
+    export_family: exportFamily,
+    kind,
+    style: input.documentIntentHints.document_style,
+    layout_template: layoutTemplate,
+    preserve_numbers: moneyAmounts.length > 0 || tableRequired,
+    table_required: tableRequired,
+    exact_text_required:
+      Boolean(input.documentIntentHints.footer_text) ||
+      Boolean(input.documentIntentHints.signature_text) ||
+      mustInclude.length > 0,
+    must_include: mustInclude,
+    money_amounts: moneyAmounts,
+    quality_checks: {
+      preserve_numbers: moneyAmounts.length > 0 || tableRequired,
+      preserve_user_phrases: mustInclude.length > 0,
+      no_assistant_chatter: true,
+      preflight_required: true,
+    },
+    ...(input.documentIntentHints.footer_text
+      ? { footer_text: input.documentIntentHints.footer_text }
+      : {}),
+    ...(input.documentIntentHints.signature_text
+      ? { signature_text: input.documentIntentHints.signature_text }
+      : {}),
+    ...(input.format === "xlsx"
+      ? {
+          spreadsheet: {
+            sheet_name: input.title ?? "Elyan Çıktısı",
+            suggested_columns:
+              metadataColumns.length > 0
+                ? metadataColumns
+                : detectSpreadsheetColumns(input.textBlocks),
+            include_totals:
+              moneyAmounts.length > 0 ||
+              readBoolean(input.metadata, "include_totals") === true ||
+              /\b(toplam|genel\s+toplam|total|sum)\b/i.test(normalizedPrompt),
+          },
+        }
+      : {}),
   };
 }
 
@@ -764,14 +1072,25 @@ export function buildLocalRenderRecipe(input: {
   taskId?: string;
   sessionId?: string;
   assistantBlocks?: unknown[];
+  understandingEnvelope?: UnderstandingEnvelope | null;
 }): LocalRenderRecipe | null {
-  if (!hasRenderRequest(input.prompt, input.metadata)) {
+  const rawMetadata = readRecord(input.metadata) ?? {};
+  const envelope =
+    input.understandingEnvelope ?? findUnderstandingEnvelope(rawMetadata);
+  if (
+    !hasRenderRequest(input.prompt, input.metadata) &&
+    !hasRenderableDesiredOutput(envelope)
+  ) {
     return null;
   }
 
-  const format = detectFormat(input.prompt, input.metadata) ?? "pdf";
-  const renderOn = input.renderOn ?? detectRenderTarget(input.metadata);
-  const metadata = readRecord(input.metadata) ?? {};
+  const envelopeFormat = preferredFormatFromUnderstandingEnvelope(envelope);
+  const format =
+    (isRenderRecipeFormat(envelopeFormat) ? envelopeFormat : null) ??
+    detectFormat(input.prompt, input.metadata) ??
+    "pdf";
+  const metadata = mergeEnvelopeRenderMetadata(rawMetadata, envelope);
+  const renderOn = input.renderOn ?? detectRenderTarget(metadata);
   const documentIntentHints = detectDocumentIntentHints(
     input.prompt,
     metadata,
@@ -821,14 +1140,17 @@ export function buildLocalRenderRecipe(input: {
     format === "svg"
       ? "image_render_recipe"
       : "document_render_recipe";
-  const requiredMarkers = [
+  const documentRequirements = buildDocumentRequirementSpec({
+    format,
+    outputType,
+    prompt: input.prompt,
+    plainTextSource,
     title,
-    documentIntentHints.footer_text ?? null,
-    documentIntentHints.signature_text ?? null,
-  ].filter(
-    (value): value is string =>
-      typeof value === "string" && compactText(value).length > 0,
-  );
+    textBlocks,
+    documentIntentHints,
+    metadata,
+  });
+  const requiredMarkers = documentRequirements.must_include;
   const recipe: LocalRenderRecipe = {
     schema_version: "2026-06-mobile-render-recipe-v2",
     output_type: outputType,
@@ -873,6 +1195,8 @@ export function buildLocalRenderRecipe(input: {
       file_name: fileName,
       preflight_required: true,
       required_markers: requiredMarkers,
+      document_requirements: documentRequirements,
+      quality_checks: documentRequirements.quality_checks,
       structured_block_count: structuredTextBlocks.length,
       preferred_export_family:
         format === "xlsx"

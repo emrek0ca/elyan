@@ -1,8 +1,14 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { datasetManifests, modelArtifacts, trainingJobs } from "../../db/schema.js";
+import {
+  brainMemoryEpisodes,
+  cognitiveMutationOutbox,
+  datasetManifests,
+  modelArtifacts,
+  trainingJobs,
+} from "../../db/schema.js";
 import { createAuditLog } from "../audit/service.js";
 import {
   evaluateBrainPromotionEligibility,
@@ -20,6 +26,10 @@ import {
   type ProactiveTriggerRow,
   type ProactiveTriggerSweepResult,
 } from "./proactive-engine.js";
+import {
+  processContinuousLearningDailyBuild,
+  type ContinuousLearningBuildResult,
+} from "./continuous-learning-pipeline.js";
 import { generateSharedBrainReply } from "./inference.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
 
@@ -668,6 +678,7 @@ const MEMORY_JOB_KINDS = [
   "memory_reconsolidation",
   "memory_index",
 ] as const;
+const DOCUMENT_JOB_KINDS = ["retrieval_index"] as const;
 
 async function claimNextQueuedMemoryJob(
   app: FastifyInstance,
@@ -724,6 +735,57 @@ export async function processNextQueuedMemoryJob(
   return true;
 }
 
+async function claimNextQueuedDocumentJob(
+  app: FastifyInstance,
+): Promise<TrainingJobRow | null> {
+  const queuedRows = await app.db
+    .select()
+    .from(trainingJobs)
+    .where(
+      and(
+        eq(trainingJobs.status, "queued"),
+        inArray(trainingJobs.kind, [...DOCUMENT_JOB_KINDS]),
+      ),
+    )
+    .orderBy(asc(trainingJobs.createdAt))
+    .limit(1);
+
+  const queuedJob = queuedRows[0];
+  if (!queuedJob) {
+    return null;
+  }
+
+  const now = new Date();
+  const updatedRows = await app.db
+    .update(trainingJobs)
+    .set({
+      status: "running",
+      startedAt: now,
+      updatedAt: now,
+      metadata: mergeTrainingMetadata(queuedJob.metadata, {
+        workerStatus: "running",
+        trainingMode: "document_worker",
+        claimedAt: now.toISOString(),
+        claimedBy: "document_worker",
+      }),
+    })
+    .where(and(eq(trainingJobs.id, queuedJob.id), eq(trainingJobs.status, "queued")))
+    .returning();
+
+  return updatedRows[0] ?? null;
+}
+
+export async function processNextQueuedDocumentJob(
+  app: FastifyInstance,
+): Promise<boolean> {
+  const job = await claimNextQueuedDocumentJob(app);
+  if (!job) {
+    return false;
+  }
+  await processTrainingJob(app, job);
+  return true;
+}
+
 type MemoryWorkerState = {
   timer: ReturnType<typeof setInterval>;
   running: boolean;
@@ -735,6 +797,9 @@ export type BrainWorkerIterationResult = {
   memoryDecayProcessed: number;
   memoryDecayUpdated: number;
   proactive: ProactiveTriggerSweepResult;
+  expiredEpisodes?: number;
+  outboxProcessed?: number;
+  continuousLearning?: ContinuousLearningBuildResult;
 };
 
 type BrainWorkerIterationOptions = {
@@ -742,12 +807,19 @@ type BrainWorkerIterationOptions = {
   processMemoryJob?: (app: FastifyInstance) => Promise<boolean>;
   processDecay?: typeof processMemoryImportanceDecay;
   processProactive?: typeof processDueProactiveTriggers;
+  processExpiredEpisodes?: typeof processExpiredCognitiveEpisodes;
+  processOutbox?: typeof processCognitiveMutationOutbox;
+  processContinuousLearning?: typeof processContinuousLearningDailyBuild;
 };
 
 const activeMemoryWorkers = new WeakMap<FastifyInstance, MemoryWorkerState>();
 const MEMORY_WORKER_INTERVAL_MS = 30_000;
 const MEMORY_WORKER_BATCH = 25;
 const PROACTIVE_WORKER_BATCH = 5;
+const COGNITIVE_MAINTENANCE_BATCH = 100;
+export const BRAIN_WORKER_HEARTBEAT_KEY = "elyan:brain-worker:heartbeat";
+const BRAIN_WORKER_HEARTBEAT_TTL_MS = 90_000;
+const BRAIN_WORKER_HEARTBEAT_FRESH_MS = 75_000;
 
 function emptyProactiveSweep(): ProactiveTriggerSweepResult {
   return {
@@ -757,6 +829,57 @@ function emptyProactiveSweep(): ProactiveTriggerSweepResult {
     deferred: 0,
     failed: 0,
   };
+}
+
+export async function processExpiredCognitiveEpisodes(
+  app: FastifyInstance,
+  input: { limit?: number; now?: Date } = {},
+): Promise<number> {
+  const limit = Math.max(1, Math.min(input.limit ?? COGNITIVE_MAINTENANCE_BATCH, 500));
+  const now = input.now ?? new Date();
+  return app.db.transaction(async (tx) => {
+    const rows = await tx
+      .select({ id: brainMemoryEpisodes.id })
+      .from(brainMemoryEpisodes)
+      .where(and(
+        eq(brainMemoryEpisodes.lifecycleStatus, "active"),
+        lt(brainMemoryEpisodes.expiresAt, now),
+      ))
+      .limit(limit)
+      .for("update", { skipLocked: true });
+    if (rows.length === 0) return 0;
+    await tx
+      .update(brainMemoryEpisodes)
+      .set({ lifecycleStatus: "expired", staleAt: now, updatedAt: now })
+      .where(inArray(brainMemoryEpisodes.id, rows.map((row) => row.id)));
+    return rows.length;
+  });
+}
+
+export async function processCognitiveMutationOutbox(
+  app: FastifyInstance,
+  input: { limit?: number; now?: Date } = {},
+): Promise<number> {
+  const limit = Math.max(1, Math.min(input.limit ?? COGNITIVE_MAINTENANCE_BATCH, 500));
+  const now = input.now ?? new Date();
+  return app.db.transaction(async (tx) => {
+    const rows = await tx
+      .select({ id: cognitiveMutationOutbox.id })
+      .from(cognitiveMutationOutbox)
+      .where(and(
+        eq(cognitiveMutationOutbox.status, "pending"),
+        lt(cognitiveMutationOutbox.availableAt, new Date(now.getTime() + 1)),
+      ))
+      .orderBy(asc(cognitiveMutationOutbox.availableAt))
+      .limit(limit)
+      .for("update", { skipLocked: true });
+    if (rows.length === 0) return 0;
+    await tx
+      .update(cognitiveMutationOutbox)
+      .set({ status: "processed", processedAt: now, lastErrorCode: null })
+      .where(inArray(cognitiveMutationOutbox.id, rows.map((row) => row.id)));
+    return rows.length;
+  });
 }
 
 export async function composeProactiveTriggerMessage(
@@ -819,6 +942,9 @@ export async function processBrainWorkerIteration(
   const processMemoryJob = options.processMemoryJob ?? processNextQueuedMemoryJob;
   const processDecay = options.processDecay ?? processMemoryImportanceDecay;
   const processProactive = options.processProactive ?? processDueProactiveTriggers;
+  const processExpiredEpisodes = options.processExpiredEpisodes ?? processExpiredCognitiveEpisodes;
+  const processOutbox = options.processOutbox ?? processCognitiveMutationOutbox;
+  const processContinuousLearning = options.processContinuousLearning ?? processContinuousLearningDailyBuild;
 
   let memoryJobsProcessed = 0;
   while (memoryJobsProcessed < memoryBatch) {
@@ -836,12 +962,26 @@ export async function processBrainWorkerIteration(
   }
 
   const proactive = await processProactive(app);
+  const cognitiveMaintenanceEnabled =
+    app.config?.ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED === true ||
+    (app.config?.ELYAN_COGNITIVE_FOUNDATION_ROLLOUT_PERCENT ?? 0) > 0;
+  const [expiredEpisodes, outboxProcessed] = cognitiveMaintenanceEnabled
+    ? await Promise.all([processExpiredEpisodes(app), processOutbox(app)])
+    : [0, 0];
+  const continuousLearningEnabled =
+    app.config?.ELYAN_CONTINUOUS_LEARNING_V2_ENABLED === true ||
+    app.config?.ELYAN_CONTINUOUS_LEARNING_SHADOW_ENABLED === true;
+  const continuousLearning = continuousLearningEnabled
+    ? await processContinuousLearning(app)
+    : undefined;
 
   return {
     memoryJobsProcessed,
     memoryDecayProcessed,
     memoryDecayUpdated,
     proactive,
+    ...(cognitiveMaintenanceEnabled ? { expiredEpisodes, outboxProcessed } : {}),
+    ...(continuousLearning ? { continuousLearning } : {}),
   };
 }
 
@@ -858,11 +998,17 @@ export async function runBrainWorker(
     let processed = false;
 
     try {
+      await writeBrainWorkerHeartbeat(app);
       const result = await processBrainWorkerIteration(app);
       processed =
         result.memoryJobsProcessed > 0 ||
         result.memoryDecayUpdated > 0 ||
         result.proactive.processed > 0;
+      processed =
+        processed ||
+        (result.expiredEpisodes ?? 0) > 0 ||
+        (result.outboxProcessed ?? 0) > 0 ||
+        result.continuousLearning?.processed === true;
       if (result.memoryJobsProcessed > 0) {
         app.log.info?.(
           { processed: result.memoryJobsProcessed },
@@ -881,6 +1027,18 @@ export async function runBrainWorker(
       if (result.proactive.processed > 0) {
         app.log.info?.(result.proactive, "brain worker processed proactive triggers");
       }
+      if (result.continuousLearning?.processed === true) {
+        app.log.info?.(
+          {
+            runId: result.continuousLearning.runId,
+            datasetManifestId: result.continuousLearning.datasetManifestId,
+            acceptedEventCount: result.continuousLearning.candidate.acceptedEventCount,
+            promotionStatus: result.continuousLearning.promotionReport.status,
+            shadow: result.continuousLearning.shadow,
+          },
+          "brain worker built continuous learning manifest",
+        );
+      }
     } catch (error) {
       app.log.error(
         { error: describePostgresError(error) },
@@ -896,8 +1054,102 @@ export async function runBrainWorker(
   }
 }
 
+export async function runDocumentWorker(
+  app: FastifyInstance,
+  options: {
+    idleDelayMs?: number;
+    once?: boolean;
+  } = {},
+) {
+  const idleDelayMs = options.idleDelayMs ?? MEMORY_WORKER_INTERVAL_MS;
+
+  while (true) {
+    let processed = false;
+    try {
+      processed = await processNextQueuedDocumentJob(app);
+      if (processed) {
+        app.log.info?.("document worker processed queued document job");
+      }
+    } catch (error) {
+      app.log.error?.({ error }, "document worker iteration failed");
+    }
+    if (options.once) {
+      break;
+    }
+    await sleep(processed ? 0 : idleDelayMs);
+  }
+}
+
+export async function runProactiveScheduler(
+  app: FastifyInstance,
+  options: {
+    idleDelayMs?: number;
+    once?: boolean;
+  } = {},
+) {
+  const idleDelayMs = options.idleDelayMs ?? MEMORY_WORKER_INTERVAL_MS;
+
+  while (true) {
+    let processed = false;
+    try {
+      const result = await processDueProactiveTriggers(app);
+      processed = result.processed > 0;
+      if (processed) {
+        app.log.info?.(result, "proactive scheduler processed triggers");
+      }
+    } catch (error) {
+      app.log.error?.({ error }, "proactive scheduler iteration failed");
+    }
+    if (options.once) {
+      break;
+    }
+    await sleep(processed ? 0 : idleDelayMs);
+  }
+}
+
+async function writeBrainWorkerHeartbeat(app: FastifyInstance): Promise<void> {
+  await app.services?.reliability?.store
+    .set(
+      BRAIN_WORKER_HEARTBEAT_KEY,
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        mode: "brain_worker",
+      }),
+      BRAIN_WORKER_HEARTBEAT_TTL_MS,
+    )
+    .catch(() => undefined);
+}
+
+async function hasFreshBrainWorkerHeartbeat(app: FastifyInstance): Promise<boolean> {
+  const raw = await app.services?.reliability?.store
+    .get(BRAIN_WORKER_HEARTBEAT_KEY)
+    .catch(() => null);
+  if (!raw) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const record =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    const timestamp = typeof record?.timestamp === "string" ? record.timestamp : null;
+    const updatedAt = timestamp ? Date.parse(timestamp) : Number.NaN;
+    return Number.isFinite(updatedAt) && Date.now() - updatedAt <= BRAIN_WORKER_HEARTBEAT_FRESH_MS;
+  } catch {
+    return false;
+  }
+}
+
 /// Starts the periodic in-process memory-job drainer. Returns a stop callback.
 export function startInProcessMemoryWorker(app: FastifyInstance): () => void {
+  if (
+    app.config?.ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED === true ||
+    (app.config?.ELYAN_COGNITIVE_FOUNDATION_ROLLOUT_PERCENT ?? 0) > 0
+  ) {
+    app.log.info?.("in-process memory worker disabled; cognitive foundation requires brain-worker");
+    return () => {};
+  }
   if (process.env.ELYAN_MEMORY_WORKER_DISABLED === "true") {
     app.log.info?.("in-process memory worker disabled via ELYAN_MEMORY_WORKER_DISABLED");
     return () => {};
@@ -925,10 +1177,31 @@ export function startInProcessMemoryWorker(app: FastifyInstance): () => void {
   state.timer.unref?.();
   activeMemoryWorkers.set(app, state);
 
-  void drain();
+  void maybeStartFallbackDrain();
+
+  async function maybeStartFallbackDrain() {
+    if (state.stopped) {
+      return;
+    }
+    if (await hasFreshBrainWorkerHeartbeat(app)) {
+      state.stopped = true;
+      clearInterval(state.timer);
+      activeMemoryWorkers.delete(app);
+      app.log.info?.("in-process memory worker skipped; external brain worker heartbeat is fresh");
+      return;
+    }
+    void drain();
+  }
 
   async function drain() {
     if (state.stopped || state.running) {
+      return;
+    }
+    if (await hasFreshBrainWorkerHeartbeat(app)) {
+      state.stopped = true;
+      clearInterval(state.timer);
+      activeMemoryWorkers.delete(app);
+      app.log.info?.("in-process memory worker stopped; external brain worker heartbeat is fresh");
       return;
     }
     state.running = true;

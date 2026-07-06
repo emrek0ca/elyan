@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildSynchronousMemoryOpsFromLearningSignals,
+  buildTaskUnderstanding,
   emptyUnderstanding,
   persistLearningSignals,
   recordBlockQualityLearning,
@@ -84,6 +85,43 @@ test("emptyUnderstanding keeps best-effort answering enabled instead of forcing 
   assert.equal(result.context.taskFrame.shouldClarify, false);
   assert.equal(result.context.clarificationDiagnostics.shouldClarify, false);
   assert.equal(result.context.clarificationDiagnostics.ambiguityKind, "none");
+});
+
+test("buildTaskUnderstanding only adds neutral envelope when envelope flags are enabled", async () => {
+  const input = {
+    userId: "00000000-0000-0000-0000-000000000001",
+    accountId: "00000000-0000-0000-0000-000000000001",
+    message: "Merhaba",
+    metadata: {},
+  };
+  const log = {
+    info: () => undefined,
+    warn: () => undefined,
+    debug: () => undefined,
+  };
+
+  const disabled = await buildTaskUnderstanding({
+    config: {
+      ELYAN_USER_UNDERSTANDING_ENABLED: false,
+      ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED: false,
+      ELYAN_UNDERSTANDING_ENVELOPE_SHADOW_ENABLED: false,
+      ELYAN_UNDERSTANDING_ENVELOPE_MODEL_FALLBACK_ENABLED: false,
+    },
+    log,
+  } as never, input);
+  assert.equal(disabled.envelope, undefined);
+
+  const enabled = await buildTaskUnderstanding({
+    config: {
+      ELYAN_USER_UNDERSTANDING_ENABLED: false,
+      ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED: true,
+      ELYAN_UNDERSTANDING_ENVELOPE_SHADOW_ENABLED: false,
+      ELYAN_UNDERSTANDING_ENVELOPE_MODEL_FALLBACK_ENABLED: false,
+    },
+    log,
+  } as never, input);
+  assert.equal(enabled.envelope?.schema_version, "2026-07-understanding-envelope-v2");
+  assert.equal(enabled.envelopeSource, "legacy_fallback");
 });
 
 test("persistLearningSignals stores only policy-approved safe events", async () => {

@@ -6,6 +6,7 @@ import type { AssistantMessageBlock } from "../chat/message-blocks.js";
 import type { AgentToolResult } from "./tool-registry.js";
 import { resolveCanonicalMemoryKey } from "./memory-key-policy.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
+import { isCognitiveFoundationEnabled } from "./cognitive-foundation-policy.js";
 
 const uuidSchema = z.string().uuid();
 
@@ -47,6 +48,12 @@ const userMemorySchema = z.object({
   updatedAt: z.string().datetime({ offset: true }).nullable().default(null),
 }).default({});
 
+const memoryRefsSchema = z.object({
+  revision: z.number().int().nonnegative().default(0),
+  factIds: z.array(z.string().uuid()).max(80).default([]),
+  episodeIds: z.array(z.string().uuid()).max(40).default([]),
+}).default({});
+
 export const dialogueStateSchema = z
   .object({
     goal: z.string().trim().max(500).nullable().default(null),
@@ -61,6 +68,7 @@ export const dialogueStateSchema = z
     lastProactiveAt: z.string().datetime({ offset: true }).nullable().default(null),
     conversationDynamics: conversationDynamicsSchema,
     userMemory: userMemorySchema,
+    memoryRefs: memoryRefsSchema,
   })
   .default({});
 
@@ -72,6 +80,21 @@ export type DialogueStateSnapshot = {
   revision: number;
   state: DialogueState;
 };
+
+export type DialogueStateTurnInput = {
+  userId: string;
+  sessionId: string | null;
+  requestMetadata?: Record<string, unknown>;
+  userMessage: string;
+  assistantText: string;
+  assistantBlocks?: AssistantMessageBlock[];
+  envelope?: TurnEnvelope | null;
+  toolResults?: AgentToolResult[];
+  workload?: string | null;
+  memoryRefs?: { revision: number; factIds?: string[]; episodeIds?: string[] };
+};
+
+type DialogueDb = FastifyInstance["db"];
 
 const DIALOGUE_STATE_METADATA_SOURCE = "server_dialogue_state.v1";
 
@@ -321,6 +344,8 @@ export function mergeDialogueState(input: {
   envelope?: TurnEnvelope | null;
   toolResults?: AgentToolResult[];
   workload?: string | null;
+  omitUserMemory?: boolean;
+  memoryRefs?: DialogueStateTurnInput["memoryRefs"];
   now?: Date;
 }): DialogueState {
   const nowIso = (input.now ?? new Date()).toISOString();
@@ -393,11 +418,9 @@ export function mergeDialogueState(input: {
     previous.conversationDynamics,
     input.assistantText,
   );
-  const userMemory = mergeUserMemory(
-    previous.userMemory ?? fallback.userMemory,
-    memoryOps,
-    nowIso,
-  );
+  const userMemory = input.omitUserMemory
+    ? userMemorySchema.parse({})
+    : mergeUserMemory(previous.userMemory ?? fallback.userMemory, memoryOps, nowIso);
 
   return dialogueStateSchema.parse({
     ...previous,
@@ -416,6 +439,13 @@ export function mergeDialogueState(input: {
     lastProactiveAt: previous.lastProactiveAt,
     conversationDynamics,
     userMemory,
+    memoryRefs: input.memoryRefs
+      ? {
+          revision: input.memoryRefs.revision,
+          factIds: input.memoryRefs.factIds ?? [],
+          episodeIds: input.memoryRefs.episodeIds ?? [],
+        }
+      : previous.memoryRefs,
   });
 }
 
@@ -423,7 +453,14 @@ export async function readDialogueState(
   app: FastifyInstance,
   input: { userId: string; sessionId: string },
 ): Promise<DialogueStateSnapshot | null> {
-  const rows = await app.db
+  return readDialogueStateOnDb(app.db, input);
+}
+
+export async function readDialogueStateOnDb(
+  db: DialogueDb,
+  input: { userId: string; sessionId: string },
+): Promise<DialogueStateSnapshot | null> {
+  const rows = await db
     .select({
       sessionId: dialogueStates.sessionId,
       userId: dialogueStates.userId,
@@ -447,28 +484,30 @@ export async function readDialogueState(
 
 export async function recordDialogueStateTurn(
   app: FastifyInstance,
-  input: {
-    userId: string;
-    sessionId: string | null;
-    requestMetadata?: Record<string, unknown>;
-    userMessage: string;
-    assistantText: string;
-    assistantBlocks?: AssistantMessageBlock[];
-    envelope?: TurnEnvelope | null;
-    toolResults?: AgentToolResult[];
-    workload?: string | null;
-  },
+  input: DialogueStateTurnInput,
+): Promise<DialogueStateSnapshot | null> {
+  return recordDialogueStateTurnOnDb(app.db, input, {
+    foundationEnabled: isCognitiveFoundationEnabled(app, input.userId),
+  });
+}
+
+export async function recordDialogueStateTurnOnDb(
+  db: DialogueDb,
+  input: DialogueStateTurnInput,
+  options: { foundationEnabled: boolean },
 ): Promise<DialogueStateSnapshot | null> {
   if (!input.sessionId) {
     return null;
   }
 
-  const fallback = buildDialogueStateFallbackFromMetadata(input.requestMetadata, {
-    userId: input.userId,
-    sessionId: input.sessionId,
-  });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const current = await readDialogueState(app, {
+  const fallback = options.foundationEnabled
+    ? dialogueStateSchema.parse({})
+    : buildDialogueStateFallbackFromMetadata(input.requestMetadata, {
+        userId: input.userId,
+        sessionId: input.sessionId,
+      });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await readDialogueStateOnDb(db, {
       userId: input.userId,
       sessionId: input.sessionId,
     });
@@ -481,13 +520,15 @@ export async function recordDialogueStateTurn(
       envelope: input.envelope,
       toolResults: input.toolResults,
       workload: input.workload,
+      omitUserMemory: options.foundationEnabled,
+      memoryRefs: input.memoryRefs,
     });
     const nextRevision = (current?.revision ?? 0) + 1;
     const now = new Date();
 
     if (!current) {
       try {
-        await app.db.insert(dialogueStates).values({
+        await db.insert(dialogueStates).values({
           sessionId: input.sessionId,
           userId: input.userId,
           revision: nextRevision,
@@ -505,7 +546,7 @@ export async function recordDialogueStateTurn(
       }
     }
 
-    const updated = await app.db
+    const updated = await db
       .update(dialogueStates)
       .set({
         revision: nextRevision,

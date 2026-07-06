@@ -323,6 +323,41 @@ test("mergeDialogueState forgets single-value user memory without erasing other 
   assert.equal(state.userMemory.updatedAt, "2026-07-04T11:00:00.000Z");
 });
 
+test("foundation dialogue state stores memory references without copying user values", () => {
+  const state = mergeDialogueState({
+    previous: {
+      userMemory: { preferredName: "Zeynep" },
+    },
+    userMessage: "Benim adim Emre",
+    assistantText: "Tamam.",
+    envelope: {
+      reply: { text: "", lang: "tr", tone: "neutral" },
+      blocks: [],
+      memory_ops: [{
+        op: "update",
+        kind: "preference",
+        key: "preferred_name",
+        value: "Emre",
+        confidence: 1,
+      }],
+      goal_ops: [],
+      follow_ups: [],
+      tool_requests: [],
+      affect: { user_mood_guess: "unknown", energy: "mid", register: "neutral" },
+    },
+    omitUserMemory: true,
+    memoryRefs: {
+      revision: 8,
+      factIds: ["11111111-1111-4111-8111-111111111111"],
+      episodeIds: [],
+    },
+  });
+
+  assert.equal(state.userMemory.preferredName, null);
+  assert.equal(state.memoryRefs.revision, 8);
+  assert.deepEqual(state.memoryRefs.factIds, ["11111111-1111-4111-8111-111111111111"]);
+});
+
 test("recordDialogueStateTurn inserts then optimistically updates dialogue state", async () => {
   let row: Record<string, unknown> | null = null;
   const app = {

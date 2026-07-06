@@ -31,6 +31,12 @@ import {
   buildMemoryRecallPackage,
 } from "../../modules/brain/user-model.js";
 import { isTrustedDialogueStateMetadata } from "../../modules/brain/dialogue-state.js";
+import { buildCognitiveContextPacket } from "../../modules/brain/cognitive-context.js";
+import {
+  isCognitiveFoundationEnabled,
+  isCognitiveShadowReadEnabled,
+  recordCognitiveFoundationSignal,
+} from "../../modules/brain/cognitive-foundation-policy.js";
 
 const MAX_HINTS = 12;
 const MAX_CHARS = 4000;
@@ -1515,6 +1521,13 @@ export async function buildUserContext(
   const query        = `${input.title ?? ""} ${input.message ?? ""} ${input.intent.primaryIntent}`;
   const queryTokens  = tokenize(query);
   const now          = new Date();
+  const foundationEnabled = isCognitiveFoundationEnabled(app, input.userId);
+  const shadowReadEnabled = !foundationEnabled && isCognitiveShadowReadEnabled(app);
+  const metadataChat = readRecord(input.metadata?.chat);
+  const sessionId =
+    typeof metadataChat?.sessionId === "string" && metadataChat.sessionId.trim()
+      ? metadataChat.sessionId.trim()
+      : null;
   const isSocialTurn =
     input.intent.primaryIntent === "chat" && isLikelySocialChatMessage(input.message);
 
@@ -1527,11 +1540,12 @@ export async function buildUserContext(
     : [];
 
   /* Run all async ops in parallel for minimum latency */
-  const [memorySearch, canonicalMemory, userProfile, quickFacts, freshWorldSignals] = await Promise.all([
-    memoryEnabled && !isSocialTurn
+  const cognitiveReadStartedAt = Date.now();
+  const [memorySearch, canonicalMemory, userProfile, quickFacts, freshWorldSignals, cognitiveContext] = await Promise.all([
+    memoryEnabled && !isSocialTurn && !foundationEnabled
       ? searchBrainMemory(app, { userId: input.userId, query, limit: MAX_HINTS }).catch(() => ({ results: [] }))
       : Promise.resolve({ results: [] }),
-    memoryEnabled
+    memoryEnabled && !foundationEnabled
       ? readCanonicalMemoryState(app, input.userId).catch(() => [])
       : Promise.resolve([]),
     loadCachedSafeUserProfile(app, input.userId),
@@ -1542,6 +1556,16 @@ export async function buildUserContext(
     !isSocialTurn
       ? listCachedFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 72 }).catch(() => [])
       : Promise.resolve([]),
+    (foundationEnabled || shadowReadEnabled) && memoryEnabled
+      ? buildCognitiveContextPacket(app, {
+          userId: input.userId,
+          sessionId,
+          semanticLimit: MAX_HINTS,
+          episodicLimit: 8,
+          maxChars: MAX_CHARS,
+          now,
+        }).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   /* Enrich profile only from explicit self-identification, never from arbitrary message fragments. */
@@ -1560,7 +1584,7 @@ export async function buildUserContext(
   );
   void relevanceMode; // gelecek observability için; bırakıyoruz.
 
-  const stableMemory = filteredResults.map((result) => ({
+  const legacyStableMemory = filteredResults.map((result) => ({
     id:             result.id,
     type:           result.memoryType,
     key:            result.title,
@@ -1577,8 +1601,52 @@ export async function buildUserContext(
     metadata:       result.metadata,
   }));
 
+  const cognitiveStableMemory: RetrievedMemory[] = cognitiveContext
+    ? [
+        ...cognitiveContext.semantic.map((item) => ({
+          id: item.id,
+          type: "semantic",
+          key: item.key,
+          value: item.value,
+          confidence: item.confidence,
+          scope: "user" as const,
+          source: "memory_fact",
+          createdAt: new Date(item.observedAt),
+          staleness: "fresh" as const,
+          conflictStatus: "active" as const,
+          lastVerifiedAt: new Date(item.observedAt),
+          importanceScore: 80,
+          isPinned: false,
+          metadata: { cognitiveRevision: item.revision, sourceKind: item.sourceKind },
+        })),
+        ...cognitiveContext.episodic.map((item) => ({
+          id: item.id,
+          type: "episode",
+          key: item.topic,
+          value: item.summary,
+          confidence: item.confidence,
+          scope: "user" as const,
+          source: "memory_episode",
+          createdAt: new Date(item.observedAt),
+          staleness: "fresh" as const,
+          conflictStatus: "active" as const,
+          lastVerifiedAt: new Date(item.observedAt),
+          importanceScore: 70,
+          isPinned: false,
+          metadata: { cognitiveRevision: item.revision, expiresAt: item.expiresAt },
+        })),
+      ]
+    : [];
+  if (foundationEnabled || shadowReadEnabled) {
+    recordCognitiveFoundationSignal({
+      ok: cognitiveContext != null,
+      latencyMs: Date.now() - cognitiveReadStartedAt,
+    });
+  }
+  const stableMemory = foundationEnabled ? cognitiveStableMemory : legacyStableMemory;
+
   const fallbackRows =
-    !memoryEnabled || stableMemory.length >= Math.min(4, MAX_HINTS)
+    foundationEnabled || !memoryEnabled || stableMemory.length >= Math.min(4, MAX_HINTS)
       ? []
       : await app.db
           .select({
@@ -1683,24 +1751,24 @@ export async function buildUserContext(
     situational: [], behavioral: [], environmental: [],
   }));
 
-  const metadataChat = readRecord(input.metadata?.chat);
-  const continuitySummary = deriveContinuitySummary(input.metadata, {
+  const legacyContinuitySummary = deriveContinuitySummary(input.metadata, {
     userId: input.userId,
-    sessionId:
-      typeof metadataChat?.sessionId === "string" && metadataChat.sessionId.trim()
-        ? metadataChat.sessionId.trim()
-        : null,
+    sessionId,
   });
+  const continuitySummary = foundationEnabled && cognitiveContext
+    ? {
+        userGoal: cognitiveContext.working.goal,
+        assistantState: cognitiveContext.working.stage,
+        openLoops: cognitiveContext.working.openLoops,
+      }
+    : legacyContinuitySummary;
   const continuityBoundary = deriveContinuityBoundary({
     metadata: input.metadata,
     message: input.message,
     continuitySummary,
     intent: input.intent,
     userId: input.userId,
-    sessionId:
-      typeof metadataChat?.sessionId === "string" && metadataChat.sessionId.trim()
-        ? metadataChat.sessionId.trim()
-        : null,
+    sessionId,
   });
   const selectedContinuityMemory = selectContinuityMemory({
     memory: memory as RetrievedMemory[],
@@ -1717,9 +1785,7 @@ export async function buildUserContext(
 
   const activeGoal = await getActiveGoalForContext(app, {
     userId: input.userId,
-    sessionId: typeof input.metadata?.chat === "object" && input.metadata.chat !== null
-      ? String((input.metadata.chat as Record<string, unknown>).sessionId ?? "")
-      : null,
+    sessionId,
   }).catch(() => null);
 
   const ctx = buildUserContextFromMemory({
@@ -1732,6 +1798,29 @@ export async function buildUserContext(
     contextPackets,
     activeGoal,
   });
+  if (cognitiveContext) {
+    ctx.cognitiveReadMs = Date.now() - cognitiveReadStartedAt;
+    if (foundationEnabled) {
+      ctx.cognitiveContext = cognitiveContext;
+    } else {
+      const legacyKeys = new Set(legacyStableMemory.map((item) => item.key));
+      const cognitiveKeys = new Set(cognitiveContext.semantic.map((item) => item.key));
+      ctx.cognitiveShadow = {
+        legacyFactCount: legacyStableMemory.length,
+        cognitiveFactCount: cognitiveContext.semantic.length,
+        keyMismatchCount: new Set(
+          [...legacyKeys, ...cognitiveKeys].filter(
+            (key) => !legacyKeys.has(key) || !cognitiveKeys.has(key),
+          ),
+        ).size,
+        cognitiveRevision: cognitiveContext.working.memoryRevision,
+      };
+      recordCognitiveFoundationSignal({
+        ok: true,
+        keyMismatchCount: ctx.cognitiveShadow.keyMismatchCount,
+      });
+    }
+  }
   if (app.config.ELYAN_USER_MODEL_V2_ENABLED === true) {
     const userModel = buildCanonicalUserModel({
       memory: stableMemory as RetrievedMemory[],

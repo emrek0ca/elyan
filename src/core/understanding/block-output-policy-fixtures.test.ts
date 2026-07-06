@@ -96,7 +96,7 @@ async function loadFixtures(): Promise<BlockOutputFixture[]> {
 
 test("block output policy fixtures keep intent to workload and block shape deterministic", async () => {
   const fixtures = await loadFixtures();
-  assert.equal(fixtures.length, 50);
+  assert.equal(fixtures.length, 55);
 
   for (const fixture of fixtures) {
     const route = await decideCommandRoute(createApp() as never, {

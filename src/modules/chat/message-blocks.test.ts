@@ -89,6 +89,73 @@ test("validateAssistantBlockContract is the canonical block gate", () => {
   assert.ok(validation.blockQuality.feedbackSignals.includes("raw_json_leak_prevented"));
 });
 
+test("block contract enriches document table and svg blocks for render preflight", () => {
+  const validation = validateAssistantBlockContract({
+    blocks: [
+      {
+        type: "document_block",
+        title: "Kapı Tamiri Teklifi",
+        summary: "Kısa teklif.",
+        sections: [{ heading: "Kalemler", content: "Toplam 21.000 TL", level: 1 }],
+      },
+      {
+        type: "table",
+        columns: ["Kalem", "Tutar"],
+        rows: [["Kapı tamiri", "18.000 TL"], ["Menteşe", "3.000 TL"]],
+      },
+      {
+        type: "svg",
+        svg: '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>',
+      },
+    ],
+    content: "PDF oluşturuldu.",
+    mode: "normalize",
+  });
+
+  const document = validation.blocks.find((block) => block.type === "document_block") as
+    | Record<string, unknown>
+    | undefined;
+  const table = validation.blocks.find((block) => block.type === "table") as
+    | Record<string, unknown>
+    | undefined;
+  const svg = validation.blocks.find((block) => block.type === "svg") as
+    | Record<string, unknown>
+    | undefined;
+
+  assert.deepEqual(document?.exportFormats, ["pdf", "docx"]);
+  assert.deepEqual(document?.design, {
+    theme: "report",
+    density: "comfortable",
+    pageSize: "A4",
+  });
+  assert.equal((document?.renderHints as Record<string, unknown>).preflightRequired, true);
+  assert.equal((table?.renderHints as Record<string, unknown>).renderer, "native_table");
+  assert.deepEqual(table?.previewRows, [["Kapı tamiri", "18.000 TL"], ["Menteşe", "3.000 TL"]]);
+  assert.equal(table?.totalRowCount, 2);
+  assert.deepEqual(svg?.exportFormats, ["svg", "png", "pdf"]);
+  assert.equal(validation.blockQuality.metrics.documentPreflightEnrichedCount, 3);
+});
+
+test("block contract safely falls back malformed document payload without raw JSON leak", () => {
+  const validation = validateAssistantBlockContract({
+    blocks: [
+      {
+        type: "document_block",
+        title: "Hazır belge",
+        content: '{"type":"document_block","sections":[',
+      },
+    ],
+    content: "",
+    mode: "normalize",
+  });
+
+  assert.equal(validation.blocks.length, 1);
+  assert.equal(validation.blocks[0]?.type, "text");
+  assert.equal((validation.blocks[0] as Record<string, unknown>).markdown, "Hazır belge");
+  assert.equal(validation.blockQuality.metrics.fallbackToTextCount, 1);
+  assert.ok(validation.blockQuality.issues.includes("fallback_to_text"));
+});
+
 test("evaluateAssistantBlockQuality reports duplicate, malformed, and fallback signals safely", () => {
   const rawBlocks = [
     {

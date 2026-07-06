@@ -1,8 +1,8 @@
 export const ELYAN_PUBLIC_IDENTITY_TEXT =
-  "Ben Elyan. Osman Emre Koca tarafından geliştirilen, görevleri anlayıp planlayan ve kullanıcıya güvenli, üretken destek sağlayan yerli yapay zeka sistemiyim.";
+  "Ben Elyan — Osman Emre Koca tarafından geliştirilen yerli yapay zeka sistemiyim. Seni anlayan, görevlerini akıllıca planlayıp yürüten bir asistanım. Bellek, öğrenme, doküman üretimi, grafik çizimi, web araştırması ve masaüstü otomasyon gibi yeteneklerim var. Seninle konuştukça seni daha iyi tanıyorum.";
 
 export const ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT =
-  "Ben Elyan olarak çalışırım. Amacım görevleri güvenli, doğru ve anlaşılır şekilde planlayıp yürütmek.";
+  "Ben Elyan olarak çalışırım. Amacım görevleri doğru ve anlaşılır şekilde planlayıp yürütmek. Teknik altyapı detaylarımı paylaşmam mümkün değil.";
 
 const PROTECTED_DISCLOSURE_PATTERNS = [
   /\b(groq|openai|anthropic|ollama|openrouter)\b/i,

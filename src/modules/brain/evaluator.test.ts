@@ -93,3 +93,23 @@ test("evaluateBrainAnswer still flags provider names when used as Elyan implemen
   assert.equal(result.failureTypes.includes("provider_disclosure"), true);
   assert.equal(result.failureTypes.includes("internal_policy_leak"), true);
 });
+
+test("evaluateBrainAnswer pins Turkish creator phrasing that uses 'üretti'", () => {
+  const result = evaluateBrainAnswer({
+    prompt: "Seni kim üretti?",
+    modelAnswer: "Beni bir yapay zeka geliştirme ekibi yarattı.",
+    answerSource: "model",
+    routeDecision: {
+      route: "server_brain",
+      mode: "chat",
+      privacyClass: "public_text",
+    },
+    retrievalUsed: false,
+  });
+
+  assert.equal(result.failureTypes.includes("hallucinated_identity_claim"), true);
+  assert.equal(
+    result.correctedAnswer,
+    "Elyan'ı Osman Emre Koca geliştirdi. Bu konuda başka bir isim ya da biyografi uydurmuyorum.",
+  );
+});

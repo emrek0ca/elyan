@@ -304,7 +304,7 @@ test("buildChatDispatchDeliverySnapshot preserves desktop ack and lease truth", 
   });
 
   assert.equal(delivery.route, "desktop_runtime");
-  assert.equal(delivery.presentation, "task");
+  assert.equal(delivery.presentation, "chat");
   assert.equal(delivery.targetDeviceId, "desktop-1");
   assert.equal(delivery.requestedTargetDeviceId, "desktop-1");
   assert.equal(delivery.requiresDesktopAck, true);

@@ -3,6 +3,7 @@ import test from "node:test";
 import { brainMemoryEpisodes } from "../../db/schema.js";
 import {
   executeAgentTool,
+  getAgentToolMetadata,
   listAgentTools,
 } from "./tool-registry.js";
 
@@ -134,6 +135,18 @@ test("listAgentTools exposes the first server brain tools with permissions", () 
   assert.equal(tools.some((tool) => tool.name === "memory.query" && tool.permission === "read"), true);
   assert.equal(tools.some((tool) => tool.name === "memory.write" && tool.permission === "write"), true);
   assert.equal(tools.some((tool) => tool.name === "goals.update" && tool.permission === "write"), true);
+});
+
+test("tool registry exposes timeout, idempotency and parallel safety", () => {
+  assert.deepEqual(getAgentToolMetadata("web.search"), {
+    name: "web.search",
+    permission: "read",
+    timeoutMs: 7_000,
+    idempotency: "read_only",
+    parallelSafe: true,
+  });
+  assert.equal(getAgentToolMetadata("memory.write")?.parallelSafe, false);
+  assert.equal(getAgentToolMetadata("memory.write")?.idempotency, "non_idempotent");
 });
 
 test("executeAgentTool blocks write tools unless state-write policy is enabled", async () => {

@@ -86,7 +86,14 @@ export async function listRealtimeEventsForStream(
       taskId: row.taskId ?? undefined,
       payload:
         row.payloadBlobId && app.services?.blobs
-          ? ((await app.services.blobs?.hydrateJson(row.payloadBlobId)) ?? row.payload)
+          ? row.userId
+            ? ((await app.services.blobs?.hydrateJsonForOwner({
+                blobId: row.payloadBlobId,
+                userId: row.userId,
+                ownerType: "realtime_event",
+                ownerId: String(row.id),
+              })) ?? row.payload)
+            : ((await app.services.blobs?.hydrateJson(row.payloadBlobId)) ?? row.payload)
           : row.payload,
       createdAt: row.createdAt.toISOString(),
     })),

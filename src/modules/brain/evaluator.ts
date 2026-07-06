@@ -294,11 +294,13 @@ function isElyanDeveloperQuestion(prompt: string): boolean {
   const lowered = prompt.toLowerCase();
   return (
     /\bseni kim geliştirdi\b/.test(lowered) ||
+    /\bseni kim (ü|u)retti\b/.test(lowered) ||
+    /\bseni kim kurdu\b/.test(lowered) ||
     /\bseni kim yap(tı|ti|mış|mis)?\b/.test(lowered) ||
     /\bwho built you\b/.test(lowered) ||
     /\bwho developed you\b/.test(lowered) ||
     /\bwho made you\b/.test(lowered) ||
-    /\belyan.*(kim geliştirdi|kim yaptı|who built|who developed|who made)\b/.test(lowered) ||
+    /\belyan.*(kim geliştirdi|kim (ü|u)retti|kim kurdu|kim yaptı|who built|who developed|who made)\b/.test(lowered) ||
     /\bosman emre koca\b/.test(lowered)
   );
 }

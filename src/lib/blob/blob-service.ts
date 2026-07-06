@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { AppEnv } from "../../config/env.js";
 import * as schema from "../../db/schema.js";
+import { buildTenantCacheKey } from "../../db/tenant-context.js";
 import type { ReliabilityStore } from "../reliability/redis.js";
 import {
   decodeBlobBytes,
@@ -83,6 +84,7 @@ export class BlobService {
   public async storeJson(input: {
     ownerType: BlobOwnerType;
     ownerId: string;
+    userId?: string;
     slot: string;
     scope: BlobScope;
     value: unknown;
@@ -98,6 +100,7 @@ export class BlobService {
   public async storeText(input: {
     ownerType: BlobOwnerType;
     ownerId: string;
+    userId?: string;
     slot: string;
     scope: BlobScope;
     value: string;
@@ -113,6 +116,7 @@ export class BlobService {
   public async storeBinary(input: {
     ownerType: BlobOwnerType;
     ownerId: string;
+    userId?: string;
     slot: string;
     scope: BlobScope;
     value: Uint8Array;
@@ -126,7 +130,7 @@ export class BlobService {
   }
 
   public async hydrateText(blobId: string): Promise<string | null> {
-    const cacheKey = `blob:text:${blobId}`;
+    const cacheKey = `legacy:blob:text:${blobId}`;
     const cached = await this.reliabilityStore.get(cacheKey);
     if (cached) {
       return cached;
@@ -151,8 +155,40 @@ export class BlobService {
     return text;
   }
 
+  public async hydrateTextForOwner(input: {
+    blobId: string;
+    userId: string;
+    ownerType: BlobOwnerType;
+    ownerId: string;
+  }): Promise<string | null> {
+    const row = await this.getOwnedBlobRow(input);
+    if (!row) {
+      return null;
+    }
+    const cacheKey = this.tenantBlobCacheKey({
+      userId: input.userId,
+      kind: "text",
+      row,
+    });
+    const cached = await this.reliabilityStore.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const storedBytes = await this.store.getObjectBytes(row.storageKey);
+    if (!storedBytes) {
+      return null;
+    }
+    const text = await decodeTextBlob({
+      storedBytes,
+      compression: row.compression,
+    });
+    await this.reliabilityStore.set(cacheKey, text, HOT_CACHE_TTL_MS);
+    void this.touchBlob(input.blobId);
+    return text;
+  }
+
   public async hydrateJson<T>(blobId: string): Promise<T | null> {
-    const cacheKey = `blob:json:${blobId}`;
+    const cacheKey = `legacy:blob:json:${blobId}`;
     const cached = await this.reliabilityStore.get(cacheKey);
     if (cached) {
       return JSON.parse(cached) as T;
@@ -177,6 +213,38 @@ export class BlobService {
     return value;
   }
 
+  public async hydrateJsonForOwner<T>(input: {
+    blobId: string;
+    userId: string;
+    ownerType: BlobOwnerType;
+    ownerId: string;
+  }): Promise<T | null> {
+    const row = await this.getOwnedBlobRow(input);
+    if (!row) {
+      return null;
+    }
+    const cacheKey = this.tenantBlobCacheKey({
+      userId: input.userId,
+      kind: "json",
+      row,
+    });
+    const cached = await this.reliabilityStore.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached) as T;
+    }
+    const storedBytes = await this.store.getObjectBytes(row.storageKey);
+    if (!storedBytes) {
+      return null;
+    }
+    const value = await decodeJsonBlob<T>({
+      storedBytes,
+      compression: row.compression,
+    });
+    await this.reliabilityStore.set(cacheKey, JSON.stringify(value), HOT_CACHE_TTL_MS);
+    void this.touchBlob(input.blobId);
+    return value;
+  }
+
   public async hydrateBytes(blobId: string): Promise<Uint8Array | null> {
     const row = await this.getBlobRow(blobId);
     if (!row) {
@@ -189,6 +257,29 @@ export class BlobService {
     }
 
     void this.touchBlob(blobId);
+    return decodeBlobBytes({
+      storedBytes,
+      compression: row.compression,
+    });
+  }
+
+  public async hydrateBytesForOwner(input: {
+    blobId: string;
+    userId: string;
+    ownerType: BlobOwnerType;
+    ownerId: string;
+  }): Promise<Uint8Array | null> {
+    const row = await this.getOwnedBlobRow(input);
+    if (!row) {
+      return null;
+    }
+
+    const storedBytes = await this.store.getObjectBytes(row.storageKey);
+    if (!storedBytes) {
+      return null;
+    }
+
+    void this.touchBlob(input.blobId);
     return decodeBlobBytes({
       storedBytes,
       compression: row.compression,
@@ -212,6 +303,26 @@ export class BlobService {
     });
   }
 
+  public async createDownloadUrlForOwner(input: {
+    blobId: string;
+    userId: string;
+    ownerType: BlobOwnerType;
+    ownerId: string;
+    fileName?: string | null;
+    contentType?: string | null;
+  }): Promise<string | null> {
+    const row = await this.getOwnedBlobRow(input);
+    if (!row) {
+      return null;
+    }
+
+    return this.store.createDownloadUrl({
+      storageKey: row.storageKey,
+      fileName: input.fileName,
+      contentType: input.contentType ?? row.contentType,
+    });
+  }
+
   public async createDownloadUrlFromStorageKey(input: {
     storageKey: string;
     fileName?: string | null;
@@ -224,13 +335,15 @@ export class BlobService {
     input: {
       ownerType: BlobOwnerType;
       ownerId: string;
+      userId?: string;
       slot: string;
       scope: BlobScope;
     },
     encoded: EncodedBlob,
   ): Promise<StoredBlobDescriptor | null> {
-    const existing = await this.findBlobByScopeHash(input.scope, encoded.sha256);
-    const row = existing ?? (await this.uploadAndInsertBlob(input.scope, encoded));
+    const storageScope = this.storageScope(input.scope, input.userId);
+    const existing = await this.findBlobByScopeHash(storageScope, encoded.sha256);
+    const row = existing ?? (await this.uploadAndInsertBlob(storageScope, input.scope, input.userId, encoded));
     if (!row) {
       return null;
     }
@@ -263,7 +376,7 @@ export class BlobService {
     };
   }
 
-  private async findBlobByScopeHash(scope: BlobScope, sha256: string): Promise<BlobRow | null> {
+  private async findBlobByScopeHash(scope: string, sha256: string): Promise<BlobRow | null> {
     const rows = await this.db
       .select()
       .from(schema.blobObjects)
@@ -272,9 +385,19 @@ export class BlobService {
     return rows[0] ?? null;
   }
 
-  private async uploadAndInsertBlob(scope: BlobScope, encoded: EncodedBlob): Promise<BlobRow | null> {
-    const addressKey = this.createAddressKey(scope, encoded.sha256);
-    const storageKey = `${scope}/${addressKey.slice(0, 2)}/${addressKey}`;
+  private async uploadAndInsertBlob(
+    storageScope: string,
+    publicScope: BlobScope,
+    userId: string | undefined,
+    encoded: EncodedBlob,
+  ): Promise<BlobRow | null> {
+    const addressKey = this.createAddressKey(storageScope, encoded.sha256);
+    const storageKey = this.storageKey({
+      publicScope,
+      storageScope,
+      userId,
+      addressKey,
+    });
 
     if (!(await this.store.objectExists(storageKey))) {
       await this.store.putObject({
@@ -292,7 +415,7 @@ export class BlobService {
       .insert(schema.blobObjects)
       .values({
         contentSha256: encoded.sha256,
-        scope,
+        scope: storageScope,
         addressKey,
         contentType: encoded.contentType,
         compression: encoded.compression,
@@ -305,10 +428,26 @@ export class BlobService {
       })
       .returning();
 
-    return insertRows[0] ?? (await this.findBlobByScopeHash(scope, encoded.sha256));
+    return insertRows[0] ?? (await this.findBlobByScopeHash(storageScope, encoded.sha256));
   }
 
-  private createAddressKey(scope: BlobScope, sha256: string): string {
+  private storageScope(scope: BlobScope, userId?: string): string {
+    return userId ? `${scope}:tenant:${userId}` : scope;
+  }
+
+  private storageKey(input: {
+    publicScope: BlobScope;
+    storageScope: string;
+    userId?: string;
+    addressKey: string;
+  }): string {
+    if (input.userId) {
+      return `tenant/${input.userId}/${input.publicScope}/${input.addressKey.slice(0, 2)}/${input.addressKey}`;
+    }
+    return `${input.storageScope}/${input.addressKey.slice(0, 2)}/${input.addressKey}`;
+  }
+
+  private createAddressKey(scope: string, sha256: string): string {
     return createHmac("sha256", this.addressSecret)
       .update(`${scope}:${sha256}`)
       .digest("hex");
@@ -321,6 +460,97 @@ export class BlobService {
       .where(eq(schema.blobObjects.id, blobId))
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  private async getOwnedBlobRow(input: {
+    blobId: string;
+    userId: string;
+    ownerType: BlobOwnerType;
+    ownerId: string;
+  }): Promise<BlobRow | null> {
+    const references = await this.db
+      .select({ id: schema.blobReferences.id })
+      .from(schema.blobReferences)
+      .where(
+        and(
+          eq(schema.blobReferences.blobId, input.blobId),
+          eq(schema.blobReferences.ownerType, input.ownerType),
+          eq(schema.blobReferences.ownerId, input.ownerId),
+        ),
+      )
+      .limit(1);
+    if (!references[0]) {
+      return null;
+    }
+
+    const ownerMatches = await this.verifyOwnerUser(input);
+    if (!ownerMatches) {
+      return null;
+    }
+
+    return this.getBlobRow(input.blobId);
+  }
+
+  private async verifyOwnerUser(input: {
+    userId: string;
+    ownerType: BlobOwnerType;
+    ownerId: string;
+  }): Promise<boolean> {
+    if (input.ownerType === "chat_message") {
+      const rows = await this.db
+        .select({ id: schema.chatMessages.id })
+        .from(schema.chatMessages)
+        .where(and(eq(schema.chatMessages.id, input.ownerId), eq(schema.chatMessages.userId, input.userId)))
+        .limit(1);
+      return rows.length > 0;
+    }
+    if (input.ownerType === "task") {
+      const rows = await this.db
+        .select({ id: schema.tasks.id })
+        .from(schema.tasks)
+        .where(and(eq(schema.tasks.id, input.ownerId), eq(schema.tasks.userId, input.userId)))
+        .limit(1);
+      return rows.length > 0;
+    }
+    if (input.ownerType === "artifact") {
+      const rows = await this.db
+        .select({ id: schema.artifacts.id })
+        .from(schema.artifacts)
+        .innerJoin(schema.tasks, eq(schema.tasks.id, schema.artifacts.taskId))
+        .where(and(eq(schema.artifacts.id, input.ownerId), eq(schema.tasks.userId, input.userId)))
+        .limit(1);
+      return rows.length > 0;
+    }
+    if (input.ownerType === "task_event") {
+      const rows = await this.db
+        .select({ id: schema.taskEvents.id })
+        .from(schema.taskEvents)
+        .innerJoin(schema.tasks, eq(schema.tasks.id, schema.taskEvents.taskId))
+        .where(and(eq(schema.taskEvents.id, input.ownerId), eq(schema.tasks.userId, input.userId)))
+        .limit(1);
+      return rows.length > 0;
+    }
+    if (input.ownerType === "realtime_event") {
+      const rows = await this.db
+        .select({ id: schema.realtimeEvents.id })
+        .from(schema.realtimeEvents)
+        .where(and(eq(schema.realtimeEvents.id, Number(input.ownerId)), eq(schema.realtimeEvents.userId, input.userId)))
+        .limit(1);
+      return rows.length > 0;
+    }
+    return false;
+  }
+
+  private tenantBlobCacheKey(input: {
+    userId: string;
+    kind: "text" | "json";
+    row: BlobRow;
+  }): string {
+    return buildTenantCacheKey({
+      userId: input.userId,
+      scope: `blob:${input.kind}`,
+      parts: [input.row.id, input.row.contentSha256],
+    });
   }
 
   private async touchBlob(blobId: string): Promise<void> {

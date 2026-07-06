@@ -18,6 +18,19 @@ export const dbPlugin = fp(async (app) => {
   const db = drizzle(sql, { schema });
   app.decorate("db", db);
 
+  if (app.config.ELYAN_TENANT_RLS_ENFORCEMENT_ENABLED === true) {
+    const roles = await sql<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>`
+      SELECT rolsuper, rolbypassrls
+      FROM pg_roles
+      WHERE rolname = current_user
+      LIMIT 1
+    `;
+    if (!roles[0] || roles[0].rolsuper || roles[0].rolbypassrls) {
+      await sql.end({ timeout: 5 });
+      throw new Error("tenant_rls_requires_restricted_database_role");
+    }
+  }
+
   app.addHook("onClose", async () => {
     await sql.end({ timeout: 5 });
   });

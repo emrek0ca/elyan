@@ -138,11 +138,11 @@ const GREETING_PATTERN =
 const DEVICE_RELEVANCE_PATTERN =
   /\b(cihaz|device|pil|battery|şarj|sarj|ağ|ag|network|wifi|internet|bağlantı|baglanti|online|offline|kopuyor|çevrim|performans|yavaş|yavas|hata|problem|sorun|çöktü|crash|timeout)\b/i;
 const HEALTH_RELEVANCE_PATTERN =
-  /\b(sağlık|saglik|health|uyku|sleep|enerji|energy|yorgun|dinlen|adım|adim|steps?|spor|egzersiz|workout|fitness|stres|stress|odak|focus|rutin|wellbeing|iyi oluş|iyi olus|tempo)\b/i;
+  /\b(sağlık|saglik|health|uyku|sleep|enerji|energy|yorgun|dinlen|adım|adim|steps?|spor|egzersiz|workout|fitness|stres|stress|odak|focus|rutin|wellbeing|iyi oluş|iyi olus|tempo|kalori|calor|nabız|nabiz|heart|yürü|yuru|koş|kos|walk|run|form|kondisyon|performans|kilo|weight|diyet|diet|beslenme|nutrition|vitamin|protein|su içtim|su ictim|antrenman|hissediyorum|kendimi|nasılım|nasilim|vücud|vucut|body)\b/i;
 const LOCATION_RELEVANCE_PATTERN =
-  /\b(nerede|neredeyim|konum|location|şehir|sehir|ilçe|ilce|yakın|yakin|çevre|cevre|mekan|restoran|yemek|hava|weather|sıcaklık|sicaklik|gezi|seyahat|rota|ulaşım|ulasim|öner|oner|meşhur|meshur|kayseri|hatay|istanbul|ankara|izmir)\b/i;
+  /\b(nerede|neredeyim|konum|location|şehir|sehir|ilçe|ilce|yakın|yakin|çevre|cevre|mekan|restoran|yemek|hava|weather|sıcaklık|sicaklik|gezi|seyahat|rota|ulaşım|ulasim|öner|oner|meşhur|meshur|kayseri|hatay|istanbul|ankara|izmir|cafe|kafe|otel|hotel|park|market|eczane|hastane|havalimanı|havalimani|otogar|istasyon|sokak|cadde|semt|mahalle|bölge|bolge)\b/i;
 const SCHEDULE_RELEVANCE_PATTERN =
-  /\b(takvim|calendar|program|plan|planla|saat|time|bugün|bugun|yarın|yarin|toplantı|toplanti|müsait|musait|boş|bos|deadline|son tarih|odak|focus|yoğun|yogun|rutin|ajanda|zaman)\b/i;
+  /\b(takvim|calendar|program|plan|planla|saat|time|bugün|bugun|yarın|yarin|toplantı|toplanti|müsait|musait|boş|bos|deadline|son tarih|odak|focus|yoğun|yogun|rutin|ajanda|zaman|gün|gun|hafta|ay|randevu|etkinlik|event|görev|gorev|task|iş|is|çalışma|calisma|ödev|odev|ders|sınav|sinav|sunum|presentation)\b/i;
 const NOTIFICATION_RELEVANCE_PATTERN =
   /\b(bildirim|notification|dikkat|attention|rahatsız|rahatsiz|odak|focus|sessiz|silent|acil|urgent|öncelik|oncelik)\b/i;
 const ADAPTIVE_WORK_PATTERN =
