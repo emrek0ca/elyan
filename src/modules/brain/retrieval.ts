@@ -37,9 +37,16 @@ function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+/* Arama katmanı case-folding: i-ailesi tek harfe iner (İ/I/ı → i) — C daemon
+ * tr_lower tablosuyla birebir. NOT: hashed embedding bucket'ları tokenlere
+ * bağlı; ı içeren ESKİ kayıtlı vektörler bu tokenler için kısmen eşleşmez
+ * (birincil sinyal embedding_v2/e5 olduğundan etki ikincil, yeni yazımlar
+ * tutarlı). Eski davranış İ'li kelimelerde C↔JS arasında zaten tutarsızdı. */
 function tokenize(text: string): string[] {
   return compactText(text)
+    .replace(/İ|I/g, "i")
     .toLowerCase()
+    .replace(/ı/g, "i")
     .replace(/[^a-z0-9çğıöşü_\s.-]/gi, " ")
     .split(/\s+/)
     .filter((token) => token.length >= 2)

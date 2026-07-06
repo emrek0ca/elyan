@@ -18,6 +18,8 @@ import type { TurnEnvelope } from "./turn-envelope.js";
 import { notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
 import { invalidateBrainProfileCache } from "./profile-cache.js";
+import { filterRowsToTenant } from "../../lib/tenant-guard.js";
+import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import {
   buildHashedKnowledgeEmbedding,
   canUseHybridRetrieval,
@@ -223,6 +225,21 @@ function toRows(input: unknown): ExecuteRow[] {
   return [];
 }
 
+/** Tenant guard'lı satır okuma — searchBrainMemory/listBrainMemory yolu. */
+function toTenantRows(
+  input: unknown,
+  expectedUserId: string,
+  source: string,
+  logger?: { error: (obj: Record<string, unknown>, msg: string) => void },
+): ExecuteRow[] {
+  return filterRowsToTenant({
+    rows: toRows(input) as Array<Record<string, unknown>>,
+    expectedUserId,
+    source,
+    logger: logger ?? null,
+  }) as ExecuteRow[];
+}
+
 function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -259,9 +276,17 @@ function normalizeMemoryValue(value: string): string {
   return compactText(value).toLowerCase();
 }
 
+/* Arama katmanı case-folding: i-ailesi tek harfe iner (İ/I/ı → i).
+ * Düz toLowerCase() "İ"yi "i"+combining-dot yapar (baş harf kayboluyordu);
+ * I→ı Türkçe kuralı ise İngilizce kısaltmaları bozar (API→apı). Collapse
+ * her iki dilde query↔doküman eşleşmesini garantiler — C daemon'daki
+ * TR_U/TR_L tablosuyla birebir aynı semantik. */
+function turkishLower(text: string): string {
+  return text.replace(/İ|I/g, "i").toLowerCase().replace(/ı/g, "i");
+}
+
 function tokenize(text: string): string[] {
-  return compactText(text)
-    .toLowerCase()
+  return turkishLower(compactText(text))
     .replace(/[^a-z0-9çğıöşü_\s.-]/gi, " ")
     .split(/\s+/)
     .filter((token) => token.length >= 2)
@@ -307,11 +332,30 @@ async function ensureMemorySemanticV2Columns(app: FastifyInstance): Promise<bool
 }
 
 function lexicalOverlapScore(query: string, text: string): number {
-  const haystack = compactText(text).toLowerCase();
+  const haystack = turkishLower(compactText(text));
   const tokens = tokenize(query);
   const overlap = tokens.reduce((count, token) => count + (haystack.includes(token) ? 1 : 0), 0);
-  const exactBonus = haystack.includes(compactText(query).toLowerCase()) ? 4 : 0;
+  const exactBonus = haystack.includes(turkishLower(compactText(query))) ? 4 : 0;
   return exactBonus + overlap * 2;
+}
+
+/**
+ * Satır grubunu tek C daemon IPC çağrısıyla skorlar (overlap_batch).
+ * Daemon yoksa/uyuşmazsa satır başına JS lexicalOverlapScore'a düşer —
+ * skor semantiği iki yolda birebir aynı.
+ */
+async function batchOverlapScores(query: string, rows: ExecuteRow[]): Promise<number[]> {
+  const docs = rows.map((row) => `${row.title ?? ""} ${row.content ?? ""}`);
+  if (docs.length === 0) {
+    return [];
+  }
+  const native = nlpDaemon.isAvailable()
+    ? await nlpDaemon.overlapBatch(query, docs).catch(() => null)
+    : null;
+  if (native && native.length === docs.length) {
+    return native;
+  }
+  return docs.map((doc) => lexicalOverlapScore(query, doc));
 }
 
 function safeMetadata(input: unknown): Record<string, unknown> {
@@ -1211,6 +1255,7 @@ export async function searchBrainMemory(
     const lexicalFactsQuery = app.db.execute(sql`
       select
         id,
+        user_id as "tenantUserId",
         fact_type as "memoryType",
         canonical_key as "title",
         value as "content",
@@ -1239,6 +1284,7 @@ export async function searchBrainMemory(
     const lexicalEpisodesQuery = app.db.execute(sql`
       select
         id,
+        user_id as "tenantUserId",
         episode_type as "memoryType",
         episode_type as "title",
         summary as "content",
@@ -1270,6 +1316,7 @@ export async function searchBrainMemory(
         ? app.db.execute(sql`
       select
         id,
+        user_id as "tenantUserId",
         fact_type as "memoryType",
         canonical_key as "title",
         value as "content",
@@ -1305,6 +1352,7 @@ export async function searchBrainMemory(
         : app.db.execute(sql`
       select
         id,
+        user_id as "tenantUserId",
         fact_type as "memoryType",
         canonical_key as "title",
         value as "content",
@@ -1336,6 +1384,7 @@ export async function searchBrainMemory(
         ? app.db.execute(sql`
       select
         id,
+        user_id as "tenantUserId",
         episode_type as "memoryType",
         episode_type as "title",
         summary as "content",
@@ -1369,6 +1418,7 @@ export async function searchBrainMemory(
         : app.db.execute(sql`
       select
         id,
+        user_id as "tenantUserId",
         episode_type as "memoryType",
         episode_type as "title",
         summary as "content",
@@ -1412,8 +1462,11 @@ export async function searchBrainMemory(
     }
     const [lexicalFacts, lexicalEpisodes, semanticFactsRaw, semanticEpisodesRaw] = budgetResult;
 
+    const lexFactRows = toTenantRows(lexicalFacts, input.userId, "memory.search.lexical_facts", app.log);
+    const lexEpisodeRows = toTenantRows(lexicalEpisodes, input.userId, "memory.search.lexical_episodes", app.log);
+    const lexOverlapScores = await batchOverlapScores(input.query, [...lexFactRows, ...lexEpisodeRows]);
     const lexicalResults = [
-      ...toRows(lexicalFacts).map((row) =>
+      ...lexFactRows.map((row, rowIndex) =>
         buildMemoryHit({
           id: row.id,
           memorySource: normalizeMemorySource(String(row.memoryType ?? "semantic")),
@@ -1432,7 +1485,7 @@ export async function searchBrainMemory(
           conflictStatus: row.conflictStatus,
           lifecycleStatus: row.lifecycleStatus,
           scope: row.scope,
-          lexicalScore: lexicalOverlapScore(input.query, `${row.title ?? ""} ${row.content ?? ""}`),
+          lexicalScore: lexOverlapScores[rowIndex],
           lastVerifiedAt: row.lastVerifiedAt,
           deletedAt: row.deletedAt,
           deletedReason: row.deletedReason,
@@ -1440,7 +1493,7 @@ export async function searchBrainMemory(
           metadata: row.metadata,
         }),
       ),
-      ...toRows(lexicalEpisodes).map((row) =>
+      ...lexEpisodeRows.map((row, rowIndex) =>
         buildMemoryHit({
           id: row.id,
           memorySource: "episodic_memory",
@@ -1451,7 +1504,7 @@ export async function searchBrainMemory(
           staleness: row.staleAt ? "stale" : "fresh",
           importanceScore: row.importanceScore,
           isPinned: row.isPinned,
-          lexicalScore: lexicalOverlapScore(input.query, `${row.title ?? ""} ${row.content ?? ""}`),
+          lexicalScore: lexOverlapScores[lexFactRows.length + rowIndex],
           conflictStatus: row.staleAt ? "superseded" : "active",
           lifecycleStatus: row.lifecycleStatus,
           scope: row.scope,
@@ -1488,8 +1541,11 @@ export async function searchBrainMemory(
     const semanticFacts = semanticFactsRaw ?? [];
     const semanticEpisodes = semanticEpisodesRaw ?? [];
 
+    const semFactRows = toTenantRows(semanticFacts, input.userId, "memory.search.semantic_facts", app.log);
+    const semEpisodeRows = toTenantRows(semanticEpisodes, input.userId, "memory.search.semantic_episodes", app.log);
+    const semOverlapScores = await batchOverlapScores(input.query, [...semFactRows, ...semEpisodeRows]);
     const semanticResults = [
-      ...toRows(semanticFacts).map((row) =>
+      ...semFactRows.map((row, rowIndex) =>
         buildMemoryHit({
           id: row.id,
           memorySource: normalizeMemorySource(String(row.memoryType ?? "semantic")),
@@ -1508,7 +1564,7 @@ export async function searchBrainMemory(
           conflictStatus: row.conflictStatus,
           lifecycleStatus: row.lifecycleStatus,
           scope: row.scope,
-          lexicalScore: lexicalOverlapScore(input.query, `${row.title ?? ""} ${row.content ?? ""}`),
+          lexicalScore: semOverlapScores[rowIndex],
           semanticScore: Number(row.semanticScore ?? 0),
           lastVerifiedAt: row.lastVerifiedAt,
           deletedAt: row.deletedAt,
@@ -1517,7 +1573,7 @@ export async function searchBrainMemory(
           metadata: row.metadata,
         }),
       ),
-      ...toRows(semanticEpisodes).map((row) =>
+      ...semEpisodeRows.map((row, rowIndex) =>
         buildMemoryHit({
           id: row.id,
           memorySource: "episodic_memory",
@@ -1528,7 +1584,7 @@ export async function searchBrainMemory(
           staleness: row.staleAt ? "stale" : "fresh",
           importanceScore: row.importanceScore,
           isPinned: row.isPinned,
-          lexicalScore: lexicalOverlapScore(input.query, `${row.title ?? ""} ${row.content ?? ""}`),
+          lexicalScore: semOverlapScores[semFactRows.length + rowIndex],
           semanticScore: Number(row.semanticScore ?? 0),
           conflictStatus: row.staleAt ? "superseded" : "active",
           lifecycleStatus: row.lifecycleStatus,
@@ -1630,6 +1686,7 @@ async function fetchBrainMemoryFacts(app: FastifyInstance, userId: string, limit
   return app.db.execute(sql`
     select
       id,
+      user_id as "tenantUserId",
       fact_type as "memoryType",
       canonical_key as "title",
       value as "content",
@@ -1657,6 +1714,7 @@ async function fetchBrainMemoryEpisodes(app: FastifyInstance, userId: string, li
   return app.db.execute(sql`
     select
       id,
+      user_id as "tenantUserId",
       episode_type as "memoryType",
       episode_type as "title",
       summary as "content",
@@ -1754,8 +1812,8 @@ export async function listBrainMemory(
     input.surface === "facts" ? Promise.resolve({ rows: [] }) : fetchBrainMemoryEpisodes(app, input.userId, input.limit * 2),
   ]);
   const all = [
-    ...toRows(factRows).map((row) => shapeBrainMemoryRecord({ entityType: "fact", row })),
-    ...toRows(episodeRows).map((row) => shapeBrainMemoryRecord({ entityType: "episode", row })),
+    ...toTenantRows(factRows, input.userId, "memory.list.facts", app.log).map((row) => shapeBrainMemoryRecord({ entityType: "fact", row })),
+    ...toTenantRows(episodeRows, input.userId, "memory.list.episodes", app.log).map((row) => shapeBrainMemoryRecord({ entityType: "episode", row })),
   ].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
   const visible = filterVisibleMemory(all, {
     includeSoftDeleted: input.includeSoftDeleted,
@@ -1780,6 +1838,7 @@ export async function getBrainMemoryById(
     app.db.execute(sql`
       select
         id,
+        user_id as "tenantUserId",
         fact_type as "memoryType",
         canonical_key as "title",
         value as "content",
@@ -1803,6 +1862,7 @@ export async function getBrainMemoryById(
     app.db.execute(sql`
       select
         id,
+        user_id as "tenantUserId",
         episode_type as "memoryType",
         episode_type as "title",
         summary as "content",

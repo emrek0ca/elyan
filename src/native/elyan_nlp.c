@@ -143,11 +143,17 @@ static void sha256_hash(const unsigned char *data, size_t len, unsigned char *ou
 
 /* ── Turkish character helpers ──────────────────────────────────────── */
 
+/* Arama katmanı case-folding: i-ailesi TEK harfe iner (İ/I/ı → i).
+ * Neden: harf-bazlı folding'de Türkçe kuralı (I→ı) İngilizce kısaltmaları
+ * bozar (API→apı), İngilizce kuralı (I→i) Türkçe'yi bozar (ISPARTA≠ısparta).
+ * Retrieval/eşleşme için doğru cevap collapse: her iki dilde de query ile
+ * doküman aynı forma iner, recall artar; ı/i minimal çiftleri retrieval
+ * skorlamasında ihmal edilebilir. (Eski tablo İ→ı eşliyordu — düz bug.) */
 static const char *TR_U[] = {
-  "\xc3\x87","\xc4\x9e","\xc4\xb0","\xc3\x96","\xc5\x9e","\xc3\x9c", NULL
+  "\xc3\x87","\xc4\x9e","\xc4\xb0","\xc3\x96","\xc5\x9e","\xc3\x9c","I","\xc4\xb1", NULL
 };
 static const char *TR_L[] = {
-  "\xc3\xa7","\xc4\x9f","\xc4\xb1","\xc3\xb6","\xc5\x9f","\xc3\xbc", NULL
+  "\xc3\xa7","\xc4\x9f","i","\xc3\xb6","\xc5\x9f","\xc3\xbc","i","i", NULL
 };
 
 static int tr_lower(const char *src, char *dst, int dmax) {
@@ -944,6 +950,54 @@ static void h_bm25_batch(const char *json, const char *id) {
   printf("]}\n");
 }
 
+/* ── Lexical overlap batch (memory.ts lexicalOverlapScore ile aynı) ────
+ * Girdi:  {"type":"overlap_batch","_id":"...","query":"...","docs":[...]}
+ * Çıktı:  {"ok":true,"_id":"...","scores":[int,...]}
+ * skor = (doc, query'yi aynen içeriyorsa 4) + 2 * (doc içinde geçen query
+ * token sayısı). Token'lama tokenize_retrieval ile (stem YOK) — TS tarafı
+ * tokenize() ile aynı charset/min-uzunluk.                                */
+static void fold_compact_lower(const char *src, char *dst, int cap) {
+  int w=0, last_space=1;
+  const char *p=src;
+  while (*p && w<cap-8) {
+    if (*p==' '||*p=='\t'||*p=='\n'||*p=='\r') {
+      if (!last_space && w<cap-2) { dst[w++]=' '; last_space=1; }
+      p++;
+      continue;
+    }
+    char lo[8]={0}; int n=tr_lower(p,lo,sizeof(lo));
+    int ll=(int)strlen(lo);
+    if (w+ll>=cap-1) break;
+    memcpy(dst+w,lo,ll); w+=ll; p+=n; last_space=0;
+  }
+  while (w>0 && dst[w-1]==' ') w--;
+  dst[w]='\0';
+}
+
+static void h_overlap_batch(const char *json, const char *id) {
+  char q[MAX_LINE]={0}; jstr(json,"query",q,sizeof(q));
+  static char docs[MAX_BATCH_DOCS][MAX_DOC_LEN];
+  int ndocs=jstring_array(json,"docs",docs,MAX_BATCH_DOCS);
+  if (!ndocs) { write_ok(id); printf(",\"scores\":[]}\n"); return; }
+
+  static char qlower[MAX_LINE];
+  fold_compact_lower(q,qlower,sizeof(qlower));
+  static char qtok[80][MAX_TOKEN_LEN];
+  int qn=tokenize_retrieval(q,qtok,80);
+
+  write_ok(id); printf(",\"scores\":[");
+  static char dlower[MAX_DOC_LEN*2];
+  for (int di=0;di<ndocs;di++) {
+    fold_compact_lower(docs[di],dlower,sizeof(dlower));
+    int overlap=0;
+    for (int ti=0;ti<qn;ti++) if (strstr(dlower,qtok[ti])) overlap++;
+    int exact=(qlower[0] && strstr(dlower,qlower))?4:0;
+    if (di) putchar(',');
+    printf("%d",exact+overlap*2);
+  }
+  printf("]}\n");
+}
+
 static void h_embed_256(const char *json, const char *id) {
   char text[MAX_LINE]={0};
   if (!jstr(json,"text",text,sizeof(text))) { write_err(id,"missing text"); return; }
@@ -1508,6 +1562,7 @@ int main(void) {
     else if (!strcmp(type,"tokenize_retrieval")) h_tokenize_retrieval(line,req_id);
     else if (!strcmp(type,"score_bm25"))      h_score_bm25(line,req_id);
     else if (!strcmp(type,"bm25_batch"))      h_bm25_batch(line,req_id);
+    else if (!strcmp(type,"overlap_batch"))   h_overlap_batch(line,req_id);
     else if (!strcmp(type,"embed_256"))       h_embed_256(line,req_id);
     else if (!strcmp(type,"cosine_sim"))      h_cosine_sim(line,req_id);
     else if (!strcmp(type,"extract_facts"))   h_extract_facts(line,req_id);

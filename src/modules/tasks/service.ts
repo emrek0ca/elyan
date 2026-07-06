@@ -56,6 +56,10 @@ import { syncChatTaskLifecycle, compactMessagePreview } from "../chat/task-sync.
 import { buildTaskTraceBlock } from "../chat/task-trace.js";
 import { persistRollingSummaryToSession, listChatSessionMessages } from "../chat/service.js";
 import { applyGoalProgressBlocks } from "../goals/service.js";
+import {
+  detectGoalChatCommand,
+  executeGoalChatCommand,
+} from "../goals/chat-goal-commands.js";
 import { getUserDevice, RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { decideCommandRoute, resolveCommandTarget, resolvePendingDesktopQueueTarget } from "../routing-policy/service.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
@@ -2970,6 +2974,23 @@ async function processSharedBrainChatTask(
       attachmentContextUsed: attachmentContext?.used === true || (clientDocCtx?.hasContent === true),
       envelope: input.understanding.envelope,
     });
+    // Deterministik hedef komutu: "hedef oluştur/tamamla" model beklemeden
+    // sunucuda uygulanır. Model yolu (turn envelope goal_ops) bunu dışlamaz;
+    // bu yol flag'siz, her mesajda mikrosaniyede çalışan garanti halka.
+    const goalCommand = detectGoalChatCommand(input.prompt);
+    const goalCommandResult = goalCommand
+      ? await executeGoalChatCommand(app, {
+          userId: input.userId,
+          sessionId: chatStreaming?.sessionId ?? null,
+          taskId: runningTask.id,
+          command: goalCommand,
+        })
+      : null;
+    if (goalCommandResult && input.understanding.context) {
+      // Modele yeni hedefi [GOAL] bloğu üzerinden duyur — cevap metni hedefi
+      // isim ve adım sayısıyla referans alabilsin.
+      input.understanding.context.activeGoal = goalCommandResult.goal;
+    }
     const ackText = buildSharedBrainAckText(selectedWorkload);
     const ackTaskTrace = buildTaskTraceBlock({
       task: runningTask,
@@ -3271,9 +3292,22 @@ async function processSharedBrainChatTask(
       const visibleText = inferenceResolved.text || completedResultText;
       // attachmentAck varsa tüm blokların önüne ekle (belge alındı kartı)
       const ackBlock = attachmentAckBlock ? [attachmentAckBlock] : [];
+      // Deterministik hedef bloğu: model kendi goal_progress bloğunu ürettiyse
+      // duplike etme — aynı goalId için tek kart.
+      const goalBlock =
+        goalCommandResult &&
+        !inferenceBlocks.some(
+          (block) =>
+            block &&
+            typeof block === "object" &&
+            (block as Record<string, unknown>).type === "goal_progress" &&
+            (block as Record<string, unknown>).goalId === goalCommandResult.block.goalId,
+        )
+          ? [goalCommandResult.block]
+          : [];
       const finalBlocks = composeAssistantMessageBlocks({
         content: visibleText,
-        blocks: [...ackBlock, taskTrace, ...inferenceBlocks],
+        blocks: [...ackBlock, taskTrace, ...goalBlock, ...inferenceBlocks],
       });
       void applyGoalProgressBlocks(app, {
         userId: input.userId,

@@ -39,7 +39,11 @@ function normalizeTextFallback(text: string): { text: string; modified: boolean 
 }
 
 function tokenizeRetrievalFallback(text: string, limit = 120): string[] {
-  const normalized = normalizeTextFallback(text).text.toLowerCase();
+  // i-ailesi collapse (İ/I/ı → i) — C tokenize_retrieval ile parity.
+  const normalized = normalizeTextFallback(text)
+    .text.replace(/İ|I/g, "i")
+    .toLowerCase()
+    .replace(/ı/g, "i");
   const matches = normalized.match(/[a-z0-9çğıöşü_.-]{2,}/giu) ?? [];
   return matches.slice(0, Math.max(1, Math.min(limit, 512)));
 }
@@ -315,6 +319,22 @@ export class NlpDaemon {
     try {
       const r = await this._send({ type: "bm25_batch", query, docs, avg_len: String(avgLen) });
       if (!Array.isArray(r.scores)) return null;
+      return r.scores as number[];
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Lexical overlap batch — memory.ts lexicalOverlapScore'un C karşılığı.
+   * Tek IPC çağrısında N doküman skorlanır; daemon yoksa null döner ve
+   * çağıran JS fallback'ini kullanır.
+   */
+  async overlapBatch(query: string, docs: string[]): Promise<number[] | null> {
+    if (!docs.length) return [];
+    try {
+      const r = await this._send({ type: "overlap_batch", query, docs });
+      if (!Array.isArray(r.scores) || r.scores.length !== docs.length) return null;
       return r.scores as number[];
     } catch {
       return null;

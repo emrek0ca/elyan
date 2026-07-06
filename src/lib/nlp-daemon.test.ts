@@ -16,7 +16,7 @@ test("NlpDaemon normalizeText and tokenizeRetrieval use safe TS fallback when bi
   });
 
   const tokens = await daemon.tokenizeRetrieval("OpenAI API anahtarı nasıl kullanılır?", 4);
-  assert.deepEqual(tokens, ["openai", "api", "anahtarı", "nasıl"]);
+  assert.deepEqual(tokens, ["openai", "api", "anahtari", "nasil"]);
 });
 
 test("NlpDaemon exposes C normalizeText and tokenizeRetrieval capabilities when binary is present", async (t) => {
@@ -37,7 +37,7 @@ test("NlpDaemon exposes C normalizeText and tokenizeRetrieval capabilities when 
     });
     assert.deepEqual(
       await daemon.tokenizeRetrieval("OpenAI API anahtarı nasıl kullanılır?", 4),
-      ["openai", "api", "anahtarı", "nasıl"],
+      ["openai", "api", "anahtari", "nasil"],
     );
   } finally {
     daemon.stop();

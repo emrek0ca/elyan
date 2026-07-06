@@ -66,6 +66,7 @@ import {
   resolveDialogueStateSessionId,
 } from "./dialogue-state.js";
 import { recordTurnMemoryOps } from "./memory-fabric.js";
+import { applyTurnGoalOps } from "../goals/chat-goal-commands.js";
 import { cognitiveMemoryRepository } from "./cognitive-memory-repository.js";
 import { isCognitiveFoundationEnabled } from "./cognitive-foundation-policy.js";
 import { applyTurnProactiveOps, recordTurnFollowUps } from "./proactive-engine.js";
@@ -5458,6 +5459,29 @@ export async function generateSharedBrainReply(
           envelope: turnEnvelope,
         }).catch((error) => {
           app.log.debug?.({ error: error instanceof Error ? error.message : "proactive_prefs_write_failed" }, "proactive preferences write skipped");
+        });
+      }
+
+      // goal_ops kalıcılaştırma: turn envelope'daki open/advance/complete
+      // yalnız session state'e değil goals servisine de yazılır — mobil
+      // /v1/goals listesi ve goal_progress kartları gerçek veriyi gösterir.
+      if (
+        turnEnvelope &&
+        turnEnvelope.goal_ops.length > 0 &&
+        !input.internalEvaluation?.refinementPass &&
+        !input.internalEvaluation?.skipReviewLogging
+      ) {
+        await applyTurnGoalOps(app, {
+          userId: input.userId,
+          taskId: input.taskId ?? null,
+          sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+          goalOps: turnEnvelope.goal_ops,
+          userMessage: input.prompt,
+        }).catch((error) => {
+          app.log.debug?.(
+            { error: error instanceof Error ? error.message : "goal_ops_write_failed" },
+            "turn goal ops write skipped",
+          );
         });
       }
 
