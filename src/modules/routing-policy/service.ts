@@ -722,6 +722,15 @@ function deriveSelectedWorkload(input: {
   if (postPlanningPolicyWorkload) {
     return postPlanningPolicyWorkload;
   }
+  // Research/math/analysis intents deserve deeper workloads regardless of
+  // message length — a short "enflasyon analizi yap" still needs retrieval
+  // grounding and reasoning depth that mobile_chat_fast can't provide.
+  if (input.primaryIntent === "research") {
+    return "mobile_chat_deep_refine";
+  }
+  if (input.primaryIntent === "math") {
+    return "mobile_chat_balanced";
+  }
   const hybrid = selectHybridMobileChatWorkload({
     message: input.message,
     primaryIntent: input.primaryIntent,

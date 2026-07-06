@@ -25,6 +25,9 @@ export function resolveReasoningEffort(
   ) {
     return "high";
   }
+  if (reasoningMode === "balanced") {
+    return "medium";
+  }
   if (
     workload === "mobile_chat_balanced" ||
     workload === "vision_reasoning" ||

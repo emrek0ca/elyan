@@ -72,11 +72,9 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
   },
   mobile_chat_deep_refine: {
     workload: "mobile_chat_deep_refine",
-    timeoutMs: 9_500,
-    firstDeltaBudgetMs: 2_400,
-    // Bumped 640 → 800: refine path handles long-form / math / plan-heavy
-    // outputs where 640 was cutting the closing paragraph.
-    maxTokens: 800,
+    timeoutMs: 12_000,
+    firstDeltaBudgetMs: 3_000,
+    maxTokens: 1024,
     streamingEnabled: true,
     cachePolicy: "off",
     fallbackWorkload: "mobile_chat_balanced",

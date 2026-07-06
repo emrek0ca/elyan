@@ -19,7 +19,7 @@ export function getMaxTokensForWorkload(
     workload === "planning"
       ? 900
       : workload === "mobile_chat_deep_refine"
-        ? 980
+        ? 1200
         : workload === "mobile_chat_balanced"
           ? 760
           : workload === "mobile_chat_fast"

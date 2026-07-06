@@ -31,11 +31,21 @@ const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = 
       /\b(türk dünyası|turkic|oğuz|oguz|kıpçak|kipchak|karluk|qipchak|qarluq|azerbaijani|kazakh|kyrgyz|uzbek|turkmen|uyghur|tatar|bashkir|gagauz|karakalpak|sakha|chuvash)\b.*\b(araştır|arastir|incele|study|learn|öğren|ogren|compare|karşılaştır|karsilastir|gramer|grammar|lehçe|lehce|etimoloji|etymology|kaynak|source)\b/i,
       /\b(tarih|tarihsel|tarihçe|tarihce|historical|kronoloji|chronolog)\b/i,
       /\b(nüfus|nufus|population|gdp|gsyih|ekonomi|economy|istatistik|statistic|trend|büyüme|buyume|growth)\b/i,
+      /(?<!\p{L})(analiz\s+et|değerlendir|degerlendir|karşılaştır|karsilastir|kıyasla|kiyasla)\p{L}*/iu,
+      /(?<!\p{L})(etki\p{L}*|nas[ıi]l\s+etkil|sebep\p{L}*|neden\p{L}*)\s.{0,40}(ekonomi|toplum|dünya|sektör|piyasa|iş\s+dünya)/iu,
+      /\b(yapay\s*zeka|artificial\s*intelligence|machine\s*learning|deep\s*learning|AI)\b.*\b(etki|analiz|gelecek|future|trend)\b/i,
     ],
   },
   {
     intent: "math",
-    patterns: [/\b(math|solve|equation|integral|derivative|latex|proof)\b/i, /\b(matematik|denklem|integral|türev|ispat)\b/i],
+    patterns: [
+      /\b(math|solve|equation|integral|derivative|latex|proof|calculate|computation|formula)\b/i,
+      /\b(matematik|denklem|integral|türev|ispat|hesapla|hesap|toplam|çarp|kaç tane|kaç kişi|kaç lira|kaçtır|sonuç|formül)\b/i,
+      /(?<!\p{L})böl(?!\p{L}).{0,20}(?:\d|say[ıi]|kalan|pay|payda|bölüm|bölme)/iu,
+      /(?<!\p{L})(koyun|inek|elma|araba|öğrenci|ogrenci|kişi|kisi)\p{L}*\s+\p{L}*\s*(?:var|kald[ıi]|eklen|satt[ıi]|ald[ıi]|toplam|ka[çc])\b/iu,
+      /\b\d+\s*[\+\-\*\/\^]\s*\d+/,
+      /\b\d+\s*[''](?:ın|in|un|ün|nın|nin|nun|nün)\b/i,
+    ],
   },
   {
     intent: "document",

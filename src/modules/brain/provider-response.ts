@@ -155,6 +155,8 @@ export function shouldStreamReasoning(
     workload === "planning" ||
     workload === "document_generate" ||
     workload === "mobile_chat_balanced" ||
+    workload === "mobile_chat_deep_refine" ||
+    workload === "document_analysis" ||
     workload === "vision_reasoning" ||
     workload === "image_analyze"
   );

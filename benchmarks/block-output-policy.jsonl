@@ -6,7 +6,7 @@
 {"id":"block-output-006","message":"f(x)=x^2 fonksiyonunun grafiğini çiz","expected":{"workload":"mobile_chat_balanced","primaryShape":"chart","tablePolicy":"forbidden","expectedBlockTypes":["chart"]}}
 {"id":"block-output-007","message":"z = x^5 - y^2 fonksiyonunun 3 boyutlu yüzey grafiğini çiz","expected":{"workload":"mobile_chat_balanced","primaryShape":"math_surface_3d","tablePolicy":"forbidden","expectedBlockTypes":["math_surface_3d"]}}
 {"id":"block-output-008","message":"Bu konuyu kısaca anlat, tablo istemiyorum","expected":{"workload":"mobile_chat_fast","primaryShape":"prose","tablePolicy":"forbidden","expectedBlockTypes":["text"]}}
-{"id":"block-output-009","message":"Bir startup için pazara giriş stratejisini değerlendir ve öner","expected":{"workload":"mobile_chat_balanced","primaryShape":"prose","tablePolicy":"explicit_only","expectedBlockTypes":["text"]}}
+{"id":"block-output-009","message":"Bir startup için pazara giriş stratejisini değerlendir ve öner","expected":{"workload":"mobile_chat_deep_refine","primaryShape":"prose","tablePolicy":"explicit_only","expectedBlockTypes":["text"]}}
 {"id":"block-output-010","message":"Selam, bugün hızlıca bir şey soracağım","expected":{"workload":"mobile_chat_fast","primaryShape":"prose","tablePolicy":"explicit_only","expectedBlockTypes":["text"]}}
 {"id":"block-output-011","message":"5 adımlık Teknofest hazırlık programı çıkar","expected":{"workload":"planning","primaryShape":"list","tablePolicy":"forbidden","expectedBlockTypes":["text"]}}
 {"id":"block-output-012","message":"Bir e-ticaret uygulaması için veritabanı şeması nasıl tasarlanır, adımları planla","expected":{"workload":"planning","primaryShape":"list","tablePolicy":"forbidden","expectedBlockTypes":["text"]}}

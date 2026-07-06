@@ -258,10 +258,11 @@ test("decideCommandRoute upgrades complex public chat to the balanced profile", 
 
   assert.equal(decision.route, "server_brain");
   assert.equal(decision.shouldAskClarification, false);
-  assert.equal(decision.selectedWorkload, "mobile_chat_balanced");
+  // "karşılaştır" triggers research intent → mobile_chat_deep_refine
+  assert.equal(decision.selectedWorkload, "mobile_chat_deep_refine");
 });
 
-test("decideCommandRoute upgrades complex chat on premium plans to the planning profile", async () => {
+test("decideCommandRoute upgrades complex chat on premium plans to the deep refine profile", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
@@ -279,7 +280,8 @@ test("decideCommandRoute upgrades complex chat on premium plans to the planning 
 
   assert.equal(decision.route, "server_brain");
   assert.equal(decision.shouldAskClarification, false);
-  assert.equal(decision.selectedWorkload, "planning");
+  // "karşılaştır" + "analiz et" triggers research → deep_refine
+  assert.equal(decision.selectedWorkload, "mobile_chat_deep_refine");
 });
 
 test("decideCommandRoute keeps packaged mobile world context on the shared brain", async () => {

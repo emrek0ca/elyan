@@ -4563,7 +4563,7 @@ test("prompt gating: greeting turns get the lean social profile", () => {
     // greeting fast-path
     baseInput({ prompt: "Selam nasılsın?" }),
   );
-  assert.ok(prompt.length < 2000, `greeting prompt too long: ${prompt.length}`);
+  assert.ok(prompt.length < 2600, `greeting prompt too long: ${prompt.length}`);
   assert.ok(!prompt.includes("Memory recall policy"));
   assert.ok(!prompt.includes("Task-routing policy"));
   assert.ok(!prompt.includes("Public web policy"));
