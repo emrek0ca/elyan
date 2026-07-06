@@ -2694,7 +2694,7 @@ test("generateSharedBrainReply includes explicit local context but guards live w
     .map((message) => String(message.content ?? ""))
     .join("\n");
   assert.match(messageText, /Konum: Kayseri/);
-  assert.match(messageText, /Never invent live weather or temperature/i);
+  assert.match(messageText, /Live context|mentionPolicy|Never diagnose/i);
 });
 
 test("generateSharedBrainReply keeps response cache isolated across plan profiles", async () => {

@@ -1726,6 +1726,13 @@ export function buildStructuredSystemPrompt(
     /\b(elyan|osman|emre|koca|geliştir|geliştirici|kim yaptı|kim yazdı|kim üretti|kim uretti|kim kurdu|founder|developer|kimdir)\b/i.test(
       input.prompt,
     );
+  // C/C++ / sistem programlama sinyali — routing-policy'deki
+  // SYSTEMS_PROGRAMMING_PATTERN ile hizalı. Bu turlarda senior systems
+  // programmer direktifi ekleniyor; genel sorularda dead weight olurdu.
+  const systemsProgrammingRelevant =
+    /(?<!\p{L})(c\+\+|cpp|c\s*dili(?:yle|nde|ni)?|c\s+programlama|segfault|segmentation\s+fault|core\s+dump|memory\s+leak|bellek\s+s[ıi]z[ıi]nt[ıi]|undefined\s+behavior|tan[ıi]ms[ıi]z\s+davran[ıi][şs]|malloc|calloc|realloc|memcpy|nullptr|unique_ptr|shared_ptr|constexpr|std::\w+|raii|valgrind|gdb|cmake|i[şs]aret[çc]i|pointer|move\s+semantics|template\s+metaprogramming|gcc|clang|linker|derleyici)(?!\p{L})/iu.test(
+      input.prompt,
+    );
 
   return [
     basePrompt,
@@ -1774,6 +1781,10 @@ export function buildStructuredSystemPrompt(
     "Stay grounded: never invent statistics, dates, prices, or facts not in your evidence. When uncertain, say so — 'kesin bilmiyorum ama araştırabilirim' beats a confident guess.",
     currentnessSignal
       ? `Today is ${new Date().toISOString().slice(0, 10)}. For time-sensitive claims, prefer web grounding over training knowledge. When web sources are present, cite them naturally. When they're not, flag potential staleness.`
+      : null,
+    // ── SYSTEMS PROGRAMMING (only on C/C++ signals) ──
+    systemsProgrammingRelevant
+      ? "C/C++ expertise: answer as a senior systems programmer. State which language standard your code assumes (default to C17 / C++20 unless the user targets another). Write complete, compilable examples with the required #include lines — never pseudo-code fragments that won't build. In C++, follow RAII and the rule of zero/five; prefer smart pointers, std::string_view, std::span, and standard algorithms over raw pointers and manual loops when appropriate. In C, show explicit ownership, error handling on every allocation and I/O call, and bounds-checked buffer use. Proactively flag undefined behavior, lifetime bugs, data races, and memory-safety pitfalls in the user's code or in your own examples. When relevant, recommend concrete tooling: compiler flags (-Wall -Wextra -Werror, -fsanitize=address,undefined), CMake for builds, gdb/lldb for debugging, valgrind or sanitizers for memory issues. Explain performance and safety trade-offs briefly — the why, not just the how."
       : null,
     // ── TASK ROUTING (Elyan-specific infrastructure) ──
     taskRoutingPolicy,

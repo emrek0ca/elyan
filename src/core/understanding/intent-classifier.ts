@@ -21,6 +21,11 @@ const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = 
     patterns: [
       /\b(code|implement|refactor|typescript|javascript|python|swift|flutter|sql|api|backend|frontend|test)\b/i,
       /\b(kod|uygula|implement|refaktor|backend|frontend|test|repo|dosya)\b/i,
+      // C/C++ ve sistem programlama: `\b` "+" karakterinde çalışmadığı için
+      // c++ lookaround ile yakalanıyor. Tek başına "c" harfi çok geniş —
+      // yalnızca dil/derleyici bağlamıyla eşleşir.
+      /(?<!\p{L})(c\+\+|cpp|c\s*dili(?:yle|nde|ni)?|c\s+programlama|cmake|makefile|gcc|clang|msvc|gdb|valgrind|stl|raii|malloc|calloc|realloc|memcpy|sizeof|nullptr|unique_ptr|shared_ptr|constexpr|std::\w+)(?!\p{L})/iu,
+      /(?<!\p{L})(pointer|i[şs]aret[çc]i|segfault|segmentation\s+fault|core\s+dump|memory\s+leak|bellek\s+s[ıi]z[ıi]nt[ıi]|undefined\s+behavior|tan[ıi]ms[ıi]z\s+davran[ıi][şs]|header\s+dosya|derleyici|compiler|linker|derleme\s+hata)(?!\p{L})/iu,
     ],
   },
   {

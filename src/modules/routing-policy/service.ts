@@ -698,6 +698,17 @@ function deriveNormalizedIntent(input: {
   return "normal_chat";
 }
 
+// C/C++ / sistem programlama sinyali — intent-classifier'daki coding
+// pattern'leriyle hizalı ama workload yükseltmesi için daha dar tutuldu:
+// yalnızca gerçekten derinlik isteyen sinyaller (dil adı + bellek/derleyici
+// kavramları), "test yaz" gibi genel kodlama istekleri değil.
+const SYSTEMS_PROGRAMMING_PATTERN =
+  /(?<!\p{L})(c\+\+|cpp|c\s*dili(?:yle|nde|ni)?|c\s+programlama|segfault|segmentation\s+fault|core\s+dump|memory\s+leak|bellek\s+s[ıi]z[ıi]nt[ıi]|undefined\s+behavior|tan[ıi]ms[ıi]z\s+davran[ıi][şs]|malloc|calloc|realloc|memcpy|nullptr|unique_ptr|shared_ptr|constexpr|std::\w+|raii|valgrind|gdb|cmake|i[şs]aret[çc]i\s+aritmeti[ğg]i|pointer\s+arithmetic|move\s+semantics|template\s+metaprogramming)(?!\p{L})/iu;
+
+export function isSystemsProgrammingMessage(message: string): boolean {
+  return SYSTEMS_PROGRAMMING_PATTERN.test(message);
+}
+
 function deriveSelectedWorkload(input: {
   route: CommandRoute;
   intent: NormalizedCommandIntent;
@@ -729,6 +740,12 @@ function deriveSelectedWorkload(input: {
     return "mobile_chat_deep_refine";
   }
   if (input.primaryIntent === "math") {
+    return "mobile_chat_balanced";
+  }
+  // C/C++ ve sistem programlama soruları fast profile düşerse yüzeysel,
+  // derleme-hatalı snippet'ler üretiyor. Bellek güvenliği, UB, lifetime gibi
+  // konular reasoning derinliği ister — en az balanced.
+  if (isSystemsProgrammingMessage(input.message)) {
     return "mobile_chat_balanced";
   }
   const hybrid = selectHybridMobileChatWorkload({
