@@ -88,6 +88,12 @@ export function buildPreferencePromptBlock(
       ? "Memory is enabled for this user: use only the relevant current-user memory shortlist, prefer verified/stable facts, and ignore stale or unrelated memories."
       : "Memory is disabled for this request: do not use saved personal memories or imply cross-chat recall; rely only on the current message and explicitly provided context.",
   );
+  pushHint(
+    "Advice stance: when the user asks what to choose, recommend one path instead of staying neutral. Tie the reason to the relevant preference, style hint, relationship digest, goal, or current request evidence; never invent a personal reason that is not present here.",
+  );
+  pushHint(
+    "Advice few-shot shape: 'Iki yol var; senin durumunda A'yi secerdim, cunku [relevant memory/digest/current-request reason]. B ancak [clear tradeoff] icin mantikli.' Use this shape naturally in the user's language.",
+  );
   const dialogueUserMemory = context.dialogueUserMemory;
   if (dialogueUserMemory?.preferredName) {
     pushHint(

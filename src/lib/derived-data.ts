@@ -31,6 +31,10 @@ const rawBinaryUploadHintKeys = new Set([
   "signedurl",
   "uploadurl",
   "rawbinary",
+  "base64thumbnail",
+  "visionimagejpeg",
+  "imagethumbnail",
+  "thumbnailbase64",
 ]);
 
 const heavyDerivedDiagnosticKeys = new Set([
@@ -97,10 +101,44 @@ function sanitizeDerivedValue(value: unknown, depth = 0): unknown {
     if (normalizedKey === "rawfileuploaded") {
       continue;
     }
+    if (normalizedKey === "visionblock") {
+      const sanitizedVision = sanitizeVisionBlockValue(rawValue, depth + 1);
+      if (sanitizedVision !== undefined) {
+        next[rawKey] = sanitizedVision;
+      }
+      continue;
+    }
     if (shouldDropDerivedKey(normalizedKey)) {
       continue;
     }
     const sanitized = sanitizeDerivedValue(rawValue, depth + 1);
+    if (sanitized !== undefined) {
+      next[rawKey] = sanitized;
+    }
+  }
+  return next;
+}
+
+function sanitizeVisionBlockValue(value: unknown, depth = 0): unknown {
+  if (depth > 8 || value == null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeVisionBlockValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const [rawKey, rawValue] of Object.entries(record)) {
+    const normalizedKey = normalizeKey(rawKey);
+    if (rawBinaryUploadHintKeys.has(normalizedKey)) {
+      continue;
+    }
+    const sanitized = sanitizeVisionBlockValue(rawValue, depth + 1);
     if (sanitized !== undefined) {
       next[rawKey] = sanitized;
     }

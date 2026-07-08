@@ -339,8 +339,12 @@ function formatSkillText(skill: SkillDefinition, output: Record<string, unknown>
   if (skill.id === "vision_analysis") {
     const description = compactText(output.visualDescription);
     const detectedText = compactText(output.detectedText);
+    // Model labels arrive as raw classifier slugs ("drinking_glass") — the
+    // user-facing list must read as natural language.
     const keyElements = Array.isArray(output.keyElements)
-      ? output.keyElements.map(compactText).filter(Boolean)
+      ? output.keyElements
+          .map((item) => compactText(item).replace(/_/g, " "))
+          .filter(Boolean)
       : [];
     return [
       description,

@@ -15,6 +15,10 @@ import {
 } from "../brain/attachment-context.js";
 import { buildSharedBrainAckText } from "../brain/chat-heuristics.js";
 import {
+  buildProactiveOpeningCompose,
+  processDueProactiveTriggerForSession,
+} from "../brain/proactive-engine.js";
+import {
   getSharedBrainWorkloadProfile,
   resolveAttachmentAwareSharedBrainWorkload,
   type SharedBrainWorkload,
@@ -708,6 +712,38 @@ function decodeCursor<T extends ChatSessionCursor | ChatMessageCursor>(
   }
 }
 
+async function maybeInjectDueProactiveOpeningMessage(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId: string;
+    cursor?: string;
+    enabled: boolean;
+  },
+) {
+  if (
+    !input.enabled ||
+    input.cursor?.trim()
+  ) {
+    return;
+  }
+
+  await processDueProactiveTriggerForSession(app, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+    compose: async (trigger) => buildProactiveOpeningCompose(trigger),
+  }).catch((error) => {
+    app.log.debug?.(
+      {
+        error: error instanceof Error
+          ? error.message
+          : "proactive_opening_injection_failed",
+      },
+      "proactive opening message injection skipped",
+    );
+  });
+}
+
 function chatPayloadSessionIdCondition(sessionId: string) {
   return sql`${tasks.payload} -> 'metadata' -> 'chat' ->> 'sessionId' = ${sessionId}`;
 }
@@ -1153,9 +1189,16 @@ export async function listChatSessionMessages(
     sessionId: string;
     cursor?: string;
     limit?: number;
+    processProactiveOpening?: boolean;
   },
 ) {
   const session = await assertOwnedChatSession(app, input.userId, input.sessionId);
+  await maybeInjectDueProactiveOpeningMessage(app, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+    cursor: input.cursor,
+    enabled: input.processProactiveOpening !== false,
+  });
   const sortTimestamp = chatMessages.createdAt;
   const decodedCursor = decodeCursor<ChatMessageCursor>(input.cursor);
   const limit = normalizeChatMessagePageLimit({
@@ -1733,8 +1776,10 @@ export async function createChatMessage(
     selectedWorkload: routeDecision.selectedWorkload,
     attachmentContextUsed: attachmentContext?.used === true,
     hasVisionImage:
-      Array.isArray(attachmentContext?.visionImages) &&
-      (attachmentContext!.visionImages!.length ?? 0) > 0,
+      (Array.isArray(attachmentContext?.visionImages) &&
+        (attachmentContext!.visionImages!.length ?? 0) > 0) ||
+      (Array.isArray(attachmentContext?.visionBlocks) &&
+        (attachmentContext!.visionBlocks!.length ?? 0) > 0),
   });
   const assistantAckText =
     routeDecision.route === "server_brain"

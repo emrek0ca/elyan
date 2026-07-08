@@ -111,6 +111,7 @@ test("streaming support and reasoning visibility stay workload/provider aware", 
   assert.equal(supportsNativeStreamingAttempt("ollama", "/api/generate"), true);
   assert.equal(supportsNativeStreamingAttempt("ollama", "/chat/completions"), false);
   assert.equal(supportsNativeStreamingAttempt("groq", "/chat/completions"), true);
+  assert.equal(supportsNativeStreamingAttempt("gemini", "/chat/completions"), false);
   assert.equal(shouldStreamReasoning("planning"), true);
   assert.equal(shouldStreamReasoning("mobile_chat_fast"), false);
 });

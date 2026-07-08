@@ -81,3 +81,32 @@ test("createChatMessageBodySchema rejects raw or storage-backed attachment paylo
     assert.match(result.error.message, /raw binary upload payload is not accepted/);
   }
 });
+
+test("createChatMessageBodySchema rejects legacy vision image base64 payloads", () => {
+  const result = createChatMessageBodySchema.safeParse({
+    chatSessionId: sessionId,
+    content: "Bu gorselde ne var?",
+    metadata: {
+      attachments: [
+        {
+          documentId: "img-raw",
+          fileName: "screen.png",
+          mimeType: "image/png",
+          visionImageJpeg: "abc123",
+          clientAttachments: [
+            {
+              attachmentType: "image",
+              base64Thumbnail: "abc123",
+              mimeType: "image/jpeg",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.match(result.error.message, /raw binary upload payload is not accepted/);
+  }
+});

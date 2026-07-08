@@ -61,6 +61,8 @@ const fallbackClarificationDiagnostics: ClarificationDiagnostics = {
 };
 
 const SYNCHRONOUS_MEMORY_KEYS = new Set([
+  "answer_length",
+  "brevity_preference",
   "name",
   "preferred_name",
   "preferred_language",

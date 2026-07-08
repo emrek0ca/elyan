@@ -29,6 +29,7 @@ const stackKeywords = [
 ];
 
 const IDENTITY_EXTRACTOR_VERSION = "identity_v1";
+const STYLE_CORRECTION_EXTRACTOR_VERSION = "style_correction_v1";
 const PREFERRED_NAME_STOP_WORDS = new Set([
   "cevap",
   "yanıt",
@@ -152,6 +153,48 @@ function buildIdentitySignal(input: {
   });
 }
 
+function isExplicitConciseCorrection(text: string): boolean {
+  return /\b(daha\s+k[ıi]sa|k[ıi]sa\s+(?:yaz|cevap\s+ver|tut|kes|ge[çc]|anlat)|gereksiz\s+uzatma|uzatma|(?:cevap|yan[ıi]t|yazd[ıi][ğg][ıi]n|bu)\s+(?:çok|cok|fazla)\s+uzun|(?:çok|cok|fazla)\s+uzun\s+(?:oldu|geldi|yazd[ıi]n)|shorter|more\s+concise|be\s+concise|keep\s+it\s+short)\b/iu.test(
+    text,
+  );
+}
+
+function buildExplicitConciseStyleSignals(input: {
+  taskId?: string;
+  source: "interaction" | "feedback";
+  reason: string;
+  confidence?: number;
+}): LearningSignal[] {
+  const metadata = {
+    explicit: true,
+    extractorVersion: STYLE_CORRECTION_EXTRACTOR_VERSION,
+    reason: input.reason,
+    ...(input.taskId ? { sourceTurnId: input.taskId } : {}),
+  };
+  return [
+    baseSignal({
+      type: "style",
+      key: "answer_length",
+      value: "concise",
+      confidence: input.confidence ?? 0.9,
+      scope: "user",
+      source: input.source,
+      ttlDays: null,
+      metadata,
+    }),
+    baseSignal({
+      type: "style",
+      key: "brevity_preference",
+      value: "short",
+      confidence: input.confidence ?? 0.9,
+      scope: "user",
+      source: input.source,
+      ttlDays: null,
+      metadata,
+    }),
+  ];
+}
+
 function extractIdentitySignals(input: TaskUnderstandingInput): LearningSignal[] {
   const text = `${input.title ?? ""}\n${input.message ?? ""}`;
   const signals: LearningSignal[] = [];
@@ -238,7 +281,19 @@ export function extractPreferenceSignals(input: TaskUnderstandingInput & { inten
     );
   }
 
-  if (/\b(concise|short|brief|kisa|kısa|terse)\b/i.test(text)) {
+  const explicitConciseCorrection = isExplicitConciseCorrection(text);
+  if (explicitConciseCorrection) {
+    signals.push(
+      ...buildExplicitConciseStyleSignals({
+        taskId: input.taskId,
+        source: "interaction",
+        reason: "user_requested_shorter_replies",
+        confidence: 0.92,
+      }),
+    );
+  }
+
+  if (!explicitConciseCorrection && /\b(concise|short|brief|kisa|kısa|terse)\b/i.test(text)) {
     signals.push(
       baseSignal({
         type: "style",
@@ -444,6 +499,7 @@ export function extractPreferenceSignals(input: TaskUnderstandingInput & { inten
 
 export function extractFeedbackSignals(input: {
   feedbackType: FeedbackType;
+  taskId?: string;
   correction?: string;
   preferredAnswer?: string;
   reasonTags?: string[];
@@ -514,6 +570,20 @@ export function extractFeedbackSignals(input: {
           scope: "user",
           source: "feedback",
           ttlDays: 90,
+          metadata: {
+            explicit: true,
+            extractorVersion: STYLE_CORRECTION_EXTRACTOR_VERSION,
+            reason: "feedback_too_long",
+            ...(input.taskId ? { sourceTurnId: input.taskId } : {}),
+          },
+        }),
+      );
+      signals.push(
+        ...buildExplicitConciseStyleSignals({
+          taskId: input.taskId,
+          source: "feedback",
+          reason: "feedback_too_long",
+          confidence: 0.9,
         }),
       );
     } else if (tag === "too_general") {
@@ -590,6 +660,16 @@ export function extractFeedbackSignals(input: {
         scope: "user",
         source: "feedback",
         ttlDays: null,
+      }),
+    );
+  }
+  if (correction && isExplicitConciseCorrection(correction)) {
+    signals.push(
+      ...buildExplicitConciseStyleSignals({
+        taskId: input.taskId,
+        source: "feedback",
+        reason: "feedback_correction_requested_shorter_replies",
+        confidence: 0.92,
       }),
     );
   }

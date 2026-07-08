@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { buildGeminiModelCatalog, resolveGeminiFallbackModel } from "./gemini-models.js";
 import { buildGroqModelCatalog, resolveGroqFallbackModel } from "./groq-models.js";
 import {
   listSharedBrainProviderCandidates,
@@ -16,7 +17,7 @@ export type SharedBrainProviderCandidate = {
 
 export function getConfiguredProviderApiKey(
   app: FastifyInstance,
-  provider: "groq",
+  provider: "groq" | "gemini",
 ): string {
   const normalize = (value: unknown) => {
     if (typeof value !== "string") {
@@ -31,6 +32,8 @@ export function getConfiguredProviderApiKey(
   switch (provider) {
     case "groq":
       return normalize(app.config.GROQ_API_KEY);
+    case "gemini":
+      return normalize(app.config.GEMINI_API_KEY);
     default:
       return "";
   }
@@ -38,7 +41,7 @@ export function getConfiguredProviderApiKey(
 
 function getConfiguredProviderBaseUrl(
   app: FastifyInstance,
-  provider: "groq",
+  provider: "groq" | "gemini",
 ): string | null {
   const normalize = (value: unknown) => {
     const trimmed = typeof value === "string" ? value.trim() : "";
@@ -47,36 +50,68 @@ function getConfiguredProviderBaseUrl(
   switch (provider) {
     case "groq":
       return normalize(app.config.GROQ_BASE_URL);
+    case "gemini":
+      return normalize(app.config.GEMINI_BASE_URL);
     default:
       return null;
   }
+}
+
+function isVisionWorkload(workload: SharedBrainWorkload): boolean {
+  return workload === "vision_reasoning" || workload === "image_analyze";
 }
 
 function buildHostedProviderCandidates(
   app: FastifyInstance,
   workload: SharedBrainWorkload,
 ): SharedBrainProviderCandidate[] {
-  const providerCode = "groq" as const;
-  const apiKey = getConfiguredProviderApiKey(app, providerCode);
-  const baseUrl = getConfiguredProviderBaseUrl(app, providerCode);
-  const catalog = buildGroqModelCatalog(app.config);
-  const primaryModel = catalog.defaultModelByWorkload[workload];
-  const fallbackModel =
-    resolveGroqFallbackModel(app.config, primaryModel) ?? catalog.fallbackModel;
-  if (!apiKey || !baseUrl || !primaryModel) {
-    return [];
-  }
+  const hostedCandidates: SharedBrainProviderCandidate[] = [];
 
-  return [
-    {
-      provider: providerCode,
-      baseUrl,
-      preferredModels: [primaryModel, fallbackModel].filter(
+  const groqApiKey = getConfiguredProviderApiKey(app, "groq");
+  const groqBaseUrl = getConfiguredProviderBaseUrl(app, "groq");
+  const groqCatalog = buildGroqModelCatalog(app.config);
+  const groqPrimaryModel = groqCatalog.defaultModelByWorkload[workload];
+  const groqFallbackModel =
+    resolveGroqFallbackModel(app.config, groqPrimaryModel, workload) ??
+    groqCatalog.fallbackModel;
+  if (groqApiKey && groqBaseUrl && groqPrimaryModel) {
+    hostedCandidates.push({
+      provider: "groq",
+      baseUrl: groqBaseUrl,
+      preferredModels: [groqPrimaryModel, groqFallbackModel].filter(
         (model, index, values): model is string =>
           Boolean(model) && values.indexOf(model) === index,
       ),
       hosted: true,
-    },
+    });
+  }
+
+  const geminiApiKey = getConfiguredProviderApiKey(app, "gemini");
+  const geminiBaseUrl = getConfiguredProviderBaseUrl(app, "gemini");
+  const geminiCatalog = buildGeminiModelCatalog(app.config);
+  const geminiPrimaryModel = geminiCatalog.defaultModelByWorkload[workload];
+  const geminiFallbackModel =
+    resolveGeminiFallbackModel(app.config, geminiPrimaryModel) ??
+    geminiCatalog.fastModel;
+  if (geminiApiKey && geminiBaseUrl && geminiPrimaryModel) {
+    hostedCandidates.push({
+      provider: "gemini",
+      baseUrl: geminiBaseUrl,
+      preferredModels: [geminiPrimaryModel, geminiFallbackModel].filter(
+        (model, index, values): model is string =>
+          Boolean(model) && values.indexOf(model) === index,
+      ),
+      hosted: true,
+    });
+  }
+
+  if (!isVisionWorkload(workload)) {
+    return hostedCandidates;
+  }
+
+  return [
+    ...hostedCandidates.filter((candidate) => candidate.provider === "gemini"),
+    ...hostedCandidates.filter((candidate) => candidate.provider !== "gemini"),
   ];
 }
 
@@ -142,11 +177,11 @@ export function buildProviderHeaders(
     "content-type": "application/json",
   };
 
-  if (provider !== "groq") {
+  if (provider !== "groq" && provider !== "gemini") {
     return headers;
   }
 
-  const apiKey = getConfiguredProviderApiKey(app, "groq");
+  const apiKey = getConfiguredProviderApiKey(app, provider);
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
   }

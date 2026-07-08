@@ -397,12 +397,13 @@ function resolveBrainServingMode(app: FastifyInstance): "groq_primary_direct" | 
   const groqKey = String(app.config.GROQ_API_KEY ?? "").trim();
   const anthropicKey = String(app.config.ANTHROPIC_API_KEY ?? "").trim();
   const openAiKey = String(app.config.OPENAI_API_KEY ?? "").trim();
+  const geminiKey = String(app.config.GEMINI_API_KEY ?? "").trim();
   const openRouterKey = String(app.config.OPENROUTER_API_KEY ?? "").trim();
 
   if (groqKey) {
     return "groq_primary_direct";
   }
-  if (anthropicKey || openAiKey || openRouterKey) {
+  if (anthropicKey || openAiKey || geminiKey || openRouterKey) {
     return "fast_first_hybrid";
   }
   return "fast_first_local_only";
@@ -1627,7 +1628,11 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         : "normal";
   const activeArtifact = activeSharedModel ?? activeUserModel;
   const hostedConfigured = Boolean(
-    app.config.ANTHROPIC_API_KEY || app.config.OPENAI_API_KEY || app.config.GROQ_API_KEY || app.config.OPENROUTER_API_KEY,
+    app.config.ANTHROPIC_API_KEY ||
+      app.config.OPENAI_API_KEY ||
+      app.config.GROQ_API_KEY ||
+      app.config.GEMINI_API_KEY ||
+      app.config.OPENROUTER_API_KEY,
   );
   const activeKnowledgeCorpusSnapshot = await getActiveKnowledgeCorpusSummary(app).catch(() => ({
     mode: "shared_global",

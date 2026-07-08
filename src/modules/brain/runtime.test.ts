@@ -71,3 +71,38 @@ test("shared brain runtime stays unavailable when no provider probes pass", asyn
     globalThis.fetch = originalFetch;
   }
 });
+
+test("shared brain runtime probes Gemini with bearer auth", async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: Array<{ url: string; authorization: string | null }> = [];
+
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    requested.push({
+      url: String(input),
+      authorization: headers.get("authorization"),
+    });
+    return new Response("{}", { status: 200 });
+  };
+
+  const app = {
+    config: {
+      ELYAN_SHARED_BRAIN_PROVIDER: "gemini",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      GEMINI_API_KEY: "gemini-test-key",
+    },
+  };
+
+  try {
+    const warmSnapshot = await warmSharedBrainRuntime(app as never);
+
+    assert.equal(warmSnapshot.provider, "gemini");
+    assert.equal(warmSnapshot.ready, true);
+    assert.ok(requested.some((entry) => entry.url.endsWith("/models")));
+    assert.equal(requested[0]?.authorization, "Bearer gemini-test-key");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

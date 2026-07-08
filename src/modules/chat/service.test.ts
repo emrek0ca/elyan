@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { chatMessages, chatSessions, proactiveTriggers, userProactivePrefs } from "../../db/schema.js";
 import {
   buildChatDispatchDeliverySnapshot,
   buildChatTurnAdmissionLockKey,
@@ -88,6 +89,121 @@ class FakeDb {
     return new FakeQuery(this.results.shift() ?? [], (value) => {
       this.limitCalls.push(value);
     });
+  }
+}
+
+class OpeningProactiveDb {
+  readonly insertedRows: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+  readonly updates: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+  private claimConsumed = false;
+
+  constructor(
+    private readonly session: Record<string, unknown>,
+    private readonly trigger: Record<string, unknown>,
+  ) {}
+
+  select() {
+    const db = this;
+    return {
+      from(table: unknown) {
+        const builder = {
+          where() {
+            return builder;
+          },
+          orderBy() {
+            return builder;
+          },
+          limit(value?: number) {
+            if (table === chatSessions) {
+              return Promise.resolve([db.session]);
+            }
+            if (table === proactiveTriggers) {
+              if (db.claimConsumed) return Promise.resolve([]);
+              return Promise.resolve([db.trigger]);
+            }
+            if (table === userProactivePrefs) {
+              return Promise.resolve([
+                {
+                  enabled: true,
+                  maxDaily: 3,
+                  quietStartHour: 0,
+                  quietEndHour: 0,
+                  timezone: "UTC",
+                  mutedKinds: [],
+                },
+              ]);
+            }
+            if (table === chatMessages) {
+              return Promise.resolve(db.insertedRows
+                .filter((row) => row.table === chatMessages)
+                .map((row) => ({
+                  ...row.values,
+                  createdAt: row.values.createdAt,
+                  updatedAt: row.values.updatedAt,
+                }))
+                .slice(0, value ?? 30));
+            }
+            return Promise.resolve([]);
+          },
+        };
+        return builder;
+      },
+    };
+  }
+
+  update(table: unknown) {
+    const db = this;
+    let values: Record<string, unknown> = {};
+    const builder = {
+      set(next: Record<string, unknown>) {
+        values = next;
+        db.updates.push({ table, values });
+        return builder;
+      },
+      where() {
+        return builder;
+      },
+      returning() {
+        if (table === proactiveTriggers && values.status === "running") {
+          db.claimConsumed = true;
+          return Promise.resolve([{ ...db.trigger, ...values }]);
+        }
+        return Promise.resolve([]);
+      },
+      then<TResult1 = unknown, TResult2 = never>(
+        resolve?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,
+        reject?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+      ) {
+        return Promise.resolve([]).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  insert(table: unknown) {
+    const db = this;
+    const builder = {
+      values(values: Record<string, unknown>) {
+        db.insertedRows.push({ table, values });
+        return builder;
+      },
+      returning() {
+        const values = db.insertedRows[db.insertedRows.length - 1]?.values ?? {};
+        return Promise.resolve([
+          {
+            ...values,
+            id: values.id,
+            createdAt: values.createdAt,
+            updatedAt: values.updatedAt,
+          },
+        ]);
+      },
+    };
+    return builder;
+  }
+
+  execute() {
+    return Promise.resolve([{ count: 0 }]);
   }
 }
 
@@ -621,6 +737,79 @@ test("listChatSessionMessages defaults to latest 30 messages on first page and o
   });
 
   assert.deepEqual(db.limitCalls, [1, 31, 1, 11]);
+});
+
+test("listChatSessionMessages injects a due proactive opening message on the first page", async () => {
+  const now = new Date("2030-01-01T12:00:00.000Z");
+  const sessionId = "11111111-1111-4111-8111-111111111111";
+  const userId = "22222222-2222-4222-8222-222222222222";
+  const session = {
+    id: sessionId,
+    userId,
+    title: "Ingilizce hedefi",
+    metadata: {},
+    status: "active",
+    targetDeviceId: "33333333-3333-4333-8333-333333333333",
+    source: "mobile",
+    createdAt: now,
+    updatedAt: now,
+    lastMessageAt: now,
+  };
+  const db = new OpeningProactiveDb(session, {
+    id: "44444444-4444-4444-8444-444444444444",
+    userId,
+    sessionId,
+    kind: "follow_up",
+    due: now,
+    payload: {
+      source: "turn_envelope",
+      topic: "Ingilizce hedefi",
+      nudge: "Dun Ingilizce hedefinin 3. adimindaydin, bugun 15 dakikan var mi?",
+      dueHint: "tomorrow",
+    },
+    status: "pending",
+    createdBy: "model",
+    firedAt: null,
+    canceledAt: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const events: Array<Record<string, unknown>> = [];
+  const app = {
+    config: { ELYAN_PROACTIVE_ENGINE_ENABLED: false },
+    db,
+    log: { debug: () => undefined },
+    services: {
+      eventBus: {
+        publish(event: Record<string, unknown>) {
+          events.push(event);
+          return Promise.resolve(event);
+        },
+        publishVolatile(event: Record<string, unknown>) {
+          events.push(event);
+          return Promise.resolve(event);
+        },
+      },
+    },
+  };
+
+  const page = await listChatSessionMessages(app as never, {
+    userId,
+    sessionId,
+  });
+
+  assert.equal(page.messages.length, 1);
+  assert.equal(page.messages[0]?.blocks?.[0]?.type, "text");
+  assert.match(page.messages[0]?.blocks?.[0]?.markdown ?? "", /Ingilizce hedefinin 3\. adimindaydin/);
+  assert.equal(db.insertedRows[0]?.table, chatMessages);
+  assert.equal(
+    db.updates.some((entry) => entry.table === proactiveTriggers && entry.values.status === "fired"),
+    true,
+  );
+  assert.deepEqual(
+    events.map((event) => event.topic),
+    ["chat.message.created", "message.created", "message.completed"],
+  );
 });
 
 test("getChatSessionDetail returns the latest window instead of eager full history", async () => {

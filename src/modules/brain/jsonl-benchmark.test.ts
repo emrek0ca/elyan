@@ -48,6 +48,7 @@ test("detectSecretLeak flags every configured secret shape", () => {
   assert.equal(detectSecretLeak("postgres://user:pass@host:5432/db"), true);
   assert.equal(detectSecretLeak("DATABASE_URL=postgres://x"), true);
   assert.equal(detectSecretLeak("OPENAI_API_KEY=abc"), true);
+  assert.equal(detectSecretLeak("GEMINI_API_KEY=abc"), true);
   assert.equal(detectSecretLeak("GROQ_API_KEY = abc"), true);
   assert.equal(detectSecretLeak("JWT_SECRET=supersecret"), true);
   assert.equal(detectSecretLeak("IYZICO_SECRET_KEY=zzz"), true);

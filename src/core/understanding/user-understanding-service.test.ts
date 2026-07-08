@@ -174,7 +174,7 @@ test("persistLearningSignals stores only policy-approved safe events", async () 
   assert.equal((inserted[0] as { key: string }).key, "answer_length");
 });
 
-test("buildSynchronousMemoryOpsFromLearningSignals keeps only explicit durable profile facts", () => {
+test("buildSynchronousMemoryOpsFromLearningSignals keeps explicit durable profile and style facts", () => {
   const ops = buildSynchronousMemoryOpsFromLearningSignals([
     {
       type: "identity",
@@ -216,10 +216,18 @@ test("buildSynchronousMemoryOpsFromLearningSignals keeps only explicit durable p
       confidence: 0.96,
       ttl_days: undefined,
     },
+    {
+      op: "write",
+      kind: "preference",
+      key: "answer_length",
+      value: "concise",
+      confidence: 0.82,
+      ttl_days: undefined,
+    },
   ]);
 });
 
-test("persistLearningSignals synchronously writes explicit preferred name into memory fabric", async () => {
+test("persistLearningSignals synchronously writes explicit preferred name and style into memory fabric", async () => {
   const fake = createLearningMemoryFakeApp();
 
   const count = await persistLearningSignals(fake.app, {
@@ -236,16 +244,29 @@ test("persistLearningSignals synchronously writes explicit preferred name into m
         ttlDays: null,
         metadata: { explicit: true, sourceTurnId: "00000000-0000-0000-0000-000000000002" },
       },
+      {
+        type: "style",
+        key: "brevity_preference",
+        value: "short",
+        confidence: 0.92,
+        scope: "user",
+        source: "interaction",
+        ttlDays: null,
+        metadata: { explicit: true, sourceTurnId: "00000000-0000-0000-0000-000000000002" },
+      },
     ],
     requestId: "req_2",
   });
 
-  assert.equal(count, 1);
-  assert.equal(fake.learningRows.length, 1);
-  assert.equal(fake.memoryFacts.length, 1);
+  assert.equal(count, 2);
+  assert.equal(fake.learningRows.length, 2);
+  assert.equal(fake.memoryFacts.length, 2);
   assert.equal(fake.memoryFacts[0]?.canonicalKey, "preferred_name");
   assert.equal(fake.memoryFacts[0]?.value, "Emre");
   assert.equal(fake.memoryFacts[0]?.confidence, 96);
+  assert.equal(fake.memoryFacts[1]?.canonicalKey, "brevity_preference");
+  assert.equal(fake.memoryFacts[1]?.value, "short");
+  assert.equal(fake.memoryFacts[1]?.confidence, 92);
   assert.equal((fake.memoryFacts[0]?.metadata as { source?: string } | undefined)?.source, "turn_envelope");
 });
 

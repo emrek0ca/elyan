@@ -14,6 +14,12 @@ import {
   buildAssistantTableBlock,
   type AssistantMessageBlock,
 } from "../chat/message-blocks.js";
+import {
+  formatVisionEvidencePrompt,
+  parseVisionBlockV2,
+  type VisionBlockV2,
+} from "./vision-block.js";
+import { extractClientAttachments } from "./document-types.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 3;
 const DEFAULT_MAX_CHUNKS = 20;
@@ -71,6 +77,7 @@ export type ResolvedAttachmentContext = {
   clarificationMessage?: string;
   cacheHit?: boolean;
   visionImages?: ResolvedAttachmentContextVisionImage[];
+  visionBlocks?: VisionBlockV2[];
 };
 
 type CachedPreparedAttachmentCandidate = {
@@ -242,7 +249,7 @@ export function extractAttachmentMetadataCarrier(
     "data_origin",
     "privacy_level",
     "attachmentCount",
-    "visionImageJpeg",
+    "visionBlock",
   ]) {
     if (record[key] !== undefined) {
       carrier[key] = record[key];
@@ -1438,48 +1445,47 @@ async function extractSessionCandidatesWithCache(
   return prepared;
 }
 
-const MAX_VISION_IMAGES_PER_TURN = 4;
+const MAX_VISION_BLOCKS_PER_TURN = 4;
 
-function readVisionImageFromRecord(
+function readVisionBlockFromRecord(
   record: Record<string, unknown> | null,
-  fallbackId: string,
-): ResolvedAttachmentContextVisionImage | null {
-  const b64 = readString(record, "visionImageJpeg");
-  if (!b64) {
-    return null;
-  }
-  return {
-    documentId: readString(record, "documentId") ?? fallbackId,
-    mimeType: "image/jpeg",
-    base64: b64,
-    label: readString(record, "fileName") ?? readString(record, "name") ?? "görsel",
-  };
+): VisionBlockV2 | null {
+  return parseVisionBlockV2(readRecord(record?.visionBlock));
 }
 
-function collectVisionImagesFromCarrier(
+function collectVisionBlocksFromCarrier(
   carrier: Record<string, unknown> | null,
-): ResolvedAttachmentContextVisionImage[] {
+): VisionBlockV2[] {
   if (!carrier) {
     return [];
   }
-  const images: ResolvedAttachmentContextVisionImage[] = [];
-  const topLevel = readVisionImageFromRecord(carrier, `vision-0`);
+  const blocks: VisionBlockV2[] = [];
+  const topLevel = readVisionBlockFromRecord(carrier);
   if (topLevel) {
-    images.push(topLevel);
+    blocks.push(topLevel);
   }
   const attachmentRecords = readArray(carrier, "attachments")
     .map((item) => readRecord(item))
     .filter((item): item is Record<string, unknown> => item != null);
   for (const record of attachmentRecords) {
-    if (images.length >= MAX_VISION_IMAGES_PER_TURN) {
+    if (blocks.length >= MAX_VISION_BLOCKS_PER_TURN) {
       break;
     }
-    const img = readVisionImageFromRecord(record, `vision-${images.length}`);
-    if (img) {
-      images.push(img);
+    const block = readVisionBlockFromRecord(record);
+    if (block) {
+      blocks.push(block);
+    }
+    for (const item of readArray(record, "clientAttachments")) {
+      if (blocks.length >= MAX_VISION_BLOCKS_PER_TURN) {
+        break;
+      }
+      const nested = readVisionBlockFromRecord(readRecord(item));
+      if (nested) {
+        blocks.push(nested);
+      }
     }
   }
-  return images;
+  return blocks;
 }
 
 function resolveAttachmentContextFromCandidates(input: {
@@ -1495,8 +1501,24 @@ function resolveAttachmentContextFromCandidates(input: {
     input.requestCandidates.length > 0 ? "request_attachments" : "session_recovery";
   const baseCandidates =
     input.requestCandidates.length > 0 ? input.requestCandidates : input.sessionCandidates;
+  const visionBlocks = collectVisionBlocksFromCarrier(input.requestCarrier);
 
   if (baseCandidates.length === 0) {
+    if (visionBlocks.length > 0) {
+      const visionPromptBlock = formatVisionEvidencePrompt(visionBlocks) ?? "";
+      return {
+        used: true,
+        source: "request_attachments",
+        promptBlock: visionPromptBlock,
+        documentIds: visionBlocks.map((block) => block.id),
+        documents: [],
+        chunks: [],
+        totalChars: visionPromptBlock.length,
+        chunkCount: 0,
+        needsClarification: false,
+        visionBlocks,
+      };
+    }
     if (input.requestCarrier) {
       return {
         used: false,
@@ -1551,11 +1573,14 @@ function resolveAttachmentContextFromCandidates(input: {
     maxChunks: input.maxChunks,
     maxChars: input.maxChars,
   });
-  const visionImages = collectVisionImagesFromCarrier(input.requestCarrier);
+  const visionPromptBlock = formatVisionEvidencePrompt(visionBlocks);
+  const combinedPromptBlock = [promptBlock.promptBlock, visionPromptBlock]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n\n");
   return {
-    used: promptBlock.documents.length > 0 || visionImages.length > 0,
+    used: promptBlock.documents.length > 0 || visionBlocks.length > 0,
     source,
-    promptBlock: promptBlock.promptBlock,
+    promptBlock: combinedPromptBlock,
     documentIds: promptBlock.documentIds,
     documents: promptBlock.documents,
     chunks: promptBlock.chunks,
@@ -1563,7 +1588,7 @@ function resolveAttachmentContextFromCandidates(input: {
     chunkCount: promptBlock.chunkCount,
     needsClarification: false,
     cacheHit: selectedCandidates.some((candidate) => candidate.cacheHit),
-    visionImages,
+    visionBlocks,
   };
 }
 
@@ -1598,6 +1623,56 @@ export function extractAttachmentCandidatesFromBrainContext(
   return resolved;
 }
 
+const MAX_SESSION_VISION_IMAGES = 2;
+
+/**
+ * Multi-turn cloud vision: earlier turns in this session may have carried a
+ * consented image thumbnail (cloudVisionOptIn + clientAttachments image). On
+ * follow-up turns the client re-sends nothing, so the persisted message
+ * metadata is the only source. Only images from turns where the user
+ * explicitly opted in are ever re-surfaced.
+ */
+function collectSessionVisionImages(
+  candidates: AttachmentContextCandidate[] | undefined,
+): ResolvedAttachmentContextVisionImage[] {
+  if (!candidates?.length) {
+    return [];
+  }
+  const images: ResolvedAttachmentContextVisionImage[] = [];
+  const seen = new Set<string>();
+  // Newest turn first so follow-ups reference the most recent image.
+  const ordered = [...candidates].sort((a, b) =>
+    String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")),
+  );
+  for (const candidate of ordered) {
+    const metadata = candidate.metadata;
+    if (!metadata || metadata.cloudVisionOptIn !== true) {
+      continue;
+    }
+    for (const attachment of extractClientAttachments(metadata)) {
+      if (attachment.attachmentType !== "image") {
+        continue;
+      }
+      if (seen.has(attachment.imageId)) {
+        continue;
+      }
+      seen.add(attachment.imageId);
+      images.push({
+        documentId: attachment.imageId,
+        mimeType: attachment.mimeType.startsWith("image/")
+          ? attachment.mimeType
+          : "image/jpeg",
+        base64: attachment.base64Thumbnail,
+        label: scrubLabel(attachment.fileName),
+      });
+      if (images.length >= MAX_SESSION_VISION_IMAGES) {
+        return images;
+      }
+    }
+  }
+  return images;
+}
+
 export function resolveAttachmentContext(input: {
   prompt: string;
   metadata?: Record<string, unknown>;
@@ -1624,7 +1699,7 @@ export function resolveAttachmentContext(input: {
         maxChars,
       )
     : [];
-  return resolveAttachmentContextFromCandidates({
+  const context = resolveAttachmentContextFromCandidates({
     prompt: input.prompt,
     requestCarrier,
     requestCandidates,
@@ -1633,6 +1708,15 @@ export function resolveAttachmentContext(input: {
     maxChunks,
     maxChars,
   });
+  if (context && !requestCarrier) {
+    const sessionVisionImages = collectSessionVisionImages(
+      input.sessionAttachmentCandidates,
+    );
+    if (sessionVisionImages.length > 0) {
+      context.visionImages = sessionVisionImages;
+    }
+  }
+  return context;
 }
 
 export async function resolveAttachmentContextWithCache(
@@ -1665,7 +1749,7 @@ export async function resolveAttachmentContextWithCache(
       )
     : [];
 
-  return resolveAttachmentContextFromCandidates({
+  const context = resolveAttachmentContextFromCandidates({
     prompt: input.prompt,
     requestCarrier,
     requestCandidates,
@@ -1674,6 +1758,15 @@ export async function resolveAttachmentContextWithCache(
     maxChunks,
     maxChars,
   });
+  if (context && !requestCarrier) {
+    const sessionVisionImages = collectSessionVisionImages(
+      input.sessionAttachmentCandidates,
+    );
+    if (sessionVisionImages.length > 0) {
+      context.visionImages = sessionVisionImages;
+    }
+  }
+  return context;
 }
 const MAX_TABLES = 2;
 const MAX_TABLE_ROWS = 12;

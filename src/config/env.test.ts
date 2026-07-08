@@ -30,6 +30,15 @@ test("loadEnv derives iyzico public base url from app base url", () => {
   assert.equal(env.GROQ_FAST_MODEL, "openai/gpt-oss-20b");
   assert.equal(env.GROQ_FALLBACK_MODEL, "qwen/qwen3.6-27b");
   assert.equal(env.GROQ_BASE_URL, "https://api.groq.com/openai/v1");
+  assert.equal(env.GEMINI_BASE_URL, "https://generativelanguage.googleapis.com/v1beta/openai");
+  assert.equal(env.GEMINI_INTERACTIONS_BASE_URL, "https://generativelanguage.googleapis.com/v1beta");
+  assert.equal(env.GEMINI_TEXT_MODEL, "gemini-3.5-flash");
+  assert.equal(env.GEMINI_FAST_MODEL, "gemini-3.1-flash-lite");
+  assert.equal(env.GEMINI_REASONING_MODEL, "gemini-3.5-flash");
+  assert.equal(env.GEMINI_VISION_MODEL, "gemini-3.5-flash");
+  assert.equal(env.GEMINI_IMAGE_MODEL, "gemini-3.1-flash-image");
+  assert.equal(env.GEMINI_IMAGE_PRO_MODEL, "gemini-3-pro-image-preview");
+  assert.equal(env.GEMINI_IMAGE_SIZE, "2K");
   assert.equal(env.ELYAN_SHARED_BRAIN_FAST_MODEL, "qwen2.5-coder:3b");
   assert.equal(env.ELYAN_SHARED_BRAIN_BALANCED_MODEL, "qwen2.5:7b-instruct-q5_K_M");
   assert.equal(env.ELYAN_SHARED_BRAIN_PLANNING_MODEL, "qwen2.5:7b-instruct-q5_K_M");

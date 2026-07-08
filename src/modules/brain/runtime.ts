@@ -16,6 +16,7 @@ export type SharedBrainProvider =
   | "openai"
   | "claude"
   | "groq"
+  | "gemini"
   | "openrouter";
 
 export type SharedBrainRuntimeSnapshot = {
@@ -61,6 +62,10 @@ function normalizeProvider(raw: string): SharedBrainProvider {
     return "groq";
   }
 
+  if (normalized === "gemini" || normalized === "google" || normalized === "googleai") {
+    return "gemini";
+  }
+
   if (normalized === "openrouter") {
     return "openrouter";
   }
@@ -92,6 +97,8 @@ function getConfiguredProviderApiKey(app: FastifyInstance, provider: SharedBrain
           .map((entry) => entry.trim())
           .find((entry) => entry.length > 0) ?? ""
       );
+    case "gemini":
+      return normalize(app.config.GEMINI_API_KEY);
     case "openrouter":
       return normalize(app.config.OPENROUTER_API_KEY);
     default:
@@ -158,7 +165,7 @@ function getProbePaths(provider: SharedBrainProvider): string[] {
     return ["/api/tags"];
   }
 
-  if (provider === "openai" || provider === "groq" || provider === "openrouter") {
+  if (provider === "openai" || provider === "groq" || provider === "gemini" || provider === "openrouter") {
     return ["/models", "/v1/models"];
   }
 
@@ -198,7 +205,7 @@ async function probeSharedBrainCandidate(
   const apiKey = getConfiguredProviderApiKey(app, candidate.provider);
   const headers: Record<string, string> = {};
 
-  if (apiKey && (candidate.provider === "openai" || candidate.provider === "groq" || candidate.provider === "openrouter")) {
+  if (apiKey && (candidate.provider === "openai" || candidate.provider === "groq" || candidate.provider === "gemini" || candidate.provider === "openrouter")) {
     headers.Authorization = `Bearer ${apiKey}`;
   } else if (apiKey && candidate.provider === "claude") {
     headers["x-api-key"] = apiKey;

@@ -1583,6 +1583,8 @@ async function shapePublicArtifactRecord(
 
   return shapeTaskArtifact({
     ...artifact,
+    payload: sanitizePublicInferenceValue(artifact.payload ?? null),
+    metadata: sanitizePublicInferenceValue(artifact.metadata ?? null),
     downloadUrl,
   });
 }
@@ -2386,7 +2388,11 @@ async function completeServerBrainTask(
     prompt,
     responseText: visibleResponseText,
     metadata: payloadMetadata,
+    userId: input.userId,
   });
+  if (generatedImageArtifact) {
+    visibleResponseText = generatedImageArtifact.previewText;
+  }
   const renderRecipeMetadata =
     artifactPipeline.kind === "rendered"
       ? {

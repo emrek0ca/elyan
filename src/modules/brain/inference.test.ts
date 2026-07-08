@@ -12,6 +12,8 @@ import {
   extractTypedJsonBlocksFromText,
   generateGovernedSharedBrainReply,
   generateSharedBrainReply,
+  isCloudVisionRequested,
+  promptReferencesRecentImage,
   buildShortFollowUpSystemPrompt,
   buildSocialChatSystemPrompt,
   buildStructuredSystemPrompt,
@@ -3213,6 +3215,94 @@ test("generateGovernedSharedBrainReply keeps fast chat out of refinement passes"
   assert.equal(result.metadata.refinementApplied, false);
 });
 
+test("generateGovernedSharedBrainReply runs factuality gate before publishing unsupported claims", async () => {
+  let chatCalls = 0;
+  const app = {
+    db: createQuotaReadyDb([
+      [],
+      [],
+      [{ planCode: "free", status: "trialing", taskLimitMonthly: 10, aiCreditsMonthly: 1000, currentPeriodStartedAt: new Date("2030-01-01T00:00:00.000Z"), periodEndsAt: new Date("2030-02-01T00:00:00.000Z"), trialEndsAt: new Date("2099-02-01T00:00:00.000Z") }],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [],
+    ]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "ollama",
+      ELYAN_SHARED_BRAIN_BASE_URL: "http://127.0.0.1:11434",
+      ELYAN_SHARED_BRAIN_MODEL: "qwen2.5:7b-instruct-q5_K_M",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/tags")) {
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/chat")) {
+        chatCalls += 1;
+        return new Response(
+          JSON.stringify({
+            model: "qwen2.5:7b-instruct-q5_K_M",
+            message: {
+              role: "assistant",
+              content: "Acme Labs 2030'da 50 milyon USD gelir acikladi.",
+            },
+            done: true,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Kısa cevap ver.",
+        route: "shared_brain",
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "safe chat",
+          intent: "normal_chat",
+          confidence: 0.9,
+          requiredRuntime: "server",
+          privacyLevel: "low",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
+        internalEvaluation: { skipReviewLogging: true, skipUsageValidation: true, skipConsentValidation: true },
+      }),
+  );
+
+  assert.equal(chatCalls >= 2, true);
+  assert.equal(result.metadata.factualityGateTriggered, true);
+  assert.equal(result.metadata.factualityGateFallbackApplied, true);
+  assert.equal(result.metadata.factualityGateApplied, true);
+  assert.doesNotMatch(result.text, /2030'da 50 milyon USD gelir/);
+  assert.match(result.text, /dogrulayamiyorum|doğrulayamıyorum/i);
+});
+
 test("generateGovernedSharedBrainReply refuses unsupported identity claims without retrieval", async () => {
   const app = {
     db: createQuotaReadyDb([
@@ -4604,6 +4694,42 @@ test("prompt gating: currentness signal reactivates web-grounding policies", () 
   assert.ok(prompt.includes("web grounding"));
 });
 
+test("prompt gating: explicit time context enables natural temporal awareness", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({
+      prompt: "TypeScript kodunda bu hatayı debug et.",
+      understandingContext: {
+        contextPackets: [
+          {
+            kind: "time_context",
+            title: "Yerel zaman bağlamı",
+            summary: "Yerel saat gece geç; local_time=02:10; daypart=gece geç; working_hours=no",
+            source: "world_signal",
+            confidence: 0.91,
+            freshness: "fresh",
+            privacyClass: "safe_derived",
+            evidenceCount: 4,
+            signalKinds: ["time"],
+            renderHint: "context_signal",
+            createdAt: "2030-01-01T23:10:00.000Z",
+            expiresAt: "2030-01-02T07:10:00.000Z",
+            mentionPolicy: "explicit_when_relevant",
+            relevanceReason: "time_aware_work_or_schedule_request",
+            allowedUse: ["time-aware framing"],
+          },
+        ],
+        packetKinds: ["time_context"],
+      } as never,
+    }),
+  );
+
+  assert.ok(prompt.includes("Temporal awareness:"));
+  assert.ok(prompt.includes("local_time=02:10"));
+  assert.ok(prompt.includes("Bu saatte uzun yolu uzatmayayim"));
+  assert.ok(prompt.includes("Never invent local time"));
+});
+
 test("prompt gating: elyan/founder keyword activates project identity rule", () => {
   const withKeyword = buildStructuredSystemPrompt(
     "BASE",
@@ -5011,4 +5137,94 @@ test("extractAntiRepeatSignatures ignores user turns and short/empty content", (
     { role: "assistant", content: "İşte cevabın. Umarım işine yarar." },
   ]);
   assert.ok(sigs.every((s) => !s.includes("?")));
+});
+
+test("isCloudVisionRequested requires flag, opt-in metadata and an image attachment", () => {
+  const imageAttachmentMetadata = {
+    cloudVisionOptIn: true,
+    clientAttachments: [
+      {
+        attachmentType: "image",
+        imageId: "img-1",
+        mimeType: "image/jpeg",
+        fileName: "masa.jpg",
+        base64Thumbnail: "aGVsbG8=",
+        thumbnailWidth: 512,
+        thumbnailHeight: 512,
+        ocrText: "",
+      },
+    ],
+  } satisfies Record<string, unknown>;
+
+  // All three signals present → requested
+  assert.equal(
+    isCloudVisionRequested({ ELYAN_CLOUD_VISION_ENABLED: true }, imageAttachmentMetadata),
+    true,
+  );
+  // Flag off → never
+  assert.equal(
+    isCloudVisionRequested({ ELYAN_CLOUD_VISION_ENABLED: false }, imageAttachmentMetadata),
+    false,
+  );
+  // No opt-in marker → never (privacy default)
+  assert.equal(
+    isCloudVisionRequested(
+      { ELYAN_CLOUD_VISION_ENABLED: true },
+      { clientAttachments: imageAttachmentMetadata.clientAttachments },
+    ),
+    false,
+  );
+  // Opt-in but no image attachment → nothing to send
+  assert.equal(
+    isCloudVisionRequested(
+      { ELYAN_CLOUD_VISION_ENABLED: true },
+      {
+        cloudVisionOptIn: true,
+        clientAttachments: [
+          {
+            attachmentType: "document_chunk",
+            chunkId: "c1",
+            documentId: "d1",
+            documentTitle: "Belge",
+            text: "metin",
+          },
+        ],
+      },
+    ),
+    false,
+  );
+  // Missing metadata → never
+  assert.equal(
+    isCloudVisionRequested({ ELYAN_CLOUD_VISION_ENABLED: true }, undefined),
+    false,
+  );
+});
+
+test("promptReferencesRecentImage matches image follow-ups and skips topic changes", () => {
+  assert.equal(promptReferencesRecentImage("görselde ne yazıyor?"), true);
+  assert.equal(promptReferencesRecentImage("soldaki nesne ne?"), true);
+  assert.equal(promptReferencesRecentImage("bu tablo neyi gösteriyor"), true);
+  assert.equal(promptReferencesRecentImage("what's in the picture?"), true);
+  assert.equal(promptReferencesRecentImage("fotoğraftaki fişin toplamı kaç"), true);
+  assert.equal(promptReferencesRecentImage("yarın hava nasıl olacak?"), false);
+  assert.equal(promptReferencesRecentImage("bana bir plan hazırla"), false);
+});
+
+test("cloud vision structured prompt announces the attached image and block extraction", () => {
+  const withImage = buildStructuredSystemPrompt("BASE", {
+    userId: "user-1",
+    prompt: "bu fişteki kalemleri tabloya döker misin",
+    workload: "vision_reasoning",
+    cloudVisionActive: true,
+  } as never);
+  assert.match(withImage, /vision mode \(image attached\)/);
+  assert.match(withImage, /VISION STRUCTURED EXTRACTION/);
+  assert.match(withImage, /"type":"table"/);
+
+  const withoutImage = buildStructuredSystemPrompt("BASE", {
+    userId: "user-1",
+    prompt: "bu fişteki kalemleri tabloya döker misin",
+    workload: "vision_reasoning",
+  } as never);
+  assert.match(withoutImage, /raw image is NOT available/);
 });

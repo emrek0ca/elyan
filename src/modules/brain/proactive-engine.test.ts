@@ -3,6 +3,7 @@ import test from "node:test";
 import { chatMessages, chatSessions, proactiveTriggers, userProactivePrefs } from "../../db/schema.js";
 import {
   applyTurnProactiveOps,
+  buildProactiveOpeningCompose,
   evaluateProactivePolicy,
   claimNextDueProactiveTrigger,
   publishProactiveAssistantMessage,
@@ -142,6 +143,10 @@ function createFakePublishApp(input: { sessions?: Array<Record<string, unknown>>
     },
     services: {
       eventBus: {
+        publish(event: Record<string, unknown>) {
+          events.push(event);
+          return Promise.resolve(event);
+        },
         publishVolatile(event: Record<string, unknown>) {
           events.push(event);
           return Promise.resolve(event);
@@ -232,6 +237,31 @@ test("recordTurnFollowUps writes pending proactive follow-up triggers", async ()
   });
 });
 
+test("buildProactiveOpeningCompose uses nudge from partial scheduler payloads", () => {
+  const now = new Date("2026-07-03T10:00:00.000Z");
+  const result = buildProactiveOpeningCompose({
+    id: "44444444-4444-4444-8444-444444444444",
+    userId: "22222222-2222-4222-8222-222222222222",
+    sessionId: "11111111-1111-4111-8111-111111111111",
+    kind: "follow_up",
+    due: now,
+    payload: {
+      nudge: "Dun Ingilizce hedefinin 3. adimindaydin, bugun 15 dakikan var mi?",
+    },
+    status: "running",
+    createdBy: "scheduler",
+    firedAt: null,
+    canceledAt: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  assert.equal(
+    result.text,
+    "Dun Ingilizce hedefinin 3. adimindaydin, bugun 15 dakikan var mi?",
+  );
+});
+
 test("claimNextDueProactiveTrigger atomically marks the oldest pending trigger running", async () => {
   const now = new Date("2026-07-03T10:00:00.000Z");
   const fake = createFakeClaimApp({
@@ -316,10 +346,11 @@ test("publishProactiveAssistantMessage writes assistant message and emits chat S
   );
   assert.deepEqual(
     fake.events.map((event) => event.topic),
-    ["message.created", "message.completed"],
+    ["chat.message.created", "message.created", "message.completed"],
   );
   assert.equal((fake.events[0]?.payload as { sessionId?: string }).sessionId, sessionId);
-  assert.equal((fake.events[1]?.payload as { content?: string }).content?.includes("deploy"), true);
+  assert.equal((fake.events[0]?.payload as { proactive?: { triggerId?: string } }).proactive?.triggerId, "44444444-4444-4444-8444-444444444444");
+  assert.equal((fake.events[2]?.payload as { content?: string }).content?.includes("deploy"), true);
 });
 
 test("publishProactiveAssistantMessage expires triggers that cannot target a session", async () => {

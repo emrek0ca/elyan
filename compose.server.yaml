@@ -79,10 +79,19 @@ services:
       GROQ_REASONING_MODEL: openai/gpt-oss-120b
       GROQ_FAST_MODEL: openai/gpt-oss-20b
       GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      GEMINI_INTERACTIONS_BASE_URL: ${GEMINI_INTERACTIONS_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+      GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.5-flash}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.1-flash-lite}
+      GEMINI_REASONING_MODEL: ${GEMINI_REASONING_MODEL:-gemini-3.5-flash}
+      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3.5-flash}
+      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
+      GEMINI_IMAGE_PRO_MODEL: ${GEMINI_IMAGE_PRO_MODEL:-gemini-3-pro-image-preview}
+      GEMINI_IMAGE_SIZE: ${GEMINI_IMAGE_SIZE:-2K}
       ELYAN_SHARED_BRAIN_PROVIDER: groq
       ELYAN_SHARED_BRAIN_BASE_URL: https://api.groq.com/openai/v1
-      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ""
-      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ""
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ${ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER:-}
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ${ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL:-}
       ELYAN_SHARED_BRAIN_MODEL: openai/gpt-oss-120b
       ELYAN_SHARED_BRAIN_FAST_MODEL: openai/gpt-oss-20b
       ELYAN_SHARED_BRAIN_BALANCED_MODEL: openai/gpt-oss-120b
@@ -142,10 +151,19 @@ services:
       GROQ_REASONING_MODEL: openai/gpt-oss-120b
       GROQ_FAST_MODEL: openai/gpt-oss-20b
       GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      GEMINI_INTERACTIONS_BASE_URL: ${GEMINI_INTERACTIONS_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+      GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.5-flash}
+      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.1-flash-lite}
+      GEMINI_REASONING_MODEL: ${GEMINI_REASONING_MODEL:-gemini-3.5-flash}
+      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3.5-flash}
+      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
+      GEMINI_IMAGE_PRO_MODEL: ${GEMINI_IMAGE_PRO_MODEL:-gemini-3-pro-image-preview}
+      GEMINI_IMAGE_SIZE: ${GEMINI_IMAGE_SIZE:-2K}
       ELYAN_SHARED_BRAIN_PROVIDER: groq
       ELYAN_SHARED_BRAIN_BASE_URL: https://api.groq.com/openai/v1
-      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ""
-      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ""
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ${ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER:-}
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ${ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL:-}
       ELYAN_SHARED_BRAIN_MODEL: openai/gpt-oss-120b
       ELYAN_SHARED_BRAIN_FAST_MODEL: openai/gpt-oss-20b
       ELYAN_SHARED_BRAIN_BALANCED_MODEL: openai/gpt-oss-120b

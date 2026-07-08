@@ -648,6 +648,10 @@ test("processDueProactiveTriggers composes and publishes a due proactive chat me
     db,
     services: {
       eventBus: {
+        publish(event: Record<string, unknown>) {
+          events.push(event);
+          return Promise.resolve(event);
+        },
         publishVolatile(event: Record<string, unknown>) {
           events.push(event);
           return Promise.resolve(event);
@@ -675,7 +679,7 @@ test("processDueProactiveTriggers composes and publishes a due proactive chat me
   );
   assert.deepEqual(
     events.map((event) => event.topic),
-    ["message.created", "message.completed"],
+    ["chat.message.created", "message.created", "message.completed"],
   );
 });
 

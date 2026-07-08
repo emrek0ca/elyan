@@ -49,6 +49,55 @@ function buildSessionCandidate(input: {
   };
 }
 
+function buildVisionBlock(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "vision_img_1",
+    type: "vision",
+    version: 2,
+    render: { widget: "vision_summary", title: "Gorsel analizi", status: "ready" },
+    source: {
+      kind: "gallery",
+      privacy: "local_extracted_only",
+      image_sent_to_server: false,
+      platform: "ios",
+      engine: "apple_vision",
+    },
+    input_kind: { value: "error_screen", confidence: 0.84 },
+    quality: {
+      blur: 0.12,
+      brightness: 0.52,
+      contrast: 0.44,
+      resolution: { width: 1170, height: 2532 },
+      rotation: 0,
+      is_readable: true,
+      warnings: [],
+    },
+    text: {
+      full_text: "Unhandled Exception: SocketException failed host lookup",
+      blocks: [
+        {
+          text: "Unhandled Exception: SocketException failed host lookup",
+          confidence: 0.91,
+          box: { x: 0.08, y: 0.12, w: 0.8, h: 0.08 },
+          role: "error",
+        },
+      ],
+      reading_order: "top_to_bottom",
+    },
+    scene: {
+      labels: [{ name: "screenshot", confidence: 0.82, source: "apple_vision" }],
+      objects: [],
+    },
+    documents: { detected: false, pages: [] },
+    barcodes: [],
+    task_hints: ["extract_error"],
+    summary_for_llm: "Bu gorsel error_screen olarak siniflandirildi.",
+    confidence: { overall: 0.78, ocr: 0.91, scene: 0.82, document: 0 },
+    debug: { latency_ms: 120, engine_version: "apple_vision", warnings: [] },
+    ...overrides,
+  };
+}
+
 class FakeStore {
   private readonly memory = new Map<string, string>();
 
@@ -221,6 +270,65 @@ test("resolveAttachmentContext treats image attachment with OCR text as usable c
   assert.equal(context?.used, true);
   assert.equal(context?.documentIds.length, 1);
   assert.match(context?.promptBlock ?? "", /screenshot\.png/i);
+});
+
+test("resolveAttachmentContext uses VisionBlock v2 without raw image data", () => {
+  const context = resolveAttachmentContext({
+    prompt: "Bu ekrandaki hatayi acikla",
+    metadata: {
+      attachments: [
+        {
+          documentId: "img-vision",
+          fileName: "error-screen.png",
+          mimeType: "image/png",
+          processingState: "fast_ready",
+          visionBlock: buildVisionBlock(),
+        },
+      ],
+    },
+  });
+
+  assert.ok(context);
+  assert.equal(context?.used, true);
+  assert.equal(context?.needsClarification, false);
+  assert.equal(context?.visionBlocks?.length, 1);
+  assert.match(context?.promptBlock ?? "", /server does NOT have the image/i);
+  assert.match(context?.promptBlock ?? "", /SocketException failed host lookup/);
+  assert.doesNotMatch(context?.promptBlock ?? "", /base64/i);
+});
+
+test("resolveAttachmentContext surfaces low-quality VisionBlock as qualified evidence", () => {
+  const context = resolveAttachmentContext({
+    prompt: "Bu gorselde ne yaziyor?",
+    metadata: {
+      attachments: [
+        {
+          documentId: "img-low",
+          fileName: "blurred.png",
+          mimeType: "image/png",
+          processingState: "fast_ready",
+          visionBlock: buildVisionBlock({
+            render: { widget: "vision_summary", status: "unreadable" },
+            quality: {
+              blur: 0.88,
+              brightness: 0.18,
+              contrast: 0.12,
+              resolution: { width: 480, height: 640 },
+              rotation: 0,
+              is_readable: false,
+              warnings: ["possible_blur", "too_dark"],
+            },
+            confidence: { overall: 0.31, ocr: 0.28, scene: 0.4, document: 0 },
+          }),
+        },
+      ],
+    },
+  });
+
+  assert.ok(context);
+  assert.equal(context?.used, true);
+  assert.match(context?.promptBlock ?? "", /Quality warnings/i);
+  assert.match(context?.promptBlock ?? "", /Overall vision confidence is low/i);
 });
 
 test("resolveAttachmentContext formats document headers, page labels, and table chunks with larger excerpts", () => {
@@ -478,4 +586,77 @@ test("resolveAttachmentContext keeps short documents untouched (no reranking)", 
   assert.ok(context);
   assert.match(context?.promptBlock ?? "", /Birinci bölüm metni/);
   assert.match(context?.promptBlock ?? "", /KVKK metni/);
+});
+
+test("resolveAttachmentContext re-surfaces consented session vision images on follow-up turns", () => {
+  const optedInCandidate: AttachmentContextCandidate = {
+    messageId: "message-vision-1",
+    createdAt: "2030-01-02T00:00:00.000Z",
+    prompt: "Burada ne var",
+    metadata: {
+      ...buildAttachmentMetadata({
+        documentId: "doc-vision-1",
+        fileName: "masa.jpg",
+        text: "Görsel cihazda analiz edildi. Sahne: genel.",
+      }),
+      cloudVisionOptIn: true,
+      clientAttachments: [
+        {
+          attachmentType: "image",
+          imageId: "img-vision-1",
+          mimeType: "image/jpeg",
+          fileName: "masa.jpg",
+          base64Thumbnail: "aGVsbG8=",
+          thumbnailWidth: 512,
+          thumbnailHeight: 512,
+          ocrText: "",
+        },
+      ],
+    },
+  };
+
+  const context = resolveAttachmentContext({
+    prompt: "soldaki nesne ne?",
+    sessionAttachmentCandidates: [optedInCandidate],
+  });
+
+  assert.ok(context);
+  assert.equal(context.visionImages?.length, 1);
+  assert.equal(context.visionImages?.[0]?.documentId, "img-vision-1");
+  assert.equal(context.visionImages?.[0]?.base64, "aGVsbG8=");
+});
+
+test("resolveAttachmentContext never re-surfaces session images without the opt-in marker", () => {
+  const nonConsentedCandidate: AttachmentContextCandidate = {
+    messageId: "message-vision-2",
+    createdAt: "2030-01-02T00:00:00.000Z",
+    prompt: "Burada ne var",
+    metadata: {
+      ...buildAttachmentMetadata({
+        documentId: "doc-vision-2",
+        fileName: "masa.jpg",
+        text: "Görsel cihazda analiz edildi. Sahne: genel.",
+      }),
+      clientAttachments: [
+        {
+          attachmentType: "image",
+          imageId: "img-vision-2",
+          mimeType: "image/jpeg",
+          fileName: "masa.jpg",
+          base64Thumbnail: "aGVsbG8=",
+          thumbnailWidth: 512,
+          thumbnailHeight: 512,
+          ocrText: "",
+        },
+      ],
+    },
+  };
+
+  const context = resolveAttachmentContext({
+    prompt: "soldaki nesne ne?",
+    sessionAttachmentCandidates: [nonConsentedCandidate],
+  });
+
+  assert.ok(context);
+  assert.equal((context.visionImages ?? []).length, 0);
 });

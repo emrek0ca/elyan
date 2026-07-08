@@ -44,6 +44,8 @@ test("buildPreferencePromptBlock renders safe user preference hints and deduplic
 
   assert.ok(block?.startsWith("User preference hints:"));
   assert.match(block ?? "", /Memory is enabled for this user/);
+  assert.match(block ?? "", /Advice stance: when the user asks what to choose/);
+  assert.match(block ?? "", /Advice few-shot shape:/);
   assert.match(block ?? "", /Current dialogue state preferred name: Emre/);
   assert.match(block ?? "", /Current dialogue state preferred language: Türkçe/);
   assert.match(block ?? "", /Current dialogue state style: tone=Sıcak ve profesyonel/);
@@ -59,6 +61,7 @@ test("buildPreferencePromptBlock reflects memory disabled mode", () => {
   } as never);
 
   assert.match(block ?? "", /Memory is disabled for this request/);
+  assert.match(block ?? "", /never invent a personal reason/);
 });
 
 test("buildMemoryProfilePromptBlock delegates memory snapshot formatting", () => {

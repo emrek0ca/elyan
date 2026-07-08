@@ -56,10 +56,20 @@ test("extractFeedbackSignals converts bounded feedback into learning signals", (
 test("extractFeedbackSignals converts compact reason tags into safe quality signals", () => {
   const result = extractFeedbackSignals({
     feedbackType: "thumbs_down",
+    taskId: "task_feedback_1",
     reasonTags: ["too_long", "not_warm_enough", "too_playful"],
   });
 
   assert.ok(result.signals.some((signal) => signal.key === "brevity_preference" && signal.value === "short"));
+  assert.ok(
+    result.signals.some(
+      (signal) =>
+        signal.key === "answer_length" &&
+        signal.value === "concise" &&
+        signal.metadata?.explicit === true &&
+        signal.metadata?.sourceTurnId === "task_feedback_1",
+    ),
+  );
   assert.ok(result.signals.some((signal) => signal.key === "preferred_tone" && signal.value === "warm_professional"));
   assert.ok(result.signals.some((signal) => signal.key === "humor_level" && signal.value === "restrained"));
 });
@@ -117,9 +127,27 @@ test("extractPreferenceSignals does not treat ordinary instructions as preferred
   const result = extractPreferenceSignals({
     userId: "user_1",
     message: "Bana kısa cevap ver ve gereksiz uzatma.",
+    taskId: "task_short_1",
   });
 
   assert.equal(result.signals.some((signal) => signal.key === "preferred_name"), false);
+  assert.ok(
+    result.signals.some(
+      (signal) =>
+        signal.key === "answer_length" &&
+        signal.value === "concise" &&
+        signal.metadata?.explicit === true &&
+        signal.metadata?.sourceTurnId === "task_short_1",
+    ),
+  );
+  assert.ok(
+    result.signals.some(
+      (signal) =>
+        signal.key === "brevity_preference" &&
+        signal.value === "short" &&
+        signal.metadata?.explicit === true,
+    ),
+  );
 });
 
 test("extractPreferenceSignals does not infer identity from non-explicit wording", () => {
@@ -129,4 +157,22 @@ test("extractPreferenceSignals does not infer identity from non-explicit wording
   });
 
   assert.equal(result.signals.some((signal) => ["name", "job_title", "company", "location"].includes(signal.key)), false);
+});
+
+test("extractPreferenceSignals does not treat long-form requests as brevity corrections", () => {
+  const result = extractPreferenceSignals({
+    userId: "user_1",
+    message: "Bu konu için çok uzun ve detaylı bir rapor yaz.",
+    intent: "writing",
+  });
+
+  assert.equal(
+    result.signals.some(
+      (signal) =>
+        signal.key === "answer_length" &&
+        signal.value === "concise" &&
+        signal.metadata?.explicit === true,
+    ),
+    false,
+  );
 });

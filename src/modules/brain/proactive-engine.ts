@@ -287,6 +287,14 @@ function readPayload(payload: unknown): z.output<typeof proactiveTriggerPayloadS
   return parsed.success ? parsed.data : null;
 }
 
+function readPayloadString(payload: unknown, key: "nudge" | "topic"): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? compactText(value, key === "nudge" ? 500 : 240) : null;
+}
+
 function buildAssistantPayload(input: {
   id: string;
   sessionId: string;
@@ -325,6 +333,18 @@ export function buildProactiveComposePrompt(trigger: ProactiveTriggerRow): strin
     .join("\n");
 }
 
+export function buildProactiveOpeningCompose(trigger: ProactiveTriggerRow): ProactiveComposeResult {
+  const nudge = readPayloadString(trigger.payload, "nudge");
+  const topic = readPayloadString(trigger.payload, "topic");
+  const text = compactText(
+    nudge ||
+      (topic ? `${topic} için kaldığımız yerden devam etmek ister misin?` : "") ||
+      "Kaldığımız yerden devam etmek ister misin?",
+    500,
+  );
+  return { text };
+}
+
 export async function claimNextDueProactiveTrigger(
   app: FastifyInstance,
   input: { now?: Date } = {},
@@ -346,6 +366,45 @@ export async function claimNextDueProactiveTrigger(
       updatedAt: now,
     })
     .where(and(eq(proactiveTriggers.id, candidate.id), eq(proactiveTriggers.status, "pending")))
+    .returning();
+  return claimed[0] ?? null;
+}
+
+export async function claimDueProactiveTriggerForSession(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId: string;
+    now?: Date;
+  },
+): Promise<ProactiveTriggerRow | null> {
+  const sessionId = safeSessionId(input.sessionId);
+  if (!sessionId) return null;
+  const now = input.now ?? new Date();
+  const rows = await app.db
+    .select()
+    .from(proactiveTriggers)
+    .where(and(
+      eq(proactiveTriggers.userId, input.userId),
+      eq(proactiveTriggers.sessionId, sessionId),
+      eq(proactiveTriggers.status, "pending"),
+      lte(proactiveTriggers.due, now),
+    ))
+    .orderBy(asc(proactiveTriggers.due))
+    .limit(1);
+  const candidate = rows[0];
+  if (!candidate) return null;
+
+  const claimed = await app.db
+    .update(proactiveTriggers)
+    .set({
+      status: "running",
+      updatedAt: now,
+    })
+    .where(and(
+      eq(proactiveTriggers.id, candidate.id),
+      eq(proactiveTriggers.status, "pending"),
+    ))
     .returning();
   return claimed[0] ?? null;
 }
@@ -495,6 +554,38 @@ export async function publishProactiveAssistantMessage(
     updatedAt: message?.updatedAt ?? now,
   });
 
+  await app.services.eventBus.publish({
+    topic: "chat.message.created",
+    userId: input.trigger.userId,
+    deviceId: session.targetDeviceId,
+    payload: {
+      sessionId: session.id,
+      presentation: "chat",
+      session: {
+        id: session.id,
+        title: session.title,
+        status: session.status,
+        source: session.source,
+      },
+      assistantMessage,
+      dispatched: false,
+      reused: false,
+      proactive: {
+        triggerId: input.trigger.id,
+        kind: input.trigger.kind,
+      },
+    },
+  }).catch((error) => {
+    app.log.debug?.(
+      {
+        error: error instanceof Error ? error.message : "proactive_domain_event_publish_failed",
+        triggerId: input.trigger.id,
+        kind: input.trigger.kind,
+      },
+      "proactive chat domain event publish skipped",
+    );
+  });
+
   await app.services.eventBus.publishVolatile({
     topic: "message.created",
     userId: input.trigger.userId,
@@ -540,6 +631,59 @@ export async function publishProactiveAssistantMessage(
   });
 
   return { status: "fired", triggerId: input.trigger.id, messageId };
+}
+
+export async function processDueProactiveTriggerForSession(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId: string;
+    now?: Date;
+    compose?: (trigger: ProactiveTriggerRow) => Promise<ProactiveComposeResult>;
+  },
+): Promise<ProcessProactiveTriggerResult> {
+  const now = input.now ?? new Date();
+  const trigger = await claimDueProactiveTriggerForSession(app, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+    now,
+  });
+  if (!trigger) {
+    return { status: "idle", reason: "no_due_trigger" };
+  }
+  const policy = await readProactivePolicy(app, trigger.userId).catch(() => DEFAULT_PROACTIVE_POLICY);
+  const firedToday = await countFiredToday(app, trigger.userId, now).catch(() => 0);
+  const decision = evaluateProactivePolicy({ policy, kind: trigger.kind, firedToday, now });
+  if (!decision.allowed) {
+    if (decision.reason === "quiet_hours") {
+      await deferQuietHoursTrigger(app, trigger.id, now);
+      return { status: "deferred", triggerId: trigger.id, reason: "quiet_hours" };
+    }
+    await markTrigger(app, {
+      triggerId: trigger.id,
+      status: "expired",
+      now,
+      reason: decision.reason,
+    });
+    return { status: "expired", triggerId: trigger.id, reason: decision.reason };
+  }
+  const compose = await (input.compose ?? (async (item) => buildProactiveOpeningCompose(item)))(trigger).catch(async () => {
+    await markTrigger(app, {
+      triggerId: trigger.id,
+      status: "failed",
+      now,
+      reason: "compose_failed",
+    });
+    return null;
+  });
+  if (!compose) {
+    return { status: "expired", triggerId: trigger.id, reason: "compose_failed" };
+  }
+  return publishProactiveAssistantMessage(app, {
+    trigger,
+    compose,
+    now,
+  });
 }
 
 export async function processNextDueProactiveTrigger(

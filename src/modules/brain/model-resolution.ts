@@ -115,6 +115,7 @@ function hasHostedSharedBrainProviderConfigured(app: FastifyInstance): boolean {
     app.config.OPENAI_API_KEY ||
       app.config.ANTHROPIC_API_KEY ||
       app.config.GROQ_API_KEY ||
+      app.config.GEMINI_API_KEY ||
       app.config.OPENROUTER_API_KEY,
   );
 }

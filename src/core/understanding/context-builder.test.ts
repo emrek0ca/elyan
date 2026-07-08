@@ -1045,6 +1045,44 @@ test("buildContextPacketsFromMetadata exposes only relevant world context", () =
   assert.match(localPackets.find((packet) => packet.kind === "world_context")?.summary ?? "", /city=Kayseri/);
 });
 
+test("buildContextPacketsFromMetadata exposes time context for technical work pacing", () => {
+  const now = new Date("2030-01-01T23:15:00.000Z");
+  const packets = buildContextPacketsFromMetadata(
+    {
+      chatContext: {
+        lastDerivedContextDigest: {
+          worldSignals: [
+            {
+              signalId: "time-late-1",
+              kind: "time",
+              summary: "Yerel saat gece geç; kısa ve uygulanabilir cevap iyi olur.",
+              confidence: 0.91,
+              createdAt: "2030-01-01T23:10:00.000Z",
+              facts: {
+                timezone: "Europe/Istanbul",
+                localTime: "02:10",
+                dayPart: "gece geç",
+                workingHours: false,
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      now,
+      requestText: "TypeScript kodunda bu hatayı debug et.",
+      intent: "debugging",
+    },
+  );
+
+  const timePacket = packets.find((packet) => packet.kind === "time_context");
+  assert.equal(timePacket?.mentionPolicy, "explicit_when_relevant");
+  assert.equal(timePacket?.relevanceReason, "time_aware_work_or_schedule_request");
+  assert.match(timePacket?.summary ?? "", /local_time=02:10/);
+  assert.ok(timePacket?.allowedUse?.includes("time-aware framing"));
+});
+
 test("buildContextPacketsFromMetadata reads world signals from mobile memory snapshots", () => {
   const packets = buildContextPacketsFromMetadata(
     {

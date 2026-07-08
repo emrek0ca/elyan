@@ -147,6 +147,17 @@ const NOTIFICATION_RELEVANCE_PATTERN =
   /\b(bildirim|notification|dikkat|attention|rahatsız|rahatsiz|odak|focus|sessiz|silent|acil|urgent|öncelik|oncelik)\b/i;
 const ADAPTIVE_WORK_PATTERN =
   /\b(plan|planla|planning|program|schedule|bugün|bugun|yarın|yarin|task|görev|gorev|workflow|routine|rutin|araştır|arastir|research|debug|kod|code|odak|focus|hazırla|hazirla|çıkar|cikar|optimize|iyileştir|iyilestir|prepare)\b/i;
+const WORK_INTENTS = new Set<UnderstandingIntent>([
+  "automation",
+  "browser",
+  "coding",
+  "computer",
+  "debugging",
+  "document",
+  "math",
+  "research",
+  "writing",
+]);
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -246,13 +257,32 @@ function resolveMentionPolicy(input: {
     };
   }
 
-  if (input.packetKind === "calendar_context" || input.packetKind === "time_context") {
+  if (input.packetKind === "calendar_context") {
     const explicit = SCHEDULE_RELEVANCE_PATTERN.test(message) || intent === "planning";
     return {
       mentionPolicy: explicit ? "explicit_when_relevant" : "implicit",
       relevanceReason: explicit ? "schedule_or_planning_request" : "time_context_for_pacing_only",
       allowedUse: explicit
         ? ["schedule-aware planning", "timing suggestions", "do not expose private event details"]
+        : ["adjust brevity and timing without naming the context"],
+    };
+  }
+
+  if (input.packetKind === "time_context") {
+    const explicit =
+      SCHEDULE_RELEVANCE_PATTERN.test(message) ||
+      intent === "planning" ||
+      WORK_INTENTS.has(intent) ||
+      ADAPTIVE_WORK_PATTERN.test(message);
+    return {
+      mentionPolicy: explicit ? "explicit_when_relevant" : "implicit",
+      relevanceReason: explicit ? "time_aware_work_or_schedule_request" : "time_context_for_pacing_only",
+      allowedUse: explicit
+        ? [
+            "time-aware framing",
+            "schedule-aware planning",
+            "suggest shorter path during late or busy windows",
+          ]
         : ["adjust brevity and timing without naming the context"],
     };
   }

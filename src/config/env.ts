@@ -5,6 +5,7 @@ export type SharedBrainProvider =
   | "vllm"
   | "llamacpp"
   | "groq"
+  | "gemini"
   | "openai"
   | "claude"
   | "openrouter";
@@ -121,6 +122,16 @@ const envSchema = z.object({
   GROQ_FAST_MODEL: z.string().default("openai/gpt-oss-20b"),
   GROQ_FALLBACK_MODEL: z.string().default("qwen/qwen3.6-27b"),
   GROQ_VISION_MODEL: z.string().default("meta-llama/llama-4-scout-17b-16e-instruct"),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_BASE_URL: z.string().url().default("https://generativelanguage.googleapis.com/v1beta/openai"),
+  GEMINI_INTERACTIONS_BASE_URL: z.string().url().default("https://generativelanguage.googleapis.com/v1beta"),
+  GEMINI_TEXT_MODEL: z.string().default("gemini-3.5-flash"),
+  GEMINI_FAST_MODEL: z.string().default("gemini-3.1-flash-lite"),
+  GEMINI_REASONING_MODEL: z.string().default("gemini-3.5-flash"),
+  GEMINI_VISION_MODEL: z.string().default("gemini-3.5-flash"),
+  GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-image"),
+  GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image-preview"),
+  GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("2K"),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().optional(),
   IYZICO_API_KEY: z.string().optional(),
@@ -131,7 +142,7 @@ const envSchema = z.object({
   IYZICO_PUBLIC_BASE_URL: z.string().url().optional(),
   IYZICO_LOCALE: z.enum(["tr", "en"]).default("tr"),
   IYZICO_PRODUCT_NAME: z.string().default("Elyan Subscriptions"),
-  ELYAN_SHARED_BRAIN_PROVIDER: z.enum(["ollama", "vllm", "llamacpp", "groq", "openai", "claude", "openrouter"]).default("ollama"),
+  ELYAN_SHARED_BRAIN_PROVIDER: z.enum(["ollama", "vllm", "llamacpp", "groq", "gemini", "openai", "claude", "openrouter"]).default("ollama"),
   ELYAN_SHARED_BRAIN_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
   ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: z.preprocess(
     (value) => {
@@ -141,7 +152,7 @@ const envSchema = z.object({
 
       return value;
     },
-    z.enum(["ollama", "vllm", "llamacpp", "groq", "openai", "claude", "openrouter"]).optional(),
+    z.enum(["ollama", "vllm", "llamacpp", "groq", "gemini", "openai", "claude", "openrouter"]).optional(),
   ),
   ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: optionalBlankableUrl(),
   ELYAN_SHARED_BRAIN_MODEL: z.string().default("llama3.2"),
@@ -180,6 +191,7 @@ const envSchema = z.object({
   ELYAN_GOAL_STATE_V2_ENABLED: booleanFlag(false),
   ELYAN_AGENT_LOOP_ENABLED: booleanFlag(false),
   ELYAN_PROACTIVE_ENGINE_ENABLED: booleanFlag(false),
+  ELYAN_CLOUD_VISION_ENABLED: booleanFlag(false),
   ELYAN_COST_GUARD_ENABLED: booleanFlag(false),
   ELYAN_MODEL_CANARY_ENABLED: booleanFlag(false),
   ELYAN_MODEL_PRIMARY_ENABLED: booleanFlag(false),
@@ -244,6 +256,16 @@ export type AppEnv = ParsedEnv & {
   GROQ_FAST_MODEL: string;
   GROQ_FALLBACK_MODEL: string;
   GROQ_VISION_MODEL: string;
+  GEMINI_API_KEY: string;
+  GEMINI_BASE_URL: string;
+  GEMINI_INTERACTIONS_BASE_URL: string;
+  GEMINI_TEXT_MODEL: string;
+  GEMINI_FAST_MODEL: string;
+  GEMINI_REASONING_MODEL: string;
+  GEMINI_VISION_MODEL: string;
+  GEMINI_IMAGE_MODEL: string;
+  GEMINI_IMAGE_PRO_MODEL: string;
+  GEMINI_IMAGE_SIZE: "1K" | "2K" | "4K";
   OPENROUTER_API_KEY: string;
   OPENROUTER_BASE_URL: string;
   TOKEN_ENCRYPTION_KEY?: string;
@@ -303,6 +325,7 @@ export type AppEnv = ParsedEnv & {
   ELYAN_GOAL_STATE_V2_ENABLED: boolean;
   ELYAN_AGENT_LOOP_ENABLED: boolean;
   ELYAN_PROACTIVE_ENGINE_ENABLED: boolean;
+  ELYAN_CLOUD_VISION_ENABLED: boolean;
   ELYAN_COST_GUARD_ENABLED: boolean;
   ELYAN_MODEL_CANARY_ENABLED: boolean;
   ELYAN_MODEL_PRIMARY_ENABLED: boolean;
@@ -426,6 +449,18 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GROQ_FAST_MODEL: parsed.GROQ_FAST_MODEL,
     GROQ_FALLBACK_MODEL: parsed.GROQ_FALLBACK_MODEL,
     GROQ_VISION_MODEL: parsed.GROQ_VISION_MODEL,
+    GEMINI_API_KEY: parsed.GEMINI_API_KEY ?? "",
+    GEMINI_BASE_URL:
+      parsed.GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta/openai",
+    GEMINI_INTERACTIONS_BASE_URL:
+      parsed.GEMINI_INTERACTIONS_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta",
+    GEMINI_TEXT_MODEL: parsed.GEMINI_TEXT_MODEL,
+    GEMINI_FAST_MODEL: parsed.GEMINI_FAST_MODEL,
+    GEMINI_REASONING_MODEL: parsed.GEMINI_REASONING_MODEL,
+    GEMINI_VISION_MODEL: parsed.GEMINI_VISION_MODEL,
+    GEMINI_IMAGE_MODEL: parsed.GEMINI_IMAGE_MODEL,
+    GEMINI_IMAGE_PRO_MODEL: parsed.GEMINI_IMAGE_PRO_MODEL,
+    GEMINI_IMAGE_SIZE: parsed.GEMINI_IMAGE_SIZE,
     OPENROUTER_API_KEY: parsed.OPENROUTER_API_KEY ?? "",
     OPENROUTER_BASE_URL: parsed.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
     TOKEN_ENCRYPTION_KEY: parsed.TOKEN_ENCRYPTION_KEY ?? "",
@@ -458,6 +493,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ELYAN_GOAL_STATE_V2_ENABLED: parsed.ELYAN_GOAL_STATE_V2_ENABLED,
     ELYAN_AGENT_LOOP_ENABLED: parsed.ELYAN_AGENT_LOOP_ENABLED,
     ELYAN_PROACTIVE_ENGINE_ENABLED: parsed.ELYAN_PROACTIVE_ENGINE_ENABLED,
+    ELYAN_CLOUD_VISION_ENABLED: parsed.ELYAN_CLOUD_VISION_ENABLED,
     ELYAN_COST_GUARD_ENABLED: parsed.ELYAN_COST_GUARD_ENABLED,
     ELYAN_MODEL_CANARY_ENABLED: parsed.ELYAN_MODEL_CANARY_ENABLED,
     ELYAN_MODEL_PRIMARY_ENABLED: parsed.ELYAN_MODEL_PRIMARY_ENABLED,
