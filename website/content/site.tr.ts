@@ -4,16 +4,14 @@ import type { SiteContent } from '@/content/site.types';
 const desktopVisual = {
   eyebrow: 'Desktop',
   title: 'Yerel runtime sakin bir operatör yüzeyinde kalır.',
-  body:
-    'Elyan Desktop özel bağlamı cihazda tutar, görevi control-plane üzerinden alır ve yerel yetenekleri güvenli sınırlar içinde yürütür.',
+  body: 'Elyan Desktop özel bağlamı cihazda tutar, görevi control-plane üzerinden alır ve yerel yetenekleri güvenli sınırlar içinde yürütür.',
   screenshots: getDesktopScreenshots('tr')
 } as const;
 
 const mobileVisual = {
   eyebrow: 'Mobil',
   title: 'Mobil yüzey görev kontrolü içindir.',
-  body:
-    'Mobil uygulama görevi gönderir, durumu izler ve sonucu gösterir. Yerel agent runtime burada çalışmaz.',
+  body: 'Mobil uygulama görevi gönderir, durumu izler ve sonucu gösterir. Yerel agent runtime burada çalışmaz.',
   screenshots: getMobileScreenshots('tr')
 } as const;
 
@@ -33,8 +31,7 @@ const content: SiteContent = {
     { href: '/tr/support', label: 'Destek' }
   ],
   footer: {
-    note:
-      'Elyan, kişisel veriler ve cihaz görevleri için yerel runtime sınırını temel alır.',
+    note: 'Elyan, kişisel veriler ve cihaz görevleri için yerel runtime sınırını temel alır.',
     legal: [
       { href: '/tr/privacy', label: 'Gizlilik' },
       { href: '/tr/terms', label: 'Koşullar' },
@@ -65,12 +62,13 @@ const content: SiteContent = {
   },
   home: {
     title: 'Kendi AI ajan sistemini başlat.',
-    description: 'Elyan; sohbet, belge, görev ve cihaz akışlarını tek bir kişisel çalışma alanında birleştirir. Özel verin cihazında kalır, kontrol sende olur.',
+    description:
+      'Elyan; sohbet, belge, görev ve cihaz akışlarını tek bir kişisel çalışma alanında birleştirir. Özel verin cihazında kalır, kontrol sende olur.',
     eyebrow: 'Kişisel AI Ajan Sistemi',
     intro:
       'Elyan; sohbet, belge, görev ve cihaz akışlarını tek bir kişisel çalışma alanında birleştirir. Özel verin cihazında kalır, kontrol sende olur.',
     ctas: [
-      { href: '/tr/desktop', label: 'Elyan\'ı dene' },
+      { href: '/tr/desktop', label: "Elyan'ı dene" },
       { href: '/tr/mobile', label: 'Sistemi keşfet' }
     ],
     loopTitle: 'Ürün gerçeği',
@@ -238,11 +236,14 @@ const content: SiteContent = {
         },
         {
           title: 'Gerçek release disiplini',
-          body: 'İmzalı release artifact\'ları hazır olduğunda bu sayfa yalnızca gerçek platform bağlantılarını yayınlar.'
+          body: "İmzalı release artifact'ları hazır olduğunda bu sayfa yalnızca gerçek platform bağlantılarını yayınlar."
         }
       ],
       ctas: [
-        { href: 'https://raw.githubusercontent.com/emrek0ca/elyan/main/Formula/elyan.rb', label: 'Homebrew formula' },
+        {
+          href: 'https://raw.githubusercontent.com/emrek0ca/elyan/main/Formula/elyan.rb',
+          label: 'Homebrew formula'
+        },
         { href: 'https://github.com/emrek0ca/elyan', label: 'Kaynak repo' }
       ]
     },
@@ -268,9 +269,9 @@ const content: SiteContent = {
           body: [
             'Hesap verileri: e-posta, kullanıcı kimliği, oturum bilgileri, kimlik doğrulama yöntemi ve güvenli hesap yönetimi için gereken kayıtlar.',
             'Cihaz ve eşleştirme verileri: eşleştirilen cihaz tanımlayıcıları, cihaz türü, bağlantı durumu, runtime readiness, son heartbeat zamanı ve güvenli görev yönlendirme için gereken teknik metadata.',
-            'Görev ve sohbet verileri: kullanıcının yazdığı istemler, görev durumları, yanıtlar, artifact metadata\'sı, hata durumları ve sohbet devamlılığı için gereken sınırlı bağlam.',
+            "Görev ve sohbet verileri: kullanıcının yazdığı istemler, görev durumları, yanıtlar, artifact metadata'sı, hata durumları ve sohbet devamlılığı için gereken sınırlı bağlam.",
             'Destek verileri: bize e-posta veya destek talebiyle gönderdiğiniz iletişim bilgileri, mesajlar ve sorunu çözmek için gerekli ek açıklamalar.',
-            'Abonelik verileri: App Store veya Google Play üzerinden alınan abonelik durumları, plan bilgileri ve ödeme doğrulaması için gereken mağaza tarafından sağlanan işlem metadata\'sı. Tam kart bilgileri Elyan tarafından tutulmaz.'
+            "Abonelik verileri: App Store veya Google Play üzerinden alınan abonelik durumları, plan bilgileri ve ödeme doğrulaması için gereken mağaza tarafından sağlanan işlem metadata'sı. Tam kart bilgileri Elyan tarafından tutulmaz."
           ]
         },
         {
@@ -293,8 +294,9 @@ const content: SiteContent = {
           title: '5. Elyan Zeka Katmanı ve Güvenli Altyapı',
           body: [
             'Elyan; yanıt üretimi, görev yönlendirme, kimlik doğrulama, veri tabanı, bildirim ve güvenlik süreçlerini kendi zeka katmanı ve güvenli işletim altyapısı içinde yönetir.',
-            'Veri kullanımı, hizmetin çalışması için gereken en dar kapsamla sınırlıdır. Kişisel verileriniz reklam veya dış pazarlama amacıyla satılmaz.',
-            'Elyan tek ürün kimliğiyle sunulur. Kullanıcı içerikleri, açık rıza veya hizmetin çalışması için gereken görev bağlamı dışında model geliştirme amacıyla kullanılmaz.'
+            'Gelişmiş AI özelliklerini kullandığınızda yazdığınız mesajlar, yüklediğiniz belge/görsel/dosya içerikleri, sesli girişten türetilen metinler ve isteği yanıtlamak için gerekli sınırlı sohbet bağlamı Elyan sunucuları ve Elyan AI bulut işleme katmanı tarafından işlenebilir.',
+            'Bu işleme yalnızca isteğinizi yanıtlamak, dosya/görsel/ses içeriklerini analiz etmek, kötüye kullanımı önlemek, güvenilirliği sağlamak ve açıkça izin verdiğiniz özellikleri çalıştırmak için yapılır. Kişisel verileriniz reklam veya dış pazarlama amacıyla satılmaz ya da kullanılmaz.',
+            'Elyan tek ürün kimliğiyle sunulur. Kullanıcı içerikleri, açık rıza veya hizmetin çalışması için gereken görev bağlamı dışında model geliştirme amacıyla kullanılmaz. Elyan AI iznini uygulama içindeki Ayarlar bölümünden kapatabilirsiniz.'
           ]
         },
         {
@@ -340,7 +342,7 @@ const content: SiteContent = {
       description: 'Elyan ürünlerinin kullanımı için temel hukuki koşullar ve yükümlülükler.',
       eyebrow: 'Hizmet Şartları',
       intro:
-        'Bu koşullar Elyan web sitesi, Elyan Mobile, Elyan Desktop ve bağlı control-plane servislerinin kullanımını düzenler. Elyan\'ı kullanarak bu koşulları ve gizlilik politikasını kabul etmiş olursunuz. Yürürlük tarihi: 22 Haziran 2026.',
+        "Bu koşullar Elyan web sitesi, Elyan Mobile, Elyan Desktop ve bağlı control-plane servislerinin kullanımını düzenler. Elyan'ı kullanarak bu koşulları ve gizlilik politikasını kabul etmiş olursunuz. Yürürlük tarihi: 22 Haziran 2026.",
       sections: [],
       legal: [
         {
@@ -362,7 +364,7 @@ const content: SiteContent = {
         {
           title: '3. Kabul Edilebilir Kullanım',
           body: [
-            'Elyan\'ı yasa dışı faaliyet, kötüye kullanım, zararlı otomasyon, yetkisiz erişim, kimlik avı, taciz, telif hakkı ihlali veya başkalarının gizlilik haklarını ihlal etmek için kullanamazsınız.',
+            "Elyan'ı yasa dışı faaliyet, kötüye kullanım, zararlı otomasyon, yetkisiz erişim, kimlik avı, taciz, telif hakkı ihlali veya başkalarının gizlilik haklarını ihlal etmek için kullanamazsınız.",
             'Güvenlik sınırlarını aşmaya çalışmak, gizli anahtar veya kimlik bilgisi toplamaya çalışmak, sistemleri bozmak, yoğun istekle hizmeti aksatmak veya güvenlik kontrollerini devre dışı bırakmak yasaktır.',
             'Elyan, kötüye kullanım şüphesi olduğunda görevi reddedebilir, hesabı askıya alabilir veya gerekli güvenlik önlemlerini uygulayabilir.'
           ]
@@ -372,14 +374,14 @@ const content: SiteContent = {
           body: [
             'Elyan çıktıları eksik, hatalı, eski veya bağlama uygun olmayan bilgiler içerebilir. Kritik kararlar almadan önce çıktıları kontrol etmek kullanıcının sorumluluğundadır.',
             'Elyan tıbbi tanı, tedavi, hukuki danışmanlık, finansal yatırım tavsiyesi veya acil durum hizmeti sunmaz. Sağlık, hukuk, finans veya güvenlik açısından yüksek riskli konularda yetkili profesyonellerden destek alınmalıdır.',
-            'Elyan\'ın görev planlaması ve otomasyon önerileri kullanıcı onayı, platform izinleri ve güvenlik politikalarıyla sınırlıdır.'
+            "Elyan'ın görev planlaması ve otomasyon önerileri kullanıcı onayı, platform izinleri ve güvenlik politikalarıyla sınırlıdır."
           ]
         },
         {
           title: '5. İçerik Sahipliği',
           body: [
             'Uygulamaya yüklediğiniz dosyalar, yazdığınız komutlar ve size ait içerikler size aittir.',
-            'Elyan\'a, hizmeti sağlamak, güvenli biçimde işlemek, yanıt üretmek, senkronize etmek, hata ayıklamak ve destek vermek için gerekli sınırlı kullanım hakkını vermiş olursunuz.',
+            "Elyan'a, hizmeti sağlamak, güvenli biçimde işlemek, yanıt üretmek, senkronize etmek, hata ayıklamak ve destek vermek için gerekli sınırlı kullanım hakkını vermiş olursunuz.",
             'Elyan markası, logosu, tasarım sistemi, yazılımı, dokümantasyonu ve mimarisi Elyan geliştiricilerine aittir.'
           ]
         },
@@ -447,7 +449,10 @@ const content: SiteContent = {
         }
       ],
       ctas: [
-        { href: 'mailto:support@elyan.dev?subject=Elyan%20Hesap%20ve%20Veri%20Silme%20Talebi', label: 'Silme talebi gönder' },
+        {
+          href: 'mailto:support@elyan.dev?subject=Elyan%20Hesap%20ve%20Veri%20Silme%20Talebi',
+          label: 'Silme talebi gönder'
+        },
         { href: '/tr/privacy', label: 'Gizlilik Politikası' },
         { href: '/tr/support', label: 'Destek' }
       ]
@@ -496,7 +501,8 @@ const content: SiteContent = {
       key: 'ai',
       navLabel: 'Zeka Bildirimi',
       title: 'Elyan Zeka Bildirimi',
-      description: 'Elyan zeka katmanının çalışma sınırları, veri işleme yöntemi ve kullanıcı kontrolü hakkında açık bilgilendirme.',
+      description:
+        'Elyan zeka katmanının çalışma sınırları, veri işleme yöntemi ve kullanıcı kontrolü hakkında açık bilgilendirme.',
       eyebrow: 'Elyan Zeka Katmanı',
       intro:
         'Bu bildirim, Elyan içindeki zeka destekli özelliklerin nasıl çalıştığını, verilerinizin görev bağlamında nasıl işlendiğini ve kullanıcı kontrolünün nerede durduğunu açıklar.',

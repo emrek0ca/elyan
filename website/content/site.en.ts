@@ -4,16 +4,14 @@ import type { SiteContent } from '@/content/site.types';
 const desktopVisual = {
   eyebrow: 'Desktop',
   title: 'The local runtime stays inside a quiet operator shell.',
-  body:
-    'Elyan Desktop keeps private context on device, accepts work through the control-plane, and executes local capabilities behind a clean runtime boundary.',
+  body: 'Elyan Desktop keeps private context on device, accepts work through the control-plane, and executes local capabilities behind a clean runtime boundary.',
   screenshots: getDesktopScreenshots('en')
 } as const;
 
 const mobileVisual = {
   eyebrow: 'Mobile',
   title: 'Mobile is for task control, not local execution.',
-  body:
-    'The mobile app sends work, watches task truth, and surfaces results. It does not run a local agent runtime.',
+  body: 'The mobile app sends work, watches task truth, and surfaces results. It does not run a local agent runtime.',
   screenshots: getMobileScreenshots('en')
 } as const;
 
@@ -33,8 +31,7 @@ const content: SiteContent = {
     { href: '/en/support', label: 'Support' }
   ],
   footer: {
-    note:
-      'Elyan establishes a local runtime boundary for personal data and device tasks.',
+    note: 'Elyan establishes a local runtime boundary for personal data and device tasks.',
     legal: [
       { href: '/en/privacy', label: 'Privacy' },
       { href: '/en/terms', label: 'Terms' },
@@ -65,7 +62,8 @@ const content: SiteContent = {
   },
   home: {
     title: 'Start your personal AI agent system.',
-    description: 'Elyan brings chat, documents, tasks, and device workflows into one private AI workspace. Your data stays under your control.',
+    description:
+      'Elyan brings chat, documents, tasks, and device workflows into one private AI workspace. Your data stays under your control.',
     eyebrow: 'Personal AI Agent System',
     intro:
       'Elyan brings chat, documents, tasks, and device workflows into one private AI workspace. Your data stays under your control.',
@@ -151,7 +149,7 @@ const content: SiteContent = {
     ],
     finalTitle: 'Your data, your workspace.',
     finalCopy:
-      'Don\'t let your data scatter across cloud tools. Keep it local, unified, and under your control. The mobile app and desktop runtime work together to bring your agent system to life.',
+      "Don't let your data scatter across cloud tools. Keep it local, unified, and under your control. The mobile app and desktop runtime work together to bring your agent system to life.",
     finalLinks: [
       { href: '/en/download', label: 'Start now' },
       { href: '/en/support', label: 'Support' },
@@ -244,8 +242,14 @@ const content: SiteContent = {
         }
       ],
       ctas: [
-        { href: 'https://raw.githubusercontent.com/emrek0ca/elyan/main/Formula/elyan.rb', label: 'Homebrew formula' },
-        { href: 'https://github.com/emrek0ca/elyan', label: 'Source repository' }
+        {
+          href: 'https://raw.githubusercontent.com/emrek0ca/elyan/main/Formula/elyan.rb',
+          label: 'Homebrew formula'
+        },
+        {
+          href: 'https://github.com/emrek0ca/elyan',
+          label: 'Source repository'
+        }
       ]
     },
     privacy: {
@@ -286,7 +290,7 @@ const content: SiteContent = {
         {
           title: '4. Local-First Architecture and File Processing',
           body: [
-            'Elyan Desktop protects a local-first boundary for private files, local tools, and device-side work context. The local runtime executes private computer actions on the user\'s device.',
+            "Elyan Desktop protects a local-first boundary for private files, local tools, and device-side work context. The local runtime executes private computer actions on the user's device.",
             'When you attach a file, image, PDF, table, or document, Elyan processes it only to complete the task. If a file must be sent to the server, the transfer is limited to the explicit task context; where possible, Elyan uses summaries, metadata, or processed packets instead of raw data.',
             'Your private files are not used for advertising, profiling, or external marketing.'
           ]
@@ -295,8 +299,9 @@ const content: SiteContent = {
           title: '5. Elyan Intelligence Layer and Secure Infrastructure',
           body: [
             'Elyan manages response generation, task routing, authentication, databases, notifications, and security through its own intelligence layer and secure operating infrastructure.',
-            'Data use is limited to what is necessary to operate the service. Your personal data is not sold for advertising or external marketing.',
-            'Elyan is presented as a single product identity. User content is not used for model development outside explicit consent or the task context required to operate the service.'
+            'When you use advanced AI features, the messages you type, uploaded document/image/file contents, text derived from voice input, and limited conversation context needed to answer the request may be processed by Elyan servers and the Elyan AI cloud processing layer.',
+            'This processing is limited to answering your request, analyzing file/image/audio content, preventing abuse, maintaining reliability, and operating features you explicitly permit. Your personal data is not sold or used for advertising or external marketing.',
+            'Elyan is presented as a single product identity. User content is not used for model development outside explicit consent or the task context required to operate the service. You can turn off Elyan AI permission in the app Settings area.'
           ]
         },
         {
@@ -316,7 +321,7 @@ const content: SiteContent = {
           ]
         },
         {
-          title: '8. Children\'s Privacy',
+          title: "8. Children's Privacy",
           body: [
             'Elyan is not intended for children under 13. If we learn that personal data from a child under 13 has been processed, we will take appropriate steps to delete it after verification.'
           ]
@@ -358,13 +363,13 @@ const content: SiteContent = {
           body: [
             'You are responsible for the security of your account, sessions, and paired devices. Report unauthorized access or suspicious activity to support@elyan.dev.',
             'Device permissions are requested only for the relevant feature. You can disable calendar, notification, health/activity, device state, file access, or similar permissions through your operating system settings.',
-            'You may not use another person\'s account, device, files, notifications, calendar, or health data without authorization.'
+            "You may not use another person's account, device, files, notifications, calendar, or health data without authorization."
           ]
         },
         {
           title: '3. Acceptable Use',
           body: [
-            'You may not use Elyan for illegal activity, abuse, harmful automation, unauthorized access, phishing, harassment, copyright infringement, or violating someone else\'s privacy rights.',
+            "You may not use Elyan for illegal activity, abuse, harmful automation, unauthorized access, phishing, harassment, copyright infringement, or violating someone else's privacy rights.",
             'You may not attempt to bypass security boundaries, collect hidden credentials, disrupt systems, overload the service, or disable safety controls.',
             'Elyan may refuse a task, suspend an account, or apply security restrictions when misuse is suspected.'
           ]
@@ -382,13 +387,13 @@ const content: SiteContent = {
           body: [
             'Your uploaded files, prompts, and user content remain yours.',
             'You grant Elyan a limited right to use your content as needed to provide, process, synchronize, debug, secure, and support the service.',
-            'The Elyan brand, logo, design system, software, documentation, and architecture belong to Elyan\'s developers.'
+            "The Elyan brand, logo, design system, software, documentation, and architecture belong to Elyan's developers."
           ]
         },
         {
           title: '6. Subscriptions, Cancellations, and Refunds',
           body: [
-            'Paid plans may be offered through the App Store, Google Play, or another supported payment channel. Store purchases are subject to that store\'s subscription, cancellation, and refund rules.',
+            "Paid plans may be offered through the App Store, Google Play, or another supported payment channel. Store purchases are subject to that store's subscription, cancellation, and refund rules.",
             'You can manage and cancel App Store or Google Play subscriptions through your store account. Access may continue until the end of the paid period after cancellation.',
             'Prices, trials, and plan limits may vary by region and platform.'
           ]
@@ -449,7 +454,10 @@ const content: SiteContent = {
         }
       ],
       ctas: [
-        { href: 'mailto:support@elyan.dev?subject=Elyan%20Account%20and%20Data%20Deletion%20Request', label: 'Send deletion request' },
+        {
+          href: 'mailto:support@elyan.dev?subject=Elyan%20Account%20and%20Data%20Deletion%20Request',
+          label: 'Send deletion request'
+        },
         { href: '/en/privacy', label: 'Privacy Policy' },
         { href: '/en/support', label: 'Support' }
       ]
@@ -500,7 +508,8 @@ const content: SiteContent = {
       heroImage: '/cozy_night.png',
       navLabel: 'Intelligence Disclosure',
       title: 'Elyan Intelligence Disclosure',
-      description: 'Clear information about Elyan intelligence features, data processing methods, and user control boundaries.',
+      description:
+        'Clear information about Elyan intelligence features, data processing methods, and user control boundaries.',
       eyebrow: 'Elyan Intelligence Layer',
       intro:
         'This disclosure explains how Elyan intelligence features work, how your data is processed in task context, and where user control remains in place.',
