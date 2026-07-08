@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { ArtifactInput } from "../../contracts/domain.js";
 import { tryAcquireLoadSheddingPermit } from "../../lib/reliability/load-shedding.js";
@@ -37,7 +39,9 @@ const IMAGE_CIRCUIT_OPEN_MS = 60_000;
 const IMAGE_CIRCUIT_QUOTA_OPEN_MS = 5 * 60_000;
 // Aynı istemi eşzamanlı üreten N isteği tek dış çağrıya indirger (single-flight)
 // ve kısa süreli sonuç önbelleği ile tekrar istekleri anında karşılar.
-const IMAGE_CACHE_TTL_MS = 5 * 60_000;
+// Aynı istem (aynı oran/boyut/kalite) 6 saat boyunca tek dış çağrıyla
+// paylaşılır — "kedi resmi çiz" gibi popüler istemlerde en büyük tasarruf.
+const IMAGE_CACHE_TTL_MS = 6 * 60 * 60_000;
 const IMAGE_CACHE_MAX_BASE64_LENGTH = 1_800_000; // ~1.3MB görsel; daha büyüğü önbelleğe alınmaz
 const IMAGE_SINGLEFLIGHT_LOCK_TTL_MS = 75_000;
 const IMAGE_SINGLEFLIGHT_WAIT_MS = 12_000;
@@ -109,11 +113,33 @@ const NON_CREATIVE_EXPORT_PATTERNS = [
   /\b(ver|çevir|cevir|dönüştür|donustur|kaydet)\b.*\b(png|jpg|jpeg|webp)\b/i,
 ];
 
+// Pro model SADECE açık, pahalıyı hak eden taleplerde denenir. Eski liste
+// ("detaylı", "gerçekçi", "afiş", "kapak"...) neredeyse her yaratıcı istemi
+// premium'a yükseltiyordu — tek görsel ~10 TL'ye çıkıyordu. Genel kelimeler
+// bilinçli olarak çıkarıldı; ayrıca GEMINI_IMAGE_PRO_ENABLED flag'i kapalıyken
+// (default) Pro hiç kullanılmaz.
 const PREMIUM_IMAGE_REQUEST_PATTERNS = [
-  /\b(en kaliteli|yüksek kalite|yuksek kalite|profesyonel|premium|ultra|detaylı|detayli|gerçekçi|gercekci|photorealistic|realistic|stüdyo|studyo|reklam|kampanya)\b/i,
-  /\b(afiş|afis|poster|kapak|cover|banner|hero|ürün fotoğrafı|urun fotografi|product shot|app store|play store)\b/i,
+  /\b(en kaliteli|yüksek kalite|yuksek kalite|profesyonel|premium|ultra kalite|photorealistic|stüdyo çekimi|studyo cekimi|product shot)\b/i,
   /\b(2k|4k|high resolution|hi-res|yüksek çözünürlük|yuksek cozunurluk)\b/i,
 ];
+
+const HIGH_RESOLUTION_REQUEST_PATTERN =
+  /\b(2k|4k|high resolution|hi-res|yüksek çözünürlük|yuksek cozunurluk)\b/i;
+
+/** Gemini çıktı boyutu: config değeri tavan davranır. Default tavan "1K" —
+ * 2K/4K yalnızca operatör GEMINI_IMAGE_SIZE'ı yükselttiyse VE kullanıcı
+ * açıkça yüksek çözünürlük istediyse kullanılır. Maliyetin ana kolu bu. */
+function resolveGeminiImageSize(
+  prompt: string,
+  configuredMax: "1K" | "2K" | "4K",
+): "1K" | "2K" | "4K" {
+  if (configuredMax === "1K") {
+    return "1K";
+  }
+  return HIGH_RESOLUTION_REQUEST_PATTERN.test(compactText(prompt).toLowerCase())
+    ? configuredMax
+    : "1K";
+}
 
 function compactText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -144,6 +170,10 @@ function shouldGenerateHostedImage(prompt: string): boolean {
     return false;
   }
   return CREATIVE_IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+export function isHostedImageGenerationRequest(prompt: string): boolean {
+  return shouldGenerateHostedImage(prompt);
 }
 
 function joinUrl(baseUrl: string, path: string): string {
@@ -180,7 +210,13 @@ function inferGeminiAspectRatio(prompt: string): "1:1" | "2:3" | "3:2" | "9:16" 
   return "1:1";
 }
 
-function shouldPreferPremiumImageModel(prompt: string): boolean {
+function shouldPreferPremiumImageModel(
+  prompt: string,
+  proEnabled: boolean,
+): boolean {
+  if (!proEnabled) {
+    return false;
+  }
   const normalized = compactText(prompt).toLowerCase();
   return PREMIUM_IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
 }
@@ -219,12 +255,15 @@ function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
   const attachmentSummary = inferAttachmentSummary(input.metadata);
   const sections = [
     "Create one polished production-ready image for a mobile user.",
-    `User request: ${compactText(input.prompt)}`,
+    // "User request:" etiketiyle verilen istem, modelin istem METNİNİ görselin
+    // üstüne yazmasına yol açıyordu ("kedi resmi çiz" yazılı kedi görseli).
+    // İstem "çizilecek konu" olarak veriliyor ve metin çizimi açıkça yasaklanıyor.
+    `Depict the following subject (this is a description of WHAT to draw, never text to render): ${compactText(input.prompt)}`,
     attachmentSummary ? `Attachment summary: ${attachmentSummary}` : null,
     compactText(input.responseText)
       ? `Approved content brief: ${compactText(input.responseText)}`
       : null,
-    "Use clean typography and coherent layout. Do not add watermarks or UI chrome unless the request explicitly needs it.",
+    "CRITICAL: Do not render ANY text, words, letters, captions, labels, instructions, watermarks, signatures, or logos inside the image. The image must be completely text-free — the ONLY exception is when the user explicitly asked for specific wording (e.g. a poster title or a sign); in that case render exactly that requested text and nothing else. Never write the request itself onto the image. No UI chrome.",
   ];
   return sections.filter((value): value is string => Boolean(value)).join("\n\n");
 }
@@ -244,12 +283,13 @@ function buildArtifactName(prompt: string, mimeType: string): string {
 /** Aynı çıktıyı belirleyen sinyallerden önbellek anahtarı üretir. Farklı
  * kullanıcıların aynı istemi (aynı oran/boyut/kalite) tek çağrıda paylaşması
  * için istem metni + oran + boyut + kalite katmanı üzerinden hash'lenir. */
-function imageCacheKey(prompt: string): string {
+function imageCacheKey(prompt: string, proEnabled: boolean, geminiSize: string): string {
   const seed = [
     compactText(prompt).toLowerCase(),
     inferGeminiAspectRatio(prompt),
     inferImageSize(prompt),
-    shouldPreferPremiumImageModel(prompt) ? "premium" : "standard",
+    geminiSize,
+    shouldPreferPremiumImageModel(prompt, proEnabled) ? "premium" : "standard",
   ].join("|");
   const digest = createHash("sha256").update(seed).digest("hex").slice(0, 32);
   return `image:cache:v1:${digest}`;
@@ -321,7 +361,11 @@ export async function maybeGenerateHostedImageArtifact(
   }
 
   const store = resolveReliabilityStore(app);
-  const cacheKey = imageCacheKey(input.prompt);
+  const cacheKey = imageCacheKey(
+    input.prompt,
+    app.config.GEMINI_IMAGE_PRO_ENABLED === true,
+    resolveGeminiImageSize(input.prompt, app.config.GEMINI_IMAGE_SIZE ?? "1K"),
+  );
 
   // 1) Önbellek: aynı istem yakın zamanda üretildiyse dış çağrı yok.
   const cached = await readCachedImage(store, cacheKey, input.prompt);
@@ -427,6 +471,59 @@ async function waitForSharedImage(
 /** Üretilen görselden mobil-uyumlu artifact sonucu kurar. Sağlayıcı/model adı
  * BİLİNÇLİ olarak artifact metadata/payload'ına YAZILMAZ — kullanıcı yüzeyinden
  * hangi dış sağlayıcının kullanıldığı asla anlaşılmamalı. */
+// ── Elyan filigranı (dosyaya gömülü) ─────────────────────────────────────
+// Üretilen her görselin sağ üst köşesine arkaplansız Elyan logosu bir kez,
+// üretim anında bake edilir (SynthID tarzı görünür işaret). Kaydet/paylaş
+// dahil her kopyada kalır; render katmanında ekstra maliyet sıfır. sharp
+// dinamik yüklenir ve asset/işlem hatasında orijinal görsel değişmeden döner
+// (filigran asla üretimi düşürmez).
+let watermarkAssetPromise: Promise<Buffer | null> | null = null;
+
+function loadWatermarkAsset(): Promise<Buffer | null> {
+  watermarkAssetPromise ??= readFile(
+    path.resolve(process.cwd(), "assets/elyan-watermark.png"),
+  ).catch(() => null);
+  return watermarkAssetPromise;
+}
+
+async function applyElyanWatermark(
+  app: FastifyInstance,
+  base64: string,
+  mimeType: string,
+): Promise<string> {
+  try {
+    const [sharpModule, watermark] = await Promise.all([
+      import("sharp"),
+      loadWatermarkAsset(),
+    ]);
+    if (!watermark) {
+      return base64;
+    }
+    const sharp = sharpModule.default;
+    const source = Buffer.from(base64, "base64");
+    const metadata = await sharp(source).metadata();
+    const width = metadata.width ?? 0;
+    const height = metadata.height ?? 0;
+    if (width < 128 || height < 128) {
+      return base64;
+    }
+    const markWidth = Math.max(48, Math.round(width * 0.075));
+    const margin = Math.max(14, Math.round(width * 0.03));
+    const mark = await sharp(watermark).resize(markWidth).png().toBuffer();
+    const composited = sharp(source).composite([
+      { input: mark, top: margin, left: width - markWidth - margin },
+    ]);
+    const output =
+      mimeType === "image/png"
+        ? await composited.png().toBuffer()
+        : await composited.jpeg({ quality: 90 }).toBuffer();
+    return output.toString("base64");
+  } catch (error) {
+    app.log.warn({ err: error }, "elyan watermark embed failed; using original image");
+    return base64;
+  }
+}
+
 function buildImageArtifactResult(params: {
   prompt: string;
   base64: string;
@@ -482,7 +579,10 @@ function buildHostedImageProviderConfigs(
     const premiumImageModel = String(
       app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image-preview",
     ).trim();
-    const imageSize = app.config.GEMINI_IMAGE_SIZE ?? "2K";
+    const imageSize = resolveGeminiImageSize(
+      prompt,
+      app.config.GEMINI_IMAGE_SIZE ?? "1K",
+    );
     const addGeminiProvider = (model: string) => {
       if (
         !model ||
@@ -500,7 +600,12 @@ function buildHostedImageProviderConfigs(
       });
     };
 
-    if (shouldPreferPremiumImageModel(prompt)) {
+    if (
+      shouldPreferPremiumImageModel(
+        prompt,
+        app.config.GEMINI_IMAGE_PRO_ENABLED === true,
+      )
+    ) {
       addGeminiProvider(premiumImageModel);
       addGeminiProvider(fastImageModel);
     } else {
@@ -592,9 +697,12 @@ async function generateHostedImageArtifactWithPermit(
       if (store) {
         await recordCircuitSuccess(store, circuitKey, IMAGE_CIRCUIT_OPEN_MS).catch(() => undefined);
       }
+      // Filigran üretim anında gömülür — önbellek ve kalıcı artifact de
+      // işaretli kopyayı taşır.
+      const watermarkedBase64 = await applyElyanWatermark(app, base64, mimeType);
       return buildImageArtifactResult({
         prompt: input.prompt,
-        base64,
+        base64: watermarkedBase64,
         mimeType,
         revisedPrompt,
         model: providerConfig.model,

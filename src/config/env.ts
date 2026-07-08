@@ -131,7 +131,8 @@ const envSchema = z.object({
   GEMINI_VISION_MODEL: z.string().default("gemini-3.5-flash"),
   GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-image"),
   GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image-preview"),
-  GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("2K"),
+  GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("1K"),
+  GEMINI_IMAGE_PRO_ENABLED: booleanFlag(false),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().optional(),
   IYZICO_API_KEY: z.string().optional(),
@@ -266,6 +267,7 @@ export type AppEnv = ParsedEnv & {
   GEMINI_IMAGE_MODEL: string;
   GEMINI_IMAGE_PRO_MODEL: string;
   GEMINI_IMAGE_SIZE: "1K" | "2K" | "4K";
+  GEMINI_IMAGE_PRO_ENABLED: boolean;
   OPENROUTER_API_KEY: string;
   OPENROUTER_BASE_URL: string;
   TOKEN_ENCRYPTION_KEY?: string;
@@ -461,6 +463,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GEMINI_IMAGE_MODEL: parsed.GEMINI_IMAGE_MODEL,
     GEMINI_IMAGE_PRO_MODEL: parsed.GEMINI_IMAGE_PRO_MODEL,
     GEMINI_IMAGE_SIZE: parsed.GEMINI_IMAGE_SIZE,
+    GEMINI_IMAGE_PRO_ENABLED: parsed.GEMINI_IMAGE_PRO_ENABLED,
     OPENROUTER_API_KEY: parsed.OPENROUTER_API_KEY ?? "",
     OPENROUTER_BASE_URL: parsed.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
     TOKEN_ENCRYPTION_KEY: parsed.TOKEN_ENCRYPTION_KEY ?? "",

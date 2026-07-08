@@ -38,7 +38,9 @@ test("loadEnv derives iyzico public base url from app base url", () => {
   assert.equal(env.GEMINI_VISION_MODEL, "gemini-3.5-flash");
   assert.equal(env.GEMINI_IMAGE_MODEL, "gemini-3.1-flash-image");
   assert.equal(env.GEMINI_IMAGE_PRO_MODEL, "gemini-3-pro-image-preview");
-  assert.equal(env.GEMINI_IMAGE_SIZE, "2K");
+  // Maliyet politikası: default tavan 1K — 2K/4K yalnızca operatör açarsa.
+  assert.equal(env.GEMINI_IMAGE_SIZE, "1K");
+  assert.equal(env.GEMINI_IMAGE_PRO_ENABLED, false);
   assert.equal(env.ELYAN_SHARED_BRAIN_FAST_MODEL, "qwen2.5-coder:3b");
   assert.equal(env.ELYAN_SHARED_BRAIN_BALANCED_MODEL, "qwen2.5:7b-instruct-q5_K_M");
   assert.equal(env.ELYAN_SHARED_BRAIN_PLANNING_MODEL, "qwen2.5:7b-instruct-q5_K_M");

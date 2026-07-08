@@ -122,12 +122,14 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
       "https://generativelanguage.googleapis.com/v1beta/interactions",
     );
     assert.equal(requests[0]?.geminiKey, "gemini-test-key");
-    assert.equal(requests[0]?.body.model, "gemini-3-pro-image-preview");
+    // Maliyet politikası: "poster" tek başına artık premium değil (Pro flag
+    // default kapalı) ve açık çözünürlük istenmedikçe 1K üretilir.
+    assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image");
     assert.deepEqual(requests[0]?.body.response_format, {
       type: "image",
       mime_type: "image/jpeg",
       aspect_ratio: "2:3",
-      image_size: "2K",
+      image_size: "1K",
     });
     assert.equal(result.previewText, "Görsel hazır.");
     assert.equal(result.mimeType, "image/jpeg");
@@ -204,6 +206,7 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
     const result = await maybeGenerateHostedImageArtifact(
       appWithConfig({
         GEMINI_API_KEY: "gemini-test-key",
+        GEMINI_IMAGE_PRO_ENABLED: true,
       }),
       {
         prompt: "Profesyonel kapak görseli oluştur",
@@ -411,6 +414,101 @@ test("concurrent identical prompts collapse into a single upstream call (single-
     assert.equal(calls, 1, "concurrent identical requests must share one upstream call");
     assert.deepEqual([...a.binaryBody], [...Buffer.from("shared-image")]);
     assert.deepEqual([...b.binaryBody], [...Buffer.from("shared-image")]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("premium prompts stay on Flash while GEMINI_IMAGE_PRO_ENABLED is off (cost guard)", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<Record<string, unknown>> = [];
+  const jpegBase64 = Buffer.from("cheap-flash").toString("base64");
+
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    requests.push(body);
+    return Response.json({
+      output_image: { data: jpegBase64, mime_type: "image/jpeg" },
+    });
+  };
+
+  try {
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig({ GEMINI_API_KEY: "gemini-test-key" }),
+      { prompt: "En kaliteli profesyonel ürün görseli çiz", responseText: "" },
+    );
+
+    assert.ok(result);
+    assert.deepEqual(
+      requests.map((request) => request.model),
+      ["gemini-3.1-flash-image"],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("explicit high-resolution prompts get the configured max size, others stay 1K", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<Record<string, unknown>> = [];
+  const jpegBase64 = Buffer.from("size-test").toString("base64");
+
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    requests.push(body);
+    return Response.json({
+      output_image: { data: jpegBase64, mime_type: "image/jpeg" },
+    });
+  };
+
+  try {
+    const app = appWithConfig({ GEMINI_API_KEY: "gemini-test-key", GEMINI_IMAGE_SIZE: "2K" });
+    await maybeGenerateHostedImageArtifact(app, {
+      prompt: "4k çözünürlükte bir dağ manzarası çiz",
+      responseText: "",
+    });
+    await maybeGenerateHostedImageArtifact(app, {
+      prompt: "bir dağ manzarası çiz",
+      responseText: "",
+    });
+
+    const sizes = requests.map(
+      (request) => (request.response_format as Record<string, unknown>).image_size,
+    );
+    assert.deepEqual(sizes, ["2K", "1K"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("generated images carry the embedded Elyan watermark (real jpeg grows, fake bytes fail open)", async () => {
+  const originalFetch = globalThis.fetch;
+  // 256x256 gerçek bir JPEG üret — sharp compose edebilsin.
+  const sharp = (await import("sharp")).default;
+  const realJpeg = await sharp({
+    create: { width: 256, height: 256, channels: 3, background: { r: 40, g: 80, b: 60 } },
+  })
+    .jpeg()
+    .toBuffer();
+
+  globalThis.fetch = async () =>
+    Response.json({
+      output_image: { data: realJpeg.toString("base64"), mime_type: "image/jpeg" },
+    });
+
+  try {
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig({ GEMINI_API_KEY: "gemini-test-key" }),
+      { prompt: "orman manzarası çiz", responseText: "" },
+    );
+
+    assert.ok(result);
+    // Filigran gömüldüyse çıktı bayt dizisi orijinalden farklıdır ve hâlâ
+    // geçerli bir JPEG'dir (sharp ile açılabilir).
+    assert.notDeepEqual([...result.binaryBody], [...realJpeg]);
+    const meta = await sharp(Buffer.from(result.binaryBody)).metadata();
+    assert.equal(meta.format, "jpeg");
+    assert.equal(meta.width, 256);
   } finally {
     globalThis.fetch = originalFetch;
   }
