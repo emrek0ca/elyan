@@ -20,12 +20,32 @@ struct ElyanSSEEvent {
     let data: [String: Any]
 }
 
+private actor ElyanSSECursor {
+    private var eventId: String?
+
+    func current() -> String? {
+        eventId
+    }
+
+    func update(_ value: String) {
+        eventId = value
+    }
+}
+
 actor ElyanSSEClient {
     private let urlSession: URLSession
     private var currentTask: Task<Void, Never>?
 
     private static let maxReconnectAttempts = 4
     private static let reconnectBaseDelayNs: UInt64 = 800_000_000 // 0.8s, üstel artar
+    // Backend SSE_HEARTBEAT_MS defaults to 15s (routes.ts) — at least one
+    // line (data or heartbeat comment) should always arrive within that
+    // window. 45s (3x) gives generous jitter margin before declaring the
+    // socket a "silent stall": open (no error/close) but no longer receiving
+    // anything, which macOS sleep/wake and half-open TCP can produce.
+    // Without this the read loop just awaits forever and `isStreaming` never
+    // clears.
+    private static let silentStallTimeoutNs: UInt64 = 45_000_000_000
 
     init() {
         let config = URLSessionConfiguration.default
@@ -52,11 +72,12 @@ actor ElyanSSEClient {
         let session = urlSession
 
         currentTask = Task.detached(priority: .utility) {
-            var lastEventId: String?
+            let cursor = ElyanSSECursor()
             var attempt = 0
 
             while !Task.isCancelled {
                 do {
+                    let lastEventId = await cursor.current()
                     let sawEvent = try await Self.connectOnce(
                         session: session,
                         accessToken: accessToken,
@@ -64,7 +85,7 @@ actor ElyanSSEClient {
                         baseURL: baseURL,
                         lastEventId: lastEventId,
                         onEvent: { event in
-                            if let id = event.id, !id.isEmpty { lastEventId = id }
+                            if let id = event.id, !id.isEmpty { await cursor.update(id) }
                             await onEvent(event)
                         }
                     )
@@ -134,25 +155,104 @@ actor ElyanSSEClient {
             )
         }
 
-        var sawEvent = false
-        var pending = SSEFrame()
-        for try await line in bytes.lines {
-            if Task.isCancelled { break }
-            if line.isEmpty {
-                if let event = pending.flush() {
-                    sawEvent = true
-                    await onEvent(event)
+        // Both child tasks below always RETURN a value, never throw — a
+        // throwing task group whose only consumed result (`group.next()`
+        // called once) came from one task, while an UN-consumed sibling task
+        // separately throws on its own cancellation teardown, is a case
+        // whose behavior isn't worth relying on. Modeling both outcomes as
+        // plain values sidesteps that ambiguity entirely: nothing can ever
+        // surface a spurious error out of the group.
+        let activity = ActivityTracker()
+        let outcome: ConnectOutcome = await withTaskGroup(of: ConnectOutcome.self) { group in
+            group.addTask {
+                do {
+                    var sawEvent = false
+                    var pending = SSEFrame()
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { break }
+                        activity.markActivity()
+                        if line.isEmpty {
+                            if let event = pending.flush() {
+                                sawEvent = true
+                                await onEvent(event)
+                            }
+                            continue
+                        }
+                        pending.consume(line: line)
+                    }
+                    return .streamEnded(sawEvent: sawEvent)
+                } catch {
+                    return .readerFailed(error)
                 }
-                continue
             }
-            pending.consume(line: line)
+            group.addTask {
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(nanoseconds: Self.silentStallTimeoutNs)
+                    } catch {
+                        break // cancelled — reader already finished, nothing to report
+                    }
+                    if Task.isCancelled { break }
+                    if !activity.checkAndReset() {
+                        return .stalled
+                    }
+                }
+                return .cancelledOrClosing
+            }
+            defer { group.cancelAll() }
+            // First finisher wins: normal stream end / reader error returns
+            // from the reader task; a stall returns from the watchdog task.
+            // Whichever the caller's for-loop starts iterating gets used;
+            // the loser is cancelled and drained by the group's implicit
+            // teardown without its (never-thrown) result mattering.
+            return await group.next() ?? .cancelledOrClosing
         }
-        return sawEvent
+
+        switch outcome {
+        case .streamEnded(let sawEvent): return sawEvent
+        case .readerFailed(let error): throw error
+        case .stalled:
+            throw ElyanBackendError.transport("Realtime stream stalled (no data received).")
+        case .cancelledOrClosing: return false
+        }
+    }
+
+    private enum ConnectOutcome {
+        case streamEnded(sawEvent: Bool)
+        case readerFailed(Error)
+        case stalled
+        case cancelledOrClosing
     }
 
     func cancel() {
         currentTask?.cancel()
         currentTask = nil
+    }
+}
+
+/// Tracks whether any line has arrived since the watchdog last checked, so a
+/// truly silent (but still "open") socket can be told apart from one that's
+/// merely between frames. Deliberately a lock-guarded class rather than an
+/// actor: an actor would force an `await` (a real executor hop) on every
+/// single SSE line, and a fast delta stream can produce dozens of lines per
+/// second — that overhead sat directly on the chat-streaming hot path for no
+/// benefit, since all this needs is a cheap best-effort flag.
+private final class ActivityTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sawActivity = false
+
+    func markActivity() {
+        lock.lock()
+        sawActivity = true
+        lock.unlock()
+    }
+
+    func checkAndReset() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let value = sawActivity
+        sawActivity = false
+        return value
     }
 }
 

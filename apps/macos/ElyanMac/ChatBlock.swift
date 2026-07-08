@@ -101,64 +101,163 @@ enum ChatBlock: Identifiable {
         }
     }
 
+    // MARK: - Parse helpers
+
+    private static func stringValue(_ value: Any?) -> String? {
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return nil
+    }
+
+    private static func firstString(_ dict: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = stringValue(dict[key]) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let int = value as? Int { return int }
+        if let double = value as? Double { return Int(double) }
+        if let string = stringValue(value) { return Int(string) }
+        return nil
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let double = value as? Double { return double }
+        if let int = value as? Int { return Double(int) }
+        if let string = stringValue(value) { return Double(string) }
+        return nil
+    }
+
+    private static func boolValue(_ value: Any?, default fallback: Bool = false) -> Bool {
+        if let bool = value as? Bool { return bool }
+        if let number = value as? NSNumber { return number.boolValue }
+        if let string = stringValue(value)?.lowercased() {
+            if ["true", "1", "yes"].contains(string) { return true }
+            if ["false", "0", "no"].contains(string) { return false }
+        }
+        return fallback
+    }
+
+    private static func stringArray(_ value: Any?) -> [String] {
+        guard let values = value as? [Any] else { return [] }
+        return values.compactMap { stringValue($0) }
+    }
+
+    private static func doubleArray(_ value: Any?) -> [Double]? {
+        guard let values = value as? [Any] else { return nil }
+        let mapped = values.compactMap { doubleValue($0) }
+        return mapped.isEmpty ? nil : mapped
+    }
+
+    private static func dictArray(_ value: Any?) -> [[String: Any]] {
+        if let dicts = value as? [[String: Any]] { return dicts }
+        guard let values = value as? [Any] else { return [] }
+        return values.compactMap { $0 as? [String: Any] }
+    }
+
+    private static func tableRows(from value: Any?, columns: [String]) -> [[String]] {
+        guard let values = value as? [Any] else { return [] }
+        return values.compactMap { row in
+            if let strings = row as? [String] {
+                return strings
+            }
+            if let anyValues = row as? [Any] {
+                return anyValues.map { stringValue($0) ?? "" }
+            }
+            if let dict = row as? [String: Any] {
+                let keys = columns.isEmpty ? dict.keys.sorted() : columns
+                return keys.map { stringValue(dict[$0]) ?? "" }
+            }
+            return nil
+        }
+    }
+
+    private static func tableColumns(from explicit: Any?, rowsValue: Any?) -> [String] {
+        let columns = stringArray(explicit)
+        if !columns.isEmpty { return columns }
+        guard let firstRow = (rowsValue as? [Any])?.first as? [String: Any] else { return [] }
+        return firstRow.keys.sorted()
+    }
+
+    private static func chartLabels(from rows: [[String: Any]]) -> [String]? {
+        let labels = rows.compactMap { firstString($0, keys: ["label", "name", "x", "category", "title"]) }
+        return labels.isEmpty ? nil : labels
+    }
+
+    private static func chartValues(from rows: [[String: Any]]) -> [Double]? {
+        let values = rows.compactMap { doubleValue($0["value"] ?? $0["y"] ?? $0["amount"]) }
+        return values.isEmpty ? nil : values
+    }
+
     // MARK: - Parse from JSON dictionary
 
     static func parse(from dict: [String: Any]) -> ChatBlock? {
-        guard let rawType = dict["type"] as? String else { return nil }
-        let stable = dict["stableBlockId"] as? String
+        guard let rawTypeValue = firstString(dict, keys: ["type"]) else { return nil }
+        let rawType = rawTypeValue.lowercased()
+        let stable = firstString(dict, keys: ["stableBlockId", "stable_block_id", "cacheDigest", "cache_digest", "id"])
 
         switch rawType {
         case "text":
-            guard let md = dict["markdown"] as? String, !md.isEmpty else { return nil }
+            guard let md = firstString(dict, keys: ["markdown", "text", "content"]) else { return nil }
             return .text(TextBlock(stableBlockId: stable, markdown: md))
 
         case "summary":
-            guard let summary = dict["summary"] as? String else { return nil }
+            guard let summary = firstString(dict, keys: ["summary", "markdown", "text", "content"]) else { return nil }
             return .summary(SummaryBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
+                title: firstString(dict, keys: ["title", "heading"]),
                 summary: summary
             ))
 
         case "next_steps":
-            guard let items = dict["items"] as? [String], !items.isEmpty else { return nil }
+            let items = stringArray(dict["items"]).isEmpty ? stringArray(dict["steps"]) : stringArray(dict["items"])
+            guard !items.isEmpty else { return nil }
             return .nextSteps(NextStepsBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
+                title: firstString(dict, keys: ["title", "heading"]),
                 items: items
             ))
 
         case "status":
-            guard let title = dict["title"] as? String else { return nil }
-            let statusStr = dict["status"] as? String ?? "running"
+            let title = firstString(dict, keys: ["title", "message", "summary"]) ?? "Durum"
+            let statusStr = firstString(dict, keys: ["status", "state"]) ?? "running"
             return .status(StatusBlock(
                 stableBlockId: stable,
                 status: StatusBlock.Status(rawValue: statusStr) ?? .running,
                 title: title,
-                detail: dict["detail"] as? String
+                detail: firstString(dict, keys: ["detail", "description", "content", "markdown"])
             ))
 
         case "task_trace":
-            guard let taskId = dict["taskId"] as? String,
-                  let title = dict["title"] as? String,
-                  let statusStr = dict["status"] as? String,
-                  let rawSteps = dict["steps"] as? [[String: Any]] else { return nil }
+            let taskId = firstString(dict, keys: ["taskId", "task_id"]) ?? stable ?? "task_trace"
+            let title = firstString(dict, keys: ["title", "message"]) ?? "Görev yürütülüyor"
+            let statusStr = firstString(dict, keys: ["status", "state"]) ?? "running"
+            let rawSteps = dictArray(dict["steps"])
             let steps = rawSteps.compactMap { TaskTraceStep.parse(from: $0) }
             return .taskTrace(TaskTraceBlock(
                 stableBlockId: stable,
                 taskId: taskId,
                 status: TaskTraceBlock.Status(rawValue: statusStr) ?? .running,
                 title: title,
-                phase: dict["phase"] as? String,
-                summary: dict["summary"] as? String,
-                progressLabel: dict["progressLabel"] as? String,
-                activeStepId: dict["activeStepId"] as? String,
+                phase: firstString(dict, keys: ["phase"]),
+                summary: firstString(dict, keys: ["summary", "markdown", "content"]),
+                progressLabel: firstString(dict, keys: ["progressLabel", "progress_label"]),
+                activeStepId: firstString(dict, keys: ["activeStepId", "active_step_id"]),
                 steps: steps
             ))
 
         case "attachment_context", "context_signal":
-            guard let title = dict["title"] as? String,
-                  let rawItems = dict["items"] as? [[String: Any]] else { return nil }
+            let title = firstString(dict, keys: ["title", "heading"]) ?? "Bağlam"
+            let rawItems = dictArray(dict["items"])
             let items = rawItems.compactMap { InfoCardItem.parse(from: $0) }
             return .infoCard(InfoCardBlock(
                 stableBlockId: stable,
@@ -168,123 +267,133 @@ enum ChatBlock: Identifiable {
             ))
 
         case "web_search":
-            guard let query = dict["query"] as? String,
-                  let rawResults = dict["results"] as? [[String: Any]] else { return nil }
+            let query = firstString(dict, keys: ["query", "title", "summary"]) ?? ""
+            var rawResults = dictArray(dict["results"])
+            if rawResults.isEmpty { rawResults = dictArray(dict["sources"]) }
+            if rawResults.isEmpty { rawResults = dictArray(dict["items"]) }
+            if rawResults.isEmpty, let url = firstString(dict, keys: ["url", "link", "href"]) {
+                rawResults = [["title": firstString(dict, keys: ["title", "source", "host"]) ?? url, "url": url]]
+            }
             let results = rawResults.compactMap { WebSearchResult.parse(from: $0) }
             return .webSearch(WebSearchBlock(
                 stableBlockId: stable,
                 query: query,
-                queries: dict["queries"] as? [String] ?? [query],
-                confidence: WebSearchBlock.Confidence(rawValue: dict["confidence"] as? String ?? "medium") ?? .medium,
+                queries: stringArray(dict["queries"]).isEmpty ? (query.isEmpty ? [] : [query]) : stringArray(dict["queries"]),
+                confidence: WebSearchBlock.Confidence(rawValue: firstString(dict, keys: ["confidence"]) ?? "medium") ?? .medium,
                 results: results
             ))
 
         case "code":
-            guard let code = dict["code"] as? String else { return nil }
+            guard let code = firstString(dict, keys: ["code", "content", "markdown"]) else { return nil }
             return .code(CodeBlock(
                 stableBlockId: stable,
                 code: code,
-                language: dict["language"] as? String,
-                filename: dict["filename"] as? String,
-                title: dict["title"] as? String,
-                collapsed: dict["collapsed"] as? Bool ?? false
+                language: firstString(dict, keys: ["language", "lang"]),
+                filename: firstString(dict, keys: ["filename", "fileName", "name"]),
+                title: firstString(dict, keys: ["title"]),
+                collapsed: boolValue(dict["collapsed"])
             ))
 
         case "table":
-            guard let cols = dict["columns"] as? [String],
-                  let rows = dict["rows"] as? [[String]] else { return nil }
+            let rawRows = dict["rows"] ?? dict["data"] ?? dict["items"]
+            let cols = tableColumns(from: dict["columns"] ?? dict["headers"], rowsValue: rawRows)
+            let rows = tableRows(from: rawRows, columns: cols)
+            guard !cols.isEmpty else { return nil }
             return .table(TableBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
-                summary: dict["summary"] as? String,
+                title: firstString(dict, keys: ["title"]),
+                summary: firstString(dict, keys: ["summary", "description", "markdown"]),
                 columns: cols,
                 rows: rows,
-                totalRowCount: dict["totalRowCount"] as? Int,
-                caption: dict["caption"] as? String,
-                density: TableBlock.Density(rawValue: dict["density"] as? String ?? "comfortable") ?? .comfortable
+                totalRowCount: intValue(dict["totalRowCount"] ?? dict["total_row_count"]),
+                caption: firstString(dict, keys: ["caption"]),
+                density: TableBlock.Density(rawValue: firstString(dict, keys: ["density"]) ?? "comfortable") ?? .comfortable
             ))
 
         case "chart":
-            guard let chartTypeStr = dict["chartType"] as? String else { return nil }
+            let pointRows = dictArray(dict["points"]).isEmpty
+                ? (dictArray(dict["data"]).isEmpty ? dictArray(dict["items"]) : dictArray(dict["data"]))
+                : dictArray(dict["points"])
+            let chartTypeStr = firstString(dict, keys: ["chartType", "chart_type", "kind", "block_type"]) ?? "bar"
             return .chart(ChartBlock(
                 stableBlockId: stable,
                 chartType: ChartBlock.ChartType(rawValue: chartTypeStr) ?? .bar,
-                title: dict["title"] as? String,
-                labels: dict["labels"] as? [String],
-                values: dict["values"] as? [Double],
-                series: (dict["series"] as? [[String: Any]])?.compactMap { ChartSeries.parse(from: $0) },
-                xLabel: dict["xLabel"] as? String,
-                yLabel: dict["yLabel"] as? String,
-                caption: dict["caption"] as? String
+                title: firstString(dict, keys: ["title"]),
+                labels: stringArray(dict["labels"]).isEmpty
+                    ? (stringArray(dict["categories"]).isEmpty ? (chartLabels(from: pointRows) ?? stringArray(dict["x"])) : stringArray(dict["categories"]))
+                    : stringArray(dict["labels"]),
+                values: doubleArray(dict["values"] ?? dict["y"]) ?? chartValues(from: pointRows),
+                series: (dictArray(dict["series"]).isEmpty ? dictArray(dict["datasets"]) : dictArray(dict["series"]))
+                    .compactMap { ChartSeries.parse(from: $0) },
+                xLabel: firstString(dict, keys: ["xLabel", "x_label"]),
+                yLabel: firstString(dict, keys: ["yLabel", "y_label"]),
+                caption: firstString(dict, keys: ["caption", "summary"])
             ))
 
         case "math":
-            guard let content = dict["content"] as? String else { return nil }
+            guard let content = firstString(dict, keys: ["content", "latex", "tex", "equation", "expression", "markdown"]) else { return nil }
             return .math(MathBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
+                title: firstString(dict, keys: ["title", "label"]),
                 content: content,
-                latex: dict["latex"] as? String,
-                displayMode: dict["displayMode"] as? Bool ?? true,
-                result: dict["result"] as? String,
-                explanation: dict["explanation"] as? String
+                latex: firstString(dict, keys: ["latex", "tex"]),
+                displayMode: boolValue(dict["displayMode"] ?? dict["display_mode"], default: true),
+                result: firstString(dict, keys: ["result", "answer"]),
+                explanation: firstString(dict, keys: ["explanation", "detail", "summary"])
             ))
 
         case "math_surface_3d":
             return .mathSurface3D(MathSurface3DBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
-                expression: dict["expression"] as? String,
-                caption: dict["caption"] as? String
+                title: firstString(dict, keys: ["title", "label"]),
+                expression: firstString(dict, keys: ["expression", "expr", "formula", "function"]),
+                caption: firstString(dict, keys: ["caption", "summary"])
             ))
 
         case "svg":
             return .svg(SvgBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
-                svg: (dict["svg"] as? String) ?? (dict["markup"] as? String),
-                url: dict["url"] as? String,
-                caption: dict["caption"] as? String
+                title: firstString(dict, keys: ["title"]),
+                svg: firstString(dict, keys: ["svg", "SVG", "markup", "source", "xml", "content", "code"]),
+                url: firstString(dict, keys: ["url", "src"]),
+                caption: firstString(dict, keys: ["caption", "summary"])
             ))
 
         case "file":
-            guard let fileName = dict["fileName"] as? String else { return nil }
+            guard let fileName = firstString(dict, keys: ["fileName", "filename", "name", "title"]) else { return nil }
             return .file(FileBlock(
                 stableBlockId: stable,
                 fileName: fileName,
-                mimeType: dict["mimeType"] as? String,
-                sizeBytes: dict["sizeBytes"] as? Int,
-                preview: dict["preview"] as? String
+                mimeType: firstString(dict, keys: ["mimeType", "mime_type", "contentType", "mime"]),
+                sizeBytes: intValue(dict["sizeBytes"] ?? dict["size"] ?? dict["fileSize"]),
+                preview: firstString(dict, keys: ["preview", "summary", "description"])
             ))
 
         case "attachment_ack":
-            guard let summary = dict["summary"] as? String else { return nil }
+            guard let summary = firstString(dict, keys: ["summary", "markdown", "text", "content"]) else { return nil }
             return .attachmentAck(AttachmentAckBlock(
                 stableBlockId: stable,
                 summary: summary,
-                attachmentCount: dict["attachmentCount"] as? Int ?? 0,
-                pageCount: dict["pageCount"] as? Int,
-                hasTable: dict["hasTable"] as? Bool,
-                hasImage: dict["hasImage"] as? Bool
+                attachmentCount: intValue(dict["attachmentCount"] ?? dict["attachment_count"]) ?? 1,
+                pageCount: intValue(dict["pageCount"] ?? dict["page_count"]),
+                hasTable: dict["hasTable"] as? Bool ?? dict["has_table"] as? Bool,
+                hasImage: dict["hasImage"] as? Bool ?? dict["has_image"] as? Bool
             ))
 
         case "image_analysis":
-            guard let description = dict["description"] as? String else { return nil }
+            guard let description = firstString(dict, keys: ["description", "markdown", "text", "content", "summary"]) else { return nil }
             return .imageAnalysis(ImageAnalysisBlock(
                 stableBlockId: stable,
                 description: description,
-                detectedText: dict["detectedText"] as? String,
-                tags: dict["tags"] as? [String]
+                detectedText: firstString(dict, keys: ["detectedText", "detected_text", "ocr"]),
+                tags: stringArray(dict["tags"]).isEmpty ? stringArray(dict["labels"]) : stringArray(dict["tags"])
             ))
 
         case "goal_progress":
-            guard let goalId = dict["goalId"] as? String ?? dict["goal_id"] as? String, !goalId.isEmpty else { return nil }
-            let ofSteps = max(1, min(10_000, (dict["ofSteps"] as? Int) ?? (dict["of_steps"] as? Int) ?? 1))
-            let step = max(0, min(ofSteps, (dict["step"] as? Int) ?? 0))
-            let advancedTo = (dict["advancedTo"] as? String)
-                ?? (dict["advanced_to"] as? String)
-                ?? (dict["summary"] as? String)
-                ?? (dict["markdown"] as? String)
+            guard let goalId = firstString(dict, keys: ["goalId", "goal_id", "id"]) else { return nil }
+            let ofSteps = max(1, min(10_000, intValue(dict["ofSteps"] ?? dict["of_steps"] ?? dict["total"]) ?? 1))
+            let step = max(0, min(ofSteps, intValue(dict["step"] ?? dict["current"]) ?? 0))
+            let advancedTo = firstString(dict, keys: ["advancedTo", "advanced_to", "summary", "markdown", "text"])
                 ?? ""
             return .goalProgress(GoalProgressBlock(
                 stableBlockId: stable,
@@ -292,137 +401,142 @@ enum ChatBlock: Identifiable {
                 step: step,
                 ofSteps: ofSteps,
                 advancedTo: advancedTo,
-                blocker: dict["blocker"] as? String,
-                done: dict["done"] as? Bool ?? false
+                blocker: firstString(dict, keys: ["blocker"]),
+                done: boolValue(dict["done"] ?? dict["complete"] ?? dict["completed"])
             ))
 
         case "actionable":
-            guard let kindStr = dict["kind"] as? String,
-                  let title = dict["title"] as? String else { return nil }
+            let kindStr = firstString(dict, keys: ["kind", "typeHint", "actionType"]) ?? "retry_option"
+            let title = firstString(dict, keys: ["title", "label", "actionLabel", "message"]) ?? "İşlem gerekli"
             return .actionable(ActionableBlock(
                 stableBlockId: stable,
                 kind: ActionableBlock.Kind(rawValue: kindStr) ?? .retry_option,
                 title: title,
-                detail: dict["detail"] as? String
+                detail: firstString(dict, keys: ["detail", "description", "summary", "markdown"])
             ))
 
         case "block_group":
-            guard let children = dict["children"] as? [[String: Any]] else { return nil }
+            var children = dictArray(dict["children"])
+            if children.isEmpty { children = dictArray(dict["blocks"]) }
+            if children.isEmpty { children = dictArray(dict["items"]) }
             let parsed = children.compactMap { ChatBlock.parse(from: $0) }
             return .blockGroup(BlockGroupBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
+                title: firstString(dict, keys: ["title", "heading"]),
                 children: parsed
             ))
 
         case "document_block":
-            guard let rawSections = dict["sections"] as? [[String: Any]] else { return nil }
-            let sections = rawSections.compactMap { DocumentSection.parse(from: $0) }
+            var sections = dictArray(dict["sections"]).compactMap { DocumentSection.parse(from: $0) }
+            if sections.isEmpty, let content = firstString(dict, keys: ["content", "markdown", "text"]) {
+                sections = [DocumentSection(heading: nil, content: content, level: nil, role: nil)]
+            }
             return .document(DocumentBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
+                title: firstString(dict, keys: ["title", "name"]),
                 sections: sections,
-                format: dict["format"] as? String,
-                summary: dict["summary"] as? String
+                format: firstString(dict, keys: ["format", "mimeType", "mime_type"]),
+                summary: firstString(dict, keys: ["summary", "description", "markdown"])
             ))
 
         case "reasoning_trace":
             return .reasoningTrace(ReasoningTraceBlock(
                 stableBlockId: stable,
-                status: dict["status"] as? String ?? "completed",
-                content: (dict["content"] as? String) ?? (dict["markdown"] as? String) ?? ""
+                status: firstString(dict, keys: ["status", "state"]) ?? "completed",
+                content: firstString(dict, keys: ["content", "markdown", "text"]) ?? ""
             ))
 
         case "terminal":
-            let exit = (dict["exitCode"] as? Int) ?? (dict["exit_code"] as? Int)
+            let exit = intValue(dict["exitCode"] ?? dict["exit_code"])
             return .terminal(TerminalBlock(
                 stableBlockId: stable,
-                output: (dict["output"] as? String) ?? (dict["content"] as? String) ?? "",
-                command: (dict["command"] as? String) ?? (dict["cmd"] as? String),
+                output: firstString(dict, keys: ["output", "content", "text", "markdown"]) ?? "",
+                command: firstString(dict, keys: ["command", "cmd"]),
                 exitCode: exit,
-                truncated: (dict["truncated"] as? Bool) ?? false
+                truncated: boolValue(dict["truncated"])
             ))
 
         case "automation":
             return .automation(AutomationBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String ?? "Otomasyon",
-                description: (dict["description"] as? String) ?? (dict["summary"] as? String) ?? "",
-                schedule: dict["schedule"] as? String,
-                triggerType: (dict["triggerType"] as? String) ?? (dict["trigger_type"] as? String),
-                steps: (dict["steps"] as? [Any])?.compactMap { $0 as? String } ?? [],
-                automationId: (dict["automationId"] as? String) ?? (dict["automation_id"] as? String)
+                title: firstString(dict, keys: ["title", "name"]) ?? "Otomasyon",
+                description: firstString(dict, keys: ["description", "summary", "markdown", "text"]) ?? "",
+                schedule: firstString(dict, keys: ["schedule", "cron", "when"]),
+                triggerType: firstString(dict, keys: ["triggerType", "trigger_type", "trigger"]),
+                steps: stringArray(dict["steps"]),
+                automationId: firstString(dict, keys: ["automationId", "automation_id", "id"])
             ))
 
         case "pdf_generate":
-            let pages = (dict["estimatedPages"] as? Int) ?? (dict["pages"] as? Int) ?? 1
-            let sections = (dict["sections"] as? [[String: Any]])?.map {
+            let pages = intValue(dict["estimatedPages"] ?? dict["estimated_pages"] ?? dict["pages"]) ?? 1
+            let sections = dictArray(dict["sections"]).map {
                 PdfGenerateSection(
-                    title: $0["title"] as? String,
-                    content: ($0["content"] as? String) ?? ($0["markdown"] as? String) ?? ""
+                    title: firstString($0, keys: ["title", "heading"]),
+                    content: firstString($0, keys: ["content", "markdown", "text"]) ?? ""
                 )
-            } ?? []
+            }
             return .pdfGenerate(PdfGenerateBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String,
+                title: firstString(dict, keys: ["title", "name"]),
                 estimatedPages: pages,
-                language: dict["language"] as? String ?? "tr",
+                language: firstString(dict, keys: ["language", "lang"]) ?? "tr",
                 sections: sections
             ))
 
         case "pdf_viewer":
-            let pageCount = (dict["pageCount"] as? Int) ?? (dict["page_count"] as? Int)
+            let pageCount = intValue(dict["pageCount"] ?? dict["page_count"])
             return .pdfViewer(PdfViewerBlock(
                 stableBlockId: stable,
-                title: (dict["title"] as? String) ?? (dict["name"] as? String),
-                fileId: (dict["fileId"] as? String) ?? (dict["file_id"] as? String) ?? (dict["id"] as? String),
-                localPath: (dict["localPath"] as? String) ?? (dict["local_path"] as? String),
-                remoteUrl: (dict["remoteUrl"] as? String) ?? (dict["remote_url"] as? String) ?? (dict["url"] as? String),
+                title: firstString(dict, keys: ["title", "name"]),
+                fileId: firstString(dict, keys: ["fileId", "file_id", "documentId", "document_id", "id"]),
+                localPath: firstString(dict, keys: ["localPath", "local_path", "path"]),
+                remoteUrl: firstString(dict, keys: ["remoteUrl", "remote_url", "url", "downloadUrl", "download_url"]),
                 pageCount: pageCount,
-                thumbnailUrl: (dict["thumbnailUrl"] as? String) ?? (dict["thumbnail_url"] as? String)
+                thumbnailUrl: firstString(dict, keys: ["thumbnailUrl", "thumbnail_url"])
             ))
 
         case "desktop_suggestion":
             return .desktopSuggestion(DesktopSuggestionBlock(
                 stableBlockId: stable,
-                reason: (dict["reason"] as? String) ?? (dict["summary"] as? String) ?? "",
-                requiredCapabilities: (dict["requiredCapabilities"] as? [Any])?.compactMap { $0 as? String }
-                    ?? (dict["required_capabilities"] as? [Any])?.compactMap { $0 as? String } ?? [],
-                detectedIntent: (dict["detectedIntent"] as? String) ?? (dict["detected_intent"] as? String)
+                reason: firstString(dict, keys: ["reason", "summary", "markdown", "text"]) ?? "",
+                requiredCapabilities: stringArray(dict["requiredCapabilities"]).isEmpty
+                    ? stringArray(dict["required_capabilities"])
+                    : stringArray(dict["requiredCapabilities"]),
+                detectedIntent: firstString(dict, keys: ["detectedIntent", "detected_intent", "intent"])
             ))
 
         case "memory_echo":
             return .memoryEcho(MemoryEchoBlock(
                 stableBlockId: stable,
-                recall: (dict["recall"] as? String) ?? (dict["content"] as? String) ?? "",
-                question: (dict["question"] as? String) ?? "",
-                confidence: (dict["confidence"] as? Double) ?? 0
+                recall: firstString(dict, keys: ["recall", "memory", "title", "content"]) ?? "",
+                question: firstString(dict, keys: ["question", "markdown", "text"]) ?? "",
+                confidence: doubleValue(dict["confidence"]) ?? 0
             ))
 
         case "proactive_touch":
             return .proactiveTouch(ProactiveTouchBlock(
                 stableBlockId: stable,
-                suggestion: (dict["suggestion"] as? String) ?? (dict["content"] as? String) ?? "",
-                cta: (dict["cta"] as? String) ?? "",
-                context: (dict["context"] as? String) ?? (dict["reason"] as? String)
+                suggestion: firstString(dict, keys: ["suggestion", "content", "markdown", "text"]) ?? "",
+                cta: firstString(dict, keys: ["cta", "action", "label"]) ?? "",
+                context: firstString(dict, keys: ["context", "reason", "summary"])
             ))
 
         case "artifact":
             return .artifact(ArtifactBlock(
                 stableBlockId: stable,
-                artifactType: (dict["artifactType"] as? String) ?? (dict["artifact_type"] as? String) ?? "image",
-                url: (dict["url"] as? String) ?? (dict["uri"] as? String) ?? (dict["src"] as? String) ?? "",
-                artifactId: (dict["artifactId"] as? String) ?? (dict["artifact_id"] as? String),
-                title: dict["title"] as? String,
-                mime: (dict["mime"] as? String) ?? (dict["mimeType"] as? String),
-                summary: dict["summary"] as? String,
-                preview: dict["preview"] as? String
+                artifactType: firstString(dict, keys: ["artifactType", "artifact_type", "typeHint"]) ?? "image",
+                url: firstString(dict, keys: ["url", "uri", "src", "path"]) ?? "",
+                artifactId: firstString(dict, keys: ["artifactId", "artifact_id", "id"]),
+                title: firstString(dict, keys: ["title", "name"]),
+                mime: firstString(dict, keys: ["mime", "mimeType", "mime_type", "contentType"]),
+                summary: firstString(dict, keys: ["summary", "description", "markdown"]),
+                preview: firstString(dict, keys: ["preview", "previewText", "preview_text", "content"])
             ))
 
         case "document_block_skeleton":
             return .documentSkeleton(DocumentSkeletonBlock(
                 stableBlockId: stable,
-                title: dict["title"] as? String
+                title: firstString(dict, keys: ["title", "name"])
             ))
 
         default:
@@ -431,9 +545,7 @@ enum ChatBlock: Identifiable {
             if let generic = GenericBlock.parse(rawType: rawType, dict: dict, stableBlockId: stable) {
                 return .generic(generic)
             }
-            let text = (dict["markdown"] as? String)
-                ?? (dict["text"] as? String)
-                ?? (dict["content"] as? String)
+            let text = firstString(dict, keys: ["markdown", "text", "content", "summary"])
                 ?? ""
             return .unknown(type: rawType, rawText: text)
         }
@@ -502,14 +614,22 @@ struct TaskTraceStep: Equatable {
     var detail: String?
 
     static func parse(from dict: [String: Any]) -> TaskTraceStep? {
-        guard let id = dict["id"] as? String,
-              let label = dict["label"] as? String,
-              let statusStr = dict["status"] as? String else { return nil }
+        func str(_ keys: [String]) -> String? {
+            for key in keys {
+                if let value = dict[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return value
+                }
+            }
+            return nil
+        }
+        guard let id = str(["id", "stepId", "step_id"]),
+              let label = str(["label", "title", "name"]) else { return nil }
+        let statusStr = str(["status", "state"]) ?? "pending"
         return TaskTraceStep(
             id: id,
             label: label,
             status: Status(rawValue: statusStr) ?? .pending,
-            detail: dict["detail"] as? String
+            detail: str(["detail", "description", "summary"])
         )
     }
 }
@@ -533,8 +653,9 @@ struct InfoCardItem: Equatable {
     var label: String
     var value: String
     static func parse(from dict: [String: Any]) -> InfoCardItem? {
-        guard let label = dict["label"] as? String,
-              let value = dict["value"] as? String else { return nil }
+        let label = (dict["label"] as? String) ?? (dict["title"] as? String) ?? (dict["name"] as? String)
+        let value = (dict["value"] as? String) ?? (dict["text"] as? String) ?? (dict["content"] as? String)
+        guard let label, let value else { return nil }
         return InfoCardItem(label: label, value: value)
     }
 }
@@ -553,14 +674,15 @@ struct WebSearchResult: Equatable {
     var sourceHost: String?
     var verificationState: String  // "verified" | "partial" | "unverified"
     static func parse(from dict: [String: Any]) -> WebSearchResult? {
-        guard let title = dict["title"] as? String,
-              let url = dict["url"] as? String else { return nil }
+        let url = (dict["url"] as? String) ?? (dict["link"] as? String) ?? (dict["href"] as? String)
+        guard let url, !url.isEmpty else { return nil }
+        let title = (dict["title"] as? String) ?? (dict["name"] as? String) ?? (dict["source"] as? String) ?? url
         return WebSearchResult(
             title: title,
             url: url,
-            snippet: dict["snippet"] as? String,
-            sourceHost: dict["sourceHost"] as? String,
-            verificationState: dict["verificationState"] as? String ?? "unverified"
+            snippet: (dict["snippet"] as? String) ?? (dict["summary"] as? String) ?? (dict["description"] as? String),
+            sourceHost: (dict["sourceHost"] as? String) ?? (dict["source_host"] as? String) ?? (dict["host"] as? String),
+            verificationState: (dict["verificationState"] as? String) ?? (dict["verification_state"] as? String) ?? "unverified"
         )
     }
 }
@@ -600,10 +722,25 @@ struct ChartSeries: Equatable {
     var labels: [String]?
     var values: [Double]?
     static func parse(from dict: [String: Any]) -> ChartSeries? {
-        let values = (dict["values"] as? [Double]) ?? (dict["values"] as? [Int])?.map { Double($0) }
+        func strings(_ value: Any?) -> [String]? {
+            guard let values = value as? [Any] else { return nil }
+            let mapped = values.compactMap { $0 as? String }
+            return mapped.isEmpty ? nil : mapped
+        }
+        func doubles(_ value: Any?) -> [Double]? {
+            guard let values = value as? [Any] else { return nil }
+            let mapped = values.compactMap { item -> Double? in
+                if let double = item as? Double { return double }
+                if let int = item as? Int { return Double(int) }
+                if let string = item as? String { return Double(string) }
+                return nil
+            }
+            return mapped.isEmpty ? nil : mapped
+        }
+        let values = doubles(dict["values"] ?? dict["data"] ?? dict["y"])
         return ChartSeries(
-            name: dict["name"] as? String,
-            labels: dict["labels"] as? [String],
+            name: (dict["name"] as? String) ?? (dict["title"] as? String) ?? (dict["label"] as? String),
+            labels: strings(dict["labels"] ?? dict["categories"] ?? dict["x"]),
             values: values
         )
     }
@@ -613,13 +750,17 @@ struct ChartBlock: Equatable {
     enum ChartType: String {
         case bar, line, pie, area, scatter, geometry, function_, surface3d, mesh, heatmap
         init?(rawValue: String) {
-            switch rawValue {
-            case "bar": self = .bar
-            case "line": self = .line
-            case "pie": self = .pie
-            case "area": self = .area
-            case "scatter": self = .scatter
-            case "function": self = .function_
+            switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "bar", "bar_chart": self = .bar
+            case "line", "line_chart": self = .line
+            case "pie", "pie_chart", "donut", "doughnut": self = .pie
+            case "area", "area_chart": self = .area
+            case "scatter", "scatter_plot": self = .scatter
+            case "geometry": self = .geometry
+            case "function", "fn": self = .function_
+            case "surface3d", "surface_3d", "3d_surface": self = .surface3d
+            case "mesh": self = .mesh
+            case "heatmap", "heat_map": self = .heatmap
             default: return nil
             }
         }
@@ -752,9 +893,13 @@ struct DocumentSection: Equatable {
     var level: Int?
     var role: String?
     static func parse(from dict: [String: Any]) -> DocumentSection? {
-        guard let content = dict["content"] as? String else { return nil }
+        let content = (dict["content"] as? String)
+            ?? (dict["markdown"] as? String)
+            ?? (dict["text"] as? String)
+            ?? ""
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return DocumentSection(
-            heading: dict["heading"] as? String,
+            heading: (dict["heading"] as? String) ?? (dict["title"] as? String),
             content: content,
             level: dict["level"] as? Int,
             role: dict["role"] as? String

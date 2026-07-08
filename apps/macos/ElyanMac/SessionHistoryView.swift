@@ -7,6 +7,9 @@ struct SessionHistoryView: View {
     @State private var sessions: [ElyanSession] = []
     @State private var selected: ElyanSession? = nil
     @State private var isLoading = false
+    @State private var isLoadingMore = false
+    @State private var hasMoreSessions = false
+    @State private var nextCursor: String? = nil
     @State private var error: String = ""
     @State private var confirmDelete: ElyanSession? = nil
 
@@ -69,6 +72,20 @@ struct SessionHistoryView: View {
                         }
                 }
                 .listStyle(.sidebar)
+                if hasMoreSessions {
+                    Button {
+                        Task { await loadMoreSessions() }
+                    } label: {
+                        if isLoadingMore {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Daha fazla")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.vertical, 8)
+                    .disabled(isLoadingMore)
+                }
             }
         }
         .frame(minWidth: 220)
@@ -104,14 +121,33 @@ struct SessionHistoryView: View {
     }
 
     private func loadSessions() async {
+        if isLoading { return }
         isLoading = true
         error = ""
         do {
-            sessions = try await appState.backend.getSessions()
+            let page = try await appState.backend.getSessionsPage(limit: 12)
+            sessions = page.sessions
+            hasMoreSessions = page.hasMore
+            nextCursor = page.nextCursor
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
+    }
+
+    private func loadMoreSessions() async {
+        guard !isLoadingMore, hasMoreSessions else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let page = try await appState.backend.getSessionsPage(limit: 12, cursor: nextCursor)
+            let existingIds = Set(sessions.map(\.id))
+            sessions.append(contentsOf: page.sessions.filter { !existingIds.contains($0.id) })
+            hasMoreSessions = page.hasMore
+            nextCursor = page.nextCursor
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     private func deleteSession(_ session: ElyanSession) async {
@@ -163,6 +199,9 @@ struct SessionDetailView: View {
 
     @State private var messages: [ElyanSessionMessage] = []
     @State private var isLoading = false
+    @State private var isLoadingMore = false
+    @State private var hasMoreMessages = false
+    @State private var nextCursor: String? = nil
     @State private var error: String = ""
 
     var body: some View {
@@ -183,6 +222,18 @@ struct SessionDetailView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
+                            if hasMoreMessages {
+                                Button {
+                                    Task { await loadMoreMessages() }
+                                } label: {
+                                    if isLoadingMore {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Text("Daha eski mesajlar")
+                                    }
+                                }
+                                .buttonStyle(.borderless)
+                            }
                             ForEach(messages) { msg in
                                 HistoryBubble(message: msg)
                                     .id(msg.id)
@@ -203,15 +254,38 @@ struct SessionDetailView: View {
     }
 
     private func load() async {
+        if isLoading { return }
         isLoading = true
         error = ""
         do {
-            let result = try await appState.backend.getSessionMessages(sessionId: session.id)
+            let result = try await appState.backend.getSessionMessages(sessionId: session.id, limit: 30)
             messages = result.messages
+            hasMoreMessages = result.hasMore
+            nextCursor = result.nextCursor
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
+    }
+
+    private func loadMoreMessages() async {
+        guard !isLoadingMore, hasMoreMessages else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let result = try await appState.backend.getSessionMessages(
+                sessionId: session.id,
+                limit: 30,
+                cursor: nextCursor
+            )
+            let existingIds = Set(messages.map(\.id))
+            let older = result.messages.filter { !existingIds.contains($0.id) }
+            messages.insert(contentsOf: older, at: 0)
+            hasMoreMessages = result.hasMore
+            nextCursor = result.nextCursor
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
     }
 }
 

@@ -42,12 +42,16 @@ enum ElyanTheme {
 
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
+    // KRİTİK: ChatStore ayrı bir ObservableObject — appState üzerinden
+    // computed property ile erişmek onun @Published mutasyonlarını
+    // GÖZLEMLEMEZ (AppState yalnız supervisor.objectWillChange'i iletiyor).
+    // Bu yüzden kullanıcı mesajı ve stream delta'ları ekrana ancak başka bir
+    // global yenileme (25 sn'lik dispatch watchdog'u) tetiklenince düşüyordu.
+    @ObservedObject var chat: ChatStore
     @State private var draft = ""
     @AppStorage("showTimestamps") private var showTimestamps: Bool = false
     @AppStorage("compactBubbles") private var compactBubbles: Bool = false
     @AppStorage("chatFontSize") private var chatFontSize: Double = 14
-
-    private var chat: ChatStore { appState.chat }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -233,6 +237,10 @@ private struct ChatBubble: View, Equatable {
 
                 contentView
 
+                if message.isHistoryPending || message.isHistoryFailed {
+                    HistoryStatusBadge(message: message)
+                }
+
                 if showTimestamp {
                     Text(message.timestamp.formatted(date: .omitted, time: .shortened))
                         .font(.caption2)
@@ -275,6 +283,38 @@ private struct ChatBubble: View, Equatable {
             // Assistant: markdown fallback
             MarkdownBubble(markdown: message.text, fontSize: fontSize, compact: compact)
         }
+    }
+}
+
+// MARK: - History status badge
+//
+// Reopening a session whose last assistant message never reached a terminal
+// backend status (e.g. the known chat-task deadlock: fire-and-forget
+// in-process processing crashes/times out, the lease sweeper resets it to
+// "queued", and nothing ever picks a queued chat task back up) previously
+// rendered as a plain, unlabeled — often empty — bubble, indistinguishable
+// from a normal reply. This makes the real server-side status visible
+// instead of silently showing nothing.
+private struct HistoryStatusBadge: View {
+    let message: ChatMessage
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if message.isHistoryPending {
+                ProgressView().controlSize(.mini)
+                Text("Hâlâ işleniyor…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if message.isHistoryFailed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Text(message.historyError?.isEmpty == false ? message.historyError! : "Yanıt alınamadı")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal, 4)
     }
 }
 

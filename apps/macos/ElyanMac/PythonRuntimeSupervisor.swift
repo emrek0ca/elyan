@@ -19,7 +19,9 @@ final class PythonRuntimeSupervisor: ObservableObject {
     @Published var taskInbox: [RuntimeTaskItem] = []
     @Published var pairingSummary = ""
     @Published var pairingCode = ""
+    @Published var pairingQrText = ""
     @Published var pairingClaimed = false
+    @Published var pairingExpired = false
     @Published var isExecutingAssignedTasks = false
 
     var pendingTaskCount: Int {
@@ -42,6 +44,16 @@ final class PythonRuntimeSupervisor: ObservableObject {
 
     private var pairingPollTask: Task<Void, Never>?
     var onAuthRefreshNeeded: (() async -> Void)?
+    /// Runtime tam operasyonel hale geldiğinde (boot veya crash-restart
+    /// sonrası) bir kez tetiklenir — AppState bunu backend'de bekleyen
+    /// görevleri HEMEN çekip yürütmek için kullanır; yoksa uygulama açılışında
+    /// kuyrukta bekleyen görevler ilk SSE event'ine kadar el değmeden kalırdı.
+    var onBecameOperational: (() async -> Void)?
+
+    private var crashRestartAttempts = 0
+    private var crashRestartTask: Task<Void, Never>?
+    private static let maxCrashRestartAttempts = 3
+    private var lastStartSession: ElyanAuthSession?
 
     init() {
         bridge.onUnsolicitedResponse = { [weak self] response in
@@ -54,9 +66,15 @@ final class PythonRuntimeSupervisor: ObservableObject {
                 self?.lastDiagnostic = diagnostic
             }
         }
+        bridge.onProcessTerminated = { [weak self] status in
+            Task { @MainActor in
+                self?.handleUnexpectedTermination(status: status)
+            }
+        }
     }
 
     func start(initialSession: ElyanAuthSession? = nil) {
+        lastStartSession = initialSession
         Task {
             do {
                 try bridge.startProcess()
@@ -66,6 +84,12 @@ final class PythonRuntimeSupervisor: ObservableObject {
                 pendingAuthSync = true
                 _ = await flushPendingAuthSync()
                 await refreshAll()
+                // A clean, successful start resets the crash counter so a
+                // later unrelated crash gets the full retry budget again.
+                crashRestartAttempts = 0
+                if isOperational {
+                    await onBecameOperational?()
+                }
             } catch {
                 isRunning = false
                 runtimeReady = false
@@ -77,6 +101,8 @@ final class PythonRuntimeSupervisor: ObservableObject {
     }
 
     func stop() {
+        crashRestartTask?.cancel()
+        crashRestartTask = nil
         pairingPollTask?.cancel()
         pairingPollTask = nil
         bridge.stopProcess()
@@ -87,10 +113,87 @@ final class PythonRuntimeSupervisor: ObservableObject {
         lifecycleState = "stopped"
     }
 
+    /// A crash previously left `isRunning`/`lifecycleState` stale (nothing
+    /// updated them until the next request happened to fail) and nothing
+    /// ever restarted the process — the user's only signal was a status dot
+    /// quietly going orange. This reflects the crash immediately and retries
+    /// with a bounded backoff instead of staying silently dead forever.
+    private func handleUnexpectedTermination(status: Int32) {
+        isRunning = false
+        runtimeReady = false
+        backendReady = false
+        lifecycleState = "crashed"
+        lastError = "Python runtime beklenmedik şekilde sonlandı (exit \(status))."
+
+        guard crashRestartAttempts < Self.maxCrashRestartAttempts else {
+            lastError += " Otomatik yeniden başlatma denemeleri tükendi; manuel olarak yeniden başlatın."
+            return
+        }
+        crashRestartAttempts += 1
+        let delaySeconds = [2.0, 5.0, 15.0][min(crashRestartAttempts - 1, 2)]
+        crashRestartTask?.cancel()
+        crashRestartTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.start(initialSession: self.lastStartSession)
+        }
+    }
+
     func syncAuthSession(_ session: ElyanAuthSession?) async {
         pendingAuthSession = session
         pendingAuthSync = true
         _ = await flushPendingAuthSync()
+    }
+
+    // MARK: - Local-first chat (Jarvis yolu)
+
+    /// Yerel sohbet bağlamının kimliği. Boşsa bridge yeni konuşma açar ve
+    /// dönen kimlik burada saklanır; cloud session'a geçişte üzerine yazılır.
+    private var localConversationId = ""
+
+    func setLocalConversation(_ id: String) {
+        localConversationId = id
+    }
+
+    struct LocalChatReply {
+        let text: String
+        let needsConfirmation: Bool
+    }
+
+    /// Komutu YEREL runtime'da çalıştırır (deterministik router + araçlar).
+    /// Bulut round-trip'i yok: "safariyi aç" gerçekten Safari'yi açar ve
+    /// sonuç senkron döner. Bridge çalışmıyorsa fırlatır — çağıran buluta
+    /// düşebilir.
+    func sendLocalChat(_ text: String) async throws -> LocalChatReply {
+        guard isRunning, runtimeReady else {
+            throw RuntimeBridgeSwiftError.runtimeNotStarted
+        }
+        let response = try await bridge.request(
+            capability: "conversation.send",
+            payload: [
+                "conversationId": localConversationId,
+                "text": text,
+            ],
+            timeoutSeconds: 180
+        )
+        let map = response.resultMap
+        if let cid = string(map["conversationId"]), !cid.isEmpty {
+            localConversationId = cid
+        }
+        let content = string(map["assistantMessage"]) ?? ""
+        guard response.ok, !content.isEmpty else {
+            let message = string((map["error"] as? [String: Any])?["message"])
+                ?? "Yerel runtime yanıt üretemedi."
+            throw NSError(
+                domain: "ElyanLocalChat",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        }
+        return LocalChatReply(
+            text: content,
+            needsConfirmation: bool(map["needsConfirmation"])
+        )
     }
 
 
@@ -99,7 +202,7 @@ final class PythonRuntimeSupervisor: ObservableObject {
     /// the result immediately rather than waiting for the next tick.
     @discardableResult
     func executeAssignedTasks(limit: Int = 5) async -> Bool {
-        guard isRunning else { return false }
+        guard isRunning, !isExecutingAssignedTasks else { return false }
         isExecutingAssignedTasks = true
         defer { isExecutingAssignedTasks = false }
         do {
@@ -131,6 +234,11 @@ final class PythonRuntimeSupervisor: ObservableObject {
             lastError = safeMessage(error)
             lifecycleState = runtimeReady ? "ready_with_backend_issue" : "degraded"
         }
+    }
+
+    func refreshTaskInbox() async {
+        guard isRunning else { return }
+        await refreshConnectionAndTasks()
     }
 
     private func flushPendingAuthSync() async -> Bool {
@@ -220,32 +328,72 @@ final class PythonRuntimeSupervisor: ObservableObject {
         lifecycleState = isOperational ? "connected" : (runtimeReady ? "runtime_ready" : "degraded")
     }
 
-    func createPairingSession() async {
+    func createPairingSession(forceNew: Bool = false) async {
         pairingPollTask?.cancel()
         pairingClaimed = false
+        pairingExpired = false
         pairingCode = ""
-        do {
-            let response = try await bridge.request(capability: "pairing.create_session", payload: [:], timeoutSeconds: 30)
-            // The bridge wraps the backend's BackendResult under "result", whose
-            // own "data" field carries the actual pairing payload — not a
-            // top-level "data" key on the response itself.
-            let backendResult = response.resultMap["result"] as? [String: Any] ?? response.resultMap
-            let data = backendResult["data"] as? [String: Any] ?? backendResult
-            let code = string(data["manualEntryCode"]) ?? string(data["pairingCode"]) ?? ""
-            let session = string(data["sessionId"]) ?? string(data["id"]) ?? ""
-            pairingCode = code
-            if response.ok, !code.isEmpty {
-                pairingSummary = "Telefonunda bu kodu gir: \(code)"
-            } else if response.ok {
-                pairingSummary = "Eşleştirme oturumu hazır, kod bekleniyor."
-            } else {
-                pairingSummary = "Eşleştirme oturumu oluşturulamadı."
+        pairingQrText = ""
+
+        // Retry loop: pairing.create_session hits the backend over the Python
+        // bridge — a cold Python subprocess plus a cold backend can genuinely
+        // take longer than the old flat 30s. Try up to 3 times with a longer
+        // per-attempt budget and a short backoff; surface progress to the UI so
+        // the user isn't staring at a frozen button.
+        let attempts = 3
+        let perAttemptTimeout: TimeInterval = 45
+        var lastError: Error?
+
+        let payload: [String: Any] = [
+            "deviceLabel": Host.current().localizedName ?? "Elyan Mac",
+            "platform": "macos",
+            "runtimeVersion": "1.0.0",
+            "forceNew": forceNew,
+        ]
+
+        for attempt in 1...attempts {
+            if attempt > 1 {
+                pairingSummary = "Bağlantı zayıf, tekrar deneniyor (\(attempt)/\(attempts))…"
+                try? await Task.sleep(nanoseconds: UInt64(1_500_000_000 * (attempt - 1)))
             }
-            if response.ok, !session.isEmpty {
-                startPairingClaimPoll(sessionId: session)
+            do {
+                let response = try await bridge.request(
+                    capability: "pairing.create_session",
+                    payload: payload,
+                    timeoutSeconds: perAttemptTimeout
+                )
+                // Bridge wraps BackendResult under "result"; its "data" carries
+                // the pairing payload.
+                let backendResult = response.resultMap["result"] as? [String: Any] ?? response.resultMap
+                let data = backendResult["data"] as? [String: Any] ?? backendResult
+                let code = string(data["manualEntryCode"]) ?? string(data["pairingCode"]) ?? ""
+                let session = string(data["sessionId"]) ?? string(data["id"]) ?? ""
+
+                if response.ok, !code.isEmpty {
+                    pairingCode = code
+                    pairingQrText = string(data["qrText"]) ?? code
+                    pairingSummary = "Telefonunda bu kodu gir: \(code)"
+                    if !session.isEmpty {
+                        startPairingClaimPoll(sessionId: session)
+                    }
+                    return
+                }
+                // The backend answered but without a code — no point retrying,
+                // there's a policy/config problem to surface.
+                pairingSummary = response.ok
+                    ? "Eşleştirme oturumu hazır, kod bekleniyor."
+                    : "Eşleştirme oturumu oluşturulamadı. Tekrar dene."
+                return
+            } catch {
+                lastError = error
+                // fall through to retry
             }
-        } catch {
+        }
+
+        if let error = lastError {
             pairingSummary = safeMessage(error)
+        } else {
+            pairingSummary = "Eşleştirme oturumu oluşturulamadı. Tekrar dene."
         }
     }
 
@@ -273,9 +421,13 @@ final class PythonRuntimeSupervisor: ObservableObject {
                         self.pairingClaimed = true
                         self.pairingSummary = "Eşleştirme tamamlandı."
                         await self.refreshAll()
+                        if self.isOperational {
+                            await self.onBecameOperational?()
+                        }
                         return
                     }
                     if status == "expired" || status == "canceled" {
+                        self.pairingExpired = true
                         self.pairingSummary = "Eşleştirme kodu süresi doldu. Yeniden deneyin."
                         return
                     }

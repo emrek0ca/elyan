@@ -4,6 +4,7 @@ import GoogleSignIn
 
 struct LoginView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.colorScheme) private var colorScheme
     @State private var mode: Mode = .login
     @State private var email = ""
     @State private var password = ""
@@ -19,52 +20,63 @@ struct LoginView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let isNarrow = proxy.size.width < 600
-            
+            let isNarrow = proxy.size.width < 760
+
             if isNarrow {
                 VStack(spacing: 0) {
-                    heroImage
-                        .frame(height: proxy.size.height * 0.35)
-                        .clipped()
+                    heroPane
+                        .frame(height: max(260, proxy.size.height * 0.42))
                     formContainer
-                        .frame(maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .ignoresSafeArea()
             } else {
                 HStack(spacing: 0) {
                     formContainer
-                        .frame(width: max(380, proxy.size.width * 0.45))
-                        .zIndex(1)
-                    
-                    heroImage
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
+
+                    heroPane
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .ignoresSafeArea()
             }
         }
-        .frame(minWidth: 600, minHeight: 600)
+        .frame(minWidth: 760, minHeight: 620)
         .background(ElyanTheme.canvas)
     }
-    
-    private var heroImage: some View {
-        Image("LoginHero")
-            .resizable()
-            .aspectRatio(contentMode: .fill)
+
+    private var heroPane: some View {
+        // GeometryReader gives the image the pane's EXACT size, so scaledToFill
+        // fills edge-to-edge (bleeds off any gradient/background). Without this
+        // SwiftUI resolves Image against its natural size and leaves side bands
+        // of the parent showing through.
+        GeometryReader { geo in
+            Image("LoginHero")
+                .resizable()
+                .interpolation(.high)
+                .antialiased(true)
+                .scaledToFill()
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+        }
+        .background(Color.black)
     }
     
     private var formContainer: some View {
         ZStack {
             ElyanTheme.canvas
             
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 32) {
                     // Logo & Header
                     VStack(spacing: 16) {
                         Image("Logo")
+                            .renderingMode(.template)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(width: 80, height: 80)
+                            // Tint the (templated) logo — white on dark, brand on light.
+                            .foregroundStyle(colorScheme == .dark ? Color.white : Color.accentColor)
                             .shadow(color: Color.accentColor.opacity(0.3), radius: 20, x: 0, y: 10)
                         
                         VStack(spacing: 8) {

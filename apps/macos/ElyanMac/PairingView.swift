@@ -2,19 +2,17 @@ import SwiftUI
 import CoreImage.CIFilterBuiltins
 
 /// Masaüstü eşleştirme ekranı — mobil uygulamanın PairingScreen'ine karşılık gelir.
-/// Backend'deki /v1/pairing/* endpoint'leri üzerinden QR kodu gösterir ve
-/// claim (talep) durumunu poll ederek eşleştirme tamamlanınca bildirir.
+/// Pairing/runtime ownership Python RuntimeBridge'dedir. Swift yalnız tipli
+/// köprü snapshot'ını gösterir; backend'e ikinci bir runtime olarak bağlanmaz.
 struct PairingView: View {
     @EnvironmentObject var appState: AppState
     @State private var pairingCode: String = ""
-    @State private var pairingSessionId: String = ""
-    @State private var pairingToken: String = ""
     @State private var pairingQrText: String = ""
     @State private var isLoading = false
     @State private var isClaimed = false
+    @State private var isExpired = false
     @State private var claimInfo: String = ""
     @State private var error: String = ""
-    @State private var pollTask: Task<Void, Never>? = nil
     @State private var devices: [ElyanDevice] = []
     @State private var isLoadingDevices = false
     @State private var confirmRemove: ElyanDevice? = nil
@@ -39,8 +37,19 @@ struct PairingView: View {
             }
         }
         .onChange(of: tab) { _, newValue in loadForTab(newValue) }
+        .onChange(of: appState.supervisor.pairingClaimed) { _, claimed in
+            guard claimed else { return }
+            withAnimation {
+                isClaimed = true
+                claimInfo = appState.supervisor.pairingSummary
+            }
+            Task { await loadDevices() }
+        }
+        .onChange(of: appState.supervisor.pairingExpired) { _, expired in
+            guard expired else { return }
+            withAnimation { isExpired = true }
+        }
         .task { loadForTab(tab) }
-        .onDisappear { pollTask?.cancel() }
         .navigationTitle("Masaüstü Eşleştirme")
     }
 
@@ -84,6 +93,22 @@ struct PairingView: View {
                         }
                     }
                     .transition(.scale.combined(with: .opacity))
+                } else if isExpired {
+                    VStack(spacing: 16) {
+                        Image(systemName: "clock.badge.exclamationmark")
+                            .font(.system(size: 56))
+                            .foregroundStyle(.orange)
+                        Text("Kodun süresi doldu")
+                            .font(.title3.bold())
+                        Text("Bu kod artık geçerli değil. Devam etmek için yeni bir kod oluştur.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 320)
+                        Button("Yeni Kod Oluştur") { Task { await createPairingCode() } }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .transition(.opacity.combined(with: .scale))
                 } else if pairingCode.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "link.badge.plus")
@@ -153,7 +178,7 @@ struct PairingView: View {
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: pairingCode)
                 }
 
-                if !isClaimed {
+                if !isClaimed && !isExpired {
                     Button(pairingCode.isEmpty ? "Kod Oluştur" : "Yeni Kod Oluştur") {
                         Task { await createPairingCode() }
                     }
@@ -266,114 +291,26 @@ struct PairingView: View {
     }
 
     private func createPairingCode() async {
-        pollTask?.cancel()
+        let forceNew = !pairingCode.isEmpty || isExpired
         pairingCode = ""
-        pairingSessionId = ""
-        pairingToken = ""
         pairingQrText = ""
         isClaimed = false
+        isExpired = false
         claimInfo = ""
         error = ""
         isLoading = true
 
-        do {
-            // Backend contract: POST /v1/pairing/sessions returns
-            //   { sessionId, pairingCode, pairingToken, qrText, qrPayload, ... }
-            // Body requires deviceLabel + platform (createPairSessionBodySchema),
-            // otherwise it 400s with "deviceLabel: Required · platform: Required".
-            // The pairingToken is required by GET /sessions/:sessionId via the
-            // x-pairing-token header, so we hold on to it for polling.
-            let hostName = Host.current().localizedName ?? "Elyan Mac"
-            let raw = try await appState.backend.postJSON(
-                path: "/v1/pairing/sessions",
-                body: [
-                    "deviceLabel": hostName,
-                    "platform": "macos",
-                    "runtimeVersion": "1.0.0"
-                ],
-                requireAuth: true
-            )
-            let payload = ElyanBackend.unwrap(raw)
-            pairingSessionId = (payload["sessionId"] as? String) ?? ""
-            pairingCode = (payload["pairingCode"] as? String)
-                ?? (payload["manualEntryCode"] as? String)
-                ?? ""
-            pairingToken = (payload["pairingToken"] as? String) ?? ""
-            pairingQrText = (payload["qrText"] as? String) ?? ""
-
-            if pairingSessionId.isEmpty || pairingCode.isEmpty || pairingToken.isEmpty {
-                error = "Sunucu geçerli bir eşleştirme oturumu döndürmedi."
-            } else {
-                appState.backend.invalidateGetCache()
-                startPolling()
-            }
-        } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        await appState.supervisor.createPairingSession(forceNew: forceNew)
+        pairingCode = appState.supervisor.pairingCode
+        pairingQrText = appState.supervisor.pairingQrText
+        isClaimed = appState.supervisor.pairingClaimed
+        isExpired = appState.supervisor.pairingExpired
+        if pairingCode.isEmpty {
+            error = appState.supervisor.pairingSummary.isEmpty
+                ? "Eşleştirme oturumu oluşturulamadı."
+                : appState.supervisor.pairingSummary
         }
         isLoading = false
-    }
-
-    private func startPolling() {
-        pollTask?.cancel()
-        pollTask = Task {
-            while !Task.isCancelled && !isClaimed {
-                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 sn
-                guard !Task.isCancelled else { break }
-                if let claimed = await checkPairingClaim() {
-                    await MainActor.run {
-                        withAnimation {
-                            isClaimed = true
-                            claimInfo = claimed
-                        }
-                    }
-                    await loadDevices()
-                    break
-                }
-            }
-        }
-    }
-
-    private func checkPairingClaim() async -> String? {
-        guard !pairingSessionId.isEmpty, !pairingToken.isEmpty else { return nil }
-        do {
-            // Backend: GET /v1/pairing/sessions/:sessionId  (auth NOT required —
-            // pairing token in header authenticates the poll). Status is a plain
-            // string ("pending" / "claimed" / "expired"), not a boolean flag.
-            let raw = try await appState.backend.internalGetJSON(
-                path: "/v1/pairing/sessions/\(pairingSessionId)",
-                queryItems: [],
-                requireAuth: false,
-                cacheTTL: 0,
-                extraHeaders: ["x-pairing-token": pairingToken]
-            )
-            let payload = ElyanBackend.unwrap(raw)
-            let status = (payload["status"] as? String) ?? ""
-            if status.lowercased() == "claimed" {
-                // Backend hands us runtimeAuth = {deviceId, deviceSecret} the
-                // moment the mobile side claims. Register the runtime right
-                // away so mobile immediately sees this desktop as online
-                // instead of "eşleştirildi ama çevrimdışı" purgatory.
-                if let runtimeAuth = payload["runtimeAuth"] as? [String: Any],
-                   let deviceId = runtimeAuth["deviceId"] as? String,
-                   let deviceSecret = runtimeAuth["deviceSecret"] as? String,
-                   !deviceId.isEmpty, !deviceSecret.isEmpty {
-                    _ = try? await appState.backend.registerRuntime(
-                        deviceId: deviceId,
-                        deviceSecret: deviceSecret
-                    )
-                    await appState.backend.runtimeHeartbeat(status: "online")
-                }
-                let mobile = payload["mobileDevice"] as? [String: Any] ?? [:]
-                let deviceName = (mobile["displayName"] as? String)
-                    ?? (mobile["name"] as? String)
-                    ?? (payload["deviceName"] as? String)
-                    ?? ""
-                return deviceName.isEmpty
-                    ? "Cihaz başarıyla eşleştirildi."
-                    : "\(deviceName) eşleştirildi."
-            }
-        } catch { }
-        return nil
     }
 
     private func loadDevices() async {

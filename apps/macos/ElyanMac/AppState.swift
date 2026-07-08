@@ -1,5 +1,7 @@
 import Foundation
 import SwiftUI
+import AppKit
+import Combine
 
 @MainActor
 final class AppState: ObservableObject {
@@ -12,9 +14,12 @@ final class AppState: ObservableObject {
     @Published private(set) var assignedTasks: [ElyanRuntimeTask] = []
     @Published private(set) var lastDispatchError: String = ""
 
-    private var heartbeatTask: Task<Void, Never>?
+    private var dispatchWatchdogTask: Task<Void, Never>?
     private let realtimeClient = ElyanSSEClient()
     private var realtimeTask: Task<Void, Never>?
+    private var realtimeResubscribeTask: Task<Void, Never>?
+    private var wakeObserver: NSObjectProtocol?
+    private var supervisorObservation: AnyCancellable?
 
     var pendingTaskCount: Int {
         assignedTasks.filter { !["completed", "failed", "canceled"].contains($0.status.lowercased()) }.count
@@ -26,11 +31,17 @@ final class AppState: ObservableObject {
         self.backend = backend
         self.chat = ChatStore(backend: backend)
         self.supervisor = supervisor
-
-        // Bring back the runtime token from the previous launch so mobile
-        // sees this Mac as online immediately, not only after the next
-        // manual pairing.
-        backend.restoreRuntimeToken()
+        // Jarvis yolu: komutlar önce yerel runtime'da yürütülür.
+        self.chat.localSend = { [weak supervisor] text in
+            guard let supervisor else { throw RuntimeBridgeSwiftError.runtimeNotStarted }
+            return try await supervisor.sendLocalChat(text)
+        }
+        self.chat.onSessionActivated = { [weak supervisor] sessionId in
+            supervisor?.setLocalConversation(sessionId)
+        }
+        supervisorObservation = supervisor.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
 
         backend.onSessionChanged = { [weak self] session in
             Task { @MainActor in
@@ -45,30 +56,65 @@ final class AppState: ObservableObject {
             do {
                 _ = try await backend.refresh()
                 await supervisor.syncAuthSession(backend.session)
-            } catch {
+            } catch ElyanBackendError.notAuthenticated {
                 await backend.logout()
+            } catch {
+                // Geçici ağ/5xx hatası oturumu veya runtime kimliğini silmez.
+                // Python runtime kendi bounded retry hattında yeniden dener.
+                supervisor.lastError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
             }
         }
 
-        startRuntimeHeartbeatLoop()
+        // Runtime ayağa kalkar kalkmaz (boot veya crash-restart sonrası)
+        // backend'de birikmiş görevleri hemen çek ve yürüt — ilk SSE
+        // event'ini beklemek, uygulama kapalıyken mobilden gönderilmiş
+        // görevleri süresiz askıda bırakıyordu.
+        supervisor.onBecameOperational = { [weak self] in
+            await self?.refreshAssignedTasks()
+        }
+
+        startDispatchWatchdogLoop()
         startRealtimeSubscription()
+
+        // ElyanSSEClient gives up after 4 reconnect attempts (~12s of
+        // exponential backoff) and calls onError once, permanently — nothing
+        // previously called startRealtimeSubscription() again after that, so
+        // a longer outage (or a stall the socket-level watchdog hasn't yet
+        // caught) silently killed task/device/pairing notifications for the
+        // rest of the app's life. Mac sleep/wake is the most common trigger;
+        // resubscribe immediately on wake instead of waiting on the next
+        // login/logout event.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.startRealtimeSubscription()
+                // Uyku sırasında birikmiş görevleri de hemen çek.
+                await self?.refreshAssignedTasks()
+            }
+        }
     }
 
-    /// Fires an online heartbeat every 25s — ama YALNIZ Python runtime
-    /// çalışmıyorken. Runtime operasyonelken kendi kayıt/heartbeat/WS hattı
-    /// cihaz varlığının tek sahibidir; buradaki ikinci HTTP heartbeat ayrı bir
-    /// runtime bağlantısı gibi görünüp backend'in task lease dağıtımını
-    /// şaşırtıyordu (görevlerin mobilde "sırada" takılı kalmasının bir nedeni).
-    /// Swift HTTP heartbeat sadece degraded fallback'te devrede kalır ki
-    /// Python başlatılamasa bile cihaz çevrimdışı görünmesin.
-    private func startRuntimeHeartbeatLoop() {
-        heartbeatTask?.cancel()
-        heartbeatTask = Task { [weak self] in
+    deinit {
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+    }
+
+    /// WebSocket/SSE kesintilerinde kuyrukta kalan görevleri bounded aralıkla
+    /// Python RuntimeBridge üzerinden yeniden kontrol eder. Runtime kimliği,
+    /// heartbeat ve lease sahipliği Swift'e taşınmaz.
+    private func startDispatchWatchdogLoop() {
+        dispatchWatchdogTask?.cancel()
+        dispatchWatchdogTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if !self.supervisor.isOperational {
-                    await self.backend.runtimeHeartbeat(status: "online")
-                }
+                // Runtime register/heartbeat/task lease hattının tek sahibi
+                // Python runtime'dır. Swift yalnız köprü snapshot'ını yeniler.
+                await self.refreshAssignedTasks()
                 try? await Task.sleep(nanoseconds: 25_000_000_000)
             }
         }
@@ -91,6 +137,8 @@ final class AppState: ObservableObject {
     /// onlarca gereksiz istek. Mobile'daki AYNI filtre burada da uygulanıyor.
     private func startRealtimeSubscription() {
         realtimeTask?.cancel()
+        realtimeResubscribeTask?.cancel()
+        realtimeResubscribeTask = nil
         realtimeTask = Task { [weak self] in
             guard let self, let token = self.backend.session?.accessToken else { return }
             await self.realtimeClient.open(
@@ -100,8 +148,16 @@ final class AppState: ObservableObject {
                     guard Self.isTaskRelevantEvent(event.event.lowercased()) else { return }
                     await self?.refreshAssignedTasks()
                 },
-                onError: { _ in
-                    // If it errors, we can just let it backoff/retry which is handled inside ElyanSSEClient
+                onError: { [weak self] _ in
+                    // ElyanSSEClient already exhausted its own 4-attempt
+                    // exponential backoff before calling this — it will NOT
+                    // retry again on its own. Previously nothing happened
+                    // here, so a single outage longer than ~12s permanently
+                    // killed task/device/pairing notifications until the next
+                    // login/logout. Schedule one longer-interval resubscribe
+                    // instead of matching ElyanSSEClient's tight backoff, so
+                    // a persistently-down network doesn't spin.
+                    await self?.scheduleRealtimeResubscribe()
                 },
                 onClose: {
                 }
@@ -121,52 +177,29 @@ final class AppState: ObservableObject {
             || type == "pairing.claimed"
     }
 
-    func refreshAssignedTasks() async {
-        do {
-            let fresh = try await backend.getAssignedRuntimeTasks()
-            let previouslyKnown = Set(assignedTasks.map(\.id))
-            assignedTasks = fresh
-            lastDispatchError = ""
-
-            let newQueued = fresh.filter {
-                !previouslyKnown.contains($0.id) && $0.status.lowercased() == "queued"
-            }
-            guard !newQueued.isEmpty else { return }
-
-            if supervisor.isOperational {
-                // Görev yürütmenin tek sahibi Python runtime'dır (AGENTS.md
-                // sınırı). Buradan ayrıca "running" ack'lemek, runtime'ın kendi
-                // lease/ack akışıyla çakışıp görevleri iki durum arasında
-                // sıkıştırıyordu. Yeni görev görüldüğünde bir sonraki 3sn poll
-                // tick'ini beklemeden yürütmeyi hemen tetikle.
-                await supervisor.executeAssignedTasks()
-            } else {
-                // Degraded fallback: runtime yoksa mobil spinner'ı "sırada"da
-                // bırakma — manuel inbox akışı için kabul et.
-                for task in newQueued {
-                    _ = try? await backend.updateRuntimeTaskStatus(
-                        taskId: task.id,
-                        status: "running",
-                        message: "Elyan Mac görevi aldı"
-                    )
-                }
-            }
-        } catch {
-            lastDispatchError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
+    /// Retries the realtime subscription once after a fixed delay following an
+    /// exhausted ElyanSSEClient backoff. Coalesces with any already-pending
+    /// retry so repeated errors in a short window don't stack up parallel
+    /// resubscribe timers.
+    private func scheduleRealtimeResubscribe() {
+        guard realtimeResubscribeTask == nil else { return }
+        realtimeResubscribeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000) // 20s
+            guard let self, !Task.isCancelled else { return }
+            self.realtimeResubscribeTask = nil
+            self.startRealtimeSubscription()
         }
     }
 
-    /// Called by the Task Inbox UI when the user marks a task done or
-    /// declines it. Wraps the raw API call and refreshes the list so the
-    /// row disappears immediately.
-    func resolveTask(_ task: ElyanRuntimeTask, completed: Bool, message: String? = nil) async {
-        _ = try? await backend.updateRuntimeTaskStatus(
-            taskId: task.id,
-            status: completed ? "completed" : "failed",
-            message: message,
-            error: completed ? nil : (message ?? "Kullanıcı tamamlanmadı olarak işaretledi.")
-        )
-        await refreshAssignedTasks()
+    func refreshAssignedTasks() async {
+        if supervisor.isOperational {
+            _ = await supervisor.executeAssignedTasks()
+        } else {
+            await supervisor.refreshTaskInbox()
+        }
+        assignedTasks = supervisor.taskInbox.map(ElyanRuntimeTask.init(runtimeItem:))
+        lastDispatchError = supervisor.isOperational
+            ? supervisor.lastError
+            : "Yerel çalışma motoru hazır olduğunda görev otomatik başlayacak."
     }
 }

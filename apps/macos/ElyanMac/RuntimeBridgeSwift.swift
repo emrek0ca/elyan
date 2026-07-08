@@ -21,8 +21,8 @@ enum RuntimeBridgeSwiftError: Error, LocalizedError {
             return "Python runtime başlatılamadı: \(message)"
         case .writeFailed(let message):
             return "Runtime ile bağlantı koptu: \(message)"
-        case .responseTimeout(let id):
-            return "Runtime yanıt zaman aşımı: \(id)"
+        case .responseTimeout:
+            return "Sunucuya ulaşılamıyor. Ağ bağlantını kontrol edip tekrar dene."
         case .responseDecodeFailed(let line):
             return "Runtime yanıtı çözümlenemedi: \(line.prefix(120))"
         }
@@ -40,6 +40,11 @@ final class RuntimeBridgeSwift: @unchecked Sendable {
 
     var onUnsolicitedResponse: ((RuntimeResponse) -> Void)?
     var onDiagnostic: ((String) -> Void)?
+    /// Fired when the Python process exits WITHOUT us having called
+    /// stopProcess() — i.e. an actual crash, not a deliberate shutdown.
+    /// Carries the exit status for diagnostics.
+    var onProcessTerminated: ((Int32) -> Void)?
+    private var isStoppingIntentionally = false
     var isRunning: Bool {
         process?.isRunning == true
     }
@@ -48,21 +53,50 @@ final class RuntimeBridgeSwift: @unchecked Sendable {
         if process?.isRunning == true {
             return
         }
+        isStoppingIntentionally = false
 
-        let repoRoot = try resolveRepoRoot()
-        let bridgeURL = repoRoot.appendingPathComponent("runtime/bridge.py")
-        guard FileManager.default.fileExists(atPath: bridgeURL.path) else {
-            throw RuntimeBridgeSwiftError.bridgeScriptNotFound(bridgeURL)
-        }
+        let repoRoot = try? resolveRepoRoot()
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", "-u", bridgeURL.path]
-        process.currentDirectoryURL = repoRoot
+        if let packagedRuntime = resolvePackagedRuntime(repoRoot: repoRoot) {
+            process.executableURL = packagedRuntime
+            process.arguments = []
+            onDiagnostic?("Paketli Elyan runtime başlatılıyor.")
+        } else {
+            guard let repoRoot else {
+                throw RuntimeBridgeSwiftError.repoRootNotFound
+            }
+            let bridgeURL = repoRoot.appendingPathComponent("runtime/bridge.py")
+            guard FileManager.default.fileExists(atPath: bridgeURL.path) else {
+                throw RuntimeBridgeSwiftError.bridgeScriptNotFound(bridgeURL)
+            }
+
+            // Source checkout fallback for development. Shipping builds prefer
+            // the packaged runtime above and therefore do not depend on a
+            // system Python installation or a user-specific repo path.
+            let pinnedPython = repoRoot.appendingPathComponent("venv/bin/python3")
+            let pinnedPythonAlt = repoRoot.appendingPathComponent(".venv/bin/python3")
+            if FileManager.default.isExecutableFile(atPath: pinnedPython.path) {
+                process.executableURL = pinnedPython
+                process.arguments = ["-u", bridgeURL.path]
+            } else if FileManager.default.isExecutableFile(atPath: pinnedPythonAlt.path) {
+                process.executableURL = pinnedPythonAlt
+                process.arguments = ["-u", bridgeURL.path]
+            } else {
+                onDiagnostic?("Uyarı: paketli runtime ve repo venv'i bulunamadı; sınırlı Python fallback'i kullanılıyor.")
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.arguments = ["python3", "-u", bridgeURL.path]
+            }
+        }
+        process.currentDirectoryURL = repoRoot ?? FileManager.default.homeDirectoryForCurrentUser
 
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
-        env["ELYAN_REPO_ROOT"] = repoRoot.path
+        if let repoRoot {
+            env["ELYAN_REPO_ROOT"] = repoRoot.path
+        } else {
+            env.removeValue(forKey: "ELYAN_REPO_ROOT")
+        }
         process.environment = env
 
         let inPipe = Pipe()
@@ -100,6 +134,16 @@ final class RuntimeBridgeSwift: @unchecked Sendable {
                     callback(.failure(RuntimeBridgeSwiftError.processLaunchFailed("exit \(terminated.terminationStatus)")))
                 }
             }
+            // Previously nothing observed this at all: `isRunning` (derived
+            // from `process?.isRunning`) only went stale-but-true until the
+            // NEXT request happened to be made, no restart was ever
+            // attempted, and the user saw no signal beyond a status dot
+            // eventually turning orange. Only fire for an actual crash — a
+            // deliberate stopProcess() call already updates supervisor state
+            // itself and shouldn't also trigger crash-recovery.
+            if self?.isStoppingIntentionally != true {
+                self?.onProcessTerminated?(terminated.terminationStatus)
+            }
         }
 
         do {
@@ -110,6 +154,7 @@ final class RuntimeBridgeSwift: @unchecked Sendable {
     }
 
     func stopProcess() {
+        isStoppingIntentionally = true
         outputPipe?.fileHandleForReading.readabilityHandler = nil
         errorPipe?.fileHandleForReading.readabilityHandler = nil
         inputPipe?.fileHandleForWriting.closeFile()
@@ -222,6 +267,35 @@ final class RuntimeBridgeSwift: @unchecked Sendable {
         }
 
         throw RuntimeBridgeSwiftError.repoRootNotFound
+    }
+
+    private func resolvePackagedRuntime(repoRoot: URL?) -> URL? {
+        let manager = FileManager.default
+
+        // Geliştirme makinesinde kaynak checkout + venv varsa paketli runtime
+        // kullanılmaz: paket, `npm run build:runtime` çalıştırıldığı andaki
+        // Python kodunun donmuş kopyasıdır ve sonraki tüm runtime/actions
+        // değişikliklerini sessizce yok sayar (bayat paket, canlı kodun önüne
+        // geçip "Bu özellik bu kurulumda hazır değil" hatalarına yol açıyordu).
+        // Dağıtılmış uygulamada repo bulunamayacağı için paket yine seçilir.
+        if let repoRoot,
+           manager.fileExists(atPath: repoRoot.appendingPathComponent("runtime/bridge.py").path),
+           manager.isExecutableFile(atPath: repoRoot.appendingPathComponent("venv/bin/python3").path)
+               || manager.isExecutableFile(atPath: repoRoot.appendingPathComponent(".venv/bin/python3").path) {
+            return nil
+        }
+
+        var candidates: [URL] = []
+
+        if let resources = Bundle.main.resourceURL {
+            candidates.append(resources.appendingPathComponent("elyan-runtime/elyan-runtime"))
+            candidates.append(resources.appendingPathComponent("elyan-runtime"))
+        }
+        if let repoRoot {
+            candidates.append(repoRoot.appendingPathComponent("build/runtime/macos/elyan-runtime/elyan-runtime"))
+        }
+
+        return candidates.first { manager.isExecutableFile(atPath: $0.path) }
     }
 }
 

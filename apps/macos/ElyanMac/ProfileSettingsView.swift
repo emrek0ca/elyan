@@ -9,6 +9,7 @@ struct ProfileSettingsView: View {
     @State private var saveSuccess = false
     @State private var showDeleteConfirm = false
     @State private var passwordError: String = ""
+    @State private var passwordSuccess = false
     @State private var currentPassword = ""
     @State private var newPassword = ""
     @State private var confirmPassword = ""
@@ -164,6 +165,13 @@ struct ProfileSettingsView: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
             }
+            if passwordSuccess {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Şifre başarıyla güncellendi").foregroundStyle(.green)
+                }
+                .font(.callout)
+            }
 
             Button(action: changePassword) {
                 HStack {
@@ -200,6 +208,7 @@ struct ProfileSettingsView: View {
 
     private func changePassword() {
         passwordError = ""
+        passwordSuccess = false
         guard newPassword == confirmPassword else {
             passwordError = "Yeni şifreler eşleşmiyor."
             return
@@ -220,7 +229,7 @@ struct ProfileSettingsView: View {
                 currentPassword = ""
                 newPassword = ""
                 confirmPassword = ""
-                passwordError = "Şifre başarıyla güncellendi."
+                passwordSuccess = true
             } catch {
                 passwordError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }

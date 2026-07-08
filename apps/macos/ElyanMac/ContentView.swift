@@ -10,6 +10,10 @@ struct ContentView: View {
     @State private var selection: SidebarItem? = .chat
     @State private var sessions: [ElyanSession] = []
     @State private var isLoadingSessions = false
+    @State private var isLoadingMoreSessions = false
+    @State private var sessionsLoaded = false
+    @State private var hasMoreSessions = false
+    @State private var sessionsCursor: String? = nil
     @State private var sessionsError: String = ""
     @State private var confirmDeleteSession: ElyanSession? = nil
     @AppStorage("colorScheme") private var storedScheme: String = "system"
@@ -82,7 +86,6 @@ struct ContentView: View {
             }
         }
         .onAppear { applyStoredScheme() }
-        .task { await refreshSessions() }
         // Only react to session changes that are different from the currently
         // displayed session — prevents loadSession wiping an in-progress chat.
         .onReceive(appState.chat.$sessionId.dropFirst()) { sid in
@@ -90,7 +93,9 @@ struct ContentView: View {
             if case .session(let currentId) = selection, currentId == sid { return }
             if selection == .chat, appState.chat.messages.isEmpty == false { return }
             navigate(to: .session(sid))
-            Task { await refreshSessions(force: true) }
+            if sessionsLoaded {
+                Task { await refreshSessions(force: true) }
+            }
         }
         .onChange(of: selection) { _, newValue in
             guard let item = newValue else { return }
@@ -158,21 +163,42 @@ struct ContentView: View {
             }
 
             Section("Geçmiş") {
-                if sessions.isEmpty && !isLoadingSessions {
+                if !sessionsLoaded {
+                    Button {
+                        Task { await refreshSessions() }
+                    } label: {
+                        Label("Geçmişi göster", systemImage: "clock")
+                    }
+                    .disabled(isLoadingSessions)
+                } else if sessions.isEmpty && !isLoadingSessions {
                     Text(sessionsError.isEmpty ? "Henüz sohbet yok." : sessionsError)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                } else if isLoadingSessions && sessions.isEmpty {
+                }
+
+                if isLoadingSessions && sessions.isEmpty {
                     ProgressView().controlSize(.small)
                 }
 
                 ForEach(sessions) { session in
                     SessionRowNative(
                         session: session,
-                        onDelete: { confirmDeleteSession = session },
-                        onPrefetch: { appState.chat.prefetchSession(session.id) }
+                        onDelete: { confirmDeleteSession = session }
                     )
                     .tag(SidebarItem.session(session.id))
+                }
+
+                if sessionsLoaded && hasMoreSessions {
+                    Button {
+                        Task { await loadMoreSessions() }
+                    } label: {
+                        if isLoadingMoreSessions {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Daha fazla")
+                        }
+                    }
+                    .disabled(isLoadingMoreSessions)
                 }
             }
         }
@@ -218,7 +244,7 @@ struct ContentView: View {
     private var detailView: some View {
         switch selection ?? .chat {
         case .chat, .session:
-            ChatView()
+            ChatView(chat: appState.chat)
                 .environmentObject(appState)
         case .pairing:
             PairingView()
@@ -248,10 +274,32 @@ struct ContentView: View {
     }
 
     private func refreshSessions(force: Bool = false) async {
+        if isLoadingSessions { return }
         isLoadingSessions = true
         defer { isLoadingSessions = false }
         do {
-            sessions = try await appState.backend.getSessions(limit: 40, forceRefresh: force)
+            let page = try await appState.backend.getSessionsPage(limit: 12, forceRefresh: force)
+            sessions = page.sessions
+            sessionsLoaded = true
+            hasMoreSessions = page.hasMore
+            sessionsCursor = page.nextCursor
+            sessionsError = ""
+        } catch {
+            sessionsLoaded = true
+            sessionsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func loadMoreSessions() async {
+        guard !isLoadingMoreSessions, hasMoreSessions else { return }
+        isLoadingMoreSessions = true
+        defer { isLoadingMoreSessions = false }
+        do {
+            let page = try await appState.backend.getSessionsPage(limit: 12, cursor: sessionsCursor)
+            let existingIds = Set(sessions.map(\.id))
+            sessions.append(contentsOf: page.sessions.filter { !existingIds.contains($0.id) })
+            hasMoreSessions = page.hasMore
+            sessionsCursor = page.nextCursor
             sessionsError = ""
         } catch {
             sessionsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -263,6 +311,10 @@ struct ContentView: View {
         appState.chat.reset()
         await appState.backend.logout()
         sessions.removeAll()
+        sessionsLoaded = false
+        hasMoreSessions = false
+        sessionsCursor = nil
+        sessionsError = ""
     }
 
     private func applyStoredScheme() {
@@ -280,7 +332,6 @@ struct ContentView: View {
 private struct SessionRowNative: View {
     let session: ElyanSession
     let onDelete: () -> Void
-    var onPrefetch: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -296,9 +347,6 @@ private struct SessionRowNative: View {
         .padding(.vertical, 2)
         .contextMenu {
             Button("Sil", role: .destructive) { onDelete() }
-        }
-        .onHover { hovering in
-            if hovering { onPrefetch?() }
         }
     }
 

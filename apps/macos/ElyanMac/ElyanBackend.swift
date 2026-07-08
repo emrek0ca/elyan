@@ -165,7 +165,7 @@ final class ElyanBackend: ObservableObject {
     // MARK: - Sessions / History
 
     /// GET /v1/chat/sessions — list of conversation sessions, newest first.
-    func getSessions(limit: Int = 40, cursor: String? = nil, forceRefresh: Bool = false) async throws -> [ElyanSession] {
+    func getSessionsPage(limit: Int = 20, cursor: String? = nil, forceRefresh: Bool = false) async throws -> ElyanSessionPage {
         var query: [URLQueryItem] = [URLQueryItem(name: "limit", value: "\(max(1, min(limit, 20)))")]
         if let cursor, !cursor.isEmpty {
             query.append(URLQueryItem(name: "cursor", value: cursor))
@@ -174,14 +174,18 @@ final class ElyanBackend: ObservableObject {
             path: "/v1/chat/sessions",
             queryItems: query,
             requireAuth: true,
-            cacheTTL: forceRefresh ? 0 : 30
+            cacheTTL: forceRefresh ? 0 : 300
         )
-        return Self.parseSessions(raw)
+        return Self.parseSessionPage(raw)
+    }
+
+    func getSessions(limit: Int = 20, cursor: String? = nil, forceRefresh: Bool = false) async throws -> [ElyanSession] {
+        try await getSessionsPage(limit: limit, cursor: cursor, forceRefresh: forceRefresh).sessions
     }
 
     /// GET /v1/chat/sessions/{id}/messages
     func getSessionMessages(sessionId: String, limit: Int = 50, cursor: String? = nil, forceRefresh: Bool = false) async throws -> (messages: [ElyanSessionMessage], hasMore: Bool, nextCursor: String?) {
-        var queryItems: [URLQueryItem] = [URLQueryItem(name: "limit", value: "\(limit)")]
+        var queryItems: [URLQueryItem] = [URLQueryItem(name: "limit", value: "\(max(1, min(limit, 50)))")]
         if let cursor = cursor {
             queryItems.append(URLQueryItem(name: "cursor", value: cursor))
         }
@@ -234,142 +238,6 @@ final class ElyanBackend: ObservableObject {
         if let email = user["email"] as? String { updated.email = email }
         try persistSession(updated)
         return updated
-    }
-
-    // MARK: - Runtime (this desktop declaring itself online)
-
-    /// Runtime bearer token — obtained from POST /v1/runtime/register with the
-    /// deviceId + deviceSecret we get out of the pairing claim. This is
-    /// distinct from the user access token; the runtime uses it to identify
-    /// itself for heartbeats and task pulls, so mobile can show the desktop
-    /// as "online".
-    @Published private(set) var runtimeToken: String?
-    private static let runtimeKeychainAccount = "runtime.v1"
-
-    /// POST /v1/runtime/register — swaps a paired deviceId/deviceSecret for a
-    /// runtime bearer token. Called by the pairing view once the claim has
-    /// gone through and the backend returned the runtimeAuth block.
-    @discardableResult
-    func registerRuntime(deviceId: String, deviceSecret: String) async throws -> String {
-        let body: [String: Any] = [
-            "deviceId": deviceId,
-            "deviceSecret": deviceSecret,
-            "runtimeVersion": "1.0.0",
-            "capabilities": [],
-            "capabilityStates": [:]
-        ]
-        let raw = try await postJSON(path: "/v1/runtime/register", body: body, requireAuth: false)
-        let payload = Self.unwrap(raw)
-        let tokens = (payload["tokens"] as? [String: Any]) ?? [:]
-        let token = (tokens["accessToken"] as? String)
-            ?? (payload["accessToken"] as? String)
-            ?? ""
-        guard !token.isEmpty else {
-            throw ElyanBackendError.malformedResponse("Runtime register response had no accessToken.")
-        }
-        runtimeToken = token
-        Self.writeRuntimeTokenKeychain(token)
-        return token
-    }
-
-    /// POST /v1/runtime/heartbeat — must be called every ~30s using the
-    /// runtime bearer token; otherwise the backend/mobile shows this desktop
-    /// as offline (isOnline computed from lastSeenAt).
-    func runtimeHeartbeat(status: String = "online") async {
-        guard let token = runtimeToken, !token.isEmpty else { return }
-        var request = makeRequest(path: "/v1/runtime/heartbeat", method: "POST")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["status": status], options: [])
-        _ = try? await urlSession.data(for: request)
-    }
-
-    /// GET /v1/runtime/tasks/assigned — pulls the queue of tasks the mobile
-    /// side has dispatched to this desktop. Uses the runtime bearer token,
-    /// not the user access token.
-    func getAssignedRuntimeTasks() async throws -> [ElyanRuntimeTask] {
-        guard let token = runtimeToken, !token.isEmpty else { return [] }
-        var request = makeRequest(path: "/v1/runtime/tasks/assigned", method: "GET")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await urlSession.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            if (response as? HTTPURLResponse)?.statusCode == 401 {
-                // Runtime token expired — drop it so we re-register next pairing.
-                runtimeToken = nil
-                Self.deleteRuntimeTokenKeychain()
-            }
-            return []
-        }
-        let decoded = (try? JSONSerialization.jsonObject(with: data, options: [])) as? [String: Any] ?? [:]
-        let items = (decoded["tasks"] as? [[String: Any]]) ?? []
-        return items.compactMap(ElyanRuntimeTask.init(dictionary:))
-    }
-
-    /// POST /v1/runtime/tasks/:taskId/status — reports back what happened to
-    /// a task so the mobile side unblocks. Only tell the truth: "accepted"
-    /// when the desktop has picked it up, "completed" when done, "failed"
-    /// with an error message otherwise.
-    @discardableResult
-    func updateRuntimeTaskStatus(
-        taskId: String,
-        status: String,
-        message: String? = nil,
-        error: String? = nil
-    ) async throws -> Bool {
-        guard let token = runtimeToken, !token.isEmpty else { return false }
-        var request = makeRequest(path: "/v1/runtime/tasks/\(taskId)/status", method: "POST")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["status": status, "artifacts": []]
-        if let message, !message.isEmpty { body["message"] = message }
-        if let error, !error.isEmpty { body["error"] = error }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-        let (_, response) = try await urlSession.data(for: request)
-        return ((response as? HTTPURLResponse)?.statusCode ?? 0) < 300
-    }
-
-    private static func deleteRuntimeTokenKeychain() {
-        SecItemDelete([
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: runtimeKeychainAccount
-        ] as CFDictionary)
-    }
-
-    /// Restores the runtime token from Keychain on launch so we don't have to
-    /// re-pair after every relaunch.
-    func restoreRuntimeToken() {
-        if let token = Self.readRuntimeTokenKeychain(), !token.isEmpty {
-            runtimeToken = token
-        }
-    }
-
-    private static func writeRuntimeTokenKeychain(_ token: String) {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: runtimeKeychainAccount
-        ]
-        SecItemDelete(query as CFDictionary)
-        query[kSecValueData as String] = Data(token.utf8)
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(query as CFDictionary, nil)
-    }
-
-    private static func readRuntimeTokenKeychain() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: runtimeKeychainAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
-              let str = String(data: data, encoding: .utf8) else { return nil }
-        _ = query
-        return str
     }
 
     // MARK: - Devices
@@ -439,8 +307,12 @@ final class ElyanBackend: ObservableObject {
             path: "/v1/chat/messages",
             body: body,
             requireAuth: true,
-            extraHeaders: extraHeaders
+            extraHeaders: extraHeaders,
+            invalidatesCache: false
         )
+        // Scoped invalidation: only chat session list/messages change when a
+        // message is sent — devices/billing/profile caches stay warm.
+        invalidateGetCache(pathContaining: "/v1/chat/sessions")
         return try ChatDispatch.parse(raw)
     }
 
@@ -462,7 +334,8 @@ final class ElyanBackend: ObservableObject {
         path: String,
         body: [String: Any],
         requireAuth: Bool,
-        extraHeaders: [String: String] = [:]
+        extraHeaders: [String: String] = [:],
+        invalidatesCache: Bool = true
     ) async throws -> Any {
         var attemptedRefresh = false
         while true {
@@ -474,12 +347,21 @@ final class ElyanBackend: ObservableObject {
                 extraHeaders: extraHeaders
             )
             switch raw {
-            case .success(let value):
+            case .success(let value, _):
                 // A POST usually mutates something the user is about to look at
                 // (send message → session list, create pairing → devices, etc).
-                // Drop cache so the next GET returns fresh state.
-                invalidateGetCache()
+                // Drop cache so the next GET returns fresh state. Hot-path
+                // callers (chat send) pass invalidatesCache: false and scope
+                // the invalidation themselves — nuking EVERY cached GET
+                // (devices, billing, profile, avatar…) on every single chat
+                // message forced a wave of cold refetches right when the app
+                // was busiest.
+                if invalidatesCache {
+                    invalidateGetCache()
+                }
                 return value
+            case .notModified:
+                throw ElyanBackendError.malformedResponse("Unexpected 304 on a POST.")
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -509,6 +391,17 @@ final class ElyanBackend: ObservableObject {
         if cacheTTL > 0, let hit = cachedValue(forKey: key) {
             return hit
         }
+        // Cache expired (or forceRefresh/cacheTTL==0) — if we still hold the
+        // stale value + its etag, send If-None-Match. A 304 means the payload
+        // is byte-identical to what's already in memory: skip re-parsing and
+        // re-mapping it into [ElyanSession]/[ElyanSessionMessage], just
+        // re-stamp the TTL. Every one of these endpoints (chat sessions,
+        // chat session messages) already emits weak ETags server-side
+        // (sendConditionalJson, elyan-backend/src/lib/http.ts) — this was
+        // previously unused, so a "force refresh" or any TTL expiry (message
+        // pages: 5 minutes) always paid for a full re-transfer + re-parse
+        // even when the conversation hadn't changed at all.
+        let staleEntry = getCache[key]
         var attemptedRefresh = false
         while true {
             let raw = try await performRequest(
@@ -517,14 +410,27 @@ final class ElyanBackend: ObservableObject {
                 bodyJSON: nil,
                 requireAuth: requireAuth,
                 extraHeaders: extraHeaders,
-                queryItems: queryItems
+                queryItems: queryItems,
+                ifNoneMatch: staleEntry?.etag
             )
             switch raw {
-            case .success(let value):
-                if cacheTTL > 0 {
-                    storeCached(value, forKey: key, ttl: cacheTTL)
-                }
+            case .success(let value, let etag):
+                // Store even when cacheTTL == 0 (forceRefresh): the value
+                // won't be served without revalidation next time (expiresAt
+                // is immediately in the past), but the etag sticks around so
+                // that *next* call — forced or not — can still 304 instead
+                // of re-transferring.
+                storeCached(value, forKey: key, ttl: cacheTTL, etag: etag)
                 return value
+            case .notModified:
+                guard let staleEntry else {
+                    // Shouldn't happen (304 implies we sent an etag, which
+                    // implies staleEntry existed) — fail safe by treating it
+                    // as "nothing to show" rather than force-unwrapping.
+                    throw ElyanBackendError.malformedResponse("304 received without a cached prior value.")
+                }
+                storeCached(staleEntry.value, forKey: key, ttl: cacheTTL, etag: staleEntry.etag)
+                return staleEntry.value
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -539,9 +445,11 @@ final class ElyanBackend: ObservableObject {
         while true {
             let raw = try await performRequest(method: "PATCH", path: path, bodyJSON: body, requireAuth: requireAuth, extraHeaders: [:])
             switch raw {
-            case .success(let value):
+            case .success(let value, _):
                 invalidateGetCache() // list/summary GETs must reflect this write
                 return value
+            case .notModified:
+                throw ElyanBackendError.malformedResponse("Unexpected 304 on a PATCH.")
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -556,9 +464,11 @@ final class ElyanBackend: ObservableObject {
         while true {
             let raw = try await performRequest(method: "PUT", path: path, bodyJSON: body, requireAuth: requireAuth, extraHeaders: [:])
             switch raw {
-            case .success(let value):
+            case .success(let value, _):
                 invalidateGetCache()
                 return value
+            case .notModified:
+                throw ElyanBackendError.malformedResponse("Unexpected 304 on a PUT.")
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -574,9 +484,11 @@ final class ElyanBackend: ObservableObject {
         while true {
             let raw = try await performRequest(method: "DELETE", path: path, bodyJSON: nil, requireAuth: requireAuth, extraHeaders: [:])
             switch raw {
-            case .success(let value):
+            case .success(let value, _):
                 invalidateGetCache()
                 return value
+            case .notModified:
+                throw ElyanBackendError.malformedResponse("Unexpected 304 on a DELETE.")
             case .unauthorized:
                 guard requireAuth, !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -600,7 +512,7 @@ final class ElyanBackend: ObservableObject {
                 extraHeaders: [:]
             )
             switch raw {
-            case .success(let value):
+            case .success(let value, _):
                 var updated = session ?? current
                 if let payload = value as? [String: Any] {
                     let root = (payload["data"] as? [String: Any]) ?? payload
@@ -614,6 +526,8 @@ final class ElyanBackend: ObservableObject {
                 }
                 try persistSession(updated)
                 return updated
+            case .notModified:
+                throw ElyanBackendError.malformedResponse("Unexpected 304 on /v1/auth/me.")
             case .unauthorized:
                 guard !attemptedRefresh else { throw ElyanBackendError.notAuthenticated }
                 attemptedRefresh = true
@@ -624,7 +538,13 @@ final class ElyanBackend: ObservableObject {
     }
 
     private enum HTTPOutcome {
-        case success(Any)
+        case success(value: Any, etag: String?)
+        // Backend chat/session GET endpoints (`sendConditionalJson`, http.ts)
+        // already implement weak ETags + 304 — this client just never sent
+        // `If-None-Match` to take advantage of it, so every TTL-expired or
+        // force-refreshed GET re-transferred and re-parsed the full payload
+        // even when nothing had changed server-side.
+        case notModified
         case unauthorized
     }
 
@@ -634,7 +554,8 @@ final class ElyanBackend: ObservableObject {
         bodyJSON: [String: Any]?,
         requireAuth: Bool,
         extraHeaders: [String: String],
-        queryItems: [URLQueryItem] = []
+        queryItems: [URLQueryItem] = [],
+        ifNoneMatch: String? = nil
     ) async throws -> HTTPOutcome {
         var request = makeRequest(path: path, method: method, queryItems: queryItems)
         if requireAuth {
@@ -649,6 +570,9 @@ final class ElyanBackend: ObservableObject {
         }
         for (key, value) in extraHeaders {
             request.setValue(value, forHTTPHeaderField: key)
+        }
+        if let ifNoneMatch, !ifNoneMatch.isEmpty {
+            request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
         }
 
         let data: Data
@@ -667,13 +591,17 @@ final class ElyanBackend: ObservableObject {
         if status == 401, requireAuth {
             return .unauthorized
         }
+        if status == 304 {
+            return .notModified
+        }
 
         let decoded: Any? = data.isEmpty ? nil : (try? JSONSerialization.jsonObject(with: data, options: []))
         guard (200..<300).contains(status) else {
             let message = Self.extractErrorMessage(decoded) ?? "HTTP \(status)"
             throw ElyanBackendError.server(status: status, message: message)
         }
-        return .success(decoded ?? [:])
+        let etag = http.value(forHTTPHeaderField: "Etag")
+        return .success(value: decoded ?? [:], etag: etag)
     }
 
     /// Builds a URLRequest using URLComponents so `?query=…` and other reserved
@@ -708,6 +636,11 @@ final class ElyanBackend: ObservableObject {
     private struct CacheEntry {
         let value: Any
         let expiresAt: Date
+        // Kept even for a `ttl <= 0` (forceRefresh) entry — expiresAt already
+        // in the past means cachedValue(forKey:) will never serve it without
+        // a network round-trip, but the etag lets that round-trip come back
+        // as a cheap 304 instead of a full re-transfer + re-parse.
+        let etag: String?
     }
     private var getCache: [String: CacheEntry] = [:]
 
@@ -722,15 +655,22 @@ final class ElyanBackend: ObservableObject {
         return entry.value
     }
 
-    private func storeCached(_ value: Any, forKey key: String, ttl: TimeInterval) {
-        guard ttl > 0 else { return }
-        getCache[key] = CacheEntry(value: value, expiresAt: Date().addingTimeInterval(ttl))
+    private func storeCached(_ value: Any, forKey key: String, ttl: TimeInterval, etag: String? = nil) {
+        let resolvedEtag = etag ?? getCache[key]?.etag
+        getCache[key] = CacheEntry(value: value, expiresAt: Date().addingTimeInterval(ttl), etag: resolvedEtag)
     }
 
     /// Drop everything cached for the signed-in user — call after mutations
     /// (send message, save profile, checkout, remove device, sign out).
     func invalidateGetCache() {
         getCache.removeAll()
+    }
+
+    /// Scoped variant: drop only entries whose cache key contains the given
+    /// path fragment (keys are "userId|path|query"). Lets hot paths like chat
+    /// send invalidate just the chat caches instead of everything.
+    func invalidateGetCache(pathContaining fragment: String) {
+        getCache = getCache.filter { !$0.key.contains(fragment) }
     }
 
     private static func extractErrorMessage(_ decoded: Any?) -> String? {
@@ -929,11 +869,58 @@ struct ElyanSession: Identifiable, Equatable, Hashable {
     let messageCount: Int
 }
 
+struct ElyanSessionPage: Equatable {
+    let sessions: [ElyanSession]
+    let hasMore: Bool
+    let nextCursor: String?
+}
+
 struct ElyanSessionMessage: Identifiable, Equatable, Hashable {
     let id: String
     let role: String // "user" | "assistant"
     let text: String
     let createdAt: Date
+    /// Fully-parsed widget blocks (chart/table/math/svg/…) from the history
+    /// payload. History previously flattened blocks into markdown text and
+    /// dropped everything non-textual — a chart drawn on mobile rendered as
+    /// nothing when the same session was opened on desktop, even though the
+    /// live-streaming path renders the identical block JSON fine.
+    let blocks: [ChatBlock]
+    // Backend `chat_messages` rows always carry a status ("queued" / "running"
+    // / "waiting_approval" / "completed" / "failed" / "canceled" —
+    // contracts/domain.ts chatMessageStatusValues) and it's already present
+    // in the GET /v1/chat/sessions/:id/messages JSON (shapeChatMessageForResponse
+    // spreads the raw row). This client previously never decoded it, so
+    // reopening a session with a task stuck server-side (e.g. the backend
+    // fire-and-forget chat task deadlock — see task-lifecycle notes) showed a
+    // static, unlabeled message with no "still processing" or "failed" signal
+    // at all — indistinguishable from a normal completed reply.
+    let status: String
+    let taskId: String?
+    let errorMessage: String?
+
+    var isPending: Bool {
+        ["queued", "running", "waiting_approval"].contains(status.lowercased())
+    }
+    var isFailed: Bool {
+        ["failed", "canceled"].contains(status.lowercased())
+    }
+
+    // Manual conformances: ChatBlock (enum with associated values) isn't
+    // Hashable, and block content is fully determined by the message row
+    // anyway — id + text + status identify a history message.
+    static func == (lhs: ElyanSessionMessage, rhs: ElyanSessionMessage) -> Bool {
+        lhs.id == rhs.id
+            && lhs.text == rhs.text
+            && lhs.status == rhs.status
+            && lhs.blocks.count == rhs.blocks.count
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(text)
+        hasher.combine(status)
+    }
 }
 
 // MARK: - Device Models
@@ -945,13 +932,12 @@ struct ElyanRuntimeTask: Identifiable, Equatable, Hashable {
     let summary: String
     let error: String
 
-    init?(dictionary: [String: Any]) {
-        guard let id = dictionary["id"] as? String, !id.isEmpty else { return nil }
-        self.id = id
-        self.title = (dictionary["title"] as? String) ?? "Yeni görev"
-        self.status = (dictionary["status"] as? String) ?? "queued"
-        self.summary = (dictionary["summary"] as? String) ?? ""
-        self.error = (dictionary["error"] as? String) ?? ""
+    init(runtimeItem: RuntimeTaskItem) {
+        self.id = runtimeItem.id
+        self.title = runtimeItem.title
+        self.status = runtimeItem.status
+        self.summary = runtimeItem.summary
+        self.error = runtimeItem.error
     }
 }
 
@@ -991,7 +977,7 @@ extension ElyanBackend {
         return dict
     }
 
-    static func parseSessions(_ raw: Any) -> [ElyanSession] {
+    static func parseSessionPage(_ raw: Any) -> ElyanSessionPage {
         let payload = unwrap(raw)
         let items: [[String: Any]] = {
             if let arr = payload["sessions"] as? [[String: Any]] { return arr }
@@ -999,7 +985,7 @@ extension ElyanBackend {
             if let arr = raw as? [[String: Any]] { return arr }
             return []
         }()
-        return items.compactMap { item in
+        let sessions: [ElyanSession] = items.compactMap { item in
             guard let id = item["id"] as? String else { return nil }
             let title = (item["title"] as? String) ?? (item["name"] as? String) ?? "Sohbet"
             let lastMessage = (item["lastMessage"] as? String) ?? (item["summary"] as? String) ?? ""
@@ -1008,6 +994,18 @@ extension ElyanBackend {
             let count = (item["messageCount"] as? Int) ?? 0
             return ElyanSession(id: id, title: title, lastMessage: lastMessage, updatedAt: updatedAt, messageCount: count)
         }
+        let meta = payload["meta"] as? [String: Any]
+        let nextCursor = (meta?["nextCursor"] as? String)
+            ?? (payload["nextCursor"] as? String)
+            ?? (payload["cursor"] as? String)
+        let hasMore = (meta?["hasMore"] as? Bool)
+            ?? (payload["hasMore"] as? Bool)
+            ?? (nextCursor?.isEmpty == false)
+        return ElyanSessionPage(sessions: sessions, hasMore: hasMore, nextCursor: nextCursor)
+    }
+
+    static func parseSessions(_ raw: Any) -> [ElyanSession] {
+        parseSessionPage(raw).sessions
     }
 
     static func parseSessionMessages(_ raw: Any) -> (messages: [ElyanSessionMessage], hasMore: Bool, nextCursor: String?) {
@@ -1024,18 +1022,30 @@ extension ElyanBackend {
         let messages = items.compactMap { item -> ElyanSessionMessage? in
             guard let id = item["id"] as? String else { return nil }
             let role = (item["role"] as? String) ?? "assistant"
-            // Support blocks-style messages
+            // Parse the FULL typed block array — the same ChatBlock.parse the
+            // live SSE path uses — so charts/tables/math/svg from history
+            // render identically to when they were first streamed.
+            let rawBlocks = (item["blocks"] as? [[String: Any]]) ?? []
+            let blocks = ChatBlock.parseArray(from: rawBlocks)
+            // Text fallback (used when a message carries no renderable blocks).
             let text: String = {
                 if let t = item["text"] as? String { return t }
-                if let blocks = item["blocks"] as? [[String: Any]] {
-                    return blocks.compactMap { $0["markdown"] as? String }.joined(separator: "\n")
+                if !rawBlocks.isEmpty {
+                    return rawBlocks.compactMap { $0["markdown"] as? String }.joined(separator: "\n")
                 }
                 if let content = item["content"] as? String { return content }
                 return ""
             }()
             let createdStr = (item["createdAt"] as? String) ?? ""
             let createdAt = ElyanDateParser.parse(createdStr) ?? Date()
-            return ElyanSessionMessage(id: id, role: role, text: text, createdAt: createdAt)
+            let status = (item["status"] as? String) ?? "completed"
+            let taskId = item["taskId"] as? String
+            let errorMessage = item["error"] as? String
+            return ElyanSessionMessage(
+                id: id, role: role, text: text, createdAt: createdAt,
+                blocks: blocks,
+                status: status, taskId: taskId, errorMessage: errorMessage
+            )
         }
         return (messages, hasMore, nextCursor)
     }

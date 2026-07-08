@@ -10,12 +10,32 @@ struct ChatMessage: Identifiable {
     var text: String
     var blocks: [ChatBlock]
     let timestamp: Date
+    /// Non-nil only for messages loaded from session history whose backend
+    /// status wasn't a terminal "completed" (queued/running/waiting_approval/
+    /// failed/canceled) — nil for live/local messages so the normal streaming
+    /// path (which already has its own "Düşünüyor…" indicator) is untouched.
+    var historyStatus: String?
+    var historyError: String?
 
-    init(role: Role, text: String, blocks: [ChatBlock] = [], timestamp: Date = Date()) {
+    init(
+        role: Role, text: String, blocks: [ChatBlock] = [], timestamp: Date = Date(),
+        historyStatus: String? = nil, historyError: String? = nil
+    ) {
         self.role = role
         self.text = text
         self.blocks = blocks
         self.timestamp = timestamp
+        self.historyStatus = historyStatus
+        self.historyError = historyError
+    }
+
+    var isHistoryPending: Bool {
+        guard let historyStatus else { return false }
+        return ["queued", "running", "waiting_approval"].contains(historyStatus.lowercased())
+    }
+    var isHistoryFailed: Bool {
+        guard let historyStatus else { return false }
+        return ["failed", "canceled"].contains(historyStatus.lowercased())
     }
 }
 
@@ -30,6 +50,7 @@ extension ChatMessage: Equatable {
         lhs.id == rhs.id
             && lhs.text == rhs.text
             && lhs.blocks.count == rhs.blocks.count
+            && lhs.historyStatus == rhs.historyStatus
     }
 }
 
@@ -57,6 +78,18 @@ final class ChatStore: ObservableObject {
     private var streamingAssistantId: UUID?
     private var prefetchTasks: [String: Task<Void, Never>] = [:]
 
+    // Kalıcı realtime kanalı: eskiden HER send() yeni bir per-task SSE
+    // bağlantısı açıyordu (POST döndükten SONRA) — her mesajda tam bir
+    // TLS+HTTP el sıkışması (yüzlerce ms) ve subscribe tamamlanmadan yayınlanan
+    // ilk delta'ların kaçması demekti. "Mesaj çok yavaş gidiyor/geliyor"
+    // şikayetinin ana bileşeni buydu. Artık TEK user-channel stream'i açık
+    // tutuyoruz (backend user:<userId> kanalı task event'lerini de fan-out
+    // eder — AppState'in realtime aboneliğiyle aynı sözleşme) ve gelen
+    // event'leri taskId/sessionId ile aktif akışa eşliyoruz.
+    private var realtimeOpen = false
+    private var currentTaskId: String?
+    private var realtimeReopenTask: Task<Void, Never>?
+
     // Delta birleştirme: her SSE chunk'ında `messages` dizisini mutasyona
     // uğratmak @Published'ı saniyede onlarca kez tetikliyor ve TÜM sohbet
     // listesi (markdown parse dahil) yeniden değerlendiriliyordu — "chat
@@ -74,7 +107,12 @@ final class ChatStore: ObservableObject {
     // MARK: - Reset
 
     func reset() {
+        // Logout / tam sıfırlama: kalıcı kanal da kapanır (token değişecek).
         Task { await sseClient.cancel() }
+        realtimeOpen = false
+        realtimeReopenTask?.cancel()
+        realtimeReopenTask = nil
+        currentTaskId = nil
         deltaFlushTask?.cancel()
         deltaFlushTask = nil
         pendingDeltaText = ""
@@ -83,6 +121,7 @@ final class ChatStore: ObservableObject {
         streamingAssistantId = nil
         isStreaming = false
         sessionId = nil
+        onSessionActivated?("")
         lastError = ""
         hasMoreMessages = false
         nextCursor = nil
@@ -96,15 +135,41 @@ final class ChatStore: ObservableObject {
     func loadSession(_ id: String) async {
         let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        await sseClient.cancel()
+
+        // A message just sent from a brand-new (sessionId == nil) chat gets
+        // its session id back from the backend mid-flight and publishes it
+        // via `sessionId = sid` — which some callers (or a future/careless
+        // caller) could react to by calling loadSession(sid) on the very
+        // session whose reply is actively streaming right now. Before this
+        // guard, that would cancel the live SSE subscription, wipe the
+        // optimistic bubble (`messages.removeAll()` below, since a brand-new
+        // session has no cache yet), and reissue a REST fetch that might
+        // still race the backend's own write — exactly the "message vanished
+        // until it showed up in the sidebar and I clicked it" symptom.
+        // There's nothing to "load": we already hold the freshest possible
+        // state locally.
+        if trimmed == sessionId, isStreaming {
+            return
+        }
+
+        // Kanalı session açılırken ısıt — kullanıcı ilk mesajını yazana kadar
+        // bağlantı çoktan kurulmuş olur.
+        ensureRealtimeOpen()
+
+        // Kalıcı kanal AÇIK KALIR (user-scoped, session'a bağlı değil) —
+        // yalnız bu session'a ait canlı akış state'i sıfırlanır. Başka bir
+        // session'ın yarım akışından gelebilecek geç delta'lar currentTaskId
+        // temizlendiği için eşleşmeyip düşer.
         deltaFlushTask?.cancel()
         deltaFlushTask = nil
         pendingDeltaText = ""
         pendingBlocks = nil
         streamingAssistantId = nil
+        currentTaskId = nil
         isStreaming = false
         lastError = ""
         sessionId = trimmed
+        onSessionActivated?(trimmed)
 
         // 1. Show cache immediately (zero-latency perceived switch)
         if let (cached, isExpired) = cache.messagePage(sessionId: trimmed, cursor: nil) {
@@ -124,7 +189,7 @@ final class ChatStore: ObservableObject {
         defer { isLoadingSession = false; isStale = false }
         do {
             let result = try await backend.getSessionMessages(
-                sessionId: trimmed, limit: 50, cursor: nil, forceRefresh: true
+                sessionId: trimmed, limit: 30, cursor: nil, forceRefresh: false
             )
             let page = CachedMessagePage(
                 messages: result.messages,
@@ -163,7 +228,7 @@ final class ChatStore: ObservableObject {
             guard let self else { return }
             do {
                 let result = try await backend.getSessionMessages(
-                    sessionId: trimmed, limit: 50, cursor: nil, forceRefresh: false
+                    sessionId: trimmed, limit: 30, cursor: nil, forceRefresh: false
                 )
                 let page = CachedMessagePage(
                     messages: result.messages,
@@ -198,7 +263,7 @@ final class ChatStore: ObservableObject {
 
         do {
             let result = try await backend.getSessionMessages(
-                sessionId: id, limit: 50, cursor: nextCursor, forceRefresh: false
+                sessionId: id, limit: 30, cursor: nextCursor, forceRefresh: false
             )
             let page = CachedMessagePage(
                 messages: result.messages,
@@ -225,7 +290,12 @@ final class ChatStore: ObservableObject {
             case "assistant", "elyan", "system": role = .assistant
             default: return nil
             }
-            return ChatMessage(role: role, text: m.text, blocks: [], timestamp: m.createdAt)
+            let isTerminalCompleted = m.status.lowercased() == "completed"
+            return ChatMessage(
+                role: role, text: m.text, blocks: m.blocks, timestamp: m.createdAt,
+                historyStatus: isTerminalCompleted ? nil : m.status,
+                historyError: m.errorMessage
+            )
         }
         if prepend {
             messages.insert(contentsOf: mapped, at: 0)
@@ -244,7 +314,10 @@ final class ChatStore: ObservableObject {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        await sseClient.cancel()
+        // Kanal POST'tan ÖNCE ısınır: dispatch döner dönmez ilk delta'lar
+        // zaten açık olan stream'den akar — eski per-task modeldeki
+        // "POST bitti, şimdi bağlan" boşluğu yok.
+        ensureRealtimeOpen()
 
         let userMsg = ChatMessage(role: .user, text: trimmed)
         messages.append(userMsg)
@@ -264,54 +337,151 @@ final class ChatStore: ObservableObject {
         // çağrısından ÖNCE ekrana çizilmesini garantiler.
         await Task.yield()
 
+        // YEREL-ÖNCELİKLİ YOL (Jarvis): bulut, masaüstü kaynaklı komutları
+        // masaüstüne geri göndermeyip kendi LLM'iyle "masaüstü ortamı yok"
+        // diye reddediyordu. Komut yerel runtime'da (deterministik router +
+        // gerçek araçlar) çalışır; sonuç senkron döner. Bridge kapalıysa
+        // eski bulut yoluna düşülür.
+        if let localSend {
+            do {
+                let reply = try await localSend(trimmed)
+                completeStreaming(withLocalReply: reply)
+                return
+            } catch is RuntimeBridgeSwiftError {
+                // Bridge ayakta değil — bulut yoluna devam.
+            } catch {
+                await finishStreaming(withFailure: error)
+                return
+            }
+        }
+
         do {
             let dispatch = try await backend.sendChatMessage(
                 prompt: trimmed,
                 sessionId: sessionId,
                 source: "desktop"
             )
+            currentTaskId = dispatch.taskId
             if let sid = dispatch.sessionId, !sid.isEmpty {
                 sessionId = sid
                 // Invalidate cache for this session so next open fetches fresh
                 cache.invalidateMessages(forSession: sid)
             }
-            guard let token = backend.session?.accessToken, !token.isEmpty else {
-                throw ElyanBackendError.notAuthenticated
-            }
-            await subscribe(taskId: dispatch.taskId, token: token)
         } catch {
             await finishStreaming(withFailure: error)
         }
     }
 
-    // MARK: - SSE subscription
+    /// AppState tarafından bağlanır: komutu yerel Python runtime'ında koşturur.
+    var localSend: ((String) async throws -> PythonRuntimeSupervisor.LocalChatReply)?
 
-    private func subscribe(taskId: String, token: String) async {
-        await sseClient.open(
-            accessToken: token,
-            taskId: taskId,
-            onEvent: { [weak self] event in await self?.handle(event: event) },
-            onError: { [weak self] error in await self?.finishStreaming(withFailure: error) },
-            onClose: { [weak self] in await self?.streamDidClose() }
-        )
+    /// Aktif oturum değiştiğinde (yeni sohbet = boş kimlik) yerel runtime'ın
+    /// konuşma bağlamını senkron tutmak için AppState tarafından bağlanır.
+    var onSessionActivated: ((String) -> Void)?
+
+    private func completeStreaming(withLocalReply reply: PythonRuntimeSupervisor.LocalChatReply) {
+        drainPendingStream()
+        if let id = streamingAssistantId,
+           let idx = messages.firstIndex(where: { $0.id == id }) {
+            messages[idx].text = reply.text
+        }
+        isStreaming = false
+        streamingAssistantId = nil
+        currentTaskId = nil
+    }
+
+    // MARK: - Realtime channel (persistent, user-scoped)
+
+    /// Kalıcı user-channel SSE'yi (idempotent) açar. send()'ler arasında açık
+    /// kalır; bağlantı düşerse ElyanSSEClient kendi içinde Last-Event-ID
+    /// replay'li 4 deneme yapar, o da tükenirse burada gecikmeli yeniden
+    /// açılır.
+    func ensureRealtimeOpen() {
+        guard !realtimeOpen else { return }
+        guard let token = backend.session?.accessToken, !token.isEmpty else { return }
+        realtimeOpen = true
+        realtimeReopenTask?.cancel()
+        realtimeReopenTask = nil
+        Task { [weak self] in
+            await self?.sseClient.open(
+                accessToken: token,
+                taskId: nil,
+                onEvent: { [weak self] event in await self?.handle(event: event) },
+                onError: { [weak self] error in await self?.realtimeDidFail(error) },
+                onClose: { [weak self] in await self?.realtimeDidClose() }
+            )
+        }
+    }
+
+    /// 4 iç deneme de tükendi — aktif akış varsa kullanıcıya söyle, kanalı
+    /// bir süre sonra yeniden kurmayı dene.
+    private func realtimeDidFail(_ error: Error) async {
+        realtimeOpen = false
+        if isStreaming {
+            await finishStreaming(withFailure: error)
+        }
+        scheduleRealtimeReopen(afterSeconds: 15)
+    }
+
+    /// Sunucu kanalı kapattı (idle timeout, deploy, ağ) — aktif akış yarıda
+    /// kaldıysa eski davranışla sonlandır, kanalı kısa gecikmeyle yeniden aç.
+    private func realtimeDidClose() async {
+        realtimeOpen = false
+        if isStreaming {
+            await streamDidClose()
+        }
+        scheduleRealtimeReopen(afterSeconds: 2)
+    }
+
+    private func scheduleRealtimeReopen(afterSeconds seconds: Double) {
+        guard realtimeReopenTask == nil else { return }
+        realtimeReopenTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.realtimeReopenTask = nil
+            self.ensureRealtimeOpen()
+        }
+    }
+
+    /// User-channel'dan gelen event bu store'un aktif akışına mı ait?
+    /// Aynı kullanıcının MOBİLDE başlattığı eşzamanlı bir task'ın delta'ları
+    /// da bu kanala düşer — taskId (birincil) / sessionId (ikincil) eşleşmesi
+    /// olmadan hiçbir içerik uygulanmaz. Routing bilgisi hiç yoksa yalnız
+    /// aktif streaming sırasında kabul edilir (eski per-task davranışın
+    /// dengi).
+    private func matchesCurrentStream(_ data: [String: Any]) -> Bool {
+        let routing = Self.extractRouting(from: data)
+        if let tid = routing.taskId, !tid.isEmpty {
+            return tid == currentTaskId
+        }
+        if let sid = routing.sessionId, !sid.isEmpty {
+            return sid == sessionId
+        }
+        return isStreaming
     }
 
     private func handle(event: ElyanSSEEvent) async {
         switch event.event {
         case "chat.message.delta":
+            guard matchesCurrentStream(event.data) else { return }
             let (text, blocks) = Self.extractContent(from: event.data)
             // Delta ve blocks AYNI event'te gelebilir (ör. ack: delta metni +
             // task-trace blokları). İkisini de uygula — eskiden `else if` biri
             // atlanıyordu.
             if !blocks.isEmpty { applyAssistantBlocks(blocks) }
-            if !text.isEmpty { appendDelta(text) }
+            if !text.isEmpty, !Self.isTaskTraceOnlySnapshot(blocks) { appendDelta(text) }
         case "chat.message.updated":
+            guard matchesCurrentStream(event.data) else { return }
             let (text, blocks) = Self.extractContent(from: event.data)
-            replaceAssistant(text: text, blocks: blocks)
+            replaceAssistant(text: text, blocks: Self.removingTaskTraceBlocks(from: blocks))
             finishStreamingSuccessfully()
         case "chat.heartbeat", "chat.message.created":
             break
         default:
+            // Task/device/pairing yaşam döngüsü event'leri AppState'in işi;
+            // burada yalnız chat içeriği taşıyan bilinmeyen event adlarını
+            // (eşleşiyorsa) uygula.
+            guard event.event.hasPrefix("chat."), matchesCurrentStream(event.data) else { return }
             let (text, blocks) = Self.extractContent(from: event.data)
             if !blocks.isEmpty { applyAssistantBlocks(blocks) }
             if !text.isEmpty { appendDelta(text) }
@@ -382,7 +552,7 @@ final class ChatStore: ObservableObject {
         drainPendingStream()
         guard let id = streamingAssistantId,
               let idx = messages.firstIndex(where: { $0.id == id }) else { return }
-        if !blocks.isEmpty { messages[idx].blocks = blocks }
+        messages[idx].blocks = Self.removingTaskTraceBlocks(from: blocks)
         if !text.isEmpty { messages[idx].text = text }
     }
 
@@ -390,13 +560,11 @@ final class ChatStore: ObservableObject {
         drainPendingStream()
         isStreaming = false
         streamingAssistantId = nil
-        // Terminal olay geldi — akışı kapat ki SSE istemcisinin otomatik
-        // yeniden bağlanması tamamlanmış bir stream'i yeniden açmasın.
-        Task { await sseClient.cancel() }
+        currentTaskId = nil
+        // Kalıcı kanal AÇIK KALIR — sonraki send() sıfır el sıkışmayla akar.
     }
 
     private func finishStreaming(withFailure error: Error) async {
-        await sseClient.cancel()
         drainPendingStream()
         let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         lastError = msg
@@ -407,6 +575,7 @@ final class ChatStore: ObservableObject {
         }
         isStreaming = false
         streamingAssistantId = nil
+        currentTaskId = nil
     }
 
     private func streamDidClose() async {
@@ -419,6 +588,7 @@ final class ChatStore: ObservableObject {
         }
         isStreaming = false
         streamingAssistantId = nil
+        currentTaskId = nil
     }
 
     // MARK: - Content extraction (SSE)
@@ -432,6 +602,23 @@ final class ChatStore: ObservableObject {
     /// dek "Düşünüyor…"da takılıyordu (geçmiş cevaplar REST'ten geldiği için
     /// çalışıyordu, canlı SSE değil). Artık payload + assistantMessage + eski
     /// top-level varyantlarının hepsi taranıyor.
+    /// Envelope'dan yönlendirme kimliklerini çıkarır — kalıcı user-channel
+    /// üzerinde birden fazla eşzamanlı task'ın (ör. mobilden başlatılmış)
+    /// event'leri karışmasın diye. taskId/sessionId payload'da, top-level'da
+    /// veya assistantMessage içinde olabilir; hepsi taranır.
+    static func extractRouting(from data: [String: Any]) -> (taskId: String?, sessionId: String?) {
+        let payload = (data["payload"] as? [String: Any]) ?? data
+        let assistantMessage = (payload["assistantMessage"] as? [String: Any])
+            ?? (data["assistantMessage"] as? [String: Any])
+        let taskId = (payload["taskId"] as? String)
+            ?? (data["taskId"] as? String)
+            ?? (assistantMessage?["taskId"] as? String)
+        let sessionId = (payload["sessionId"] as? String)
+            ?? (data["sessionId"] as? String)
+            ?? (assistantMessage?["sessionId"] as? String)
+        return (taskId, sessionId)
+    }
+
     static func extractContent(from data: [String: Any]) -> (text: String, blocks: [ChatBlock]) {
         let payload = (data["payload"] as? [String: Any]) ?? data
 
@@ -459,5 +646,19 @@ final class ChatStore: ObservableObject {
         let blocks = ChatBlock.parseArray(from: rawBlocks)
 
         return (text, blocks)
+    }
+
+    private static func isTaskTraceOnlySnapshot(_ blocks: [ChatBlock]) -> Bool {
+        !blocks.isEmpty && blocks.allSatisfy { block in
+            if case .taskTrace = block { return true }
+            return false
+        }
+    }
+
+    private static func removingTaskTraceBlocks(from blocks: [ChatBlock]) -> [ChatBlock] {
+        blocks.filter { block in
+            if case .taskTrace = block { return false }
+            return true
+        }
     }
 }

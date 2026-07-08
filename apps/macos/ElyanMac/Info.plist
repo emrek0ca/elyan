@@ -34,17 +34,17 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.googleusercontent.apps.378810502396-pu2sfs4rb17e1usrh55vkjm9p5c0ivd1</string>
+			<string>com.googleusercontent.apps.762420924659-9g27gaqn3f05liqrcnakj8s5k7v0d1o9</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.378810502396-pu2sfs4rb17e1usrh55vkjm9p5c0ivd1</string>
+				<string>com.googleusercontent.apps.762420924659-9g27gaqn3f05liqrcnakj8s5k7v0d1o9</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>GIDClientID</key>
-	<string>378810502396-pu2sfs4rb17e1usrh55vkjm9p5c0ivd1.apps.googleusercontent.com</string>
+	<string>762420924659-9g27gaqn3f05liqrcnakj8s5k7v0d1o9.apps.googleusercontent.com</string>
 	<key>GIDServerClientID</key>
 	<string>762420924659-heq7v2qm19kqt9tj8tt14fef9u7s4dgh.apps.googleusercontent.com</string>
 	<key>LSApplicationCategoryType</key>

@@ -1,5 +1,7 @@
 import SwiftUI
 import Charts
+import AppKit
+import CoreText
 
 // MARK: - BlocksRenderer
 // Top-level entry: renders a [ChatBlock] array dispatching to each block view.
@@ -354,121 +356,38 @@ private struct StatusBlockView: View {
 
 private struct TaskTraceBlockView: View {
     let block: TaskTraceBlock
-    @State private var expanded = true
 
     private var isRunning: Bool { block.status == .running }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            Button(action: { withAnimation(.spring(duration: 0.25)) { expanded.toggle() } }) {
-                HStack(spacing: 10) {
-                    if isRunning {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: block.status == .completed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundStyle(block.status == .completed ? .green : .red)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(block.title)
-                            .font(.system(size: 13, weight: .semibold))
-                        if let phase = block.phase {
-                            Text(phase)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(expanded ? 0 : -90))
-                }
-                .padding(12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            // Steps
-            if expanded {
-                Divider()
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(block.steps, id: \.id) { step in
-                        TaskStepRow(step: step, isActive: step.id == block.activeStepId)
-                    }
-                }
+        if isRunning {
+            TaskTraceThinkingWave()
                 .padding(.vertical, 4)
-
-                // Summary
-                if let summary = block.summary {
-                    Divider()
-                    Text(summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(12)
-                }
-            }
+                .accessibilityLabel(Text("Yanıt hazırlanıyor"))
         }
-        .background(Material.regular)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-        )
     }
 }
 
-private struct TaskStepRow: View {
-    let step: TaskTraceStep
-    let isActive: Bool
-
-    private var icon: String {
-        let stepId = TaskTraceStep.StepId(rawValue: step.id)
-        switch step.status {
-        case .completed: return "checkmark.circle.fill"
-        case .failed:    return "xmark.circle.fill"
-        case .skipped:   return "minus.circle"
-        case .running:   return "circle.fill"
-        case .pending:   return stepId?.icon ?? "circle"
-        }
-    }
-
-    private var iconColor: Color {
-        switch step.status {
-        case .completed: return .green
-        case .failed:    return .red
-        case .running:   return .accentColor
-        default:         return .secondary
-        }
-    }
+private struct TaskTraceThinkingWave: View {
+    @State private var pulsing = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            if step.status == .running {
-                ProgressView().controlSize(.mini)
-                    .frame(width: 16)
-            } else {
-                Image(systemName: icon)
-                    .font(.system(size: 13))
-                    .foregroundStyle(iconColor)
-                    .frame(width: 16)
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(Color.accentColor.opacity(0.55))
+                    .frame(width: 5, height: 5)
+                    .scaleEffect(pulsing ? 1.15 : 0.7)
+                    .opacity(pulsing ? 1.0 : 0.3)
+                    .animation(
+                        .easeInOut(duration: 0.6)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(index) * 0.18),
+                        value: pulsing
+                    )
             }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(step.label)
-                    .font(.system(size: 12, weight: isActive ? .semibold : .regular))
-                    .foregroundStyle(isActive ? .primary : .secondary)
-                if let detail = step.detail {
-                    Text(detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(2)
-                }
-            }
-            Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(isActive ? Color.accentColor.opacity(0.06) : .clear)
+        .onAppear { pulsing = true }
     }
 }
 
@@ -1343,6 +1262,97 @@ private struct BlockGroupView: View {
     }
 }
 
+// MARK: - Native PDF export
+//
+// Backend `document_block`/`pdf_generate` blocks only ever carry structured
+// JSON (title + sections) — there is no server-side PDF byte generation
+// (elyan-backend never produces PDF bytes; export is left entirely to
+// clients). Unlike the mobile client, which leans on Syncfusion + hand-rolled
+// OOXML for this, macOS can produce a real PDF with zero third-party
+// dependencies via CoreText pagination into a CGContext PDF context. This is
+// the first working document export path on the desktop client.
+enum DocumentPDFExporter {
+    struct Section {
+        var heading: String?
+        var content: String
+        var level: Int
+    }
+
+    static func makePDFData(title: String, sections: [Section]) -> Data {
+        let pageWidth: CGFloat = 612   // US Letter, points
+        let pageHeight: CGFloat = 792
+        let margin: CGFloat = 56
+        let contentRect = CGRect(x: margin, y: margin, width: pageWidth - margin * 2, height: pageHeight - margin * 2)
+
+        let attributed = NSMutableAttributedString()
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.paragraphSpacing = 10
+        paragraphStyle.lineSpacing = 3
+
+        if !title.isEmpty {
+            attributed.append(NSAttributedString(string: title + "\n\n", attributes: [
+                .font: NSFont.boldSystemFont(ofSize: 20),
+                .paragraphStyle: paragraphStyle,
+            ]))
+        }
+        for section in sections {
+            if let heading = section.heading, !heading.isEmpty {
+                let headingSize: CGFloat = section.level <= 1 ? 16 : (section.level == 2 ? 14.5 : 13)
+                attributed.append(NSAttributedString(string: heading + "\n", attributes: [
+                    .font: NSFont.boldSystemFont(ofSize: headingSize),
+                    .paragraphStyle: paragraphStyle,
+                ]))
+            }
+            attributed.append(NSAttributedString(string: section.content + "\n\n", attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .paragraphStyle: paragraphStyle,
+            ]))
+        }
+
+        let data = NSMutableData()
+        guard let consumer = CGDataConsumer(data: data as CFMutableData) else { return Data() }
+        var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
+        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return Data() }
+
+        let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+        let path = CGPath(rect: contentRect, transform: nil)
+        var currentIndex = 0
+        let totalLength = attributed.length
+
+        repeat {
+            context.beginPDFPage(nil)
+            let frame = CTFramesetterCreateFrame(
+                framesetter,
+                CFRange(location: currentIndex, length: 0),
+                path,
+                nil
+            )
+            CTFrameDraw(frame, context)
+            let visibleRange = CTFrameGetVisibleStringRange(frame)
+            context.endPDFPage()
+            // Guard against a pathological zero-progress frame (e.g. content
+            // rect too small to fit even one line) so export can't hang.
+            guard visibleRange.length > 0 else { break }
+            currentIndex += visibleRange.length
+        } while currentIndex < totalLength
+
+        context.closePDF()
+        return data as Data
+    }
+
+    @MainActor
+    static func savePanel(suggestedName: String, pdfData: Data) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.nameFieldStringValue = suggestedName
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? pdfData.write(to: url)
+        }
+    }
+}
+
 // MARK: - DocumentBlockView
 
 private struct DocumentBlockView: View {
@@ -1389,6 +1399,18 @@ private struct DocumentBlockView: View {
                     .padding(14)
                 }
                 .frame(maxHeight: 400)
+
+                Divider()
+                HStack {
+                    Spacer()
+                    Button(action: exportAsPDF) {
+                        Label("PDF olarak kaydet", systemImage: "arrow.down.doc")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(10)
+                }
             }
         }
         .background(Material.regular)
@@ -1397,6 +1419,15 @@ private struct DocumentBlockView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.1), lineWidth: 1)
         )
+    }
+
+    private func exportAsPDF() {
+        let sections = block.sections.map {
+            DocumentPDFExporter.Section(heading: $0.heading, content: $0.content, level: $0.level ?? 2)
+        }
+        let data = DocumentPDFExporter.makePDFData(title: block.title ?? "Belge", sections: sections)
+        let name = (block.title?.isEmpty == false ? block.title! : "Belge") + ".pdf"
+        DocumentPDFExporter.savePanel(suggestedName: name, pdfData: data)
     }
 }
 
@@ -1585,8 +1616,23 @@ private struct PdfGenerateBlockView: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
+                Button(action: exportAsPDF) {
+                    Label("PDF olarak kaydet", systemImage: "arrow.down.doc")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
+    }
+
+    private func exportAsPDF() {
+        let sections = block.sections.map {
+            DocumentPDFExporter.Section(heading: $0.title, content: $0.content, level: 2)
+        }
+        let data = DocumentPDFExporter.makePDFData(title: block.title ?? "PDF Belgesi", sections: sections)
+        let name = (block.title?.isEmpty == false ? block.title! : "PDF Belgesi") + ".pdf"
+        DocumentPDFExporter.savePanel(suggestedName: name, pdfData: data)
     }
 }
 

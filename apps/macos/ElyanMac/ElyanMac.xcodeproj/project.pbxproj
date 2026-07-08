@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0A0D6016C954D042BCAC9BB6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2C6E2A8B3E70C4EBD48A2E3F /* Assets.xcassets */; };
+		AB01CD02EF03AB04CD050001 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = AB01CD02EF03AB04CD050002 /* AppIcon.icon */; };
 		13F799C98E68C275E1217FC7 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00ABF0B11195B7260D4B4FF8 /* AppState.swift */; };
 		159BC6F6DA3DEEE0993CF7A4 /* WindowTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1046C5B2DBC040C01611107 /* WindowTools.swift */; };
 		2897D157067A312078EA7BE3 /* TaskInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D68479A969BDDD2030AA79 /* TaskInboxView.swift */; };
@@ -45,6 +46,7 @@
 		18FAAC9A00EEA315B1765386 /* SessionHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHistoryView.swift; sourceTree = "<group>"; };
 		2719DA9829A7A096CA7C71FB /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		2C6E2A8B3E70C4EBD48A2E3F /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AB01CD02EF03AB04CD050002 /* AppIcon.icon */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; path = AppIcon.icon; sourceTree = "<group>"; };
 		4DF32D9114D668C52985F9F1 /* BlockViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BlockViews.swift; sourceTree = "<group>"; };
 		573305C5E86DAAF7023F6FF0 /* Elyan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Elyan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		588F228D0CFCFA8126E5CE5F /* AppearanceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceSettingsView.swift; sourceTree = "<group>"; };
@@ -145,6 +147,7 @@
 				00D68479A969BDDD2030AA79 /* TaskInboxView.swift */,
 				C1046C5B2DBC040C01611107 /* WindowTools.swift */,
 				2C6E2A8B3E70C4EBD48A2E3F /* Assets.xcassets */,
+				AB01CD02EF03AB04CD050002 /* AppIcon.icon */,
 			);
 			name = .;
 			sourceTree = SOURCE_ROOT;
@@ -159,6 +162,7 @@
 				9D55F78B017AA4CAD5E9CF80 /* Sources */,
 				7E365046DB8D58F8E74C8B85 /* Frameworks */,
 				E5F04A89BAD728725FA2532B /* Resources */,
+				EB40000000000000RUNTIME1 /* Embed Elyan Runtime */,
 			);
 			buildRules = (
 			);
@@ -208,10 +212,30 @@
 			buildActionMask = 2147483647;
 			files = (
 				0A0D6016C954D042BCAC9BB6 /* Assets.xcassets in Resources */,
+				AB01CD02EF03AB04CD050001 /* AppIcon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		EB40000000000000RUNTIME1 /* Embed Elyan Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../../../build/runtime/macos/elyan-runtime/elyan-runtime",
+			);
+			name = "Embed Elyan Runtime";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/elyan-runtime/elyan-runtime",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nRUNTIME_SOURCE=\"$SRCROOT/../../../build/runtime/macos/elyan-runtime\"\nRUNTIME_DESTINATION=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/elyan-runtime\"\nif [ -d \"$RUNTIME_SOURCE\" ] && [ -x \"$RUNTIME_SOURCE/elyan-runtime\" ]; then\n  rm -rf \"$RUNTIME_DESTINATION\"\n  mkdir -p \"$(dirname \"$RUNTIME_DESTINATION\")\"\n  /usr/bin/ditto \"$RUNTIME_SOURCE\" \"$RUNTIME_DESTINATION\"\n  chmod +x \"$RUNTIME_DESTINATION/elyan-runtime\"\nelif [ \"$CONFIGURATION\" = \"Release\" ]; then\n  echo \"error: Packaged Elyan runtime missing. Run npm run build:runtime before Release archive.\" >&2\n  exit 1\nelse\n  echo \"warning: Packaged Elyan runtime missing; Debug build will use the source runtime fallback.\" >&2\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		9D55F78B017AA4CAD5E9CF80 /* Sources */ = {

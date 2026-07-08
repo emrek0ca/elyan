@@ -1,12 +1,18 @@
 import SwiftUI
 
-/// Shows tasks the mobile app has dispatched to this desktop. AppState polls
-/// GET /v1/runtime/tasks/assigned every ~10s and auto-acks new ones as
-/// "running" so the mobile UI advances out of "sırada". The user then closes
-/// each task manually with Tamamlandı / Reddet — the native app doesn't run
-/// desktop capabilities on its own yet.
+/// Shows tasks the mobile app has dispatched to this desktop. Assignment is
+/// SSE-pushed (`AppState.refreshAssignedTasks`, triggered by task/command/
+/// runtime realtime events) rather than polled; the Python runtime is the
+/// sole executor when operational (`supervisor.executeAssignedTasks()`) and
+/// Swift only auto-acks as a degraded fallback when the runtime isn't
+/// available (see AppState.refreshAssignedTasks). Runtime completion is
+/// evidence-driven; the UI can cancel or approve but cannot fabricate a
+/// completed state. A task the runtime marked
+/// `waiting_approval` gets a real approve/deny sheet wired to
+/// `supervisor.approveTask` instead.
 struct TaskInboxView: View {
     @EnvironmentObject var appState: AppState
+    @State private var approvalItem: RuntimeTaskItem?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +26,34 @@ struct TaskInboxView: View {
         }
         .background(Color(NSColor.windowBackgroundColor))
         .task { await appState.refreshAssignedTasks() }
+        .sheet(item: $approvalItem) { item in
+            TaskApprovalView(
+                task: item,
+                onApprove: {
+                    Task {
+                        await appState.supervisor.approveTask(taskId: item.id, approved: true)
+                        approvalItem = nil
+                        await appState.refreshAssignedTasks()
+                    }
+                },
+                onDeny: {
+                    Task {
+                        await appState.supervisor.approveTask(taskId: item.id, approved: false)
+                        approvalItem = nil
+                        await appState.refreshAssignedTasks()
+                    }
+                }
+            )
+        }
+    }
+
+    /// The Python bridge's own task inbox is the authoritative source for
+    /// `approvalRequest` payloads (title/message/labels) — the REST
+    /// `ElyanRuntimeTask` model the list above renders from doesn't carry
+    /// that detail. Match by id to find the matching bridge-side record.
+    private func approvalItem(for task: ElyanRuntimeTask) -> RuntimeTaskItem? {
+        guard task.status.lowercased() == "waiting_approval" else { return nil }
+        return appState.supervisor.taskInbox.first { $0.id == task.id && $0.isWaitingApproval }
     }
 
     private var header: some View {
@@ -75,11 +109,9 @@ struct TaskInboxView: View {
             LazyVStack(spacing: 12) {
                 ForEach(appState.assignedTasks) { task in
                     TaskRow(task: task,
-                            onComplete: {
-                                Task { await appState.resolveTask(task, completed: true) }
-                            },
-                            onReject: {
-                                Task { await appState.resolveTask(task, completed: false) }
+                            pendingApproval: approvalItem(for: task),
+                            onReview: { item in
+                                approvalItem = item
                             })
                 }
             }
@@ -90,8 +122,8 @@ struct TaskInboxView: View {
 
 private struct TaskRow: View {
     let task: ElyanRuntimeTask
-    let onComplete: () -> Void
-    let onReject: () -> Void
+    var pendingApproval: RuntimeTaskItem? = nil
+    var onReview: (RuntimeTaskItem) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -119,12 +151,12 @@ private struct TaskRow: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.red)
             }
-            HStack(spacing: 8) {
-                Button("Reddet", role: .destructive, action: onReject)
-                    .buttonStyle(.bordered)
-                Spacer()
-                Button("Tamamlandı", action: onComplete)
-                    .buttonStyle(.borderedProminent)
+            if let pendingApproval {
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button("İncele ve Onayla") { onReview(pendingApproval) }
+                        .buttonStyle(.borderedProminent)
+                }
             }
         }
         .padding(14)
