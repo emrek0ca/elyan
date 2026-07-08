@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { ArtifactInput, TaskStatus } from "../../contracts/domain.js";
@@ -37,7 +37,10 @@ import { buildSharedBrainAckText } from "../brain/chat-heuristics.js";
 import { extractClientAttachments } from "../brain/document-types.js";
 import { buildDocumentContextBlock, buildAttachmentAckText } from "../brain/document-context.js";
 import { buildAssistantAttachmentAckBlock, buildAssistantCodeBlock, buildAssistantDocumentBlock, buildAssistantTableBlock } from "../chat/message-blocks.js";
-import { maybeGenerateHostedImageArtifact } from "../brain/image-generation.js";
+import {
+  isHostedImageGenerationRequest,
+  maybeGenerateHostedImageArtifact,
+} from "../brain/image-generation.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import { cancelAgentRunForTask, resumeAgentRunAfterApproval } from "../brain/agent-engine.js";
 import { maybeQueueAutomaticSharedBrainRefresh } from "../brain/service.js";
@@ -1404,6 +1407,13 @@ async function persistArtifacts(
         value: item.binaryBody,
         contentType: item.contentType,
       });
+      if (!bodyBlob?.blobId) {
+        app.log.warn(
+          { taskId, artifactId, contentType: item.contentType },
+          "artifact binary body could not be persisted",
+        );
+        continue;
+      }
     } else if (item.payload || item.textContent) {
       bodyBlob = await app.services?.blobs?.storeJson({
         ownerType: "artifact",
@@ -1564,7 +1574,7 @@ async function shapePublicArtifactRecord(
   artifact: typeof artifacts.$inferSelect,
   userId?: string,
 ) {
-  const downloadUrl = artifact.bodyBlobId
+  const blobDownloadUrl = artifact.bodyBlobId
     ? userId
       ? await app.services?.blobs?.createDownloadUrlForOwner({
           blobId: artifact.bodyBlobId,
@@ -1580,6 +1590,11 @@ async function shapePublicArtifactRecord(
           contentType: artifact.contentType,
         })
     : null;
+  const downloadUrl =
+    blobDownloadUrl ??
+    (artifact.bodyBlobId && userId
+      ? createSignedArtifactRawContentUrl(app, artifact, userId)
+      : null);
 
   return shapeTaskArtifact({
     ...artifact,
@@ -1587,6 +1602,143 @@ async function shapePublicArtifactRecord(
     metadata: sanitizePublicInferenceValue(artifact.metadata ?? null),
     downloadUrl,
   });
+}
+
+function artifactDownloadSecret(app: FastifyInstance): string {
+  return String(app.config.BLOB_HMAC_SECRET || app.config.JWT_SECRET || "").trim();
+}
+
+function base64UrlEncode(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function base64UrlDecode(value: string): string | null {
+  try {
+    return Buffer.from(value, "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function signArtifactToken(secret: string, payload: string): string {
+  return createHmac("sha256", secret).update(payload).digest("base64url");
+}
+
+function safeEqualToken(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  if (left.length !== right.length) {
+    return false;
+  }
+  return timingSafeEqual(left, right);
+}
+
+function createSignedArtifactRawContentUrl(
+  app: FastifyInstance,
+  artifact: typeof artifacts.$inferSelect,
+  userId: string,
+): string | null {
+  const secret = artifactDownloadSecret(app);
+  if (secret.length < 32) {
+    return null;
+  }
+  const exp = Math.floor(Date.now() / 1000) + app.config.BLOB_STORAGE_SIGNED_URL_TTL_SECONDS;
+  const payload = base64UrlEncode(JSON.stringify({
+    taskId: artifact.taskId,
+    artifactId: artifact.id,
+    userId,
+    exp,
+  }));
+  const sig = signArtifactToken(secret, payload);
+  const baseUrl = String(app.config.APP_BASE_URL || "").replace(/\/+$/, "");
+  if (!baseUrl) {
+    return null;
+  }
+  return `${baseUrl}/v1/tasks/${artifact.taskId}/artifacts/${artifact.id}/content/raw?token=${payload}.${sig}`;
+}
+
+function verifyArtifactRawContentToken(
+  app: FastifyInstance,
+  token: string | null | undefined,
+  taskId: string,
+  artifactId: string,
+): { userId: string } | null {
+  const [payload, sig, extra] = String(token ?? "").split(".");
+  if (!payload || !sig || extra !== undefined) {
+    return null;
+  }
+  const secret = artifactDownloadSecret(app);
+  if (secret.length < 32) {
+    return null;
+  }
+  if (!safeEqualToken(sig, signArtifactToken(secret, payload))) {
+    return null;
+  }
+  const decoded = base64UrlDecode(payload);
+  if (!decoded) {
+    return null;
+  }
+  let record: Record<string, unknown> | null = null;
+  try {
+    record = readRecord(JSON.parse(decoded));
+  } catch {
+    return null;
+  }
+  const exp = typeof record?.exp === "number" ? record.exp : 0;
+  if (
+    record?.taskId !== taskId ||
+    record?.artifactId !== artifactId ||
+    typeof record?.userId !== "string" ||
+    exp < Math.floor(Date.now() / 1000)
+  ) {
+    return null;
+  }
+  return { userId: record.userId };
+}
+
+function buildGeneratedImageArtifactBlocks(
+  shapedArtifacts: Array<ReturnType<typeof shapeTaskArtifact>>,
+): AssistantMessageBlock[] {
+  return shapedArtifacts
+    .filter((artifact) => {
+      const contentType = String(artifact.contentType ?? "").toLowerCase();
+      const viewerHint = String(artifact.viewerHint ?? "").toLowerCase();
+      const family = String(artifact.contentFamily ?? "").toLowerCase();
+      return viewerHint === "image" || family === "image" || contentType.startsWith("image/");
+    })
+    .map((artifact) => {
+      const url =
+        typeof artifact.downloadUrl === "string" && artifact.downloadUrl.trim()
+          ? artifact.downloadUrl.trim()
+          : "";
+      return {
+        type: "artifact",
+        artifactType: "image",
+        artifactId: artifact.id,
+        title: "Görsel",
+        url,
+        mime: artifact.contentType,
+        viewerHint: "image",
+        contentFamily: "image",
+        loadStrategy: "remote_url",
+        visibility: "user_visible",
+        stableBlockId: `artifact_image_${artifact.id}`,
+        cacheDigest: `artifact_image_${artifact.id}`,
+        renderHints: {
+          sectionRole: "image_result",
+          density: "full",
+          generated: true,
+        },
+        payload: sanitizePublicInferenceValue(artifact.payload ?? null),
+        metadata: {
+          sourceType: "task_artifact",
+          contentFamily: "image",
+          viewerHint: "image",
+          mimeType: artifact.contentType,
+        },
+      };
+    })
+    .filter((block) => block.url);
 }
 
 async function getTaskArtifactRecordForUser(
@@ -2390,8 +2542,14 @@ async function completeServerBrainTask(
     metadata: payloadMetadata,
     userId: input.userId,
   });
+  const imageGenerationRequested = isHostedImageGenerationRequest(prompt);
   if (generatedImageArtifact) {
     visibleResponseText = generatedImageArtifact.previewText;
+    resolvedAssistantBlocks = [];
+  } else if (imageGenerationRequested) {
+    visibleResponseText =
+      "Görsel şu anda üretilemedi. Lütfen biraz sonra tekrar dene.";
+    resolvedAssistantBlocks = [];
   }
   const renderRecipeMetadata =
     artifactPipeline.kind === "rendered"
@@ -2426,7 +2584,7 @@ async function completeServerBrainTask(
     : structuredSummary;
 
   const now = new Date();
-  const result = {
+  const result: Record<string, unknown> = {
     text: visibleResponseText,
     route: input.route,
     workload: input.workload,
@@ -2533,7 +2691,7 @@ async function completeServerBrainTask(
     .where(eq(tasks.id, task.id))
     .returning();
 
-  const updatedTask = rows[0] ?? {
+  let updatedTask = rows[0] ?? {
     ...task,
     status: "completed" as const,
     summary: taskSummary,
@@ -2568,6 +2726,72 @@ async function completeServerBrainTask(
     structuredOutputArtifacts = await Promise.all(
       storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact, input.userId)),
     );
+  }
+  const generatedImageBlocks = generatedImageArtifact
+    ? buildGeneratedImageArtifactBlocks(structuredOutputArtifacts)
+    : [];
+  if (generatedImageBlocks.length > 0) {
+    resolvedAssistantBlocks = normalizeAssistantMessageBlocks({
+      blocks: [...resolvedAssistantBlocks, ...generatedImageBlocks],
+    });
+    result.assistantBlocks = resolvedAssistantBlocks;
+    result.artifacts = structuredOutputArtifacts;
+    result.imageArtifactPersisted = true;
+    const finalResultBlob = await storeTaskJsonBlob(app, {
+      taskId: task.id,
+      userId: input.userId,
+      slot: "result",
+      scope: "task_result",
+      value: result,
+    });
+    const finalRows = await app.db
+      .update(tasks)
+      .set({
+        result,
+        resultBlobId: finalResultBlob?.blobId ?? null,
+        updatedAt: now,
+      })
+      .where(eq(tasks.id, task.id))
+      .returning();
+    updatedTask = finalRows[0] ?? {
+      ...updatedTask,
+      result,
+      resultBlobId: finalResultBlob?.blobId ?? updatedTask.resultBlobId ?? null,
+      updatedAt: now,
+    };
+  } else if (generatedImageArtifact) {
+    visibleResponseText =
+      "Görsel üretildi ama dosya hazırlanamadı. Lütfen biraz sonra tekrar dene.";
+    resolvedAssistantBlocks = [];
+    result.text = visibleResponseText;
+    result.assistantBlocks = resolvedAssistantBlocks;
+    result.artifacts = [];
+    result.imageArtifactGenerated = false;
+    result.imageArtifactPersisted = false;
+    const finalResultBlob = await storeTaskJsonBlob(app, {
+      taskId: task.id,
+      userId: input.userId,
+      slot: "result",
+      scope: "task_result",
+      value: result,
+    });
+    const finalRows = await app.db
+      .update(tasks)
+      .set({
+        summary: visibleResponseText,
+        result,
+        resultBlobId: finalResultBlob?.blobId ?? null,
+        updatedAt: now,
+      })
+      .where(eq(tasks.id, task.id))
+      .returning();
+    updatedTask = finalRows[0] ?? {
+      ...updatedTask,
+      summary: visibleResponseText,
+      result,
+      resultBlobId: finalResultBlob?.blobId ?? updatedTask.resultBlobId ?? null,
+      updatedAt: now,
+    };
   }
 
   await insertTaskEvent(app, {
@@ -2981,6 +3205,201 @@ async function processSharedBrainChatTask(
       attachmentContextUsed: attachmentContext?.used === true || (clientDocCtx?.hasContent === true),
       envelope: input.understanding.envelope,
     });
+    /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
+    const attachmentAckBlock = clientDocCtx?.hasContent
+      ? buildAssistantAttachmentAckBlock({
+          summary: buildAttachmentAckText(clientDocCtx),
+          attachmentCount: clientAttachments.length,
+          chunkCount: clientDocCtx.chunkCount,
+          hasTable: clientDocCtx.tableCount > 0,
+          hasImage: clientDocCtx.imageCount > 0,
+        })
+      : null;
+    const imageGenerationRequested = isHostedImageGenerationRequest(input.prompt);
+
+    if (imageGenerationRequested) {
+      const startedAtMs = Date.now();
+      let imageStreamSeq = 0;
+      let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+      if (chatStreaming) {
+        const hbSessionId = chatStreaming.sessionId;
+        const hbMessageId = chatStreaming.assistantMessageId;
+        const now = new Date().toISOString();
+        await publishVolatileChatStreamEvent(app, {
+          userId: input.userId,
+          deviceId: runningTask.targetDeviceId,
+          taskId: runningTask.id,
+          sessionId: hbSessionId,
+          messageId: hbMessageId,
+          event: "message.delta",
+          seq: ++imageStreamSeq,
+          payload: {
+            delta: "",
+            assistantMessage: shapeAssistantMessagePayload({
+              id: hbMessageId,
+              role: "assistant",
+              status: "running",
+              content: "",
+              taskId: runningTask.id,
+              createdAt: runningTask.createdAt.toISOString(),
+              updatedAt: now,
+            }),
+            streaming: {
+              firstDeltaMs: null,
+              selectedProfile: selectedWorkload,
+              answerSource: "image_generation",
+              reset: true,
+            },
+          },
+        });
+        heartbeatTimer = setInterval(() => {
+          publishVolatileChatStreamEvent(app, {
+            userId: input.userId,
+            deviceId: runningTask.targetDeviceId,
+            taskId: runningTask.id,
+            sessionId: hbSessionId,
+            messageId: hbMessageId,
+            event: "heartbeat",
+            seq: ++imageStreamSeq,
+            payload: { status: "generating_image", elapsedMs: Date.now() - startedAtMs },
+          }).catch(() => undefined);
+        }, 5_000);
+      }
+
+      let completedTask: Awaited<ReturnType<typeof completeServerBrainTask>>;
+      try {
+        completedTask = await completeServerBrainTask(app, {
+          taskId: input.currentTask.id,
+          userId: input.userId,
+          responseText: "",
+          provider: "elyan_image",
+          model: "elyan_image",
+          route: "shared_brain",
+          workload: selectedWorkload,
+          latencyMs: Math.max(1, Date.now() - startedAtMs),
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          firstDeltaMs: null,
+          completionLatencyMs: null,
+          responseBytes: 0,
+          attachmentContextUsed: attachmentContext?.used === true || clientDocCtx?.hasContent === true,
+          attachmentContextSource: attachmentContext?.source ?? null,
+        });
+      } finally {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+      }
+
+      await recordBridgeLearningSignals(app, {
+        userId: input.userId,
+        accountId: input.userId,
+        taskId: completedTask.id,
+        target: "server_brain",
+        outcome: "completed",
+        readiness: "ready",
+        routingMode: "server_brain_first",
+        requestId: input.requestId,
+      });
+
+      const completedResultRecord = readRecord((completedTask as { result?: unknown }).result);
+      const completedResultText =
+        typeof completedResultRecord?.text === "string" && completedResultRecord.text.trim()
+          ? completedResultRecord.text.trim()
+          : "Görsel hazır.";
+
+      void recordConversationExchangeLearning(app, {
+        userId: input.userId,
+        taskId: completedTask.id,
+        userMessage: input.prompt,
+        assistantReply: completedResultText,
+        intent: input.understanding.intent.primaryIntent,
+        requestId: input.requestId,
+      }).catch(() => undefined);
+
+      if (chatStreaming?.sessionId) {
+        void persistRollingSummaryToSession(app, {
+          userId: input.userId,
+          sessionId: chatStreaming.sessionId,
+          userMessage: input.prompt,
+          assistantReply: completedResultText,
+        }).catch(() => undefined);
+      }
+
+      if (chatStreaming) {
+        const completedResultBlocks = Array.isArray(completedResultRecord?.assistantBlocks)
+          ? completedResultRecord.assistantBlocks
+          : [];
+        const imageResultBlocks = normalizeAssistantMessageBlocks({
+          blocks: [
+            ...(attachmentAckBlock ? [attachmentAckBlock] : []),
+            ...completedResultBlocks,
+          ],
+        });
+        const visibleText = imageResultBlocks.length > 0 ? "" : completedResultText;
+        const finalBlocks = composeAssistantMessageBlocks({
+          content: visibleText,
+          blocks: imageResultBlocks,
+        });
+        await app.db
+          .update(chatMessages)
+          .set({
+            status: "completed",
+            content: visibleText,
+            preview: compactMessagePreview(visibleText),
+            metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
+              withAssistantBlocksMetadata({}, {
+                content: visibleText,
+                blocks: finalBlocks,
+              }),
+            )}::jsonb`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(chatMessages.id, chatStreaming.assistantMessageId),
+              eq(chatMessages.sessionId, chatStreaming.sessionId),
+              eq(chatMessages.userId, input.userId),
+            ),
+          );
+        await publishPersistedChatStreamEvent(app, {
+          userId: input.userId,
+          deviceId: completedTask.targetDeviceId,
+          taskId: completedTask.id,
+          sessionId: chatStreaming.sessionId,
+          messageId: chatStreaming.assistantMessageId,
+          event: "message.completed",
+          seq: ++imageStreamSeq,
+          payload: {
+            content: visibleText,
+            blocks: finalBlocks,
+            assistantMessage: shapeAssistantMessagePayload({
+              id: chatStreaming.assistantMessageId,
+              role: "assistant",
+              status: "completed",
+              content: visibleText,
+              blocks: finalBlocks,
+              taskId: completedTask.id,
+              createdAt: completedTask.createdAt.toISOString(),
+              updatedAt: completedTask.updatedAt.toISOString(),
+            }),
+            task: shapeTaskFeedItem(completedTask),
+            usage: {
+              inputTokens: 0,
+              outputTokens: 0,
+              totalTokens: 0,
+            },
+            streaming: {
+              firstDeltaMs: null,
+              selectedProfile: selectedWorkload,
+              answerSource: "image_generation",
+              fallbackUsed: false,
+              cached: false,
+            },
+          },
+        });
+      }
+      return;
+    }
     // Deterministik hedef komutu: "hedef oluştur/tamamla" model beklemeden
     // sunucuda uygulanır. Model yolu (turn envelope goal_ops) bunu dışlamaz;
     // bu yol flag'siz, her mesajda mikrosaniyede çalışan garanti halka.
@@ -3004,17 +3423,6 @@ async function processSharedBrainChatTask(
       assistantContent: ackText,
     });
     let streamSeq = 0;
-
-    /* Eğer istemci ek dosya gönderdiyse, attachment_ack bloğu — hem açılış hem kapanış event'ine eklenir */
-    const attachmentAckBlock = clientDocCtx?.hasContent
-      ? buildAssistantAttachmentAckBlock({
-          summary: buildAttachmentAckText(clientDocCtx),
-          attachmentCount: clientAttachments.length,
-          chunkCount: clientDocCtx.chunkCount,
-          hasTable: clientDocCtx.tableCount > 0,
-          hasImage: clientDocCtx.imageCount > 0,
-        })
-      : null;
 
     if (chatStreaming) {
       const now = new Date().toISOString();
@@ -4055,6 +4463,50 @@ export async function createTask(
         : input.payload;
       const runningMetadata = getPayloadMetadata(runningPayload);
       const attachmentContext = await resolveTaskAttachmentContext(app, runningPayload, prompt);
+      const selectedWorkload = resolveSharedBrainWorkloadForUnderstanding({
+        routeDecision,
+        attachmentContextUsed: attachmentContext?.used === true,
+        envelope: understanding.envelope,
+      });
+      if (isHostedImageGenerationRequest(prompt)) {
+        const startedAtMs = Date.now();
+        const completedTask = await completeServerBrainTask(app, {
+          taskId: runningTask.id,
+          userId: input.userId,
+          responseText: "",
+          provider: "elyan_image",
+          model: "elyan_image",
+          route: "shared_brain",
+          workload: selectedWorkload,
+          latencyMs: Math.max(1, Date.now() - startedAtMs),
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          firstDeltaMs: null,
+          completionLatencyMs: null,
+          responseBytes: 0,
+          attachmentContextUsed: attachmentContext?.used === true,
+          attachmentContextSource: attachmentContext?.source ?? null,
+        });
+        await recordBridgeLearningSignals(app, {
+          userId: input.userId,
+          accountId: input.userId,
+          taskId: completedTask.id,
+          target: "server_brain",
+          outcome: "completed",
+          readiness: "ready",
+          routingMode: "server_brain_first",
+          requestId: input.requestId,
+        });
+
+        return {
+          task: shapeTaskFeedItem(completedTask, { selectedDesktopOnline }),
+          dispatched: true,
+          reused: false,
+          selectedDesktopOnline,
+          renderRecipe: completedTask.renderRecipe ?? null,
+        };
+      }
       const inference = await generateGovernedSharedBrainReply(app, {
         userId: input.userId,
         taskId: runningTask.id,
@@ -4065,11 +4517,7 @@ export async function createTask(
         requestMetadata: runningMetadata,
         route: "shared_brain",
         routeDecision,
-        workload: resolveSharedBrainWorkloadForUnderstanding({
-          routeDecision,
-          attachmentContextUsed: attachmentContext?.used === true,
-          envelope: understanding.envelope,
-        }),
+        workload: selectedWorkload,
         meteringSurface: runningMetadata.channel === "chat" ? "chat" : "task",
         planCode: usageAccess.planCode,
         understandingContext: understanding.context,
@@ -4447,6 +4895,36 @@ export async function getTaskArtifactContent(
       downloadUrl: shapedArtifact.downloadUrl,
       downloadable: shapedArtifact.downloadable,
     },
+  };
+}
+
+export async function getTaskArtifactRawContent(
+  app: FastifyInstance,
+  taskId: string,
+  artifactId: string,
+  token: string | null | undefined,
+) {
+  const verified = verifyArtifactRawContentToken(app, token, taskId, artifactId);
+  if (!verified) {
+    throw notFound("Artifact not found");
+  }
+  const artifact = await getTaskArtifactRecordForUser(app, taskId, artifactId, verified.userId);
+  if (!artifact.bodyBlobId) {
+    throw notFound("Artifact content not found");
+  }
+  const body = await app.services?.blobs?.hydrateBytesForOwner({
+    blobId: artifact.bodyBlobId,
+    userId: verified.userId,
+    ownerType: "artifact",
+    ownerId: artifact.id,
+  });
+  if (!body) {
+    throw notFound("Artifact content not found");
+  }
+  return {
+    body: Buffer.from(body),
+    contentType: artifact.contentType || "application/octet-stream",
+    fileName: artifact.name || artifact.id,
   };
 }
 

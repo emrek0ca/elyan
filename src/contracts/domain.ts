@@ -646,6 +646,22 @@ export const elyanAssistantFileBlockSchema =
     documentId: z.string().min(1).max(255).optional(),
     preview: z.string().min(1).max(400).optional(),
   });
+export const elyanAssistantArtifactBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("artifact"),
+    artifactType: z.string().min(1).max(80).optional(),
+    artifactId: z.string().min(1).max(255).optional(),
+    title: z.string().min(1).max(180).optional(),
+    url: z.string().min(1).max(2_000).optional(),
+    mime: z.string().min(1).max(120).optional(),
+    viewerHint: z.string().min(1).max(80).optional(),
+    contentFamily: z.string().min(1).max(80).optional(),
+    summary: z.string().min(1).max(400).optional(),
+    preview: z.string().min(1).max(400).optional(),
+    loadStrategy: z.string().min(1).max(80).optional(),
+    payload: z.record(z.any()).optional(),
+    metadata: z.record(z.any()).optional(),
+  });
 export const elyanAssistantActionableBlockSchema =
   elyanAssistantBlockBaseSchema.extend({
     type: z.literal("actionable"),
@@ -755,6 +771,7 @@ export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantMathBlockSchema,
   elyanAssistantSvgBlockSchema,
   elyanAssistantFileBlockSchema,
+  elyanAssistantArtifactBlockSchema,
   elyanAssistantActionableBlockSchema,
   elyanAssistantBlockGroupBlockSchema,
   elyanAssistantDocumentBlockSchema,
@@ -863,6 +880,9 @@ export type ElyanAssistantSvgBlock = z.infer<
 >;
 export type ElyanAssistantFileBlock = z.infer<
   typeof elyanAssistantFileBlockSchema
+>;
+export type ElyanAssistantArtifactBlock = z.infer<
+  typeof elyanAssistantArtifactBlockSchema
 >;
 export type ElyanAssistantActionableBlock = z.infer<
   typeof elyanAssistantActionableBlockSchema

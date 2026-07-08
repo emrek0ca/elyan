@@ -1,3 +1,5 @@
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { AppEnv } from "../../config/env.js";
@@ -13,6 +15,7 @@ export class BlobStore {
   private readonly client: S3Client | null;
   private readonly bucket: string;
   private readonly signedUrlTtlSeconds: number;
+  private readonly localRoot: string;
 
   public constructor(private readonly env: Pick<
     AppEnv,
@@ -26,6 +29,7 @@ export class BlobStore {
   >) {
     this.bucket = env.BLOB_STORAGE_BUCKET.trim();
     this.signedUrlTtlSeconds = env.BLOB_STORAGE_SIGNED_URL_TTL_SECONDS;
+    this.localRoot = path.resolve(process.cwd(), ".blob-store");
 
     if (
       !this.bucket ||
@@ -49,12 +53,15 @@ export class BlobStore {
   }
 
   public isConfigured(): boolean {
-    return this.client !== null;
+    return true;
   }
 
   public async putObject(input: BlobStorePutInput): Promise<void> {
     if (!this.client) {
-      throw new Error("blob_store_unconfigured");
+      const filePath = this.localPathForStorageKey(input.storageKey);
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, input.body);
+      return;
     }
 
     await this.client.send(
@@ -70,7 +77,12 @@ export class BlobStore {
 
   public async objectExists(storageKey: string): Promise<boolean> {
     if (!this.client) {
-      return false;
+      try {
+        await stat(this.localPathForStorageKey(storageKey));
+        return true;
+      } catch {
+        return false;
+      }
     }
 
     try {
@@ -88,7 +100,11 @@ export class BlobStore {
 
   public async getObjectBytes(storageKey: string): Promise<Uint8Array | null> {
     if (!this.client) {
-      return null;
+      try {
+        return await readFile(this.localPathForStorageKey(storageKey));
+      } catch {
+        return null;
+      }
     }
 
     try {
@@ -132,5 +148,14 @@ export class BlobStore {
         expiresIn: this.signedUrlTtlSeconds,
       },
     );
+  }
+
+  private localPathForStorageKey(storageKey: string): string {
+    const safeSegments = storageKey
+      .split("/")
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .filter((segment) => segment !== "." && segment !== "..");
+    return path.join(this.localRoot, ...safeSegments);
   }
 }

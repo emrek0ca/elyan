@@ -781,3 +781,113 @@ test("syncChatTaskLifecycle preserves typed result blocks even when v1.1 chrome 
   assert.equal(blocks[0]?.type, "document_block");
   assert.equal(blocks[1]?.type, "task_trace");
 });
+
+test("syncChatTaskLifecycle carries generated image artifact blocks to chat surface", async () => {
+  const published: Array<Record<string, unknown>> = [];
+  const app = {
+    config: {
+      ELYAN_BLOCKS_V11_ENABLED: false,
+    },
+    db: {
+      update() {
+        return {
+          set(values: Record<string, unknown>) {
+            return {
+              where() {
+                return {
+                  returning: async () => [
+                    {
+                      id: "assistant-1",
+                      sessionId: "session-1",
+                      userId: "user-1",
+                      taskId: "task-1",
+                      role: "assistant",
+                      status: values.status,
+                      content: values.content,
+                      error: values.error ?? null,
+                    },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+    services: {
+      eventBus: {
+        publish(event: Record<string, unknown>) {
+          published.push(event);
+        },
+      },
+    },
+  };
+
+  await syncChatTaskLifecycle(app as never, {
+    originalTask: {
+      id: "task-1",
+      userId: "user-1",
+      targetDeviceId: "device-1",
+      payload: {
+        metadata: {
+          presentation: "chat",
+          chat: {
+            sessionId: "session-1",
+            assistantMessageId: "assistant-1",
+          },
+        },
+      },
+    } as never,
+    updatedTask: {
+      id: "task-1",
+      userId: "user-1",
+      targetDeviceId: "device-1",
+      title: "Kedi resmi",
+      status: "completed",
+      queuePosition: 0,
+      requestedCapabilities: [],
+      summary: "Görsel hazır.",
+      result: {
+        text: "Görsel hazır.",
+        assistantBlocks: [
+          {
+            type: "artifact",
+            artifactType: "image",
+            artifactId: "artifact-1",
+            title: "Görsel hazır",
+            preview: "Görsel hazır.",
+            url: "https://api.elyan.dev/v1/artifacts/artifact-1/content?token=signed",
+            mime: "image/jpeg",
+            viewerHint: "image",
+            contentFamily: "image",
+            loadStrategy: "remote_url",
+          },
+        ],
+      },
+      createdAt: new Date("2026-01-01T12:00:00.000Z"),
+      updatedAt: new Date("2026-01-01T12:00:02.000Z"),
+      completedAt: new Date("2026-01-01T12:00:02.000Z"),
+      payload: {
+        metadata: {
+          presentation: "chat",
+          chat: {
+            sessionId: "session-1",
+            assistantMessageId: "assistant-1",
+          },
+        },
+      },
+    } as never,
+  });
+
+  const payload = published[0]?.payload as
+    | {
+        assistantMessage?: { blocks?: Array<Record<string, unknown>> };
+      }
+    | undefined;
+  const blocks = payload?.assistantMessage?.blocks ?? [];
+  assert.equal(blocks[0]?.type, "artifact");
+  assert.equal(blocks[0]?.viewerHint, "image");
+  assert.equal(blocks[0]?.contentFamily, "image");
+  assert.equal(blocks[0]?.url, "https://api.elyan.dev/v1/artifacts/artifact-1/content?token=signed");
+  assert.equal(blocks[1]?.type, "task_trace");
+});

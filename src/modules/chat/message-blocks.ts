@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { elyanAssistantBlockSchema } from "../../contracts/domain.js";
+import {
+  elyanAssistantArtifactBlockSchema,
+  elyanAssistantBlockSchema,
+} from "../../contracts/domain.js";
 import {
   containsProtectedElyanDisclosure,
   ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT,
@@ -2050,6 +2053,10 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
         renderHints: normalizeRenderHints(record.renderHints) ?? {},
       }),
     };
+  }
+  if (type === "artifact") {
+    const parsed = elyanAssistantArtifactBlockSchema.safeParse(record);
+    return parsed.success ? parsed.data : null;
   }
   if (type === "web_search") {
     const rawResults = Array.isArray(record.results) ? record.results : [];

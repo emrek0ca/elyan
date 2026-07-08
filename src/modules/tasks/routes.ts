@@ -4,7 +4,7 @@ import { getRequestContext, serializeZodError } from "../../lib/http.js";
 import { getIdempotencyKey } from "../../lib/idempotency.js";
 import { getUserAuth } from "../../lib/request-auth.js";
 import { approvalBodySchema, createTaskBodySchema, feedbackBodySchema, listTasksQuerySchema, taskArtifactParamsSchema, taskParamsSchema } from "./schemas.js";
-import { cancelTask, createTask, getTaskArtifact, getTaskArtifactContent, getTaskDetail, listTasks, resolveTaskApproval, submitTaskFeedback } from "./service.js";
+import { cancelTask, createTask, getTaskArtifact, getTaskArtifactContent, getTaskArtifactRawContent, getTaskDetail, listTasks, resolveTaskApproval, submitTaskFeedback } from "./service.js";
 
 function parseTaskParamsOrReply(request: FastifyRequest, reply: FastifyReply): { taskId: string } | null {
   const parsed = taskParamsSchema.safeParse(request.params);
@@ -118,6 +118,23 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     }
     const auth = getUserAuth(request);
     return getTaskArtifact(app, params.taskId, params.artifactId, auth.sub);
+  });
+
+  app.get("/:taskId/artifacts/:artifactId/content/raw", async (request, reply) => {
+    const params = parseTaskArtifactParamsOrReply(request, reply);
+    if (!params) {
+      return;
+    }
+    const query = request.query && typeof request.query === "object"
+      ? (request.query as Record<string, unknown>)
+      : {};
+    const token = typeof query.token === "string" ? query.token : null;
+    const content = await getTaskArtifactRawContent(app, params.taskId, params.artifactId, token);
+    reply
+      .header("Cache-Control", "private, max-age=600")
+      .header("Content-Disposition", `inline; filename="${content.fileName.replace(/"/g, "")}"`)
+      .type(content.contentType)
+      .send(content.body);
   });
 
   app.get("/:taskId/artifacts/:artifactId/content", async (request, reply) => {

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import {
   assertOwnedDesktopTaskTarget,
@@ -13,6 +15,72 @@ import {
   shapeTaskFeedItem,
   sanitizePublicInferenceValue,
 } from "./service-helpers.js";
+import { normalizeAssistantMessageBlocks } from "../chat/message-blocks.js";
+
+test("hosted image chat requests bypass text inference and streaming prose", () => {
+  const serviceSource = readFileSync(path.join(process.cwd(), "src/modules/tasks/service.ts"), "utf8");
+  const processStart = serviceSource.indexOf("async function processSharedBrainChatTask");
+  assert.notEqual(processStart, -1);
+  const imageBranchStart = serviceSource.indexOf(
+    "const imageGenerationRequested = isHostedImageGenerationRequest(input.prompt);",
+    processStart,
+  );
+  const inferenceStart = serviceSource.indexOf(
+    "const inference = await generateGovernedSharedBrainReply(app, {",
+    processStart,
+  );
+  assert.ok(imageBranchStart > processStart);
+  assert.ok(inferenceStart > imageBranchStart);
+
+  const imageBranchEnd = serviceSource.indexOf("\n    // Deterministik hedef komutu", imageBranchStart);
+  assert.ok(imageBranchEnd > imageBranchStart);
+  const imageBranch = serviceSource.slice(imageBranchStart, imageBranchEnd);
+  assert.equal(imageBranch.includes("generateGovernedSharedBrainReply"), false);
+  assert.ok(imageBranch.includes('event: "message.delta"'));
+  assert.ok(imageBranch.includes('delta: ""'));
+  assert.ok(imageBranch.includes('reset: true'));
+  assert.ok(imageBranch.includes('event: "heartbeat"'));
+  assert.ok(imageBranch.includes('event: "message.completed"'));
+  assert.ok(imageBranch.includes('const visibleText = imageResultBlocks.length > 0 ? "" : completedResultText;'));
+  assert.equal(imageBranch.includes('title: ""'), false);
+  assert.equal(imageBranch.includes('summary: ""'), false);
+  assert.equal(imageBranch.includes('preview: ""'), false);
+  assert.ok(imageBranch.includes('answerSource: "image_generation"'));
+  assert.equal(imageBranch.includes('answerSource: "model"'), false);
+
+  const taskPathBranchStart = serviceSource.indexOf(
+    "if (isHostedImageGenerationRequest(prompt)) {",
+    inferenceStart,
+  );
+  const taskPathInferenceStart = serviceSource.indexOf(
+    "const inference = await generateGovernedSharedBrainReply(app, {",
+    taskPathBranchStart,
+  );
+  assert.ok(taskPathBranchStart > inferenceStart);
+  assert.ok(taskPathInferenceStart > taskPathBranchStart);
+});
+
+test("generated image artifact blocks survive assistant block normalization", () => {
+  const blocks = normalizeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "artifact",
+        artifactType: "image",
+        artifactId: "artifact-image-1",
+        title: "Görsel",
+        url: "https://api.elyan.dev/v1/tasks/task-1/artifacts/artifact-image-1/content/raw?token=signed",
+        mime: "image/jpeg",
+        viewerHint: "image",
+        contentFamily: "image",
+        loadStrategy: "remote_url",
+      },
+    ],
+  });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "artifact");
+  assert.equal((blocks[0] as { url?: string }).url?.includes("/content/raw?token="), true);
+});
 
 test("createInvalidTargetDeviceError keeps the target-device validation contract", () => {
   const error = createInvalidTargetDeviceError("device-1");

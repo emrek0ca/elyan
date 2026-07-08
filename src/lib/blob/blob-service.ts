@@ -69,10 +69,11 @@ export class BlobService {
       | "BLOB_STORAGE_FORCE_PATH_STYLE"
       | "BLOB_STORAGE_SIGNED_URL_TTL_SECONDS"
       | "BLOB_HMAC_SECRET"
+      | "JWT_SECRET"
     >,
   ) {
     this.store = new BlobStore(env);
-    this.addressSecret = env.BLOB_HMAC_SECRET.trim();
+    this.addressSecret = env.BLOB_HMAC_SECRET.trim() || env.JWT_SECRET.trim();
   }
 
   private readonly addressSecret: string;
