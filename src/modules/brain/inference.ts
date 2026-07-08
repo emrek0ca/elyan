@@ -7064,7 +7064,13 @@ export async function generateGovernedSharedBrainReply(
     }
   }
   let factualityGateMetadata: Record<string, unknown> | null = null;
-  if (!input.internalEvaluation?.refinementPass) {
+  // Selamlaşma / sohbet turlarında kanıt kapısını ÇALIŞTIRMA. Bu cevaplar
+  // Elyan'ın kendi adı veya sıradan özel adlar gibi "isim iddiaları" içerdiği
+  // için gate yanlışlıkla tetikleniyor ve "Selam" gibi masum bir mesaja bile
+  // tüm cevabı "doğrulayamıyorum / I cannot verify" fallback'iyle eziyordu.
+  // Kapı yalnızca bilgi/olgu odaklı turlar için anlamlı.
+  const skipFactualityGate = isSocialChatPrompt(compactText(input.prompt));
+  if (!input.internalEvaluation?.refinementPass && !skipFactualityGate) {
     const factualityCandidate =
       typeof activeEvaluation.correctedAnswer === "string" &&
       activeEvaluation.correctedAnswer.trim()

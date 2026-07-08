@@ -137,6 +137,24 @@ test("applyDeterministicFactualityFallback softens unsupported factual sentences
   assert.doesNotMatch(fallback, /2027 yilinda cikti/);
 });
 
+test("deterministic fallback defaults to Turkish for non-English prompts", () => {
+  const decision = evaluatePrePublishFactuality({
+    prompt: "2+2 kac",
+    answer: "Apple Vision Prime 2027 yilinda cikti.",
+    understandingContext: null,
+    inferenceMetadata: {},
+  });
+  const fallback = applyDeterministicFactualityFallback({
+    answer: "Apple Vision Prime 2027 yilinda cikti.",
+    decision,
+    // Short Turkish prompt without diacritics must not fall back to English.
+    prompt: "2+2 kac",
+  });
+
+  assert.match(fallback, /dogrulayamiyorum/);
+  assert.doesNotMatch(fallback, /cannot verify/);
+});
+
 test("buildFactualityCritiquePrompt includes unsupported markers and evidence", () => {
   const decision = evaluatePrePublishFactuality({
     prompt: "Kisa cevap ver.",

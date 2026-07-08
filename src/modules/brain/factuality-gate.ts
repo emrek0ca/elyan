@@ -370,9 +370,17 @@ function splitSentences(text: string): string[] {
 }
 
 function fallbackSentence(sample: string): string {
-  return looksTurkish(sample)
-    ? "Bu iddiayi elimdeki kanitlarla dogrulayamiyorum; istersen bakabilirim."
-    : "I cannot verify that from the available evidence; want me to check?";
+  const turkish = "Bu iddiayi elimdeki kanitlarla dogrulayamiyorum; istersen bakabilirim.";
+  const english = "I cannot verify that from the available evidence; want me to check?";
+  // Elyan Türkçe-öncelikli: örnek metin AÇIKÇA İngilizce değilse Türkçe fallback
+  // kullan. Kısa Türkçe girdiler ("2+2 kac", "Selam") aksan içermeyince yanlışlıkla
+  // İngilizce fallback alıyordu.
+  const clearlyEnglish =
+    !looksTurkish(sample) &&
+    /\b(the|and|is|are|was|were|please|check|verify|help|what|how|when|why|which|available|evidence)\b/i.test(
+      sample,
+    );
+  return clearlyEnglish ? english : turkish;
 }
 
 function looksTurkish(value: string): boolean {
