@@ -266,6 +266,63 @@ test("maybeGenerateHostedImageArtifact treats Turkish draw prompts as image gene
   }
 });
 
+test("detects bare imperative draw command without an explicit image noun", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const jpegBase64 = Buffer.from("red-car").toString("base64");
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return Response.json({ output_image: { data: jpegBase64, mime_type: "image/jpeg" } });
+  };
+
+  try {
+    for (const prompt of [
+      "Bana kırmızı bir araba çiz",
+      "bir kedi çiz",
+      "araba çizer misin",
+      "draw me a red car",
+    ]) {
+      calls = 0;
+      const result = await maybeGenerateHostedImageArtifact(
+        appWithConfig({ GEMINI_API_KEY: "gemini-test-key" }),
+        { prompt, responseText: "" },
+      );
+      assert.ok(result, `prompt should trigger image generation: ${prompt}`);
+      assert.equal(calls, 1, `prompt should make one upstream call: ${prompt}`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("does not treat non-drawing 'çiz*' words as image generation", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return Response.json({ output_image: { data: "x", mime_type: "image/jpeg" } });
+  };
+
+  try {
+    for (const prompt of [
+      "bana güzel çizgi film önerileri ver",
+      "haftalık çizelge hazırla",
+      "bu paragrafı özetle",
+    ]) {
+      const result = await maybeGenerateHostedImageArtifact(
+        appWithConfig({ GEMINI_API_KEY: "gemini-test-key" }),
+        { prompt, responseText: "" },
+      );
+      assert.equal(result, null, `prompt must not trigger image generation: ${prompt}`);
+    }
+    assert.equal(calls, 0, "no upstream image call for non-drawing prompts");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("repeat identical prompt is served from cache without a second upstream call", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;

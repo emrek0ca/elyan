@@ -95,6 +95,13 @@ const CREATIVE_IMAGE_REQUEST_PATTERNS = [
   /\b(üret|uret|oluştur|olustur|hazırla|hazirla|tasarla|çiz|ciz|draw|paint|sketch|design|generate|create)\b.*\b(görsel|gorsel|resim|resmi|resmini|image|afiş|afis|poster|banner|kapak|thumbnail|illüstrasyon|illustration|mockup|cover|logo|ikon|avatar|maskot|sticker|çizim|cizim)\b/i,
   /\b[\p{L}\p{N}_-]{2,}(?:\s+[\p{L}\p{N}_-]{2,}){0,6}\s+(resmi|resmini|çizimi|cizimi)\s*(çiz|ciz|draw|paint|sketch)\b/iu,
   /\b(afiş|afis|poster|banner|kapak|thumbnail)\b/i,
+  // Emir/istek kipi çizim komutları — "resim/görsel" ismi OLMADAN da yakala:
+  // "bana kırmızı bir araba çiz", "bir kedi çiz", "araba çizer misin", "çizsene".
+  // Türkçe "ç" ASCII \b sınırını bozduğu için Unicode-farkında (\p{L}) sınır
+  // kullanılır; "çizgi/çizelge/çizik" gibi çizim-dışı kelimeler eşleşmez.
+  /(?<!\p{L})(çiz|ciz)(er|ersen|sene|senize|ebilir|iver|in|iniz|elim|sin)?(?!\p{L})/iu,
+  // İngilizce çizim fiilleri: "draw me a red car", "sketch a cat".
+  /\b(draw|sketch|paint|illustrate)\b/i,
 ];
 
 const NON_CREATIVE_EXPORT_PATTERNS = [
