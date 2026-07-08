@@ -73,12 +73,48 @@ APP_ALIASES = {
     "dosya yoneticisi": "Finder",
     "file explorer": "Finder",
     "file manager": "Finder",
+    "sistem ayarlari": "System Settings",
+    "sistem tercihleri": "System Settings",
+    "mesajlar": "Messages",
+    "messages": "Messages",
+    "facetime": "FaceTime",
+    "notlarim": "Notes",
+    "not defteri": "Notes",
+    "hesap makinesi": "Calculator",
+    "hesap makinesi uygulamasi": "Calculator",
+    "komut satiri": "Terminal",
+    "aktivite monitoru": "Activity Monitor",
+    "etkinlik monitoru": "Activity Monitor",
 }
 
 
+def _tr_fold(value: str) -> str:
+    value = value.lower().strip()
+    for src, dst in (("ı", "i"), ("ğ", "g"), ("ü", "u"), ("ş", "s"), ("ö", "o"), ("ç", "c")):
+        value = value.replace(src, dst)
+    return " ".join(value.split())
+
+
+# Alias anahtarları Türkçe karaktersiz katlanmış halde de eşleşsin
+# ("müzik" ↔ "muzik", "fotoğraflar" ↔ "fotograflar").
+_FOLDED_ALIASES = {_tr_fold(key): app for key, app in APP_ALIASES.items()}
+
+# "terminali", "notları", "safariyi" gibi hâl/iyelik ekleri alias eşleşmesini
+# kaçırıyordu; bilinen ekleri soyup tekrar denenir.
+_TR_CASE_SUFFIXES = ("lari", "leri", "yi", "yu", "ni", "nu", "i", "u", "a", "e")
+
+
 def _resolve_app_name(app_name: str) -> str:
-    normalized = app_name.lower().strip()
-    return APP_ALIASES.get(normalized, app_name.strip())
+    raw = app_name.strip()
+    folded = _tr_fold(raw)
+    if folded in _FOLDED_ALIASES:
+        return _FOLDED_ALIASES[folded]
+    for suffix in _TR_CASE_SUFFIXES:
+        if folded.endswith(suffix) and len(folded) - len(suffix) >= 3:
+            candidate = folded[: -len(suffix)]
+            if candidate in _FOLDED_ALIASES:
+                return _FOLDED_ALIASES[candidate]
+    return raw
 
 
 def _looks_generic_close_target(app_name: str) -> bool:

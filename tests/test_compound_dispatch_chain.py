@@ -1,0 +1,182 @@
+"""Bileşik komut rotası + adımlar arası veri zinciri regresyon testleri.
+
+"X'i araştır ve belgele" gibi tek mesajlık çok araçlı görevlerin: (1) doğru
+sıralı plana bölünmesini, (2) yazıcı araçların önceki adımın çıktısını içerik
+olarak devralmasını garanti eder.
+"""
+from __future__ import annotations
+
+from runtime.capability_registry import _writer_source_context
+from runtime.task_router import route_text_to_tool
+
+
+def _step_capabilities(text: str) -> list[str]:
+    routed = route_text_to_tool(text)
+    assert routed is not None, f"{text!r} rotalanamadı"
+    if routed.steps:
+        return [str(step.get("capability", "")) for step in routed.steps]
+    return [routed.tool_name]
+
+
+def test_research_then_document_chain() -> None:
+    assert _step_capabilities(
+        "kuantum bilgisayarlarını araştır ve rapor olarak belgele"
+    ) == ["web_research", "document_write"]
+
+
+def test_research_sonra_document_chain() -> None:
+    assert _step_capabilities(
+        "bitcoin fiyatını araştır sonra bir word belgesi hazırla"
+    ) == ["web_research", "document_write"]
+
+
+def test_open_app_then_site_chain() -> None:
+    assert _step_capabilities("safari'yi aç ve youtube'a gir") == [
+        "open_app",
+        "browser_control",
+    ]
+
+
+def test_compound_requires_confirmation_and_multi_step() -> None:
+    routed = route_text_to_tool("kuantum bilgisayarlarını araştır ve rapor olarak belgele")
+    assert routed is not None
+    assert routed.is_multi_step is True
+    assert routed.requires_confirmation is True
+    assert routed.plan_preview is not None
+
+
+def test_ve_inside_single_topic_not_split() -> None:
+    # "tuz ve biber araştır" tek araştırma görevi kalmalı.
+    routed = route_text_to_tool("tuz ve biber araştır")
+    assert routed is not None
+    assert routed.tool_name == "web_research"
+    assert routed.intent != "compound_task"
+
+
+def test_time_expression_sonra_not_split() -> None:
+    routed = route_text_to_tool("5 dakika sonra hatırlatıcı ekle")
+    assert routed is not None
+    assert routed.tool_name == "add_reminder"
+
+
+# ── Devam segmentleri: zamirle kurulan ikinci eylemler ────────────────────────
+
+
+def test_pronoun_continuation_document() -> None:
+    assert _step_capabilities(
+        "yapay zeka ajanlarını araştır ve bunu belgele"
+    ) == ["web_research", "document_write"]
+
+
+def test_continuation_report_verb() -> None:
+    assert _step_capabilities(
+        "elyan projesini araştır ve bulduklarını rapor et"
+    ) == ["web_research", "document_write"]
+
+
+def test_continuation_word_save() -> None:
+    assert _step_capabilities(
+        "türkiye ekonomisini araştır ve bir word belgesi olarak kaydet"
+    ) == ["web_research", "document_write"]
+
+
+def test_continuation_spreadsheet() -> None:
+    assert _step_capabilities(
+        "dolar kurunu araştır ve tabloya dök"
+    ) == ["web_research", "spreadsheet_write"]
+
+
+def test_continuation_presentation() -> None:
+    assert _step_capabilities(
+        "iklim değişikliğini araştır ve sonuçları sunuma çevir"
+    ) == ["web_research", "presentation_write"]
+
+
+def test_continuation_self_mail() -> None:
+    routed = route_text_to_tool("bitcoin fiyatını araştır ve sonucu bana mail at")
+    assert routed is not None
+    caps = [str(step.get("capability", "")) for step in routed.steps]
+    assert caps == ["web_research", "email_draft", "email_send"]
+    assert routed.privacy_class == "side_effect"
+    assert routed.requires_confirmation is True
+    # "bana" alıcısı yürütmede hesap e-postasına çözülecek "me" yer tutucusudur.
+    draft_args = routed.steps[1].get("args", {})
+    assert draft_args.get("to") == ["me"]
+
+
+def test_continuation_explicit_mail_recipient() -> None:
+    routed = route_text_to_tool(
+        "kuantum bilgisayarları araştır ve sonucu ali@ornek.com adresine gönder"
+    )
+    assert routed is not None
+    caps = [str(step.get("capability", "")) for step in routed.steps]
+    assert caps == ["web_research", "email_draft", "email_send"]
+
+
+def test_continuation_not_applied_to_first_segment() -> None:
+    # İlk segment zamir tabanlı tüketiciyse ("sonucu ... mail at") önce gelen
+    # bir çıktı olmadığı için devam çözümü uygulanmamalı; bölme iptal edilip
+    # metin tek görev olarak işlenmeli.
+    routed = route_text_to_tool("sonucu bana mail at ve yapay zekayı araştır")
+    assert routed is not None
+    assert routed.intent != "compound_task"
+
+
+# ── "me" alıcı yer tutucusunun çözümü ─────────────────────────────────────────
+
+
+def test_email_me_placeholder_resolves_to_account_email(monkeypatch) -> None:
+    import actions.email as email_mod
+
+    monkeypatch.setattr(email_mod, "_account_email", lambda: "kisi@ornek.com")
+    assert email_mod._resolve_recipients(["me"]) == ["kisi@ornek.com"]
+    assert email_mod._resolve_recipients(["bana", "dis@ornek.com"]) == [
+        "kisi@ornek.com",
+        "dis@ornek.com",
+    ]
+
+
+def test_email_me_placeholder_errors_without_account_email(monkeypatch) -> None:
+    import pytest
+
+    import actions.email as email_mod
+    from runtime.capability_registry import SafeCapabilityError
+
+    monkeypatch.setattr(email_mod, "_account_email", lambda: "")
+    with pytest.raises(SafeCapabilityError):
+        email_mod._resolve_recipients(["me"])
+
+
+# ── Yazıcı araçların zincir bağlamı ────────────────────────────────────────────
+
+
+def test_writer_context_prefers_explicit_source_context() -> None:
+    args = {"sourceContext": "açık içerik", "_previousOutput": "önceki çıktı"}
+    assert _writer_source_context(args) == "açık içerik"
+
+
+def test_writer_context_falls_back_to_previous_result() -> None:
+    args = {
+        "_previousResult": {
+            "kind": "web_research",
+            "summary": "Kuantum bilgisayarlar hızla gelişiyor.",
+            "sources": [
+                {"title": "Nature", "snippet": "Yeni kubit rekoru."},
+                {"url": "https://example.com", "snippet": "Endüstri raporu."},
+            ],
+        },
+        "_previousOutput": "ham çıktı",
+    }
+    context = _writer_source_context(args)
+    assert "Kuantum bilgisayarlar hızla gelişiyor." in context
+    assert "Nature" in context
+    assert "Kaynaklar:" in context
+
+
+def test_writer_context_falls_back_to_previous_output() -> None:
+    args = {"_previousOutput": "önceki adımın metni"}
+    assert _writer_source_context(args) == "önceki adımın metni"
+
+
+def test_writer_context_empty_when_nothing_available() -> None:
+    assert _writer_source_context({}) == ""

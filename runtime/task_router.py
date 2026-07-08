@@ -63,6 +63,43 @@ def _normalise(text: str) -> str:
     return " ".join(value.split())
 
 
+# "Safari'yi açar mısın lütfen" gibi istek kipleri deterministik kalıpları
+# ıskalatıyordu; komutu emir kipine indirger, kibarlık eklerini atar.
+_REQUEST_FORM_REWRITES = [
+    (r"a[cç](?:ar\s*m[ıi]s[ıi]n[ıi]?z?|abilir\s*mi[sy]in(?:iz)?)", "aç"),
+    (r"kapat(?:[ıi]r\s*m[ıi]s[ıi]n[ıi]?z?|abilir\s*mi[sy]in(?:iz)?)", "kapat"),
+    (r"ba[sş]lat(?:[ıi]r\s*m[ıi]s[ıi]n[ıi]?z?|abilir\s*mi[sy]in(?:iz)?)", "başlat"),
+    (r"gid(?:er\s*misin(?:iz)?|ebilir\s*misin(?:iz)?)", "git"),
+    (r"gir(?:er\s*misin(?:iz)?|ebilir\s*misin(?:iz)?)", "gir"),
+    (r"getir(?:ir\s*misin(?:iz)?|ebilir\s*misin(?:iz)?)", "getir"),
+    (r"g[oö]ster(?:ir\s*misin(?:iz)?|ebilir\s*misin(?:iz)?)", "göster"),
+    (r"olu[sş]tur(?:ur\s*musun(?:uz)?|abilir\s*misin(?:iz)?)", "oluştur"),
+    (r"haz[ıi]rla(?:r\s*m[ıi]s[ıi]n[ıi]?z?|yabilir\s*misin(?:iz)?)", "hazırla"),
+    (r"ara[sş]t[ıi]r(?:[ıi]r\s*m[ıi]s[ıi]n[ıi]?z?|abilir\s*misin(?:iz)?)", "araştır"),
+    (r"yap(?:ar\s*m[ıi]s[ıi]n[ıi]?z?|abilir\s*misin(?:iz)?)", "yap"),
+    (r"[cç]al[ıi][sş]t[ıi]r(?:[ıi]r\s*m[ıi]s[ıi]n[ıi]?z?|abilir\s*misin(?:iz)?)", "çalıştır"),
+]
+
+
+def _canonicalize_request(text: str) -> str:
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(
+        r"^(?:l[uü]tfen|please|hemen|rica etsem)[\s,]+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"[\s,]+(?:l[uü]tfen|please|rica etsem|rica ederim)[\s.!?]*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    for pattern, replacement in _REQUEST_FORM_REWRITES:
+        cleaned = re.sub(rf"\b{pattern}\s*[.!?]*$", replacement, cleaned, flags=re.IGNORECASE)
+    return cleaned.strip(" .!?")
+
+
 def _strip_polite_suffix(value: str) -> str:
     value = value.strip(" .,!?:;")
     value = re.sub(
@@ -742,6 +779,86 @@ def revise_plan_payload(plan: dict[str, Any], revision_text: str) -> dict[str, A
     return None
 
 
+_KNOWN_SITES = {
+    "openai": "https://openai.com",
+    "github": "https://github.com",
+    "google": "https://google.com",
+    "youtube": "https://youtube.com",
+    "notion": "https://notion.so",
+    "slack": "https://slack.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "instagram": "https://instagram.com",
+    "linkedin": "https://linkedin.com",
+    "facebook": "https://facebook.com",
+    "reddit": "https://reddit.com",
+    "wikipedia": "https://tr.wikipedia.org",
+    "vikipedi": "https://tr.wikipedia.org",
+    "netflix": "https://netflix.com",
+    "amazon": "https://amazon.com.tr",
+    "trendyol": "https://trendyol.com",
+    "hepsiburada": "https://hepsiburada.com",
+    "sahibinden": "https://sahibinden.com",
+    "gmail": "https://mail.google.com",
+    "google maps": "https://maps.google.com",
+    "haritalar": "https://maps.google.com",
+    "chatgpt": "https://chatgpt.com",
+    "claude": "https://claude.ai",
+    "anthropic": "https://anthropic.com",
+    "stackoverflow": "https://stackoverflow.com",
+    "twitch": "https://twitch.tv",
+    "spotify web": "https://open.spotify.com",
+}
+
+
+def _known_or_explicit_url(value: str) -> str | None:
+    """Yalnızca bilinen bir site adı veya açıkça URL görünümlü hedefler için
+    URL döndürür; belirsiz hedefleri (ör. "işe git") None bırakır ki istek
+    semantik planlayıcıya düşsün."""
+    cleaned = _clean_app_name(value)
+    if not cleaned:
+        return None
+    normalized = _normalise(cleaned)
+    if normalized in _KNOWN_SITES:
+        return _KNOWN_SITES[normalized]
+    if "." in cleaned and _looks_like_url(cleaned):
+        return cleaned if "://" in cleaned else f"https://{cleaned}"
+    return None
+
+
+def _site_visit_route(text: str) -> RoutedTask | None:
+    """"youtube'a gir", "google'a git", "şu siteye git: anthropic.com",
+    "tarayıcıda openai sitesini aç" gibi gezinme komutları."""
+    original = str(text or "").strip()
+    patterns = [
+        r"(?:[sş]u\s+)?(?:siteye|sayfaya|adrese)\s+(?:git|gir)[:\s]+(.+)$",
+        r"(?:taray[ıi]c[ıi]da|browserda)\s+(.+?)\s*(?:sitesini|sayfas[ıi]n[ıi])?\s*(?:a[cç]|git|gir)$",
+        r"(.+?)\s+(?:sitesini|sitesine|sayfas[ıi]n[ıi])\s*(?:a[cç]|git|gir)$",
+        r"(.+?)(?:['’]\s?(?:a|e|ya|ye))?\s+(?:git|gir|gidelim|girelim)$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, original, flags=re.IGNORECASE)
+        if not match:
+            continue
+        target = match.group(1).strip()
+        # Türkçe yönelme eki bitişik yazılmışsa ("youtube'a" zaten ayrıldı,
+        # "googlea git" gibi) bilinen site + ek varyantını da dene.
+        url = _known_or_explicit_url(target)
+        if url is None:
+            trimmed = re.sub(r"(?:['’]?\s?(?:a|e|ya|ye|na|ne))$", "", target, flags=re.IGNORECASE)
+            if trimmed != target:
+                url = _known_or_explicit_url(trimmed)
+        if url:
+            return RoutedTask(
+                "browser_control",
+                {"action": "open_url", "url": url},
+                "open_url",
+                intent="open_url",
+                confidence=0.95,
+            )
+    return None
+
+
 def _site_target_to_url(value: str) -> str | None:
     cleaned = _clean_app_name(value)
     if not cleaned:
@@ -749,16 +866,8 @@ def _site_target_to_url(value: str) -> str | None:
     if _looks_like_url(cleaned):
         return cleaned if "://" in cleaned else f"https://{cleaned}"
     normalized = _normalise(cleaned)
-    known = {
-        "openai": "https://openai.com",
-        "github": "https://github.com",
-        "google": "https://google.com",
-        "youtube": "https://youtube.com",
-        "notion": "https://notion.so",
-        "slack": "https://slack.com",
-    }
-    if normalized in known:
-        return known[normalized]
+    if normalized in _KNOWN_SITES:
+        return _KNOWN_SITES[normalized]
     if normalized.endswith(" sitesi") or normalized.endswith(" sitesi ac"):
         normalized = normalized.replace(" sitesi", "").strip()
     slug = re.sub(r"[^a-z0-9]+", "", normalized)
@@ -1171,9 +1280,12 @@ def _latex_parse_route(text: str) -> RoutedTask | None:
 
 def _document_write_route(text: str) -> RoutedTask | None:
     q = _normalise(text)
-    if not any(token in q for token in ("docx", "word", "belge")):
+    if not any(token in q for token in ("docx", "word", "belge", "dokuman", "rapor")):
         return None
-    if not any(token in q for token in ("yap", "cevir", "çevir", "olustur", "oluştur", "hazirla", "hazırla")):
+    if not any(token in q for token in ("yap", "cevir", "çevir", "olustur", "oluştur", "hazirla", "hazırla", "belgele", "dokumante", "donustur", "dönüştür")):
+        return None
+    # Excel/sunum raporları kendi rotalarına gitmeli; buraya sızmasın.
+    if any(token in q for token in ("xlsx", "excel", "tablo", "cizelge", "sheet", "sunum", "pptx", "powerpoint", "slayt", "canvas", "kanvas")):
         return None
     output_path = _resolve_output_path(text, ".docx", hint=text or "elyan-document")
     steps = [
@@ -1343,7 +1455,7 @@ def _extract_email_addresses(text: str) -> list[str]:
 def _research_topic(text: str) -> str:
     original = str(text or "").strip()
     patterns = [
-        r"(.+?)\s+(?:hakk[ıi]nda|about)\s+(?:araştırma yap|arastirma yap|araştır|araştir|research|incele)$",
+        r"(.+?)\s+(?:hakk[ıi]nda|about|ile ilgili)\s+(?:detayl[ıi]\s+)?(?:araştırma yap|arastirma yap|araştır|araştir|research|incele|bilgi topla|bilgi edin)$",
         r"(?:araştırma yap|arastirma yap|araştır|araştir|research|incele)\s+(.+)$",
     ]
     for pattern in patterns:
@@ -1355,7 +1467,7 @@ def _research_topic(text: str) -> str:
     return _strip_leading_fillers(original)
 
 
-_RESEARCH_STRONG_TRIGGERS = {"araştır", "arastir", "araştırma", "research", "incele"}
+_RESEARCH_STRONG_TRIGGERS = {"araştır", "arastir", "araştırma", "research", "incele", "bilgi topla", "bilgi edin"}
 _RESEARCH_WEAK_TRIGGERS = {"kaynak", "source", "verify"}
 _RESEARCH_STOPWORDS = {
     "araştır",
@@ -1367,6 +1479,13 @@ _RESEARCH_STOPWORDS = {
     "source",
     "verify",
     "ver",
+    "bilgi",
+    "topla",
+    "edin",
+    "detayli",
+    "detaylı",
+    "hakkinda",
+    "hakkında",
     "goster",
     "göster",
     "bak",
@@ -1813,7 +1932,7 @@ def _list_dir_route(text: str) -> RoutedTask | None:
 
     if not (has_trigger and has_location):
         # Also match "masaüstünü göster" / "indirilenler klasörü"
-        if not (any(t in q for t in ("goster", "göster", "bak")) and has_location):
+        if not (any(t in q for t in ("goster", "göster")) and has_location):
             return None
 
     location_path = _resolve_location_path(text)
@@ -2033,15 +2152,192 @@ def _desktop_document_route(text: str, selected_artifacts: list[dict[str, Any]] 
 
 # ── route_text_to_tool ────────────────────────────────────────────────────────
 
+# Bileşik komut ayırıcıları — uzun kalıplar önce denenmeli.
+_COMPOUND_SPLIT_RE = re.compile(
+    r"\s*(?:;|,?\s+ve\s+ard[ıi]ndan|,?\s+ard[ıi]ndan|,?\s+ve\s+sonra(?:\s+da)?|,?\s+daha\s+sonra|,?\s+sonra(?:\s+da)?|\s+ve)\s+",
+    re.IGNORECASE,
+)
+_COMPOUND_MIN_CONFIDENCE = 0.8
+
+# Zincirin 2+ segmentlerinde "bunu belgele", "sonucu bana mail at" gibi önceki
+# adımın çıktısını tüketen ifadeler tek başına rotalanamaz (konu zamirde kalır).
+# Bu ön ek atılıp kalan fiil bir "tüketici" araca eşlenir; içerik bağlamı
+# yürütmede _previousOutput/_writer_source_context üzerinden akar.
+_CONTINUATION_PRONOUN_RE = re.compile(
+    r"^(?:ve\s+)?(?:bunu|bunlar[ıi]|onu|onlar[ıi]|sonucu|sonu[çc]lar[ıi]n?[ıi]?|"
+    r"bulduklar[ıi]n[ıi]|bulgular[ıi]n?[ıi]?|[çc][ıi]kt[ıi]y[ıi]|hepsini)\s+",
+    re.IGNORECASE,
+)
+_CONTINUATION_WRITE_VERBS = (
+    "belgele", "raporla", "rapor et", "kaydet", "olustur", "hazirla", "yap",
+    "yaz", "cevir", "donustur", "dok", "aktar", "cikar", "dokumante",
+)
+_MAIL_SEND_VERB_RE = re.compile(r"\b(at|gonder|yolla|ilet|send)\b")
+_SELF_MAIL_RE = re.compile(r"\b(bana|kendime|kendi adresime|e-?postama|epostama|mailime)\b", re.IGNORECASE)
+
+
+def _continuation_task(segment: str, topic_hint: str) -> RoutedTask | None:
+    stripped = _CONTINUATION_PRONOUN_RE.sub("", segment.strip())
+    q = _normalise(stripped)
+    if not q:
+        return None
+    topic = _strip_leading_fillers(topic_hint) or topic_hint
+
+    # E-posta tüketici: "sonucu bana mail at", "x@y.com adresine gönder".
+    if any(token in q for token in ("mail", "e-posta", "eposta", "email")) and _MAIL_SEND_VERB_RE.search(q):
+        recipients = _extract_email_addresses(segment)
+        if not recipients and _SELF_MAIL_RE.search(segment):
+            # "me" yer tutucusu actions.email tarafında hesap e-postasına çözülür.
+            recipients = ["me"]
+        if not recipients:
+            return None
+        subject = _email_subject(topic, segment)
+        steps = (
+            {
+                "capability": "email_draft",
+                "args": {"to": recipients, "subject": subject, "topic": topic, "prompt": segment.strip()},
+                "description": f"{', '.join(recipients)} için önceki adımın çıktısından e-posta taslağı hazırlanacak.",
+            },
+            {
+                "capability": "email_send",
+                "args": {"to": recipients, "subject": subject},
+                "description": f"{', '.join(recipients)} adresine e-posta gönderilecek.",
+            },
+        )
+        return RoutedTask(
+            "email_send",
+            dict(steps[0]["args"]),
+            "compound_continuation",
+            intent="email_send",
+            confidence=0.9,
+            requires_confirmation=True,
+            is_multi_step=True,
+            privacy_class="side_effect",
+            steps=steps,
+        )
+
+    if not any(token in q for token in _CONTINUATION_WRITE_VERBS):
+        return None
+
+    def _writer_task(capability: str, extension: str, label: str) -> RoutedTask:
+        output_path = _resolve_output_path(topic, extension, hint=topic or "elyan-cikti")
+        args = {
+            "prompt": f"{topic} hakkında {label} hazırla. İstek: {segment.strip()}",
+            "outputPath": output_path,
+            "overwrite": False,
+        }
+        step = {
+            "capability": capability,
+            "args": args,
+            "description": f"Önceki adımın çıktısından {Path(output_path).name} oluşturulacak.",
+        }
+        return RoutedTask(
+            capability,
+            dict(args),
+            "compound_continuation",
+            intent=capability,
+            confidence=0.85,
+            requires_confirmation=True,
+            privacy_class="local_private",
+            steps=(step,),
+        )
+
+    # Sıra önemli: excel/sunum belirteçleri "rapor" ile birlikte geçebildiği
+    # için özgül olanlar önce denenir.
+    if any(token in q for token in ("xlsx", "excel", "tablo", "cizelge", "sheet")):
+        return _writer_task("spreadsheet_write", ".xlsx", "bir tablo")
+    if any(token in q for token in ("pptx", "powerpoint", "sunum", "slayt", "slide")):
+        return _writer_task("presentation_write", ".pptx", "bir sunum")
+    if any(token in q for token in ("rapor", "belge", "belgele", "raporla", "word", "docx", "dokuman", "dokumante")):
+        return _writer_task("document_write", ".docx", "bir rapor")
+    return None
+
+
+def _compound_route(
+    text: str,
+    selected_artifacts: list[dict[str, Any]] | None,
+) -> RoutedTask | None:
+    """"X'i araştır ve rapor olarak belgele" gibi tek mesajda birden çok
+    eylem içeren komutları sıralı çok adımlı plana çevirir. Muhafazakâr
+    davranır: her parça kendi başına yüksek güvenle rotalanamıyorsa
+    (ör. "tuz ve biber araştır") bölme iptal edilir ve metin tek görev
+    olarak işlenir."""
+    segments = [seg.strip(" .,!") for seg in _COMPOUND_SPLIT_RE.split(text)]
+    segments = [seg for seg in segments if seg]
+    if not 2 <= len(segments) <= 5:
+        return None
+    parts: list[tuple[str, RoutedTask]] = []
+    for index, segment in enumerate(segments):
+        routed = route_text_to_tool(
+            segment,
+            selected_artifacts=selected_artifacts,
+            _allow_compound=False,
+        )
+        if (routed is None or routed.confidence < _COMPOUND_MIN_CONFIDENCE) and index > 0 and parts:
+            # "bunu belgele" / "sonucu bana mail at" gibi devam segmentleri
+            # konu zamirde kaldığı için tek başına rotalanamaz; ilk adımın
+            # konusu bağlam olarak verilerek tüketici araca eşlenir.
+            first_routed = parts[0][1]
+            topic_hint = str(first_routed.args.get("query", "") or "").strip() or segments[0]
+            routed = _continuation_task(segment, topic_hint)
+        if routed is None or routed.confidence < _COMPOUND_MIN_CONFIDENCE:
+            return None
+        parts.append((segment, routed))
+    steps: list[dict[str, Any]] = []
+    for segment, routed in parts:
+        if routed.steps:
+            steps.extend(dict(step) for step in routed.steps if isinstance(step, dict))
+        else:
+            description = (
+                str(routed.plan_preview.get("summary", "") or "").strip()
+                if isinstance(routed.plan_preview, dict)
+                else ""
+            ) or segment
+            steps.append({
+                "capability": routed.tool_name,
+                "args": dict(routed.args),
+                "description": description,
+            })
+    if len(steps) < 2:
+        return None
+    if any(routed.privacy_class == "side_effect" for _, routed in parts):
+        privacy_class = "side_effect"
+    elif any(routed.privacy_class == "local_private" for _, routed in parts):
+        privacy_class = "local_private"
+    else:
+        privacy_class = "public_text"
+    capability_chain = " → ".join(str(step.get("capability", "")) for step in steps)
+    summary = f"{len(steps)} adımlı görev planlandı: {capability_chain}"
+    first = parts[0][1]
+    return RoutedTask(
+        first.tool_name,
+        dict(first.args),
+        "compound_task",
+        intent="compound_task",
+        confidence=min(routed.confidence for _, routed in parts),
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class=privacy_class,
+        plan_preview=_build_plan_summary(summary, steps, privacy_class),
+        steps=tuple(steps),
+    )
+
+
 def route_text_to_tool(
     text: str,
     *,
     selected_artifacts: list[dict[str, Any]] | None = None,
+    _allow_compound: bool = True,
 ) -> RoutedTask | None:
-    original = str(text or "").strip()
+    original = _canonicalize_request(text)
     if not original:
         return None
     q = _normalise(original)
+
+    if _allow_compound:
+        compound = _compound_route(original, selected_artifacts)
+        if compound is not None:
+            return compound
 
     # ── File system operations (highest priority — very specific intents) ──────
     mkdir = _mkdir_route(original)
@@ -2089,6 +2385,10 @@ def route_text_to_tool(
     multi_step = _multi_step_browser_route(original)
     if multi_step is not None:
         return multi_step
+
+    site_visit = _site_visit_route(original)
+    if site_visit is not None:
+        return site_visit
 
     speech_transcription = _speech_transcription_route(original, selected_artifacts)
     if speech_transcription is not None:
@@ -2171,64 +2471,90 @@ def route_text_to_tool(
             confidence=0.92,
         )
 
-    if any(
-        token in q
-        for token in (
-            "ss al",
-            "screenshot al",
-            "ekran goruntusu al",
-            "ekran görüntüsü al",
-            "ekran resmini al",
-            "ekranin resmini al",
-            "ekranın resmini al",
-            "ekrani cek",
-            "ekranı çek",
-            "ekran fotosu al",
-            "ekran fotografi al",
-            "ekran fotoğrafı al",
-            "ekranda ne var",
-            "ekrani analiz",
-            "ekran analizi",
-            "bu hatayi oku",
-            "buradaki hatayi oku",
-            "buradaki hatayi incele",
-            "pencereyi analiz",
-            "aktif pencereyi analiz",
-            "aktif pencereye bak",
-            "bu pencereyi oku",
-            "burada ne var",
-            "ne goruyorsun",
-            "ekrana bak",
-            "masaustunde ne var",
-            "masaustune bak",
-            "masaustunu analiz",
-            "masaustunu goster",
-            "bilgisayarda ne var",
-            "bilgisayarda ne acik",
-            "bilgisayara bak",
-            "ne acik",
-            "what is on",
-            "whats on",
-            "what's on",
-            "desktop",
-            "screen",
-        )
-    ):
-        screenshot_terms = {
-            "ss al",
-            "screenshot al",
-            "ekran goruntusu al",
-            "ekran görüntüsü al",
-            "ekran resmini al",
-            "ekranin resmini al",
-            "ekranın resmini al",
-            "ekrani cek",
-            "ekranı çek",
-            "ekran fotosu al",
-            "ekran fotografi al",
-            "ekran fotoğrafı al",
-        }
-        if any(token in q for token in screenshot_terms):
+    # ── System controls (must be before open/close app to avoid false matches) ──
+    _volume_up_tokens = {"ses ac", "sesi ac", "sesi arttir", "sesi yukselt", "volume up", "turn up volume"}
+    _volume_down_tokens = {"ses kis", "sesi kis", "sesi azalt", "sesi dusur", "volume down", "turn down volume"}
+    _volume_mute_tokens = {"sesi kapat", "sessize al", "sessiz yap", "mute", "sessiz mod"}
+    if any(token in q for token in _volume_down_tokens | _volume_mute_tokens | _volume_up_tokens):
+        if any(token in q for token in _volume_mute_tokens):
+            action = "mute"
+        elif any(token in q for token in _volume_down_tokens):
+            action = "volume_down"
+        else:
+            action = "volume_up"
+        return RoutedTask("system_control", {"action": action}, "volume_control", intent="volume_control", confidence=0.96, privacy_class="local_private")
+
+    _brightness_up_tokens = {"parlaklik arttir", "parlaklik yukselt", "ekrani aydinlat", "brightness up"}
+    _brightness_down_tokens = {"parlaklik azalt", "parlaklik dusur", "ekrani karart", "brightness down"}
+    if any(token in q for token in _brightness_up_tokens | _brightness_down_tokens):
+        action = "brightness_down" if any(token in q for token in _brightness_down_tokens) else "brightness_up"
+        return RoutedTask("system_control", {"action": action}, "brightness_control", intent="brightness_control", confidence=0.95, privacy_class="local_private")
+
+    _sys_toggle_map = {
+        "wifi": ("wifi", {"wifi kapat", "wifi ac", "wi-fi kapat", "wi-fi ac"}),
+        "bluetooth": ("bluetooth", {"bluetooth kapat", "bluetooth ac"}),
+        "dark_mode": ("dark_mode", {"karanlik mod ac", "karanlik mod kapat", "dark mode", "gece modu ac", "gece modu kapat", "acik mod", "light mode"}),
+        "do_not_disturb": ("do_not_disturb", {"rahatsiz etme", "do not disturb", "dnd"}),
+    }
+    for _toggle_key, (_action_name, _toggle_tokens) in _sys_toggle_map.items():
+        if any(token in q for token in _toggle_tokens):
+            enable = any(token in q for token in ("ac", "enable", "on", "etkinlestir"))
+            return RoutedTask(
+                "system_control",
+                {"action": f"toggle_{_action_name}", "enable": enable},
+                f"toggle_{_action_name}",
+                intent=f"toggle_{_action_name}",
+                confidence=0.94,
+                privacy_class="local_private",
+            )
+
+    _lock_tokens = {"bilgisayari kilitle", "ekrani kilitle", "lock screen", "lock computer", "mac i kilitle", "kilitle"}
+    _sleep_tokens = {"bilgisayari uyut", "uyku moduna al", "sleep", "bilgisayari kapat", "mac i uyut"}
+    _reboot_tokens = {"bilgisayari yeniden baslat", "bilgisayari restart", "restart computer", "reboot", "sistemi yeniden baslat"}
+    _trash_tokens = {"cop kutusunu bosalt", "cöp kutusunu boşalt", "empty trash", "휴지통 비우기"}
+    if any(token in q for token in _lock_tokens):
+        return RoutedTask("system_control", {"action": "lock_screen"}, "lock_screen", intent="lock_screen", confidence=0.97, requires_confirmation=True, privacy_class="local_private")
+    if any(token in q for token in _sleep_tokens):
+        return RoutedTask("system_control", {"action": "sleep"}, "sleep", intent="sleep", confidence=0.95, requires_confirmation=True, privacy_class="local_private")
+    if any(token in q for token in _reboot_tokens):
+        return RoutedTask("system_control", {"action": "reboot"}, "reboot", intent="reboot", confidence=0.95, requires_confirmation=True, privacy_class="local_private")
+    if any(token in q for token in _trash_tokens):
+        return RoutedTask("system_control", {"action": "empty_trash"}, "empty_trash", intent="empty_trash", confidence=0.93, requires_confirmation=True, privacy_class="local_private")
+
+    # ── Screenshot / screen analysis ────────────────────────────────────────────
+    _screenshot_capture_tokens = {
+        "ss al", "ss cek",
+        "screenshot al", "screenshot cek", "screenshot",
+        "ekran goruntusu al", "ekran goruntusu cek",
+        "ekran goruntusunu al", "ekran goruntusunu cek",
+        "ekran resmini al", "ekran resmini cek",
+        "ekranin resmini al", "ekranin resmini cek",
+        "ekrani cek", "ekrani yakala",
+        "ekran fotosu al", "ekran fotosu cek",
+        "ekran fotografi al", "ekran fotografi cek",
+        "ekran fotografini cek",
+        "fotografini cek", "fotosunu cek",
+        "print screen", "printscreen",
+        "capture screen", "take screenshot",
+        "take a screenshot",
+    }
+    _screen_analysis_tokens = {
+        "ekranda ne var", "ekrana bak",
+        "ekrani analiz", "ekran analizi",
+        "bu hatayi oku", "buradaki hatayi oku", "buradaki hatayi incele",
+        "pencereyi analiz", "aktif pencereyi analiz",
+        "aktif pencereye bak", "bu pencereyi oku",
+        "burada ne var", "ne goruyorsun",
+        "masaustunde ne var", "masaustune bak",
+        "masaustunu analiz", "masaustunu goster",
+        "bilgisayarda ne var", "bilgisayarda ne acik",
+        "bilgisayara bak", "ne acik",
+        "what is on", "whats on", "what's on",
+        "what do you see",
+        "masaustune bak", "masaustunu goster",
+    }
+    if any(token in q for token in _screenshot_capture_tokens | _screen_analysis_tokens):
+        if any(token in q for token in _screenshot_capture_tokens):
             return RoutedTask(
                 "desktop_operator.observe_screen",
                 {"query": original, "target": "active_window", "preserveScreenshot": True},
@@ -2420,5 +2746,48 @@ def route_text_to_tool(
             plan_preview=_build_plan_summary(summary, steps, "local_private"),
             steps=tuple(steps),
         )
+
+    # ── Known folder shortcuts ──────────────────────────────────────────────────
+    _folder_map = {
+        "indirilenler": "~/Downloads",
+        "downloads": "~/Downloads",
+        "belgeler": "~/Documents",
+        "documents": "~/Documents",
+        "masaustu": "~/Desktop",
+        "resimler": "~/Pictures",
+        "pictures": "~/Pictures",
+        "muzik": "~/Music",
+        "music": "~/Music",
+        "videolar": "~/Movies",
+        "movies": "~/Movies",
+    }
+    for _folder_key, _folder_path in _folder_map.items():
+        if _folder_key in q and any(token in q for token in ("ac", "goster", "open", "show", "git")):
+            return RoutedTask(
+                "open_app",
+                {"app_name": "Finder", "path": _folder_path},
+                "open_folder",
+                intent="open_folder",
+                confidence=0.93,
+                privacy_class="local_private",
+            )
+
+    # ── General knowledge / web search fallback ──────────────────────────────
+    _info_query_patterns = [
+        (r"(.+?)\s+(?:ne(?:dir)?|nedir|kac|kaç|ne kadar)[\s?]*$", "query"),
+        (r"(.+?)\s+(?:haberleri?|news)[\s?]*$", "news"),
+        (r"(.+?)\s+kuru?\s*(?:ne|kac|kaç)?[\s?]*$", "finance"),
+    ]
+    for _pattern, _query_type in _info_query_patterns:
+        _info_match = re.search(_pattern, original, flags=re.IGNORECASE)
+        if _info_match:
+            _info_query = _info_match.group(1).strip()
+            return RoutedTask(
+                "browser_control",
+                {"action": "search", "query": f"{_info_query} {_query_type}" if _query_type != "query" else _info_query},
+                "web_search",
+                intent="web_search",
+                confidence=0.78,
+            )
 
     return None

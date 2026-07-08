@@ -1386,6 +1386,43 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _writer_source_context(args: dict[str, Any]) -> str:
+    """Yazıcı araçlar (document/spreadsheet/presentation/canvas) için içerik
+    bağlamı: açık sourceContext yoksa zincirdeki önceki adımın çıktısına düşer.
+    Böylece "araştır ve belgele" gibi çok adımlı planlarda rapor, araştırma
+    içeriğiyle dolu üretilir — boş şablon değil."""
+    explicit = str(args.get("sourceContext", "") or args.get("source_context", "") or "").strip()
+    if explicit:
+        return explicit
+    previous = args.get("_previousResult")
+    if isinstance(previous, dict):
+        parts: list[str] = []
+        for key in ("summary", "text", "body", "output"):
+            value = str(previous.get(key, "") or "").strip()
+            if value:
+                parts.append(value)
+                break
+        bullets = previous.get("bullets")
+        if isinstance(bullets, list):
+            cleaned = [str(item).strip() for item in bullets if str(item).strip()]
+            if cleaned:
+                parts.append("\n".join(f"- {item}" for item in cleaned))
+        sources = previous.get("sources")
+        if isinstance(sources, list):
+            lines = []
+            for source in sources:
+                if isinstance(source, dict):
+                    label = str(source.get("title", "") or source.get("url", "") or "").strip()
+                    snippet = str(source.get("snippet", "") or source.get("summary", "") or "").strip()
+                    if label or snippet:
+                        lines.append(f"- {label}: {snippet}".rstrip(": "))
+            if lines:
+                parts.append("Kaynaklar:\n" + "\n".join(lines))
+        if parts:
+            return "\n\n".join(parts)
+    return str(args.get("_previousOutput", "") or "").strip()
+
+
 def _string_from_exception(exc: Exception) -> str:
     return " ".join(str(exc or "").split()).strip()[:160]
 
@@ -1626,7 +1663,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             sections=args.get("sections") if isinstance(args.get("sections"), list) else None,
             blocks=args.get("blocks") if isinstance(args.get("blocks"), list) else None,
             source_path=str(args.get("sourcePath", "") or args.get("source_path", "") or ""),
-            source_context=str(args.get("sourceContext", "") or args.get("source_context", "") or ""),
+            source_context=_writer_source_context(args),
             overwrite=bool(args.get("overwrite", False)),
         ),
         "canvas_write": lambda args: _load_adapter("canvas_write")(
@@ -1639,7 +1676,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             width=args.get("width"),
             height=args.get("height"),
             theme=args.get("theme") if isinstance(args.get("theme"), dict) else None,
-            source_context=str(args.get("sourceContext", "") or args.get("source_context", "") or ""),
+            source_context=_writer_source_context(args),
             source_path=str(args.get("sourcePath", "") or args.get("source_path", "") or ""),
             overwrite=bool(args.get("overwrite", False)),
         ),
@@ -1649,7 +1686,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             title=str(args.get("title", "") or ""),
             columns=args.get("columns") if isinstance(args.get("columns"), list) else None,
             rows=args.get("rows") if isinstance(args.get("rows"), list) else None,
-            source_context=str(args.get("sourceContext", "") or args.get("source_context", "") or ""),
+            source_context=_writer_source_context(args),
             overwrite=bool(args.get("overwrite", False)),
         ),
         "presentation_write": lambda args: _load_adapter("presentation_write")(
@@ -1658,7 +1695,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             title=str(args.get("title", "") or ""),
             slides=args.get("slides") if isinstance(args.get("slides"), list) else None,
             blocks=args.get("blocks") if isinstance(args.get("blocks"), list) else None,
-            source_context=str(args.get("sourceContext", "") or args.get("source_context", "") or ""),
+            source_context=_writer_source_context(args),
             overwrite=bool(args.get("overwrite", False)),
         ),
         "retrieve_context": lambda args: _load_adapter("retrieve_context")(

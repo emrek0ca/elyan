@@ -234,10 +234,12 @@ def test_bootstrap_includes_brain_profile_surface(
     assert payload["backend"]["brainProfile"]["data"]["chat"]["brainProfilePath"] == "/v1/brain/profile"
 
 
-def test_semantic_prompt_includes_native_desktop_truth(
+def test_planning_envelope_includes_native_desktop_truth_and_intelligence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # Eski serbest metin prompt yerine yapılandırılmış zarf (elyan.plan.v1):
+    # masaüstü canlı durumu ve öğrenilmiş rota geçmişi VERİ olarak taşınmalı.
     _isolate_state(monkeypatch, tmp_path)
     monkeypatch.setattr(
         bridge,
@@ -269,12 +271,19 @@ def test_semantic_prompt_includes_native_desktop_truth(
         confidence=0.94,
     )
 
-    prompt = bridge._semantic_understanding_prompt("pencereyi aç", state_store.snapshot())
+    envelope = bridge._build_structured_planning_request(state_store.snapshot(), "pencereyi aç")
 
-    assert "[DESKTOP NATIVE TRUTH]" in prompt
-    assert "Finder" in prompt
-    assert "Task posture: confident" in prompt
-    assert "Research posture:" in prompt
+    assert envelope["contract"] == "elyan.plan.v1"
+    desktop = envelope["context"]["desktop"]
+    assert desktop["activeWindow"]["appName"] == "Finder"
+    assert desktop["operator"]["accessibilityReady"] is True
+    assert desktop["permissions"]["accessibility"] == "granted"
+    recent = envelope["context"]["recentIntents"]
+    assert any(item.get("capability") == "get_weather" for item in recent)
+    assert all(isinstance(item, dict) for item in recent)
+    # Araç kataloğu JSON Schema parametreli olmalı; düz metin talimat yok.
+    assert isinstance(envelope["toolCatalog"], list) and envelope["toolCatalog"]
+    assert envelope["responseSchema"]["properties"]["contract"]["const"] == "elyan.plan.v1"
 
 
 def test_runtime_status_includes_operator_state(

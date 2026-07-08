@@ -7,6 +7,42 @@ from runtime.backend_client import BackendClient
 from runtime.capability_registry import SafeCapabilityError
 
 
+# "bana mail at" gibi komutlarda router alıcıyı "me" yer tutucusuyla verir;
+# gerçek adres oturum açan hesabın e-postasından çözülür.
+_SELF_RECIPIENT_TOKENS = {"me", "self", "bana", "kendime"}
+
+
+def _account_email() -> str:
+    try:
+        from runtime import state_store
+
+        account = state_store.snapshot().get("account")
+        if isinstance(account, dict):
+            return str(account.get("email", "") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _resolve_recipients(to: list[str] | None) -> list[str]:
+    recipients: list[str] = []
+    for item in to or []:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if text.lower() in _SELF_RECIPIENT_TOKENS:
+            own = _account_email()
+            if not own:
+                raise SafeCapabilityError(
+                    "INVALID_ARGUMENT",
+                    "Kendi e-posta adresin hesapta bulunamadı; alıcı adresini açıkça belirt.",
+                )
+            text = own
+        if text not in recipients:
+            recipients.append(text)
+    return recipients
+
+
 def _current_backend_client() -> BackendClient:
     client = BackendClient(os.environ.get("APP_BASE_URL"))
     if not client.configured:
@@ -54,7 +90,7 @@ def email_draft(
     _confirmed: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
-    recipients = [item.strip() for item in (to or []) if str(item or "").strip()]
+    recipients = _resolve_recipients(to)
     if not recipients:
         raise SafeCapabilityError("INVALID_ARGUMENT", "Alıcı belirtilmedi.")
     resolved_topic = str(topic or subject or prompt or "E-posta").strip()
@@ -87,7 +123,7 @@ def email_send(
     _confirmed: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
-    recipients = [item.strip() for item in (to or []) if str(item or "").strip()]
+    recipients = _resolve_recipients(to)
     if not recipients:
         raise SafeCapabilityError("INVALID_ARGUMENT", "Alıcı belirtilmedi.")
     if not _confirmed:

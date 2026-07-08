@@ -1984,6 +1984,18 @@ class BackendClient:
         return result
 
     def pairing_claim_session(self, session_id: str, payload: dict[str, Any]) -> BackendResult:
+        # Claim, oturum sahibinin user token'ıyla yetkilendirilir. Mobil kendi
+        # token'ıyla claim eder; masaüstü self-pairing'de aynı hesabın token'ı
+        # kullanılır (backend canlı olarak doğrulandı: aynı kullanıcı kendi
+        # oturumunu claim edebiliyor).
+        if self._user_access_token():
+            return self._authorized_request(
+                "POST",
+                f"/v1/pairing/sessions/{session_id}/claim",
+                payload,
+                token_kind="user",
+                refresh_on_401=True,
+            )
         return self._request(
             "POST",
             f"/v1/pairing/sessions/{session_id}/claim",

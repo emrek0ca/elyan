@@ -9,6 +9,7 @@ from runtime import state_store
 from runtime.agent_planning import build_agent_plan
 from runtime.backend_client import BackendResult
 from runtime.capability_registry import capability_readiness
+from runtime.desktop_work_order import validate_payload, verify_result
 
 
 REMOTE_TASK_RUNNER_VERSION = "remote_task_orchestrator_v1"
@@ -27,6 +28,13 @@ def _safe_text(value: Any, limit: int = 1000) -> str:
     if len(text) > limit:
         return text[: limit - 1].rstrip() + "…"
     return text
+
+
+def _desktop_work_order_summary(work_order: dict[str, Any] | None) -> str:
+    work_order = work_order if isinstance(work_order, dict) else {}
+    goal = work_order.get("goal")
+    goal = goal if isinstance(goal, dict) else {}
+    return _safe_text(goal.get("summary"), 1000)
 
 
 def _normalize_capability(value: Any) -> str:
@@ -134,8 +142,25 @@ class RemoteTaskRunner:
         task_id = str(task.get("id", "") or "").strip()
         payload = task.get("payload", {})
         payload = payload if isinstance(payload, dict) else {}
+        work_order_validation = validate_payload(payload)
+        if work_order_validation.errors:
+            task_run_id = self._ensure_task_run_id(task_id)
+            first_error = work_order_validation.errors[0]
+            return self._fail_safe(
+                task_id,
+                task_run_id,
+                message="Görev verisi doğrulanamadı. İşlem güvenli şekilde durduruldu.",
+                error_code=first_error.get("code", "WORK_ORDER_INVALID"),
+                result_status="failed_closed",
+            )
+        work_order = work_order_validation.work_order
         title = str(task.get("title", "") or payload.get("title", "") or "Elyan görevi")
-        prompt = str(payload.get("prompt", "") or payload.get("message", "") or title).strip()
+        prompt = str(
+            _desktop_work_order_summary(work_order)
+            or payload.get("prompt", "")
+            or payload.get("message", "")
+            or title
+        ).strip()
         task_run_id = self._ensure_task_run_id(task_id)
         if not task_id:
             return {"taskId": "", "ok": False, "status": "missing_task_id"}
@@ -208,7 +233,14 @@ class RemoteTaskRunner:
                 capability_readiness_payload=readiness,
             )
             if local_result.get("needsConfirmation") is True and str(local_result.get("pendingPlanId", "") or "").strip():
-                return self._pause_for_approval(task_id, task_run_id, title, local_result, dispatched_via_websocket)
+                return self._pause_for_approval(
+                    task_id,
+                    task_run_id,
+                    title,
+                    local_result,
+                    dispatched_via_websocket,
+                    work_order=work_order,
+                )
 
             self._report_lifecycle(
                 task_id,
@@ -219,6 +251,8 @@ class RemoteTaskRunner:
                 plan_preview=local_result.get("planPreview") if isinstance(local_result.get("planPreview"), dict) else plan_preview,
                 capability_readiness_payload=readiness,
             )
+            if work_order is not None:
+                local_result = self._apply_work_order_verification(work_order, local_result)
             result = self.host._report_runtime_task_terminal_result(
                 task_id,
                 local_result,
@@ -248,6 +282,20 @@ class RemoteTaskRunner:
 
         pending_plan_id = str(link.get("pendingPlanId", "") or "").strip()
         conversation_id = str(link.get("conversationId", "") or "").strip()
+        stored_work_order = link.get("desktopWorkOrder")
+        work_order: dict[str, Any] | None = None
+        if stored_work_order is not None:
+            validation = validate_payload({"desktopWorkOrder": stored_work_order})
+            if validation.errors or validation.work_order is None:
+                first_error = validation.errors[0] if validation.errors else {"code": "WORK_ORDER_INVALID"}
+                return self._fail_safe(
+                    task_id,
+                    task_run_id,
+                    message="Onaylanan görevin tipli verisi doğrulanamadı. İşlem güvenli şekilde durduruldu.",
+                    error_code=first_error.get("code", "WORK_ORDER_INVALID"),
+                    result_status="failed_closed",
+                )
+            work_order = validation.work_order
         if not pending_plan_id:
             self.host._runtime_diag("task_approval_missing_plan", task_id=task_id)
             state_store.remove_remote_task_link(task_id)
@@ -278,6 +326,8 @@ class RemoteTaskRunner:
             local_result = self.host.confirm_conversation_plan(conversation_id, pending_plan_id, True)
             local_result = self._augment_local_result(local_result, task_id=task_id, task_run_id=task_run_id)
             self._report_lifecycle(task_id, task_run_id, "verifying", "Görev sonucu doğrulanıyor.")
+            if work_order is not None:
+                local_result = self._apply_work_order_verification(work_order, local_result)
             result = self.host._report_runtime_task_terminal_result(
                 task_id,
                 local_result,
@@ -512,6 +562,8 @@ class RemoteTaskRunner:
         title: str,
         local_result: dict[str, Any],
         dispatched_via_websocket: bool,
+        *,
+        work_order: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         pending_plan_id = str(local_result.get("pendingPlanId", "") or "").strip()
         conversation_id = str(local_result.get("conversationId", "") or "").strip()
@@ -553,6 +605,8 @@ class RemoteTaskRunner:
             last_backend_status="waiting_approval",
             resume_token=str(local_result.get("resumeToken", "") or pending_plan_id),
         )
+        if work_order is not None:
+            state_store.update_remote_task_link(task_id, {"desktopWorkOrder": dict(work_order)})
         payload = self._status_payload(
             task_id,
             task_run_id,
@@ -573,6 +627,32 @@ class RemoteTaskRunner:
             "report": report.to_dict() if report else None,
             "local": {"conversationId": conversation_id, "provider": waiting_result["provider"], "pendingPlanId": pending_plan_id},
         }
+
+    def _apply_work_order_verification(
+        self,
+        work_order: dict[str, Any],
+        local_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = dict(local_result)
+        verification = verify_result(work_order, result)
+        result["verification"] = verification
+        trace = result.get("executionTrace")
+        if isinstance(trace, dict):
+            trace = dict(trace)
+            trace["verificationState"] = verification
+            result["executionTrace"] = trace
+        if verification.get("passed") is not True:
+            missing_count = len(verification.get("missingEvidence", []))
+            result["chatOk"] = False
+            result["assistantMessage"] = (
+                "Görev yürütüldü ancak tamamlandığını doğrulayacak "
+                f"{missing_count} kanıt eksik. Sonuç tamamlandı olarak işaretlenmedi."
+            )
+            result["error"] = {
+                "code": "WORK_ORDER_EVIDENCE_MISSING",
+                "message": result["assistantMessage"],
+            }
+        return result
 
     def _augment_local_result(
         self,

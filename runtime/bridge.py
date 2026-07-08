@@ -4,6 +4,7 @@ import asyncio
 import copy
 import datetime as dt
 import difflib
+import hashlib
 import inspect
 import json
 import os
@@ -39,6 +40,7 @@ from runtime.capability_registry import (
 )
 from runtime.safety_policy import PERSONAL_ACTION_CAPABILITIES, evaluate_tool
 from runtime.agent_planning import build_agent_plan
+from runtime import structured_planner
 from runtime.task_router import (
     RoutedTask,
     artifact_target_clarification,
@@ -48,6 +50,7 @@ from runtime.task_router import (
 from runtime import state_store
 from runtime.executor_core import ExecutorCore
 from runtime.remote_task_runner import RemoteTaskRunner
+from runtime.desktop_work_order import canonical_capability, validate_payload
 from runtime import native_file_indexer
 from runtime import mcp_runtime
 from runtime import skill_runtime
@@ -199,7 +202,7 @@ def _canonical_capability_name(value: Any) -> str:
         return "desktop_operator." + normalized.removeprefix("desktop.operator.")
     if normalized.startswith("desktop_os."):
         return normalized
-    return normalized.replace(".", "_")
+    return canonical_capability(normalized)
 
 
 def _extract_email_addresses_from_text(text: str) -> list[str]:
@@ -1355,11 +1358,13 @@ def _local_runtime_client_from_state(
     )
 
 
-def _local_runtime_status_from_state(
+def _local_runtime_status_snapshot_from_state(
     state: dict[str, Any],
     provider_id: str = "",
 ) -> tuple[str, dict[str, Any]]:
-    provider, client = _local_runtime_client_from_state(state, provider_id)
+    provider = str(provider_id or _local_runtime_family_from_state(state)).strip().lower() or "ollama"
+    if provider not in {"ollama", "lmstudio", "llamacpp"}:
+        provider = "ollama"
     providers = _map_from(state.get("providers"))
     cfg = _map_from(providers.get(provider))
     base_url_defaults = {
@@ -1367,7 +1372,7 @@ def _local_runtime_status_from_state(
         "lmstudio": "http://127.0.0.1:1234/v1",
         "llamacpp": "http://127.0.0.1:8080/v1",
     }
-    default_status = {
+    return provider, {
         "providerId": provider,
         "available": False,
         "reachable": False,
@@ -1376,9 +1381,18 @@ def _local_runtime_status_from_state(
         "defaultModel": _model_for_provider(state, provider),
         "latencyMs": 0,
         "lastCheckedAt": "",
-        "errorCode": f"{provider}_client_unavailable",
+        "errorCode": f"{provider}_status_not_probed",
         "jobs": [],
     }
+
+
+def _local_runtime_status_from_state(
+    state: dict[str, Any],
+    provider_id: str = "",
+) -> tuple[str, dict[str, Any]]:
+    provider, client = _local_runtime_client_from_state(state, provider_id)
+    _, default_status = _local_runtime_status_snapshot_from_state(state, provider)
+    default_status["errorCode"] = f"{provider}_client_unavailable"
     if client is None:
         return provider, default_status
     status = client.status() if hasattr(client, "status") else {}
@@ -1448,6 +1462,12 @@ def _semantic_candidate_providers(
     if configured("ollama"):
         ordered.append("ollama")
     if fallback_to_cloud and privacy_class == "public_text":
+        # Sunucu beyni birincil bulut planlayıcıdır: hesap girişi yeterli,
+        # ayrıca API anahtarı istemez. Daha önce aday listesinde HİÇ yoktu —
+        # yerel model kapalıyken semantik planlama tamamen kör kalıyordu.
+        account = _map_from(state.get("account"))
+        if backend is not None and str(account.get("accessToken", "") or "").strip():
+            ordered.append("server_brain")
         active_cloud = active if active not in {"local", "ollama"} else ""
         if active_cloud and configured(active_cloud):
             ordered.append(active_cloud)
@@ -1525,6 +1545,23 @@ def _requires_tool_capable_route(text: str) -> bool:
         r"\bara\b",
         r"\btakvim\b",
         r"\bhatırlat",
+        r"\bhatirlat",
+        r"\bunuttur",
+        r"\banımsat",
+        r"\banimsat",
+        r"\brandevu\b",
+        r"\balarm\b",
+        r"\bayarla\b",
+        r"\bkaydet\b",
+        r"\bgönder\b",
+        r"\bgonder\b",
+        r"\bindir\b",
+        r"\bsil\b",
+        r"\btaşı\b",
+        r"\btasi\b",
+        r"\bkopyala\b",
+        r"\boynat\b",
+        r"\bnot al\b",
         r"\bwhatsapp\b",
         r"\bekran\b",
         r"\buygulama\b",
@@ -2811,87 +2848,6 @@ def _artifact_selection_status_payload() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {"selectedCount": 0, "activeKinds": []}
 
 
-def _semantic_understanding_prompt(
-    text: str,
-    state: dict[str, Any],
-    retrieval_context: str = "",
-    mcp_context: str = "",
-) -> str:
-    learning = _task_intelligence_prompt_context(state)
-    skill_context = skill_runtime.planner_skill_context(state, text)
-    native_desktop_context = _desktop_native_context_lines(_desktop_native_snapshot_payload())
-    platform_name = "macOS" if sys.platform == "darwin" else ("Windows" if os.name == "nt" else "Linux")
-    guidance = (
-        "You are Elyan local intent planner. Output one JSON object only. "
-        "Map the request to one of these capabilities if possible: "
-        "open_app, close_app, sys_info, get_weather, get_calendar_events, add_calendar_event, "
-        "get_reminders, add_reminder, browser_control, send_whatsapp_message, save_whatsapp_contact, document_read, document_write, "
-        "spreadsheet_write, presentation_write, canvas_write, ocr_read, image_read, data_analyze, chart_generate, math_solve, latex_parse, retrieve_context, "
-        "mcp_call_tool, run_skill, "
-        "speech_to_text, text_to_speech, "
-        "analyze_screen, get_youtube_channel_report, shell_run, play_media. "
-        "If the request is unsupported or general chat, use intent=chat and capability=\"\". "
-        "Keep greetings, small talk, and topicless messages on fast chat; do not launch web_research for them. "
-        "Use web_research only when the user explicitly asks for current facts, sources, comparison, verification, or a deeper research pass. "
-        "If the research target is vague, ask one short clarifying question instead of guessing. "
-        "Set confidence between 0 and 1. "
-        "Set requiresConfirmation=true for side-effect actions, file writes, scheduling writes, personal actions, shell execution, or multi-step actions. "
-        "Set privacyClass=local_private for files, screen, system details, calendar, reminders, personal actions, apps, shell; otherwise public_text. "
-        "If a browser action is needed, args.action must be one of search, open_url, play_youtube. "
-        "browser_control, play_media, and analyze_screen require explicit local permission before execution. "
-        "add_calendar_event, add_reminder, send_whatsapp_message, and save_whatsapp_contact require explicit local personal-action permission before execution. "
-        "If document_read is chosen, args.mode must be read, summary, or bullets, and args may include path or text. "
-        "Use text when the content is already available as extracted readable text. "
-        "If send_whatsapp_message is chosen, args must include message and may include recipient_name, phone_number, app_target, send_now. "
-        "If save_whatsapp_contact is chosen, args must include display_name and phone_number and may include aliases. "
-        "If document_write is chosen, args may include outputPath, title, sourcePath, sourceContext, overwrite. "
-        "If spreadsheet_write is chosen, args may include outputPath, title, columns, rows, sourceContext, overwrite. "
-        "If presentation_write is chosen, args may include outputPath, title, slides, sourceContext, overwrite. "
-        "If canvas_write is chosen, args may include outputPath, title, blocks, sections, outputFormat, width, height, sourcePath, sourceContext, overwrite. "
-        "If ocr_read is chosen, args.mode must be read, summary, or bullets. "
-        "If image_read is chosen, args.mode must be summary, metadata, or palette. "
-        "If data_analyze is chosen, args.mode must be summary, profile, or preview. "
-        "If chart_generate is chosen, args.chartType must be bar, line, scatter, or histogram. "
-        "If math_solve is chosen, args.mode must be solve, simplify, factor, expand, or evaluate. "
-        "If latex_parse is chosen, args.mode must be parse or normalize. "
-        "If retrieve_context is chosen, args must include query and optional sources. "
-        "If mcp_call_tool is chosen, args must include serverId, toolName, and arguments. "
-        "If run_skill is chosen, args must include skillId and may include payload. "
-        "If speech_to_text is chosen, args may include audioPath, sessionId, and languageHint. "
-        "If text_to_speech is chosen, args must include text and may include languageHint, voice, interrupt. "
-        "If shell_run is chosen, args.command is the shell command (pipes and operators supported; set use_shell=true when using && || | ; > < operators). "
-        "Prefer clarification over guessing missing targets, files, recipients, URLs, commands, or expressions. "
-        "For complex requests, preserve the user's real goal, keep args minimal and exact, and use planPreview with ordered steps instead of collapsing everything into one guessed tool call. "
-        "Do not invent file paths, app names, query text, recipients, or document contents. "
-        "If the request clearly involves multiple sequential actions, set isMultiStep=true and include planPreview with summary and steps. "
-        "When a request needs multiple phases, make planPreview.agentPlan explicit with stepCount, agentRoles, laneCount, and executionStrategy. "
-        "Never invent unsupported capabilities."
-    )
-    if sys.platform != "darwin":
-        guidance = (
-            f"{guidance} Current platform is {platform_name}. "
-            "Do not choose macOS-only capabilities such as open_app, close_app, calendar/reminder desktop helpers, "
-            "analyze_screen, Spotify or Apple Music desktop playback, or WhatsApp desktop automation. "
-            "Prefer browser_control, YouTube media playback, or WhatsApp Web draft flows when suitable."
-        )
-    if learning:
-        guidance = f"{guidance}\n\n{learning}"
-    if retrieval_context:
-        guidance = f"{guidance}\n\n{retrieval_context}"
-    if mcp_context:
-        guidance = f"{guidance}\n\n{mcp_context}"
-    if skill_context:
-        guidance = f"{guidance}\n\n{skill_context}"
-    if native_desktop_context:
-        guidance = f"{guidance}\n\n{native_desktop_context}"
-    return (
-        f"{guidance}\n\n"
-        "Return JSON with keys: intent, capability, args, confidence, isMultiStep, "
-        "requiresConfirmation, privacyClass, planPreview.\n"
-        f"User request: {text}"
-    )
-
-
 def _invoke_provider_chat(
     state: dict[str, Any],
     provider: str,
@@ -3023,6 +2979,97 @@ def _invoke_provider_chat(
     return _chat_with_google_live(state, conversation, text)
 
 
+def _planner_skills_data(state: dict[str, Any], text: str) -> list[dict[str, Any]]:
+    """Planlama isteğine veri olarak giden etkin skill envanteri."""
+    try:
+        status = skill_runtime.list_skill_runtime(state, refresh=False)
+        skills = [
+            item
+            for item in status.get("skills", [])
+            if isinstance(item, dict) and item.get("enabled") is True and item.get("available", True) is True
+        ]
+        if str(text or "").strip():
+            skills = skill_runtime.rank_skills_for_text(text, state, skills=skills, limit=8)
+        return skills[:8]
+    except Exception:
+        return []
+
+
+def _planner_mcp_tools_data(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Planlama isteğine veri olarak giden MCP araç envanteri."""
+    try:
+        status = mcp_runtime.list_mcp_tools(state)
+        tools = status.get("tools", []) if isinstance(status, dict) else []
+        payload: list[dict[str, Any]] = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            server_id = str(tool.get("serverId", "") or tool.get("server_id", "") or "").strip()
+            tool_name = str(tool.get("name", "") or tool.get("toolName", "") or "").strip()
+            if not server_id or not tool_name:
+                continue
+            payload.append({
+                "serverId": server_id,
+                "toolName": tool_name,
+                "description": str(tool.get("description", "") or "")[:160],
+                "readOnly": bool(tool.get("readOnly", False)),
+            })
+        return payload[:16]
+    except Exception:
+        return []
+
+
+def _compact_desktop_snapshot() -> dict[str, Any] | None:
+    """Planlama zarfına giden masaüstü canlı durumu — aktif pencere, izinler
+    ve operator hazırlığı; yapılandırılmış veri olarak (metin satırı değil)."""
+    snapshot = _desktop_native_snapshot_payload()
+    if not isinstance(snapshot, dict) or not bool(snapshot.get("available", False)):
+        return None
+    compact: dict[str, Any] = {"platform": str(snapshot.get("platform", "") or "")}
+    active_window = snapshot.get("activeWindow")
+    if isinstance(active_window, dict):
+        window = {
+            key: str(active_window.get(key, "") or "")
+            for key in ("appName", "windowTitle")
+            if str(active_window.get(key, "") or "")
+        }
+        if window:
+            compact["activeWindow"] = window
+    operator = snapshot.get("operator")
+    if isinstance(operator, dict):
+        compact["operator"] = {
+            key: bool(operator.get(key, False))
+            for key in ("available", "screenObservationReady", "accessibilityReady", "inputControlReady")
+        }
+    permissions = snapshot.get("permissions")
+    if isinstance(permissions, dict):
+        compact["permissions"] = {
+            str(name): str((detail or {}).get("status", "") or "")
+            for name, detail in permissions.items()
+            if isinstance(detail, dict)
+        }
+    return compact
+
+
+def _build_structured_planning_request(
+    state: dict[str, Any],
+    text: str,
+    *,
+    retrieval_matches: list[dict[str, Any]] | None = None,
+    skills: list[dict[str, Any]] | None = None,
+    mcp_tools: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return structured_planner.build_planning_request(
+        text,
+        selected_artifacts=STATE.get_selected_artifacts(),
+        retrieval_matches=retrieval_matches,
+        skills=skills,
+        mcp_tools=mcp_tools,
+        recent_intents=structured_planner.intelligence_context(state),
+        desktop_snapshot=_compact_desktop_snapshot(),
+    )
+
+
 def _semantic_route(
     state: dict[str, Any],
     conversation: list[dict[str, Any]],
@@ -3062,18 +3109,29 @@ def _semantic_route(
         if _should_retrieve_context(text, privacy_class)
         else None
     )
-    mcp_context = mcp_runtime.planner_mcp_context(state)
+    skills_data = _planner_skills_data(state, text)
+    mcp_tools_data = _planner_mcp_tools_data(state)
     for provider in _semantic_candidate_providers(state, privacy_class=privacy_class, backend=backend):
         filtered_retrieval = _filter_retrieval_matches(
             retrieval,
             allowed_sources=_retrieval_sources_for_provider(provider),
         )
-        prompt = _semantic_understanding_prompt(
-            text,
-            state,
-            retrieval_context=_format_retrieval_context(filtered_retrieval),
-            mcp_context=mcp_context,
+        retrieval_matches = (
+            filtered_retrieval.get("matches")
+            if isinstance(filtered_retrieval, dict) and isinstance(filtered_retrieval.get("matches"), list)
+            else None
         )
+        # Düz metin prompt yok: planlama isteği araç kataloğu + bağlam +
+        # öğrenilmiş rota geçmişi + masaüstü canlı durumu + yanıt şemasıyla
+        # tek bir JSON zarfı olarak gider (elyan.plan.v1).
+        planning_request = _build_structured_planning_request(
+            state,
+            text,
+            retrieval_matches=retrieval_matches,
+            skills=skills_data,
+            mcp_tools=mcp_tools_data,
+        )
+        prompt = structured_planner.planning_prompt(planning_request)
         seeded_conversation = [{"role": "system", "text": prompt}]
         result = _invoke_provider_chat_with_context(
             state,
@@ -3085,7 +3143,42 @@ def _semantic_route(
         )
         if not result.get("ok"):
             continue
-        payload = _extract_json_object(str(result.get("content", "") or ""))
+        raw_content = str(result.get("content", "") or "")
+        payload = _extract_json_object(raw_content)
+        plan_errors: list[str] = []
+        if isinstance(payload, dict) and (
+            str(payload.get("contract", "") or "") == structured_planner.PLAN_CONTRACT
+            or (isinstance(payload.get("steps"), list) and payload.get("steps"))
+        ):
+            plan, plan_errors = structured_planner.validate_plan(payload)
+            if plan is not None:
+                payload = structured_planner.plan_to_semantic_payload(plan, fallback_privacy=privacy_class)
+                plan_errors = []
+        elif payload is None:
+            plan_errors = ["yanıt geçerli bir JSON nesnesi değildi"]
+
+        # Tek turluk yapılandırılmış onarım: geçersiz yanıt + doğrulama
+        # hataları veri olarak geri gönderilir; düzeltilmiş plan beklenir.
+        if plan_errors:
+            repair_request = structured_planner.build_repair_request(
+                planning_request,
+                payload if payload is not None else raw_content[:2000],
+                plan_errors,
+            )
+            repair_result = _invoke_provider_chat_with_context(
+                state,
+                provider,
+                [{"role": "system", "text": structured_planner.planning_prompt(repair_request)}],
+                text,
+                backend=backend,
+                conversation_id=conversation_id,
+            )
+            if repair_result.get("ok"):
+                repaired = _extract_json_object(str(repair_result.get("content", "") or ""))
+                if isinstance(repaired, dict):
+                    plan, _repair_errors = structured_planner.validate_plan(repaired)
+                    if plan is not None:
+                        payload = structured_planner.plan_to_semantic_payload(plan, fallback_privacy=privacy_class)
         if not isinstance(payload, dict):
             continue
         capability = str(payload.get("capability", "") or "").strip()
@@ -3167,6 +3260,7 @@ def _semantic_route(
             "isMultiStep": bool(payload.get("isMultiStep", False)),
             "privacyClass": str(payload.get("privacyClass", privacy_class) or privacy_class),
             "planPreview": payload.get("planPreview") if isinstance(payload.get("planPreview"), dict) else None,
+            "clarificationQuestion": str(payload.get("clarificationQuestion", "") or ""),
             "provider": provider,
             "model": str(result.get("model", "") or ""),
             "retrieval": filtered_retrieval,
@@ -4462,6 +4556,25 @@ def _route_chat(
         else None
     )
     if semantic and not semantic.get("capability"):
+        planner_question = str(semantic.get("clarificationQuestion", "") or "").strip()
+        if planner_question:
+            try:
+                STATE.increment_clarification_count()
+            except Exception:
+                pass
+            _record_task_intelligence_outcome(
+                "clarified",
+                query=text,
+                intent=str(semantic.get("intent", "") or "clarification"),
+                capability="",
+                conversation_id=conversation_id,
+                question=planner_question,
+            )
+            return _clarification_response(
+                planner_question,
+                intent=str(semantic.get("intent", "") or "clarification"),
+                privacy_class=str(semantic.get("privacyClass", "public_text") or "public_text"),
+            )
         if _requires_tool_capable_route(text):
             question = "Görevi netleştirmem gerekiyor. Hangi uygulama, dosya veya hedef üzerinde işlem yapmamı istiyorsun?"
             try:
@@ -4826,6 +4939,8 @@ class RuntimeBridge:
         self._runtime_register_retry_target: dict[str, str] | None = None
         self._runtime_register_retry_generation = 0
         self._runtime_register_retry_wake = threading.Event()
+        self._self_pair_lock = threading.RLock()
+        self._self_pair_thread: threading.Thread | None = None
         self._pairing_claim_poll_lock = threading.RLock()
         self._pairing_claim_poll_thread: threading.Thread | None = None
         self._pairing_claim_poll_target: dict[str, str] | None = None
@@ -5973,15 +6088,18 @@ class RuntimeBridge:
 
     def _runtime_task_result_payload(self, local_result: dict[str, Any]) -> dict[str, Any]:
         structured_result = local_result.get("structuredResult")
+        structured_result = self._public_runtime_structured_result(structured_result)
         plan_preview = local_result.get("planPreview")
         privacy_class = "local_private"
         if isinstance(plan_preview, dict):
             privacy_class = str(plan_preview.get("privacyClass", "") or privacy_class)
         execution_trace = local_result.get("executionTrace")
-        verification = {}
+        verification = local_result.get("verification")
+        verification = verification if isinstance(verification, dict) else {}
         if isinstance(execution_trace, dict):
-            verification = execution_trace.get("verificationState", {})
-            verification = verification if isinstance(verification, dict) else {}
+            trace_verification = execution_trace.get("verificationState", {})
+            if not verification and isinstance(trace_verification, dict):
+                verification = trace_verification
         access_mode = "full_access" if self._full_access_active() else "permission_gated"
         safe_summary = self._truncate_text(str(local_result.get("assistantMessage", "") or "").strip(), 1000)
         result_payload: dict[str, Any] = {
@@ -6022,20 +6140,21 @@ class RuntimeBridge:
         chat_ok = local_result.get("chatOk", True) is not False
         assistant_message = str(local_result.get("assistantMessage", "") or "").strip()
         provider = str(local_result.get("provider", "") or "")
-        artifacts = [
+        local_artifacts = [
             dict(item)
             for item in (local_result.get("artifacts", []) if isinstance(local_result.get("artifacts"), list) else [])
             if isinstance(item, dict)
         ]
-        for artifact in artifacts:
+        for artifact in local_artifacts:
             artifact.setdefault("shareable", False)
             artifact.setdefault("requiresUserShare", True)
-        if assistant_message and not any(str(item.get("kind", "") or "").strip() == "summary" for item in artifacts):
-            artifacts.extend(self._summary_artifacts(assistant_message, provider))
-        for artifact in artifacts:
+        if assistant_message and not any(str(item.get("kind", "") or "").strip() == "summary" for item in local_artifacts):
+            local_artifacts.extend(self._summary_artifacts(assistant_message, provider))
+        for artifact in local_artifacts:
             if str(artifact.get("kind", "") or "") != "summary":
                 artifact.setdefault("shareable", False)
                 artifact.setdefault("requiresUserShare", True)
+        artifacts = [self._public_runtime_artifact(item) for item in local_artifacts]
         result_payload = self._runtime_task_result_payload(local_result)
         payload: dict[str, Any] = {
             "status": "completed" if chat_ok else "failed",
@@ -6070,10 +6189,10 @@ class RuntimeBridge:
         separate_artifacts: bool = False,
     ) -> dict[str, Any]:
         status_payload, artifacts, chat_ok = self._runtime_task_terminal_payload(local_result)
-        should_split_artifacts = dispatched_via_websocket or separate_artifacts
         artifact_report = None
-        if should_split_artifacts:
+        if artifacts:
             artifact_report = self._report_runtime_task_artifacts(task_id, artifacts)
+        if artifact_report is not None and artifact_report.ok:
             status_payload["artifacts"] = []
         report = self._report_runtime_task_status(task_id, status_payload)
         return {
@@ -6806,6 +6925,10 @@ class RuntimeBridge:
         backend_snapshot = self._runtime_backend_snapshot()
         if self._user_auth_ready():
             self._sync_conversation_truth_from_backend()
+            # Önceki oturumdan token'lı ama hiç eşleştirilmemiş kurulumlar
+            # (auth fingerprint değişmediği için auth_sync tetiklenmez) burada
+            # yakalanır — arka planda self-pairing + runtime register.
+            self._ensure_self_paired_async()
         state = self._state_with_access()
         return {
             "state": state,
@@ -7789,7 +7912,7 @@ class RuntimeBridge:
         }
         return response
 
-    def local_models_status(self) -> dict[str, Any]:
+    def local_models_status(self, *, probe_clients: bool = False) -> dict[str, Any]:
         state = STATE.snapshot()
         providers = _map_from(state.get("providers"))
         selected_runtime = self._local_runtime_family(state)
@@ -7802,16 +7925,35 @@ class RuntimeBridge:
             )
         runtime_statuses: dict[str, Any] = {}
         for provider_id in ("ollama", "lmstudio", "llamacpp"):
-            _, runtime_status = _local_runtime_status_from_state(state, provider_id)
+            _, runtime_status = (
+                _local_runtime_status_from_state(state, provider_id)
+                if probe_clients
+                else _local_runtime_status_snapshot_from_state(state, provider_id)
+            )
             runtime_statuses[provider_id] = runtime_status
-        provider_id, client = self._selected_local_client(selected_runtime)
+        provider_id = str(selected_runtime or "ollama").strip().lower()
+        if provider_id not in {"ollama", "lmstudio", "llamacpp"}:
+            provider_id = "ollama"
         selected_runtime_status = _map_from(runtime_statuses.get(provider_id))
+        if not probe_clients:
+            return {
+                "status": selected_runtime_status,
+                "models": {
+                    "ok": False,
+                    "available": False,
+                    "models": [],
+                    "error": "local_models_not_probed",
+                },
+                "jobs": [],
+                "selectedRuntime": provider_id,
+                "selectedRuntimeStatus": selected_runtime_status,
+                "runtimes": runtime_statuses,
+                "defaultLocalModel": default_model,
+            }
+        _, client = self._selected_local_client(provider_id)
         if client is None:
             return {
-                "status": selected_runtime_status or runtime_statuses.get(provider_id, _ollama_status_payload(
-                    base_url=str(_map_from(providers.get("ollama")).get("baseUrl", "") or "http://127.0.0.1:11434"),
-                    default_model=default_model,
-                )),
+                "status": selected_runtime_status,
                 "models": {
                     "ok": False,
                     "available": False,
@@ -7837,7 +7979,7 @@ class RuntimeBridge:
         }
 
     def local_models_list(self) -> dict[str, Any]:
-        return self.local_models_status()
+        return self.local_models_status(probe_clients=True)
 
     def local_models_download(self, model: str) -> dict[str, Any]:
         provider_id, client = self._selected_local_client()
@@ -8657,6 +8799,10 @@ class RuntimeBridge:
         )
         hydrated = self._hydrate_backend_truth()
         self._start_runtime_register_retry_if_needed()
+        # Girişli ama runtime kimliği yoksa (hiç eşleştirilmemiş masaüstü)
+        # arka planda kendi kendine eşleş — aksi halde backend görev
+        # gönderemez ve chat yanıtları süresiz askıda kalır.
+        self._ensure_self_paired_async()
         return {
             "ok": True,
             "signedIn": True,
@@ -9471,6 +9617,81 @@ class RuntimeBridge:
         self._log_backend_result("pairing_claim_session", result)
         return {"ok": result.ok, "result": result.to_dict()}
 
+    def pairing_self_pair(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Masaüstünün telefonsuz kendi kendini eşleştirmesi.
+
+        Kullanıcı masaüstünde zaten hesabına girmişse ayrıca bir telefona QR
+        okutması gerekmez: aynı hesabın user token'ı pairing oturumunu kendisi
+        claim edebilir (backend buna izin veriyor). Akış: oturum oluştur →
+        kendi token'ınla claim et → get_session claimed'i görüp runtime'ı
+        otomatik register eder. Bu olmadan runtime backend'e hiç kaydolamıyor
+        ve chat görevleri sonsuza dek "Düşünüyor…"da bekliyordu.
+        """
+        if self.backend.runtime_register_identity_error() is None:
+            registration = self.ensure_runtime_registered()
+            return {"ok": bool(registration.get("ok")), "stage": "already_paired", "registration": registration}
+
+        label = str(payload.get("deviceLabel", "") or "Elyan Mac").strip() or "Elyan Mac"
+        create = self.backend.pairing_create_session(
+            {
+                "deviceLabel": label,
+                "platform": str(payload.get("platform", "") or "macos"),
+                "runtimeVersion": str(payload.get("runtimeVersion", "") or "1.0.0"),
+                "forceNew": True,
+            }
+        )
+        self._log_backend_result("pairing_create_session", create)
+        if not create.ok or not isinstance(create.data, dict):
+            return {"ok": False, "stage": "create", "result": create.to_dict()}
+        session_id = str(create.data.get("sessionId", "") or create.data.get("id", "") or "").strip()
+        pairing_code = str(create.data.get("pairingCode", "") or "").strip()
+        if not session_id or not pairing_code:
+            return {
+                "ok": False,
+                "stage": "create",
+                "error": {"code": "PAIRING_CODE_MISSING", "message": "Eşleştirme kodu üretilemedi."},
+            }
+
+        claim = self.backend.pairing_claim_session(
+            session_id,
+            {"pairingCode": pairing_code, "deviceLabel": label, "platform": "macos"},
+        )
+        self._log_backend_result("pairing_claim_session", claim)
+        if not claim.ok:
+            return {"ok": False, "stage": "claim", "result": claim.to_dict()}
+
+        session = self.pairing_get_session(session_id)
+        registration = session.get("registration") if isinstance(session, dict) else None
+        ok = bool(session.get("ok")) and bool((registration or {}).get("ok"))
+        return {"ok": ok, "stage": "registered" if ok else "register_pending", "session": session}
+
+    def _ensure_self_paired_async(self) -> None:
+        """Girişli ama runtime kimliği olmayan masaüstünü arka planda
+        kendiliğinden eşleştirir; zaten eşliyse veya iş sürüyorsa no-op."""
+        account = _map_from(STATE.snapshot().get("account"))
+        if not str(account.get("accessToken", "") or "").strip():
+            return
+        identity_error = getattr(self.backend, "runtime_register_identity_error", None)
+        if identity_error is None or identity_error() is None:
+            return
+        with self._self_pair_lock:
+            if self._self_pair_thread is not None and self._self_pair_thread.is_alive():
+                return
+            thread = threading.Thread(
+                target=self._self_pair_worker,
+                name="elyan-self-pair",
+                daemon=True,
+            )
+            self._self_pair_thread = thread
+            thread.start()
+
+    def _self_pair_worker(self) -> None:
+        try:
+            result = self.pairing_self_pair({})
+            self._runtime_diag("self_pair", stage=str(result.get("stage", "")), ok=bool(result.get("ok")))
+        except Exception as exc:  # pragma: no cover - ağ yüzeyi
+            self._runtime_diag("self_pair", stage="error", ok=False, error=str(exc))
+
     def pairing_get_session(self, session_id: str) -> dict[str, Any]:
         result = self.backend.pairing_get_session(session_id)
         self._log_backend_result("pairing_get_session", result)
@@ -9665,15 +9886,67 @@ class RuntimeBridge:
         return result
 
     def _report_runtime_task_artifacts(self, task_id: str, artifacts: list[dict[str, Any]]) -> BackendResult | None:
-        if not artifacts:
+        public_artifacts = [self._public_runtime_artifact(item) for item in artifacts if isinstance(item, dict)]
+        if not public_artifacts:
             return None
-        if self._send_runtime_socket_message({"type": "task.artifacts", "taskId": task_id, "artifacts": artifacts}):
-            self._sync_task_inbox_artifacts(task_id, artifacts)
+        if self._send_runtime_socket_message({"type": "task.artifacts", "taskId": task_id, "artifacts": public_artifacts}):
+            self._sync_task_inbox_artifacts(task_id, public_artifacts)
             return BackendResult(ok=True, request_id=_request_id(), status_code=200, data={"ok": True, "transport": "websocket"})
-        result = self.backend.runtime_task_artifacts(task_id, {"artifacts": artifacts})
+        if not callable(getattr(self.backend, "runtime_task_artifacts", None)):
+            return None
+        result = self.backend.runtime_task_artifacts(task_id, {"artifacts": public_artifacts})
         if result.ok:
-            self._sync_task_inbox_artifacts(task_id, artifacts)
+            self._sync_task_inbox_artifacts(task_id, public_artifacts)
         return result
+
+    def _public_runtime_artifact(self, artifact: dict[str, Any]) -> dict[str, Any]:
+        path = str(artifact.get("path", "") or artifact.get("outputPath", "") or "").strip()
+        public = {
+            key: value
+            for key, value in artifact.items()
+            if key not in {"path", "outputPath", "sourcePath", "textContent", "content", "body", "bytes"}
+        }
+        public.setdefault("shareable", False)
+        public.setdefault("requiresUserShare", True)
+        if path:
+            public["localRef"] = "local_" + hashlib.sha256(path.encode("utf-8")).hexdigest()[:24]
+            public.setdefault("name", Path(path).name)
+            public.setdefault("id", public["localRef"])
+        return public
+
+    def _public_runtime_structured_result(self, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        blocked_fragments = (
+            "path",
+            "content",
+            "text",
+            "body",
+            "prompt",
+            "query",
+            "screenshot",
+            "credential",
+            "token",
+        )
+        public: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key or "").strip()
+            lowered = normalized_key.lower()
+            if not normalized_key or any(fragment in lowered for fragment in blocked_fragments):
+                continue
+            if isinstance(item, (str, int, float, bool)) or item is None:
+                public[normalized_key] = item
+            elif isinstance(item, list):
+                public[normalized_key] = [
+                    entry
+                    for entry in item[:24]
+                    if isinstance(entry, (str, int, float, bool)) or entry is None
+                ]
+            elif isinstance(item, dict):
+                nested = self._public_runtime_structured_result(item)
+                if nested:
+                    public[normalized_key] = nested
+        return public or None
 
     def _remove_remote_task_local_link(self, task_id: str) -> None:
         link = STATE.get_remote_task_link(task_id)
@@ -9802,6 +10075,21 @@ class RuntimeBridge:
             route_decision = metadata.get("routeDecision") or metadata.get("routingDecision")
         return dict(route_decision) if isinstance(route_decision, dict) else {}
 
+    def _remote_task_work_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        validation = validate_payload(payload)
+        return dict(validation.work_order) if validation.ok and isinstance(validation.work_order, dict) else {}
+
+    def _remote_task_work_order_summary(self, payload: dict[str, Any]) -> str:
+        work_order = self._remote_task_work_order(payload)
+        goal = work_order.get("goal")
+        goal = goal if isinstance(goal, dict) else {}
+        return self._truncate_text(goal.get("summary", "") or "", 1000)
+
+    def _remote_task_work_order_plan_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
+        work_order = self._remote_task_work_order(payload)
+        plan_preview = work_order.get("planPreview")
+        return dict(plan_preview) if isinstance(plan_preview, dict) else {}
+
     def _remote_task_capabilities(self, task: dict[str, Any], payload: dict[str, Any]) -> set[str]:
         route_decision = self._remote_task_route_decision(payload)
         raw = route_decision.get("capabilities")
@@ -9809,6 +10097,10 @@ class RuntimeBridge:
             raw = task.get("requestedCapabilities")
         if not isinstance(raw, list):
             raw = []
+        work_order = self._remote_task_work_order(payload)
+        required = work_order.get("requiredCapabilities")
+        if isinstance(required, list):
+            raw = [*raw, *required]
         return {_canonical_capability_name(item) for item in raw if str(item or "").strip()}
 
     def _remote_task_step_sources(self, task: dict[str, Any], route_decision: dict[str, Any]) -> list[Any]:
@@ -9822,6 +10114,7 @@ class RuntimeBridge:
             route_decision.get("planPreview") if isinstance(route_decision.get("planPreview"), dict) else None,
             route_decision.get("plan") if isinstance(route_decision.get("plan"), dict) else None,
             payload.get("planPreview") if isinstance(payload.get("planPreview"), dict) else None,
+            self._remote_task_work_order_plan_preview(payload),
             metadata.get("planPreview") if isinstance(metadata.get("planPreview"), dict) else None,
             task.get("planPreview") if isinstance(task.get("planPreview"), dict) else None,
         ):
@@ -10056,6 +10349,7 @@ class RuntimeBridge:
 
     def _remote_task_running_plan_preview(self, task: dict[str, Any], prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
         route_decision = self._remote_task_route_decision(payload)
+        work_order_preview = self._remote_task_work_order_plan_preview(payload)
         mobile_metadata = _map_from(payload.get("metadata") or {})
         mobile_desktop_required = bool(mobile_metadata.get("desktopRequired", False))
         route = str(route_decision.get("route", "") or "").strip()
@@ -10066,6 +10360,8 @@ class RuntimeBridge:
         has_explicit_steps = bool(self._remote_task_step_sources(task, route_decision))
         # When mobile signals desktopRequired, also try routing the prompt directly
         if not capabilities.intersection(REMOTE_DETERMINISTIC_CAPABILITIES) and not has_explicit_steps:
+            if work_order_preview:
+                return work_order_preview
             if mobile_desktop_required:
                 routed = route_text_to_tool(prompt)
                 if routed is not None:
@@ -10078,7 +10374,7 @@ class RuntimeBridge:
             return {}
         steps, plan_preview = self._remote_task_steps_from_route(task, prompt, capabilities, route_decision)
         if not steps:
-            return {}
+            return work_order_preview
         if not isinstance(plan_preview.get("agentPlan"), dict):
             plan_preview = {
                 **plan_preview,
@@ -10175,9 +10471,10 @@ class RuntimeBridge:
 
             payload_top = task.get("payload", {})
             payload_top = payload_top if isinstance(payload_top, dict) else {}
+            work_order_goal = self._remote_task_work_order_summary(payload_top)
             desktop_ctx = payload_top.get("desktopContext")
             desktop_ctx = desktop_ctx if isinstance(desktop_ctx, dict) else {}
-            natural_goal = str(desktop_ctx.get("naturalLanguageGoal", "") or "").strip() or prompt
+            natural_goal = work_order_goal or str(desktop_ctx.get("naturalLanguageGoal", "") or "").strip() or prompt
             topic = self._truncate_text(_research_topic_from_text(natural_goal), 120)
             recipients = self._remote_task_email_recipients(task, payload_top, natural_goal, decision)
             subject = f"{topic[:80]} hakkında notlar"
@@ -10294,9 +10591,10 @@ class RuntimeBridge:
         fallback_steps: list[dict[str, Any]] = []
         payload_fb = task.get("payload", {})
         payload_fb = payload_fb if isinstance(payload_fb, dict) else {}
+        work_order_goal_fb = self._remote_task_work_order_summary(payload_fb)
         desktop_ctx_fb = payload_fb.get("desktopContext")
         desktop_ctx_fb = desktop_ctx_fb if isinstance(desktop_ctx_fb, dict) else {}
-        natural_goal_fb = str(desktop_ctx_fb.get("naturalLanguageGoal", "") or "").strip() or prompt
+        natural_goal_fb = work_order_goal_fb or str(desktop_ctx_fb.get("naturalLanguageGoal", "") or "").strip() or prompt
         if "browser_control" in capabilities:
             import re as _re
             url_match_fb = _re.search(r"https?://\S+", natural_goal_fb)
@@ -10769,6 +11067,13 @@ class RuntimeBridge:
         return {_canonical_capability_name(item) for item in raw if str(item or "").strip()}
 
     def _runtime_task_preflight_error(self, task: dict[str, Any], payload: dict[str, Any]) -> dict[str, str] | None:
+        validation = validate_payload(payload)
+        if validation.errors:
+            first_error = validation.errors[0]
+            return {
+                "code": str(first_error.get("code", "WORK_ORDER_INVALID") or "WORK_ORDER_INVALID").lower(),
+                "message": "Görev verisi doğrulanamadı. İşlem güvenli şekilde durduruldu.",
+            }
         runtime = _map_from(STATE.snapshot().get("runtime"))
         runtime_device_id = str(runtime.get("deviceId", "") or "").strip()
         target_device_id = str(task.get("targetDeviceId", "") or "").strip()
@@ -10913,7 +11218,7 @@ class RuntimeBridge:
                     },
                 )
             elif capability == "local_models.status":
-                result = self.local_models_status()
+                result = self.local_models_status(probe_clients=True)
             elif capability == "local_models.list":
                 result = self.local_models_list()
             elif capability == "local_models.download":
@@ -11046,6 +11351,8 @@ class RuntimeBridge:
                 result = self.pairing_create_session(payload)
             elif capability == "pairing.claim_session":
                 result = self.pairing_claim_session(str(payload.get("sessionId", "") or payload.get("session_id", "") or ""), payload)
+            elif capability == "pairing.self_pair":
+                result = self.pairing_self_pair(payload)
             elif capability == "pairing.get_session":
                 result = self.pairing_get_session(str(payload.get("sessionId", "") or payload.get("session_id", "") or ""))
             elif capability in capability_names():
