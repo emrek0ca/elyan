@@ -416,6 +416,23 @@ Windows/Linux arayüzü; macOS target'ı YALNIZ geliştirme doğrulaması için
 6. Ekran operatörü (desktop_operator) Windows/Linux muadili — uzak dilim
    (helper mimarisi: pywinauto/AT-SPI adayları).
 
+## DMG öncesi güvenilirlik turu (2026-07-09, akşam)
+
+Kullanıcı raporu: "sunum hazırlanıyor" spinner'ı saatlerce takılı görünüyordu.
+Üç kök neden bulunup düzeltildi (commit: `fix(macos+runtime): takılı ...`):
+1. **ChatMessage == blocks.count vekili** yerinde blok güncellemesini (canlı
+   checklist tikleri, finalize) görmüyordu → `revision` sayacı eklendi; her
+   yerinde blok mutasyonu artırmalı (applyProgressBlock/finalizeChecklist/
+   completeStreaming/finishLocal yapıyor). YENİ yerinde blok mutasyonu
+   eklerken revision'ı artırmayı unutma.
+2. **Block-first render tuzağı**: mesajda blok varken `.text` çizilmez —
+   final metin text BLOĞU olarak eklenmeli (confirmPlan zaten yapıyordu;
+   completeStreaming/finishLocal'a da eklendi).
+3. **"araştırıp" (-ıp ulacı)** compound tetiklemiyordu; `_RESEARCH_CONVERB_RE`
+   ile bölünüyor. Yazıcı dosya adı araştırma konusundan türüyor.
+   `presentation_write._derive_slide_specs`: "N sayfalık" → N slayt (bulgular
+   dağıtılır + Kaynaklar kapanışı). Suite 536 passed.
+
 ## Bilinmesi gerekenler
 
 - Backend: `https://api.elyan.dev` (config/api_keys.json). Runtime durumu:
