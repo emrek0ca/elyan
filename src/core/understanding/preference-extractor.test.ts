@@ -88,6 +88,38 @@ test("extractPreferenceSignals reads mobile response style metadata safely", () 
   assert.ok(result.signals.some((signal) => signal.key === "humor_level" && signal.value === "light"));
 });
 
+test("extractPreferenceSignals captures explicit warm mature teaching response style", () => {
+  const result = extractPreferenceSignals({
+    userId: "user_1",
+    taskId: "task_style_1",
+    message:
+      "Elyan'ın cevapları her dilde daha doğal, samimi, sıcakkanlı, olgun, açıklayıcı ve öğretici olsun.",
+  });
+
+  assert.ok(
+    result.signals.some(
+      (signal) =>
+        signal.key === "response_style_preference" &&
+        signal.value === "warm_close_mature_teaching" &&
+        signal.metadata?.explicit === true &&
+        signal.metadata?.sourceTurnId === "task_style_1",
+    ),
+  );
+  assert.ok(result.signals.some((signal) => signal.key === "preferred_tone" && signal.value === "warm_close_mature"));
+  assert.ok(result.signals.some((signal) => signal.key === "explanation_style" && signal.value === "explanatory_teaching"));
+});
+
+test("extractPreferenceSignals does not persist one-off warm writing instructions as global style", () => {
+  const result = extractPreferenceSignals({
+    userId: "user_1",
+    message: "X için samimi ve sıcak bir tweet yaz.",
+    intent: "writing",
+  });
+
+  assert.equal(result.signals.some((signal) => signal.key === "response_style_preference"), false);
+  assert.equal(result.signals.some((signal) => signal.key === "preferred_tone"), false);
+});
+
 test("extractPreferenceSignals captures explicit identity facts with provenance metadata", () => {
   const result = extractPreferenceSignals({
     userId: "user_1",

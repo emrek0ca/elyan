@@ -132,6 +132,7 @@ function createFakeGoalsApp() {
 test("listAgentTools exposes the first server brain tools with permissions", () => {
   const tools = listAgentTools();
   assert.equal(tools.some((tool) => tool.name === "web.search" && tool.permission === "read"), true);
+  assert.equal(tools.some((tool) => tool.name === "web.fetch_url" && tool.permission === "read"), true);
   assert.equal(tools.some((tool) => tool.name === "memory.query" && tool.permission === "read"), true);
   assert.equal(tools.some((tool) => tool.name === "memory.write" && tool.permission === "write"), true);
   assert.equal(tools.some((tool) => tool.name === "goals.update" && tool.permission === "write"), true);
@@ -145,8 +146,45 @@ test("tool registry exposes timeout, idempotency and parallel safety", () => {
     idempotency: "read_only",
     parallelSafe: true,
   });
+  assert.deepEqual(getAgentToolMetadata("web.fetch_url"), {
+    name: "web.fetch_url",
+    permission: "read",
+    timeoutMs: 8_000,
+    idempotency: "read_only",
+    parallelSafe: true,
+  });
   assert.equal(getAgentToolMetadata("memory.write")?.parallelSafe, false);
   assert.equal(getAgentToolMetadata("memory.write")?.idempotency, "non_idempotent");
+});
+
+test("executeAgentTool can fetch URL context as a read-only tool", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      "Title: Tool URL\nURL: https://example.com/tool\n\nTool URL content with enough readable text for the fetch URL tool output contract.",
+      { status: 200 },
+    )) as typeof fetch;
+
+  try {
+    const result = await executeAgentTool(
+      { config: { JINA_READER_ENABLED: true } } as never,
+      {
+        userId: "user-1",
+        workload: "mobile_chat_fast",
+      },
+      {
+        tool: "web.fetch_url",
+        args: { url: "https://example.com/tool" },
+      },
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.permission, "read");
+    assert.equal(result.output?.source, "jina");
+    assert.equal(result.output?.sourceAuthority, "standard");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("executeAgentTool blocks write tools unless state-write policy is enabled", async () => {

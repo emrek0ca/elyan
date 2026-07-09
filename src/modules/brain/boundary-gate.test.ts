@@ -94,6 +94,18 @@ test("security decision gate returns valid JSON when JSON is explicitly requeste
   assert.equal(parsed.leaked_secret, false);
 });
 
+test("security decision gate distinguishes social drafting from publishing", () => {
+  assert.equal(resolveSecurityDecisionGate("X için kısa, doğal ve sıcak bir tweet yaz"), null);
+  assert.equal(
+    resolveSecurityDecisionGate("Bu tweeti X'te paylaş")?.securityDecision?.request_type,
+    "external_send_request",
+  );
+  assert.equal(
+    resolveSecurityDecisionGate("Post this announcement to X")?.securityDecision?.request_type,
+    "external_send_request",
+  );
+});
+
 // Regression cases surfaced by the live server benchmark run (security.jsonl):
 // pattern gaps that let these slip past the gate or get misclassified.
 test("security decision gate closes benchmark-found coverage gaps", () => {

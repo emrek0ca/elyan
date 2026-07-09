@@ -159,6 +159,66 @@ function isExplicitConciseCorrection(text: string): boolean {
   );
 }
 
+function isExplicitWarmTeachingStylePreference(text: string): boolean {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return false;
+  }
+  const styleWords =
+    /\b(doğal|dogal|samimi|sıcakkanlı|sicakkanli|yakın|yakin|olgun|açıklayıcı|aciklayici|öğretici|ogretici|natural|warm|warmer|personable|close|closer|mature|explanatory|teaching|teacherly)\b/iu;
+  const scopeWords =
+    /\b(cevap|yanıt|yanit|konuş|konus|üslup|uslup|ton|kişilik|kisilik|karakter|tarz|style|tone|personality|reply|response|answer|every language|all languages|her dil|elyan)\b/iu;
+  const directiveWords =
+    /\b(daha|biraz daha|olmasını|olmasini|sağla|sagla|geliştir|gelistir|istiyorum|tercih|should be|make it|be more|become|improve)\b/iu;
+  return styleWords.test(compact) && scopeWords.test(compact) && directiveWords.test(compact);
+}
+
+function buildWarmTeachingStyleSignals(input: {
+  taskId?: string;
+  source: "interaction" | "feedback";
+  reason: string;
+  confidence?: number;
+}): LearningSignal[] {
+  const metadata = {
+    explicit: true,
+    extractorVersion: STYLE_CORRECTION_EXTRACTOR_VERSION,
+    reason: input.reason,
+    ...(input.taskId ? { sourceTurnId: input.taskId } : {}),
+  };
+  return [
+    baseSignal({
+      type: "style",
+      key: "response_style_preference",
+      value: "warm_close_mature_teaching",
+      confidence: input.confidence ?? 0.9,
+      scope: "user",
+      source: input.source,
+      ttlDays: null,
+      metadata,
+    }),
+    baseSignal({
+      type: "style",
+      key: "preferred_tone",
+      value: "warm_close_mature",
+      confidence: input.confidence ?? 0.88,
+      scope: "user",
+      source: input.source,
+      ttlDays: null,
+      metadata,
+    }),
+    baseSignal({
+      type: "style",
+      key: "explanation_style",
+      value: "explanatory_teaching",
+      confidence: input.confidence ?? 0.86,
+      scope: "user",
+      source: input.source,
+      ttlDays: null,
+      metadata,
+    }),
+  ];
+}
+
 function buildExplicitConciseStyleSignals(input: {
   taskId?: string;
   source: "interaction" | "feedback";
@@ -288,6 +348,17 @@ export function extractPreferenceSignals(input: TaskUnderstandingInput & { inten
         taskId: input.taskId,
         source: "interaction",
         reason: "user_requested_shorter_replies",
+        confidence: 0.92,
+      }),
+    );
+  }
+
+  if (isExplicitWarmTeachingStylePreference(text)) {
+    signals.push(
+      ...buildWarmTeachingStyleSignals({
+        taskId: input.taskId,
+        source: "interaction",
+        reason: "user_requested_warm_close_mature_teaching_style",
         confidence: 0.92,
       }),
     );
@@ -493,7 +564,7 @@ export function extractPreferenceSignals(input: TaskUnderstandingInput & { inten
   }
 
   return {
-    signals: filterLearningSignals(signals).slice(0, 8),
+    signals: filterLearningSignals(signals).slice(0, 10),
   };
 }
 
@@ -650,7 +721,7 @@ export function extractFeedbackSignals(input: {
 
   const correction = input.correction?.replace(/\s+/g, " ").trim();
 
-  if (correction && /\b(shorter|longer|concise|detailed|turkish|english|kısa|detaylı|türkçe|ingilizce)\b/i.test(correction)) {
+  if (correction && /\b(shorter|longer|concise|detailed|turkish|english|warm|warmer|natural|personable|mature|teaching|explanatory|kısa|detaylı|türkçe|ingilizce|samimi|sıcakkanlı|sicakkanli|doğal|dogal|olgun|öğretici|ogretici|açıklayıcı|aciklayici)\b/i.test(correction)) {
     signals.push(
       baseSignal({
         type: "style",
@@ -670,6 +741,16 @@ export function extractFeedbackSignals(input: {
         source: "feedback",
         reason: "feedback_correction_requested_shorter_replies",
         confidence: 0.92,
+      }),
+    );
+  }
+  if (correction && isExplicitWarmTeachingStylePreference(correction)) {
+    signals.push(
+      ...buildWarmTeachingStyleSignals({
+        taskId: input.taskId,
+        source: "feedback",
+        reason: "feedback_requested_warm_close_mature_teaching_style",
+        confidence: 0.9,
       }),
     );
   }

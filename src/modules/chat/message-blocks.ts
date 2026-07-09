@@ -200,9 +200,68 @@ function normalizePriority(value: unknown): number | undefined {
     : undefined;
 }
 
+const internalRenderHintKeyPattern =
+  /(?:^|[_-])(?:analysis|reasoning|debug|trace|tool|metadata|prompt|system|developer|secret|token|password|credential|raw|internal)(?:$|[_-])/i;
+
+function normalizeBlockStableId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/[^\w:.-]+/g, "_").slice(0, 96);
+  return normalized.length >= 3 ? normalized : undefined;
+}
+
+function normalizeBlockCacheDigest(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return /^[a-f0-9]{8,64}$/.test(normalized) ? normalized : undefined;
+}
+
+function normalizeRenderHintValue(value: unknown, depth: number): unknown {
+  if (value === null || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string") {
+    const normalized = normalizeTextValue(value, 160);
+    return normalized ?? undefined;
+  }
+  if (Array.isArray(value)) {
+    if (depth >= 2) {
+      return undefined;
+    }
+    const items = value
+      .slice(0, 8)
+      .map((item) => normalizeRenderHintValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+    return items.length > 0 ? items : undefined;
+  }
+  if (!value || typeof value !== "object" || depth >= 2) {
+    return undefined;
+  }
+  const output: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>).slice(0, 16)) {
+    const normalizedKey = key.trim().replace(/[^\w.-]+/g, "_").slice(0, 48);
+    const policyKey = normalizedKey.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+    if (!normalizedKey || internalRenderHintKeyPattern.test(policyKey)) {
+      continue;
+    }
+    const normalizedValue = normalizeRenderHintValue(raw, depth + 1);
+    if (normalizedValue !== undefined) {
+      output[normalizedKey] = normalizedValue;
+    }
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
 function normalizeRenderHints(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? { ...(value as Record<string, unknown>) }
+  const normalized = normalizeRenderHintValue(value, 0);
+  return normalized && typeof normalized === "object" && !Array.isArray(normalized)
+    ? normalized as Record<string, unknown>
     : undefined;
 }
 
@@ -269,7 +328,7 @@ function withAssistantBlockDefaults<T extends Record<string, unknown>>(
   options: AssistantBlockCommon = {},
 ): T & Required<Pick<AssistantBlockCommon, "stableBlockId" | "visibility" | "cacheDigest">> & AssistantBlockCommon {
   const visibility = options.visibility ?? "user_visible";
-  const renderHints = options.renderHints ?? { sectionRole: type };
+  const renderHints = normalizeRenderHints(options.renderHints) ?? { sectionRole: type };
   const withMeta = {
     ...payload,
     renderHints,
@@ -277,9 +336,9 @@ function withAssistantBlockDefaults<T extends Record<string, unknown>>(
     ...(options.priority != null ? { priority: options.priority } : {}),
     visibility,
   };
-  const cacheDigest = options.cacheDigest ?? buildCacheDigest({ type, ...withMeta });
+  const cacheDigest = normalizeBlockCacheDigest(options.cacheDigest) ?? buildCacheDigest({ type, ...withMeta });
   const stableBlockId =
-    options.stableBlockId ?? `${type}_${cacheDigest}`;
+    normalizeBlockStableId(options.stableBlockId) ?? `${type}_${cacheDigest}`;
   return {
     ...withMeta,
     stableBlockId,
@@ -1726,17 +1785,11 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
     title,
     steps,
     ...withAssistantBlockDefaults("task_trace", {}, {
-      stableBlockId:
-        typeof value.stableBlockId === "string" && value.stableBlockId.trim()
-          ? value.stableBlockId.trim()
-          : undefined,
+      stableBlockId: normalizeBlockStableId(value.stableBlockId),
       visibility: normalizeVisibility(value.visibility),
       confidence: normalizeConfidence(value.confidence),
       priority: normalizePriority(value.priority),
-      cacheDigest:
-        typeof value.cacheDigest === "string" && value.cacheDigest.trim()
-          ? value.cacheDigest.trim()
-          : undefined,
+      cacheDigest: normalizeBlockCacheDigest(value.cacheDigest),
       renderHints: normalizeRenderHints(value.renderHints),
     }),
   };
@@ -1745,16 +1798,11 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
 function parseCommonMetadata(value: Record<string, unknown>): AssistantBlockCommon {
   return {
     stableBlockId:
-      typeof value.stableBlockId === "string" && value.stableBlockId.trim()
-        ? value.stableBlockId.trim()
-        : undefined,
+      normalizeBlockStableId(value.stableBlockId),
     visibility: normalizeVisibility(value.visibility),
     confidence: normalizeConfidence(value.confidence),
     priority: normalizePriority(value.priority),
-    cacheDigest:
-      typeof value.cacheDigest === "string" && value.cacheDigest.trim()
-        ? value.cacheDigest.trim()
-        : undefined,
+    cacheDigest: normalizeBlockCacheDigest(value.cacheDigest),
     renderHints: normalizeRenderHints(value.renderHints),
   };
 }
@@ -1792,11 +1840,11 @@ function stableBlockDedupeKey(block: AssistantMessageBlock): string {
     return contentKey;
   }
   const record = block as Record<string, unknown>;
-  const stableBlockId = typeof record.stableBlockId === "string" ? record.stableBlockId.trim() : "";
+  const stableBlockId = normalizeBlockStableId(record.stableBlockId) ?? "";
   if (stableBlockId) {
     return `${block.type}:id:${stableBlockId}`;
   }
-  const cacheDigest = typeof record.cacheDigest === "string" ? record.cacheDigest.trim() : "";
+  const cacheDigest = normalizeBlockCacheDigest(record.cacheDigest) ?? "";
   if (cacheDigest) {
     return `${block.type}:cache:${cacheDigest}`;
   }
@@ -2042,14 +2090,8 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
         visibility: normalizeVisibility(record.visibility) ?? "assistant_internal_by_default",
         confidence: normalizeConfidence(record.confidence),
         priority: normalizePriority(record.priority),
-        stableBlockId:
-          typeof record.stableBlockId === "string" && record.stableBlockId.trim()
-            ? record.stableBlockId.trim()
-            : undefined,
-        cacheDigest:
-          typeof record.cacheDigest === "string" && record.cacheDigest.trim()
-            ? record.cacheDigest.trim()
-            : undefined,
+        stableBlockId: normalizeBlockStableId(record.stableBlockId),
+        cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
         renderHints: normalizeRenderHints(record.renderHints) ?? {},
       }),
     };
@@ -2380,14 +2422,8 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
       visibility: normalizeVisibility(record.visibility),
       confidence: normalizeConfidence(record.confidence),
       priority: normalizePriority(record.priority),
-      stableBlockId:
-        typeof record.stableBlockId === "string" && record.stableBlockId.trim()
-          ? record.stableBlockId.trim()
-          : undefined,
-      cacheDigest:
-        typeof record.cacheDigest === "string" && record.cacheDigest.trim()
-          ? record.cacheDigest.trim()
-          : undefined,
+      stableBlockId: normalizeBlockStableId(record.stableBlockId),
+      cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
       renderHints: {
         sectionRole: "detail",
         ...(normalizeRenderHints(record.renderHints) ?? {}),
@@ -2655,6 +2691,10 @@ function parseAssistantBlocksWithSalvage(blocks: unknown): AssistantMessageBlock
   return output;
 }
 
+function isInternalOnlyPublicBlock(block: AssistantMessageBlock): boolean {
+  return ["task_trace", "security_decision", "reasoning_trace", "tool_trace"].includes(block.type);
+}
+
 function mergeAssistantBlocks(blocks: AssistantMessageBlock[]): AssistantMessageBlock[] {
   if (blocks.length === 0) {
     return [];
@@ -2769,6 +2809,9 @@ export function normalizeAssistantMessageBlocks(input: {
 }): AssistantMessageBlock[] {
   const normalizedBlocks = parseAssistantBlocksWithSalvage(input.blocks);
   if (normalizedBlocks.length > 0) {
+    if (normalizedBlocks.length === 1 && normalizedBlocks[0]?.type === "text") {
+      return normalizedBlocks;
+    }
     return dedupeAssistantBlocks(mergeAssistantBlocks(normalizedBlocks));
   }
   return buildAssistantMessageBlocks(input.content, {
@@ -2885,10 +2928,11 @@ export function shapeAssistantMessagePayload<
     content: typeof message.content === "string" ? message.content : "",
     streaming: String((message as Record<string, unknown>).status ?? "").trim().toLowerCase() === "running",
   });
+  const publicBlocks = blocks.filter((block) => !isInternalOnlyPublicBlock(block));
   const payload = { ...(message as Record<string, unknown>) };
   delete payload.content;
-  if (blocks.length > 0) {
-    payload.blocks = blocks;
+  if (publicBlocks.length > 0) {
+    payload.blocks = publicBlocks;
   } else {
     delete payload.blocks;
   }

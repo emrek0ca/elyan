@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { chatSessionSourceSchema, chatSessionStatusSchema } from "../../contracts/domain.js";
 import { hasRawBinaryUploadHint } from "../../lib/derived-data.js";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
 export const createChatSessionBodySchema = z.object({
   targetDeviceId: z.string().uuid().optional(),
   source: chatSessionSourceSchema.default("mobile"),
   title: z.string().trim().min(1).max(200).optional(),
-  metadata: z.record(z.any()).optional(),
+  metadata: boundedJsonRecordSchema.optional(),
 }).superRefine((input, ctx) => {
   if (hasRawBinaryUploadHint(input.metadata)) {
     ctx.addIssue({
@@ -44,7 +45,7 @@ export const createChatMessageBodySchema = z.object({
     .max(20)
     .transform((values) => [...new Set(values)])
     .default([]),
-  metadata: z.record(z.any()).optional(),
+  metadata: boundedJsonRecordSchema.optional(),
 })
   .superRefine((input, ctx) => {
     const content = input.content?.trim() || contentFromInputBlocks(input.blocks);

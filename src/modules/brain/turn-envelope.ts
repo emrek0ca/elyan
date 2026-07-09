@@ -2,6 +2,7 @@ import { z } from "zod";
 import { elyanAssistantBlockSchema } from "../../contracts/domain.js";
 import type { AssistantMessageBlock } from "../chat/message-blocks.js";
 import { agentPlanEnvelopeSchema } from "./agent-plan.js";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
 const turnEnvelopeReplySchema = z.object({
   text: z.string().default(""),
@@ -47,7 +48,7 @@ const followUpSchema = z.object({
 
 const toolRequestSchema = z.object({
   tool: z.string().trim().min(1).max(120),
-  args: z.record(z.string(), z.unknown()).default({}),
+  args: boundedJsonRecordSchema.default({}),
 });
 
 const affectSchema = z.object({

@@ -313,6 +313,34 @@ test("readServerBrainCompletionMetadata preserves web grounding metadata for all
     contextPacketCount: 5,
     contextPacketKinds: ["health_context", "calendar_context", "device_context"],
     healthContextUsed: true,
+    freshData: {
+      schemaVersion: "elyan.fresh_data.v1",
+      domain: "market",
+      status: "fresh",
+      freshnessRequired: true,
+      requestedAt: "2026-07-09T12:00:00.000Z",
+      retrievedAt: "2026-07-09T12:00:00.000Z",
+      freshUntil: "2026-07-09T12:00:30.000Z",
+      staleUntil: "2026-07-09T12:02:30.000Z",
+      ageMs: 0,
+      cache: { state: "miss", shared: false },
+      evidence: {
+        sourceCount: 2,
+        freshSourceCount: 2,
+        verifiedSourceCount: 2,
+        freshVerifiedSourceCount: 2,
+        datedSourceCount: 0,
+        freshDatedSourceCount: 0,
+        independentHostCount: 2,
+        minimumSources: 2,
+        minimumVerifiedSources: 2,
+        minimumDatedSources: 0,
+        numericCorroborated: true,
+        sufficient: true,
+      },
+      reasons: ["fresh"],
+      extraInternalField: "drop-me",
+    },
     blocks: [{ type: "context_signal", title: "Web kaynakları" }],
   });
 
@@ -322,6 +350,11 @@ test("readServerBrainCompletionMetadata preserves web grounding metadata for all
   assert.equal(metadata.webSourceCount, 4);
   assert.equal(metadata.responseBudgetReason, "long_form_expanded");
   assert.equal(metadata.contextPacketCount, 5);
+  assert.equal(metadata.freshDataDomain, "market");
+  assert.equal(metadata.freshDataStatus, "fresh");
+  assert.equal(metadata.freshDataEvidenceSufficient, true);
+  assert.ok(metadata.freshData);
+  assert.equal((metadata.freshData as Record<string, unknown>).extraInternalField, undefined);
   assert.deepEqual(metadata.contextPacketKinds, [
     "health_context",
     "calendar_context",
@@ -329,6 +362,19 @@ test("readServerBrainCompletionMetadata preserves web grounding metadata for all
   ]);
   assert.equal(metadata.healthContextUsed, true);
   assert.deepEqual(metadata.assistantBlocks, [{ type: "context_signal", title: "Web kaynakları" }]);
+});
+
+test("readServerBrainCompletionMetadata rejects invalid fresh-data scalar metadata", () => {
+  const metadata = readServerBrainCompletionMetadata({
+    freshDataDomain: "not-a-domain",
+    freshDataStatus: "not-a-status",
+    freshDataEvidenceSufficient: true,
+  });
+
+  assert.equal(metadata.freshData, null);
+  assert.equal(metadata.freshDataDomain, null);
+  assert.equal(metadata.freshDataStatus, null);
+  assert.equal(metadata.freshDataEvidenceSufficient, true);
 });
 
 test("reconcileStaleRuntimeTasks returns old active desktop tasks to the queue when runtime is unavailable", async () => {

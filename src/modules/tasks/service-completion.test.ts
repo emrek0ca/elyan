@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   resolveCompletionAssistantBlocks,
+  resolveNonEchoAssistantText,
   resolveVisibleAssistantResponse,
+  stripPromptEchoFromAssistantText,
 } from "./service.js";
 
 test("resolveCompletionAssistantBlocks promotes markdown tables into typed table blocks", () => {
@@ -204,4 +206,24 @@ test("resolveCompletionAssistantBlocks deduplicates repeated typed blocks", () =
 
   const blocks = result.blocks as Array<Record<string, unknown>>;
   assert.equal(blocks.filter((block) => block.type === "table").length, 1);
+});
+
+test("stripPromptEchoFromAssistantText removes prompt-only assistant output", () => {
+  assert.equal(
+    stripPromptEchoFromAssistantText({
+      prompt: "Bana çok bilinmeyen en garip hayvan ismini söyle",
+      responseText: "Bana çok bilinmeyen en garip hayvan ismini söyle",
+    }),
+    "",
+  );
+});
+
+test("resolveNonEchoAssistantText recovers animal-name prompt echoes with a real answer", () => {
+  const answer = resolveNonEchoAssistantText({
+    prompt: "Bana çok bilinmeyen en garip hayvan ismini söyle",
+    responseText: "Bana çok bilinmeyen en garip hayvan ismini söyle",
+  });
+
+  assert.match(answer, /Yıldız burunlu köstebek/u);
+  assert.doesNotMatch(answer, /^Bana çok bilinmeyen/u);
 });

@@ -10,12 +10,17 @@ import {
   recordCircuitSuccess,
 } from "../../lib/reliability/circuit-breaker.js";
 import type { ReliabilityStore } from "../../lib/reliability/redis.js";
+import {
+  assertMonthlyImageGenerationAllowed,
+  recordImageGenerationUsage,
+} from "../billing/usage-ledger.js";
 
 type HostedImageArtifactInput = {
   prompt: string;
   responseText: string;
   metadata?: Record<string, unknown>;
   userId?: string;
+  taskId?: string;
 };
 
 // ── Çoklu-kullanıcı dayanıklılık ayarları ─────────────────────────────────
@@ -46,12 +51,31 @@ const IMAGE_CACHE_MAX_BASE64_LENGTH = 1_800_000; // ~1.3MB görsel; daha büyü�
 const IMAGE_SINGLEFLIGHT_LOCK_TTL_MS = 75_000;
 const IMAGE_SINGLEFLIGHT_WAIT_MS = 12_000;
 const IMAGE_SINGLEFLIGHT_POLL_MS = 300;
+// Kısa pencere rate limit: günlük kota maliyeti kontrol eder, bu katman ise
+// ani trafik patlamalarında provider ve CPU yükünü yumuşatır. Cache hit'ler
+// bu sayacı tüketmez.
+const IMAGE_RATE_LIMIT_WINDOW_MS = 5 * 60_000;
+const IMAGE_RATE_LIMIT_GLOBAL_WINDOW_MS = 60_000;
+const IMAGE_RATE_LIMIT_GLOBAL_MAX = 24;
+
+const IMAGE_RATE_LIMITS_BY_PLAN: Record<string, number> = {
+  free: 2,
+  solo: 5,
+  pro: 8,
+};
 
 type CachedImagePayload = {
   base64: string;
   mimeType: string;
   revisedPrompt: string | null;
   model: string;
+};
+
+type ImageGenerationUsageAllowance = {
+  planCode: string;
+  limit: number;
+  used: number;
+  remaining: number;
 };
 
 function resolveReliabilityStore(app: FastifyInstance): ReliabilityStore | null {
@@ -113,6 +137,22 @@ const NON_CREATIVE_EXPORT_PATTERNS = [
   /\b(ver|çevir|cevir|dönüştür|donustur|kaydet)\b.*\b(png|jpg|jpeg|webp)\b/i,
 ];
 
+// "Grafiğini çiz", "fonksiyonun grafiği", "plot the function" gibi istekler
+// GÖRSEL ÜRETİMİ DEĞİL, matematiksel/veri grafiği (chart/math bloğu) ister.
+// "çiz/draw" fiili tek başına görsel üretimini tetiklediği için ("grafiğini
+// ÇİZ" → stok fotoğraf), veri-görselleştirme sinyali varsa hosted image
+// tamamen devre dışı bırakılır ve karar akıllı inference'a (chart pipeline)
+// bırakılır. Sanatsal "grafik tasarım/afiş" istekleri "tasarım/afiş" gibi
+// yaratıcı kelimelerle zaten ayrışır; burada yalnızca veri/matematik
+// grafiği sinyalleri yakalanır.
+const DATA_VISUALIZATION_REQUEST_PATTERNS = [
+  /\bgrafi(k|ğ|g)\w*\b/i, // grafik, grafiği, grafiğini, grafikte
+  /\b(plot|chart|diagram|diyagram|histogram|scatter|dağılım grafiği|dagilim grafigi)\b/i,
+  /\b(fonksiyon|denklem|polinom|parabol|integral|türev|turev|eğri|egri|koordinat|eksen)\w*\b.{0,40}\b(çiz|ciz|göster|goster|plot|grafik)\b/i,
+  /\b(çiz|ciz|göster|goster|plot|grafik)\b.{0,40}\b(fonksiyon|denklem|polinom|parabol|integral|türev|turev|eğri|egri|koordinat|eksen)\w*\b/i,
+  /\bf\s*\(\s*x\s*\)/i, // f(x) = ... ifadesinin grafiği
+];
+
 // Pro model SADECE açık, pahalıyı hak eden taleplerde denenir. Eski liste
 // ("detaylı", "gerçekçi", "afiş", "kapak"...) neredeyse her yaratıcı istemi
 // premium'a yükseltiyordu — tek görsel ~10 TL'ye çıkıyordu. Genel kelimeler
@@ -167,6 +207,11 @@ function shouldGenerateHostedImage(prompt: string): boolean {
     return false;
   }
   if (NON_CREATIVE_EXPORT_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+  // Veri/matematik grafiği istekleri hosted image'a ASLA gitmez — chart/math
+  // pipeline'ına bırakılır (aksi halde "grafiğini çiz" stok fotoğraf üretir).
+  if (DATA_VISUALIZATION_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return false;
   }
   return CREATIVE_IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
@@ -347,6 +392,140 @@ async function writeCachedImage(
   await store.set(cacheKey, JSON.stringify(payload), IMAGE_CACHE_TTL_MS).catch(() => undefined);
 }
 
+function setImageGenerationBlockReason(
+  metadata: Record<string, unknown> | undefined,
+  reason: string,
+  details: Record<string, unknown> = {},
+): void {
+  if (!metadata) {
+    return;
+  }
+  metadata.imageGenerationBlockedReason = reason;
+  metadata.imageGenerationBlockedDetails = details;
+}
+
+function resolveImageRateLimitForPlan(planCode?: string | null): number {
+  const normalized = String(planCode || "free").trim().toLowerCase();
+  return IMAGE_RATE_LIMITS_BY_PLAN[normalized] ?? IMAGE_RATE_LIMITS_BY_PLAN.free;
+}
+
+async function consumeImageGenerationRateLimit(
+  app: FastifyInstance,
+  input: HostedImageArtifactInput,
+  allowance: ImageGenerationUsageAllowance | "blocked" | null,
+): Promise<boolean> {
+  const store = resolveReliabilityStore(app);
+  if (!store) {
+    return true;
+  }
+
+  const planCode =
+    allowance && allowance !== "blocked" && allowance.planCode
+      ? allowance.planCode
+      : "free";
+  const perUserLimit = resolveImageRateLimitForPlan(planCode);
+  const userKey = input.userId
+    ? `rate:image:user:${input.userId}:${planCode}`
+    : "rate:image:user:anonymous";
+  const globalKey = "rate:image:global";
+
+  const [userCount, globalCount] = await Promise.all([
+    store.increment(userKey, IMAGE_RATE_LIMIT_WINDOW_MS),
+    store.increment(globalKey, IMAGE_RATE_LIMIT_GLOBAL_WINDOW_MS),
+  ]);
+
+  if (userCount > perUserLimit || globalCount > IMAGE_RATE_LIMIT_GLOBAL_MAX) {
+    setImageGenerationBlockReason(input.metadata, "image_generation_rate_limited", {
+      planCode,
+      limit: perUserLimit,
+      windowSeconds: Math.ceil(IMAGE_RATE_LIMIT_WINDOW_MS / 1000),
+      retryAfterSeconds: userCount > perUserLimit ? 60 : 10,
+      globalLimited: globalCount > IMAGE_RATE_LIMIT_GLOBAL_MAX,
+    });
+    app.log.warn(
+      {
+        userId: input.userId,
+        planCode,
+        userCount,
+        userLimit: perUserLimit,
+        globalCount,
+        globalLimit: IMAGE_RATE_LIMIT_GLOBAL_MAX,
+      },
+      "hosted image generation rate limited",
+    );
+    return false;
+  }
+
+  return true;
+}
+
+async function assertImageGenerationPlanAllowance(
+  app: FastifyInstance,
+  input: HostedImageArtifactInput,
+): Promise<ImageGenerationUsageAllowance | "blocked" | null> {
+  if (!input.userId || !("db" in app) || !app.db) {
+    return null;
+  }
+  try {
+    const summary = await assertMonthlyImageGenerationAllowed(app.db, input.userId);
+    return {
+      planCode: summary.planCode,
+      limit: summary.imageGenerationUsage.limit,
+      used: summary.imageGenerationUsage.used,
+      remaining: summary.imageGenerationUsage.remaining,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "image_generation_limit_reached") {
+      const details =
+        error && typeof error === "object" && "details" in error
+          ? (error as { details?: unknown }).details
+          : null;
+      setImageGenerationBlockReason(
+        input.metadata,
+        "image_generation_limit_reached",
+        details && typeof details === "object" && !Array.isArray(details)
+          ? (details as Record<string, unknown>)
+          : {},
+      );
+      app.log.warn(
+        {
+          userId: input.userId,
+          reason: "image_generation_limit_reached",
+        },
+        "hosted image generation blocked by plan quota",
+      );
+      return "blocked";
+    }
+    throw error;
+  }
+}
+
+async function recordSuccessfulImageGenerationUsage(
+  app: FastifyInstance,
+  input: HostedImageArtifactInput,
+  allowance: ImageGenerationUsageAllowance | "blocked" | null,
+): Promise<void> {
+  if (!input.userId || !("db" in app) || !app.db || allowance === "blocked") {
+    return;
+  }
+  await recordImageGenerationUsage(app.db, {
+    userId: input.userId,
+    taskId: input.taskId ?? null,
+    planCode:
+      allowance?.planCode === "solo" || allowance?.planCode === "pro"
+        ? allowance.planCode
+        : "free",
+    limit: allowance?.limit ?? null,
+    usedBefore: allowance?.used ?? null,
+  }).catch((error) => {
+    app.log.warn(
+      { err: error, userId: input.userId },
+      "hosted image generation usage record failed",
+    );
+  });
+}
+
 export async function maybeGenerateHostedImageArtifact(
   app: FastifyInstance,
   input: HostedImageArtifactInput,
@@ -360,6 +539,11 @@ export async function maybeGenerateHostedImageArtifact(
     return null;
   }
 
+  const allowance = await assertImageGenerationPlanAllowance(app, input);
+  if (allowance === "blocked") {
+    return null;
+  }
+
   const store = resolveReliabilityStore(app);
   const cacheKey = imageCacheKey(
     input.prompt,
@@ -370,6 +554,7 @@ export async function maybeGenerateHostedImageArtifact(
   // 1) Önbellek: aynı istem yakın zamanda üretildiyse dış çağrı yok.
   const cached = await readCachedImage(store, cacheKey, input.prompt);
   if (cached) {
+    await recordSuccessfulImageGenerationUsage(app, input, allowance);
     return cached;
   }
 
@@ -385,10 +570,19 @@ export async function maybeGenerateHostedImageArtifact(
     if (!holdsLock) {
       const shared = await waitForSharedImage(store, cacheKey, input.prompt);
       if (shared) {
+        await recordSuccessfulImageGenerationUsage(app, input, allowance);
         return shared;
       }
       // Kilit sahibi başarısız olmuş olabilir — yine de üretmeyi dene.
     }
+  }
+
+  const rateLimitAllowed = await consumeImageGenerationRateLimit(app, input, allowance);
+  if (!rateLimitAllowed) {
+    if (store && holdsLock) {
+      await store.releaseLock(lockKey, lockOwner).catch(() => undefined);
+    }
+    return null;
   }
 
   // 3) Kullanıcı başına adil eşzamanlılık: bir kullanıcı tüm slotları yiyemez.
@@ -439,6 +633,7 @@ export async function maybeGenerateHostedImageArtifact(
     const result = await generateHostedImageArtifactWithPermit(app, input, providers);
     if (result) {
       await writeCachedImage(store, cacheKey, result);
+      await recordSuccessfulImageGenerationUsage(app, input, allowance);
     }
     return result;
   } finally {

@@ -6,6 +6,7 @@ import { isMateriallyAmbiguousUserPrompt, isShortFollowUpPrompt, isSocialChatPro
 import { normalizePlanBrainProfile, type PlanBrainProfile } from "../billing/catalog.js";
 import type { SharedBrainWorkload } from "../brain/workloads.js";
 import { generateSharedBrainReply } from "../brain/inference.js";
+import { responsePolicyForPrompt } from "../brain/response-policy.js";
 import { getSharedBrainTargetDevice, getUserDevice, listUserDevices } from "../devices/service.js";
 import {
   assertOwnedDesktopTaskTarget,
@@ -709,6 +710,12 @@ export function isSystemsProgrammingMessage(message: string): boolean {
   return SYSTEMS_PROGRAMMING_PATTERN.test(message);
 }
 
+function isReferentialRewritePrompt(message: string): boolean {
+  return /(?<!\p{L})(onu|bunu|şunu|sunu|it|this|that)\p{L}*[\s\S]{0,80}(daha\s+(?:k[ıi]sa|uzun|net|sade)|ayn[ıi]\s+anlam|same meaning|yeniden yaz|tekrar yaz|rewrite|paraphrase)(?!\p{L})/iu.test(
+    message,
+  );
+}
+
 function deriveSelectedWorkload(input: {
   route: CommandRoute;
   intent: NormalizedCommandIntent;
@@ -720,6 +727,7 @@ function deriveSelectedWorkload(input: {
   if (input.route === "desktop_runtime" || input.route === "pairing_required" || input.route === "unavailable") {
     return "desktop_handoff";
   }
+  const responsePolicy = responsePolicyForPrompt(input.message);
   // Structured workload rules live in a data-backed policy table so examples
   // can become fixtures instead of hidden routing branches.
   const prePlanningPolicyWorkload = selectPolicyWorkload(input.message, { phase: "pre_planning" });
@@ -748,6 +756,14 @@ function deriveSelectedWorkload(input: {
   if (isSystemsProgrammingMessage(input.message)) {
     return "mobile_chat_balanced";
   }
+  if (
+    !responsePolicy.requestedLongForm &&
+    !isShortFollowUpPrompt(input.message) &&
+    !isReferentialRewritePrompt(input.message) &&
+    ["casual_chat", "creative_answer", "writing", "image_generation"].includes(responsePolicy.intent)
+  ) {
+    return "mobile_chat_fast";
+  }
   const hybrid = selectHybridMobileChatWorkload({
     message: input.message,
     primaryIntent: input.primaryIntent,
@@ -760,11 +776,12 @@ function deriveSelectedWorkload(input: {
   // çok daha iyi taşıyor. Selamlaşma/small-talk muaf.
   if (
     hybrid === "mobile_chat_fast" &&
-    !isSocialChatPrompt(input.message) &&
-    (input.intent === "ambiguous_request" ||
-      input.confidence < 0.5 ||
-      isShortFollowUpPrompt(input.message))
-  ) {
+	    !isSocialChatPrompt(input.message) &&
+	    (input.intent === "ambiguous_request" ||
+	      input.confidence < 0.5 ||
+	      isShortFollowUpPrompt(input.message) ||
+	      isReferentialRewritePrompt(input.message))
+	  ) {
     return "mobile_chat_balanced";
   }
   return hybrid;

@@ -6,6 +6,7 @@ import { getCircuitState } from "../../lib/reliability/circuit-breaker.js";
 import { ReliabilityStore } from "../../lib/reliability/redis.js";
 import {
   calculateBillableAiCredits,
+  buildContextualWebGroundingPrompt,
   computeStreamVisibleText,
   createDeltaPublisher,
   extractAntiRepeatSignatures,
@@ -26,7 +27,40 @@ import {
   resolveGenerationTemperature,
   resolveReasoningEffort,
   shouldUseLegacyMemoryPrompt,
+  shouldUseResponseCache,
 } from "./inference.js";
+
+test("contextual web grounding carries only volatile entity keys into short follow-ups", () => {
+  const prompt = buildContextualWebGroundingPrompt({
+    prompt: "Peki dün?",
+    workload: "mobile_chat_balanced",
+    understandingContext: {
+      continuitySummary: {
+        userGoal: "Kullanıcı güncel gram altın fiyatını karşılaştırıyor.",
+        assistantState: "Son turda altın için canlı kaynaklar incelendi.",
+        openLoops: [],
+      },
+    },
+  } as never);
+
+  assert.equal(prompt, "altın Peki dün?");
+  assert.doesNotMatch(prompt, /Kullanıcı|canlı kaynaklar/u);
+});
+
+test("response cache never stores current-data answers", () => {
+  assert.equal(
+    shouldUseResponseCache({
+      prompt: "Bugünkü gram altın fiyatı kaç TL?",
+      routeDecision: {
+        route: "server_brain",
+        privacyClass: "public_text",
+        shouldAskClarification: false,
+      },
+      conversation: [],
+    } as never, "mobile_chat_fast"),
+    false,
+  );
+});
 
 test("legacy memory prompt remains selected when structured user model is disabled", () => {
   assert.equal(shouldUseLegacyMemoryPrompt(undefined), true);
@@ -2110,10 +2144,10 @@ test("generateSharedBrainReply uses web grounding for short research prompts", a
       }),
   );
 
-  assert.equal(result.text, "Güncel bilgiyle yanıt.");
+  assert.equal(result.text, "I couldn't establish this from enough current sources right now.");
   assert.equal(requestedPaths.some((path) => path.includes("duckduckgo.com/html")), true);
   assert.equal(result.metadata.webGroundingUsed, true);
-  assert.equal(result.metadata.webGroundingConfidence === "high" || result.metadata.webGroundingConfidence === "medium", true);
+  assert.equal(result.metadata.webGroundingConfidence, "low");
   assert.equal(Array.isArray(result.metadata.webGroundingQueries), true);
   assert.equal(Array.isArray(result.metadata.webSources), true);
   assert.equal((result.metadata.webSources as Array<Record<string, unknown>>)[0]?.url, "https://example.com/apple-news");
@@ -2966,8 +3000,8 @@ test("generateGovernedSharedBrainReply does not force clarification for greeting
       }),
   );
 
-  assert.equal(result.answerSource, "model");
-  assert.equal(result.text.includes("yardımcı"), true);
+  assert.equal(result.answerSource, "backend_gate");
+  assert.equal(result.text.includes("buradayım"), true);
 });
 
 test("generateGovernedSharedBrainReply serves cheap social turns without a provider call when cost guard is enabled", async () => {
@@ -3301,6 +3335,89 @@ test("generateGovernedSharedBrainReply runs factuality gate before publishing un
   assert.equal(result.metadata.factualityGateApplied, true);
   assert.doesNotMatch(result.text, /2030'da 50 milyon USD gelir/);
   assert.match(result.text, /dogrulayamiyorum|doğrulayamıyorum/i);
+});
+
+test("generateGovernedSharedBrainReply does not factuality-rewrite creative naming answers", async () => {
+  const app = {
+    db: createQuotaReadyDb([
+      [],
+      [],
+      [{ planCode: "free", status: "trialing", taskLimitMonthly: 10, aiCreditsMonthly: 1000, currentPeriodStartedAt: new Date("2030-01-01T00:00:00.000Z"), periodEndsAt: new Date("2030-02-01T00:00:00.000Z"), trialEndsAt: new Date("2099-02-01T00:00:00.000Z") }],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [],
+    ]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "ollama",
+      ELYAN_SHARED_BRAIN_BASE_URL: "http://127.0.0.1:11434",
+      ELYAN_SHARED_BRAIN_MODEL: "qwen2.5:7b-instruct-q5_K_M",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/tags")) {
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/chat")) {
+        return new Response(
+          JSON.stringify({
+            model: "qwen2.5:7b-instruct-q5_K_M",
+            message: {
+              role: "assistant",
+              content: "Bence en değişik hayvan ismi: Aksolotl.",
+            },
+            done: true,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "en değişik hayvan ismi söyle",
+        route: "shared_brain",
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "creative naming",
+          intent: "normal_chat",
+          confidence: 0.9,
+          requiredRuntime: "server",
+          privacyLevel: "low",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
+        internalEvaluation: { skipReviewLogging: true, skipUsageValidation: true, skipConsentValidation: true },
+      }),
+  );
+
+  assert.match(result.text, /Aksolotl/i);
+  assert.equal(result.metadata.factualityGateTriggered, undefined);
+  assert.doesNotMatch(result.text, /kanıt|kanit|doğrulayamıyorum|dogrulayamiyorum/i);
 });
 
 test("generateGovernedSharedBrainReply refuses unsupported identity claims without retrieval", async () => {

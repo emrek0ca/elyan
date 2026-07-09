@@ -7,8 +7,8 @@ import type {
   UnderstandingIntent,
 } from "./types.js";
 
-const MAX_PACKETS = 8;
-const MAX_PACKET_SUMMARY_CHARS = 280;
+const MAX_PACKETS = 10;
+const MAX_PACKET_SUMMARY_CHARS = 360;
 const HEALTH_CONTEXT_TTL_HOURS = 24;
 const CALENDAR_CONTEXT_TTL_HOURS = 18;
 const DEVICE_CONTEXT_TTL_HOURS = 6;
@@ -147,18 +147,10 @@ const NOTIFICATION_RELEVANCE_PATTERN =
   /\b(bildirim|notification|dikkat|attention|rahatsız|rahatsiz|odak|focus|sessiz|silent|acil|urgent|öncelik|oncelik)\b/i;
 const ADAPTIVE_WORK_PATTERN =
   /\b(plan|planla|planning|program|schedule|bugün|bugun|yarın|yarin|task|görev|gorev|workflow|routine|rutin|araştır|arastir|research|debug|kod|code|odak|focus|hazırla|hazirla|çıkar|cikar|optimize|iyileştir|iyilestir|prepare)\b/i;
-const WORK_INTENTS = new Set<UnderstandingIntent>([
-  "automation",
-  "browser",
-  "coding",
-  "computer",
-  "debugging",
-  "document",
-  "math",
-  "research",
-  "writing",
-]);
-
+const EDUCATIONAL_HELP_PATTERN =
+  /\b(açıkla|acikla|anlat|öğret|ogret|explain|teach|öğren|ogren|learn|ders|lesson|adım adım|step by step|rehber|guide)\b/i;
+const CASUAL_OR_CREATIVE_ONLY_PATTERN =
+  /\b(sohbet|chat|şaka|saka|joke|şiir|siir|poem|tweet|caption|başlık|baslik|isim söyle|name one|yaratıcı|creative|garip|weird|hayvan|animal)\b/i;
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -211,6 +203,12 @@ function resolveMentionPolicy(input: {
   const message = normalizeText(input.message);
   const intent = input.intent ?? "unknown";
   const isGreeting = GREETING_PATTERN.test(message);
+  const isCasualOrCreativeOnly =
+    (intent === "chat" || intent === "writing" || intent === "image") &&
+    CASUAL_OR_CREATIVE_ONLY_PATTERN.test(message) &&
+    !ADAPTIVE_WORK_PATTERN.test(message) &&
+    !SCHEDULE_RELEVANCE_PATTERN.test(message) &&
+    !LOCATION_RELEVANCE_PATTERN.test(message);
   if (!message || isGreeting) {
     return {
       mentionPolicy: "silent",
@@ -230,9 +228,17 @@ function resolveMentionPolicy(input: {
     };
   }
 
+  if (isCasualOrCreativeOnly) {
+    return {
+      mentionPolicy: "silent",
+      relevanceReason: "casual_or_creative_request_no_live_context_needed",
+      allowedUse: ["do not mention this context"],
+    };
+  }
+
   if (input.packetKind === "health_context") {
     const explicit = HEALTH_RELEVANCE_PATTERN.test(message);
-    const implicit = intent === "planning" || intent === "writing";
+    const implicit = intent === "planning" || (ADAPTIVE_WORK_PATTERN.test(message) && !EDUCATIONAL_HELP_PATTERN.test(message));
     return {
       mentionPolicy: explicit ? "explicit_when_relevant" : implicit ? "implicit" : "silent",
       relevanceReason: explicit
@@ -259,31 +265,58 @@ function resolveMentionPolicy(input: {
 
   if (input.packetKind === "calendar_context") {
     const explicit = SCHEDULE_RELEVANCE_PATTERN.test(message) || intent === "planning";
+    const implicit =
+      !explicit &&
+      (intent === "coding" ||
+        intent === "debugging" ||
+        intent === "document" ||
+        intent === "research" ||
+        intent === "automation" ||
+        ADAPTIVE_WORK_PATTERN.test(message));
     return {
-      mentionPolicy: explicit ? "explicit_when_relevant" : "implicit",
-      relevanceReason: explicit ? "schedule_or_planning_request" : "time_context_for_pacing_only",
+      mentionPolicy: explicit ? "explicit_when_relevant" : implicit ? "implicit" : "silent",
+      relevanceReason: explicit
+        ? "schedule_or_planning_request"
+        : implicit
+          ? "calendar_context_for_work_pacing_only"
+          : "calendar_context_not_requested",
       allowedUse: explicit
         ? ["schedule-aware planning", "timing suggestions", "do not expose private event details"]
-        : ["adjust brevity and timing without naming the context"],
+        : implicit
+          ? ["adjust brevity and timing without naming the context"]
+          : ["do not mention calendar context"],
     };
   }
 
   if (input.packetKind === "time_context") {
     const explicit =
       SCHEDULE_RELEVANCE_PATTERN.test(message) ||
-      intent === "planning" ||
-      WORK_INTENTS.has(intent) ||
-      ADAPTIVE_WORK_PATTERN.test(message);
+      intent === "planning";
+    const implicit =
+      !explicit &&
+      (intent === "coding" ||
+        intent === "debugging" ||
+        intent === "document" ||
+        intent === "research" ||
+        intent === "automation" ||
+        intent === "math" ||
+        ADAPTIVE_WORK_PATTERN.test(message));
     return {
-      mentionPolicy: explicit ? "explicit_when_relevant" : "implicit",
-      relevanceReason: explicit ? "time_aware_work_or_schedule_request" : "time_context_for_pacing_only",
+      mentionPolicy: explicit ? "explicit_when_relevant" : implicit ? "implicit" : "silent",
+      relevanceReason: explicit
+        ? "time_aware_work_or_schedule_request"
+        : implicit
+          ? "time_context_for_work_pacing_only"
+          : "time_context_not_requested",
       allowedUse: explicit
         ? [
             "time-aware framing",
             "schedule-aware planning",
             "suggest shorter path during late or busy windows",
           ]
-        : ["adjust brevity and timing without naming the context"],
+        : implicit
+          ? ["adjust brevity and timing without naming the context"]
+          : ["do not mention time context"],
     };
   }
 
@@ -328,6 +361,17 @@ function resolveMentionPolicy(input: {
     relevanceReason: "context_not_requested",
     allowedUse: ["do not mention this context"],
   };
+}
+
+function mentionPriority(packet: ContextPacket): number {
+  switch (packet.mentionPolicy) {
+    case "explicit_when_relevant":
+      return 0;
+    case "implicit":
+      return 1;
+    default:
+      return 2;
+  }
 }
 
 function withUsageGuidance(
@@ -647,7 +691,10 @@ function buildWorldPacket(signal: Record<string, unknown>, now: Date): ContextPa
   if (freshness === "stale") {
     return null;
   }
-  const summary = clipCompactText(readString(signal, "summary") ?? "", MAX_PACKET_SUMMARY_CHARS);
+  const summary = clipCompactText(
+    scrubDerivedSummary(readString(signal, "summary") ?? "", `${kind}_signal=recent`),
+    MAX_PACKET_SUMMARY_CHARS,
+  );
   if (!summary) {
     return null;
   }
@@ -749,15 +796,22 @@ export function buildContextPacketsFromMetadata(
                 })
                 : buildWorldPacket(signal, now);
     if (packet) {
-      packets.push(withUsageGuidance(packet, options));
+      const guided = withUsageGuidance(packet, options);
+      if (!options.requestText?.trim() || guided.mentionPolicy !== "silent") {
+        packets.push(guided);
+      }
     }
   }
 
   return packets
     .sort((left, right) => {
+      const priorityDelta = mentionPriority(left) - mentionPriority(right);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
       const leftDate = parseDate(left.createdAt)?.getTime() ?? 0;
       const rightDate = parseDate(right.createdAt)?.getTime() ?? 0;
-      return rightDate - leftDate;
+      return rightDate - leftDate || right.confidence - left.confidence;
     })
     .slice(0, MAX_PACKETS);
 }

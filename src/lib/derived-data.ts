@@ -58,6 +58,7 @@ const heavyDerivedDiagnosticKeys = new Set([
   "textlines",
   "visionlines",
 ]);
+const unsafeJsonObjectKeys = new Set(["__proto__", "constructor", "prototype"]);
 
 function normalizeKey(key: string): string {
   return key.trim().toLowerCase().replace(/[\s._-]+/g, "");
@@ -97,6 +98,9 @@ function sanitizeDerivedValue(value: unknown, depth = 0): unknown {
   const record = value as Record<string, unknown>;
   const next: Record<string, unknown> = {};
   for (const [rawKey, rawValue] of Object.entries(record)) {
+    if (unsafeJsonObjectKeys.has(rawKey)) {
+      continue;
+    }
     const normalizedKey = normalizeKey(rawKey);
     if (normalizedKey === "rawfileuploaded") {
       continue;
@@ -134,6 +138,9 @@ function sanitizeVisionBlockValue(value: unknown, depth = 0): unknown {
   const record = value as Record<string, unknown>;
   const next: Record<string, unknown> = {};
   for (const [rawKey, rawValue] of Object.entries(record)) {
+    if (unsafeJsonObjectKeys.has(rawKey)) {
+      continue;
+    }
     const normalizedKey = normalizeKey(rawKey);
     if (rawBinaryUploadHintKeys.has(normalizedKey)) {
       continue;

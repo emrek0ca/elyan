@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
 export const registerMobileDeviceBodySchema = z.object({
   externalDeviceId: z.string().min(1).max(160),
@@ -11,7 +12,7 @@ export const registerMobileDeviceBodySchema = z.object({
   supportsLiveActivities: z.boolean().optional(),
   supportsDynamicIsland: z.boolean().optional(),
   backgroundRefreshEnabled: z.boolean().optional(),
-  buildMetadata: z.record(z.string(), z.unknown()).optional(),
+  buildMetadata: boundedJsonRecordSchema.optional(),
 });
 
 export const deviceParamsSchema = z.object({

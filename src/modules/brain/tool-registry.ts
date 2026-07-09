@@ -16,6 +16,7 @@ import {
   extractNumericEvidenceFromGrounding,
   searchPublicWebGrounding,
 } from "./web-grounding.js";
+import { fetchUrlContext } from "./url-context.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
 export type AgentToolPermission = "read" | "write" | "side_effect";
@@ -61,6 +62,10 @@ const webSearchArgsSchema = z.object({
   query: z.string().trim().min(1).max(320),
 });
 
+const webFetchUrlArgsSchema = z.object({
+  url: z.string().trim().url().max(2_000),
+});
+
 const memoryQueryArgsSchema = z.object({
   query: z.string().trim().min(1).max(320),
   limit: z.coerce.number().int().min(1).max(10).default(5),
@@ -101,6 +106,16 @@ const webSearchOutputSchema = z.object({
   used: z.boolean(),
   query: z.string(),
   results: z.array(z.object({ title: z.string(), url: z.string() }).passthrough()),
+}).passthrough();
+const webFetchUrlOutputSchema = z.object({
+  url: z.string(),
+  title: z.string(),
+  content: z.string(),
+  source: z.enum(["jina", "html_fallback"]),
+  sourceAuthority: z.enum(["official", "trusted", "standard", "low"]),
+  retrievedAt: z.string(),
+  contentLength: z.number().int().nonnegative(),
+  error: z.string().optional(),
 }).passthrough();
 const numericFactsOutputSchema = z.object({
   query: z.string(), hasNumericFacts: z.boolean(), hasChartableSeries: z.boolean(), points: z.array(z.unknown()),
@@ -249,10 +264,22 @@ const toolDefinitions = [
           title: result.title,
           url: result.url,
           sourceHost: result.sourceHost,
+          sourceAuthority: result.sourceAuthority,
           snippet: result.snippet,
           verificationState: result.verificationState,
         })),
       };
+    },
+  },
+  {
+    name: "web.fetch_url",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 8_000,
+    outputSchema: webFetchUrlOutputSchema,
+    argsSchema: webFetchUrlArgsSchema,
+    async execute(app, _context, args) {
+      return fetchUrlContext(app, args.url);
     },
   },
   {

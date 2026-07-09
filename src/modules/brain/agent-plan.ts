@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { boundedJsonRecordSchema, validateBoundedJsonRecord } from "../../lib/json-boundary.js";
 import { getAgentToolMetadata, type AgentToolRequest } from "./tool-registry.js";
 
 export const agentRunStateSchema = z.enum([
@@ -28,7 +29,7 @@ export const agentPlanStepSchema = z.object({
   depends_on: z.array(z.string().trim().min(1).max(80)).max(7).default([]),
   tool_request: z.object({
     tool: z.string().trim().min(1).max(120),
-    args: z.record(z.string(), z.unknown()).default({}),
+    args: boundedJsonRecordSchema.default({}),
   }),
   expected_outcome: z.object({
     description: z.string().trim().min(1).max(500),
@@ -45,6 +46,10 @@ export const agentPlanEnvelopeSchema = z.object({
   }),
   steps: z.array(agentPlanStepSchema).min(1).max(8),
 }).superRefine((plan, ctx) => {
+  const jsonBoundaryIssue = validateBoundedJsonRecord(plan as Record<string, unknown>);
+  if (jsonBoundaryIssue) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["steps"], message: jsonBoundaryIssue });
+  }
   const ids = new Set(plan.steps.map((step) => step.id));
   if (ids.size !== plan.steps.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["steps"], message: "step ids must be unique" });

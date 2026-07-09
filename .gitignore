@@ -1,6 +1,7 @@
 node_modules
 dist
 .env
+.blob-store/
 .DS_Store
 coverage
 drizzle/*.local.json

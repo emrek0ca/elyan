@@ -93,6 +93,11 @@ const INTERNAL_DISCLOSURE_AVOIDANCE_PATTERNS = [
   /\b(iç model|ic model|sağlayıcı|saglayici|system prompt|sistem promptu|gizli talimat|dahili yönlendirme)\b.{0,100}\b(bahsetme|söyleme|anlatma|paylaşma|değinme|ifşa etme|geçirme)\b/i,
 ];
 
+// Drafting social copy is a normal text task. Only treat it as an external
+// side effect when the prompt also contains a publish/send/share action.
+const EXTERNAL_PUBLISH_ACTION_PATTERN =
+  /(?<!\p{L})(?:(?:tweet|post|dm|sms|mesaj|paylaşım|paylasim|yayın|yayin)\p{L}*.{0,48}(?:at|gönder|gonder|paylaş|paylas|yayınla|yayinla|post|publish|send)\p{L}*|(?:at|gönder|gonder|paylaş|paylas|yayınla|yayinla|post|publish|send)\p{L}*.{0,48}(?:tweet|post|dm|sms|mesaj|paylaşım|paylasim|yayın|yayin)\p{L}*)/iu;
+
 function isInternalDisclosureAvoidanceInstruction(prompt: string): boolean {
   const normalized = prompt.toLocaleLowerCase("tr-TR");
   return INTERNAL_DISCLOSURE_AVOIDANCE_PATTERNS.some(
@@ -308,7 +313,10 @@ export function resolveSecurityDecisionGate(prompt: string): BrainBoundaryGateRe
     );
   }
 
-  if (/(^|[^\p{L}])(send email|send message|post to|dm|sms|slack|whatsapp|telegram|tweet|publish|email gönder\p{L}*|e-posta olarak gönder\p{L}*|e posta olarak gönder\p{L}*|mail gönder\p{L}*|mesaj gönder\p{L}*|sms gönder\p{L}*|slack'e yaz\p{L}*|whatsapp'tan yaz\p{L}*|yayınla\p{L}*|paylaş\p{L}*)([^\p{L}]|$)/iu.test(securityHaystack)) {
+  if (
+    /(^|[^\p{L}])(send email|send message|post to|slack|whatsapp|telegram|email gönder\p{L}*|e-posta olarak gönder\p{L}*|e posta olarak gönder\p{L}*|mail gönder\p{L}*|mesaj gönder\p{L}*|sms gönder\p{L}*|slack'e yaz\p{L}*|whatsapp'tan yaz\p{L}*)([^\p{L}]|$)/iu.test(securityHaystack) ||
+    EXTERNAL_PUBLISH_ACTION_PATTERN.test(securityHaystack)
+  ) {
     return buildSecurityGateResult(
       decision({
         requestType: "external_send_request",

@@ -5,8 +5,8 @@ export const ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT =
   "Ben Elyan olarak çalışırım. Amacım görevleri doğru ve anlaşılır şekilde planlayıp yürütmek. Teknik altyapı detaylarımı paylaşmam mümkün değil.";
 
 const PROTECTED_DISCLOSURE_PATTERNS = [
-  /\b(groq|openai|anthropic|ollama|openrouter)\b/i,
-  /\b(gpt|llama|claude|mixtral|qwen|deepseek)\b/i,
+  /\b(groq|openai|anthropic|ollama|openrouter|vertex ai|vertexai)\b/i,
+  /\b(gpt|llama|claude|mixtral|qwen|deepseek|gemini|imagen|nano banana)\b/i,
   /\b(system prompt|developer message|hidden instruction|internal routing|backend policy|model id|model identifier)\b/i,
   /\b(model provider|underlying model|underlying provider|provider metadata|gateway product|fallback implementation)\b/i,
   /\b(sistem promptu|geliştirici mesajı|gizli talimat|iç model|alttaki model|arkadaki model|model adı|model kimliği)\b/i,
@@ -26,6 +26,10 @@ const PROTECTED_COMPACT_TOKENS = [
   "mixtral",
   "qwen",
   "deepseek",
+  "gemini",
+  "imagen",
+  "vertexai",
+  "nanobanana",
 ] as const;
 
 const PROTECTED_COMPACT_PHRASES = [

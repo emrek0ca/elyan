@@ -223,6 +223,15 @@ function assertWorldSignalValueSafe(value: unknown, key = ""): void {
   }
 }
 
+function sanitizeStoredWorldSignalRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? sanitizeInboundContextRecord(value as Record<string, unknown>, {
+        maxDepth: 2,
+        maxStringLength: 160,
+      })
+    : {};
+}
+
 export function assertSafeWorldSignalPayload(body: UploadWorldSignalsBody) {
   const payloadBytes = Buffer.byteLength(JSON.stringify(body), "utf8");
   if (payloadBytes > MAX_WORLD_SIGNAL_PAYLOAD_BYTES) {
@@ -587,11 +596,11 @@ export async function listFreshWorldSignals(
     signalId: row.signalId,
     source: row.source,
     kind: row.kind,
-    summary: row.summary,
+    summary: sanitizeInboundContextText(row.summary, 480).text,
     confidence: row.confidenceBps / 1000,
-    facts: row.facts,
-    privacy: row.privacy,
-    renderHints: row.renderHints,
+    facts: sanitizeStoredWorldSignalRecord(row.facts),
+    privacy: sanitizeStoredWorldSignalRecord(row.privacy),
+    renderHints: sanitizeStoredWorldSignalRecord(row.renderHints),
     visibility: row.visibility,
     createdAt: row.createdAt,
   }));

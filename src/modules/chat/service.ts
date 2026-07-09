@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type {
@@ -35,7 +35,9 @@ import { assertTrialTaskQuotaAllowedFromUsage, getTrialQuotaUsage } from "../quo
 import { routeChatTurn } from "../routing-policy/service.js";
 import { resolveCommandTarget } from "../routing-policy/service.js";
 import { createTask, shapeTaskFeedItem } from "../tasks/service.js";
+import { sanitizePublicInferenceValue } from "../tasks/service-helpers.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
+import { sanitizeInboundContextRecord } from "../../lib/context-text-sanitizer.js";
 import { listFreshWorldSignals } from "../mobile/service.js";
 import {
   type AssistantMessageBlock,
@@ -332,6 +334,24 @@ function clipCompactText(value: string, maxLength: number) {
   return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+function scrubCompactText(value: string, maxLength: number) {
+  return clipCompactText(value, maxLength)
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/(?:\/Users\/|\/home\/|C:\\Users\\)[^\s]+/gi, "[path]")
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[email]")
+    .replace(/\b(?:\+?\d[\d\s().-]{7,}\d)\b/g, "[number]");
+}
+
+function sanitizeCompactContextRecord(value: unknown) {
+  const record = readRecord(value);
+  return record
+    ? sanitizeInboundContextRecord(record, {
+        maxDepth: 2,
+        maxStringLength: 120,
+      })
+    : null;
+}
+
 function sanitizeCompactRecentMessages(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
@@ -350,11 +370,63 @@ function sanitizeCompactRecentMessages(value: unknown) {
       }
       return {
         role,
-        content: clipCompactText(content, 280),
+        content: scrubCompactText(content, 280),
       };
     })
     .filter((item): item is { role: "system" | "user" | "assistant"; content: string } => item != null)
-    .slice(-6);
+    .slice(-10);
+}
+
+function sanitizeCompactTurns(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => readRecord(item))
+    .filter((item): item is Record<string, unknown> => item != null)
+    .map((item) => {
+      const at = readString(item, "at");
+      const user = readString(item, "user");
+      const assistant = readString(item, "assistant");
+      const workload = readString(item, "workload");
+      if (!user) {
+        return null;
+      }
+      return {
+        ...(at ? { at } : {}),
+        user: scrubCompactText(user, 280),
+        ...(assistant ? { assistant: scrubCompactText(assistant, 320) } : {}),
+        ...(workload ? { workload: scrubCompactText(workload, 80) } : {}),
+      };
+    })
+    .filter((item): item is { at?: string; user: string; assistant?: string; workload?: string } => item != null)
+    .slice(0, 12);
+}
+
+function sanitizeCompactSalience(value: unknown) {
+  const record = readRecord(value);
+  if (!record) {
+    return null;
+  }
+  const topics = sanitizeStringList(record.topics, 8, 80);
+  const entities = sanitizeStringList(record.entities, 10, 80);
+  const userIntent = readString(record, "userIntent");
+  const assistantCommitment = readString(record, "assistantCommitment");
+  const emotionalTone = readString(record, "emotionalTone");
+  const unresolved = readBoolean(record, "unresolved");
+  const updatedAt = readString(record, "updatedAt");
+  const sanitized = {
+    ...(topics.length > 0 ? { topics } : {}),
+    ...(entities.length > 0 ? { entities } : {}),
+    ...(userIntent ? { userIntent: scrubCompactText(userIntent, 160) } : {}),
+    ...(assistantCommitment
+      ? { assistantCommitment: scrubCompactText(assistantCommitment, 160) }
+      : {}),
+    ...(emotionalTone ? { emotionalTone: scrubCompactText(emotionalTone, 80) } : {}),
+    ...(unresolved != null ? { unresolved } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+  return Object.keys(sanitized).length > 0 ? sanitized : null;
 }
 
 function sanitizeStringList(value: unknown, limit = 4, maxLength = 120) {
@@ -362,7 +434,7 @@ function sanitizeStringList(value: unknown, limit = 4, maxLength = 120) {
     return [];
   }
   return value
-    .map((item) => (typeof item === "string" ? clipCompactText(item, maxLength) : ""))
+    .map((item) => (typeof item === "string" ? scrubCompactText(item, maxLength) : ""))
     .filter(Boolean)
     .slice(0, limit);
 }
@@ -373,9 +445,9 @@ function sanitizeRollingSummaryRecord(value: unknown) {
     return null;
   }
   const sanitized = {
-    ...(readString(record, "userGoal") ? { userGoal: clipCompactText(readString(record, "userGoal")!, 220) } : {}),
+    ...(readString(record, "userGoal") ? { userGoal: scrubCompactText(readString(record, "userGoal")!, 220) } : {}),
     ...(readString(record, "assistantState")
-      ? { assistantState: clipCompactText(readString(record, "assistantState")!, 220) }
+      ? { assistantState: scrubCompactText(readString(record, "assistantState")!, 220) }
       : {}),
     ...(sanitizeStringList(record.openLoops, 4, 140).length > 0
       ? { openLoops: sanitizeStringList(record.openLoops, 4, 140) }
@@ -419,15 +491,15 @@ function sanitizeWorldSignalDigest(value: unknown) {
       const summary = readString(item, "summary");
       const confidence = readNumber(item, "confidence");
       const createdAt = readString(item, "createdAt");
-      const facts = readRecord(item.facts);
-      const privacy = readRecord(item.privacy);
+      const facts = sanitizeCompactContextRecord(item.facts);
+      const privacy = sanitizeCompactContextRecord(item.privacy);
       if (!kind || !summary) {
         return null;
       }
       return {
         ...(signalId ? { signalId } : {}),
         kind,
-        summary: clipCompactText(summary, 140),
+        summary: scrubCompactText(summary, 140),
         ...(confidence != null ? { confidence } : {}),
         ...(createdAt ? { createdAt } : {}),
         ...(facts ? { facts } : {}),
@@ -444,6 +516,8 @@ function buildSanitizedCompactContext(value: unknown) {
     return null;
   }
   const recentMessages = sanitizeCompactRecentMessages(record.recentMessages);
+  const turns = sanitizeCompactTurns(record.turns);
+  const salience = sanitizeCompactSalience(record.salience);
   const rollingSummary = sanitizeRollingSummaryRecord(record.rollingSummary);
   const attachmentDigest = sanitizeAttachmentDigest(record.attachmentDigest);
   const derivedContextDigestRecord = readRecord(record.derivedContextDigest);
@@ -463,6 +537,8 @@ function buildSanitizedCompactContext(value: unknown) {
   const lastAssistantBlocksDigest = readString(record, "lastAssistantBlocksDigest");
   const compactContext = {
     ...(recentMessages.length > 0 ? { recentMessages } : {}),
+    ...(turns.length > 0 ? { turns } : {}),
+    ...(salience ? { salience } : {}),
     ...(rollingSummary ? { rollingSummary } : {}),
     ...(attachmentDigest ? { attachmentDigest } : {}),
     ...(Object.keys(derivedContextDigest).length > 0
@@ -471,7 +547,7 @@ function buildSanitizedCompactContext(value: unknown) {
     ...(responseVerbosityHint ? { responseVerbosityHint } : {}),
     ...(wantsLongForm != null ? { wantsLongForm } : {}),
     ...(lastAssistantBlocksDigest
-      ? { lastAssistantBlocksDigest: clipCompactText(lastAssistantBlocksDigest, 280) }
+      ? { lastAssistantBlocksDigest: scrubCompactText(lastAssistantBlocksDigest, 280) }
       : {}),
   };
   return Object.keys(compactContext).length > 0 ? compactContext : null;
@@ -533,17 +609,11 @@ export async function enrichChatMetadataForRequest(
   freshWorldSignalDigest = freshSignals.map((signal) => ({
     signalId: signal.signalId,
     kind: signal.kind,
-    summary: clipCompactText(signal.summary, 220),
+    summary: scrubCompactText(signal.summary, 220),
     confidence: signal.confidence,
     createdAt: signal.createdAt.toISOString(),
-    facts:
-      signal.facts && typeof signal.facts === "object" && !Array.isArray(signal.facts)
-        ? signal.facts
-        : {},
-    privacy:
-      signal.privacy && typeof signal.privacy === "object" && !Array.isArray(signal.privacy)
-        ? signal.privacy
-        : {},
+    facts: sanitizeCompactContextRecord(signal.facts) ?? {},
+    privacy: sanitizeCompactContextRecord(signal.privacy) ?? {},
   }));
 
   const mergedDerivedContextDigest = {
@@ -654,10 +724,24 @@ async function hydrateMessageContent(
 function shapeChatMessageForResponse<T extends typeof chatMessages.$inferSelect>(
   message: T,
 ): T & { blocks?: AssistantMessageBlock[]; content?: string } {
-  return shapeAssistantMessagePayload(message) as T & {
+  const shaped = shapeAssistantMessagePayload(message) as T & {
     blocks?: AssistantMessageBlock[];
     content?: string;
   };
+  const record = shaped as Record<string, unknown>;
+  if (record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)) {
+    record.metadata = sanitizePublicInferenceValue(record.metadata);
+  }
+  return shaped;
+}
+
+function shapeChatSessionForResponse<T extends typeof chatSessions.$inferSelect>(session: T): T {
+  const shaped = { ...session } as T;
+  const record = shaped as Record<string, unknown>;
+  if (record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)) {
+    record.metadata = sanitizePublicInferenceValue(record.metadata);
+  }
+  return shaped;
 }
 
 function encodeCursor(cursor: ChatSessionCursor | ChatMessageCursor) {
@@ -1034,7 +1118,9 @@ async function loadChatConversation(
         eq(chatMessages.userId, input.userId),
       ),
     )
-    .orderBy(asc(chatMessages.createdAt))
+    // Read the newest window first. An ascending LIMIT keeps the oldest
+    // messages forever and silently drops the active part of long sessions.
+    .orderBy(desc(chatMessages.createdAt))
     .limit(input.limit ?? 32);
 
   const hydratedRows = await Promise.all(
@@ -1044,10 +1130,11 @@ async function loadChatConversation(
       content: await hydrateMessageContent(app, { ...row, userId: input.userId }),
     })),
   );
+  const chronologicalRows = hydratedRows.reverse();
 
   return {
     conversation: trimConversationForSharedBrain(
-      hydratedRows
+      chronologicalRows
         .map((row) => ({
           role: row.role,
           content: row.content,
@@ -1062,7 +1149,7 @@ async function loadChatConversation(
         ),
     ),
     attachmentCandidates: extractAttachmentCandidatesFromChatRows(
-      hydratedRows as ChatAttachmentRow[],
+      chronologicalRows as ChatAttachmentRow[],
     ),
   };
 }
@@ -1243,7 +1330,7 @@ export async function listChatSessionMessages(
     : null;
 
   return {
-    session,
+    session: shapeChatSessionForResponse(session),
     messages: pageMessages,
     nextCursor,
     hasMore,
@@ -1314,7 +1401,7 @@ export async function updateChatSession(
   });
 
   return {
-    session,
+    session: shapeChatSessionForResponse(session),
   };
 }
 
@@ -1331,53 +1418,63 @@ export async function persistRollingSummaryToSession(
   },
 ): Promise<void> {
   try {
-    const existing = input.existingMetadata ?? {};
-    const existingChatCtx = readRecord(existing.chatContext) ?? {};
-    const existingRS = readRecord(existingChatCtx.rollingSummary);
+    await app.db.transaction(async (tx) => {
+      // Serialize summary writes per session. Without the row lock, two
+      // nearly simultaneous completions can read the same old summary and
+      // erase each other's open loops or continuity state.
+      const sessionRows = await tx
+        .select({ metadata: chatSessions.metadata })
+        .from(chatSessions)
+        .where(and(eq(chatSessions.id, input.sessionId), eq(chatSessions.userId, input.userId)))
+        .for("update");
+      const persistedMetadata = readRecord(sessionRows[0]?.metadata) ?? {};
+      const existing = {
+        ...(input.existingMetadata ?? {}),
+        ...persistedMetadata,
+      };
+      const existingChatCtx = readRecord(existing.chatContext) ?? {};
+      const existingRS = readRecord(existingChatCtx.rollingSummary);
 
-    // Önceki openLoops'ları koru, yenileri ekle
-    const prevLoops: string[] = Array.isArray(existingRS?.openLoops)
-      ? (existingRS.openLoops as unknown[]).map((l) => String(l ?? "")).filter(Boolean)
-      : [];
+      // Önceki openLoops'ları koru, yenileri ekle
+      const prevLoops: string[] = Array.isArray(existingRS?.openLoops)
+        ? (existingRS.openLoops as unknown[]).map((l) => String(l ?? "")).filter(Boolean)
+        : [];
 
-    // Kullanıcı mesajından hedef ve açık döngüleri derive et
-    const userGoal = input.userMessage.length > 180
-      ? `${input.userMessage.slice(0, 177)}…`
-      : input.userMessage;
+      // Kullanıcı mesajından hedef ve açık döngüleri derive et
+      const userGoal = scrubCompactText(input.userMessage, 180);
 
-    const assistantStateSummary = input.assistantReply.length > 180
-      ? `${input.assistantReply.slice(0, 177)}…`
-      : input.assistantReply;
+      const assistantStateSummary = scrubCompactText(input.assistantReply, 180);
 
-    // Açık döngü tespiti: soru işareti veya açık kalan şey sinyali
-    const newLoops: string[] = [];
-    const OPEN_LOOP_DETECT = /\b(yarın|sonra|daha sonra|follow up|remind me|let's continue|bekliyor|pending|onay bekleniyor)\b|\?$/i;
-    if (OPEN_LOOP_DETECT.test(input.userMessage)) {
-      const snippet = userGoal.length > 100 ? `${userGoal.slice(0, 97)}…` : userGoal;
-      if (!prevLoops.includes(snippet)) newLoops.push(snippet);
-    }
+      // Açık döngü tespiti: soru işareti veya açık kalan şey sinyali
+      const newLoops: string[] = [];
+      const OPEN_LOOP_DETECT = /\b(yarın|sonra|daha sonra|follow up|remind me|let's continue|bekliyor|pending|onay bekleniyor)\b|\?$/i;
+      if (OPEN_LOOP_DETECT.test(input.userMessage)) {
+        const snippet = userGoal.length > 100 ? `${userGoal.slice(0, 97)}…` : userGoal;
+        if (!prevLoops.includes(snippet)) newLoops.push(snippet);
+      }
 
-    const mergedLoops = [...newLoops, ...prevLoops].slice(0, 3);
+      const mergedLoops = [...newLoops, ...prevLoops].slice(0, 3);
 
-    const rollingSummary = {
-      userGoal,
-      assistantState: assistantStateSummary,
-      openLoops: mergedLoops,
-      updatedAt: new Date().toISOString(),
-    };
+      const rollingSummary = {
+        userGoal,
+        assistantState: assistantStateSummary,
+        openLoops: mergedLoops,
+        updatedAt: new Date().toISOString(),
+      };
 
-    const updatedMetadata = {
-      ...existing,
-      chatContext: {
-        ...existingChatCtx,
-        rollingSummary,
-      },
-    };
+      const updatedMetadata = {
+        ...existing,
+        chatContext: {
+          ...existingChatCtx,
+          rollingSummary,
+        },
+      };
 
-    await app.db
-      .update(chatSessions)
-      .set({ metadata: updatedMetadata, updatedAt: new Date() })
-      .where(and(eq(chatSessions.id, input.sessionId), eq(chatSessions.userId, input.userId)));
+      await tx
+        .update(chatSessions)
+        .set({ metadata: updatedMetadata, updatedAt: new Date() })
+        .where(and(eq(chatSessions.id, input.sessionId), eq(chatSessions.userId, input.userId)));
+    });
   } catch {
     // Başarısız olursa sessizce geç — kritik değil
   }
@@ -1605,7 +1702,7 @@ export async function createChatSession(
     },
   });
 
-  return session;
+  return shapeChatSessionForResponse(session);
 }
 
 export async function createChatMessage(
@@ -2062,9 +2159,7 @@ export async function createChatMessage(
     admissionLockAcquired = false;
   }
   return {
-    session: {
-      ...responseSession,
-    },
+    session: shapeChatSessionForResponse(responseSession),
     userMessage,
     assistantMessage: responseAssistantMessage,
     task: taskResult.task,

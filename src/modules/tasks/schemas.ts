@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { hasRawBinaryUploadHint } from "../../lib/derived-data.js";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
 const taskPayloadSchema = z
   .object({
     prompt: z.string().trim().min(1).max(20_000),
     source: z.enum(["mobile", "desktop"]).default("mobile"),
-    metadata: z.record(z.any()).optional(),
+    metadata: boundedJsonRecordSchema.optional(),
   })
   .passthrough();
 

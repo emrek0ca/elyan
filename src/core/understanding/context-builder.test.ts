@@ -360,6 +360,59 @@ test("buildUserContextFromMemory derives preferred name and language from safe m
   assert.ok((context.speakingStyleDirectives ?? []).some((item) => item.includes("Türkçe")));
 });
 
+test("buildUserContextFromMemory turns warm mature teaching style memory into scoped directives", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Bunu bana açıkla.",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Bunu bana açıkla.",
+    },
+    profile: {
+      displayName: "Emre",
+    },
+    memory: [
+      {
+        id: "style-warm-teaching",
+        type: "style",
+        key: "response_style_preference",
+        value: "warm_close_mature_teaching",
+        confidence: 0.96,
+        scope: "user",
+        source: "semantic_memory",
+        createdAt: new Date(),
+        staleness: "fresh",
+        conflictStatus: "active",
+        lastVerifiedAt: new Date(),
+        importanceScore: 90,
+        isPinned: true,
+      },
+    ],
+  });
+
+  assert.ok(
+    context.relationshipContextDigest.some((item) =>
+      item.includes("warm, close, mature, explanatory"),
+    ),
+  );
+  assert.ok(
+    (context.speakingStyleDirectives ?? []).some((item) =>
+      item.includes("warm, close, mature, explanatory"),
+    ),
+  );
+  assert.ok(
+    (context.speakingStyleDirectives ?? []).some((item) =>
+      item.includes("not overdo intimacy"),
+    ),
+  );
+});
+
 test("buildUserContextFromMemory keeps the latest preferred name and suppresses stale aliases", () => {
   const intent = classifyIntent({
     userId: "user_1",
@@ -823,6 +876,132 @@ test("buildUserContextFromMemory suppresses stale continuity when the user clear
   assert.ok((context.reasoningDirectives ?? []).some((item) => item.includes("optional background")));
 });
 
+test("buildUserContextFromMemory carries continuity from canonical turn traces", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Buna göre ikinci öneriyi daha samimi yap.",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Buna göre ikinci öneriyi daha samimi yap.",
+      metadata: {
+        dialogueStateSource: "server_dialogue_state.v1",
+        dialogueStateUserId: "user_1",
+        compactContext: {
+          source: "server_dialogue_state.v1",
+          ownerUserId: "user_1",
+          turns: [
+            {
+              at: "2030-01-01T12:00:00.000Z",
+              user: "Üç farklı onboarding mesajı öner.",
+              assistant: "Birinci mesaj net, ikinci mesaj daha sıcak, üçüncü mesaj daha kurumsal olabilir.",
+              workload: "mobile_chat_fast",
+            },
+          ],
+        },
+      },
+    },
+    profile: {
+      displayName: "Emre",
+    },
+    memory: [],
+  });
+
+  assert.equal(context.continuityBoundary?.mode, "same_topic");
+  assert.equal(context.continuityBoundary?.reason, "referential_followup");
+  assert.equal(context.continuityBoundary?.carryContinuity, true);
+  assert.match(context.continuitySummary.userGoal ?? "", /onboarding mesajı/);
+  assert.match(context.continuitySummary.assistantState ?? "", /ikinci mesaj/);
+  assert.ok(context.relationshipContextDigest.some((item) => item.includes("Continuing user goal")));
+});
+
+test("buildUserContextFromMemory links later turns by session turn overlap", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Auth timeout çözümünü Redis tarafına uyarla.",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Auth timeout çözümünü Redis tarafına uyarla.",
+      metadata: {
+        dialogueStateSource: "server_dialogue_state.v1",
+        dialogueStateUserId: "user_1",
+        compactContext: {
+          source: "server_dialogue_state.v1",
+          ownerUserId: "user_1",
+          turns: [
+            {
+              at: "2030-01-01T12:00:00.000Z",
+              user: "Backend auth timeout hatasını nasıl çözeriz?",
+              assistant: "Önce timeout kaynağını izole edip retry ve guard eklemek gerekir.",
+              workload: "debugging",
+            },
+          ],
+        },
+      },
+    },
+    memory: [],
+  });
+
+  assert.equal(context.continuityBoundary?.mode, "same_topic");
+  assert.equal(context.continuityBoundary?.reason, "session_turn_overlap");
+  assert.equal(context.continuityBoundary?.carryContinuity, true);
+  assert.ok(context.memoryRelevanceSummary.some((item) => item.includes("current_goal")));
+});
+
+test("buildUserContextFromMemory uses salience to keep long-session intent alive cheaply", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Redis kısmını aynı mantıkla güncelle.",
+  });
+
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Redis kısmını aynı mantıkla güncelle.",
+      metadata: {
+        dialogueStateSource: "server_dialogue_state.v1",
+        dialogueStateUserId: "user_1",
+        compactContext: {
+          source: "server_dialogue_state.v1",
+          ownerUserId: "user_1",
+          salience: {
+            topics: ["auth", "timeout", "redis"],
+            entities: ["Redis", "Fastify"],
+            userIntent: "Auth timeout çözümünü kalıcı hale getirmek.",
+            assistantCommitment: "Retry guard mantığını Redis tarafına uyarlayacağım.",
+            emotionalTone: "focused",
+            unresolved: true,
+          },
+        },
+      },
+    },
+    memory: [],
+  });
+
+  assert.equal(context.continuityBoundary?.mode, "same_topic");
+  assert.equal(context.continuityBoundary?.reason, "referential_followup");
+  assert.match(context.continuitySummary.userGoal ?? "", /Auth timeout/);
+  assert.match(context.continuitySummary.assistantState ?? "", /Retry guard/);
+  assert.ok(context.situationalHints.some((hint) => hint.includes("auth, timeout, redis")));
+  assert.ok(context.situationalHints.some((hint) => hint.includes("Redis, Fastify")));
+  assert.ok(context.behavioralHints.some((hint) => hint.includes("Retry guard")));
+  assert.ok(context.behavioralHints.some((hint) => hint.includes("focused")));
+});
+
 test("buildContextPacketsFromMetadata packages health signals without raw measurements", () => {
   const now = new Date("2030-01-01T12:00:00.000Z");
   const packets = buildContextPacketsFromMetadata(
@@ -973,12 +1152,44 @@ test("buildContextPacketsFromMetadata suppresses irrelevant world context in gre
     { now, requestText: "Selam", intent: "chat" },
   );
 
-  assert.equal(packets.length, 3);
-  assert.deepEqual(
-    packets.map((packet) => packet.mentionPolicy),
-    ["silent", "silent", "silent"],
+  assert.equal(packets.length, 0);
+});
+
+test("buildContextPacketsFromMetadata does not inject live context into creative short prompts", () => {
+  const now = new Date("2030-01-01T12:00:00.000Z");
+  const packets = buildContextPacketsFromMetadata(
+    {
+      chatContext: {
+        lastDerivedContextDigest: {
+          worldSignals: [
+            {
+              signalId: "location-1",
+              kind: "location",
+              summary: "Konum: Kayseri, Türkiye.",
+              confidence: 0.82,
+              createdAt: "2030-01-01T11:57:00.000Z",
+              facts: { city: "Kayseri", country: "Türkiye" },
+            },
+            {
+              signalId: "time-1",
+              kind: "time",
+              summary: "Yerel saat öğle sonrası.",
+              confidence: 0.93,
+              createdAt: "2030-01-01T11:58:00.000Z",
+              facts: { dayPart: "öğle sonrası" },
+            },
+          ],
+        },
+      },
+    },
+    {
+      now,
+      requestText: "Bana çok bilinmeyen en garip hayvan ismini söyle",
+      intent: "chat",
+    },
   );
-  assert.ok(packets.every((packet) => packet.relevanceReason === "greeting_context_suppressed"));
+
+  assert.equal(packets.length, 0);
 });
 
 test("buildContextPacketsFromMetadata exposes only relevant world context", () => {
@@ -1022,7 +1233,7 @@ test("buildContextPacketsFromMetadata exposes only relevant world context", () =
     intent: "chat",
   });
   assert.equal(devicePackets.find((packet) => packet.kind === "device_context")?.mentionPolicy, "explicit_when_relevant");
-  assert.equal(devicePackets.find((packet) => packet.kind === "health_context")?.mentionPolicy, "silent");
+  assert.equal(devicePackets.find((packet) => packet.kind === "health_context"), undefined);
 
   const planningPackets = buildContextPacketsFromMetadata(baseSignals, {
     now,
@@ -1077,10 +1288,10 @@ test("buildContextPacketsFromMetadata exposes time context for technical work pa
   );
 
   const timePacket = packets.find((packet) => packet.kind === "time_context");
-  assert.equal(timePacket?.mentionPolicy, "explicit_when_relevant");
-  assert.equal(timePacket?.relevanceReason, "time_aware_work_or_schedule_request");
+  assert.equal(timePacket?.mentionPolicy, "implicit");
+  assert.equal(timePacket?.relevanceReason, "time_context_for_work_pacing_only");
   assert.match(timePacket?.summary ?? "", /local_time=02:10/);
-  assert.ok(timePacket?.allowedUse?.includes("time-aware framing"));
+  assert.ok(timePacket?.allowedUse?.includes("adjust brevity and timing without naming the context"));
 });
 
 test("buildContextPacketsFromMetadata reads world signals from mobile memory snapshots", () => {

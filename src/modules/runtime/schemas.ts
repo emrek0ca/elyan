@@ -1,20 +1,21 @@
 import { z } from "zod";
 import { artifactInputSchema, taskStatusSchema } from "../../contracts/domain.js";
 import { hasRawBinaryUploadHint } from "../../lib/derived-data.js";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
 export const registerRuntimeBodySchema = z.object({
   deviceId: z.string().uuid(),
   deviceSecret: z.string().min(16),
   runtimeVersion: z.string().min(1).max(80).optional(),
   capabilities: z.array(z.string().min(1).max(80)).default([]),
-  capabilityStates: z.record(z.any()).default({}),
+  capabilityStates: boundedJsonRecordSchema.default({}),
 });
 
 export const runtimeHeartbeatBodySchema = z.object({
   status: z.enum(["online", "busy", "idle"]).default("online"),
   currentTaskId: z.string().uuid().optional(),
   capabilities: z.array(z.string().min(1).max(80)).optional(),
-  capabilityStates: z.record(z.any()).optional(),
+  capabilityStates: boundedJsonRecordSchema.optional(),
 });
 
 export const runtimeTaskParamsSchema = z.object({
@@ -26,9 +27,9 @@ export const runtimeTaskUpdateBodySchema = z.object({
   message: z.string().max(500).optional(),
   summary: z.string().optional(),
   error: z.string().optional(),
-  approvalRequest: z.record(z.any()).optional(),
-  result: z.record(z.any()).optional(),
-  operator: z.record(z.any()).optional(),
+  approvalRequest: boundedJsonRecordSchema.optional(),
+  result: boundedJsonRecordSchema.optional(),
+  operator: boundedJsonRecordSchema.optional(),
   artifacts: z.array(artifactInputSchema).default([]),
 }).superRefine((input, ctx) => {
   if (hasRawBinaryUploadHint(input.approvalRequest)) {
@@ -66,7 +67,7 @@ export const runtimeSocketMessageSchema = z.discriminatedUnion("type", [
     status: z.enum(["online", "busy", "idle"]).default("online"),
     currentTaskId: z.string().uuid().optional(),
     capabilities: z.array(z.string().min(1).max(80)).optional(),
-    capabilityStates: z.record(z.any()).optional(),
+    capabilityStates: boundedJsonRecordSchema.optional(),
   }),
   z.object({
     type: z.literal("task.ack"),

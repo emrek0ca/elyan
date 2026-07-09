@@ -54,6 +54,23 @@ const memoryRefsSchema = z.object({
   episodeIds: z.array(z.string().uuid()).max(40).default([]),
 }).default({});
 
+const turnTraceSchema = z.object({
+  at: z.string().datetime({ offset: true }).nullable().default(null),
+  user: z.string().trim().min(1).max(280),
+  assistant: z.string().trim().min(1).max(320).nullable().default(null),
+  workload: z.string().trim().max(80).nullable().default(null),
+});
+
+const turnSalienceSchema = z.object({
+  topics: z.array(z.string().trim().min(2).max(80)).max(8).default([]),
+  entities: z.array(z.string().trim().min(2).max(80)).max(10).default([]),
+  userIntent: z.string().trim().max(160).nullable().default(null),
+  assistantCommitment: z.string().trim().max(160).nullable().default(null),
+  emotionalTone: z.string().trim().max(80).nullable().default(null),
+  unresolved: z.boolean().default(false),
+  updatedAt: z.string().datetime({ offset: true }).nullable().default(null),
+}).default({});
+
 export const dialogueStateSchema = z
   .object({
     goal: z.string().trim().max(500).nullable().default(null),
@@ -67,6 +84,8 @@ export const dialogueStateSchema = z
     moodTrend: z.array(moodTrendItemSchema).max(20).default([]),
     lastProactiveAt: z.string().datetime({ offset: true }).nullable().default(null),
     conversationDynamics: conversationDynamicsSchema,
+    turns: z.array(turnTraceSchema).max(12).default([]),
+    salience: turnSalienceSchema,
     userMemory: userMemorySchema,
     memoryRefs: memoryRefsSchema,
   })
@@ -125,6 +144,197 @@ function appendUnique(values: string[], additions: string[], max: number): strin
     }
   }
   return output;
+}
+
+function scrubPrivateSnippet(value: string, max = 160): string {
+  return clip(value, max)
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/(?:\/Users\/|\/home\/|C:\\Users\\)[^\s]+/gi, "[path]")
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[email]")
+    .replace(/\b(?:\+?\d[\d\s().-]{7,}\d)\b/g, "[number]");
+}
+
+function scrubOptionalSnippet(value: unknown, max: number): string | null {
+  const text = readString(value);
+  return text ? scrubPrivateSnippet(text, max) : null;
+}
+
+function sanitizeTurnTrace(value: unknown): z.output<typeof turnTraceSchema> | null {
+  const record = readRecord(value);
+  if (!record) {
+    return null;
+  }
+  const user = scrubOptionalSnippet(record.user, 280);
+  if (!user) {
+    return null;
+  }
+  return turnTraceSchema.parse({
+    at: readString(record.at),
+    user,
+    assistant: scrubOptionalSnippet(record.assistant, 320),
+    workload: scrubOptionalSnippet(record.workload, 80),
+  });
+}
+
+function sanitizeTurnTraces(value: unknown): z.output<typeof turnTraceSchema>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map(sanitizeTurnTrace)
+    .filter((item): item is z.output<typeof turnTraceSchema> => item != null)
+    .slice(0, 12);
+}
+
+function sanitizeSalience(value: unknown): DialogueState["salience"] {
+  const record = readRecord(value);
+  if (!record) {
+    return turnSalienceSchema.parse({});
+  }
+  const topics = Array.isArray(record.topics)
+    ? record.topics.map(String).map((item) => scrubPrivateSnippet(item, 80)).filter(Boolean).slice(0, 8)
+    : [];
+  const entities = Array.isArray(record.entities)
+    ? record.entities.map(String).map((item) => scrubPrivateSnippet(item, 80)).filter(Boolean).slice(0, 10)
+    : [];
+  return turnSalienceSchema.parse({
+    topics,
+    entities,
+    userIntent: scrubOptionalSnippet(record.userIntent, 160),
+    assistantCommitment: scrubOptionalSnippet(record.assistantCommitment, 160),
+    emotionalTone: scrubOptionalSnippet(record.emotionalTone, 80),
+    unresolved: typeof record.unresolved === "boolean" ? record.unresolved : false,
+    updatedAt: readString(record.updatedAt),
+  });
+}
+
+function sanitizeDialogueStateSnapshot(state: DialogueState): DialogueState {
+  return dialogueStateSchema.parse({
+    ...state,
+    goal: state.goal ? scrubPrivateSnippet(state.goal, 500) : null,
+    stage: state.stage ? scrubPrivateSnippet(state.stage, 240) : null,
+    openLoops: state.openLoops.map((item) => scrubPrivateSnippet(item, 500)).filter(Boolean).slice(0, 12),
+    lastAssistantDigest: state.lastAssistantDigest
+      ? scrubPrivateSnippet(state.lastAssistantDigest, 500)
+      : null,
+    factsTouched: state.factsTouched.map((item) => scrubPrivateSnippet(item, 160)).filter(Boolean).slice(0, 80),
+    turns: sanitizeTurnTraces(state.turns),
+    salience: sanitizeSalience(state.salience),
+  });
+}
+
+function normalizeSearchToken(value: string): string {
+  return value
+    .toLocaleLowerCase("tr")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ı/g, "i")
+    .replace(/ç/g, "c")
+    .replace(/ğ/g, "g")
+    .replace(/ö/g, "o")
+    .replace(/ş/g, "s")
+    .replace(/ü/g, "u")
+    .replace(/[^a-z0-9_.:-]+/g, " ")
+    .trim();
+}
+
+const SALIENCE_STOP_WORDS = new Set([
+  "bana", "bunu", "şunu", "sunu", "buna", "gore", "göre", "icin", "için",
+  "daha", "biraz", "sonra", "onceki", "önceki", "aynı", "ayni", "şekilde",
+  "sekilde", "devam", "nasıl", "nasil", "nedir", "what", "this", "that",
+  "with", "from", "into", "about", "please", "the", "and", "bir", "ve",
+]);
+
+function extractSalienceTopics(text: string): string[] {
+  const normalized = normalizeSearchToken(text);
+  const output: string[] = [];
+  for (const token of normalized.split(/\s+/)) {
+    if (
+      token.length < 4 ||
+      token.length > 36 ||
+      SALIENCE_STOP_WORDS.has(token) ||
+      /^\d+$/.test(token)
+    ) {
+      continue;
+    }
+    if (!output.includes(token)) {
+      output.push(token);
+    }
+    if (output.length >= 8) {
+      break;
+    }
+  }
+  return output;
+}
+
+function extractSalienceEntities(text: string): string[] {
+  const compact = scrubPrivateSnippet(text, 600);
+  const candidates = compact.match(/\b[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü0-9_.-]{2,}(?:\s+[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü0-9_.-]{2,}){0,2}\b/g) ?? [];
+  const tech = compact.match(/\b(?:API|URL|JSON|SSE|Redis|Postgres|Fastify|Flutter|TypeScript|Python|Docker|OAuth|JWT|WebSocket|MCP)\b/g) ?? [];
+  return appendUnique([], [...tech, ...candidates], 10).map((item) => clip(item, 80));
+}
+
+function deriveUserIntentSnippet(message: string): string | null {
+  const cleaned = scrubPrivateSnippet(message, 160);
+  if (!cleaned) {
+    return null;
+  }
+  const firstSentence = cleaned.split(/(?<=[.!?])\s+/)[0] ?? cleaned;
+  return firstSentence ? clip(firstSentence, 160) : null;
+}
+
+function deriveAssistantCommitment(text: string): string | null {
+  const cleaned = scrubPrivateSnippet(text, 240);
+  if (!cleaned) {
+    return null;
+  }
+  const sentence = cleaned
+    .split(/(?<=[.!?])\s+/)
+    .find((part) =>
+      /\b(yapacağım|yapacagim|bakacağım|bakacagim|devam edeceğim|edecegim|hazırlayacağım|hazirlayacagim|kontrol edeceğim|hatırlatacağım|hatirlatacagim|edecegim|I will|I'll|next|sonraki|devam)\b/i.test(part),
+    );
+  return sentence ? clip(sentence, 160) : null;
+}
+
+function deriveTurnSalience(input: {
+  previous: DialogueState["salience"];
+  userMessage: string;
+  assistantText: string;
+  envelope?: TurnEnvelope | null;
+  newLoops: string[];
+  toolResults: AgentToolResult[];
+  nowIso: string;
+}): DialogueState["salience"] {
+  const previous = turnSalienceSchema.parse(input.previous ?? {});
+  const topics = appendUnique(
+    previous.topics,
+    extractSalienceTopics(`${input.userMessage} ${input.assistantText}`),
+    8,
+  );
+  const entities = appendUnique(
+    previous.entities,
+    extractSalienceEntities(`${input.userMessage} ${input.assistantText}`),
+    10,
+  );
+  const userIntent = deriveUserIntentSnippet(input.userMessage) ?? previous.userIntent;
+  const assistantCommitment = deriveAssistantCommitment(input.assistantText) ?? previous.assistantCommitment;
+  const emotionalTone =
+    input.envelope?.affect.user_mood_guess ??
+    previous.emotionalTone ??
+    null;
+  const unresolved =
+    input.newLoops.length > 0 ||
+    input.toolResults.some((result) => !result.ok) ||
+    /\?$/.test(input.userMessage.trim());
+  return turnSalienceSchema.parse({
+    topics,
+    entities,
+    userIntent,
+    assistantCommitment,
+    emotionalTone,
+    unresolved,
+    updatedAt: input.nowIso,
+  });
 }
 
 function normalizeMemoryKey(value: string): string {
@@ -202,15 +412,34 @@ function digestAssistantBlocks(blocks: AssistantMessageBlock[]): string | null {
 }
 
 function digestAssistantText(text: string, blocks: AssistantMessageBlock[] = []): string | null {
-  const cleaned = clip(text, 360);
+  const cleaned = scrubPrivateSnippet(text, 360);
   if (cleaned) {
     return cleaned;
   }
   return digestAssistantBlocks(blocks);
 }
 
+function buildTurnTrace(input: {
+  userMessage: string;
+  assistantText: string;
+  workload?: string | null;
+  nowIso: string;
+}): z.output<typeof turnTraceSchema> | null {
+  const user = scrubPrivateSnippet(input.userMessage, 280);
+  if (!user) {
+    return null;
+  }
+  const assistant = scrubPrivateSnippet(input.assistantText, 320);
+  return turnTraceSchema.parse({
+    at: input.nowIso,
+    user,
+    assistant: assistant || null,
+    workload: input.workload ?? null,
+  });
+}
+
 function phraseEdge(text: string, edge: "start" | "end"): string | null {
-  const normalized = clip(text, 2_000);
+  const normalized = scrubPrivateSnippet(text, 2_000);
   if (!normalized) return null;
   const sentences = normalized.split(/(?<=[.!?])\s+/).filter(Boolean);
   const selected = edge === "start" ? sentences[0] : sentences.at(-1);
@@ -259,6 +488,7 @@ export function applyCanonicalDialogueStateToMetadata(input: {
   const existing = input.metadata ?? {};
   const compactContext = readRecord(existing.compactContext) ?? {};
   const rollingSummary = readRecord(compactContext.rollingSummary) ?? {};
+  const state = sanitizeDialogueStateSnapshot(input.snapshot.state);
   return {
     ...existing,
     dialogueStateRevision: input.snapshot.revision,
@@ -272,13 +502,15 @@ export function applyCanonicalDialogueStateToMetadata(input: {
       ownerSessionId: input.snapshot.sessionId,
       rollingSummary: {
         ...rollingSummary,
-        userGoal: input.snapshot.state.goal,
-        assistantState: input.snapshot.state.stage,
-        openLoops: input.snapshot.state.openLoops,
+        userGoal: state.goal,
+        assistantState: state.stage,
+        openLoops: state.openLoops,
       },
-      lastAssistantBlocksDigest: input.snapshot.state.lastAssistantDigest,
-      conversationDynamics: input.snapshot.state.conversationDynamics,
-      userMemory: input.snapshot.state.userMemory,
+      turns: state.turns,
+      salience: state.salience,
+      lastAssistantBlocksDigest: state.lastAssistantDigest,
+      conversationDynamics: state.conversationDynamics,
+      userMemory: state.userMemory,
     },
   };
 }
@@ -324,15 +556,17 @@ export function buildDialogueStateFallbackFromMetadata(
     ? rollingSummary.openLoops
     : [];
   const parsed = dialogueStateSchema.parse({
-    goal: readString(rollingSummary?.userGoal),
-    stage: readString(rollingSummary?.assistantState),
-    openLoops: openLoopsRaw.map(String).filter(Boolean).slice(0, 12),
+    goal: scrubOptionalSnippet(rollingSummary?.userGoal, 500),
+    stage: scrubOptionalSnippet(rollingSummary?.assistantState, 240),
+    openLoops: openLoopsRaw.map(String).map((item) => scrubPrivateSnippet(item, 500)).filter(Boolean).slice(0, 12),
     lastAssistantDigest:
-      readString(compactContext?.lastAssistantBlocksDigest) ??
-      readString(chatContext?.lastAssistantBlocksDigest),
+      scrubOptionalSnippet(compactContext?.lastAssistantBlocksDigest, 500) ??
+      scrubOptionalSnippet(chatContext?.lastAssistantBlocksDigest, 500),
+    turns: sanitizeTurnTraces(compactContext?.turns),
+    salience: sanitizeSalience(compactContext?.salience),
     userMemory: readRecord(compactContext?.userMemory ?? chatContext?.userMemory) ?? {},
   });
-  return parsed;
+  return sanitizeDialogueStateSnapshot(parsed);
 }
 
 export function mergeDialogueState(input: {
@@ -364,7 +598,7 @@ export function mergeDialogueState(input: {
 
   for (const op of goalOps) {
     if (op.op === "open") {
-      goal = op.step ?? op.next ?? goal ?? clip(input.userMessage, 240);
+      goal = op.step ?? op.next ?? goal ?? scrubPrivateSnippet(input.userMessage, 240);
       stage = "open";
     } else if (op.op === "advance") {
       stage = op.step ?? op.next ?? stage ?? "advance";
@@ -379,7 +613,7 @@ export function mergeDialogueState(input: {
   }
 
   for (const followUp of followUps) {
-    newLoops.push(`${followUp.due}: ${followUp.topic} — ${followUp.nudge}`);
+    newLoops.push(scrubPrivateSnippet(`${followUp.due}: ${followUp.topic} — ${followUp.nudge}`, 500));
   }
 
   const factsTouched = appendUnique(
@@ -421,32 +655,53 @@ export function mergeDialogueState(input: {
   const userMemory = input.omitUserMemory
     ? userMemorySchema.parse({})
     : mergeUserMemory(previous.userMemory ?? fallback.userMemory, memoryOps, nowIso);
-
-  return dialogueStateSchema.parse({
-    ...previous,
-    goal,
-    stage: stage ?? input.workload ?? previous.stage,
-    openLoops: appendUnique(previous.openLoops, newLoops, 12),
-    lastAssistantDigest: digestAssistantText(input.assistantText, input.assistantBlocks ?? []) ?? previous.lastAssistantDigest,
-    styleSignature: {
-      opener: conversationDynamics.recentOpeners[0] ?? previous.styleSignature.opener,
-      closer: conversationDynamics.recentClosers[0] ?? previous.styleSignature.closer,
-    },
-    userRegister: envelope?.affect.register ?? previous.userRegister ?? fallback.userRegister,
-    factsTouched,
-    toolHistory,
-    moodTrend,
-    lastProactiveAt: previous.lastProactiveAt,
-    conversationDynamics,
-    userMemory,
-    memoryRefs: input.memoryRefs
-      ? {
-          revision: input.memoryRefs.revision,
-          factIds: input.memoryRefs.factIds ?? [],
-          episodeIds: input.memoryRefs.episodeIds ?? [],
-        }
-      : previous.memoryRefs,
+  const turnTrace = buildTurnTrace({
+    userMessage: input.userMessage,
+    assistantText: input.assistantText,
+    workload: input.workload,
+    nowIso,
   });
+  const salience = deriveTurnSalience({
+    previous: previous.salience ?? fallback.salience,
+    userMessage: input.userMessage,
+    assistantText: input.assistantText,
+    envelope,
+    newLoops,
+    toolResults,
+    nowIso,
+  });
+
+  return sanitizeDialogueStateSnapshot(
+    dialogueStateSchema.parse({
+      ...previous,
+      goal: goal ? scrubPrivateSnippet(goal, 500) : null,
+      stage: stage ? scrubPrivateSnippet(stage, 240) : (input.workload ?? previous.stage),
+      openLoops: appendUnique(previous.openLoops, newLoops, 12),
+      lastAssistantDigest:
+        digestAssistantText(input.assistantText, input.assistantBlocks ?? []) ??
+        previous.lastAssistantDigest,
+      styleSignature: {
+        opener: conversationDynamics.recentOpeners[0] ?? previous.styleSignature.opener,
+        closer: conversationDynamics.recentClosers[0] ?? previous.styleSignature.closer,
+      },
+      userRegister: envelope?.affect.register ?? previous.userRegister ?? fallback.userRegister,
+      factsTouched,
+      toolHistory,
+      moodTrend,
+      lastProactiveAt: previous.lastProactiveAt,
+      conversationDynamics,
+      turns: turnTrace ? [turnTrace, ...previous.turns].slice(0, 12) : previous.turns,
+      salience,
+      userMemory,
+      memoryRefs: input.memoryRefs
+        ? {
+            revision: input.memoryRefs.revision,
+            factIds: input.memoryRefs.factIds ?? [],
+            episodeIds: input.memoryRefs.episodeIds ?? [],
+          }
+        : previous.memoryRefs,
+    }),
+  );
 }
 
 export async function readDialogueState(
@@ -478,7 +733,7 @@ export async function readDialogueStateOnDb(
     sessionId: row.sessionId,
     userId: row.userId,
     revision: row.revision,
-    state: dialogueStateSchema.parse(row.state),
+    state: sanitizeDialogueStateSnapshot(dialogueStateSchema.parse(row.state)),
   };
 }
 

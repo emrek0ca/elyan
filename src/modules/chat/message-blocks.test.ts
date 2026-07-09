@@ -425,6 +425,31 @@ test("composeAssistantMessageBlocks preserves task trace blocks before the text 
   assert.equal(blocks[1]?.markdown, "Belge hazır.");
 });
 
+test("shapeAssistantMessagePayload removes internal task and security blocks from public payloads", () => {
+  const payload = shapeAssistantMessagePayload({
+    role: "assistant",
+    content: "Güvenli cevap.",
+    metadata: {
+      blocks: [
+        {
+          type: "task_trace",
+          taskId: "task-1",
+          status: "completed",
+          title: "Görev tamamlandı",
+          steps: [{ id: "response", label: "Yanıt", status: "completed" }],
+        },
+        {
+          type: "security_decision",
+          request_type: "external_send_request",
+          risk: "medium",
+        },
+      ],
+    },
+  }) as { blocks?: Array<{ type: string }> };
+  assert.equal(payload.blocks?.length, 1);
+  assert.equal(payload.blocks?.[0]?.type, "text");
+});
+
 test("sanitizeAssistantVisibleText strips internal reasoning and keeps the final user-facing answer", () => {
   const sanitized = sanitizeAssistantVisibleText(`
 1. Analyze User Input:
@@ -781,6 +806,55 @@ test("composeAssistantMessageBlocks preserves internal visibility metadata for n
   assert.equal(blocks[0]?.type, "context_signal");
   assert.equal(blocks[0]?.visibility, "assistant_internal_by_default");
   assert.equal(blocks[1]?.type, "text");
+});
+
+test("normalizeAssistantMessageBlocks sanitizes block metadata JSON", () => {
+  const blocks = normalizeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "text",
+        markdown: "Merhaba.",
+        stableBlockId: "bad id with spaces @@@",
+        cacheDigest: "not-a-digest",
+        renderHints: {
+          sectionRole: "detail",
+          debug: "drop",
+          nested: {
+            prompt: "drop raw prompt",
+            density: "compact",
+          },
+          list: ["ok", { toolTrace: "drop" }],
+          longValue: "x".repeat(300),
+        },
+      },
+    ],
+  });
+
+  const block = blocks[0] as Record<string, unknown>;
+  const renderHints = block.renderHints as Record<string, unknown>;
+  const nested = renderHints.nested as Record<string, unknown>;
+
+  assert.equal(block.stableBlockId, "bad_id_with_spaces_");
+  assert.match(String(block.cacheDigest), /^[a-f0-9]{16}$/u);
+  assert.equal(renderHints.debug, undefined);
+  assert.equal(nested.prompt, undefined);
+  assert.equal(nested.density, "compact");
+  assert.deepEqual(renderHints.list, ["ok"]);
+  assert.equal(String(renderHints.longValue).length <= 160, true);
+});
+
+test("normalizeAssistantMessageBlocks drops reasoning trace blocks instead of salvaging them", () => {
+  const blocks = normalizeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "reasoning_trace",
+        content: "internal chain of thought",
+        visibility: "user_visible",
+      },
+    ],
+  });
+
+  assert.deepEqual(blocks, []);
 });
 
 test("sanitizeAssistantVisibleText converts raw br tags into readable markdown lines", () => {

@@ -19,6 +19,8 @@ export type BillingPlan = {
   desktopLimit: number;
   taskLimitMonthly: number;
   aiCreditsMonthly: number;
+  imageGenerationLimitDaily: number;
+  imageGenerationLimitMonthly: number;
   fiveHourBudgetUnits: number;
   dailyBudgetUnits: number;
   weeklyBudgetUnits: number;
@@ -62,6 +64,8 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     desktopLimit: 0,
     taskLimitMonthly: 50,
     aiCreditsMonthly: 120,
+    imageGenerationLimitDaily: 3,
+    imageGenerationLimitMonthly: 3,
     fiveHourBudgetUnits: 4,
     dailyBudgetUnits: 4,
     weeklyBudgetUnits: 72,
@@ -94,6 +98,8 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     desktopLimit: 1,
     taskLimitMonthly: 200,
     aiCreditsMonthly: 600,
+    imageGenerationLimitDaily: 10,
+    imageGenerationLimitMonthly: 10,
     fiveHourBudgetUnits: 18,
     dailyBudgetUnits: 18,
     weeklyBudgetUnits: 288,
@@ -136,6 +142,8 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     desktopLimit: 2,
     taskLimitMonthly: 2_000,
     aiCreditsMonthly: 2_000,
+    imageGenerationLimitDaily: 20,
+    imageGenerationLimitMonthly: 20,
     fiveHourBudgetUnits: 60,
     dailyBudgetUnits: 60,
     weeklyBudgetUnits: 960,

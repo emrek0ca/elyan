@@ -14,6 +14,7 @@ import {
   shapeTaskArtifact,
   shapeTaskFeedItem,
   sanitizePublicInferenceValue,
+  sanitizePublicTaskEventPayload,
 } from "./service-helpers.js";
 import { normalizeAssistantMessageBlocks } from "../chat/message-blocks.js";
 
@@ -539,4 +540,64 @@ test("sanitizePublicInferenceValue removes nested provider and model metadata", 
       latencyMs: 42,
     },
   });
+});
+
+test("sanitizePublicInferenceValue bounds public JSON and strips internal variants", () => {
+  const sanitized = sanitizePublicInferenceValue({
+    text: "x".repeat(9_000),
+    createdAt: new Date("2030-01-01T00:00:00.000Z"),
+    selected_workload: "planning",
+    toolTrace: { raw: "secret" },
+    blocks: Array.from({ length: 250 }, (_, index) => ({ type: "text", markdown: `row-${index}` })),
+    public: {
+      ok: true,
+      nested: {
+        value: "kept",
+      },
+    },
+  }) as Record<string, unknown>;
+
+  assert.equal(String(sanitized.text).endsWith("…"), true);
+  assert.equal(sanitized.createdAt, "2030-01-01T00:00:00.000Z");
+  assert.equal("selected_workload" in sanitized, false);
+  assert.equal("toolTrace" in sanitized, false);
+  assert.equal((sanitized.blocks as unknown[]).length, 200);
+  assert.deepEqual(sanitized.public, {
+    ok: true,
+    nested: {
+      value: "kept",
+    },
+  });
+});
+
+test("sanitizePublicTaskEventPayload preserves public routing contract while stripping internals", () => {
+  const sanitized = sanitizePublicTaskEventPayload({
+    task: {
+      id: "task-1",
+      routeDecision: {
+        route: "server_brain",
+        selectedWorkload: "mobile_chat_fast",
+      },
+      provider: "private-provider",
+      toolTrace: "secret",
+    },
+    artifacts: Array.from({ length: 250 }, (_, index) => ({
+      id: `artifact-${index}`,
+      previewText: "p".repeat(9_000),
+      rawProviderResponse: "secret",
+    })),
+    reasoning: "hidden",
+  }) as Record<string, unknown>;
+
+  const task = sanitized.task as Record<string, unknown>;
+  const routeDecision = task.routeDecision as Record<string, unknown>;
+  assert.equal(routeDecision.route, "server_brain");
+  assert.equal(routeDecision.selectedWorkload, "mobile_chat_fast");
+  assert.equal("provider" in task, false);
+  assert.equal("toolTrace" in task, false);
+  assert.equal("reasoning" in sanitized, false);
+  const artifacts = sanitized.artifacts as Array<Record<string, unknown>>;
+  assert.equal(artifacts.length, 200);
+  assert.equal(String(artifacts[0]?.previewText).endsWith("…"), true);
+  assert.equal("rawProviderResponse" in artifacts[0]!, false);
 });

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildWebGroundingAbstentionBlock,
   buildWebGroundingPromptBlock,
+  classifyWebGroundingDecision,
   detectFactualityGrounding,
   extractDateFromText,
   extractNumericEvidenceFromGrounding,
@@ -11,6 +12,36 @@ import {
   searchPublicWebGrounding,
   shouldUseWebGrounding,
 } from "./web-grounding.js";
+
+function makeFreshData(sourceCount: number, sufficient = sourceCount > 0) {
+  return {
+    schemaVersion: "elyan.fresh_data.v1" as const,
+    domain: "market" as const,
+    status: sourceCount > 0 ? "fresh" as const : "unavailable" as const,
+    freshnessRequired: true,
+    requestedAt: "2026-07-09T12:00:00.000Z",
+    retrievedAt: "2026-07-09T12:00:00.000Z",
+    freshUntil: "2026-07-09T12:00:30.000Z",
+    staleUntil: "2026-07-09T12:02:30.000Z",
+    ageMs: 0,
+    cache: { state: "miss" as const, shared: false },
+    evidence: {
+      sourceCount,
+      freshSourceCount: sourceCount,
+      verifiedSourceCount: sourceCount,
+      freshVerifiedSourceCount: sourceCount,
+      datedSourceCount: sourceCount,
+      freshDatedSourceCount: sourceCount,
+      independentHostCount: sourceCount,
+      minimumSources: 1,
+      minimumVerifiedSources: 1,
+      minimumDatedSources: 0,
+      numericCorroborated: null,
+      sufficient,
+    },
+    reasons: ["test"],
+  };
+}
 
 async function withMockedFetch<T>(
   handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response,
@@ -26,7 +57,7 @@ async function withMockedFetch<T>(
   }
 }
 
-test("shouldUseWebGrounding enables public web grounding for research-like prompts", () => {
+test("shouldUseWebGrounding enables public web grounding only for required prompts", () => {
   assert.equal(
     shouldUseWebGrounding({
       prompt: "Bugünkü Apple haberlerini araştır ve özetle",
@@ -39,7 +70,7 @@ test("shouldUseWebGrounding enables public web grounding for research-like promp
       prompt: "Oğuz, Kıpçak ve Karluk dillerini araştır",
       workload: "mobile_chat_fast",
     }),
-    true,
+    false,
   );
   assert.equal(
     shouldUseWebGrounding({
@@ -53,7 +84,7 @@ test("shouldUseWebGrounding enables public web grounding for research-like promp
       prompt: "Claude ile Groq performansını karşılaştır",
       workload: "mobile_chat_balanced",
     }),
-    true,
+    false,
   );
   assert.equal(
     shouldUseWebGrounding({
@@ -72,6 +103,13 @@ test("shouldUseWebGrounding enables public web grounding for research-like promp
   assert.equal(
     shouldUseWebGrounding({
       prompt: "Bunu internetten araştır ve son verilerle açıkla",
+      workload: "mobile_chat_fast",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldUseWebGrounding({
+      prompt: "Oğuz, Kıpçak ve Karluk dillerini kaynaklı şekilde araştır",
       workload: "mobile_chat_fast",
     }),
     true,
@@ -117,6 +155,99 @@ test("shouldUseWebGrounding grounds volatile factual questions without keywords"
   );
 });
 
+test("shouldUseWebGrounding avoids web for self-contained tasks unless explicitly requested", () => {
+  const prompts = [
+    "Bana kedi resmi çiz",
+    "X için kısa bir paylaşım metni yaz",
+    "Bu Python kodundaki hatayı açıkla",
+    "İki sayının toplamı 10, farkı 4 ise bu sayılar kaçtır?",
+    "Aşağıdaki metni Türkçeye çevir",
+  ];
+  for (const prompt of prompts) {
+    assert.equal(
+      shouldUseWebGrounding({ prompt, workload: "planning" }),
+      false,
+      prompt,
+    );
+  }
+  assert.equal(
+    shouldUseWebGrounding({
+      prompt: "Flutter son sürüm migration guide webden bak",
+      workload: "mobile_chat_balanced",
+    }),
+    true,
+  );
+});
+
+test("classifyWebGroundingDecision separates no-web, optional and required cases", () => {
+  assert.deepEqual(
+    classifyWebGroundingDecision({
+      prompt: "Bana kedi resmi çiz",
+      workload: "mobile_chat_fast",
+    }).mode,
+    "no_web_needed",
+  );
+  assert.deepEqual(
+    classifyWebGroundingDecision({
+      prompt: "Bugünkü dolar kaç TL?",
+      workload: "mobile_chat_fast",
+    }).mode,
+    "web_required",
+  );
+  assert.deepEqual(
+    classifyWebGroundingDecision({
+      prompt: "Flutter son sürümde breaking change var mı?",
+      workload: "mobile_chat_balanced",
+    }).mode,
+    "web_required",
+  );
+  assert.deepEqual(
+    classifyWebGroundingDecision({
+      prompt: "Yapay zeka eğitim yaklaşımlarını karşılaştır",
+      workload: "planning",
+    }).mode,
+    "web_optional",
+  );
+  assert.equal(
+    shouldUseWebGrounding({
+      prompt: "Yapay zeka eğitim yaklaşımlarını karşılaştır",
+      workload: "planning",
+    }),
+    false,
+  );
+});
+
+test("classifyWebGroundingDecision keeps short referential rewrites offline", () => {
+  assert.equal(
+    classifyWebGroundingDecision({
+      prompt: "Aynı hayvandan bahsediyorum; bunu daha kısa, sıcak ve doğru şekilde anlatır mısın?",
+      workload: "mobile_chat_balanced",
+    }).mode,
+    "no_web_needed",
+  );
+});
+
+test("detectFactualityGrounding does not ground generic how-to without freshness signal", () => {
+  assert.equal(
+    detectFactualityGrounding("Flutter ile liste nasıl yapılır?").triggered,
+    false,
+  );
+  assert.equal(
+    shouldUseWebGrounding({
+      prompt: "Flutter ile liste nasıl yapılır?",
+      workload: "mobile_chat_balanced",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldUseWebGrounding({
+      prompt: "Flutter son sürümde liste performansı için güncel best practice nedir?",
+      workload: "mobile_chat_balanced",
+    }),
+    true,
+  );
+});
+
 test("buildWebGroundingAbstentionBlock instructs abstention when grounding failed", () => {
   const block = buildWebGroundingAbstentionBlock({
     enabled: true,
@@ -128,6 +259,7 @@ test("buildWebGroundingAbstentionBlock instructs abstention when grounding faile
     degradedReason: "web_search_timeout",
     confidence: "low",
     decisionReasons: ["volatile_market_fact"],
+    freshData: makeFreshData(0, false),
   });
   assert.ok(block);
   assert.match(block, /WEB VERIFICATION UNAVAILABLE/);
@@ -147,6 +279,7 @@ test("buildWebGroundingAbstentionBlock stays silent for ordinary chat and for us
       degradedReason: null,
       confidence: "low",
       decisionReasons: [],
+      freshData: makeFreshData(0, false),
     }),
     null,
   );
@@ -164,14 +297,19 @@ test("buildWebGroundingAbstentionBlock stays silent for ordinary chat and for us
           url: "https://example.com",
           snippet: "rate",
           sourceHost: "example.com",
+          sourceAuthority: "standard",
           verificationState: "verified",
           queryHits: 1,
           score: 1,
+          sourceTrustScore: 0.62,
+          observedAt: "2026-07-09T12:00:00.000Z",
+          freshnessStatus: "fresh",
         },
       ],
       degradedReason: null,
       confidence: "high",
       decisionReasons: ["volatile_market_fact"],
+      freshData: makeFreshData(1),
     }),
     null,
   );
@@ -281,14 +419,14 @@ test("searchPublicWebGrounding merges multi-query results and verifies top sourc
   );
 
   assert.equal(result.used, true);
-  assert.equal(result.queries.length > 1, true);
+  assert.equal(result.queries.length, 1);
   assert.equal(result.results.length > 0, true);
   assert.equal(result.results[0]?.verificationState, "verified");
   assert.equal(result.results[0]?.queryHits >= 1, true);
   assert.equal(result.confidence === "high" || result.confidence === "medium", true);
 
   const block = buildWebGroundingPromptBlock(result);
-  assert.equal(block?.includes("Queries used:"), true);
+  assert.equal(block?.includes("Query:"), true);
   assert.equal(block?.includes("Retrieved at:"), true);
   assert.equal(block?.includes("Research reasons:"), true);
   assert.equal(block?.includes("Grounding confidence:"), true);
@@ -414,10 +552,58 @@ test("searchPublicWebGrounding caches repeated grounding requests for the same p
   );
 });
 
+test("searchPublicWebGrounding falls back to one secondary provider", async () => {
+  const app = {
+    config: {
+      ELYAN_WEB_GROUNDING_ENABLED: true,
+      ELYAN_SEARCH_PROVIDER: "searxng",
+      SEARXNG_BASE_URL: "https://search.example",
+      ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
+      ELYAN_WEB_GROUNDING_MAX_RESULTS: 3,
+      ELYAN_WEB_GROUNDING_TIMEOUT_MS: 2_000,
+    },
+  } as never;
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.startsWith("https://search.example/")) {
+        return new Response("unavailable", { status: 503 });
+      }
+      if (url.includes("duckduckgo.com/html")) {
+        return new Response(
+          `
+            <div class="result">
+              <a class="result__a" href="https://example.com/current">Current source</a>
+              <a class="result__snippet">Current verified information.</a>
+            </div>
+          `,
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url === "https://example.com/current") {
+        return new Response(
+          "<html><head><title>Current source</title><meta name=\"description\" content=\"Current verified information.\" /></head></html>",
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    () => searchPublicWebGrounding(app, {
+      prompt: "Güncel resmi bilgiyi doğrula",
+      workload: "mobile_chat_balanced",
+    }),
+  );
+
+  assert.equal(result.used, true);
+  assert.equal(result.source, "duckduckgo_html");
+  assert.match(result.degradedReason ?? "", /searxng_http_503/u);
+});
+
 /* ── Structured numeric evidence extraction ─────────────────────────────── */
 
 function makeGroundingResult(
-  results: Array<{ snippet: string; pageContent?: string; url?: string }>,
+  results: Array<{ snippet: string; pageContent?: string; url?: string; sourceHost?: string }>,
 ): Parameters<typeof buildWebGroundingPromptBlock>[0] {
   return {
     enabled: true,
@@ -430,13 +616,18 @@ function makeGroundingResult(
       url: result.url ?? `https://example.com/${index + 1}`,
       snippet: result.snippet,
       pageContent: result.pageContent,
-      sourceHost: "example.com",
+      sourceHost: result.sourceHost ?? "example.com",
+      sourceAuthority: "standard",
       verificationState: "verified",
       queryHits: 1,
       score: 1.5,
+      sourceTrustScore: 0.62,
+      observedAt: "2026-07-09T12:00:00.000Z",
+      freshnessStatus: "fresh",
     })),
     degradedReason: null,
     confidence: "high",
+    freshData: makeFreshData(results.length),
   };
 }
 
@@ -450,6 +641,61 @@ test("parseLocalizedNumber handles TR and EN number formats", () => {
   assert.equal(parseLocalizedNumber("42"), 42);
   assert.equal(parseLocalizedNumber(""), null);
   assert.equal(parseLocalizedNumber("abc"), null);
+});
+
+test("source authority affects ranking and prompt evidence", async () => {
+  const app = {
+    config: {
+      ELYAN_WEB_GROUNDING_ENABLED: true,
+      ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
+      ELYAN_WEB_GROUNDING_MAX_RESULTS: 3,
+      ELYAN_WEB_GROUNDING_TIMEOUT_MS: 2_000,
+      JINA_READER_ENABLED: false,
+    },
+  } as never;
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("duckduckgo.com/html")) {
+        return new Response(
+          `
+            <div class="result">
+              <a class="result__a" href="https://random-low.example/post">Random post</a>
+              <a class="result__snippet">Unofficial copied summary.</a>
+            </div>
+            <div class="result">
+              <a class="result__a" href="https://developer.apple.com/documentation">Official docs</a>
+              <a class="result__snippet">Official documentation summary.</a>
+            </div>
+          `,
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url === "https://random-low.example/post") {
+        return new Response("<html><title>Random post</title><p>Copied summary only.</p></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (url === "https://developer.apple.com/documentation") {
+        return new Response("<html><title>Official docs</title><p>Official documentation content.</p></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    async () =>
+      searchPublicWebGrounding(app, {
+        prompt: "Apple developer documentation kaynaklı araştır",
+        workload: "mobile_chat_balanced",
+      }),
+  );
+
+  assert.equal(result.used, true);
+  assert.equal(result.results[0]?.sourceAuthority, "official");
+  assert.match(buildWebGroundingPromptBlock(result) ?? "", /Source authority: official/);
 });
 
 test("extractDateFromText finds ISO, dotted and named Turkish dates", () => {
@@ -516,6 +762,24 @@ test("numeric extraction skips bare years and URL fragments", () => {
   ]);
   const evidence = extractNumericEvidenceFromGrounding(grounding);
   assert.equal(evidence.hasNumericFacts, false);
+});
+
+test("numeric evidence requires matching units from independent hosts", () => {
+  const grounding = makeGroundingResult([
+    {
+      snippet: "Gram altın 4.250,75 TL.",
+      sourceHost: "market-a.example",
+      url: "https://market-a.example/gold",
+    },
+    {
+      snippet: "Gram altın 4.252,10 TL.",
+      sourceHost: "market-b.example",
+      url: "https://market-b.example/gold",
+    },
+  ]);
+  const evidence = extractNumericEvidenceFromGrounding(grounding);
+  assert.equal(evidence.hasIndependentCorroboration, true);
+  assert.deepEqual(evidence.corroboratedUnits, ["TL"]);
 });
 
 /* ── Web grounding circuit breaker ──────────────────────────────────────── */

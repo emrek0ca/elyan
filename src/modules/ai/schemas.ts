@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { aiProviderSchema } from "../../contracts/domain.js";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 import { sharedBrainWorkloadValues } from "../brain/workloads.js";
 
 export const routePreviewBodySchema = z.object({
@@ -19,7 +20,7 @@ export const upsertAiCredentialBodySchema = z.object({
   apiKey: z.string().min(1).optional(),
   baseUrl: z.string().url().optional(),
   defaultModel: z.string().min(1).max(160).optional(),
-  metadata: z.record(z.any()).optional(),
+  metadata: boundedJsonRecordSchema.optional(),
 });
 
 export const aiUsageQuerySchema = z.object({

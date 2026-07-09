@@ -57,7 +57,7 @@ function createMemoryStore() {
 
 function appWithConfig(
   config: Record<string, unknown>,
-  options: { store?: ReturnType<typeof createMemoryStore> } = {},
+  options: { store?: ReturnType<typeof createMemoryStore>; db?: unknown } = {},
 ): FastifyInstance {
   return {
     config: {
@@ -77,7 +77,59 @@ function appWithConfig(
     services: options.store
       ? { reliability: { store: options.store } }
       : undefined,
+    ...(options.db ? { db: options.db } : {}),
   } as unknown as FastifyInstance;
+}
+
+class FakeQuery<T> {
+  constructor(private readonly result: T) {}
+
+  from() {
+    return this;
+  }
+
+  where() {
+    return this;
+  }
+
+  orderBy() {
+    return this;
+  }
+
+  limit() {
+    return this;
+  }
+
+  then<TResult1 = T, TResult2 = never>(
+    resolve?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+    reject?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ) {
+    return Promise.resolve(this.result).then(resolve, reject);
+  }
+}
+
+class FakeDb {
+  public readonly inserted: Array<Record<string, unknown>> = [];
+
+  constructor(private readonly selectResults: unknown[]) {}
+
+  select() {
+    return new FakeQuery(this.selectResults.shift() ?? []);
+  }
+
+  insert() {
+    const inserted = this.inserted;
+    const builder = {
+      values(values: Record<string, unknown>) {
+        inserted.push(values);
+        return builder;
+      },
+      onConflictDoNothing() {
+        return Promise.resolve();
+      },
+    };
+    return builder;
+  }
 }
 
 test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-renderable image metadata", async () => {
@@ -350,6 +402,149 @@ test("repeat identical prompt is served from cache without a second upstream cal
     assert.ok(second);
     assert.equal(calls, 1, "second identical request must hit the cache");
     assert.deepEqual([...second.binaryBody], [...Buffer.from("cached-dog")]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("plan image limit blocks hosted generation before any provider call", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const metadata: Record<string, unknown> = {};
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return Response.json({ output_image: { data: "x", mime_type: "image/jpeg" } });
+  };
+
+  try {
+    const db = new FakeDb([
+      [],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [{ used: 3 }],
+      [{ granted: 0, used: 0 }],
+      [],
+    ]);
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig(
+        { GEMINI_API_KEY: "gemini-test-key" },
+        { db },
+      ),
+      {
+        prompt: "Kedi resmi çiz",
+        responseText: "",
+        userId: "free-user",
+        taskId: "task-1",
+        metadata,
+      },
+    );
+
+    assert.equal(result, null);
+    assert.equal(calls, 0, "quota-blocked image generation must not call Gemini/OpenAI");
+    assert.equal(metadata.imageGenerationBlockedReason, "image_generation_limit_reached");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("successful hosted generation records plan-scoped image usage", async () => {
+  const originalFetch = globalThis.fetch;
+  const jpegBase64 = Buffer.from("recorded-image").toString("base64");
+
+  globalThis.fetch = async () =>
+    Response.json({ output_image: { data: jpegBase64, mime_type: "image/jpeg" } });
+
+  try {
+    const db = new FakeDb([
+      [
+        {
+          userId: "solo-user",
+          planCode: "solo",
+          status: "active",
+          taskLimitMonthly: 200,
+          aiCreditsMonthly: 600,
+          currentPeriodStartedAt: new Date("2030-01-01T00:00:00.000Z"),
+          periodEndsAt: new Date("2030-02-01T00:00:00.000Z"),
+        },
+      ],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [{ used: 4 }],
+      [{ granted: 0, used: 0 }],
+      [],
+    ]);
+
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig(
+        { GEMINI_API_KEY: "gemini-test-key" },
+        { db },
+      ),
+      {
+        prompt: "Kedi resmi çiz",
+        responseText: "",
+        userId: "solo-user",
+        taskId: "task-2",
+        metadata: {},
+      },
+    );
+
+    assert.ok(result);
+    assert.equal(db.inserted.length, 1);
+    assert.equal(db.inserted[0]?.metric, "subscription_image_generation");
+    assert.equal(db.inserted[0]?.imageUnits, 1);
+    assert.equal(db.inserted[0]?.taskId, "task-2");
+    assert.deepEqual(db.inserted[0]?.planSnapshot, {
+      planCode: "solo",
+      limit: 10,
+      usedBefore: 4,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("hosted image rate limit blocks burst traffic before provider calls", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const jpegBase64 = Buffer.from("rate-limited-image").toString("base64");
+  const metadata: Record<string, unknown> = {};
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return Response.json({ output_image: { data: jpegBase64, mime_type: "image/jpeg" } });
+  };
+
+  try {
+    const app = appWithConfig(
+      { GEMINI_API_KEY: "gemini-test-key" },
+      { store: createMemoryStore() },
+    );
+
+    const first = await maybeGenerateHostedImageArtifact(app, {
+      prompt: "Kedi resmi çiz",
+      responseText: "",
+      userId: "rate-user",
+      metadata,
+    });
+    const second = await maybeGenerateHostedImageArtifact(app, {
+      prompt: "Köpek resmi çiz",
+      responseText: "",
+      userId: "rate-user",
+      metadata,
+    });
+    const third = await maybeGenerateHostedImageArtifact(app, {
+      prompt: "Kuş resmi çiz",
+      responseText: "",
+      userId: "rate-user",
+      metadata,
+    });
+
+    assert.ok(first);
+    assert.ok(second);
+    assert.equal(third, null);
+    assert.equal(calls, 2, "rate-limited request must not call the image provider");
+    assert.equal(metadata.imageGenerationBlockedReason, "image_generation_rate_limited");
   } finally {
     globalThis.fetch = originalFetch;
   }

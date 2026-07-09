@@ -32,6 +32,12 @@ const INJECTION_PHRASE_PATTERN =
 
 const FENCE_PATTERN = /```+/g;
 
+const URL_PATTERN = /https?:\/\/\S+/gi;
+const LOCAL_PATH_PATTERN = /(?:\/Users\/|\/home\/|C:\\Users\\)[^\s]+/gi;
+const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+const PHONE_PATTERN = /\b(?:\+?\d[\d\s().-]{7,}\d)\b/g;
+const UNSAFE_JSON_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 export type SanitizedContextText = {
   text: string;
   modified: boolean;
@@ -64,6 +70,10 @@ export function sanitizeInboundContextText(
     .replace(ROLE_LABEL_PATTERN, (_match, prefix: string, label: string) => `${prefix}${label} -`)
     .replace(INJECTION_PHRASE_PATTERN, "[filtered]")
     .replace(FENCE_PATTERN, "'")
+    .replace(URL_PATTERN, "[url]")
+    .replace(LOCAL_PATH_PATTERN, "[path]")
+    .replace(EMAIL_PATTERN, "[email]")
+    .replace(PHONE_PATTERN, "[number]")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -109,6 +119,7 @@ export function sanitizeInboundContextRecord(
       let keys = 0;
       for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
         if (keys >= 32) break;
+        if (UNSAFE_JSON_OBJECT_KEYS.has(key)) continue;
         const cleaned = walk(entry, depth + 1);
         if (cleaned !== undefined) {
           out[key] = cleaned;

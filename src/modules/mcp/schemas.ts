@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { mcpAuthTypeSchema, mcpServerStatusSchema, mcpTransportSchema } from "../../contracts/domain.js";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
 export const createMcpServerBodySchema = z.object({
   integrationConnectionId: z.string().uuid().optional(),
@@ -10,9 +11,9 @@ export const createMcpServerBodySchema = z.object({
   baseUrl: z.string().url().optional(),
   command: z.string().min(1).optional(),
   args: z.array(z.string().min(1)).default([]),
-  config: z.record(z.any()).optional(),
+  config: boundedJsonRecordSchema.optional(),
   capabilities: z.array(z.string().min(1)).default([]),
-  metadata: z.record(z.any()).optional(),
+  metadata: boundedJsonRecordSchema.optional(),
 });
 
 export const updateMcpServerBodySchema = createMcpServerBodySchema.partial();

@@ -12,6 +12,7 @@
 import type { FastifyInstance } from "fastify";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
+import { LRUCache } from "lru-cache";
 import { tryAcquireLoadSheddingPermit } from "../../lib/reliability/load-shedding.js";
 
 const URL_PATTERN = /https?:\/\/[^\s\])"'>]{8,}/gi;
@@ -20,6 +21,7 @@ const MAX_CONTENT_CHARS = 1_000;
 const JINA_TIMEOUT_MS = 8_000;
 const FALLBACK_TIMEOUT_MS = 5_000;
 const JINA_BASE = "https://r.jina.ai/";
+const URL_CONTEXT_CACHE_TTL_MS = 30 * 60_000;
 
 const BLOCKED_HOSTS = [
   /^localhost$/i,
@@ -41,7 +43,79 @@ function isAllowedHost(url: string): boolean {
   }
 }
 
-function extractUrlsFromPrompt(prompt: string): string[] {
+export type UrlSourceAuthority = "official" | "trusted" | "standard" | "low";
+
+const OFFICIAL_URL_HOST_PATTERNS = [
+  /\.(gov|edu)(\.[a-z]{2})?$/i,
+  /\.go\.tr$/i,
+  /\.edu\.tr$/i,
+  /(^|\.)who\.int$/i,
+  /(^|\.)oecd\.org$/i,
+  /(^|\.)worldbank\.org$/i,
+  /(^|\.)europa\.eu$/i,
+  /(^|\.)apple\.com$/i,
+  /(^|\.)openai\.com$/i,
+  /(^|\.)github\.com$/i,
+];
+
+const LOW_AUTHORITY_URL_HOST_PATTERNS = [
+  /(^|\.)pinterest\./i,
+  /(^|\.)facebook\./i,
+  /(^|\.)instagram\./i,
+  /(^|\.)tiktok\./i,
+  /(^|\.)reddit\./i,
+  /(^|\.)quora\./i,
+];
+
+const TRUSTED_URL_HOST_PATTERNS = [
+  /(^|\.)docs\./i,
+  /(^|\.)developer\./i,
+  /(^|\.)github\.io$/i,
+  /(^|\.)npmjs\.com$/i,
+  /(^|\.)pub\.dev$/i,
+];
+
+const urlContextCache = new WeakMap<
+  FastifyInstance,
+  LRUCache<string, UrlContextResult | Promise<UrlContextResult>>
+>();
+
+function hostFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function classifyUrlSourceAuthority(url: string): UrlSourceAuthority {
+  const host = hostFromUrl(url);
+  if (!host) return "standard";
+  if (LOW_AUTHORITY_URL_HOST_PATTERNS.some((pattern) => pattern.test(host))) return "low";
+  if (OFFICIAL_URL_HOST_PATTERNS.some((pattern) => pattern.test(host))) return "official";
+  if (TRUSTED_URL_HOST_PATTERNS.some((pattern) => pattern.test(host))) return "trusted";
+  return "standard";
+}
+
+function getUrlContextCache(
+  app: FastifyInstance,
+): LRUCache<string, UrlContextResult | Promise<UrlContextResult>> {
+  const existing = urlContextCache.get(app);
+  if (existing) return existing;
+  const created = new LRUCache<string, UrlContextResult | Promise<UrlContextResult>>({
+    max: 200,
+    ttl: URL_CONTEXT_CACHE_TTL_MS,
+    ttlAutopurge: false,
+  });
+  urlContextCache.set(app, created);
+  return created;
+}
+
+function cloneUrlContextResult(result: UrlContextResult): UrlContextResult {
+  return { ...result };
+}
+
+export function extractUrlsFromPrompt(prompt: string): string[] {
   const re = new RegExp(URL_PATTERN.source, "gi");
   const seen = new Set<string>();
   const result: string[] = [];
@@ -165,15 +239,28 @@ export type UrlContextResult = {
   title: string;
   content: string;
   source: "jina" | "html_fallback";
+  sourceAuthority: UrlSourceAuthority;
+  retrievedAt: string;
+  contentLength: number;
   error?: string;
 };
 
-async function fetchUrlContext(app: FastifyInstance, url: string): Promise<UrlContextResult> {
+async function fetchUrlContextUncached(app: FastifyInstance, url: string): Promise<UrlContextResult> {
+  const retrievedAt = new Date().toISOString();
+  const sourceAuthority = classifyUrlSourceAuthority(url);
   /* Try Jina first when enabled */
   if (app.config.JINA_READER_ENABLED) {
     const jinaResult = await fetchViaJina(url);
     if (jinaResult.content.length > 60) {
-      return { url, title: jinaResult.title, content: jinaResult.content, source: "jina" };
+      return {
+        url,
+        title: jinaResult.title,
+        content: jinaResult.content,
+        source: "jina",
+        sourceAuthority,
+        retrievedAt,
+        contentLength: jinaResult.content.length,
+      };
     }
   }
 
@@ -184,8 +271,49 @@ async function fetchUrlContext(app: FastifyInstance, url: string): Promise<UrlCo
     title: htmlResult.title,
     content: htmlResult.content,
     source: "html_fallback",
+    sourceAuthority,
+    retrievedAt,
+    contentLength: htmlResult.content.length,
     error: htmlResult.error,
   };
+}
+
+export async function fetchUrlContext(app: FastifyInstance, url: string): Promise<UrlContextResult> {
+  const normalized = new URL(url).toString();
+  if (!isAllowedHost(normalized)) {
+    return {
+      url: normalized,
+      title: normalized,
+      content: "",
+      source: "html_fallback",
+      sourceAuthority: classifyUrlSourceAuthority(normalized),
+      retrievedAt: new Date().toISOString(),
+      contentLength: 0,
+      error: "blocked_host",
+    };
+  }
+  const cache = getUrlContextCache(app);
+  const cacheKey = normalized.toLowerCase();
+  const cached = cache.get(cacheKey);
+  if (cached !== undefined) {
+    return cloneUrlContextResult(await cached);
+  }
+  const run = fetchUrlContextUncached(app, normalized);
+  cache.set(cacheKey, run);
+  const result = await run;
+  cache.set(cacheKey, result);
+  app.log?.info?.(
+    {
+      provider: result.source,
+      cacheHit: false,
+      sourceAuthority: result.sourceAuthority,
+      contentLength: result.contentLength,
+      success: result.content.length > 40,
+      errorCode: result.error ?? null,
+    },
+    "url context fetched",
+  );
+  return cloneUrlContextResult(result);
 }
 
 /**
@@ -232,7 +360,7 @@ async function buildUrlContextBlockWithPermit(
     "The user's message contains the following URL(s). Content was fetched automatically to help you answer accurately.",
     "Use this content to answer. If content is partial or missing, say so instead of guessing.",
     ...usable.map(
-      (r, i) => `\n${i + 1}. ${r.title}\nURL: ${r.url}\nContent:\n${r.content}`,
+      (r, i) => `\n${i + 1}. ${r.title}\nURL: ${r.url}\nSource authority: ${r.sourceAuthority}\nRetrieved at: ${r.retrievedAt}\nContent:\n${r.content}`,
     ),
     "\nDo not fabricate details not present in the fetched content.",
   ];

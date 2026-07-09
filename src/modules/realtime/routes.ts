@@ -23,6 +23,7 @@ import {
   listRealtimeEventsForStream,
   parseRealtimeEventCursor,
 } from "./log.js";
+import { sanitizePublicTaskEventPayload } from "../tasks/service-helpers.js";
 
 const realtimeStreamQuerySchema = z
   .object({
@@ -54,6 +55,7 @@ export function shapeRealtimeEventEnvelope(
       : null;
   return {
     ...event,
+    payload: sanitizePublicTaskEventPayload(event.payload),
     eventId: seq != null ? String(seq) : null,
     seq,
     cursor: seq != null ? String(seq) : null,

@@ -511,6 +511,7 @@ export async function recordConversationExchangeLearning(
     assistantReply: string;
     intent: string;
     requestId?: string;
+    volatileExternalData?: boolean;
   },
 ): Promise<number> {
   const signals: LearningSignal[] = [];
@@ -687,7 +688,7 @@ export async function recordConversationExchangeLearning(
   }
 
   // Keyword-based memory tag: C'den gelen keyword'lar varsa project_context olarak kaydet
-  if (keywordsResult && keywordsResult.length >= 3) {
+  if (!input.volatileExternalData && keywordsResult && keywordsResult.length >= 3) {
     signals.push({
       type: "project_context",
       key: "message_keywords",

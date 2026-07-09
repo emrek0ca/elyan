@@ -150,7 +150,7 @@ export function shapeTaskFeedItem(
     ...(renderRecipe ? { renderRecipe } : {}),
     summary: task.summary ?? null,
     error: task.error ?? null,
-    approvalRequest: task.approvalRequest ?? null,
+    approvalRequest: sanitizePublicInferenceValue(task.approvalRequest ?? null),
     createdAt: task.createdAt,
     startedAt: task.startedAt ?? null,
     completedAt: task.completedAt ?? null,
@@ -330,6 +330,11 @@ function extractTaskBrainMetadata(value: unknown) {
 }
 
 const INTERNAL_INFERENCE_KEYS = new Set([
+  "agentPlan",
+  "agentplan",
+  "agentRunState",
+  "agentrunstate",
+  "analysis",
   "provider",
   "model",
   "baseModel",
@@ -343,22 +348,147 @@ const INTERNAL_INFERENCE_KEYS = new Set([
   "activeSharedModelProvider",
   "attemptedModels",
   "attemptedProviders",
+  "debug",
+  "debugPayload",
+  "debugpayload",
+  "developerMessage",
+  "developermessage",
+  "internal",
+  "internalMetadata",
+  "internalmetadata",
+  "raw",
+  "rawProviderResponse",
+  "rawproviderresponse",
+  "reasoning",
+  "reasoningTrace",
+  "reasoningtrace",
+  "routeDecision",
+  "routedecision",
+  "selectedWorkload",
+  "selectedworkload",
+  "stackTrace",
+  "stacktrace",
+  "systemPrompt",
+  "systemprompt",
+  "toolRequests",
+  "toolrequests",
+  "toolResults",
+  "toolresults",
+  "toolTrace",
+  "tooltrace",
   "modelSource",
 ]);
 
-export function sanitizePublicInferenceValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizePublicInferenceValue(item));
-  }
-  if (!value || typeof value !== "object") {
+function normalizePublicInferenceKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const NORMALIZED_INTERNAL_INFERENCE_KEYS = new Set(
+  [...INTERNAL_INFERENCE_KEYS].map((key) => normalizePublicInferenceKey(key)),
+);
+
+const INTERNAL_EVENT_PAYLOAD_KEYS = new Set([
+  "analysis",
+  "provider",
+  "model",
+  "baseModel",
+  "configuredBaseModel",
+  "resolvedBaseModel",
+  "resolvedBaseModelSource",
+  "availableModels",
+  "fallbackModel",
+  "fallbackState",
+  "runtimeProvider",
+  "activeSharedModelProvider",
+  "attemptedModels",
+  "attemptedProviders",
+  "debug",
+  "debugPayload",
+  "developerMessage",
+  "internal",
+  "internalMetadata",
+  "raw",
+  "rawProviderResponse",
+  "reasoning",
+  "reasoningTrace",
+  "stackTrace",
+  "systemPrompt",
+  "toolRequests",
+  "toolResults",
+  "toolTrace",
+  "modelSource",
+]);
+
+const NORMALIZED_INTERNAL_EVENT_PAYLOAD_KEYS = new Set(
+  [...INTERNAL_EVENT_PAYLOAD_KEYS].map((key) => normalizePublicInferenceKey(key)),
+);
+
+function clipPublicString(value: string, maxLength: number): string {
+  // Preserve markdown/newline structure; the public boundary only needs a
+  // deterministic size cap, not prose normalization.
+  const normalized = value.trim();
+  return normalized.length <= maxLength
+    ? normalized
+    : `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function sanitizeBoundedPublicJson(
+  value: unknown,
+  internalKeys: Set<string>,
+  depth = 0,
+): unknown {
+  if (value == null || typeof value === "number" || typeof value === "boolean") {
     return value;
+  }
+  if (typeof value === "string") {
+    return clipPublicString(value, 8_000);
+  }
+  if (typeof value !== "object") {
+    return null;
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (depth >= 8) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 200)
+      .map((item) => sanitizeBoundedPublicJson(item, internalKeys, depth + 1));
   }
 
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !INTERNAL_INFERENCE_KEYS.has(key))
-      .map(([key, nestedValue]) => [key, sanitizePublicInferenceValue(nestedValue)]),
+      .filter(
+        ([key]) =>
+          !internalKeys.has(key) &&
+          !internalKeys.has(normalizePublicInferenceKey(key)),
+      )
+      .slice(0, 80)
+      .map(([key, nestedValue]) => {
+        if (normalizePublicInferenceKey(key) === "blocks" && Array.isArray(nestedValue)) {
+          nestedValue = nestedValue.filter((block) => {
+            if (!block || typeof block !== "object" || Array.isArray(block)) return true;
+            const type = String((block as Record<string, unknown>).type ?? "").trim().toLowerCase();
+            return !["task_trace", "security_decision", "reasoning_trace", "tool_trace"].includes(type);
+          });
+        }
+        const nestedKeys =
+          normalizePublicInferenceKey(key) === "metadata"
+            ? NORMALIZED_INTERNAL_INFERENCE_KEYS
+            : internalKeys;
+        return [key, sanitizeBoundedPublicJson(nestedValue, nestedKeys, depth + 1)];
+      }),
   );
+}
+
+export function sanitizePublicInferenceValue(value: unknown, depth = 0): unknown {
+  return sanitizeBoundedPublicJson(value, NORMALIZED_INTERNAL_INFERENCE_KEYS, depth);
+}
+
+export function sanitizePublicTaskEventPayload(value: unknown, depth = 0): unknown {
+  return sanitizeBoundedPublicJson(value, NORMALIZED_INTERNAL_EVENT_PAYLOAD_KEYS, depth);
 }
 
 function extractTaskOperatorSummary(value: unknown) {

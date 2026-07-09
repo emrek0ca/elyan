@@ -39,6 +39,23 @@ test("canonical dialogue state overrides client rolling summary but preserves hi
         stage: "executing",
         openLoops: ["verify"],
         lastAssistantDigest: "server digest",
+        turns: [
+          {
+            at: "2026-07-03T12:00:00.000Z",
+            user: "server user turn",
+            assistant: "server assistant turn",
+            workload: "mobile_chat_fast",
+          },
+        ],
+        salience: {
+          topics: ["onboarding", "mesaj"],
+          entities: ["Elyan"],
+          userIntent: "Üç onboarding mesajı öner.",
+          assistantCommitment: "İkinci mesajı daha sıcak yapacağım.",
+          emotionalTone: "focused",
+          unresolved: true,
+          updatedAt: "2026-07-03T12:00:00.000Z",
+        },
         userMemory: {
           preferredName: "Emre",
           preferredLanguage: "Türkçe",
@@ -51,6 +68,23 @@ test("canonical dialogue state overrides client rolling summary but preserves hi
   assert.equal(rolling.userGoal, "server goal");
   assert.deepEqual(rolling.contextNotes, ["keep"]);
   assert.equal(compact.wantsLongForm, true);
+  assert.deepEqual(compact.turns, [
+    {
+      at: "2026-07-03T12:00:00.000Z",
+      user: "server user turn",
+      assistant: "server assistant turn",
+      workload: "mobile_chat_fast",
+    },
+  ]);
+  assert.deepEqual(compact.salience, {
+    topics: ["onboarding", "mesaj"],
+    entities: ["Elyan"],
+    userIntent: "Üç onboarding mesajı öner.",
+    assistantCommitment: "İkinci mesajı daha sıcak yapacağım.",
+    emotionalTone: "focused",
+    unresolved: true,
+    updatedAt: "2026-07-03T12:00:00.000Z",
+  });
   assert.deepEqual(compact.userMemory, {
     name: null,
     preferredName: "Emre",
@@ -94,6 +128,21 @@ test("buildDialogueStateFallbackFromMetadata preserves sanitized compact context
         openLoops: ["benchmark tekrar kosulacak"],
       },
       lastAssistantBlocksDigest: "summary + text",
+      turns: [
+        {
+          at: "2026-07-03T12:00:00.000Z",
+          user: "Önce problemi tarif ettim",
+          assistant: "Sonra çözüm yolunu anlattım",
+          workload: "mobile_chat_fast",
+        },
+      ],
+      salience: {
+        topics: ["problem", "çözüm"],
+        entities: ["Redis"],
+        userIntent: "Problemi tarif ettim",
+        assistantCommitment: "Çözüm yolunu anlattım",
+        unresolved: false,
+      },
       userMemory: {
         preferredName: "Emre",
         preferredLanguage: "tr",
@@ -108,6 +157,10 @@ test("buildDialogueStateFallbackFromMetadata preserves sanitized compact context
   assert.equal(state.stage, "turn envelope eklendi");
   assert.deepEqual(state.openLoops, ["benchmark tekrar kosulacak"]);
   assert.equal(state.lastAssistantDigest, "summary + text");
+  assert.equal(state.turns[0]?.user, "Önce problemi tarif ettim");
+  assert.equal(state.turns[0]?.assistant, "Sonra çözüm yolunu anlattım");
+  assert.equal(state.salience.topics[0], "problem");
+  assert.equal(state.salience.entities[0], "Redis");
   assert.equal(state.userMemory.preferredName, "Emre");
   assert.equal(state.userMemory.preferredLanguage, "tr");
 });
@@ -225,6 +278,14 @@ test("mergeDialogueState folds TurnEnvelope ops into canonical typed state", () 
   assert.equal(state.stage, "reminder_captured");
   assert.equal(state.openLoops[0], "tomorrow: deploy — Deploy nasil gitti?");
   assert.equal(state.openLoops.includes("eski takip"), true);
+  assert.equal(state.turns[0]?.user, "Yarın deployu hatırlat");
+  assert.equal(state.turns[0]?.assistant, "Tamam, yarın sabah hatırlatacağım.");
+  assert.equal(state.turns[0]?.workload, "mobile_chat_fast");
+  assert.ok(state.salience.topics.includes("deployu"));
+  assert.equal(state.salience.userIntent, "Yarın deployu hatırlat");
+  assert.equal(state.salience.assistantCommitment, "Tamam, yarın sabah hatırlatacağım.");
+  assert.equal(state.salience.emotionalTone, "focused");
+  assert.equal(state.salience.unresolved, true);
   assert.deepEqual(state.factsTouched.slice(0, 2), [
     "reminder_preference",
     "preferred_language",
@@ -237,6 +298,86 @@ test("mergeDialogueState folds TurnEnvelope ops into canonical typed state", () 
   assert.equal(state.moodTrend[0]?.mood, "focused");
   assert.equal(state.userRegister, "technical");
   assert.equal(state.lastAssistantDigest, "Tamam, yarın sabah hatırlatacağım.");
+});
+
+test("mergeDialogueState stores masked continuity snippets instead of raw private values", () => {
+  const state = mergeDialogueState({
+    userMessage:
+      "Şu dosyadaki planı takip et: /Users/emrekoca/Desktop/private/roadmap.md ve bana emre@example.com adresinden bahset.",
+    assistantText:
+      "https://secret.example.com/check adresini ve +90 555 111 22 33 numarasını sonraki adımda tekrar kontrol edeceğim.",
+    workload: "mobile_chat_fast",
+    now: new Date("2026-07-04T12:00:00.000Z"),
+    envelope: {
+      reply: { text: "Kontrol edeceğim.", lang: "tr", tone: "warm" },
+      blocks: [],
+      memory_ops: [],
+      goal_ops: [{ op: "open", step: "Dosya /Users/emrekoca/Desktop/private/roadmap.md takip edilecek" }],
+      follow_ups: [
+        {
+          due: "tomorrow",
+          topic: "https://secret.example.com/check",
+          nudge: "emre@example.com adresini tekrar kontrol et",
+        },
+      ],
+      tool_requests: [],
+      affect: { user_mood_guess: "focused", energy: "mid", register: "technical" },
+    },
+  });
+
+  const serialized = JSON.stringify({
+    goal: state.goal,
+    openLoops: state.openLoops,
+    lastAssistantDigest: state.lastAssistantDigest,
+    turns: state.turns,
+    salience: state.salience,
+  });
+  assert.equal(serialized.includes("/Users/emrekoca"), false);
+  assert.equal(serialized.includes("emre@example.com"), false);
+  assert.equal(serialized.includes("secret.example.com"), false);
+  assert.equal(serialized.includes("+90 555"), false);
+  assert.equal(serialized.includes("[path]"), true);
+  assert.equal(serialized.includes("[email]"), true);
+  assert.equal(serialized.includes("[url]"), true);
+  assert.equal(serialized.includes("[number]"), true);
+});
+
+test("applyCanonicalDialogueStateToMetadata masks legacy raw dialogue snippets", () => {
+  const metadata = applyCanonicalDialogueStateToMetadata({
+    snapshot: {
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      userId: "22222222-2222-4222-8222-222222222222",
+      revision: 1,
+      state: dialogueStateSchema.parse({
+        goal: "Review /Users/emrekoca/Desktop/private.json",
+        stage: "Mail emre@example.com checked",
+        openLoops: ["Call +90 555 111 22 33 tomorrow"],
+        lastAssistantDigest: "Opened https://secret.example.com/page",
+        turns: [
+          {
+            at: "2026-07-04T12:00:00.000Z",
+            user: "Look at /home/emre/private.txt",
+            assistant: "I checked emre@example.com",
+            workload: "mobile_chat_fast",
+          },
+        ],
+        salience: {
+          topics: ["private"],
+          entities: ["https://secret.example.com/page"],
+          userIntent: "Check /Users/emrekoca/Desktop/private.json",
+          assistantCommitment: "I will mail emre@example.com",
+          unresolved: true,
+        },
+      }),
+    },
+  });
+
+  const serialized = JSON.stringify(metadata.compactContext);
+  assert.equal(serialized.includes("/Users/emrekoca"), false);
+  assert.equal(serialized.includes("/home/emre"), false);
+  assert.equal(serialized.includes("emre@example.com"), false);
+  assert.equal(serialized.includes("secret.example.com"), false);
+  assert.equal(serialized.includes("+90 555"), false);
 });
 
 test("mergeDialogueState keeps canonical single-value user memory current", () => {

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertMonthlyImageGenerationAllowed,
   assertMonthlyAiUsageAllowed,
   getBillingUsageSummary,
+  recordImageGenerationUsage,
   recordUsageLedgerEntry,
 } from "./usage-ledger.js";
 
@@ -73,6 +75,7 @@ test("getBillingUsageSummary reads monthly usage from usage_records only", async
       [],
       [{ used: 7 }],
       [{ used: 3 }],
+      [{ used: 1 }],
       [{ granted: 0, used: 0 }],
       [],
     ]),
@@ -85,7 +88,13 @@ test("getBillingUsageSummary reads monthly usage from usage_records only", async
   assert.equal(summary.subscriptionStatus, "free");
   assert.equal(summary.taskLimitMonthly, 50);
   assert.equal(summary.aiCreditsMonthly, 120);
+  assert.equal(summary.imageGenerationLimitDaily, 3);
   assert.equal(summary.aiUsage.remaining, 117);
+  assert.deepEqual(summary.imageGenerationUsage, {
+    limit: 3,
+    used: 1,
+    remaining: 2,
+  });
 });
 
 test("getBillingUsageSummary upgrades legacy zero-credit free rows to catalog allowance", async () => {
@@ -102,6 +111,7 @@ test("getBillingUsageSummary upgrades legacy zero-credit free rows to catalog al
           periodEndsAt: new Date("2030-02-01T00:00:00.000Z"),
         },
       ],
+      [{ used: 0 }],
       [{ used: 0 }],
       [{ used: 0 }],
       [{ granted: 0, used: 0 }],
@@ -123,6 +133,7 @@ test("getBillingUsageSummary keeps free remaining credits on usage_records when 
       [],
       [{ used: 1 }],
       [{ used: 1 }],
+      [{ used: 0 }],
       [{ granted: 0, used: 1 }],
       [{ balanceAfter: 0 }],
     ]),
@@ -142,12 +153,132 @@ test("assertMonthlyAiUsageAllowed only validates subscription activity; quota wi
       [],
       [{ used: 0 }],
       [{ used: 120 }],
+      [{ used: 0 }],
       [{ granted: 0, used: 0 }],
       [],
     ]),
   };
 
   await assert.doesNotReject(() => assertMonthlyAiUsageAllowed(app.db as never, "user-1", 1));
+});
+
+test("image generation daily limits are plan-bound", async () => {
+  const free = await getBillingUsageSummary(
+    new FakeDb([
+      [],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [{ used: 3 }],
+      [{ granted: 0, used: 0 }],
+      [],
+    ]) as never,
+    "free-user",
+  );
+  assert.deepEqual(free.imageGenerationUsage, {
+    limit: 3,
+    used: 3,
+    remaining: 0,
+  });
+
+  const solo = await getBillingUsageSummary(
+    new FakeDb([
+      [
+        {
+          userId: "solo-user",
+          planCode: "solo",
+          status: "active",
+          taskLimitMonthly: 200,
+          aiCreditsMonthly: 600,
+          currentPeriodStartedAt: new Date("2030-01-01T00:00:00.000Z"),
+          periodEndsAt: new Date("2030-02-01T00:00:00.000Z"),
+        },
+      ],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [{ used: 9 }],
+      [{ granted: 0, used: 0 }],
+      [],
+    ]) as never,
+    "solo-user",
+  );
+  assert.deepEqual(solo.imageGenerationUsage, {
+    limit: 10,
+    used: 9,
+    remaining: 1,
+  });
+
+  const pro = await getBillingUsageSummary(
+    new FakeDb([
+      [
+        {
+          userId: "pro-user",
+          planCode: "pro",
+          status: "active",
+          taskLimitMonthly: 2_000,
+          aiCreditsMonthly: 2_000,
+          currentPeriodStartedAt: new Date("2030-01-01T00:00:00.000Z"),
+          periodEndsAt: new Date("2030-02-01T00:00:00.000Z"),
+        },
+      ],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [{ used: 19 }],
+      [{ granted: 0, used: 0 }],
+      [],
+    ]) as never,
+    "pro-user",
+  );
+  assert.deepEqual(pro.imageGenerationUsage, {
+    limit: 20,
+    used: 19,
+    remaining: 1,
+  });
+});
+
+test("assertMonthlyImageGenerationAllowed rejects when daily plan image limit is exhausted", async () => {
+  const db = new FakeDb([
+    [],
+    [{ used: 0 }],
+    [{ used: 0 }],
+    [{ used: 3 }],
+    [{ granted: 0, used: 0 }],
+    [],
+  ]);
+
+  await assert.rejects(
+    () => assertMonthlyImageGenerationAllowed(db as never, "user-1"),
+    /image_generation_limit_reached/,
+  );
+});
+
+test("recordImageGenerationUsage appends a plan-scoped image usage row", async () => {
+  const db = new FakeDb([]);
+
+  await recordImageGenerationUsage(db as never, {
+    userId: "user-1",
+    taskId: "task-1",
+    planCode: "solo",
+    limit: 10,
+    usedBefore: 4,
+  });
+
+  assert.deepEqual(db.inserted[0], {
+    userId: "user-1",
+    identityId: null,
+    taskId: "task-1",
+    metric: "subscription_image_generation",
+    quantity: 1,
+    budgetUnits: 0,
+    documentUnits: 0,
+    imageUnits: 1,
+    toolUnits: 0,
+    qualityProfile: null,
+    planSnapshot: {
+      planCode: "solo",
+      limit: 10,
+      usedBefore: 4,
+    },
+  });
 });
 
 test("recordUsageLedgerEntry appends a usage row", async () => {

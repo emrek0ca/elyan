@@ -27,6 +27,10 @@ import { listFreshWorldSignals } from "../../modules/mobile/service.js";
 import { getActiveGoalForContext } from "../../modules/goals/service.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import {
+  sanitizeInboundContextRecord,
+  sanitizeInboundContextText,
+} from "../../lib/context-text-sanitizer.js";
+import {
   buildCanonicalUserModel,
   buildMemoryRecallPackage,
 } from "../../modules/brain/user-model.js";
@@ -75,6 +79,12 @@ const SUSPICIOUS_NAME_TOKENS = new Set([
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function clipCompactText(value: string, maxChars: number): string {
+  const compact = compactText(value);
+  if (compact.length <= maxChars) return compact;
+  return `${compact.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
 }
 
 type UnderstandingCacheStore = {
@@ -329,6 +339,25 @@ function pushDigestLine(target: string[], value: string | null, maxItems = 6) {
   target.push(compact);
 }
 
+function hasWarmCloseTeachingStyle(value: string): boolean {
+  const normalized = value.replace(/[_-]+/g, " ");
+  return /\b(warm|close|natural|personable|samimi|sıcakkanlı|sicakkanli|yakın|yakin|mature|olgun|teaching|öğretici|ogretici|explanatory|açıklayıcı|aciklayici)\b/i.test(normalized);
+}
+
+function describeResponseStylePreference(value: string): string {
+  const normalized = value.toLowerCase();
+  if (hasWarmCloseTeachingStyle(normalized)) {
+    return "warm, close, mature, explanatory, and teaching-oriented without becoming theatrical or clingy";
+  }
+  if (normalized.includes("professional")) {
+    return "precise, calm, and professional";
+  }
+  if (normalized.includes("formal")) {
+    return "formal and restrained";
+  }
+  return value;
+}
+
 function readSnapshotFact(
   snapshot: MemoryProfileSnapshot | undefined,
   keys: string[],
@@ -373,7 +402,7 @@ function buildRelationshipContextDigest(input: {
   const recentTopics = readSnapshotFact(input.memorySnapshot, ["self_model_recent_topics"]);
 
   if (preferredName) {
-    pushDigestLine(digest, `Use the user's name naturally: ${preferredName}.`);
+    pushDigestLine(digest, `Use the user's name naturally and sparingly: ${preferredName}.`);
   }
   if (preferredLanguage) {
     pushDigestLine(digest, `Default response language preference: ${preferredLanguage}.`);
@@ -382,7 +411,10 @@ function buildRelationshipContextDigest(input: {
     pushDigestLine(digest, `Stable answer length preference: ${answerLength.value}.`);
   }
   if (responseStyle) {
-    pushDigestLine(digest, `Stable response style preference: ${responseStyle.value}.`);
+    pushDigestLine(
+      digest,
+      `Stable response style preference: ${describeResponseStylePreference(responseStyle.value)}.`,
+    );
   }
   if (recentTopics) {
     pushDigestLine(digest, recentTopics.value);
@@ -707,13 +739,17 @@ function buildSpeakingStyleDirectives(input: {
   } else if (answerLength.includes("detailed") || answerLength.includes("long")) {
     directives.push("Give a fuller explanation when needed, but keep the structure clean and deliberate.");
   }
-  if (preferredTone.includes("warm")) {
-    directives.push("Use a warm and close tone, but keep it grounded and non-theatrical.");
+  if (hasWarmCloseTeachingStyle(preferredTone)) {
+    directives.push("Use a warm, close, mature, explanatory, and teaching-oriented tone in the user's language.");
+    directives.push("Be sincere and human, but do not overdo intimacy, praise, or repeated name use.");
   } else if (preferredTone.includes("professional")) {
     directives.push("Keep the tone precise, calm, and professional.");
   }
   if (input.intent.primaryIntent === "chat") {
-    directives.push("Sound natural and human, but avoid filler, hype, or repetitive reassurance.");
+    directives.push("Sound natural, warm, and human; avoid filler, hype, or repetitive reassurance.");
+  }
+  if (input.userProfile?.preferredName) {
+    directives.push("Use the user's name only when it adds warmth or clarity, not as a default opener.");
   }
   if (!input.continuityBoundary.carryContinuity) {
     directives.push("Do not drag prior chat context into the answer when the user has clearly shifted topics.");
@@ -722,7 +758,7 @@ function buildSpeakingStyleDirectives(input: {
     directives.push(continuityStyle);
   }
 
-  return directives.slice(0, 5);
+  return directives.slice(0, 6);
 }
 
 function buildReasoningDirectives(input: {
@@ -853,6 +889,15 @@ async function loadCachedSafeUserProfile(
 
 type FreshWorldSignals = Awaited<ReturnType<typeof listFreshWorldSignals>>;
 
+function sanitizeCachedWorldSignalRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? sanitizeInboundContextRecord(value as Record<string, unknown>, {
+        maxDepth: 2,
+        maxStringLength: 160,
+      })
+    : {};
+}
+
 function reviveFreshWorldSignals(value: unknown): FreshWorldSignals {
   if (!Array.isArray(value)) {
     return [];
@@ -865,14 +910,14 @@ function reviveFreshWorldSignals(value: unknown): FreshWorldSignals {
       signalId: String(record.signalId ?? ""),
       source: String(record.source ?? ""),
       kind: String(record.kind ?? ""),
-      summary: String(record.summary ?? ""),
+      summary: sanitizeInboundContextText(String(record.summary ?? ""), 480).text,
       confidence:
         typeof record.confidence === "number" && Number.isFinite(record.confidence)
           ? record.confidence
           : 0,
-      facts: record.facts,
-      privacy: record.privacy,
-      renderHints: record.renderHints,
+      facts: sanitizeCachedWorldSignalRecord(record.facts),
+      privacy: sanitizeCachedWorldSignalRecord(record.privacy),
+      renderHints: sanitizeCachedWorldSignalRecord(record.renderHints),
       visibility: record.visibility,
       createdAt:
         record.createdAt instanceof Date
@@ -976,6 +1021,8 @@ const OPEN_LOOP_PATTERNS = [
   /\b(bekliyor|bekleyecek|onay bekleniyor|cevap bekliyor|waiting for|pending|needs approval|to be done)\b/i,
   /\?$/,
 ];
+const REFERENTIAL_FOLLOWUP_PATTERN =
+  /^(bunu|şunu|sunu|buradaki|bundaki|aynı|ayni|same|that|this|it|devam|sürdür|surdur)\b|\b(az önceki|az onceki|önceki|onceki|son söylediğin|son soyledigin|son cevabın|son cevabin|bununla bağlantılı|bununla baglantili|ona göre|ona gore|buna göre|buna gore|aynı şekilde|ayni sekilde|aynı mantıkla|ayni mantikla|same logic|devam et|continue|as above|like before)\b/i;
 
 function extractOpenLoopsFromMessages(
   messages: Array<{ role: string; content: string }>,
@@ -991,6 +1038,73 @@ function extractOpenLoopsFromMessages(
     }
   }
   return loops.slice(0, 3);
+}
+
+function extractTurnTracesFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+  input: { userId: string; sessionId?: string | null },
+): Array<{ user: string; assistant: string | null; workload: string | null }> {
+  const root = readRecord(metadata);
+  const compactContext = isTrustedDialogueStateMetadata(metadata, input)
+    ? readRecord(root?.compactContext)
+    : null;
+  const rawTurns = Array.isArray(compactContext?.turns) ? compactContext.turns : [];
+  return rawTurns
+    .map((item) => {
+      const record = readRecord(item);
+      const user = readStringValue(record, "user");
+      if (!user) {
+        return null;
+      }
+      return {
+        user,
+        assistant: readStringValue(record, "assistant"),
+        workload: readStringValue(record, "workload"),
+      };
+    })
+    .filter((item): item is { user: string; assistant: string | null; workload: string | null } => item != null)
+    .slice(0, 8);
+}
+
+function extractSalienceFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+  input: { userId: string; sessionId?: string | null },
+): {
+  topics: string[];
+  entities: string[];
+  userIntent: string | null;
+  assistantCommitment: string | null;
+  emotionalTone: string | null;
+  unresolved: boolean;
+} {
+  const root = readRecord(metadata);
+  const compactContext = isTrustedDialogueStateMetadata(metadata, input)
+    ? readRecord(root?.compactContext)
+    : null;
+  const salience = readRecord(compactContext?.salience);
+  const topics = Array.isArray(salience?.topics)
+    ? salience.topics.map(String).filter(Boolean).slice(0, 8)
+    : [];
+  const entities = Array.isArray(salience?.entities)
+    ? salience.entities.map(String).filter(Boolean).slice(0, 10)
+    : [];
+  return {
+    topics,
+    entities,
+    userIntent: readStringValue(salience, "userIntent"),
+    assistantCommitment: readStringValue(salience, "assistantCommitment"),
+    emotionalTone: readStringValue(salience, "emotionalTone"),
+    unresolved: readBooleanValue(salience, "unresolved") === true,
+  };
+}
+
+function buildTurnTraceText(turns: Array<{ user: string; assistant: string | null; workload: string | null }>): string {
+  return compactText(
+    turns
+      .slice(0, 6)
+      .map((turn) => `${turn.workload ?? "turn"} user=${turn.user} assistant=${turn.assistant ?? ""}`)
+      .join(" "),
+  );
 }
 
 function deriveGoalFromRecentMessages(
@@ -1040,16 +1154,40 @@ function deriveContinuitySummary(
       return { role, content };
     })
     .filter((m): m is { role: string; content: string } => m !== null);
+  const recentTurns = input ? extractTurnTracesFromMetadata(metadata, input) : [];
+  const salience = input
+    ? extractSalienceFromMetadata(metadata, input)
+    : { topics: [], entities: [], userIntent: null, assistantCommitment: null, emotionalTone: null, unresolved: false };
 
   const derivedLoops =
-    storedLoops.length === 0 ? extractOpenLoopsFromMessages(recentMessages) : storedLoops;
+    storedLoops.length === 0
+      ? extractOpenLoopsFromMessages([
+          ...recentMessages,
+          ...recentTurns.map((turn) => ({ role: "user", content: turn.user })),
+        ])
+      : storedLoops;
   const derivedGoal =
-    storedGoal ?? (recentMessages.length > 0 ? deriveGoalFromRecentMessages(recentMessages) : null);
+    storedGoal ??
+    salience.userIntent ??
+    (recentTurns[0]?.user
+      ? clipCompactText(recentTurns[0].user, 180)
+      : recentMessages.length > 0
+        ? deriveGoalFromRecentMessages(recentMessages)
+        : null);
+  const derivedState =
+    storedState ??
+    salience.assistantCommitment ??
+    (recentTurns[0]?.assistant
+      ? clipCompactText(recentTurns[0].assistant, 180)
+      : null);
 
   return {
     userGoal: derivedGoal,
-    assistantState: storedState,
-    openLoops: derivedLoops,
+    assistantState: derivedState,
+    openLoops:
+      salience.unresolved && salience.userIntent && !derivedLoops.includes(salience.userIntent)
+        ? [salience.userIntent, ...derivedLoops].slice(0, 4)
+        : derivedLoops,
   };
 }
 
@@ -1062,7 +1200,23 @@ function deriveContinuityBoundary(input: {
   sessionId?: string | null;
 }): ContinuityBoundary {
   const current = compactText(input.message);
-  if (!current || (!input.continuitySummary.userGoal && input.continuitySummary.openLoops.length === 0)) {
+  const recentTurns = extractTurnTracesFromMetadata(input.metadata, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+  });
+  const salience = extractSalienceFromMetadata(input.metadata, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+  });
+  if (
+    !current ||
+    (!input.continuitySummary.userGoal &&
+      !input.continuitySummary.assistantState &&
+      input.continuitySummary.openLoops.length === 0 &&
+      recentTurns.length === 0 &&
+      salience.topics.length === 0 &&
+      salience.entities.length === 0)
+  ) {
     return {
       mode: "new_topic",
       reason: "no_prior_context",
@@ -1089,15 +1243,26 @@ function deriveContinuityBoundary(input: {
     }))
     .filter((item) => item.role && item.content);
   const lastUserMessage = [...recentMessages].reverse().find((item) => item.role === "user")?.content ?? "";
+  const rollingSummary = readRecord(compactContext?.rollingSummary);
+  const contextNotes = Array.isArray(rollingSummary?.contextNotes)
+    ? rollingSummary.contextNotes.map(String).filter(Boolean).slice(0, 4).join(" ")
+    : "";
   const priorText = compactText(
     [
       input.continuitySummary.userGoal ?? "",
+      input.continuitySummary.assistantState ?? "",
       input.continuitySummary.openLoops.join(" "),
       lastUserMessage,
+      contextNotes,
+      salience.userIntent ?? "",
+      salience.assistantCommitment ?? "",
+      salience.topics.join(" "),
+      salience.entities.join(" "),
+      buildTurnTraceText(recentTurns),
     ].join(" "),
   );
 
-  if (/^(bunu|şunu|sunu|buradaki|bundaki|aynı|same|that|this|it|devam|sürdür|surdur)\b/i.test(current)) {
+  if (REFERENTIAL_FOLLOWUP_PATTERN.test(current)) {
     return {
       mode: "same_topic",
       reason: "referential_followup",
@@ -1110,7 +1275,7 @@ function deriveContinuityBoundary(input: {
   if (overlap >= 2 || overlapRatio >= 0.24) {
     return {
       mode: "same_topic",
-      reason: "lexical_topic_overlap",
+      reason: recentTurns.length > 0 ? "session_turn_overlap" : "lexical_topic_overlap",
       carryContinuity: true,
     };
   }
@@ -1239,6 +1404,9 @@ export function buildUserContextFromMemory(input: {
   const continuitySummary = deriveContinuitySummary(input.task.metadata, {
     userId: input.userId,
   });
+  const turnSalience = extractSalienceFromMetadata(input.task.metadata, {
+    userId: input.userId,
+  });
   const continuityBoundary = deriveContinuityBoundary({
     metadata: input.task.metadata,
     message: input.task.message,
@@ -1253,9 +1421,52 @@ export function buildUserContextFromMemory(input: {
   });
   const memoryEnabled = resolveMemoryEnabled(input.task.metadata);
   const personalizationPrompt = readPersonalizationPrompt(input.task.metadata);
-  const contextPackets = (input.contextPackets ?? []).slice(0, 8);
+  const contextPackets = (input.contextPackets ?? []).slice(0, 10);
   const packetKinds = Array.from(new Set(contextPackets.map((packet) => packet.kind)));
   const healthContextUsed = packetKinds.includes("health_context");
+  if (turnSalience.topics.length > 0) {
+    pushBounded(
+      situationalHints,
+      `Session topics to keep coherent: ${turnSalience.topics.slice(0, 5).join(", ")}`,
+      state,
+    );
+  }
+  if (turnSalience.entities.length > 0) {
+    pushBounded(
+      situationalHints,
+      `Referenced entities from this conversation: ${turnSalience.entities.slice(0, 5).join(", ")}`,
+      state,
+    );
+  }
+  if (turnSalience.assistantCommitment) {
+    pushBounded(
+      behavioralHints,
+      `Assistant commitment to honor if relevant: ${turnSalience.assistantCommitment}`,
+      state,
+    );
+  }
+  if (turnSalience.emotionalTone) {
+    pushBounded(
+      behavioralHints,
+      `User affect signal: ${turnSalience.emotionalTone}; adapt warmth without mentioning the signal.`,
+      state,
+    );
+  }
+  for (const packet of contextPackets) {
+    if (packet.mentionPolicy === "explicit_when_relevant") {
+      pushBounded(
+        situationalHints,
+        `Relevant live context available if directly useful: ${packet.kind}: ${packet.summary}`,
+        state,
+      );
+    } else if (packet.mentionPolicy === "implicit") {
+      pushBounded(
+        behavioralHints,
+        `Silently adapt using ${packet.kind}: ${(packet.allowedUse ?? ["pacing"]).join(", ")}`,
+        state,
+      );
+    }
+  }
 
   for (const hint of extractProjectHints(input.task)) {
     pushBounded(projectHints, hint, state);

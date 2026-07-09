@@ -26,6 +26,10 @@ import { createAuditLog } from "../audit/service.js";
 import { getSharedBrainTargetDevice, listUserDevices } from "../devices/service.js";
 import { buildElyanModelLearningPolicy } from "./elyan-model-learning-policy.js";
 import { buildElyanModelProviderPlan } from "./elyan-model-provider-plan.js";
+import {
+  freshDataPolicyForDomain,
+  type FreshDataDomain,
+} from "./fresh-data-policy.js";
 import { probeSharedBrainInference } from "./inference.js";
 import { getBrainLatencySummary, type BrainLatencySummary } from "./latency-summary.js";
 import { resolveSharedBrainModel } from "./model-resolution.js";
@@ -1708,9 +1712,48 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     },
     webGrounding: {
       enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
-      source: "duckduckgo_html",
+      source:
+        app.config.ELYAN_SEARCH_PROVIDER === "searxng" && app.config.SEARXNG_BASE_URL
+          ? "searxng"
+          : app.config.ELYAN_SEARCH_PROVIDER === "brave" && app.config.BRAVE_SEARCH_API_KEY
+            ? "brave"
+            : "duckduckgo_html",
       maxResults: app.config.ELYAN_WEB_GROUNDING_MAX_RESULTS,
       timeoutMs: app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
+      freshDataContract: {
+        schemaVersion: "elyan.fresh_data.v1",
+        cacheMode: "redis_with_memory_fallback",
+        refreshMode: "request_driven_hot_key",
+        staleGuard: true,
+        sourceTrustScoring: true,
+        sourceFreshnessScoring: true,
+        domains: Object.fromEntries(
+          ([
+            "news",
+            "market",
+            "weather",
+            "sports",
+            "regulation",
+            "software_security",
+            "software_release",
+            "url_review",
+          ] satisfies FreshDataDomain[]).map((domain) => {
+            const policy = freshDataPolicyForDomain(domain);
+            return [
+              domain,
+              {
+                cacheTtlSeconds: Math.round(policy.cacheTtlMs / 1_000),
+                refreshAfterSeconds: Math.round(policy.refreshAfterMs / 1_000),
+                minimumSources: policy.minimumSources,
+                minimumFreshSources: policy.minimumSources,
+                minimumVerifiedSources: policy.minimumVerifiedSources,
+                minimumDatedSources: policy.minimumDatedSources,
+                staleIfError: policy.allowStaleIfError,
+              },
+            ];
+          }),
+        ),
+      },
     },
     hostedConfigured,
   };

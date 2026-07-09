@@ -14,6 +14,7 @@ export const BILLING_USAGE_METRICS = {
   trialTask: "trial_task",
   subscriptionTask: "subscription_task",
   subscriptionAiCredit: "subscription_ai_credit",
+  subscriptionImageGeneration: "subscription_image_generation",
 } as const;
 
 type SubscriptionRow = typeof subscriptions.$inferSelect;
@@ -31,6 +32,7 @@ export type BillingUsageSummary = {
   subscriptionStatus: string;
   taskLimitMonthly: number;
   aiCreditsMonthly: number;
+  imageGenerationLimitDaily: number;
   taskUsage: {
     used: number;
     remaining: number;
@@ -40,8 +42,15 @@ export type BillingUsageSummary = {
     remaining: number;
     granted: number;
   };
+  imageGenerationUsage: {
+    limit: number;
+    used: number;
+    remaining: number;
+  };
   periodStartsAt: Date;
   periodEndsAt: Date;
+  imageGenerationWindowStartsAt: Date;
+  imageGenerationWindowEndsAt: Date;
 };
 
 function now(): Date {
@@ -55,6 +64,15 @@ function startOfCurrentUtcMonth(): Date {
 
 function addUtcMonths(startAt: Date, months: number): Date {
   return new Date(Date.UTC(startAt.getUTCFullYear(), startAt.getUTCMonth() + months, 1, 0, 0, 0, 0));
+}
+
+function startOfCurrentUtcDay(): Date {
+  const current = now();
+  return new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), current.getUTCDate(), 0, 0, 0, 0));
+}
+
+function addUtcDays(startAt: Date, days: number): Date {
+  return new Date(startAt.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
 async function getSubscriptionRow(db: BillingReadDb, userId: string): Promise<SubscriptionRow | null> {
@@ -115,7 +133,11 @@ export async function getBillingUsageSummary(db: BillingReadDb, userId: string):
   const plan = getBillingPlan(subscription?.planCode);
   const planCode = normalizeBillingPlanCode(subscription?.planCode ?? plan.code);
   const window = getUsageWindow(subscription);
-  const [taskUsageUsed, aiUsageUsed, creditSummary] = await Promise.all([
+  const imageGenerationWindow: UsageWindow = {
+    startAt: startOfCurrentUtcDay(),
+    endAt: addUtcDays(startOfCurrentUtcDay(), 1),
+  };
+  const [taskUsageUsed, aiUsageUsed, imageGenerationUsed, creditSummary] = await Promise.all([
     countUsageMetricInWindow(db, {
       userId,
       metric: BILLING_USAGE_METRICS.subscriptionTask,
@@ -125,6 +147,11 @@ export async function getBillingUsageSummary(db: BillingReadDb, userId: string):
       userId,
       metric: BILLING_USAGE_METRICS.subscriptionAiCredit,
       startAt: window.startAt,
+    }),
+    countUsageMetricInWindow(db, {
+      userId,
+      metric: BILLING_USAGE_METRICS.subscriptionImageGeneration,
+      startAt: imageGenerationWindow.startAt,
     }),
     getCreditWindowSummary(db, {
       userId,
@@ -149,12 +176,14 @@ export async function getBillingUsageSummary(db: BillingReadDb, userId: string):
     creditSummary.granted > 0
       ? creditSummary.balance
       : Math.max(0, aiCreditsMonthly - aiUsageUsed);
+  const imageGenerationLimitDaily = plan.imageGenerationLimitDaily;
 
   return {
     planCode,
     subscriptionStatus: subscription?.status ?? "free",
     taskLimitMonthly,
     aiCreditsMonthly,
+    imageGenerationLimitDaily,
     taskUsage: {
       used: taskUsageUsed,
       remaining: Math.max(0, taskLimitMonthly - taskUsageUsed),
@@ -164,8 +193,15 @@ export async function getBillingUsageSummary(db: BillingReadDb, userId: string):
       remaining: creditRemaining,
       granted: creditGranted,
     },
+    imageGenerationUsage: {
+      limit: imageGenerationLimitDaily,
+      used: imageGenerationUsed,
+      remaining: Math.max(0, imageGenerationLimitDaily - imageGenerationUsed),
+    },
     periodStartsAt: window.startAt,
     periodEndsAt: window.endAt,
+    imageGenerationWindowStartsAt: imageGenerationWindow.startAt,
+    imageGenerationWindowEndsAt: imageGenerationWindow.endAt,
   };
 }
 
@@ -194,6 +230,47 @@ export async function assertMonthlyAiUsageAllowed(
   const summary = await getBillingUsageSummary(db, userId);
   assertSubscriptionActive(summary);
   void estimatedCredits;
+}
+
+export async function assertMonthlyImageGenerationAllowed(
+  db: BillingReadDb,
+  userId: string,
+): Promise<BillingUsageSummary> {
+  const summary = await getBillingUsageSummary(db, userId);
+  assertSubscriptionActive(summary);
+  if (summary.imageGenerationUsage.remaining <= 0) {
+    throw conflict("image_generation_limit_reached", {
+      planCode: summary.planCode,
+      limit: summary.imageGenerationUsage.limit,
+      used: summary.imageGenerationUsage.used,
+      retryAt: summary.imageGenerationWindowEndsAt,
+    });
+  }
+  return summary;
+}
+
+export async function recordImageGenerationUsage(
+  db: BillingWriteDb,
+  input: {
+    userId: string;
+    taskId?: string | null;
+    planCode?: BillingPlanCode | null;
+    limit?: number | null;
+    usedBefore?: number | null;
+  },
+): Promise<void> {
+  await recordUsageLedgerEntry(db, {
+    userId: input.userId,
+    taskId: input.taskId ?? null,
+    metric: BILLING_USAGE_METRICS.subscriptionImageGeneration,
+    quantity: 1,
+    imageUnits: 1,
+    planSnapshot: {
+      planCode: input.planCode ?? null,
+      limit: input.limit ?? null,
+      usedBefore: input.usedBefore ?? null,
+    },
+  });
 }
 
 export async function recordUsageLedgerEntry(

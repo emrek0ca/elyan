@@ -167,12 +167,7 @@ test("syncChatTaskLifecycle publishes running assistant snapshots for chat tasks
   const runningBlocks = runningPayload?.assistantMessage?.blocks as
     | Array<Record<string, unknown>>
     | undefined;
-  assert.equal(runningBlocks?.length, 1);
-  assert.equal(runningBlocks?.[0]?.type, "task_trace");
-  assert.equal(runningBlocks?.[0]?.taskId, "task-1");
-  assert.equal(runningBlocks?.[0]?.status, "running");
-  assert.ok(runningBlocks?.[0]?.stableBlockId);
-  assert.ok(runningBlocks?.[0]?.cacheDigest);
+  assert.equal(runningBlocks?.length ?? 0, 0);
 });
 
 test("syncChatTaskLifecycle uses approval message for waiting approval chat snapshots", async () => {
@@ -467,10 +462,9 @@ test("syncChatTaskLifecycle publishes completed assistant blocks with the task s
   const completedBlocks = completedPayload?.assistantMessage?.blocks as
     | Array<Record<string, unknown>>
     | undefined;
-  assert.equal(completedBlocks?.length, 2);
-  assert.equal(completedBlocks?.[0]?.type, "task_trace");
-  assert.equal(completedBlocks?.[1]?.type, "text");
-  assert.equal(completedBlocks?.[1]?.markdown, "Merhaba, nasıl yardımcı olabilirim?");
+  assert.equal(completedBlocks?.length, 1);
+  assert.equal(completedBlocks?.[0]?.type, "text");
+  assert.equal(completedBlocks?.[0]?.markdown, "Merhaba, nasıl yardımcı olabilirim?");
 });
 
 test("syncChatTaskLifecycle strips internal analysis from completed assistant snapshots", async () => {
@@ -584,7 +578,7 @@ Final answer: Görselde okunan metin kabaca "10:03 cku.itiraf.paylasim •II = 3
     undefined,
   );
   assert.equal(
-    completedPayload?.assistantMessage?.blocks?.[1]?.markdown,
+    completedPayload?.assistantMessage?.blocks?.[0]?.markdown,
     'Görselde okunan metin kabaca "10:03 cku.itiraf.paylasim •II = 37" diye başlıyor.',
   );
 });
@@ -678,8 +672,7 @@ test("syncChatTaskLifecycle emits phased v1.1 summary blocks when enabled", asyn
     | undefined;
   const blocks = payload?.assistantMessage?.blocks ?? [];
   assert.equal(blocks[0]?.type, "summary");
-  assert.equal(blocks[1]?.type, "task_trace");
-  assert.equal(blocks[2]?.type, "text");
+  assert.equal(blocks[1]?.type, "text");
 });
 
 test("syncChatTaskLifecycle preserves typed result blocks even when v1.1 chrome is disabled", async () => {
@@ -779,7 +772,8 @@ test("syncChatTaskLifecycle preserves typed result blocks even when v1.1 chrome 
     | undefined;
   const blocks = payload?.assistantMessage?.blocks ?? [];
   assert.equal(blocks[0]?.type, "document_block");
-  assert.equal(blocks[1]?.type, "task_trace");
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[1]?.type, "text");
 });
 
 test("syncChatTaskLifecycle carries generated image artifact blocks to chat surface", async () => {
@@ -889,5 +883,6 @@ test("syncChatTaskLifecycle carries generated image artifact blocks to chat surf
   assert.equal(blocks[0]?.viewerHint, "image");
   assert.equal(blocks[0]?.contentFamily, "image");
   assert.equal(blocks[0]?.url, "https://api.elyan.dev/v1/artifacts/artifact-1/content?token=signed");
-  assert.equal(blocks[1]?.type, "task_trace");
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[1]?.type, "text");
 });

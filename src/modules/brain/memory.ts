@@ -332,6 +332,61 @@ async function ensureMemorySemanticV2Columns(app: FastifyInstance): Promise<bool
   return pending;
 }
 
+async function insertLegacyMemoryFact(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    key: string;
+    value: string;
+    scope: "user" | "shared";
+    factType: "semantic" | "self_model" | "reflective";
+    canonicalKey: string;
+    confidence: number;
+    importanceScore: number;
+    metadata: Record<string, unknown>;
+    sourceRunId?: string | null;
+  },
+) {
+  const rows = await app.db.execute(sql`
+    insert into brain_memory_facts (
+      user_id,
+      account_id,
+      scope,
+      fact_type,
+      canonical_key,
+      key,
+      value,
+      confidence,
+      importance_score,
+      is_pinned,
+      conflict_status,
+      lifecycle_status,
+      last_verified_at,
+      metadata
+    ) values (
+      ${input.userId},
+      ${input.userId},
+      ${input.scope},
+      ${input.factType},
+      ${input.canonicalKey},
+      ${input.key},
+      ${input.value},
+      ${input.confidence},
+      ${input.importanceScore},
+      false,
+      'active',
+      'active',
+      now(),
+      ${JSON.stringify({
+        ...(input.sourceRunId ? { sourceRunId: input.sourceRunId } : {}),
+        ...input.metadata,
+      })}::jsonb
+    ) returning id
+  `);
+  const first = (rows as Array<Record<string, unknown>>)[0];
+  return typeof first?.id === "string" ? first.id : null;
+}
+
 function lexicalOverlapScore(query: string, text: string): number {
   const haystack = turkishLower(compactText(text));
   const tokens = tokenize(query);
@@ -2364,6 +2419,25 @@ export async function upsertMemoryFact(
       })
       .where(eq(brainMemoryFacts.id, existingRows[0].id));
     return existingRows[0].id;
+  }
+
+  // Older local databases can legitimately lag the optional semantic-v2
+  // columns. Drizzle's generated insert includes those columns even when
+  // their value is undefined, so use an explicit legacy-column insert when
+  // the capability probe cannot prepare semantic-v2 safely.
+  if (!(await ensureMemorySemanticV2Columns(app))) {
+    return insertLegacyMemoryFact(app, {
+      userId: input.userId,
+      key: input.key,
+      value: input.value,
+      scope: input.scope,
+      factType: input.factType,
+      canonicalKey,
+      confidence: input.confidence,
+      importanceScore: input.importanceScore,
+      metadata: input.metadata,
+      sourceRunId: input.sourceRunId,
+    });
   }
 
   const insertedRows = await app.db

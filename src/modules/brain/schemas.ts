@@ -9,8 +9,9 @@ import {
   trainingJobKindSchema,
 } from "../../contracts/domain.js";
 import { hasRawBinaryUploadHint } from "../../lib/derived-data.js";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
-const jsonRecordSchema = z.record(z.any());
+const jsonRecordSchema = boundedJsonRecordSchema;
 const memoryLifecycleStatusSchema = z.enum(["active", "contested", "superseded", "soft_deleted", "stale"]);
 const memorySurfaceSchema = z.enum(["all", "facts", "episodes"]);
 const brainChatConversationItemSchema = z.object({

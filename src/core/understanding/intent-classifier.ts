@@ -435,6 +435,10 @@ export async function enhanceIntentWithTransformer(
   text: string,
   current: IntentClassification,
 ): Promise<IntentClassification> {
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+  if (normalizedText.length <= 96 && current.primaryIntent === "chat") {
+    return current;
+  }
   // Only re-classify when the sync path was unsure: "chat", "unknown", or
   // confidence below 0.6. Otherwise the regex match is already definitive
   // and a transformer disagreement is more often a false positive.

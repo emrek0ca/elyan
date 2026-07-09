@@ -58,6 +58,36 @@ test("realtime stream shapes additive envelope fields for mobile replay safety",
   });
 });
 
+test("realtime envelope strips internal metadata before SSE delivery", () => {
+  const envelope = shapeRealtimeEventEnvelope({
+    id: 42,
+    topic: "message.completed",
+    userId: "user-1",
+    payload: {
+      routeDecision: { route: "server_brain", selectedWorkload: "mobile_chat_fast" },
+      assistantMessage: {
+        metadata: {
+          blocks: [{ type: "text", markdown: "Merhaba" }],
+          provider: "private-provider",
+          toolTrace: { secret: true },
+        },
+      },
+    },
+    createdAt: "2030-01-01T00:00:00.000Z",
+  });
+
+  const payload = envelope.payload as Record<string, unknown>;
+  assert.deepEqual(payload.routeDecision, {
+    route: "server_brain",
+    selectedWorkload: "mobile_chat_fast",
+  });
+  const assistantMessage = payload.assistantMessage as Record<string, unknown>;
+  const metadata = assistantMessage.metadata as Record<string, unknown>;
+  assert.deepEqual(metadata.blocks, [{ type: "text", markdown: "Merhaba" }]);
+  assert.equal("provider" in metadata, false);
+  assert.equal("toolTrace" in metadata, false);
+});
+
 test("realtime stream slots are bounded and released per user", () => {
   const release = acquireRealtimeStreamSlot("user-limit", 1);
   assert.equal(activeRealtimeStreamCountForUser("user-limit"), 1);

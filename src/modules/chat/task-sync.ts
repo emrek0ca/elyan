@@ -215,26 +215,50 @@ function clipSummaryText(value: string | null | undefined, maxLength: number) {
   return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
+function scrubSummaryText(value: string | null | undefined, maxLength: number) {
+  return clipSummaryText(value, maxLength)
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/(?:\/Users\/|\/home\/|C:\\Users\\)[^\s]+/gi, "[path]")
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[email]")
+    .replace(/\b(?:\+?\d[\d\s().-]{7,}\d)\b/g, "[number]");
+}
+
 function buildRollingSummaryFromTask(input: {
   task: typeof tasks.$inferSelect;
   assistantContent: string;
+  previousRollingSummary?: Record<string, unknown> | null;
 }) {
-  const openLoops: string[] = [];
+  const openLoops: string[] = Array.isArray(input.previousRollingSummary?.openLoops)
+    ? input.previousRollingSummary.openLoops
+        .map((value) => scrubSummaryText(String(value ?? ""), 140))
+        .filter(Boolean)
+    : [];
   if (input.task.status === "waiting_approval") {
-    openLoops.push("Kullanıcı onayı bekleniyor.");
+    if (!openLoops.includes("Kullanıcı onayı bekleniyor.")) {
+      openLoops.unshift("Kullanıcı onayı bekleniyor.");
+    }
   }
   if (input.task.status === "failed" && input.task.error?.trim()) {
-    openLoops.push(clipSummaryText(input.task.error, 140));
+    const failureLoop = scrubSummaryText(input.task.error, 140);
+    if (failureLoop && !openLoops.includes(failureLoop)) {
+      openLoops.unshift(failureLoop);
+    }
   }
-  const contextNotes = [input.task.summary, input.task.title]
-    .map((value) => (typeof value === "string" ? clipSummaryText(value, 160) : ""))
+  const previousContextNotes = Array.isArray(input.previousRollingSummary?.contextNotes)
+    ? input.previousRollingSummary.contextNotes
+        .map((value) => scrubSummaryText(String(value ?? ""), 160))
+        .filter(Boolean)
+    : [];
+  const contextNotes = [input.task.summary, input.task.title, ...previousContextNotes]
+    .map((value) => (typeof value === "string" ? scrubSummaryText(value, 160) : ""))
     .filter(Boolean)
-    .slice(0, 2);
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .slice(0, 4);
 
   return {
-    userGoal: clipSummaryText(input.task.title, 180) || "Sohbet hedefi",
-    assistantState: clipSummaryText(input.assistantContent, 220),
-    ...(openLoops.length > 0 ? { openLoops } : {}),
+    userGoal: scrubSummaryText(input.task.title, 180) || "Sohbet hedefi",
+    assistantState: scrubSummaryText(input.assistantContent, 220),
+    ...(openLoops.length > 0 ? { openLoops: openLoops.slice(0, 6) } : {}),
     ...(contextNotes.length > 0 ? { contextNotes } : {}),
     updatedAt: new Date().toISOString(),
   };
@@ -355,7 +379,9 @@ export async function syncChatTaskLifecycle(
   },
 ) {
   const metadata = extractChatMetadata(input.originalTask);
-  if (!metadata?.sessionId || !metadata.assistantMessageId) {
+  const sessionId = metadata?.sessionId;
+  const assistantMessageId = metadata?.assistantMessageId;
+  if (!sessionId || !assistantMessageId) {
     return;
   }
 
@@ -386,7 +412,7 @@ export async function syncChatTaskLifecycle(
   }
   const contentBlob = await app.services?.blobs?.storeText({
     ownerType: "chat_message",
-    ownerId: metadata.assistantMessageId,
+    ownerId: assistantMessageId,
     userId: input.updatedTask.userId,
     slot: "content",
     scope: "chat_message_content",
@@ -413,9 +439,10 @@ export async function syncChatTaskLifecycle(
     })
     .where(
       and(
-        eq(chatMessages.id, metadata.assistantMessageId),
-        eq(chatMessages.sessionId, metadata.sessionId),
+        eq(chatMessages.id, assistantMessageId),
+        eq(chatMessages.sessionId, sessionId),
         eq(chatMessages.userId, input.updatedTask.userId),
+        sql`${chatMessages.status} <> 'completed'`,
       ),
     )
     .returning();
@@ -426,24 +453,68 @@ export async function syncChatTaskLifecycle(
   }
 
   const sessionUpdateTime = new Date();
-  const rollingSummary = buildRollingSummaryFromTask({
-    task: input.updatedTask,
-    assistantContent,
-  });
-  await app.db
-    .update(chatSessions)
-    .set({
-      metadata: sql`${chatSessions.metadata} || ${JSON.stringify({
-        chatContext: {
-          rollingSummary,
-          lastAssistantBlocksDigest: clipSummaryText(assistantContent, 280),
-          updatedAt: sessionUpdateTime.toISOString(),
-        },
-      })}::jsonb`,
-      lastMessageAt: sessionUpdateTime,
-      updatedAt: sessionUpdateTime,
-    })
-    .where(and(eq(chatSessions.id, metadata.sessionId), eq(chatSessions.userId, input.updatedTask.userId)));
+  const updateSessionContext = async (tx: typeof app.db) => {
+    if (typeof tx.select !== "function" || typeof tx.update !== "function") {
+      await tx
+        .update(chatSessions)
+        .set({ lastMessageAt: sessionUpdateTime, updatedAt: sessionUpdateTime })
+        .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, input.updatedTask.userId)));
+      return;
+    }
+    const sessionQuery = tx
+      .select({ metadata: chatSessions.metadata })
+      .from(chatSessions)
+      .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, input.updatedTask.userId)));
+    const queryWithOptionalLock = sessionQuery as unknown as {
+      for?: (mode: "update") => Promise<Array<{ metadata: unknown }>>;
+    };
+    const lockedSessionRows = typeof queryWithOptionalLock.for === "function"
+      ? await queryWithOptionalLock.for("update")
+      : await sessionQuery;
+    const sessionMetadata = lockedSessionRows[0]?.metadata;
+    const existingChatContext =
+      sessionMetadata && typeof sessionMetadata === "object" && !Array.isArray(sessionMetadata)
+        ? (sessionMetadata as Record<string, unknown>).chatContext
+        : null;
+    const previousRollingSummary =
+      existingChatContext && typeof existingChatContext === "object" && !Array.isArray(existingChatContext)
+        ? (existingChatContext as Record<string, unknown>).rollingSummary
+        : null;
+    const rollingSummary = buildRollingSummaryFromTask({
+      task: input.updatedTask,
+      assistantContent,
+      previousRollingSummary:
+        previousRollingSummary && typeof previousRollingSummary === "object" && !Array.isArray(previousRollingSummary)
+          ? previousRollingSummary as Record<string, unknown>
+          : null,
+    });
+    await tx
+      .update(chatSessions)
+      .set({
+        metadata: sql`
+          coalesce(${chatSessions.metadata}, '{}'::jsonb) ||
+          jsonb_build_object(
+            'chatContext',
+            coalesce(${chatSessions.metadata}->'chatContext', '{}'::jsonb) ||
+            ${JSON.stringify({
+              rollingSummary,
+              lastAssistantBlocksDigest: scrubSummaryText(assistantContent, 280),
+              updatedAt: sessionUpdateTime.toISOString(),
+            })}::jsonb
+          )
+        `,
+        lastMessageAt: sessionUpdateTime,
+        updatedAt: sessionUpdateTime,
+      })
+      .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, input.updatedTask.userId)));
+  };
+  if (typeof app.db.transaction === "function") {
+    await app.db.transaction(updateSessionContext);
+  } else {
+    // Small unit-test doubles and legacy adapters may not expose transactions;
+    // the production Drizzle database always takes the transactional branch.
+    await updateSessionContext(app.db);
+  }
 
   await app.services.eventBus.publish({
     topic: "chat.message.updated",
@@ -451,7 +522,7 @@ export async function syncChatTaskLifecycle(
     deviceId: input.updatedTask.targetDeviceId,
     taskId: input.updatedTask.id,
     payload: {
-      sessionId: metadata.sessionId,
+      sessionId,
       presentation: extractTaskPresentation(input.updatedTask.payload),
       assistantMessage: shapeAssistantMessagePayload({
         ...assistantMessage,

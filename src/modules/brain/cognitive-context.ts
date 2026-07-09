@@ -16,6 +16,14 @@ const workingSchema = z.object({
   goal: z.string().nullable(),
   stage: z.string().nullable(),
   openLoops: z.array(z.string()).max(12),
+  salience: z.object({
+    topics: z.array(z.string()).max(8),
+    entities: z.array(z.string()).max(10),
+    userIntent: z.string().nullable(),
+    assistantCommitment: z.string().nullable(),
+    emotionalTone: z.string().nullable(),
+    unresolved: z.boolean(),
+  }),
   recentTools: z.array(z.object({
     tool: z.string(),
     status: z.string(),
@@ -219,6 +227,14 @@ async function buildCognitiveContextPacketOnDb(
       goal: dialogue?.state.goal ?? null,
       stage: dialogue?.state.stage ?? null,
       openLoops: dialogue?.state.openLoops ?? [],
+      salience: {
+        topics: dialogue?.state.salience.topics ?? [],
+        entities: dialogue?.state.salience.entities ?? [],
+        userIntent: dialogue?.state.salience.userIntent ?? null,
+        assistantCommitment: dialogue?.state.salience.assistantCommitment ?? null,
+        emotionalTone: dialogue?.state.salience.emotionalTone ?? null,
+        unresolved: dialogue?.state.salience.unresolved ?? false,
+      },
       recentTools: (dialogue?.state.toolHistory ?? []).slice(-12).map((item) => ({
         tool: item.tool,
         status: item.status,

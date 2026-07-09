@@ -41,7 +41,9 @@ import {
   isHostedImageGenerationRequest,
   maybeGenerateHostedImageArtifact,
 } from "../brain/image-generation.js";
+import { sanitizeFinalAssistantResponse } from "../brain/response-policy.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
+import { normalizeFreshDataEnvelope } from "../brain/fresh-data-policy.js";
 import { cancelAgentRunForTask, resumeAgentRunAfterApproval } from "../brain/agent-engine.js";
 import { maybeQueueAutomaticSharedBrainRefresh } from "../brain/service.js";
 import { resolveAttachmentAwareSharedBrainWorkload } from "../brain/workloads.js";
@@ -88,6 +90,7 @@ import {
   getSharedBrainFallbackMessage,
   getTaskPrompt,
   resolveIdempotentTaskMatch,
+  sanitizePublicTaskEventPayload,
   sanitizePublicInferenceValue,
   shapeTaskFeedItem,
   shapeTaskArtifact,
@@ -131,6 +134,81 @@ function visibleTextFromAssistantBlocks(blocks: AssistantMessageBlock[] | undefi
     .filter(Boolean)
     .join("\n\n")
     .trim();
+}
+
+function normalizePromptEchoText(value: string | null | undefined) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("tr-TR")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function stripPromptEchoFromAssistantText(input: {
+  prompt: string;
+  responseText: string;
+}) {
+  const responseText = sanitizeAssistantVisibleText(input.responseText, {
+    fallback: "",
+  }).trim();
+  const prompt = sanitizeAssistantVisibleText(input.prompt, { fallback: "" }).trim();
+  if (!prompt || !responseText) {
+    return responseText;
+  }
+
+  const normalizedPrompt = normalizePromptEchoText(prompt);
+  const normalizedResponse = normalizePromptEchoText(responseText);
+  if (!normalizedPrompt || !normalizedResponse) {
+    return responseText;
+  }
+  if (normalizedResponse === normalizedPrompt) {
+    return "";
+  }
+
+  const lowerPrompt = prompt.toLocaleLowerCase("tr-TR");
+  const lowerResponse = responseText.toLocaleLowerCase("tr-TR");
+  if (lowerResponse.startsWith(lowerPrompt)) {
+    return responseText
+      .slice(prompt.length)
+      .replace(/^[\s:;,.!?'"“”‘’\-–—]+/u, "")
+      .trim();
+  }
+
+  return responseText;
+}
+
+function buildPromptEchoRecoveryAnswer(prompt: string) {
+  const normalized = normalizePromptEchoText(prompt);
+  if (!normalized) {
+    return "";
+  }
+
+  const asksAnimalName =
+    /\bhayvan\b/u.test(normalized) &&
+    /\b(isim|ismi|ad|adı|adi|soyle|söyle|oner|öner|bul)\b/u.test(normalized);
+  if (asksAnimalName) {
+    return "Yıldız burunlu köstebek. Burnunda yıldız şeklinde 22 dokunaç bulunan, çok az bilinen ve oldukça sıra dışı görünümlü bir memeli.";
+  }
+
+  return "";
+}
+
+export function resolveNonEchoAssistantText(input: {
+  prompt: string;
+  responseText: string;
+}) {
+  const stripped = stripPromptEchoFromAssistantText(input);
+  if (stripped) {
+    return stripped;
+  }
+
+  const recovery = buildPromptEchoRecoveryAnswer(input.prompt);
+  if (recovery) {
+    return recovery;
+  }
+
+  return "Yanıtı düzgün üretemedim. Lütfen tekrar dene.";
 }
 
 function conversationTextFromChatMessage(message: {
@@ -222,6 +300,30 @@ function readInferenceStringList(metadata: Record<string, unknown>, key: string)
   return Array.isArray(value)
     ? value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean).slice(0, 8)
     : [];
+}
+
+function readFreshDataDomainString(metadata: Record<string, unknown>): string | null {
+  const value = readInferenceString(metadata, "freshDataDomain");
+  return value && [
+    "news",
+    "market",
+    "weather",
+    "sports",
+    "regulation",
+    "software_security",
+    "software_release",
+    "url_review",
+    "general",
+  ].includes(value)
+    ? value
+    : null;
+}
+
+function readFreshDataStatusString(metadata: Record<string, unknown>): string | null {
+  const value = readInferenceString(metadata, "freshDataStatus");
+  return value && ["fresh", "aging", "stale", "undated", "unavailable"].includes(value)
+    ? value
+    : null;
 }
 
 function readInferenceBoolean(metadata: Record<string, unknown>, key: string): boolean | null {
@@ -327,6 +429,7 @@ export function readServerBrainCompletionMetadata(metadata: Record<string, unkno
   const webGroundingUsed = readInferenceBoolean(metadata, "webGroundingUsed") ?? webSourceCount > 0;
   const groundingUsed =
     readInferenceBoolean(metadata, "groundingUsed") ?? (documentSourceCount > 0 || webGroundingUsed);
+  const freshData = normalizeFreshDataEnvelope(metadata.freshData);
 
   return {
     firstDeltaMs: readInferenceNumber(metadata, "firstDeltaMs"),
@@ -386,6 +489,15 @@ export function readServerBrainCompletionMetadata(metadata: Record<string, unkno
     contextPacketKinds: readInferenceStringList(metadata, "contextPacketKinds"),
     healthContextUsed: Boolean(metadata.healthContextUsed),
     contextFreshness: metadata.contextFreshness ?? null,
+    freshData,
+    freshDataDomain: freshData?.domain ?? readFreshDataDomainString(metadata),
+    freshDataStatus: freshData?.status ?? readFreshDataStatusString(metadata),
+    freshDataEvidenceSufficient:
+      freshData?.evidence.sufficient ?? readInferenceBoolean(metadata, "freshDataEvidenceSufficient"),
+    freshDataStreamPolicy:
+      freshData?.freshnessRequired === true && freshData.evidence.sufficient === false
+        ? "buffer_until_validated"
+        : readInferenceString(metadata, "freshDataStreamPolicy"),
     assistantBlocks: Array.isArray(metadata.blocks) ? metadata.blocks : [],
   };
 }
@@ -1182,6 +1294,12 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
+function readRenderRecipeFromTask(value: unknown): Record<string, unknown> | null {
+  const taskRecord = readRecord(value);
+  const renderRecipe = readRecord(taskRecord?.renderRecipe);
+  return renderRecipe ?? null;
+}
+
 function extractUnderstandingEnvelopeFromMetadata(metadata: Record<string, unknown>) {
   const understanding = readRecord(metadata.understanding);
   const parsed = understandingEnvelopeSchema.safeParse(understanding?.envelope);
@@ -1339,6 +1457,10 @@ async function insertTaskEvent(
   },
 ) {
   const eventId = randomUUID();
+  const publicPayload = input.payload
+    ? sanitizePublicTaskEventPayload(input.payload)
+    : null;
+  const publicPayloadRecord = readRecord(publicPayload);
   const payloadBlob = input.payload
     ? await app.services?.blobs?.storeJson({
         ownerType: "task_event",
@@ -1346,7 +1468,7 @@ async function insertTaskEvent(
         userId: input.userId,
         slot: "payload",
         scope: "task_event_payload",
-        value: input.payload,
+        value: publicPayloadRecord ?? publicPayload,
       })
     : null;
   await app.db.insert(taskEvents).values({
@@ -1354,7 +1476,7 @@ async function insertTaskEvent(
     taskId: input.taskId,
     status: input.status,
     message: input.message,
-    payload: compactJsonEnvelope(input.payload),
+    payload: compactJsonEnvelope(publicPayloadRecord),
     payloadBlobId: payloadBlob?.blobId ?? null,
   });
 }
@@ -2122,7 +2244,7 @@ async function publishTaskEvent(app: FastifyInstance, task: typeof tasks.$inferS
     userId: task.userId,
     deviceId: task.targetDeviceId,
     taskId: task.id,
-    payload,
+    payload: sanitizePublicTaskEventPayload(payload),
   });
 }
 
@@ -2252,8 +2374,18 @@ export async function reconcileStaleRuntimeTasks(
             dispatchAckAt: null,
             runtimeConnectionId: null,
           })
-          .where(eq(tasks.id, task.id))
+          .where(
+            and(
+              eq(tasks.id, task.id),
+              eq(tasks.status, "running" as TaskStatus),
+            ),
+          )
           .returning();
+        if (rows.length === 0) {
+          // A completion worker won the race while the stale reconciler was
+          // preparing its fallback. Never emit a second failure transition.
+          continue;
+        }
         const failedTask = rows[0] ?? {
           ...task,
           status: "failed" as TaskStatus,
@@ -2410,6 +2542,11 @@ async function completeServerBrainTask(
     documentSourceCount?: number;
     webGroundingUsed?: boolean;
     webSourceCount?: number;
+    freshData?: Record<string, unknown> | null;
+    freshDataDomain?: string | null;
+    freshDataStatus?: string | null;
+    freshDataEvidenceSufficient?: boolean | null;
+    freshDataStreamPolicy?: string | null;
     attachmentContextUsed?: boolean;
     attachmentContextSource?: string | null;
     attachmentDocumentIds?: string[];
@@ -2458,6 +2595,9 @@ async function completeServerBrainTask(
   if (!task || task.userId !== input.userId) {
     throw notFound("Task not found");
   }
+  if (task.status === "completed") {
+    return task;
+  }
 
   const payload =
     task.payload && typeof task.payload === "object" && !Array.isArray(task.payload)
@@ -2495,6 +2635,29 @@ async function completeServerBrainTask(
     assistantBlocks: resolvedAssistantBlocks,
     allowPublicProviderReferences:
       input.webGroundingUsed === true || (input.webSourceCount ?? 0) > 0,
+  });
+  if (visibleResponseText) {
+    visibleResponseText = resolveNonEchoAssistantText({
+      prompt,
+      responseText: visibleResponseText,
+    });
+  }
+  const normalizedFreshData = normalizeFreshDataEnvelope(input.freshData);
+  visibleResponseText = sanitizeFinalAssistantResponse({
+    prompt,
+    text: visibleResponseText,
+    workload: input.workload,
+    allowVerificationLanguage:
+      input.webGroundingUsed === true || (input.webSourceCount ?? 0) > 0,
+    freshData: normalizedFreshData
+      ? {
+          freshnessRequired: normalizedFreshData.freshnessRequired,
+          status: normalizedFreshData.status,
+          evidence: {
+            sufficient: normalizedFreshData.evidence.sufficient,
+          },
+        }
+      : null,
   });
   const artifactPipeline = await buildArtifactPipeline({
     userRequest: prompt,
@@ -2536,19 +2699,39 @@ async function completeServerBrainTask(
     resolvedAssistantBlocks = mergedValidation.blocks;
     blockQuality = mergedValidation.blockQuality;
   }
-  const generatedImageArtifact = await maybeGenerateHostedImageArtifact(app, {
-    prompt,
-    responseText: visibleResponseText,
-    metadata: payloadMetadata,
-    userId: input.userId,
-  });
-  const imageGenerationRequested = isHostedImageGenerationRequest(prompt);
+  // Model zaten bir veri/matematik görseli (chart/math/table/svg) ürettiyse,
+  // hosted image üretimi ÇALIŞMAZ ve bu blokları ASLA ezmez. "Grafiğini çiz"
+  // gibi isteklerde akıllı inference'ın verdiği doğru grafik korunur; ham
+  // görsel-router artık chart kararını bastıramaz.
+  const VISUAL_DATA_BLOCK_TYPES = new Set([
+    "chart",
+    "math",
+    "math_surface_3d",
+    "table",
+    "svg",
+  ]);
+  const hasVisualDataBlock = resolvedAssistantBlocks.some((block) =>
+    VISUAL_DATA_BLOCK_TYPES.has(block.type),
+  );
+  const generatedImageArtifact = hasVisualDataBlock
+    ? null
+    : await maybeGenerateHostedImageArtifact(app, {
+        prompt,
+        responseText: visibleResponseText,
+        metadata: payloadMetadata,
+        userId: input.userId,
+        taskId: input.taskId,
+      });
+  const imageGenerationRequested =
+    !hasVisualDataBlock && isHostedImageGenerationRequest(prompt);
   if (generatedImageArtifact) {
     visibleResponseText = generatedImageArtifact.previewText;
     resolvedAssistantBlocks = [];
   } else if (imageGenerationRequested) {
     visibleResponseText =
-      "Görsel şu anda üretilemedi. Lütfen biraz sonra tekrar dene.";
+      payloadMetadata.imageGenerationBlockedReason === "image_generation_limit_reached"
+        ? "Bu ayki görsel üretim hakkın doldu. Plan limitin yenilendiğinde tekrar görsel üretebilirsin."
+        : "Görsel şu anda üretilemedi. Lütfen biraz sonra tekrar dene.";
     resolvedAssistantBlocks = [];
   }
   const renderRecipeMetadata =
@@ -2579,7 +2762,7 @@ async function completeServerBrainTask(
       })
       : null;
   const structuredSummary = summarizeStructuredAssistantBlocks(resolvedAssistantBlocks);
-  const taskSummary = visibleResponseText
+  let taskSummary = visibleResponseText
     ? visibleResponseText.slice(0, 280)
     : structuredSummary;
 
@@ -2605,6 +2788,15 @@ async function completeServerBrainTask(
     documentSourceCount: input.documentSourceCount ?? 0,
     webGroundingUsed: input.webGroundingUsed ?? false,
     webSourceCount: input.webSourceCount ?? 0,
+    freshData: normalizedFreshData,
+    freshDataDomain: normalizedFreshData?.domain ?? input.freshDataDomain ?? null,
+    freshDataStatus: normalizedFreshData?.status ?? input.freshDataStatus ?? null,
+    freshDataEvidenceSufficient:
+      normalizedFreshData?.evidence.sufficient ?? input.freshDataEvidenceSufficient ?? null,
+    freshDataStreamPolicy:
+      normalizedFreshData?.freshnessRequired === true && normalizedFreshData.evidence.sufficient === false
+        ? "buffer_until_validated"
+        : input.freshDataStreamPolicy ?? null,
     attachmentContextUsed: input.attachmentContextUsed ?? false,
     attachmentContextSource: input.attachmentContextSource ?? null,
     attachmentDocumentIds: input.attachmentDocumentIds ?? [],
@@ -2688,8 +2880,21 @@ async function completeServerBrainTask(
       updatedAt: now,
       queuePosition: 0,
     })
-    .where(eq(tasks.id, task.id))
+    .where(
+      and(
+        eq(tasks.id, task.id),
+        sql`${tasks.status} <> 'completed'`,
+      ),
+    )
     .returning();
+
+  // Two completion workers can finish at nearly the same time. The first
+  // conditional update owns the terminal transition; the loser must return
+  // the already-persisted result without emitting another completion event.
+  if (rows.length === 0) {
+    const currentTask = await getTaskById(app, task.id);
+    return currentTask ?? task;
+  }
 
   let updatedTask = rows[0] ?? {
     ...task,
@@ -2788,6 +2993,61 @@ async function completeServerBrainTask(
     updatedTask = finalRows[0] ?? {
       ...updatedTask,
       summary: visibleResponseText,
+      result,
+      resultBlobId: finalResultBlob?.blobId ?? updatedTask.resultBlobId ?? null,
+      updatedAt: now,
+    };
+  }
+
+  const finalVisibleResponseText = sanitizeFinalAssistantResponse({
+    prompt,
+    text: visibleResponseText,
+    workload: input.workload,
+    allowVerificationLanguage:
+      input.webGroundingUsed === true || (input.webSourceCount ?? 0) > 0,
+    imageGenerationRequested,
+    hasRenderableOutput:
+      resolvedAssistantBlocks.length > 0 ||
+      structuredOutputArtifacts.length > 0 ||
+      Boolean(renderRecipe),
+    freshData: normalizedFreshData
+      ? {
+          freshnessRequired: normalizedFreshData.freshnessRequired,
+          status: normalizedFreshData.status,
+          evidence: {
+            sufficient: normalizedFreshData.evidence.sufficient,
+          },
+        }
+      : null,
+  });
+  if (finalVisibleResponseText !== visibleResponseText) {
+    visibleResponseText = finalVisibleResponseText;
+    result.text = visibleResponseText;
+    result.responseBytes = Buffer.byteLength(
+      visibleResponseText || JSON.stringify(resolvedAssistantBlocks ?? []),
+      "utf8",
+    );
+    taskSummary = visibleResponseText ? visibleResponseText.slice(0, 280) : structuredSummary;
+    const finalResultBlob = await storeTaskJsonBlob(app, {
+      taskId: task.id,
+      userId: input.userId,
+      slot: "result",
+      scope: "task_result",
+      value: result,
+    });
+    const finalRows = await app.db
+      .update(tasks)
+      .set({
+        summary: taskSummary,
+        result,
+        resultBlobId: finalResultBlob?.blobId ?? null,
+        updatedAt: now,
+      })
+      .where(eq(tasks.id, task.id))
+      .returning();
+    updatedTask = finalRows[0] ?? {
+      ...updatedTask,
+      summary: taskSummary,
       result,
       resultBlobId: finalResultBlob?.blobId ?? updatedTask.resultBlobId ?? null,
       updatedAt: now,
@@ -3302,10 +3562,15 @@ async function processSharedBrainChatTask(
       });
 
       const completedResultRecord = readRecord((completedTask as { result?: unknown }).result);
+      const completedResultBlocks = Array.isArray(completedResultRecord?.assistantBlocks)
+        ? completedResultRecord.assistantBlocks
+        : [];
       const completedResultText =
         typeof completedResultRecord?.text === "string" && completedResultRecord.text.trim()
           ? completedResultRecord.text.trim()
-          : "Görsel hazır.";
+          : completedResultBlocks.length > 0
+            ? "Görsel hazır."
+            : "Görsel şu anda üretilemedi. Lütfen biraz sonra tekrar dene.";
 
       void recordConversationExchangeLearning(app, {
         userId: input.userId,
@@ -3326,9 +3591,6 @@ async function processSharedBrainChatTask(
       }
 
       if (chatStreaming) {
-        const completedResultBlocks = Array.isArray(completedResultRecord?.assistantBlocks)
-          ? completedResultRecord.assistantBlocks
-          : [];
         const imageResultBlocks = normalizeAssistantMessageBlocks({
           blocks: [
             ...(attachmentAckBlock ? [attachmentAckBlock] : []),
@@ -3340,7 +3602,7 @@ async function processSharedBrainChatTask(
           content: visibleText,
           blocks: imageResultBlocks,
         });
-        await app.db
+        const finalizedRows = await app.db
           .update(chatMessages)
           .set({
             status: "completed",
@@ -3359,8 +3621,13 @@ async function processSharedBrainChatTask(
               eq(chatMessages.id, chatStreaming.assistantMessageId),
               eq(chatMessages.sessionId, chatStreaming.sessionId),
               eq(chatMessages.userId, input.userId),
+              sql`${chatMessages.status} <> 'completed'`,
             ),
-          );
+          )
+          .returning({ id: chatMessages.id });
+        if (finalizedRows.length === 0) {
+          return;
+        }
         await publishPersistedChatStreamEvent(app, {
           userId: input.userId,
           deviceId: completedTask.targetDeviceId,
@@ -3434,39 +3701,38 @@ async function processSharedBrainChatTask(
         blocks: [ackTaskTrace, ...(attachmentAckBlock ? [attachmentAckBlock] : [])],
         streaming: true,
       });
-      await publishVolatileChatStreamEvent(app, {
-        userId: input.userId,
-        deviceId: runningTask.targetDeviceId,
-        taskId: runningTask.id,
-        sessionId: chatStreaming.sessionId,
-        messageId: chatStreaming.assistantMessageId,
-        event: "message.delta",
-        seq: ++streamSeq,
-        payload: {
-          delta: visibleAckText,
-          // content is omitted — mobile accumulates from delta.
-          // blocks are included so the task-trace card renders immediately.
-          assistantMessage: shapeAssistantMessagePayload({
-            id: chatStreaming.assistantMessageId,
-            role: "assistant",
-            status: "running",
-            ...(ackBlocks.length > 0 ? { blocks: ackBlocks } : {}),
-            taskId: runningTask.id,
-            createdAt: runningTask.createdAt.toISOString(),
-            updatedAt: now,
-          }),
-          streaming: {
-            firstDeltaMs: 0,
-            answerSource: "backend_ack",
+      if (visibleAckText) {
+        await publishVolatileChatStreamEvent(app, {
+          userId: input.userId,
+          deviceId: runningTask.targetDeviceId,
+          taskId: runningTask.id,
+          sessionId: chatStreaming.sessionId,
+          messageId: chatStreaming.assistantMessageId,
+          event: "message.delta",
+          seq: ++streamSeq,
+          payload: {
+            delta: visibleAckText,
+            // content is omitted — mobile accumulates from delta.
+            // blocks are included so the task-trace card renders immediately.
+            assistantMessage: shapeAssistantMessagePayload({
+              id: chatStreaming.assistantMessageId,
+              role: "assistant",
+              status: "running",
+              ...(ackBlocks.length > 0 ? { blocks: ackBlocks } : {}),
+              taskId: runningTask.id,
+              createdAt: runningTask.createdAt.toISOString(),
+              updatedAt: now,
+            }),
+            streaming: {
+              firstDeltaMs: 0,
+              answerSource: "backend_ack",
+            },
           },
-        },
-      });
+        });
+      }
     }
 
-    // Reasoning-channel ("Düşünüyor...") snapshot. Lives next to content so the
-    // SSE delta can carry an updated reasoning block even when content hasn't
-    // grown — gpt-oss emits reasoning chunks BEFORE the first content token.
-    let lastStreamedReasoning = "";
+    // Only sanitized visible content streams to chat; provider reasoning stays internal.
     let lastVisibleStreamingContent = sanitizeAssistantVisibleText(ackText, {
       fallback: ackText,
     });
@@ -3545,20 +3811,20 @@ async function processSharedBrainChatTask(
       brainProfile: input.brainProfile,
           onDelta: chatStreaming
         ? async (delta) => {
-            // Two channels arrive here: content (visible answer) and reasoning
-            // (the "düşünüyor" trace). Either can change without the other.
-            const incomingReasoning = delta.reasoningContent ?? "";
-            const reasoningChanged =
-              incomingReasoning && incomingReasoning !== lastStreamedReasoning;
-            if (reasoningChanged) {
-              lastStreamedReasoning = incomingReasoning;
-            }
-
+            // Provider reasoning is internal-only; only content can stream to chat.
+            const incomingVisibleContent = sanitizeAssistantVisibleText(delta.content, {
+              fallback: "",
+            });
+            const nonEchoVisibleContent = incomingVisibleContent
+              ? stripPromptEchoFromAssistantText({
+                  prompt: input.prompt,
+                  responseText: incomingVisibleContent,
+                })
+              : "";
             const visibleContent =
-              sanitizeAssistantVisibleText(delta.content, { fallback: "" }) ||
-              lastVisibleStreamingContent;
+              nonEchoVisibleContent || lastVisibleStreamingContent;
             const contentChanged = visibleContent !== lastVisibleStreamingContent;
-            if (!contentChanged && !reasoningChanged) {
+            if (!contentChanged) {
               return;
             }
             // Monotonic delta rule: only emit an append-delta when the new
@@ -3579,24 +3845,11 @@ async function processSharedBrainChatTask(
               lastVisibleStreamingContent = visibleContent;
             }
             const now = new Date().toISOString();
-            // Surface reasoning as a typed block so the existing block pipeline
-            // delivers it to the client. Status flips to "completed" once the
-            // final answer (content) is in flight or after generation ends —
-            // see the post-inference patch below.
-            const reasoningBlock = lastStreamedReasoning
-              ? {
-                  type: "reasoning_trace",
-                  status: contentChanged ? "completed" : "running",
-                  content: lastStreamedReasoning,
-                  visibility: "user_visible",
-                }
-              : null;
             const streamingBlocks = composeAssistantMessageBlocks({
               content: visibleContent,
               blocks: [
                 ackTaskTrace,
                 ...(attachmentAckBlock ? [attachmentAckBlock] : []),
-                ...(reasoningBlock ? [reasoningBlock] : []),
               ],
               streaming: true,
             });
@@ -3644,7 +3897,10 @@ async function processSharedBrainChatTask(
     const completedTask = await completeServerBrainTask(app, {
       taskId: input.currentTask.id,
       userId: input.userId,
-      responseText: inference.text,
+      responseText: resolveNonEchoAssistantText({
+        prompt: input.prompt,
+        responseText: inference.text,
+      }),
       provider: inference.provider,
       model: inference.model,
       route: inference.metadata.route as string,
@@ -3670,9 +3926,15 @@ async function processSharedBrainChatTask(
       userId: input.userId,
       taskId: completedTask.id,
       userMessage: input.prompt,
-      assistantReply: inference.text,
+      assistantReply: resolveNonEchoAssistantText({
+        prompt: input.prompt,
+        responseText: inference.text,
+      }),
       intent: input.understanding.intent.primaryIntent,
       requestId: input.requestId,
+      volatileExternalData:
+        typeof inference.metadata.freshDataDomain === "string" &&
+        !["general", "url_review"].includes(inference.metadata.freshDataDomain),
     }).catch(() => undefined);
     // Rolling summary'yi session'a yaz (fire-and-forget)
     if (chatStreaming?.sessionId) {
@@ -3680,7 +3942,10 @@ async function processSharedBrainChatTask(
         userId: input.userId,
         sessionId: chatStreaming.sessionId,
         userMessage: input.prompt,
-        assistantReply: inference.text,
+        assistantReply: resolveNonEchoAssistantText({
+          prompt: input.prompt,
+          responseText: inference.text,
+        }),
       }).catch(() => undefined);
     }
     if (chatStreaming) {
@@ -3733,7 +3998,7 @@ async function processSharedBrainChatTask(
       // Persist final blocks + cleaned content to the chat_messages row so a
       // later GET /messages (user leaves and reopens) returns the same
       // widget-only view, not the duplicated markdown.
-      await app.db
+      const finalizedRows = await app.db
         .update(chatMessages)
         .set({
           status: "completed",
@@ -3752,8 +4017,13 @@ async function processSharedBrainChatTask(
             eq(chatMessages.id, chatStreaming.assistantMessageId),
             eq(chatMessages.sessionId, chatStreaming.sessionId),
             eq(chatMessages.userId, input.userId),
+            sql`${chatMessages.status} <> 'completed'`,
           ),
-        );
+        )
+        .returning({ id: chatMessages.id });
+      if (finalizedRows.length === 0) {
+        return;
+      }
       await publishPersistedChatStreamEvent(app, {
         userId: input.userId,
         deviceId: completedTask.targetDeviceId,
@@ -3803,8 +4073,19 @@ async function processSharedBrainChatTask(
         updatedAt: new Date(),
         queuePosition: 0,
       })
-      .where(eq(tasks.id, input.currentTask.id))
+      .where(
+        and(
+          eq(tasks.id, input.currentTask.id),
+          sql`${tasks.status} <> 'completed'`,
+        ),
+      )
       .returning();
+    if (rows.length === 0) {
+      const currentTask = await getTaskById(app, input.currentTask.id);
+      if (currentTask?.status === "completed") {
+        return;
+      }
+    }
     const failedTask = rows[0] ?? input.currentTask;
     await insertTaskEvent(app, {
       taskId: failedTask.id,
@@ -4504,7 +4785,7 @@ export async function createTask(
           dispatched: true,
           reused: false,
           selectedDesktopOnline,
-          renderRecipe: completedTask.renderRecipe ?? null,
+          renderRecipe: readRenderRecipeFromTask(completedTask),
         };
       }
       const inference = await generateGovernedSharedBrainReply(app, {
@@ -4564,7 +4845,7 @@ export async function createTask(
         dispatched: true,
         reused: false,
         selectedDesktopOnline,
-        renderRecipe: completedTask.renderRecipe ?? null,
+        renderRecipe: readRenderRecipeFromTask(completedTask),
       };
     } catch (error) {
       const fallbackMessage = getSharedBrainFallbackMessage(error);
@@ -4578,8 +4859,25 @@ export async function createTask(
           updatedAt: new Date(),
           queuePosition: 0,
         })
-        .where(eq(tasks.id, currentTask.id))
+        .where(
+          and(
+            eq(tasks.id, currentTask.id),
+            sql`${tasks.status} <> 'completed'`,
+          ),
+        )
         .returning();
+      if (rows.length === 0) {
+        const latestTask = await getTaskById(app, currentTask.id);
+        if (latestTask?.status === "completed") {
+          return {
+            task: shapeTaskFeedItem(latestTask, { selectedDesktopOnline }),
+            dispatched: true,
+            reused: false,
+            selectedDesktopOnline,
+            renderRecipe: readRenderRecipeFromTask(latestTask),
+          };
+        }
+      }
       const failedTask = rows[0] ?? currentTask;
       await insertTaskEvent(app, {
         taskId: failedTask.id,
@@ -4820,7 +5118,9 @@ export async function getTaskDetail(app: FastifyInstance, taskId: string, userId
   return {
     task: {
       ...hydratedTask,
+      payload: sanitizePublicTaskEventPayload(hydratedTask.payload),
       result: sanitizePublicInferenceValue(hydratedTask.result),
+      approvalRequest: sanitizePublicInferenceValue(hydratedTask.approvalRequest),
       chatSessionId: extractTaskChatSessionId(hydratedTask.payload),
     },
     events: await Promise.all(

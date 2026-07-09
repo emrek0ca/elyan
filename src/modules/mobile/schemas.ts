@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
 export const worldSignalKindSchema = z.enum([
   "health",
@@ -26,9 +27,9 @@ export const uploadWorldSignalsBodySchema = z.object({
         kind: worldSignalKindSchema,
         summary: z.string().min(1).max(480),
         confidence: z.number().finite().min(0).max(1),
-        facts: z.record(z.string(), z.unknown()),
-        privacy: z.record(z.string(), z.unknown()),
-        renderHints: z.record(z.string(), z.unknown()).optional(),
+        facts: boundedJsonRecordSchema,
+        privacy: boundedJsonRecordSchema,
+        renderHints: boundedJsonRecordSchema.optional(),
         visibility: z
           .enum(["user_visible", "assistant_internal_by_default"])
           .optional(),

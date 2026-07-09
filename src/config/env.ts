@@ -165,7 +165,7 @@ const envSchema = z.object({
   ELYAN_WEB_SEARCH_BASE_URL: z.string().url().default("https://html.duckduckgo.com/html/"),
   ELYAN_WEB_GROUNDING_MAX_RESULTS: z.coerce.number().int().positive().max(8).default(4),
   ELYAN_WEB_GROUNDING_TIMEOUT_MS: z.coerce.number().int().positive().default(6_500),
-  ELYAN_SEARCH_PROVIDER: z.enum(["duckduckgo_html", "brave", "searxng"]).default("duckduckgo_html"),
+  ELYAN_SEARCH_PROVIDER: z.enum(["duckduckgo_html", "brave", "searxng"]).default("searxng"),
   BRAVE_SEARCH_API_KEY: z.string().optional(),
   SEARXNG_BASE_URL: z.string().url().optional(),
   JINA_READER_ENABLED: booleanFlag(true),
