@@ -403,9 +403,10 @@ Windows/Linux arayüzü; macOS target'ı YALNIZ geliştirme doğrulaması için
 1. **Blok render tamlığı**: şimdilik text + task_trace tam; ChatBlock.swift'teki
    ~30 blok türü (code, table, chart, file, web_search, markdown...) generic'e
    düşüyor. Markdown renderer ekle (markdown paketi), sonra blok blok port et.
-2. **Görünümler**: TaskInboxView (mobilden görevler + onay kartı), PairingView,
-   SettingsView/Profile, BillingView, SessionHistory bulut oturumları
-   (backend getSessionsPage) — şu an yalnız yerel `conversation.list` var.
+2. **Görünümler**: ~~TaskInboxView~~ ✅ (onay diyaloğu + rozet + backend.tasks.
+   approval/execute_assigned bağlı), Pairing = durum kartı ✅ (tam QR akışı
+   kaldı). Kalan: SettingsView/Profile, BillingView, SessionHistory bulut
+   oturumları (backend getSessionsPage) — şu an yalnız yerel `conversation.list`.
 3. **Google OAuth** (LoginView.swift'teki akış) + avatar çekme.
 4. **Paketleme**: `build/runtime/windows|linux/elyan-runtime` PyInstaller
    hedefleri (pyinstaller/ klasöründe macOS spec'i var — çoğalt), Flutter
