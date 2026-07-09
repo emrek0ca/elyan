@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -192,6 +193,76 @@ def _add_slide_blocks(
             continue
 
 
+_SLIDE_COUNT_RE = re.compile(r"(\d+)\s*(?:sayfa|slayt|slide|page)", re.IGNORECASE)
+
+
+def _requested_slide_count(*texts: str) -> int:
+    """Komuttan istenen slayt/sayfa hedefi ("5 sayfalık sunum") — yoksa 0."""
+    for text in texts:
+        match = _SLIDE_COUNT_RE.search(str(text or ""))
+        if match:
+            return max(2, min(12, int(match.group(1))))
+    return 0
+
+
+def _derive_slide_specs(seed_text: str, deck_title: str, target: int) -> list[dict[str, Any]]:
+    """`slides` verilmediğinde içerikten çok-slaytlı deste türetir.
+
+    Eskiden başlık + TEK içerik slaytı basılıyordu; "5 sayfalık sunum" isteği
+    2 slaytlık, içeriği kopyalanmış bir dosya üretiyordu. Araştırma özeti
+    numaralı bulgular + "Kaynaklar:" kuyruğu biçiminde gelir; bulgular istenen
+    sayıda slayta sırayla dağıtılır, kaynaklar ayrı kapanış slaytı olur.
+    """
+    text = str(seed_text or "").strip()
+    if not text:
+        return []
+
+    sources_text = ""
+    main = text
+    marker = re.search(r"\n?\s*Kaynaklar\s*:\s*", main, flags=re.IGNORECASE)
+    if marker:
+        sources_text = main[marker.end():].strip()
+        main = main[: marker.start()].strip()
+
+    items = [part.strip(" -•\t\n") for part in re.split(r"\n\s*(?=\d+[.)]\s)", main) if part.strip()]
+    if len(items) <= 1:
+        items = [part.strip() for part in re.split(r"(?<=[.!?])\s+", main) if len(part.strip()) > 3]
+    if not items:
+        return []
+
+    has_sources = bool(sources_text)
+    if target:
+        content_slots = max(1, target - 1 - (1 if has_sources else 0))
+    else:
+        content_slots = min(4, len(items))
+    content_slots = min(content_slots, len(items))
+
+    chunks: list[list[str]] = [[] for _ in range(content_slots)]
+    for index, item in enumerate(items):
+        slot = min(index * content_slots // len(items), content_slots - 1)
+        chunks[slot].append(item)
+
+    specs: list[dict[str, Any]] = []
+    for chunk in chunks:
+        if not chunk:
+            continue
+        lead = re.sub(r"^\d+[.)]\s*", "", chunk[0])
+        slide_title = lead.split(":", 1)[0].strip()
+        if len(slide_title) > 60 or not slide_title:
+            slide_title = summarize_text(lead, max_chars=60)
+        bullets = [summarize_text(re.sub(r"^\d+[.)]\s*", "", entry), max_chars=220) for entry in chunk]
+        specs.append({"title": slide_title or deck_title, "bullets": bullets, "body": ""})
+
+    if has_sources:
+        source_lines = [line.strip(" -•\t") for line in re.split(r"\n|(?:\s-\s)", sources_text) if line.strip(" -•\t")]
+        specs.append({
+            "title": "Kaynaklar",
+            "bullets": [summarize_text(line, max_chars=180) for line in source_lines[:8]],
+            "body": "",
+        })
+    return specs
+
+
 def _single_slide_payload(
     title: str,
     blocks: list[dict[str, Any]],
@@ -239,6 +310,10 @@ def presentation_write(
         temp_paths=temp_paths,
     )
 
+    if not normalized_slides:
+        derived = _derive_slide_specs(seed_text, deck_title, _requested_slide_count(prompt, title))
+        if derived:
+            normalized_slides = _normalize_slides(derived)
     slide_specs = normalized_slides if normalized_slides else _single_slide_payload(deck_title, normalized_blocks, seed_text)
     try:
         for slide in slide_specs:

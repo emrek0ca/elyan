@@ -2474,6 +2474,17 @@ _COMPOUND_SPLIT_RE = re.compile(
 )
 _COMPOUND_MIN_CONFIDENCE = 0.8
 
+# Türkçe -ıp/-ip ulacı bağlaç görevi görür: "yapay zekayı araştırıp sunum
+# hazırla" = "araştır VE sunum hazırla". Ana bölücü yalnız açık bağlaçları
+# tanıdığı için bu biçim tek segmente düşüyor, araştırma adımı kayboluyor ve
+# komutun tamamı yazıcı aracın dosya adı oluyordu. Muhafazakâr kalmak için
+# yalnız araştırma köklü fiillerde uygulanır (kaydedip/açıp gibi ulaçlar
+# bölünmez — devam segmenti kendi başına rotalanamayabilir).
+_RESEARCH_CONVERB_RE = re.compile(
+    r"^(?P<first>.+?(?:ara[şs]t[ıi]r|arat))[ıi]p\s+(?P<rest>.{4,})$",
+    re.IGNORECASE,
+)
+
 # Zincirin 2+ segmentlerinde "bunu belgele", "sonucu bana mail at" gibi önceki
 # adımın çıktısını tüketen ifadeler tek başına rotalanamaz (konu zamirde kalır).
 # Bu ön ek atılıp kalan fiil bir "tüketici" araca eşlenir; içerik bağlamı
@@ -2579,6 +2590,15 @@ def _compound_route(
     olarak işlenir."""
     segments = [seg.strip(" .,!") for seg in _COMPOUND_SPLIT_RE.split(text)]
     segments = [seg for seg in segments if seg]
+    expanded: list[str] = []
+    for segment in segments:
+        converb = _RESEARCH_CONVERB_RE.match(segment)
+        if converb:
+            expanded.append(converb.group("first").strip())
+            expanded.append(converb.group("rest").strip())
+        else:
+            expanded.append(segment)
+    segments = expanded
     if not 2 <= len(segments) <= 5:
         return None
     parts: list[tuple[str, RoutedTask]] = []
@@ -2638,6 +2658,15 @@ def _compound_route(
                 args["prompt"] = prompt
                 if not str(args.get("title", "") or "").strip():
                     args["title"] = research_topic[:80]
+                current_output = str(args.get("outputPath", "") or "").strip()
+                if current_output:
+                    suffix = Path(current_output).suffix or ".docx"
+                    # Açık yol/tırnaklı ad İSTENMEDİYSE dosya adını konudan üret;
+                    # klasör ipuçları (masaüstüne vb.) tam metinden korunur.
+                    if not re.search(r'["“/~]', text):
+                        args["outputPath"] = _resolve_output_path(
+                            research_topic, suffix, hint=research_topic
+                        )
                 step["args"] = args
 
     if any(routed.privacy_class == "side_effect" for _, routed in parts):

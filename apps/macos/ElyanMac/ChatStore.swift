@@ -55,6 +55,12 @@ struct ChatMessage: Identifiable {
     /// path (which already has its own "Düşünüyor…" indicator) is untouched.
     var historyStatus: String?
     var historyError: String?
+    /// Yerinde blok mutasyonlarının (canlı checklist adım güncellemesi,
+    /// finalizeChecklist) sayacı. `==` blocks.count'u vekil kullanır; aynı
+    /// blok üzerine yazıldığında sayı değişmediği için .equatable() yeniden
+    /// çizimi atlıyordu — spinner runtime "tamamlandı" dese de ekranda sonsuza
+    /// dek dönüyordu. Her yerinde blok güncellemesi bu sayacı artırmalı.
+    var revision: Int = 0
 
     init(
         role: Role, text: String, blocks: [ChatBlock] = [], timestamp: Date = Date(),
@@ -92,6 +98,7 @@ extension ChatMessage: Equatable {
         lhs.id == rhs.id
             && lhs.text == rhs.text
             && lhs.blocks.count == rhs.blocks.count
+            && lhs.revision == rhs.revision
             && lhs.plan == rhs.plan
             && lhs.permission == rhs.permission
             && lhs.historyStatus == rhs.historyStatus
@@ -402,7 +409,13 @@ final class ChatStore: ObservableObject {
     private func finishLocal(text: String) {
         if let id = streamingAssistantId,
            let idx = messages.firstIndex(where: { $0.id == id }) {
-            messages[idx].text = text
+            finalizeChecklist(inMessageId: id, success: false)
+            if messages[idx].blocks.isEmpty {
+                messages[idx].text = text
+            } else {
+                messages[idx].blocks.append(.text(TextBlock(stableBlockId: nil, markdown: text)))
+                messages[idx].revision += 1
+            }
         }
         isStreaming = false
         streamingAssistantId = nil
@@ -436,6 +449,7 @@ final class ChatStore: ObservableObject {
         } else {
             messages[idx].blocks.append(parsed)
         }
+        messages[idx].revision += 1
     }
 
     /// Yürütme çözüldüğünde checklist'i DETERMİNİSTİK sonlandırır: kalan
@@ -458,6 +472,7 @@ final class ChatStore: ObservableObject {
             trace.status = success ? .completed : .failed
             messages[idx].blocks[bIdx] = .taskTrace(trace)
         }
+        messages[idx].revision += 1
     }
 
     /// Aktif oturum değiştiğinde (yeni sohbet = boş kimlik) yerel runtime'ın
@@ -468,7 +483,19 @@ final class ChatStore: ObservableObject {
         drainPendingStream()
         if let id = streamingAssistantId,
            let idx = messages.firstIndex(where: { $0.id == id }) {
-            messages[idx].text = reply.text
+            // Doğrudan send() yolunda da (onay kartsız yürütme) biriken canlı
+            // checklist deterministik kapanır — final progress event'i yarışta
+            // kaybolsa bile spinner takılı kalmaz (confirmPlan'daki kuralın aynısı).
+            finalizeChecklist(inMessageId: id, success: true)
+            let finalText = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if messages[idx].blocks.isEmpty {
+                messages[idx].text = reply.text
+            } else if !finalText.isEmpty {
+                // Render block-first: blok varken .text çizilmez; final metin
+                // text bloğu olarak eklenmezse kullanıcı sonucu hiç göremez.
+                messages[idx].blocks.append(.text(TextBlock(stableBlockId: nil, markdown: finalText)))
+                messages[idx].revision += 1
+            }
             messages[idx].plan = reply.plan
             messages[idx].permission = reply.permission
         }

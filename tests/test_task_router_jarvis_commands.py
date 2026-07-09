@@ -250,3 +250,41 @@ def test_operator_route_does_not_shadow_specific_capabilities() -> None:
         else:
             tool = routed.tool_name if routed else None
             assert tool != "desktop_operator.run", f"{text!r} yanlışlıkla operatöre gitti"
+
+
+def test_research_converb_splits_into_compound_presentation() -> None:
+    # "araştırıp" ulacı bağlaçtır: araştırma adımı + yazıcı adımı üretmeli
+    # (ekran görüntüsündeki hata: tek presentation_write'a düşüp komutun
+    # tamamını dosya adı yapıyordu, araştırma hiç çalışmıyordu).
+    routed = route_text_to_tool("yapay zekayı araştırıp 5 sayfalık sunum hazırla")
+
+    assert routed is not None and routed.intent == "compound_task", f"-> {routed}"
+    capabilities = [step.get("capability") for step in routed.steps]
+    assert capabilities == ["web_research", "presentation_write"]
+    writer_args = dict(routed.steps[1].get("args") or {})
+    prompt = str(writer_args.get("prompt", ""))
+    assert "yapay zeka" in prompt.lower()
+    assert "5 sayfa" in prompt.lower()
+    # Dosya adı ham komut değil, araştırma konusundan türemeli.
+    output_name = str(writer_args.get("outputPath", "")).rsplit("/", 1)[-1]
+    assert output_name.startswith("yapay-zekayi"), output_name
+    assert "arastirip" not in output_name
+
+
+def test_research_converb_document_variant() -> None:
+    routed = route_text_to_tool("kuantum bilgisayarları araştırıp 3 sayfalık belge oluştur")
+
+    assert routed is not None and routed.intent == "compound_task"
+    capabilities = [step.get("capability") for step in routed.steps]
+    assert capabilities == ["web_research", "document_write"]
+
+
+def test_non_research_converb_does_not_split() -> None:
+    # "kaydedip/açıp" gibi araştırma-dışı ulaçlar bölünmez (devam segmenti
+    # kendi başına rotalanamaz; muhafazakâr davranış korunur).
+    routed = route_text_to_tool("dosyayı kaydedip kapat")
+    assert routed is None or routed.intent != "compound_task"
+
+    # Tekil sunum rotası regresyona uğramamalı.
+    single = route_text_to_tool("yapay zeka sunumu hazırla")
+    assert single is not None and single.tool_name == "presentation_write"
