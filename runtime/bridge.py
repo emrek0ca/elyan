@@ -9759,6 +9759,39 @@ class RuntimeBridge:
         self._log_backend_result("pairing_claim_session", result)
         return {"ok": result.ok, "result": result.to_dict()}
 
+    def _deactivate_stale_desktop_devices(self, *, stale_after_seconds: int = 600) -> bool:
+        """Backend'de kayıtlı ama uzun süredir görünmeyen masaüstü cihazlarını
+        düşürür. desktop_limit_reached self-heal'i için kullanılır. En az bir
+        cihaz düşürüldüyse True döner."""
+        boot = self.backend.mobile_bootstrap()
+        if not boot.ok or not isinstance(boot.data, dict):
+            return False
+        data = boot.data.get("data") if isinstance(boot.data.get("data"), dict) else boot.data
+        devices = data.get("devices") if isinstance(data, dict) else None
+        if not isinstance(devices, list):
+            return False
+        now = dt.datetime.now(dt.timezone.utc)
+        removed = 0
+        for device in devices:
+            if not isinstance(device, dict):
+                continue
+            if str(device.get("type", "") or device.get("kind", "") or "").lower() != "desktop":
+                continue
+            device_id = str(device.get("id", "") or device.get("deviceId", "") or "").strip()
+            if not device_id:
+                continue
+            last_seen = _parse_iso_datetime(str(device.get("lastSeenAt", "") or ""))
+            if last_seen is not None:
+                if last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=dt.timezone.utc)
+                if (now - last_seen).total_seconds() < stale_after_seconds:
+                    continue  # yakın zamanda canlıydı — dokunma
+            result = self.backend.device_deactivate(device_id)
+            self._log_backend_result("device_deactivate_stale", result)
+            if result.ok:
+                removed += 1
+        return removed > 0
+
     def pairing_self_pair(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Masaüstünün telefonsuz kendi kendini eşleştirmesi.
 
@@ -9774,15 +9807,23 @@ class RuntimeBridge:
             return {"ok": bool(registration.get("ok")), "stage": "already_paired", "registration": registration}
 
         label = str(payload.get("deviceLabel", "") or "Elyan Mac").strip() or "Elyan Mac"
-        create = self.backend.pairing_create_session(
-            {
-                "deviceLabel": label,
-                "platform": str(payload.get("platform", "") or "macos"),
-                "runtimeVersion": str(payload.get("runtimeVersion", "") or "1.0.0"),
-                "forceNew": True,
-            }
-        )
+        create_payload = {
+            "deviceLabel": label,
+            "platform": str(payload.get("platform", "") or "macos"),
+            "runtimeVersion": str(payload.get("runtimeVersion", "") or "1.0.0"),
+            "forceNew": True,
+        }
+        create = self.backend.pairing_create_session(create_payload)
         self._log_backend_result("pairing_create_session", create)
+        if not create.ok and "desktop_limit_reached" in str(create.error or ""):
+            # Self-heal: yerel kimlik kaybolmuş ama backend'de bu hesabın eski
+            # (hayalet) masaüstü kayıtları limiti dolduruyor. Bayat masaüstü
+            # cihazlarını (≥10 dk görünmemiş) düşür ve bir kez daha dene.
+            # Yanlışlıkla düşen aktif bir masaüstü, kendi self-pair'ıyla geri
+            # kaydolur — akış iki yönde de kendini onarır.
+            if self._deactivate_stale_desktop_devices():
+                create = self.backend.pairing_create_session(create_payload)
+                self._log_backend_result("pairing_create_session_retry", create)
         if not create.ok or not isinstance(create.data, dict):
             return {"ok": False, "stage": "create", "result": create.to_dict()}
         session_id = str(create.data.get("sessionId", "") or create.data.get("id", "") or "").strip()

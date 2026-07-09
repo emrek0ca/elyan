@@ -1,8 +1,63 @@
-# Elyan Mac — Devir Notu (2026-07-08)
+# Elyan Desktop — Devir Notu
 
-Amaç: Elyan macOS uygulamasını Jarvis gibi çalıştırmak — komutları anlayıp
-masaüstünde gerçekten yürüten, sunucu beyniyle yalnız JSON veri sözleşmesiyle
-konuşan bir agent.
+## PIVOT: GUI kaldırıldı → CLI + daemon + tepsi ikonu (2026-07-09 gece)
+
+Kullanıcı kararı: masaüstünde GUI YOK. iOS uygulaması yayında; masaüstü ürünü
+"CLI ile kur, QR ile eşleş, arka planda sessizce yaşa" modeline döndü
+(OpenClaw / Claude dispatch benzeri mobilden-PC kontrol). Swift app
+(apps/macos) ve Flutter app (apps/desktop) SİLİNDİ (git geçmişinde duruyor).
+
+### Yeni yüzey
+- **CLI** `cli/main.py` (`bin/elyan`, Windows: `bin/elyan.cmd`):
+  pair (terminal QR + claim bekleme), login/logout, start/stop/restart/run,
+  status, tasks, doctor, service install|uninstall (launchd/systemd/schtasks),
+  version. Hafif komutlar yalnız STATE dosyası okur; ağır komutlar (pair/login)
+  süreç-içi bridge kullanır ve çift-bridge yarışını önlemek için çalışan
+  daemon'u önce durdurur.
+- **Daemon** `runtime/daemon.py`: RuntimeBridge'i başsız ayakta tutar
+  (bootstrap → WS relay zaten bridge içinde otonom), pidfile + log
+  (`~/Library/Application Support/Elyan/state/daemon.{pid,log}` ve muadilleri),
+  bağlantı düşerse 5 dk'da bir yeniden bootstrap.
+- **Tepsi** `runtime/tray.py` (pystray + pillow): macOS menü çubuğu / Windows
+  tepsi / Linux gösterge — durum + aktif görevler + "Elyan'ı Durdur". Başsız
+  oturumda sessizce devre dışı kalır. pystray macOS'ta ana thread ister;
+  daemon bekçi döngüsünü yan thread'e alır.
+- **Kurulum** `scripts/install.sh`: python3.10+ kontrolü, venv, pip,
+  ~/.local/bin/elyan symlink, doctor.
+
+### Canlıda doğrulanan kritik akış (bu oturum)
+`elyan start` → self-pair 409 **desktop_limit_reached** (hesapta 2 hayalet
+masaüstü kaydı; "çalışmadı" şikayetinin kök nedeni buydu) → YENİ self-heal
+`_deactivate_stale_desktop_devices` (≥10 dk görünmeyen desktop cihazları
+düşürür) → oturum→claim→register 200 → **WS açık, lifecycle ready,
+eşleştirme tamam**. `elyan status` bunların hepsini gösteriyor
+(state şeması: account.accessToken/email, runtime.runtimeToken, taskInbox).
+
+### Temizlik (bu oturum)
+- SİLİNDİ: apps/ (Swift+Flutter GUI), script/, scripts/{release-macos.sh,
+  scaffold_*.py, generate_mac_proj.rb, import_backgrounds.rb}, RELEASE.md,
+  tests/electron, vitest.config.ts, dist/ (eski Electron kalıntıları).
+- KALDI (bilinçli): helpers/ (screen helper — desktop_operator kullanıyor),
+  scripts/*.mjs + package.json (PyInstaller runtime paketleme), website/.
+
+### Sıradaki işler (öncelik)
+1. **Yerel LLM sağlayıcı katmanını söküm**: bridge'te ollama/lmstudio/
+   llamacpp/anthropic/google-live yolları uyuyor (varsayılan kapalı) ama
+   duruyor; `_invoke_provider_chat` AYNI ZAMANDA server_brain hint + operatör
+   JSON zarfının taşıyıcısı — bu yüzden bu gece sökülmedi. Söküm: server_brain
+   yolunu bağımsızlaştır, provider fallback'lerini ve `core/prompt.txt` düz
+   metin prompt'u kaldır (tek beyin=server_brain, düz metin bağlam yasak).
+2. **Windows/Linux gerçek doğrulama**: kod çapraz platform (pathler, servisler,
+   tepsiler hazır) ama yalnız macOS'ta canlı test edildi.
+3. **Mobil uçtan uca prova**: iOS'tan görev gönder → tepside görün →
+   yürüt → mobile raporlan (backend tarafı hazır; 55 dispatch testi + canlı
+   WS bağlantısı doğrulandı, gerçek telefon provası kullanıcıda).
+4. Paketleme: PyInstaller (build-runtime.mjs) → tek ikili + install.sh'ın
+   ikiliyi indirir hale getirilmesi (şimdilik git clone + venv).
+
+---
+
+# ESKİ NOTLAR (GUI dönemi — silinen apps/ referansları tarihsel)
 
 ## Mimari (mevcut hal)
 
