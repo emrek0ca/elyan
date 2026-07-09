@@ -360,6 +360,61 @@ Belirti (ekran görüntüsü): "dif geo ... aratır ve 4 sayfa belge oluştur" t
   →confirm→"Web araştırması tamamlandı"+"DOCX oluşturuldu", progress overall
   **completed**. Suite **521 passed**, Swift build SUCCEEDED.
 
+## Çapraz platform turu (2026-07-09) — Windows + Linux
+
+Kullanıcı spec'i: macOS'ta Swift, Windows/Linux'ta Flutter; Python (+C helper)
+motoru HER platformda aynı; arayüz %100 birebir; tek beyin VPS server_brain
+(yerel LLM yok — bu zaten böyle, `env.removeValue(ELYAN_DETERMINISTIC_ONLY)`);
+mobil→görev→yürütme akışı sorunsuz.
+
+### Yapılan 1: Motor çapraz platform (commit `feat(runtime): open_app/...`)
+- `clipboard.py`: platform seçimli (pbpaste/pbcopy · PowerShell Get/Set-Clipboard
+  · wl-clipboard→xclip→xsel). `open_app.py`: Windows `cmd /c start` + hedef
+  eşleme (`_WINDOWS_LAUNCH_TARGETS`), Linux aday listesi (`_LINUX_LAUNCH_TARGETS`)
+  + gtk-launch yedeği. `close_app`: psutil terminate→kill (tüm platformlar).
+- 4 yetenek `_DARWIN_ONLY_CAPABILITIES`'ten çıktı. Kalan darwin-only: takvim/
+  anımsatıcı/WhatsApp/ekran-analizi/desktop_operator (helper Swift'e bağlı).
+- shell/state_store/app_config zaten platform-farkındaydı (powershell/bash,
+  APPDATA/XDG). Testler: `tests/test_cross_platform_desktop.py`. **529 passed**.
+
+### Yapılan 2: Flutter desktop iskeleti (`apps/desktop/` — elyan_desktop)
+Windows/Linux arayüzü; macOS target'ı YALNIZ geliştirme doğrulaması için
+(sandbox kapatıldı — bridge alt süreci için gerekli; macOS'a Swift app çıkar).
+- **Tema** (`lib/theme/elyan_theme.dart`): SwiftUI ElyanTheme renkleri birebir
+  (canvas F2EEE5/1B1B19, userBubble E5DFD3/2E2E2B, composer FBF9F4/252523,
+  surface F8F5EF/282826, hairline %8) — test dosyası bu eşitliği assert ediyor.
+- **Köprü** (`lib/bridge/runtime_bridge.dart`): RuntimeBridgeSwift portu —
+  aynı JSON-lines sözleşmesi, repo-kökü çözümü (ELYAN_REPO_ROOT→cwd→exe'den
+  yukarı), venv python (win: venv\Scripts\python.exe) → paketli runtime
+  (`build/runtime/<os>/elyan-runtime`) önceliği, unsolicited event'ler,
+  çökme algılama.
+- **Supervisor** (`lib/bridge/runtime_supervisor.dart`): bootstrap, auth senkronu
+  (`backend.auth_sync_session` aynı payload), sendLocalChat/confirmLocalPlan
+  (`conversation.send/confirm_plan`), `conversation.progress` → onProgress,
+  crash-restart (tek zamanlayıcı, çift-bridge yarışına dikkat).
+- **Store/UI**: ChatStore (iyimser baloncuk, saf-yerel send, canlı checklist
+  upsert + finalizeChecklist), ChatView (balonsuz asistan, krem kullanıcı
+  balonu r18, hap composer r22, Düşünüyor…, PlanCard, PermissionCard,
+  TaskTrace checklist), AppShell (sidebar+profil çipi), LoginView
+  (email/şifre + kayıt; `/v1/auth/*` mobil ile aynı gövde). `flutter analyze`
+  temiz, 3 Dart testi geçiyor.
+
+### Kalan işler (Flutter parite — öncelik sırasıyla)
+1. **Blok render tamlığı**: şimdilik text + task_trace tam; ChatBlock.swift'teki
+   ~30 blok türü (code, table, chart, file, web_search, markdown...) generic'e
+   düşüyor. Markdown renderer ekle (markdown paketi), sonra blok blok port et.
+2. **Görünümler**: TaskInboxView (mobilden görevler + onay kartı), PairingView,
+   SettingsView/Profile, BillingView, SessionHistory bulut oturumları
+   (backend getSessionsPage) — şu an yalnız yerel `conversation.list` var.
+3. **Google OAuth** (LoginView.swift'teki akış) + avatar çekme.
+4. **Paketleme**: `build/runtime/windows|linux/elyan-runtime` PyInstaller
+   hedefleri (pyinstaller/ klasöründe macOS spec'i var — çoğalt), Flutter
+   installer (msix / AppImage-deb).
+5. **Windows/Linux'ta gerçek doğrulama**: bu makine macOS; Windows/Linux VM'de
+   uçtan uca (login→pairing→mobil görev→yürütme) test edilmeli.
+6. Ekran operatörü (desktop_operator) Windows/Linux muadili — uzak dilim
+   (helper mimarisi: pywinauto/AT-SPI adayları).
+
 ## Bilinmesi gerekenler
 
 - Backend: `https://api.elyan.dev` (config/api_keys.json). Runtime durumu:
