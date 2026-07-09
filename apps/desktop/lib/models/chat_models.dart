@@ -215,6 +215,82 @@ class ElyanSessionSummary {
   });
 }
 
+/// Mobilden gönderilmiş görev — runtime yerel görev kutusundaki hali
+/// (`runtime.bootstrap` → result.runtime.taskInbox.items; RuntimeModels.swift
+/// RuntimeTaskItem karşılığı).
+class RuntimeApprovalRequest {
+  final String title;
+  final String message;
+  final String summary;
+  final String confirmLabel;
+  final String rejectLabel;
+  const RuntimeApprovalRequest({
+    required this.title,
+    required this.message,
+    required this.summary,
+    required this.confirmLabel,
+    required this.rejectLabel,
+  });
+}
+
+class RuntimeTaskItem {
+  final String id;
+  final String title;
+  final String status;
+  final String summary;
+  final String error;
+  final String updatedAt;
+  final RuntimeApprovalRequest? approvalRequest;
+
+  const RuntimeTaskItem({
+    required this.id,
+    required this.title,
+    required this.status,
+    required this.summary,
+    required this.error,
+    required this.updatedAt,
+    this.approvalRequest,
+  });
+
+  bool get isWaitingApproval =>
+      status == 'waiting_approval' && approvalRequest != null;
+  bool get isTerminal =>
+      const {'completed', 'failed', 'canceled'}.contains(status);
+
+  static RuntimeTaskItem? parse(Map<String, dynamic> map) {
+    final id = (map['id'] as String?) ?? '';
+    if (id.isEmpty) return null;
+    RuntimeApprovalRequest? approval;
+    final rawApproval = map['approvalRequest'];
+    if (rawApproval is Map) {
+      final title = (rawApproval['title'] as String?) ?? '';
+      if (title.isNotEmpty) {
+        approval = RuntimeApprovalRequest(
+          title: title,
+          message: (rawApproval['message'] as String?) ?? '',
+          summary: (rawApproval['summary'] as String?) ?? '',
+          confirmLabel: _nonEmpty(rawApproval['confirmLabel']) ?? 'Onayla',
+          rejectLabel: _nonEmpty(rawApproval['rejectLabel']) ?? 'Reddet',
+        );
+      }
+    }
+    return RuntimeTaskItem(
+      id: id,
+      title: _nonEmpty(map['title']) ?? 'Yeni görev',
+      status: _nonEmpty(map['status']) ?? 'queued',
+      summary: (map['summary'] as String?) ?? '',
+      error: (map['error'] as String?) ?? '',
+      updatedAt: (map['updatedAt'] as String?) ?? '',
+      approvalRequest: approval,
+    );
+  }
+
+  static String? _nonEmpty(dynamic value) {
+    if (value is String && value.isNotEmpty) return value;
+    return null;
+  }
+}
+
 class ElyanAuthSession {
   final String id;
   final String displayName;

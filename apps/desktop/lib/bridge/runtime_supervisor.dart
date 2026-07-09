@@ -86,11 +86,76 @@ class PythonRuntimeSupervisor extends ChangeNotifier {
           timeout: const Duration(seconds: 60));
       runtimeReady = response.ok;
       lifecycleState = response.ok ? 'runtime_started' : 'degraded';
+      _applyTaskInbox(response.result);
     } catch (e) {
       lastError = e.toString();
       lifecycleState = 'degraded';
     }
     notifyListeners();
+  }
+
+  // MARK: - Mobil görev kutusu
+  //
+  // Görev yürütmesini bridge kendi WS/polling döngüsüyle otonom yapar; bu
+  // yüzey görünürlük + onay (waiting_approval) içindir.
+
+  List<RuntimeTaskItem> taskInbox = const [];
+
+  int get pendingTaskCount =>
+      taskInbox.where((task) => !task.isTerminal).length;
+
+  void _applyTaskInbox(Map<String, dynamic> bootstrapResult) {
+    final runtime = bootstrapResult['runtime'];
+    if (runtime is! Map) return;
+    final inbox = runtime['taskInbox'];
+    if (inbox is! Map) return;
+    final items = inbox['items'];
+    if (items is! List) return;
+    taskInbox = [
+      for (final item in items)
+        if (item is Map)
+          RuntimeTaskItem.parse(Map<String, dynamic>.from(item)),
+    ].whereType<RuntimeTaskItem>().toList();
+  }
+
+  Future<void> refreshTaskInbox() async {
+    if (!isRunning) return;
+    await _bootstrap();
+  }
+
+  /// waiting_approval görevini onayla/reddet, sonra yürütmeyi hemen sürdür.
+  Future<void> approveTask({
+    required String taskId,
+    required bool approved,
+    String notes = '',
+  }) async {
+    if (taskId.isEmpty) return;
+    try {
+      await bridge.request('backend.tasks.approval',
+          payload: {'taskId': taskId, 'approved': approved, 'notes': notes},
+          timeout: const Duration(seconds: 30));
+      await executeAssignedTasks();
+    } catch (e) {
+      lastError = e.toString();
+      notifyListeners();
+    }
+  }
+
+  bool _isExecutingAssignedTasks = false;
+
+  Future<void> executeAssignedTasks({int limit = 5}) async {
+    if (!isRunning || _isExecutingAssignedTasks) return;
+    _isExecutingAssignedTasks = true;
+    try {
+      await bridge.request('runtime.tasks.execute_assigned',
+          payload: {'limit': limit}, timeout: const Duration(seconds: 90));
+    } catch (e) {
+      lastError = e.toString();
+    } finally {
+      _isExecutingAssignedTasks = false;
+    }
+    // Yürütme görev kutusunu yan etki olarak değiştirir — taze listeyi çek.
+    await refreshTaskInbox();
   }
 
   // MARK: - Auth senkronu

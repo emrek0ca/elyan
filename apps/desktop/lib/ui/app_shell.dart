@@ -4,6 +4,7 @@ import '../models/chat_models.dart';
 import '../store/app_state.dart';
 import '../theme/elyan_theme.dart';
 import 'chat_view.dart';
+import 'task_inbox_view.dart';
 
 /// Giriş sonrası ana kabuk — macOS `ContentView.swift` portu: solda oturum
 /// geçmişli sidebar (Claude Code stili), altta profil çipi, sağda sohbet.
@@ -43,10 +44,21 @@ class _AppShellState extends State<AppShell> {
         children: [
           _sidebar(brightness),
           Container(width: 1, color: ElyanTheme.hairline(brightness)),
-          Expanded(child: ChatView(chat: appState.chat)),
+          Expanded(child: _detailView()),
         ],
       ),
     );
+  }
+
+  Widget _detailView() {
+    switch (_selection) {
+      case 'taskInbox':
+        return TaskInboxView(appState: appState);
+      case 'pairing':
+        return _PairingStatusView(appState: appState);
+      default:
+        return ChatView(chat: appState.chat);
+    }
   }
 
   Widget _sidebar(Brightness brightness) {
@@ -93,6 +105,7 @@ class _AppShellState extends State<AppShell> {
             icon: Icons.move_to_inbox_outlined,
             label: 'Mobilden görevler',
             brightness: brightness,
+            badgeCount: appState.supervisor.pendingTaskCount,
             onTap: () => setState(() => _selection = 'taskInbox'),
           ),
           _sidebarItem(
@@ -181,6 +194,7 @@ class _AppShellState extends State<AppShell> {
     required String label,
     required Brightness brightness,
     required VoidCallback onTap,
+    int badgeCount = 0,
   }) {
     final selected = _selection == id;
     return Padding(
@@ -206,6 +220,23 @@ class _AppShellState extends State<AppShell> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (badgeCount > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: ElyanTheme.accent,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '$badgeCount',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -364,6 +395,65 @@ class _SessionRow extends StatelessWidget {
                 ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Cihaz eşleştirme durumu — masaüstü artık kendi pairing oturumunu kendi
+/// token'ıyla claim ediyor (bridge self-pairing); bu ekran durumu gösterir.
+/// Tam QR/kod akışı (macOS PairingView paritesi) sonraki dilim.
+class _PairingStatusView extends StatelessWidget {
+  final AppState appState;
+  const _PairingStatusView({required this.appState});
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
+    final supervisor = appState.supervisor;
+    final ready = supervisor.runtimeReady;
+    return Container(
+      color: ElyanTheme.canvas(brightness),
+      alignment: Alignment.center,
+      child: Container(
+        width: 380,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: ElyanTheme.surface(brightness),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: ElyanTheme.hairline(brightness)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              ready ? Icons.check_circle_rounded : Icons.sync_rounded,
+              size: 34,
+              color: ready
+                  ? Colors.green
+                  : ElyanTheme.secondaryText(brightness),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              ready ? 'Bu bilgisayar eşleştirildi' : 'Motor hazırlanıyor…',
+              style:
+                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              ready
+                  ? 'Masaüstü, hesabınla otomatik eşleşti. Mobilden gönderdiğin '
+                      'görevler burada yürütülür.'
+                  : 'Durum: ${supervisor.lifecycleState}'
+                      '${supervisor.lastError.isEmpty ? '' : '\n${supervisor.lastError}'}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: ElyanTheme.secondaryText(brightness),
+              ),
+            ),
+          ],
         ),
       ),
     );
