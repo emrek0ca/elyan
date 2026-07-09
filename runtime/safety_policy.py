@@ -26,6 +26,12 @@ KNOWN_SAFE_TOOLS = {
     "data_analyze",
     "chart_generate",
     "web_research",
+    "image_fetch",
+    "file_read",
+    "file_search",
+    "directory_tree",
+    "git_status",
+    "git_diff",
     "email_draft",
     "math_solve",
     "latex_parse",
@@ -43,6 +49,8 @@ KNOWN_SAFE_TOOLS = {
     "desktop_operator.locate",
     "desktop_operator.focus_window",
     "desktop_operator.cancel",
+    "clipboard_read",
+    "clipboard_write",
 }
 
 DESTRUCTIVE_OR_SENSITIVE_TOOLS = {
@@ -69,6 +77,14 @@ WRITE_CAPABILITIES = {
     "presentation_write",
     "canvas_write",
     "image_generate",
+    "file_write",
+    "file_patch",
+}
+
+# git_guard: yerel repo mutasyonları — onaysız çalışmaz. PUSH/REMOTE burada YOK.
+GIT_MUTATION_CAPABILITIES = {
+    "git_commit",
+    "git_branch",
 }
 
 PERSONAL_ACTION_CAPABILITIES = {
@@ -214,6 +230,15 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
             False,
             "PERMISSION_REQUIRED",
             "Dosya yazmak için açık onay gerekiyor.",
+        )
+
+    if name in GIT_MUTATION_CAPABILITIES:
+        if _truthy(args.get("_confirmed", False)):
+            return PolicyDecision(True)
+        return PolicyDecision(
+            False,
+            "PERMISSION_REQUIRED",
+            "Git deposunu değiştirmek için açık onay gerekiyor (push yapılmaz).",
         )
 
     if name == "speech_capture":

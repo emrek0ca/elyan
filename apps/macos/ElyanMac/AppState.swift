@@ -36,6 +36,32 @@ final class AppState: ObservableObject {
             guard let supervisor else { throw RuntimeBridgeSwiftError.runtimeNotStarted }
             return try await supervisor.sendLocalChat(text)
         }
+        self.chat.localRecover = { [weak supervisor] in
+            await supervisor?.ensureLocalReady() ?? false
+        }
+        self.chat.localStatus = { [weak supervisor] in
+            guard let supervisor else { return "supervisor yok" }
+            let err = supervisor.lastError.isEmpty ? "" : " — \(supervisor.lastError)"
+            return "\(supervisor.lifecycleState)\(err)"
+        }
+        // Canlı checklist: executor adım event'leri → aktif mesajdaki task_trace bloğu.
+        supervisor.onProgress = { [weak chat = self.chat] conversationId, block in
+            chat?.applyProgressBlock(conversationId: conversationId, block: block)
+        }
+        self.chat.localConfirmPlan = { [weak supervisor] conversationId, pendingPlanId, approved in
+            guard let supervisor else { throw RuntimeBridgeSwiftError.runtimeNotStarted }
+            return try await supervisor.confirmLocalPlan(
+                conversationId: conversationId,
+                pendingPlanId: pendingPlanId,
+                approved: approved
+            )
+        }
+        self.chat.localGrantPermission = { [weak supervisor] key in
+            await supervisor?.grantElyanPermission(key) ?? false
+        }
+        self.chat.localOpenSystemPermission = { [weak supervisor] systemKey in
+            await supervisor?.openSystemPermission(systemKey)
+        }
         self.chat.onSessionActivated = { [weak supervisor] sessionId in
             supervisor?.setLocalConversation(sessionId)
         }

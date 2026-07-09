@@ -43,6 +43,9 @@ class ExecutorCore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._current: dict[str, dict[str, Any]] = {}
+        # Canlı checklist: adım geçişlerinde (conversation_id, task_trace bloğu)
+        # ile çağrılır. Bridge bunu unsolicited event olarak masaüstüne akıtır.
+        self._progress_emitter: Callable[[str, dict[str, Any]], None] | None = None
         self._metrics = {
             "completed": 0,
             "failed": 0,
@@ -126,6 +129,7 @@ class ExecutorCore:
                 }
             )
             self._persist()
+        self._emit_progress(execution_id)
 
     def _record_step_result(
         self,
@@ -167,6 +171,7 @@ class ExecutorCore:
             trace["verificationState"] = verification
             current["executionTrace"] = trace
             self._persist()
+        self._emit_progress(execution_id)
 
     def _record_repair_attempt(self, execution_id: str, *, strategy: str, reason: str) -> None:
         with self._lock:
@@ -195,6 +200,98 @@ class ExecutorCore:
             trace["stopReason"] = str(reason or "").strip()
             current["executionTrace"] = trace
             self._persist()
+
+    def set_progress_emitter(self, emitter: Callable[[str, dict[str, Any]], None] | None) -> None:
+        """Bridge, canlı checklist için burayı bağlar: her adım geçişinde
+        (conversation_id, task_trace bloğu) ile çağrılır."""
+        self._progress_emitter = emitter
+
+    _CAPABILITY_LABELS: dict[str, str] = {
+        "web_research": "Araştırılıyor",
+        "document_write": "Belge yazılıyor",
+        "spreadsheet_write": "Tablo hazırlanıyor",
+        "presentation_write": "Sunum hazırlanıyor",
+        "canvas_write": "Görsel belge oluşturuluyor",
+        "chart_generate": "Grafik çiziliyor",
+        "image_generate": "Görsel üretiliyor",
+        "image_fetch": "Görsel indiriliyor",
+        "file_read": "Dosya okunuyor",
+        "file_search": "Kod/dosya aranıyor",
+        "directory_tree": "Proje taranıyor",
+        "file_write": "Dosya yazılıyor",
+        "file_patch": "Dosya düzenleniyor",
+        "git_status": "Git durumu",
+        "git_diff": "Değişiklikler",
+        "git_commit": "Commit'leniyor",
+        "git_branch": "Branch oluşturuluyor",
+        "shell_run": "Komut çalıştırılıyor",
+        "open_app": "Uygulama açılıyor",
+        "browser_control": "Tarayıcı",
+        "web_search": "Web araması",
+    }
+
+    @classmethod
+    def _step_label(cls, capability: str, description: str = "") -> str:
+        desc = _safe_text(description, limit=48)
+        if desc:
+            return desc
+        return cls._CAPABILITY_LABELS.get(capability, capability or "Adım")
+
+    def _build_task_trace_block(self, current: dict[str, Any], *, final: bool = False) -> dict[str, Any]:
+        """execute_plan_steps ilerlemesini task_trace bloğuna çevirir (canlı checklist)."""
+        exec_id = str(current.get("id", "") or "")
+        trace = current.get("executionTrace")
+        trace = trace if isinstance(trace, dict) else {}
+        step_states = trace.get("stepStates")
+        step_states = step_states if isinstance(step_states, list) else []
+        steps: list[dict[str, Any]] = []
+        active_step_id = ""
+        for state in step_states:
+            if not isinstance(state, dict):
+                continue
+            status = str(state.get("status", "") or "pending")
+            # executor status → task_trace status
+            mapped = {"running": "running", "completed": "completed", "failed": "failed"}.get(status, "pending")
+            step_id = str(state.get("id", "") or f"step_{len(steps) + 1}")
+            if mapped == "running":
+                active_step_id = step_id
+            steps.append(
+                {
+                    "id": step_id,
+                    "label": self._step_label(str(state.get("capability", "") or ""), str(state.get("label", "") or "")),
+                    "status": mapped,
+                    "detail": _safe_text(str(state.get("outputPreview", "") or state.get("stopReason", "") or ""), limit=120),
+                }
+            )
+        overall = "running"
+        if final:
+            overall = "failed" if any(s["status"] == "failed" for s in steps) else "completed"
+        return {
+            "type": "task_trace",
+            "stableBlockId": f"tasktrace_{exec_id}",
+            "taskId": exec_id,
+            "status": overall,
+            "title": _safe_text(str(current.get("summary", "") or ""), limit=80) or "Görev yürütülüyor",
+            "activeStepId": active_step_id,
+            "steps": steps,
+        }
+
+    def _emit_progress(self, execution_id: str, *, final: bool = False) -> None:
+        emitter = self._progress_emitter
+        if emitter is None:
+            return
+        with self._lock:
+            current = self._current.get(execution_id)
+            if not isinstance(current, dict):
+                return
+            conversation_id = str(current.get("conversationId", "") or "")
+            block = self._build_task_trace_block(current, final=final)
+        if not block.get("steps"):
+            return
+        try:
+            emitter(conversation_id, block)
+        except Exception:
+            pass  # ilerleme akışı hiçbir zaman yürütmeyi bozmamalı
 
     def graph_backend(self) -> str:
         return self._graph_backend
@@ -333,6 +430,8 @@ class ExecutorCore:
             self._persist()
 
     def finish_execution(self, execution_id: str, *, ok: bool, detail: str = "") -> None:
+        final_block: dict[str, Any] | None = None
+        conversation_id = ""
         with self._lock:
             current = self._current.pop(execution_id, None)
             if current is None:
@@ -347,6 +446,15 @@ class ExecutorCore:
                 last_ok=ok,
                 last_execution_trace=current.get("executionTrace") if isinstance(current.get("executionTrace"), dict) else None,
             )
+            if self._progress_emitter is not None:
+                conversation_id = str(current.get("conversationId", "") or "")
+                final_block = self._build_task_trace_block(current, final=True)
+        # Son checklist durumunu (tamamlandı/başarısız) lock DIŞINDA yayınla.
+        if final_block is not None and final_block.get("steps") and self._progress_emitter is not None:
+            try:
+                self._progress_emitter(conversation_id, final_block)
+            except Exception:
+                pass
 
     def _apply_display_state(self, current: dict[str, Any]) -> None:
         stage = str(current.get("stage", "") or "").strip().lower()
@@ -442,6 +550,31 @@ class ExecutorCore:
                 "capabilityMetadataSummary": capability_metadata_summary(runtime_capabilities),
             }
 
+    def _replan_remaining(
+        self,
+        replan_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None,
+        replans_used: int,
+        max_replans: int,
+        context: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        """ReAct: bir adım başarısız/doğrulanamaz olduğunda planlayıcıya bağlamı
+        geri besleyip kalan planın revizesini ister. Bütçe dolduysa, callback yoksa
+        veya geçerli adım dönmezse None döner (çağıran normal iptale düşer)."""
+        if replan_fn is None or replans_used >= max_replans:
+            return None
+        try:
+            revised = replan_fn(dict(context))
+        except Exception:
+            return None
+        if not isinstance(revised, list):
+            return None
+        cleaned = [
+            dict(step)
+            for step in revised
+            if isinstance(step, dict) and str(step.get("capability", "") or "").strip()
+        ]
+        return cleaned or None
+
     def execute_plan_steps(
         self,
         *,
@@ -451,6 +584,8 @@ class ExecutorCore:
         source: str,
         task_id: str = "",
         conversation_id: str = "",
+        replan_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
+        max_replans: int = 2,
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
         execution_id = self.begin_execution(
             source=source,
@@ -476,7 +611,16 @@ class ExecutorCore:
             self.record_stage(execution_id, "plan_execution", detail="steps")
             planned_roles = self._current.get(execution_id, {}).get("agentPlan", {}).get("stepRoles", [])
             planned_roles = planned_roles if isinstance(planned_roles, list) else []
-            for index, step in enumerate(steps, start=1):
+            # ReAct: statik plan yerine adım sonucunu değerlendirip kalan planı
+            # revize edebilmek için indeks tabanlı, splice edilebilir döngü.
+            # `steps` yerel bir kopya; replan_fn kalan adımları yeniden yazabilir.
+            steps = [dict(step) for step in steps if isinstance(step, dict)]
+            replans_used = 0
+            step_index = 0
+            while step_index < len(steps):
+                step = steps[step_index]
+                index = step_index + 1
+                step_index += 1
                 if not isinstance(step, dict):
                     continue
                 capability = str(step.get("capability", "") or "").strip()
@@ -495,6 +639,7 @@ class ExecutorCore:
                 step_phase = str(step.get("phase", "") or step_role.get("phase", "") or "act")
                 step_role_name = str(step.get("role", "") or step_role.get("role", "") or "operator")
                 self.record_stage(execution_id, "step_execution", detail=capability)
+                did_replan = False
                 attempt = 0
                 while True:
                     attempt += 1
@@ -537,6 +682,35 @@ class ExecutorCore:
                             error_code=error_code,
                             stop_reason=message,
                         )
+                        revised = self._replan_remaining(
+                            replan_fn,
+                            replans_used,
+                            max_replans,
+                            {
+                                "reason": "tool_failure",
+                                "failedCapability": capability,
+                                "errorCode": error_code,
+                                "message": message,
+                                "completedOutputs": list(outputs),
+                                "failedArgs": {
+                                    k: v for k, v in (step.get("args") or {}).items()
+                                    if not str(k).startswith("_")
+                                },
+                                "remainingCapabilities": [
+                                    str(s.get("capability", "") or "") for s in steps[step_index:]
+                                ],
+                                "remainingSteps": [dict(s) for s in steps[step_index:]],
+                            },
+                        )
+                        if revised is not None:
+                            replans_used += 1
+                            self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=message)
+                            self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
+                            steps = steps[: step_index - 1] + revised
+                            step_index = step_index - 1
+                            did_replan = True
+                            error_code = ""  # revize edildi; hata kodu temizlenir
+                            break
                         self._set_stop_reason(execution_id, error_code.lower())
                         self.finish_execution(execution_id, ok=False, detail=message)
                         return False, message, events, error_code, structured_result, artifacts
@@ -562,6 +736,35 @@ class ExecutorCore:
                             error_code=error_code,
                             stop_reason=verification.message,
                         )
+                        revised = self._replan_remaining(
+                            replan_fn,
+                            replans_used,
+                            max_replans,
+                            {
+                                "reason": "verification_failure",
+                                "failedCapability": capability,
+                                "errorCode": error_code,
+                                "message": verification.message,
+                                "completedOutputs": list(outputs),
+                                "failedArgs": {
+                                    k: v for k, v in (step.get("args") or {}).items()
+                                    if not str(k).startswith("_")
+                                },
+                                "remainingCapabilities": [
+                                    str(s.get("capability", "") or "") for s in steps[step_index:]
+                                ],
+                                "remainingSteps": [dict(s) for s in steps[step_index:]],
+                            },
+                        )
+                        if revised is not None:
+                            replans_used += 1
+                            self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=verification.message)
+                            self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
+                            steps = steps[: step_index - 1] + revised
+                            step_index = step_index - 1
+                            did_replan = True
+                            error_code = ""  # revize edildi; hata kodu temizlenir
+                            break
                         self._set_stop_reason(execution_id, "verification_failed")
                         self.finish_execution(execution_id, ok=False, detail=verification.message)
                         return False, verification.message or "Doğrulama başarısız oldu.", events, error_code, structured_result, artifacts
@@ -574,6 +777,11 @@ class ExecutorCore:
                         reason=verification.message,
                     )
                     self.record_stage(execution_id, "retry_repair", detail=f"{capability}:{verification.message}")
+
+                # Kalan plan revize edildiyse (ReAct), başarısız adımın çıktısını
+                # işleme — döngü yeni adımdan devam etsin.
+                if did_replan:
+                    continue
 
                 output = str(tool_result.get("output", "") or "").strip()
                 if output:

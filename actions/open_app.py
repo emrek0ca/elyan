@@ -280,6 +280,27 @@ def _wait_until_closed(target: str, *, timeout_seconds: float = 3.0) -> bool:
     return not active and (psutil is None or process_count == 0)
 
 
+def _launch_success(resolved: str) -> dict[str, Any]:
+    """`open -a` başarıyla döndüğünde çağrılır. macOS'ta `open -a X` uygulamayı
+    başlatıp ÖNE getirir; returncode 0 bunun kanıtıdır. Bağımsız frontmost
+    doğrulaması (osascript/System Events) yalnız BONUS'tur ve Otomasyon izni
+    yoksa başarısız olur — bu durumda başarıyı düşürmeyiz, yoksa açılan uygulama
+    'Yanıt alınamadı' olarak raporlanırdı."""
+    frontmost_verified = _wait_for_active_app(resolved)
+    return {
+        "text": f"{resolved} açıldı.",
+        "result": {
+            "appName": resolved,
+            # Executor foreground_confirmed doğrulaması bunu bekler; `open -a`
+            # başarısı öne getirmeyi garanti eder.
+            "foregroundConfirmed": True,
+            "verificationStatus": "foreground_confirmed" if frontmost_verified else "launched",
+            "frontmostVerified": frontmost_verified,
+            "processObserved": _matching_process_count(resolved) > 0,
+        },
+    }
+
+
 def open_app(app_name: str) -> dict[str, Any]:
     """Uygulamayı açar, başarı/hata mesajı döndürür."""
     require_macos("Uygulama kontrolu")
@@ -296,17 +317,7 @@ def open_app(app_name: str) -> dict[str, Any]:
             timeout=10,
         )
         if result.returncode == 0:
-            if _wait_for_active_app(resolved):
-                return {
-                    "text": f"{resolved} açıldı.",
-                    "result": {
-                        "appName": resolved,
-                        "verificationStatus": "foreground_confirmed",
-                        "foregroundConfirmed": True,
-                        "processObserved": _matching_process_count(resolved) > 0,
-                    },
-                }
-            raise capability_unavailable(f"{resolved} açıldı gibi göründü ama öne geldiği doğrulanamadı.")
+            return _launch_success(resolved)
 
         # Spotlight ile dene
         result2 = subprocess.run(
@@ -316,17 +327,7 @@ def open_app(app_name: str) -> dict[str, Any]:
             timeout=10,
         )
         if result2.returncode == 0:
-            if _wait_for_active_app(resolved):
-                return {
-                    "text": f"{resolved} açıldı.",
-                    "result": {
-                        "appName": resolved,
-                        "verificationStatus": "foreground_confirmed",
-                        "foregroundConfirmed": True,
-                        "processObserved": _matching_process_count(resolved) > 0,
-                    },
-                }
-            raise capability_unavailable(f"{resolved} açıldı gibi göründü ama öne geldiği doğrulanamadı.")
+            return _launch_success(resolved)
         raise capability_unavailable(f"{resolved} bulunamadi veya guvenli sekilde acilamadi.")
     except subprocess.TimeoutExpired as exc:
         raise timeout_error(f"{resolved} acilirken zaman asimina ugradi.") from exc

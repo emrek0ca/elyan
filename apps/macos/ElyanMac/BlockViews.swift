@@ -360,10 +360,55 @@ private struct TaskTraceBlockView: View {
     private var isRunning: Bool { block.status == .running }
 
     var body: some View {
-        if isRunning {
-            TaskTraceThinkingWave()
-                .padding(.vertical, 4)
-                .accessibilityLabel(Text("Yanıt hazırlanıyor"))
+        if block.steps.isEmpty {
+            // Adım yoksa (henüz plan yürütülmüyor) yalnız düşünme dalgası.
+            if isRunning {
+                TaskTraceThinkingWave()
+                    .padding(.vertical, 4)
+                    .accessibilityLabel(Text("Yanıt hazırlanıyor"))
+            }
+        } else {
+            // CANLI CHECKLIST: her adım durum ikonuyla; çalışan adımda spinner.
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(block.steps, id: \.id) { step in
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        stepIcon(step.status)
+                            .frame(width: 16, height: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(step.label)
+                                .font(.system(size: 12.5, weight: step.status == .running ? .semibold : .regular))
+                                .foregroundStyle(step.status == .pending ? Color.secondary : Color.primary)
+                            if step.status == .failed, let detail = step.detail, !detail.isEmpty {
+                                Text(detail)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.045)))
+            .accessibilityLabel(Text("Görev adımları"))
+        }
+    }
+
+    @ViewBuilder
+    private func stepIcon(_ status: TaskTraceStep.Status) -> some View {
+        switch status {
+        case .completed:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+        case .running:
+            ProgressView().controlSize(.small)
+        case .skipped:
+            Image(systemName: "minus.circle").foregroundStyle(.secondary)
+        case .pending:
+            Image(systemName: "circle").foregroundStyle(Color.secondary.opacity(0.5))
         }
     }
 }

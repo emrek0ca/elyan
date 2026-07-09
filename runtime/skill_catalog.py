@@ -704,6 +704,148 @@ BUILTIN_SKILL_DEFINITIONS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "research.present",
+        "name": "Research and Present",
+        "description": "Konuyu web üzerinde araştırır ve bulguları bir sunuma (PPTX) dönüştürür.",
+        "category": "research",
+        "adapter": "presentation_write",
+        "libraries": ["httpx", "trafilatura", "playwright", "python-pptx"],
+        "requiresConfirmation": True,
+        "parameters": ["query", "outputPath", "title", "maxResults", "languageHint", "overwrite"],
+        "requiredParameters": ["query", "outputPath"],
+        "selectionPriority": 94,
+        "steps": [
+            {
+                "capability": "web_research",
+                "description": "Konuyu araştır",
+                "argsFromPayload": {
+                    "query": "query",
+                    "max_results": "maxResults",
+                    "language_hint": "languageHint",
+                },
+            },
+            {
+                "capability": "presentation_write",
+                "description": "Bulguları sunuma dönüştür",
+                "args": {"overwrite": False},
+                "argsFromPayload": {
+                    "outputPath": "outputPath",
+                    "title": "title",
+                    "overwrite": "overwrite",
+                },
+                "argsFromPreviousOutput": ["sourceContext"],
+            },
+        ],
+    },
+    {
+        "id": "research.report",
+        "name": "Research and Report",
+        "description": "Konuyu web üzerinde araştırır ve kaynaklı bir DOCX rapor olarak belgeler.",
+        "category": "research",
+        "adapter": "document_write",
+        "libraries": ["httpx", "trafilatura", "playwright", "python-docx"],
+        "requiresConfirmation": True,
+        "parameters": ["query", "outputPath", "title", "maxResults", "languageHint", "overwrite"],
+        "requiredParameters": ["query", "outputPath"],
+        "selectionPriority": 94,
+        "steps": [
+            {
+                "capability": "web_research",
+                "description": "Konuyu araştır",
+                "argsFromPayload": {
+                    "query": "query",
+                    "max_results": "maxResults",
+                    "language_hint": "languageHint",
+                },
+            },
+            {
+                "capability": "document_write",
+                "description": "Araştırmayı rapora dönüştür",
+                "args": {"overwrite": False},
+                "argsFromPayload": {
+                    "outputPath": "outputPath",
+                    "title": "title",
+                    "overwrite": "overwrite",
+                },
+                "argsFromPreviousOutput": ["sourceContext"],
+            },
+        ],
+    },
+    {
+        "id": "data.analyze_and_chart",
+        "name": "Analyze and Chart",
+        "description": "Veri dosyasını analiz eder ve ardından grafiğini çizer.",
+        "category": "analysis",
+        "adapter": "chart_generate",
+        "libraries": ["pandas", "matplotlib"],
+        "requiresConfirmation": True,
+        "parameters": ["path", "mode", "columns", "chartType", "xColumn", "yColumn", "title"],
+        "requiredParameters": ["path"],
+        "selectionPriority": 90,
+        "steps": [
+            {
+                "capability": "data_analyze",
+                "description": "Veriyi analiz et",
+                "argsFromPayload": {
+                    "path": "path",
+                    "mode": "mode",
+                    "columns": "columns",
+                },
+            },
+            {
+                "capability": "chart_generate",
+                "description": "Grafiğini çiz",
+                "argsFromPayload": {
+                    "path": "path",
+                    "chartType": "chartType",
+                    "xColumn": "xColumn",
+                    "yColumn": "yColumn",
+                    "title": "title",
+                },
+            },
+        ],
+    },
+    {
+        "id": "screen.explain",
+        "name": "Screen Explain",
+        "description": "Ekranda ne olduğunu gözlemler ve açıklar; öğe ve hedef önerileri çıkarır.",
+        "category": "operator",
+        "adapter": "desktop_operator.observe_screen",
+        "libraries": ["mss", "pyobjc", "psutil"],
+        "parameters": ["query", "target"],
+        "steps": [
+            {
+                "capability": "desktop_operator.observe_screen",
+                "description": "Ekranı gözlemle ve açıkla",
+                "argsFromPayload": {
+                    "query": "query",
+                    "target": "target",
+                },
+            }
+        ],
+    },
+    {
+        "id": "image.describe",
+        "name": "Image Describe",
+        "description": "Bir görseli açıklar veya özetler.",
+        "category": "vision",
+        "adapter": "image_read",
+        "libraries": ["Pillow"],
+        "parameters": ["path", "mode"],
+        "requiredParameters": ["path"],
+        "steps": [
+            {
+                "capability": "image_read",
+                "description": "Görseli açıkla",
+                "args": {"mode": "summary"},
+                "argsFromPayload": {
+                    "path": "path",
+                    "mode": "mode",
+                },
+            }
+        ],
+    },
+    {
         "id": "mcp.readonly_tool_proxy",
         "name": "MCP Readonly Proxy",
         "description": "Read-only MCP aracini preset olarak cagirir.",

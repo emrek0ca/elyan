@@ -109,7 +109,16 @@ struct ChatView: View {
                             isStreamingTail: chat.isStreaming && message.id == chat.messages.last?.id,
                             showTimestamp: showTimestamps,
                             compact: compactBubbles,
-                            fontSize: chatFontSize
+                            fontSize: chatFontSize,
+                            onPlanDecision: { messageId, approved in
+                                Task { await chat.confirmPlan(messageId: messageId, approved: approved) }
+                            },
+                            onGrantPermission: { messageId in
+                                Task { await chat.grantPermission(messageId: messageId) }
+                            },
+                            onOpenSystemPermission: { messageId in
+                                Task { await chat.openSystemPermission(messageId: messageId) }
+                            }
                         )
                         .equatable()
                         .id(message.id)
@@ -222,6 +231,22 @@ private struct ChatBubble: View, Equatable {
     var showTimestamp: Bool = false
     var compact: Bool = false
     var fontSize: Double = 14
+    /// (messageId, approved) — kullanıcı plan kartında karar verdiğinde.
+    var onPlanDecision: (UUID, Bool) -> Void = { _, _ in }
+    /// messageId — kullanıcı izin kartında "İzin Ver"e bastığında.
+    var onGrantPermission: (UUID) -> Void = { _ in }
+    /// messageId — kullanıcı "Sistem Ayarları'nı Aç"a bastığında.
+    var onOpenSystemPermission: (UUID) -> Void = { _ in }
+
+    // Kapanış (closure) Equatable olmadığı için sentezlenen == kullanılamaz;
+    // yalnız render'ı etkileyen alanları karşılaştırıyoruz.
+    static func == (lhs: ChatBubble, rhs: ChatBubble) -> Bool {
+        lhs.message == rhs.message
+            && lhs.isStreamingTail == rhs.isStreamingTail
+            && lhs.showTimestamp == rhs.showTimestamp
+            && lhs.compact == rhs.compact
+            && lhs.fontSize == rhs.fontSize
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -236,6 +261,24 @@ private struct ChatBubble: View, Equatable {
                 }
 
                 contentView
+
+                if let plan = message.plan {
+                    PlanCard(
+                        plan: plan,
+                        fontSize: fontSize,
+                        onApprove: { onPlanDecision(message.id, true) },
+                        onCancel: { onPlanDecision(message.id, false) }
+                    )
+                }
+
+                if let permission = message.permission {
+                    PermissionCard(
+                        permission: permission,
+                        fontSize: fontSize,
+                        onGrant: { onGrantPermission(message.id) },
+                        onOpenSettings: { onOpenSystemPermission(message.id) }
+                    )
+                }
 
                 if message.isHistoryPending || message.isHistoryFailed {
                     HistoryStatusBadge(message: message)
@@ -315,6 +358,164 @@ private struct HistoryStatusBadge: View {
             }
         }
         .padding(.horizontal, 4)
+    }
+}
+
+// MARK: - Plan Card
+//
+// Çok adımlı / yan etkili planlar artık düz metin "onayla yaz" yerine adımları
+// listeleyen bir kart + Onayla/İptal butonlarıyla gösterilir. Onaylanınca
+// runtime adımları masaüstünde yürütür (needsConfirmation/pendingPlanId zaten
+// bridge'den dönüyordu; UI bunu görselleştiriyor).
+private struct PlanCard: View {
+    let plan: PendingPlan
+    var fontSize: Double = 14
+    let onApprove: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "list.bullet.rectangle")
+                    .foregroundStyle(.secondary)
+                Text("Onay bekleyen plan")
+                    .font(.system(size: fontSize - 1, weight: .semibold))
+                Spacer()
+                if plan.isConfirming {
+                    ProgressView().controlSize(.small)
+                }
+            }
+
+            if !plan.summary.isEmpty {
+                Text(plan.summary)
+                    .font(.system(size: fontSize - 1))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !plan.steps.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(plan.steps.enumerated()), id: \.element.id) { index, step in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("\(index + 1)")
+                                .font(.system(size: fontSize - 3, weight: .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 18, height: 18)
+                                .background(Color.secondary.opacity(0.15))
+                                .clipShape(Circle())
+                            Text(step.description)
+                                .font(.system(size: fontSize - 1))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button(action: onApprove) {
+                    Text("Onayla")
+                        .font(.system(size: fontSize - 1, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(plan.isConfirming)
+
+                Button(action: onCancel) {
+                    Text("İptal")
+                        .font(.system(size: fontSize - 1))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(plan.isConfirming)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: 420, alignment: .leading)
+        .background(ElyanTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ElyanTheme.hairline, lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Permission Card
+//
+// İzin gerektiren komutlar artık kullanıcıyı Ayarlar'da kaybetmek yerine chat'te
+// tek-tıkla verme kartı gösterir: Elyan'ın kendi izni anında açılır (ve komut
+// otomatik yeniden çalışır), macOS sistem izni için doğru panel açılır.
+private struct PermissionCard: View {
+    let permission: PermissionRequest
+    var fontSize: Double = 14
+    let onGrant: () -> Void
+    let onOpenSettings: () -> Void
+
+    private var needsSystem: Bool {
+        permission.systemPermissionRequired || !permission.systemPermissionKey.isEmpty
+    }
+    private var canGrantInApp: Bool { !permission.permissionKey.isEmpty }
+
+    private var systemLabel: String {
+        switch permission.systemPermissionKey {
+        case "accessibility": return "Erişilebilirlik"
+        case "screenRecording": return "Ekran Kaydı"
+        case "inputMonitoring": return "Girdi İzleme"
+        case "automation": return "Otomasyon"
+        default: return "Sistem izni"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "lock.shield")
+                    .foregroundStyle(.orange)
+                Text("İzin gerekiyor")
+                    .font(.system(size: fontSize - 1, weight: .semibold))
+                Spacer()
+                if permission.isGranting { ProgressView().controlSize(.small) }
+            }
+
+            Text(permission.reason)
+                .font(.system(size: fontSize - 1))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if needsSystem {
+                Text("macOS \(systemLabel) izni gerekli — açılan panelde Elyan'ı işaretle.")
+                    .font(.system(size: fontSize - 3))
+                    .foregroundStyle(.tertiary)
+            }
+
+            HStack(spacing: 10) {
+                if canGrantInApp {
+                    Button(action: onGrant) {
+                        Text("İzin ver")
+                            .font(.system(size: fontSize - 1, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(permission.isGranting)
+                } else if needsSystem {
+                    Button(action: onOpenSettings) {
+                        Text("Sistem Ayarları'nı aç")
+                            .font(.system(size: fontSize - 1, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(permission.isGranting)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: 420, alignment: .leading)
+        .background(ElyanTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+        )
     }
 }
 

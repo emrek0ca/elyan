@@ -422,3 +422,98 @@ def test_desktop_operator_cancel_stops_active_run(
     operator_state = state_store.snapshot()["operator"]
     assert operator_state["activeRunId"] == ""
     assert operator_state["lastStopReason"] == "user_cancel"
+
+
+def test_rank_targets_tolerates_typos_via_fuzzy_match() -> None:
+    observation = {
+        "elements": [
+            {"id": "a", "type": "button", "text": "Safari", "source": "accessibility", "enabled": True, "bbox": {"x": 1, "y": 1, "w": 80, "h": 24}},
+            {"id": "b", "type": "button", "text": "Settings", "source": "accessibility", "enabled": True, "bbox": {"x": 100, "y": 1, "w": 80, "h": 24}},
+        ]
+    }
+    from actions.desktop_operator import _rank_targets
+
+    assert _rank_targets(observation, text="safar")[0]["text"] == "Safari"
+    assert _rank_targets(observation, text="sittings")[0]["text"] == "Settings"
+
+
+def test_rank_targets_matches_across_languages_bidirectionally() -> None:
+    observation = {
+        "elements": [
+            {"id": "a", "type": "button", "text": "Gönder", "source": "accessibility", "enabled": True, "bbox": {"x": 1, "y": 1, "w": 80, "h": 24}},
+            {"id": "b", "type": "button", "text": "Ayarlar", "source": "accessibility", "enabled": True, "bbox": {"x": 100, "y": 1, "w": 80, "h": 24}},
+        ]
+    }
+    from actions.desktop_operator import _rank_targets
+
+    # İngilizce sorgu → Türkçe buton (çift yönlü eşanlam).
+    assert _rank_targets(observation, text="send")[0]["text"] == "Gönder"
+    assert _rank_targets(observation, text="settings")[0]["text"] == "Ayarlar"
+
+
+def test_query_tokens_expands_both_directions() -> None:
+    from actions.desktop_operator import _query_tokens
+
+    assert "gonder" in _query_tokens("send") or "gönder" in _query_tokens("send")
+    assert "send" in _query_tokens("gönder")
+
+
+def test_fuzzy_does_not_match_unrelated_short_text() -> None:
+    # Alakasız kısa metin fuzzy ile yanlış eşleşmemeli (yüksek eşik).
+    observation = {
+        "elements": [
+            {"id": "a", "type": "button", "text": "OK", "source": "accessibility", "enabled": True, "bbox": {"x": 1, "y": 1, "w": 40, "h": 24}},
+        ]
+    }
+    from actions.desktop_operator import _rank_targets
+
+    ranked = _rank_targets(observation, text="download report presentation")
+    # Ya hiç eşleşme yok ya da fuzzy skoru zayıf (kesin hedef yok).
+    assert not ranked or ranked[0].get("candidateScore", 0) < 24
+
+
+def test_open_app_reports_success_without_foreground_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`open -a` returncode 0 → başarı; frontmost (Otomasyon izni) doğrulanamasa
+    bile 'Yanıt alınamadı' verilmez (açılan uygulama hata gibi görünürdü)."""
+    from actions import open_app as oa
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(oa.subprocess, "run", lambda *a, **k: _R())
+    monkeypatch.setattr(oa, "_wait_for_active_app", lambda *a, **k: False)  # izin yok
+    monkeypatch.setattr(oa, "_matching_process_count", lambda *a, **k: 1)
+
+    result = oa.open_app("safari")
+    assert result["result"]["foregroundConfirmed"] is True
+    assert result["result"]["verificationStatus"] == "launched"
+
+
+def test_deterministic_operator_planner_handles_simple_goals() -> None:
+    """Basit GUI hedefleri bulut beyni olmadan adımlara çevrilmeli (offline+hızlı)."""
+    from actions.desktop_operator import _deterministic_operator_steps as D
+
+    assert D("sayfayı aşağı kaydır") == [{"action": "scroll", "delta": -600}]
+    assert D("yukarı kaydır") == [{"action": "scroll", "delta": 600}]
+    assert D("Gönder butonuna tıkla") == [{"action": "click", "targetText": "Gönder"}]
+    assert D("profil resmine çift tıkla") == [{"action": "double_click", "targetText": "profil resmi"}]
+    assert D("dosyaya sağ tıkla") == [{"action": "right_click", "targetText": "dosya"}]
+    # Karmaşık/sohbet hedefleri deterministik çözülmez (buluta kalır).
+    assert D("safariden kedi resmi bul ve kaydet") == []
+    assert D("merhaba nasılsın") == []
+
+
+def test_plan_operator_steps_prefers_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deterministik plan varsa bulut planlayıcı ÇAĞRILMAMALI."""
+    from actions import desktop_operator as op
+    from runtime import bridge
+
+    called = {"cloud": False}
+    monkeypatch.setattr(bridge, "plan_visual_operator_steps", lambda *a, **k: called.__setitem__("cloud", True) or {"steps": []})
+
+    result = op._plan_operator_steps("aşağı kaydır", {})
+    assert result["provider"] == "deterministic"
+    assert result["steps"] == [{"action": "scroll", "delta": -600}]
+    assert called["cloud"] is False

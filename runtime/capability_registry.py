@@ -414,6 +414,105 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         ["prompt"],
     ),
     _tool_decl(
+        "image_fetch",
+        "Herkese açık bir kaynaktan (Openverse/Wikimedia) bir konu için görsel indirir ve kullanıcının klasörüne (varsayılan masaüstü) kaydeder.",
+        {
+            "query": {"type": "STRING"},
+            "destination": {"type": "STRING"},
+            "count": {"type": "INTEGER"},
+            "overwrite": {"type": "BOOLEAN"},
+        },
+        ["query"],
+    ),
+    _tool_decl(
+        "file_read",
+        "Bir metin/kod dosyasını güvenli şekilde okur (isteğe bağlı satır aralığı).",
+        {
+            "path": {"type": "STRING"},
+            "max_bytes": {"type": "INTEGER"},
+            "start_line": {"type": "INTEGER"},
+            "end_line": {"type": "INTEGER"},
+        },
+        ["path"],
+    ),
+    _tool_decl(
+        "file_search",
+        "Bir klasör ağacında dosya içeriğinde metin/regex arar (ripgrep destekli).",
+        {
+            "query": {"type": "STRING"},
+            "path": {"type": "STRING"},
+            "glob": {"type": "STRING"},
+            "regex": {"type": "BOOLEAN"},
+            "case_sensitive": {"type": "BOOLEAN"},
+            "max_results": {"type": "INTEGER"},
+        },
+        ["query"],
+    ),
+    _tool_decl(
+        "directory_tree",
+        "Proje/klasör yapısını (ağaç) çıkarır; gürültülü klasörleri atlar.",
+        {
+            "path": {"type": "STRING"},
+            "max_depth": {"type": "INTEGER"},
+            "max_entries": {"type": "INTEGER"},
+        },
+    ),
+    _tool_decl(
+        "git_status",
+        "Bir git deposunun durumunu (branch + staged/unstaged/untracked) döndürür.",
+        {"path": {"type": "STRING"}},
+    ),
+    _tool_decl(
+        "git_diff",
+        "Bir git deposundaki çalışma ağacı veya staged farkını (diff) döndürür.",
+        {
+            "path": {"type": "STRING"},
+            "staged": {"type": "BOOLEAN"},
+            "target_file": {"type": "STRING"},
+        },
+    ),
+    _tool_decl(
+        "file_write",
+        "Bir metin/kod dosyası oluşturur veya (overwrite=true ile) üzerine yazar. Onay gerektirir.",
+        {
+            "path": {"type": "STRING"},
+            "content": {"type": "STRING"},
+            "overwrite": {"type": "BOOLEAN"},
+        },
+        ["path"],
+    ),
+    _tool_decl(
+        "file_patch",
+        "Var olan bir dosyada çıpalı bul/değiştir uygular (old_string → new_string). Onay gerektirir.",
+        {
+            "path": {"type": "STRING"},
+            "old_string": {"type": "STRING"},
+            "new_string": {"type": "STRING"},
+            "replace_all": {"type": "BOOLEAN"},
+        },
+        ["path", "old_string"],
+    ),
+    _tool_decl(
+        "git_commit",
+        "Değişiklikleri commit'ler (opsiyonel git add -A). PUSH YAPMAZ. Onay gerektirir.",
+        {
+            "path": {"type": "STRING"},
+            "message": {"type": "STRING"},
+            "add_all": {"type": "BOOLEAN"},
+        },
+        ["message"],
+    ),
+    _tool_decl(
+        "git_branch",
+        "Yeni bir git branch'i oluşturur (varsayılan: oluşturup geçer). Onay gerektirir.",
+        {
+            "path": {"type": "STRING"},
+            "name": {"type": "STRING"},
+            "checkout": {"type": "BOOLEAN"},
+        },
+        ["name"],
+    ),
+    _tool_decl(
         "canvas_write",
         "Metin, tablo, grafik ve görselleri PDF veya PNG canvas çıktısına dönüştürür.",
         {
@@ -642,6 +741,17 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         "Kalıcı hafızadan kayıt siler.",
         {"category": {"type": "STRING"}, "key": {"type": "STRING"}, "match_text": {"type": "STRING"}},
     ),
+    _tool_decl(
+        "clipboard_read",
+        "Panodaki (clipboard) metni okur.",
+        {"query": {"type": "STRING"}},
+    ),
+    _tool_decl(
+        "clipboard_write",
+        "Verilen metni panoya (clipboard) kopyalar.",
+        {"text": {"type": "STRING"}},
+        ["text"],
+    ),
 ]
 
 
@@ -675,6 +785,16 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "ocr_read": _AdapterSpec("actions.ocr_read", "ocr_read"),
     "image_read": _AdapterSpec("actions.image_read", "image_read"),
     "image_generate": _AdapterSpec("actions.image_generate", "image_generate"),
+    "image_fetch": _AdapterSpec("actions.image_fetch", "image_fetch"),
+    "file_read": _AdapterSpec("actions.filesystem", "file_read"),
+    "file_search": _AdapterSpec("actions.filesystem", "file_search"),
+    "directory_tree": _AdapterSpec("actions.filesystem", "directory_tree"),
+    "git_status": _AdapterSpec("actions.git_ops", "git_status"),
+    "git_diff": _AdapterSpec("actions.git_ops", "git_diff"),
+    "file_write": _AdapterSpec("actions.file_write", "file_write"),
+    "file_patch": _AdapterSpec("actions.file_write", "file_patch"),
+    "git_commit": _AdapterSpec("actions.git_ops", "git_commit"),
+    "git_branch": _AdapterSpec("actions.git_ops", "git_branch"),
     "canvas_write": _AdapterSpec("actions.canvas_write", "canvas_write"),
     "data_analyze": _AdapterSpec("actions.data_analyze", "data_analyze"),
     "chart_generate": _AdapterSpec("actions.chart_generate", "chart_generate"),
@@ -699,6 +819,8 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "desktop_os_active_window": _AdapterSpec("actions.desktop_os", "desktop_os_active_window"),
     "update_memory": _AdapterSpec("memory.memory_manager", "update_memory"),
     "delete_memory": _AdapterSpec("memory.memory_manager", "delete_memory"),
+    "clipboard_read": _AdapterSpec("actions.clipboard", "clipboard_read"),
+    "clipboard_write": _AdapterSpec("actions.clipboard", "clipboard_write"),
 }
 
 
@@ -723,6 +845,8 @@ _DARWIN_ONLY_CAPABILITIES = {
     "desktop_operator.execute_action",
     "desktop_operator.run",
     "desktop_operator.cancel",
+    "clipboard_read",
+    "clipboard_write",
 }
 _WRITE_CAPABILITIES = {
     "document_write",
@@ -754,6 +878,10 @@ _SIDE_EFFECT_CAPABILITIES = {
     "chart_generate",
     "run_skill",
     "mcp_call_tool",
+    "file_write",
+    "file_patch",
+    "git_commit",
+    "git_branch",
 }
 _NON_RETRYABLE_SIDE_EFFECTS = {
     "open_app",
@@ -765,6 +893,9 @@ _NON_RETRYABLE_SIDE_EFFECTS = {
     "send_whatsapp_message",
     "save_whatsapp_contact",
     "email_send",
+    "file_patch",
+    "git_commit",
+    "git_branch",
 }
 _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
     "web_research": ("httpx",),
@@ -779,6 +910,7 @@ _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
     "presentation_write": ("python_pptx",),
     "canvas_write": ("reportlab", "pillow"),
     "browser_control": ("requests",),
+    "image_fetch": ("requests",),
     "speech_to_text": ("faster_whisper", "soundfile"),
     "text_to_speech": (),
     "mcp_call_tool": ("mcp",),
@@ -1026,7 +1158,9 @@ def capability_metadata(name: str) -> dict[str, Any]:
         ).to_dict()
 
     category = "other"
-    if normalized in {"web_research", "retrieve_context", "document_read", "ocr_read", "image_read"}:
+    if normalized in {"file_read", "file_search", "directory_tree", "git_status", "git_diff", "file_write", "file_patch", "git_commit", "git_branch"}:
+        category = "developer"
+    elif normalized in {"web_research", "retrieve_context", "document_read", "ocr_read", "image_read", "image_fetch"}:
         category = "research_docs"
     elif normalized in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write", "image_generate", "chart_generate"}:
         category = "research_docs"
@@ -1034,7 +1168,7 @@ def capability_metadata(name: str) -> dict[str, Any]:
         category = "communication_approval"
     elif normalized in {"math_solve", "latex_parse", "quantum_model_problem", "quantum_run_experiment", "quantum_compare_classical", "quantum_generate_report"}:
         category = "math_quantum"
-    elif normalized in {"open_app", "close_app", "sys_info", "browser_control", "play_media", "analyze_screen", "shell_run", "desktop_os.status", "desktop_os.permissions", "desktop_os.open_permission_settings", "desktop_os.processes", "desktop_os.active_window", "speech_capture", "speech_to_text", "text_to_speech"}:
+    elif normalized in {"open_app", "close_app", "sys_info", "browser_control", "play_media", "analyze_screen", "shell_run", "desktop_os.status", "desktop_os.permissions", "desktop_os.open_permission_settings", "desktop_os.processes", "desktop_os.active_window", "speech_capture", "speech_to_text", "text_to_speech", "clipboard_read", "clipboard_write"}:
         category = "local_execution"
     elif normalized.startswith("desktop_operator."):
         category = "local_execution"
@@ -1087,9 +1221,9 @@ def capability_metadata(name: str) -> dict[str, Any]:
         verification_mode = "operator_verified"
     elif normalized == "desktop_operator.cancel":
         verification_mode = "operator_cancelled"
-    if normalized in _WRITE_CAPABILITIES:
+    if normalized in _WRITE_CAPABILITIES or normalized in {"image_fetch", "file_write", "file_patch"}:
         verification_mode = "artifact_exists"
-    elif normalized in {"document_read", "ocr_read", "image_read", "data_analyze", "math_solve", "latex_parse", "speech_to_text", "text_to_speech", "web_research", "retrieve_context", "email_draft", "quantum_model_problem", "quantum_compare_classical", "quantum_generate_report"}:
+    elif normalized in {"document_read", "ocr_read", "image_read", "data_analyze", "math_solve", "latex_parse", "speech_to_text", "text_to_speech", "web_research", "retrieve_context", "email_draft", "quantum_model_problem", "quantum_compare_classical", "quantum_generate_report", "clipboard_read", "file_read", "file_search", "directory_tree", "git_status", "git_diff", "git_commit", "git_branch"}:
         verification_mode = "result_nonempty"
     elif normalized in {"speech_capture"}:
         verification_mode = "none"
@@ -1106,7 +1240,7 @@ def capability_metadata(name: str) -> dict[str, Any]:
 
     dependency_keys = _CAPABILITY_DEPENDENCY_KEYS.get(normalized, ())
     timeout_seconds = 60
-    if normalized in {"web_research", "document_write", "spreadsheet_write", "presentation_write", "canvas_write", "quantum_run_experiment", "image_generate", "ocr_read", "desktop_operator.observe_screen", "desktop_operator.locate", "desktop_operator.execute_action", "desktop_operator.run"}:
+    if normalized in {"web_research", "document_write", "spreadsheet_write", "presentation_write", "canvas_write", "quantum_run_experiment", "image_generate", "image_fetch", "ocr_read", "file_search", "desktop_operator.observe_screen", "desktop_operator.locate", "desktop_operator.execute_action", "desktop_operator.run"}:
         timeout_seconds = 120
     elif normalized == "shell_run":
         timeout_seconds = 180
@@ -1163,6 +1297,7 @@ _CAPABILITY_GROUP_DEFINITIONS: tuple[tuple[str, str, set[str]], ...] = (
             "ocr_read",
             "image_read",
             "image_generate",
+            "image_fetch",
             "data_analyze",
             "chart_generate",
             "document_write",
@@ -1198,6 +1333,21 @@ _CAPABILITY_GROUP_DEFINITIONS: tuple[tuple[str, str, set[str]], ...] = (
             "quantum_run_experiment",
             "quantum_compare_classical",
             "quantum_generate_report",
+        },
+    ),
+    (
+        "developer",
+        "Geliştirme / Kod",
+        {
+            "file_read",
+            "file_search",
+            "directory_tree",
+            "git_status",
+            "git_diff",
+            "file_write",
+            "file_patch",
+            "git_commit",
+            "git_branch",
         },
     ),
     (
@@ -1615,6 +1765,64 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             background=str(args.get("background", "auto") or "auto"),
             overwrite=bool(args.get("overwrite", False)),
         ),
+        "image_fetch": lambda args: _load_adapter("image_fetch")(
+            query=str(args.get("query", "") or args.get("subject", "") or ""),
+            destination=str(args.get("destination", "") or args.get("dest", "") or ""),
+            count=_as_int(args.get("count"), 1),
+            overwrite=bool(args.get("overwrite", False)),
+        ),
+        "file_read": lambda args: _load_adapter("file_read")(
+            str(args.get("path", "") or ""),
+            _as_int(args.get("max_bytes") if args.get("max_bytes") is not None else args.get("maxBytes"), 400000),
+            _as_int(args.get("start_line") if args.get("start_line") is not None else args.get("startLine"), 0),
+            _as_int(args.get("end_line") if args.get("end_line") is not None else args.get("endLine"), 0),
+        ),
+        "file_search": lambda args: _load_adapter("file_search")(
+            str(args.get("query", "") or ""),
+            str(args.get("path", ".") or "."),
+            str(args.get("glob", "") or ""),
+            bool(args.get("regex", False)),
+            bool(args.get("case_sensitive", False) or args.get("caseSensitive", False)),
+            _as_int(args.get("max_results") if args.get("max_results") is not None else args.get("maxResults"), 50),
+        ),
+        "directory_tree": lambda args: _load_adapter("directory_tree")(
+            str(args.get("path", ".") or "."),
+            _as_int(args.get("max_depth") if args.get("max_depth") is not None else args.get("maxDepth"), 3),
+            _as_int(args.get("max_entries") if args.get("max_entries") is not None else args.get("maxEntries"), 400),
+        ),
+        "git_status": lambda args: _load_adapter("git_status")(
+            str(args.get("path", ".") or "."),
+        ),
+        "git_diff": lambda args: _load_adapter("git_diff")(
+            str(args.get("path", ".") or "."),
+            bool(args.get("staged", False)),
+            str(args.get("target_file", "") or args.get("targetFile", "") or ""),
+        ),
+        "file_write": lambda args: _load_adapter("file_write")(
+            str(args.get("path", "") or ""),
+            str(args.get("content", "") or ""),
+            overwrite=bool(args.get("overwrite", False)),
+            _confirmed=bool(args.get("_confirmed", False)),
+        ),
+        "file_patch": lambda args: _load_adapter("file_patch")(
+            str(args.get("path", "") or ""),
+            str(args.get("old_string", "") or args.get("oldString", "") or ""),
+            str(args.get("new_string", "") or args.get("newString", "") or ""),
+            replace_all=bool(args.get("replace_all", False) or args.get("replaceAll", False)),
+            _confirmed=bool(args.get("_confirmed", False)),
+        ),
+        "git_commit": lambda args: _load_adapter("git_commit")(
+            str(args.get("path", ".") or "."),
+            str(args.get("message", "") or ""),
+            add_all=bool(args.get("add_all", True) if args.get("add_all") is not None else args.get("addAll", True)),
+            _confirmed=bool(args.get("_confirmed", False)),
+        ),
+        "git_branch": lambda args: _load_adapter("git_branch")(
+            str(args.get("path", ".") or "."),
+            str(args.get("name", "") or ""),
+            checkout=bool(args.get("checkout", True) if args.get("checkout") is not None else True),
+            _confirmed=bool(args.get("_confirmed", False)),
+        ),
         "data_analyze": lambda args: _load_adapter("data_analyze")(
             str(args.get("path", "") or ""),
             str(args.get("mode", "summary") or "summary"),
@@ -1765,6 +1973,8 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
         ),
         "save_memory": _save_memory,
         "delete_memory": _delete_memory,
+        "clipboard_read": lambda args: _load_adapter("clipboard_read")(str(args.get("query", "") or "")),
+        "clipboard_write": lambda args: _load_adapter("clipboard_write")(str(args.get("text", "") or "")),
     }
 
 

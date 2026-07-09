@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -75,15 +77,68 @@ UI_QUERY_SYNONYMS = {
     "kaydet": ("save",),
     "iptal": ("cancel", "close"),
     "kapat": ("close",),
-    "tamam": ("ok", "done"),
+    "tamam": ("ok", "done", "confirm"),
+    "onayla": ("confirm", "ok", "approve"),
     "ara": ("search", "find"),
     "bul": ("search", "find"),
     "ayarlar": ("settings", "preferences"),
     "giris": ("sign in", "log in", "login"),
     "giriş": ("sign in", "log in", "login"),
     "oturum": ("sign in", "log in", "login"),
-    "sil": ("delete", "remove"),
+    "sil": ("delete", "remove", "trash"),
     "silme": ("delete", "remove"),
+    # Genişletilmiş UI fiil/isim eşanlamları — masaüstü hakimiyeti için daha
+    # geniş kapsama (TR komut → EN arayüz etiketi).
+    "ac": ("open",),
+    "aç": ("open",),
+    "geri": ("back", "previous"),
+    "yenile": ("refresh", "reload"),
+    "indir": ("download",),
+    "yukle": ("upload", "load"),
+    "yükle": ("upload", "load"),
+    "duzenle": ("edit", "modify"),
+    "düzenle": ("edit", "modify"),
+    "ekle": ("add", "new", "create"),
+    "yeni": ("new", "add", "create"),
+    "olustur": ("create", "new"),
+    "oluştur": ("create", "new"),
+    "paylas": ("share",),
+    "paylaş": ("share",),
+    "kopyala": ("copy",),
+    "yapistir": ("paste",),
+    "yapıştır": ("paste",),
+    "kes": ("cut",),
+    "oynat": ("play",),
+    "durdur": ("stop", "pause"),
+    "duraklat": ("pause",),
+    "evet": ("yes", "ok", "allow"),
+    "hayir": ("no", "deny"),
+    "hayır": ("no", "deny"),
+    "uygula": ("apply",),
+    "gir": ("enter", "submit"),
+    "sec": ("select", "choose"),
+    "seç": ("select", "choose"),
+    "filtrele": ("filter",),
+    "sirala": ("sort",),
+    "sırala": ("sort",),
+    "profil": ("profile", "account"),
+    "hesap": ("account", "profile"),
+    "cikis": ("logout", "sign out", "log out"),
+    "çıkış": ("logout", "sign out", "log out"),
+    "menu": ("menu",),
+    "menü": ("menu",),
+    "indirilenler": ("downloads",),
+    "dosya": ("file",),
+    "duzen": ("edit",),
+    "goruntu": ("view",),
+    "görüntü": ("view",),
+    "yardim": ("help",),
+    "yardım": ("help",),
+    "gonderme": ("send",),
+    "begen": ("like",),
+    "beğen": ("like",),
+    "abone": ("subscribe",),
+    "takip": ("follow",),
 }
 
 
@@ -103,6 +158,18 @@ def _normalize_query_text(value: Any) -> str:
     return " ".join(text.split())
 
 
+# Ters eşanlam indeksi: EN arayüz etiketi → TR karşılık(lar)ı. Çift yönlü
+# eşleşme sağlar — İngilizce sorgu ("send") Türkçe butonu ("Gönder") ya da
+# tersini bulabilir. UI_QUERY_SYNONYMS'ten türetilir (tek kaynak).
+_REVERSE_UI_SYNONYMS: dict[str, tuple[str, ...]] = {}
+for _tr_key, _en_values in UI_QUERY_SYNONYMS.items():
+    for _en in _en_values:
+        for _en_word in _en.lower().split():
+            _REVERSE_UI_SYNONYMS.setdefault(_en_word, ())
+            if _tr_key not in _REVERSE_UI_SYNONYMS[_en_word]:
+                _REVERSE_UI_SYNONYMS[_en_word] = (*_REVERSE_UI_SYNONYMS[_en_word], _tr_key)
+
+
 def _query_tokens(value: Any) -> list[str]:
     tokens: list[str] = []
     for token in _normalize_query_text(value).split():
@@ -112,7 +179,35 @@ def _query_tokens(value: Any) -> list[str]:
             for synonym_token in _normalize_query_text(synonym).split():
                 if synonym_token and synonym_token not in tokens:
                     tokens.append(synonym_token)
+        for reverse in _REVERSE_UI_SYNONYMS.get(token, ()):
+            for reverse_token in _normalize_query_text(reverse).split():
+                if reverse_token and reverse_token not in tokens:
+                    tokens.append(reverse_token)
     return tokens
+
+
+def _fuzzy_ratio(a: str, b: str) -> float:
+    """Kısa UI etiketleri için typo-toleranslı benzerlik (0..1). Boş/çok kısa
+    girişlerde 0 döner ki gürültü eşleşmesi olmasın."""
+    a = (a or "").strip()
+    b = (b or "").strip()
+    if len(a) < 3 or len(b) < 3:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _best_fuzzy_score(normalized_text: str, query_tokens: list[str], item_text: str, aliases: list[str]) -> float:
+    """Sorgu ile öğe metni/alias'ları arasındaki en iyi fuzzy oranı. Hem tüm
+    sorgu ifadesi hem tek tek tokenlar denenir (kullanıcı 'safar' yazınca
+    'safari' butonu yakalanır)."""
+    candidates = [item_text, *aliases]
+    best = 0.0
+    for candidate in candidates:
+        best = max(best, _fuzzy_ratio(normalized_text, candidate))
+        for token in query_tokens:
+            for word in candidate.split():
+                best = max(best, _fuzzy_ratio(token, word))
+    return best
 
 
 def _rank_targets(observation: dict[str, Any], text: str = "", element_type: str = "") -> list[dict[str, Any]]:
@@ -151,6 +246,17 @@ def _rank_targets(observation: dict[str, Any], text: str = "", element_type: str
                 score += 42
             elif item_text in normalized_text and item_text:
                 score += 34
+            else:
+                # Typo/kısmi biçim toleransı: hiçbir kesin/altdizge/token hit
+                # yoksa fuzzy benzerliğe bak ("safar"→"safari", "sittings"→
+                # "settings"). Yüksek eşik: yanlış hedef seçimini önler.
+                fuzzy = _best_fuzzy_score(normalized_text, query_tokens, item_text, aliases)
+                if fuzzy >= 0.9:
+                    score += 48
+                elif fuzzy >= 0.8:
+                    score += 30
+                elif fuzzy >= 0.72:
+                    score += 16
         if aliases and query_tokens:
             overlap = 0
             for alias in aliases:
@@ -601,7 +707,33 @@ def _ensure_helper_binary() -> tuple[bool, str]:
         HELPER_BIN.chmod(0o755)
     except Exception:
         pass
+    # İmzasız swiftc binary'sinin Accessibility/Input izni içerik-hash'ine
+    # bağlanır → relaunch'ta kaybolur. Kararlı kimlikle imzala ki izin kalıcı olsun.
+    _codesign_binary(HELPER_BIN)
     return True, ""
+
+
+def _codesign_binary(binary_path: Path) -> None:
+    """Operatör helper binary'sini kararlı codesigning kimliğiyle imzalar
+    (yoksa ad-hoc). Best-effort: TCC izin kalıcılığını iyileştirir."""
+    identity = "-"
+    try:
+        out = subprocess.run(
+            ["security", "find-identity", "-v", "-p", "codesigning"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+        found = re.search(r"\)\s+([0-9A-F]{40})\s+\"", out)
+        if found:
+            identity = found.group(1)
+    except Exception:
+        pass
+    try:
+        subprocess.run(
+            ["codesign", "--force", "--sign", identity, str(binary_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        pass
 
 
 def _run_operator_helper(mode: str, payload: dict[str, Any] | None = None, *, timeout: int = 20) -> dict[str, Any]:
@@ -1006,8 +1138,56 @@ def _ensure_focus_for_input(target: dict[str, Any], observation: dict[str, Any])
         raise capability_unavailable("Input hedefi odaklanamadı; kör yazma yapılmadı.")
 
 
+_OPERATOR_CLICK_RE = re.compile(
+    r"^(?P<target>.+?)\s*(?:butonuna|dugmesine|düğmesine|linkine|baglantisina|bağlantısına|sekmesine|menusune|menüsüne|['’]?(?:e|a|ye|ya|na|ne|ni|yi))?\s*"
+    r"(?P<kind>cift\s*tikla|çift\s*tıkla|double\s*click|sag\s*tikla|sağ\s*tıkla|sag\s*tik|sağ\s*tık|right\s*click|tikla|tıkla|bas|click|sec|seç|select)$",
+    re.IGNORECASE,
+)
+
+
+def _deterministic_operator_steps(goal: str) -> list[dict[str, Any]]:
+    """Basit, sık kullanılan GUI hedeflerini bulut beyni OLMADAN adımlara çevirir
+    (kaydır / tıkla / çift-tık / sağ-tık). Hedef eşleştirmesini executor yapar
+    (fuzzy + TR↔EN eşanlam). Karmaşık/çok adımlı hedefler bulut planlayıcıya kalır."""
+    original = str(goal or "").strip()
+    if not original:
+        return []
+    normalized = " ".join(_clean_text(original, 200).lower().split())
+
+    # Kaydırma — hedef gerekmez, tamamen deterministik.
+    if any(p in normalized for p in ("asagi kaydir", "aşağı kaydır", "scroll down", "asagiya in", "aşağıya in")):
+        return [{"action": "scroll", "delta": -600}]
+    if any(p in normalized for p in ("yukari kaydir", "yukarı kaydır", "scroll up", "yukariya cik", "yukarıya çık")):
+        return [{"action": "scroll", "delta": 600}]
+
+    match = _OPERATOR_CLICK_RE.match(original.strip())
+    if match:
+        target = _clean_text(match.group("target"), 120).strip(" '’\"")
+        kind = " ".join(match.group("kind").lower().split())
+        if target and len(target) >= 2:
+            if kind in {"cift tikla", "çift tıkla", "double click"}:
+                action = "double_click"
+            elif kind in {"sag tik", "sağ tık", "right click", "sag tikla", "sağ tıkla"}:
+                action = "right_click"
+            else:
+                action = "click"
+            return [{"action": action, "targetText": target}]
+    return []
+
+
 def _plan_operator_steps(goal: str, observation: dict[str, Any]) -> dict[str, Any]:
     from runtime import bridge as runtime_bridge
+
+    # Önce deterministik (bulutsuz) plan: basit hedefler anında + isabetli çözülür.
+    deterministic = _deterministic_operator_steps(goal)
+    if deterministic:
+        return {
+            "steps": deterministic,
+            "confidence": 0.9,
+            "provider": "deterministic",
+            "message": "",
+            "clarificationQuestion": "",
+        }
 
     planner = getattr(runtime_bridge, "plan_visual_operator_steps", None)
     if planner is None:

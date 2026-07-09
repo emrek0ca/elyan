@@ -263,3 +263,94 @@ def test_executor_core_agent_status_maps_runtime_stage_to_simple_copy(
     assert payload["agentStatus"]["active"] is True
     assert payload["agentStatus"]["displayStage"] == "Kaynak topluyor"
     assert payload["agentStatus"]["verificationUsed"] is True
+
+
+def test_executor_react_replans_after_tool_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """İlk adım araç hatasıyla düşerse, replan_fn kalan planı çalışan bir adımla
+    revize edip yürütmeyi tamamlamalı (statik plan iptali yerine ReAct)."""
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+    calls: list[str] = []
+
+    def execute_step(capability: str, _args, _state, _source):
+        calls.append(capability)
+        if capability == "web_research":
+            return {"ok": False, "error": {"code": "NETWORK_FAILED", "message": "ağ yok"}}, []
+        return {"ok": True, "output": "yerel bağlamdan yanıt", "result": {"kind": capability}}, []
+
+    replan_calls: list[dict] = []
+
+    def replan_fn(context: dict):
+        replan_calls.append(context)
+        # Başarısız web_research yerine yerel retrieve_context ile devam et.
+        return [{"capability": "retrieve_context", "args": {"query": "x"}}]
+
+    ok, content, _events, error_code, structured_result, _artifacts = executor.execute_plan_steps(
+        steps=[{"capability": "web_research", "args": {"query": "x"}}],
+        state_factory=state_store.snapshot,
+        execute_step=execute_step,
+        source="confirmed_plan",
+        replan_fn=replan_fn,
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert content == "yerel bağlamdan yanıt"
+    assert calls == ["web_research", "retrieve_context"]
+    assert replan_calls and replan_calls[0]["failedCapability"] == "web_research"
+    assert replan_calls[0]["errorCode"] == "NETWORK_FAILED"
+    trace = state_store.snapshot()["runtime"]["executor"]["lastExecutionTrace"]
+    assert trace["repair"]["attempted"] is True
+
+
+def test_executor_react_gives_up_when_replan_budget_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """replan_fn sürekli başarısız adım döndürürse bütçe dolunca iptal edilmeli."""
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+
+    def execute_step(_capability, _args, _state, _source):
+        return {"ok": False, "error": {"code": "NETWORK_FAILED", "message": "ağ yok"}}, []
+
+    replan_count = {"n": 0}
+
+    def replan_fn(_context):
+        replan_count["n"] += 1
+        return [{"capability": "web_research", "args": {"query": "x"}}]
+
+    ok, _content, _events, error_code, _structured, _artifacts = executor.execute_plan_steps(
+        steps=[{"capability": "web_research", "args": {"query": "x"}}],
+        state_factory=state_store.snapshot,
+        execute_step=execute_step,
+        source="confirmed_plan",
+        replan_fn=replan_fn,
+        max_replans=2,
+    )
+
+    assert ok is False
+    assert error_code == "NETWORK_FAILED"
+    assert replan_count["n"] == 2  # bütçe kadar denendi, sonra iptal
+
+
+def test_executor_react_no_replan_fn_keeps_static_abort(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """replan_fn verilmezse davranış eskisi gibi: ilk hata planı iptal eder."""
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+
+    ok, _content, _events, error_code, _structured, _artifacts = executor.execute_plan_steps(
+        steps=[{"capability": "web_research", "args": {}}],
+        state_factory=state_store.snapshot,
+        execute_step=lambda *_a: ({"ok": False, "error": {"code": "NETWORK_FAILED", "message": "x"}}, []),
+        source="confirmed_plan",
+    )
+
+    assert ok is False
+    assert error_code == "NETWORK_FAILED"

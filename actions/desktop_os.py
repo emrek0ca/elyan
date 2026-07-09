@@ -273,12 +273,14 @@ def _normalise_permission_name(value: str) -> str:
 
 
 def desktop_os_open_permission_settings(permission: str = "privacy") -> dict[str, Any]:
-    snapshot = _load_snapshot()
     normalized = _normalise_permission_name(permission)
     if not normalized:
         raise SafeCapabilityError("INVALID_ARGUMENT", "Acilacak izin belirtilmedi.")
 
-    platform = str(snapshot.get("platform", "") or "").strip().lower()
+    # Native snapshot'ın platform alanına güvenme (boş olabilir) — gerçek OS'a bak.
+    # Aksi halde macOS'ta bile "İzin ver" kartı ayar panelini açamıyordu.
+    import sys as _sys
+    platform = "darwin" if _sys.platform == "darwin" else _sys.platform
     if platform != "darwin":
         raise SafeCapabilityError("UNSUPPORTED_PLATFORM", "Sistem izinlerini buradan açma akışı şu anda yalnız macOS'ta hazır.")
 

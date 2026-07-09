@@ -118,7 +118,39 @@ def _ensure_helper_binary() -> tuple[bool, str]:
         HELPER_BIN.chmod(0o755)
     except Exception:
         pass
+    # KRİTİK: helper'ı KARARLI bir kimlikle imzala. İmzasız swiftc binary'sinin
+    # TCC (Ekran Kaydı) izni içerik-hash'ine bağlanır → her relaunch'ta kaybolur,
+    # panel eski girdiyi "açık" gösterse bile. Geliştirici kimliğiyle imzalayınca
+    # izin team/bundle kimliğine bağlanır ve kalıcı olur.
+    _codesign_app(HELPER_APP)
     return True, ""
+
+
+def _codesign_identity() -> str:
+    """İlk geçerli codesigning kimliğinin hash'ini döndürür (yoksa boş)."""
+    try:
+        out = subprocess.run(
+            ["security", "find-identity", "-v", "-p", "codesigning"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except Exception:
+        return ""
+    import re as _re
+    match = _re.search(r"\)\s+([0-9A-F]{40})\s+\"", out)
+    return match.group(1) if match else ""
+
+
+def _codesign_app(app_path: Path) -> None:
+    """Helper .app'i kararlı kimlikle imzalar (yoksa ad-hoc). Best-effort:
+    başarısızlık capture'ı engellemez, yalnız TCC kalıcılığını iyileştirir."""
+    identity = _codesign_identity() or "-"
+    try:
+        subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", identity, str(app_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        pass
 
 
 def _run_helper(mode: str, timeout: int = 20) -> tuple[bool, str]:

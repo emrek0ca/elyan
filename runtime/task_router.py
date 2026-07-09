@@ -153,6 +153,212 @@ def _clean_app_name(value: str) -> str:
     return cleaned.strip(" .,!?:;\"'’")
 
 
+# Açık GUI eylem fiilleri — bunlar tek başına "ekranda mouse/klavye ile işlem
+# yap" demektir; hiçbir spesifik capability bunları karşılamaz.
+_OPERATOR_GUI_VERBS = (
+    "tikla", "tıkla", "click", "cift tikla", "çift tıkla", "double click",
+    "sag tik", "sağ tık", "right click", "surukle", "sürükle", "drag",
+    "asagi kaydir", "aşağı kaydır", "yukari kaydir", "yukarı kaydır", "scroll",
+    "uzerine gel", "üzerine gel", "butonuna bas", "butonuna tikla",
+    "tusuna bas", "tuşuna bas", "alanina yaz", "alanına yaz", "kutusuna yaz",
+)
+# "Tarayıcıdan bir kaynak (resim/dosya) bul & kaydet" dar kalıbı — bu görevi
+# başka hiçbir capability yapamaz, o yüzden operatöre gider. Belge/mesaj/
+# hesaplama gibi generic "kaydet/gönder" komutlarını GÖLGELEMEZ.
+_OPERATOR_BROWSER_TOKENS = ("safari", "chrome", "firefox", "edge", "opera", "arc", "brave", "tarayici", "tarayıcı", "browser")
+_OPERATOR_RESOURCE_TOKENS = ("resim", "resmi", "gorsel", "görsel", "foto", "fotograf", "fotoğraf", "image", "picture", "gif")
+_OPERATOR_GRAB_VERBS = ("bul", "kaydet", "indir", "download")
+
+
+_IMAGE_FIND_VERBS = ("bul", "ara", "goster", "göster", "ac", "aç", "getir", "indir", "kaydet", "bulur musun")
+_IMAGE_DRAW_VERBS = ("ciz", "çiz", "olustur", "oluştur", "uret", "üret", "generate", "yap", "tasarla")
+_IMAGE_RESOURCE_WORDS = ("resim", "resmi", "resmini", "gorsel", "görsel", "gorseli", "görseli", "foto", "fotograf", "fotoğraf", "image", "picture")
+# "kaydet/indir" varsa görseli GERÇEKTEN indirip diske yazan image_fetch'e gider;
+# yoksa sadece tarayıcıda arama açılır.
+_IMAGE_SAVE_VERBS = ("kaydet", "indir", "download", "save", "kaydeder")
+# Hedef klasör anahtarları (normalize edilmiş) → açık yol.
+_IMAGE_DEST_KEYWORDS = (
+    ("masaustu", "~/Desktop"),
+    ("desktop", "~/Desktop"),
+    ("indirilenler", "~/Downloads"),
+    ("downloads", "~/Downloads"),
+    ("resimler klasor", "~/Pictures"),
+    ("pictures", "~/Pictures"),
+    ("fotograflar klasor", "~/Pictures"),
+    ("belgeler", "~/Documents"),
+    ("documents", "~/Documents"),
+)
+
+
+def _image_find_route(text: str) -> "RoutedTask | None":
+    """"X resmi/görseli bul/ara/göster" → Google Görseller araması (tarayıcıda).
+    Kırılgan pikselli operatör yerine %100 güvenilir; 'kedi resmi çiz' gibi ÜRETME
+    komutlarını (image_generate) gölgelemez."""
+    original = str(text or "").strip()
+    if not original:
+        return None
+    q = _normalise(original)
+    has_resource = any(w in q for w in _IMAGE_RESOURCE_WORDS)
+    has_find = any(v in q for v in _IMAGE_FIND_VERBS)
+    has_draw = any(v in q for v in _IMAGE_DRAW_VERBS)
+    if not (has_resource and has_find) or has_draw:
+        return None
+    # Arama konusunu çıkar: "resim/görsel" kelimesinden ÖNCEki isim öbeği.
+    subject = ""
+    m = re.search(r"(.+?)\s+(?:resim|resmi|resmini|gorsel|görsel|gorseli|görseli|foto\w*|image|picture)", q)
+    if m:
+        subject = m.group(1).strip()
+    # Baştaki uygulama/ablatif ekli tokenları at ("safariden", "tarayicida").
+    subject_tokens = [
+        tok for tok in subject.split()
+        if not any(tok.startswith(app) for app in _OPERATOR_BROWSER_TOKENS)
+        and tok not in {"bir", "bana", "su", "şu", "bu", "internetten", "webden", "googledan"}
+    ]
+    subject = " ".join(subject_tokens).strip() or subject.strip()
+    if not subject:
+        return None
+    # "kaydet/indir" niyeti → görseli herkese açık kaynaktan indirip diske yaz
+    # (kırılgan pikselli operatör yerine %100 güvenilir HTTP indirme).
+    if any(v in q for v in _IMAGE_SAVE_VERBS):
+        destination = ""
+        for keyword, path in _IMAGE_DEST_KEYWORDS:
+            if keyword in q:
+                destination = path
+                break
+        return RoutedTask(
+            "image_fetch",
+            {"query": subject, "destination": destination or "~/Desktop", "count": 1},
+            "image_fetch",
+            intent="image_fetch",
+            confidence=0.92,
+            privacy_class="public_text",
+        )
+    from urllib.parse import quote_plus
+    url = f"https://www.google.com/search?tbm=isch&q={quote_plus(subject)}"
+    return RoutedTask(
+        "browser_control",
+        {"action": "open_url", "url": url},
+        "image_search",
+        intent="image_search",
+        confidence=0.9,
+        privacy_class="public_text",
+    )
+
+
+def _operator_action_route(text: str) -> "RoutedTask | None":
+    """Açık GUI eylem fiili içeren komutları görsel operatöre (observe→plan→
+    execute→verify, gerçek mouse/klavye) yönlendirir. Yalnız net GUI fiilleri
+    (tıkla/kaydır/yaz…) — kırılgan pikselli otomasyonu sadece gerçekten GUI
+    manipülasyonu istenen yerde kullanır. Operatör kendi iznini uygular."""
+    original = str(text or "").strip()
+    if not original:
+        return None
+    q = _normalise(original)
+    if not any(marker in q for marker in _OPERATOR_GUI_VERBS):
+        return None
+    return RoutedTask(
+        "desktop_operator.run",
+        {"goal": original},
+        "desktop_operator",
+        intent="desktop_operator",
+        confidence=0.85,
+        privacy_class="local_private",
+    )
+
+
+def _extract_quoted_message(text: str) -> str:
+    """Tırnak içi mesajı çıkarır. Çift tırnak öncelikli; tek tırnak yalnız
+    boşlukla açılıyorsa (Türkçe ek-kesme işaretini —commit'le— mesaj sanmamak
+    için) kabul edilir. En uzun aday seçilir."""
+    original = str(text or "")
+    doubles = [d.strip() for d in re.findall(r'"([^"]+)"', original) if d.strip()]
+    if doubles:
+        return max(doubles, key=len)
+    singles = [s.strip() for s in re.findall(r"(?:^|\s)'([^']+?)'(?=\s|$)", original) if s.strip()]
+    return max(singles, key=len) if singles else ""
+
+
+def _developer_tool_route(text: str) -> "RoutedTask | None":
+    """Yüksek-sinyalli, düşük-çakışmalı geliştirici (kod-ajanı) komutlarını
+    okuma-tarafı dev tool'larına yönlendirir: git durumu/diff, proje ağacı,
+    kod içinde arama. file_read burada bilinçli yok (document_read çakışması);
+    o ajan-içi capability olarak kalır."""
+    original = str(text or "").strip()
+    if not original:
+        return None
+    q = _normalise(original)
+    tokens = q.split()
+
+    # git commit (mutasyon → onay gerekli; PUSH yapılmaz). Yalnız açık commit niyeti.
+    if "commit" in q:
+        message = _extract_quoted_message(original)
+        return RoutedTask(
+            "git_commit", {"path": ".", "message": message, "add_all": True}, "git_commit",
+            intent="git_commit", confidence=0.85, requires_confirmation=True, privacy_class="local_private",
+        )
+    # git branch oluştur (mutasyon → onay gerekli). Yalnız açık oluşturma niyeti.
+    if any(p in q for p in ("yeni branch", "branch olustur", "branch ac", "new branch", "create branch", "yeni dal")):
+        _branch_verbs = {"yeni", "new", "create", "branch", "git", "olustur", "ac", "dal", "adinda", "adiyla", "isimli"}
+        candidates = [
+            tok for tok in original.split()
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/\-]*", tok) and _normalise(tok) not in _branch_verbs
+        ]
+        branch_name = next((c for c in candidates if "/" in c or "-" in c), candidates[-1] if candidates else "")
+        if branch_name:
+            return RoutedTask(
+                "git_branch", {"path": ".", "name": branch_name, "checkout": True}, "git_branch",
+                intent="git_branch", confidence=0.85, requires_confirmation=True, privacy_class="local_private",
+            )
+
+    # git durumu
+    if "git status" in q or ("git" in tokens and any(w in tokens for w in ("durum", "durumu", "status"))):
+        return RoutedTask(
+            "git_status", {"path": "."}, "git_status",
+            intent="git_status", confidence=0.9, privacy_class="local_private",
+        )
+    # git diff / farklar (yalnız git bağlamında)
+    if "git diff" in q or ("git" in tokens and any(w in q for w in ("diff", "fark", "farklar", "farklari", "degisiklik"))):
+        staged = any(w in q for w in ("staged", "indekste", "index"))
+        return RoutedTask(
+            "git_diff", {"path": ".", "staged": staged}, "git_diff",
+            intent="git_diff", confidence=0.88, privacy_class="local_private",
+        )
+    # proje / klasör ağacı
+    if any(p in q for p in ("proje yapisi", "proje agaci", "klasor agaci", "dizin agaci", "dosya agaci", "dosya yapisi", "directory tree", "folder tree", "file tree")):
+        return RoutedTask(
+            "directory_tree", {"path": ".", "max_depth": 3}, "directory_tree",
+            intent="directory_tree", confidence=0.9, privacy_class="local_private",
+        )
+    # kod/proje içinde arama (web/görsel aramasını çalmamak için kod bağlamı şart)
+    code_ctx = any(w in q for w in ("kod", "kodda", "kodlarda", "projede", "repoda", "kaynak kod", "codebase", "dosyalarda"))
+    if code_ctx and any(w in tokens for w in ("ara", "bul", "search", "grep", "gecen", "geçen")):
+        subject = _extract_after(
+            [r"(?:kod(?:da|larda)?|projede|repoda|dosyalarda|codebase)\s+(?:icinde\s+|içinde\s+)?['\"]?(.+?)['\"]?\s+(?:ara|bul|search|grep|gecen|geçen)"],
+            original,
+        )
+        subject = subject or _extract_after([r"['\"](.+?)['\"]"], original)
+        if subject:
+            return RoutedTask(
+                "file_search", {"query": subject, "path": "."}, "file_search",
+                intent="file_search", confidence=0.82, privacy_class="local_private",
+            )
+    return None
+
+
+def _is_non_app_open_target(value: str) -> bool:
+    """Uygulama adı gibi görünmeyen, ama 'aç' fiiliyle gelen ifadeler (tarayıcı
+    sekmesi vb.) — open_app'e yanlış yönlenmemeleri için."""
+    normalized = _normalise(value)
+    if normalized in {
+        "yeni sekme", "sekme", "new tab", "tab", "yeni pencere", "new window",
+        "yeni sayfa", "new page", "gizli sekme", "incognito", "gizli pencere",
+        "yeni tab", "bir sekme", "bir tab",
+    }:
+        return True
+    # "... sekme" / "... tab" ile biten kısa ifadeler
+    return bool(normalized) and normalized.split()[-1] in {"sekme", "tab"} and len(normalized.split()) <= 3
+
+
 def _is_generic_app_target(value: str) -> bool:
     normalized = _normalise(value)
     return normalized in {
@@ -197,23 +403,83 @@ def _looks_like_url(value: str) -> bool:
 
 def _sys_info_query(text: str) -> str | None:
     q = _normalise(text)
-    tokens = set(q.split())
-    if tokens.intersection({"pil", "battery", "sarj"}):
+    tokens = q.split()
+
+    def _has(stems: set[str]) -> bool:
+        # Ekli/çekimli biçimleri de yakala: "pilim", "şarjım", "diskte",
+        # "bellekte" → kök önekle eşleşir. Tam token eşitliği "pilim"i
+        # ıskalıyordu; bu Jarvis'in en sık kaçırdığı komut ailesiydi.
+        for token in tokens:
+            for stem in stems:
+                if token == stem or (len(stem) >= 3 and token.startswith(stem)):
+                    return True
+        return False
+
+    if _has({"pil", "battery", "sarj", "batarya"}):
         return "battery"
-    if tokens.intersection({"cpu", "islemci"}):
+    if _has({"cpu", "islemci"}) or "islemci" in q:
         return "cpu"
-    if tokens.intersection({"ram", "bellek", "memory"}):
+    if _has({"ram", "bellek", "memory", "hafiza"}):
         return "ram"
-    if tokens.intersection({"disk", "depolama", "storage"}):
+    if _has({"disk", "depolama", "storage"}):
         return "disk"
-    if tokens.intersection({"ag", "wifi", "network", "internet"}):
+    # "internet" yalnız TAM token olarak ağ-durumu sorgusudur; "internetten"/
+    # "internette" (kaynak/konum: "internetten indir") bir durum sorgusu değildir.
+    if _has({"wifi", "network"}) or "internet" in tokens or "ag durumu" in q or _has({"agim"}):
         return "network"
-    if tokens.intersection({"saat", "time", "zaman"}):
+    if _has({"saat", "time", "zaman"}):
         return "time"
-    if tokens.intersection({"tarih", "date"}) or "bugun hangi gun" in q:
+    if _has({"tarih", "date"}) or "bugun hangi gun" in q or "hangi gundeyiz" in q:
         return "date"
-    if q in {"sistem bilgisi", "system info", "sistem durumu"}:
+    if any(phrase in q for phrase in ("sistem bilgisi", "system info", "sistem durumu", "sistem raporu")):
         return "all"
+    return None
+
+
+def _clipboard_write_text(text: str) -> str:
+    """"panoya kopyala X" / "X'i panoya kopyala" biçimlerinden kopyalanacak
+    metni çıkarır."""
+    original = str(text or "").strip()
+    # Sonra gelen biçim: "panoya kopyala: X" / "panoya kopyala X"
+    after = _extract_after(
+        [
+            r"(?:panoya|pano'ya|clipboard'?a)\s+(?:kopyala|yaz|ekle)\s*[:\-]?\s*(.+)$",
+            r"copy\s+(?:to\s+clipboard)?\s*[:\-]?\s*(.+?)\s*(?:to\s+clipboard)?$",
+        ],
+        original,
+    )
+    if after.strip():
+        return after.strip().strip("\"'")
+    # Önce gelen biçim: "X panoya kopyala" / "X'i panoya kopyala". Kelimeyi
+    # bütün yakala; yalnız apostrofla gelen ek (X'i) ayrıca budanır — böylece
+    # "raporu" gibi ekler yanlışlıkla kırpılmaz.
+    match = re.search(r"^(.+?)\s+(?:panoya|clipboard'?a)\s+(?:kopyala|yaz)", original, flags=re.IGNORECASE)
+    if match and match.group(1).strip():
+        captured = match.group(1).strip().strip("\"'")
+        captured = re.sub(r"['’](?:i|ı|u|ü|yi|yı|yu|yü)$", "", captured).strip()
+        return captured
+    return ""
+
+
+def _clipboard_route(text: str) -> "RoutedTask | None":
+    q = _normalise(text)
+    read_markers = (
+        "panoda ne var", "panodaki", "panodakini", "pano oku", "panoyu oku",
+        "panoda ne", "clipboard oku", "kopyalanani", "kopyalanan metni",
+        "panonun icerigi", "panoyu goster",
+    )
+    if any(marker in q for marker in read_markers):
+        return RoutedTask(
+            "clipboard_read", {}, "clipboard_read",
+            intent="clipboard_read", confidence=0.9, privacy_class="local_private",
+        )
+    if any(marker in q for marker in ("panoya kopyala", "panoya yaz", "clipboarda kopyala", "copy to clipboard", "clipboard a kopyala")):
+        payload = _clipboard_write_text(text)
+        if payload:
+            return RoutedTask(
+                "clipboard_write", {"text": payload}, "clipboard_write",
+                intent="clipboard_write", confidence=0.88, privacy_class="local_private",
+            )
     return None
 
 
@@ -870,8 +1136,16 @@ def _site_target_to_url(value: str) -> str | None:
         return _KNOWN_SITES[normalized]
     if normalized.endswith(" sitesi") or normalized.endswith(" sitesi ac"):
         normalized = normalized.replace(" sitesi", "").strip()
+    # Uygulama-olmayan ifadeler ("yeni sekme") domain'e ÇEVRİLMEZ — eskiden
+    # "yeni sekme" → "yenisekme.com" gibi uydurma URL üretiyordu.
+    if _is_non_app_open_target(normalized):
+        return None
+    # Yalnız TEK kelimelik marka benzeri hedefleri uydurma .com'a çevir; çok
+    # kelimeli Türkçe ifadeler domain değildir.
+    if " " in normalized:
+        return None
     slug = re.sub(r"[^a-z0-9]+", "", normalized)
-    if slug:
+    if slug and len(slug) >= 2:
         return f"https://{slug}.com"
     return None
 
@@ -1452,6 +1726,36 @@ def _extract_email_addresses(text: str) -> list[str]:
     return ordered
 
 
+_RESEARCH_VERB_NORMS = {
+    "aratir", "arat", "arastir", "arastirma", "arastirin", "aratirin",
+    "ogren", "ogrenin", "derle", "derleyin", "analiz", "incele", "inceleyin",
+    "sorustur", "research", "arastirmak", "arastiralim",
+}
+
+
+def _strip_research_verbs(topic: str) -> str:
+    """Konu öbeğinin baş/sonundaki araştırma fiillerini atar:
+    'yapay zeka öğren' → 'yapay zeka', 'dif geo ... aratır' → 'dif geo ...'."""
+    tokens = str(topic or "").split()
+    while tokens and _normalise(tokens[-1]) in _RESEARCH_VERB_NORMS:
+        tokens.pop()
+    while tokens and _normalise(tokens[0]) in _RESEARCH_VERB_NORMS:
+        tokens.pop(0)
+    return " ".join(tokens).strip() or str(topic or "").strip()
+
+
+def _extract_page_count(text: str) -> int:
+    """'4 sayfalık', '6 sayfa', '3 page' → 4/6/3. Yoksa 0."""
+    match = re.search(r"(\d+)\s*(?:sayfa\w*|page[s]?)", _normalise(text))
+    if match:
+        try:
+            value = int(match.group(1))
+            return value if 1 <= value <= 100 else 0
+        except ValueError:
+            return 0
+    return 0
+
+
 def _research_topic(text: str) -> str:
     original = str(text or "").strip()
     patterns = [
@@ -1461,17 +1765,29 @@ def _research_topic(text: str) -> str:
     for pattern in patterns:
         match = re.search(pattern, original, flags=re.IGNORECASE)
         if match:
-            candidate = _strip_leading_fillers(match.group(1))
+            candidate = _strip_research_verbs(_strip_leading_fillers(match.group(1)))
             if candidate:
                 return candidate
-    return _strip_leading_fillers(original)
+    return _strip_research_verbs(_strip_leading_fillers(original))
 
 
 _RESEARCH_STRONG_TRIGGERS = {"araştır", "arastir", "araştırma", "research", "incele", "bilgi topla", "bilgi edin"}
 _RESEARCH_WEAK_TRIGGERS = {"kaynak", "source", "verify"}
+# Stem tabanlı araştırma fiili yakalayıcı (normalize edilmiş metinde: ş→s, ı→i).
+# YALNIZ araştır/aratır ailesi — "aras?tir" hem araştır→arastir hem aratır→aratir'i
+# yakalar. (öğren/derle/analiz gibi fiiller web-arama/veri-analizi ile çakıştığı
+# için bilinçli DIŞARIDA; onlar zaten _RESEARCH_STRONG_TRIGGERS'ta gerekiyorsa var.)
+_RESEARCH_STEM_RE = re.compile(r"aras?tir")
 _RESEARCH_STOPWORDS = {
     "araştır",
     "arastir",
+    "arastirma",
+    "aratir",
+    "arat",
+    "ogren",
+    "derle",
+    "analiz",
+    "sorustur",
     "araştırma",
     "research",
     "incele",
@@ -1508,15 +1824,14 @@ def _research_topic_terms(text: str) -> list[str]:
 def _research_request_profile(text: str) -> tuple[str, bool]:
     original = str(text or "").strip()
     q = _normalise(original)
-    if not any(token in q for token in (*_RESEARCH_STRONG_TRIGGERS, *_RESEARCH_WEAK_TRIGGERS)):
+    has_strong = bool(_RESEARCH_STEM_RE.search(q)) or any(token in q for token in _RESEARCH_STRONG_TRIGGERS)
+    if not (has_strong or any(token in q for token in _RESEARCH_WEAK_TRIGGERS)):
         return "", False
     topic = _research_topic(original)
     topic_terms = _research_topic_terms(topic)
     if not topic_terms:
         return topic, False
-    if any(token in q for token in _RESEARCH_STRONG_TRIGGERS):
-        return topic, True
-    if any(token in q for token in ("hakkinda", "about")):
+    if has_strong or any(token in q for token in ("hakkinda", "about")):
         return topic, True
     return topic, len(topic_terms) >= 2
 
@@ -2300,6 +2615,31 @@ def _compound_route(
             })
     if len(steps) < 2:
         return None
+
+    # ── Profesyonel veri akışı: araştırma adımı bir yazıcı adımını besliyorsa,
+    # yazıcının prompt'una KONUYU + (varsa) sayfa hedefini enjekte et. Yürütücü
+    # ayrıca web_research çıktısını _previousResult ile document_write'a geçirir
+    # (sourceContext) → belge gerçek araştırma içeriğiyle dolar, boş şablon değil.
+    research_topic = ""
+    for step in steps:
+        if str(step.get("capability", "")) == "web_research":
+            research_topic = str((step.get("args") or {}).get("query", "") or "").strip()
+            break
+    if research_topic:
+        page_target = _extract_page_count(text)
+        for step in steps:
+            if str(step.get("capability", "")) in {"document_write", "presentation_write", "spreadsheet_write", "canvas_write"}:
+                args = dict(step.get("args") or {})
+                prompt = str(args.get("prompt", "") or "").strip()
+                if research_topic.lower() not in prompt.lower():
+                    prompt = f"{research_topic} hakkında {prompt}".strip() if prompt else f"{research_topic} hakkında ayrıntılı belge"
+                if page_target and "sayfa" not in prompt.lower() and "page" not in prompt.lower():
+                    prompt = f"{prompt} (yaklaşık {page_target} sayfa)"
+                args["prompt"] = prompt
+                if not str(args.get("title", "") or "").strip():
+                    args["title"] = research_topic[:80]
+                step["args"] = args
+
     if any(routed.privacy_class == "side_effect" for _, routed in parts):
         privacy_class = "side_effect"
     elif any(routed.privacy_class == "local_private" for _, routed in parts):
@@ -2338,6 +2678,12 @@ def route_text_to_tool(
         compound = _compound_route(original, selected_artifacts)
         if compound is not None:
             return compound
+
+    # Pano komutları dosya-kopyalama ("kopyala") rotasından ÖNCE ele alınır;
+    # aksi halde "panoya kopyala X" yanlışlıkla cp olarak yorumlanır.
+    clipboard_task = _clipboard_route(original)
+    if clipboard_task is not None:
+        return clipboard_task
 
     # ── File system operations (highest priority — very specific intents) ──────
     mkdir = _mkdir_route(original)
@@ -2711,8 +3057,22 @@ def route_text_to_tool(
         open_target = _clean_app_name(open_target)
         if _looks_like_url(open_target):
             return RoutedTask("browser_control", {"action": "open_url", "url": open_target}, "open_url", intent="open_url", confidence=0.93)
-        if not _is_generic_app_target(open_target) and not any(token in _normalise(open_target) for token in ("dosya", "file", "klasor", "folder")):
+        # "yeni sekme aç", "new tab", "sekme aç" gibi ifadeler bir UYGULAMA adı
+        # değil; open_app'e kaçarsa "yeni sekme guvenli sekilde acilamadi" diye
+        # kafa karıştırıcı hata verirdi. Bunları open_app dışında tut.
+        if (
+            not _is_generic_app_target(open_target)
+            and not _is_non_app_open_target(open_target)
+            and not any(token in _normalise(open_target) for token in ("dosya", "file", "klasor", "folder"))
+        ):
             return RoutedTask("open_app", {"app_name": open_target}, "open_app", intent="open_app", confidence=0.95, privacy_class="local_private")
+
+    # ── Geliştirici (kod-ajanı) okuma tool'ları — SHELL rotasından ÖNCE, çünkü
+    # "git durumu/diff" gibi komutlar yoksa ham shell_run'a düşerdi. Yalnız
+    # status/diff/ağaç/kod-arama yakalanır; diğer git komutları shell'e kalır. ─
+    dev_task = _developer_tool_route(original)
+    if dev_task is not None:
+        return dev_task
 
     command = _extract_after(
         [
@@ -2771,6 +3131,16 @@ def route_text_to_tool(
                 confidence=0.93,
                 privacy_class="local_private",
             )
+
+    # ── Görsel bulma → tarayıcı araması (kırılgan operatör yerine güvenilir) ──
+    image_find = _image_find_route(original)
+    if image_find is not None:
+        return image_find
+
+    # ── Operatör (mouse/klavye): yalnız açık GUI fiilleri ────────────────────
+    operator_task = _operator_action_route(original)
+    if operator_task is not None:
+        return operator_task
 
     # ── General knowledge / web search fallback ──────────────────────────────
     _info_query_patterns = [

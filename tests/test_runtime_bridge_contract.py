@@ -7496,3 +7496,308 @@ def test_runtime_task_terminal_payload_marks_private_artifacts_share_required(
     assert payload["safeSummary"] == "Yerel rapor hazır."
     assert artifacts[0]["shareable"] is False
     assert artifacts[0]["requiresUserShare"] is True
+
+
+def test_backend_truth_sync_preserves_local_only_conversations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Yerel-öncelikli konuşmalar backend truth-sync'te silinmemeli.
+
+    Sidebar tek gerçek kaynak olarak backend session listesini kullandığından,
+    buluta hiç gitmeyen yerel konuşmalar (id 'conv_...') her senkronda
+    kayboluyordu. Bu regresyon testi kaybı önlediğimizi garanti eder.
+    """
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state({"account": {"refreshToken": "rt_local", "accessToken": ""}})
+
+    # Bir yerel-öncelikli konuşma (buluta gitmemiş) + state'e yaz.
+    local_id = "conv_1700000000000_abcdef01"
+    state_store.update_state(
+        {
+            "conversation": {
+                "activeId": local_id,
+                "items": [
+                    {
+                        "id": local_id,
+                        "title": "Safari'yi aç",
+                        "updatedAt": "2026-07-09T10:00:00Z",
+                        "messages": [
+                            {"role": "user", "text": "safariyi aç"},
+                            {"role": "assistant", "text": "Safari açıldı."},
+                        ],
+                    }
+                ],
+            }
+        }
+    )
+
+    class FakeBackend:
+        def chat_sessions(self, *, limit: int = 30) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_sessions",
+                status_code=200,
+                data={
+                    "sessions": [
+                        {
+                            "id": VALID_CHAT_SESSION_ID,
+                            "title": "Bulut sohbeti",
+                            "updatedAt": "2026-07-09T11:00:00Z",
+                        }
+                    ]
+                },
+            )
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    runtime._sync_conversation_truth_from_backend()
+
+    ids = {
+        str(item.get("id", ""))
+        for item in state_store.snapshot().get("conversation", {}).get("items", [])
+    }
+    # Hem bulut session'ı hem de yerel-öncelikli konuşma korunmalı.
+    assert VALID_CHAT_SESSION_ID in ids
+    assert local_id in ids
+
+
+def test_backend_truth_sync_clear_all_drops_local_conversations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """clear_all=True açıkça tüm geçmişi temizler; yerel konuşmalar da gitmeli."""
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state({"account": {"refreshToken": "rt_local", "accessToken": ""}})
+    local_id = "conv_1700000000000_abcdef02"
+    state_store.update_state(
+        {
+            "conversation": {
+                "activeId": local_id,
+                "items": [
+                    {
+                        "id": local_id,
+                        "title": "Yerel",
+                        "updatedAt": "2026-07-09T10:00:00Z",
+                        "messages": [{"role": "user", "text": "merhaba"}],
+                    }
+                ],
+            }
+        }
+    )
+
+    class FakeBackend:
+        def chat_sessions(self, *, limit: int = 30) -> BackendResult:
+            return BackendResult(
+                ok=True, request_id="req", status_code=200, data={"sessions": []}
+            )
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    runtime._sync_conversation_truth_from_backend(clear_all=True)
+
+    ids = {
+        str(item.get("id", ""))
+        for item in state_store.snapshot().get("conversation", {}).get("items", [])
+    }
+    assert local_id not in ids
+
+
+def test_recoverable_replan_falls_back_web_research_to_local_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Web araştırma ağ hatasıyla düşerse ReAct replan yerel bağlama düşmeli ve
+    kalan yazıcı adımını (outputPath dahil) korumalı."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    revised = runtime._recoverable_replan(
+        {
+            "failedCapability": "web_research",
+            "errorCode": "NETWORK_FAILED",
+            "failedArgs": {"query": "elyan nedir"},
+            "remainingSteps": [
+                {"capability": "document_write", "args": {"outputPath": "r.docx", "title": "R"}}
+            ],
+        }
+    )
+
+    assert [s["capability"] for s in revised] == ["retrieve_context", "document_write"]
+    assert revised[0]["args"]["query"] == "elyan nedir"
+    assert revised[1]["args"]["outputPath"] == "r.docx"  # yazıcı hedefi korunur
+
+
+def test_recoverable_replan_ignores_non_recoverable_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    # Ağ dışı hata → replan yok (izin hatası gibi kurtarılamaz).
+    assert runtime._recoverable_replan(
+        {"failedCapability": "web_research", "errorCode": "ACCESS_DENIED", "failedArgs": {"query": "x"}}
+    ) == []
+    # Alakasız capability → replan yok.
+    assert runtime._recoverable_replan(
+        {"failedCapability": "document_write", "errorCode": "NETWORK_FAILED", "failedArgs": {}}
+    ) == []
+
+
+def test_capability_execution_telemetry_and_reliability_surfacing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Gerçek yürütme sonucu capability telemetrisine yazılmalı ve sık başarısız
+    olan araç planlayıcı bağlamına 'reliability' kaydı olarak düşmeli."""
+    _isolate_state(monkeypatch, tmp_path)
+    from runtime import structured_planner
+
+    # 3 yürütme, 2 başarısız (%67 hata) — güvenilmez eşiği aşar.
+    state_store.record_capability_execution("web_research", False)
+    state_store.record_capability_execution("web_research", False)
+    state_store.record_capability_execution("web_research", True)
+
+    snap = state_store.capability_quality_snapshot("web_research")
+    assert snap["executions"] == 3
+    assert snap["executionFailures"] == 2
+
+    records = structured_planner.intelligence_context(state_store.snapshot())
+    reliability = [r for r in records if r.get("kind") == "reliability"]
+    assert reliability and reliability[0]["capability"] == "web_research"
+    assert reliability[0]["failureRate"] == 0.67
+
+
+def test_reliable_capability_not_flagged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Düşük hata oranlı araç reliability kaydı üretmemeli."""
+    _isolate_state(monkeypatch, tmp_path)
+    from runtime import structured_planner
+
+    for _ in range(9):
+        state_store.record_capability_execution("document_write", True)
+    state_store.record_capability_execution("document_write", False)  # %10 hata
+
+    records = structured_planner.intelligence_context(state_store.snapshot())
+    assert not [r for r in records if r.get("kind") == "reliability"]
+
+
+def test_execute_step_with_telemetry_records_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Bridge execute_step sarmalayıcısı adım sonucunu telemetriye yazmalı."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(
+        bridge,
+        "_execute_capability_with_preprocessing",
+        lambda capability, args, state, source: ({"ok": True, "output": "ok"}, []),
+    )
+
+    result, _events = runtime._execute_step_with_telemetry("math_solve", {}, {}, "confirmed_plan")
+
+    assert result["ok"] is True
+    assert state_store.capability_quality_snapshot("math_solve")["executions"] == 1
+
+
+def test_clipboard_capabilities_registered_and_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """clipboard_read/write kayıtlı, güvenli (read_only) ve uçtan uca çalışıyor."""
+    _isolate_state(monkeypatch, tmp_path)
+    from runtime import capability_registry as cr
+
+    assert "clipboard_read" in cr.capability_names()
+    assert "clipboard_write" in cr.capability_names()
+    meta = cr.capability_metadata("clipboard_read")
+    assert meta["permissionClass"] == "read_only"
+    assert meta["sideEffect"] is False
+
+    # pbcopy/pbpaste'i taklit et — CI/sandbox'ta gerçek pano olmayabilir.
+    from actions import clipboard
+    store = {"value": ""}
+    monkeypatch.setattr(
+        clipboard.subprocess, "run",
+        lambda cmd, **kw: _FakeClip(cmd, kw, store),
+    )
+
+    state = state_store._ensure_defaults({})
+    w = cr.run_capability("clipboard_write", {"text": "elyan"}, state)
+    assert w["ok"] is True
+    r = cr.run_capability("clipboard_read", {}, state)
+    assert r["ok"] is True
+    assert "elyan" in (r.get("output") or "")
+
+
+class _FakeClip:
+    """pbcopy/pbpaste taklidi — paylaşılan sözlükte metin tutar."""
+    def __init__(self, cmd, kw, store):
+        self.returncode = 0
+        if cmd == ["pbcopy"]:
+            store["value"] = kw.get("input", "")
+            self.stdout = ""
+        else:  # pbpaste
+            self.stdout = store["value"]
+
+
+def test_billing_truth_refresh_is_throttled_and_syncs_quota(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dispatch/sohbet sonrası kota senkronu: auth_me çağrılır ama throttle
+    aralığında ikinci kez çağrılmaz (task loop'unu yavaşlatmaz)."""
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state({"account": {"accessToken": "user-token"}})
+    runtime = bridge.RuntimeBridge()
+
+    calls = {"n": 0}
+
+    class FakeBackend:
+        def auth_me(self):
+            calls["n"] += 1
+            return bridge.BackendResult(ok=True, request_id="r", status_code=200, data={})
+
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    # Thread'i senkron çalıştır ki test deterministik olsun.
+    class _SyncThread:
+        def __init__(self, target=None, **_kw):
+            self._target = target
+        def start(self):
+            if self._target:
+                self._target()
+    monkeypatch.setattr(bridge.threading, "Thread", _SyncThread)
+
+    runtime._refresh_billing_truth_async()
+    assert calls["n"] == 1
+    # Throttle aralığında ikinci çağrı no-op.
+    runtime._refresh_billing_truth_async()
+    assert calls["n"] == 1
+    # force=True aralığı bypass eder.
+    runtime._refresh_billing_truth_async(force=True)
+    assert calls["n"] == 2
+
+
+def test_billing_refresh_skipped_when_not_authenticated(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    calls = {"n": 0}
+
+    class FakeBackend:
+        def auth_me(self):
+            calls["n"] += 1
+            return bridge.BackendResult(ok=True, request_id="r", status_code=200, data={})
+
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+    runtime._refresh_billing_truth_async(force=True)  # oturum yok → çağrılmamalı
+    assert calls["n"] == 0

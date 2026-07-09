@@ -867,6 +867,11 @@ struct ElyanSession: Identifiable, Equatable, Hashable {
     let lastMessage: String
     let updatedAt: Date
     let messageCount: Int
+    /// True for conversations executed purely on this desktop (local-first
+    /// runtime) that never round-tripped to the cloud. These live in the local
+    /// bridge conversation store, not backend `/v1/chat/sessions`, so history
+    /// detail must be loaded from the bridge instead of the backend.
+    var isLocal: Bool = false
 }
 
 struct ElyanSessionPage: Equatable {
@@ -1006,6 +1011,29 @@ extension ElyanBackend {
 
     static func parseSessions(_ raw: Any) -> [ElyanSession] {
         parseSessionPage(raw).sessions
+    }
+
+    static func isUUID(_ value: String) -> Bool {
+        UUID(uuidString: value) != nil
+    }
+
+    /// Maps the bridge `conversation.list` payload into sessions, surfacing
+    /// only local-only conversations (bridge-generated "conv_..." ids). Backend-
+    /// synced conversations carry UUID ids and already appear via
+    /// `/v1/chat/sessions`, so filtering by non-UUID id avoids duplicates.
+    static func parseLocalSessions(_ conversations: [[String: Any]]) -> [ElyanSession] {
+        conversations.compactMap { item in
+            guard let id = item["id"] as? String, !id.isEmpty, !isUUID(id) else { return nil }
+            let rawTitle = (item["title"] as? String) ?? ""
+            let title = rawTitle.isEmpty ? "Yerel sohbet" : rawTitle
+            let preview = (item["preview"] as? String) ?? (item["lastMessage"] as? String) ?? ""
+            let updatedAt = ElyanDateParser.parse(item["updatedAt"] as? String) ?? Date()
+            let count = (item["messageCount"] as? Int) ?? 0
+            return ElyanSession(
+                id: id, title: title, lastMessage: preview,
+                updatedAt: updatedAt, messageCount: count, isLocal: true
+            )
+        }
     }
 
     static func parseSessionMessages(_ raw: Any) -> (messages: [ElyanSessionMessage], hasMore: Bool, nextCursor: String?) {

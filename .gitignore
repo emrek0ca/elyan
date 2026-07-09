@@ -32,3 +32,4 @@ config/api_keys.json
 memory/memory.json
 memory/phone_book.json
 website.zip
+elyan_output/

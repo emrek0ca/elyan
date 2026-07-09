@@ -3,6 +3,41 @@ import SwiftUI
 
 // MARK: - ChatMessage
 
+/// A single step in a multi-step plan awaiting user approval.
+struct PlanStep: Identifiable, Equatable {
+    let id = UUID()
+    let description: String
+    let capability: String
+}
+
+/// A plan the local runtime produced that needs the user's confirmation before
+/// it executes (side-effecting or multi-step). Rendered as an inline card with
+/// Onayla / İptal actions; on approval the runtime runs the steps on the desktop.
+struct PendingPlan: Equatable {
+    let pendingPlanId: String
+    let conversationId: String
+    let summary: String
+    let steps: [PlanStep]
+    /// True while the confirm/cancel round-trip is in flight (disables buttons).
+    var isConfirming: Bool = false
+}
+
+/// A permission wall the runtime hit while trying to run a command. Rendered as
+/// an inline card with one-tap grant actions so the user never has to hunt
+/// through Settings. `originalText` is re-run automatically once granted.
+struct PermissionRequest: Equatable {
+    let reason: String
+    /// Elyan's own toggle (e.g. "allow_computer_control") — granted in-app.
+    let permissionKey: String
+    let canGrantPersistently: Bool
+    /// macOS TCC permission (e.g. "accessibility", "screenRecording") — opened
+    /// in System Settings; the user flips it there.
+    let systemPermissionKey: String
+    let systemPermissionRequired: Bool
+    let originalText: String
+    var isGranting: Bool = false
+}
+
 struct ChatMessage: Identifiable {
     enum Role: String, Equatable { case user, assistant }
     let id = UUID()
@@ -10,6 +45,10 @@ struct ChatMessage: Identifiable {
     var text: String
     var blocks: [ChatBlock]
     let timestamp: Date
+    /// Non-nil when this assistant message carries a plan awaiting approval.
+    var plan: PendingPlan?
+    /// Non-nil when this assistant message is a permission request.
+    var permission: PermissionRequest?
     /// Non-nil only for messages loaded from session history whose backend
     /// status wasn't a terminal "completed" (queued/running/waiting_approval/
     /// failed/canceled) — nil for live/local messages so the normal streaming
@@ -19,12 +58,15 @@ struct ChatMessage: Identifiable {
 
     init(
         role: Role, text: String, blocks: [ChatBlock] = [], timestamp: Date = Date(),
+        plan: PendingPlan? = nil, permission: PermissionRequest? = nil,
         historyStatus: String? = nil, historyError: String? = nil
     ) {
         self.role = role
         self.text = text
         self.blocks = blocks
         self.timestamp = timestamp
+        self.plan = plan
+        self.permission = permission
         self.historyStatus = historyStatus
         self.historyError = historyError
     }
@@ -50,6 +92,8 @@ extension ChatMessage: Equatable {
         lhs.id == rhs.id
             && lhs.text == rhs.text
             && lhs.blocks.count == rhs.blocks.count
+            && lhs.plan == rhs.plan
+            && lhs.permission == rhs.permission
             && lhs.historyStatus == rhs.historyStatus
     }
 }
@@ -314,11 +358,6 @@ final class ChatStore: ObservableObject {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        // Kanal POST'tan ÖNCE ısınır: dispatch döner dönmez ilk delta'lar
-        // zaten açık olan stream'den akar — eski per-task modeldeki
-        // "POST bitti, şimdi bağlan" boşluğu yok.
-        ensureRealtimeOpen()
-
         let userMsg = ChatMessage(role: .user, text: trimmed)
         messages.append(userMsg)
         let placeholder = ChatMessage(role: .assistant, text: "")
@@ -327,53 +366,99 @@ final class ChatStore: ObservableObject {
         isStreaming = true
         lastError = ""
 
-        // SwiftUI'nin @Published mutasyonlarını bir render'a çevirmesi için
-        // RunLoop'a bir "nefes" verilmeden hemen ağ çağrısına geçiliyordu —
-        // kullanıcının kendi mesajı, sonraki @Published mutasyonu (cevap ya
-        // da hata) gelene kadar ekranda hiç görünmüyordu (canlı testte
-        // doğrulandı: messages.append hemen çalışıyor ama arayüz ancak
-        // stream/hata sonucunu da alınca "birden" doluyormuş gibi
-        // güncelleniyordu). Tek bir yield, optimistic baloncuğun ağ
-        // çağrısından ÖNCE ekrana çizilmesini garantiler.
+        // Optimistic baloncuğun ağ/işlem çağrısından ÖNCE çizilmesini garantiler.
         await Task.yield()
 
-        // YEREL-ÖNCELİKLİ YOL (Jarvis): bulut, masaüstü kaynaklı komutları
-        // masaüstüne geri göndermeyip kendi LLM'iyle "masaüstü ortamı yok"
-        // diye reddediyordu. Komut yerel runtime'da (deterministik router +
-        // gerçek araçlar) çalışır; sonuç senkron döner. Bridge kapalıysa
-        // eski bulut yoluna düşülür.
-        if let localSend {
-            do {
-                let reply = try await localSend(trimmed)
-                completeStreaming(withLocalReply: reply)
-                return
-            } catch is RuntimeBridgeSwiftError {
-                // Bridge ayakta değil — bulut yoluna devam.
-            } catch {
-                await finishStreaming(withFailure: error)
-                return
-            }
+        // ── SAF YEREL OTOMASYON — bulut/LLM/SSE yolu TAMAMEN kaldırıldı ──────
+        // Dış bağımlılık yok: komut yalnız deterministik router + gerçek
+        // araçlarla masaüstünde çalışır. Bridge düşükse önce toparlanır; hâlâ
+        // yanıt veremezse GERÇEK neden gösterilir (eskiden buluta düşüp boş
+        // dönerek "Yanıt gelmedi" maskeliyordu — o sınıf hata artık imkânsız).
+        guard let localSend else {
+            finishLocal(text: "Masaüstü motoru bağlı değil. Uygulamayı yeniden başlat.")
+            return
+        }
+
+        if let localRecover {
+            _ = await localRecover()
         }
 
         do {
-            let dispatch = try await backend.sendChatMessage(
-                prompt: trimmed,
-                sessionId: sessionId,
-                source: "desktop"
-            )
-            currentTaskId = dispatch.taskId
-            if let sid = dispatch.sessionId, !sid.isEmpty {
-                sessionId = sid
-                // Invalidate cache for this session so next open fetches fresh
-                cache.invalidateMessages(forSession: sid)
-            }
+            let reply = try await localSend(trimmed)
+            completeStreaming(withLocalReply: reply)
+        } catch is RuntimeBridgeSwiftError {
+            // Toparlama denendi ama süreç hâlâ ayakta değil — gerçek durumu ver.
+            let diag = localStatus?() ?? ""
+            let suffix = diag.isEmpty ? "" : "\n(durum: \(diag))"
+            finishLocal(text: "Masaüstü motoru başlatılamadı. Birkaç saniye sonra tekrar dene.\(suffix)")
         } catch {
-            await finishStreaming(withFailure: error)
+            let base = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            finishLocal(text: "Komut tamamlanamadı: \(base)")
         }
+    }
+
+    /// Yerel-yalnız akışta placeholder baloncuğu net bir metinle doldurur ve
+    /// streaming durumunu kapatır (SSE yok; bulut maskeleme yok).
+    private func finishLocal(text: String) {
+        if let id = streamingAssistantId,
+           let idx = messages.firstIndex(where: { $0.id == id }) {
+            messages[idx].text = text
+        }
+        isStreaming = false
+        streamingAssistantId = nil
+        currentTaskId = nil
     }
 
     /// AppState tarafından bağlanır: komutu yerel Python runtime'ında koşturur.
     var localSend: ((String) async throws -> PythonRuntimeSupervisor.LocalChatReply)?
+
+    /// Bridge süreci düşükse toparlamayı dener (restart + canlı olana kadar
+    /// bekle). true dönerse `localSend` yeniden denenebilir. AppState bağlar.
+    var localRecover: (() async -> Bool)?
+
+    /// Masaüstü motorunun anlık tanı metni (lifecycle + son hata). Bridge
+    /// başlatılamadığında GERÇEK nedeni chat'te göstermek için. AppState bağlar.
+    var localStatus: (() -> String)?
+
+    /// Canlı checklist'i barındıran aktif asistan mesajı (plan yürütme sırasında).
+    /// Executor progress event'leri conversation_id taşımadığı için hedef budur.
+    private var progressHostId: UUID?
+
+    /// Executor adım event'ini (task_trace bloğu) aktif mesaja iliştirir/günceller.
+    /// Aynı stableBlockId'li blok varsa üzerine yazar → checklist canlı tik atar.
+    func applyProgressBlock(conversationId: String, block: [String: Any]) {
+        guard let parsed = ChatBlock.parse(from: block) else { return }
+        let targetId = progressHostId ?? streamingAssistantId
+        guard let id = targetId,
+              let idx = messages.firstIndex(where: { $0.id == id }) else { return }
+        if let existing = messages[idx].blocks.firstIndex(where: { $0.id == parsed.id }) {
+            messages[idx].blocks[existing] = parsed
+        } else {
+            messages[idx].blocks.append(parsed)
+        }
+    }
+
+    /// Yürütme çözüldüğünde checklist'i DETERMİNİSTİK sonlandırır: kalan
+    /// running/pending adımları kapatır, overall status'u set eder. Final
+    /// progress event'i yarışta kaybolsa bile spinner asla takılı kalmaz.
+    private func finalizeChecklist(inMessageId id: UUID, success: Bool) {
+        guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
+        for bIdx in messages[idx].blocks.indices {
+            guard case .taskTrace(var trace) = messages[idx].blocks[bIdx] else { continue }
+            for i in trace.steps.indices {
+                switch trace.steps[i].status {
+                case .running:
+                    trace.steps[i].status = success ? .completed : .failed
+                case .pending where success:
+                    trace.steps[i].status = .completed
+                default:
+                    break
+                }
+            }
+            trace.status = success ? .completed : .failed
+            messages[idx].blocks[bIdx] = .taskTrace(trace)
+        }
+    }
 
     /// Aktif oturum değiştiğinde (yeni sohbet = boş kimlik) yerel runtime'ın
     /// konuşma bağlamını senkron tutmak için AppState tarafından bağlanır.
@@ -384,10 +469,130 @@ final class ChatStore: ObservableObject {
         if let id = streamingAssistantId,
            let idx = messages.firstIndex(where: { $0.id == id }) {
             messages[idx].text = reply.text
+            messages[idx].plan = reply.plan
+            messages[idx].permission = reply.permission
         }
         isStreaming = false
         streamingAssistantId = nil
         currentTaskId = nil
+    }
+
+    /// Bağlanır: Elyan izin anahtarını açar (state.update).
+    var localGrantPermission: ((_ key: String) async -> Bool)?
+    /// Bağlanır: macOS sistem izin panelini doğru bölmede açar.
+    var localOpenSystemPermission: ((_ systemKey: String) async -> Void)?
+
+    /// Kullanıcı izin kartında "İzin Ver"e bastığında: Elyan toggle'ını açar ve
+    /// başarılıysa orijinal komutu otomatik yeniden çalıştırır (kullanıcı tekrar
+    /// yazmak zorunda kalmaz). Sistem izni gerekiyorsa ilgili paneli açar.
+    func grantPermission(messageId: UUID) async {
+        guard let idx = messages.firstIndex(where: { $0.id == messageId }),
+              let permission = messages[idx].permission else { return }
+        messages[idx].permission?.isGranting = true
+
+        // Elyan'ın kendi izin kümesini aç (operatörde tüm set birlikte açılır).
+        var granted = false
+        if !permission.permissionKey.isEmpty, let localGrantPermission {
+            granted = await localGrantPermission(permission.permissionKey)
+        }
+
+        // Kartı temizle.
+        if let i = messages.firstIndex(where: { $0.id == messageId }) {
+            messages[i].permission = nil
+        }
+
+        guard granted, !permission.originalText.isEmpty else {
+            if !granted {
+                messages.append(ChatMessage(role: .assistant, text: "İzin verilemedi. Lütfen tekrar dene veya Ayarlar’dan elle aç."))
+            }
+            return
+        }
+
+        // Elyan izni açıldı → komutu HEMEN otomatik yeniden çalıştır. macOS sistem
+        // izni (Erişilebilirlik/Ekran Kaydı) zaten verilmişse iş biter; verilmemişse
+        // yeni yanıt taze bir izin kartı getirir (o da tek tıkla panele yönlendirir).
+        await send(permission.originalText)
+    }
+
+    /// Sistem izin anahtarını okunur panel adına çevirir.
+    static func systemPaneName(_ key: String) -> String {
+        switch key {
+        case "accessibility": return "Erişilebilirlik"
+        case "screenRecording": return "Ekran Kaydı"
+        case "inputMonitoring": return "Girdi İzleme"
+        case "automation": return "Otomasyon"
+        default: return "Gizlilik ve Güvenlik"
+        }
+    }
+
+    /// Kullanıcı "Sistem Ayarları'nı Aç"a bastığında.
+    func openSystemPermission(messageId: UUID) async {
+        guard let idx = messages.firstIndex(where: { $0.id == messageId }),
+              let permission = messages[idx].permission else { return }
+        await localOpenSystemPermission?(permission.systemPermissionKey)
+    }
+
+    /// Bağlanır: onay bekleyen bir planı yerel runtime'da onaylar/iptal eder.
+    var localConfirmPlan: ((_ conversationId: String, _ pendingPlanId: String, _ approved: Bool) async throws -> PythonRuntimeSupervisor.LocalChatReply)?
+
+    /// Kullanıcı bir plan kartında "Onayla"/"İptal"e bastığında çağrılır. Plan
+    /// mesajının kartını "onaylanıyor" durumuna alır, runtime sonucunu bekler ve
+    /// sonucu yeni bir asistan baloncuğu olarak ekler; kart kaybolur.
+    func confirmPlan(messageId: UUID, approved: Bool) async {
+        guard let idx = messages.firstIndex(where: { $0.id == messageId }),
+              let plan = messages[idx].plan,
+              let localConfirmPlan else { return }
+        messages[idx].plan?.isConfirming = true
+        // Onay sırasında CANLI baloncuk: executor adım event'leri buraya
+        // task_trace (checklist) bloğu olarak akar; sonuç da aynı baloncuğa yerleşir.
+        let liveHost = ChatMessage(role: .assistant, text: "")
+        messages.append(liveHost)
+        progressHostId = liveHost.id
+        defer { progressHostId = nil }
+        do {
+            let reply = try await localConfirmPlan(plan.conversationId, plan.pendingPlanId, approved)
+            // Kartı temizle (plan çözüldü).
+            if let i = messages.firstIndex(where: { $0.id == messageId }) {
+                messages[i].plan = nil
+            }
+            // Checklist'i deterministik tamamla (spinner takılı kalmaz).
+            finalizeChecklist(inMessageId: liveHost.id, success: true)
+            // Canlı baloncuğu sonuçla doldur; biriken checklist bloğu (tamamlandı
+            // durumunda) korunur. Render block-first olduğu için, checklist varsa
+            // final metni bir text bloğu olarak eklenir (yoksa düz text gösterilir).
+            if let hostIdx = messages.firstIndex(where: { $0.id == liveHost.id }) {
+                messages[hostIdx].plan = reply.plan
+                messages[hostIdx].permission = reply.permission
+                let finalText = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !finalText.isEmpty {
+                    if messages[hostIdx].blocks.isEmpty {
+                        messages[hostIdx].text = finalText
+                    } else {
+                        messages[hostIdx].blocks.append(.text(TextBlock(stableBlockId: nil, markdown: finalText)))
+                    }
+                }
+            } else {
+                messages.append(
+                    ChatMessage(role: .assistant, text: reply.text, plan: reply.plan, permission: reply.permission)
+                )
+            }
+        } catch {
+            // Onay başarısız — kartı geri getir ki kullanıcı tekrar deneyebilsin.
+            if let i = messages.firstIndex(where: { $0.id == messageId }) {
+                messages[i].plan?.isConfirming = false
+            }
+            let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            lastError = msg
+            finalizeChecklist(inMessageId: liveHost.id, success: false)
+            if let hostIdx = messages.firstIndex(where: { $0.id == liveHost.id }) {
+                let note = "İşlem tamamlanamadı: \(msg)"
+                if messages[hostIdx].blocks.isEmpty {
+                    messages[hostIdx].text = note
+                } else {
+                    messages[hostIdx].blocks.append(.text(TextBlock(stableBlockId: nil, markdown: note)))
+                }
+            }
+        }
     }
 
     // MARK: - Realtime channel (persistent, user-scoped)
@@ -584,7 +789,10 @@ final class ChatStore: ObservableObject {
         if let id = streamingAssistantId,
            let idx = messages.firstIndex(where: { $0.id == id }),
            messages[idx].text.isEmpty, messages[idx].blocks.isEmpty {
-            messages[idx].text = "Yanıt alınamadı."
+            // Çıplak "Yanıt alınamadı." bir çıkmazdı. Nedeni + eylemi ver:
+            // stream boş kapandıysa bu genellikle masaüstü motoru/bağlantı
+            // sorunudur; kullanıcı tekrar deneyince yerel yol toparlanır.
+            messages[idx].text = "Yanıt gelmedi — masaüstü motoru yeniden bağlanıyor olabilir. Birkaç saniye sonra tekrar dener misin?"
         }
         isStreaming = false
         streamingAssistantId = nil

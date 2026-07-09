@@ -40,3 +40,33 @@ def test_builtin_skill_catalog_exposes_library_backed_skills() -> None:
     assert summary_and_save["stepCount"] == 2
     assert "path" in summary_and_save["expectedInputs"]
     assert "text" in summary_and_save["expectedInputs"]
+
+
+def test_builtin_skill_catalog_exposes_new_compound_skills() -> None:
+    manifests = _builtin_skill_manifests()
+    by_id = {str(item.get("id", "") or ""): item for item in manifests}
+
+    for skill_id in {
+        "research.present",
+        "research.report",
+        "data.analyze_and_chart",
+        "screen.explain",
+        "image.describe",
+    }:
+        assert skill_id in by_id, f"{skill_id} eksik"
+
+    present = by_id["research.present"]
+    assert present["adapter"] == "presentation_write"
+    assert present["stepCount"] == 2  # web_research -> presentation_write
+    assert present["requiresConfirmation"] is True
+
+    report = by_id["research.report"]
+    assert report["adapter"] == "document_write"
+    assert report["stepCount"] == 2  # web_research -> document_write
+
+    chart = by_id["data.analyze_and_chart"]
+    assert chart["stepCount"] == 2  # data_analyze -> chart_generate
+
+    screen = by_id["screen.explain"]
+    assert screen["adapter"] == "desktop_operator.observe_screen"
+    assert screen["requiresConfirmation"] is False  # gözlem yan etkisiz

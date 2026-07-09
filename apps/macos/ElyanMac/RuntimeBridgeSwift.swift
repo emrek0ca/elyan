@@ -92,6 +92,11 @@ final class RuntimeBridgeSwift: @unchecked Sendable {
 
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
+        // HİBRİT: basit komutlar yerel/deterministik (hızlı); eşleşmeyen karmaşık
+        // görevler Elyan sunucu beynine (server_brain) yapılandırılmış plan için
+        // gider → PlanCard → adım adım yürütme + canlı checklist. (Saf-deterministik
+        // acil kapatma için ELYAN_DETERMINISTIC_ONLY=1 elle set edilebilir.)
+        env.removeValue(forKey: "ELYAN_DETERMINISTIC_ONLY")
         if let repoRoot {
             env["ELYAN_REPO_ROOT"] = repoRoot.path
         } else {

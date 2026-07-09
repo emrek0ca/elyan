@@ -354,7 +354,22 @@ KNOWN_PROVIDER_IDS = {"local", "ollama", "lmstudio", "llamacpp", "openai", "gemi
 
 
 _LOCK = threading.RLock()
+# In-process state cache — komut başına ~19 kez load_state çağrılıyordu; her biri
+# dosya okuma + JSON parse + _ensure_defaults deepcopy demekti (Jarvis hız yolunun
+# en büyük yereldeki maliyeti). Cache mtime ile doğrulanır: state dosyası dışarıdan
+# değişirse (ör. başka süreç) otomatik geçersizleşir, tek-yazıcı varsayımına
+# güvenmez. Yalnız bu modül state dosyasını yazar.
+_STATE_CACHE: dict[str, Any] | None = None
+_STATE_CACHE_PATH: str | None = None
+_STATE_CACHE_MTIME: int = -2
 _VOLATILE_PROVIDER_SECRETS: dict[str, str] = {}
+
+
+def _state_file_mtime_ns() -> int:
+    try:
+        return STATE_PATH.stat().st_mtime_ns if STATE_PATH.exists() else -1
+    except OSError:
+        return -1
 _RECENT_ROUTE_LIMIT = 24
 _CONFIRMED_PLAN_LIMIT = 16
 _MISROUTE_LIMIT = 16
@@ -539,6 +554,9 @@ def _update_capability_quality(
         "revisions": int(current.get("revisions", 0) or 0),
         "rejections": int(current.get("rejections", 0) or 0),
         "misroutes": int(current.get("misroutes", 0) or 0),
+        # Yürütme telemetrisi (record_capability_execution) korunur.
+        "executions": int(current.get("executions", 0) or 0),
+        "executionFailures": int(current.get("executionFailures", 0) or 0),
         "lastSeenAt": _intelligence_timestamp(),
     }
     if outcome == "correct":
@@ -552,6 +570,38 @@ def _update_capability_quality(
     elif outcome == "misrouted":
         next_payload["misroutes"] += 1
     quality[normalized_capability] = next_payload
+
+
+def record_capability_execution(capability: str, ok: bool) -> None:
+    """Bir capability'nin GERÇEK yürütme sonucunu (araç çalıştı mı) telemetriye
+    yazar. Routing sonuçlarından (correct/misrouted) ayrı: planlayıcı hangi
+    aracın çalışma zamanında güvenilir olduğunu buradan öğrenir."""
+    normalized_capability = str(capability or "").strip()[:80]
+    if not normalized_capability:
+        return
+    with _LOCK:
+        state = load_state()
+        intelligence = state.setdefault("taskIntelligence", {})
+        if not isinstance(intelligence, dict):
+            intelligence = {}
+            state["taskIntelligence"] = intelligence
+        quality = intelligence.setdefault("capabilityQuality", {})
+        if not isinstance(quality, dict):
+            quality = {}
+            intelligence["capabilityQuality"] = quality
+        current = quality.get(normalized_capability, {})
+        if not isinstance(current, dict):
+            current = {}
+        payload = dict(current)
+        payload["executions"] = int(current.get("executions", 0) or 0) + 1
+        if not ok:
+            payload["executionFailures"] = int(current.get("executionFailures", 0) or 0) + 1
+        else:
+            payload["executionFailures"] = int(current.get("executionFailures", 0) or 0)
+        payload["lastSeenAt"] = _intelligence_timestamp()
+        quality[normalized_capability] = payload
+        _touch_task_intelligence(intelligence)
+        save_state(state)
 
 
 def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -1046,6 +1096,15 @@ def _normalise_composer_state(state: dict[str, Any]) -> None:
 
 def load_state() -> dict[str, Any]:
     with _LOCK:
+        global _STATE_CACHE, _STATE_CACHE_PATH, _STATE_CACHE_MTIME
+        current_path = str(STATE_PATH)
+        current_mtime = _state_file_mtime_ns()
+        if (
+            _STATE_CACHE is not None
+            and _STATE_CACHE_PATH == current_path
+            and _STATE_CACHE_MTIME == current_mtime
+        ):
+            return copy.deepcopy(_STATE_CACHE)
         try:
             if STATE_PATH.exists():
                 raw = json.loads(STATE_PATH.read_text(encoding="utf-8"))
@@ -1065,19 +1124,31 @@ def load_state() -> dict[str, Any]:
         payload = _ensure_defaults(raw)
         _capture_provider_secrets_in_place(payload)
         _strip_provider_secrets_in_place(payload)
+        _STATE_CACHE = copy.deepcopy(payload)
+        _STATE_CACHE_PATH = current_path
+        _STATE_CACHE_MTIME = _state_file_mtime_ns()
         return payload
 
 
 def save_state(state: dict[str, Any]) -> dict[str, Any]:
     with _LOCK:
+        global _STATE_CACHE, _STATE_CACHE_PATH, _STATE_CACHE_MTIME
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         payload = _ensure_defaults(state)
         _capture_provider_secrets_in_place(payload)
         _strip_provider_secrets_in_place(payload)
+        # Kompakt JSON (indent yok): makine-yönetimli state dosyasında okunabilirlik
+        # gerekmiyor; encode süresini ve dosya boyutunu belirgin azaltır (sıcak
+        # yolda komut başına ~11 kez yazılıyor). Hâlâ geçerli JSON, round-trip aynı.
         STATE_PATH.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False),
+            json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
             encoding="utf-8",
         )
+        # Yazdığımız değeri cache'e al; mtime dosyadan okunur ki bir sonraki
+        # load_state cache'i geçerli sayabilsin (fazladan okuma/parse yok).
+        _STATE_CACHE = copy.deepcopy(payload)
+        _STATE_CACHE_PATH = str(STATE_PATH)
+        _STATE_CACHE_MTIME = _state_file_mtime_ns()
         return payload
 
 
@@ -2137,6 +2208,8 @@ def capability_quality_snapshot(capability: str) -> dict[str, Any]:
             "revisions": 0,
             "rejections": 0,
             "misroutes": 0,
+            "executions": 0,
+            "executionFailures": 0,
             "lastSeenAt": "",
         }
     state = load_state()
@@ -2148,6 +2221,8 @@ def capability_quality_snapshot(capability: str) -> dict[str, Any]:
             "revisions": 0,
             "rejections": 0,
             "misroutes": 0,
+            "executions": 0,
+            "executionFailures": 0,
             "lastSeenAt": "",
         }
     quality = intelligence.get("capabilityQuality", {})
@@ -2158,6 +2233,8 @@ def capability_quality_snapshot(capability: str) -> dict[str, Any]:
             "revisions": 0,
             "rejections": 0,
             "misroutes": 0,
+            "executions": 0,
+            "executionFailures": 0,
             "lastSeenAt": "",
         }
     payload = quality.get(normalized_capability, {})
@@ -2169,6 +2246,8 @@ def capability_quality_snapshot(capability: str) -> dict[str, Any]:
         "revisions": int(payload.get("revisions", 0) or 0),
         "rejections": int(payload.get("rejections", 0) or 0),
         "misroutes": int(payload.get("misroutes", 0) or 0),
+        "executions": int(payload.get("executions", 0) or 0),
+        "executionFailures": int(payload.get("executionFailures", 0) or 0),
         "lastSeenAt": str(payload.get("lastSeenAt", "") or ""),
     }
 

@@ -154,6 +154,25 @@ def test_rank_skills_for_text_prefers_summary_save_skill_for_save_requests() -> 
     assert ranked[0]["score"] > ranked[1]["score"]
 
 
+def test_rank_new_compound_skills_win_their_trigger_phrases() -> None:
+    from runtime.skill_runtime import _builtin_skill_manifests
+
+    skills = _builtin_skill_manifests()
+
+    cases = {
+        "bu konuyu araştır ve sunum yap": "research.present",
+        "veriyi analiz et ve grafiğini çiz": "data.analyze_and_chart",
+        "ekranda ne var açıkla": "screen.explain",
+        "bu görseli açıkla": "image.describe",
+    }
+    for query, expected_id in cases.items():
+        ranked = rank_skills_for_text(query, skills=skills)
+        assert ranked, f"{query!r} için hiç skill sıralanmadı"
+        assert ranked[0]["id"] == expected_id, (
+            f"{query!r} -> {ranked[0]['id']} (beklenen {expected_id})"
+        )
+
+
 def test_record_skill_usage_updates_recent_runs_and_stats(monkeypatch) -> None:
     base_state = {
         "skills": {

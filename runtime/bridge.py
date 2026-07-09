@@ -41,6 +41,7 @@ from runtime.capability_registry import (
 from runtime.safety_policy import PERSONAL_ACTION_CAPABILITIES, evaluate_tool
 from runtime.agent_planning import build_agent_plan
 from runtime import structured_planner
+from runtime import operator_planner
 from runtime.task_router import (
     RoutedTask,
     artifact_target_clarification,
@@ -1461,19 +1462,23 @@ def _semantic_candidate_providers(
     ordered = []
     if configured("ollama"):
         ordered.append("ollama")
-    if fallback_to_cloud and privacy_class == "public_text":
-        # Sunucu beyni birincil bulut planlayıcıdır: hesap girişi yeterli,
-        # ayrıca API anahtarı istemez. Daha önce aday listesinde HİÇ yoktu —
-        # yerel model kapalıyken semantik planlama tamamen kör kalıyordu.
+    if fallback_to_cloud:
+        # server_brain = Elyan'ın KENDİ sunucu beyni (üçüncü taraf değil). Planlama
+        # için yalnız görev metni + tool catalog alır (dosya İÇERİĞİ değil) → hem
+        # public_text hem local_private görevlerde plan üretebilir. Hesap girişi
+        # yeterli, API anahtarı istemez. Kullanıcı bunu açıkça yetkilendirdi.
         account = _map_from(state.get("account"))
         if backend is not None and str(account.get("accessToken", "") or "").strip():
             ordered.append("server_brain")
-        active_cloud = active if active not in {"local", "ollama"} else ""
-        if active_cloud and configured(active_cloud):
-            ordered.append(active_cloud)
-        for provider in cloud_candidates:
-            if provider != active_cloud and configured(provider):
-                ordered.append(provider)
+        # Üçüncü-taraf bulut sağlayıcılar (openai/gemini/anthropic...) YALNIZ
+        # public_text — private görev metnini dışarı sızdırmamak için.
+        if privacy_class == "public_text":
+            active_cloud = active if active not in {"local", "ollama"} else ""
+            if active_cloud and configured(active_cloud):
+                ordered.append(active_cloud)
+            for provider in cloud_candidates:
+                if provider != active_cloud and configured(provider):
+                    ordered.append(provider)
     return ordered
 
 
@@ -3286,58 +3291,19 @@ def _operator_candidate_providers(state: dict[str, Any]) -> list[str]:
     return ordered
 
 
-def _operator_planning_prompt(goal: str, observation: dict[str, Any]) -> str:
-    native_desktop = _desktop_native_snapshot_payload()
-    native_active_window = native_desktop.get("activeWindow", {})
-    native_active_window = native_active_window if isinstance(native_active_window, dict) else {}
-    native_processes = native_desktop.get("processes", {})
-    native_processes = native_processes if isinstance(native_processes, dict) else {}
-    native_operator = native_desktop.get("operator", {})
-    native_operator = native_operator if isinstance(native_operator, dict) else {}
-    elements = observation.get("elements", [])
-    elements = [dict(item) for item in elements if isinstance(item, dict)]
-    summarized = []
-    for item in elements[:24]:
-        summarized.append(
-                {
-                    "type": str(item.get("type", "") or ""),
-                    "text": " ".join(str(item.get("text", "") or "").split()).strip()[:96],
-                    "source": str(item.get("source", "") or ""),
-                    "role": str(item.get("role", "") or ""),
-                    "focused": bool(item.get("focused", False)),
-                    "enabled": bool(item.get("enabled", True)),
-                }
-        )
-    payload = {
-        "activeApp": str(observation.get("activeApp", "") or ""),
-        "activeWindow": str(observation.get("activeWindow", "") or ""),
-        "resolutionMode": str(observation.get("resolutionMode", "") or ""),
-        "elements": summarized,
-        "nativeDesktop": {
-            "available": bool(native_desktop.get("available", False)),
-            "platform": str(native_desktop.get("platform", "") or ""),
-            "source": str(native_desktop.get("source", "") or ""),
-            "activeWindow": {
-                "appName": str(native_active_window.get("appName", "") or ""),
-                "windowTitle": str(native_active_window.get("windowTitle", "") or ""),
-            },
-            "processCount": int(native_processes.get("total", 0) or 0),
-            "operatorReady": bool(native_operator.get("available", False)),
-            "accessibilityReady": bool(native_operator.get("accessibilityReady", False)),
-            "inputControlReady": bool(native_operator.get("inputControlReady", False)),
-        },
+def _operator_step_to_legacy(step: dict[str, Any]) -> dict[str, Any]:
+    """Doğrulanmış operatör adımını executor'ın beklediği tam alan setine
+    genişletir (eksik alanlar None/"" ile doldurulur)."""
+    return {
+        "action": str(step.get("action", "") or ""),
+        "targetText": str(step.get("targetText", "") or ""),
+        "elementType": str(step.get("elementType", "") or ""),
+        "text": str(step.get("text", "") or ""),
+        "keys": step.get("keys") if isinstance(step.get("keys"), list) else None,
+        "delta": step.get("delta"),
+        "duration": step.get("duration"),
+        "appName": str(step.get("appName", "") or ""),
     }
-    return (
-        "You are Elyan's desktop operator planner.\n"
-        "Use only the sanitized screen metadata below. Do not invent unseen UI.\n"
-        "Return strict JSON with keys: steps, confidence, clarificationQuestion, message.\n"
-        "steps must be a short array of actions. Each action can contain only: "
-        "action, targetText, elementType, text, keys, delta, duration, appName.\n"
-        "Allowed actions: click, double_click, right_click, type_text, scroll, hotkey, wait, focus_window.\n"
-        "If the target is ambiguous or unsafe, return an empty steps array and a clarificationQuestion.\n"
-        f"Goal: {goal.strip()}\n"
-        f"Observation: {json.dumps(payload, ensure_ascii=False)}"
-    )
 
 
 def plan_visual_operator_steps(goal: str, observation: dict[str, Any], *, state: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -3351,7 +3317,15 @@ def plan_visual_operator_steps(goal: str, observation: dict[str, Any], *, state:
             "message": "Operator planner için hazır model bulunamadı.",
             "clarificationQuestion": "",
         }
-    prompt = _operator_planning_prompt(goal, observation)
+    # Düz metin prompt yok: eylem kataloğu + sanitize gözlem + kurallar + yanıt
+    # şeması tek bir JSON zarfı olarak gider (elyan.operator.v1); dönen plan
+    # tek noktada (operator_planner.validate_operator_plan) doğrulanır.
+    request_envelope = operator_planner.build_operator_request(
+        goal,
+        observation,
+        native_desktop=_desktop_native_snapshot_payload(),
+    )
+    prompt = operator_planner.operator_prompt(request_envelope)
     for index, provider in enumerate(providers):
         result = _invoke_provider_chat(
             runtime_state,
@@ -3361,47 +3335,49 @@ def plan_visual_operator_steps(goal: str, observation: dict[str, Any], *, state:
         )
         if not result.get("ok"):
             continue
-        payload = _extract_json_object(str(result.get("content", "") or ""))
-        if not isinstance(payload, dict):
+        raw_content = str(result.get("content", "") or "")
+        payload = _extract_json_object(raw_content)
+        plan, plan_errors = operator_planner.validate_operator_plan(payload)
+
+        # Tek turluk yapılandırılmış onarım: geçersiz yanıt + doğrulama hataları
+        # veri olarak geri gönderilir; düzeltilmiş plan beklenir.
+        if plan is None and plan_errors:
+            repair_request = operator_planner.build_repair_request(
+                request_envelope,
+                payload if payload is not None else raw_content[:2000],
+                plan_errors,
+            )
+            repair_result = _invoke_provider_chat(
+                runtime_state,
+                provider,
+                [{"role": "system", "text": operator_planner.operator_prompt(repair_request)}],
+                goal,
+            )
+            if repair_result.get("ok"):
+                repaired = _extract_json_object(str(repair_result.get("content", "") or ""))
+                plan, _repair_errors = operator_planner.validate_operator_plan(repaired)
+
+        if plan is None:
             continue
-        raw_steps = payload.get("steps", [])
-        normalized_steps: list[dict[str, Any]] = []
-        if isinstance(raw_steps, list):
-            for item in raw_steps[:4]:
-                if not isinstance(item, dict):
-                    continue
-                action = str(item.get("action", "") or "").strip().lower()
-                if action not in {"click", "double_click", "right_click", "type_text", "scroll", "hotkey", "wait", "focus_window"}:
-                    continue
-                normalized_steps.append(
-                    {
-                        "action": action,
-                        "targetText": str(item.get("targetText", "") or ""),
-                        "elementType": str(item.get("elementType", "") or ""),
-                        "text": str(item.get("text", "") or ""),
-                        "keys": item.get("keys") if isinstance(item.get("keys"), list) else None,
-                        "delta": item.get("delta"),
-                        "duration": item.get("duration"),
-                        "appName": str(item.get("appName", "") or ""),
-                    }
-                )
-        confidence = _intent_confidence(payload.get("confidence"), 0.0)
-        if normalized_steps:
+
+        confidence = _intent_confidence(plan.get("confidence"), 0.0)
+        steps = [_operator_step_to_legacy(step) for step in plan.get("steps", [])]
+        if steps:
             return {
-                "steps": normalized_steps,
+                "steps": steps,
                 "confidence": confidence,
                 "provider": provider,
-                "message": str(payload.get("message", "") or ""),
-                "clarificationQuestion": str(payload.get("clarificationQuestion", "") or ""),
+                "message": str(plan.get("message", "") or ""),
+                "clarificationQuestion": str(plan.get("clarificationQuestion", "") or ""),
                 "fallbackUsed": index > 0,
             }
-        clarification = str(payload.get("clarificationQuestion", "") or "").strip()
+        clarification = str(plan.get("clarificationQuestion", "") or "").strip()
         if clarification:
             return {
                 "steps": [],
                 "confidence": confidence,
                 "provider": provider,
-                "message": str(payload.get("message", "") or clarification),
+                "message": str(plan.get("message", "") or clarification),
                 "clarificationQuestion": clarification,
                 "fallbackUsed": index > 0,
             }
@@ -4366,6 +4342,42 @@ def _chat_provider_candidates(
     return ordered
 
 
+def _deterministic_only_enabled() -> bool:
+    """SAF DETERMİNİSTİK MOD: dış LLM/backend beyni devre dışı. App bunu
+    `ELYAN_DETERMINISTIC_ONLY=1` env'iyle açar (RuntimeBridgeSwift enjekte eder);
+    testler env'i set etmediği için semantic yol testte korunur."""
+    return str(os.environ.get("ELYAN_DETERMINISTIC_ONLY", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+_DETERMINISTIC_HELP = (
+    "Bunu otomatik bir komuta çeviremedim. Şunları yapabilirim:\n"
+    "• Uygulama: 'safari aç', 'spotify kapat'\n"
+    "• Sistem: 'pil durumu', 'saat kaç', 'disk doluluğu'\n"
+    "• Dosya/kod: 'proje yapısı', 'kodda X ara', 'HANDOFF.md oku'\n"
+    "• Git: 'git durumu', 'git diff', 'yeni branch X oluştur', \"commit yap 'mesaj'\"\n"
+    "• Görsel: 'kedi resmi bul ve masaüstüne kaydet'\n"
+    "• Web: 'internette X ara', tarayıcıda bir siteyi aç\n"
+    "• Terminal: 'terminalde <komut> çalıştır'\n"
+    "Komutu biraz daha net yazar mısın?"
+)
+
+
+def _deterministic_fallback_reply(text: str) -> dict[str, Any]:
+    """Deterministik router eşleşmediğinde LLM/backend'e gitmeden yerel,
+    yardımcı bir yanıt döndürür. Dış bağımlılık ve 'yanıt gelmedi' sınıfını yok eder."""
+    return {
+        "ok": True,
+        "content": _DETERMINISTIC_HELP,
+        "provider": "local_deterministic",
+        "toolEvents": [],
+        "intent": "unmatched",
+        "confidence": 0.0,
+        "executionMode": "deterministic_fallback",
+        "needsConfirmation": False,
+        "privacyClass": "local_private",
+    }
+
+
 def _route_chat(
     state: dict[str, Any],
     conversation: list[dict[str, Any]],
@@ -4520,6 +4532,12 @@ def _route_chat(
             "needsConfirmation": False,
             "privacyClass": routed.privacy_class,
         }
+
+    # ── SAF DETERMİNİSTİK MOD: buradan sonrası LLM/backend beynidir. App'te
+    # kapalı (ELYAN_DETERMINISTIC_ONLY=1) — eşleşmeyen komut buluta GİTMEZ,
+    # yerel yardımcı yanıt döner. Böylece dış bağımlılık + "yanıt gelmedi" biter.
+    if _deterministic_only_enabled():
+        return _deterministic_fallback_reply(text)
 
     local_private_request = _is_local_private_chat_request(text)
     tool_capable_request = _requires_tool_capable_route(text)
@@ -4952,6 +4970,11 @@ class RuntimeBridge:
         self._assigned_task_fetch_requested = threading.Event()
         self._last_assigned_task_fetch_at = 0.0
         self._last_shared_brain_error_code = ""
+        # Kota/abonelik senkronu: dispatch görevi kredi tükettikten sonra
+        # backend'den taze usage çekmek için throttle'lı arka plan yenileme.
+        self._billing_refresh_lock = threading.RLock()
+        self._last_billing_refresh_at = 0.0
+        self._billing_refresh_min_interval = 15.0
         self.executor_core = ExecutorCore()
         self.remote_task_runner = RemoteTaskRunner(self)
         self._full_access_session: dict[str, Any] = {
@@ -6180,6 +6203,26 @@ class RuntimeBridge:
             )
         return payload, artifacts, chat_ok
 
+    def _refresh_billing_truth_async(self, *, force: bool = False) -> None:
+        """Backend'den taze abonelik+usage çeker (auth_me → _apply_subscription_truth).
+        Throttle'lı ve arka planda: dispatch görevleri kredi tükettikçe desktop
+        kotası sunucuyla senkron kalır; task tamamlanmasını yavaşlatmaz."""
+        if not self._user_auth_ready() or not hasattr(self.backend, "auth_me"):
+            return
+        now = time.monotonic()
+        with self._billing_refresh_lock:
+            if not force and (now - self._last_billing_refresh_at) < self._billing_refresh_min_interval:
+                return
+            self._last_billing_refresh_at = now
+
+        def _worker() -> None:
+            try:
+                self.backend.auth_me()  # subscription + usage truth'u state'e uygular
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, name="elyan-billing-refresh", daemon=True).start()
+
     def _report_runtime_task_terminal_result(
         self,
         task_id: str,
@@ -6195,6 +6238,10 @@ class RuntimeBridge:
         if artifact_report is not None and artifact_report.ok:
             status_payload["artifacts"] = []
         report = self._report_runtime_task_status(task_id, status_payload)
+        # Görev terminal duruma ulaştı ve backend'e raporlandı → sunucu krediyi
+        # düşmüş olabilir; kota/usage'ı arka planda yeniden senkronla.
+        if report is not None and report.ok:
+            self._refresh_billing_truth_async()
         return {
             "taskId": task_id,
             "ok": bool(chat_ok and report and report.ok),
@@ -7339,6 +7386,59 @@ class RuntimeBridge:
     def _pending_plan_exists(self, plan_id: str) -> bool:
         return STATE.get_pending_plan(plan_id) is not None
 
+    def _recoverable_replan(self, context: dict[str, Any]) -> list[dict[str, Any]]:
+        """ReAct replan: bir adım başarısız olduğunda deterministik, güvenli
+        alternatiflere revize eder. Bilinmeyen/kurtarılamaz hatalarda boş liste
+        döner (executor normal iptale düşer). Ağa/dış servise bağlı değil."""
+        capability = str(context.get("failedCapability", "") or "")
+        error_code = str(context.get("errorCode", "") or "").upper()
+        failed_args = context.get("failedArgs")
+        failed_args = failed_args if isinstance(failed_args, dict) else {}
+        remaining_steps = context.get("remainingSteps")
+        remaining_steps = [dict(s) for s in remaining_steps if isinstance(s, dict)] if isinstance(remaining_steps, list) else []
+
+        network_like = error_code in {
+            "NETWORK_FAILED", "WEB_RESEARCH_FAILED", "TIMEOUT", "TOOL_TIMEOUT",
+            "CONNECTION_FAILED", "HTTP_ERROR",
+        }
+        # Web araştırma dış servise erişemiyorsa yerel bağlam getirmeye düş —
+        # kullanıcı yine de mevcut bilgiden yararlanır. Kalan yazıcı adımları
+        # (rapor/sunum) orijinal args'larıyla (outputPath dahil) korunur; kaynak
+        # bağlamı executor zaten _previousOutput ile devralır.
+        if capability == "web_research" and network_like:
+            query = str(failed_args.get("query", "") or "").strip()
+            if query:
+                return [
+                    {
+                        "capability": "retrieve_context",
+                        "args": {"query": query, "sources": "workspace,conversations", "limit": 6},
+                        "description": "Web erişilemedi; yerel bağlamdan yanıt",
+                    },
+                    *remaining_steps,
+                ]
+        return []
+
+    def _execute_step_with_telemetry(
+        self,
+        capability: str,
+        args: dict[str, Any],
+        state: dict[str, Any],
+        source: str,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Adımı yürütür ve gerçek yürütme sonucunu (araç çalıştı mı) capability
+        telemetrisine yazar — planlayıcı araç güvenilirliğini buradan öğrenir."""
+        tool_result, step_events = _execute_capability_with_preprocessing(
+            capability,
+            args,
+            state,
+            source=source,
+        )
+        try:
+            STATE.record_capability_execution(capability, bool(tool_result.get("ok")))
+        except Exception:
+            pass
+        return tool_result, step_events
+
     def _execute_plan_steps(
         self,
         steps: list[dict[str, Any]],
@@ -7346,13 +7446,9 @@ class RuntimeBridge:
         return self.executor_core.execute_plan_steps(
             steps=steps,
             state_factory=self._state_with_access,
-            execute_step=lambda capability, args, state, source: _execute_capability_with_preprocessing(
-                capability,
-                args,
-                state,
-                source=source,
-            ),
+            execute_step=self._execute_step_with_telemetry,
             source="confirmed_plan",
+            replan_fn=self._recoverable_replan,
         )
 
     def revise_conversation_plan(self, conversation_id: str, pending_plan_id: str, revision_text: str) -> dict[str, Any]:
@@ -7724,11 +7820,31 @@ class RuntimeBridge:
                 response["state"] = cleared_state
                 return response
 
-        shared_prompt_context, shared_metadata, _shared_profile = self._shared_brain_context_for_conversation(
-            text=text,
-            conversation_id=conversation_id,
-            enabled=True,
+        # JARVIS HIZ YOLU: deterministik router yüksek güvenle eşleşiyorsa
+        # (ör. "panoya kopyala", "safariyi aç", "saat kaç") paylaşılan beyin
+        # bağlamı İÇİN BACKEND'E HİÇ GİTME — o iki ağ çağrısı (brain_profile +
+        # retrieval_search) yerel komutu ~1 sn geciktiriyordu. LLM planlaması
+        # gereken serbest metinlerde bağlam yine çekilir.
+        deterministic_hit = route_text_to_tool(text, selected_artifacts=normalized_selected)
+        # SAF DETERMİNİSTİK MOD: hiç backend retrieval yapma (dış bağımlılık yok).
+        skip_shared_context = _deterministic_only_enabled() or (
+            deterministic_hit is not None and float(
+                getattr(deterministic_hit, "confidence", 0.0) or 0.0
+            ) >= 0.8
         )
+        if skip_shared_context:
+            shared_prompt_context, shared_metadata, _shared_profile = "", {
+                "sharedRetrievalUsed": False,
+                "sharedRetrievalCount": 0,
+                "sharedRetrievalSources": [],
+                "sharedModelSnapshot": {},
+            }, {}
+        else:
+            shared_prompt_context, shared_metadata, _shared_profile = self._shared_brain_context_for_conversation(
+                text=text,
+                conversation_id=conversation_id,
+                enabled=True,
+            )
         state = STATE.snapshot()
         route_conversation = list(chat_context)
         if shared_prompt_context:
@@ -7862,10 +7978,18 @@ class RuntimeBridge:
             STATE.update_conversation_title(conversation_id, title)
         cleared_state = _clear_selected_artifacts()
         if backend_session_id and _is_uuid_value(backend_session_id):
+            # Bu tur yerel bir yer tutucudan (conv_...) başlayıp kanonik bir
+            # backend session'ına promote edildiyse, yer tutucuyu senkron öncesi
+            # düş — aksi halde koruma mantığı onu kalıcı bir yerel-öncelikli
+            # konuşma sanıp kanonik session'ın yanında kopya olarak bırakır.
+            if conversation_id and conversation_id != backend_session_id and not _is_uuid_value(conversation_id):
+                STATE.delete_conversation(conversation_id)
             cleared_state = self._sync_conversation_truth_from_backend(
                 focus_session_id=backend_session_id,
             )
             conversation_id = backend_session_id
+            # Sunucu beyni bu turu işledi (kredi tüketmiş olabilir) → kota senkronu.
+            self._refresh_billing_truth_async()
         response: dict[str, Any] = {
             "ok": True,
             "chatOk": True,
@@ -8611,6 +8735,24 @@ class RuntimeBridge:
                         messages=detail_messages,
                     )
                 )
+
+        # Yerel-öncelikli konuşmaları koru: backend session listesi tek gerçek
+        # kaynak olarak items'ı yeniden kurduğu için, buluta hiç gitmeyen
+        # (id UUID değil, ör. "conv_...") ve içeriği olan yerel konuşmalar aksi
+        # halde her senkronda siliniyordu. Bunlar backend'de olmadığından
+        # seen_ids'te de yok; burada geri ekleyip kaybı önlüyoruz.
+        if not clear_all:
+            for item in current_items:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("id", "") or "").strip()
+                if not item_id or item_id in seen_ids or _is_uuid_value(item_id):
+                    continue
+                messages = item.get("messages")
+                if not (isinstance(messages, list) and messages):
+                    continue
+                next_items.append(item)
+                seen_ids.add(item_id)
 
         active_id = str(current_conversation.get("activeId", "") or "").strip()
         if normalized_focus_session_id:
@@ -10745,15 +10887,11 @@ class RuntimeBridge:
             ok, content, tool_events, error_code, structured_result, artifacts = self.executor_core.execute_plan_steps(
                 steps=pre_approval_steps,
                 state_factory=self._state_with_access,
-                execute_step=lambda capability, args, state, source: _execute_capability_with_preprocessing(
-                    capability,
-                    args,
-                    state,
-                    source=source,
-                ),
+                execute_step=self._execute_step_with_telemetry,
                 source="runtime_task",
                 task_id=str(task.get("id", "") or ""),
                 conversation_id=conversation_id,
+                replan_fn=self._recoverable_replan,
             )
         else:
             ok = True
@@ -11146,6 +11284,32 @@ class RuntimeBridge:
                 result = self.update_state(payload)
             elif capability == "conversation.list":
                 result = {"conversations": _conversation_entries(), "activeConversationId": str(STATE.snapshot().get("conversation", {}).get("activeId", "") or "")}
+            elif capability == "conversation.detail":
+                detail_id = str(payload.get("conversationId", "") or payload.get("conversation_id", "") or "")
+                conversation_detail = state_store.get_conversation(detail_id)
+                if conversation_detail is None:
+                    result = {
+                        "ok": False,
+                        "error": {"code": "CONVERSATION_NOT_FOUND", "message": "Sohbet bulunamadı."},
+                    }
+                else:
+                    detail_messages_raw = conversation_detail.get("messages", [])
+                    detail_messages_raw = detail_messages_raw if isinstance(detail_messages_raw, list) else []
+                    result = {
+                        "ok": True,
+                        "conversationId": detail_id,
+                        "session": {
+                            "id": detail_id,
+                            "title": str(conversation_detail.get("title", "") or ""),
+                            "updatedAt": str(conversation_detail.get("updatedAt", "") or ""),
+                            "messageCount": len(detail_messages_raw),
+                        },
+                        "messages": [
+                            _normalize_backend_chat_message(message)
+                            for message in detail_messages_raw
+                            if isinstance(message, dict)
+                        ],
+                    }
             elif capability == "conversation.list_archives":
                 result = self.list_archived_conversations()
             elif capability == "conversation.create":
@@ -11433,6 +11597,27 @@ def main() -> int:
         with out_lock:
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
+
+    # Canlı checklist: executor adım geçişlerini masaüstüne unsolicited event
+    # olarak akıtır (conversation.progress). Swift bunu aktif mesaja task_trace
+    # bloğu olarak iliştirir.
+    def emit_progress(conversation_id: str, block: dict[str, Any]) -> None:
+        emit(
+            {
+                "id": _request_id(),
+                "taskId": "",
+                "ok": True,
+                "capability": "conversation.progress",
+                "result": {"conversationId": conversation_id, "block": block},
+                "events": [],
+                "artifacts": [],
+                "error": None,
+                "durationMs": 0,
+                "requestId": _request_id(),
+            }
+        )
+
+    bridge.executor_core.set_progress_emitter(emit_progress)
 
     def handle_line(line: str) -> None:
         line = line.strip()

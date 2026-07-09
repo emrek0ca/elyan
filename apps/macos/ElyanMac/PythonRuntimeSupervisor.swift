@@ -158,14 +158,86 @@ final class PythonRuntimeSupervisor: ObservableObject {
     struct LocalChatReply {
         let text: String
         let needsConfirmation: Bool
+        var plan: PendingPlan? = nil
+        var permission: PermissionRequest? = nil
+    }
+
+    /// Builds a `PermissionRequest` from a result map when the runtime blocked a
+    /// command for a missing permission. `originalText` lets the card re-run the
+    /// command automatically once permission is granted.
+    private static func parsePermission(from map: [String: Any], originalText: String) -> PermissionRequest? {
+        guard bool(map["permissionNeeded"]) else { return nil }
+        let permissionKey = string(map["permissionKey"]) ?? ""
+        let systemKey = string(map["systemPermissionKey"]) ?? ""
+        // İçlerinden en az biri eyleme dönüşebilir olmalı.
+        guard !permissionKey.isEmpty || !systemKey.isEmpty || bool(map["systemPermissionRequired"]) else {
+            return nil
+        }
+        return PermissionRequest(
+            reason: string(map["permissionReason"]) ?? string(map["assistantMessage"]) ?? "Bu işlem için izin gerekiyor.",
+            permissionKey: permissionKey,
+            canGrantPersistently: bool(map["canGrantPersistently"]),
+            systemPermissionKey: systemKey,
+            systemPermissionRequired: bool(map["systemPermissionRequired"]),
+            originalText: originalText
+        )
+    }
+
+    /// Builds a `PendingPlan` from a `conversation.send` / `confirm_plan`
+    /// result map when the runtime is asking for approval. Returns nil when the
+    /// reply doesn't carry an actionable pending plan.
+    private static func parsePendingPlan(from map: [String: Any]) -> PendingPlan? {
+        guard bool(map["needsConfirmation"]),
+              let pendingPlanId = string(map["pendingPlanId"]), !pendingPlanId.isEmpty else {
+            return nil
+        }
+        let conversationId = string(map["conversationId"]) ?? ""
+        let preview = (map["planPreview"] as? [String: Any]) ?? [:]
+        let summary = string(preview["summary"]) ?? string(map["assistantMessage"]) ?? "Plan onayı bekleniyor."
+        let rawSteps = (preview["steps"] as? [[String: Any]]) ?? []
+        let steps: [PlanStep] = rawSteps.map { step in
+            PlanStep(
+                description: string(step["description"]) ?? string(step["capability"]) ?? "Adım",
+                capability: string(step["capability"]) ?? ""
+            )
+        }
+        return PendingPlan(
+            pendingPlanId: pendingPlanId,
+            conversationId: conversationId,
+            summary: summary,
+            steps: steps
+        )
     }
 
     /// Komutu YEREL runtime'da çalıştırır (deterministik router + araçlar).
     /// Bulut round-trip'i yok: "safariyi aç" gerçekten Safari'yi açar ve
     /// sonuç senkron döner. Bridge çalışmıyorsa fırlatır — çağıran buluta
     /// düşebilir.
+    /// Bridge süreci düşükse toparlamayı dener: süren bir crash-restart varsa
+    /// ona saygı gösterir (çift bridge = token yarışı riskini önler), yoksa bir
+    /// kez başlatır ve süreç canlı olana kadar (~8s sınırlı) bekler. Yalnız
+    /// süreç canlılığını hedefler — backend hazırlığını değil.
+    func ensureLocalReady() async -> Bool {
+        if isRunning { return true }
+        if crashRestartTask == nil {
+            start(initialSession: lastStartSession)
+        }
+        for _ in 0..<32 {
+            if isRunning { return true }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return isRunning
+    }
+
     func sendLocalChat(_ text: String) async throws -> LocalChatReply {
-        guard isRunning, runtimeReady else {
+        // YALNIZ bridge sürecinin ayakta olması yeterli. `runtimeReady` backend/
+        // bootstrap bayrağıdır; yerel deterministik komutlar (git durumu, dosya,
+        // saat...) backend'e ihtiyaç duymaz. Eskiden bu guard, backend yavaş/
+        // kapalıyken yerel komutu bile reddedip buluta düşürüyordu — bulut da
+        // boş dönünce kullanıcı "Yanıt alınamadı" görüyordu. Süreç canlıysa
+        // komut yerelde çalışır; gerçekten backend gereken bir komut ise bridge
+        // uygun mesajı zaten döndürür.
+        guard isRunning else {
             throw RuntimeBridgeSwiftError.runtimeNotStarted
         }
         let response = try await bridge.request(
@@ -192,8 +264,147 @@ final class PythonRuntimeSupervisor: ObservableObject {
         }
         return LocalChatReply(
             text: content,
-            needsConfirmation: bool(map["needsConfirmation"])
+            needsConfirmation: bool(map["needsConfirmation"]),
+            plan: Self.parsePendingPlan(from: map),
+            permission: Self.parsePermission(from: map, originalText: text)
         )
+    }
+
+    /// Verir: Elyan'ın kendi izin anahtarını (ör. allow_computer_control) açar.
+    /// macOS sistem izinleri (Accessibility/Screen Recording) TCC tarafından
+    /// yönetildiği için buradan açılamaz — onun için `openSystemPermission`.
+    /// Operatörün uçtan uca çalışması için gereken Elyan-side izin kümesi. Operatör
+    /// bir görevde SIRAYLA control (yürüt) + screen_analysis (gözlemle) + inspection
+    /// ister; tek tek açmak "izin verdim ama hâlâ istiyor" döngüsüne yol açıyordu.
+    private static let operatorPermissionKeys = [
+        "allow_computer_control", "allow_screen_analysis",
+        "allow_system_inspection", "allow_browser_control",
+    ]
+
+    @discardableResult
+    func grantElyanPermission(_ key: String) async -> Bool {
+        guard isRunning, runtimeReady, !key.isEmpty else { return false }
+        var permissions: [String: Any] = [key: true]
+        // Operatörle ilgili bir izin isteniyorsa, kümenin tamamını birlikte aç —
+        // tek onayla operatör tam çalışır, tekrar tekrar izin sormaz.
+        if Self.operatorPermissionKeys.contains(key) {
+            for k in Self.operatorPermissionKeys { permissions[k] = true }
+        }
+        do {
+            // Ana "tehlikeli alan" gate'ini de aç (çoğu izin bunu ön koşul ister).
+            let response = try await bridge.request(
+                capability: "state.update",
+                payload: [
+                    "permissions": permissions,
+                    "account": ["dangerousAreaEnabled": true],
+                ],
+                timeoutSeconds: 20
+            )
+            return response.ok
+        } catch {
+            return false
+        }
+    }
+
+    /// macOS sistem izin panelini doğru bölmede açar (Accessibility / Screen
+    /// Recording / Input Monitoring). Kullanıcı tek tıkla doğru yere gider.
+    func openSystemPermission(_ systemKey: String) async {
+        guard isRunning, runtimeReady else { return }
+        _ = try? await bridge.request(
+            capability: "desktop_os.open_permission_settings",
+            payload: ["permission": systemKey.isEmpty ? "privacy" : systemKey],
+            timeoutSeconds: 15
+        )
+    }
+
+    /// Confirms (or cancels) a pending multi-step/side-effecting plan. On
+    /// approval the runtime executes the steps on this desktop and returns the
+    /// result; on cancel it acknowledges. Throws if the bridge is unavailable.
+    func confirmLocalPlan(
+        conversationId: String,
+        pendingPlanId: String,
+        approved: Bool
+    ) async throws -> LocalChatReply {
+        guard isRunning, runtimeReady else {
+            throw RuntimeBridgeSwiftError.runtimeNotStarted
+        }
+        let response = try await bridge.request(
+            capability: "conversation.confirm_plan",
+            payload: [
+                "conversationId": conversationId,
+                "pendingPlanId": pendingPlanId,
+                "approved": approved,
+            ],
+            timeoutSeconds: 180
+        )
+        let map = response.resultMap
+        if let cid = string(map["conversationId"]), !cid.isEmpty {
+            localConversationId = cid
+        }
+        let content = string(map["assistantMessage"]) ?? (approved ? "Plan yürütüldü." : "İşlem iptal edildi.")
+        guard response.ok else {
+            let message = string((map["error"] as? [String: Any])?["message"]) ?? content
+            throw NSError(
+                domain: "ElyanLocalPlan",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        }
+        return LocalChatReply(
+            text: content,
+            needsConfirmation: bool(map["needsConfirmation"]),
+            plan: Self.parsePendingPlan(from: map),
+            permission: Self.parsePermission(from: map, originalText: "")
+        )
+    }
+
+    /// Local-first conversations that never round-tripped to the cloud. These
+    /// live in the bridge conversation store (not backend `/v1/chat/sessions`),
+    /// so the history sidebar merges them with cloud sessions to avoid dropping
+    /// everything the user ran offline. Returns [] on any failure — the sidebar
+    /// still shows cloud sessions.
+    func localSessions() async -> [ElyanSession] {
+        guard isRunning, runtimeReady else { return [] }
+        do {
+            let response = try await bridge.request(capability: "conversation.list", timeoutSeconds: 20)
+            let conversations = (response.resultMap["conversations"] as? [[String: Any]]) ?? []
+            return ElyanBackend.parseLocalSessions(conversations)
+        } catch {
+            return []
+        }
+    }
+
+    /// Deletes a local-only conversation from the bridge store. Returns true on
+    /// success so the sidebar can drop the row.
+    @discardableResult
+    func deleteLocalConversation(_ conversationId: String) async -> Bool {
+        guard isRunning, runtimeReady else { return false }
+        do {
+            let response = try await bridge.request(
+                capability: "conversation.delete",
+                payload: ["conversationId": conversationId],
+                timeoutSeconds: 20
+            )
+            return response.ok
+        } catch {
+            return false
+        }
+    }
+
+    /// Messages for a local-only conversation, fetched from the bridge and
+    /// normalized into the same shape backend history uses (typed blocks + text).
+    func localSessionMessages(_ conversationId: String) async -> [ElyanSessionMessage] {
+        guard isRunning, runtimeReady else { return [] }
+        do {
+            let response = try await bridge.request(
+                capability: "conversation.detail",
+                payload: ["conversationId": conversationId],
+                timeoutSeconds: 20
+            )
+            return ElyanBackend.parseSessionMessages(response.resultMap).messages
+        } catch {
+            return []
+        }
     }
 
 
@@ -464,6 +675,10 @@ final class PythonRuntimeSupervisor: ObservableObject {
         ].joined(separator: "|")
     }
 
+    /// Canlı checklist: executor adım geçişlerini (task_trace bloğu) UI'a iletir.
+    /// AppState bunu ChatStore.applyProgressBlock'a bağlar.
+    var onProgress: ((_ conversationId: String, _ block: [String: Any]) -> Void)?
+
     private func handleUnsolicited(_ response: RuntimeResponse) {
         if response.capability == "bridge.ready" {
             runtimeReady = response.ok
@@ -471,6 +686,12 @@ final class PythonRuntimeSupervisor: ObservableObject {
         } else if response.capability == "backend.auth_refresh_needed" {
             Task { @MainActor in
                 await onAuthRefreshNeeded?()
+            }
+        } else if response.capability == "conversation.progress" {
+            let result = response.resultMap
+            let cid = string(result["conversationId"]) ?? ""
+            if let block = result["block"] as? [String: Any] {
+                onProgress?(cid, block)
             }
         }
     }

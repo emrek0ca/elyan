@@ -222,6 +222,33 @@ def intelligence_context(state: dict[str, Any]) -> list[dict[str, Any]]:
             if intent:
                 record["intent"] = intent
             records.append(record)
+
+    # Araç güvenilirliği: çalışma zamanında sık başarısız olan capability'ler
+    # planlayıcıya "reliability" kaydı olarak bildirilir; planlayıcı güvenilir
+    # alternatifleri tercih edebilir.
+    quality = intelligence.get("capabilityQuality", {})
+    if isinstance(quality, dict):
+        reliability: list[dict[str, Any]] = []
+        for capability, stats in quality.items():
+            if not isinstance(stats, dict):
+                continue
+            executions = int(stats.get("executions", 0) or 0)
+            failures = int(stats.get("executionFailures", 0) or 0)
+            if executions < 3 or failures == 0:
+                continue
+            failure_rate = round(failures / executions, 2)
+            if failure_rate < 0.34:
+                continue  # yalnız gerçekten güvenilmez olanları bildir
+            reliability.append(
+                {
+                    "kind": "reliability",
+                    "capability": str(capability),
+                    "executions": executions,
+                    "failureRate": failure_rate,
+                }
+            )
+        reliability.sort(key=lambda item: item["failureRate"], reverse=True)
+        records.extend(reliability[:5])
     return records
 
 

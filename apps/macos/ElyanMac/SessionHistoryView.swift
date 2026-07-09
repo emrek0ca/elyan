@@ -126,7 +126,14 @@ struct SessionHistoryView: View {
         error = ""
         do {
             let page = try await appState.backend.getSessionsPage(limit: 12)
-            sessions = page.sessions
+            // Merge local-first conversations (bridge store) with cloud sessions
+            // so chats run offline don't vanish from history. Local entries carry
+            // non-UUID ids and never collide with backend sessions; dedupe by id
+            // defensively anyway.
+            let local = await appState.supervisor.localSessions()
+            let cloudIds = Set(page.sessions.map(\.id))
+            let merged = page.sessions + local.filter { !cloudIds.contains($0.id) }
+            sessions = merged.sorted { $0.updatedAt > $1.updatedAt }
             hasMoreSessions = page.hasMore
             nextCursor = page.nextCursor
         } catch {
@@ -151,6 +158,16 @@ struct SessionHistoryView: View {
     }
 
     private func deleteSession(_ session: ElyanSession) async {
+        if session.isLocal {
+            let ok = await appState.supervisor.deleteLocalConversation(session.id)
+            if ok {
+                sessions.removeAll { $0.id == session.id }
+                if selected?.id == session.id { selected = nil }
+            } else {
+                self.error = "Yerel sohbet silinemedi."
+            }
+            return
+        }
         do {
             try await appState.backend.deleteSession(sessionId: session.id)
             sessions.removeAll { $0.id == session.id }
@@ -167,9 +184,20 @@ private struct SessionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(session.title)
-                .font(.system(.body, weight: .medium))
-                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text(session.title)
+                    .font(.system(.body, weight: .medium))
+                    .lineLimit(1)
+                if session.isLocal {
+                    Text("Yerel")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.15))
+                        .clipShape(Capsule())
+                        .foregroundStyle(.secondary)
+                }
+            }
             if !session.lastMessage.isEmpty {
                 Text(session.lastMessage)
                     .font(.caption)
@@ -257,6 +285,15 @@ struct SessionDetailView: View {
         if isLoading { return }
         isLoading = true
         error = ""
+        // Local-first conversations live in the bridge store, not the backend —
+        // load their history from the runtime instead of hitting /v1/chat/sessions.
+        if session.isLocal {
+            messages = await appState.supervisor.localSessionMessages(session.id)
+            hasMoreMessages = false
+            nextCursor = nil
+            isLoading = false
+            return
+        }
         do {
             let result = try await appState.backend.getSessionMessages(sessionId: session.id, limit: 30)
             messages = result.messages
