@@ -491,8 +491,6 @@ def test_non_darwin_desktop_capabilities_fail_closed(
     registry._load_adapter.cache_clear()
 
     cases = [
-        ("open_app", {"app_name": "Finder"}, state_store.snapshot()),
-        ("close_app", {"app_name": "Safari"}, state_store.snapshot()),
         ("get_calendar_events", {"query": "today"}, state_store.snapshot()),
         (
             "add_calendar_event",

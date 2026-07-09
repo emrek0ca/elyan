@@ -4290,14 +4290,20 @@ def test_router_handles_generic_close_command() -> None:
     assert routed.args == {"app_name": ""}
 
 
-def test_non_darwin_open_app_route_returns_safe_assistant_message(
+def test_linux_open_app_route_launches_native_file_manager(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """open_app artık çapraz platform: Linux'ta Finder → nautilus/dolphin...
+    aday ikilisi PATH'te aranıp detached başlatılır; bulunamazsa güvenli
+    CAPABILITY_UNAVAILABLE mesajı döner (asla 'yalnız macOS' reddi değil)."""
     _isolate_state(monkeypatch, tmp_path)
-    import actions._platform_common as platform_common
+    import actions.open_app as open_app_module
 
-    monkeypatch.setattr(platform_common.sys, "platform", "linux")
+    monkeypatch.setattr(open_app_module.sys, "platform", "linux")
+    launched: list[list[str]] = []
+    monkeypatch.setattr(open_app_module.shutil, "which", lambda name: "/usr/bin/nautilus" if name == "nautilus" else None)
+    monkeypatch.setattr(open_app_module, "_spawn_detached", lambda cmd: launched.append(cmd))
     runtime = bridge.RuntimeBridge()
 
     response = runtime.handle(
@@ -4310,8 +4316,33 @@ def test_non_darwin_open_app_route_returns_safe_assistant_message(
     )
 
     assert response["ok"] is True
+    assert response["result"]["chatOk"] is True
+    assert launched == [["nautilus"]]
+
+
+def test_linux_open_app_without_binary_fails_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.open_app as open_app_module
+
+    monkeypatch.setattr(open_app_module.sys, "platform", "linux")
+    monkeypatch.setattr(open_app_module.shutil, "which", lambda name: None)
+    runtime = bridge.RuntimeBridge()
+
+    response = runtime.handle(
+        {
+            "id": "req_open_app_linux_missing",
+            "taskId": "task_open_app_linux_missing",
+            "capability": "conversation.send",
+            "payload": {"conversationId": "", "text": "finder ac"},
+        }
+    )
+
+    assert response["ok"] is True
     assert response["result"]["chatOk"] is False
-    assert "yalnizca macOS'ta" in response["result"]["assistantMessage"]
+    assert "bulunamadi" in response["result"]["assistantMessage"]
 
 
 def test_router_builds_calendar_plan_preview() -> None:

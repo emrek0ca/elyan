@@ -829,8 +829,6 @@ def capability_names() -> set[str]:
 
 
 _DARWIN_ONLY_CAPABILITIES = {
-    "open_app",
-    "close_app",
     "get_calendar_events",
     "add_calendar_event",
     "delete_calendar_event",
@@ -845,8 +843,6 @@ _DARWIN_ONLY_CAPABILITIES = {
     "desktop_operator.execute_action",
     "desktop_operator.run",
     "desktop_operator.cancel",
-    "clipboard_read",
-    "clipboard_write",
 }
 _WRITE_CAPABILITIES = {
     "document_write",

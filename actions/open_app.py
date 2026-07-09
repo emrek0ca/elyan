@@ -8,11 +8,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import time
 from typing import Any
 
-from actions._platform_common import capability_unavailable, invalid_argument, require_macos, timeout_error
+from actions._platform_common import capability_unavailable, invalid_argument, timeout_error
 
 try:
     import psutil
@@ -144,6 +146,8 @@ def _frontmost_application_name() -> str:
                         return app_name
         except Exception:
             pass
+    if sys.platform != "darwin":
+        return ""
     script = 'tell application "System Events" to get name of first application process whose frontmost is true'
     try:
         result = subprocess.run(
@@ -301,13 +305,109 @@ def _launch_success(resolved: str) -> dict[str, Any]:
     }
 
 
+# Kanonik (macOS-merkezli) uygulama adı → platform başlatma hedefi.
+# Windows: `start` ile çözülen komut/URI. Linux: PATH'te aranan aday listesi.
+_WINDOWS_LAUNCH_TARGETS = {
+    "google chrome": "chrome",
+    "safari": "msedge",  # Safari Windows'ta yok; varsayılan sistem tarayıcısına en yakın karşılık
+    "firefox": "firefox",
+    "terminal": "wt",
+    "iterm": "wt",
+    "finder": "explorer",
+    "visual studio code": "code",
+    "system settings": "ms-settings:",
+    "system preferences": "ms-settings:",
+    "calculator": "calc",
+    "notes": "notepad",
+    "textedit": "notepad",
+    "activity monitor": "taskmgr",
+    "mail": "outlook",
+    "preview": "mspaint",
+}
+_LINUX_LAUNCH_TARGETS = {
+    "google chrome": ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"),
+    "safari": ("xdg-open",),  # varsayılan tarayıcı; aşağıda URL argümanıyla açılır
+    "firefox": ("firefox",),
+    "terminal": ("gnome-terminal", "konsole", "xfce4-terminal", "x-terminal-emulator", "xterm"),
+    "iterm": ("gnome-terminal", "konsole", "x-terminal-emulator", "xterm"),
+    "finder": ("nautilus", "dolphin", "thunar", "pcmanfm"),
+    "visual studio code": ("code", "codium"),
+    "system settings": ("gnome-control-center", "systemsettings"),
+    "system preferences": ("gnome-control-center", "systemsettings"),
+    "calculator": ("gnome-calculator", "kcalc"),
+    "notes": ("gnome-text-editor", "gedit", "kate"),
+    "textedit": ("gnome-text-editor", "gedit", "kate"),
+    "activity monitor": ("gnome-system-monitor", "ksysguard"),
+}
+
+
+def _spawn_detached(command: list[str]) -> None:
+    subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _open_app_windows(resolved: str) -> dict[str, Any]:
+    target = _WINDOWS_LAUNCH_TARGETS.get(_tr_fold(resolved), resolved)
+    try:
+        # `start` kabuk yerleşiği; boş "" başlık argümanı boşluklu adlar için şart.
+        result = subprocess.run(
+            ["cmd", "/c", "start", "", target],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return _launch_success(resolved)
+        raise capability_unavailable(f"{resolved} bulunamadi veya guvenli sekilde acilamadi.")
+    except subprocess.TimeoutExpired as exc:
+        raise timeout_error(f"{resolved} acilirken zaman asimina ugradi.") from exc
+    except FileNotFoundError as exc:
+        raise capability_unavailable(f"{resolved} guvenli sekilde acilamadi.") from exc
+
+
+def _open_app_linux(resolved: str) -> dict[str, Any]:
+    folded = _tr_fold(resolved)
+    candidates = _LINUX_LAUNCH_TARGETS.get(folded, ())
+    binary = next((c for c in candidates if shutil.which(c)), None)
+    if binary is None and shutil.which(folded.replace(" ", "-")):
+        binary = folded.replace(" ", "-")
+    if binary is None and shutil.which(folded.replace(" ", "")):
+        binary = folded.replace(" ", "")
+    if binary is None and shutil.which("gtk-launch"):
+        # .desktop kimliğiyle son bir şans (ör. org.gnome.Calculator değilse de
+        # çoğu dağıtımda basit ad çalışır).
+        probe = subprocess.run(
+            ["gtk-launch", folded.replace(" ", "-")],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if probe.returncode == 0:
+            return _launch_success(resolved)
+    if binary is None:
+        raise capability_unavailable(f"{resolved} bu sistemde bulunamadi.")
+    try:
+        _spawn_detached([binary])
+        return _launch_success(resolved)
+    except FileNotFoundError as exc:
+        raise capability_unavailable(f"{resolved} guvenli sekilde acilamadi.") from exc
+
+
 def open_app(app_name: str) -> dict[str, Any]:
     """Uygulamayı açar, başarı/hata mesajı döndürür."""
-    require_macos("Uygulama kontrolu")
     if not app_name:
         raise invalid_argument("Uygulama adi belirtilmedi.")
 
     resolved = _resolve_app_name(app_name)
+    if sys.platform == "win32":
+        return _open_app_windows(resolved)
+    if sys.platform != "darwin":
+        return _open_app_linux(resolved)
 
     try:
         result = subprocess.run(
@@ -337,12 +437,27 @@ def open_app(app_name: str) -> dict[str, Any]:
 
 def close_app(app_name: str) -> dict[str, Any]:
     """Uygulamayı güvenli şekilde kapatır."""
-    require_macos("Uygulama kontrolu")
     resolved = _resolve_app_name(app_name) if app_name else ""
     if _looks_generic_close_target(app_name):
         resolved = _frontmost_application_name() or resolved
     if not resolved:
         raise invalid_argument("Kapatilacak uygulama bulunamadi.")
+
+    if sys.platform != "darwin":
+        # Windows/Linux: nazik quit protokolü yok; psutil terminate→kill akışı
+        # (SIGTERM önce, cevapsıza SIGKILL) güvenli kapatma muadili.
+        terminated = _terminate_matching_processes(resolved)
+        if terminated > 0 and _wait_until_closed(resolved):
+            return {
+                "text": f"{resolved} kapatıldı.",
+                "result": {
+                    "appName": resolved,
+                    "verificationStatus": "closed_confirmed",
+                    "closedConfirmed": True,
+                    "processObserved": _matching_process_count(resolved) == 0,
+                },
+            }
+        raise capability_unavailable(f"{resolved} calisan bir uygulama olarak bulunamadi.")
 
     script = f'tell application "{_escape_osascript_text(resolved)}" to quit'
     try:
