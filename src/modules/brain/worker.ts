@@ -382,9 +382,10 @@ async function completeTrainingJob(
 ) {
   const now = new Date();
   const metrics = buildSafeEvaluationMetrics(input);
-  const artifactStatus = metrics.promotionGate === "ready" ? "ready" : "draft";
   const metadata = mergeTrainingMetadata(input.job.metadata, {
     trainingMode: "bounded_cpu_eval",
+    artifactPurpose: "behavior_evaluation",
+    servable: false,
     workerStatus: "completed",
     phase: "evaluation",
     datasetManifestId: input.job.datasetManifestId,
@@ -435,11 +436,14 @@ async function completeTrainingJob(
     name: `${completedJob.name} evaluation artifact`,
     provider: "elyan-ml-worker",
     baseModel: completedJob.baseModel,
-    adapterKind: input.adapterMode ?? "eval_adapter",
-    status: artifactStatus,
-    storageUri: `elyan://model-artifacts/${completedJob.id}`,
-    checksum: `sha256:${metrics.datasetFingerprint}`,
+    adapterKind: "behavior_eval",
+    status: "draft",
+    storageUri: null,
+    checksum: null,
     metadata: {
+      artifactPurpose: "behavior_evaluation",
+      servable: false,
+      trainingMode: "bounded_cpu_eval",
       evaluationState: metrics.evaluationState,
       promotionGate: metrics.promotionGate,
       qualityGateStatus: metrics.qualityGateStatus,

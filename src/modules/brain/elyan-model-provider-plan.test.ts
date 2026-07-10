@@ -9,8 +9,8 @@ const readyArtifact = {
   provider: "elyan-ml-worker",
   baseModel: "llama3.2",
   adapterKind: "lora",
-  storageUri: "elyan://model-artifacts/model_1",
-  checksum: "sha256:model_1",
+  storageUri: "s3://elyan-models/model_1/adapter.safetensors",
+  checksum: `sha256:${"a".repeat(64)}`,
   metadata: {
     servingProvider: "ollama",
   },
@@ -49,6 +49,45 @@ test("Elyan provider plan keeps Groq at 100 percent when no trained artifact exi
   assert.equal(plan.routeReason, "no_ready_elyan_model");
   assert.equal(plan.traffic.groqPercent, 100);
   assert.equal(plan.traffic.elyanCanaryPercent, 0);
+});
+
+test("Elyan provider plan rejects CPU evaluation records as servable models", () => {
+  const policy = buildElyanModelLearningPolicy({
+    groqConfigured: true,
+    costGuardEnabled: true,
+    activeSharedModelId: "eval_1",
+    activeUserModelId: null,
+    warmupJobId: null,
+    warmupJobStatus: null,
+    qualityGateStatus: "ready_for_queue",
+    qualityGateReasons: [],
+    promotionGateStatus: "ready",
+    promotionGateReasons: [],
+    approvedCorrectionDatasetReady: true,
+    compactDatasetEligible: true,
+    evaluationScore: 0.95,
+    benchmarkScore: 0.95,
+    recentTimeoutCount: 0,
+  });
+  const plan = buildElyanModelProviderPlan({
+    policy,
+    artifact: {
+      ...readyArtifact,
+      id: "eval_1",
+      adapterKind: "behavior_eval",
+      storageUri: "elyan://model-artifacts/eval_1",
+      metadata: { trainingMode: "bounded_cpu_eval", servable: false },
+    },
+    workload: "mobile_chat_fast",
+    runtimeProvider: "ollama",
+    runtimeReady: true,
+    canaryEnabled: true,
+    primaryEnabled: true,
+  });
+
+  assert.equal(plan.routeReason, "no_ready_elyan_model");
+  assert.equal(plan.liveRoutingEnabled, false);
+  assert.equal(plan.traffic.groqPercent, 100);
 });
 
 test("Elyan provider plan shadows a ready model without changing live routing", () => {

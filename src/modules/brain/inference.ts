@@ -187,6 +187,7 @@ import {
   buildElyanVoiceProfilePromptBlock,
   sanitizeFinalAssistantResponse,
 } from "./response-policy.js";
+import { buildBehaviorLearningPromptBlock } from "./behavior-learning.js";
 import {
   shouldAcceptExtractedTypedBlock,
   tableBlockToPlainFallback,
@@ -4369,18 +4370,23 @@ export async function generateSharedBrainReply(
       // Deterministic corpus guidance (design/skills/data language) — RAM-cached
       // + C-BM25 ranked, independent of embedding-based retrieval so it surfaces
       // reliably for "rapor/tablo/pdf yap" style requests.
-      const corpusGuidanceBlock = await buildBrainCorpusGuidanceBlock(
-        input.prompt,
-        brainCorpusDomains,
-      ).catch(() => null);
-      // Fresh-session continuity hint ("kaldığımız yer"). Only on the very
-      // first turn of a new chat; if the user opens a new session within ~7
-      // days of a meaningful episode, Elyan can naturally reference it.
-      const continuityBlock = await buildSessionContinuityBlock(app, {
-        userId: input.userId,
-        conversationLength: boundedConversation.length,
-        cognitiveContext: input.understandingContext?.cognitiveContext,
-      }).catch(() => null);
+      const [corpusGuidanceBlock, continuityBlock, behaviorLearningBlock] = await Promise.all([
+        buildBrainCorpusGuidanceBlock(input.prompt, brainCorpusDomains).catch(() => null),
+        // Fresh-session continuity hint ("kaldığımız yer"). Only on the very
+        // first turn of a new chat; if the user opens a new session within ~7
+        // days of a meaningful episode, Elyan can naturally reference it.
+        buildSessionContinuityBlock(app, {
+          userId: input.userId,
+          conversationLength: boundedConversation.length,
+          cognitiveContext: input.understandingContext?.cognitiveContext,
+        }).catch(() => null),
+        app.config.ELYAN_BEHAVIOR_LEARNING_ENABLED === true
+          ? buildBehaviorLearningPromptBlock(app, {
+              userId: input.userId,
+              prompt: input.prompt,
+            }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
       const systemPrompt = buildStructuredSystemPrompt(
         retrievalBlock == null &&
           memoryBlock == null &&
@@ -4389,11 +4395,13 @@ export async function generateSharedBrainReply(
           clientDocBlock == null &&
           corpusGuidanceBlock == null &&
           continuityBlock == null &&
+          behaviorLearningBlock == null &&
           claimConfidencePromptDirective == null
           ? app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT
           : [
               app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
               continuityBlock,
+              behaviorLearningBlock,
               corpusGuidanceBlock,
               retrievalBlock,
               memoryBlock,

@@ -75,6 +75,28 @@ function readString(record: Record<string, unknown> | null, key: string): string
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function isServableModelArtifact(artifact: ElyanModelPlanArtifact | null): boolean {
+  if (
+    !artifact?.id ||
+    !artifact.storageUri ||
+    !artifact.checksum ||
+    !/^sha256:[a-f0-9]{64}$/i.test(artifact.checksum)
+  ) {
+    return false;
+  }
+  const metadata = readRecord(artifact.metadata);
+  const trainingMode = readString(metadata, "trainingMode");
+  const evaluationState = readString(metadata, "evaluationState");
+  const adapterKind = artifact.adapterKind.trim().toLowerCase();
+  return (
+    !artifact.storageUri.startsWith("elyan://model-artifacts/") &&
+    !["eval_adapter", "grounding_eval", "behavior_eval"].includes(adapterKind) &&
+    trainingMode !== "bounded_cpu_eval" &&
+    evaluationState !== "bounded_offline_eval" &&
+    metadata?.servable !== false
+  );
+}
+
 function normalizeProvider(value: string | null): SharedBrainProvider | null {
   if (!value) {
     return null;
@@ -118,7 +140,7 @@ export function buildElyanModelProviderPlan(input: {
     artifact: input.artifact,
     runtimeProvider: input.runtimeProvider,
   });
-  const hasReadyArtifact = Boolean(input.artifact?.id);
+  const hasReadyArtifact = isServableModelArtifact(input.artifact);
   const canaryWorkloadSafe = lowRiskCanaryWorkloads.has(input.workload);
   const base = {
     logicalProvider: "elyan" as const,

@@ -1773,6 +1773,7 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     evaluationScore: readNumberMetadata(activeSharedModel?.metadata, "evaluationScore"),
     benchmarkScore: benchmarkSummary.latestOverallScore,
     recentTimeoutCount: brainLatency.recentBrainTimeoutCount,
+    weightTrainingAvailable: app.config.ELYAN_WEIGHT_TRAINING_ENABLED,
   });
   const elyanModelProviderPlan = buildElyanModelProviderPlan({
     policy: elyanModelLearningPolicy,
@@ -2113,6 +2114,12 @@ export async function maybeQueueAutomaticSharedBrainRefresh(
     source: string;
   },
 ) {
+  if (app.config.ELYAN_WEIGHT_TRAINING_ENABLED === false) {
+    return {
+      queued: false,
+      reason: "behavior_memory_active" as const,
+    };
+  }
   const profile = await getBrainProfile(app, input.userId);
   const qualityGate = profile.learning.qualityGate;
   const freshness = profile.training.signalFreshness;
@@ -2239,6 +2246,15 @@ export async function queueContinuousBrainTrainingJob(
     userAgent?: string;
   },
 ) {
+  if (app.config.ELYAN_WEIGHT_TRAINING_ENABLED === false) {
+    return {
+      job: null,
+      created: false,
+      reason: "weight_training_disabled" as const,
+      elyanModel: null,
+      elyanProviderPlan: null,
+    };
+  }
   const profile = await getBrainProfile(app, input.userId);
   const activeSharedJob = profile.training.pipeline.continuousImprovement.activeSharedJobId;
   const elyanModelPolicy = profile.training.elyanModel ?? profile.learning.elyanModel ?? null;

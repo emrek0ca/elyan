@@ -5,6 +5,7 @@ import { auditLogs, datasetManifests, learningEvents } from "../../db/schema.js"
 import { createAuditLog } from "../audit/service.js";
 import { ELYAN_CONSTITUTION_VERSION, ELYAN_PROMPT_PROFILE_VERSION, constitutionRuleCount } from "./constitution.js";
 import { invalidateBrainProfileCache } from "./profile-cache.js";
+import { invalidateBehaviorLearningCache } from "./behavior-learning.js";
 import type { BrainEvalResult } from "./evaluator.js";
 
 type RouteDecisionSnapshot = {
@@ -591,6 +592,7 @@ async function updateInteractionApprovalState(
   });
 
   invalidateBrainProfileCache(app, interaction.userId);
+  invalidateBehaviorLearningCache(app);
   return {
     id: interaction.id,
     review: nextReview,

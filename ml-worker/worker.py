@@ -338,11 +338,12 @@ def complete_job(conn: psycopg.Connection, job: dict[str, Any], dataset: dict[st
     training_backend = read_string(config, "trainingBackend") or "pytorch_cpu_safe"
     adapter_mode = read_string(config, "adapterMode")
     metrics = build_safe_metrics(job, dataset, training_backend, adapter_mode)
-    artifact_status = "ready" if metrics["promotionGate"] == "ready" else "draft"
     metadata = merge_metadata(
         job.get("metadata"),
         {
             "trainingMode": "bounded_cpu_eval",
+            "artifactPurpose": "behavior_evaluation",
+            "servable": False,
             "workerStatus": "completed",
             "phase": "evaluation",
             "datasetManifestId": str(job.get("dataset_manifest_id")) if job.get("dataset_manifest_id") else None,
@@ -363,6 +364,9 @@ def complete_job(conn: psycopg.Connection, job: dict[str, Any], dataset: dict[st
         },
     )
     artifact_metadata = {
+        "artifactPurpose": "behavior_evaluation",
+        "servable": False,
+        "trainingMode": "bounded_cpu_eval",
         "evaluationState": metrics["evaluationState"],
         "promotionGate": metrics["promotionGate"],
         "datasetFingerprint": metrics["datasetFingerprint"],
@@ -405,12 +409,12 @@ def complete_job(conn: psycopg.Connection, job: dict[str, Any], dataset: dict[st
                 job.get("owner_user_id"),
                 job.get("scope") or "user",
                 job["id"],
-                f"{job.get('name') or 'Elyan'} evaluation artifact",
+                f"{job.get('name') or 'Elyan'} behavior evaluation",
                 job.get("base_model") or "llama3.2",
-                adapter_mode or "eval_adapter",
-                artifact_status,
-                f"elyan://model-artifacts/{job['id']}",
-                f"sha256:{metrics['datasetFingerprint']}",
+                "behavior_eval",
+                "draft",
+                None,
+                None,
                 Jsonb(artifact_metadata),
             ),
         )

@@ -25,7 +25,7 @@ test("Elyan model policy collects data until a safe SFT dataset is ready", () =>
   assert.equal(policy.groqRole, "primary");
   assert.equal(policy.elyanRole, "learning");
   assert.equal(policy.canRetireGroq, false);
-  assert.equal(policy.nextAction, "export_sft_ready_corrections_dataset");
+  assert.equal(policy.nextAction, "use_behavior_memory");
   assert.ok(policy.blockers.includes("sft_ready_dataset_missing_or_not_compact_eligible"));
 });
 
@@ -46,6 +46,7 @@ test("Elyan model policy queues refresh only after dataset and quality gates pas
     evaluationScore: null,
     benchmarkScore: null,
     recentTimeoutCount: 0,
+    weightTrainingAvailable: true,
   });
 
   assert.equal(policy.stage, "queue_ready");

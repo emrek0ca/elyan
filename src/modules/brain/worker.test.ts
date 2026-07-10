@@ -445,6 +445,13 @@ test("processNextQueuedTrainingJob completes shared jobs with bounded neural eva
   assert.equal(metrics.promotionGate, "ready");
 
   assert.equal((app.db as FakeDb).insertedRows.length, 2);
+  const evaluationArtifact = (app.db as FakeDb).insertedRows.find((entry) => {
+    const value = entry.values as Record<string, unknown>;
+    return value["adapterKind"] === "behavior_eval";
+  });
+  assert.equal((evaluationArtifact?.values as Record<string, unknown> | undefined)?.status, "draft");
+  assert.equal((evaluationArtifact?.values as Record<string, unknown> | undefined)?.storageUri, null);
+  assert.equal((evaluationArtifact?.values as Record<string, unknown> | undefined)?.checksum, null);
 });
 
 test("processNextQueuedTrainingJob keeps artifact draft when quality gate blocks promotion", async () => {
@@ -542,7 +549,7 @@ test("processNextQueuedTrainingJob keeps artifact draft when quality gate blocks
   assert.equal((trainingJobsRows[0].metadata as Record<string, unknown>).qualityGateStatus, "blocked_quality_regression");
   const artifactInsert = (app.db as FakeDb).insertedRows.find((entry) => {
     const value = entry.values as Record<string, unknown>;
-    return value["storageUri"] === "elyan://model-artifacts/job-2";
+    return value["adapterKind"] === "behavior_eval";
   });
   assert.equal((artifactInsert?.values as Record<string, unknown> | undefined)?.status, "draft");
   assert.equal(((trainingJobsRows[0].metrics as Record<string, unknown>).datasetQualityScore as number) < 0.6, true);
