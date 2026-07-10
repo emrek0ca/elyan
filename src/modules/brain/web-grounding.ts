@@ -41,7 +41,7 @@ export type WebGroundingSearchResult = {
   publishedAt?: string;
   observedAt: string;
   freshnessStatus: FreshDataStatus;
-  searchProvider?: "duckduckgo_html" | "brave" | "searxng";
+  searchProvider?: "duckduckgo_html" | "brave" | "searxng" | "open_meteo";
   pageContent?: string;
 };
 
@@ -55,7 +55,7 @@ export type WebGroundingResult = {
   used: boolean;
   query: string;
   queries: string[];
-  source: "duckduckgo_html" | "brave" | "searxng";
+  source: "duckduckgo_html" | "brave" | "searxng" | "open_meteo";
   results: WebGroundingSearchResult[];
   degradedReason: string | null;
   confidence: "high" | "medium" | "low";
@@ -289,6 +289,7 @@ const TRUSTED_AUTHORITY_HOST_PATTERNS = [
   /(^|\.)npmjs\.com$/i,
   /(^|\.)pypi\.org$/i,
   /(^|\.)pub\.dev$/i,
+  /(^|\.)open-meteo\.com$/i,
 ];
 
 const WEB_QUERY_STOPWORDS = new Set([
@@ -1400,6 +1401,214 @@ async function fetchSearchQuery(
   };
 }
 
+type OpenMeteoPlace = {
+  name?: string;
+  admin1?: string;
+  admin2?: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
+  timezone?: string;
+};
+
+const WEATHER_QUERY_NOISE_PATTERN =
+  /(?<!\p{L})(hava durumu|hava nasıl|hava nasil|kaç derece|kac derece|yağmur yağacak mı|yagmur yagacak mi|yağmur|yagmur|kar yağacak mı|kar yagacak mi|rüzgar|ruzgar|weather|forecast|bugün|bugun|yarın|yarin|şu an|su an|güncel|guncel|current|today|tomorrow|now|için|icin)(?!\p{L})/giu;
+
+function weatherLocationCandidates(prompt: string): string[] {
+  const location = compactText(prompt)
+    .replace(WEATHER_QUERY_NOISE_PATTERN, " ")
+    .replace(/[^\p{L}\p{N}\s.'’-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!location) return [];
+  const words = location
+    .split(/\s+/u)
+    .map((word) => word.replace(/[’'](?:da|de|ta|te)$/iu, ""))
+    .filter(Boolean);
+  const normalizedLocation = words.join(" ");
+  return uniqueStrings([
+    normalizedLocation,
+    words.length > 1 ? words.slice(-2).join(" ") : "",
+    words.at(-1) ?? "",
+  ]).filter(Boolean).slice(0, 3);
+}
+
+function normalizeWeatherLookupText(value: string): string {
+  return value
+    .toLocaleLowerCase("tr-TR")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^a-z0-9çğıöşü]+/giu, " ")
+    .trim();
+}
+
+function selectWeatherPlace(prompt: string, places: OpenMeteoPlace[]): OpenMeteoPlace | null {
+  const promptTokens = new Set(normalizeWeatherLookupText(prompt).split(/\s+/u).filter(Boolean));
+  return places
+    .filter((place) =>
+      typeof place.latitude === "number" &&
+      Number.isFinite(place.latitude) &&
+      typeof place.longitude === "number" &&
+      Number.isFinite(place.longitude),
+    )
+    .map((place, index) => {
+      const haystack = normalizeWeatherLookupText(
+        [place.name, place.admin1, place.admin2, place.country].filter(Boolean).join(" "),
+      );
+      const overlap = [...promptTokens].filter((token) => haystack.includes(token)).length;
+      return { place, score: overlap * 10 - index };
+    })
+    .sort((left, right) => right.score - left.score)[0]?.place ?? null;
+}
+
+function weatherCodeDescription(code: number): string {
+  if (code === 0) return "açık";
+  if ([1, 2].includes(code)) return "az bulutlu";
+  if (code === 3) return "kapalı";
+  if ([45, 48].includes(code)) return "sisli";
+  if ([51, 53, 55, 56, 57].includes(code)) return "çiseli";
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "yağmurlu";
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return "kar yağışlı";
+  if ([95, 96, 99].includes(code)) return "gök gürültülü fırtınalı";
+  return "değişken";
+}
+
+function finiteWeatherNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+async function fetchOpenMeteoWeather(
+  app: FastifyInstance,
+  prompt: string,
+  policy: FreshDataPolicy,
+): Promise<{
+  result: WebGroundingSearchResult | null;
+  degradedReason: string | null;
+}> {
+  const candidates = weatherLocationCandidates(prompt);
+  if (candidates.length === 0) {
+    return { result: null, degradedReason: "weather_location_missing" };
+  }
+
+  const timeoutMs = Math.max(1_500, Math.min(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS, 5_000));
+  let place: OpenMeteoPlace | null = null;
+  try {
+    for (const candidate of candidates) {
+      const geocodingUrl = new URL("https://geocoding-api.open-meteo.com/v1/search");
+      geocodingUrl.searchParams.set("name", candidate);
+      geocodingUrl.searchParams.set("count", "8");
+      geocodingUrl.searchParams.set("language", "tr");
+      geocodingUrl.searchParams.set("format", "json");
+      const response = await fetchTextWithTimeout(geocodingUrl.toString(), timeoutMs, {
+        accept: "application/json",
+        "user-agent": "Elyan/1.0",
+      });
+      if (!response.ok) continue;
+      const payload = await readBoundedJsonObject(response, 200_000);
+      const places = Array.isArray(payload?.results) ? payload.results as OpenMeteoPlace[] : [];
+      place = selectWeatherPlace(prompt, places);
+      if (place) break;
+    }
+    if (!place) {
+      return { result: null, degradedReason: "weather_location_not_found" };
+    }
+
+    const forecastUrl = new URL("https://api.open-meteo.com/v1/forecast");
+    forecastUrl.searchParams.set("latitude", String(place.latitude));
+    forecastUrl.searchParams.set("longitude", String(place.longitude));
+    forecastUrl.searchParams.set(
+      "current",
+      "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,cloud_cover,wind_speed_10m",
+    );
+    forecastUrl.searchParams.set("hourly", "precipitation_probability");
+    forecastUrl.searchParams.set("daily", "temperature_2m_max,temperature_2m_min,precipitation_probability_max");
+    forecastUrl.searchParams.set("forecast_days", "2");
+    forecastUrl.searchParams.set("timezone", place.timezone || "auto");
+
+    const response = await fetchTextWithTimeout(forecastUrl.toString(), timeoutMs, {
+      accept: "application/json",
+      "user-agent": "Elyan/1.0",
+    });
+    if (!response.ok) {
+      return { result: null, degradedReason: `open_meteo_http_${response.status}` };
+    }
+    const payload = await readBoundedJsonObject(response, 500_000);
+    const current = payload?.current && typeof payload.current === "object" && !Array.isArray(payload.current)
+      ? payload.current as Record<string, unknown>
+      : null;
+    const hourly = payload?.hourly && typeof payload.hourly === "object" && !Array.isArray(payload.hourly)
+      ? payload.hourly as Record<string, unknown>
+      : null;
+    const daily = payload?.daily && typeof payload.daily === "object" && !Array.isArray(payload.daily)
+      ? payload.daily as Record<string, unknown>
+      : null;
+    const temperature = finiteWeatherNumber(current?.temperature_2m);
+    const observedAt = typeof current?.time === "string" ? current.time : null;
+    if (temperature === null || !observedAt) {
+      return { result: null, degradedReason: "open_meteo_invalid_payload" };
+    }
+
+    const weatherCode = finiteWeatherNumber(current?.weather_code) ?? -1;
+    const apparent = finiteWeatherNumber(current?.apparent_temperature);
+    const humidity = finiteWeatherNumber(current?.relative_humidity_2m);
+    const precipitation = finiteWeatherNumber(current?.precipitation);
+    const wind = finiteWeatherNumber(current?.wind_speed_10m);
+    const cloudCover = finiteWeatherNumber(current?.cloud_cover);
+    const hourlyTimes = Array.isArray(hourly?.time) ? hourly.time : [];
+    const rainProbabilities = Array.isArray(hourly?.precipitation_probability)
+      ? hourly.precipitation_probability
+      : [];
+    const currentHourIndex = hourlyTimes.findIndex((time) => time === observedAt);
+    const rainProbability = finiteWeatherNumber(
+      rainProbabilities[currentHourIndex >= 0 ? currentHourIndex : 0],
+    );
+    const maxTemperature = finiteWeatherNumber(Array.isArray(daily?.temperature_2m_max) ? daily.temperature_2m_max[0] : null);
+    const minTemperature = finiteWeatherNumber(Array.isArray(daily?.temperature_2m_min) ? daily.temperature_2m_min[0] : null);
+    const maxRainProbability = finiteWeatherNumber(
+      Array.isArray(daily?.precipitation_probability_max) ? daily.precipitation_probability_max[0] : null,
+    );
+    const label = [place.name, place.admin1, place.country].filter(Boolean).join(", ");
+    const details = [
+      `${label} gözlemi (${observedAt})`,
+      `sıcaklık ${temperature} °C`,
+      apparent === null ? null : `hissedilen ${apparent} °C`,
+      `durum ${weatherCodeDescription(weatherCode)}`,
+      humidity === null ? null : `nem %${humidity}`,
+      wind === null ? null : `rüzgar ${wind} km/sa`,
+      precipitation === null ? null : `anlık yağış ${precipitation} mm`,
+      rainProbability === null ? null : `şu saat yağış olasılığı %${rainProbability}`,
+      maxTemperature === null || minTemperature === null
+        ? null
+        : `bugün en düşük ${minTemperature} °C, en yüksek ${maxTemperature} °C`,
+      maxRainProbability === null ? null : `bugün en yüksek yağış olasılığı %${maxRainProbability}`,
+      cloudCover === null ? null : `bulutluluk %${cloudCover}`,
+    ].filter((value): value is string => Boolean(value));
+    const retrievedAt = new Date().toISOString();
+    return {
+      result: withSourceAuthority({
+        title: `${label} canlı hava durumu`,
+        url: forecastUrl.toString(),
+        snippet: details.join("; ").slice(0, 700),
+        pageContent: details.join("; ").slice(0, 1_200),
+        sourceHost: "api.open-meteo.com",
+        searchProvider: "open_meteo",
+        publishedAt: retrievedAt,
+        verificationState: "verified",
+        queryHits: 1,
+        score: 2.4,
+      }, policy, retrievedAt),
+      degradedReason: null,
+    };
+  } catch (error) {
+    return {
+      result: null,
+      degradedReason: error instanceof Error && error.name === "AbortError"
+        ? "open_meteo_timeout"
+        : "open_meteo_failed",
+    };
+  }
+}
+
 async function verifyResult(
   app: FastifyInstance,
   input: WebGroundingSearchResult,
@@ -1988,6 +2197,49 @@ export async function searchPublicWebGrounding(
       freshData: sharedCache.fresh.freshData,
     });
     return cloneWebGroundingResult(sharedCache.fresh);
+  }
+
+  if (freshDataPolicy.domain === "weather") {
+    const weather = await fetchOpenMeteoWeather(app, query, freshDataPolicy);
+    if (weather.result) {
+      const retrievedAt = new Date().toISOString();
+      const normalized = normalizeResultForFreshDataPolicy(
+        weather.result,
+        freshDataPolicy,
+        retrievedAt,
+      );
+      const freshData = freshDataEnvelopeForResult({
+        policy: freshDataPolicy,
+        requestedAt,
+        retrievedAt,
+        results: [normalized],
+        cacheState: "miss",
+        reasons: ["structured_api", "open_meteo"],
+      });
+      const result: WebGroundingResult = {
+        enabled: true,
+        used: true,
+        query,
+        queries: [query],
+        source: "open_meteo",
+        results: [normalized],
+        degradedReason: null,
+        confidence: "high",
+        retrievedAt,
+        decisionReasons: uniqueStrings([...decisionReasons, "structured_api:open_meteo"]),
+        freshData,
+      };
+      if (cache && cacheTtlMs > 0) {
+        cache.set(cacheKey, result, { ttl: cacheTtlMs });
+      }
+      void writeSharedWebGroundingCache({
+        app,
+        cacheKey,
+        policy: freshDataPolicy,
+        result,
+      });
+      return cloneWebGroundingResult(result);
+    }
   }
 
   if (await isWebGroundingCircuitOpen(app)) {

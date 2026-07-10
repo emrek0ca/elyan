@@ -143,7 +143,7 @@ const DOMAIN_CONFIG: Record<
     minimumSources: 1,
     minimumVerifiedSources: 1,
     minimumDatedSources: 0,
-    preferredHosts: ["mgm.gov.tr", "weather.com", "accuweather.com"],
+    preferredHosts: ["mgm.gov.tr", "open-meteo.com", "weather.com", "accuweather.com"],
     searchCategory: "general",
   },
   sports: {

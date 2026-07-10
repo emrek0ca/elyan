@@ -698,6 +698,82 @@ test("source authority affects ranking and prompt evidence", async () => {
   assert.match(buildWebGroundingPromptBlock(result) ?? "", /Source authority: official/);
 });
 
+test("weather grounding uses structured REST data before web search", async () => {
+  const requestedUrls: string[] = [];
+  const app = {
+    config: {
+      ELYAN_WEB_GROUNDING_ENABLED: true,
+      ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
+      ELYAN_WEB_GROUNDING_MAX_RESULTS: 3,
+      ELYAN_WEB_GROUNDING_TIMEOUT_MS: 2_000,
+      JINA_READER_ENABLED: false,
+    },
+  } as never;
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      requestedUrls.push(url);
+      const parsed = new URL(url);
+      if (parsed.hostname === "geocoding-api.open-meteo.com") {
+        if (parsed.searchParams.get("name") !== "kırıkhan") {
+          return Response.json({ results: [] });
+        }
+        return Response.json({
+          results: [{
+            name: "Kırıkhan",
+            admin1: "Hatay",
+            country: "Türkiye",
+            latitude: 36.49939,
+            longitude: 36.35755,
+            timezone: "Europe/Istanbul",
+          }],
+        });
+      }
+      if (parsed.hostname === "api.open-meteo.com") {
+        return Response.json({
+          current: {
+            time: "2026-07-10T11:00",
+            temperature_2m: 31,
+            apparent_temperature: 33.8,
+            relative_humidity_2m: 45,
+            precipitation: 0,
+            weather_code: 0,
+            cloud_cover: 3,
+            wind_speed_10m: 11.4,
+          },
+          hourly: {
+            time: ["2026-07-10T11:00"],
+            precipitation_probability: [0],
+          },
+          daily: {
+            temperature_2m_max: [36.2],
+            temperature_2m_min: [23.7],
+            precipitation_probability_max: [0],
+          },
+        });
+      }
+      throw new Error(`Unexpected web-search request: ${url}`);
+    },
+    async () =>
+      searchPublicWebGrounding(app, {
+        prompt: "Hatay kırıkhan hava durumu",
+        workload: "mobile_chat_fast",
+        bypassCache: true,
+      }),
+  );
+
+  assert.equal(result.source, "open_meteo");
+  assert.equal(result.used, true);
+  assert.equal(result.confidence, "high");
+  assert.equal(result.freshData.evidence.sufficient, true);
+  assert.equal(result.results[0]?.verificationState, "verified");
+  assert.match(result.results[0]?.snippet ?? "", /sıcaklık 31 °C/iu);
+  assert.match(result.results[0]?.snippet ?? "", /hissedilen 33\.8 °C/iu);
+  assert.ok(requestedUrls.every((url) => url.includes("open-meteo.com")));
+  assert.doesNotMatch(buildWebGroundingPromptBlock(result) ?? "", /EVIDENCE GUARD/iu);
+});
+
 test("extractDateFromText finds ISO, dotted and named Turkish dates", () => {
   assert.equal(extractDateFromText("kapanış 2024-05-22 itibarıyla"), "2024-05-22");
   assert.equal(extractDateFromText("22.05.2024 tarihli veri"), "2024-05-22");
