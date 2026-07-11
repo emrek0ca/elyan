@@ -260,6 +260,7 @@ class ExecutorCore:
                     "id": step_id,
                     "label": self._step_label(str(state.get("capability", "") or ""), str(state.get("label", "") or "")),
                     "status": mapped,
+                    "capability": str(state.get("capability", "") or ""),
                     "detail": _safe_text(str(state.get("outputPreview", "") or state.get("stopReason", "") or ""), limit=120),
                 }
             )

@@ -16,12 +16,17 @@ from __future__ import annotations
 import datetime as dt
 import json
 import sys
+from functools import lru_cache
 from typing import Any
 
 from runtime.agent_planning import build_agent_plan
 from runtime.capability_registry import TOOL_DECLARATIONS, capability_metadata, capability_names
 
 PLAN_CONTRACT = "elyan.plan.v1"
+# Cowork bağlam zarfı sözleşmesi: server_brain'e sohbet/cowork turunda giden
+# yapılandırılmış (düz metin değil) bağlam. Sorgu labeled alanda, bağlam metadata
+# JSON'unda — brain sunucuda yeniden türetmeden anlar/planlar (daha az yük).
+COWORK_CONTRACT = "elyan.cowork.v1"
 
 # Argüman enum kısıtları — daha önce bridge._semantic_route içinde dağınık
 # if bloklarıydı; artık sözleşmenin parçası.
@@ -45,8 +50,16 @@ def _declaration_index() -> dict[str, dict[str, Any]]:
 
 def tool_catalog(*, platform: str = "") -> list[dict[str, Any]]:
     """Sunucu beynine gönderilen araç kataloğu: her araç JSON Schema
-    parametreleri + yürütme meta verisiyle (yan etki, onay, platform)."""
+    parametreleri + yürütme meta verisiyle (yan etki, onay, platform).
+
+    Katalog statik TOOL_DECLARATIONS'tan üretilir → platform başına önbelleğe
+    alınır (her planlama çağrısında yeniden kurulmaz; salt-okunur tüketilir)."""
     platform = platform or ("darwin" if sys.platform == "darwin" else sys.platform)
+    return _tool_catalog_cached(platform)
+
+
+@lru_cache(maxsize=8)
+def _tool_catalog_cached(platform: str) -> list[dict[str, Any]]:
     catalog: list[dict[str, Any]] = []
     for decl in TOOL_DECLARATIONS:
         if not isinstance(decl, dict):
@@ -60,11 +73,19 @@ def tool_catalog(*, platform: str = "") -> list[dict[str, Any]]:
             continue
         raw_params = decl.get("parameters", {}) if isinstance(decl.get("parameters"), dict) else {}
         raw_props = raw_params.get("properties", {}) if isinstance(raw_params.get("properties"), dict) else {}
-        properties = {
-            key: {"type": _TYPE_MAP.get(str((value or {}).get("type", "STRING")).upper(), "string")}
-            for key, value in raw_props.items()
-            if isinstance(value, dict)
-        }
+        properties: dict[str, Any] = {}
+        for key, value in raw_props.items():
+            if not isinstance(value, dict):
+                continue
+            prop: dict[str, Any] = {
+                "type": _TYPE_MAP.get(str(value.get("type", "STRING")).upper(), "string")
+            }
+            # Skill-benzeri: her argümanın açıklaması planlayıcıya taşınır
+            # (doğru argüman seçimi için — eskiden düşürülüyordu).
+            arg_desc = str(value.get("description", "") or "").strip()
+            if arg_desc:
+                prop["description"] = arg_desc
+            properties[key] = prop
         for arg_name, allowed in ENUM_CONSTRAINTS.get(name, {}).items():
             if arg_name in properties:
                 properties[arg_name]["enum"] = sorted(allowed)
@@ -81,6 +102,13 @@ def tool_catalog(*, platform: str = "") -> list[dict[str, Any]]:
         required = raw_params.get("required")
         if isinstance(required, list) and required:
             entry["parameters"]["required"] = [str(item) for item in required]
+        # Skill-benzeri kullanım rehberi + örnekler (varsa) planlayıcıya gider.
+        usage = str(decl.get("usage", "") or "").strip()
+        if usage:
+            entry["usage"] = usage
+        examples = decl.get("examples")
+        if isinstance(examples, list) and examples:
+            entry["examples"] = [ex for ex in examples if isinstance(ex, dict)][:3]
         catalog.append(entry)
     return catalog
 
@@ -122,6 +150,85 @@ def response_schema() -> dict[str, Any]:
             },
         },
     }
+
+
+REPLAN_CONTRACT = "elyan.replan.v1"
+
+
+def build_replan_observation(context: dict[str, Any]) -> dict[str, Any]:
+    """Yürütme sırasında bir adım başarısız/doğrulanamaz olunca üretilen
+    yapılandırılmış gözlem (elyan.replan.v1) — düz metin değil, labeled JSON.
+    Deterministik kurtarma bunu tanılamaya yazar; deploy turunda server_brain
+    bu gözlemle akıllı replan üretecek (plan→adım→gözlem→uyarla döngüsü)."""
+    ctx = context if isinstance(context, dict) else {}
+    completed: list[dict[str, Any]] = []
+    for output in (ctx.get("completedOutputs") or [])[:8]:
+        preview = " ".join(str(output or "").split())[:200]
+        if preview:
+            completed.append({"outputPreview": preview})
+    failed_args = ctx.get("failedArgs")
+    failed_args = failed_args if isinstance(failed_args, dict) else {}
+    remaining: list[dict[str, Any]] = []
+    for step in (ctx.get("remainingSteps") or []):
+        if isinstance(step, dict) and str(step.get("capability", "") or "").strip():
+            remaining.append({
+                "capability": str(step.get("capability", "") or "").strip(),
+                "description": " ".join(str(step.get("description", "") or "").split())[:160],
+            })
+    return {
+        "contract": REPLAN_CONTRACT,
+        "reason": str(ctx.get("reason", "") or "tool_failure"),
+        "goal": " ".join(str(ctx.get("goal", "") or "").split())[:200],
+        "completedSteps": completed,
+        "failedStep": {
+            "capability": str(ctx.get("failedCapability", "") or ""),
+            "errorCode": str(ctx.get("errorCode", "") or ""),
+            "message": " ".join(str(ctx.get("message", "") or "").split())[:300],
+            "args": {k: v for k, v in failed_args.items() if not str(k).startswith("_")},
+        },
+        "remainingSteps": remaining,
+    }
+
+
+def build_cowork_context(
+    *,
+    platform: str = "",
+    capabilities: list[str] | None = None,
+    desktop_snapshot: dict[str, Any] | None = None,
+    recent_intents: list[dict[str, Any]] | None = None,
+    conversation_turns: list[dict[str, Any]] | None = None,
+    retrieval_matches: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """server_brain sohbet/cowork çağrısına metadata olarak eklenen hafif,
+    yapılandırılmış bağlam zarfı (elyan.cowork.v1). Sınırlı boyut — her turda
+    tam katalog değil, yalnız yetenek ADLARI + masaüstü durumu + son turlar +
+    rota geçmişi gider (sunucu yükü minimum)."""
+    plat = platform or ("darwin" if sys.platform == "darwin" else sys.platform)
+    context: dict[str, Any] = {"contract": COWORK_CONTRACT, "platform": plat}
+    if capabilities:
+        names = sorted({str(c).strip() for c in capabilities if str(c or "").strip()})
+        if names:
+            context["capabilities"] = names[:80]
+    if isinstance(desktop_snapshot, dict) and desktop_snapshot:
+        context["desktop"] = desktop_snapshot
+    if recent_intents:
+        context["recentIntents"] = [r for r in recent_intents if isinstance(r, dict)][:13]
+    if conversation_turns:
+        turns: list[dict[str, Any]] = []
+        for turn in conversation_turns[-12:]:
+            if not isinstance(turn, dict):
+                continue
+            role = str(turn.get("role", "") or "").strip().lower() or "user"
+            if role == "system":
+                continue  # prose system talimatı bağlam değil; dışarıda bırak
+            turn_text = " ".join(str(turn.get("text", "") or turn.get("content", "") or "").split())[:600]
+            if turn_text:
+                turns.append({"role": role, "text": turn_text})
+        if turns:
+            context["conversationTurns"] = turns
+    if retrieval_matches:
+        context["retrieval"] = [m for m in retrieval_matches if isinstance(m, dict)][:6]
+    return context
 
 
 def build_planning_request(
@@ -182,6 +289,13 @@ def build_planning_request(
             "unknownRequest": {"intent": "chat", "steps": []},
             "missingInformation": "set clarification.needed=true with one short question; never invent paths, apps, recipients or file contents",
             "sideEffects": "steps using sideEffect tools must set requiresConfirmation=true",
+            "sequencing": (
+                "decompose multi-action requests into one ordered step per action; "
+                "connectives such as 've', 'sonra', 'ardından', 'daha sonra', 'önce', "
+                "'and then', 'then' signal separate sequential steps; "
+                "list every step id in execution order; when a step needs a prior "
+                "step's result, put that prior step id in dependsOn"
+            ),
         },
         "responseSchema": response_schema(),
     }
@@ -408,12 +522,21 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
         metadata = capability_metadata(capability)
         if bool(metadata.get("sideEffect", False)) or str(metadata.get("permissionClass", "") or "") == "approval_required":
             requires_confirmation = True
-        steps.append({
+        raw_depends = raw.get("dependsOn")
+        depends_on = (
+            [str(item).strip() for item in raw_depends if str(item or "").strip()]
+            if isinstance(raw_depends, list)
+            else []
+        )
+        step_payload: dict[str, Any] = {
             "id": str(raw.get("id", "") or f"step_{index}"),
             "capability": capability,
             "args": args,
             "description": str(raw.get("description", "") or "").strip() or capability,
-        })
+        }
+        if depends_on:
+            step_payload["dependsOn"] = depends_on
+        steps.append(step_payload)
 
     plan = {
         "intent": intent,
@@ -430,10 +553,52 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
     return plan, errors
 
 
+def _order_steps_by_dependencies(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Adımları `dependsOn`'a göre kararlı topolojik sıraya dizer.
+
+    LLM adımları gevşek sırayla verse bile bir adım, bağımlı olduğu adımlardan
+    SONRA yürütülür. Bağımsız adımlar için orijinal (LLM) sırası korunur. Döngü
+    ya da çözülemeyen referansta orijinal sıraya düşer — asla plan bozulmaz.
+    Bilinmeyen id'ye yapılan dependsOn referansları kısıt saymaz (yok sayılır).
+    """
+    if len(steps) <= 1:
+        return list(steps)
+    id_to_index: dict[str, int] = {}
+    for idx, step in enumerate(steps):
+        sid = str(step.get("id", "") or "").strip()
+        if sid and sid not in id_to_index:
+            id_to_index[sid] = idx
+    deps: dict[int, set[int]] = {i: set() for i in range(len(steps))}
+    for i, step in enumerate(steps):
+        for dep in step.get("dependsOn", []) or []:
+            j = id_to_index.get(str(dep).strip())
+            if j is not None and j != i:
+                deps[i].add(j)
+    indeg = {i: len(deps[i]) for i in range(len(steps))}
+    resolved: set[int] = set()
+    ordered: list[int] = []
+    available = [i for i in range(len(steps)) if indeg[i] == 0]
+    while available:
+        available.sort()  # eşitlikte en küçük orijinal indeks → kararlı
+        node = available.pop(0)
+        ordered.append(node)
+        resolved.add(node)
+        for k in range(len(steps)):
+            if k in resolved or node not in deps[k]:
+                continue
+            indeg[k] -= 1
+            if indeg[k] == 0 and k not in available:
+                available.append(k)
+    if len(ordered) != len(steps):
+        return list(steps)  # döngü/çözülemedi → orijinal sıra
+    return [steps[i] for i in ordered]
+
+
 def plan_to_semantic_payload(plan: dict[str, Any], *, fallback_privacy: str = "public_text") -> dict[str, Any]:
     """Doğrulanmış planı bridge'in semantik rota sonucu şekline çevirir."""
     steps = plan.get("steps", [])
     steps = steps if isinstance(steps, list) else []
+    steps = _order_steps_by_dependencies([s for s in steps if isinstance(s, dict)])
     clarification = plan.get("clarification", {}) if isinstance(plan.get("clarification"), dict) else {}
     if clarification.get("needed") and clarification.get("question"):
         return {

@@ -104,6 +104,9 @@ _FOLDED_ALIASES = {_tr_fold(key): app for key, app in APP_ALIASES.items()}
 # "terminali", "notları", "safariyi" gibi hâl/iyelik ekleri alias eşleşmesini
 # kaçırıyordu; bilinen ekleri soyup tekrar denenir.
 _TR_CASE_SUFFIXES = ("lari", "leri", "yi", "yu", "ni", "nu", "i", "u", "a", "e")
+# Boşlukla ayrılmış hâl eki parçacıkları ("Chrome'u" yerine "Chrome u" yazımı).
+# Anahtarlar _tr_fold ile katlanmış halde tutulur (ı→i, ü→u ...).
+_TR_CASE_PARTICLES = {"u", "i", "a", "e", "yi", "yu", "ni", "nu", "ye", "ya"}
 
 
 def _resolve_app_name(app_name: str) -> str:
@@ -111,6 +114,19 @@ def _resolve_app_name(app_name: str) -> str:
     folded = _tr_fold(raw)
     if folded in _FOLDED_ALIASES:
         return _FOLDED_ALIASES[folded]
+    # Boşlukla ayrılmış Türkçe hâl eki: "Chrome u" → "Chrome", "Safari yi" →
+    # "Safari". Son jeton kısa bir ek parçacığıysa ("u", "yi", "i"...) at; iki
+    # jetonlu gerçek adları ("Visual Studio") bozmamak için parçacık kümesiyle
+    # sınırlı.
+    tokens = raw.split()
+    if len(tokens) >= 2 and _tr_fold(tokens[-1]) in _TR_CASE_PARTICLES:
+        trimmed = " ".join(tokens[:-1]).strip()
+        folded_trimmed = _tr_fold(trimmed)
+        if folded_trimmed in _FOLDED_ALIASES:
+            return _FOLDED_ALIASES[folded_trimmed]
+        if trimmed:
+            raw = trimmed
+            folded = folded_trimmed
     for suffix in _TR_CASE_SUFFIXES:
         if folded.endswith(suffix) and len(folded) - len(suffix) >= 3:
             candidate = folded[: -len(suffix)]

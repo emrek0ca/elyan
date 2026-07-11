@@ -105,6 +105,31 @@ def test_work_order_verification_accepts_tool_and_artifact_evidence(tmp_path: Pa
     assert result["status"] == "passed"
 
 
+def test_work_order_verification_accepts_verified_image_fetch_as_file_update(tmp_path: Path) -> None:
+    work_order = _work_order(require_artifact=True)
+    work_order["expectedOutputs"].append(
+        {"kind": "file_update", "format": "state_readback", "required": True}
+    )
+    validation = validate_payload({"desktopWorkOrder": work_order})
+    assert validation.work_order is not None
+    artifact_path = tmp_path / "kedi.jpg"
+    artifact_path.write_bytes(b"verified image")
+
+    result = verify_result(
+        validation.work_order,
+        {
+            "chatOk": True,
+            "assistantMessage": "Görsel kaydedildi.",
+            "toolEvents": [{"tool": "image_fetch", "ok": True}],
+            "structuredResult": {"kind": "image_fetch", "savedCount": 1},
+            "artifacts": [{"path": str(artifact_path), "contentType": "image/jpeg"}],
+        },
+    )
+
+    assert result["passed"] is True
+    assert "output:file_update" not in result["missingEvidence"]
+
+
 def test_work_order_verification_rejects_failed_tool_and_unverified_artifact(tmp_path: Path) -> None:
     validation = validate_payload({"desktopWorkOrder": _work_order(require_artifact=True)})
     assert validation.work_order is not None
@@ -121,7 +146,7 @@ def test_work_order_verification_rejects_failed_tool_and_unverified_artifact(tmp
     )
 
     assert result["passed"] is False
-    assert result["evidenceCounts"] == {"toolResults": 0, "artifacts": 0, "structuredResults": 1}
+    assert result["evidenceCounts"] == {"toolResults": 0, "artifacts": 0, "structuredResults": 1, "stateReadbacks": 0}
     assert "output:artifact" in result["missingEvidence"]
     assert "rule:tool_result" in result["missingEvidence"]
 
@@ -143,6 +168,30 @@ def test_work_order_verification_requires_explicit_runtime_success() -> None:
     assert result["passed"] is False
     assert "output:chat_result" in result["missingEvidence"]
     assert "rule:runtime_completed" in result["missingEvidence"]
+
+
+def test_work_order_verification_allows_completed_chat_only_runtime_without_tool_event() -> None:
+    validation = validate_payload({"desktopWorkOrder": _work_order()})
+    assert validation.work_order is not None
+
+    result = verify_result(
+        validation.work_order,
+        {
+            "chatOk": True,
+            "assistantMessage": "Görev tamamlandı.",
+            "toolEvents": [],
+            "executionTrace": {"status": "completed"},
+        },
+    )
+
+    assert result["passed"] is True
+    assert result["evidenceFallbacks"] == [
+        {
+            "kind": "tool_result",
+            "source": "runtime_status",
+            "reason": "chat_only_runtime_completion",
+        }
+    ]
 
 
 def test_runtime_public_payload_hides_private_paths_and_content() -> None:
@@ -173,3 +222,50 @@ def test_runtime_public_payload_hides_private_paths_and_content() -> None:
     assert "sourcePath" not in artifact
     assert "textContent" not in artifact
     assert structured == {"kind": "document_write", "created": True, "summary": "Belge üretildi."}
+
+
+def test_state_readback_counts_as_evidence_for_verified_side_effect() -> None:
+    """Kapatma teyitli (closed_confirmed) bir yan etki state_readback kanıtı
+    sayılır ve görev geçer."""
+    work_order = _work_order()
+    result = verify_result(
+        work_order,
+        {
+            "chatOk": True,
+            "assistantMessage": "Chrome kapatıldı.",
+            "toolEvents": [
+                {
+                    "tool": "close_app",
+                    "ok": True,
+                    "verified": True,
+                    "stateReadback": {"observed": True, "status": "closed_confirmed"},
+                }
+            ],
+        },
+    )
+    assert result["passed"] is True
+    assert result["evidenceCounts"]["stateReadbacks"] == 1
+
+
+def test_unverified_side_effect_fails_completion() -> None:
+    """Adım 'yaptım' (ok) deyip etkisini kanıtlayamazsa (observed=False) görev
+    tamamlandı sayılmaz — 'prove it' dürüstlük kapısı."""
+    work_order = _work_order()
+    result = verify_result(
+        work_order,
+        {
+            "chatOk": True,
+            "assistantMessage": "Chrome kapatıldı.",
+            "toolEvents": [
+                {
+                    "tool": "close_app",
+                    "ok": True,
+                    "verified": False,
+                    "stateReadback": {"observed": False, "status": "close_unconfirmed"},
+                }
+            ],
+        },
+    )
+    assert result["passed"] is False
+    assert result["unverifiedSideEffects"] == ["close_app"]
+    assert "sideeffect:close_app" in result["missingEvidence"]

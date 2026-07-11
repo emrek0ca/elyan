@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import datetime as dt
 import difflib
@@ -171,6 +172,26 @@ REMOTE_APPROVAL_CAPABILITIES = {
     "desktop_operator.execute_action",
     "desktop_operator.run",
 }
+# Hız için regex yolunda kalan basit doğrudan komutlar: LLM planlama gecikmesi
+# gereksiz olduğundan uygulama aç/kapat, medya ve sistem bilgisi burada tutulur.
+REMOTE_FAST_DIRECT_CAPABILITIES = {"open_app", "close_app", "play_media", "sys_info"}
+# Güçlü sıralama işaretleri: bunlar açıkça "önce şunu, SONRA bunu" gibi sıralı
+# çok-adımlı görev bildirir. Zayıf " ve " kasıtlı olarak DIŞARIDA — tek başına
+# "müzik aç ve keyfini çıkar" gibi durumları yanlışça çok-adım saymamak için.
+# Bu işaretler varsa basit doğrudan komutlar bile kataloglu LLM planlayıcıya
+# gider (regex tek eylemi yakalayıp kalanı düşüremez).
+_SEQUENTIAL_INTENT_MARKERS = (
+    " sonra ",
+    " ardından ",
+    " ardindan ",
+    " daha sonra ",
+    " akabinde ",
+    " peşinden ",
+    " pesinden ",
+    " and then ",
+    " then ",
+    "; ",
+)
 QUANTUM_EXECUTION_CAPABILITIES = {"quantum_run_experiment"}
 EMAIL_ADDRESS_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 
@@ -213,6 +234,54 @@ def _extract_email_addresses_from_text(text: str) -> list[str]:
         if candidate and candidate not in ordered:
             ordered.append(candidate)
     return ordered
+
+
+_BROWSER_APP_TOKENS = {
+    "chrome",
+    "google chrome",
+    "safari",
+    "firefox",
+    "edge",
+    "microsoft edge",
+    "opera",
+    "brave",
+    "arc",
+    "browser",
+    "tarayıcı",
+    "tarayici",
+}
+
+
+def _sanitize_contradictory_plan_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """"X'i kapat" içeren bir planda X'i geri açacak adımları at.
+
+    Gerçek vaka: "Chrome'u kapat" iş emrine eklenen genel browser_control
+    "search" adımı, kapatılan Chrome'u geri açıp görevi fiilen bozuyordu.
+    Kapatma niyeti ile çelişen sonraki aç/başlat adımları yürütülmez.
+    """
+    close_targets: list[str] = []
+    closes_browser = False
+    filtered: list[dict[str, Any]] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        capability = _canonical_capability_name(step.get("capability"))
+        args = step.get("args", {})
+        args = args if isinstance(args, dict) else {}
+        target = " ".join(str(args.get("app_name", "") or "").strip().lower().split())
+        if close_targets:
+            if capability == "open_app" and target and any(
+                target in closed or closed in target for closed in close_targets
+            ):
+                continue
+            if capability == "browser_control" and closes_browser:
+                continue
+        if capability == "close_app":
+            close_targets.append(target or "*")
+            if not target or any(token in target for token in _BROWSER_APP_TOKENS):
+                closes_browser = True
+        filtered.append(step)
+    return filtered
 
 
 def _research_topic_from_text(text: str) -> str:
@@ -1468,7 +1537,11 @@ def _semantic_candidate_providers(
         # public_text hem local_private görevlerde plan üretebilir. Hesap girişi
         # yeterli, API anahtarı istemez. Kullanıcı bunu açıkça yetkilendirdi.
         account = _map_from(state.get("account"))
-        if backend is not None and str(account.get("accessToken", "") or "").strip():
+        runtime_map = _map_from(state.get("runtime"))
+        if backend is not None and (
+            str(account.get("accessToken", "") or "").strip()
+            or str(runtime_map.get("runtimeToken", "") or "").strip()
+        ):
             ordered.append("server_brain")
         # Üçüncü-taraf bulut sağlayıcılar (openai/gemini/anthropic...) YALNIZ
         # public_text — private görev metnini dışarı sızdırmamak için.
@@ -1702,11 +1775,46 @@ def _with_selected_paths(args: dict[str, Any], source_args: dict[str, Any]) -> d
 
 
 def _safe_error_code(raw: Any) -> str:
+    if isinstance(raw, dict):
+        for key in ("code", "error", "type"):
+            nested = raw.get(key)
+            if nested is not None and nested is not raw:
+                code = _safe_error_code(nested)
+                if code:
+                    return code
     value = str(raw or "chat_failed").strip()
     if not value:
         return "CHAT_FAILED"
     normalised = re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_").upper()
     return normalised[:80] or "CHAT_FAILED"
+
+
+def _normalize_error_message(value: Any) -> str:
+    """Return a safe human-readable message from nested backend errors."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        for key in ("message", "error", "detail", "description"):
+            message = _normalize_error_message(value.get(key))
+            if message:
+                return message
+        return ""
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            message = _normalize_error_message(item)
+            if message:
+                return message
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text[:1] in {"{", "["}:
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return text
+        return _normalize_error_message(parsed) or text
+    return text
 
 
 _TRANSPORT_SECRET_KEYS = {
@@ -2561,7 +2669,47 @@ def _brain_profile_local_provider_hint(profile: dict[str, Any] | None) -> str:
     return ""
 
 
+# server_brain devre-kesici: ardışık chat hatası eşiği aşınca kısa bir cooldown
+# boyunca brain'i atla (sağlıksız sunucuyu döverek yük bindirmeyi ve kullanıcıyı
+# bekletmeyi önle → deterministik/çevrimdışı yola düşülür). Başarıda sıfırlanır.
+_SERVER_BRAIN_FAILURE_THRESHOLD = 3
+_SERVER_BRAIN_COOLDOWN_SECONDS = 60.0
+_server_brain_breaker_lock = threading.Lock()
+_server_brain_breaker: dict[str, float] = {"failures": 0.0, "cooldownUntil": 0.0}
+
+
+def _server_brain_circuit_open() -> bool:
+    """Devre-kesici açık mı (cooldown sürüyor → brain'i atla)?"""
+    with _server_brain_breaker_lock:
+        return time.monotonic() < _server_brain_breaker["cooldownUntil"]
+
+
+def _record_server_brain_outcome(ok: bool) -> None:
+    """Her server_brain chat sonucu buraya bildirilir. Başarı sayacı sıfırlar;
+    ardışık başarısızlık eşiği aşınca cooldown başlatır."""
+    with _server_brain_breaker_lock:
+        if ok:
+            _server_brain_breaker["failures"] = 0.0
+            _server_brain_breaker["cooldownUntil"] = 0.0
+            return
+        _server_brain_breaker["failures"] += 1.0
+        if _server_brain_breaker["failures"] >= _SERVER_BRAIN_FAILURE_THRESHOLD:
+            _server_brain_breaker["cooldownUntil"] = time.monotonic() + _SERVER_BRAIN_COOLDOWN_SECONDS
+            _server_brain_breaker["failures"] = 0.0
+
+
+def _reset_server_brain_breaker() -> None:
+    """Test/tanılama için devre-kesiciyi sıfırlar."""
+    with _server_brain_breaker_lock:
+        _server_brain_breaker["failures"] = 0.0
+        _server_brain_breaker["cooldownUntil"] = 0.0
+
+
 def _server_brain_ready(state: dict[str, Any], *, backend: BackendClient | None = None) -> bool:
+    # Devre-kesici açıksa (yakın zamanda ardışık hata) brain hazır sayılmaz —
+    # planlama delegasyonu ve chat aday seçimi otomatik olarak atlar.
+    if _server_brain_circuit_open():
+        return False
     control_plane = _map_from(state.get("controlPlane"))
     health = _map_from(control_plane.get("health"))
     agent = _map_from(health.get("agent"))
@@ -2878,17 +3026,47 @@ def _invoke_provider_chat(
         )
     if provider == "server_brain":
         if backend is not None and hasattr(backend, "chat_messages"):
-            if hasattr(backend, "auth_me"):
-                auth_me = backend.auth_me()
-                if not auth_me.ok:
-                    error = _safe_error_code(auth_me.error or "auth_required")
-                    return {
-                        "ok": False,
-                        "error": error,
-                        "message": _safe_chat_error_message(error),
-                        "provider": "server_brain",
-                        "toolEvents": [],
-                    }
+            # Kimlik: kullanıcı token'ı VARSA auth_me ile doğrula; yoksa
+            # runtime token yeter (anonim QR eşleşmesi — backend chat/brain
+            # rotaları runtime token kabul eder, sub = cihaz sahibi).
+            state_snapshot = state_store.snapshot()
+            account_map = _map_from(state_snapshot.get("account"))
+            runtime_map = _map_from(state_snapshot.get("runtime"))
+            has_user_token = bool(_first_nonempty(account_map.get("accessToken"), account_map.get("refreshToken")))
+            has_runtime_token = bool(_first_nonempty(runtime_map.get("runtimeToken")))
+            if has_user_token:
+                if hasattr(backend, "auth_me"):
+                    auth_me = backend.auth_me()
+                    if not auth_me.ok:
+                        error = _safe_error_code(auth_me.error or "auth_required")
+                        return {
+                            "ok": False,
+                            "error": error,
+                            "message": _safe_chat_error_message(error),
+                            "provider": "server_brain",
+                            "toolEvents": [],
+                        }
+            elif not has_runtime_token:
+                return {
+                    "ok": False,
+                    "error": "auth_required",
+                    "message": _safe_chat_error_message("auth_required"),
+                    "provider": "server_brain",
+                    "toolEvents": [],
+                }
+            # Yapılandırılmış cowork bağlamı (elyan.cowork.v1): brain'e düz metin
+            # yerine labeled JSON metadata — yetenek adları, masaüstü canlı
+            # durumu, son turlar, rota geçmişi. Brain sunucuda yeniden türetmeden
+            # anlar/planlar. Hafif tutulur (tam katalog değil).
+            try:
+                cowork_context = structured_planner.build_cowork_context(
+                    capabilities=sorted(capability_names()),
+                    desktop_snapshot=_compact_desktop_snapshot(),
+                    recent_intents=structured_planner.intelligence_context(state),
+                    conversation_turns=conversation,
+                )
+            except Exception:
+                cowork_context = {"contract": structured_planner.COWORK_CONTRACT}
             payload: dict[str, Any] = {
                 "title": _server_brain_chat_title(text),
                 "content": text,
@@ -2901,6 +3079,7 @@ def _invoke_provider_chat(
                         "derivedContextOnly": True,
                         "scope": "user_chat_session",
                     },
+                    "coworkContext": cowork_context,
                 },
             }
             if _is_uuid_value(conversation_id):
@@ -2931,6 +3110,7 @@ def _invoke_provider_chat(
                         "delivery": data.get("delivery"),
                         "brain": brain,
                     }
+                _record_server_brain_outcome(True)  # devre-kesici: sağlıklı yanıt
                 return {
                     "ok": True,
                     "content": _server_brain_response_text(assistant_message),
@@ -2948,6 +3128,7 @@ def _invoke_provider_chat(
                     "reused": bool(data.get("reused", False)),
                 }
             error = _safe_error_code(result.error or "server_brain_unavailable")
+            _record_server_brain_outcome(False)  # devre-kesici: sunucu/ağ hatası
             return {
                 "ok": False,
                 "error": error,
@@ -4308,6 +4489,10 @@ def _chat_provider_candidates(
             str(account.get(key, "") or "").strip()
             for key in ("accessToken", "userAccessToken", "refreshToken")
         )
+    if not auth_ready:
+        # Anonim QR eşleşmesi: runtime token da server_brain'e erişim sağlar
+        # (backend chat/brain rotaları runtime token kabul eder).
+        auth_ready = bool(str(_map_from(state.get("runtime")).get("runtimeToken", "") or "").strip())
 
     if policy == "provider_lock":
         if active == "local":
@@ -4386,6 +4571,7 @@ def _route_chat(
     conversation_id: str = "",
     selected_artifacts: list[dict[str, Any]] | None = None,
     backend: BackendClient | None = None,
+    plan_mode: bool = False,
 ) -> dict[str, Any]:
     routed = route_text_to_tool(text, selected_artifacts=selected_artifacts)
     contextual = _contextual_route(conversation_id, conversation, text)
@@ -4429,7 +4615,7 @@ def _route_chat(
         )
         return _clarification_response(app_clarification, intent="clarification", privacy_class="local_private")
     if routed is not None:
-        if routed.requires_confirmation or routed.is_multi_step:
+        if plan_mode or routed.requires_confirmation or routed.is_multi_step:
             try:
                 STATE.increment_clarification_count()
             except Exception:
@@ -4691,7 +4877,9 @@ def _route_chat(
         steps = semantic.get("planPreview", {}).get("steps", []) if isinstance(semantic.get("planPreview"), dict) else []
         if not isinstance(steps, list) or not steps:
             steps = [{"capability": capability, "args": args, "description": capability}]
-        requires_confirmation = bool(semantic.get("requiresConfirmation", False)) or bool(
+        # Plan modu: kullanıcı composer'dan plan istedi → her görev (tek adım
+        # bile) plan önizlemesi + onay ile ilerler.
+        requires_confirmation = plan_mode or bool(semantic.get("requiresConfirmation", False)) or bool(
             semantic.get("isMultiStep", False)
         ) or capability in SIDE_EFFECT_CAPABILITIES or _semantic_requires_plan_from_history(capability)
         if requires_confirmation:
@@ -4935,6 +5123,10 @@ class RuntimeContext:
 class RuntimeBridge:
     def __init__(self):
         STATE.recover_operator_state_on_boot()
+        # Background workers must never write through a state-store location
+        # that changed after this bridge was created (tests, portable installs,
+        # or a runtime profile switch). This also fences stale bridge instances.
+        self._state_store_path = str(state_store.STATE_PATH)
         self.root = BASE_DIR
         self.backend = BackendClient(
             os.environ.get("APP_BASE_URL"),
@@ -4984,6 +5176,24 @@ class RuntimeBridge:
             "source": "",
             "scope": "session",
         }
+        self._approved_task_context: contextvars.ContextVar[str] = contextvars.ContextVar(
+            f"elyan_approved_task_{id(self)}",
+            default="",
+        )
+        # Canlı adım-adım ilerleme: yürütülen mobil görevi (task_id/run_id)
+        # taşıyan bağlam. Executor her adım geçişinde progress emitter'ı çağırır;
+        # emitter bu bağlamla ilerlemeyi doğru göreve yönlendirir (daemon dahil).
+        self._active_remote_task_context: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+            f"elyan_active_remote_task_{id(self)}",
+            default=None,
+        )
+        self._remote_progress_lock = threading.Lock()
+        self._remote_progress_last_emit: dict[str, float] = {}
+        self._remote_progress_last_signature: dict[str, str] = {}
+        # Başsız daemon için de canlı ilerleme: emitter'ı burada bağla. IPC
+        # main() bunu stdout+backend bileşiğiyle değiştirir (yerel Swift sohbeti
+        # için). Her iki modda mobil görevler backend'e canlı adım akıtır.
+        self.executor_core.set_progress_emitter(self._emit_remote_task_progress)
         self._start_runtime_register_retry_if_needed()
         self._start_pairing_claim_poll_if_needed()
         native_file_indexer.handle_state_change()
@@ -4997,6 +5207,9 @@ class RuntimeBridge:
         suffix = f" {payload}" if payload else ""
         print(f"runtime {event}{suffix}", file=sys.stderr)
 
+    def _owns_current_state_store(self) -> bool:
+        return self._state_store_path == str(state_store.STATE_PATH)
+
     def _log_backend_result(self, action: str, result: BackendResult) -> None:
         self._runtime_diag(
             "backend",
@@ -5007,7 +5220,12 @@ class RuntimeBridge:
         )
 
     def _shared_brain_retrieval_eligible(self) -> bool:
-        return bool(self._user_auth_ready() and hasattr(self.backend, "brain_retrieval_search"))
+        # Kullanıcı token'ı VEYA runtime token'ı (anonim QR eşleşmesi) yeter —
+        # backend brain rotaları her ikisini de kabul eder.
+        return bool(
+            (self._user_auth_ready() or self._runtime_auth_ready())
+            and hasattr(self.backend, "brain_retrieval_search")
+        )
 
     def _record_executor_retrieval_usage(
         self,
@@ -5244,12 +5462,20 @@ class RuntimeBridge:
         }
 
     def _runtime_register_retry_eligible(self, snapshot: dict[str, Any]) -> bool:
-        if not str(snapshot.get("accessToken", "") or "").strip():
-            return False
         if bool(snapshot.get("ready", False)):
             return False
+        # Runtime token zaten alınmışsa kayıt bitmiştir — bağlantıyı relay/WS
+        # katmanı kurar; token 401'de temizlenince bu döngü yeniden devreye girer.
+        if self._runtime_auth_ready():
+            return False
+        # Cihaz kimliği (deviceId+deviceSecret) kayıt için tek başına yeter —
+        # /v1/runtime/register user token istemez. Anonim QR eşleştirmesinde
+        # masaüstünde hiç accessToken olmaz; kayıt yine de yapılmalı.
         if str(snapshot.get("deviceId", "") or "").strip() and str(snapshot.get("deviceSecret", "") or "").strip():
             return self._runtime_register_identity_error() is None
+        # Kimlik yoksa claim-sonrası self-pairing yolu user token'ı gerektirir.
+        if not str(snapshot.get("accessToken", "") or "").strip():
+            return False
         if str(snapshot.get("lastSessionStatus", "") or "").strip() != "claimed":
             return False
         if _pairing_expired(str(snapshot.get("expiresAt", "") or "").strip()):
@@ -5262,6 +5488,8 @@ class RuntimeBridge:
         *,
         generation: int,
     ) -> bool:
+        if not self._owns_current_state_store():
+            return False
         with self._runtime_register_retry_lock:
             if generation != self._runtime_register_retry_generation:
                 return False
@@ -5316,6 +5544,8 @@ class RuntimeBridge:
         *,
         generation: int,
     ) -> bool:
+        if not self._owns_current_state_store():
+            return False
         with self._pairing_claim_poll_lock:
             if generation != self._pairing_claim_poll_generation:
                 return False
@@ -5482,10 +5712,13 @@ class RuntimeBridge:
         if not connected:
             heartbeat = self._send_backend_runtime_heartbeat("online")
             if heartbeat.ok:
+                # The WebSocket can open while the HTTP heartbeat is in
+                # flight.  Never let the slower response overwrite that
+                # process-local connection truth with a stale False value.
                 self._runtime_state_patch(
                     lifecycle_state="ready",
                     ready=True,
-                    websocket_connected=False,
+                    websocket_connected=self._runtime_ws_connected,
                     error_code="",
                     x_request_id=heartbeat.x_request_id or heartbeat.request_id,
                 )
@@ -5602,7 +5835,16 @@ class RuntimeBridge:
                 runtime_state_before = {k: v for k, v in snap.items()}
         except Exception:
             pass
-        result = self.backend.heartbeat(self._runtime_heartbeat_payload(status, current_task_id))
+        heartbeat = getattr(self.backend, "heartbeat", None)
+        if not callable(heartbeat):
+            return BackendResult(
+                ok=False,
+                request_id=_request_id(),
+                status_code=None,
+                data=None,
+                error={"code": "RUNTIME_HEARTBEAT_UNAVAILABLE", "message": "Runtime heartbeat unavailable."},
+            )
+        result = heartbeat(self._runtime_heartbeat_payload(status, current_task_id))
         if not result.ok and result.status_code == 401 and self._runtime_ws_connected:
             # WS is still open — restore the token/state wiped by _clear_runtime_session
             # so the relay loop keeps running and the WS heartbeat can re-sync the backend DB.
@@ -6577,7 +6819,13 @@ class RuntimeBridge:
         return [f"Authorization: Bearer {token}"]
 
     def _runtime_ws_enabled(self) -> bool:
-        return _websocket_runtime_available() and bool(self.backend.runtime_websocket_url())
+        websocket_url = getattr(self.backend, "runtime_websocket_url", None)
+        if not _websocket_runtime_available() or not callable(websocket_url):
+            return False
+        try:
+            return bool(websocket_url())
+        except Exception:
+            return False
 
     def _runtime_ws_should_run(self) -> bool:
         return not self._runtime_ws_stop.is_set() and self._runtime_auth_ready() and self._runtime_ws_enabled()
@@ -6602,6 +6850,40 @@ class RuntimeBridge:
             ready=False,
             websocket_connected=False,
         )
+
+    def force_runtime_reconnect(self) -> dict[str, Any]:
+        """Uyku/askı sonrası hızlı toparlanma: mevcut (muhtemelen ölü) soketi
+        kapatıp yeniden bağlanmayı tetikler. Kalıcı stop bayrağını KURMAZ —
+        böylece yeniden-bağlanma döngüsü devam eder.
+
+        Uyandıktan sonra state hâlâ "ready" görünebilir ama TCP soketi çoktan
+        kopmuştur; bu yüzden lifecycle'a bakmadan koşulsuz zorlarız.
+        """
+        if not self._runtime_auth_ready():
+            return {"ok": False, "reason": "auth_not_ready"}
+        with self._runtime_ws_lock:
+            app = self._runtime_ws_app
+            thread = self._runtime_ws_thread
+        thread_alive = bool(thread and thread.is_alive())
+        # Soketi kapat: bloke `run_forever` çözülür ve döngü yeniden kaydolup
+        # bağlanır (backoff ws_loop içinde açılışta sıfırlanır).
+        if app is not None:
+            try:
+                app.close()
+            except Exception:
+                pass
+        self._runtime_ws_connected = False
+        self._runtime_state_patch(
+            lifecycle_state="reconnecting",
+            ready=False,
+            websocket_connected=False,
+            error_code="",
+        )
+        # Thread tamamen çıkmışsa (5 dk boşluğunun asıl sebebi) yeniden başlat.
+        restarted = False
+        if not thread_alive:
+            restarted = self._start_runtime_websocket_if_needed()
+        return {"ok": True, "threadWasAlive": thread_alive, "restarted": restarted}
 
     def _start_runtime_websocket_if_needed(self) -> bool:
         if not self._runtime_ws_enabled() or not self._runtime_auth_ready():
@@ -6790,9 +7072,24 @@ class RuntimeBridge:
 
     def _handle_runtime_ws_message(self, raw_message: Any) -> None:
         try:
-            payload = json.loads(str(raw_message))
-        except Exception:
-            self._runtime_diag("ws_message_invalid")
+            if isinstance(raw_message, (bytes, bytearray, memoryview)):
+                raw_text = bytes(raw_message).decode("utf-8")
+            else:
+                raw_text = str(raw_message)
+            payload = json.loads(raw_text)
+        except Exception as exc:
+            raw_text = (
+                bytes(raw_message).decode("utf-8", errors="replace")
+                if isinstance(raw_message, (bytes, bytearray, memoryview))
+                else str(raw_message)
+            )
+            digest = hashlib.sha256(raw_text.encode("utf-8", errors="replace")).hexdigest()[:12]
+            self._runtime_diag(
+                "ws_message_invalid",
+                error=type(exc).__name__,
+                length=len(raw_text),
+                digest=digest,
+            )
             return
         if not isinstance(payload, dict):
             return
@@ -6844,10 +7141,13 @@ class RuntimeBridge:
         if message_type == "task.approval":
             task_id = str(payload.get("taskId", "") or "").strip()
             approved = bool(payload.get("approved", False))
+            # Netleştirme yanıtı bu kanaldan 'notes' olarak gelir (backend
+            # resolveTaskApproval → task.approval mesajında iletir).
+            answer = str(payload.get("notes", "") or payload.get("answer", "") or "").strip()
             if task_id:
                 threading.Thread(
                     target=self._resume_remote_task_after_approval,
-                    args=(task_id, approved),
+                    args=(task_id, approved, answer),
                     name="elyan-runtime-task-approval",
                     daemon=True,
                 ).start()
@@ -6865,6 +7165,8 @@ class RuntimeBridge:
 
     def _task_relay_loop(self) -> None:
         while not self._relay_stop.is_set():
+            if not self._owns_current_state_store():
+                return
             try:
                 if self._runtime_auth_ready():
                     if not self._runtime_ws_connected:
@@ -6883,6 +7185,8 @@ class RuntimeBridge:
             self._relay_stop.wait(interval)
 
     def _full_access_active(self) -> bool:
+        if str(self._approved_task_context.get() or "").strip():
+            return True
         session = self._full_access_session if isinstance(self._full_access_session, dict) else {}
         if not bool(session.get("enabled", False)):
             return False
@@ -6903,7 +7207,12 @@ class RuntimeBridge:
 
     def _access_status(self) -> dict[str, Any]:
         session = dict(self._full_access_session) if isinstance(self._full_access_session, dict) else {}
+        approved_task_id = str(self._approved_task_context.get() or "").strip()
         session["enabled"] = self._full_access_active()
+        if approved_task_id:
+            session["source"] = "approved_remote_task"
+            session["scope"] = "task"
+            session["taskId"] = approved_task_id
         persistent = STATE.snapshot().get("permissions", {})
         persistent = persistent if isinstance(persistent, dict) else {}
         effective = {str(key): bool(value) for key, value in persistent.items()}
@@ -6918,10 +7227,23 @@ class RuntimeBridge:
                 "source": str(session.get("source", "") or ""),
                 "scope": str(session.get("scope", "session") or "session"),
                 "revokedReason": str(session.get("revokedReason", "") or ""),
+                **({"taskId": approved_task_id} if approved_task_id else {}),
             },
             "effectivePermissions": effective,
             "blockedCriticalActions": list(FULL_ACCESS_CRITICAL_ACTIONS),
         }
+
+    def _run_with_approved_task_access(
+        self,
+        task_id: str,
+        operation: Callable[[], dict[str, Any]],
+    ) -> dict[str, Any]:
+        normalized_task_id = str(task_id or "").strip()
+        token = self._approved_task_context.set(normalized_task_id)
+        try:
+            return operation()
+        finally:
+            self._approved_task_context.reset(token)
 
     def _state_with_access(self) -> dict[str, Any]:
         state = copy.deepcopy(STATE.snapshot())
@@ -6970,6 +7292,13 @@ class RuntimeBridge:
 
     def bootstrap(self) -> dict[str, Any]:
         backend_snapshot = self._runtime_backend_snapshot()
+        # A freshly started process has no live transport even when persisted
+        # STATE (or the backend's short-lived connection lease) still says the
+        # previous process was ready.  Always re-establish this process's
+        # WebSocket/polling relay from the runtime token.  The helpers are
+        # idempotent, so repeated bootstrap calls do not create extra threads.
+        if self._runtime_auth_ready():
+            self._connect_runtime_transport()
         if self._user_auth_ready():
             self._sync_conversation_truth_from_backend()
             # Önceki oturumdan token'lı ama hiç eşleştirilmemiş kurulumlar
@@ -7386,10 +7715,37 @@ class RuntimeBridge:
     def _pending_plan_exists(self, plan_id: str) -> bool:
         return STATE.get_pending_plan(plan_id) is not None
 
+    # Gözlem/bilgi toplayan (gather/observer) yetenekler: bunlardan biri
+    # patlarsa ve arkadan yürütülecek adım varsa, elde olan bağlamla devam
+    # etmek (Codex "o kaynak patladı, elimdekiyle devam et") tam iptalden iyidir.
+    _REPLAN_OBSERVER_CAPABILITIES = {
+        "web_research",
+        "retrieve_context",
+        "document_read",
+        "ocr_read",
+        "image_read",
+        "data_analyze",
+        "chart_generate",
+    }
+
     def _recoverable_replan(self, context: dict[str, Any]) -> list[dict[str, Any]]:
-        """ReAct replan: bir adım başarısız olduğunda deterministik, güvenli
-        alternatiflere revize eder. Bilinmeyen/kurtarılamaz hatalarda boş liste
-        döner (executor normal iptale düşer). Ağa/dış servise bağlı değil."""
+        """ReAct replan: bir adım başarısız/doğrulanamaz olduğunda yapılandırılmış
+        gözlemi (elyan.replan.v1) değerlendirip deterministik, güvenli alternatife
+        revize eder. Bilinmeyen/kurtarılamaz hatalarda boş liste döner (executor
+        normal iptale düşer). Ağa/dış servise bağlı değil.
+
+        Not: server_brain ile akıllı replan (gözlemle danışıp yeni plan) deploy
+        turuna bırakıldı; gözlem zarfı burada üretilip tanılamaya yazılıyor ki o
+        adımda hazır olsun."""
+        observation = structured_planner.build_replan_observation(context)
+        self._runtime_diag(
+            "replan_observation",
+            reason=str(observation.get("reason", "") or ""),
+            failed=str(observation.get("failedStep", {}).get("capability", "") or ""),
+            errorCode=str(observation.get("failedStep", {}).get("errorCode", "") or ""),
+            remaining=len(observation.get("remainingSteps", []) or []),
+        )
+
         capability = str(context.get("failedCapability", "") or "")
         error_code = str(context.get("errorCode", "") or "").upper()
         failed_args = context.get("failedArgs")
@@ -7401,7 +7757,7 @@ class RuntimeBridge:
             "NETWORK_FAILED", "WEB_RESEARCH_FAILED", "TIMEOUT", "TOOL_TIMEOUT",
             "CONNECTION_FAILED", "HTTP_ERROR",
         }
-        # Web araştırma dış servise erişemiyorsa yerel bağlam getirmeye düş —
+        # 1) Web araştırma dış servise erişemiyorsa yerel bağlam getirmeye düş —
         # kullanıcı yine de mevcut bilgiden yararlanır. Kalan yazıcı adımları
         # (rapor/sunum) orijinal args'larıyla (outputPath dahil) korunur; kaynak
         # bağlamı executor zaten _previousOutput ile devralır.
@@ -7416,6 +7772,18 @@ class RuntimeBridge:
                     },
                     *remaining_steps,
                 ]
+
+        # 2) Başarısız bir GÖZLEMCİ adımının (bilgi toplama) arkasında yürütülecek
+        # adım varsa: gözlemciyi atlayıp kalanla devam et. Yazıcı/act adımları
+        # eldeki kısmi bağlamla (executor _previousOutput) çalışır — tam iptal
+        # yerine kısmi başarı. (web_research zaten yukarıda yerel yedeğe düşer.)
+        if (
+            capability in self._REPLAN_OBSERVER_CAPABILITIES
+            and capability != "web_research"
+            and remaining_steps
+        ):
+            return remaining_steps
+
         return []
 
     def _execute_step_with_telemetry(
@@ -7768,6 +8136,8 @@ class RuntimeBridge:
         text: str,
         title: str | None = None,
         selected_artifacts: list[dict[str, Any]] | None = None,
+        *,
+        plan_mode: bool = False,
     ) -> dict[str, Any]:
         state = STATE.snapshot()
         normalized_selected = STATE.normalize_selected_artifacts(
@@ -7861,6 +8231,7 @@ class RuntimeBridge:
                 conversation_id=conversation_id,
                 selected_artifacts=normalized_selected,
                 backend=self.backend,
+                plan_mode=plan_mode,
             ),
         )
         self._record_executor_retrieval_usage(result, shared_metadata=shared_metadata)
@@ -10052,6 +10423,104 @@ class RuntimeBridge:
         self._restart_runtime_registration_after_unauthorized(result)
         return {"ok": result.ok, "result": result.to_dict()}
 
+    def _begin_active_remote_task(self, task_id: str, task_run_id: str):
+        """Yürütme süresince aktif mobil görevi bağlama koy — canlı ilerleme
+        emitter'ı bununla doğru göreve yönlenir. contextvars.Token döndürür."""
+        return self._active_remote_task_context.set((str(task_id or ""), str(task_run_id or "")))
+
+    def _end_active_remote_task(self, token, task_id: str = "") -> None:
+        try:
+            self._active_remote_task_context.reset(token)
+        except (ValueError, LookupError):
+            pass
+        normalized = str(task_id or "").strip()
+        if normalized:
+            with self._remote_progress_lock:
+                self._remote_progress_last_emit.pop(normalized, None)
+                self._remote_progress_last_signature.pop(normalized, None)
+
+    def _emit_remote_task_progress(self, conversation_id: str, block: dict[str, Any]) -> None:
+        """Executor adım geçişini aktif mobil göreve canlı 'running' güncellemesi
+        olarak akıtır. Adım durumu değişince hemen; aynı durumda saniyede en çok
+        ~2 kez (backend'i boğmamak için). Yürütmeyi asla bozmaz."""
+        active = self._active_remote_task_context.get()
+        if not active:
+            return
+        task_id, task_run_id = active
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return
+        steps = block.get("steps", []) if isinstance(block, dict) else []
+        if not isinstance(steps, list) or not steps:
+            return
+        signature = "|".join(
+            f"{step.get('id', '')}:{step.get('status', '')}"
+            for step in steps
+            if isinstance(step, dict)
+        )
+        now = time.monotonic()
+        with self._remote_progress_lock:
+            last_signature = self._remote_progress_last_signature.get(task_id, "")
+            last_emit = self._remote_progress_last_emit.get(task_id, 0.0)
+            changed = signature != last_signature
+            if not changed and (now - last_emit) < 0.5:
+                return
+            self._remote_progress_last_signature[task_id] = signature
+            self._remote_progress_last_emit[task_id] = now
+        live_trace = {
+            "type": "task_trace",
+            "taskId": task_id,
+            "taskRunId": task_run_id,
+            "status": str(block.get("status", "") or "running"),
+            "title": str(block.get("title", "") or ""),
+            "activeStepId": str(block.get("activeStepId", "") or ""),
+            "steps": [
+                {
+                    "id": str(step.get("id", "") or f"step_{index + 1}"),
+                    "label": str(step.get("label", "") or ""),
+                    "status": str(step.get("status", "") or "pending"),
+                    "capability": str(step.get("capability", "") or ""),
+                    "detail": str(step.get("detail", "") or ""),
+                }
+                for index, step in enumerate(steps)
+                if isinstance(step, dict)
+            ],
+        }
+        active_label = next(
+            (s["label"] for s in live_trace["steps"] if s["status"] == "running" and s["label"]),
+            "",
+        )
+        # Mobil canlı checklist'i `blocks` dizisindeki task_trace bloğundan çizer;
+        # aynı bloğu executionTrace/stepStates ile birlikte gönder.
+        trace_block = {
+            "type": "task_trace",
+            "stableBlockId": f"tasktrace_{task_id}",
+            "taskId": task_id,
+            "status": live_trace["status"],
+            "title": live_trace["title"] or "Görev yürütülüyor",
+            "activeStepId": live_trace["activeStepId"],
+            "progressLabel": active_label,
+            "steps": live_trace["steps"],
+        }
+        payload = {
+            "status": "running",
+            "summary": active_label or str(block.get("title", "") or "Görev yürütülüyor."),
+            "executionTrace": live_trace,
+            "taskRunId": task_run_id,
+            "result": {
+                "taskId": task_id,
+                "taskRunId": task_run_id,
+                "stepStates": live_trace["steps"],
+                "executionTrace": live_trace,
+                "blocks": [trace_block],
+                "live": True,
+            },
+        }
+        try:
+            self._report_runtime_task_status(task_id, payload)
+        except Exception:
+            pass  # canlı ilerleme akışı yürütmeyi asla bozmamalı
+
     def _report_runtime_task_status(self, task_id: str, payload: dict[str, Any]) -> BackendResult | None:
         terminal_status = str(payload.get("status", "") or "").strip().lower()
         if self._send_runtime_socket_message({"type": "task.update", "taskId": task_id, "body": payload}):
@@ -10185,8 +10654,8 @@ class RuntimeBridge:
             last_synced_at=_utc_now_iso(),
         )
 
-    def _resume_remote_task_after_approval(self, task_id: str, approved: bool) -> dict[str, Any]:
-        return self.remote_task_runner.resume_after_approval(task_id, approved)
+    def _resume_remote_task_after_approval(self, task_id: str, approved: bool, answer: str = "") -> dict[str, Any]:
+        return self.remote_task_runner.resume_after_approval(task_id, approved, answer)
         if not approved:
             self._cancel_remote_pending_task(task_id)
             return {"taskId": task_id, "ok": True, "status": "canceled"}
@@ -10340,10 +10809,18 @@ class RuntimeBridge:
         elif capability == "play_media" and not str(args.get("query", "") or "").strip():
             args["query"] = topic
         elif capability == "desktop_operator.run":
-            if not str(args.get("goal", "") or "").strip():
+            if str(args.get("workOrderKind", "") or "").strip() and prompt.strip():
+                args["goal"] = prompt
+            elif not str(args.get("goal", "") or "").strip():
                 args["goal"] = str(args.get("prompt", "") or args.get("query", "") or prompt)
             if not str(args.get("action", "") or "").strip():
                 args["action"] = "run"
+        elif capability in {"open_app", "close_app"} and not str(args.get("app_name", "") or "").strip():
+            routed = route_text_to_tool(prompt)
+            if routed is not None and _canonical_capability_name(routed.tool_name) == capability:
+                app_name = str(routed.args.get("app_name", "") or "").strip()
+                if app_name:
+                    args["app_name"] = app_name
         elif capability in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write"}:
             if not str(args.get("prompt", "") or "").strip():
                 args["prompt"] = prompt
@@ -10535,9 +11012,10 @@ class RuntimeBridge:
         work_order_preview = self._remote_task_work_order_plan_preview(payload)
         mobile_metadata = _map_from(payload.get("metadata") or {})
         mobile_desktop_required = bool(mobile_metadata.get("desktopRequired", False))
+        has_work_order = bool(self._remote_task_work_order(payload))
         route = str(route_decision.get("route", "") or "").strip()
-        # Accept desktop_runtime from routeDecision OR from mobile's desktopRequired hint
-        if route != "desktop_runtime" and not mobile_desktop_required:
+        # A validated typed work order is itself an authoritative desktop route.
+        if route != "desktop_runtime" and not mobile_desktop_required and not has_work_order:
             return {}
         capabilities = self._remote_task_capabilities(task, payload)
         has_explicit_steps = bool(self._remote_task_step_sources(task, route_decision))
@@ -10612,10 +11090,9 @@ class RuntimeBridge:
         decision_route = str(decision.get("route", "") or "").strip()
         decision_reason = str(decision.get("reason", "") or "").strip()
         decision_privacy = str(decision.get("privacyClass", "") or "").strip()
-        if decision_route == "desktop_runtime" and decision:
-            explicit_steps, explicit_preview = self._remote_task_explicit_steps_from_route(task, prompt, decision)
-            if explicit_steps:
-                return explicit_steps, explicit_preview
+        explicit_steps, explicit_preview = self._remote_task_explicit_steps_from_route(task, prompt, decision)
+        if explicit_steps:
+            return explicit_steps, explicit_preview
         if decision_route == "desktop_runtime" and decision:
             quantum_requested = bool(capabilities.intersection(REMOTE_QUANTUM_CAPABILITIES))
             if quantum_requested:
@@ -10866,6 +11343,35 @@ class RuntimeBridge:
             "description": original_send.get("description") or f"{', '.join(to)} adresine e-posta gönderilecek.",
         }
 
+    @staticmethod
+    def _prompt_has_sequential_intent(prompt: str) -> bool:
+        """Prompt açıkça sıralı çok-adımlı görev mi bildiriyor?
+
+        Yalnızca güçlü sıralama işaretlerini (sonra/ardından/then/…) sayar; zayıf
+        " ve " tek başına tetiklemez — basit komutların hız yolunu korur.
+        """
+        text = f" {' '.join(str(prompt or '').lower().split())} "
+        return any(marker in text for marker in _SEQUENTIAL_INTENT_MARKERS)
+
+    def _remote_task_should_delegate_to_llm(self, capabilities: set[str], prompt: str = "") -> bool:
+        """Serbest-metin cowork görevi kataloglu LLM planlayıcıya mı gitmeli?
+
+        Evet: karmaşık/çok-yetenekli görev VEYA açıkça sıralı çok-adımlı istek +
+        server_brain erişilebilir. Hayır: basit tek doğrudan komut (hız), quantum
+        (kendi pipeline'ı), ya da LLM erişilemez (regex planı çevrimdışı yedek).
+        """
+        normalized = {_canonical_capability_name(c) for c in capabilities if str(c or "").strip()}
+        if not normalized:
+            return False
+        if normalized & REMOTE_QUANTUM_CAPABILITIES:
+            return False
+        # Basit doğrudan komutlar hız için regex yolunda kalır — ANCAK prompt
+        # açıkça sıralı çok-adım bildiriyorsa (regex tek eylemi yakalar) yine de
+        # kataloglu planlayıcıya delege et.
+        if normalized <= REMOTE_FAST_DIRECT_CAPABILITIES and not self._prompt_has_sequential_intent(prompt):
+            return False
+        return _server_brain_ready(self._state_with_access())
+
     def _execute_deterministic_remote_task(
         self,
         task: dict[str, Any],
@@ -10879,9 +11385,11 @@ class RuntimeBridge:
         mobile_metadata = _map_from(payload.get("metadata") or {})
         mobile_desktop_required = bool(mobile_metadata.get("desktopRequired", False))
         mobile_intent_category = str(mobile_metadata.get("intentCategory", "") or "").strip()
+        has_work_order = bool(self._remote_task_work_order(payload))
         route = str(route_decision.get("route", "") or "").strip()
-        # Accept desktop routing from routeDecision OR from mobile's desktopRequired hint
-        if route != "desktop_runtime" and not mobile_desktop_required:
+        # The public task envelope may omit the redundant routeDecision; a
+        # validated desktopWorkOrder still authorizes deterministic execution.
+        if route != "desktop_runtime" and not mobile_desktop_required and not has_work_order:
             return None
 
         capabilities = self._remote_task_capabilities(task, payload)
@@ -10892,12 +11400,33 @@ class RuntimeBridge:
         ]
         if mobile_suggested_caps:
             capabilities = capabilities | {_canonical_capability_name(c) for c in mobile_suggested_caps}
+
+        # LLM-ÖNCE: serbest-metin cowork görevlerinde backend'in regex planına
+        # körlemesine güvenme. Runtime'ın kataloglu + doğrulamalı LLM planlayıcısı
+        # (send_conversation → _semantic_route) gerçek yetenek kataloğuyla plan
+        # üretsin. None döndürmek çağıranı (execute_runtime_task) LLM yoluna
+        # düşürür. Basit doğrudan komutlar hız için regex yolunda kalır; LLM
+        # erişilemezse yine regex planı çalışır (çevrimdışı çalışabilirlik).
+        if self._remote_task_should_delegate_to_llm(capabilities, prompt):
+            return None
+
         has_explicit_steps = bool(self._remote_task_step_sources(task, route_decision))
-        # When mobile signals desktopRequired, bypass the deterministic capability check
-        if not (capabilities.intersection(REMOTE_DETERMINISTIC_CAPABILITIES) or has_explicit_steps or mobile_desktop_required):
+        # Typed work-order steps also bypass the older route metadata gate.
+        if not (
+            capabilities.intersection(REMOTE_DETERMINISTIC_CAPABILITIES)
+            or has_explicit_steps
+            or mobile_desktop_required
+            or has_work_order
+        ):
             return None
 
         steps, plan_preview = self._remote_task_steps_from_route(task, prompt, capabilities, route_decision)
+        steps = _sanitize_contradictory_plan_steps(steps)
+        if isinstance(plan_preview, dict) and isinstance(plan_preview.get("steps"), list):
+            plan_preview = {
+                **plan_preview,
+                "steps": _sanitize_contradictory_plan_steps(plan_preview["steps"]),
+            }
         # If backend gave no explicit steps but mobile has intentCategory, enrich summary
         if not steps and mobile_intent_category:
             return None
@@ -11643,6 +12172,7 @@ def main() -> int:
     # olarak akıtır (conversation.progress). Swift bunu aktif mesaja task_trace
     # bloğu olarak iliştirir.
     def emit_progress(conversation_id: str, block: dict[str, Any]) -> None:
+        # 1) Yerel Swift sohbeti için stdout task_trace bloğu.
         emit(
             {
                 "id": _request_id(),
@@ -11657,6 +12187,11 @@ def main() -> int:
                 "requestId": _request_id(),
             }
         )
+        # 2) Aktif mobil görev varsa aynı ilerlemeyi backend'e canlı akıt.
+        try:
+            bridge._emit_remote_task_progress(conversation_id, block)
+        except Exception:
+            pass
 
     bridge.executor_core.set_progress_emitter(emit_progress)
 

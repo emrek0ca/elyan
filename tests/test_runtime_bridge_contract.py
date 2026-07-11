@@ -234,6 +234,39 @@ def test_bootstrap_includes_brain_profile_surface(
     assert payload["backend"]["brainProfile"]["data"]["chat"]["brainProfilePath"] == "/v1/brain/profile"
 
 
+def test_bootstrap_reconnects_process_transport_when_persisted_runtime_is_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "runtimeToken": "persisted-runtime-token",
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "ready": True,
+                "lifecycleState": "ready",
+                "websocketConnected": True,
+            }
+        }
+    )
+    runtime = bridge.RuntimeBridge()
+    connect_calls: list[bool] = []
+    monkeypatch.setattr(runtime, "_runtime_backend_snapshot", lambda: {"ok": True})
+    monkeypatch.setattr(
+        runtime,
+        "_connect_runtime_transport",
+        lambda: connect_calls.append(True) or (False, None),
+    )
+    monkeypatch.setattr(runtime, "status", lambda: {"ok": True})
+
+    payload = runtime.bootstrap()
+
+    assert payload["runtime"]["ok"] is True
+    assert connect_calls == [True]
+
+
 def test_planning_envelope_includes_native_desktop_truth_and_intelligence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -657,6 +690,8 @@ def test_execute_assigned_runtime_task_waits_for_approval_without_terminal_repor
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # Plan modu (composer'dan planMode=true): zararsız görev bile plan
+    # önizlemesi + onay ile ilerler; onaysız yürütülmez.
     _isolate_state(monkeypatch, tmp_path)
 
     class FakeBackend:
@@ -675,7 +710,10 @@ def test_execute_assigned_runtime_task_waits_for_approval_without_terminal_repor
                             "id": "task-waiting",
                             "title": "Takvim görevi",
                             "status": "queued",
-                            "payload": {"prompt": "takvime cuma 14:00 ürün toplantısı ekle"},
+                            "payload": {
+                                "prompt": "takvime cuma 14:00 ürün toplantısı ekle",
+                                "metadata": {"planMode": True},
+                            },
                         }
                     ]
                 },
@@ -873,7 +911,12 @@ def test_remote_research_email_send_uses_backend_route_decision_without_replanni
     assert result["ok"] is True
     assert result["executions"][0]["status"] == "waiting_approval"
     assert [name for name, _args in calls] == ["web_research", "email_draft"]
-    waiting = runtime.backend.status_updates[1][1]  # type: ignore[attr-defined]
+    # Canlı adım-adım ilerleme ara 'running' güncellemeleri enjekte edebilir;
+    # sözleşme, ilk (yol açan) running'i ve terminal waiting_approval'ı içermeleridir.
+    statuses = [payload["status"] for _, payload in runtime.backend.status_updates]  # type: ignore[attr-defined]
+    assert statuses[0] == "running"
+    assert statuses[-1] == "waiting_approval"
+    waiting = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
     assert waiting["status"] == "waiting_approval"
     assert waiting["approvalRequest"]["kind"] == "email_send"
     assert waiting["approvalRequest"]["to"] == ["ali@example.com"]
@@ -986,6 +1029,73 @@ def test_execute_assigned_runtime_task_uses_explicit_route_steps_without_replann
     inbox_item = state_store.get_task_inbox_item("task-explicit-route")
     assert inbox_item is not None
     assert inbox_item["executionTrace"]["status"] == "completed"
+
+
+def test_typed_work_order_executes_without_redundant_route_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "Hesap Makinesi uygulamasını aç ve açıldığını doğrula."
+    payload = {
+        "prompt": "Masaüstü cowork görevi — Hesap Makinesi'ni aç",
+        "metadata": {
+            "desktopDispatch": True,
+            "desktopFullAuthorityEnabled": True,
+        },
+        "desktopWorkOrder": {
+            "schema": "elyan.desktop_work_order.v1",
+            "source": "mobile_chat_dispatch",
+            "goal": {
+                "kind": "computer_task",
+                "summary": "Masaüstü cowork görevi — Hesap Makinesi'ni aç",
+                "language": "tr",
+                "sourceTextHash": "a" * 24,
+            },
+            "entities": [{"type": "topic", "value": prompt}],
+            "constraints": [],
+            "requiredCapabilities": ["open_app"],
+            "localContextNeeded": [],
+            "expectedOutputs": [{"kind": "chat_result", "format": "elyan_blocks.v2", "required": True}],
+            "verificationRules": [
+                {"id": "runtime_completed", "description": "Runtime completes.", "evidence": "runtime_status"},
+                {"id": "tool_result", "description": "Tool succeeds.", "evidence": "tool_result"},
+            ],
+            "execution": {"mode": "cowork_dispatch", "approvalPolicy": "capability_policy", "maxSteps": 8},
+            "planPreview": {
+                "summary": "Hesap Makinesi açılacak.",
+                "privacyClass": "local_private",
+                "steps": [
+                    {
+                        "id": "step_open_app",
+                        "capability": "open_app",
+                        "description": "Hesap Makinesi açılacak.",
+                        "args": {"app_name": "Hesap Makinesi"},
+                    }
+                ],
+            },
+        },
+    }
+    task = {
+        "id": "task-work-order-only",
+        "title": "Masaüstü cowork görevi",
+        "status": "queued",
+        "requestedCapabilities": ["open_app"],
+        "payload": payload,
+    }
+
+    preview = runtime._remote_task_running_plan_preview(task, prompt, payload)
+    result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
+
+    assert preview["steps"][0]["capability"] == "open_app"
+    assert result is not None
+    assert result["needsConfirmation"] is True
+    pending = state_store.get_pending_plan(result["pendingPlanId"])
+    assert pending is not None
+    assert pending["query"] == prompt
+    assert pending["steps"][0]["capability"] == "open_app"
+    assert pending["steps"][0]["args"]["app_name"] == "Hesap Makinesi"
 
 
 def test_remote_task_runner_adds_canonical_run_payload(
@@ -1150,6 +1260,8 @@ def test_explicit_route_side_effect_waits_for_approval_before_execution(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # Doğrudan mod bile olsa geri-alınamaz/dışa dönük (blocklist) adım
+    # (email_send) açık onay ister; onaysız yürütülmez.
     _isolate_state(monkeypatch, tmp_path)
 
     class FakeBackend:
@@ -1166,21 +1278,21 @@ def test_explicit_route_side_effect_waits_for_approval_before_execution(
                     "tasks": [
                         {
                             "id": "task-write-approval",
-                            "title": "Belge hazırla",
+                            "title": "Mail gönder",
                             "status": "queued",
                             "payload": {
-                                "prompt": "Toplantı notlarını docx olarak hazırla",
+                                "prompt": "ali@example.com'a toplantı notlarını mail at",
                                 "metadata": {
                                     "routeDecision": {
                                         "route": "desktop_runtime",
                                         "mode": "mixed_task",
                                         "privacyClass": "local_private",
-                                        "reason": "Dosya yazma desktop onayı gerektirir.",
+                                        "reason": "Mail gönderimi açık onay gerektirir.",
                                         "steps": [
                                             {
-                                                "capability": "document_write",
-                                                "args": {"title": "Toplantı notları", "prompt": "Toplantı notları"},
-                                                "description": "DOCX dosyası oluşturulacak.",
+                                                "capability": "email_send",
+                                                "args": {"to": "ali@example.com", "subject": "Toplantı notları", "body": "Notlar ekte."},
+                                                "description": "E-posta gönderilecek.",
                                             }
                                         ],
                                     }
@@ -1213,13 +1325,13 @@ def test_explicit_route_side_effect_waits_for_approval_before_execution(
     assert result["executions"][0]["status"] == "waiting_approval"
     waiting = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
     assert waiting["status"] == "waiting_approval"
-    assert waiting["approvalRequest"]["kind"] == "document_write"
+    assert waiting["approvalRequest"]["kind"] == "email_send"
     assert waiting["result"]["executionTrace"]["status"] == "waiting_approval"
     link = state_store.get_remote_task_link("task-write-approval")
     assert link is not None
     plan = state_store.get_pending_plan(link["pendingPlanId"])
     assert plan is not None
-    assert plan["steps"][0]["capability"] == "document_write"
+    assert plan["steps"][0]["capability"] == "email_send"
 
 
 def test_canonical_capability_preserves_dotted_desktop_operator_names() -> None:
@@ -1751,10 +1863,11 @@ def test_runtime_task_approval_resume_reports_terminal_result(
 
     runtime = bridge.RuntimeBridge()
     runtime.backend = FakeBackend()  # type: ignore[assignment]
-    monkeypatch.setattr(
-        runtime,
-        "confirm_conversation_plan",
-        lambda *_args, **_kwargs: {
+    observed_access: list[dict] = []
+
+    def confirm_with_task_access(*_args: object, **_kwargs: object) -> dict:
+        observed_access.append(runtime._access_status())
+        return {
             "chatOk": True,
             "assistantMessage": "add_calendar_event:Ürün toplantısı",
             "provider": "local_tool",
@@ -1762,8 +1875,9 @@ def test_runtime_task_approval_resume_reports_terminal_result(
             "conversationId": conversation["id"],
             "structuredResult": {"kind": "add_calendar_event"},
             "artifacts": [],
-        },
-    )
+        }
+
+    monkeypatch.setattr(runtime, "confirm_conversation_plan", confirm_with_task_access)
 
     result = runtime._resume_remote_task_after_approval("task-approve", True)
 
@@ -1778,6 +1892,10 @@ def test_runtime_task_approval_resume_reports_terminal_result(
     inbox_item = state_store.get_task_inbox_item("task-approve")
     assert inbox_item is not None
     assert inbox_item["status"] == "completed"
+    assert observed_access[0]["fullAccessSession"]["scope"] == "task"
+    assert observed_access[0]["fullAccessSession"]["taskId"] == "task-approve"
+    assert observed_access[0]["effectivePermissions"]["allow_computer_control"] is True
+    assert runtime._access_status()["fullAccessSession"]["enabled"] is False
 
 
 def test_execute_assigned_runtime_tasks_skips_recent_terminal_duplicate_approved_resume(
@@ -1982,6 +2100,72 @@ def test_runtime_ws_dispatch_skips_duplicate_without_second_ack(
     assert ack_payloads[0]["leaseId"] == "lease-ws-1"
     assert isinstance(ack_payloads[0]["acceptedAt"], str)
     assert len(thread_starts) == 1
+
+
+def test_runtime_ws_invalid_message_log_contains_safe_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    runtime._handle_runtime_ws_message("{invalid")
+
+    output = capsys.readouterr().err
+    assert "runtime ws_message_invalid" in output
+    assert "error=JSONDecodeError" in output
+    assert "length=8" in output
+    assert "digest=" in output
+
+
+def test_runtime_ws_accepts_utf8_binary_json_frame(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    runtime._handle_runtime_ws_message(
+        b'{"type":"error","message":"binary frame decoded"}'
+    )
+
+    assert runtime._runtime_ws_last_error == "binary frame decoded"
+
+
+def test_handle_normalizes_nested_backend_error_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    class FakeBackend:
+        def pairing_create_session(self, _payload: dict[str, object]) -> BackendResult:
+            return BackendResult(
+                ok=False,
+                request_id="req_pairing_unauthorized",
+                status_code=401,
+                data={"error": {"code": "UNAUTHORIZED", "message": "Giriş gerekli."}},
+                error={"code": "UNAUTHORIZED", "message": "Giriş gerekli."},
+            )
+
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    response = runtime.handle(
+        {
+            "id": "req_pairing",
+            "taskId": "task_pairing",
+            "capability": "pairing.create_session",
+            "payload": {"deviceLabel": "Elyan", "platform": "macos"},
+        }
+    )
+
+    assert response["ok"] is False
+    assert response["error"] == {
+        "code": "UNAUTHORIZED",
+        "message": "Giriş gerekli.",
+    }
 
 
 def test_runtime_ws_dispatch_persists_local_acceptance_before_ack(
@@ -3014,6 +3198,37 @@ def test_runtime_transport_heartbeats_until_websocket_is_actually_open(
     assert relay_started["value"] is True
 
 
+def test_runtime_transport_does_not_overwrite_websocket_opened_during_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "runtimeToken": "runtime-token",
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+            }
+        }
+    )
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(runtime, "_start_runtime_websocket_if_needed", lambda: True)
+
+    def heartbeat_after_socket_open(_status: str) -> BackendResult:
+        runtime._runtime_ws_connected = True
+        return BackendResult(ok=True, request_id="req-heartbeat", status_code=200, data={"ok": True})
+
+    monkeypatch.setattr(runtime, "_send_backend_runtime_heartbeat", heartbeat_after_socket_open)
+    monkeypatch.setattr(runtime, "_start_task_relay_if_ready", lambda: None)
+
+    runtime._connect_runtime_transport()
+
+    snapshot = state_store.snapshot()
+    assert snapshot["runtime"]["websocketConnected"] is True
+    assert snapshot["runtime"]["lifecycleState"] == "ready"
+
+
 def test_ensure_runtime_registered_rejects_invalid_runtime_identity_without_backend_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3645,6 +3860,21 @@ def test_status_registers_paired_runtime_when_offline(
     assert payload["runtimeLifecycleState"] == "ready"
     assert snapshot["runtime"]["runtimeToken"] == "runtime-token"
     assert snapshot["runtime"]["ready"] is True
+
+
+def test_stale_bridge_background_workers_stop_after_state_store_switch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    target = {"deviceId": VALID_DEVICE_ID, "deviceSecret": VALID_DEVICE_SECRET}
+    runtime._runtime_register_retry_target = target
+    runtime._runtime_register_retry_generation = 1
+
+    monkeypatch.setattr(state_store, "STATE_PATH", tmp_path / "next-profile" / "elyan_state.json")
+
+    assert runtime._runtime_register_retry_should_continue(target, generation=1) is False
 
 
 def test_runtime_register_retry_invalidation_wakes_sleeping_thread(
@@ -5533,6 +5763,12 @@ def test_server_brain_uses_backend_chat_messages_when_no_hidden_hint(
             self.calls.append("chat_messages")
             assert payload["source"] == "desktop"
             assert payload["content"] == "selam"
+            # P1: brain'e yapılandırılmış cowork bağlamı metadata olarak gider.
+            metadata = payload["metadata"]
+            assert isinstance(metadata, dict)
+            cowork = metadata["coworkContext"]
+            assert isinstance(cowork, dict)
+            assert cowork["contract"] == "elyan.cowork.v1"
             return BackendResult(
                 ok=True,
                 request_id="req_chat_messages",
@@ -5997,6 +6233,12 @@ def test_server_brain_can_live_probe_when_snapshot_is_stale(
             self.calls.append("chat_messages")
             assert payload["source"] == "desktop"
             assert payload["content"] == "selam"
+            # P1: brain'e yapılandırılmış cowork bağlamı metadata olarak gider.
+            metadata = payload["metadata"]
+            assert isinstance(metadata, dict)
+            cowork = metadata["coworkContext"]
+            assert isinstance(cowork, dict)
+            assert cowork["contract"] == "elyan.cowork.v1"
             return BackendResult(
                 ok=True,
                 request_id="req_chat_messages",
@@ -7832,3 +8074,740 @@ def test_billing_refresh_skipped_when_not_authenticated(
     runtime.backend = FakeBackend()  # type: ignore[assignment]
     runtime._refresh_billing_truth_async(force=True)  # oturum yok → çağrılmamalı
     assert calls["n"] == 0
+
+
+def _dispatch_work_order(required_capabilities: list[str]) -> dict:
+    return {
+        "schema": "elyan.desktop_work_order.v1",
+        "source": "mobile_chat_dispatch",
+        "goal": {
+            "kind": "browser_task",
+            "summary": "Chrome kapatılacak",
+            "language": "tr",
+            "sourceTextHash": "b" * 24,
+        },
+        "entities": [],
+        "constraints": [],
+        "requiredCapabilities": required_capabilities,
+        "localContextNeeded": [],
+        "expectedOutputs": [{"kind": "chat_result", "format": "elyan_blocks.v2", "required": True}],
+        "verificationRules": [
+            {"id": "runtime_completed", "description": "Runtime tamamlandı.", "evidence": "runtime_status"},
+        ],
+        "execution": {"mode": "cowork_dispatch", "approvalPolicy": "capability_policy", "maxSteps": 8},
+        "planPreview": {
+            "summary": "Chrome kapatılacak",
+            "privacyClass": "local_private",
+            "steps": [
+                {
+                    "id": "step_1",
+                    "capability": required_capabilities[0],
+                    "description": "Adım yürütülecek.",
+                    "args": {},
+                }
+            ],
+        },
+    }
+
+
+def _dispatch_auto_approve_backend(task_capabilities: list[str]):
+    class FakeBackend:
+        configured = True
+        loopback = False
+
+        def __init__(self) -> None:
+            self.status_updates: list[tuple[str, dict]] = []
+            self.heartbeats: list[dict] = []
+
+        def runtime_tasks_assigned(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_tasks",
+                status_code=200,
+                data={
+                    "tasks": [
+                        {
+                            "id": "task-dispatch",
+                            "title": "Chrome u kapat",
+                            "status": "queued",
+                            "payload": {
+                                "prompt": "Chrome u kapat",
+                                "desktopWorkOrder": _dispatch_work_order(task_capabilities),
+                            },
+                        }
+                    ]
+                },
+            )
+
+        def runtime_task_status(self, task_id: str, payload: dict) -> BackendResult:
+            self.status_updates.append((task_id, payload))
+            return BackendResult(ok=True, request_id="req_status", status_code=200, data={"ok": True})
+
+        def runtime_task_artifacts(self, task_id: str, payload: dict) -> BackendResult:
+            return BackendResult(ok=True, request_id="req_artifacts", status_code=200, data={"ok": True})
+
+        def heartbeat(self, payload: dict) -> BackendResult:
+            self.heartbeats.append(payload)
+            return BackendResult(ok=True, request_id="req_heartbeat", status_code=200, data={"ok": True})
+
+    return FakeBackend()
+
+
+def test_dispatched_plan_within_work_order_capabilities_auto_approves(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Mobil dispatch açık kullanıcı iradesidir: plan, iş emrinin bildirdiği
+    yeteneklerin içinde kaldığı sürece ikinci onay istenmez ve görev biter."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = _dispatch_auto_approve_backend(["close_app"])  # type: ignore[assignment]
+
+    monkeypatch.setattr(runtime, "_execute_deterministic_remote_task", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        runtime,
+        "send_conversation",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "chatOk": True,
+            "assistantMessage": "Chrome kapatılacak.",
+            "provider": "local_planner",
+            "toolEvents": [],
+            "conversationId": "conv_dispatch",
+            "needsConfirmation": True,
+            "pendingPlanId": "plan_dispatch",
+            "planPreview": {
+                "summary": "Chrome kapatılacak.",
+                "steps": [{"capability": "close_app", "description": "Chrome kapatılacak."}],
+            },
+        },
+    )
+    confirmed: list[tuple[str, str, bool]] = []
+
+    def fake_confirm(conversation_id: str, plan_id: str, approved: bool) -> dict:
+        confirmed.append((conversation_id, plan_id, approved))
+        return {
+            "ok": True,
+            "chatOk": True,
+            "assistantMessage": "Chrome kapatıldı.",
+            "provider": "local_planner",
+            "toolEvents": [{"tool": "close_app", "ok": True}],
+            "conversationId": conversation_id,
+        }
+
+    monkeypatch.setattr(runtime, "confirm_conversation_plan", fake_confirm)
+    monkeypatch.setattr(runtime, "_pending_plan_permission_error", lambda _plan_id: None)
+
+    result = runtime.execute_assigned_runtime_tasks()
+
+    assert result["ok"] is True
+    assert confirmed == [("conv_dispatch", "plan_dispatch", True)]
+    statuses = [payload["status"] for _, payload in runtime.backend.status_updates]  # type: ignore[attr-defined]
+    assert "waiting_approval" not in statuses
+    assert statuses[-1] in {"completed", "failed"}
+
+
+def test_dispatched_plan_with_blocklisted_capability_still_waits_for_approval(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Yıkıcı/dışa dönük adımlar (ör. email_send) dispatch kapsamında bile
+    açık onay ister."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = _dispatch_auto_approve_backend(["email_send"])  # type: ignore[assignment]
+
+    monkeypatch.setattr(runtime, "_execute_deterministic_remote_task", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        runtime,
+        "send_conversation",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "chatOk": True,
+            "assistantMessage": "E-posta gönderilecek.",
+            "provider": "local_planner",
+            "toolEvents": [],
+            "conversationId": "conv_email",
+            "needsConfirmation": True,
+            "pendingPlanId": "plan_email",
+            "planPreview": {
+                "summary": "E-posta gönderilecek.",
+                "steps": [{"capability": "email_send", "description": "E-posta gönder."}],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runtime,
+        "confirm_conversation_plan",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("blocklist adımı otomatik onaylanmamalı")),
+    )
+
+    result = runtime.execute_assigned_runtime_tasks()
+
+    assert result["ok"] is True
+    assert result["executions"][0]["status"] == "waiting_approval"
+    statuses = [payload["status"] for _, payload in runtime.backend.status_updates]  # type: ignore[attr-defined]
+    assert statuses[-1] == "waiting_approval"
+
+
+def test_sanitize_contradictory_steps_drops_browser_relaunch_after_close() -> None:
+    """"Chrome'u kapat" planındaki sonraki browser/aç adımları atılır —
+    kapatılan uygulama aynı görevde geri açılmaz."""
+    steps = [
+        {"capability": "close_app", "args": {"app_name": "Chrome u"}, "description": "kapat"},
+        {"capability": "browser_control", "args": {"action": "search", "query": "x"}, "description": "ara"},
+        {"capability": "open_app", "args": {"app_name": "Chrome"}, "description": "aç"},
+    ]
+    sanitized = bridge._sanitize_contradictory_plan_steps(steps)
+    assert [s["capability"] for s in sanitized] == ["close_app"]
+
+
+def test_sanitize_contradictory_steps_keeps_unrelated_steps() -> None:
+    steps = [
+        {"capability": "close_app", "args": {"app_name": "Spotify"}, "description": "kapat"},
+        {"capability": "browser_control", "args": {"action": "search", "query": "hava"}, "description": "ara"},
+        {"capability": "open_app", "args": {"app_name": "Notes"}, "description": "aç"},
+    ]
+    sanitized = bridge._sanitize_contradictory_plan_steps(steps)
+    assert [s["capability"] for s in sanitized] == ["close_app", "browser_control", "open_app"]
+
+
+def test_delegates_multicap_cowork_task_to_llm_planner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Çok-yetenekli serbest-metin cowork görevi, server_brain hazırsa backend
+    regex planı yerine kataloglu LLM planlayıcıya (None → send_conversation)
+    yönlendirilir."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    state_store.update_state(
+        {"controlPlane": {"health": {"ok": True, "agent": {"chatReady": True, "serverBrainReady": True}}}}
+    )
+    # document_read + web_research → basit doğrudan komut değil → LLM'e devret.
+    assert runtime._remote_task_should_delegate_to_llm({"document_read", "web_research"}) is True
+
+
+def test_simple_close_app_stays_on_fast_regex_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Yalnız uygulama kapatma gibi basit doğrudan komut, server_brain hazır
+    olsa bile hız için regex yolunda kalır (LLM'e devredilmez)."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    state_store.update_state(
+        {"controlPlane": {"health": {"ok": True, "agent": {"chatReady": True, "serverBrainReady": True}}}}
+    )
+    assert runtime._remote_task_should_delegate_to_llm({"close_app"}) is False
+    # Zayıf " ve " tek başına çok-adım saymaz — hız yolu korunur.
+    assert (
+        runtime._remote_task_should_delegate_to_llm({"play_media"}, "müzik aç ve keyfini çıkar")
+        is False
+    )
+
+
+def test_sequential_simple_command_delegates_to_llm_planner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Basit doğrudan yetenek olsa bile prompt açıkça sıralı çok-adım
+    bildiriyorsa (regex tek eylemi yakalar) kataloglu LLM planlayıcıya gider."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    state_store.update_state(
+        {"controlPlane": {"health": {"ok": True, "agent": {"chatReady": True, "serverBrainReady": True}}}}
+    )
+    assert (
+        runtime._remote_task_should_delegate_to_llm(
+            {"open_app"}, "önce Chrome'u aç sonra Not Defteri'ni aç"
+        )
+        is True
+    )
+    assert runtime._prompt_has_sequential_intent("Safari'yi aç, ardından kapat") is True
+    assert runtime._prompt_has_sequential_intent("Safari'yi aç") is False
+
+
+def test_multicap_task_stays_on_regex_when_server_brain_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """server_brain erişilemezse LLM'e devretme — regex planı çevrimdışı yedek
+    olarak korunur."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    assert runtime._remote_task_should_delegate_to_llm({"document_read", "web_research"}) is False
+
+
+def test_bridge_binds_live_progress_emitter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Başsız daemon dahil her modda executor'a canlı ilerleme emitter'ı bağlanır."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    assert runtime.executor_core._progress_emitter is not None
+
+
+def test_live_progress_routes_to_active_task_and_throttles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Aktif mobil görev bağlamındayken adım geçişi backend'e canlı 'running'
+    güncellemesi akıtır; aynı durumda kısa aralıkta tekrar akmaz (throttle)."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    pushed: list[tuple[str, str, list]] = []
+    monkeypatch.setattr(
+        runtime,
+        "_report_runtime_task_status",
+        lambda task_id, payload: pushed.append(
+            (task_id, payload["status"], [(s["id"], s["status"]) for s in payload["executionTrace"]["steps"]])
+        ),
+    )
+    # Aktif görev yokken hiçbir şey akmaz.
+    runtime._emit_remote_task_progress("conv", {"steps": [{"id": "s1", "status": "running", "label": "x"}]})
+    assert pushed == []
+
+    token = runtime._begin_active_remote_task("task-1", "run-1")
+    try:
+        block = {
+            "status": "running",
+            "title": "Görev",
+            "activeStepId": "s1",
+            "steps": [
+                {"id": "s1", "status": "running", "label": "Kapatılıyor", "capability": "close_app"},
+                {"id": "s2", "status": "pending", "label": "Doğrula", "capability": "sys_info"},
+            ],
+        }
+        runtime._emit_remote_task_progress("conv", block)
+        runtime._emit_remote_task_progress("conv", block)  # aynı sinyal → throttle
+        block2 = {
+            **block,
+            "activeStepId": "s2",
+            "steps": [
+                {"id": "s1", "status": "completed", "label": "Kapatıldı", "capability": "close_app"},
+                {"id": "s2", "status": "running", "label": "Doğrula", "capability": "sys_info"},
+            ],
+        }
+        runtime._emit_remote_task_progress("conv", block2)  # durum değişti → akar
+    finally:
+        runtime._end_active_remote_task(token, "task-1")
+
+    assert [status for _, status, _ in pushed] == ["running", "running"]
+    assert pushed[0][2] == [("s1", "running"), ("s2", "pending")]
+    assert pushed[1][2] == [("s1", "completed"), ("s2", "running")]
+    # Görev bittiğinde throttle durumu temizlenir.
+    assert "task-1" not in runtime._remote_progress_last_signature
+
+
+def test_force_runtime_reconnect_requires_auth(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Kimlik hazır değilken zorla yeniden bağlanma güvenle es geçer."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(runtime, "_runtime_auth_ready", lambda: False)
+
+    result = runtime.force_runtime_reconnect()
+
+    assert result == {"ok": False, "reason": "auth_not_ready"}
+
+
+def test_force_runtime_reconnect_closes_socket_and_restarts_when_thread_dead(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ölü soketi kapatır, thread çıkmışsa yeniden başlatmayı tetikler."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(runtime, "_runtime_auth_ready", lambda: True)
+
+    closed: list[str] = []
+
+    class _FakeApp:
+        def close(self) -> None:
+            closed.append("closed")
+
+    runtime._runtime_ws_app = _FakeApp()
+    runtime._runtime_ws_thread = None  # thread çıkmış (5 dk boşluğunun sebebi)
+    runtime._runtime_ws_connected = True
+    started: list[str] = []
+    monkeypatch.setattr(
+        runtime,
+        "_start_runtime_websocket_if_needed",
+        lambda: started.append("start") or True,
+    )
+
+    result = runtime.force_runtime_reconnect()
+
+    assert result["ok"] is True
+    assert result["restarted"] is True
+    assert closed == ["closed"]
+    assert started == ["start"]
+    assert runtime._runtime_ws_connected is False
+
+
+def test_execute_local_with_timeout_returns_sentinel_on_hang(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Takılan yürütme zaman aşımı sentinel'ı döner (süresiz beklemez)."""
+    from runtime import remote_task_runner as rtr
+
+    monkeypatch.setattr(rtr, "REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS", 0.2)
+
+    class _Host:
+        def _execute_deterministic_remote_task(self, *_args: object) -> object:
+            time.sleep(5)  # takıldı
+            return {"ok": True}
+
+        def send_conversation(self, *_args: object) -> object:  # pragma: no cover
+            return {"ok": True}
+
+        def _runtime_diag(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    runner = rtr.RemoteTaskRunner(_Host())
+    result = runner._execute_local_with_timeout({}, "prompt", "title", task_id="task-xyz")
+
+    assert result is rtr._EXECUTION_TIMEOUT
+
+
+def test_execute_local_with_timeout_delegates_none_to_conversation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deterministik yol None dönerse (LLM'e delege) send_conversation sonucu döner."""
+    from runtime import remote_task_runner as rtr
+
+    class _Host:
+        def _execute_deterministic_remote_task(self, *_args: object) -> object:
+            return None
+
+        def send_conversation(self, *_args: object, **_kwargs: object) -> object:
+            return {"ok": True, "via": "conversation"}
+
+        def _runtime_diag(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    runner = rtr.RemoteTaskRunner(_Host())
+    result = runner._execute_local_with_timeout({}, "prompt", "title", task_id="task-xyz")
+
+    assert result == {"ok": True, "via": "conversation"}
+
+
+class _ClarifyHost:
+    """Netleştirme akışı testleri için minimal sahte host."""
+
+    def __init__(self) -> None:
+        self.canceled: list[str] = []
+        self.status_reports: list[dict] = []
+
+    def _report_runtime_task_status(self, task_id, payload):
+        self.status_reports.append({"taskId": task_id, "payload": payload})
+        from types import SimpleNamespace
+        return SimpleNamespace(ok=True, to_dict=lambda: {})
+
+    def _set_runtime_task_heartbeat(self, *_args, **_kwargs):
+        return None
+
+    def _cancel_remote_pending_task(self, task_id):
+        self.canceled.append(task_id)
+
+    def _remote_task_trace_payload(self, *_args, **_kwargs):
+        return {"type": "task_trace", "steps": []}
+
+
+def _new_clarify_runner():
+    from runtime import remote_task_runner as rtr
+    return rtr.RemoteTaskRunner(_ClarifyHost()), rtr
+
+
+def test_is_clarification_result_detection() -> None:
+    from runtime import remote_task_runner as rtr
+    R = rtr.RemoteTaskRunner
+    assert R._is_clarification_result({"clarificationNeeded": True, "clarificationQuestion": "Hangi dosya?"}) is True
+    assert R._is_clarification_result({"executionMode": "clarification", "clarificationQuestion": "?"}) is True
+    assert R._is_clarification_result({"clarificationNeeded": True, "clarificationQuestion": ""}) is False
+    assert R._is_clarification_result({"capability": "open_app"}) is False
+    assert R._is_clarification_result("düz metin") is False
+
+
+def test_approval_resolution_notes_extraction() -> None:
+    from runtime import remote_task_runner as rtr
+    R = rtr.RemoteTaskRunner
+    assert R._approval_resolution_notes({"resolution": {"notes": "rapor.pdf"}}) == "rapor.pdf"
+    assert R._approval_resolution_notes({"resolution": {"answer": "evet"}}) == "evet"
+    assert R._approval_resolution_notes({"resolution": {}}) == ""
+    assert R._approval_resolution_notes({}) == ""
+
+
+def test_pause_for_clarification_persists_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runner, _rtr = _new_clarify_runner()
+    local_result = {
+        "clarificationNeeded": True,
+        "clarificationQuestion": "Hangi dosyayı özetleyeyim?",
+        "conversationId": "c1",
+    }
+    res = runner._pause_for_clarification(
+        "t1", "run1", "Başlık", "dosyayı özetle", local_result, False,
+        task={"id": "t1", "payload": {}}, work_order=None,
+    )
+    assert res["status"] == "waiting_approval"
+    assert res["clarification"] is True
+    link = state_store.get_remote_task_link("t1")
+    assert link["clarificationPending"] is True
+    assert link["clarificationRounds"] == 1
+    assert link["clarificationPrompt"] == "dosyayı özetle"
+    assert link["clarificationQuestion"] == "Hangi dosyayı özetleyeyim?"
+    assert link["clarificationTask"] == {"id": "t1", "payload": {}}
+
+
+def test_pause_for_clarification_loop_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runner, rtr = _new_clarify_runner()
+    state_store.save_remote_task_link("t1", "", "", task_run_id="run1", status="waiting_approval")
+    state_store.update_remote_task_link("t1", {"clarificationRounds": rtr.MAX_CLARIFICATION_ROUNDS})
+    captured: dict = {}
+    monkeypatch.setattr(runner, "_fail_safe", lambda *a, **k: captured.update(k) or {"ok": False, "status": "failed"})
+
+    res = runner._pause_for_clarification(
+        "t1", "run1", "B", "p",
+        {"clarificationNeeded": True, "clarificationQuestion": "q"}, False, task={"id": "t1"},
+    )
+    assert res["status"] == "failed"
+    assert captured["error_code"] == "clarification_unresolved"
+
+
+def test_resume_after_clarification_merges_answer_and_replans(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runner, _rtr = _new_clarify_runner()
+    state_store.save_remote_task_link("t1", "", "", task_run_id="run1", status="waiting_approval")
+    state_store.update_remote_task_link("t1", {
+        "clarificationPending": True,
+        "clarificationPrompt": "dosyayı özetle",
+        "clarificationQuestion": "Hangi dosya?",
+        "clarificationTask": {"id": "t1", "payload": {}},
+        "clarificationRounds": 1,
+    })
+    captured: dict = {}
+    monkeypatch.setattr(runner, "execute_runtime_task", lambda task, **kw: captured.update(task=task, **kw) or {"ok": True})
+
+    res = runner.resume_after_approval("t1", True, "rapor.pdf")
+    assert res == {"ok": True}
+    assert "dosyayı özetle" in captured["prompt_override"]
+    assert "rapor.pdf" in captured["prompt_override"]
+    assert captured["task"] == {"id": "t1", "payload": {}}
+
+
+def test_resume_after_clarification_without_answer_fails_safe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runner, _rtr = _new_clarify_runner()
+    state_store.save_remote_task_link("t1", "", "", task_run_id="run1", status="waiting_approval")
+    state_store.update_remote_task_link("t1", {
+        "clarificationPending": True,
+        "clarificationPrompt": "dosyayı özetle",
+        "clarificationQuestion": "Hangi dosya?",
+        "clarificationTask": {"id": "t1"},
+        "clarificationRounds": 1,
+    })
+    captured: dict = {}
+    monkeypatch.setattr(runner, "_fail_safe", lambda *a, **k: captured.update(k) or {"ok": False, "status": "failed"})
+
+    runner.resume_after_approval("t1", True, "   ")
+    assert captured["error_code"] == "clarification_unanswered"
+
+
+def test_resume_after_clarification_rejection_cancels(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runner, _rtr = _new_clarify_runner()
+    state_store.save_remote_task_link("t1", "", "", task_run_id="run1", status="waiting_approval")
+    state_store.update_remote_task_link("t1", {"clarificationPending": True, "clarificationQuestion": "q"})
+
+    res = runner.resume_after_approval("t1", False, "")
+    assert res["status"] == "canceled"
+    assert runner.host.canceled == ["t1"]
+
+
+def test_plan_touches_blocklist_flags_irreversible_only() -> None:
+    from runtime import remote_task_runner as rtr
+    R = rtr.RemoteTaskRunner
+    # Blocklist (geri alınamaz/dışa dönük) → True
+    assert R._plan_touches_blocklist(
+        {"planPreview": {"steps": [{"capability": "email_send"}]}}
+    ) is True
+    assert R._plan_touches_blocklist(
+        {"planPreview": {"steps": [{"capability": "open_app"}, {"capability": "shell_run"}]}}
+    ) is True
+    # Zararsız yan etki (dosya/belge yazma, uygulama, takvim ekleme) → False
+    assert R._plan_touches_blocklist(
+        {"planPreview": {"steps": [{"capability": "document_write"}, {"capability": "add_calendar_event"}]}}
+    ) is False
+    assert R._plan_touches_blocklist({"planPreview": {"steps": []}}) is False
+    assert R._plan_touches_blocklist({}) is False
+
+
+def test_recoverable_replan_web_research_falls_back_to_local(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    revised = runtime._recoverable_replan({
+        "reason": "tool_failure",
+        "failedCapability": "web_research",
+        "errorCode": "NETWORK_FAILED",
+        "failedArgs": {"query": "kuantum"},
+        "remainingSteps": [{"capability": "document_write", "args": {"prompt": "rapor"}}],
+    })
+    assert revised[0]["capability"] == "retrieve_context"
+    assert revised[1]["capability"] == "document_write"
+
+
+def test_recoverable_replan_skips_failed_observer_and_continues(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Gözlemci (document_read) patladı ama arkadan yazıcı adımı var → gözlemciyi
+    # atla, kalanla devam (kısmi başarı > tam iptal).
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    revised = runtime._recoverable_replan({
+        "reason": "verification_failure",
+        "failedCapability": "document_read",
+        "errorCode": "READ_FAILED",
+        "failedArgs": {"path": "/x.pdf"},
+        "remainingSteps": [{"capability": "document_write", "args": {"prompt": "özet"}}],
+    })
+    assert [s["capability"] for s in revised] == ["document_write"]
+
+
+def test_recoverable_replan_gives_up_when_no_pattern(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Gözlemci değil (open_app) ve kurtarma deseni yok → boş (executor iptale düşer).
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    revised = runtime._recoverable_replan({
+        "failedCapability": "open_app",
+        "errorCode": "APP_NOT_FOUND",
+        "remainingSteps": [{"capability": "close_app", "args": {"app_name": "X"}}],
+    })
+    assert revised == []
+
+
+def test_capability_display_name_friendly_and_fallback() -> None:
+    from runtime.capability_registry import capability_display_name
+    assert capability_display_name("document_write") == "Belge oluşturma"
+    assert capability_display_name("send_whatsapp_message") == "WhatsApp mesajı"
+    assert capability_display_name("desktop_operator.run") == "Ekran otomasyonu"
+    # bilinmeyen slug → okunabilir yedek (nokta sonrası, alt çizgi→boşluk, baş harf)
+    assert capability_display_name("future_new.some_action") == "Some action"
+    assert capability_display_name("") == "Bu işlem"
+
+
+def test_readiness_error_is_friendly_and_structured() -> None:
+    from runtime import remote_task_runner as rtr
+    runner = rtr.RemoteTaskRunner(object())
+    err = runner._readiness_error([
+        {"capability": "open_app", "ready": True},
+        {"capability": "document_write", "ready": False, "errorCode": "DEPENDENCY_UNAVAILABLE",
+         "degradationReason": "dependency_unavailable"},
+    ])
+    assert err is not None
+    assert err["capability"] == "document_write"
+    assert err["displayName"] == "Belge oluşturma"
+    assert err["code"] == "DEPENDENCY_UNAVAILABLE"
+    # ham slug mesajda geçmez; dostane ad geçer
+    assert "document_write" not in err["message"]
+    assert "Belge oluşturma" in err["message"]
+    assert err["degradationReason"] == "dependency_unavailable"
+
+
+def test_readiness_error_none_when_all_ready() -> None:
+    from runtime import remote_task_runner as rtr
+    runner = rtr.RemoteTaskRunner(object())
+    assert runner._readiness_error([{"capability": "open_app", "ready": True}]) is None
+
+
+def test_fail_safe_surfaces_capability_unavailable_block(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    from runtime import remote_task_runner as rtr
+
+    class _Host:
+        def _report_runtime_task_status(self, _task_id, payload):
+            from types import SimpleNamespace
+            self.last_payload = payload
+            return SimpleNamespace(ok=True, to_dict=lambda: {})
+
+        def _remote_task_trace_payload(self, *_a, **_k):
+            return {"type": "task_trace", "steps": []}
+
+    host = _Host()
+    runner = rtr.RemoteTaskRunner(host)
+    runner._fail_safe(
+        "t1", "run1",
+        message="Belge oluşturma şu an kullanılamıyor: gerekli bileşen hazır değil.",
+        error_code="DEPENDENCY_UNAVAILABLE",
+        unavailable={"capability": "document_write", "displayName": "Belge oluşturma", "degradationReason": "dependency_unavailable"},
+    )
+    result = host.last_payload["result"]
+    assert result["capabilityUnavailable"]["displayName"] == "Belge oluşturma"
+    assert result["blocks"][0]["type"] == "capability_unavailable"
+    assert result["blocks"][0]["displayName"] == "Belge oluşturma"
+
+
+def test_server_brain_circuit_breaker_opens_and_resets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    bridge._reset_server_brain_breaker()
+    state = {"controlPlane": {"health": {"agent": {"serverBrainReady": True}}}}
+    assert bridge._server_brain_ready(state) is True
+    # Ardışık hata eşiği → devre açılır, brain atlanır (delegasyon/planlama düşer)
+    for _ in range(bridge._SERVER_BRAIN_FAILURE_THRESHOLD):
+        bridge._record_server_brain_outcome(False)
+    assert bridge._server_brain_circuit_open() is True
+    assert bridge._server_brain_ready(state) is False
+    # Sağlıklı yanıt sayacı+cooldown'u sıfırlar
+    bridge._record_server_brain_outcome(True)
+    assert bridge._server_brain_circuit_open() is False
+    assert bridge._server_brain_ready(state) is True
+    bridge._reset_server_brain_breaker()
+
+
+def test_server_brain_circuit_cooldown_expires(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge._reset_server_brain_breaker()
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: clock["now"])
+    for _ in range(bridge._SERVER_BRAIN_FAILURE_THRESHOLD):
+        bridge._record_server_brain_outcome(False)
+    assert bridge._server_brain_circuit_open() is True
+    clock["now"] += bridge._SERVER_BRAIN_COOLDOWN_SECONDS + 1.0
+    assert bridge._server_brain_circuit_open() is False  # cooldown doldu
+    bridge._reset_server_brain_breaker()
+
+
+def test_single_failure_does_not_open_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge._reset_server_brain_breaker()
+    bridge._record_server_brain_outcome(False)
+    assert bridge._server_brain_circuit_open() is False  # eşiğin altında
+    bridge._reset_server_brain_breaker()
+
+
+def test_tool_catalog_cached_per_platform() -> None:
+    from runtime import structured_planner as sp
+    a = sp.tool_catalog(platform="darwin")
+    b = sp.tool_catalog(platform="darwin")
+    assert a is b  # aynı önbelleklenmiş nesne (her çağrıda yeniden kurulmaz)
+    c = sp.tool_catalog(platform="win32")
+    assert c is not a

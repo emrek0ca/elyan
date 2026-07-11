@@ -129,3 +129,16 @@ def test_desktop_core_capabilities_declared_cross_platform() -> None:
         meta = registry.capability_metadata(capability)
         platforms = tuple(meta.get("supportedPlatforms", ()))
         assert set(platforms) == {"darwin", "win32", "linux"}, capability
+
+
+def test_resolve_app_name_strips_space_separated_turkish_suffix() -> None:
+    # "Chrome'u kapat" yerine "Chrome u kapat" yazımından gelen bozuk app hint.
+    assert open_app_module._resolve_app_name("Chrome u") == "Google Chrome"
+    assert open_app_module._resolve_app_name("Safari yi") == "Safari"
+    assert open_app_module._resolve_app_name("Spotify yi") == "Spotify"
+
+
+def test_resolve_app_name_preserves_multiword_names() -> None:
+    # Gerçek iki kelimeli adlar bozulmamalı.
+    assert open_app_module._resolve_app_name("Visual Studio") == "Visual Studio"
+    assert open_app_module._resolve_app_name("Google Chrome") == "Google Chrome"

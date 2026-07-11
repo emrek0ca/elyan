@@ -87,6 +87,18 @@ def _artifact_has_evidence(artifact: dict[str, Any]) -> bool:
     )
 
 
+def _structured_file_update_verified(structured: dict[str, Any]) -> bool:
+    if structured.get("created") is True or structured.get("updated") is True:
+        return True
+    kind = str(structured.get("kind", "") or "").strip().lower()
+    if kind == "image_fetch":
+        try:
+            return int(structured.get("savedCount", 0) or 0) > 0
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
 def validate_payload(payload: dict[str, Any]) -> WorkOrderValidation:
     candidate = payload.get("desktopWorkOrder")
     if candidate is None:
@@ -225,6 +237,19 @@ def verify_result(work_order: dict[str, Any], local_result: dict[str, Any]) -> d
     tool_events = [item for item in local_result.get("toolEvents", []) if isinstance(item, dict)] if isinstance(local_result.get("toolEvents"), list) else []
     successful_tool_events = [item for item in tool_events if _tool_event_succeeded(item)]
     verified_artifacts = [item for item in artifacts if _artifact_has_evidence(item)]
+    # "prove it": bir adım başarı döndürse (ok) de iddia ettiği yan etki
+    # gerçekten gözlenemediyse (stateReadback.observed=False — ör. "kapatıldı"
+    # dedi ama süreç hâlâ ayakta), görev bunu tamamlandı sayamaz.
+    readback_observed = False
+    unverified_side_effects: list[str] = []
+    for item in tool_events:
+        readback = item.get("stateReadback")
+        if not isinstance(readback, dict):
+            continue
+        if readback.get("observed") is True:
+            readback_observed = True
+        elif item.get("ok") is True and readback.get("observed") is False:
+            unverified_side_effects.append(str(item.get("tool", "") or "capability"))
     structured = local_result.get("structuredResult")
     structured = structured if isinstance(structured, dict) else {}
     assistant_message = _safe_text(local_result.get("assistantMessage"), 1000)
@@ -239,8 +264,40 @@ def verify_result(work_order: dict[str, Any], local_result: dict[str, Any]) -> d
         "artifact": bool(verified_artifacts),
         "state_readback": structured.get("stateVerified") is True
         or structured.get("readBackVerified") is True
-        or execution_trace.get("stateVerified") is True,
+        or execution_trace.get("stateVerified") is True
+        or readback_observed,
     }
+    # A chat-only work order can complete without emitting a tool event (for
+    # example, a local runtime answer assembled from an already completed
+    # action). Keep artifact/file/state work orders strict, but do not turn a
+    # completed runtime trace into WORK_ORDER_EVIDENCE_MISSING solely because
+    # the tool event transport was empty.
+    required_output_kinds = {
+        str(output.get("kind", "") or "")
+        for output in work_order.get("expectedOutputs", [])
+        if isinstance(output, dict) and output.get("required") is True
+    }
+    chat_only = required_output_kinds <= {"chat_result"}
+    runtime_trace_completed = str(execution_trace.get("status", "") or "").strip().lower() in {
+        "completed",
+        "done",
+        "success",
+    }
+    visible_result = bool(assistant_message or structured or local_result.get("blocks"))
+    evidence_fallbacks: list[dict[str, str]] = []
+    if (
+        not evidence["tool_result"]
+        and chat_only
+        and evidence["runtime_status"]
+        and runtime_trace_completed
+        and visible_result
+    ):
+        evidence["tool_result"] = True
+        evidence_fallbacks.append({
+            "kind": "tool_result",
+            "source": "runtime_status",
+            "reason": "chat_only_runtime_completion",
+        })
     checks: list[dict[str, Any]] = []
     missing: list[str] = []
 
@@ -254,7 +311,7 @@ def verify_result(work_order: dict[str, Any], local_result: dict[str, Any]) -> d
         elif kind == "artifact":
             passed = evidence["artifact"]
         elif kind == "file_update":
-            passed = evidence["artifact"] and structured.get("created") is True
+            passed = evidence["artifact"] and _structured_file_update_verified(structured)
         elif kind in {"browser_state", "system_state"}:
             passed = evidence["tool_result"] or evidence["state_readback"]
         checks.append({"id": f"output:{kind}", "passed": passed})
@@ -277,6 +334,13 @@ def verify_result(work_order: dict[str, Any], local_result: dict[str, Any]) -> d
         if not passed:
             missing.append(f"rule:{rule_id}")
 
+    # Gözlenemeyen yan etkiler her koşulda doğrulamayı düşürür: bir adım
+    # "yaptım" (ok) deyip etkiyi kanıtlayamadıysa görev tamamlandı sayılmaz.
+    for tool_name in unverified_side_effects:
+        check_id = f"sideeffect:{tool_name}"
+        checks.append({"id": check_id, "passed": False, "evidence": "state_readback"})
+        missing.append(check_id)
+
     passed_count = sum(1 for check in checks if check.get("passed") is True)
     confidence = 1.0 if not checks else round(passed_count / len(checks), 3)
     return {
@@ -288,6 +352,14 @@ def verify_result(work_order: dict[str, Any], local_result: dict[str, Any]) -> d
             "toolResults": len(successful_tool_events),
             "artifacts": len(verified_artifacts),
             "structuredResults": 1 if structured else 0,
+            "stateReadbacks": sum(
+                1
+                for item in tool_events
+                if isinstance(item.get("stateReadback"), dict)
+                and item["stateReadback"].get("observed") is True
+            ),
         },
+        "evidenceFallbacks": evidence_fallbacks,
+        "unverifiedSideEffects": unverified_side_effects,
         "missingEvidence": missing,
     }

@@ -149,7 +149,14 @@ def _tool_decl(
     description: str,
     properties: dict[str, Any],
     required: list[str] | None = None,
+    *,
+    usage: str = "",
+    examples: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Yetenek bildirimi. Skill-benzeri kendini-belgeleyen metadata: her
+    argümanın `description`'ı (properties içinde), `usage` (ne zaman kullan),
+    `examples` (örnek çağrılar). Bunlar planlayıcıya (tool_catalog üzerinden)
+    gider → doğru yetenek, doğru argümanla seçilir."""
     payload: dict[str, Any] = {
         "name": name,
         "description": description,
@@ -160,597 +167,758 @@ def _tool_decl(
     }
     if required:
         payload["parameters"]["required"] = required
+    if usage:
+        payload["usage"] = usage
+    if examples:
+        payload["examples"] = examples
     return payload
 
 
 TOOL_DECLARATIONS: list[dict[str, Any]] = [
-    _tool_decl("open_app", "Uygulama açar.", {"app_name": {"type": "STRING"}}, ["app_name"]),
-    _tool_decl("close_app", "Uygulama kapatır.", {"app_name": {"type": "STRING"}}, ["app_name"]),
+    _tool_decl(
+        "open_app",
+        "Yerel bir masaüstü uygulamasını açar (Safari, Chrome, Notlar, Spotify…).",
+        {
+            "app_name": {
+                "type": "STRING",
+                "description": "Uygulamanın TAM adı, eksiz: 'Google Chrome', 'Safari', 'Notes'. Türkçe ekleri ('Chrome'u') çıkar.",
+            }
+        },
+        ["app_name"],
+        usage="Kullanıcı bir uygulamayı açmak istediğinde. URL/arama için browser_control, medya için play_media kullan.",
+        examples=[
+            {"args": {"app_name": "Google Chrome"}},
+            {"args": {"app_name": "Notes"}},
+        ],
+    ),
+    _tool_decl(
+        "close_app",
+        "Çalışan bir masaüstü uygulamasını kapatır.",
+        {
+            "app_name": {
+                "type": "STRING",
+                "description": "Kapatılacak uygulamanın tam adı, eksiz: 'Google Chrome', 'Spotify'.",
+            }
+        },
+        ["app_name"],
+        usage="Kullanıcı bir uygulamayı kapatmak istediğinde.",
+        examples=[{"args": {"app_name": "Spotify"}}],
+    ),
     _tool_decl(
         "sys_info",
         "Sistem bilgisi alır: pil, CPU, RAM, disk, saat, tarih, ağ.",
-        {"query": {"type": "STRING"}},
+        {"query": {"type": "STRING", "description": "Hangi bilgi: 'pil', 'saat', 'disk', 'ram', 'ağ' vb."}},
         ["query"],
+        usage="Bilgisayarın anlık durumunu/saati sorulduğunda. Çalışan uygulamalar için desktop_os.processes.",
+        examples=[{"args": {"query": "pil durumu"}}],
     ),
-    _tool_decl("get_weather", "Anlık hava durumunu özetler.", {"location": {"type": "STRING"}}),
+    _tool_decl(
+        "get_weather",
+        "Anlık hava durumunu özetler.",
+        {"location": {"type": "STRING", "description": "Şehir/konum adı, örn. 'İstanbul'. Boşsa mevcut konum."}},
+        usage="Hava durumu sorulduğunda.",
+        examples=[{"args": {"location": "Ankara"}}],
+    ),
     _tool_decl(
         "get_calendar_events",
-        "Apple Calendar takvimini okur.",
-        {"query": {"type": "STRING"}, "limit": {"type": "NUMBER"}},
+        "Apple Calendar takvimini okur (etkinlikleri listeler).",
+        {
+            "query": {"type": "STRING", "description": "Aranan aralık/konu, örn. 'bu hafta', 'yarın', 'toplantı'."},
+            "limit": {"type": "NUMBER", "description": "Döndürülecek en fazla etkinlik sayısı."},
+        },
         ["query"],
+        usage="Kullanıcı takvimini/programını sorduğunda. Yeni etkinlik için add_calendar_event.",
+        examples=[{"args": {"query": "bu hafta", "limit": 10}}],
     ),
     _tool_decl(
         "add_calendar_event",
         "Apple Calendar takvimine yeni etkinlik ekler.",
         {
-            "title": {"type": "STRING"},
-            "start_iso": {"type": "STRING"},
-            "end_iso": {"type": "STRING"},
-            "location": {"type": "STRING"},
-            "notes": {"type": "STRING"},
-            "calendar_name": {"type": "STRING"},
-            "all_day": {"type": "BOOLEAN"},
+            "title": {"type": "STRING", "description": "Etkinlik başlığı."},
+            "start_iso": {"type": "STRING", "description": "Başlangıç, ISO 8601 yerel saat: 'YYYY-MM-DDTHH:MM:SS'. Göreli ifadeyi ('yarın 14:00') mutlak tarihe çevir."},
+            "end_iso": {"type": "STRING", "description": "Bitiş, ISO 8601. Boşsa başlangıçtan 1 saat sonrası."},
+            "location": {"type": "STRING", "description": "Konum (varsa)."},
+            "notes": {"type": "STRING", "description": "Ek not."},
+            "calendar_name": {"type": "STRING", "description": "Hedef takvim adı (varsa)."},
+            "all_day": {"type": "BOOLEAN", "description": "Tüm gün etkinliği."},
         },
         ["title", "start_iso"],
+        usage="Takvime etkinlik eklerken. Tarihi HER ZAMAN mutlak ISO'ya çevir; belirsizse netleştir.",
+        examples=[{"args": {"title": "Diş randevusu", "start_iso": "2026-07-15T09:30:00"}}],
     ),
     _tool_decl(
         "delete_calendar_event",
-        "Apple Calendar takviminden etkinlik siler.",
+        "Apple Calendar takviminden etkinlik siler (geri alınamaz — onay gerekir).",
         {
-            "title": {"type": "STRING"},
-            "start_iso": {"type": "STRING"},
-            "calendar_name": {"type": "STRING"},
-            "delete_all_matches": {"type": "BOOLEAN"},
+            "title": {"type": "STRING", "description": "Silinecek etkinliğin başlığı."},
+            "start_iso": {"type": "STRING", "description": "Etkinliğin başlangıcı (ISO) — doğru eşleşme için."},
+            "calendar_name": {"type": "STRING", "description": "Takvim adı (varsa)."},
+            "delete_all_matches": {"type": "BOOLEAN", "description": "Aynı başlıklı tüm etkinlikleri sil."},
         },
         ["title"],
+        usage="Etkinlik silmek için. Yanlış silmemek için start_iso ile daralt.",
     ),
     _tool_decl(
         "get_reminders",
         "Apple Reminders listesini okur.",
-        {"query": {"type": "STRING"}, "limit": {"type": "NUMBER"}, "list_name": {"type": "STRING"}},
+        {
+            "query": {"type": "STRING", "description": "Aranan konu/liste, örn. 'bugün', 'alışveriş'."},
+            "limit": {"type": "NUMBER", "description": "En fazla öğe sayısı."},
+            "list_name": {"type": "STRING", "description": "Belirli liste adı (varsa)."},
+        },
         ["query"],
+        usage="Hatırlatıcıları/yapılacakları görüntülerken. Yeni öğe için add_reminder.",
     ),
     _tool_decl(
         "add_reminder",
-        "Apple Reminders'a yeni öğe ekler.",
+        "Apple Reminders'a yeni hatırlatıcı ekler.",
         {
-            "title": {"type": "STRING"},
-            "due_iso": {"type": "STRING"},
-            "notes": {"type": "STRING"},
-            "list_name": {"type": "STRING"},
-            "priority": {"type": "STRING"},
-            "all_day": {"type": "BOOLEAN"},
+            "title": {"type": "STRING", "description": "Hatırlatıcı metni."},
+            "due_iso": {"type": "STRING", "description": "Son tarih, ISO 8601: 'YYYY-MM-DDTHH:MM:SS'. Göreli ifadeyi mutlaka çevir."},
+            "notes": {"type": "STRING", "description": "Ek not."},
+            "list_name": {"type": "STRING", "description": "Hedef liste adı (varsa)."},
+            "priority": {"type": "STRING", "description": "Öncelik: 'low', 'medium', 'high'."},
+            "all_day": {"type": "BOOLEAN", "description": "Saatsiz, gün bazlı."},
         },
         ["title"],
+        usage="Hatırlatıcı/yapılacak eklerken. Tarih varsa mutlak ISO'ya çevir.",
+        examples=[{"args": {"title": "Faturayı öde", "due_iso": "2026-07-13T18:00:00", "priority": "high"}}],
     ),
     _tool_decl(
         "browser_control",
-        "Tarayıcıda URL açar, web araması yapar veya YouTube açar.",
-        {"action": {"type": "STRING"}, "url": {"type": "STRING"}, "query": {"type": "STRING"}},
+        "Tarayıcıda bir URL açar, web araması yapar veya YouTube'da video açar.",
+        {
+            "action": {
+                "type": "STRING",
+                "description": "İşlem türü: 'open_url' (belirli adres), 'search' (web araması), 'play_youtube' (YouTube video).",
+            },
+            "url": {"type": "STRING", "description": "action='open_url' için açılacak tam adres (https://…)."},
+            "query": {"type": "STRING", "description": "action='search'/'play_youtube' için arama metni."},
+        },
         ["action"],
+        usage="Web adresi açma/arama/YouTube için. Uygulamanın kendisini açmak için open_app kullan.",
+        examples=[
+            {"args": {"action": "open_url", "url": "https://github.com"}},
+            {"args": {"action": "search", "query": "hava durumu istanbul"}},
+            {"args": {"action": "play_youtube", "query": "lo-fi çalışma müziği"}},
+        ],
     ),
     _tool_decl(
         "web_research",
         "Public web üzerinde kaynak toplayıp kısa bir araştırma özeti üretir.",
         {
-            "query": {"type": "STRING"},
-            "max_results": {"type": "NUMBER"},
-            "language_hint": {"type": "STRING"},
+            "query": {"type": "STRING", "description": "Araştırılacak konu/soru — net ve odaklı tut."},
+            "max_results": {"type": "NUMBER", "description": "Taranacak kaynak sayısı (varsayılan ~5)."},
+            "language_hint": {"type": "STRING", "description": "Tercih edilen kaynak dili, örn. 'tr' veya 'en'."},
         },
         ["query"],
+        usage="Güncel/dış bilgi gerektiğinde. Sonucu bir belgeye yazmak için ardından document_write ekle (dependsOn ile).",
+        examples=[{"args": {"query": "2025 elektrikli araç pazar payı", "language_hint": "tr"}}],
     ),
     _tool_decl(
         "shell_run",
-        "Yerel terminal komutu çalıştırır.",
+        "Yerel terminal komutu çalıştırır (güçlü — açık onay gerekir).",
         {
-            "command": {"type": "STRING"},
-            "mode": {"type": "STRING"},
-            "timeout": {"type": "NUMBER"},
-            "use_shell": {"type": "BOOLEAN"},
-            "working_dir": {"type": "STRING"},
-            "riskOverride": {"type": "STRING"},
+            "command": {"type": "STRING", "description": "Çalıştırılacak tam komut. Yıkıcı/geri alınamaz komutlardan kaçın."},
+            "mode": {"type": "STRING", "description": "Yürütme modu (varsa)."},
+            "timeout": {"type": "NUMBER", "description": "Saniye cinsinden zaman aşımı."},
+            "use_shell": {"type": "BOOLEAN", "description": "Kabuk (shell) üzerinden çalıştır."},
+            "working_dir": {"type": "STRING", "description": "Çalışma dizini."},
+            "riskOverride": {"type": "STRING", "description": "Risk onayı geçişi (yalnız gerekli olduğunda)."},
         },
         ["command"],
+        usage="Yalnız başka yetenek yokken. Dosya işlemleri için file_* , git için git_* yeteneklerini tercih et.",
     ),
     _tool_decl(
         "play_media",
-        "YouTube, Spotify veya Music ile medya oynatır.",
-        {"query": {"type": "STRING"}, "provider": {"type": "STRING"}, "autoplay": {"type": "BOOLEAN"}},
+        "YouTube, Spotify veya Apple Music ile şarkı/çalma listesi oynatır.",
+        {
+            "query": {"type": "STRING", "description": "Çalınacak şarkı, sanatçı veya çalma listesi adı."},
+            "provider": {"type": "STRING", "description": "Kaynak: 'youtube', 'spotify' veya 'music'. Belirtilmezse akıllı seçilir."},
+            "autoplay": {"type": "BOOLEAN", "description": "Bulunan ilk sonucu otomatik çal (varsayılan true)."},
+        },
         ["query"],
+        usage="Müzik/video çalmak için. Sadece uygulamayı açmak için open_app kullan.",
+        examples=[{"args": {"query": "Tarkan Kuzu Kuzu", "provider": "spotify"}}],
     ),
     _tool_decl(
         "analyze_screen",
-        "Aktif ekranı analiz eder.",
-        {"query": {"type": "STRING"}, "target": {"type": "STRING"}},
+        "Aktif ekranda ne olduğunu analiz eder (ne görünüyor sorusu).",
+        {
+            "query": {"type": "STRING", "description": "Ekran hakkında sorulan soru."},
+            "target": {"type": "STRING", "description": "Odaklanılacak bölge/öğe (varsa)."},
+        },
         ["query"],
+        usage="'Ekranımda ne var / bu ne' gibi sorularda. Ekranda tıklama/yazma için desktop_operator.run.",
     ),
     _tool_decl(
         "desktop_operator.observe_screen",
-        "Aktif pencereyi structured ekran gözlemine çevirir.",
+        "Aktif pencereyi yapılandırılmış ekran gözlemine çevirir (operator alt-adımı).",
         {
-            "query": {"type": "STRING"},
-            "target": {"type": "STRING"},
-            "preserveScreenshot": {"type": "BOOLEAN"},
+            "query": {"type": "STRING", "description": "Gözlem odağı."},
+            "target": {"type": "STRING", "description": "Hedef bölge/öğe."},
+            "preserveScreenshot": {"type": "BOOLEAN", "description": "Ekran görüntüsünü sakla."},
         },
+        usage="İleri ekran otomasyonu alt-adımı. Uçtan uca UI görevi için desktop_operator.run tercih et.",
     ),
     _tool_decl(
         "desktop_operator.locate",
-        "Metin veya öğe tipine göre ekrandaki hedef öğeyi bulur.",
+        "Metin veya öğe tipine göre ekrandaki hedef öğeyi bulur (operator alt-adımı).",
         {
-            "text": {"type": "STRING"},
-            "elementType": {"type": "STRING"},
+            "text": {"type": "STRING", "description": "Aranan görünür metin."},
+            "elementType": {"type": "STRING", "description": "Öğe tipi, örn. 'button', 'field'."},
         },
+        usage="İleri ekran otomasyonu alt-adımı; genelde desktop_operator.run içinde.",
     ),
     _tool_decl(
         "desktop_operator.focus_window",
         "Bir masaüstü uygulamasını öne alır.",
-        {"appName": {"type": "STRING"}, "bundleId": {"type": "STRING"}},
+        {
+            "appName": {"type": "STRING", "description": "Öne alınacak uygulama adı."},
+            "bundleId": {"type": "STRING", "description": "Uygulama bundle kimliği (varsa)."},
+        },
+        usage="Bir uygulamayı öne getirmek için. Uygulamayı açmak için open_app.",
     ),
     _tool_decl(
         "desktop_operator.execute_action",
-        "Visual desktop operator ile güvenli bir UI aksiyonu çalıştırır.",
+        "Ekranda tek bir güvenli UI eylemi çalıştırır (tıkla/yaz/tuş) — operator alt-adımı.",
         {
-            "actionType": {"type": "STRING"},
-            "targetText": {"type": "STRING"},
-            "elementType": {"type": "STRING"},
-            "bbox": {"type": "OBJECT"},
-            "text": {"type": "STRING"},
-            "keys": {"type": "ARRAY"},
-            "delta": {"type": "NUMBER"},
-            "duration": {"type": "NUMBER"},
-            "appName": {"type": "STRING"},
+            "actionType": {"type": "STRING", "description": "Eylem: 'click', 'type', 'key', 'scroll' vb."},
+            "targetText": {"type": "STRING", "description": "Hedef öğenin görünür metni."},
+            "elementType": {"type": "STRING", "description": "Öğe tipi."},
+            "bbox": {"type": "OBJECT", "description": "Hedef sınır kutusu (varsa)."},
+            "text": {"type": "STRING", "description": "actionType='type' için yazılacak metin."},
+            "keys": {"type": "ARRAY", "description": "actionType='key' için tuşlar."},
+            "delta": {"type": "NUMBER", "description": "Kaydırma miktarı."},
+            "duration": {"type": "NUMBER", "description": "Süre (sn)."},
+            "appName": {"type": "STRING", "description": "Hedef uygulama."},
         },
         ["actionType"],
+        usage="Tek UI eylemi için. Çok adımlı hedef için desktop_operator.run (kendi döngüsünü yürütür).",
     ),
     _tool_decl(
         "desktop_operator.run",
-        "Observe -> locate -> execute -> verify döngüsüyle görev tabanlı operator akışı çalıştırır.",
+        "Gözlemle→bul→uygula→doğrula döngüsüyle uçtan uca ekran otomasyonu görevi çalıştırır.",
         {
-            "goal": {"type": "STRING"},
-            "action": {"type": "STRING"},
-            "targetText": {"type": "STRING"},
-            "elementType": {"type": "STRING"},
-            "text": {"type": "STRING"},
-            "appName": {"type": "STRING"},
-            "steps": {"type": "ARRAY"},
+            "goal": {"type": "STRING", "description": "Ulaşılacak hedef, doğal dille, örn. 'Ayarlar'da bildirimleri kapat'."},
+            "action": {"type": "STRING", "description": "Tek eylem kısayolu (varsa)."},
+            "targetText": {"type": "STRING", "description": "Hedef öğe metni (varsa)."},
+            "elementType": {"type": "STRING", "description": "Öğe tipi (varsa)."},
+            "text": {"type": "STRING", "description": "Yazılacak metin (varsa)."},
+            "appName": {"type": "STRING", "description": "Hedef uygulama."},
+            "steps": {"type": "ARRAY", "description": "Elle verilen adımlar (varsa)."},
         },
+        usage="Bir uygulamada tıklama/yazma gerektiren çok adımlı işler için (API/yetenek yoksa). Güçlü — dikkatli kullan.",
+        examples=[{"args": {"goal": "System Settings'te karanlık modu aç", "appName": "System Settings"}}],
     ),
     _tool_decl(
         "desktop_operator.cancel",
-        "Aktif visual desktop operator çalışmasını güvenli şekilde durdurur.",
+        "Aktif ekran otomasyonu çalışmasını güvenli şekilde durdurur.",
         {
-            "runId": {"type": "STRING"},
-            "reason": {"type": "STRING"},
-            "source": {"type": "STRING"},
+            "runId": {"type": "STRING", "description": "Durdurulacak çalışma kimliği (varsa)."},
+            "reason": {"type": "STRING", "description": "İptal nedeni."},
+            "source": {"type": "STRING", "description": "İptali başlatan kaynak."},
         },
+        usage="Takılan/istenmeyen bir operator çalışmasını durdurmak için.",
     ),
     _tool_decl(
         "get_youtube_channel_report",
         "YouTube kanal istatistiklerini ve son video performansını raporlar.",
-        {"query": {"type": "STRING"}, "handle": {"type": "STRING"}, "video_limit": {"type": "NUMBER"}},
+        {
+            "query": {"type": "STRING", "description": "Kanal adı/araması."},
+            "handle": {"type": "STRING", "description": "Kanal @handle'ı (varsa)."},
+            "video_limit": {"type": "NUMBER", "description": "Raporlanacak son video sayısı."},
+        },
+        usage="Bir YouTube kanalının performansını özetlerken.",
     ),
     _tool_decl(
         "send_whatsapp_message",
-        "WhatsApp Desktop/Web üzerinden mesaj hazırlar veya gönderir.",
+        "WhatsApp Desktop/Web üzerinden mesaj hazırlar veya gönderir (gönderim dışa dönük — onay gerekir).",
         {
-            "recipient_name": {"type": "STRING"},
-            "phone_number": {"type": "STRING"},
-            "message": {"type": "STRING"},
-            "app_target": {"type": "STRING"},
-            "send_now": {"type": "BOOLEAN"},
+            "recipient_name": {"type": "STRING", "description": "Alıcının kayıtlı adı. Numarası yoksa kişi rehberinden çözülür."},
+            "phone_number": {"type": "STRING", "description": "Uluslararası numara (+90…). recipient_name yeterliyse boş bırak."},
+            "message": {"type": "STRING", "description": "Gönderilecek mesaj metni."},
+            "app_target": {"type": "STRING", "description": "Hedef: 'desktop' veya 'web'."},
+            "send_now": {"type": "BOOLEAN", "description": "true → hemen gönder; false → yalnız hazırla."},
         },
         ["message"],
+        usage="WhatsApp mesajı için. Alıcı belirsiz/numara bilinmiyorsa netleştir, uydurma. Kişi kaydı için save_whatsapp_contact.",
     ),
     _tool_decl(
         "save_whatsapp_contact",
-        "WhatsApp kişisini kalıcı kaydeder.",
-        {"display_name": {"type": "STRING"}, "phone_number": {"type": "STRING"}, "aliases": {"type": "STRING"}},
+        "WhatsApp kişisini kalıcı kaydeder (sonraki mesajlarda adla çözülür).",
+        {
+            "display_name": {"type": "STRING", "description": "Kişinin görünen adı."},
+            "phone_number": {"type": "STRING", "description": "Uluslararası numara (+90…)."},
+            "aliases": {"type": "STRING", "description": "Alternatif adlar, virgüllü (varsa)."},
+        },
         ["display_name", "phone_number"],
+        usage="Bir kişiyi ilerideki WhatsApp mesajları için kaydetmek üzere.",
     ),
     _tool_decl(
         "email_draft",
-        "E-posta taslağı hazırlar.",
+        "E-posta taslağı hazırlar (göndermez — kullanıcı onayına sunulur).",
         {
-            "to": {"type": "ARRAY"},
-            "subject": {"type": "STRING"},
-            "topic": {"type": "STRING"},
-            "prompt": {"type": "STRING"},
-            "tone": {"type": "STRING"},
+            "to": {"type": "ARRAY", "description": "Alıcı e-posta adresleri listesi. Bilinmiyorsa netleştirme iste, uydurma."},
+            "subject": {"type": "STRING", "description": "E-posta konusu."},
+            "topic": {"type": "STRING", "description": "İçeriğin kısa konusu (gövde bundan üretilir)."},
+            "prompt": {"type": "STRING", "description": "Gövde için ayrıntılı yönlendirme/talimat."},
+            "tone": {"type": "STRING", "description": "Üslup: 'resmi', 'samimi', 'kısa' vb."},
         },
         ["to"],
+        usage="E-posta yazmak için. Taslak onaydan sonra email_send ile gönderilir. Alıcı belirsizse netleştir.",
+        examples=[{"args": {"to": ["ali@ornek.com"], "subject": "Toplantı", "topic": "cuma 14:00 toplantı daveti", "tone": "resmi"}}],
     ),
     _tool_decl(
         "email_send",
-        "Onaylı e-postayı gönderir.",
+        "Onaylı e-postayı GÖNDERİR (geri alınamaz — açık onay gerekir).",
         {
-            "to": {"type": "ARRAY"},
-            "subject": {"type": "STRING"},
-            "body": {"type": "STRING"},
-            "connectionId": {"type": "STRING"},
-            "cc": {"type": "ARRAY"},
-            "bcc": {"type": "ARRAY"},
-            "replyTo": {"type": "STRING"},
+            "to": {"type": "ARRAY", "description": "Alıcı adresleri. Gerçek adres yoksa gönderme, netleştir."},
+            "subject": {"type": "STRING", "description": "Konu."},
+            "body": {"type": "STRING", "description": "Gövde (tam metin)."},
+            "connectionId": {"type": "STRING", "description": "Gönderen hesap bağlantı kimliği (varsa)."},
+            "cc": {"type": "ARRAY", "description": "CC adresleri."},
+            "bcc": {"type": "ARRAY", "description": "BCC adresleri."},
+            "replyTo": {"type": "STRING", "description": "Yanıt adresi."},
         },
         ["to", "subject", "body"],
+        usage="Genelde email_draft ile taslak hazırlanıp onaydan sonra gönderilir. Doğrudan gönderim geri alınamaz.",
     ),
     _tool_decl(
         "document_read",
-        "Belge veya dosya içeriğini güvenli şekilde okur.",
+        "Zengin belge içeriğini (Word/PDF/metin) okur ve özetlenebilir metne çevirir.",
         {
-            "path": {"type": "STRING"},
-            "text": {"type": "STRING"},
-            "mode": {"type": "STRING"},
+            "path": {"type": "STRING", "description": "Okunacak belgenin tam yolu (.docx/.pdf/.txt…)."},
+            "text": {"type": "STRING", "description": "Doğrudan metin verilecekse (path yerine)."},
+            "mode": {"type": "STRING", "description": "Okuma modu (varsa)."},
         },
         ["path"],
+        usage="Word/PDF gibi belgeleri okurken. Görüntüdeki metin için ocr_read, düz metin/kod için file_read.",
     ),
     _tool_decl(
         "ocr_read",
-        "Görsel veya PDF sayfasındaki metni OCR ile okur.",
+        "Görsel veya taranmış PDF sayfasındaki metni OCR ile çıkarır.",
         {
-            "path": {"type": "STRING"},
-            "mode": {"type": "STRING"},
-            "languageHint": {"type": "STRING"},
+            "path": {"type": "STRING", "description": "Görsel/PDF yolu."},
+            "mode": {"type": "STRING", "description": "OCR modu (varsa)."},
+            "languageHint": {"type": "STRING", "description": "Metin dili ipucu, örn. 'tr'."},
         },
         ["path"],
+        usage="Fotoğraf/ekran görüntüsü/taranmış belgedeki YAZIYI okumak için. Seçilebilir metinli belge için document_read.",
     ),
     _tool_decl(
         "image_read",
-        "Yerel görsel dosyasını güvenli şekilde inceler.",
-        {"path": {"type": "STRING"}, "mode": {"type": "STRING"}},
+        "Yerel bir görselin ne içerdiğini inceler (açıklama/etiket/renk).",
+        {
+            "path": {"type": "STRING", "description": "İncelenecek görsel yolu."},
+            "mode": {"type": "STRING", "description": "'summary' (açıklama), 'metadata' veya 'palette' (renkler)."},
+        },
         ["path"],
+        usage="Bir görselin İÇERİĞİNİ anlamak için. İçindeki yazıyı okumak için ocr_read.",
     ),
     _tool_decl(
         "image_generate",
-        "OpenAI Images API ile görsel üretir ve güvenli çıktı dosyası yazar.",
+        "Metin isteminden yapay zekâ ile görsel üretir ve dosyaya kaydeder.",
         {
-            "prompt": {"type": "STRING"},
-            "outputPath": {"type": "STRING"},
-            "title": {"type": "STRING"},
-            "size": {"type": "STRING"},
-            "quality": {"type": "STRING"},
-            "background": {"type": "STRING"},
-            "overwrite": {"type": "BOOLEAN"},
+            "prompt": {"type": "STRING", "description": "Üretilecek görselin ayrıntılı tarifi."},
+            "outputPath": {"type": "STRING", "description": "Kaydedilecek yol (verilmezse akıllı seçilir)."},
+            "title": {"type": "STRING", "description": "Görsel başlığı/dosya adı."},
+            "size": {"type": "STRING", "description": "Boyut, örn. '1024x1024'."},
+            "quality": {"type": "STRING", "description": "Kalite (varsa)."},
+            "background": {"type": "STRING", "description": "Arka plan: 'transparent' vb."},
+            "overwrite": {"type": "BOOLEAN", "description": "Üzerine yaz."},
         },
         ["prompt"],
+        usage="Sıfırdan görsel/illüstrasyon üretmek için. Web'den hazır görsel indirmek için image_fetch.",
+        examples=[{"args": {"prompt": "minimalist dağ manzarası, düz renkler", "size": "1024x1024"}}],
     ),
     _tool_decl(
         "image_fetch",
         "Herkese açık bir kaynaktan (Openverse/Wikimedia) bir konu için görsel indirir ve kullanıcının klasörüne (varsayılan masaüstü) kaydeder.",
         {
-            "query": {"type": "STRING"},
-            "destination": {"type": "STRING"},
-            "count": {"type": "INTEGER"},
-            "overwrite": {"type": "BOOLEAN"},
+            "query": {"type": "STRING", "description": "İndirilecek görselin konusu/araması."},
+            "destination": {"type": "STRING", "description": "Kaydedilecek klasör (varsayılan masaüstü)."},
+            "count": {"type": "INTEGER", "description": "İndirilecek görsel sayısı."},
+            "overwrite": {"type": "BOOLEAN", "description": "Var olanın üzerine yaz."},
         },
         ["query"],
+        usage="Web'den hazır/telifsiz görsel indirmek için. Sıfırdan görsel üretmek için image_generate.",
     ),
     _tool_decl(
         "file_read",
         "Bir metin/kod dosyasını güvenli şekilde okur (isteğe bağlı satır aralığı).",
         {
-            "path": {"type": "STRING"},
-            "max_bytes": {"type": "INTEGER"},
-            "start_line": {"type": "INTEGER"},
-            "end_line": {"type": "INTEGER"},
+            "path": {"type": "STRING", "description": "Okunacak dosyanın tam yolu."},
+            "max_bytes": {"type": "INTEGER", "description": "En fazla okunacak bayt (büyük dosyalar için)."},
+            "start_line": {"type": "INTEGER", "description": "Başlangıç satırı (1'den)."},
+            "end_line": {"type": "INTEGER", "description": "Bitiş satırı (dahil)."},
         },
         ["path"],
+        usage="Belge/kod dosyası içeriğini görmek için. Word/PDF gibi zengin belgeler için document_read kullan.",
+        examples=[{"args": {"path": "/Users/x/Desktop/notlar.txt"}}],
     ),
     _tool_decl(
         "file_search",
-        "Bir klasör ağacında dosya içeriğinde metin/regex arar (ripgrep destekli).",
+        "Bir klasör ağacında dosya İÇERİĞİNDE metin/regex arar (ripgrep destekli).",
         {
-            "query": {"type": "STRING"},
-            "path": {"type": "STRING"},
-            "glob": {"type": "STRING"},
-            "regex": {"type": "BOOLEAN"},
-            "case_sensitive": {"type": "BOOLEAN"},
-            "max_results": {"type": "INTEGER"},
+            "query": {"type": "STRING", "description": "Aranacak metin veya regex deseni."},
+            "path": {"type": "STRING", "description": "Arama kök klasörü (boşsa proje/çalışma dizini)."},
+            "glob": {"type": "STRING", "description": "Dosya filtresi, örn. '*.py'."},
+            "regex": {"type": "BOOLEAN", "description": "query'yi regex olarak yorumla."},
+            "case_sensitive": {"type": "BOOLEAN", "description": "Büyük/küçük harf duyarlı."},
+            "max_results": {"type": "INTEGER", "description": "En fazla eşleşme."},
         },
         ["query"],
+        usage="Dosya içinde metin ararken. Dosya ADIYLA bulmak veya klasör yapısı için directory_tree.",
+        examples=[{"args": {"query": "TODO", "glob": "*.py"}}],
     ),
     _tool_decl(
         "directory_tree",
         "Proje/klasör yapısını (ağaç) çıkarır; gürültülü klasörleri atlar.",
         {
-            "path": {"type": "STRING"},
-            "max_depth": {"type": "INTEGER"},
-            "max_entries": {"type": "INTEGER"},
+            "path": {"type": "STRING", "description": "Kök klasör (boşsa çalışma dizini)."},
+            "max_depth": {"type": "INTEGER", "description": "En fazla derinlik."},
+            "max_entries": {"type": "INTEGER", "description": "En fazla girdi sayısı."},
         },
+        usage="Bir klasörde neler olduğunu/proje yapısını görmek için. Dosya içeriğinde arama için file_search.",
     ),
     _tool_decl(
         "git_status",
         "Bir git deposunun durumunu (branch + staged/unstaged/untracked) döndürür.",
-        {"path": {"type": "STRING"}},
+        {"path": {"type": "STRING", "description": "Depo yolu (boşsa çalışma dizini)."}},
+        usage="Bir repoda hangi değişiklikler var diye bakarken.",
     ),
     _tool_decl(
         "git_diff",
         "Bir git deposundaki çalışma ağacı veya staged farkını (diff) döndürür.",
         {
-            "path": {"type": "STRING"},
-            "staged": {"type": "BOOLEAN"},
-            "target_file": {"type": "STRING"},
+            "path": {"type": "STRING", "description": "Depo yolu."},
+            "staged": {"type": "BOOLEAN", "description": "true → staged (index) farkı; false → çalışma ağacı."},
+            "target_file": {"type": "STRING", "description": "Yalnız bu dosyanın farkı (varsa)."},
         },
+        usage="Kod değişikliklerinin detayını görmek için.",
     ),
     _tool_decl(
         "file_write",
-        "Bir metin/kod dosyası oluşturur veya (overwrite=true ile) üzerine yazar. Onay gerektirir.",
+        "Bir metin/kod dosyası oluşturur veya (overwrite=true ile) üzerine yazar.",
         {
-            "path": {"type": "STRING"},
-            "content": {"type": "STRING"},
-            "overwrite": {"type": "BOOLEAN"},
+            "path": {"type": "STRING", "description": "Yazılacak dosyanın tam yolu."},
+            "content": {"type": "STRING", "description": "Dosyaya yazılacak tam içerik."},
+            "overwrite": {"type": "BOOLEAN", "description": "Var olan dosyanın üzerine yaz (yoksa hata verir)."},
         },
         ["path"],
+        usage="Düz metin/kod dosyası oluştururken. Word belgesi için document_write, tablo için spreadsheet_write.",
     ),
     _tool_decl(
         "file_patch",
-        "Var olan bir dosyada çıpalı bul/değiştir uygular (old_string → new_string). Onay gerektirir.",
+        "Var olan bir dosyada çıpalı bul/değiştir uygular (old_string → new_string).",
         {
-            "path": {"type": "STRING"},
-            "old_string": {"type": "STRING"},
-            "new_string": {"type": "STRING"},
-            "replace_all": {"type": "BOOLEAN"},
+            "path": {"type": "STRING", "description": "Düzenlenecek dosyanın tam yolu."},
+            "old_string": {"type": "STRING", "description": "Değiştirilecek TAM mevcut metin (benzersiz olmalı)."},
+            "new_string": {"type": "STRING", "description": "Yerine yazılacak yeni metin."},
+            "replace_all": {"type": "BOOLEAN", "description": "Tüm eşleşmeleri değiştir."},
         },
         ["path", "old_string"],
+        usage="Bir dosyanın küçük bir bölümünü değiştirmek için. Tüm dosyayı yeniden yazmak için file_write.",
     ),
     _tool_decl(
         "git_commit",
-        "Değişiklikleri commit'ler (opsiyonel git add -A). PUSH YAPMAZ. Onay gerektirir.",
+        "Değişiklikleri commit'ler (opsiyonel git add -A). PUSH YAPMAZ.",
         {
-            "path": {"type": "STRING"},
-            "message": {"type": "STRING"},
-            "add_all": {"type": "BOOLEAN"},
+            "path": {"type": "STRING", "description": "Depo yolu."},
+            "message": {"type": "STRING", "description": "Commit mesajı — kısa ve açıklayıcı."},
+            "add_all": {"type": "BOOLEAN", "description": "Commit'ten önce tüm değişiklikleri sahnele (git add -A)."},
         },
         ["message"],
+        usage="Değişiklikleri kaydederken. Push YAPMAZ (güvenlik). Yeni dal için git_branch.",
     ),
     _tool_decl(
         "git_branch",
-        "Yeni bir git branch'i oluşturur (varsayılan: oluşturup geçer). Onay gerektirir.",
+        "Yeni bir git branch'i oluşturur (varsayılan: oluşturup geçer).",
         {
-            "path": {"type": "STRING"},
-            "name": {"type": "STRING"},
-            "checkout": {"type": "BOOLEAN"},
+            "path": {"type": "STRING", "description": "Depo yolu."},
+            "name": {"type": "STRING", "description": "Yeni dal adı."},
+            "checkout": {"type": "BOOLEAN", "description": "Oluşturduktan sonra dala geç (varsayılan true)."},
         },
         ["name"],
+        usage="Ana dalda çalışmadan önce yeni bir dal açarken.",
     ),
     _tool_decl(
         "canvas_write",
         "Metin, tablo, grafik ve görselleri PDF veya PNG canvas çıktısına dönüştürür.",
         {
-            "prompt": {"type": "STRING"},
-            "outputPath": {"type": "STRING"},
-            "title": {"type": "STRING"},
-            "blocks": {"type": "ARRAY"},
-            "sections": {"type": "ARRAY"},
-            "outputFormat": {"type": "STRING"},
-            "width": {"type": "NUMBER"},
-            "height": {"type": "NUMBER"},
-            "sourceContext": {"type": "STRING"},
-            "sourcePath": {"type": "STRING"},
-            "overwrite": {"type": "BOOLEAN"},
+            "prompt": {"type": "STRING", "description": "İçerik/düzen için talimat."},
+            "outputPath": {"type": "STRING", "description": "Kaydedilecek çıktı yolu."},
+            "title": {"type": "STRING", "description": "Sayfa başlığı."},
+            "blocks": {"type": "ARRAY", "description": "Yerleştirilecek içerik blokları (varsa)."},
+            "sections": {"type": "ARRAY", "description": "Bölümler (varsa)."},
+            "outputFormat": {"type": "STRING", "description": "Çıktı biçimi: 'pdf' veya 'png'."},
+            "width": {"type": "NUMBER", "description": "Genişlik (px)."},
+            "height": {"type": "NUMBER", "description": "Yükseklik (px)."},
+            "sourceContext": {"type": "STRING", "description": "Ek bağlam metni."},
+            "sourcePath": {"type": "STRING", "description": "Kaynak dosya (varsa)."},
+            "overwrite": {"type": "BOOLEAN", "description": "Üzerine yaz."},
         },
         ["outputPath"],
+        usage="Metin+tablo+grafik+görseli tek görsel sayfada (PDF/PNG) birleştirmek için. Sadece Word için document_write.",
     ),
     _tool_decl(
         "data_analyze",
-        "CSV veya JSON verisini yerel olarak analiz eder.",
+        "CSV veya JSON verisini yerel olarak analiz eder (özet/profil/önizleme).",
         {
-            "path": {"type": "STRING"},
-            "mode": {"type": "STRING"},
-            "columns": {"type": "ARRAY"},
+            "path": {"type": "STRING", "description": "Veri dosyası yolu (.csv/.json)."},
+            "mode": {"type": "STRING", "description": "'summary', 'profile' veya 'preview'."},
+            "columns": {"type": "ARRAY", "description": "Odaklanılacak sütun adları (varsa)."},
         },
         ["path"],
+        usage="Bir veri dosyasını anlamak/özetlemek için. Grafik çizmek için chart_generate.",
     ),
     _tool_decl(
         "chart_generate",
         "CSV veya JSON verisinden yerel PNG grafik üretir.",
         {
-            "path": {"type": "STRING"},
-            "chartType": {"type": "STRING"},
-            "xColumn": {"type": "STRING"},
-            "yColumn": {"type": "STRING"},
-            "title": {"type": "STRING"},
+            "path": {"type": "STRING", "description": "Veri dosyası yolu."},
+            "chartType": {"type": "STRING", "description": "Tür: 'bar', 'line', 'scatter' veya 'histogram'."},
+            "xColumn": {"type": "STRING", "description": "X ekseni sütunu."},
+            "yColumn": {"type": "STRING", "description": "Y ekseni sütunu."},
+            "title": {"type": "STRING", "description": "Grafik başlığı."},
         },
         ["path"],
+        usage="Veriyi görselleştirmek için. Önce veriyi anlamak istersen data_analyze.",
+        examples=[{"args": {"path": "/Users/x/veri.csv", "chartType": "bar", "xColumn": "ay", "yColumn": "gelir"}}],
     ),
     _tool_decl(
         "math_solve",
-        "Yerel matematik ifadesini çözer veya sadeleştirir.",
+        "Matematik ifadesini yerel olarak çözer veya sadeleştirir.",
         {
-            "expression": {"type": "STRING"},
-            "mode": {"type": "STRING"},
+            "expression": {"type": "STRING", "description": "Çözülecek ifade/denklem, örn. '2x+3=7' veya 'integral x^2 dx'."},
+            "mode": {"type": "STRING", "description": "İşlem türü (çöz/sadeleştir) — varsayılan otomatik."},
         },
         ["expression"],
+        usage="Hesaplama/denklem/türev-integral için. LaTeX girdiyi ayrıştırmak için latex_parse.",
+        examples=[{"args": {"expression": "12 * (3 + 4)"}}],
     ),
     _tool_decl(
         "latex_parse",
-        "LaTeX matematik ifadesini yerel sembolik forma çevirir.",
+        "LaTeX matematik ifadesini yerel sembolik forma çevirir/normalize eder.",
         {
-            "expression": {"type": "STRING"},
-            "mode": {"type": "STRING"},
+            "expression": {"type": "STRING", "description": "LaTeX ifadesi, örn. '\\frac{a}{b}'."},
+            "mode": {"type": "STRING", "description": "'parse' veya 'normalize'."},
         },
         ["expression"],
+        usage="LaTeX'i işlerken. Sayısal çözüm için math_solve.",
     ),
     _tool_decl(
         "quantum_model_problem",
         "Optimizasyon problemini QUBO/Ising demo modeline dönüştürür.",
         {
-            "prompt": {"type": "STRING"},
-            "problemClass": {"type": "STRING"},
+            "prompt": {"type": "STRING", "description": "Modellemek istenen optimizasyon problemi."},
+            "problemClass": {"type": "STRING", "description": "Problem sınıfı (varsa)."},
         },
         ["prompt"],
+        usage="Kuantum/optimizasyon demo akışının ilk adımı; ardından quantum_run_experiment.",
     ),
     _tool_decl(
         "quantum_run_experiment",
-        "QAOA/VQE simulator demo deneyini yürütür.",
+        "QAOA/VQE simülatör demo deneyini yürütür.",
         {
-            "prompt": {"type": "STRING"},
-            "algorithm": {"type": "STRING"},
-            "shots": {"type": "NUMBER"},
+            "prompt": {"type": "STRING", "description": "Deney tanımı/hedefi."},
+            "algorithm": {"type": "STRING", "description": "Algoritma: 'qaoa' veya 'vqe'."},
+            "shots": {"type": "NUMBER", "description": "Ölçüm sayısı."},
         },
         ["prompt"],
+        usage="Kuantum demo deneyi çalıştırmak için (Qiskit/Aer gerekir).",
     ),
     _tool_decl(
         "quantum_compare_classical",
-        "Quantum demo sonucunu klasik baseline ile karşılaştırır.",
-        {
-            "prompt": {"type": "STRING"},
-        },
+        "Kuantum demo sonucunu klasik baseline ile karşılaştırır.",
+        {"prompt": {"type": "STRING", "description": "Karşılaştırılacak problem/sonuç bağlamı."}},
         ["prompt"],
+        usage="Kuantum sonucunu klasik yöntemle kıyaslarken.",
     ),
     _tool_decl(
         "quantum_generate_report",
-        "Quantum deney akışı için teknik rapor ve metrik artifact üretir.",
+        "Kuantum deney akışı için teknik rapor ve metrik artifact üretir.",
         {
-            "prompt": {"type": "STRING"},
-            "title": {"type": "STRING"},
+            "prompt": {"type": "STRING", "description": "Rapor konusu/kapsamı."},
+            "title": {"type": "STRING", "description": "Rapor başlığı."},
         },
         ["prompt"],
+        usage="Kuantum deney akışının sonunda özet rapor üretmek için.",
     ),
     _tool_decl(
         "document_write",
-        "DOCX belge üretir veya dönüştürür.",
+        "DOCX (Word) belgesi oluşturur veya bir kaynaktan dönüştürür.",
         {
-            "prompt": {"type": "STRING"},
-            "outputPath": {"type": "STRING"},
-            "title": {"type": "STRING"},
-            "sourcePath": {"type": "STRING"},
-            "sourceContext": {"type": "STRING"},
-            "overwrite": {"type": "BOOLEAN"},
+            "prompt": {"type": "STRING", "description": "Belge içeriği için talimat/konu. Önceki adımın çıktısı otomatik bağlam olur."},
+            "outputPath": {"type": "STRING", "description": "Kaydedilecek dosya yolu (verilmezse akıllı seçilir)."},
+            "title": {"type": "STRING", "description": "Belge başlığı."},
+            "sourcePath": {"type": "STRING", "description": "Dönüştürülecek kaynak dosya yolu (varsa)."},
+            "sourceContext": {"type": "STRING", "description": "Ek bağlam metni."},
+            "overwrite": {"type": "BOOLEAN", "description": "Var olan dosyanın üzerine yaz."},
         },
+        usage="Rapor/mektup/not gibi Word belgesi üretmek için. Araştırma sonrası kullanılıyorsa web_research adımına dependsOn ver; içerik _previousOutput'tan gelir.",
+        examples=[{"args": {"title": "Pazar Raporu", "prompt": "Elektrikli araç pazarı hakkında 1 sayfalık özet"}}],
     ),
     _tool_decl(
         "spreadsheet_write",
-        "XLSX çalışma sayfası üretir.",
+        "XLSX (Excel) çalışma sayfası üretir.",
         {
-            "prompt": {"type": "STRING"},
-            "outputPath": {"type": "STRING"},
-            "title": {"type": "STRING"},
-            "sourceContext": {"type": "STRING"},
-            "overwrite": {"type": "BOOLEAN"},
+            "prompt": {"type": "STRING", "description": "Tablo içeriği/yapısı için talimat. Önceki adım çıktısı bağlam olur."},
+            "outputPath": {"type": "STRING", "description": "Kaydedilecek yol (verilmezse akıllı seçilir)."},
+            "title": {"type": "STRING", "description": "Çalışma sayfası başlığı."},
+            "sourceContext": {"type": "STRING", "description": "Ek bağlam/veri metni."},
+            "overwrite": {"type": "BOOLEAN", "description": "Üzerine yaz."},
         },
+        usage="Sayısal/tablosal veri (bütçe, liste, hesap) için. Metin belgesi için document_write.",
+        examples=[{"args": {"title": "Aylık Bütçe", "prompt": "Gelir-gider tablosu, 3 aylık"}}],
     ),
     _tool_decl(
         "presentation_write",
-        "PPTX sunum üretir.",
+        "PPTX (PowerPoint) sunum üretir.",
         {
-            "prompt": {"type": "STRING"},
-            "outputPath": {"type": "STRING"},
-            "title": {"type": "STRING"},
-            "sourceContext": {"type": "STRING"},
-            "overwrite": {"type": "BOOLEAN"},
+            "prompt": {"type": "STRING", "description": "Sunum konusu/anahatları için talimat. Önceki adım çıktısı bağlam olur."},
+            "outputPath": {"type": "STRING", "description": "Kaydedilecek yol (verilmezse akıllı seçilir)."},
+            "title": {"type": "STRING", "description": "Sunum başlığı."},
+            "sourceContext": {"type": "STRING", "description": "Ek bağlam metni."},
+            "overwrite": {"type": "BOOLEAN", "description": "Üzerine yaz."},
         },
+        usage="Slayt destesi için. Araştırma sonrası kullanılıyorsa web_research'e dependsOn ver.",
+        examples=[{"args": {"title": "Ürün Tanıtımı", "prompt": "5 slaytlık ürün sunumu"}}],
     ),
     _tool_decl(
         "retrieve_context",
-        "Yerel çalışma alanı ve konuşmalardan bağlam eşleşmeleri döndürür.",
+        "Yerel çalışma alanı ve konuşmalardan bağlam eşleşmeleri döndürür (çevrimdışı).",
         {
-            "query": {"type": "STRING"},
-            "sources": {"type": "STRING"},
-            "limit": {"type": "NUMBER"},
-            "conversationId": {"type": "STRING"},
+            "query": {"type": "STRING", "description": "Aranan konu/soru."},
+            "sources": {"type": "STRING", "description": "Kaynaklar, virgüllü: 'workspace,conversations'."},
+            "limit": {"type": "NUMBER", "description": "En fazla eşleşme."},
+            "conversationId": {"type": "STRING", "description": "Belirli konuşma bağlamı (varsa)."},
         },
         ["query"],
+        usage="Yerel/geçmiş bilgi gerektiğinde veya web erişilemediğinde. Güncel dış bilgi için web_research.",
     ),
     _tool_decl(
         "speech_capture",
         "Yerel mikrofondan kısa ses kaydı başlatır veya durdurur.",
         {
-            "action": {"type": "STRING"},
-            "_uiGesture": {"type": "BOOLEAN"},
+            "action": {"type": "STRING", "description": "'start' (kaydı başlat) veya 'stop' (durdur)."},
+            "_uiGesture": {"type": "BOOLEAN", "description": "Kullanıcı jestiyle tetiklendi (dahili)."},
         },
         ["action"],
+        usage="Sesli not/dikte almak için kaydı başlatıp durdurma. Kaydı metne çevirmek için speech_to_text.",
     ),
     _tool_decl(
         "speech_to_text",
-        "Yerel ses kaydını metne çevirir.",
+        "Yerel ses kaydını metne çevirir (dikte).",
         {
-            "audioPath": {"type": "STRING"},
-            "sessionId": {"type": "STRING"},
-            "languageHint": {"type": "STRING"},
-            "taskId": {"type": "STRING"},
+            "audioPath": {"type": "STRING", "description": "Çevrilecek ses dosyası yolu (varsa)."},
+            "sessionId": {"type": "STRING", "description": "Kayıt oturumu kimliği (varsa)."},
+            "languageHint": {"type": "STRING", "description": "Konuşma dili ipucu, örn. 'tr'."},
+            "taskId": {"type": "STRING", "description": "İlişkili görev kimliği (varsa)."},
         },
+        usage="Ses kaydını yazıya dökmek için. Yazıyı sese çevirmek için text_to_speech.",
     ),
     _tool_decl(
         "text_to_speech",
         "Metni yerel olarak sesli okur.",
         {
-            "text": {"type": "STRING"},
-            "languageHint": {"type": "STRING"},
-            "voice": {"type": "STRING"},
-            "interrupt": {"type": "BOOLEAN"},
+            "text": {"type": "STRING", "description": "Sesli okunacak metin."},
+            "languageHint": {"type": "STRING", "description": "Dil ipucu, örn. 'tr'."},
+            "voice": {"type": "STRING", "description": "Ses/tını adı (varsa)."},
+            "interrupt": {"type": "BOOLEAN", "description": "Süren okumayı kesip yeniden başla."},
         },
         ["text"],
+        usage="Bir metni/cevabı sesli okutmak için.",
     ),
     _tool_decl(
         "mcp_call_tool",
-        "Yerel stdio MCP sunucusundaki bir aracı çağırır.",
+        "Bağlı bir MCP sunucusundaki aracı çağırır (harici entegrasyonlar).",
         {
-            "serverId": {"type": "STRING"},
-            "toolName": {"type": "STRING"},
-            "arguments": {"type": "OBJECT"},
+            "serverId": {"type": "STRING", "description": "MCP sunucu kimliği."},
+            "toolName": {"type": "STRING", "description": "Çağrılacak araç adı."},
+            "arguments": {"type": "OBJECT", "description": "Araca geçilecek argümanlar (araç şemasına uygun)."},
         },
         ["serverId", "toolName"],
+        usage="Yerleşik yeteneklerin karşılamadığı, kullanıcının bağladığı bir MCP aracı gerektiğinde.",
     ),
     _tool_decl(
         "run_skill",
-        "Yerel skill manifestinden kontrollü bir skill çalıştırır.",
+        "Yerel skill manifestinden kontrollü, çok adımlı bir beceri çalıştırır.",
         {
-            "skillId": {"type": "STRING"},
-            "payload": {"type": "OBJECT"},
+            "skillId": {"type": "STRING", "description": "Çalıştırılacak beceri kimliği (skill kataloğundan)."},
+            "payload": {"type": "OBJECT", "description": "Becerinin beklediği girdi alanları."},
         },
         ["skillId"],
+        usage="Kullanıcının tanımladığı hazır bir beceri/otomasyon gerektiğinde.",
     ),
     _tool_decl(
         "desktop_os.status",
-        "Yerel desktop OS capability ve native entegrasyon durumunu döndürür.",
+        "Masaüstü OS yetenek ve native entegrasyon durumunu döndürür.",
         {},
+        usage="Masaüstünün hangi yeteneklerinin hazır olduğunu kontrol ederken (tanılama).",
     ),
     _tool_decl(
         "desktop_os.permissions",
-        "Yerel desktop izin modelini ve izin readiness durumunu döndürür.",
+        "Masaüstü izin modelini ve izin hazırlık (readiness) durumunu döndürür.",
         {},
+        usage="Hangi sistem izinlerinin verildiğini görmek için. İzin ekranını açmak için desktop_os.open_permission_settings.",
     ),
     _tool_decl(
         "desktop_os.open_permission_settings",
         "İlgili sistem izin ekranını güvenli şekilde açar.",
-        {
-            "permission": {"type": "STRING"},
-        },
+        {"permission": {"type": "STRING", "description": "Açılacak izin türü, örn. 'accessibility', 'screen'."}},
+        usage="Bir izin eksikse kullanıcıyı doğru sistem ayar ekranına yönlendirmek için.",
     ),
     _tool_decl(
         "desktop_os.processes",
-        "Yerel çalışan prosesleri güvenli şekilde listeler.",
+        "Çalışan uygulamaları/prosesleri güvenli şekilde listeler.",
         {
-            "query": {"type": "STRING"},
-            "limit": {"type": "NUMBER"},
+            "query": {"type": "STRING", "description": "Filtre/arama (varsa)."},
+            "limit": {"type": "NUMBER", "description": "En fazla sonuç."},
         },
+        usage="Hangi uygulamaların açık olduğunu görmek için. Genel sistem bilgisi için sys_info.",
     ),
     _tool_decl(
         "desktop_os.active_window",
-        "Aktif pencere bilgisini güvenli şekilde döndürür.",
+        "Şu an öndeki (aktif) pencere bilgisini döndürür.",
         {},
+        usage="Kullanıcının o an hangi uygulamada olduğunu öğrenmek için.",
     ),
     _tool_decl(
         "save_memory",
-        "Kalıcı hafızaya bir kayıt ekler.",
-        {"category": {"type": "STRING"}, "key": {"type": "STRING"}, "value": {"type": "STRING"}},
+        "Kullanıcı hakkında kalıcı bir tercih/olgu kaydeder (sonraki oturumlarda hatırlanır).",
+        {
+            "category": {"type": "STRING", "description": "Kategori, örn. 'tercih', 'kişi', 'proje'."},
+            "key": {"type": "STRING", "description": "Kısa anahtar/etiket."},
+            "value": {"type": "STRING", "description": "Hatırlanacak bilgi."},
+        },
         ["key", "value"],
+        usage="Kullanıcı 'bunu hatırla/aklında tut' dediğinde kalıcı tercih/olgu kaydetmek için.",
+        examples=[{"args": {"category": "tercih", "key": "kahve", "value": "sütlü, şekersiz"}}],
     ),
     _tool_decl(
         "delete_memory",
-        "Kalıcı hafızadan kayıt siler.",
-        {"category": {"type": "STRING"}, "key": {"type": "STRING"}, "match_text": {"type": "STRING"}},
+        "Kalıcı hafızadan bir kaydı siler.",
+        {
+            "category": {"type": "STRING", "description": "Kategori (varsa)."},
+            "key": {"type": "STRING", "description": "Silinecek kaydın anahtarı."},
+            "match_text": {"type": "STRING", "description": "Anahtar yoksa içerikle eşleştir."},
+        },
+        usage="Kullanıcı 'şunu unut/hatırlama' dediğinde.",
     ),
     _tool_decl(
         "clipboard_read",
         "Panodaki (clipboard) metni okur.",
-        {"query": {"type": "STRING"}},
+        {"query": {"type": "STRING", "description": "İsteğe bağlı bağlam/filtre."}},
+        usage="Kullanıcı 'panodakini/kopyaladığımı' işleme dediğinde.",
     ),
     _tool_decl(
         "clipboard_write",
         "Verilen metni panoya (clipboard) kopyalar.",
-        {"text": {"type": "STRING"}},
+        {"text": {"type": "STRING", "description": "Panoya kopyalanacak metin."}},
         ["text"],
+        usage="Bir sonucu/metni kullanıcının yapıştırabilmesi için panoya koymak.",
     ),
 ]
 
@@ -826,6 +994,92 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
 
 def capability_names() -> set[str]:
     return {str(item["name"]) for item in TOOL_DECLARATIONS}
+
+
+# Kullanıcıya gösterilen dostane yetenek adları (TR). Ham slug ("document_write")
+# yerine "Belge oluşturma" — degrade/kullanılamıyor mesajlarında ve plan
+# önizlemesinde kullanılır.
+_CAPABILITY_DISPLAY_NAMES: dict[str, str] = {
+    "open_app": "Uygulama açma",
+    "close_app": "Uygulama kapatma",
+    "sys_info": "Sistem bilgisi",
+    "shell_run": "Terminal komutu",
+    "browser_control": "Tarayıcı kontrolü",
+    "play_media": "Medya oynatma",
+    "analyze_screen": "Ekran analizi",
+    "clipboard_read": "Panoyu okuma",
+    "clipboard_write": "Panoya yazma",
+    "file_read": "Dosya okuma",
+    "file_write": "Dosya yazma",
+    "file_patch": "Dosya düzenleme",
+    "file_search": "Dosya arama",
+    "directory_tree": "Klasör ağacı",
+    "git_status": "Git durumu",
+    "git_diff": "Git değişiklikleri",
+    "git_commit": "Git commit",
+    "git_branch": "Git dal",
+    "web_research": "Web araştırması",
+    "retrieve_context": "Yerel bağlam getirme",
+    "document_read": "Belge okuma",
+    "ocr_read": "Görüntüden metin (OCR)",
+    "image_read": "Görsel inceleme",
+    "image_fetch": "Görsel indirme",
+    "image_generate": "Görsel üretme",
+    "document_write": "Belge oluşturma",
+    "spreadsheet_write": "Tablo oluşturma",
+    "presentation_write": "Sunum oluşturma",
+    "canvas_write": "Görsel pano oluşturma",
+    "chart_generate": "Grafik oluşturma",
+    "data_analyze": "Veri analizi",
+    "email_draft": "E-posta taslağı",
+    "email_send": "E-posta gönderme",
+    "send_whatsapp_message": "WhatsApp mesajı",
+    "save_whatsapp_contact": "WhatsApp kişi kaydı",
+    "add_calendar_event": "Takvim etkinliği ekleme",
+    "delete_calendar_event": "Takvim etkinliği silme",
+    "get_calendar_events": "Takvim etkinliklerini görme",
+    "add_reminder": "Hatırlatıcı ekleme",
+    "get_reminders": "Hatırlatıcıları görme",
+    "get_weather": "Hava durumu",
+    "get_youtube_channel_report": "YouTube kanal raporu",
+    "math_solve": "Matematik çözümü",
+    "latex_parse": "LaTeX işleme",
+    "speech_capture": "Ses kaydı",
+    "speech_to_text": "Sesten metne",
+    "text_to_speech": "Metinden sese",
+    "run_skill": "Beceri çalıştırma",
+    "mcp_call_tool": "MCP aracı",
+    "save_memory": "Hafızaya kaydetme",
+    "delete_memory": "Hafızadan silme",
+    "quantum_model_problem": "Kuantum modelleme",
+    "quantum_run_experiment": "Kuantum deneyi",
+    "quantum_compare_classical": "Kuantum karşılaştırma",
+    "quantum_generate_report": "Kuantum raporu",
+    "desktop_operator.run": "Ekran otomasyonu",
+    "desktop_operator.execute_action": "Ekran eylemi",
+    "desktop_operator.focus_window": "Pencere odaklama",
+    "desktop_operator.observe_screen": "Ekran gözlemi",
+    "desktop_operator.locate": "Ekranda konum bulma",
+    "desktop_operator.cancel": "Otomasyonu iptal",
+    "desktop_os.status": "Masaüstü durumu",
+    "desktop_os.permissions": "İzin durumu",
+    "desktop_os.processes": "Çalışan uygulamalar",
+    "desktop_os.active_window": "Aktif pencere",
+    "desktop_os.open_permission_settings": "İzin ayarlarını açma",
+}
+
+
+def capability_display_name(name: str) -> str:
+    """Yetenek slug'ının kullanıcıya gösterilecek dostane TR adı. Bilinmeyen
+    slug için okunabilir bir yedek üretir (alt çizgi/nokta → boşluk, baş harf)."""
+    normalized = str(name or "").strip()
+    if not normalized:
+        return "Bu işlem"
+    label = _CAPABILITY_DISPLAY_NAMES.get(normalized)
+    if label:
+        return label
+    readable = normalized.split(".")[-1].replace("_", " ").strip()
+    return readable[:1].upper() + readable[1:] if readable else "Bu işlem"
 
 
 _DARWIN_ONLY_CAPABILITIES = {
@@ -1988,14 +2242,15 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
     readiness = capability_readiness(tool_name, state=state)
     if readiness.get("ready") is False:
         error_code = str(readiness.get("errorCode", "") or "CAPABILITY_UNAVAILABLE")
+        display = capability_display_name(tool_name)
         if error_code == "UNSUPPORTED_PLATFORM":
-            message = "Bu özellik bu işletim sisteminde desteklenmiyor."
+            message = f"{display} bu işletim sisteminde desteklenmiyor."
         elif error_code == "DEPENDENCY_UNAVAILABLE":
-            message = "Bu özellik bu kurulumda hazır değil."
+            message = f"{display} şu an kullanılamıyor: gerekli bileşen bu masaüstünde hazır değil."
         elif error_code == "OS_PERMISSION_REQUIRED":
             message = _system_permission_message(str(readiness.get("systemPermissionKey", "") or ""))
         else:
-            message = "Bu özellik güvenli şekilde başlatılamadı."
+            message = f"{display} güvenli şekilde başlatılamadı."
         return {
             "ok": False,
             "tool": tool_name,
@@ -2006,11 +2261,13 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
 
     handler = _handlers().get(tool_name)
     if handler is None:
+        display = capability_display_name(tool_name)
+        message = f"{display} şu anda hazır değil."
         return {
             "ok": False,
             "tool": tool_name,
-            "output": "Bu özellik şu anda hazır değil.",
-            "error": {"code": "CAPABILITY_UNAVAILABLE", "message": "Bu özellik şu anda hazır değil."},
+            "output": message,
+            "error": {"code": "CAPABILITY_UNAVAILABLE", "message": message},
         }
 
     try:
@@ -2113,16 +2370,90 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
     }
 
 
+_CONFIRMED_READBACK_STATUSES = {
+    "closed_confirmed",
+    "foreground_confirmed",
+    "frontmost_verified",
+    "state_verified",
+    "read_back_verified",
+    "created",
+    "updated",
+    "launched",
+    "saved",
+}
+_READBACK_BOOL_FIELDS = (
+    ("closedConfirmed", "closed_confirmed"),
+    ("foregroundConfirmed", "foreground_confirmed"),
+    ("frontmostVerified", "frontmost_verified"),
+    ("stateVerified", "state_verified"),
+    ("readBackVerified", "read_back_verified"),
+    ("created", "created"),
+    ("updated", "updated"),
+)
+
+
+def extract_state_readback(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Yeteneğin ürettiği gerçek-durum gözlemini makine-okur kanıta çevirir.
+
+    "Komut hata vermedi" (ok) DEĞİL, "etki gerçekten gözlendi" anlamına gelen
+    alanlar aranır: uygulama kapandı/açıldı mı, dosya diskte var mı, kaç dosya
+    kaydedildi. Gözlemlenecek bir son-durum yoksa None döner (bu adımın yan
+    etkisi yok ya da doğrulanamıyor demektir). "prove it" ilkesinin çekirdeği.
+    """
+    payload = result.get("result")
+    if not isinstance(payload, dict):
+        return None
+    for key, status in _READBACK_BOOL_FIELDS:
+        if payload.get(key) is True:
+            return {"observed": True, "status": status, "field": key}
+    try:
+        saved = int(payload.get("savedCount", 0) or 0)
+    except (TypeError, ValueError):
+        saved = 0
+    if saved > 0:
+        return {"observed": True, "status": "saved", "field": "savedCount", "count": saved}
+    out_path = str(payload.get("outputPath", "") or payload.get("path", "") or "").strip()
+    if out_path:
+        try:
+            exists = Path(out_path).expanduser().is_file()
+        except (OSError, RuntimeError, ValueError):
+            exists = False
+        return {
+            "observed": exists,
+            "status": "file_exists" if exists else "file_missing",
+            "field": "outputPath",
+        }
+    verification_status = str(payload.get("verificationStatus", "") or "").strip().lower()
+    if verification_status:
+        return {
+            "observed": verification_status in _CONFIRMED_READBACK_STATUSES,
+            "status": verification_status,
+            "field": "verificationStatus",
+        }
+    if payload.get("processObserved") is True:
+        return {"observed": True, "status": "process_observed", "field": "processObserved"}
+    return None
+
+
 def safe_tool_event(tool_name: str, result: dict[str, Any], *, source: str) -> dict[str, Any]:
     error = result.get("error") if isinstance(result.get("error"), dict) else {}
     output = str(result.get("output") or error.get("message") or "").strip()
-    return {
+    ok = bool(result.get("ok"))
+    readback = extract_state_readback(result) if ok else None
+    event: dict[str, Any] = {
         "tool": tool_name,
         "source": source,
-        "ok": bool(result.get("ok")),
+        "ok": ok,
         "output": output[:1000],
         "errorCode": str(error.get("code", "") or ""),
+        # verified = araç başarılı VE (gözlenecek son-durum yoksa | gözlendiyse).
+        # Yan etki iddia edilip gözlenemezse (ör. kapatıldı ama süreç hâlâ var)
+        # bu False olur; görev "tamamlandı" iddiasını buna dayandırır.
+        "verified": ok and (readback is None or readback.get("observed") is True),
     }
+    if readback is not None:
+        event["stateReadback"] = readback
+    return event
 
 
 def run_capability_text(tool_name: str, args: dict[str, Any] | None, state: dict[str, Any]) -> str:
