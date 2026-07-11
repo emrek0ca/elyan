@@ -1,0 +1,14 @@
+# Elyan çekirdek bağımlılıklar — `elyan` komutunun ve daemon'un çalışması için
+# yeterli asgari küme. Ağır/opsiyonel paketler requirements.txt'te kalır ve
+# ilk kurulumdan sonra arka planda kurulur (scripts/install_extras.py).
+requests
+httpx
+websocket-client
+psutil
+Pillow
+pystray>=0.19
+qrcode>=7.4
+litellm
+langgraph
+google-genai
+mcp

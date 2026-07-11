@@ -1,9 +1,30 @@
 {
-  "name": "elyan-desktop",
+  "name": "elyan",
   "productName": "Elyan",
-  "version": "1.3.0",
-  "private": true,
-  "description": "Elyan Desktop. macOS native Swift App, Windows Flutter App, Python Runtime Core.",
+  "version": "1.4.0",
+  "description": "Elyan masaüstü ajanı — npm install -g elyan && elyan. Mobilden gelen görevleri bilgisayarında yürütür.",
+  "bin": {
+    "elyan": "bin/elyan.js"
+  },
+  "files": [
+    "bin/elyan.js",
+    "cli/",
+    "runtime/",
+    "core/",
+    "actions/",
+    "helpers/",
+    "config/api_keys.example.json",
+    "resources/",
+    "app_config.py",
+    "__init__.py",
+    "__main__.py",
+    "scripts/install_extras.py",
+    "requirements-core.txt",
+    "requirements.txt"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "clean": "node ./scripts/clean.mjs",
     "build:runtime": "node ./scripts/build-runtime.mjs"
