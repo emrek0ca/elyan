@@ -27,6 +27,7 @@ from runtime import state_store
 
 PID_PATH = state_store.CONFIG_DIR / "daemon.pid"
 LOG_PATH = state_store.CONFIG_DIR / "daemon.log"
+STOP_PATH = state_store.CONFIG_DIR / "daemon.stop"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -52,6 +53,10 @@ def read_daemon_pid() -> int:
 
 def _write_pidfile() -> None:
     PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        STOP_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
     PID_PATH.write_text(str(os.getpid()))
 
 
@@ -61,6 +66,42 @@ def _remove_pidfile() -> None:
             PID_PATH.unlink()
     except OSError:
         pass
+    try:
+        STOP_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _stop_requested() -> bool:
+    """Return True only for a stop marker addressed to this daemon PID."""
+    try:
+        return STOP_PATH.read_text().strip() == str(os.getpid())
+    except OSError:
+        return False
+
+
+def _mark_daemon_transport_starting() -> None:
+    """Invalidate transport truth inherited from an earlier daemon process."""
+    state = state_store.snapshot()
+    runtime = state.get("runtime", {}) if isinstance(state.get("runtime"), dict) else {}
+    paired = bool(
+        str(runtime.get("runtimeToken", "") or "").strip()
+        or (
+            str(runtime.get("deviceId", "") or "").strip()
+            and str(runtime.get("deviceSecret", "") or "").strip()
+        )
+    )
+    state_store.update_state(
+        {
+            "runtime": {
+                "ready": False,
+                "websocketConnected": False,
+                "lifecycleState": "runtime_connecting" if paired else "offline",
+                "lastErrorCode": "",
+            },
+            "pairing": {"realtimeReady": False},
+        }
+    )
 
 
 class ElyanDaemon:
@@ -71,6 +112,7 @@ class ElyanDaemon:
         # tasks) bunu hiç yüklemez.
         from runtime.bridge import RuntimeBridge
 
+        _mark_daemon_transport_starting()
         self.bridge = RuntimeBridge()
         self._stop = threading.Event()
 
@@ -102,22 +144,70 @@ class ElyanDaemon:
     def stop(self) -> None:
         self._stop.set()
 
+    # 1 sn beklerken duvar-saati bu kadar atladıysa makine uyumuş/askıya
+    # alınmış olabilir; uyanışta soket koptuğu için hemen yeniden bağlan.
+    WAKE_GAP_SECONDS = 8.0
+    # Bağlantı düşükken kademeli yeniden-deneme (düz 300 sn yerine hızlı ilk
+    # denemeler + katlanan sırt): ağ kısa süre gidip geldiğinde saniyeler
+    # içinde toparlanır, kalıcı kesintide gereksiz yük bindirmez.
+    OFFLINE_RETRY_MIN = 5.0
+    OFFLINE_RETRY_MAX = 300.0
+    _CONNECTED_LIFECYCLES = frozenset({"ready", "online", "connected"})
+
+    def _force_reconnect(self) -> None:
+        reconnect = getattr(self.bridge, "force_runtime_reconnect", None)
+        if callable(reconnect):
+            try:
+                reconnect()
+                return
+            except Exception:
+                pass
+        self.bootstrap()
+
     def run_forever(self) -> None:
         """Relay thread'leri (bridge içinde, daemon=True) işi yapar; burası
-        süreci canlı tutar ve düşen bağlantıyı periyodik bootstrap ile toparlar."""
+        süreci canlı tutar, uykudan uyanışı tespit edip düşen bağlantıyı
+        kademeli olarak toparlar."""
         last_bootstrap = time.monotonic()
+        last_wall = time.time()
+        offline_retry = self.OFFLINE_RETRY_MIN
         while not self._stop.is_set():
-            self._stop.wait(30)
+            # A native tray main loop can defer Python signal handlers on
+            # macOS.  The CLI also writes a PID-scoped stop marker, which this
+            # lightweight keeper observes cross-platform without depending on
+            # the UI event loop.
+            self._stop.wait(1)
+            if _stop_requested():
+                self.stop()
             if self._stop.is_set():
                 break
-            # Bağlantı düşmüşse (offline/reconnecting) 5 dakikada bir yeniden
-            # bootstrap dene — ağ geri geldiğinde müdahalesiz toparlanma.
-            if time.monotonic() - last_bootstrap >= 300:
-                snapshot = state_store.snapshot().get("runtime", {})
-                lifecycle = str(snapshot.get("lifecycleState", "") or "")
-                if lifecycle not in {"ready", "online", "connected"}:
-                    self.bootstrap()
+
+            now_wall = time.time()
+            wall_gap = now_wall - last_wall
+            last_wall = now_wall
+
+            snapshot = state_store.snapshot().get("runtime", {})
+            snapshot = snapshot if isinstance(snapshot, dict) else {}
+            lifecycle = str(snapshot.get("lifecycleState", "") or "")
+            connected = lifecycle in self._CONNECTED_LIFECYCLES
+
+            # Uyku/askı tespiti: state "ready" görünse bile soket kopmuştur;
+            # 5 dk döngüsünü beklemeden koşulsuz zorla yeniden bağlan.
+            if wall_gap >= self.WAKE_GAP_SECONDS:
+                self._force_reconnect()
                 last_bootstrap = time.monotonic()
+                offline_retry = self.OFFLINE_RETRY_MIN
+                continue
+
+            if connected:
+                offline_retry = self.OFFLINE_RETRY_MIN
+                continue
+
+            # Bağlantı düşük: kısa aralıkla dene, başarısızlıkta sırtı uzat.
+            if time.monotonic() - last_bootstrap >= offline_retry:
+                self.bootstrap()
+                last_bootstrap = time.monotonic()
+                offline_retry = min(offline_retry * 2, self.OFFLINE_RETRY_MAX)
 
 
 # -- durum yardımcıları (tray + CLI status paylaşır) ------------------------
@@ -140,14 +230,33 @@ def runtime_status_summary() -> dict[str, Any]:
         if isinstance(item, dict)
         and str(item.get("status", "")) not in {"completed", "failed", "canceled"}
     ]
+    pid = read_daemon_pid()
+    # STATE is deliberately persisted across restarts, but a persisted
+    # `ready` flag must never make a stopped process look connected.  The
+    # daemon PID is the local liveness authority for this lightweight view;
+    # backend truth is refreshed by the running bridge.
+    lifecycle = str(runtime.get("lifecycleState", "") or "stopped")
+    websocket_connected = bool(runtime.get("websocketConnected", False))
+    if not pid:
+        lifecycle = "offline"
+        websocket_connected = False
     return {
-        "pid": read_daemon_pid(),
-        "lifecycleState": str(runtime.get("lifecycleState", "") or "stopped"),
-        "websocketConnected": bool(runtime.get("websocketConnected", False)),
+        "pid": pid,
+        "lifecycleState": lifecycle,
+        "websocketConnected": websocket_connected,
         "lastErrorCode": str(runtime.get("lastErrorCode", "") or ""),
         "signedIn": bool(str(account.get("accessToken", "") or "").strip()),
         "email": str(account.get("email", "") or ""),
-        "paired": bool(str(runtime.get("runtimeToken", "") or "").strip()),
+        # Eşleşme kanıtı: kayıtlı runtime token VEYA claim'den gelen cihaz
+        # kimliği (deviceId+deviceSecret). Kayıt geçici olarak başarısızsa bile
+        # eşleştirme yapılmıştır — CLI yeniden QR akışı başlatmamalı.
+        "paired": bool(
+            str(runtime.get("runtimeToken", "") or "").strip()
+            or (
+                str(runtime.get("deviceId", "") or "").strip()
+                and str(runtime.get("deviceSecret", "") or "").strip()
+            )
+        ),
         "activeTasks": active,
         "recentTasks": [item for item in items if isinstance(item, dict)][:10],
     }

@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from runtime import state_store  # noqa: E402
-from runtime.daemon import LOG_PATH, PID_PATH, read_daemon_pid, runtime_status_summary  # noqa: E402
+from runtime.daemon import LOG_PATH, PID_PATH, STOP_PATH, read_daemon_pid, runtime_status_summary  # noqa: E402
 
 VERSION = "1.0.0"
 SERVICE_LABEL = "dev.elyan.daemon"
@@ -40,11 +40,20 @@ SERVICE_LABEL = "dev.elyan.daemon"
 
 
 def _python_executable() -> str:
-    """Daemon'u başlatacak yorumlayıcı — venv öncelikli."""
+    """Daemon'u başlatacak yorumlayıcı — venv öncelikli (~/.elyan sonra repo)."""
+    home_venv = Path.home() / ".elyan" / "venv"
     candidates = (
-        [REPO_ROOT / "venv" / "Scripts" / "python.exe", REPO_ROOT / ".venv" / "Scripts" / "python.exe"]
+        [
+            home_venv / "Scripts" / "python.exe",
+            REPO_ROOT / "venv" / "Scripts" / "python.exe",
+            REPO_ROOT / ".venv" / "Scripts" / "python.exe",
+        ]
         if os.name == "nt"
-        else [REPO_ROOT / "venv" / "bin" / "python3", REPO_ROOT / ".venv" / "bin" / "python3"]
+        else [
+            home_venv / "bin" / "python3",
+            REPO_ROOT / "venv" / "bin" / "python3",
+            REPO_ROOT / ".venv" / "bin" / "python3",
+        ]
     )
     for candidate in candidates:
         if candidate.exists():
@@ -125,6 +134,11 @@ def _stop_daemon(quiet: bool = False) -> bool:
     if not quiet:
         print(f"Daemon duraklatılıyor (pid {pid})…")
     try:
+        STOP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        STOP_PATH.write_text(str(pid))
+    except OSError:
+        pass
+    try:
         os.kill(pid, 15)
     except OSError:
         return False
@@ -136,6 +150,21 @@ def _stop_daemon(quiet: bool = False) -> bool:
         print("Daemon nazikçe durmadı; zorla kapatılıyor.")
     try:
         os.kill(pid, 9)
+    except OSError:
+        pass
+    # SIGKILL sonrası süreç tablosu/pidfile birkaç an bayat kalabilir. Restart
+    # aynı komut içinde devam ettiği için sınırlı biçimde gerçek çıkışı bekle.
+    for _ in range(40):
+        if not _daemon_running():
+            return True
+        time.sleep(0.05)
+    try:
+        if PID_PATH.exists() and PID_PATH.read_text().strip() == str(pid):
+            PID_PATH.unlink()
+    except OSError:
+        pass
+    try:
+        STOP_PATH.unlink(missing_ok=True)
     except OSError:
         pass
     return True
@@ -203,9 +232,13 @@ def cmd_pair(args: argparse.Namespace) -> int:
     while time.monotonic() < deadline:
         time.sleep(2)
         snapshot = state_store.snapshot()
-        auth = snapshot.get("auth", {}) if isinstance(snapshot.get("auth"), dict) else {}
         pairing = snapshot.get("pairing", {}) if isinstance(snapshot.get("pairing"), dict) else {}
-        if bool(auth.get("signedIn")) or str(pairing.get("pairingToken", "") or "").strip():
+        runtime = snapshot.get("runtime", {}) if isinstance(snapshot.get("runtime"), dict) else {}
+        claimed = str(pairing.get("lastSessionStatus", "") or "").strip().lower() == "claimed"
+        has_runtime_identity = bool(
+            str(runtime.get("deviceSecret", "") or "").strip() or str(runtime.get("runtimeToken", "") or "").strip()
+        )
+        if claimed or has_runtime_identity:
             paired = True
             break
         print(".", end="", flush=True)
@@ -305,7 +338,11 @@ def cmd_status(_args: argparse.Namespace) -> int:
         ("Daemon", f"çalışıyor (pid {pid})" if pid else "durdu"),
         ("Bağlantı", str(lifecycle)),
         ("WebSocket", "açık" if summary.get("websocketConnected") else "kapalı"),
-        ("Hesap", summary.get("email") or ("giriş yok" if not summary.get("signedIn") else "?")),
+        (
+            "Hesap",
+            summary.get("email")
+            or ("QR eşleşmesi (telefon hesabı)" if summary.get("paired") else "giriş yok"),
+        ),
         ("Eşleştirme", "tamam" if summary.get("paired") else "yok — elyan pair"),
         ("Aktif görev", str(len(summary.get("activeTasks", [])))),
     ]
@@ -339,7 +376,7 @@ def cmd_tasks(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_doctor(_args: argparse.Namespace) -> int:
+def cmd_doctor(args: argparse.Namespace) -> int:
     checks: list[tuple[str, bool, str]] = []
 
     version_ok = sys.version_info >= (3, 10)
@@ -386,8 +423,58 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             failures += 1
         print(f"  {mark} {name.ljust(20)} {note}")
     print()
-    print("Her şey yolunda." if failures == 0 else f"{failures} sorun bulundu.")
-    return 0 if failures == 0 else 1
+
+    if not getattr(args, "fix", False):
+        if failures:
+            print(f"{failures} sorun bulundu. Otomatik onar: elyan doctor --fix")
+        else:
+            print("Her şey yolunda.")
+        return 0 if failures == 0 else 1
+
+    # --fix: güvenle otomatik düzeltilebilecekleri onar; gerisi için yönlendir.
+    print("Onarım deneniyor…")
+    repaired: list[str] = []
+    manual: list[str] = []
+
+    if not deps_ok:
+        manual.append("Bağımlılıklar eksik — yeniden kur: npm install -g elyan")
+
+    if not summary.get("signedIn") and not summary.get("paired"):
+        manual.append("Eşleştirme yok — telefonla bağla: elyan pair")
+    elif str(summary.get("lastErrorCode") or "") == "desktop_runtime_device_not_found":
+        manual.append(
+            "Cihaz kaydı backend'de bulunamadı — telefondan yeniden eşleştir: elyan pair"
+        )
+
+    if not _daemon_running():
+        if summary.get("paired") or summary.get("signedIn"):
+            pid = _start_daemon_detached()
+            time.sleep(1.5)
+            if _daemon_running():
+                repaired.append(f"Daemon başlatıldı (pid {pid}).")
+            else:
+                manual.append(f"Daemon başlatılamadı — log: {LOG_PATH}")
+    else:
+        # Daemon çalışıyor ama bağlantı düşükse yeniden başlatarak taze
+        # kayıt + WS bağlantısı zorla (uyanış/askı sonrası takılmayı çözer).
+        lifecycle = str(summary.get("lifecycleState") or "")
+        connected = bool(summary.get("websocketConnected")) or lifecycle in {"ready", "online", "connected"}
+        if summary.get("paired") and not connected:
+            _stop_daemon()
+            pid = _start_daemon_detached()
+            time.sleep(1.5)
+            if _daemon_running():
+                repaired.append("Daemon yeniden başlatıldı (bağlantı tazelendi).")
+            else:
+                manual.append(f"Daemon yeniden başlatılamadı — log: {LOG_PATH}")
+
+    for line in repaired:
+        print(f"  ✓ {line}")
+    for line in manual:
+        print(f"  → {line}")
+    if not repaired and not manual:
+        print("  Onarılacak bir şey yok.")
+    return 0 if not manual else 1
 
 
 # ── açılışta otomatik başlatma (servis) ─────────────────────────────────────
@@ -505,6 +592,39 @@ def cmd_service(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_auto(_args: argparse.Namespace) -> int:
+    """`elyan` (argümansız) — durumu anla, kullanıcıyı kendisi yönlendir.
+
+    1. Eşleşme yoksa → QR eşleştirmeyi hemen başlat, bitince servisi kur.
+    2. Eşleşme var ama daemon kapalıysa → başlat (servis yoksa kur).
+    3. Her şey çalışıyorsa → kısa durum özeti göster.
+    """
+    summary = runtime_status_summary()
+    paired = bool(summary.get("paired")) or bool(summary.get("signedIn"))
+
+    if not paired:
+        print("Elyan'a hoş geldin! 👋")
+        print("Telefonunla eşleştirme yapılmamış — şimdi başlatılıyor.")
+        print()
+        code = cmd_pair(argparse.Namespace(force=False, start=False))
+        if code != 0:
+            return code
+        # Açılışta otomatik başlasın; servis kurulumu daemon'u da başlatır.
+        service_code = cmd_service(argparse.Namespace(action="install"))
+        if service_code != 0:
+            print("Servis kurulamadı — daemon elle başlatılıyor.")
+            return cmd_start(argparse.Namespace())
+        print()
+        print("Hazır ✓ — artık telefondan görev gönderebilirsin.")
+        return 0
+
+    if not summary.get("pid"):
+        print("Eşleşme tamam ama Elyan çalışmıyor — başlatılıyor…")
+        return cmd_start(argparse.Namespace())
+
+    return cmd_status(_args)
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     print(f"elyan {VERSION} ({_platform_name()}, python {platform.python_version()})")
     return 0
@@ -517,9 +637,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="elyan",
         description="Elyan masaüstü ajanı — mobilden gelen görevleri bilgisayarında yürütür.",
-        epilog="Hızlı başlangıç: elyan pair → QR'ı iOS uygulamasıyla okut → elyan service install",
+        epilog="Hızlı başlangıç: sadece `elyan` yaz — eşleştirme ve kurulum kendiliğinden yapılır.",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=False)
 
     pair = sub.add_parser("pair", help="QR ile telefonuna bağla (kurulumun tamamı)")
     pair.add_argument("--force", action="store_true", help="Yeni eşleştirme oturumu zorla")
@@ -537,7 +657,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("run", help="Ön planda çalıştır (hata ayıklama)").set_defaults(func=cmd_run)
     sub.add_parser("status", help="Bağlantı ve görev durumu").set_defaults(func=cmd_status)
     sub.add_parser("tasks", help="Son görevleri listele").set_defaults(func=cmd_tasks)
-    sub.add_parser("doctor", help="Kurulum sağlık kontrolü").set_defaults(func=cmd_doctor)
+    doctor = sub.add_parser("doctor", help="Kurulum sağlık kontrolü")
+    doctor.add_argument("--fix", action="store_true", help="Bulunan sorunları otomatik onarmayı dene")
+    doctor.set_defaults(func=cmd_doctor)
 
     service = sub.add_parser("service", help="Açılışta otomatik başlatma")
     service.add_argument("action", choices=["install", "uninstall"])
@@ -550,8 +672,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    func = getattr(args, "func", cmd_auto)  # argümansız `elyan` → akıllı akış
     try:
-        return int(args.func(args))
+        return int(func(args))
     except KeyboardInterrupt:
         print("\nİptal edildi.")
         return 130

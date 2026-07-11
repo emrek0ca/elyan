@@ -9,6 +9,8 @@ bayat masaüstü cihazlarını düşürür.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -35,6 +37,8 @@ def test_runtime_status_summary_reads_real_schema(
     import runtime.daemon as daemon
 
     monkeypatch.setattr(daemon, "PID_PATH", tmp_path / "daemon.pid")
+    daemon.PID_PATH.write_text(str(12345))
+    monkeypatch.setattr(daemon, "_pid_alive", lambda _pid: True)
     state_store.update_state(
         {
             "account": {"accessToken": "tok", "email": "test@elyan.dev"},
@@ -64,6 +68,61 @@ def test_runtime_status_summary_reads_real_schema(
     assert summary["activeTasks"][0]["id"] == "t1"
 
 
+def test_runtime_status_summary_does_not_report_persisted_ready_when_daemon_stopped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import runtime.daemon as daemon
+
+    monkeypatch.setattr(daemon, "PID_PATH", tmp_path / "daemon.pid")
+    state_store.update_state(
+        {
+            "runtime": {
+                "runtimeToken": "stale-runtime-token",
+                "lifecycleState": "ready",
+                "websocketConnected": True,
+            }
+        }
+    )
+
+    summary = daemon.runtime_status_summary()
+
+    assert summary["pid"] == 0
+    assert summary["lifecycleState"] == "offline"
+    assert summary["websocketConnected"] is False
+    assert summary["paired"] is True
+
+
+def test_daemon_start_invalidates_transport_truth_from_previous_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import runtime.daemon as daemon
+
+    state_store.update_state(
+        {
+            "runtime": {
+                "runtimeToken": "persisted-runtime-token",
+                "deviceId": "11111111-1111-4111-8111-111111111111",
+                "deviceSecret": "x" * 32,
+                "ready": True,
+                "lifecycleState": "ready",
+                "websocketConnected": True,
+            },
+            "pairing": {"realtimeReady": True},
+        }
+    )
+
+    daemon._mark_daemon_transport_starting()
+
+    snapshot = state_store.snapshot()
+    assert snapshot["runtime"]["runtimeToken"] == "persisted-runtime-token"
+    assert snapshot["runtime"]["ready"] is False
+    assert snapshot["runtime"]["websocketConnected"] is False
+    assert snapshot["runtime"]["lifecycleState"] == "runtime_connecting"
+    assert snapshot["pairing"]["realtimeReady"] is False
+
+
 def test_read_daemon_pid_ignores_dead_process(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -78,6 +137,25 @@ def test_read_daemon_pid_ignores_dead_process(
     assert daemon.read_daemon_pid() == 0
     monkeypatch.setattr(daemon, "_pid_alive", lambda pid: True)
     assert daemon.read_daemon_pid() == 999999
+
+
+def test_daemon_keeper_honors_pid_scoped_stop_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import runtime.daemon as daemon
+
+    stop_path = tmp_path / "daemon.stop"
+    monkeypatch.setattr(daemon, "STOP_PATH", stop_path)
+    instance = object.__new__(daemon.ElyanDaemon)
+    instance._stop = threading.Event()
+    stop_path.write_text(str(os.getpid()))
+
+    thread = threading.Thread(target=instance.run_forever)
+    thread.start()
+    thread.join(timeout=2)
+
+    assert thread.is_alive() is False
+    assert instance._stop.is_set() is True
 
 
 def test_cli_parser_covers_mvp_commands() -> None:
@@ -95,12 +173,103 @@ def test_cli_parser_covers_mvp_commands() -> None:
         ["status"],
         ["tasks"],
         ["doctor"],
+        ["doctor", "--fix"],
         ["service", "install"],
         ["service", "uninstall"],
         ["version"],
     ):
         args = parser.parse_args(command)
         assert callable(args.func), command
+    assert parser.parse_args(["doctor", "--fix"]).fix is True
+    assert parser.parse_args(["doctor"]).fix is False
+
+
+def test_daemon_run_forever_forces_reconnect_on_wake_gap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Uyku/askı sonrası duvar-saati atlaması hemen yeniden bağlanmayı tetikler."""
+    import runtime.daemon as daemon
+
+    monkeypatch.setattr(daemon, "STOP_PATH", tmp_path / "daemon.stop")
+    instance = object.__new__(daemon.ElyanDaemon)
+    instance._stop = threading.Event()
+
+    calls: list[str] = []
+
+    def _reconnect() -> dict[str, Any]:
+        calls.append("reconnect")
+        instance._stop.set()  # tek iterasyondan sonra döngüyü durdur
+        return {"ok": True}
+
+    instance.bridge = SimpleNamespace(force_runtime_reconnect=_reconnect)
+    monkeypatch.setattr(instance._stop, "wait", lambda _timeout: False)
+    # İlk çağrı last_wall'ı kurar; ikinci çağrı büyük atlama (uyku) simüle eder.
+    wall_values = iter([1_000.0, 2_000.0])
+    monkeypatch.setattr(daemon.time, "time", lambda: next(wall_values, 2_000.0))
+    monkeypatch.setattr(
+        daemon.state_store, "snapshot", lambda: {"runtime": {"lifecycleState": "ready"}}
+    )
+
+    instance.run_forever()
+
+    assert calls == ["reconnect"]
+
+
+def test_daemon_run_forever_skips_reconnect_without_wake_gap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Küçük tik aralığında (uyku yok) ve bağlıyken yeniden bağlanma tetiklenmez."""
+    import runtime.daemon as daemon
+
+    monkeypatch.setattr(daemon, "STOP_PATH", tmp_path / "daemon.stop")
+    instance = object.__new__(daemon.ElyanDaemon)
+    instance._stop = threading.Event()
+
+    calls: list[str] = []
+    instance.bridge = SimpleNamespace(
+        force_runtime_reconnect=lambda: calls.append("reconnect") or {"ok": True}
+    )
+
+    tick = {"n": 0}
+
+    def _wait(_timeout: float) -> bool:
+        tick["n"] += 1
+        if tick["n"] >= 2:
+            instance._stop.set()
+        return False
+
+    monkeypatch.setattr(instance._stop, "wait", _wait)
+    wall_values = iter([1_000.0, 1_001.0, 1_002.0])
+    monkeypatch.setattr(daemon.time, "time", lambda: next(wall_values, 1_002.0))
+    monkeypatch.setattr(
+        daemon.state_store, "snapshot", lambda: {"runtime": {"lifecycleState": "ready"}}
+    )
+
+    instance.run_forever()
+
+    assert calls == []
+
+
+def test_stop_daemon_clears_stale_pid_after_forced_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import cli.main as cli
+
+    pid_path = tmp_path / "daemon.pid"
+    stop_path = tmp_path / "daemon.stop"
+    pid_path.write_text("12345")
+    kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(cli, "PID_PATH", pid_path)
+    monkeypatch.setattr(cli, "STOP_PATH", stop_path)
+    monkeypatch.setattr(cli, "_daemon_running", lambda: 12345)
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+
+    assert cli._stop_daemon(quiet=True) is True
+    assert kills == [(12345, 15), (12345, 9)]
+    assert pid_path.exists() is False
+    assert stop_path.exists() is False
 
 
 def test_service_definitions_run_daemon_module() -> None:

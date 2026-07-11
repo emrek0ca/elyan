@@ -128,6 +128,11 @@ def run_tray(daemon: "ElyanDaemon") -> bool:
                 except Exception:
                     pass
                 daemon._stop.wait(5)
+            if daemon._stop.is_set() and icon_ref.visible:
+                try:
+                    icon_ref.stop()
+                except Exception:
+                    pass
 
         threading.Thread(target=_tick, name="elyan-tray-tick", daemon=True).start()
 
