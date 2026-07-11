@@ -238,6 +238,10 @@ DEFAULT_STATE: dict[str, Any] = {
         "websocketConnected": False,
         "lastErrorCode": "",
         "lastXRequestId": "",
+        # Backend "cihaz bulunamadı" derse hemen kimliği silmiyoruz; sürekli
+        # devam ederse (deploy penceresi/geçici 404 değil, gerçekten silinmiş)
+        # bu ISO zaman damgasından itibaren geçen süre eşiği aşınca siliyoruz.
+        "deviceNotFoundSince": "",
         "executor": {
             "available": True,
             "graphBackend": "sequential_fallback",

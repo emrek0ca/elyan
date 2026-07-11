@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,7 @@ import pytest
 import requests
 
 from runtime import state_store
+from runtime import backend_client
 from runtime.backend_client import BackendClient, BackendResult
 from runtime.capability_registry import capability_names
 
@@ -113,19 +115,9 @@ def test_runtime_unauthorized_clears_runtime_without_user_session(
     assert state["account"]["refreshToken"] == "refresh-token"
 
 
-# Ownership note (post refactor): Python no longer decides the fate of a
-# stale user session on its own. `_refresh_user_session_after_unauthorized`
-# never calls `refresh_session()` anymore — it immediately emits a
-# `backend.auth_refresh_needed` capability event over stdout and returns a
-# fixed delegated-401, leaving the actual refresh (and any decision to log
-# out) entirely to the Swift host (see AppState.onAuthRefreshNeeded /
-# PythonRuntimeSupervisor). Local session/runtime state is intentionally
-# left untouched here in every case — Swift re-syncs it via
-# `syncAuthSession` once it knows the real outcome. The three scenarios
-# below (definitive session expiry, network failure, and an unrelated
-# refresh rejection) used to diverge; now they must converge identically on
-# the delegated contract, which is itself the regression these tests guard.
-def test_user_session_expiry_delegates_refresh_to_swift_without_clearing_local_state(
+# The shipping desktop is headless, so Python owns token refresh again. User
+# auth expiry must never tear down the independent QR-paired runtime session.
+def test_terminal_user_refresh_failure_clears_user_tokens_but_preserves_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -184,20 +176,19 @@ def test_user_session_expiry_delegates_refresh_to_swift_without_clearing_local_s
     state = state_store.snapshot()
     assert result.ok is False
     assert result.status_code == 401
-    assert result.error == {"code": "UNAUTHORIZED", "message": "Token refresh delegated to Swift."}
+    assert result.error == "session_expired"
     assert disconnected["called"] is False
-    assert state["account"]["accessToken"] == "user-token"
-    assert state["account"]["refreshToken"] == "refresh-token"
+    assert state["account"]["accessToken"] == ""
+    assert state["account"]["refreshToken"] == ""
     assert state["runtime"]["runtimeToken"] == "runtime-token"
     assert state["runtime"]["ready"] is True
     emitted = capsys.readouterr().out
     assert '"capability": "backend.auth_refresh_needed"' in emitted
 
 
-def test_user_refresh_network_failure_still_delegates_to_swift(
+def test_user_refresh_network_failure_preserves_retryable_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
@@ -252,21 +243,18 @@ def test_user_refresh_network_failure_still_delegates_to_swift(
 
     state = state_store.snapshot()
     assert result.ok is False
-    assert result.status_code == 401
-    assert result.error == {"code": "UNAUTHORIZED", "message": "Token refresh delegated to Swift."}
+    assert result.status_code is None
+    assert result.error == "network_timeout"
     assert disconnected["called"] is False
     assert state["account"]["accessToken"] == "user-token"
     assert state["account"]["refreshToken"] == "refresh-token"
     assert state["runtime"]["runtimeToken"] == "runtime-token"
     assert state["runtime"]["ready"] is True
-    emitted = capsys.readouterr().out
-    assert '"capability": "backend.auth_refresh_needed"' in emitted
 
 
-def test_generic_refresh_unauthorized_still_delegates_to_swift(
+def test_generic_refresh_rejection_preserves_session_for_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
@@ -321,15 +309,50 @@ def test_generic_refresh_unauthorized_still_delegates_to_swift(
 
     state = state_store.snapshot()
     assert result.ok is False
-    assert result.status_code == 401
-    assert result.error == {"code": "UNAUTHORIZED", "message": "Token refresh delegated to Swift."}
+    assert result.status_code == 403
+    assert result.error == "forbidden"
     assert disconnected["called"] is False
     assert state["account"]["accessToken"] == "user-token"
     assert state["account"]["refreshToken"] == "refresh-token"
     assert state["runtime"]["runtimeToken"] == "runtime-token"
     assert state["runtime"]["ready"] is True
-    emitted = capsys.readouterr().out
-    assert '"capability": "backend.auth_refresh_needed"' in emitted
+
+
+def test_user_request_refreshes_once_and_retries_with_rotated_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "account": {"accessToken": "stale-access", "refreshToken": "stale-refresh"},
+            "runtime": {"runtimeToken": "runtime-token", "ready": True},
+        }
+    )
+    client = BackendClient("http://backend.example")
+    seen_authorizations: list[str] = []
+
+    def fake_request(*_args: Any, **kwargs: Any) -> BackendResult:
+        authorization = str(kwargs.get("headers", {}).get("Authorization", ""))
+        seen_authorizations.append(authorization)
+        if authorization == "Bearer stale-access":
+            return BackendResult(ok=False, request_id="req_stale", status_code=401, data=None, error="token_expired")
+        return BackendResult(ok=True, request_id="req_fresh", status_code=200, data={"ok": True})
+
+    def fake_refresh() -> BackendResult:
+        state_store.update_state(
+            {"account": {"accessToken": "fresh-access", "refreshToken": "fresh-refresh"}}
+        )
+        return BackendResult(ok=True, request_id="req_refresh", status_code=200, data={"ok": True})
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    monkeypatch.setattr(client, "refresh_session", fake_refresh)
+
+    result = client._authorized_request("GET", "/v1/auth/me", token_kind="user", refresh_on_401=True)
+
+    assert result.ok is True
+    assert seen_authorizations == ["Bearer stale-access", "Bearer fresh-access"]
+    assert state_store.snapshot()["runtime"]["runtimeToken"] == "runtime-token"
 
 
 def test_stale_concurrent_unauthorized_reuses_already_rotated_user_session(
@@ -594,6 +617,12 @@ def test_pairing_create_session_hydrates_canonical_qr_truth(
         )
 
     monkeypatch.setattr(client, "_authorized_request", fake_authorized_request)
+    # Girişsiz (anonim) yol _request kullanır — aynı sözleşme her iki dalda geçerli.
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, json_body=None, **kwargs: fake_authorized_request(method, path, json_body),
+    )
 
     result = client.pairing_create_session({"deviceLabel": "Elyan", "platform": "macos"})
 
@@ -1336,10 +1365,25 @@ def test_repair_invalid_runtime_identity_clears_stale_runtime_and_pairing_truth(
     assert state["pairing"]["lastErrorCode"] == "runtime_register_invalid_identity"
 
 
-def test_register_runtime_repairs_backend_device_not_found_identity(
+def _device_not_found_backend(*_args: Any, **_kwargs: Any) -> BackendResult:
+    return BackendResult(
+        ok=False,
+        request_id="req_device_not_found",
+        status_code=404,
+        data={"error": "not_found", "message": "Desktop runtime device not found"},
+        error="Desktop runtime device not found",
+    )
+
+
+def test_register_runtime_keeps_identity_on_transient_device_not_found(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Tek bir 'cihaz bulunamadı' yanıtı kalıcı eşleşmeyi silmemeli.
+
+    Backend deploy penceresinde/geçici 404'te kimlik korunur ki
+    yeniden-deneme döngüsü backend toparlanınca kendini iyileştirsin.
+    """
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
         {
@@ -1352,17 +1396,46 @@ def test_register_runtime_repairs_backend_device_not_found_identity(
         }
     )
     client = BackendClient("http://backend.example")
-    monkeypatch.setattr(
-        client,
-        "_request",
-        lambda *_args, **_kwargs: BackendResult(
-            ok=False,
-            request_id="req_device_not_found",
-            status_code=404,
-            data={"error": "not_found", "message": "Desktop runtime device not found"},
-            error="Desktop runtime device not found",
-        ),
+    monkeypatch.setattr(client, "_request", _device_not_found_backend)
+
+    result = client.register_runtime({"capabilities": ["runtime.status"]})
+
+    state = state_store.snapshot()
+    assert result.ok is False
+    assert result.error == "desktop_runtime_device_not_found"
+    # Kimlik KORUNDU — yeniden-deneme döngüsü aynı cihazla devam edebilir.
+    assert state["runtime"]["deviceId"] == VALID_DEVICE_ID
+    assert state["runtime"]["deviceSecret"] == VALID_DEVICE_SECRET
+    assert state["pairing"]["desktopDeviceId"] == VALID_DEVICE_ID
+    assert state["runtime"]["lifecycleState"] == "offline"
+    assert state["runtime"]["lastErrorCode"] == "desktop_runtime_device_not_found"
+    # İlk gözlemde zaman damgası kaydedildi.
+    assert str(state["runtime"]["deviceNotFoundSince"]).strip() != ""
+
+
+def test_register_runtime_wipes_identity_after_device_not_found_grace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Kesintisiz 'cihaz bulunamadı' grace süresini aşınca kimlik silinir."""
+    _isolate_state(monkeypatch, tmp_path)
+    stale_since = (
+        dt.datetime.now(dt.timezone.utc)
+        - dt.timedelta(seconds=backend_client._DEVICE_NOT_FOUND_WIPE_GRACE_SECONDS + 60)
+    ).isoformat()
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "runtimeToken": "stale-runtime-token",
+                "deviceNotFoundSince": stale_since,
+            },
+            "pairing": {"desktopDeviceId": VALID_DEVICE_ID, "pairingToken": "stale-pairing-token"},
+        }
     )
+    client = BackendClient("http://backend.example")
+    monkeypatch.setattr(client, "_request", _device_not_found_backend)
 
     result = client.register_runtime({"capabilities": ["runtime.status"]})
 
@@ -1374,6 +1447,40 @@ def test_register_runtime_repairs_backend_device_not_found_identity(
     assert state["runtime"]["runtimeToken"] == ""
     assert state["pairing"]["desktopDeviceId"] == ""
     assert state["pairing"]["pairingToken"] == ""
+
+
+def test_register_runtime_clears_device_not_found_streak_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Başarılı kayıt, birikmiş 'cihaz bulunamadı' sayacını sıfırlar."""
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "deviceNotFoundSince": dt.datetime.now(dt.timezone.utc).isoformat(),
+            },
+        }
+    )
+    client = BackendClient("http://backend.example")
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *_args, **_kwargs: BackendResult(
+            ok=True,
+            request_id="req_ok",
+            status_code=200,
+            data={"deviceId": VALID_DEVICE_ID, "connectionId": "connection-1", "runtimeToken": "fresh-token"},
+        ),
+    )
+
+    result = client.register_runtime({"capabilities": ["runtime.status"]})
+
+    state = state_store.snapshot()
+    assert result.ok is True
+    assert str(state["runtime"]["deviceNotFoundSince"]).strip() == ""
 
 
 def test_tasks_list_uses_user_auth_surface(
@@ -1448,6 +1555,9 @@ def test_brain_profile_uses_user_auth_surface(
     tmp_path: Path,
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
+    # Kullanıcı token'ı varken bu rotalar user auth yüzeyini kullanır;
+    # token yoksa runtime token'a düşer (anonim QR eşleşmesi).
+    state_store.update_state({"account": {"accessToken": "user-token"}})
     client = BackendClient("http://backend.example")
     captured: dict[str, Any] = {}
 
@@ -1656,6 +1766,9 @@ def test_chat_messages_uses_user_auth_surface(
     tmp_path: Path,
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
+    # Kullanıcı token'ı varken bu rotalar user auth yüzeyini kullanır;
+    # token yoksa runtime token'a düşer (anonim QR eşleşmesi).
+    state_store.update_state({"account": {"accessToken": "user-token"}})
     client = BackendClient("http://backend.example")
     captured: dict[str, Any] = {}
 
@@ -1713,6 +1826,9 @@ def test_brain_retrieval_search_uses_user_auth_surface(
     tmp_path: Path,
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
+    # Kullanıcı token'ı varken bu rotalar user auth yüzeyini kullanır;
+    # token yoksa runtime token'a düşer (anonim QR eşleşmesi).
+    state_store.update_state({"account": {"accessToken": "user-token"}})
     client = BackendClient("http://backend.example")
     captured: dict[str, Any] = {}
 
@@ -1803,3 +1919,30 @@ def test_brain_profile_network_errors_are_normalized(
     assert result.ok is False
     assert result.status_code is None
     assert result.error == "network_unreachable"
+
+
+def test_chat_messages_falls_back_to_runtime_auth_when_no_user_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state({"runtime": {"runtimeToken": "runtime-token"}})
+    client = BackendClient("http://backend.example")
+    captured: dict[str, Any] = {}
+
+    def fake_authorized_request(
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        *,
+        token_kind: str = "user",
+        refresh_on_401: bool = False,
+    ) -> BackendResult:
+        captured["token_kind"] = token_kind
+        captured["path"] = path
+        return BackendResult(ok=True, request_id="req_chat_rt", status_code=200, data={})
+
+    monkeypatch.setattr(client, "_authorized_request", fake_authorized_request)
+
+    assert client.chat_messages({"content": "selam", "source": "desktop"}).ok is True
+    assert captured == {"token_kind": "runtime", "path": "/v1/chat/messages"}

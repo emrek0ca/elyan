@@ -137,6 +137,16 @@ def _runtime_identity_repair_error_code(value: Any) -> str:
     return "runtime_register_invalid_identity"
 
 
+# Backend register "cihaz bulunamadı" (DESKTOP_RUNTIME_DEVICE_NOT_FOUND) yanıtı
+# tek başına belirsizdir: deploy penceresi, geçici proxy 404'ü, yanlış DB'ye
+# bağlanma ya da cihazın gerçekten silinmiş olması — hepsi aynı kodu döndürür.
+# Kalıcı eşleşmeyi tek bir belirsiz yanıtla yok etmemek için, bu hata KESİNTİSİZ
+# olarak bu kadar saniye sürerse yerel kimliği siliyoruz (yeniden eşleştirme
+# gerekir). Daha kısa kesintilerde kayıt-yeniden-deneme döngüsü aynı kimlikle
+# devam eder ve backend toparlanınca kendini iyileştirir.
+_DEVICE_NOT_FOUND_WIPE_GRACE_SECONDS = 900.0
+
+
 def _runtime_registration_identity_error(result: "BackendResult") -> str:
     values: list[str] = [str(result.error or "")]
     if isinstance(result.data, dict):
@@ -890,6 +900,17 @@ class BackendClient:
         )
 
     def _expire_user_session(self) -> None:
+        # User auth and the paired runtime are separate lifecycles. A terminal
+        # refresh failure clears only user tokens; the QR-paired daemon keeps
+        # its runtime identity and can continue receiving desktop tasks.
+        state_store.update_state(
+            {
+                "account": {
+                    "accessToken": "",
+                    "refreshToken": "",
+                }
+            }
+        )
         import sys
         import json
         event_id = _request_id()
@@ -917,14 +938,7 @@ class BackendClient:
                     status_code=200,
                     data={"reusedRotatedSession": True},
                 )
-            self._expire_user_session()
-            return BackendResult(
-                ok=False,
-                request_id=_request_id(),
-                status_code=401,
-                error={"code": "UNAUTHORIZED", "message": "Token refresh delegated to Swift."},
-                data=None,
-            )
+            return self.refresh_session()
 
     def _authorized_request(
         self,
@@ -1213,6 +1227,39 @@ class BackendClient:
                 },
             }
         )
+
+    def _clear_device_not_found_streak(self) -> None:
+        runtime = state_store.snapshot().get("runtime", {})
+        runtime = runtime if isinstance(runtime, dict) else {}
+        if str(runtime.get("deviceNotFoundSince", "") or "").strip():
+            state_store.update_state({"runtime": {"deviceNotFoundSince": ""}})
+
+    def _device_not_found_wipe_due(self) -> bool:
+        """Kesintisiz 'cihaz bulunamadı' süresi eşiği aştıysa True.
+
+        İlk gözlemde zaman damgasını kaydeder ve False döner (kimliği koru,
+        yeniden dene). Ancak süre eşiği aşınca True döner ki çağıran gerçekten
+        silinmiş cihaz için kimliği temizlesin.
+        """
+        now = dt.datetime.now(dt.timezone.utc)
+        runtime = state_store.snapshot().get("runtime", {})
+        runtime = runtime if isinstance(runtime, dict) else {}
+        since_raw = str(runtime.get("deviceNotFoundSince", "") or "").strip()
+        since: dt.datetime | None = None
+        if since_raw:
+            try:
+                since = dt.datetime.fromisoformat(since_raw)
+            except ValueError:
+                since = None
+            if since is not None and since.tzinfo is None:
+                since = since.replace(tzinfo=dt.timezone.utc)
+        if since is None:
+            state_store.update_state(
+                {"runtime": {"deviceNotFoundSince": now.isoformat()}}
+            )
+            return False
+        elapsed = (now - since).total_seconds()
+        return elapsed >= _DEVICE_NOT_FOUND_WIPE_GRACE_SECONDS
 
     def auth_register(
         self,
@@ -1528,11 +1575,18 @@ class BackendClient:
             refresh_on_401=True,
         )
 
+    def _user_scoped_token_kind(self) -> str:
+        """Kullanıcı-kapsamlı ama runtime token'la da çağrılabilen rotalar
+        (chat/brain) için token seçimi. Anonim (QR) eşleşmiş masaüstünde hiç
+        kullanıcı token'ı olmaz; backend bu rotalarda runtime token kabul eder
+        (sub = cihaz sahibinin userId'si)."""
+        return "user" if self._user_access_token() else "runtime"
+
     def brain_profile(self) -> BackendResult:
         result = self._authorized_request(
             "GET",
             "/v1/brain/profile",
-            token_kind="user",
+            token_kind=self._user_scoped_token_kind(),
             refresh_on_401=True,
         )
         if result.ok and isinstance(result.data, dict):
@@ -1546,7 +1600,7 @@ class BackendClient:
             "POST",
             "/v1/chat/messages",
             dict(payload),
-            token_kind="user",
+            token_kind=self._user_scoped_token_kind(),
             refresh_on_401=True,
         )
 
@@ -1574,7 +1628,7 @@ class BackendClient:
         return self._authorized_request(
             "GET",
             f"/v1/chat/sessions/{session_id}",
-            token_kind="user",
+            token_kind=self._user_scoped_token_kind(),
             refresh_on_401=True,
         )
 
@@ -1583,7 +1637,7 @@ class BackendClient:
             "POST",
             "/v1/chat/sessions",
             dict(payload),
-            token_kind="user",
+            token_kind=self._user_scoped_token_kind(),
             refresh_on_401=True,
         )
 
@@ -1623,7 +1677,7 @@ class BackendClient:
             "POST",
             "/v1/brain/retrieval/search",
             dict(payload),
-            token_kind="user",
+            token_kind=self._user_scoped_token_kind(),
             refresh_on_401=True,
         )
 
@@ -1684,6 +1738,7 @@ class BackendClient:
             request_id=request_id,
         )
         if result.ok and isinstance(result.data, dict):
+            self._clear_device_not_found_streak()
             state_store.update_state(
                 {
                     "runtime": {
@@ -1710,6 +1765,38 @@ class BackendClient:
             )
         elif not result.ok:
             identity_error_code = _runtime_registration_identity_error(result)
+            if identity_error_code == "DESKTOP_RUNTIME_DEVICE_NOT_FOUND":
+                # Belirsiz tek yanıt: kimliği hemen silme. Yalnızca hata
+                # kesintisiz olarak grace süresini aşarsa (gerçekten silinmiş
+                # cihaz) sil; aksi halde kimliği koru ki yeniden-deneme döngüsü
+                # backend toparlanınca kendini iyileştirsin.
+                if self._device_not_found_wipe_due():
+                    self.repair_invalid_runtime_identity(identity_error_code)
+                    return BackendResult(
+                        ok=False,
+                        request_id=result.request_id,
+                        status_code=result.status_code,
+                        data=result.data,
+                        error=_runtime_identity_repair_error_code(identity_error_code),
+                        x_request_id=result.x_request_id,
+                    )
+                self._apply_runtime_truth(
+                    {
+                        "ready": False,
+                        "lifecycleState": "offline",
+                        "websocketConnected": False,
+                        "lastErrorCode": _runtime_identity_repair_error_code(identity_error_code),
+                        "xRequestId": result.x_request_id or "",
+                    }
+                )
+                return BackendResult(
+                    ok=False,
+                    request_id=result.request_id,
+                    status_code=result.status_code,
+                    data=result.data,
+                    error=_runtime_identity_repair_error_code(identity_error_code),
+                    x_request_id=result.x_request_id,
+                )
             if identity_error_code:
                 self.repair_invalid_runtime_identity(identity_error_code)
                 return BackendResult(
@@ -1963,13 +2050,18 @@ class BackendClient:
         )
         if external_device_id:
             request_payload["externalDeviceId"] = external_device_id
-        result = self._authorized_request(
-            "POST",
-            "/v1/pairing/sessions",
-            request_payload,
-            token_kind="user",
-            refresh_on_401=True,
-        )
+        # Girişsiz masaüstü de oturum açabilir (anonim eşleştirme) — token
+        # varsa gönderilir, yoksa istek yetkisiz gider ve backend kabul eder.
+        if self._user_access_token():
+            result = self._authorized_request(
+                "POST",
+                "/v1/pairing/sessions",
+                request_payload,
+                token_kind="user",
+                refresh_on_401=True,
+            )
+        else:
+            result = self._request("POST", "/v1/pairing/sessions", request_payload)
         if result.ok and isinstance(result.data, dict):
             self._apply_pairing_truth(result.data)
             self._apply_runtime_truth(
