@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 import threading
 import uuid
 from dataclasses import dataclass
@@ -31,6 +32,92 @@ def _safe_text(value: Any, limit: int = 160) -> str:
     if len(text) > limit:
         return text[: limit - 1].rstrip() + "…"
     return text
+
+
+# ── Adım çıktısı şablonları + forEach ────────────────────────────────────────
+# Bir adımın args'ı önceki adımların YAPILANDIRILMIŞ çıktısına referans
+# verebilir: {{steps.<id>.result.items[0].href}}. Bir adım "forEach" taşıyorsa
+# çözülen liste üzerinde fan-out yapılır; kopyalarda {{item...}} ve {{index}}
+# eleman değerleriyle doldurulur. Bu, "5 linki topla, HER BİRİ için indir"
+# görevlerinin plan diliyle ifade edilebilmesini sağlar.
+
+_TEMPLATE_RE = re.compile(r"\{\{\s*([a-zA-Z_][\w\.\[\]]*)\s*\}\}")
+_WHOLE_TEMPLATE_RE = re.compile(r"^\{\{\s*([a-zA-Z_][\w\.\[\]]*)\s*\}\}$")
+_MAX_FOREACH_ITEMS = 20
+_TEMPLATE_MISSING = object()
+
+
+class TemplateResolutionError(ValueError):
+    def __init__(self, expression: str) -> None:
+        super().__init__(expression)
+        self.expression = expression
+
+
+def _lookup_template_path(root: Any, path: str) -> Any:
+    current = root
+    for part in re.sub(r"\[(\d+)\]", r".\1", path).split("."):
+        if not part:
+            continue
+        if isinstance(current, dict):
+            current = current.get(part, _TEMPLATE_MISSING)
+        elif isinstance(current, list) and part.isdigit():
+            index = int(part)
+            current = current[index] if index < len(current) else _TEMPLATE_MISSING
+        else:
+            return _TEMPLATE_MISSING
+        if current is _TEMPLATE_MISSING:
+            return _TEMPLATE_MISSING
+    return current
+
+
+def _resolve_templates(value: Any, namespace: dict[str, Any]) -> Any:
+    """Args ağacındaki {{...}} şablonlarını çözer. Değerin tamamı tek şablonsa
+    tipi korunur (liste/sözlük) — forEach listeleri böyle taşınır."""
+    if isinstance(value, dict):
+        return {key: _resolve_templates(item, namespace) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_templates(item, namespace) for item in value]
+    if not isinstance(value, str) or "{{" not in value:
+        return value
+    whole = _WHOLE_TEMPLATE_RE.match(value.strip())
+    if whole:
+        resolved = _lookup_template_path(namespace, whole.group(1))
+        if resolved is _TEMPLATE_MISSING:
+            raise TemplateResolutionError(whole.group(1))
+        return resolved
+
+    def _substitute(match: "re.Match[str]") -> str:
+        resolved_part = _lookup_template_path(namespace, match.group(1))
+        if resolved_part is _TEMPLATE_MISSING:
+            raise TemplateResolutionError(match.group(1))
+        return str(resolved_part)
+
+    return _TEMPLATE_RE.sub(_substitute, value)
+
+
+def _expand_for_each(step: dict[str, Any], step_outputs: dict[str, Any]) -> list[dict[str, Any]]:
+    """forEach taşıyan adımı, çözülen listenin her elemanı için bir kopyaya açar."""
+    source = step.get("forEach")
+    if isinstance(source, str):
+        source = _resolve_templates(source, {"steps": step_outputs})
+    if not isinstance(source, list):
+        raise TemplateResolutionError("forEach bir listeye çözülemedi")
+    items = source[:_MAX_FOREACH_ITEMS]
+    base_id = str(step.get("id", "") or "step")
+    expanded: list[dict[str, Any]] = []
+    for position, element in enumerate(items):
+        clone = {key: value for key, value in step.items() if key != "forEach"}
+        clone["id"] = f"{base_id}_{position + 1}"
+        namespace = {"steps": step_outputs, "item": element, "index": position + 1}
+        clone["args"] = _resolve_templates(dict(clone.get("args", {}) or {}), namespace)
+        description = str(clone.get("description", "") or "")
+        if "{{" in description:
+            try:
+                clone["description"] = str(_resolve_templates(description, namespace))
+            except TemplateResolutionError:
+                pass
+        expanded.append(clone)
+    return expanded
 
 
 @dataclass(frozen=True)
@@ -607,6 +694,9 @@ class ExecutorCore:
         previous_output = ""
         previous_result: dict[str, Any] | None = None
         previous_artifacts: list[dict[str, Any]] = []
+        # Adım kimliği → yapılandırılmış çıktı; {{steps.<id>...}} şablonları ve
+        # forEach fan-out buradan beslenir.
+        step_outputs: dict[str, dict[str, Any]] = {}
 
         try:
             self.record_stage(execution_id, "plan_execution", detail="steps")
@@ -620,6 +710,19 @@ class ExecutorCore:
             step_index = 0
             while step_index < len(steps):
                 step = steps[step_index]
+                # forEach fan-out: adım, önceki bir adımın liste çıktısının her
+                # elemanı için kopyalanır; döngü aynı indeksten (ilk kopya)
+                # devam eder.
+                if isinstance(step, dict) and step.get("forEach") is not None:
+                    try:
+                        expanded = _expand_for_each(step, step_outputs)
+                    except TemplateResolutionError as exc:
+                        message = f"forEach listesi çözülemedi: {exc.expression}"
+                        self._set_stop_reason(execution_id, "template_unresolved")
+                        self.finish_execution(execution_id, ok=False, detail=message)
+                        return False, message, events, "TEMPLATE_UNRESOLVED", structured_result, artifacts
+                    steps = steps[:step_index] + expanded + steps[step_index + 1 :]
+                    continue
                 index = step_index + 1
                 step_index += 1
                 if not isinstance(step, dict):
@@ -655,6 +758,39 @@ class ExecutorCore:
                     )
                     args = step.get("args", {})
                     args = dict(args) if isinstance(args, dict) else {}
+                    # Önceki adımların yapılandırılmış çıktısına şablon referansı:
+                    # {{steps.<id>.result.items[0].href}}. Çözülemeyen referans
+                    # düzeltilebilir bir hatadır (replan bakabilir).
+                    try:
+                        args = _resolve_templates(args, {"steps": step_outputs})
+                    except TemplateResolutionError as exc:
+                        tool_result = {
+                            "ok": False,
+                            "tool": capability,
+                            "output": f"Adım argümanındaki referans çözülemedi: {exc.expression}",
+                            "error": {
+                                "code": "TEMPLATE_UNRESOLVED",
+                                "message": f"Adım argümanındaki referans çözülemedi: {exc.expression}",
+                            },
+                        }
+                        step_events = []
+                        args = dict(step.get("args", {}) or {})
+                        events.extend(step_events)
+                        error = tool_result["error"]
+                        error_code = error["code"]
+                        message = error["message"]
+                        self._record_step_result(
+                            execution_id,
+                            step_id=step_id,
+                            status="failed",
+                            verification_status="failed",
+                            output_preview=message,
+                            error_code=error_code,
+                            stop_reason=message,
+                        )
+                        self._set_stop_reason(execution_id, error_code.lower())
+                        self.finish_execution(execution_id, ok=False, detail=message)
+                        return False, message, events, error_code, structured_result, artifacts
                     args["_confirmed"] = True
                     args["_retryAttempt"] = attempt
                     if previous_output:
@@ -793,10 +929,16 @@ class ExecutorCore:
                     structured_result = dict(result_payload)
                     previous_result = dict(result_payload)
                 step_artifacts = tool_result.get("artifacts", [])
+                cleaned_artifacts: list[dict[str, Any]] = []
                 if isinstance(step_artifacts, list):
                     cleaned_artifacts = [item for item in step_artifacts if isinstance(item, dict)]
                     artifacts.extend(cleaned_artifacts)
                     previous_artifacts = cleaned_artifacts
+                step_outputs[step_id] = {
+                    "output": output,
+                    "result": dict(result_payload) if isinstance(result_payload, dict) else {},
+                    "artifacts": cleaned_artifacts,
+                }
 
             summary = "\n".join(output for output in outputs if output).strip() or "İşlem tamamlandı."
             self.record_stage(execution_id, "finalize", detail=summary, status="completed")

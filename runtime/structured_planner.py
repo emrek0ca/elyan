@@ -145,6 +145,10 @@ def response_schema() -> dict[str, Any]:
                         "args": {"type": "object"},
                         "description": {"type": "string"},
                         "dependsOn": {"type": "array", "items": {"type": "string"}},
+                        # Önceki bir adımın liste çıktısı üzerinde fan-out:
+                        # "{{steps.<id>.result.items}}" — kopyalarda {{item...}}
+                        # ve {{index}} kullanılabilir (bkz. executor_core).
+                        "forEach": {"type": "string"},
                     },
                 },
             },
@@ -175,17 +179,23 @@ def build_replan_observation(context: dict[str, Any]) -> dict[str, Any]:
                 "capability": str(step.get("capability", "") or "").strip(),
                 "description": " ".join(str(step.get("description", "") or "").split())[:160],
             })
+    failed_step: dict[str, Any] = {
+        "capability": str(ctx.get("failedCapability", "") or ""),
+        "errorCode": str(ctx.get("errorCode", "") or ""),
+        "message": " ".join(str(ctx.get("message", "") or "").split())[:300],
+        "args": {k: v for k, v in failed_args.items() if not str(k).startswith("_")},
+    }
+    # APP_NOT_FOUND gibi düzeltilebilir hatalarda planlayıcıya somut alternatif
+    # adaylar ver (ör. kurulu uygulama adları) — "adı düzelt" sinyali.
+    suggestions = [str(s).strip() for s in (ctx.get("appSuggestions") or []) if str(s or "").strip()]
+    if suggestions:
+        failed_step["suggestions"] = suggestions[:8]
     return {
         "contract": REPLAN_CONTRACT,
         "reason": str(ctx.get("reason", "") or "tool_failure"),
         "goal": " ".join(str(ctx.get("goal", "") or "").split())[:200],
         "completedSteps": completed,
-        "failedStep": {
-            "capability": str(ctx.get("failedCapability", "") or ""),
-            "errorCode": str(ctx.get("errorCode", "") or ""),
-            "message": " ".join(str(ctx.get("message", "") or "").split())[:300],
-            "args": {k: v for k, v in failed_args.items() if not str(k).startswith("_")},
-        },
+        "failedStep": failed_step,
         "remainingSteps": remaining,
     }
 
@@ -295,6 +305,22 @@ def build_planning_request(
                 "'and then', 'then' signal separate sequential steps; "
                 "list every step id in execution order; when a step needs a prior "
                 "step's result, put that prior step id in dependsOn"
+            ),
+            "dataFlow": (
+                "a step's args may reference a prior step's structured output with "
+                "{{steps.<stepId>.result.<path>}} (e.g. {{steps.listele.result.items[0].href}}); "
+                "give steps short stable ids to enable this"
+            ),
+            "fanOut": (
+                "to repeat one step for EVERY element of a prior step's list output, "
+                "set forEach to the list reference (e.g. \"{{steps.listele.result.items}}\") "
+                "and use {{item.<field>}} / {{index}} inside that step's args; "
+                "browser_session.extract returns result.items"
+            ),
+            "browserWork": (
+                "for multi-step browser tasks on pages whose layout you cannot know, "
+                "prefer a single browser_agent.run step with the natural-language goal; "
+                "use browser_session.* steps only when the exact selectors/urls are known"
             ),
         },
         "responseSchema": response_schema(),

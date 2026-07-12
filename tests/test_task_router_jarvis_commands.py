@@ -288,3 +288,72 @@ def test_non_research_converb_does_not_split() -> None:
     # Tekil sunum rotası regresyona uğramamalı.
     single = route_text_to_tool("yapay zeka sunumu hazırla")
     assert single is not None and single.tool_name == "presentation_write"
+
+
+# ── Uygulama + içerik kalıbı: "Chrome'dan kedi resmi aç" ─────────────────────
+
+
+def test_app_content_split_browser_becomes_open_plus_search() -> None:
+    # open_app'e "Chrome dan kedi resmi" gibi uydurma bir ad gitmemeli;
+    # tarayıcı + arama planı üretilmeli.
+    for text in ("Chrome dan kedi resmi aç", "Chrome'dan kedi resmi aç"):
+        routed = route_text_to_tool(text)
+        assert routed is not None and routed.intent == "open_app_content", f"{text!r} -> {routed}"
+        capabilities = [step.get("capability") for step in routed.steps]
+        assert capabilities == ["open_app", "browser_control"]
+        assert routed.steps[0]["args"]["app_name"] == "Google Chrome"
+        # Görsel isteği görsel aramasına gitmeli.
+        assert "tbm=isch" in str(routed.steps[1]["args"].get("url", ""))
+
+
+def test_app_content_split_attached_suffix() -> None:
+    routed = route_text_to_tool("Safariden kedi videosu aç")
+    assert routed is not None and routed.intent == "open_app_content"
+    assert routed.steps[0]["args"]["app_name"] == "Safari"
+    assert routed.steps[1]["args"] == {"action": "search", "query": "kedi videosu"}
+
+
+def test_app_content_split_non_browser_skips_open_app() -> None:
+    # Tarayıcı olmayan uygulamada rota open_app'e düşmemeli (LLM devralır).
+    routed = route_text_to_tool("Notion dan notlarımı aç")
+    assert routed is None or routed.intent != "open_app"
+
+
+def test_plain_open_commands_stay_fast() -> None:
+    from runtime.task_router import prompt_requests_app_content
+
+    for text in ("Chrome aç", "Chrome u aç", "Visual Studio Code aç"):
+        routed = route_text_to_tool(text)
+        assert routed is not None and routed.intent == "open_app", f"{text!r} -> {routed}"
+        assert prompt_requests_app_content(text) is False
+
+    for text in ("Chrome dan kedi resmi aç", "Notion dan notlarımı aç"):
+        assert prompt_requests_app_content(text) is True
+
+
+def test_web_services_open_in_browser_not_open_app() -> None:
+    # Yerel uygulaması olmayan servisler open_app("YouTube")→APP_NOT_FOUND
+    # yerine tarayıcıda doğru adrese gitmeli.
+    for text, expected_url in (
+        ("YouTube aç", "https://www.youtube.com"),
+        ("youtube u aç", "https://www.youtube.com"),
+        ("gmail aç", "https://mail.google.com"),
+        ("Netflix aç", "https://www.netflix.com"),
+    ):
+        routed = route_text_to_tool(text)
+        assert routed is not None and routed.intent == "web_service_open", f"{text!r} -> {routed}"
+        assert routed.args == {"action": "open_url", "url": expected_url}
+
+
+def test_browser_plus_web_service_opens_url_directly() -> None:
+    routed = route_text_to_tool("Google dan YouTube aç")
+    assert routed is not None and routed.intent == "open_app_content"
+    capabilities = [step.get("capability") for step in routed.steps]
+    assert capabilities == ["open_app", "browser_control"]
+    assert routed.steps[1]["args"] == {"action": "open_url", "url": "https://www.youtube.com"}
+
+
+def test_youtube_play_still_extracts_content_query() -> None:
+    routed = route_text_to_tool("muse youtube da çal")
+    assert routed is not None and routed.intent == "youtube_play"
+    assert routed.args["query"] == "muse"

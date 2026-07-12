@@ -14,7 +14,8 @@ import sys
 import time
 from typing import Any
 
-from actions._platform_common import capability_unavailable, invalid_argument, timeout_error
+from actions._platform_common import app_not_found, capability_unavailable, invalid_argument, timeout_error
+from runtime.capability_registry import SafeCapabilityError
 
 try:
     import psutil
@@ -133,6 +134,34 @@ def _resolve_app_name(app_name: str) -> str:
             if candidate in _FOLDED_ALIASES:
                 return _FOLDED_ALIASES[candidate]
     return raw
+
+
+def suggest_installed_apps(query: str, limit: int = 6) -> list[str]:
+    """Sorguya benzeyen kurulu uygulama adları — APP_NOT_FOUND sonrası replan
+    gözlemine öneri olarak eklenir (planlayıcı adı düzeltebilsin). macOS'ta
+    /Applications taranır; diğer platformlarda alias tablosuyla yetinilir."""
+    tokens = [t for t in _tr_fold(query).replace("'", " ").split() if len(t) >= 2]
+    candidates: list[str] = []
+    if sys.platform == "darwin":
+        for root in ("/Applications", "/System/Applications", str(Path.home() / "Applications")):
+            try:
+                candidates.extend(p.stem for p in Path(root).glob("*.app"))
+            except Exception:
+                continue
+    candidates.extend(_FOLDED_ALIASES.values())
+
+    scored: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for name in candidates:
+        if name in seen:
+            continue
+        seen.add(name)
+        folded_name = _tr_fold(name)
+        score = sum(1 for token in tokens if token in folded_name)
+        if score:
+            scored.append((score, name))
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))
+    return [name for _, name in scored[:limit]]
 
 
 def _looks_generic_close_target(app_name: str) -> bool:
@@ -379,7 +408,7 @@ def _open_app_windows(resolved: str) -> dict[str, Any]:
         )
         if result.returncode == 0:
             return _launch_success(resolved)
-        raise capability_unavailable(f"{resolved} bulunamadi veya guvenli sekilde acilamadi.")
+        raise app_not_found(f"{resolved} bu bilgisayarda bulunamadi.")
     except subprocess.TimeoutExpired as exc:
         raise timeout_error(f"{resolved} acilirken zaman asimina ugradi.") from exc
     except FileNotFoundError as exc:
@@ -406,7 +435,7 @@ def _open_app_linux(resolved: str) -> dict[str, Any]:
         if probe.returncode == 0:
             return _launch_success(resolved)
     if binary is None:
-        raise capability_unavailable(f"{resolved} bu sistemde bulunamadi.")
+        raise app_not_found(f"{resolved} bu sistemde bulunamadi.")
     try:
         _spawn_detached([binary])
         return _launch_success(resolved)
@@ -444,9 +473,12 @@ def open_app(app_name: str) -> dict[str, Any]:
         )
         if result2.returncode == 0:
             return _launch_success(resolved)
-        raise capability_unavailable(f"{resolved} bulunamadi veya guvenli sekilde acilamadi.")
+        # Hem `open -a` hem Spotlight denemesi düştü: uygulama bu makinede yok.
+        raise app_not_found(f"{resolved} bu bilgisayarda bulunamadi.")
     except subprocess.TimeoutExpired as exc:
         raise timeout_error(f"{resolved} acilirken zaman asimina ugradi.") from exc
+    except SafeCapabilityError:
+        raise
     except Exception as exc:
         raise capability_unavailable(f"{resolved} guvenli sekilde acilamadi.") from exc
 
@@ -473,7 +505,7 @@ def close_app(app_name: str) -> dict[str, Any]:
                     "processObserved": _matching_process_count(resolved) == 0,
                 },
             }
-        raise capability_unavailable(f"{resolved} calisan bir uygulama olarak bulunamadi.")
+        raise app_not_found(f"{resolved} calisan bir uygulama olarak bulunamadi.")
 
     script = f'tell application "{_escape_osascript_text(resolved)}" to quit'
     try:
@@ -511,4 +543,4 @@ def close_app(app_name: str) -> dict[str, Any]:
             },
         }
 
-    raise capability_unavailable(f"{resolved} calisan bir uygulama olarak bulunamadi.")
+    raise app_not_found(f"{resolved} calisan bir uygulama olarak bulunamadi.")

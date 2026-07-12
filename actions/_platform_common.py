@@ -46,6 +46,13 @@ def capability_unavailable(message: str) -> SafeCapabilityError:
     return SafeCapabilityError("CAPABILITY_UNAVAILABLE", message)
 
 
+def app_not_found(message: str) -> SafeCapabilityError:
+    # "Uygulama bulunamadı" bir yetenek arızası DEĞİLDİR — replanner bu kodla
+    # uygulama adını düzeltmeyi/alternatif önermeyi deneyebilir;
+    # CAPABILITY_UNAVAILABLE ise "bu yetenek bu kurulumda bozuk" demektir.
+    return SafeCapabilityError("APP_NOT_FOUND", message)
+
+
 def permission_required(message: str) -> SafeCapabilityError:
     return SafeCapabilityError("PERMISSION_REQUIRED", message)
 

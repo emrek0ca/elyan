@@ -198,3 +198,70 @@ def file_patch(
             }
         ],
     }
+
+
+def make_directory(path: str) -> dict[str, Any]:
+    """Klasör oluşturur (üst klasörler dahil, varsa hata vermez)."""
+    resolved = _resolve_write_path(path, must_exist=False)
+    if resolved.exists() and not resolved.is_dir():
+        raise SafeCapabilityError("INVALID_ARGUMENT", "Bu yol zaten bir dosya; klasör oluşturulamaz.")
+    try:
+        resolved.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise SafeCapabilityError("WRITE_FAILED", "Klasör oluşturulamadı.") from exc
+    return {
+        "text": f"Klasör hazır: {resolved}",
+        "result": {
+            "kind": "directory",
+            "path": str(resolved),
+            "name": resolved.name,
+            "created": True,
+        },
+        "artifacts": [
+            {"kind": "directory", "name": resolved.name, "path": str(resolved), "contentType": "inode/directory"}
+        ],
+    }
+
+
+def file_move(source: str, destination: str, *, overwrite: bool = False) -> dict[str, Any]:
+    """Dosya/klasörü taşır (hedef klasörse içine). Üzerine yazma açıkça istenmeli."""
+    import shutil
+
+    source_resolved = _resolve_write_path(source, must_exist=False)
+    if not source_resolved.exists():
+        raise SafeCapabilityError("FILE_NOT_FOUND", "Taşınacak dosya bulunamadı.")
+    destination_resolved = _resolve_write_path(destination, must_exist=False)
+    if destination_resolved.is_dir():
+        destination_resolved = destination_resolved / source_resolved.name
+    if destination_resolved.exists():
+        if not overwrite:
+            raise SafeCapabilityError(
+                "DESTINATION_EXISTS",
+                "Hedefte aynı adla bir dosya var; üzerine yazmak için overwrite gerekli.",
+            )
+        if destination_resolved.is_dir():
+            raise SafeCapabilityError("INVALID_ARGUMENT", "Hedef bir klasör; üzerine yazılamaz.")
+    destination_resolved.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(source_resolved), str(destination_resolved))
+    except OSError as exc:
+        raise SafeCapabilityError("WRITE_FAILED", "Dosya taşınamadı.") from exc
+    return {
+        "text": f"Taşındı: {source_resolved.name} → {destination_resolved}",
+        "result": {
+            "kind": "file_move",
+            "sourcePath": str(source_resolved),
+            "path": str(destination_resolved),
+            "outputPath": str(destination_resolved),
+            "name": destination_resolved.name,
+            "moved": True,
+        },
+        "artifacts": [
+            {
+                "kind": "file",
+                "name": destination_resolved.name,
+                "path": str(destination_resolved),
+                "contentType": content_type_for(destination_resolved),
+            }
+        ],
+    }

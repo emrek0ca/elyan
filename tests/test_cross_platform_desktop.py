@@ -78,7 +78,9 @@ def test_non_darwin_close_app_without_process_fails_safe(monkeypatch: pytest.Mon
     with pytest.raises(Exception) as excinfo:
         open_app_module.close_app("Safari")
 
-    assert getattr(excinfo.value, "code", "") == "CAPABILITY_UNAVAILABLE"
+    # "Çalışan uygulama bulunamadı" bir yetenek arızası değil, düzeltilebilir
+    # hedef hatasıdır — replanner adı düzeltebilsin diye APP_NOT_FOUND.
+    assert getattr(excinfo.value, "code", "") == "APP_NOT_FOUND"
 
 
 def test_non_darwin_close_app_terminates_and_confirms(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8811,3 +8811,84 @@ def test_tool_catalog_cached_per_platform() -> None:
     assert a is b  # aynı önbelleklenmiş nesne (her çağrıda yeniden kurulmaz)
     c = sp.tool_catalog(platform="win32")
     assert c is not a
+
+
+def test_recoverable_replan_corrects_app_content_open_app(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Eski istemci/backend planından gelen "Chrome dan kedi resmi" gibi uydurma
+    # open_app hedefi APP_NOT_FOUND ile düşünce plan yerinde düzeltilir:
+    # uygulamayı aç + içerik için tarayıcı adımı.
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    revised = runtime._recoverable_replan({
+        "reason": "tool_failure",
+        "failedCapability": "open_app",
+        "errorCode": "APP_NOT_FOUND",
+        "failedArgs": {"app_name": "Chrome dan kedi resmi"},
+        "remainingSteps": [],
+    })
+    assert [s["capability"] for s in revised] == ["open_app", "browser_control"]
+    assert revised[0]["args"]["app_name"] == "Google Chrome"
+
+
+def test_replan_observation_includes_app_suggestions_for_app_not_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    from runtime import structured_planner
+
+    observation = structured_planner.build_replan_observation({
+        "reason": "tool_failure",
+        "failedCapability": "open_app",
+        "errorCode": "APP_NOT_FOUND",
+        "failedArgs": {"app_name": "Chorme"},
+        "appSuggestions": ["Google Chrome", "Chromium"],
+    })
+    assert observation["failedStep"]["suggestions"] == ["Google Chrome", "Chromium"]
+
+
+def test_sweep_interrupted_tasks_fails_stuck_running_items(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Daemon yeniden başladığında önceki süreçten 'running' kalmış görevler
+    # dürüstçe failed'a çekilir; waiting_approval/terminal görevlere dokunulmaz.
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.upsert_task_inbox_item({"id": "11111111-1111-4111-8111-111111111111", "title": "Tarayıcı kapat", "status": "running"})
+    state_store.upsert_task_inbox_item({"id": "22222222-2222-4222-8222-222222222222", "title": "Onay bekleyen", "status": "waiting_approval"})
+    state_store.upsert_task_inbox_item({"id": "33333333-3333-4333-8333-333333333333", "title": "Biten", "status": "completed"})
+
+    runtime = bridge.RuntimeBridge()
+    reported: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        runtime,
+        "_report_runtime_task_status",
+        lambda task_id, payload: reported.append((task_id, str(payload.get("status", "")))) or None,
+    )
+    swept = runtime.remote_task_runner.sweep_interrupted_tasks()
+
+    assert swept == 1
+    assert reported and reported[0][0] == "11111111-1111-4111-8111-111111111111"
+    assert reported[0][1] == "failed"
+    stuck = state_store.get_task_inbox_item("11111111-1111-4111-8111-111111111111")
+    assert stuck is not None and stuck["status"] == "failed"
+    waiting = state_store.get_task_inbox_item("22222222-2222-4222-8222-222222222222")
+    assert waiting is not None and waiting["status"] == "waiting_approval"
+
+
+def test_status_payload_carries_task_title_for_local_inbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    payload = runtime.remote_task_runner._status_payload(
+        "44444444-4444-4444-8444-444444444444",
+        "run-1",
+        status="running",
+        message="Yürütülüyor.",
+        task={"id": "44444444-4444-4444-8444-444444444444", "payload": {"prompt": "Chrome dan kedi resmi aç"}},
+    )
+    assert payload["title"] == "Chrome dan kedi resmi aç"
+    runtime._sync_task_inbox_status("44444444-4444-4444-8444-444444444444", payload)
+    item = state_store.get_task_inbox_item("44444444-4444-4444-8444-444444444444")
+    assert item is not None and item["title"] == "Chrome dan kedi resmi aç"

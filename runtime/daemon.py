@@ -173,9 +173,10 @@ class ElyanDaemon:
         offline_retry = self.OFFLINE_RETRY_MIN
         while not self._stop.is_set():
             # A native tray main loop can defer Python signal handlers on
-            # macOS.  The CLI also writes a PID-scoped stop marker, which this
-            # lightweight keeper observes cross-platform without depending on
-            # the UI event loop.
+            # macOS; SIGTERM/SIGINT are therefore bridged through
+            # signal.set_wakeup_fd in main().  The CLI also writes a
+            # PID-scoped stop marker, which this lightweight keeper observes
+            # cross-platform without depending on the UI event loop.
             self._stop.wait(1)
             if _stop_requested():
                 self.stop()
@@ -283,6 +284,31 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, _terminate)
     signal.signal(signal.SIGINT, _terminate)
+
+    # macOS'ta pystray'in AppKit run loop'u ana thread'i Python bytecode'undan
+    # uzak tutar; Python seviyesindeki _terminate süresiz ertelenebilir ve
+    # SIGTERM süreci öldüremez. set_wakeup_fd C-seviyesindeki sinyal
+    # işleyicisinden yazar: sinyal numarası pipe'a anında düşer, yan thread
+    # okuyup durdurmayı tetikler (tray tick thread'i _stop'u görünce
+    # icon.stop() çağırır — bkz. runtime/tray.py).
+    wake_read, wake_write = os.pipe()
+    os.set_blocking(wake_write, False)
+    signal.set_wakeup_fd(wake_write)
+
+    def _signal_watcher() -> None:
+        stop_signals = {int(signal.SIGTERM), int(signal.SIGINT)}
+        while True:
+            try:
+                data = os.read(wake_read, 64)
+            except OSError:
+                return
+            if not data:
+                return
+            if any(byte in stop_signals for byte in data):
+                daemon.stop()
+                return
+
+    threading.Thread(target=_signal_watcher, name="elyan-signal-watcher", daemon=True).start()
 
     print("Elyan daemon başlıyor…", flush=True)
     boot = daemon.bootstrap()

@@ -6,7 +6,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote as _url_quote, urlparse
 
 from runtime.agent_planning import build_agent_plan
 
@@ -357,6 +357,194 @@ def _is_non_app_open_target(value: str) -> bool:
         return True
     # "... sekme" / "... tab" ile biten kısa ifadeler
     return bool(normalized) and normalized.split()[-1] in {"sekme", "tab"} and len(normalized.split()) <= 3
+
+
+# "Chrome'dan kedi resmi aç" gibi cümlelerde ayrılma/bulunma eki uygulama adı
+# ile İÇERİĞİ ayırır; open_app'e "Chrome dan kedi resmi" gibi uydurma bir ad
+# gitmesin. Bağlaçlar hem ayrı jeton ("Chrome dan") hem kesme işaretli
+# ("Chrome'dan") hem bitişik ("Safariden") yazımıyla yakalanır.
+_APP_CONTENT_CONNECTORS = {"dan", "den", "tan", "ten", "da", "de", "uzerinden", "icinden", "ile"}
+_ATTACHED_CONTENT_SUFFIXES = ("dan", "den", "tan", "ten")
+_BROWSER_APP_DISPLAY_NAMES = {
+    "Safari",
+    "Google Chrome",
+    "Firefox",
+    "Microsoft Edge",
+    "Opera",
+    "Brave Browser",
+    "Arc",
+    "Yandex",
+}
+# Alias tablosunda olmayan yaygın tarayıcı yazımları da tanınsın.
+_EXTRA_BROWSER_ALIASES = {
+    "edge": "Microsoft Edge",
+    "microsoft edge": "Microsoft Edge",
+    "opera": "Opera",
+    "brave": "Brave Browser",
+    "arc": "Arc",
+    "yandex": "Yandex",
+    "tarayici": "Safari",
+    "browser": "Safari",
+    "google": "Google Chrome",
+}
+_IMAGE_CONTENT_WORDS = ("resim", "resmi", "resimleri", "gorsel", "gorseli", "gorselleri", "foto", "fotograf", "image", "photo")
+
+# Masaüstünde yerel uygulaması olmayan (ya da tipik olarak tarayıcıda açılan)
+# servisler: "YouTube aç" open_app("YouTube")→APP_NOT_FOUND yerine tarayıcıda
+# doğru adrese gitmeli. Yerel uygulaması yaygın olanlar (Spotify, Notion,
+# WhatsApp...) bilerek YOK — onlar APP_ALIASES ile uygulamaya gider.
+_WEB_SERVICE_URLS = {
+    "youtube": "https://www.youtube.com",
+    "gmail": "https://mail.google.com",
+    "google drive": "https://drive.google.com",
+    "drive": "https://drive.google.com",
+    "google docs": "https://docs.google.com",
+    "netflix": "https://www.netflix.com",
+    "instagram": "https://www.instagram.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "facebook": "https://www.facebook.com",
+    "tiktok": "https://www.tiktok.com",
+    "twitch": "https://www.twitch.tv",
+    "github": "https://github.com",
+    "chatgpt": "https://chatgpt.com",
+    "linkedin": "https://www.linkedin.com",
+    "reddit": "https://www.reddit.com",
+}
+
+
+def _web_service_url(folded_phrase: str) -> str:
+    phrase = " ".join(str(folded_phrase or "").split())
+    if phrase in _WEB_SERVICE_URLS:
+        return _WEB_SERVICE_URLS[phrase]
+    # "youtube u" / "youtube'u" gibi hâl ekli yazımlar da servisi bulsun.
+    tokens = phrase.replace("'", " ").split()
+    if len(tokens) >= 2 and tokens[-1] in {"u", "i", "a", "e", "yi", "yu", "ye", "ya"}:
+        return _WEB_SERVICE_URLS.get(" ".join(tokens[:-1]), "")
+    return ""
+
+
+def _browser_content_step(content: str) -> dict[str, Any]:
+    """İçerik ifadesini doğru tarayıcı adımına çevirir: bilinen web servisi →
+    doğrudan URL, görsel isteği → görsel araması, aksi halde arama."""
+    folded = _normalise(content)
+    service_url = _web_service_url(folded)
+    if service_url:
+        return {
+            "capability": "browser_control",
+            "args": {"action": "open_url", "url": service_url},
+            "description": f"{content} açılacak.",
+        }
+    if any(word in folded.split() for word in _IMAGE_CONTENT_WORDS):
+        return {
+            "capability": "browser_control",
+            "args": {"action": "open_url", "url": "https://www.google.com/search?tbm=isch&q=" + _url_quote(content)},
+            "description": f"'{content}' için görsel araması açılacak.",
+        }
+    return {
+        "capability": "browser_control",
+        "args": {"action": "search", "query": content},
+        "description": f"'{content}' araması yapılacak.",
+    }
+
+
+def _route_app_content_open(original: str) -> RoutedTask | None:
+    """'<tarayıcı>'dan <içerik> aç' kalıbını erken yakalar — youtube/arama
+    regex'lerinden ÖNCE çağrılır, yoksa "Google dan YouTube aç" gibi cümleler
+    youtube_play(query="Google dan") benzeri bozuk rotalara kaçar."""
+    target = _extract_after(_OPEN_VERB_PATTERNS, original)
+    if not target:
+        return None
+    target = _clean_app_name(target)
+    if _looks_like_url(target):
+        return None
+    app_content = _split_app_content_target(target)
+    if app_content is None:
+        return None
+    app_display, content = app_content
+    if app_display not in _BROWSER_APP_DISPLAY_NAMES:
+        return None
+    steps = [
+        {"capability": "open_app", "args": {"app_name": app_display}, "description": f"{app_display} açılacak."},
+        _browser_content_step(content),
+    ]
+    summary = f"{app_display} açılıp '{content}' görüntülenecek."
+    return RoutedTask(
+        "open_app",
+        {"app_name": app_display},
+        "open_app_content",
+        intent="open_app_content",
+        confidence=0.9,
+        is_multi_step=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _resolve_known_app_phrase(folded_phrase: str) -> str | None:
+    """Katlanmış ifadeyi bilinen bir uygulama görünen adına çözer; bilinmiyorsa None."""
+    from actions.open_app import _FOLDED_ALIASES as _open_app_aliases
+
+    phrase = " ".join(str(folded_phrase or "").split())
+    if not phrase:
+        return None
+    return _open_app_aliases.get(phrase) or _EXTRA_BROWSER_ALIASES.get(phrase)
+
+
+def _split_app_content_target(value: str) -> tuple[str, str] | None:
+    """'<uygulama> dan/den <içerik>' kalıbını (bilinen uygulama + içerik) ayırır.
+
+    Dönen çift: (uygulama görünen adı, içerik metni). Kalıp yoksa None —
+    open_app normal tek-uygulama yolunda kalır.
+    """
+    from actions.open_app import _tr_fold
+
+    tokens = str(value or "").split()
+    if len(tokens) < 2:
+        return None
+    folded = [_tr_fold(token) for token in tokens]
+
+    max_head = min(3, len(tokens))
+    for k in range(1, max_head + 1):
+        last = folded[k - 1]
+        # Kesme işaretli bağlaç: "chrome'dan kedi resmi"
+        if "'" in last:
+            base, _, suffix = last.partition("'")
+            if suffix in _APP_CONTENT_CONNECTORS and k < len(tokens):
+                app = _resolve_known_app_phrase(" ".join(folded[: k - 1] + [base]))
+                if app:
+                    return app, " ".join(tokens[k:])
+        # Ayrı jeton bağlaç: "chrome dan kedi resmi"
+        app = _resolve_known_app_phrase(" ".join(folded[:k]))
+        if app and k < len(folded) - 1 and folded[k].strip("'") in _APP_CONTENT_CONNECTORS:
+            return app, " ".join(tokens[k + 1:])
+    # Bitişik ek: "safariden kedi resmi"
+    first = folded[0]
+    for suffix in _ATTACHED_CONTENT_SUFFIXES:
+        if first.endswith(suffix) and len(first) > len(suffix) + 2:
+            app = _resolve_known_app_phrase(first[: -len(suffix)])
+            if app:
+                return app, " ".join(tokens[1:])
+    return None
+
+
+_OPEN_VERB_PATTERNS = [
+    r"(.+?)\s+(?:uygulamas[ıi]n[ıi]\s+)?(?:ac|aç|open|launch|başlat|baslat|start)$",
+    r"(?:ac|aç|open|launch|başlat|baslat|start)\s+(.+)$",
+]
+
+
+def prompt_requests_app_content(prompt: str) -> bool:
+    """Prompt 'X uygulamasından Y aç' kalıbında mı? (LLM delegasyon kapısı için.)
+
+    True ise görev tek open_app komutu DEĞİLDİR; kataloglu LLM planlayıcıya
+    delege edilmelidir.
+    """
+    target = _extract_after(_OPEN_VERB_PATTERNS, str(prompt or ""))
+    if not target:
+        return False
+    return _split_app_content_target(_clean_app_name(target)) is not None
 
 
 def _is_generic_app_target(value: str) -> bool:
@@ -2984,15 +3172,33 @@ def route_text_to_tool(
             privacy_class="local_private",
         )
 
+    # "Chrome'dan X aç" kalıbı youtube/arama regex'lerinden önce ele alınır.
+    app_content_open = _route_app_content_open(original)
+    if app_content_open is not None:
+        return app_content_open
+
+    # Önce "X youtube'da çal" (içerik önde) denenir — tersi sırada "muse
+    # youtube da çal" gibi cümlelerde içerik kaybolur.
     youtube_query = _extract_after(
         [
-            r"youtube(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?\s+(.+?)\s+(?:ac|aç|cal|çal|oynat|ara)$",
             r"(.+?)\s+youtube(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?\s+(?:ac|aç|cal|çal|oynat)$",
+            r"youtube(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?\s+(.+?)\s+(?:ac|aç|cal|çal|oynat|ara)$",
         ],
         original,
     )
     if youtube_query:
         youtube_query = _strip_leading_fillers(youtube_query)
+        folded_query = _normalise(youtube_query)
+        # "youtube u aç" gibi hâl ekinden ibaret sorgu: aranacak içerik yok,
+        # YouTube'un kendisi açılmak isteniyor.
+        if not folded_query or folded_query in {"u", "i", "a", "e", "yi", "yu", "ye", "ya"}:
+            return RoutedTask(
+                "browser_control",
+                {"action": "open_url", "url": _WEB_SERVICE_URLS["youtube"]},
+                "web_service_open",
+                intent="web_service_open",
+                confidence=0.93,
+            )
         return RoutedTask(
             "browser_control",
             {"action": "play_youtube", "query": youtube_query},
@@ -3075,22 +3281,33 @@ def route_text_to_tool(
                 steps=tuple(steps),
             )
 
-    open_target = _extract_after(
-        [
-            r"(.+?)\s+(?:uygulamas[ıi]n[ıi]\s+)?(?:ac|aç|open|launch|başlat|baslat|start)$",
-            r"(?:ac|aç|open|launch|başlat|baslat|start)\s+(.+)$",
-        ],
-        original,
-    )
+    open_target = _extract_after(_OPEN_VERB_PATTERNS, original)
     if open_target:
         open_target = _clean_app_name(open_target)
         if _looks_like_url(open_target):
             return RoutedTask("browser_control", {"action": "open_url", "url": open_target}, "open_url", intent="open_url", confidence=0.93)
+        # Uygulama + içerik kalıbı yukarıda (_route_app_content_open) tarayıcı
+        # planına çevrildi; buraya düşen split yalnız TARAYICI-OLMAYAN uygulama
+        # demektir ("Notion dan notlarımı aç") — open_app'e uydurma ad göndermek
+        # yerine rotayı atla (LLM planlayıcı devralır).
+        app_content = _split_app_content_target(open_target)
+        # "YouTube aç" gibi yerel uygulaması olmayan web servisleri tarayıcıda
+        # doğru adrese gitsin (open_app("YouTube") → APP_NOT_FOUND yerine).
+        service_url = _web_service_url(_normalise(open_target))
+        if app_content is None and service_url:
+            return RoutedTask(
+                "browser_control",
+                {"action": "open_url", "url": service_url},
+                "web_service_open",
+                intent="web_service_open",
+                confidence=0.93,
+            )
         # "yeni sekme aç", "new tab", "sekme aç" gibi ifadeler bir UYGULAMA adı
         # değil; open_app'e kaçarsa "yeni sekme guvenli sekilde acilamadi" diye
         # kafa karıştırıcı hata verirdi. Bunları open_app dışında tut.
         if (
-            not _is_generic_app_target(open_target)
+            app_content is None
+            and not _is_generic_app_target(open_target)
             and not _is_non_app_open_target(open_target)
             and not any(token in _normalise(open_target) for token in ("dosya", "file", "klasor", "folder"))
         ):

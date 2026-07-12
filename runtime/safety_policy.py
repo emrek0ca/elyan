@@ -259,6 +259,40 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
             "Bu MCP aracı için açık onay gerekiyor.",
         )
 
+    if name == "browser_agent.run":
+        agent_gate = _permission_block(
+            state,
+            "allow_browser_control",
+            "Tarayıcı ve medya erişimi kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Tarayıcı ajanı için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+        )
+        if agent_gate.allowed:
+            return PolicyDecision(True)
+        return agent_gate
+
+    if name.startswith("browser_session."):
+        # Oturumu kapatmak her zaman güvenli (operator.cancel gibi temizlik).
+        if name == "browser_session.close":
+            return PolicyDecision(True)
+        session_gate = _permission_block(
+            state,
+            "allow_browser_control",
+            "Tarayıcı ve medya erişimi kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Tarayıcı işlemleri için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+        )
+        if session_gate.allowed:
+            return PolicyDecision(True)
+        return session_gate
+
+    if name in {"make_directory", "file_move"}:
+        if _truthy(args.get("_confirmed", False)):
+            return PolicyDecision(True)
+        return PolicyDecision(
+            False,
+            "PERMISSION_REQUIRED",
+            "Dosya sistemini değiştirmek için açık onay gerekiyor.",
+        )
+
     if name in {"browser_control", "play_media"}:
         browser_gate = _permission_block(
             state,

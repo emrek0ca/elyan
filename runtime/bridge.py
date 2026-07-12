@@ -42,10 +42,12 @@ from runtime.capability_registry import (
 from runtime.safety_policy import PERSONAL_ACTION_CAPABILITIES, evaluate_tool
 from runtime.agent_planning import build_agent_plan
 from runtime import structured_planner
+from runtime import browser_agent
 from runtime import operator_planner
 from runtime.task_router import (
     RoutedTask,
     artifact_target_clarification,
+    prompt_requests_app_content,
     revise_plan_payload,
     route_text_to_tool,
 )
@@ -1864,6 +1866,8 @@ def _safe_chat_error_message(raw: Any) -> str:
         return "Bu işlem için işletim sistemi izni gerekiyor."
     if value == "UNSUPPORTED_PLATFORM":
         return "Bu özellik bu işletim sisteminde desteklenmiyor."
+    if value == "APP_NOT_FOUND":
+        return "İstenen uygulama bu bilgisayarda bulunamadı."
     if value in {"CAPABILITY_UNAVAILABLE", "DEPENDENCY_UNAVAILABLE"}:
         return "Bu özellik bu kurulumda hazır değil."
     if value == "TIMEOUT":
@@ -5141,6 +5145,7 @@ class RuntimeBridge:
         self._runtime_ws_lock = threading.RLock()
         self._runtime_ws_connected = False
         self._runtime_ws_last_error = ""
+        self._runtime_ws_last_close_code = 0
         self._runtime_ws_reconnect_attempts = 0
         self._last_dispatch_ack_at = ""
         self._runtime_register_retry_lock = threading.RLock()
@@ -5169,6 +5174,9 @@ class RuntimeBridge:
         self._billing_refresh_min_interval = 15.0
         self.executor_core = ExecutorCore()
         self.remote_task_runner = RemoteTaskRunner(self)
+        # ReAct tarayıcı ajanının LLM karar vericisi: kataloglu sağlayıcı
+        # zinciri (server_brain → yerel model) üzerinden tek-aksiyon JSON'u.
+        browser_agent.register_decider(self._browser_agent_decide)
         self._full_access_session: dict[str, Any] = {
             "enabled": False,
             "startedAt": "",
@@ -6126,6 +6134,7 @@ class RuntimeBridge:
         task = {
             **existing,
             "id": task_id,
+            "title": str(payload.get("title", "") or existing.get("title", "") or "").strip()[:200],
             "status": str(payload.get("status", "") or existing.get("status", "") or "queued"),
             "summary": summary or str(existing.get("summary", "") or ""),
             "error": str(payload.get("error", "") or "").strip() or str(existing.get("error", "") or ""),
@@ -6968,14 +6977,30 @@ class RuntimeBridge:
                 self._handle_runtime_ws_message(message)
 
             def _on_error(_app: Any, error: Any) -> None:
-                self._runtime_ws_last_error = type(error).__name__ if not isinstance(error, str) else error
+                # websocket-client, sunucunun normal close frame'ini de on_error'a
+                # geçirir — exception değil, ham ABNF frame nesnesi gelir. Bu bir
+                # protokol hatası değildir; kapanış kodunu/nedenini çıkarıp öyle
+                # logla ("ABNF" diye anlamsız bir hata satırı yerine).
+                close_code = 0
+                close_reason = ""
+                frame_data = getattr(error, "data", None)
+                if not isinstance(error, BaseException) and isinstance(frame_data, (bytes, bytearray)):
+                    if len(frame_data) >= 2:
+                        close_code = int.from_bytes(frame_data[:2], "big")
+                        close_reason = frame_data[2:].decode("utf-8", "replace")[:120]
+                if close_code:
+                    self._runtime_ws_last_error = f"server_close_{close_code}"
+                    self._runtime_diag("ws_server_close", code=close_code, reason=close_reason)
+                else:
+                    self._runtime_ws_last_error = type(error).__name__ if not isinstance(error, str) else error
+                    self._runtime_diag("ws_error", error=self._runtime_ws_last_error)
+                self._runtime_ws_last_close_code = close_code
                 self._runtime_state_patch(
                     lifecycle_state="reconnecting",
                     ready=False,
                     websocket_connected=False,
                     error_code=self._runtime_ws_last_error,
                 )
-                self._runtime_diag("ws_error", error=self._runtime_ws_last_error)
 
             def _on_close(_app: Any, status_code: Any, message: Any) -> None:
                 self._runtime_ws_connected = False
@@ -7004,6 +7029,10 @@ class RuntimeBridge:
                     status=status_code,
                     reason=message,
                 )
+                try:
+                    self._runtime_ws_last_close_code = int(status_code or 0) or self._runtime_ws_last_close_code
+                except (TypeError, ValueError):
+                    pass
 
             app = websocket_module.WebSocketApp(  # type: ignore[union-attr]
                 ws_url,
@@ -7033,6 +7062,16 @@ class RuntimeBridge:
 
             if self._runtime_ws_stop.is_set() or not self._paired_runtime_ready():
                 return
+
+            # 4001 "replaced": aynı cihaz için başka bir soket bağlandı (ör.
+            # restart sırasında eski süreç hâlâ ayakta). Anında geri bağlanmak
+            # iki sürecin birbirini sonsuza dek düşürmesine yol açar — kısa
+            # bekleme kapışmayı kırar; kalıcı süreç bağlantıyı geri alır.
+            if getattr(self, "_runtime_ws_last_close_code", 0) == 4001:
+                self._runtime_ws_last_close_code = 0
+                self._runtime_ws_stop.wait(3.0)
+                if self._runtime_ws_stop.is_set() or not self._paired_runtime_ready():
+                    return
 
             refreshed = self._refresh_runtime_registration_for_reconnect()
             if not refreshed:
@@ -7299,6 +7338,16 @@ class RuntimeBridge:
         # idempotent, so repeated bootstrap calls do not create extra threads.
         if self._runtime_auth_ready():
             self._connect_runtime_transport()
+        # Süreç başına bir kez: önceki süreçten 'yürütülüyor' durumda kalmış
+        # hayalet görevleri dürüstçe kapat (bkz. sweep_interrupted_tasks).
+        # bootstrap() yeniden-bağlanma yollarından tekrar çağrılabilir; o anda
+        # gerçekten yürüyen görevleri süpürmemek için bayrakla korunur.
+        if not getattr(self, "_interrupted_task_sweep_done", False):
+            self._interrupted_task_sweep_done = True
+            try:
+                self.remote_task_runner.sweep_interrupted_tasks()
+            except Exception:
+                pass
         if self._user_auth_ready():
             self._sync_conversation_truth_from_backend()
             # Önceki oturumdan token'lı ama hiç eşleştirilmemiş kurulumlar
@@ -7737,6 +7786,22 @@ class RuntimeBridge:
         Not: server_brain ile akıllı replan (gözlemle danışıp yeni plan) deploy
         turuna bırakıldı; gözlem zarfı burada üretilip tanılamaya yazılıyor ki o
         adımda hazır olsun."""
+        pre_capability = str(context.get("failedCapability", "") or "")
+        pre_error_code = str(context.get("errorCode", "") or "").upper()
+        pre_args = context.get("failedArgs")
+        pre_args = pre_args if isinstance(pre_args, dict) else {}
+        if pre_error_code == "APP_NOT_FOUND" and pre_capability in {"open_app", "close_app"}:
+            # Gözleme kurulu-uygulama önerileri ekle: planlayıcı "yetenek bozuk"
+            # değil "ad yanlış" diye okusun ve düzeltebilsin.
+            try:
+                from actions.open_app import suggest_installed_apps
+
+                context = {
+                    **context,
+                    "appSuggestions": suggest_installed_apps(str(pre_args.get("app_name", "") or "")),
+                }
+            except Exception:
+                pass
         observation = structured_planner.build_replan_observation(context)
         self._runtime_diag(
             "replan_observation",
@@ -7784,7 +7849,51 @@ class RuntimeBridge:
         ):
             return remaining_steps
 
+        # 3) open_app hedefi bulunamadı ve hedef aslında "uygulama + içerik"
+        # kalıbıysa ("Chrome dan kedi resmi") planı yerinde düzelt: uygulamayı
+        # aç + içerik için doğru adımı üret. Eski istemci/backend planlarından
+        # gelen uydurma app adlarına karşı güvenlik ağı.
+        if capability == "open_app" and error_code == "APP_NOT_FOUND":
+            bad_name = str(failed_args.get("app_name", "") or "").strip()
+            corrected = route_text_to_tool(f"{bad_name} aç") if bad_name else None
+            if corrected is not None and corrected.intent == "open_app_content" and corrected.steps:
+                return [dict(step) for step in corrected.steps] + remaining_steps
+            # "YouTube" gibi web servisi: uygulama yerine tarayıcıda doğru URL.
+            if corrected is not None and corrected.intent == "web_service_open":
+                return [
+                    {
+                        "capability": corrected.tool_name,
+                        "args": dict(corrected.args),
+                        "description": f"{bad_name} tarayıcıda açılacak.",
+                    },
+                    *remaining_steps,
+                ]
+
         return []
+
+    def _browser_agent_decide(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """ReAct tarayıcı ajanı için tek-tur karar: gözlem zarfını sağlayıcı
+        zincirine (server_brain → yerel model) gönderir, tek aksiyon JSON'u
+        bekler. Sağlayıcı yoksa dürüst hata — ajan sessizce tahmine düşmez."""
+        state = self._state_with_access()
+        seeded = [{"role": "system", "text": browser_agent.decision_system_prompt()}]
+        user_text = json.dumps(payload, ensure_ascii=False)
+        for provider in _semantic_candidate_providers(state, privacy_class="local_private", backend=self.backend):
+            try:
+                result = _invoke_provider_chat_with_context(
+                    state, provider, seeded, user_text, backend=self.backend
+                )
+            except Exception:
+                continue
+            if not result.get("ok"):
+                continue
+            decision = _extract_json_object(str(result.get("content", "") or ""))
+            if isinstance(decision, dict) and str(decision.get("action", "") or "").strip():
+                return decision
+        raise SafeCapabilityError(
+            "server_brain_unavailable",
+            "Tarayıcı ajanı için karar sağlayıcısına ulaşılamadı.",
+        )
 
     def _execute_step_with_telemetry(
         self,
@@ -11366,9 +11475,14 @@ class RuntimeBridge:
         if normalized & REMOTE_QUANTUM_CAPABILITIES:
             return False
         # Basit doğrudan komutlar hız için regex yolunda kalır — ANCAK prompt
-        # açıkça sıralı çok-adım bildiriyorsa (regex tek eylemi yakalar) yine de
-        # kataloglu planlayıcıya delege et.
-        if normalized <= REMOTE_FAST_DIRECT_CAPABILITIES and not self._prompt_has_sequential_intent(prompt):
+        # açıkça sıralı çok-adım bildiriyorsa (regex tek eylemi yakalar) ya da
+        # "X uygulamasından Y aç" gibi uygulama+içerik kalıbındaysa (tek
+        # open_app komutu değildir) yine de kataloglu planlayıcıya delege et.
+        if (
+            normalized <= REMOTE_FAST_DIRECT_CAPABILITIES
+            and not self._prompt_has_sequential_intent(prompt)
+            and not prompt_requests_app_content(prompt)
+        ):
             return False
         return _server_brain_ready(self._state_with_access())
 

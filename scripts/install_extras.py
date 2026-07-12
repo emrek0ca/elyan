@@ -14,7 +14,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CORE = REPO_ROOT / "requirements-core.txt"
 FULL = REPO_ROOT / "requirements.txt"
-DONE_MARKER = Path.home() / ".elyan" / ".extras-installed"
+# Marker venv'İN İÇİNDE yaşar: venv yeniden kurulursa (Python güncellemesi)
+# marker da gider ve extras yeniden kurulur. Eski ~/.elyan konumundaki marker
+# venv'i temsil etmediği için güvenilmez (paketler eksikken atlanıyordu).
+DONE_MARKER = Path(sys.prefix) / ".elyan-extras-installed"
 
 
 def _packages(path: Path) -> list[str]:

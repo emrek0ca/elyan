@@ -21,6 +21,10 @@ REMOTE_TASK_RUNNER_VERSION = "remote_task_orchestrator_v1"
 # bir "zaman aşımı" hatası raporlanır (takıldı bildirimi). Sentinel dönüşü ile
 # gerçek None (delege→LLM) sonucundan ayrılır.
 REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS = 300.0
+# Tarayıcı ajanı / operatör gibi uzun soluklu görevler (gözlem-karar turları +
+# sayfa beklemeleri) 5 dk'ya sığmaz; bu görevlere geniş bütçe tanınır.
+REMOTE_TASK_LONG_EXECUTION_TIMEOUT_SECONDS = 1200.0
+_LONG_RUNNING_CAPABILITY_PREFIXES = ("browser_agent.", "browser_session.", "desktop_operator.")
 _EXECUTION_TIMEOUT = object()
 
 # Bir görev için üst üste kaç kez netleştirme sorulabilir. Aşılırsa görev
@@ -91,6 +95,31 @@ def _safe_error_code(value: Any, fallback: str = "REMOTE_TASK_FAILED") -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in raw)[:80] or fallback
 
 
+_MISSING_EVIDENCE_LABELS = {
+    "chat_result": "görünür bir sonuç mesajı",
+    "artifact": "üretilen dosya",
+    "file_update": "dosya güncellemesi",
+    "browser_state": "tarayıcıda gerçekleşen etki",
+    "system_state": "sistemde gerçekleşen etki",
+    "runtime_status": "çalışma durumu",
+    "tool_result": "araç sonucu",
+    "state_readback": "gerçek durum gözlemi",
+}
+
+
+def _human_missing_evidence_labels(missing: Any) -> list[str]:
+    """verify_result'ın 'output:browser_state' / 'rule:x' kimliklerini kullanıcıya
+    okunur etikete çevirir; bilinmeyenleri ham bırakmak yerine atlar."""
+    labels: list[str] = []
+    for item in missing if isinstance(missing, list) else []:
+        raw = str(item or "")
+        key = raw.split(":", 1)[1] if ":" in raw else raw
+        label = _MISSING_EVIDENCE_LABELS.get(key)
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
 def _backend_task_status(value: Any) -> str:
     status = str(value or "").strip().lower()
     if status in BACKEND_TASK_STATUSES:
@@ -116,6 +145,47 @@ class RemoteTaskRunner:
 
     def __init__(self, host: Any) -> None:
         self.host = host
+
+    # Bu süreçte gerçekten yürütülüyor olabilecek durumlar; daemon yeni
+    # başladıysa bunlarda kalmış bir görev kesinlikle yarıda kalmıştır.
+    _EXECUTING_STATUSES = frozenset({"planning", "readiness_check", "running", "verifying", "repairing", "unknown"})
+
+    def sweep_interrupted_tasks(self) -> int:
+        """Daemon (yeniden) başladığında bir kez: yerel gelen kutusunda
+        'yürütülüyor' görünen görevler bu süreçte çalışmıyordur — backend'e
+        dürüstçe failed raporla, yerelde de kapat. Tepside/mobilde sonsuza dek
+        'çalışıyor' görünen hayalet görevleri bitirir."""
+        inbox = state_store.get_task_inbox()
+        items = inbox.get("items", []) if isinstance(inbox, dict) else []
+        swept = 0
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status", "") or "").strip().lower()
+            if status not in self._EXECUTING_STATUSES:
+                continue
+            task_id = str(item.get("id", "") or "").strip()
+            if not task_id:
+                continue
+            task_run_id = str(item.get("taskRunId", "") or "").strip() or self._ensure_task_run_id(task_id)
+            message = (
+                "Görev, masaüstü uygulaması yeniden başladığı için yarıda kaldı. "
+                "Lütfen tekrar gönderin."
+            )
+            try:
+                self._fail_safe(
+                    task_id,
+                    task_run_id,
+                    message=message,
+                    error_code="task_interrupted_by_restart",
+                )
+            except Exception:
+                pass
+            self._upsert_local_task(task_id, status="failed", summary=message)
+            swept += 1
+        if swept:
+            self.host._runtime_diag("interrupted_task_sweep", count=swept)
+        return swept
 
     def execute_assigned_runtime_tasks(self, limit: int = 1) -> dict[str, Any]:
         self.host._assigned_task_fetch_requested.clear()
@@ -302,7 +372,7 @@ class RemoteTaskRunner:
                     task_run_id,
                     message=(
                         "Görev zaman aşımına uğradı ve takıldı "
-                        f"({int(REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS)} sn); güvenle durduruldu."
+                        f"({int(self._execution_timeout_for(task))} sn); güvenle durduruldu."
                     ),
                     error_code="task_execution_timeout",
                     plan_preview=plan_preview,
@@ -415,13 +485,27 @@ class RemoteTaskRunner:
             daemon=True,
         )
         worker.start()
-        worker.join(REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS)
+        worker.join(self._execution_timeout_for(task))
         if worker.is_alive():
             self.host._runtime_diag("task_execution_timeout", task_id=task_id)
             return _EXECUTION_TIMEOUT
         if "error" in box:
             raise box["error"]
         return box.get("result")
+
+    def _execution_timeout_for(self, task: dict[str, Any]) -> float:
+        """Görev tarayıcı ajanı/operatör içeriyorsa uzun bütçe, aksi halde standart."""
+        try:
+            payload = task.get("payload", {}) if isinstance(task, dict) else {}
+            payload = payload if isinstance(payload, dict) else {}
+            capabilities = self.host._remote_task_capabilities(task, payload)
+        except Exception:
+            capabilities = set()
+        for capability in capabilities:
+            name = str(capability or "")
+            if name.startswith(_LONG_RUNNING_CAPABILITY_PREFIXES):
+                return REMOTE_TASK_LONG_EXECUTION_TIMEOUT_SECONDS
+        return REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS
 
     def resume_after_approval(self, task_id: str, approved: bool, answer: str = "") -> dict[str, Any]:
         link = state_store.get_remote_task_link(task_id)
@@ -650,6 +734,18 @@ class RemoteTaskRunner:
             canonical["error"] = {"code": error_code, "message": message}
         if isinstance(task, dict):
             payload["routeDecision"] = task.get("routeDecision") if isinstance(task.get("routeDecision"), dict) else {}
+            # Yerel gelen kutusu (tepsi menüsü + CLI) anlamlı bir ad görsün:
+            # başlık yoksa kullanıcının görev metni başlık olur.
+            task_payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+            title = _safe_text(
+                task.get("title", "")
+                or task_payload.get("title", "")
+                or task_payload.get("prompt", "")
+                or task_payload.get("message", ""),
+                200,
+            )
+            if title:
+                payload["title"] = title
         return payload
 
     def _trace_for_status(self, task_id: str, task_run_id: str, status: str, plan_preview: dict[str, Any]) -> dict[str, Any]:
@@ -1100,6 +1196,17 @@ class RemoteTaskRunner:
             trace["verificationState"] = verification
             result["executionTrace"] = trace
         if verification.get("passed") is not True:
+            # Yürütme zaten dürüst, somut bir hatayla bittiyse ("YouTube bu
+            # bilgisayarda bulunamadı" gibi) o mesajı kanıt jargonuyla EZME —
+            # kullanıcı gerçek nedeni görsün; doğrulama kaydı yine eklendi.
+            existing_error = result.get("error") if isinstance(result.get("error"), dict) else {}
+            existing_message = str(
+                existing_error.get("message", "")
+                or (result.get("assistantMessage", "") if result.get("chatOk") is False else "")
+                or ""
+            ).strip()
+            if result.get("chatOk") is False and existing_message:
+                return result
             unverified = [
                 str(name) for name in verification.get("unverifiedSideEffects", []) if str(name or "").strip()
             ]
@@ -1112,10 +1219,14 @@ class RemoteTaskRunner:
                 )
                 error_code = "WORK_ORDER_SIDE_EFFECT_UNVERIFIED"
             else:
-                missing_count = len(verification.get("missingEvidence", []))
+                # Teknik jargon değil, insanca: neyin doğrulanamadığını söyle.
+                missing_labels = _human_missing_evidence_labels(
+                    verification.get("missingEvidence", [])
+                )
+                detail = f" Doğrulanamayan: {', '.join(missing_labels)}." if missing_labels else ""
                 message = (
-                    "Görev yürütüldü ancak tamamlandığını doğrulayacak "
-                    f"{missing_count} kanıt eksik. Sonuç tamamlandı olarak işaretlenmedi."
+                    "Görevi çalıştırdım ama sonucun gerçekten oluştuğunu "
+                    f"doğrulayamadım; bu yüzden tamamlandı demiyorum.{detail}"
                 )
                 error_code = "WORK_ORDER_EVIDENCE_MISSING"
             result["chatOk"] = False
