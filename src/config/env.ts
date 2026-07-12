@@ -132,7 +132,7 @@ const envSchema = z.object({
   GEMINI_VISION_MODEL: z.string().default("gemini-3.5-flash"),
   GEMINI_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
   GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-image"),
-  GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image-preview"),
+  GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image"),
   GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("1K"),
   GEMINI_IMAGE_PRO_ENABLED: booleanFlag(false),
   OPENROUTER_API_KEY: z.string().optional(),

@@ -38,7 +38,7 @@
     }
   },
   "allowedTools": [],
-  "modelProfile": "fast_reasoning",
+  "modelProfile": "document_reasoning",
   "maxInputTokens": 2400,
   "maxOutputTokens": 500,
   "timeoutMs": 6500,

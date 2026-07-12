@@ -380,6 +380,74 @@ test("executor prioritizes explicit page references and typed relevance signals"
   assert.match(prompt, /"chunkHash":"page-3"/);
 });
 
+test("document summary samples beginning middle and end within one cheap pass", async () => {
+  resetSkillExecutionCacheForTests();
+  const skill = await getActiveSkillById("document_summary");
+  assert.ok(skill);
+  const chunks = Array.from({ length: 7 }, (_, index) => ({
+    ...attachmentContext.chunks[0],
+    chunkId: `doc-1:chunk:${index + 1}`,
+    chunkHash: `coverage-${index + 1}`,
+    content: `Belgenin ${index + 1}. bölümündeki bilgi.`,
+    pageNumber: index + 1,
+  }));
+  let receivedSchema: Record<string, unknown> | null = null;
+
+  const result = await executeSkill({
+    app: { db: new FakeDb() } as never,
+    userId: "user-1",
+    skill,
+    skillInput: {
+      prompt: "Belgenin tamamını özetle",
+      attachmentContext: {
+        ...attachmentContext,
+        documents: [
+          {
+            ...attachmentContext.documents[0],
+            chunkCount: chunks.length,
+            includedChunkCount: chunks.length,
+          },
+        ],
+        chunks,
+        chunkCount: chunks.length,
+      },
+    },
+    routeDecision: {
+      needsSkill: true,
+      skillId: "document_summary",
+      confidence: 0.9,
+      reason: "summary",
+      source: "deterministic",
+    },
+    modelCall: async (input) => {
+      receivedSchema = input.outputSchema;
+      return {
+        text: JSON.stringify({
+          summary: "Belgenin başlangıç, orta ve sonuç bölümleri özetlendi.",
+          keyPoints: ["Temsili bölümler kapsandı"],
+          confidence: 0.84,
+        }),
+        provider: "gemini",
+        model: "gemini-fast",
+        latencyMs: 8,
+        promptTokens: 200,
+        completionTokens: 40,
+        totalTokens: 240,
+        metadata: {},
+      };
+    },
+  });
+
+  assert.ok(result);
+  assert.deepEqual(result.metadata.selectedChunkHashes.slice(0, 4), [
+    "coverage-1",
+    "coverage-3",
+    "coverage-5",
+    "coverage-7",
+  ]);
+  assert.deepEqual(receivedSchema, skill.outputSchema);
+});
+
 test("executor rejects low-confidence validated outputs", async () => {
   resetSkillExecutionCacheForTests();
   const skill = await getActiveSkillById("document_summary");

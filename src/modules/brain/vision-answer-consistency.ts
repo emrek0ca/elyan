@@ -5,7 +5,7 @@ const CURRENCY_AMOUNT_PATTERN = /(?:[$€£₺]\s*\d{1,9}(?:[.,]\d{1,2})?|\d{1,9
 const LABELED_TOTAL_PATTERN = /(?:toplam|total|grand total|gesamt|totale|итого|المجموع)\s*[:=-]?\s*([$€£₺]?\s*\d{1,9}(?:[.,]\d{1,2})?\s*(?:tl|try|usd|eur|gbp|₺|\$|€|£)?)/giu;
 
 function normalizeToken(value: string): string {
-  const compact = value.toLocaleUpperCase("en-US").replace(/\s+/g, "").replace(/,(?=\d{1,2}$)/u, ".");
+  const compact = value.toLocaleUpperCase("en-US").replace(/\s+/g, "");
   const currency = /(?:₺|TRY|TL)/u.test(compact)
     ? "TRY"
     : /(?:\$|USD)/u.test(compact)
@@ -16,7 +16,14 @@ function normalizeToken(value: string): string {
           ? "GBP"
           : null;
   if (currency) {
-    const numeric = compact.replace(/[^\d.-]/g, "");
+    const rawNumeric = compact.replace(/[^\d,.-]/g, "");
+    const lastComma = rawNumeric.lastIndexOf(",");
+    const lastDot = rawNumeric.lastIndexOf(".");
+    const decimalSeparator = Math.max(lastComma, lastDot);
+    const fractionalDigits = decimalSeparator >= 0 ? rawNumeric.length - decimalSeparator - 1 : 0;
+    const numeric = fractionalDigits > 0 && fractionalDigits <= 2
+      ? `${rawNumeric.slice(0, decimalSeparator).replace(/[.,]/g, "")}.${rawNumeric.slice(decimalSeparator + 1)}`
+      : rawNumeric.replace(/[.,]/g, "");
     return `${currency}:${numeric}`;
   }
   return compact.replace(/^[._-]+|[._-]+$/g, "");

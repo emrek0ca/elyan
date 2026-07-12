@@ -118,6 +118,7 @@ export function buildRequestBody(
   reasoningPolicy: "hidden" | "visible" = "hidden",
   reasoningEffort: "low" | "medium" | "high" = "low",
   temperature: number = ANALYTICAL_GENERATION_TEMPERATURE,
+  responseSchema?: Record<string, unknown>,
 ) {
   if (provider === "ollama") {
     return {
@@ -143,6 +144,18 @@ export function buildRequestBody(
     temperature,
     max_tokens: maxTokens,
     stream,
+    ...(responseSchema && ["gemini", "groq", "openai", "openrouter"].includes(provider)
+      ? {
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "elyan_structured_output",
+              strict: true,
+              schema: responseSchema,
+            },
+          },
+        }
+      : {}),
     ...(isReasoningChannelModel(model)
       ? {
           reasoning_format: reasoningPolicy === "visible" ? "parsed" : "hidden",

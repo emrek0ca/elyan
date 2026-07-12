@@ -188,16 +188,52 @@ function truncateContentToTokenBudget(content: string, maxTokens: number): {
   };
 }
 
+function prioritizeSummaryCoverage(chunks: SelectedSkillChunk[]): SelectedSkillChunk[] {
+  const byDocument = new Map<string, SelectedSkillChunk[]>();
+  for (const chunk of chunks) {
+    const current = byDocument.get(chunk.documentId) ?? [];
+    current.push(chunk);
+    byDocument.set(chunk.documentId, current);
+  }
+
+  const prioritized: SelectedSkillChunk[] = [];
+  const seen = new Set<string>();
+  const add = (chunk: SelectedSkillChunk | undefined) => {
+    if (!chunk || seen.has(chunk.chunkHash)) return;
+    seen.add(chunk.chunkHash);
+    prioritized.push(chunk);
+  };
+
+  for (const documentChunks of byDocument.values()) {
+    const ordered = [...documentChunks].sort(
+      (a, b) =>
+        (a.pageNumber ?? Number.MAX_SAFE_INTEGER) -
+          (b.pageNumber ?? Number.MAX_SAFE_INTEGER) ||
+        b.score - a.score,
+    );
+    const last = ordered.length - 1;
+    for (const index of [0, Math.floor(last / 3), Math.floor((last * 2) / 3), last]) {
+      add(ordered[index]);
+    }
+  }
+
+  for (const chunk of chunks) add(chunk);
+  return prioritized;
+}
+
 function selectChunks(input: SkillInput, skill: SkillDefinition): SelectedSkillChunk[] {
   const selected: SelectedSkillChunk[] = [];
   let usedTokens = Math.max(0, estimateTextTokens(input.prompt));
   const summaryMap = buildDocumentSummaryMap(input);
-  const sorted = [...input.attachmentContext.chunks]
+  const ranked = [...input.attachmentContext.chunks]
     .map((chunk) => ({
       ...chunk,
       score: scoreChunk(input.prompt, chunk, summaryMap),
     }))
     .sort((a, b) => b.score - a.score || (a.pageNumber ?? 9999) - (b.pageNumber ?? 9999));
+  const sorted = skill.id === "document_summary"
+    ? prioritizeSummaryCoverage(ranked)
+    : ranked;
 
   for (const chunk of sorted) {
     const remainingTokens = skill.maxInputTokens - usedTokens;
@@ -254,6 +290,13 @@ function selectChunks(input: SkillInput, skill: SkillDefinition): SelectedSkillC
 }
 
 function buildSkillInputPayload(input: SkillInput, selectedChunks: SelectedSkillChunk[]) {
+  const selectedCounts = new Map<string, number>();
+  for (const chunk of selectedChunks) {
+    selectedCounts.set(
+      chunk.documentId,
+      (selectedCounts.get(chunk.documentId) ?? 0) + 1,
+    );
+  }
   return {
     prompt: input.prompt,
     documents: input.attachmentContext.documents.map((document) => ({
@@ -262,6 +305,9 @@ function buildSkillInputPayload(input: SkillInput, selectedChunks: SelectedSkill
       mimeType: document.mimeType,
       summary: document.summary,
       source: document.source,
+      availableChunkCount: document.chunkCount,
+      includedChunkCount: document.includedChunkCount,
+      selectedChunkCount: selectedCounts.get(document.documentId) ?? 0,
     })),
     chunks: selectedChunks.map((chunk) => ({
       documentId: chunk.documentId,
@@ -531,6 +577,7 @@ export async function executeSkill(input: {
   let modelResult = await input.modelCall({
     prompt: buildModelPrompt(input.skill, payload),
     workload,
+    outputSchema: input.skill.outputSchema,
     maxOutputTokens: input.skill.maxOutputTokens,
     timeoutMs: input.skill.timeoutMs,
     metadata: {
@@ -589,6 +636,7 @@ export async function executeSkill(input: {
         `Invalid output: ${modelResult.text.slice(0, 4000)}`,
       ].join("\n\n"),
       workload,
+      outputSchema: input.skill.outputSchema,
       maxOutputTokens: input.skill.maxOutputTokens,
       timeoutMs: input.skill.timeoutMs,
       metadata: {

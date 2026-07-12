@@ -14,6 +14,11 @@ import {
   assertMonthlyImageGenerationAllowed,
   recordImageGenerationUsage,
 } from "../billing/usage-ledger.js";
+import {
+  buildHostedImageProviderRequest,
+  extractHostedGeneratedImage,
+  type HostedImageProviderConfig,
+} from "./media/hosted-image-adapter.js";
 
 type HostedImageArtifactInput = {
   prompt: string;
@@ -97,15 +102,6 @@ function classifyProviderFailure(status: number | null): "quota" | "error" {
   }
   return "error";
 }
-
-type HostedImageProviderConfig = {
-  provider: "gemini" | "openai";
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  source: string;
-  imageSize?: "1K" | "2K" | "4K";
-};
 
 export type HostedImageArtifactResult = {
   artifact: ArtifactInput;
@@ -772,7 +768,7 @@ function buildHostedImageProviderConfigs(
       app.config.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-image",
     ).trim();
     const premiumImageModel = String(
-      app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image-preview",
+      app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
     ).trim();
     const imageSize = resolveGeminiImageSize(
       prompt,
@@ -843,26 +839,18 @@ async function generateHostedImageArtifactWithPermit(
     }
 
     try {
-      const response =
-        providerConfig.provider === "gemini"
-          ? await fetch(joinUrl(providerConfig.baseUrl, "/interactions"), {
-              method: "POST",
-              headers: {
-                "x-goog-api-key": providerConfig.apiKey,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(buildGeminiInteractionRequestBody(providerConfig, input)),
-              signal: AbortSignal.timeout(60_000),
-            })
-          : await fetch(joinUrl(providerConfig.baseUrl, "/images/generations"), {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${providerConfig.apiKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(buildOpenAiImageGenerationRequestBody(providerConfig, input, size)),
-              signal: AbortSignal.timeout(45_000),
-            });
+      const request = buildHostedImageProviderRequest({
+        config: providerConfig,
+        prompt: buildHostedImagePrompt(input),
+        aspectRatio: inferGeminiAspectRatio(input.prompt),
+        openAiSize: size,
+      });
+      const response = await fetch(joinUrl(providerConfig.baseUrl, request.path), {
+        method: "POST",
+        headers: request.headers,
+        body: JSON.stringify(request.body),
+        signal: AbortSignal.timeout(request.timeoutMs),
+      });
 
       if (!response.ok) {
         app.log.warn(
@@ -877,7 +865,7 @@ async function generateHostedImageArtifactWithPermit(
       }
 
       const payload = await response.json();
-      const extractedImage = extractGeneratedImage(payload);
+      const extractedImage = extractHostedGeneratedImage(payload);
       const base64 = compactText(extractedImage.base64);
       if (!base64) {
         // Boş/şekilsiz gövde de bir başarısızlıktır (sağlayıcı sağlıksız).
@@ -885,9 +873,7 @@ async function generateHostedImageArtifactWithPermit(
         continue;
       }
 
-      const mimeType =
-        extractedImage.mimeType ??
-        (providerConfig.provider === "gemini" ? "image/jpeg" : "image/png");
+      const mimeType = extractedImage.mimeType ?? request.defaultMimeType;
       const revisedPrompt = compactText(extractedImage.revisedPrompt) || null;
       if (store) {
         await recordCircuitSuccess(store, circuitKey, IMAGE_CIRCUIT_OPEN_MS).catch(() => undefined);
@@ -933,136 +919,4 @@ async function recordProviderFailure(
     { failureThreshold: IMAGE_CIRCUIT_FAILURE_THRESHOLD, openMs },
     failureKind === "quota" ? "image_provider_quota" : "image_provider_error",
   ).catch(() => undefined);
-}
-
-function buildGeminiInteractionRequestBody(
-  providerConfig: HostedImageProviderConfig,
-  input: HostedImageArtifactInput,
-): Record<string, unknown> {
-  return {
-    model: providerConfig.model,
-    input: buildHostedImagePrompt(input),
-    response_format: {
-      type: "image",
-      mime_type: "image/jpeg",
-      aspect_ratio: inferGeminiAspectRatio(input.prompt),
-      image_size: providerConfig.imageSize ?? "2K",
-    },
-  };
-}
-
-function buildOpenAiImageGenerationRequestBody(
-  providerConfig: HostedImageProviderConfig,
-  input: HostedImageArtifactInput,
-  size: "1024x1024" | "1024x1536" | "1536x1024",
-): Record<string, unknown> {
-  return {
-    model: providerConfig.model,
-    prompt: buildHostedImagePrompt(input),
-    size,
-    response_format: "b64_json",
-    n: 1,
-    quality: "medium",
-    output_format: "png",
-  };
-}
-
-function extractGeneratedImage(payload: unknown): {
-  base64: string | null;
-  mimeType: string | null;
-  revisedPrompt: string | null;
-} {
-  const visited = new Set<unknown>();
-  let base64: string | null = null;
-  let detectedMimeType: string | null = null;
-  let revisedPrompt: string | null = null;
-
-  const visit = (value: unknown, parentKey = "") => {
-    if (base64 && detectedMimeType && revisedPrompt) {
-      return;
-    }
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    if (visited.has(value)) {
-      return;
-    }
-    visited.add(value);
-
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        visit(item, parentKey);
-      }
-      return;
-    }
-
-    const record = value as Record<string, unknown>;
-    const b64Json = record.b64_json;
-    if (!base64 && typeof b64Json === "string" && b64Json.trim()) {
-      base64 = b64Json.trim();
-    }
-
-    const outputImage = readRecord(record.output_image);
-    const outputImageData = outputImage?.data;
-    const outputImageMimeType = readImageMimeType(outputImage);
-    if (!base64 && typeof outputImageData === "string" && outputImageData.trim()) {
-      base64 = outputImageData.trim();
-    }
-    if (!detectedMimeType && outputImageMimeType) {
-      detectedMimeType = outputImageMimeType;
-    }
-
-    const inlineData = readRecord(record.inline_data) ?? readRecord(record.inlineData);
-    const inlineImageData = inlineData?.data;
-    const inlineImageMimeType = readImageMimeType(inlineData);
-    if (!base64 && typeof inlineImageData === "string" && inlineImageData.trim()) {
-      base64 = inlineImageData.trim();
-    }
-    if (!detectedMimeType && inlineImageMimeType) {
-      detectedMimeType = inlineImageMimeType;
-    }
-
-    const data = record.data;
-    const mimeType = readImageMimeType(record) ?? "";
-    if (!detectedMimeType && mimeType) {
-      detectedMimeType = mimeType;
-    }
-    if (
-      !base64 &&
-      parentKey.toLowerCase().includes("image") &&
-      typeof data === "string" &&
-      data.trim()
-    ) {
-      base64 = data.trim();
-    }
-    if (!base64 && mimeType.startsWith("image/") && typeof data === "string" && data.trim()) {
-      base64 = data.trim();
-    }
-
-    const revised = record.revised_prompt;
-    if (!revisedPrompt && typeof revised === "string" && revised.trim()) {
-      revisedPrompt = revised.trim();
-    }
-    const text = record.text;
-    if (!revisedPrompt && typeof text === "string" && text.trim()) {
-      revisedPrompt = text.trim();
-    }
-
-    for (const [key, nestedValue] of Object.entries(record)) {
-      visit(nestedValue, key);
-    }
-  };
-
-  visit(payload);
-  return { base64, mimeType: detectedMimeType, revisedPrompt };
-}
-
-function readImageMimeType(record: Record<string, unknown> | null): string | null {
-  const value =
-    typeof record?.mime_type === "string"
-      ? record.mime_type
-      : typeof record?.mimeType === "string"
-        ? record.mimeType
-        : null;
-  return value?.startsWith("image/") ? value : null;
 }

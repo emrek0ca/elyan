@@ -80,6 +80,36 @@ test("buildRequestBody caps high reasoning effort when the token budget is tight
   assert.equal(body.reasoning_effort, "medium");
 });
 
+test("buildRequestBody requests schema-constrained Gemini output", () => {
+  const schema = {
+    type: "object",
+    required: ["visualDescription"],
+    properties: { visualDescription: { type: "string" } },
+  };
+  const body = buildRequestBody(
+    "gemini",
+    "gemini-fast",
+    [{ role: "user", content: "Describe the image" }],
+    256,
+    undefined,
+    false,
+    [],
+    "hidden",
+    "low",
+    0.2,
+    schema,
+  ) as Record<string, unknown>;
+
+  assert.deepEqual(body.response_format, {
+    type: "json_schema",
+    json_schema: {
+      name: "elyan_structured_output",
+      strict: true,
+      schema,
+    },
+  });
+});
+
 test("buildSharedBrainRequestAttempt adds TurnEnvelope response_format only for supported chat providers", () => {
   const chatBody = {
     messages: [{ role: "user", content: "Selam" }],

@@ -351,6 +351,9 @@ type SharedBrainInferenceInput = {
   responseBudget?: AdaptiveInferenceBudget;
   maxCompletionTokensOverride?: number;
   timeoutMsOverride?: number;
+  responseSchemaOverride?: Record<string, unknown>;
+  /** Original user wording when an internal skill prompt replaces `prompt`. */
+  mediaIntentPrompt?: string;
   skillExecutionMetadata?: Record<string, unknown>;
   onDelta?: (delta: SharedBrainInferenceDelta) => void | Promise<void>;
   internalEvaluation?: {
@@ -4228,8 +4231,9 @@ export async function generateSharedBrainReply(
         requestImageCount,
         countDistinctEphemeralImages(input.ephemeralVision),
       );
+      const mediaIntentPrompt = input.mediaIntentPrompt ?? input.prompt;
       const visionTaskDecision = classifyVisionTask({
-        prompt: input.prompt,
+        prompt: mediaIntentPrompt,
         imageCount: physicalVisionImageCount,
       });
       const visionResponseContract = getVisionResponseContract(visionTaskDecision);
@@ -4242,7 +4246,7 @@ export async function generateSharedBrainReply(
         images: extractClientAttachments(input.requestMetadata ?? {})
           .filter((attachment): attachment is Extract<ClientAttachment, { attachmentType: "image" }> =>
             attachment.attachmentType === "image"),
-        prompt: input.prompt,
+        prompt: mediaIntentPrompt,
         explicitCloudConsent: cloudVisionActive,
         declaredSensitivity: input.ephemeralVision?.privacy.localSensitivity,
         imageCount: physicalVisionImageCount,
@@ -4392,11 +4396,11 @@ export async function generateSharedBrainReply(
       const visualToolActionAuthorized =
         workload !== "vision_reasoning" && workload !== "image_analyze"
           ? true
-          : userExplicitlyAuthorizesVisualAction(input.prompt);
+          : userExplicitlyAuthorizesVisualAction(mediaIntentPrompt);
       const visionMediaDecision = decideVisionMediaPolicy({
         task: visionTaskDecision,
         images: requestImageAttachments,
-        prompt: input.prompt,
+        prompt: mediaIntentPrompt,
         explicitCloudConsent: cloudVisionActive,
         declaredSensitivity: input.ephemeralVision?.privacy.localSensitivity,
         imageCount: physicalVisionImageCount || requestVisionImages.length,
@@ -4482,7 +4486,7 @@ export async function generateSharedBrainReply(
       });
       if (visionInputGate.shortCircuit) {
         const recoveryText = buildVisionRecoveryMessage({
-          prompt: input.prompt,
+          prompt: mediaIntentPrompt,
           reason: visionInputGate.reason === "privacy"
             ? "privacy"
             : visionInputGate.reason === "busy"
@@ -4496,7 +4500,7 @@ export async function generateSharedBrainReply(
             await recoveryOnDelta({
               delta: recoveryText,
               content: recoveryText,
-              provider: "backend_gate",
+              provider: servingProvider,
               model: "vision-input-gate",
               firstDeltaMs: 0,
             });
@@ -4783,9 +4787,10 @@ export async function generateSharedBrainReply(
       const usageAccess = usageBudget.access;
       const startedAt = Date.now();
       const turnEnvelopeEnabled =
-        app.config.ELYAN_TURN_ENVELOPE_ENABLED === true ||
-        isAgentEngineV2Enabled(app, input.userId) ||
-        isAgentEngineShadowEnabled(app);
+        !input.responseSchemaOverride &&
+        (app.config.ELYAN_TURN_ENVELOPE_ENABLED === true ||
+          isAgentEngineV2Enabled(app, input.userId) ||
+          isAgentEngineShadowEnabled(app));
 
       let lastError: unknown = null;
       let successfulProvider: SharedBrainProvider | null = null;
@@ -4835,6 +4840,7 @@ export async function generateSharedBrainReply(
           reasoningPolicy,
           reasoningEffort,
           generationTemperature,
+          input.responseSchemaOverride,
         );
         const structuredAttempt = buildSharedBrainRequestAttempt({
           provider,
@@ -5939,7 +5945,7 @@ export async function generateSharedBrainReply(
       if (cloudVisionActive) {
         finalText = gateVisionAnswer({
           text: finalText,
-          prompt: input.prompt,
+          prompt: mediaIntentPrompt,
           task: visionTaskDecision,
           media: visionMediaDecision,
           imageCount: clientVisionImages.length,
@@ -6221,7 +6227,7 @@ export async function generateSharedBrainReply(
       const finalizedVisionGate = cloudVisionActive
         ? gateVisionAnswer({
             text: result.text,
-            prompt: input.prompt,
+            prompt: mediaIntentPrompt,
             task: visionTaskDecision,
             media: visionMediaDecision,
             imageCount: clientVisionImages.length,
@@ -7020,6 +7026,11 @@ async function tryGenerateSkillReply(
         planCode: input.planCode,
         brainProfile: input.brainProfile,
         understandingContext: input.understandingContext,
+        attachmentContext,
+        clientAttachments: input.clientAttachments,
+        ephemeralVision: input.ephemeralVision,
+        responseSchemaOverride: modelInput.outputSchema,
+        mediaIntentPrompt: input.prompt,
         maxCompletionTokensOverride: modelInput.maxOutputTokens,
         timeoutMsOverride: modelInput.timeoutMs,
         skillExecutionMetadata:

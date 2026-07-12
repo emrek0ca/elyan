@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import sharp from "sharp";
 import { AppError } from "../../lib/errors.js";
 import { brainMemoryEpisodes, proactiveTriggers } from "../../db/schema.js";
 import { getCircuitState } from "../../lib/reliability/circuit-breaker.js";
@@ -4414,6 +4415,170 @@ test("generateGovernedSharedBrainReply honors a valid skillHint with attachment 
   assert.equal(result.metadata.evidenceSufficiency, "partial");
   assert.equal(result.metadata.dataConfidence, "medium");
   assert.equal(result.metadata.responseLanguage, "tr");
+});
+
+test("vision skill sends ephemeral image to Gemini Flash-Lite with JSON schema", async () => {
+  const app = {
+    db: new FakeDb([], []),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "ollama",
+      ELYAN_SHARED_BRAIN_BASE_URL: "http://127.0.0.1:11434",
+      ELYAN_SHARED_BRAIN_MODEL: "local-model",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_CLOUD_VISION_ENABLED: true,
+      GEMINI_API_KEY: "gemini-key",
+      GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai",
+      GEMINI_FAST_MODEL: "gemini-fast",
+      GEMINI_TEXT_MODEL: "gemini-quality",
+      GEMINI_VISION_MODEL: "gemini-vision",
+      GEMINI_VISION_SENSITIVE_DATA_ATTESTED: false,
+      GROQ_API_KEY: "",
+    },
+    log: { info() {}, warn() {}, debug() {} },
+  };
+  const requests: Record<string, unknown>[] = [];
+  const pixels = Buffer.alloc(256 * 256 * 3);
+  for (let index = 0; index < pixels.length; index += 1) {
+    pixels[index] = (index * 31 + Math.floor(index / 17) * 13) % 256;
+  }
+  const imageBase64 = (
+    await sharp(pixels, { raw: { width: 256, height: 256, channels: 3 } })
+      .jpeg({ quality: 82 })
+      .toBuffer()
+  ).toString("base64");
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/api/tags")) {
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/chat/completions") && init?.body) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        requests.push(body);
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: JSON.stringify({
+                    visualDescription: "Mağazada yan yana duran iki kişi görülüyor.",
+                    keyElements: ["iki kişi", "mağaza rafları"],
+                    confidence: 0.91,
+                  }),
+                },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 120, completion_tokens: 32, total_tokens: 152 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Burada ne görüyorsun?",
+        route: "shared_brain",
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "safe vision",
+          intent: "normal_chat",
+          confidence: 0.94,
+          requiredRuntime: "server",
+          privacyLevel: "low",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "image_analyze",
+        },
+        requestMetadata: {
+          skillHint: "vision_analysis",
+          cloudVisionOptIn: true,
+        },
+        attachmentContext: {
+          used: true,
+          source: "request_attachments",
+          promptBlock: "Attachment context",
+          documentIds: ["image-1"],
+          documents: [
+            {
+              documentId: "image-1",
+              title: "photo.jpg",
+              mimeType: "image/jpeg",
+              summary: "Cihaz üstü görsel özeti",
+              source: "request",
+              chunkCount: 1,
+              includedChunkCount: 1,
+            },
+          ],
+          chunks: [
+            {
+              documentId: "image-1",
+              documentTitle: "photo.jpg",
+              mimeType: "image/jpeg",
+              chunkId: "image-1:chunk:1",
+              chunkHash: "image-hash-1",
+              content: "Cihaz üstü genel görsel özeti.",
+              pageNumber: 1,
+              metadata: {},
+            },
+          ],
+          totalChars: 34,
+          chunkCount: 1,
+          needsClarification: false,
+        },
+        ephemeralVision: {
+          version: 1,
+          retention: "request_ephemeral",
+          privacy: {
+            metadataStripped: true,
+            userAuthorizedCloud: true,
+            localSensitivity: "personal",
+          },
+          images: [
+            {
+              imageId: "image-1",
+              kind: "full_frame",
+              mimeType: "image/jpeg",
+              base64Data: imageBase64,
+              width: 256,
+              height: 256,
+            },
+          ],
+        },
+        internalEvaluation: {
+          skipUsageValidation: true,
+          skipConsentValidation: true,
+          skipReviewLogging: true,
+          skipInvocationLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(
+    result.metadata.skillId,
+    "vision_analysis",
+    JSON.stringify({ text: result.text, metadata: result.metadata }),
+  );
+  assert.match(result.text, /iki kişi/u);
+  assert.ok(requests.length >= 1);
+  assert.equal(requests[0]?.model, "gemini-fast");
+  assert.ok(requests[0]?.response_format);
+  const messages = requests[0]?.messages as Array<Record<string, unknown>>;
+  const content = messages.at(-1)?.content as Array<Record<string, unknown>>;
+  assert.equal(content.some((part) => part.type === "image_url"), true);
 });
 
 test("generateGovernedSharedBrainReply does not set targetDeviceId for server-brain attachment flows without desktop intent", async () => {

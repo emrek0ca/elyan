@@ -4,6 +4,8 @@ import type { ResolvedAttachmentContext, ResolvedAttachmentContextChunk } from "
 export const skillModelProfileValues = [
   "cheap_classification",
   "fast_reasoning",
+  "vision_reasoning",
+  "document_reasoning",
   "long_context",
   "code_reasoning",
   "local_only",
@@ -109,6 +111,7 @@ export type SelectedSkillChunk = ResolvedAttachmentContextChunk & {
 export type SkillModelCallInput = {
   prompt: string;
   workload: SharedBrainWorkload;
+  outputSchema: Record<string, unknown>;
   maxOutputTokens: number;
   timeoutMs: number;
   metadata: Record<string, unknown>;
@@ -182,6 +185,10 @@ export function mapSkillModelProfileToWorkload(profile: SkillModelProfile): Shar
       return "intent";
     case "fast_reasoning":
       return "mobile_chat_fast";
+    case "vision_reasoning":
+      return "image_analyze";
+    case "document_reasoning":
+      return "document_analysis";
     case "long_context":
       return "mobile_chat_balanced";
     case "code_reasoning":

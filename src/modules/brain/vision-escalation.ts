@@ -96,7 +96,11 @@ export function chooseVisionAnswer(input: {
     : secondaryBaseScore;
   const primaryScore = primaryBaseScore * 0.65 + primaryCoverage * 0.35;
   const secondaryScore = secondaryBaseScore * 0.65 + secondaryCoverage * 0.35;
-  return secondaryScore >= Math.max(0.5, primaryScore - 0.05)
+  const primaryIsUncertain = UNCERTAINTY_PATTERN.test(input.primary);
+  const secondaryIsUsable = !REFUSAL_PATTERN.test(input.secondary) && !INTERNAL_PATTERN.test(input.secondary);
+  const materiallyBetterReview = primaryIsUncertain && secondaryIsUsable
+    && secondaryScore >= 0.35 && secondaryScore >= primaryScore + 0.15;
+  return materiallyBetterReview || secondaryScore >= Math.max(0.5, primaryScore - 0.05)
     ? { text: input.secondary.trim(), usedSecondary: true, conflictDetected: false }
     : { text: input.primary.trim(), usedSecondary: false, conflictDetected: false };
 }

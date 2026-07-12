@@ -115,10 +115,20 @@ function buildHostedProviderCandidates(
   const geminiApiKey = getConfiguredProviderApiKey(app, "gemini");
   const geminiBaseUrl = getConfiguredProviderBaseUrl(app, "gemini");
   const geminiCatalog = buildGeminiModelCatalog(app.config);
-  const geminiPrimaryModel = geminiCatalog.defaultModelByWorkload[workload];
+  const geminiPrimaryModel =
+    isVisionWorkload(workload) &&
+    (visionProfile === "fast" || visionProfile === "balanced")
+      ? geminiCatalog.fastModel
+      : workload === "document_analysis"
+        ? geminiCatalog.fastModel
+      : geminiCatalog.defaultModelByWorkload[workload];
   const geminiFallbackModel =
-    resolveGeminiFallbackModel(app.config, geminiPrimaryModel) ??
-    geminiCatalog.fastModel;
+    workload === "document_analysis" && geminiPrimaryModel === geminiCatalog.fastModel
+      ? geminiCatalog.textModel
+      : isVisionWorkload(workload) && geminiPrimaryModel === geminiCatalog.fastModel
+        ? geminiCatalog.visionModel
+        : resolveGeminiFallbackModel(app.config, geminiPrimaryModel) ??
+          geminiCatalog.fastModel;
   if (geminiApiKey && geminiBaseUrl && geminiPrimaryModel) {
     hostedCandidates.push({
       provider: "gemini",
@@ -131,7 +141,7 @@ function buildHostedProviderCandidates(
     });
   }
 
-  if (!isVisionWorkload(workload)) {
+  if (!isVisionWorkload(workload) && workload !== "document_analysis") {
     return hostedCandidates;
   }
 
@@ -151,7 +161,9 @@ function buildHostedProviderCandidates(
         )
       : hostedCandidates;
 
-  const preferredProvider = visionProfile === "fast" ? "groq" : "gemini";
+  // Gemini is the canonical multimodal adapter. The low-cost Flash-Lite model
+  // handles fast/balanced requests; Groq remains a bounded provider fallback.
+  const preferredProvider = "gemini";
   return [
     ...privacyEligibleCandidates.filter((candidate) => candidate.provider === preferredProvider),
     ...privacyEligibleCandidates.filter((candidate) => candidate.provider !== preferredProvider),

@@ -28,12 +28,14 @@ export function prepareVisionEvidenceFusion(input: { ocrTexts: string[]; task: V
   if (!usableText) return { mode: "none", usableText: "", qualityScore: 0, warnings: ["ocr_empty"] };
   const visible = [...usableText].filter((char) => !/\s/u.test(char));
   const meaningful = visible.filter((char) => /[\p{L}\p{N}\p{P}\p{S}]/u.test(char));
-  const qualityScore = visible.length === 0 ? 0 : Math.min(1, meaningful.length / visible.length) * Math.min(1, usableText.length / 80);
+  const signalRatio = visible.length === 0 ? 0 : Math.min(1, meaningful.length / visible.length);
+  const qualityScore = signalRatio * Math.min(1, usableText.length / 80);
+  const isCriticalText = CRITICAL_TEXT_TASKS.has(input.task.primary);
   if (usableText.length < 8) warnings.push("ocr_too_short");
-  if (qualityScore < 0.35) warnings.push("ocr_low_signal");
+  if (signalRatio < 0.35 || (!isCriticalText && qualityScore < 0.35)) warnings.push("ocr_low_signal");
   if (warnings.length > 0) return { mode: "none", usableText: "", qualityScore, warnings };
   return {
-    mode: CRITICAL_TEXT_TASKS.has(input.task.primary) ? "critical_crosscheck" : "supporting",
+    mode: isCriticalText ? "critical_crosscheck" : "supporting",
     usableText, qualityScore, warnings,
   };
 }

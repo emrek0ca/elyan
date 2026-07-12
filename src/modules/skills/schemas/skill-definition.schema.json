@@ -58,7 +58,7 @@
     "allowedTools": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
     "modelProfile": {
       "type": "string",
-      "enum": ["cheap_classification", "fast_reasoning", "long_context", "code_reasoning", "local_only"]
+      "enum": ["cheap_classification", "fast_reasoning", "vision_reasoning", "document_reasoning", "long_context", "code_reasoning", "local_only"]
     },
     "maxInputTokens": { "type": "integer", "minimum": 128, "maximum": 12000 },
     "maxOutputTokens": { "type": "integer", "minimum": 32, "maximum": 2000 },

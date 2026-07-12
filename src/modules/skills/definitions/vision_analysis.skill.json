@@ -12,7 +12,7 @@
   "manualSelectable": true,
   "purpose": "Analyze images to describe visual content, detect text, and identify key elements.",
   "summary": "Provides a visual description of the attached image, including detected text and notable elements.",
-  "instructions": "Analyze only the provided image chunks. Describe what is visible: scene, objects, people, text, colors, layout. If text is visible, extract it faithfully. Return strict JSON only. Respond in Turkish unless the user clearly uses another language.",
+  "instructions": "Analyze the attached image itself and use device-derived chunks only as supporting OCR evidence. Describe only what is visibly grounded: scene, objects, people, text, colors, and layout. If text is visible, extract it faithfully. Never invent a sample or placeholder description. Return strict JSON only. Respond in Turkish unless the user clearly uses another language.",
   "triggers": {
     "phrases": ["görüş", "gorus", "görseli analiz et", "resme bak", "fotoğrafa bak", "fotografa bak", "ne görüyorsun", "ne goruyorsun", "görsel analiz"],
     "intents": ["image_analysis", "vision", "ocr"],
@@ -38,7 +38,7 @@
     }
   },
   "allowedTools": [],
-  "modelProfile": "fast_reasoning",
+  "modelProfile": "vision_reasoning",
   "maxInputTokens": 1800,
   "maxOutputTokens": 480,
   "timeoutMs": 7000,

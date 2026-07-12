@@ -65,7 +65,7 @@ function appWithConfig(
       GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai",
       GEMINI_INTERACTIONS_BASE_URL: "https://generativelanguage.googleapis.com/v1beta",
       GEMINI_IMAGE_MODEL: "gemini-3.1-flash-image",
-      GEMINI_IMAGE_PRO_MODEL: "gemini-3-pro-image-preview",
+      GEMINI_IMAGE_PRO_MODEL: "gemini-3-pro-image",
       GEMINI_IMAGE_SIZE: "2K",
       OPENAI_API_KEY: "",
       OPENAI_BASE_URL: "https://api.openai.com/v1",
@@ -243,7 +243,7 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     requests.push(body);
-    if (body.model === "gemini-3-pro-image-preview") {
+    if (body.model === "gemini-3-pro-image") {
       return new Response("busy", { status: 429 });
     }
     return Response.json({
@@ -269,7 +269,7 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
     assert.ok(result);
     assert.deepEqual(
       requests.map((request) => request.model),
-      ["gemini-3-pro-image-preview", "gemini-3.1-flash-image"],
+      ["gemini-3-pro-image", "gemini-3.1-flash-image"],
     );
     assert.equal(result.mimeType, "image/jpeg");
     assert.deepEqual([...result.binaryBody], [...Buffer.from("flash-after-pro")]);

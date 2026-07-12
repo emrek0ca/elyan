@@ -158,7 +158,7 @@ test("buildInferenceProviderCandidates prefers Gemini for vision workloads", () 
   assert.equal(candidates[1]?.provider, "groq");
 });
 
-test("buildInferenceProviderCandidates prefers Groq for fast vision profile", () => {
+test("buildInferenceProviderCandidates uses Gemini Flash-Lite for fast vision profile", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_VISION_MODEL: "groq-vision",
@@ -174,8 +174,32 @@ test("buildInferenceProviderCandidates prefers Groq for fast vision profile", ()
     localModels: ["local-balanced"],
     visionProfile: "fast",
   });
-  assert.equal(candidates[0]?.provider, "groq");
-  assert.equal(candidates[1]?.provider, "gemini");
+  assert.equal(candidates[0]?.provider, "gemini");
+  assert.deepEqual(candidates[0]?.preferredModels, ["gemini-fast", "gemini-vision"]);
+  assert.equal(candidates[1]?.provider, "groq");
+});
+
+test("document analysis uses Gemini Flash-Lite with 3.5 fallback", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_FAST_MODEL: "groq-fast",
+    GEMINI_API_KEY: "gemini-key",
+    GEMINI_FAST_MODEL: "gemini-fast",
+    GEMINI_TEXT_MODEL: "gemini-quality",
+  });
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "document_analysis",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+  });
+
+  assert.equal(candidates[0]?.provider, "gemini");
+  assert.deepEqual(candidates[0]?.preferredModels, [
+    "gemini-fast",
+    "gemini-quality",
+  ]);
+  assert.equal(candidates[1]?.provider, "groq");
 });
 
 test("sensitive vision excludes hosted providers without privacy attestation", () => {
