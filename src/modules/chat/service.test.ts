@@ -13,6 +13,7 @@ import {
   resolveChatSessionTargetDeviceId,
   trimConversationForSharedBrain,
 } from "./service.js";
+import { buildSessionVisionEvidenceV3 } from "../brain/vision-evidence-v3.js";
 
 test("buildChatTurnAdmissionLockKey normalizes same prompt for admission dedupe", () => {
   const first = buildChatTurnAdmissionLockKey({
@@ -365,6 +366,29 @@ test("resolveChatSessionTargetDeviceId preserves the selected desktop for deskto
   );
 });
 
+test("resolveChatSessionTargetDeviceId uses the backend-selected ready desktop over stale client selection", () => {
+  assert.equal(
+    resolveChatSessionTargetDeviceId(
+      {
+        route: "desktop_runtime",
+        targetDeviceId: "desktop-ready",
+      },
+      "desktop-stale",
+    ),
+    "desktop-ready",
+  );
+});
+
+test("resolveChatSessionTargetDeviceId carries the backend-selected desktop when the client omits one", () => {
+  assert.equal(
+    resolveChatSessionTargetDeviceId({
+      route: "desktop_runtime",
+      targetDeviceId: "desktop-ready",
+    }),
+    "desktop-ready",
+  );
+});
+
 test("enrichChatMetadataForRequest keeps fresh world signals user-scoped for server-brain chat", async () => {
   const db = new WorldSignalDb();
   const metadata = await enrichChatMetadataForRequest(
@@ -571,6 +595,25 @@ test("extractAttachmentCandidatesFromChatRows keeps recent unique user attachmen
   assert.equal(candidates.length, 2);
   assert.equal(candidates[0]?.messageId, "message-5");
   assert.equal(candidates[1]?.messageId, "message-1");
+});
+
+test("extractAttachmentCandidatesFromChatRows recovers internal assistant visual reference", () => {
+  const visionBlock = buildSessionVisionEvidenceV3({
+    task: "screen_debugging",
+    summary: "Soldaki uyarı E104 bağlantı zaman aşımını gösteriyor.",
+    sensitivity: "personal",
+    cloudUsed: true,
+  });
+  const candidates = extractAttachmentCandidatesFromChatRows([{
+    id: "assistant-vision-1",
+    role: "assistant",
+    content: "Soldaki uyarı E104.",
+    createdAt: new Date("2030-01-01T12:00:00.000Z"),
+    metadata: { visionBlock },
+  }]);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.messageId, "assistant-vision-1");
+  assert.deepEqual(candidates[0]?.metadata.visionBlock, visionBlock);
 });
 
 test("listChatSessions returns lightweight rows with pagination metadata", async () => {

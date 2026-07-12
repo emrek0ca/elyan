@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { buildSharedBrainAckText, isShortFollowUpPrompt, selectHybridMobileChatWorkload } from "./chat-heuristics.js";
+import { buildSharedBrainAckText, isShortFollowUpPrompt, isSocialChatPrompt, selectHybridMobileChatWorkload } from "./chat-heuristics.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
 test("buildSharedBrainAckText returns empty string so frontend loading indicator handles pending state", () => {
@@ -29,6 +29,12 @@ test("selectHybridMobileChatWorkload keeps only greetings on fast and upgrades e
     }),
     "mobile_chat_balanced",
   );
+});
+
+test("isSocialChatPrompt treats short slang call-outs as social turns", () => {
+  assert.equal(isSocialChatPrompt("Lan"), true);
+  assert.equal(isSocialChatPrompt("Kanka!"), true);
+  assert.equal(isSocialChatPrompt("kanka JWT nasıl çalışır"), false);
 });
 
 /* ── Türkçe ek/çekim varyasyonları: intent regex kaçırma vakaları ───────── */

@@ -158,6 +158,96 @@ test("buildInferenceProviderCandidates prefers Gemini for vision workloads", () 
   assert.equal(candidates[1]?.provider, "groq");
 });
 
+test("buildInferenceProviderCandidates prefers Groq for fast vision profile", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_VISION_MODEL: "groq-vision",
+    GROQ_FAST_MODEL: "groq-fast",
+    GEMINI_API_KEY: "gemini-key",
+    GEMINI_VISION_MODEL: "gemini-vision",
+    GEMINI_FAST_MODEL: "gemini-fast",
+  });
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "vision_reasoning",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+    visionProfile: "fast",
+  });
+  assert.equal(candidates[0]?.provider, "groq");
+  assert.equal(candidates[1]?.provider, "gemini");
+});
+
+test("sensitive vision excludes hosted providers without privacy attestation", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_VISION_MODEL: "groq-vision",
+    GEMINI_API_KEY: "gemini-key",
+    GEMINI_VISION_MODEL: "gemini-vision",
+    GROQ_VISION_SENSITIVE_DATA_ATTESTED: false,
+    GEMINI_VISION_SENSITIVE_DATA_ATTESTED: false,
+  });
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "vision_reasoning",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+    visionProfile: "detail",
+    visionSensitivity: "sensitive",
+  });
+  assert.equal(candidates.some((candidate) => candidate.hosted), false);
+});
+
+test("sensitive vision allows only explicitly attested hosted provider", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_VISION_MODEL: "groq-vision",
+    GEMINI_API_KEY: "gemini-key",
+    GEMINI_VISION_MODEL: "gemini-vision",
+    GROQ_VISION_SENSITIVE_DATA_ATTESTED: true,
+    GEMINI_VISION_SENSITIVE_DATA_ATTESTED: false,
+  });
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "vision_reasoning",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+    visionProfile: "detail",
+    visionSensitivity: "sensitive",
+  });
+  assert.equal(candidates.filter((candidate) => candidate.hosted).length, 1);
+  assert.equal(candidates.find((candidate) => candidate.hosted)?.provider, "groq");
+});
+
+test("personal vision excludes custom runtimes on public networks", () => {
+  const app = appWithConfig({
+    ELYAN_SHARED_BRAIN_BASE_URL: "https://public-runtime.example.com",
+  });
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "vision_reasoning",
+    runtime: runtimeSnapshot({ baseUrl: "https://public-runtime.example.com", ready: true }),
+    localModels: ["local-vision"],
+    visionSensitivity: "personal",
+  });
+  assert.equal(candidates.length, 0);
+});
+
+test("personal vision allows a private local runtime", () => {
+  const app = appWithConfig({
+    ELYAN_SHARED_BRAIN_BASE_URL: "http://192.168.1.20:11434",
+  });
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "vision_reasoning",
+    runtime: runtimeSnapshot({ baseUrl: "http://192.168.1.20:11434", ready: true }),
+    localModels: ["local-vision"],
+    visionSensitivity: "personal",
+  });
+  assert.equal(candidates[0]?.baseUrl, "http://192.168.1.20:11434");
+  assert.equal(candidates[0]?.hosted, false);
+});
+
 test("buildInferenceProviderCandidates uses ready local runtime when hosted is unavailable", () => {
   const app = appWithConfig({
     ELYAN_SHARED_BRAIN_PROVIDER: "ollama",

@@ -46,8 +46,10 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
   assert.equal(imageBranch.includes('title: ""'), false);
   assert.equal(imageBranch.includes('summary: ""'), false);
   assert.equal(imageBranch.includes('preview: ""'), false);
-  assert.ok(imageBranch.includes('answerSource: "image_generation"'));
+  assert.equal(imageBranch.includes('answerSource: "image_generation"'), false);
   assert.equal(imageBranch.includes('answerSource: "model"'), false);
+  assert.equal(imageBranch.includes("selectedProfile"), false);
+  assert.equal(serviceSource.includes('answerSource: "backend_ack"'), false);
 
   const taskPathBranchStart = serviceSource.indexOf(
     "if (isHostedImageGenerationRequest(prompt)) {",
@@ -529,6 +531,10 @@ test("sanitizePublicInferenceValue removes nested provider and model metadata", 
       runtimeProvider: "private-runtime",
       latencyMs: 42,
     },
+    visionBlock: {
+      type: "vision",
+      summary_for_answer: "internal visual reference",
+    },
   });
 
   assert.deepEqual(sanitized, {
@@ -539,6 +545,53 @@ test("sanitizePublicInferenceValue removes nested provider and model metadata", 
     nested: {
       latencyMs: 42,
     },
+  });
+});
+
+test("sanitizePublicInferenceValue removes compound provider and engine keys", () => {
+  const sanitized = sanitizePublicInferenceValue({
+    text: "Görselde bir uyarı var.",
+    toolRefinementProvider: "gemini",
+    toolRefinementModel: "private-vision-model",
+    secondaryVisionEngine: "groq",
+    selectedProfile: "vision_reasoning",
+    answerSource: "model",
+    modelCallCount: 2,
+    reasoningPasses: 2,
+    fallbackUsed: true,
+    cloudVisionOptIn: true,
+    visionEscalationReasons: ["secondary_unavailable"],
+    agentEngineVersion: "internal-v2",
+    nested: {
+      selectedProvider: "gemini",
+      fallbackModel: "private-model",
+      latencyMs: 42,
+    },
+  });
+  assert.deepEqual(sanitized, {
+    text: "Görselde bir uyarı var.",
+    nested: { latencyMs: 42 },
+  });
+});
+
+test("sanitizePublicTaskEventPayload removes compound provider keys from SSE data", () => {
+  const sanitized = sanitizePublicTaskEventPayload({
+    status: "completed",
+    task: {
+      summary: "Hazır",
+      visionProvider: "gemini",
+      servingModel: "private-model",
+    },
+    secondaryEngine: "groq",
+    selectedProfile: "vision_reasoning",
+    answerSource: "model",
+    fallbackUsed: true,
+    cloudVisionOptIn: true,
+    visionEscalationUsed: true,
+  });
+  assert.deepEqual(sanitized, {
+    status: "completed",
+    task: { summary: "Hazır" },
   });
 });
 

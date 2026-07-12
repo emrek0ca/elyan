@@ -37,6 +37,23 @@ export function getUserAuth(request: FastifyRequest): UserAuthTokenPayload {
   return auth;
 }
 
+export function getUserScopedAuth(request: FastifyRequest): { sub: string; kind: "user" | "runtime" } {
+  // Kullanıcı VEYA runtime token'ı — runtime token'ın sub'ı cihaz sahibinin
+  // userId'sidir (claim anında bağlanır), bu yüzden kullanıcı-kapsamlı
+  // kaynaklara (chat, brain) eşleşmiş masaüstü de erişebilir.
+  const auth = getAuthPayload(request);
+
+  if (auth.kind !== "user" && auth.kind !== "runtime") {
+    throw unauthorized("User or runtime token required");
+  }
+
+  if (!auth.sub) {
+    throw unauthorized("Token is not bound to a user");
+  }
+
+  return { sub: auth.sub, kind: auth.kind };
+}
+
 export function getRuntimeAuth(request: FastifyRequest): RuntimeAuthTokenPayload {
   const auth = getAuthPayload(request);
 

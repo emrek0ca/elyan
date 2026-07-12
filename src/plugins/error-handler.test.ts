@@ -98,3 +98,30 @@ test("error handler preserves retry-after metadata for app rate limit errors", a
   assert.equal(response.json().details.retryAfterMs, 30_000);
   await app.close();
 });
+
+test("error handler removes provider and model metadata from public details", async () => {
+  const app = Fastify({ logger: false });
+  await app.register(errorHandlerPlugin);
+  app.get("/brain", async () => {
+    throw new AppError(503, "server_brain_unavailable", "Elyan şu anda yanıt veremiyor.", {
+      retrySuggested: true,
+      transient: true,
+      provider: "gemini",
+      model: "private-vision-model",
+      attemptedProviders: ["gemini", "groq"],
+      nested: {
+        fallbackState: "provider_failed",
+        retryAfterMs: 2_000,
+      },
+    });
+  });
+  const response = await app.inject({ method: "GET", url: "/brain" });
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(response.json().details, {
+    retrySuggested: true,
+    transient: true,
+    nested: { retryAfterMs: 2_000 },
+  });
+  assert.doesNotMatch(response.body, /gemini|groq|private-vision-model|fallbackState/iu);
+  await app.close();
+});

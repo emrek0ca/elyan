@@ -21,6 +21,7 @@ const GREETING_PREFIX_PATTERNS = [
 ];
 
 const SOCIAL_CHAT_PATTERNS = [
+  /^(lan|la|olm|oğlum|oglum|kanka|dostum|bro)[!?.\s]*$/i,
   /\b(nasılsın|nasilsin|naber|napıyorsun|napiyorsun)\b/i,
   /\b(how are you|what'?s up|whats up)\b/i,
   /\b(keyifler nasıl|keyifler nasil)\b/i,

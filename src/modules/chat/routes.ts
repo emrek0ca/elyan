@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { getIdempotencyKey } from "../../lib/idempotency.js";
 import { getRequestContext, sendConditionalJson } from "../../lib/http.js";
 import { recordNumericMetricSample } from "../../lib/reliability/sample-metrics.js";
-import { getUserAuth } from "../../lib/request-auth.js";
+import { getUserAuth, getUserScopedAuth } from "../../lib/request-auth.js";
 import {
   clearChatSessionsQuerySchema,
   chatSessionParamsSchema,
@@ -76,14 +76,14 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/sessions", async (request, reply) => {
-    await app.authenticateUser(request, reply);
+    await app.authenticateUserOrRuntime(request, reply);
 
     if (reply.sent) {
       return;
     }
 
     const body = createChatSessionBodySchema.parse(request.body);
-    const auth = getUserAuth(request);
+    const auth = getUserScopedAuth(request);
     const context = getRequestContext(request);
 
     return createChatSession(app, {
@@ -99,14 +99,14 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/sessions/:sessionId", async (request, reply) => {
-    await app.authenticateUser(request, reply);
+    await app.authenticateUserOrRuntime(request, reply);
 
     if (reply.sent) {
       return;
     }
 
     const params = chatSessionParamsSchema.parse(request.params);
-    const auth = getUserAuth(request);
+    const auth = getUserScopedAuth(request);
     const startedAt = Date.now();
     const payload = await getChatSessionDetail(app, auth.sub, params.sessionId);
     await Promise.all([
@@ -125,7 +125,7 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/sessions/:sessionId/messages", async (request, reply) => {
-    await app.authenticateUser(request, reply);
+    await app.authenticateUserOrRuntime(request, reply);
 
     if (reply.sent) {
       return;
@@ -133,7 +133,7 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
 
     const params = chatSessionParamsSchema.parse(request.params);
     const query = listChatSessionMessagesQuerySchema.parse(request.query ?? {});
-    const auth = getUserAuth(request);
+    const auth = getUserScopedAuth(request);
     const startedAt = Date.now();
 
     const payload = await listChatSessionMessages(app, {
@@ -221,14 +221,15 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/messages", async (request, reply) => {
-    await app.authenticateUser(request, reply);
+    // Masaüstü runtime'ı görev yürütürken beyni runtime token'ıyla çağırır.
+    await app.authenticateUserOrRuntime(request, reply);
 
     if (reply.sent) {
       return;
     }
 
     const body = createChatMessageBodySchema.parse(request.body);
-    const auth = getUserAuth(request);
+    const auth = getUserScopedAuth(request);
     const context = getRequestContext(request);
     const idempotencyKey = getIdempotencyKey(request);
 
@@ -241,6 +242,7 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
       content: body.content,
       requestedCapabilities: body.requestedCapabilities,
       metadata: body.metadata,
+      ephemeralVision: body.ephemeralVision,
       requestId: context.requestId,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,

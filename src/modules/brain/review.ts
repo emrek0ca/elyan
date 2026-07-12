@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { auditLogs, datasetManifests, learningEvents } from "../../db/schema.js";
+import { badRequest } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
 import { ELYAN_CONSTITUTION_VERSION, ELYAN_PROMPT_PROFILE_VERSION, constitutionRuleCount } from "./constitution.js";
 import { invalidateBrainProfileCache } from "./profile-cache.js";
@@ -55,6 +56,8 @@ type BrainInteractionReviewRecord = {
   memoryUsed?: boolean;
   personalizationScope?: string | null;
   clarificationDecision?: string | null;
+  responseQualityIssues?: string[];
+  responseQualityPassed?: boolean;
 };
 
 type ApprovedCorrectionDatasetExportRecord = {
@@ -86,6 +89,18 @@ type ApprovedCorrectionDatasetExportSummary = {
   latestApprovedAt: string | null;
   oldestApprovedAt: string | null;
 };
+
+const REVIEWABLE_QUALITY_FAILURES = new Set([
+  "non_answer",
+  "incomplete_sentence",
+  "truncated_answer",
+  "poor_coherence",
+  "stiff_or_performative_tone",
+  "robotic_verification_language",
+  "repeated_answer",
+  "internal_state_leak",
+  "weak_continuity",
+]);
 
 function compactText(value: string, maxLength = 280): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
@@ -169,6 +184,10 @@ function reviewRecordFromMetadata(metadata: Record<string, unknown>): BrainInter
     memoryUsed: readBoolean(review, "memoryUsed") ?? undefined,
     personalizationScope: readString(review, "personalizationScope"),
     clarificationDecision: readString(review, "clarificationDecision"),
+    responseQualityIssues: Array.isArray(review.responseQualityIssues)
+      ? review.responseQualityIssues.map((item) => String(item)).filter(Boolean).slice(0, 12)
+      : [],
+    responseQualityPassed: readBoolean(review, "responseQualityPassed") ?? undefined,
   };
 }
 
@@ -358,8 +377,13 @@ export async function recordBrainInteractionReview(
   const promptValue = redactPrivatePrompt(input.prompt, input.routeDecision);
   const failureType =
     input.evaluation.failureTypes.find((item) => item !== "none") ?? null;
+  const reviewableQualityFailure = failureType
+    ? REVIEWABLE_QUALITY_FAILURES.has(failureType)
+    : false;
   const approvalState =
-    failureType && input.evaluation.correctedAnswer ? "pending" : "not_needed";
+    failureType && (input.evaluation.correctedAnswer || reviewableQualityFailure)
+      ? "pending"
+      : "not_needed";
   const review = {
     prompt: promptValue,
     promptPreview: compactText(promptValue, 140),
@@ -400,6 +424,23 @@ export async function recordBrainInteractionReview(
     memoryUsed: typeof input.responseMetadata?.memoryUsed === "boolean" ? input.responseMetadata.memoryUsed : undefined,
     personalizationScope: typeof input.responseMetadata?.personalizationScope === "string" ? input.responseMetadata.personalizationScope : null,
     clarificationDecision: typeof input.responseMetadata?.clarificationDecision === "string" ? input.responseMetadata.clarificationDecision : null,
+    responseQualityIssues:
+      input.responseMetadata?.responseQuality &&
+      typeof input.responseMetadata.responseQuality === "object" &&
+      !Array.isArray(input.responseMetadata.responseQuality) &&
+      Array.isArray((input.responseMetadata.responseQuality as Record<string, unknown>).issues)
+        ? ((input.responseMetadata.responseQuality as Record<string, unknown>).issues as unknown[])
+            .map((item) => String(item))
+            .filter(Boolean)
+            .slice(0, 12)
+        : [],
+    responseQualityPassed:
+      input.responseMetadata?.responseQuality &&
+      typeof input.responseMetadata.responseQuality === "object" &&
+      !Array.isArray(input.responseMetadata.responseQuality) &&
+      typeof (input.responseMetadata.responseQuality as Record<string, unknown>).passed === "boolean"
+        ? Boolean((input.responseMetadata.responseQuality as Record<string, unknown>).passed)
+        : undefined,
   } satisfies BrainInteractionReviewRecord;
 
   const [row] = await app.db
@@ -445,6 +486,8 @@ export async function recordBrainInteractionReview(
         memoryUsed: review.memoryUsed,
         personalizationScope: review.personalizationScope,
         clarificationDecision: review.clarificationDecision,
+        responseQualityIssues: review.responseQualityIssues,
+        responseQualityPassed: review.responseQualityPassed,
         constitutionVersion: ELYAN_CONSTITUTION_VERSION,
         promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
       },
@@ -529,11 +572,19 @@ async function updateInteractionApprovalState(
     return null;
   }
 
+  const proposedCorrection = compactText(
+    input.correctedAnswer ?? review.correctedAnswer ?? "",
+    2_000,
+  );
+  if (input.approved && !proposedCorrection) {
+    throw badRequest("A corrected answer is required before approving this quality failure.");
+  }
+
   const nextReview = {
     ...review,
     approvedByHuman: input.approved,
     approvalState: input.approved ? "approved" : "rejected",
-    correctedAnswer: compactText(input.correctedAnswer ?? review.correctedAnswer ?? "", 2_000) || review.correctedAnswer,
+    correctedAnswer: proposedCorrection || review.correctedAnswer,
   };
   const nextMetadata = {
     ...metadata,

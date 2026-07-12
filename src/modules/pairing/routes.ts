@@ -7,16 +7,22 @@ import { claimPairSession, createPairSession, getPairSessionStatus } from "./ser
 
 export const pairingRoutes: FastifyPluginAsync = async (app) => {
   app.post("/sessions", async (request, reply) => {
-    await app.authenticateUser(request, reply);
+    // Desktop CLI oturum açmadan QR eşleştirme başlatabilir (anonim oturum).
+    // Sahiplik claim anında doğrulanır; Authorization varsa yine kabul edilir.
+    let userId: string | null = null;
+    if (getHeaderString(request.headers.authorization)) {
+      await app.authenticateUser(request, reply);
 
-    if (reply.sent) {
-      return;
+      if (reply.sent) {
+        return;
+      }
+
+      userId = getUserAuth(request).sub;
     }
 
     const body = createPairSessionBodySchema.parse(request.body);
-    const auth = getUserAuth(request);
     return createPairSession(app, {
-      userId: auth.sub,
+      userId,
       ...body,
     });
   });

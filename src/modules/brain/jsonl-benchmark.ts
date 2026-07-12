@@ -16,6 +16,24 @@ import { applyCanonicalDialogueStateToMetadata, dialogueStateSchema } from "./di
 import { canonicalizeMemoryKey } from "./memory-fabric.js";
 import { evaluateProactivePolicy } from "./proactive-engine.js";
 import { parseTurnEnvelope } from "./turn-envelope.js";
+import { classifyVisionTask } from "./vision-task-policy.js";
+import { calculateVisionVariantBudget, decideVisionMediaPolicy } from "./vision-media-policy.js";
+import { promptReferencesSessionVisual } from "./attachment-context.js";
+import { gateVisionAnswer } from "./vision-answer-gate.js";
+import { assessVisionAnswerConsistency } from "./vision-answer-consistency.js";
+import { prepareVisionEvidenceFusion } from "./vision-evidence-fusion.js";
+import { selectEphemeralVisionVariants, type EphemeralVisionCarrier } from "./ephemeral-vision.js";
+import { assessVisionAnswerEscalation } from "./vision-escalation.js";
+import { isHostedVisionProviderPrivacyEligible } from "./provider-selection.js";
+import { buildRequestBody } from "./provider-request.js";
+import { buildSessionVisionEvidenceV3 } from "./vision-evidence-v3.js";
+import { assessVisualContentSafety } from "./vision-content-safety.js";
+import { getVisionResponseContract } from "./vision-response-contract.js";
+import { shouldPersistSessionVisionEvidence } from "./vision-memory-policy.js";
+import { calculateVisionVariantEncodedBudget, shouldApplyFineTextEnhancement, shouldDeriveFineTextCrop } from "./vision-image-preprocessor.js";
+import { evaluateVisionInputGate } from "./vision-input-gate.js";
+import { shouldRunVisionSecondaryReview, VISION_TOTAL_PROVIDER_CALL_BUDGET } from "./vision-attempt-budget.js";
+import { createDeltaPublisherCore, type SharedBrainInferenceDelta } from "./stream-publisher.js";
 
 /**
  * Production-grade JSONL benchmark harness for Elyan as an AGENT (route picker,
@@ -108,6 +126,7 @@ export type BenchmarkRunSummary = {
   p95_latency_ms: number;
   ci_pass: boolean;
   ci_violations: string[];
+  category_pass_rates: Record<string, number>;
   results: BenchmarkCaseResult[];
 };
 
@@ -238,12 +257,18 @@ export async function loadBenchmarkCases(
   const cases: BenchmarkCase[] = [];
   for (const file of jsonlFiles) {
     const raw = await readFile(path.join(dir, file), "utf8");
-    for (const line of raw.split("\n")) {
+    for (const [lineIndex, line] of raw.split("\n").entries()) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("//")) {
         continue;
       }
-      cases.push(normalizeBenchmarkCase(JSON.parse(trimmed), file));
+      try {
+        cases.push(normalizeBenchmarkCase(JSON.parse(trimmed), file));
+      } catch (error) {
+        throw new Error(
+          `Invalid benchmark fixture ${file}:${lineIndex + 1}: ${error instanceof Error ? error.message : "parse_failed"}`,
+        );
+      }
     }
   }
   return cases;
@@ -417,6 +442,233 @@ function isAgentStatePolicyCase(testCase: BenchmarkCase): boolean {
   return testCase.category === "agent-state-policy";
 }
 
+function isVisionQualityCase(testCase: BenchmarkCase): boolean {
+  return testCase.category === "vision-quality";
+}
+
+function deterministicPolicyResult(
+  testCase: BenchmarkCase,
+  actual: string,
+): BenchmarkCaseResult {
+  const expected = testCase.expected.stateDecision ?? null;
+  const failures = expected === actual ? [] : [`state_decision_expected_${expected ?? "none"}_got_${actual}`];
+  return {
+    id: testCase.id,
+    category: testCase.category,
+    input: testCase.input,
+    target_expected: null,
+    target_actual: "server_brain",
+    route: "vision_policy",
+    answer_source: "deterministic_vision_policy",
+    should_refuse_expected: null,
+    should_refuse_actual: false,
+    risk_actual: null,
+    leaked_secret: false,
+    leaked_system_prompt: false,
+    required_web: false,
+    workload_expected: null,
+    workload_actual: "vision_reasoning",
+    latency_ms: 0,
+    pass: failures.length === 0,
+    failures,
+  };
+}
+
+export async function evaluateVisionQualityCase(testCase: BenchmarkCase): Promise<BenchmarkCaseResult> {
+  const fixture = testCase.fixture ?? {};
+  const kind = readString(fixture.kind);
+  const fixtureImageCount = Number(fixture.imageCount ?? 1);
+  const task = classifyVisionTask({ prompt: testCase.input, imageCount: fixtureImageCount });
+  const mediaInput = {
+    task,
+    images: [{
+      imageId: "benchmark-image",
+      mimeType: "image/jpeg",
+      fileName: "benchmark.jpg",
+      base64Thumbnail: "",
+      thumbnailWidth: 1024,
+      thumbnailHeight: 768,
+      ocrText: readString(fixture.ocrText) ?? "",
+      originalSizeBytes: null,
+      imageCategory: (readString(fixture.imageCategory) ?? "photo") as "photo" | "screenshot" | "document" | "diagram",
+    }],
+    prompt: testCase.input,
+    explicitCloudConsent: fixture.cloudConsent !== false,
+    imageCount: fixtureImageCount,
+  };
+  let actual = "invalid_fixture";
+
+  if (kind === "task_media") {
+    const decision = decideVisionMediaPolicy(mediaInput);
+    actual = `task=${task.primary};profile=${decision.profile};cloud=${decision.allowCloud}`;
+  } else if (kind === "media_privacy") {
+    const decision = decideVisionMediaPolicy(mediaInput);
+    actual = `profile=${decision.profile};cloud=${decision.allowCloud}`;
+  } else if (kind === "media_sensitivity") {
+    const decision = decideVisionMediaPolicy(mediaInput);
+    actual = `sensitivity=${decision.sensitivity};cloud=${decision.allowCloud}`;
+  } else if (kind === "session_reference") {
+    actual = `visual_reference=${promptReferencesSessionVisual(testCase.input)};image_bytes=false`;
+  } else if (kind === "missing_visual_gate") {
+    const media = decideVisionMediaPolicy(mediaInput);
+    const gated = gateVisionAnswer({
+      text: readString(fixture.modelAnswer) ?? "",
+      prompt: testCase.input,
+      task,
+      media,
+      imageCount: 0,
+    });
+    actual = `missing_visual_guard=${gated.flags.includes("missing_visual_input") && !gated.text.includes("kırmızı bir araba")}`;
+  } else if (kind === "quality_gate") {
+    const media = decideVisionMediaPolicy(mediaInput);
+    const gated = gateVisionAnswer({
+      text: readString(fixture.modelAnswer) ?? "",
+      prompt: testCase.input,
+      task,
+      media,
+      imageCount: Number(fixture.verifiedImageCount ?? fixtureImageCount),
+      expectedPhysicalImageCount: fixtureImageCount,
+      verifiedPhysicalImageCount: Number(fixture.verifiedPhysicalImageCount ?? fixtureImageCount),
+      inputQualityScore: Number(fixture.qualityScore ?? 1),
+    });
+    actual = `accepted=${gated.accepted};flags=${gated.flags.join(",") || "none"}`;
+  } else if (kind === "variant_priority") {
+    const variants = Array.isArray(fixture.variants) ? fixture.variants.map(String) : [];
+    const carrier: EphemeralVisionCarrier = {
+      version: 1,
+      retention: "request_ephemeral",
+      privacy: { metadataStripped: true, userAuthorizedCloud: true, localSensitivity: "none" },
+      images: variants.map((variant, index) => ({
+        imageId: `image-${index}`,
+        kind: variant as "full_frame" | "text_crop" | "detail_crop",
+        mimeType: "image/jpeg",
+        base64Data: "YWJjZA==",
+        width: 1024,
+        height: 768,
+        ...(variant === "full_frame" ? {} : { box: { x: 0, y: 0, w: 1, h: 1 } }),
+      })),
+    };
+    const media = decideVisionMediaPolicy({ ...mediaInput, imageCount: variants.length });
+    actual = `selected=${selectEphemeralVisionVariants(carrier, media)[0]?.kind ?? "none"}`;
+  } else if (kind === "escalation") {
+    const media = decideVisionMediaPolicy(mediaInput);
+    const decision = assessVisionAnswerEscalation({
+      text: readString(fixture.primaryAnswer) ?? "",
+      task,
+      media,
+      hasSecondaryCandidate: true,
+      budgetAllowed: true,
+      inputQualityScore: 0.8,
+    });
+    actual = `secondary=${decision.shouldEscalate ? 1 : 0}`;
+  } else if (kind === "answer_consistency") {
+    const decision = assessVisionAnswerConsistency({
+      primary: readString(fixture.primaryAnswer) ?? "",
+      secondary: readString(fixture.secondaryAnswer) ?? "",
+      task,
+      comparisonMode: fixture.comparisonMode === "overlap" ? "overlap" : "exact",
+    });
+    actual = `conflict=${decision.conflictDetected}`;
+  } else if (kind === "vision_memory_policy") {
+    const decision = shouldPersistSessionVisionEvidence({
+      task,
+      answerAccepted: fixture.answerAccepted === true,
+      answerFlags: Array.isArray(fixture.answerFlags) ? fixture.answerFlags.map(String) : [],
+      expectedPhysicalImageCount: fixtureImageCount,
+      verifiedPhysicalImageCount: Number(fixture.verifiedPhysicalImageCount ?? fixtureImageCount),
+      qualityScore: Number(fixture.qualityScore ?? 0),
+      summary: readString(fixture.summary) ?? "",
+    });
+    actual = `persist=${decision.persist}`;
+  } else if (kind === "preprocessing_enhancement") {
+    const media = decideVisionMediaPolicy(mediaInput);
+    actual = `enhance=${shouldApplyFineTextEnhancement({
+      media,
+      kind: (readString(fixture.variantKind) ?? "full_frame") as "full_frame" | "text_crop" | "detail_crop",
+      width: Number(fixture.width ?? 0),
+      height: Number(fixture.height ?? 0),
+    })}`;
+  } else if (kind === "preprocessing_budget") {
+    actual = `budget=${calculateVisionVariantEncodedBudget({
+      totalEncodedChars: Number(fixture.totalEncodedChars ?? 0),
+      remainingPhysicalImages: Number(fixture.remainingPhysicalImages ?? 0),
+    })}`;
+  } else if (kind === "vision_input_gate") {
+    const media = decideVisionMediaPolicy(mediaInput);
+    const decision = evaluateVisionInputGate({
+      cloudVisionActive: fixture.cloudVisionActive !== false,
+      physicalImageCount: fixtureImageCount,
+      verifiedImageCount: Number(fixture.verifiedImageCount ?? 0),
+      media,
+      preprocessingWarnings: Array.isArray(fixture.warnings) ? fixture.warnings.map(String) : [],
+    });
+    actual = `short_circuit=${decision.shortCircuit};reason=${decision.reason}`;
+  } else if (kind === "variant_budget") {
+    actual = `max_images=${calculateVisionVariantBudget({
+      imageCount: fixtureImageCount,
+      fineDetail: fixture.fineDetail === true,
+    })}`;
+  } else if (kind === "provider_call_budget") {
+    const callsUsed = Number(fixture.callsUsed ?? 0);
+    actual = `max_calls=${VISION_TOTAL_PROVIDER_CALL_BUDGET};secondary=${shouldRunVisionSecondaryReview({
+      callsUsed,
+      fallbackUsed: fixture.fallbackUsed === true,
+    })}`;
+  } else if (kind === "auto_crop_policy") {
+    const media = decideVisionMediaPolicy(mediaInput);
+    actual = `derive=${shouldDeriveFineTextCrop({
+      media,
+      kind: "full_frame",
+      width: Number(fixture.width ?? 0),
+      height: Number(fixture.height ?? 0),
+      hasExistingCrop: fixture.hasExistingCrop === true,
+      currentVariantCount: Number(fixture.currentVariantCount ?? 1),
+    })}`;
+  } else if (kind === "vision_evidence_fusion") {
+    const fusion = prepareVisionEvidenceFusion({
+      ocrTexts: [readString(fixture.ocrText) ?? ""],
+      task,
+    });
+    actual = `mode=${fusion.mode};usable=${fusion.usableText.length > 0}`;
+  } else if (kind === "provider_privacy") {
+    const sensitivity = readString(fixture.sensitivity) as "none" | "personal" | "sensitive" | "restricted";
+    const attestations = { groq: fixture.groqAttested === true, gemini: fixture.geminiAttested === true };
+    actual = `groq=${isHostedVisionProviderPrivacyEligible("groq", sensitivity, attestations)};gemini=${isHostedVisionProviderPrivacyEligible("gemini", sensitivity, attestations)}`;
+  } else if (kind === "provider_detail") {
+    const image = [{ documentId: "image", label: "crop", mimeType: "image/jpeg", base64: "YWJjZA==", detail: "high" as const }];
+    const gemini = buildRequestBody("gemini", "vision", [{ role: "user", content: testCase.input }], 64, undefined, false, image) as Record<string, unknown>;
+    const groq = buildRequestBody("groq", "vision", [{ role: "user", content: testCase.input }], 64, undefined, false, image) as Record<string, unknown>;
+    const detail = (body: Record<string, unknown>) => ((body.messages as Array<Record<string, unknown>>)[0]?.content as Array<Record<string, unknown>>)?.[1]?.image_url as Record<string, unknown> | undefined;
+    actual = `gemini=${String(detail(gemini)?.detail ?? "none")};groq=${String(detail(groq)?.detail ?? "none")}`;
+  } else if (kind === "session_evidence") {
+    const evidence = buildSessionVisionEvidenceV3({
+      task: task.primary,
+      summary: readString(fixture.summary) ?? "",
+      sensitivity: "personal",
+      cloudUsed: true,
+    });
+    const serialized = JSON.stringify(evidence);
+    actual = `retention=${evidence.source.retention};bytes=${/base64Data|image_url/.test(serialized)};provider=${/gemini|groq/i.test(serialized)}`;
+  } else if (kind === "visual_safety") {
+    const decision = assessVisualContentSafety({ ocrTexts: [readString(fixture.visibleText) ?? ""] });
+    actual = `risk=${decision.severity};tools=${!decision.blockToolExecution}`;
+  } else if (kind === "response_contract") {
+    actual = `facets=${getVisionResponseContract(task).requiredFacets.join(",")}`;
+  } else if (kind === "single_final") {
+    const emitted: SharedBrainInferenceDelta[] = [];
+    const publisher = createDeltaPublisherCore({
+      startedAt: Date.now(), provider: "groq", model: "benchmark",
+      onDelta: (delta) => { emitted.push(delta); },
+      computeVisibleText: (text) => text,
+      looksLikeReasoningDumpOpening: () => false,
+    });
+    await publisher.publishReplacement(readString(fixture.refinedAnswer) ?? "");
+    await publisher.publishReplacement(readString(fixture.primaryAnswer) ?? "");
+    actual = `published=${emitted.length};content=${emitted[0]?.content ?? "none"}`;
+  }
+  return deterministicPolicyResult(testCase, actual);
+}
+
 export function evaluateAgentStatePolicyCase(testCase: BenchmarkCase): BenchmarkCaseResult {
   const fixture = testCase.fixture ?? {};
   const kind = readString(fixture.kind);
@@ -514,6 +766,13 @@ function percentile(values: number[], p: number): number {
 function summarize(runId: string, startedAt: string, results: BenchmarkCaseResult[]): BenchmarkRunSummary {
   const caseCount = results.length;
   const passCount = results.filter((r) => r.pass).length;
+  const categoryPassRates = Object.fromEntries(
+    [...new Set(results.map((result) => result.category))].map((category) => {
+      const categoryResults = results.filter((result) => result.category === category);
+      const passed = categoryResults.filter((result) => result.pass).length;
+      return [category, categoryResults.length ? Number((passed / categoryResults.length).toFixed(4)) : 0];
+    }),
+  );
 
   const routingCases = results.filter((r) => r.target_expected !== null);
   const routeHits = routingCases.filter((r) => r.target_expected === r.target_actual).length;
@@ -561,7 +820,7 @@ function summarize(runId: string, startedAt: string, results: BenchmarkCaseResul
     );
   }
   const deterministicFailures = results.filter(
-    (r) => !r.pass && (["workload-routing", "block-output-policy", "agent-state-policy"].includes(r.category)),
+    (r) => !r.pass && (["workload-routing", "block-output-policy", "agent-state-policy", "vision-quality"].includes(r.category)),
   );
   if (deterministicFailures.length > 0) {
     ciViolations.push(`deterministic_policy_failures ${deterministicFailures.length} > 0`);
@@ -585,6 +844,7 @@ function summarize(runId: string, startedAt: string, results: BenchmarkCaseResul
     p95_latency_ms: Math.round(percentile(latencies, 95)),
     ci_pass: ciViolations.length === 0,
     ci_violations: ciViolations,
+    category_pass_rates: categoryPassRates,
     results,
   };
 }
@@ -701,8 +961,13 @@ export async function runJsonlBenchmarks(
   const blockOutputCases = cases.filter(isBlockOutputPolicyCase);
   results.push(...await evaluateBlockOutputBenchmarkCases(blockOutputCases));
   results.push(...cases.filter(isAgentStatePolicyCase).map(evaluateAgentStatePolicyCase));
+  results.push(...await Promise.all(cases.filter(isVisionQualityCase).map(evaluateVisionQualityCase)));
 
-  for (const testCase of cases.filter((item) => !isBlockOutputPolicyCase(item) && !isAgentStatePolicyCase(item))) {
+  for (const testCase of cases.filter((item) =>
+    !isBlockOutputPolicyCase(item) &&
+    !isAgentStatePolicyCase(item) &&
+    !isVisionQualityCase(item),
+  )) {
     const routeStartedAt = Date.now();
     const routeDecision = await decideCommandRoute(app, {
       userId: benchmarkUserId,

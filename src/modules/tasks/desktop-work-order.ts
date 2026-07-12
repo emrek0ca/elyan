@@ -58,6 +58,81 @@ export type DesktopWorkOrder = {
   };
 };
 
+export type DirectDesktopAppCommand = {
+  capability: "open_app" | "close_app";
+  appName: string;
+};
+
+export type DirectImageFetchCommand = {
+  query: string;
+  destination: "~/Desktop" | "~/Downloads" | "~/Pictures" | "~/Documents";
+  count: number;
+};
+
+export function parseDirectDesktopAppCommand(message: string): DirectDesktopAppCommand | null {
+  const compact = compactText(message, 240);
+  const match = compact.match(
+    /^(?:(?:lütfen|lutfen|şimdi|simdi|bana)\s+)*(?<app>[\p{L}\p{N}][\p{L}\p{N} ._'’+-]{0,79}?)\s+(?:(?:uygulamasını|uygulamasini|uygulamayı|uygulamayi|programını|programini|programı|programi)\s+)?(?<verb>aç|ac|başlat|baslat|çalıştır|calistir|kapat|durdur|sonlandır|sonlandir)[.!?]*$/iu,
+  );
+  const rawApp = match?.groups?.app?.trim() ?? "";
+  const verb = match?.groups?.verb?.toLocaleLowerCase("tr-TR") ?? "";
+  if (!rawApp || !verb) return null;
+  const appName = rawApp.replace(/['’](?:y?[ıiuü])$/iu, "").trim();
+  if (!appName) return null;
+  return {
+    capability: /^(?:kapat|durdur|sonlandır|sonlandir)$/iu.test(verb) ? "close_app" : "open_app",
+    appName,
+  };
+}
+
+export function parseDirectImageFetchCommand(message: string): DirectImageFetchCommand | null {
+  const compact = compactText(message, 400);
+  const normalized = compact.toLocaleLowerCase("tr-TR");
+  const hasImage = /\b(?:resim|resmi|resmini|görsel|gorsel|görseli|gorseli|foto|fotoğraf|fotograf|image|picture)\b/iu.test(normalized);
+  const hasSave = /\b(?:indir|kaydet|download|save)\b/iu.test(normalized);
+  const hasGeneration = /\b(?:çiz|ciz|oluştur|olustur|üret|uret|generate|tasarla|yap)\b/iu.test(normalized);
+  if (!hasImage || !hasSave || hasGeneration) return null;
+
+  const subjectMatch = compact.match(
+    /(.+?)\s+(?:resim|resmi|resmini|görsel|gorsel|görseli|gorseli|foto(?:ğraf|graf)?|image|picture)\b/iu,
+  );
+  let query = subjectMatch?.[1]?.trim() ?? "";
+  query = query
+    .replace(/^(?:(?:lütfen|lutfen|bana|bir|şu|su|bu|İnternetten|internetten|webden|google'dan|googledan)\s+)+/u, "")
+    .replace(/^(?:(?:chrome|safari|firefox|edge|tarayıcı|tarayici|browser)(?:den|dan|de|da)?\s+)+/iu, "")
+    .replace(/^[1-5]\s+(?:adet\s+)?/iu, "")
+    .trim();
+  if (!query) return null;
+
+  let destination: DirectImageFetchCommand["destination"] = "~/Desktop";
+  if (/\b(?:indirilenler(?:e|den|de)?|downloads?)\b/iu.test(normalized)) destination = "~/Downloads";
+  else if (/\b(?:resimler|pictures|fotoğraflar|fotograflar)\b/iu.test(normalized)) destination = "~/Pictures";
+  else if (/\b(?:belgeler|documents?)\b/iu.test(normalized)) destination = "~/Documents";
+  const countMatch = normalized.match(/\b([1-5])\s+(?:adet\b)?/iu);
+  return { query: compactText(query, 160), destination, count: Number(countMatch?.[1] ?? 1) };
+}
+
+export function isDeterministicDesktopAppWorkOrder(
+  routeDecision: CommandRouteDecision,
+  message: string,
+): boolean {
+  const isDesktopRoute = routeDecision.route === "desktop_runtime"
+    || routeDecision.taskRoute?.operationalRoute === "desktop_runtime";
+  return isDesktopRoute && parseDirectDesktopAppCommand(message) !== null;
+}
+
+export function isDeterministicDesktopFastWorkOrder(
+  routeDecision: CommandRouteDecision,
+  message: string,
+): boolean {
+  const isDesktopRoute = routeDecision.route === "desktop_runtime"
+    || routeDecision.taskRoute?.operationalRoute === "desktop_runtime";
+  return isDesktopRoute && (
+    parseDirectDesktopAppCommand(message) !== null
+    || parseDirectImageFetchCommand(message) !== null
+  );
+}
+
 function compactText(value: unknown, maxLength = 1_000): string {
   const normalized = String(value ?? "")
     .replace(/\r\n?/g, "\n")
@@ -89,6 +164,9 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
     entities.push({ type, value: normalized });
   };
 
+  const directAppCommand = parseDirectDesktopAppCommand(message);
+  if (directAppCommand) add("app_hint", directAppCommand.appName);
+
   for (const match of message.matchAll(/https?:\/\/\S+/gi)) add("url", match[0]);
   for (const match of message.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)) add("email", match[0]);
   for (const match of message.matchAll(/\b[\wÇĞİÖŞÜçğıöşü ._-]{1,80}\.(?:pdf|docx|xlsx|csv|txt|png|jpg|jpeg|svg)\b/giu)) {
@@ -96,6 +174,12 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
   }
   for (const match of message.matchAll(/\b(vs ?code|visual studio code|chrome|safari|finder|terminal|excel|word|numbers|pages)\b/gi)) {
     add("app_hint", match[0]);
+  }
+  for (const match of message.matchAll(
+    /\b([\p{L}\p{N}][\p{L}\p{N} ._-]{0,60}?)\s+(?:uygulamasını|uygulamasini|uygulamayı|uygulamayi|programını|programini|programı|programi)\s+(?:aç|ac|kapat|başlat|baslat)(?=$|[\s.,!?])/giu,
+  )) {
+    const appName = match[1]?.replace(/^(?:(?:lütfen|lutfen|şimdi|simdi|bana)\s+)+/i, "").trim();
+    if (appName) add("app_hint", appName);
   }
 
   const topic = compactText(
@@ -126,11 +210,16 @@ function inferLocalContext(message: string, capabilities: string[]): string[] {
   if (capabilities.includes("email_send") || capabilities.includes("email_draft")) {
     contexts.add("email");
   }
+  if (capabilities.includes("image_fetch") || capabilities.includes("presentation_write")) {
+    contexts.add("filesystem");
+  }
   return [...contexts];
 }
 
 function inferKind(routeDecision: CommandRouteDecision, message: string): string {
   const normalized = message.toLocaleLowerCase("tr-TR");
+  if (parseDirectImageFetchCommand(message)) return "image_fetch";
+  if (/\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)) return "presentation_task";
   if (routeDecision.capabilities.includes("email_send")) return "email_send";
   if (routeDecision.capabilities.includes("email_draft")) return "email_draft";
   if (/\b(pdf|docx|xlsx|excel|belge|doküman|dokuman|rapor)\b/i.test(normalized)) return "document_task";
@@ -185,15 +274,38 @@ function inferCapabilities(
     if (canonical) capabilities.add(canonical);
   }
   const normalized = message.toLocaleLowerCase("tr-TR");
+  const researchRequested = /\b(?:araştır|arastir|araştırma|arastirma|research|bilgi\s+topla|kaynak\s+topla)\b/iu.test(normalized);
+  const presentationRequested = /\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)
+    && /\b(?:hazırla|hazirla|oluştur|olustur|üret|uret|yap|çevir|cevir|kaydet|save|create|prepare)\b/iu.test(normalized);
+  const directAppCommand = parseDirectDesktopAppCommand(message);
+  const directImageFetch = parseDirectImageFetchCommand(message);
+  if (directAppCommand) {
+    capabilities.add(directAppCommand.capability);
+    capabilities.delete("desktop_operator.run");
+  }
+  if (directImageFetch) {
+    capabilities.add("image_fetch");
+    capabilities.delete("desktop_operator.run");
+  }
+  if (researchRequested) capabilities.add("web_research");
+  if (presentationRequested) {
+    capabilities.add("presentation_write");
+    capabilities.delete("desktop_operator.run");
+  }
   if (/\b(masaüstü|masaustu|desktop|indirilenler|downloads|klasör|klasor|dosya|belge|pdf)\b/i.test(normalized)) {
     capabilities.add("document_read");
   }
   if (/\b(kaydet|save|yaz|oluştur|olustur|düzenle|duzenle|export|dışa aktar|disa aktar)\b/i.test(normalized)) {
-    if (/\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b/i.test(normalized)) capabilities.add("spreadsheet_write");
+    if (presentationRequested) capabilities.add("presentation_write");
+    else if (/\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b/i.test(normalized)) capabilities.add("spreadsheet_write");
     else if (/\b(pdf|svg|canvas|görsel|gorsel)\b/i.test(normalized)) capabilities.add("canvas_write");
     else capabilities.add("document_write");
   }
-  if (/\b(browser|chrome|safari|web|site|url|link)\b/i.test(normalized) || /https?:\/\//i.test(message)) {
+  if (
+    /\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b/iu.test(normalized)
+    || (/\bweb\b/iu.test(normalized) && !researchRequested)
+    || /https?:\/\//i.test(message)
+  ) {
     capabilities.add("browser_control");
   }
   if (/\b(terminal|komut|shell)\b/i.test(normalized)) capabilities.add("shell_run");
@@ -206,21 +318,36 @@ function inferExpectedOutputs(
   envelope?: UnderstandingEnvelope,
 ): DesktopWorkOrder["expectedOutputs"] {
   const outputs: DesktopWorkOrder["expectedOutputs"] = [{ kind: "chat_result", format: "elyan_blocks.v2", required: true }];
+  const addOutput = (output: DesktopWorkOrder["expectedOutputs"][number]) => {
+    if (!outputs.some((candidate) => candidate.kind === output.kind && candidate.required === output.required)) {
+      outputs.push(output);
+    }
+  };
   const normalized = message.toLocaleLowerCase("tr-TR");
+  if (parseDirectImageFetchCommand(message)) {
+    addOutput({ kind: "artifact", format: "artifact_reference", required: true });
+    addOutput({ kind: "file_update", format: "state_readback", required: true });
+  }
+  const presentationRequested = /\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)
+    && /\b(?:hazırla|hazirla|oluştur|olustur|üret|uret|yap|çevir|cevir|kaydet|save|create|prepare)\b/iu.test(normalized);
+  if (presentationRequested) {
+    addOutput({ kind: "artifact", format: "artifact_reference", required: true });
+    addOutput({ kind: "file_update", format: "state_readback", required: true });
+  }
   const typedArtifactRequested = envelope?.desired_outputs.some(
     (output) => output.target === "artifact" || ["pdf", "docx", "xlsx", "svg", "artifact"].includes(output.kind),
   ) ?? false;
   const explicitArtifactCreation =
-    /\b(pdf|docx|xlsx|csv|svg|dosya|belge|rapor)\b/i.test(normalized) &&
+    /\b(pdf|docx|xlsx|pptx|csv|svg|dosya|belge|rapor|sunum|slayt|presentation)\b/i.test(normalized) &&
     /\b(oluştur|olustur|hazırla|hazirla|dönüştür|donustur|export|dışa aktar|disa aktar|kaydet|yap)\b/i.test(normalized);
   if (typedArtifactRequested || explicitArtifactCreation) {
-    outputs.push({ kind: "artifact", format: "artifact_reference", required: true });
+    addOutput({ kind: "artifact", format: "artifact_reference", required: true });
   }
-  if (/\b(kaydet|save|düzenle|duzenle|yaz|oluştur|olustur)\b/i.test(normalized)) {
-    outputs.push({ kind: "file_update", format: "state_readback", required: true });
+  if (/\b(kaydet|save|düzenle|duzenle|yaz|oluştur|olustur|hazırla|hazirla|üret|uret)\b/i.test(normalized)) {
+    addOutput({ kind: "file_update", format: "state_readback", required: true });
   }
-  if (/\b(browser|chrome|safari|site|url|link)\b/i.test(normalized)) {
-    outputs.push({ kind: "browser_state", format: "tool_result", required: false });
+  if (/\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b/i.test(normalized)) {
+    addOutput({ kind: "browser_state", format: "tool_result", required: false });
   }
   return outputs;
 }
@@ -236,6 +363,10 @@ function buildSteps(input: {
   const steps: DesktopWorkOrderStep[] = [];
   const url = input.entities.find((entity) => entity.type === "url")?.value;
   const fileHint = input.entities.find((entity) => entity.type === "file_hint")?.value;
+  const appHint = input.entities.find((entity) => entity.type === "app_hint")?.value;
+  const topic = input.entities.find((entity) => entity.type === "topic")?.value ?? "";
+  const directImageFetch = parseDirectImageFetchCommand(topic);
+  const researchRequested = input.capabilities.includes("web_research");
   const semanticBrief = compactText([
     input.envelope?.intent.topic,
     ...(input.envelope?.entities ?? []).map((entity) => `${entity.type}: ${entity.normalized ?? entity.value}`),
@@ -243,14 +374,52 @@ function buildSteps(input: {
       .filter((constraint) => constraint.explicit)
       .map((constraint) => `${constraint.kind}: ${JSON.stringify(constraint.value)}`),
     ...(input.envelope?.success_criteria ?? []).map((criterion) => criterion.description),
-  ].filter(Boolean).join("\n"), 3_000) || input.summary;
-  if (input.capabilities.includes("browser_control")) {
+  ].filter(Boolean).join("\n"), 3_000) || topic || input.summary;
+  for (const capability of ["open_app", "close_app"] as const) {
+    if (!input.capabilities.includes(capability)) continue;
     steps.push({
-      id: "step_browser",
-      capability: "browser_control",
-      description: url ? `${url} adresi açılacak.` : "Tarayıcı bağlamı görev için hazırlanacak.",
-      args: url ? { action: "open_url", url } : { action: "search", query: input.summary },
+      id: `step_${capability}`,
+      capability,
+      description: appHint
+        ? `${appHint} ${capability === "open_app" ? "açılacak" : "kapatılacak"}.`
+        : `Uygulama ${capability === "open_app" ? "açma" : "kapatma"} isteği yerelde çözümlenecek.`,
+      args: appHint ? { app_name: appHint } : {},
     });
+  }
+  if (input.capabilities.includes("image_fetch") && directImageFetch) {
+    steps.push({
+      id: "step_image_fetch",
+      capability: "image_fetch",
+      description: `${directImageFetch.query} için herkese açık bir görsel indirilip dosya varlığı doğrulanacak.`,
+      args: {
+        query: directImageFetch.query,
+        destination: directImageFetch.destination,
+        count: directImageFetch.count,
+      },
+    });
+  }
+  if (researchRequested) {
+    steps.push({
+      id: "step_web_research",
+      capability: "web_research",
+      description: "Konu güvenilir web kaynaklarından araştırılacak ve kaynak özeti hazırlanacak.",
+      args: { query: topic || semanticBrief },
+    });
+  }
+  if (input.capabilities.includes("browser_control")) {
+    // "Chrome'u kapat/aç" gibi salt uygulama-yaşam-döngüsü görevlerinde URL yoksa
+    // genel "search" adımı ekleme — kapatılan tarayıcıyı geri açıp görevi bozuyor.
+    const appLifecycleOnly = !url && steps.some(
+      (step) => step.capability === "open_app" || step.capability === "close_app",
+    );
+    if (!appLifecycleOnly) {
+      steps.push({
+        id: "step_browser",
+        capability: "browser_control",
+        description: url ? `${url} adresi açılacak.` : "Tarayıcı bağlamı görev için hazırlanacak.",
+        args: url ? { action: "open_url", url } : { action: "search", query: input.summary },
+      });
+    }
   }
   if (input.capabilities.includes("document_read") && fileHint) {
     steps.push({
@@ -260,13 +429,31 @@ function buildSteps(input: {
       args: { path: fileHint, mode: "read" },
     });
   }
-  for (const capability of ["document_write", "spreadsheet_write", "canvas_write"] as const) {
+  for (const capability of ["document_write", "spreadsheet_write", "presentation_write", "canvas_write"] as const) {
     if (!input.capabilities.includes(capability)) continue;
     const args: Record<string, unknown> = {
       title: compactText(input.title, 160),
       prompt: semanticBrief,
-      sourceContext: semanticBrief,
     };
+    if (!researchRequested) args.sourceContext = semanticBrief;
+    if (
+      capability === "presentation_write"
+      && /\b(?:masaüstü|masaustu|desktop)\b/iu.test(topic)
+    ) {
+      const filename = topic
+        .toLocaleLowerCase("tr-TR")
+        .replace(/[ıİ]/g, "i")
+        .replace(/[ğĞ]/g, "g")
+        .replace(/[üÜ]/g, "u")
+        .replace(/[şŞ]/g, "s")
+        .replace(/[öÖ]/g, "o")
+        .replace(/[çÇ]/g, "c")
+        .replace(/\b(?:webden|web'den|araştır|arastir|araştırıp|arastirip|sonuçları|sonuclari|sunum|slayt|pptx|powerpoint|hazırla|hazirla|oluştur|olustur|masaüstüne|masaustune|desktop)\b/giu, " ")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 64) || "elyan-sunum";
+      args.outputPath = `~/Desktop/${filename}.pptx`;
+    }
     if (capability === "canvas_write") {
       const wantsPdf = input.envelope?.desired_outputs.some((output) => output.kind === "pdf") ?? false;
       if (wantsPdf) args.output_format = "pdf";

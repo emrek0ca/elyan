@@ -13,6 +13,7 @@ import type { DomainEvent } from "./event-bus.js";
 import {
   acknowledgeTaskDispatchLease,
   appendTaskArtifacts,
+  buildRuntimeTaskDispatchEnvelope,
   issueTaskDispatchLease,
   updateTaskFromRuntime,
 } from "../tasks/service.js";
@@ -603,14 +604,7 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
           continue;
         }
 
-        socket.send(
-          JSON.stringify({
-            type: "task.dispatch",
-            task: leaseResult.task,
-            leaseId: leaseResult.lease.leaseId,
-            leaseExpiresAt: leaseResult.lease.expiresAt,
-          }),
-        );
+        socket.send(JSON.stringify(buildRuntimeTaskDispatchEnvelope(leaseResult.task, leaseResult.lease)));
       }
 
       socket.on("message", async (raw: RawData) => {

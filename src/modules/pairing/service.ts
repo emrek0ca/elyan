@@ -219,7 +219,7 @@ type DesktopPairingDeviceRow = {
 async function upsertDesktopPairingDevice(
   app: FastifyInstance,
   input: {
-    userId: string;
+    userId: string | null;
     deviceLabel: string;
     platform: string;
     runtimeVersion?: string;
@@ -265,17 +265,23 @@ async function upsertDesktopPairingDevice(
     .where(and(eq(devices.type, "desktop"), eq(devices.externalDeviceId, normalizedExternalDeviceId)))
     .limit(8);
 
-  const conflictingRow = existingRows.find((row) => row.userId && row.userId !== input.userId);
+  // Anonim (girişsiz) masaüstü mevcut cihaz kaydını sahibini değiştirmeden
+  // yeniden kullanabilir — kullanıcı eşleşmesi claim anında doğrulanır.
+  const conflictingRow = input.userId
+    ? existingRows.find((row) => row.userId && row.userId !== input.userId)
+    : undefined;
   if (conflictingRow) {
     throw conflict("Desktop runtime is already paired with another user");
   }
 
-  const reusableRow = existingRows.find((row) => row.userId === input.userId) ?? existingRows.find((row) => row.userId == null);
+  const reusableRow = input.userId
+    ? (existingRows.find((row) => row.userId === input.userId) ?? existingRows.find((row) => row.userId == null))
+    : existingRows[0];
   if (reusableRow) {
     const updatedRows = await app.db
       .update(devices)
       .set({
-        userId: input.userId,
+        userId: input.userId ?? reusableRow.userId,
         label: input.deviceLabel,
         platform: input.platform,
         runtimeVersion: input.runtimeVersion,
@@ -320,7 +326,7 @@ async function upsertDesktopPairingDevice(
 export async function createPairSession(
   app: FastifyInstance,
   input: {
-    userId: string;
+    userId: string | null;
     deviceLabel: string;
     platform: string;
     runtimeVersion?: string;
@@ -328,7 +334,10 @@ export async function createPairSession(
   },
 ) {
   await expireExpiredPendingPairSessions(app);
-  await assertDesktopPairingAllowed(app, input.userId);
+  if (input.userId) {
+    // Anonim oturumda fatura/limit denetimi claim anında yapılır.
+    await assertDesktopPairingAllowed(app, input.userId);
+  }
   const desktopDevice = await upsertDesktopPairingDevice(app, input);
   await expirePendingPairSessionsForDesktop(app, desktopDevice.id);
   const pairingToken = createOpaqueCode(24);
@@ -353,7 +362,9 @@ export async function createPairSession(
 
   const pairSession = pairRows[0];
 
-  invalidateBrainProfileCache(app, input.userId);
+  if (input.userId) {
+    invalidateBrainProfileCache(app, input.userId);
+  }
 
   return {
     sessionId: pairSession.id,

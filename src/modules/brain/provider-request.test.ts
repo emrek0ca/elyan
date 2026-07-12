@@ -30,6 +30,39 @@ test("buildRequestBody attaches vision images to the final user message", () => 
   assert.deepEqual(content[1]?.image_url, { url: "data:image/jpeg;base64,abc123" });
 });
 
+test("Gemini vision request receives adaptive high-detail hint", () => {
+  const body = buildRequestBody(
+    "gemini",
+    "vision-model",
+    [{ role: "user", content: "Küçük yazıyı oku" }],
+    512,
+    undefined,
+    false,
+    [{ documentId: "doc-1", label: "text_crop", mimeType: "image/jpeg", base64: "abc123", detail: "high" }],
+  ) as Record<string, unknown>;
+  const messages = body.messages as Array<Record<string, unknown>>;
+  const content = messages.at(-1)?.content as Array<Record<string, unknown>>;
+  assert.deepEqual(content[1]?.image_url, {
+    url: "data:image/jpeg;base64,abc123",
+    detail: "high",
+  });
+});
+
+test("Groq vision request omits provider-specific detail hint", () => {
+  const body = buildRequestBody(
+    "groq",
+    "vision-model",
+    [{ role: "user", content: "Küçük yazıyı oku" }],
+    512,
+    undefined,
+    false,
+    [{ documentId: "doc-1", label: "text_crop", mimeType: "image/jpeg", base64: "abc123", detail: "high" }],
+  ) as Record<string, unknown>;
+  const messages = body.messages as Array<Record<string, unknown>>;
+  const content = messages.at(-1)?.content as Array<Record<string, unknown>>;
+  assert.deepEqual(content[1]?.image_url, { url: "data:image/jpeg;base64,abc123" });
+});
+
 test("buildRequestBody caps high reasoning effort when the token budget is tight", () => {
   const body = buildRequestBody(
     "groq",

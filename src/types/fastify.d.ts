@@ -20,6 +20,7 @@ declare module "fastify" {
     };
     authenticateUser: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     authenticateRuntime: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    authenticateUserOrRuntime: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 
   interface FastifyRequest {

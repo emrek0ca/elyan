@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { eq } from "drizzle-orm";
 import { forbidden } from "../../lib/errors.js";
 import { getRequestContext } from "../../lib/http.js";
-import { getUserAuth } from "../../lib/request-auth.js";
+import { getUserAuth, getUserScopedAuth } from "../../lib/request-auth.js";
 import { users } from "../../db/schema.js";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
 import { buildUserContext } from "../../core/understanding/context-builder.js";
@@ -75,14 +75,14 @@ async function assertAdmin(app: FastifyInstance, userId: string): Promise<void> 
 
 export const brainRoutes: FastifyPluginAsync = async (app) => {
   app.get("/profile", async (request, reply) => {
-    await app.authenticateUser(request, reply);
+    await app.authenticateUserOrRuntime(request, reply);
 
     if (reply.sent) {
       return;
     }
 
     brainProfileQuerySchema.parse(request.query ?? {});
-    const auth = getUserAuth(request);
+    const auth = getUserScopedAuth(request);
 
     return shapePublicBrainProfile(await getBrainProfile(app, auth.sub));
   });
@@ -428,14 +428,14 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/retrieval/search", async (request, reply) => {
-    await app.authenticateUser(request, reply);
+    await app.authenticateUserOrRuntime(request, reply);
 
     if (reply.sent) {
       return;
     }
 
     const body = searchKnowledgeBodySchema.parse(request.body);
-    const auth = getUserAuth(request);
+    const auth = getUserScopedAuth(request);
 
     return await searchKnowledge(app, {
       userId: auth.sub,

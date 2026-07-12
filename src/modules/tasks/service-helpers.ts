@@ -303,7 +303,6 @@ function extractTaskBrainMetadata(value: unknown) {
   }
   const metadata = {
     firstDeltaMs: readNumber(result, "firstDeltaMs"),
-    fallbackUsed: readBoolean(result, "fallbackUsed"),
     groundingUsed: readBoolean(result, "groundingUsed"),
     documentSourceCount: readNumber(result, "documentSourceCount"),
     webGroundingUsed: readBoolean(result, "webGroundingUsed"),
@@ -344,6 +343,7 @@ const INTERNAL_INFERENCE_KEYS = new Set([
   "availableModels",
   "fallbackModel",
   "fallbackState",
+  "fallbackUsed",
   "runtimeProvider",
   "activeSharedModelProvider",
   "attemptedModels",
@@ -377,6 +377,22 @@ const INTERNAL_INFERENCE_KEYS = new Set([
   "toolTrace",
   "tooltrace",
   "modelSource",
+  "modelProfile",
+  "selectedProfile",
+  "answerSource",
+  "modelCallCount",
+  "reasoningPasses",
+  "dedupedInflight",
+  "cheapSocialTurn",
+  "cloudVisionOptIn",
+  "visionEscalation",
+  "visionEscalationAttempted",
+  "visionEscalationUsed",
+  "visionEscalationReasons",
+  "visionEscalationCapacitySkipped",
+  "agentEngineVersion",
+  "visionBlock",
+  "visionblock",
 ]);
 
 function normalizePublicInferenceKey(value: string): string {
@@ -398,6 +414,7 @@ const INTERNAL_EVENT_PAYLOAD_KEYS = new Set([
   "availableModels",
   "fallbackModel",
   "fallbackState",
+  "fallbackUsed",
   "runtimeProvider",
   "activeSharedModelProvider",
   "attemptedModels",
@@ -417,11 +434,33 @@ const INTERNAL_EVENT_PAYLOAD_KEYS = new Set([
   "toolResults",
   "toolTrace",
   "modelSource",
+  "modelProfile",
+  "selectedProfile",
+  "answerSource",
+  "modelCallCount",
+  "reasoningPasses",
+  "dedupedInflight",
+  "cheapSocialTurn",
+  "cloudVisionOptIn",
+  "visionEscalation",
+  "visionEscalationAttempted",
+  "visionEscalationUsed",
+  "visionEscalationReasons",
+  "visionEscalationCapacitySkipped",
+  "agentEngineVersion",
+  "visionBlock",
+  "visionblock",
 ]);
 
 const NORMALIZED_INTERNAL_EVENT_PAYLOAD_KEYS = new Set(
   [...INTERNAL_EVENT_PAYLOAD_KEYS].map((key) => normalizePublicInferenceKey(key)),
 );
+
+function isInternalInferenceKey(key: string, internalKeys: Set<string>): boolean {
+  const normalized = normalizePublicInferenceKey(key);
+  if (internalKeys.has(key) || internalKeys.has(normalized)) return true;
+  return /(?:provider|model|engine|apikey|credential|secret|systemprompt|reasoningtrace|tooltrace|visionblock)$/u.test(normalized);
+}
 
 function clipPublicString(value: string, maxLength: number): string {
   // Preserve markdown/newline structure; the public boundary only needs a
@@ -461,9 +500,7 @@ function sanitizeBoundedPublicJson(
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
       .filter(
-        ([key]) =>
-          !internalKeys.has(key) &&
-          !internalKeys.has(normalizePublicInferenceKey(key)),
+        ([key]) => !isInternalInferenceKey(key, internalKeys),
       )
       .slice(0, 80)
       .map(([key, nestedValue]) => {

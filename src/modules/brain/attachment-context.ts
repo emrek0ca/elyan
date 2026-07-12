@@ -15,10 +15,14 @@ import {
   type AssistantMessageBlock,
 } from "../chat/message-blocks.js";
 import {
-  formatVisionEvidencePrompt,
-  parseVisionBlockV2,
-  type VisionBlockV2,
-} from "./vision-block.js";
+  formatVisionEvidenceV3Prompt,
+  normalizeVisionEvidence,
+  parseVisionEvidence,
+  type VisionEvidence,
+  type VisionEvidenceV3,
+} from "./vision-evidence-v3.js";
+import { buildVisionTaskPromptBlock, classifyVisionTask } from "./vision-task-policy.js";
+import { assessVisionEvidence, buildVisionEvidenceGatePrompt } from "./vision-evidence-gate.js";
 import { extractClientAttachments } from "./document-types.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 3;
@@ -62,6 +66,11 @@ export type ResolvedAttachmentContextVisionImage = {
   mimeType: string;
   base64: string;
   label: string;
+  width?: number;
+  height?: number;
+  category?: "photo" | "screenshot" | "document" | "diagram";
+  transport?: "request_ephemeral";
+  detail?: "low" | "high" | "auto";
 };
 
 export type ResolvedAttachmentContext = {
@@ -77,7 +86,7 @@ export type ResolvedAttachmentContext = {
   clarificationMessage?: string;
   cacheHit?: boolean;
   visionImages?: ResolvedAttachmentContextVisionImage[];
-  visionBlocks?: VisionBlockV2[];
+  visionBlocks?: VisionEvidence[];
 };
 
 type CachedPreparedAttachmentCandidate = {
@@ -213,7 +222,8 @@ function hasAttachmentShape(record: Record<string, unknown> | null): boolean {
     record.documentAnalysis != null ||
     record.compactDocument != null ||
     record.documentEnvelope != null ||
-    record.envelope != null
+    record.envelope != null ||
+    record.visionBlock != null
   );
 }
 
@@ -963,6 +973,12 @@ function isReferentialAttachmentPrompt(prompt: string): boolean {
   );
 }
 
+export function promptReferencesSessionVisual(prompt: string): boolean {
+  const normalized = normalizeToken(prompt);
+  if (!normalized) return false;
+  return /\b(görsel|gorsel|resim|fotoğraf|fotograf|ekran|screenshot|image|picture|photo|soldaki|sağdaki|sagdaki|üstteki|ustteki|alttaki|önceki ekran|onceki ekran|bu uyarı|bu uyari|bu nesne|bu yazı|bu yazi|bu tablo|bu grafik|what is on the left|in the image|in the picture)\b/u.test(normalized);
+}
+
 function candidateAliases(candidate: PreparedAttachmentCandidate): string[] {
   const aliases = new Set<string>();
   const rawTitle = compactText(candidate.title);
@@ -1449,17 +1465,17 @@ const MAX_VISION_BLOCKS_PER_TURN = 4;
 
 function readVisionBlockFromRecord(
   record: Record<string, unknown> | null,
-): VisionBlockV2 | null {
-  return parseVisionBlockV2(readRecord(record?.visionBlock));
+): VisionEvidence | null {
+  return parseVisionEvidence(readRecord(record?.visionBlock));
 }
 
 function collectVisionBlocksFromCarrier(
   carrier: Record<string, unknown> | null,
-): VisionBlockV2[] {
+): VisionEvidence[] {
   if (!carrier) {
     return [];
   }
-  const blocks: VisionBlockV2[] = [];
+  const blocks: VisionEvidence[] = [];
   const topLevel = readVisionBlockFromRecord(carrier);
   if (topLevel) {
     blocks.push(topLevel);
@@ -1488,6 +1504,49 @@ function collectVisionBlocksFromCarrier(
   return blocks;
 }
 
+function collectSessionVisionBlocks(
+  candidates: AttachmentContextCandidate[] | undefined,
+): VisionEvidence[] {
+  if (!candidates?.length) return [];
+  const blocks: VisionEvidence[] = [];
+  const seen = new Set<string>();
+  const ordered = [...candidates].sort((a, b) =>
+    String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")),
+  );
+  for (const candidate of ordered) {
+    for (const block of collectVisionBlocksFromCarrier(
+      extractAttachmentMetadataCarrier(candidate.metadata),
+    )) {
+      if (seen.has(block.id)) continue;
+      seen.add(block.id);
+      blocks.push(block);
+      if (blocks.length >= MAX_VISION_BLOCKS_PER_TURN) return blocks;
+    }
+  }
+  return blocks;
+}
+
+function buildNormalizedVisionPromptBlock(
+  prompt: string,
+  blocks: VisionEvidence[],
+): string | null {
+  const normalized = blocks
+    .map((block) => normalizeVisionEvidence(block))
+    .filter((block): block is VisionEvidenceV3 => block != null);
+  if (normalized.length === 0) return null;
+  const task = classifyVisionTask({
+    prompt,
+    evidence: normalized[0],
+    imageCount: normalized.length,
+  });
+  const evidenceGate = assessVisionEvidence(normalized, task);
+  return [
+    buildVisionTaskPromptBlock(task),
+    buildVisionEvidenceGatePrompt(evidenceGate),
+    formatVisionEvidenceV3Prompt(normalized),
+  ].filter((value): value is string => Boolean(value)).join("\n\n");
+}
+
 function resolveAttachmentContextFromCandidates(input: {
   prompt: string;
   requestCarrier: Record<string, unknown> | null;
@@ -1496,16 +1555,20 @@ function resolveAttachmentContextFromCandidates(input: {
   maxAttachments: number;
   maxChunks: number;
   maxChars: number;
+  recoveredVisionBlocks?: VisionEvidence[];
 }): ResolvedAttachmentContext | null {
   const source: AttachmentContextSource =
     input.requestCandidates.length > 0 ? "request_attachments" : "session_recovery";
   const baseCandidates =
     input.requestCandidates.length > 0 ? input.requestCandidates : input.sessionCandidates;
-  const visionBlocks = collectVisionBlocksFromCarrier(input.requestCarrier);
+  const requestVisionBlocks = collectVisionBlocksFromCarrier(input.requestCarrier);
+  const visionBlocks = requestVisionBlocks.length > 0
+    ? requestVisionBlocks
+    : (input.recoveredVisionBlocks ?? []);
 
   if (baseCandidates.length === 0) {
     if (visionBlocks.length > 0) {
-      const visionPromptBlock = formatVisionEvidencePrompt(visionBlocks) ?? "";
+      const visionPromptBlock = buildNormalizedVisionPromptBlock(input.prompt, visionBlocks) ?? "";
       return {
         used: true,
         source: "request_attachments",
@@ -1573,7 +1636,7 @@ function resolveAttachmentContextFromCandidates(input: {
     maxChunks: input.maxChunks,
     maxChars: input.maxChars,
   });
-  const visionPromptBlock = formatVisionEvidencePrompt(visionBlocks);
+  const visionPromptBlock = buildNormalizedVisionPromptBlock(input.prompt, visionBlocks);
   const combinedPromptBlock = [promptBlock.promptBlock, visionPromptBlock]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join("\n\n");
@@ -1623,56 +1686,6 @@ export function extractAttachmentCandidatesFromBrainContext(
   return resolved;
 }
 
-const MAX_SESSION_VISION_IMAGES = 2;
-
-/**
- * Multi-turn cloud vision: earlier turns in this session may have carried a
- * consented image thumbnail (cloudVisionOptIn + clientAttachments image). On
- * follow-up turns the client re-sends nothing, so the persisted message
- * metadata is the only source. Only images from turns where the user
- * explicitly opted in are ever re-surfaced.
- */
-function collectSessionVisionImages(
-  candidates: AttachmentContextCandidate[] | undefined,
-): ResolvedAttachmentContextVisionImage[] {
-  if (!candidates?.length) {
-    return [];
-  }
-  const images: ResolvedAttachmentContextVisionImage[] = [];
-  const seen = new Set<string>();
-  // Newest turn first so follow-ups reference the most recent image.
-  const ordered = [...candidates].sort((a, b) =>
-    String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")),
-  );
-  for (const candidate of ordered) {
-    const metadata = candidate.metadata;
-    if (!metadata || metadata.cloudVisionOptIn !== true) {
-      continue;
-    }
-    for (const attachment of extractClientAttachments(metadata)) {
-      if (attachment.attachmentType !== "image") {
-        continue;
-      }
-      if (seen.has(attachment.imageId)) {
-        continue;
-      }
-      seen.add(attachment.imageId);
-      images.push({
-        documentId: attachment.imageId,
-        mimeType: attachment.mimeType.startsWith("image/")
-          ? attachment.mimeType
-          : "image/jpeg",
-        base64: attachment.base64Thumbnail,
-        label: scrubLabel(attachment.fileName),
-      });
-      if (images.length >= MAX_SESSION_VISION_IMAGES) {
-        return images;
-      }
-    }
-  }
-  return images;
-}
-
 export function resolveAttachmentContext(input: {
   prompt: string;
   metadata?: Record<string, unknown>;
@@ -1707,15 +1720,10 @@ export function resolveAttachmentContext(input: {
     maxAttachments,
     maxChunks,
     maxChars,
+    recoveredVisionBlocks: !requestCarrier && promptReferencesSessionVisual(input.prompt)
+      ? collectSessionVisionBlocks(input.sessionAttachmentCandidates)
+      : [],
   });
-  if (context && !requestCarrier) {
-    const sessionVisionImages = collectSessionVisionImages(
-      input.sessionAttachmentCandidates,
-    );
-    if (sessionVisionImages.length > 0) {
-      context.visionImages = sessionVisionImages;
-    }
-  }
   return context;
 }
 
@@ -1757,15 +1765,10 @@ export async function resolveAttachmentContextWithCache(
     maxAttachments,
     maxChunks,
     maxChars,
+    recoveredVisionBlocks: !requestCarrier && promptReferencesSessionVisual(input.prompt)
+      ? collectSessionVisionBlocks(input.sessionAttachmentCandidates)
+      : [],
   });
-  if (context && !requestCarrier) {
-    const sessionVisionImages = collectSessionVisionImages(
-      input.sessionAttachmentCandidates,
-    );
-    if (sessionVisionImages.length > 0) {
-      context.visionImages = sessionVisionImages;
-    }
-  }
   return context;
 }
 const MAX_TABLES = 2;

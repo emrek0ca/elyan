@@ -193,6 +193,9 @@ function buildAssistantMetadataFromTask(task: typeof tasks.$inferSelect): Record
           : null,
     };
   }
+  if (result.visionBlock && typeof result.visionBlock === "object" && !Array.isArray(result.visionBlock)) {
+    metadata.visionBlock = result.visionBlock;
+  }
 
   return metadata;
 }

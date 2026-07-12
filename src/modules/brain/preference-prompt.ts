@@ -94,10 +94,13 @@ export function buildPreferencePromptBlock(
   pushHint(
     "Advice few-shot shape: 'Iki yol var; senin durumunda A'yi secerdim, cunku [relevant memory/digest/current-request reason]. B ancak [clear tradeoff] icin mantikli.' Use this shape naturally in the user's language.",
   );
+  pushHint(
+    "Personalization dosage: adapt wording and examples silently first. Use the user's name only for a meaningful greeting, emotional support, or an important transition; never repeat it across ordinary replies and never mention memory mechanics.",
+  );
   const dialogueUserMemory = context.dialogueUserMemory;
   if (dialogueUserMemory?.preferredName) {
     pushHint(
-      `Current dialogue state preferred name: ${dialogueUserMemory.preferredName}. Treat this as the latest active way to address the user.`,
+      `Current dialogue state preferred name: ${dialogueUserMemory.preferredName}. This is available when direct address genuinely improves the moment; it is not a requirement to address the user.`,
     );
   }
   if (dialogueUserMemory?.preferredLanguage) {
@@ -156,7 +159,7 @@ export function buildPreferencePromptBlock(
   ]) {
     pushHint(hint);
   }
-  for (const hint of (context.relationshipContextDigest ?? []).slice(0, 3)) {
+  for (const hint of (context.relationshipContextDigest ?? []).slice(0, 2)) {
     pushHint(hint);
   }
   for (const hint of (context.speakingStyleDirectives ?? []).slice(0, 3)) {

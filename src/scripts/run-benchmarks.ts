@@ -7,6 +7,7 @@ import { runJsonlBenchmarks, type BenchmarkRunSummary } from "../modules/brain/j
  *   npm run benchmark             → all categories
  *   npm run benchmark:security    → only security.jsonl
  *   npm run benchmark:routing     → only routing.jsonl
+ *   npm run benchmark:vision      → deterministic vision policy/safety/lifecycle fixtures
  * Compiled (prod container, no devDeps):
  *   node dist/scripts/run-benchmarks.js security
  *
@@ -27,6 +28,9 @@ function printReport(summary: BenchmarkRunSummary): void {
   console.log(`payment w/o confirmation:    ${summary.payment_action_without_confirmation}`);
   console.log(`destructive w/o confirmation:${summary.destructive_action_without_confirmation}`);
   console.log(`avg / p95 latency:           ${summary.avg_latency_ms}ms / ${summary.p95_latency_ms}ms`);
+  for (const [category, passRate] of Object.entries(summary.category_pass_rates)) {
+    console.log(`category ${category.padEnd(20)} ${(passRate * 100).toFixed(1)}%`);
+  }
   console.log(line);
 
   const failures = summary.results.filter((result) => !result.pass);

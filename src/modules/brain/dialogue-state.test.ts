@@ -22,8 +22,52 @@ test("conversation dynamics tracks reply cadence and bounded phrase signatures",
   assert.equal(second.recentClosers.length, 2);
 });
 
+test("dialogue state carries bounded referents for short follow-up turns", () => {
+  const previous = dialogueStateSchema.parse({
+    salience: {
+      topics: ["onboarding", "bildirim"],
+      entities: ["Elyan", "Firebase"],
+      userIntent: "Üç onboarding mesajı hazırla.",
+      assistantCommitment: "İkinci mesajı daha sıcak hale getireceğim.",
+    },
+  });
+  const next = mergeDialogueState({
+    previous,
+    userMessage: "İkincisini daha kısa yap",
+    assistantText: "İkinci mesajı kısalttım.",
+    workload: "mobile_chat_fast",
+  });
+  assert.equal(next.salience.referenceMode, "resolve_pronoun");
+  assert.ok(next.salience.referentCandidates.includes("Elyan"));
+  assert.ok(next.salience.referentCandidates.some((item) => item.includes("İkinci mesajı")));
+});
+
+test("dialogue state clears stale open loops when the active goal completes", () => {
+  const next = mergeDialogueState({
+    previous: dialogueStateSchema.parse({
+      goal: "Raporu hazırla",
+      stage: "executing",
+      openLoops: ["Kaynakları doğrula", "PDF üret"],
+    }),
+    userMessage: "Tamamla",
+    assistantText: "Rapor tamamlandı.",
+    envelope: {
+      reply: { text: "Rapor tamamlandı.", lang: "tr", tone: "warm" },
+      blocks: [],
+      memory_ops: [],
+      goal_ops: [{ op: "complete" }],
+      follow_ups: [],
+      tool_requests: [],
+      affect: { user_mood_guess: "focused", energy: "mid", register: "technical" },
+    },
+  });
+  assert.equal(next.stage, "complete");
+  assert.deepEqual(next.openLoops, []);
+});
+
 test("canonical dialogue state overrides client rolling summary but preserves hints", () => {
   const metadata = applyCanonicalDialogueStateToMetadata({
+    userMessage: "İkincisini daha kısa yap",
     metadata: {
       compactContext: {
         rollingSummary: { userGoal: "client goal", contextNotes: ["keep"] },
@@ -82,6 +126,14 @@ test("canonical dialogue state overrides client rolling summary but preserves hi
     userIntent: "Üç onboarding mesajı öner.",
     assistantCommitment: "İkinci mesajı daha sıcak yapacağım.",
     emotionalTone: "focused",
+    referenceMode: "resolve_pronoun",
+    referentCandidates: [
+      "Elyan",
+      "onboarding",
+      "mesaj",
+      "İkinci mesajı daha sıcak yapacağım.",
+      "Üç onboarding mesajı öner.",
+    ],
     unresolved: true,
     updatedAt: "2026-07-03T12:00:00.000Z",
   });

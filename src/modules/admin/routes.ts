@@ -1,9 +1,10 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { forbidden } from "../../lib/errors.js";
 import { users, runtimeConnections, tasks, taskEvents } from "../../db/schema.js";
 import { getReadiness } from "../health/service.js";
 import { activeTaskStatuses } from "../tasks/queue.js";
+import { aggregateTaskFailures, deriveTaskFailureSignature } from "../tasks/task-failure-analytics.js";
 
 async function assertAdmin(app: FastifyInstance, userId: string): Promise<void> {
   const rows = await app.db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
@@ -107,6 +108,52 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         code: row.status,
         count: Number(row.count),
       })),
+      timestamp: new Date().toISOString(),
+    };
+  });
+
+  // Başarısız görevlerin toplu raporu: hangi hata kodu + görev tipi en çok
+  // patlıyor. Kaynak-doğruluk `tasks` tablosu (feature-flag'den bağımsız);
+  // ucuz kalması için result blob'u okumaz — imza task.error + payload'dan
+  // türetilir (patlayan araç bu görünümde null kalabilir).
+  app.get("/ops/task-failures", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) {
+      return;
+    }
+    await assertAdmin(app, request.auth!.sub);
+
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    const windowDaysRaw = Number.parseInt(String(query.windowDays ?? "7"), 10);
+    const windowDays = Number.isFinite(windowDaysRaw)
+      ? Math.min(Math.max(windowDaysRaw, 1), 90)
+      : 7;
+    const limitRaw = Number.parseInt(String(query.limit ?? "500"), 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 2000) : 500;
+    const since = new Date(Date.now() - windowDays * 86_400_000);
+
+    const failedRows = await app.db
+      .select({
+        id: tasks.id,
+        error: tasks.error,
+        payload: tasks.payload,
+      })
+      .from(tasks)
+      .where(and(eq(tasks.status, "failed"), gte(tasks.updatedAt, since)))
+      .orderBy(desc(tasks.updatedAt))
+      .limit(limit);
+
+    const signatures = failedRows.map((row) => ({
+      taskId: row.id,
+      signature: deriveTaskFailureSignature({ error: row.error, payload: row.payload }),
+    }));
+    const failuresByCode = aggregateTaskFailures(signatures);
+
+    return {
+      windowDays,
+      sampledTaskCount: failedRows.length,
+      truncated: failedRows.length >= limit,
+      failuresByCode,
       timestamp: new Date().toISOString(),
     };
   });

@@ -53,6 +53,7 @@ export type CommandRequiredRuntime = "server" | "desktop" | "both";
 
 export type CommandRouteDecision = {
   route: CommandRoute;
+  targetDeviceId?: string;
   taskRoute?: TaskRoute;
   mode: CommandMode;
   capabilities: string[];
@@ -789,6 +790,7 @@ function deriveSelectedWorkload(input: {
 
 function buildDecision(input: {
   route: CommandRoute;
+  targetDeviceId?: string;
   taskRoute?: TaskRoute | null;
   mode: CommandMode;
   capabilities: string[];
@@ -815,6 +817,7 @@ function buildDecision(input: {
 
   return {
     route: input.route,
+    targetDeviceId: input.targetDeviceId,
     taskRoute: input.taskRoute ?? undefined,
     mode: input.mode,
     capabilities: input.capabilities,
@@ -1197,6 +1200,7 @@ export async function decideCommandRoute(
       });
       return buildDecision({
         route: "desktop_runtime",
+        targetDeviceId: candidates.selectedDevice.id,
         taskRoute,
         mode: "executable_task",
         capabilities: input.requestedCapabilities ?? [],

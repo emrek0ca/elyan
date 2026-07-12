@@ -41,6 +41,8 @@ test("loadEnv derives iyzico public base url from app base url", () => {
   // Maliyet politikası: default tavan 1K — 2K/4K yalnızca operatör açarsa.
   assert.equal(env.GEMINI_IMAGE_SIZE, "1K");
   assert.equal(env.GEMINI_IMAGE_PRO_ENABLED, false);
+  assert.equal(env.GROQ_VISION_SENSITIVE_DATA_ATTESTED, false);
+  assert.equal(env.GEMINI_VISION_SENSITIVE_DATA_ATTESTED, false);
   assert.equal(env.ELYAN_SHARED_BRAIN_FAST_MODEL, "qwen2.5-coder:3b");
   assert.equal(env.ELYAN_SHARED_BRAIN_BALANCED_MODEL, "qwen2.5:7b-instruct-q5_K_M");
   assert.equal(env.ELYAN_SHARED_BRAIN_PLANNING_MODEL, "qwen2.5:7b-instruct-q5_K_M");

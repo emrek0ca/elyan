@@ -10,6 +10,29 @@ export function buildTaskRuntimeOwnershipUpdate(input: { runtimeConnectionId: st
 
 export const TASK_DISPATCH_LEASE_MS = 45_000;
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function shouldAutoApproveDesktopTask(input: {
+  status: TaskStatus;
+  payload: unknown;
+}) {
+  if (input.status !== "waiting_approval") return false;
+
+  const payload = readRecord(input.payload);
+  const metadata = readRecord(payload?.metadata);
+  const routeDecision = readRecord(metadata?.routeDecision);
+  const taskRoute = readRecord(routeDecision?.taskRoute);
+
+  return metadata?.desktopDispatch === true
+    && metadata.desktopFullAuthorityEnabled === true
+    && (routeDecision?.route === "desktop_runtime"
+      || taskRoute?.operationalRoute === "desktop_runtime");
+}
+
 export function buildTaskDispatchLeaseUpdate(
   input: {
     leaseId: string;

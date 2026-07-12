@@ -88,6 +88,8 @@ export type ClientAttachment =
 
 const MAX_CHUNK_CHARS = 12_000;
 const MAX_THUMBNAIL_BASE64 = 180_000; /* ~135 KB decoded */
+const MAX_THUMBNAIL_EDGE = 1024;
+const ALLOWED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_TABLE_CELLS = 8 * 80; /* 8 sütun × 80 satır */
 
 export function validateClientAttachment(value: unknown): ClientAttachment | null {
@@ -124,14 +126,28 @@ export function validateClientAttachment(value: unknown): ClientAttachment | nul
           ? r.visionImageJpeg
           : null;
     if (!thumbnailData || thumbnailData.length > MAX_THUMBNAIL_BASE64) return null;
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(thumbnailData) || thumbnailData.length % 4 !== 0) return null;
+    const rawMimeType = typeof r.mimeType === "string" ? r.mimeType.toLowerCase() : "image/jpeg";
+    // HEIC/HEIF originals are represented by a client-generated JPEG thumbnail.
+    const mimeType = rawMimeType === "image/heic" || rawMimeType === "image/heif"
+      ? "image/jpeg"
+      : rawMimeType;
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) return null;
+    const width = typeof r.thumbnailWidth === "number" && Number.isFinite(r.thumbnailWidth)
+      ? Math.max(0, Math.floor(r.thumbnailWidth))
+      : 0;
+    const height = typeof r.thumbnailHeight === "number" && Number.isFinite(r.thumbnailHeight)
+      ? Math.max(0, Math.floor(r.thumbnailHeight))
+      : 0;
+    if (width > MAX_THUMBNAIL_EDGE || height > MAX_THUMBNAIL_EDGE) return null;
     return {
       attachmentType: "image",
       imageId: r.imageId,
-      mimeType: typeof r.mimeType === "string" ? r.mimeType : "image/jpeg",
+      mimeType,
       fileName: typeof r.fileName === "string" ? r.fileName.slice(0, 200) : "image",
       base64Thumbnail: thumbnailData,
-      thumbnailWidth: typeof r.thumbnailWidth === "number" ? r.thumbnailWidth : 0,
-      thumbnailHeight: typeof r.thumbnailHeight === "number" ? r.thumbnailHeight : 0,
+      thumbnailWidth: width,
+      thumbnailHeight: height,
       ocrText: typeof r.ocrText === "string" ? r.ocrText.slice(0, 4_000) : "",
       originalSizeBytes: typeof r.originalSizeBytes === "number" ? r.originalSizeBytes : null,
       imageCategory: ["photo", "screenshot", "document", "diagram"].includes(r.imageCategory as string)

@@ -4,8 +4,10 @@ import {
   resolveAttachmentContext,
   resolveAttachmentContextWithCache,
   selectPromptRelevantChunkIndices,
+  promptReferencesSessionVisual,
   type AttachmentContextCandidate,
 } from "./attachment-context.js";
+import { buildSessionVisionEvidenceV3 } from "./vision-evidence-v3.js";
 
 function buildAttachmentMetadata(input: {
   documentId: string;
@@ -588,7 +590,13 @@ test("resolveAttachmentContext keeps short documents untouched (no reranking)", 
   assert.match(context?.promptBlock ?? "", /KVKK metni/);
 });
 
-test("resolveAttachmentContext re-surfaces consented session vision images on follow-up turns", () => {
+test("resolveAttachmentContext recovers session-derived visual evidence without image bytes", () => {
+  const visionBlock = buildSessionVisionEvidenceV3({
+    task: "scene_understanding",
+    summary: "Solda kırmızı bir uyarı simgesi bulunuyor.",
+    sensitivity: "personal",
+    cloudUsed: true,
+  });
   const optedInCandidate: AttachmentContextCandidate = {
     messageId: "message-vision-1",
     createdAt: "2030-01-02T00:00:00.000Z",
@@ -600,6 +608,7 @@ test("resolveAttachmentContext re-surfaces consented session vision images on fo
         text: "Görsel cihazda analiz edildi. Sahne: genel.",
       }),
       cloudVisionOptIn: true,
+      visionBlock,
       clientAttachments: [
         {
           attachmentType: "image",
@@ -621,9 +630,9 @@ test("resolveAttachmentContext re-surfaces consented session vision images on fo
   });
 
   assert.ok(context);
-  assert.equal(context.visionImages?.length, 1);
-  assert.equal(context.visionImages?.[0]?.documentId, "img-vision-1");
-  assert.equal(context.visionImages?.[0]?.base64, "aGVsbG8=");
+  assert.equal((context.visionImages ?? []).length, 0);
+  assert.equal(context.visionBlocks?.[0]?.id, visionBlock.id);
+  assert.match(context.promptBlock, /kırmızı bir uyarı/iu);
 });
 
 test("resolveAttachmentContext never re-surfaces session images without the opt-in marker", () => {
@@ -659,4 +668,10 @@ test("resolveAttachmentContext never re-surfaces session images without the opt-
 
   assert.ok(context);
   assert.equal((context.visionImages ?? []).length, 0);
+});
+
+test("session visual recovery requires an explicit visual follow-up", () => {
+  assert.equal(promptReferencesSessionVisual("Peki soldaki uyarı ne demek?"), true);
+  assert.equal(promptReferencesSessionVisual("What is in the image?"), true);
+  assert.equal(promptReferencesSessionVisual("Yarın toplantıyı kaçta yapalım?"), false);
 });

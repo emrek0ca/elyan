@@ -113,3 +113,33 @@ test("evaluateBrainAnswer pins Turkish creator phrasing that uses 'üretti'", ()
     "Elyan'ı Osman Emre Koca geliştirdi. Bu konuda başka bir isim ya da biyografi uydurmuyorum.",
   );
 });
+
+test("evaluateBrainAnswer classifies robotic, repeated and generic non-answers", () => {
+  const robotic = evaluateBrainAnswer({
+    prompt: "Bana tuhaf bir hayvan ismi söyle",
+    modelAnswer: "Bir AI olarak bunu doğrulayamıyorum.",
+    answerSource: "model",
+    routeDecision: { route: "server_brain", mode: "chat", privacyClass: "public_text" },
+    retrievalUsed: false,
+  });
+  assert.ok(robotic.failureTypes.includes("robotic_verification_language"));
+
+  const paragraph = "Aye-aye, Madagaskar'da yaşayan sıra dışı bir primattır.";
+  const repeated = evaluateBrainAnswer({
+    prompt: "Aye-aye nedir?",
+    modelAnswer: `${paragraph}\n\n${paragraph}`,
+    answerSource: "model",
+    routeDecision: { route: "server_brain", mode: "chat", privacyClass: "public_text" },
+    retrievalUsed: false,
+  });
+  assert.ok(repeated.failureTypes.includes("repeated_answer"));
+
+  const nonAnswer = evaluateBrainAnswer({
+    prompt: "JWT expiration kontrolünü açıkla",
+    modelAnswer: "Nasıl yardımcı olabilirim?",
+    answerSource: "model",
+    routeDecision: { route: "server_brain", mode: "chat", privacyClass: "public_text" },
+    retrievalUsed: false,
+  });
+  assert.ok(nonAnswer.failureTypes.includes("non_answer"));
+});

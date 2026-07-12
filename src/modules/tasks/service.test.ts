@@ -2,12 +2,43 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   appendTaskArtifacts,
+  buildRuntimeTaskDispatchEnvelope,
   buildRouteDecisionLogEntry,
   createTask,
   readServerBrainCompletionMetadata,
   reconcileStaleRuntimeTasks,
   updateTaskFromRuntime,
 } from "./service.js";
+
+test("runtime dispatch envelope preserves the executable desktop work order", () => {
+  const task = {
+    id: "task-runtime-1",
+    payload: {
+      prompt: "Masaüstü cowork görevi",
+      desktopWorkOrder: {
+        schema: "elyan.desktop_work_order.v1",
+        entities: [{ type: "topic", value: "TextEdit uygulamasını aç." }],
+      },
+    },
+    requestedCapabilities: ["open_app"],
+  } as unknown as Parameters<typeof buildRuntimeTaskDispatchEnvelope>[0];
+
+  const envelope = buildRuntimeTaskDispatchEnvelope(task, {
+    leaseId: "lease-runtime-1",
+    expiresAt: "2030-01-01T00:00:45.000Z",
+  });
+
+  assert.equal(envelope.type, "task.dispatch");
+  assert.equal(envelope.leaseId, "lease-runtime-1");
+  assert.equal(envelope.task, task);
+  const dispatchedPayload = envelope.task.payload as {
+    desktopWorkOrder: { entities: Array<{ value: string }> };
+  };
+  assert.equal(
+    dispatchedPayload.desktopWorkOrder.entities[0]?.value,
+    "TextEdit uygulamasını aç.",
+  );
+});
 
 class FakeQuery<T> {
   constructor(private readonly result: T) {}

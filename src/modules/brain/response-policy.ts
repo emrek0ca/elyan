@@ -18,7 +18,7 @@ const URL_PATTERN = /https?:\/\/[^\s<>"')]+/i;
 const IMAGE_GENERATION_PATTERN =
   /(?<!\p{L})(görsel\p{L}*|gorsel\p{L}*|resm\p{L}*|foto\p{L}*|image|picture|illustration|poster|afiş\p{L}*|afis\p{L}*)(?!\p{L}).{0,50}(?<!\p{L})(çiz\p{L}*|ciz\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|generate|create|draw|make)(?!\p{L})|(?<!\p{L})(çiz\p{L}*|ciz\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|generate|create|draw|make)(?!\p{L}).{0,50}(?<!\p{L})(görsel\p{L}*|gorsel\p{L}*|resm\p{L}*|foto\p{L}*|image|picture|illustration|poster|afiş\p{L}*|afis\p{L}*)(?!\p{L})/iu;
 const CASUAL_CHAT_PATTERN =
-  /^(?:selam|merhaba|slm|hey|hi|hello|naber|nasılsın|nasilsin|teşekkürler|tesekkurler|sağ ol|sag ol|sağol|sagol)(?:\s+(?:nasılsın|nasilsin|naber|how are you))?[.!?\s]*$/iu;
+  /^(?:selam|merhaba|slm|hey|hi|hello|naber|nasılsın|nasilsin|teşekkürler|tesekkurler|sağ ol|sag ol|sağol|sagol|lan|la|olm|oğlum|oglum|kanka|dostum|bro)(?:\s+(?:nasılsın|nasilsin|naber|how are you))?[.!?\s]*$/iu;
 const CREATIVE_PATTERN =
   /(?<!\p{L})(garip|tuhaf|değişik|degisik|bilinmeyen|yaratıcı|yaratici|komik|ilginç|ilginc|hikaye|şiir|siir|isim|slogan|fikir|öner|oner)(?!\p{L})/iu;
 const WRITING_PATTERN =
@@ -33,8 +33,12 @@ const VISION_PATTERN =
   /(?<!\p{L})(görseli oku|gorseli oku|resimde|fotoğrafta|fotografta|ekran görüntüsü|ekran goruntusu|vision|ocr)(?!\p{L})/iu;
 const TASK_EXECUTION_PATTERN =
   /(?<!\p{L})(yap|oluştur|olustur|hazırla|hazirla|çalıştır|calistir|araştır|arastir|incele|kontrol et|kaydet|export)(?!\p{L})/iu;
-const WEB_REQUIRED_PATTERN =
-  /https?:\/\/[^\s<>"')]+|(?<!\p{L})(bugün|bugun|şu an|su an|güncel|guncel|latest|recent|haber|news|fiyat|price|kur|dolar|euro|altın|altin|bitcoin|btc|ethereum|eth|hava durumu|maç sonucu|mac sonucu|skor|cve|vulnerability|mevzuat|yasa|kanun|regülasyon|regulasyon|kaynaklı|kaynakli|kaynak göster|source-backed|cite sources|webden|internetten|search the web|look up|browse)(?!\p{L})/iu;
+const EXPLICIT_WEB_RESEARCH_PATTERN =
+  /(?<!\p{L})(kaynaklı|kaynakli|kaynak göster|kaynak goster|source-backed|cite sources|webden|internetten|internette ara|web search|search the web|look up|browse|araştır|arastir)(?!\p{L})/iu;
+const LIVE_DATA_SUBJECT_PATTERN =
+  /(?<!\p{L})(haber|news|fiyat|price|kur|dolar|usd|euro|eur|altın|altin|bitcoin|btc|ethereum|eth|kripto|borsa|hisse|hava durumu|weather|forecast|maç sonucu|mac sonucu|skor|puan durumu|fikstür|fikstur|cve|vulnerability|güvenlik açığı|guvenlik acigi|son sürüm|son surum|latest version|release notes?|changelog)(?!\p{L})/iu;
+const VERIFICATION_REQUIRED_SUBJECT_PATTERN =
+  /(?<!\p{L})(mevzuat|yasa|kanun|yönetmelik|yonetmelik|regülasyon|regulasyon|regulation|resmi gazete)(?!\p{L})/iu;
 const LONG_FORM_PATTERN =
   /(?<!\p{L})(detaylı|detayli|uzun|adım adım|adim adim|kapsamlı|kapsamli|derinlemesine|rapor|makale|essay|long form)(?!\p{L})/iu;
 const SHORT_FORM_PATTERN =
@@ -63,6 +67,8 @@ const CURRENT_STATUS_CLAIM_PATTERN =
   /^(?!.*(?<!\p{L})(doğrula\p{L}*|dogrula\p{L}*|bulamad\p{L}*|ulaşamad\p{L}*|ulasamad\p{L}*|erişemed\p{L}*|erise\p{L}*|alamad\p{L}*|yetersiz|emin değil\p{L}*|emin degil\p{L}*|can't|cannot|couldn't|unable|not enough|unverified)(?!\p{L}))(?=.*(?<!\p{L})(bugün|bugun|şu an|su an|güncel|guncel|canlı|canli|today|current|currently|live|now|latest)(?!\p{L})).+/iu;
 const IMAGE_SUCCESS_WITHOUT_ARTIFACT_PATTERN =
   /(?<!\p{L})(görsel|gorsel|resim|foto|image|picture)(?!\p{L}).{0,80}(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|created|generated|ready)(?!\p{L})|(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|created|generated|ready)(?!\p{L}).{0,80}(?<!\p{L})(görsel|gorsel|resim|foto|image|picture)(?!\p{L})/iu;
+const ARTIFACT_SUCCESS_WITHOUT_OUTPUT_PATTERN =
+  /(?<!\p{L})(pdf|docx|xlsx|pptx|belge|doküman|dokuman|dosya|spreadsheet|sunum|presentation|çıktı|cikti|output)(?!\p{L}).{0,80}(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|tamamlandı|tamamlandi|created|generated|completed|ready)(?!\p{L})|(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|tamamlandı|tamamlandi|created|generated|completed|ready)(?!\p{L}).{0,80}(?<!\p{L})(pdf|docx|xlsx|pptx|belge|doküman|dokuman|dosya|spreadsheet|sunum|presentation|çıktı|cikti|output)(?!\p{L})/iu;
 
 function compactText(value: string): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -73,7 +79,11 @@ export function classifyElyanTurnIntent(prompt: string): ElyanTurnIntent {
   if (!normalized) return "unknown";
   if (URL_PATTERN.test(normalized)) return "url_review";
   if (IMAGE_GENERATION_PATTERN.test(normalized)) return "image_generation";
-  if (WEB_REQUIRED_PATTERN.test(normalized)) return "web_research";
+  if (
+    EXPLICIT_WEB_RESEARCH_PATTERN.test(normalized) ||
+    LIVE_DATA_SUBJECT_PATTERN.test(normalized) ||
+    VERIFICATION_REQUIRED_SUBJECT_PATTERN.test(normalized)
+  ) return "web_research";
   if (VISION_PATTERN.test(normalized)) return "vision_or_attachment";
   if (DOCUMENT_PATTERN.test(normalized)) return "document_help";
   if (MATH_PATTERN.test(normalized)) return "math";
@@ -96,10 +106,13 @@ export function responsePolicyForPrompt(prompt: string): {
   const intent = classifyElyanTurnIntent(normalized);
   const requestedLongForm = LONG_FORM_PATTERN.test(normalized);
   const requestedShortForm = SHORT_FORM_PATTERN.test(normalized);
+  const wordCount = normalized.split(/\s+/).length;
   const simpleSelfContained =
     !requestedLongForm &&
-    ["casual_chat", "creative_answer", "writing"].includes(intent) &&
-    normalized.split(/\s+/).length <= 18;
+    (
+      (["casual_chat", "creative_answer", "writing", "math"].includes(intent) && wordCount <= 18) ||
+      (intent === "unknown" && wordCount <= 10)
+    );
   return {
     intent,
     webRequired: intent === "web_research" || intent === "url_review",
@@ -236,43 +249,61 @@ function stripInternalLinesPreservingCodeFences(value: string): string {
   return lines.join("\n").trim();
 }
 
-function guardMissingImageArtifact(input: {
+function guardMissingArtifact(input: {
   prompt: string;
   text: string;
   imageGenerationRequested?: boolean;
+  artifactRequired?: boolean;
   hasRenderableOutput?: boolean;
 }): string {
   if (
     input.hasRenderableOutput === true ||
-    (input.imageGenerationRequested !== true && classifyElyanTurnIntent(input.prompt) !== "image_generation")
+    (
+      input.artifactRequired !== true &&
+      input.imageGenerationRequested !== true &&
+      classifyElyanTurnIntent(input.prompt) !== "image_generation"
+    )
   ) {
     return input.text;
   }
-  if (!IMAGE_SUCCESS_WITHOUT_ARTIFACT_PATTERN.test(input.text)) {
+  const successPattern =
+    input.imageGenerationRequested === true || classifyElyanTurnIntent(input.prompt) === "image_generation"
+      ? IMAGE_SUCCESS_WITHOUT_ARTIFACT_PATTERN
+      : ARTIFACT_SUCCESS_WITHOUT_OUTPUT_PATTERN;
+  if (!successPattern.test(input.text)) {
     return input.text;
   }
   const looksTurkish =
     /[çğıöşüÇĞİÖŞÜ]/u.test(input.prompt) ||
     /(?<!\p{L})(görsel|gorsel|resim|foto|çiz|ciz|oluştur|olustur)(?!\p{L})/iu.test(input.prompt);
+  if (input.imageGenerationRequested === true || classifyElyanTurnIntent(input.prompt) === "image_generation") {
+    return looksTurkish
+      ? "Görsel şu anda üretilemedi. Lütfen biraz sonra tekrar dene."
+      : "I couldn't generate the image right now. Please try again shortly.";
+  }
   return looksTurkish
-    ? "Görsel şu anda üretilemedi. Lütfen biraz sonra tekrar dene."
-    : "I couldn't generate the image right now. Please try again shortly.";
+    ? "İstenen çıktı şu anda üretilemedi. Hazır olmayan bir dosyayı tamamlanmış gibi göstermeyeceğim."
+    : "I couldn't produce the requested output right now, so I won't present an unfinished file as complete.";
 }
 
 function limitSimpleAnswerLength(value: string, input: { simpleSelfContained: boolean; requestedShortForm: boolean; workload?: SharedBrainWorkload | string | null }): string {
   if (!value || (!input.simpleSelfContained && !input.requestedShortForm)) {
     return value;
   }
-  if (input.workload && !["mobile_chat_fast", "fast_route", "intent"].includes(String(input.workload))) {
+  if (/```/u.test(value)) {
+    return value;
+  }
+  if (
+    input.workload &&
+    !["mobile_chat_fast", "mobile_chat_balanced", "fast_route", "intent"].includes(
+      String(input.workload),
+    )
+  ) {
     return value;
   }
   const sentences = value.match(/[^.!?…]+[.!?…]?/gu) ?? [value];
   const maxSentences = input.requestedShortForm ? 2 : 3;
-  const limited = sentences.slice(0, maxSentences).join("").trim();
-  if (limited.length <= 520) {
-    return limited;
-  }
-  return `${limited.slice(0, 519).trimEnd()}…`;
+  return sentences.slice(0, maxSentences).join("").trim();
 }
 
 function guardUnsupportedCurrentClaims(input: {
@@ -320,6 +351,7 @@ export function sanitizeFinalAssistantResponse(input: {
   workload?: SharedBrainWorkload | string | null;
   allowVerificationLanguage?: boolean;
   imageGenerationRequested?: boolean;
+  artifactRequired?: boolean;
   hasRenderableOutput?: boolean;
   freshData?: {
     freshnessRequired: boolean;
@@ -341,10 +373,11 @@ export function sanitizeFinalAssistantResponse(input: {
     text: cleaned,
     freshData: input.freshData,
   });
-  cleaned = guardMissingImageArtifact({
+  cleaned = guardMissingArtifact({
     prompt: input.prompt,
     text: cleaned,
     imageGenerationRequested: input.imageGenerationRequested,
+    artifactRequired: input.artifactRequired,
     hasRenderableOutput: input.hasRenderableOutput,
   });
   cleaned = limitSimpleAnswerLength(cleaned, {
@@ -352,7 +385,15 @@ export function sanitizeFinalAssistantResponse(input: {
     requestedShortForm: policy.requestedShortForm,
     workload: input.workload,
   });
-  return cleaned.trim();
+  if (cleaned.trim()) {
+    return cleaned.trim();
+  }
+  const looksTurkish =
+    /[çğıöşüÇĞİÖŞÜ]/u.test(input.prompt) ||
+    /(?<!\p{L})(bana|bunu|şunu|sunu|nasıl|nasil|neden|bugün|bugun|görsel|gorsel)(?!\p{L})/iu.test(input.prompt);
+  return looksTurkish
+    ? "Bu kez düzgün bir yanıt oluşturamadım. Mesajını yeniden gönderir misin?"
+    : "I couldn't produce a complete answer this time. Please send the message again.";
 }
 
 export function buildElyanVoiceProfilePromptBlock(input: {

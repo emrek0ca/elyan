@@ -15,6 +15,7 @@ import {
   recordTaskLearningFromCreation,
   recordConversationExchangeLearning,
   recordBlockQualityLearning,
+  recordTaskFailureLearning,
 } from "../../core/understanding/user-understanding-service.js";
 import type { FeedbackType, UnderstandingEnvelope, UserUnderstandingResult } from "../../core/understanding/types.js";
 import {
@@ -28,6 +29,7 @@ import {
   shouldPromoteMarkdownTableToWidget,
 } from "../../core/understanding/structured-output-policy.js";
 import { createAuditLog } from "../audit/service.js";
+import { deriveTaskFailureSignature } from "./task-failure-analytics.js";
 import {
   extractAttachmentMetadataCarrier,
   extractAttachmentCandidatesFromBrainContext,
@@ -35,7 +37,12 @@ import {
 } from "../brain/attachment-context.js";
 import { buildSharedBrainAckText } from "../brain/chat-heuristics.js";
 import { extractClientAttachments } from "../brain/document-types.js";
+import {
+  clearEphemeralVisionCarrier,
+  type EphemeralVisionCarrier,
+} from "../brain/ephemeral-vision.js";
 import { buildDocumentContextBlock, buildAttachmentAckText } from "../brain/document-context.js";
+import { parseVisionEvidence, type VisionEvidenceV3 } from "../brain/vision-evidence-v3.js";
 import { buildAssistantAttachmentAckBlock, buildAssistantCodeBlock, buildAssistantDocumentBlock, buildAssistantTableBlock } from "../chat/message-blocks.js";
 import {
   isHostedImageGenerationRequest,
@@ -104,8 +111,12 @@ import {
   buildTaskDispatchLeaseUpdate,
   buildTaskRuntimeOwnershipUpdate,
   buildTaskRuntimeUpdate,
+  shouldAutoApproveDesktopTask,
 } from "./service-lifecycle.js";
-import { buildDesktopWorkOrder } from "./desktop-work-order.js";
+import {
+  buildDesktopWorkOrder,
+  isDeterministicDesktopFastWorkOrder,
+} from "./desktop-work-order.js";
 import { enqueueTaskDispatch } from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
 import { canUseDesktopConnections } from "../billing/catalog.js";
@@ -430,6 +441,10 @@ export function readServerBrainCompletionMetadata(metadata: Record<string, unkno
   const groundingUsed =
     readInferenceBoolean(metadata, "groundingUsed") ?? (documentSourceCount > 0 || webGroundingUsed);
   const freshData = normalizeFreshDataEnvelope(metadata.freshData);
+  const parsedVisionEvidence = parseVisionEvidence(metadata.visionBlock);
+  const visionBlock = parsedVisionEvidence?.version === 3
+    ? parsedVisionEvidence as VisionEvidenceV3
+    : null;
 
   return {
     firstDeltaMs: readInferenceNumber(metadata, "firstDeltaMs"),
@@ -499,6 +514,7 @@ export function readServerBrainCompletionMetadata(metadata: Record<string, unkno
         ? "buffer_until_validated"
         : readInferenceString(metadata, "freshDataStreamPolicy"),
     assistantBlocks: Array.isArray(metadata.blocks) ? metadata.blocks : [],
+    visionBlock,
   };
 }
 
@@ -2019,12 +2035,10 @@ async function dispatchRuntimeTaskLease(
     } as const;
   }
 
-  const dispatched = app.services.realtimeHub.sendToRuntime(input.task.targetDeviceId, {
-    type: "task.dispatch",
-    task: leaseResult.task,
-    leaseId: lease.leaseId,
-    leaseExpiresAt: lease.expiresAt,
-  });
+  const dispatched = app.services.realtimeHub.sendToRuntime(
+    input.task.targetDeviceId,
+    buildRuntimeTaskDispatchEnvelope(leaseResult.task, lease),
+  );
 
   return {
     dispatched,
@@ -2032,6 +2046,25 @@ async function dispatchRuntimeTaskLease(
     lease,
     reused: leaseResult.reused,
   } as const;
+}
+
+export function buildRuntimeTaskDispatchEnvelope(
+  task: typeof tasks.$inferSelect,
+  lease: { leaseId: string; expiresAt: string | null } | null = null,
+) {
+  return {
+    type: "task.dispatch" as const,
+    // Runtime execution needs the private task payload/work order.  The
+    // public feed shape intentionally omits it and must never be reused for
+    // this authenticated desktop channel.
+    task,
+    ...(lease
+      ? {
+          leaseId: lease.leaseId,
+          leaseExpiresAt: lease.expiresAt,
+        }
+      : {}),
+  };
 }
 
 export async function issueTaskDispatchLease(
@@ -2589,6 +2622,7 @@ async function completeServerBrainTask(
     healthContextUsed?: boolean;
     contextFreshness?: unknown;
     assistantBlocks?: unknown[];
+    visionBlock?: VisionEvidenceV3 | null;
   },
 ) {
   const task = await getTaskById(app, input.taskId);
@@ -2839,6 +2873,7 @@ async function completeServerBrainTask(
     healthContextUsed: input.healthContextUsed ?? false,
     contextFreshness: input.contextFreshness ?? null,
     assistantBlocks: resolvedAssistantBlocks,
+    ...(input.visionBlock ? { visionBlock: input.visionBlock } : {}),
     blockQuality,
     ...(artifactPipeline.kind === "rendered"
       ? {
@@ -3342,6 +3377,7 @@ function summarizeUnderstandingForSafeTelemetry(
 function resolveSharedBrainWorkloadForUnderstanding(input: {
   routeDecision: CommandRouteDecision | null | undefined;
   attachmentContextUsed?: boolean;
+  hasVisionImage?: boolean;
   envelope?: UnderstandingEnvelope | null;
 }) {
   const envelopeWorkload = preferredWorkloadFromUnderstandingEnvelope(input.envelope);
@@ -3358,6 +3394,7 @@ function resolveSharedBrainWorkloadForUnderstanding(input: {
     route: input.routeDecision?.route,
     selectedWorkload,
     attachmentContextUsed: input.attachmentContextUsed,
+    hasVisionImage: input.hasVisionImage,
   });
 }
 
@@ -3372,6 +3409,7 @@ async function processSharedBrainChatTask(
     understanding: Awaited<ReturnType<typeof buildTaskUnderstanding>>;
     planCode?: string | null;
     brainProfile?: unknown;
+    ephemeralVision?: EphemeralVisionCarrier;
   },
 ) {
   try {
@@ -3463,6 +3501,9 @@ async function processSharedBrainChatTask(
     const selectedWorkload = resolveSharedBrainWorkloadForUnderstanding({
       routeDecision: effectiveRouteDecision,
       attachmentContextUsed: attachmentContext?.used === true || (clientDocCtx?.hasContent === true),
+      hasVisionImage:
+        Boolean(input.ephemeralVision?.images.length) ||
+        Boolean(attachmentContext?.visionBlocks?.length),
       envelope: input.understanding.envelope,
     });
     /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
@@ -3506,8 +3547,6 @@ async function processSharedBrainChatTask(
             }),
             streaming: {
               firstDeltaMs: null,
-              selectedProfile: selectedWorkload,
-              answerSource: "image_generation",
               reset: true,
             },
           },
@@ -3657,10 +3696,6 @@ async function processSharedBrainChatTask(
             },
             streaming: {
               firstDeltaMs: null,
-              selectedProfile: selectedWorkload,
-              answerSource: "image_generation",
-              fallbackUsed: false,
-              cached: false,
             },
           },
         });
@@ -3725,7 +3760,6 @@ async function processSharedBrainChatTask(
             }),
             streaming: {
               firstDeltaMs: 0,
-              answerSource: "backend_ack",
             },
           },
         });
@@ -3809,6 +3843,7 @@ async function processSharedBrainChatTask(
       planCode: input.planCode,
       understandingContext: input.understanding.context,
       brainProfile: input.brainProfile,
+      ephemeralVision: input.ephemeralVision,
           onDelta: chatStreaming
         ? async (delta) => {
             // Provider reasoning is internal-only; only content can stream to chat.
@@ -3876,8 +3911,6 @@ async function processSharedBrainChatTask(
                 }),
                 streaming: {
                   firstDeltaMs: delta.firstDeltaMs,
-                  selectedProfile: selectedWorkload,
-                  answerSource: "model",
                 },
               },
             });
@@ -4053,10 +4086,6 @@ async function processSharedBrainChatTask(
           },
           streaming: {
             firstDeltaMs: inference.metadata.firstDeltaMs,
-            selectedProfile: selectedWorkload,
-            answerSource: "model",
-            fallbackUsed: Boolean(inference.metadata.fallbackUsed),
-            cached: Boolean(inference.metadata.cached),
           },
         },
       });
@@ -4160,6 +4189,8 @@ async function processSharedBrainChatTask(
       },
       "shared brain chat dispatch failed asynchronously",
     );
+  } finally {
+    clearEphemeralVisionCarrier(input.ephemeralVision);
   }
 }
 
@@ -4176,6 +4207,7 @@ export async function createTask(
     userAgent?: string;
     requestId: string;
     idempotencyKey?: string;
+    ephemeralVision?: EphemeralVisionCarrier;
     onTaskReady?: TaskReadyCallback;
   },
 ) {
@@ -4271,6 +4303,13 @@ export async function createTask(
     };
   }
 
+  const isDesktopRoute =
+    routeDecision.route === "desktop_runtime" ||
+    routeDecision.taskRoute?.operationalRoute === "desktop_runtime";
+  const useDirectDesktopFastPath = isDeterministicDesktopFastWorkOrder(
+    routeDecision,
+    prompt,
+  );
   const understandingInput = {
     userId: input.userId,
     accountId: input.userId,
@@ -4285,12 +4324,11 @@ export async function createTask(
       requestId: input.requestId,
     },
   };
-  const understanding = await buildTaskUnderstanding(app, understandingInput).catch(() =>
-    emptyUnderstanding(understandingInput),
-  );
-  const isDesktopRoute =
-    routeDecision.route === "desktop_runtime" ||
-    routeDecision.taskRoute?.operationalRoute === "desktop_runtime";
+  const understanding = useDirectDesktopFastPath
+    ? emptyUnderstanding(understandingInput)
+    : await buildTaskUnderstanding(app, understandingInput).catch(() =>
+        emptyUnderstanding(understandingInput),
+      );
   const desktopWorkOrder = isDesktopRoute
     ? buildDesktopWorkOrder({
         message: prompt,
@@ -4419,7 +4457,11 @@ export async function createTask(
         task: insertedTask,
         reused: false,
       } as const;
+    }).catch((error) => {
+      clearEphemeralVisionCarrier(input.ephemeralVision);
+      throw error;
     });
+    clearEphemeralVisionCarrier(input.ephemeralVision);
 
     if (taskResult.reused) {
       await notifyTaskReady(input.onTaskReady, {
@@ -4491,7 +4533,6 @@ export async function createTask(
       requestedTargetDeviceId: routeSelectedTargetDeviceId,
       origin: routeOrigin,
     });
-
     return {
       task: shapeTaskFeedItem(blockedTask, { selectedDesktopOnline }),
       dispatched: false,
@@ -4610,9 +4651,13 @@ export async function createTask(
       reused: false,
       payloadBlobHash: payloadBlob?.contentHash ?? null,
     } as const;
+  }).catch((error) => {
+    clearEphemeralVisionCarrier(input.ephemeralVision);
+    throw error;
   });
 
   if (taskResult.reused) {
+    clearEphemeralVisionCarrier(input.ephemeralVision);
     await notifyTaskReady(input.onTaskReady, {
       rawTask: taskResult.task,
       reused: true,
@@ -4635,14 +4680,20 @@ export async function createTask(
   }
 
   const task = taskResult.task;
-  await resequenceDeviceQueue(app, targetDeviceId);
-  const currentTask = (await getTaskById(app, task.id)) ?? task;
-  await notifyTaskReady(input.onTaskReady, {
-    rawTask: currentTask,
-    reused: false,
-    routeDecision,
-    isSharedBrain,
-  });
+  let currentTask: typeof task;
+  try {
+    await resequenceDeviceQueue(app, targetDeviceId);
+    currentTask = (await getTaskById(app, task.id)) ?? task;
+    await notifyTaskReady(input.onTaskReady, {
+      rawTask: currentTask,
+      reused: false,
+      routeDecision,
+      isSharedBrain,
+    });
+  } catch (error) {
+    clearEphemeralVisionCarrier(input.ephemeralVision);
+    throw error;
+  }
   if (isSharedBrain && useFastSharedBrainFlow) {
     void processSharedBrainChatTask(app, {
       currentTask,
@@ -4653,6 +4704,7 @@ export async function createTask(
       understanding,
       planCode: usageAccess.planCode,
       brainProfile: usageAccess.brainProfile,
+      ephemeralVision: input.ephemeralVision,
     });
     await logRouteDecision(app, {
       taskId: currentTask.id,
@@ -4803,6 +4855,7 @@ export async function createTask(
         planCode: usageAccess.planCode,
         understandingContext: understanding.context,
         brainProfile: usageAccess.brainProfile,
+        ephemeralVision: input.ephemeralVision,
       });
       const agentRunState = readAgentRunState(inference.metadata);
       if (agentRunState && agentRunState !== "completed") {
@@ -4924,8 +4977,13 @@ export async function createTask(
         selectedDesktopOnline,
         renderRecipe: null,
       };
+    } finally {
+      clearEphemeralVisionCarrier(input.ephemeralVision);
     }
   }
+
+  // Desktop dispatch never receives the cloud-only ephemeral carrier.
+  clearEphemeralVisionCarrier(input.ephemeralVision);
 
   const dispatchOwner = `backend:ws:${input.requestId}`;
   const dispatchLockAcquired = await app.services.reliability.acquireTaskDispatchLock(currentTask.id, dispatchOwner);
@@ -4938,18 +4996,7 @@ export async function createTask(
     });
     const lease = leaseResult?.lease ?? null;
     const taskForDispatch = leaseResult?.task ?? currentTask;
-    const payload =
-      lease
-        ? {
-            type: "task.dispatch",
-            task: shapeTaskFeedItem(taskForDispatch),
-            leaseId: lease.leaseId,
-            leaseExpiresAt: lease.expiresAt,
-          }
-        : {
-            type: "task.dispatch",
-            task: shapeTaskFeedItem(taskForDispatch),
-          };
+    const payload = buildRuntimeTaskDispatchEnvelope(taskForDispatch, lease);
     dispatched = app.services.realtimeHub.sendToRuntime(currentTask.targetDeviceId, payload);
     if (!dispatched) {
       const rows = await app.db
@@ -5012,6 +5059,7 @@ export async function createTask(
     requestedTargetDeviceId: routeSelectedTargetDeviceId,
     origin: routeOrigin,
   });
+  clearEphemeralVisionCarrier(input.ephemeralVision);
 
   return {
     task: shapeTaskFeedItem(currentTask, { selectedDesktopOnline }),
@@ -5455,11 +5503,33 @@ export async function updateTaskFromRuntime(
   };
 
   const rows = await app.db.update(tasks).set(updates).where(eq(tasks.id, ownedTask.id)).returning();
-  const updatedTask = rows[0];
+  let updatedTask = rows[0];
   const storedArtifacts = await persistArtifacts(app, ownedTask.id, ownedTask.userId, input.artifacts);
   const shapedArtifacts = await Promise.all(
     storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact, ownedTask.userId)),
   );
+
+  // Full-authority is an explicit, user-controlled mobile preference carried
+  // in the authenticated task envelope. When the desktop pauses for a local
+  // capability approval, resolve that pause server-side so the runtime can
+  // resume even if the mobile app is backgrounded or misses the realtime edge.
+  const existingApprovalRequest = readRecord(ownedTask.approvalRequest);
+  const existingApprovalResolution = readRecord(existingApprovalRequest?.resolution);
+  const fullAuthorityDesktopTask = shouldAutoApproveDesktopTask({
+    status: input.status,
+    payload: ownedTask.payload,
+  }) && existingApprovalResolution?.approved !== true;
+
+  if (fullAuthorityDesktopTask) {
+    const approvalRows = await app.db
+      .update(tasks)
+      .set(buildTaskApprovalResumeUpdate(updatedTask, {
+        notes: "Tam yetki modu: mobil kullanıcı tercihiyle otomatik onaylandı.",
+      }))
+      .where(eq(tasks.id, updatedTask.id))
+      .returning();
+    updatedTask = approvalRows[0] ?? updatedTask;
+  }
   await resequenceDeviceQueue(app, updatedTask.targetDeviceId);
 
   await insertTaskEvent(app, {
@@ -5476,6 +5546,36 @@ export async function updateTaskFromRuntime(
       artifacts: shapedArtifacts,
     },
   });
+
+  if (fullAuthorityDesktopTask) {
+    await insertTaskEvent(app, {
+      taskId: ownedTask.id,
+      userId: ownedTask.userId,
+      status: "waiting_approval",
+      message: "Tam yetki modu etkin; görev otomatik onaylandı.",
+      payload: {
+        approved: true,
+        source: "desktop_full_authority",
+      },
+    });
+    await publishTaskEvent(app, updatedTask, "task.approval_granted", {
+      task: shapeTaskFeedItem(updatedTask),
+      taskId: updatedTask.id,
+      approved: true,
+      source: "desktop_full_authority",
+    });
+    app.services.realtimeHub.sendToRuntime(updatedTask.targetDeviceId, {
+      type: "task.approval",
+      taskId: updatedTask.id,
+      approved: true,
+      notes: "Tam yetki modu: mobil kullanıcı tercihiyle otomatik onaylandı.",
+    });
+    await resumeAgentRunAfterApproval({
+      app,
+      userId: updatedTask.userId,
+      taskId: updatedTask.id,
+    }).catch(() => false);
+  }
 
   if (isTerminalTaskStatus(input.status)) {
     await app.services.reliability.clearTaskDispatchLock(ownedTask.id);
@@ -5501,6 +5601,20 @@ export async function updateTaskFromRuntime(
         task: ownedTask,
         result: input.result,
       });
+    } else if (input.status === "failed") {
+      const failureSignature = deriveTaskFailureSignature({
+        error: input.error,
+        result: runtimeResult,
+        payload,
+      });
+      void recordTaskFailureLearning(app, {
+        userId: ownedTask.userId,
+        accountId: ownedTask.userId,
+        taskId: ownedTask.id,
+        errorCode: failureSignature.errorCode,
+        failedTool: failureSignature.failedTool,
+        capabilities: failureSignature.capabilities,
+      }).catch(() => undefined);
     }
   }
 

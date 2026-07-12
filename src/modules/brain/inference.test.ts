@@ -5315,6 +5315,23 @@ test("isCloudVisionRequested requires flag, opt-in metadata and an image attachm
     isCloudVisionRequested({ ELYAN_CLOUD_VISION_ENABLED: true }, undefined),
     false,
   );
+  // Ephemeral variants count as an image only when the same explicit opt-in exists.
+  assert.equal(
+    isCloudVisionRequested(
+      { ELYAN_CLOUD_VISION_ENABLED: true },
+      { cloudVisionOptIn: true },
+      true,
+    ),
+    true,
+  );
+  assert.equal(
+    isCloudVisionRequested(
+      { ELYAN_CLOUD_VISION_ENABLED: true },
+      {},
+      true,
+    ),
+    false,
+  );
 });
 
 test("promptReferencesRecentImage matches image follow-ups and skips topic changes", () => {

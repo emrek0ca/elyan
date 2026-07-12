@@ -772,6 +772,52 @@ export async function recordTaskLearningFromCompletion(
   });
 }
 
+/**
+ * Başarısız görevden yapısal öğrenme sinyali kaydeder — sonucu (hata kodu,
+ * patlayan araç, görev tipi/yetenekler) öğrenme deposuna bağlar. İmza türetimi
+ * çağıran (tasks modülü) tarafında yapılır; burada döngüsel bağımlılık olmasın
+ * diye yalnız ilkel değerler alınır.
+ */
+export async function recordTaskFailureLearning(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    accountId?: string;
+    taskId: string;
+    errorCode: string;
+    failedTool?: string | null;
+    capabilities?: string[];
+    requestId?: string;
+  },
+): Promise<number> {
+  const errorCode = String(input.errorCode ?? "").trim() || "unknown";
+  const capabilities = Array.isArray(input.capabilities)
+    ? input.capabilities.map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean).slice(0, 8)
+    : [];
+  const failedTool = String(input.failedTool ?? "").trim().toLowerCase() || null;
+  const signal: LearningSignal = {
+    type: "workflow",
+    key: "task_failure",
+    value: errorCode,
+    confidence: 0.7,
+    scope: "account",
+    source: "runtime",
+    ttlDays: 60,
+    metadata: {
+      errorCode,
+      failedTool,
+      capabilities,
+    },
+  };
+  return persistLearningSignals(app, {
+    userId: input.userId,
+    accountId: input.accountId,
+    taskId: input.taskId,
+    signals: [signal],
+    requestId: input.requestId,
+  });
+}
+
 export async function recordBlockQualityLearning(
   app: FastifyInstance,
   input: {

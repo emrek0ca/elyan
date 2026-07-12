@@ -122,6 +122,7 @@ const envSchema = z.object({
   GROQ_FAST_MODEL: z.string().default("openai/gpt-oss-20b"),
   GROQ_FALLBACK_MODEL: z.string().default("qwen/qwen3.6-27b"),
   GROQ_VISION_MODEL: z.string().default("meta-llama/llama-4-scout-17b-16e-instruct"),
+  GROQ_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_BASE_URL: z.string().url().default("https://generativelanguage.googleapis.com/v1beta/openai"),
   GEMINI_INTERACTIONS_BASE_URL: z.string().url().default("https://generativelanguage.googleapis.com/v1beta"),
@@ -129,6 +130,7 @@ const envSchema = z.object({
   GEMINI_FAST_MODEL: z.string().default("gemini-3.1-flash-lite"),
   GEMINI_REASONING_MODEL: z.string().default("gemini-3.5-flash"),
   GEMINI_VISION_MODEL: z.string().default("gemini-3.5-flash"),
+  GEMINI_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
   GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-image"),
   GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image-preview"),
   GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("1K"),
@@ -259,6 +261,7 @@ export type AppEnv = ParsedEnv & {
   GROQ_FAST_MODEL: string;
   GROQ_FALLBACK_MODEL: string;
   GROQ_VISION_MODEL: string;
+  GROQ_VISION_SENSITIVE_DATA_ATTESTED?: boolean;
   GEMINI_API_KEY: string;
   GEMINI_BASE_URL: string;
   GEMINI_INTERACTIONS_BASE_URL: string;
@@ -266,6 +269,7 @@ export type AppEnv = ParsedEnv & {
   GEMINI_FAST_MODEL: string;
   GEMINI_REASONING_MODEL: string;
   GEMINI_VISION_MODEL: string;
+  GEMINI_VISION_SENSITIVE_DATA_ATTESTED?: boolean;
   GEMINI_IMAGE_MODEL: string;
   GEMINI_IMAGE_PRO_MODEL: string;
   GEMINI_IMAGE_SIZE: "1K" | "2K" | "4K";
@@ -455,6 +459,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GROQ_FAST_MODEL: parsed.GROQ_FAST_MODEL,
     GROQ_FALLBACK_MODEL: parsed.GROQ_FALLBACK_MODEL,
     GROQ_VISION_MODEL: parsed.GROQ_VISION_MODEL,
+    GROQ_VISION_SENSITIVE_DATA_ATTESTED: parsed.GROQ_VISION_SENSITIVE_DATA_ATTESTED,
     GEMINI_API_KEY: parsed.GEMINI_API_KEY ?? "",
     GEMINI_BASE_URL:
       parsed.GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -464,6 +469,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GEMINI_FAST_MODEL: parsed.GEMINI_FAST_MODEL,
     GEMINI_REASONING_MODEL: parsed.GEMINI_REASONING_MODEL,
     GEMINI_VISION_MODEL: parsed.GEMINI_VISION_MODEL,
+    GEMINI_VISION_SENSITIVE_DATA_ATTESTED: parsed.GEMINI_VISION_SENSITIVE_DATA_ATTESTED,
     GEMINI_IMAGE_MODEL: parsed.GEMINI_IMAGE_MODEL,
     GEMINI_IMAGE_PRO_MODEL: parsed.GEMINI_IMAGE_PRO_MODEL,
     GEMINI_IMAGE_SIZE: parsed.GEMINI_IMAGE_SIZE,

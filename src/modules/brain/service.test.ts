@@ -1088,7 +1088,7 @@ test("queueContinuousBrainTrainingJob queues only with approved correction linea
             adapterKind: "local",
             status: "ready",
             storageUri: "file:///models/user-model-1",
-            checksum: "sha256:user-model-1",
+            checksum: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             updatedAt: new Date("2030-01-02T00:00:00.000Z"),
             metadata: {},
           },
@@ -1255,6 +1255,7 @@ test("queueContinuousBrainTrainingJob queues only with approved correction linea
       ELYAN_USER_UNDERSTANDING_ENABLED: true,
       ELYAN_PERSONALIZATION_ENABLED: true,
       ELYAN_LEARNING_EXTRACTION_ENABLED: true,
+      ELYAN_WEIGHT_TRAINING_ENABLED: true,
     },
   };
 

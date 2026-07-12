@@ -110,3 +110,55 @@ test("createChatMessageBodySchema rejects legacy vision image base64 payloads", 
     assert.match(result.error.message, /raw binary upload payload is not accepted/);
   }
 });
+
+test("createChatMessageBodySchema accepts bounded request-ephemeral vision outside metadata", () => {
+  const result = createChatMessageBodySchema.safeParse({
+    chatSessionId: sessionId,
+    content: "Bu ekrandaki küçük hata kodunu oku.",
+    metadata: { cloudVisionOptIn: true },
+    ephemeralVision: {
+      version: 1,
+      retention: "request_ephemeral",
+      privacy: { metadataStripped: true, userAuthorizedCloud: true, localSensitivity: "personal" },
+      images: [{
+        imageId: "screen-1",
+        kind: "text_crop",
+        mimeType: "image/jpeg",
+        base64Data: Buffer.from("small-image").toString("base64"),
+        width: 1200,
+        height: 600,
+        box: { x: 0, y: 0, w: 1, h: 0.5 },
+      }],
+    },
+  });
+  assert.equal(result.success, true);
+  if (result.success) {
+    assert.equal(result.data.ephemeralVision?.retention, "request_ephemeral");
+  }
+});
+
+test("createChatMessageBodySchema migrates authorized legacy mobile vision out of metadata", () => {
+  const result = createChatMessageBodySchema.safeParse({
+    chatSessionId: sessionId,
+    content: "Bu gorselde ne var?",
+    metadata: {
+      cloudVisionOptIn: true,
+      attachments: [{
+        documentId: "img-legacy",
+        clientAttachments: [{
+          attachmentType: "image",
+          imageId: "image-1",
+          base64Thumbnail: Buffer.from("small-image").toString("base64"),
+          mimeType: "image/jpeg",
+          thumbnailWidth: 512,
+          thumbnailHeight: 384,
+        }],
+      }],
+    },
+  });
+  assert.equal(result.success, true);
+  if (result.success) {
+    assert.equal(result.data.ephemeralVision?.images.length, 1);
+    assert.equal(JSON.stringify(result.data.metadata).includes("base64Thumbnail"), false);
+  }
+});

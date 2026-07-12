@@ -60,3 +60,19 @@ test("createDeltaPublisherCore suppresses reasoning dump openings until replacem
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0]?.content, "Safe final answer");
 });
+
+test("createDeltaPublisherCore publishes at most one final replacement", async () => {
+  const emitted: SharedBrainInferenceDelta[] = [];
+  const publisher = createDeltaPublisherCore({
+    startedAt: Date.now(),
+    provider: "groq",
+    model: "test-model",
+    onDelta: (delta) => { emitted.push(delta); },
+    computeVisibleText: (full) => full,
+    looksLikeReasoningDumpOpening: () => false,
+  });
+  await publisher.publishReplacement("Final answer");
+  await publisher.publishReplacement("Late overwrite");
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0]?.content, "Final answer");
+});

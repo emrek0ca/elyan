@@ -162,6 +162,9 @@ test("shouldUseWebGrounding avoids web for self-contained tasks unless explicitl
     "Bu Python kodundaki hatayı açıkla",
     "İki sayının toplamı 10, farkı 4 ise bu sayılar kaçtır?",
     "Aşağıdaki metni Türkçeye çevir",
+    "Bugün biraz bunaldım",
+    "Bugün için kısa bir motivasyon cümlesi yaz",
+    "Güncel misin?",
   ];
   for (const prompt of prompts) {
     assert.equal(
@@ -772,6 +775,77 @@ test("weather grounding uses structured REST data before web search", async () =
   assert.match(result.results[0]?.snippet ?? "", /hissedilen 33\.8 °C/iu);
   assert.ok(requestedUrls.every((url) => url.includes("open-meteo.com")));
   assert.doesNotMatch(buildWebGroundingPromptBlock(result) ?? "", /EVIDENCE GUARD/iu);
+});
+
+test("fiat grounding uses structured JSON REST data before web search", async () => {
+  const requestedUrls: string[] = [];
+  const app = {
+    config: {
+      ELYAN_WEB_GROUNDING_ENABLED: true,
+      ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
+      ELYAN_WEB_GROUNDING_MAX_RESULTS: 3,
+      ELYAN_WEB_GROUNDING_TIMEOUT_MS: 2_000,
+    },
+  } as never;
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      requestedUrls.push(url);
+      const parsed = new URL(url);
+      if (parsed.hostname !== "api.frankfurter.app") {
+        throw new Error(`Unexpected web-search request: ${url}`);
+      }
+      return Response.json({
+        amount: 1,
+        base: "USD",
+        date: new Date().toISOString().slice(0, 10),
+        rates: { TRY: 42.75 },
+      });
+    },
+    () => searchPublicWebGrounding(app, {
+      prompt: "Bugünkü dolar kaç TL?",
+      workload: "mobile_chat_fast",
+      bypassCache: true,
+    }),
+  );
+  assert.equal(result.source, "frankfurter");
+  assert.equal(result.used, true);
+  assert.match(result.results[0]?.snippet ?? "", /1 USD = 42\.75 TRY/u);
+  assert.ok(requestedUrls.every((url) => url.includes("api.frankfurter.app")));
+});
+
+test("crypto grounding uses structured JSON REST data before web search", async () => {
+  const app = {
+    config: {
+      ELYAN_WEB_GROUNDING_ENABLED: true,
+      ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
+      ELYAN_WEB_GROUNDING_MAX_RESULTS: 3,
+      ELYAN_WEB_GROUNDING_TIMEOUT_MS: 2_000,
+    },
+  } as never;
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (!url.includes("api.coingecko.com/api/v3/simple/price")) {
+        throw new Error(`Unexpected web-search request: ${url}`);
+      }
+      return Response.json({
+        bitcoin: {
+          try: 4_100_000,
+          usd: 95_000,
+          last_updated_at: Math.floor(Date.now() / 1_000),
+        },
+      });
+    },
+    () => searchPublicWebGrounding(app, {
+      prompt: "Şu an bitcoin kaç TL?",
+      workload: "mobile_chat_fast",
+      bypassCache: true,
+    }),
+  );
+  assert.equal(result.source, "coingecko");
+  assert.equal(result.used, true);
+  assert.match(result.results[0]?.snippet ?? "", /BTC\/TRY 4100000/u);
 });
 
 test("extractDateFromText finds ISO, dotted and named Turkish dates", () => {

@@ -28,6 +28,8 @@ const CACHE_TTL_MS = 5 * 60_000;
 const MAX_GLOBAL_SOURCE_ROWS = 160;
 const MAX_USER_SOURCE_ROWS = 24;
 const MAX_USER_CACHE_ENTRIES = 500;
+const MAX_GLOBAL_LESSON_AGE_MS = 30 * 24 * 60 * 60_000;
+const MAX_USER_LESSON_AGE_MS = 180 * 24 * 60 * 60_000;
 const globalBehaviorCache = new WeakMap<FastifyInstance, GlobalBehaviorCache>();
 const userBehaviorCache = new WeakMap<FastifyInstance, Map<string, UserBehaviorCache>>();
 
@@ -40,6 +42,22 @@ const FAILURE_DIRECTIVES: Array<{ pattern: RegExp; directive: string }> = [
   {
     pattern: /style_mismatch_mobile|stiff_or_performative_tone/iu,
     directive: "Use a warm, mature, natural voice; avoid ceremonial or robotic phrasing.",
+  },
+  {
+    pattern: /robotic_verification_language/iu,
+    directive: "Do not add verification disclaimers to self-contained conversation or creative work.",
+  },
+  {
+    pattern: /repeated_answer/iu,
+    directive: "Give one coherent final answer without repeating its opening, conclusion, or paragraphs.",
+  },
+  {
+    pattern: /internal_state_leak/iu,
+    directive: "Keep internal contracts, routing state, reasoning, JSON, and tool traces out of visible prose.",
+  },
+  {
+    pattern: /non_answer/iu,
+    directive: "Answer the actual request directly instead of resetting the conversation or offering generic help.",
   },
   {
     pattern: /overcompressed_answer|reasoning_incomplete|weak_reasoning_depth|shallow_tradeoff_analysis/iu,
@@ -173,7 +191,10 @@ async function queryApprovedBehaviorLessons(
 function selectSharedDirectives(lessons: BehaviorLesson[], intent: ElyanTurnIntent): string[] {
   const evidence = new Map<string, { count: number; userIds: Set<string> }>();
   for (const lesson of lessons) {
-    if (lesson.intent !== intent) continue;
+    if (
+      lesson.intent !== intent ||
+      Date.now() - lesson.approvedAtMs > MAX_GLOBAL_LESSON_AGE_MS
+    ) continue;
     for (const candidate of FAILURE_DIRECTIVES) {
       if (candidate.pattern.test(lesson.failureType)) {
         const current = evidence.get(candidate.directive) ?? { count: 0, userIds: new Set() };
@@ -217,14 +238,17 @@ async function loadUserLessons(app: FastifyInstance, userId: string): Promise<Be
     userId,
     limit: MAX_USER_SOURCE_ROWS,
   });
+  const freshLessons = lessons.filter(
+    (lesson) => Date.now() - lesson.approvedAtMs <= MAX_USER_LESSON_AGE_MS,
+  );
   cache.delete(userId);
-  cache.set(userId, { expiresAt: Date.now() + CACHE_TTL_MS, lessons });
+  cache.set(userId, { expiresAt: Date.now() + CACHE_TTL_MS, lessons: freshLessons });
   while (cache.size > MAX_USER_CACHE_ENTRIES) {
     const oldestKey = cache.keys().next().value as string | undefined;
     if (!oldestKey) break;
     cache.delete(oldestKey);
   }
-  return lessons;
+  return freshLessons;
 }
 
 function selectUserExample(

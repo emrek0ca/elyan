@@ -7,6 +7,8 @@ import {
   type SharedBrainRuntimeSnapshot,
 } from "./runtime.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import type { VisionMediaProfile } from "./vision-media-policy.js";
+import type { VisionMediaDecision } from "./vision-media-policy.js";
 
 export type SharedBrainProviderCandidate = {
   provider: SharedBrainProvider;
@@ -61,9 +63,33 @@ function isVisionWorkload(workload: SharedBrainWorkload): boolean {
   return workload === "vision_reasoning" || workload === "image_analyze";
 }
 
+export function isHostedVisionProviderPrivacyEligible(
+  provider: "groq" | "gemini",
+  sensitivity: VisionMediaDecision["sensitivity"] | undefined,
+  attestations: { groq?: boolean; gemini?: boolean },
+): boolean {
+  if (sensitivity === "restricted") return false;
+  if (sensitivity !== "sensitive") return true;
+  return provider === "groq" ? attestations.groq === true : attestations.gemini === true;
+}
+
+function isPrivateRuntimeBaseUrl(baseUrl: string): boolean {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") return true;
+    if (/^127\./.test(hostname) || /^10\./.test(hostname) || /^192\.168\./.test(hostname)) return true;
+    const match = hostname.match(/^172\.(\d{1,3})\./);
+    return Boolean(match && Number(match[1]) >= 16 && Number(match[1]) <= 31);
+  } catch {
+    return false;
+  }
+}
+
 function buildHostedProviderCandidates(
   app: FastifyInstance,
   workload: SharedBrainWorkload,
+  visionProfile?: VisionMediaProfile,
+  visionSensitivity?: VisionMediaDecision["sensitivity"],
 ): SharedBrainProviderCandidate[] {
   const hostedCandidates: SharedBrainProviderCandidate[] = [];
 
@@ -109,9 +135,26 @@ function buildHostedProviderCandidates(
     return hostedCandidates;
   }
 
+  const privacyEligibleCandidates = visionSensitivity === "restricted"
+    ? []
+    : visionSensitivity === "sensitive"
+      ? hostedCandidates.filter((candidate) =>
+          (candidate.provider === "groq" || candidate.provider === "gemini") &&
+          isHostedVisionProviderPrivacyEligible(
+            candidate.provider,
+            visionSensitivity,
+            {
+              groq: app.config.GROQ_VISION_SENSITIVE_DATA_ATTESTED,
+              gemini: app.config.GEMINI_VISION_SENSITIVE_DATA_ATTESTED,
+            },
+          ),
+        )
+      : hostedCandidates;
+
+  const preferredProvider = visionProfile === "fast" ? "groq" : "gemini";
   return [
-    ...hostedCandidates.filter((candidate) => candidate.provider === "gemini"),
-    ...hostedCandidates.filter((candidate) => candidate.provider !== "gemini"),
+    ...privacyEligibleCandidates.filter((candidate) => candidate.provider === preferredProvider),
+    ...privacyEligibleCandidates.filter((candidate) => candidate.provider !== preferredProvider),
   ];
 }
 
@@ -137,6 +180,8 @@ export function buildInferenceProviderCandidates(input: {
   workload: SharedBrainWorkload;
   runtime: SharedBrainRuntimeSnapshot;
   localModels: string[];
+  visionProfile?: VisionMediaProfile;
+  visionSensitivity?: VisionMediaDecision["sensitivity"];
 }) {
   const localCandidates = listSharedBrainProviderCandidates(input.app).map(
     (candidate) => ({
@@ -146,9 +191,15 @@ export function buildInferenceProviderCandidates(input: {
       hosted: false,
     }),
   ) satisfies SharedBrainProviderCandidate[];
+  const privacySafeLocalCandidates =
+    input.visionSensitivity && input.visionSensitivity !== "none"
+      ? localCandidates.filter((candidate) => isPrivateRuntimeBaseUrl(candidate.baseUrl))
+      : localCandidates;
   const hostedCandidates = buildHostedProviderCandidates(
     input.app,
     input.workload,
+    input.visionProfile,
+    input.visionSensitivity,
   );
   const preferredLocalCandidate = input.runtime.ready
     ? {
@@ -158,13 +209,18 @@ export function buildInferenceProviderCandidates(input: {
         hosted: false,
       }
     : null;
+  const privacySafePreferredLocalCandidate = preferredLocalCandidate &&
+    (!input.visionSensitivity || input.visionSensitivity === "none" ||
+      isPrivateRuntimeBaseUrl(preferredLocalCandidate.baseUrl))
+    ? preferredLocalCandidate
+    : null;
 
   if (!hostedCandidates.length) {
-    return buildCandidateOrder(localCandidates, preferredLocalCandidate);
+    return buildCandidateOrder(privacySafeLocalCandidates, privacySafePreferredLocalCandidate);
   }
 
   return buildCandidateOrder(
-    [...hostedCandidates, ...localCandidates],
+    [...hostedCandidates, ...privacySafeLocalCandidates],
     hostedCandidates[0],
   );
 }

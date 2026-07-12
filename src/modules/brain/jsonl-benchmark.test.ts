@@ -9,6 +9,7 @@ import {
   detectSystemPromptLeak,
   evaluateBenchmarkCase,
   evaluateWorkloadBenchmarkCase,
+  evaluateVisionQualityCase,
   loadBenchmarkCases,
   normalizeTarget,
   type BenchmarkCase,
@@ -221,4 +222,37 @@ test("evaluateWorkloadBenchmarkCase fails on workload mismatch", () => {
   ]);
   assert.equal(result.workload_expected, "planning");
   assert.equal(result.workload_actual, "mobile_chat_fast");
+});
+
+test("vision-quality fixtures load through the standard JSONL contract", async () => {
+  const cases = await loadBenchmarkCases(path.join(process.cwd(), "benchmarks"), "vision-quality");
+  assert.ok(cases.length >= 10);
+  assert.ok(cases.every((item) => item.category === "vision-quality"));
+  assert.ok(cases.every((item) => typeof item.expected.stateDecision === "string"));
+  assert.ok(cases.every((item) => typeof item.fixture?.kind === "string"));
+});
+
+test("evaluateVisionQualityCase evaluates task and media policy without a model call", async () => {
+  const result = await evaluateVisionQualityCase({
+    id: "vision-screen",
+    category: "vision-quality",
+    input: "Bu ekran görüntüsündeki hatayı bul.",
+    expected: { stateDecision: "task=screen_debugging;profile=detail;cloud=true" },
+    fixture: { kind: "task_media", imageCategory: "screenshot", cloudConsent: true, imageCount: 1 },
+  });
+  assert.equal(result.pass, true);
+  assert.equal(result.answer_source, "deterministic_vision_policy");
+});
+
+test("loadBenchmarkCases reports malformed fixture file and line", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "elyan-benchmark-invalid-"));
+  try {
+    await writeFile(path.join(dir, "vision-quality.jsonl"), "// comment\n{not-json}\n");
+    await assert.rejects(
+      loadBenchmarkCases(dir),
+      /vision-quality\.jsonl:2/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

@@ -35,6 +35,8 @@ import { assertTrialTaskQuotaAllowedFromUsage, getTrialQuotaUsage } from "../quo
 import { routeChatTurn } from "../routing-policy/service.js";
 import { resolveCommandTarget } from "../routing-policy/service.js";
 import { createTask, shapeTaskFeedItem } from "../tasks/service.js";
+import type { EphemeralVisionCarrier } from "../brain/ephemeral-vision.js";
+import { isDeterministicDesktopFastWorkOrder } from "../tasks/desktop-work-order.js";
 import { sanitizePublicInferenceValue } from "../tasks/service-helpers.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import { sanitizeInboundContextRecord } from "../../lib/context-text-sanitizer.js";
@@ -269,18 +271,13 @@ async function shapeDuplicateChatTurnResponse(
       requestedTargetDeviceId: input.targetDeviceId,
     }),
     brain: {
-      selectedProfile: routeDecision.selectedWorkload ?? "mobile_chat_fast",
       profileMode: "elyan_managed",
       serverBrainReady: routeDecision.route === "server_brain",
       firstDeltaMs: readNumber(taskBrainRecord, "firstDeltaMs"),
-      fallbackUsed: readBoolean(taskBrainRecord, "fallbackUsed"),
       groundingUsed: readBoolean(taskBrainRecord, "groundingUsed"),
       documentSourceCount: readNumber(taskBrainRecord, "documentSourceCount"),
       webGroundingUsed: readBoolean(taskBrainRecord, "webGroundingUsed"),
       webSourceCount: readNumber(taskBrainRecord, "webSourceCount"),
-      modelCallCount: 0,
-      reasoningPasses: 0,
-      dedupedInflight: true,
       estimatedCostBucket: "deduped_inflight",
     },
     usage: shapePublicUsageSnapshot({
@@ -914,6 +911,7 @@ export function buildChatDispatchDeliverySnapshot(input: {
 export function resolveChatSessionTargetDeviceId(
   routeDecision: {
     route?: string;
+    targetDeviceId?: string;
     taskRoute?: {
       needsDesktop?: boolean;
     } | null;
@@ -925,7 +923,10 @@ export function resolveChatSessionTargetDeviceId(
     (routeDecision?.route === "desktop_runtime" ||
       routeDecision?.route === "pairing_required" ||
       routeDecision?.route === "unavailable");
-  return needsDesktop ? requestedTargetDeviceId : undefined;
+  if (!needsDesktop) {
+    return undefined;
+  }
+  return routeDecision?.targetDeviceId?.trim() || requestedTargetDeviceId;
 }
 
 type SharedBrainConversationItem = {
@@ -1056,15 +1057,14 @@ export function extractAttachmentCandidatesFromChatRows(
 
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index];
-    if (row.role !== "user") {
-      continue;
-    }
-
     const metadata =
       row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
         ? extractAttachmentMetadataCarrier(row.metadata as Record<string, unknown>)
         : null;
     if (!metadata) {
+      continue;
+    }
+    if (row.role !== "user" && metadata.visionBlock == null) {
       continue;
     }
 
@@ -1716,6 +1716,7 @@ export async function createChatMessage(
     content: string;
     requestedCapabilities: string[];
     metadata?: Record<string, unknown>;
+    ephemeralVision?: EphemeralVisionCarrier;
     requestId: string;
     ipAddress?: string;
     userAgent?: string;
@@ -1741,6 +1742,10 @@ export async function createChatMessage(
     routeDecision,
     presentation: presentationForRoute(routeDecision),
   };
+  const useDirectDesktopFastPath = isDeterministicDesktopFastWorkOrder(
+    routeDecision,
+    input.content,
+  );
   const initialTitle = deriveChatTitle(input.title, input.content);
   const initialPreview = compactSessionPreview(input.content, initialTitle);
   if (routeDecision.route === "server_brain") {
@@ -1784,12 +1789,14 @@ export async function createChatMessage(
       ipAddress: input.ipAddress,
       userAgent: input.userAgent,
     });
-  const requestChatMetadata = await enrichChatMetadataForRequest(app, {
-    userId: input.userId,
-    sessionId: session.id,
-    targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
-    metadata: routingMetadata,
-  });
+  const requestChatMetadata = useDirectDesktopFastPath
+    ? buildChatMetadata(routingMetadata)
+    : await enrichChatMetadataForRequest(app, {
+        userId: input.userId,
+        sessionId: session.id,
+        targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
+        metadata: routingMetadata,
+      });
   const admissionLockKey = buildChatTurnAdmissionLockKey({
     userId: input.userId,
     sessionId: session.id,
@@ -1830,7 +1837,6 @@ export async function createChatMessage(
         {
           retryAfterMs: 2_000,
           transient: true,
-          dedupedInflight: true,
         },
       );
     }
@@ -1873,6 +1879,7 @@ export async function createChatMessage(
     selectedWorkload: routeDecision.selectedWorkload,
     attachmentContextUsed: attachmentContext?.used === true,
     hasVisionImage:
+      Boolean(input.ephemeralVision?.images.length) ||
       (Array.isArray(attachmentContext?.visionImages) &&
         (attachmentContext!.visionImages!.length ?? 0) > 0) ||
       (Array.isArray(attachmentContext?.visionBlocks) &&
@@ -2113,6 +2120,7 @@ export async function createChatMessage(
     userAgent: input.userAgent,
     requestId: input.requestId,
     idempotencyKey: input.idempotencyKey,
+    ephemeralVision: input.ephemeralVision,
     onTaskReady: async ({ task, reused }) => {
       await publishChatMessageCreated(task, { reused });
     },
@@ -2171,11 +2179,9 @@ export async function createChatMessage(
       requestedTargetDeviceId: input.targetDeviceId,
     }),
     brain: {
-      selectedProfile: effectiveWorkload,
       profileMode: "elyan_managed",
       serverBrainReady: routeDecision.route === "server_brain",
       firstDeltaMs: readNumber(taskBrainRecord, "firstDeltaMs"),
-      fallbackUsed: readBoolean(taskBrainRecord, "fallbackUsed"),
       groundingUsed: readBoolean(taskBrainRecord, "groundingUsed"),
       documentSourceCount: readNumber(taskBrainRecord, "documentSourceCount"),
       webGroundingUsed: readBoolean(taskBrainRecord, "webGroundingUsed"),

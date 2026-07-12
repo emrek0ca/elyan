@@ -41,7 +41,7 @@ export type WebGroundingSearchResult = {
   publishedAt?: string;
   observedAt: string;
   freshnessStatus: FreshDataStatus;
-  searchProvider?: "duckduckgo_html" | "brave" | "searxng" | "open_meteo";
+  searchProvider?: "duckduckgo_html" | "brave" | "searxng" | "open_meteo" | "frankfurter" | "coingecko";
   pageContent?: string;
 };
 
@@ -55,7 +55,7 @@ export type WebGroundingResult = {
   used: boolean;
   query: string;
   queries: string[];
-  source: "duckduckgo_html" | "brave" | "searxng" | "open_meteo";
+  source: "duckduckgo_html" | "brave" | "searxng" | "open_meteo" | "frankfurter" | "coingecko";
   results: WebGroundingSearchResult[];
   degradedReason: string | null;
   confidence: "high" | "medium" | "low";
@@ -67,7 +67,7 @@ export type WebGroundingResult = {
 const WEB_RESEARCH_PATTERNS = [
   /\b(internet|web|online|çevrim içi|cevrim ici|internetten|webden)\b/i,
   /\b(araştır|arastir|araştırma|arastirma|research)\b/i,
-  /\b(güncel|guncel|latest|recent|son durum|bugün|today|news|haber)\b/i,
+  /\b(son durum|news|haber)\b/i,
   /\b(karşılaştır|karsilastir|compare|benchmark|farkı|farki|difference|artı eksi|arti eksi|avantaj|dezavantaj|pros|cons)\b/i,
   /\b(resmi|official|dokümantasyon|documentation|kaynak|source)\b/i,
   /\b(fiyat|price|kur|rate|release note|release notes?|changelog|son sürüm|son surum|duyuru|announcement)\b/i,
@@ -340,6 +340,28 @@ const webGroundingCache = new WeakMap<
   FastifyInstance,
   LRUCache<string, WebGroundingResult | Promise<WebGroundingResult>>
 >();
+const structuredApiInflight = new WeakMap<
+  FastifyInstance,
+  Map<string, Promise<unknown>>
+>();
+
+async function withStructuredApiInflight<T>(
+  app: FastifyInstance,
+  key: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const inflight = structuredApiInflight.get(app) ?? new Map<string, Promise<unknown>>();
+  structuredApiInflight.set(app, inflight);
+  const current = inflight.get(key) as Promise<T> | undefined;
+  if (current) return current;
+  const pending = run();
+  if (inflight.size < 200) inflight.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    if (inflight.get(key) === pending) inflight.delete(key);
+  }
+}
 
 function createAbortController(): AbortController {
   const controller = new AbortController();
@@ -763,6 +785,14 @@ function freshDataEnvelopeForResult(input: {
 
 function applyDomainEvidenceGuards(result: WebGroundingResult): WebGroundingResult {
   if (result.freshData.domain !== "market" || !result.used) {
+    return result;
+  }
+  if (result.source === "frankfurter" || result.source === "coingecko") {
+    result.freshData.evidence.numericCorroborated = true;
+    result.freshData.reasons = uniqueStrings([
+      ...result.freshData.reasons,
+      "structured_numeric_provider",
+    ]);
     return result;
   }
   const numericEvidence = extractNumericEvidenceFromGrounding(result);
@@ -1609,6 +1639,144 @@ async function fetchOpenMeteoWeather(
   }
 }
 
+type StructuredMarketResult = {
+  result: WebGroundingSearchResult | null;
+  source: "frankfurter" | "coingecko" | null;
+  degradedReason: string | null;
+};
+
+function requestedFiatCurrency(prompt: string): "USD" | "EUR" | "GBP" | null {
+  if (/(?<!\p{L})(dolar|usd|\$)(?!\p{L})/iu.test(prompt)) return "USD";
+  if (/(?<!\p{L})(euro|avro|eur|€)(?!\p{L})/iu.test(prompt)) return "EUR";
+  if (/(?<!\p{L})(sterlin|gbp|£)(?!\p{L})/iu.test(prompt)) return "GBP";
+  return null;
+}
+
+function requestedCryptoAsset(prompt: string): { id: string; symbol: string } | null {
+  if (/(?<!\p{L})(bitcoin|btc)(?!\p{L})/iu.test(prompt)) {
+    return { id: "bitcoin", symbol: "BTC" };
+  }
+  if (/(?<!\p{L})(ethereum|ether|eth)(?!\p{L})/iu.test(prompt)) {
+    return { id: "ethereum", symbol: "ETH" };
+  }
+  return null;
+}
+
+async function fetchStructuredMarketData(
+  app: FastifyInstance,
+  prompt: string,
+  policy: FreshDataPolicy,
+): Promise<StructuredMarketResult> {
+  const timeoutMs = Math.max(1_500, Math.min(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS, 4_000));
+  const crypto = requestedCryptoAsset(prompt);
+  const fiat = requestedFiatCurrency(prompt);
+  try {
+    if (crypto) {
+      const url = new URL("https://api.coingecko.com/api/v3/simple/price");
+      url.searchParams.set("ids", crypto.id);
+      url.searchParams.set("vs_currencies", "try,usd");
+      url.searchParams.set("include_last_updated_at", "true");
+      const response = await fetchTextWithTimeout(url.toString(), timeoutMs, {
+        accept: "application/json",
+        "user-agent": "Elyan/1.0",
+      });
+      if (!response.ok) {
+        return { result: null, source: "coingecko", degradedReason: `coingecko_http_${response.status}` };
+      }
+      const payload = await readBoundedJsonObject(response, 100_000);
+      const quote = payload?.[crypto.id];
+      if (!quote || typeof quote !== "object" || Array.isArray(quote)) {
+        return { result: null, source: "coingecko", degradedReason: "coingecko_invalid_payload" };
+      }
+      const record = quote as Record<string, unknown>;
+      const tryValue = finiteWeatherNumber(record.try);
+      const usdValue = finiteWeatherNumber(record.usd);
+      const updatedSeconds = finiteWeatherNumber(record.last_updated_at);
+      const nowSeconds = Math.floor(Date.now() / 1_000);
+      if (
+        tryValue === null ||
+        tryValue <= 0 ||
+        updatedSeconds === null ||
+        updatedSeconds < 1_500_000_000 ||
+        updatedSeconds > nowSeconds + 300
+      ) {
+        return { result: null, source: "coingecko", degradedReason: "coingecko_quote_missing" };
+      }
+      const observedAt = new Date(updatedSeconds * 1_000).toISOString();
+      const snippet = [
+        `${crypto.symbol}/TRY ${tryValue}`,
+        usdValue === null ? null : `${crypto.symbol}/USD ${usdValue}`,
+        `sağlayıcı zamanı ${observedAt}`,
+      ].filter((value): value is string => Boolean(value)).join("; ");
+      return {
+        result: withSourceAuthority({
+          title: `${crypto.symbol} yapılandırılmış piyasa verisi`,
+          url: url.toString(),
+          snippet,
+          pageContent: snippet,
+          sourceHost: "api.coingecko.com",
+          searchProvider: "coingecko",
+          publishedAt: observedAt,
+          verificationState: "verified",
+          queryHits: 1,
+          score: 2.5,
+        }, policy, observedAt),
+        source: "coingecko",
+        degradedReason: null,
+      };
+    }
+
+    if (fiat) {
+      const url = new URL("https://api.frankfurter.app/latest");
+      url.searchParams.set("from", fiat);
+      url.searchParams.set("to", "TRY");
+      const response = await fetchTextWithTimeout(url.toString(), timeoutMs, {
+        accept: "application/json",
+        "user-agent": "Elyan/1.0",
+      });
+      if (!response.ok) {
+        return { result: null, source: "frankfurter", degradedReason: `frankfurter_http_${response.status}` };
+      }
+      const payload = await readBoundedJsonObject(response, 100_000);
+      const rates = payload?.rates;
+      const rate = rates && typeof rates === "object" && !Array.isArray(rates)
+        ? finiteWeatherNumber((rates as Record<string, unknown>).TRY)
+        : null;
+      const publishedDate = typeof payload?.date === "string" ? payload.date : null;
+      if (rate === null || rate <= 0 || !publishedDate || !/^\d{4}-\d{2}-\d{2}$/u.test(publishedDate)) {
+        return { result: null, source: "frankfurter", degradedReason: "frankfurter_invalid_payload" };
+      }
+      const retrievedAt = new Date().toISOString();
+      const snippet = `1 ${fiat} = ${rate} TRY; referans tarihi ${publishedDate}; alınma zamanı ${retrievedAt}`;
+      return {
+        result: withSourceAuthority({
+          title: `${fiat}/TRY yapılandırılmış referans kuru`,
+          url: url.toString(),
+          snippet,
+          pageContent: snippet,
+          sourceHost: "api.frankfurter.app",
+          searchProvider: "frankfurter",
+          publishedAt: `${publishedDate}T23:59:59.000Z`,
+          verificationState: "verified",
+          queryHits: 1,
+          score: 2.4,
+        }, policy, retrievedAt),
+        source: "frankfurter",
+        degradedReason: null,
+      };
+    }
+  } catch (error) {
+    return {
+      result: null,
+      source: crypto ? "coingecko" : fiat ? "frankfurter" : null,
+      degradedReason: error instanceof Error && error.name === "AbortError"
+        ? "structured_market_timeout"
+        : "structured_market_failed",
+    };
+  }
+  return { result: null, source: null, degradedReason: "structured_market_unsupported_asset" };
+}
+
 async function verifyResult(
   app: FastifyInstance,
   input: WebGroundingSearchResult,
@@ -1914,7 +2082,6 @@ export function classifyWebGroundingDecision(input: {
     responsePolicy.webRequired ||
     (researchIntent && strongFreshnessOrEvidence) ||
     factuality.triggered ||
-    EXPLICIT_FRESHNESS_PATTERN.test(lower) ||
     promptLooksLikeUrl(normalized)
   ) {
     return { mode: "web_required", reasons: uniqueStrings(reasons.length ? reasons : ["fresh_or_external_fact"]) };
@@ -2200,7 +2367,11 @@ export async function searchPublicWebGrounding(
   }
 
   if (freshDataPolicy.domain === "weather") {
-    const weather = await fetchOpenMeteoWeather(app, query, freshDataPolicy);
+    const weather = await withStructuredApiInflight(
+      app,
+      `weather:${cacheKey}`,
+      () => fetchOpenMeteoWeather(app, query, freshDataPolicy),
+    );
     if (weather.result) {
       const retrievedAt = new Date().toISOString();
       const normalized = normalizeResultForFreshDataPolicy(
@@ -2239,6 +2410,62 @@ export async function searchPublicWebGrounding(
         result,
       });
       return cloneWebGroundingResult(result);
+    }
+  }
+
+  if (freshDataPolicy.domain === "market") {
+    const structuredPolicy: FreshDataPolicy = {
+      ...freshDataPolicy,
+      minimumSources: 1,
+      minimumVerifiedSources: 1,
+      minimumDatedSources: 1,
+    };
+    const market = await withStructuredApiInflight(
+      app,
+      `market:${cacheKey}`,
+      () => fetchStructuredMarketData(app, query, structuredPolicy),
+    );
+    if (market.result && market.source) {
+      const retrievedAt = new Date().toISOString();
+      const normalized = normalizeResultForFreshDataPolicy(
+        market.result,
+        structuredPolicy,
+        retrievedAt,
+      );
+      const freshData = freshDataEnvelopeForResult({
+        policy: structuredPolicy,
+        requestedAt,
+        retrievedAt,
+        results: [normalized],
+        cacheState: "miss",
+        reasons: ["structured_api", market.source],
+      });
+      const result: WebGroundingResult = {
+        enabled: true,
+        used: freshData.evidence.sufficient,
+        query,
+        queries: [query],
+        source: market.source,
+        results: [normalized],
+        degradedReason: freshData.evidence.sufficient ? null : "structured_market_not_fresh_enough",
+        confidence: freshData.evidence.sufficient ? "high" : "low",
+        retrievedAt,
+        decisionReasons: uniqueStrings([...decisionReasons, `structured_api:${market.source}`]),
+        freshData,
+      };
+      applyDomainEvidenceGuards(result);
+      if (freshData.evidence.sufficient) {
+        if (cache && cacheTtlMs > 0) {
+          cache.set(cacheKey, result, { ttl: cacheTtlMs });
+        }
+        void writeSharedWebGroundingCache({
+          app,
+          cacheKey,
+          policy: structuredPolicy,
+          result,
+        });
+        return cloneWebGroundingResult(result);
+      }
     }
   }
 

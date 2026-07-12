@@ -7,7 +7,46 @@ import {
   buildTaskDispatchLeaseAckUpdate,
   buildTaskRuntimeOwnershipUpdate,
   buildTaskRuntimeUpdate,
+  shouldAutoApproveDesktopTask,
 } from "./service-lifecycle.js";
+
+test("shouldAutoApproveDesktopTask requires dispatch, full authority, and desktop routing", () => {
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        desktopFullAuthorityEnabled: true,
+        routeDecision: {
+          route: "desktop_runtime",
+          taskRoute: { operationalRoute: "desktop_runtime" },
+        },
+      },
+    },
+  }), true);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        desktopFullAuthorityEnabled: false,
+        routeDecision: { route: "desktop_runtime" },
+      },
+    },
+  }), false);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        desktopFullAuthorityEnabled: true,
+        routeDecision: { route: "server_brain" },
+      },
+    },
+  }), false);
+});
 
 test("buildTaskCancellationUpdate clears the queue and stamps canceledAt", () => {
   const now = new Date("2030-01-01T00:00:00.000Z");

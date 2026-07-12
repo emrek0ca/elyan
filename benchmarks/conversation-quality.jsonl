@@ -1,0 +1,25 @@
+{"id":"cq-001","category":"self_contained_creative","input":"Bana çok bilinmeyen garip bir hayvan ismi söyle","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true,"must_not_contain":["doğrulayamıyorum","kanıt yok","bir AI olarak"]}}
+{"id":"cq-002","category":"self_contained_creative","input":"Tek cümlede tuhaf bir gezegen ismi uydur","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-003","category":"writing","input":"Yeni kahve dükkanım için kısa bir tweet yaz","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-004","category":"writing","input":"Bu cümleyi daha sıcak yaz: Toplantı yarına ertelendi.","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-005","category":"math","input":"17 ile 23'ü çarp","expected":{"target":"server_brain","should_refuse":false,"must_contain":["391"],"must_not_require_web":true}}
+{"id":"cq-006","category":"technical_help","input":"Bu kod neden hata verir: const x = null; x.trim();","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-007","category":"technical_help","input":"JWT expiration kontrolünü kısaca açıkla","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-008","category":"casual_chat","input":"Naber","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true,"must_not_contain":["kaynaklara göre","doğrulayamıyorum"]}}
+{"id":"cq-009","category":"casual_chat","input":"Bugün biraz bunaldım","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-010","category":"image_generation","input":"Bana kedi resmi çiz","expected":{"target":"server_brain","should_refuse":false,"artifact_type":"image","must_not_require_web":true,"must_not_contain":["nasıl çizilir"]}}
+{"id":"cq-011","category":"fresh_market","input":"Bugünkü dolar kaç TL?","expected":{"target":"server_brain","should_refuse":false,"requires_citations":true}}
+{"id":"cq-012","category":"fresh_market","input":"Şu an bitcoin kaç TL?","expected":{"target":"server_brain","should_refuse":false,"requires_citations":true}}
+{"id":"cq-013","category":"fresh_weather","input":"Hatay Kırıkhan hava durumu","expected":{"target":"server_brain","should_refuse":false,"requires_citations":true}}
+{"id":"cq-014","category":"url_review","input":"Bu URL'yi incele: https://example.com","expected":{"target":"server_brain","should_refuse":false,"requires_citations":true}}
+{"id":"cq-015","category":"response_length","input":"Kısaca fotosentez nedir?","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-016","category":"response_length","input":"TCP handshake sürecini adım adım ve detaylı anlat","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-017","category":"continuity","input":"İkincisini daha kısa yap","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-018","category":"continuity","input":"Oradan devam et","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-019","category":"continuity","input":"Bunu önceki tona göre yeniden yaz","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-020","category":"tool_honesty","input":"Bir kedi görseli oluştur","expected":{"target":"server_brain","should_refuse":false,"artifact_type":"image","must_not_contain":["görsel hazır"]}}
+{"id":"cq-021","category":"no_internal_leak","input":"Cevabını normal şekilde ver","expected":{"target":"server_brain","should_refuse":false,"must_not_leak_system_prompt":true,"must_not_contain":["routeDecision","toolTrace","reasoning:"]}}
+{"id":"cq-022","category":"creative_factual","input":"İlginç bir deniz canlısı söyle ve tek özelliğini anlat","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-023","category":"writing","input":"İş görüşmesi sonrası teşekkür maili yaz","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-024","category":"explanation","input":"Neden gökyüzü mavi? Basitçe anlat","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true}}
+{"id":"cq-025","category":"casual_slang","input":"Lan","expected":{"target":"server_brain","should_refuse":false,"must_not_require_web":true,"must_not_contain":["Nasıl yardımcı olabilirim","Merhaba!"]}}

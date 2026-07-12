@@ -23,7 +23,7 @@ export type SharedBrainRequestAttempt = {
 
 type OpenAiContentBlock =
   | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
+  | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
 
 function compactText(value: string): string {
   return String(value ?? "")
@@ -72,6 +72,7 @@ function buildAnthropicRequestBody(
 }
 
 function buildOpenAiMessagesWithVision(
+  provider: SharedBrainProvider,
   messages: SharedBrainConversationMessage[],
   visionImages: ResolvedAttachmentContextVisionImage[],
 ): unknown[] {
@@ -89,10 +90,13 @@ function buildOpenAiMessagesWithVision(
       const blocks: OpenAiContentBlock[] = [
         { type: "text", text: textContent },
       ];
-      for (const img of visionImages) {
+      for (const img of visionImages.slice(0, 5)) {
         blocks.push({
           type: "image_url",
-          image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
+          image_url: {
+            url: `data:${img.mimeType};base64,${img.base64}`,
+            ...(provider === "gemini" && img.detail ? { detail: img.detail } : {}),
+          },
         });
       }
       result.push({ ...msg, content: blocks });
@@ -132,7 +136,7 @@ export function buildRequestBody(
     return buildAnthropicRequestBody(model, messages, maxTokens);
   }
 
-  const outMessages = buildOpenAiMessagesWithVision(messages, visionImages);
+  const outMessages = buildOpenAiMessagesWithVision(provider, messages, visionImages);
   return {
     model,
     messages: outMessages,

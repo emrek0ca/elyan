@@ -20,6 +20,10 @@ export type BrainEvalFailureType =
   | "overcompressed_answer"
   | "style_mismatch_mobile"
   | "stiff_or_performative_tone"
+  | "robotic_verification_language"
+  | "repeated_answer"
+  | "internal_state_leak"
+  | "non_answer"
   | "missed_personalization_opportunity"
   | "memory_misuse"
   | "weak_continuity"
@@ -181,6 +185,17 @@ function analyzeOutputQuality(input: BrainEvalInput) {
     .map((part) => part.trim())
     .filter(Boolean).length;
 
+  if (
+    !/^(?:selam|merhaba|slm|hey|hi|hello|naber|nasılsın|nasilsin)[.!?\s]*$/iu.test(normalizedPrompt) &&
+    /^(?:merhaba[!. ]*)?(?:nasıl yardımcı olabilirim|ne konuda yardımcı olabilirim|how can i help|what can i help you with)[?!.]*$/iu.test(
+      normalizedAnswer,
+    )
+  ) {
+    completeness = Math.min(completeness, 0.35);
+    usefulness = Math.min(usefulness, 0.1);
+    flags.push("non_answer");
+  }
+
   const likelyIncomplete =
     normalizedAnswer.length >= 48 &&
     !/[.!?…:)]$/.test(normalizedAnswer) &&
@@ -192,6 +207,36 @@ function analyzeOutputQuality(input: BrainEvalInput) {
   if (/\b(ve|veya|ama|çünkü|ile|and|or|because|so|for example|örneğin|mesela)$/i.test(loweredAnswer)) {
     completeness = Math.min(completeness, 0.2);
     flags.push("truncated_answer");
+  }
+  const normalizedParagraphs = normalizedAnswer
+    .split(/\n{2,}/u)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim().toLocaleLowerCase("tr-TR"))
+    .filter((paragraph) => paragraph.length >= 24);
+  if (new Set(normalizedParagraphs).size < normalizedParagraphs.length) {
+    coherence = Math.min(coherence, 0.35);
+    usefulness = Math.min(usefulness, 0.5);
+    flags.push("repeated_answer");
+  }
+  if (
+    /(?<!\p{L})(bir ai olarak|model olarak|elimde kesin kayıtlı kanıt yok|kesin kayıtlı bir kanıt bulunmuyor|kanıt olmadığı için|bunu doğrulayamıyorum|kaynaklara göre)(?!\p{L})/iu.test(
+      normalizedAnswer,
+    ) &&
+    !/(?<!\p{L})(bugün|bugun|güncel|guncel|canlı|canli|kaynak|araştır|arastir|web|today|current|live|source|research)(?!\p{L})/iu.test(
+      normalizedPrompt,
+    )
+  ) {
+    style = Math.min(style, 0.35);
+    usefulness = Math.min(usefulness, 0.55);
+    flags.push("robotic_verification_language");
+  }
+  if (
+    /```elyan:blocks|(?:^|\n)\s*(?:analysis|reasoning|system[_ -]?prompt|tool[_ -]?trace|route[_ -]?decision|debug|internal)\s*[:=]|"(?:reasoning|toolTrace|routeDecision|systemPrompt|debug)"\s*:/iu.test(
+      normalizedAnswer,
+    )
+  ) {
+    coherence = Math.min(coherence, 0.2);
+    usefulness = Math.min(usefulness, 0.2);
+    flags.push("internal_state_leak");
   }
   if ((normalizedAnswer.match(/\(/g) ?? []).length !== (normalizedAnswer.match(/\)/g) ?? []).length) {
     completeness = Math.min(completeness, 0.3);
@@ -527,6 +572,22 @@ export function evaluateBrainAnswer(input: BrainEvalInput): BrainEvalResult {
   }
   if (outputQuality.flags.includes("stiff_or_performative_tone")) {
     failureTypes.push("stiff_or_performative_tone");
+  }
+  if (outputQuality.flags.includes("robotic_verification_language")) {
+    failureTypes.push("robotic_verification_language");
+  }
+  if (outputQuality.flags.includes("repeated_answer")) {
+    reasoning = Math.min(reasoning, 0.45);
+    failureTypes.push("repeated_answer");
+  }
+  if (outputQuality.flags.includes("internal_state_leak")) {
+    hallucination = Math.min(hallucination, 0.1);
+    boundary = Math.min(boundary, 0.2);
+    failureTypes.push("internal_state_leak");
+  }
+  if (outputQuality.flags.includes("non_answer")) {
+    reasoning = Math.min(reasoning, 0.25);
+    failureTypes.push("non_answer");
   }
   for (const leakType of [
     "provider_disclosure",

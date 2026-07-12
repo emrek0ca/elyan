@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import { ZodError } from "zod";
 import { AppError } from "../lib/errors.js";
 import { serializeZodError } from "../lib/http.js";
+import { sanitizePublicErrorDetails } from "../lib/public-error-details.js";
 
 function readRetryAfterSeconds(details: unknown): number | null {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
@@ -37,15 +38,16 @@ export const errorHandlerPlugin = fp(async (app) => {
       if (error.statusCode === 409) {
         app.log.warn({ err: { code: error.code, message: error.message, details: error.details }, requestId: request.id, url: request.url }, "409 app error");
       }
+      const publicDetails = sanitizePublicErrorDetails(error.details);
       reply.status(error.statusCode).send({
         error: error.code,
         message: error.message,
         details:
           retryAfterSeconds == null
-            ? error.details
+            ? publicDetails
             : {
-                ...(typeof error.details === "object" && error.details && !Array.isArray(error.details)
-                  ? error.details
+                ...(typeof publicDetails === "object" && publicDetails && !Array.isArray(publicDetails)
+                  ? publicDetails
                   : {}),
                 retryAfterMs: retryAfterSeconds * 1000,
               },

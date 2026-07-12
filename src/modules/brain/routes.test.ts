@@ -5,6 +5,13 @@ import { brainRoutes } from "./routes.js";
 
 test("brain profile requires authenticated user", async () => {
   const app = Fastify();
+  // /profile artık kullanıcı VEYA runtime token kabul eder.
+  app.decorate("authenticateUserOrRuntime", async (_request, reply) => {
+    reply.code(401).send({
+      code: "UNAUTHORIZED",
+      message: "Unauthorized",
+    });
+  });
   app.decorate("authenticateUser", async (_request, reply) => {
     reply.code(401).send({
       code: "UNAUTHORIZED",

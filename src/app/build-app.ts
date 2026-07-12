@@ -8,6 +8,7 @@ import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import websocket from "@fastify/websocket";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { VISION_LOG_REDACTION_PATHS } from "../lib/sensitive-log-redaction.js";
 import { loadEnv, type AppEnv } from "../config/env.js";
 import { realtimeEvents, sessions, users } from "../db/schema.js";
 import { dbPlugin } from "../plugins/db.js";
@@ -149,6 +150,7 @@ export async function buildApp(envInput?: AppEnv) {
           "req.body.authorizationCode",
           "req.body.dataBase64",
           "req.body.token",
+          ...VISION_LOG_REDACTION_PATHS,
           "res.headers['set-cookie']",
         ],
         remove: true,
@@ -367,6 +369,24 @@ export async function buildApp(envInput?: AppEnv) {
       request.auth = payload;
     } catch {
       throw unauthorized("Runtime authentication required");
+    }
+  });
+
+  app.decorate("authenticateUserOrRuntime", async (request: FastifyRequest, reply: FastifyReply) => {
+    // Kullanıcı-kapsamlı ama masaüstü runtime'ının da erişmesi gereken rotalar
+    // (chat/brain): runtime token'ın sub'ı cihaz sahibinin userId'sidir.
+    try {
+      const payload = (await request.jwtVerify()) as AuthTokenPayload;
+
+      if (payload.kind === "user") {
+        request.auth = await validateActiveUserSession(app, payload);
+      } else if (payload.kind === "runtime") {
+        request.auth = payload;
+      } else {
+        throw unauthorized("User or runtime token required");
+      }
+    } catch {
+      throw unauthorized("Authentication required");
     }
   });
 

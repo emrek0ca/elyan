@@ -67,6 +67,8 @@ const turnSalienceSchema = z.object({
   userIntent: z.string().trim().max(160).nullable().default(null),
   assistantCommitment: z.string().trim().max(160).nullable().default(null),
   emotionalTone: z.string().trim().max(80).nullable().default(null),
+  referenceMode: z.enum(["none", "continue", "revise", "resolve_pronoun"]).default("none"),
+  referentCandidates: z.array(z.string().trim().min(2).max(120)).max(8).default([]),
   unresolved: z.boolean().default(false),
   updatedAt: z.string().datetime({ offset: true }).nullable().default(null),
 }).default({});
@@ -197,12 +199,23 @@ function sanitizeSalience(value: unknown): DialogueState["salience"] {
   const entities = Array.isArray(record.entities)
     ? record.entities.map(String).map((item) => scrubPrivateSnippet(item, 80)).filter(Boolean).slice(0, 10)
     : [];
+  const referenceMode = readString(record.referenceMode);
   return turnSalienceSchema.parse({
     topics,
     entities,
     userIntent: scrubOptionalSnippet(record.userIntent, 160),
     assistantCommitment: scrubOptionalSnippet(record.assistantCommitment, 160),
     emotionalTone: scrubOptionalSnippet(record.emotionalTone, 80),
+    referenceMode: ["continue", "revise", "resolve_pronoun"].includes(referenceMode ?? "")
+      ? referenceMode
+      : "none",
+    referentCandidates: Array.isArray(record.referentCandidates)
+      ? record.referentCandidates
+          .map(String)
+          .map((item) => scrubPrivateSnippet(item, 120))
+          .filter(Boolean)
+          .slice(0, 8)
+      : [],
     unresolved: typeof record.unresolved === "boolean" ? record.unresolved : false,
     updatedAt: readString(record.updatedAt),
   });
@@ -296,6 +309,29 @@ function deriveAssistantCommitment(text: string): string | null {
   return sentence ? clip(sentence, 160) : null;
 }
 
+function deriveReferenceContext(
+  previous: DialogueState["salience"],
+  userMessage: string,
+): Pick<DialogueState["salience"], "referenceMode" | "referentCandidates"> {
+  const compactUserMessage = userMessage.replace(/\s+/g, " ").trim();
+  const referenceMode = /^(?:devam|devam et|sürdür|surdur|continue|go on|keep going)\b/iu.test(compactUserMessage)
+    ? "continue"
+    : /^(?:bunu|şunu|sunu|onu|böyle|boyle|aynısını|aynisini|that|this|it)\b.{0,80}(?:düzelt|duzelt|değiştir|degistir|yeniden|revise|fix|change)/iu.test(compactUserMessage)
+      ? "revise"
+      : /^(?:bunu|şunu|sunu|onu|bu|şu|su|o|ikincisini|birincisini|sonuncusunu|that|this|it|the second|the first)\b/iu.test(compactUserMessage)
+        ? "resolve_pronoun"
+        : "none";
+  const referentCandidates = referenceMode === "none"
+    ? []
+    : appendUnique([], [
+        ...previous.entities,
+        ...previous.topics,
+        previous.assistantCommitment ?? "",
+        previous.userIntent ?? "",
+      ], 8).map((item) => clip(item, 120));
+  return { referenceMode, referentCandidates };
+}
+
 function deriveTurnSalience(input: {
   previous: DialogueState["salience"];
   userMessage: string;
@@ -306,6 +342,10 @@ function deriveTurnSalience(input: {
   nowIso: string;
 }): DialogueState["salience"] {
   const previous = turnSalienceSchema.parse(input.previous ?? {});
+  const { referenceMode, referentCandidates } = deriveReferenceContext(
+    previous,
+    input.userMessage,
+  );
   const topics = appendUnique(
     previous.topics,
     extractSalienceTopics(`${input.userMessage} ${input.assistantText}`),
@@ -332,6 +372,8 @@ function deriveTurnSalience(input: {
     userIntent,
     assistantCommitment,
     emotionalTone,
+    referenceMode,
+    referentCandidates,
     unresolved,
     updatedAt: input.nowIso,
   });
@@ -484,11 +526,18 @@ export function resolveDialogueStateSessionId(metadata: unknown): string | null 
 export function applyCanonicalDialogueStateToMetadata(input: {
   metadata?: Record<string, unknown>;
   snapshot: DialogueStateSnapshot;
+  userMessage?: string;
 }): Record<string, unknown> {
   const existing = input.metadata ?? {};
   const compactContext = readRecord(existing.compactContext) ?? {};
   const rollingSummary = readRecord(compactContext.rollingSummary) ?? {};
   const state = sanitizeDialogueStateSnapshot(input.snapshot.state);
+  const referenceContext = input.userMessage
+    ? deriveReferenceContext(state.salience, input.userMessage)
+    : {
+        referenceMode: state.salience.referenceMode,
+        referentCandidates: state.salience.referentCandidates,
+      };
   return {
     ...existing,
     dialogueStateRevision: input.snapshot.revision,
@@ -507,7 +556,10 @@ export function applyCanonicalDialogueStateToMetadata(input: {
         openLoops: state.openLoops,
       },
       turns: state.turns,
-      salience: state.salience,
+      salience: {
+        ...state.salience,
+        ...referenceContext,
+      },
       lastAssistantBlocksDigest: state.lastAssistantDigest,
       conversationDynamics: state.conversationDynamics,
       userMemory: state.userMemory,
@@ -594,6 +646,7 @@ export function mergeDialogueState(input: {
 
   let goal = previous.goal ?? fallback.goal;
   let stage = previous.stage ?? fallback.stage;
+  let retainedOpenLoops = previous.openLoops;
   const newLoops: string[] = [];
 
   for (const op of goalOps) {
@@ -604,6 +657,7 @@ export function mergeDialogueState(input: {
       stage = op.step ?? op.next ?? stage ?? "advance";
     } else if (op.op === "complete") {
       stage = "complete";
+      retainedOpenLoops = [];
     } else if (op.op === "block") {
       stage = "blocked";
       if (op.next || op.step) {
@@ -676,7 +730,7 @@ export function mergeDialogueState(input: {
       ...previous,
       goal: goal ? scrubPrivateSnippet(goal, 500) : null,
       stage: stage ? scrubPrivateSnippet(stage, 240) : (input.workload ?? previous.stage),
-      openLoops: appendUnique(previous.openLoops, newLoops, 12),
+      openLoops: appendUnique(retainedOpenLoops, newLoops, 12),
       lastAssistantDigest:
         digestAssistantText(input.assistantText, input.assistantBlocks ?? []) ??
         previous.lastAssistantDigest,

@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDesktopWorkOrder } from "./desktop-work-order.js";
+import {
+  buildDesktopWorkOrder,
+  isDeterministicDesktopAppWorkOrder,
+  isDeterministicDesktopFastWorkOrder,
+  parseDirectDesktopAppCommand,
+  parseDirectImageFetchCommand,
+} from "./desktop-work-order.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 
@@ -66,6 +72,116 @@ test("buildDesktopWorkOrder keeps private file requests local and evidence-gated
   assert.equal(workOrder.verificationRules.some((rule) => rule.evidence === "tool_result"), true);
 });
 
+test("buildDesktopWorkOrder emits a direct app capability with the parsed application name", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Hesap Makinesi uygulamasını aç ve açıldığını doğrula.",
+    title: "Hesap Makinesi'ni aç",
+    routeDecision: routeDecision({ capabilities: ["open_app"] }),
+    requestedCapabilities: ["open_app"],
+  });
+
+  const step = workOrder.planPreview.steps.find((item) => item.capability === "open_app");
+  assert.ok(step);
+  assert.equal(step.args.app_name, "Hesap Makinesi");
+  assert.equal(workOrder.planPreview.steps.some((item) => item.capability === "desktop_operator.run"), false);
+});
+
+test("direct desktop app commands support terse Turkish and skip generic planning", () => {
+  assert.deepEqual(parseDirectDesktopAppCommand("TextEdit aç"), {
+    capability: "open_app",
+    appName: "TextEdit",
+  });
+  assert.deepEqual(parseDirectDesktopAppCommand("Chrome'u kapat"), {
+    capability: "close_app",
+    appName: "Chrome",
+  });
+  assert.equal(
+    isDeterministicDesktopAppWorkOrder(
+      routeDecision({ capabilities: ["open_app"] }),
+      "Lütfen Hesap Makinesi uygulamasını aç.",
+    ),
+    true,
+  );
+
+  const workOrder = buildDesktopWorkOrder({
+    message: "Chrome'u kapat",
+    title: "Chrome'u kapat",
+    routeDecision: routeDecision({ capabilities: [] }),
+    requestedCapabilities: [],
+  });
+  const closeStep = workOrder.planPreview.steps.find((step) => step.capability === "close_app");
+  assert.ok(closeStep);
+  assert.equal(closeStep.args.app_name, "Chrome");
+  assert.equal(workOrder.planPreview.steps.some((step) => step.capability === "desktop_operator.run"), false);
+});
+
+test("direct image download becomes an artifact-producing image_fetch plan", () => {
+  assert.deepEqual(
+    parseDirectImageFetchCommand("Kedi resmi indir. İndirilen dosyayı doğrula."),
+    { query: "Kedi", destination: "~/Desktop", count: 1 },
+  );
+  assert.deepEqual(
+    parseDirectImageFetchCommand("İnternetten 3 adet aslan görseli indirilenlere indir"),
+    { query: "aslan", destination: "~/Downloads", count: 3 },
+  );
+  assert.equal(
+    isDeterministicDesktopFastWorkOrder(routeDecision(), "Kedi resmi indir"),
+    true,
+  );
+
+  const workOrder = buildDesktopWorkOrder({
+    message: "Kedi resmi indir. İndirilen dosyayı doğrula.",
+    title: "Kedi resmi indir",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+  const step = workOrder.planPreview.steps.find((item) => item.capability === "image_fetch");
+  assert.ok(step);
+  assert.equal(step.args.query, "Kedi");
+  assert.equal(step.args.destination, "~/Desktop");
+  assert.equal(workOrder.requiredCapabilities.includes("desktop_operator.run"), false);
+  assert.equal(workOrder.expectedOutputs.some((output) => output.kind === "artifact" && output.required), true);
+});
+
+test("research presentation becomes a typed evidence-gated desktop chain", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Kuantum bilgisayarlarını web'den araştırıp 5 slaytlık sunum olarak masaüstüne hazırla.",
+    title: "Kuantum bilgisayarları sunumu",
+    routeDecision: routeDecision({ capabilities: ["desktop.runtime"] }),
+    requestedCapabilities: [],
+  });
+
+  assert.equal(workOrder.goal.kind, "presentation_task");
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["web_research", "presentation_write"],
+  );
+  assert.equal(workOrder.requiredCapabilities.includes("browser_control"), false);
+  assert.equal(workOrder.requiredCapabilities.includes("document_write"), false);
+  assert.equal(workOrder.requiredCapabilities.includes("desktop_operator.run"), false);
+
+  const presentation = workOrder.planPreview.steps[1];
+  assert.equal(presentation?.args.sourceContext, undefined);
+  assert.match(String(presentation?.args.prompt ?? ""), /5 slaytlık sunum/iu);
+  assert.match(String(presentation?.args.outputPath ?? ""), /^~\/Desktop\/.+\.pptx$/u);
+  assert.equal(workOrder.expectedOutputs.filter((output) => output.kind === "artifact").length, 1);
+  assert.equal(workOrder.expectedOutputs.filter((output) => output.kind === "file_update").length, 1);
+});
+
+test("presentation creation does not add a second generic document writer", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "İklim değişikliğini araştır ve sonuçlardan bir sunum oluştur.",
+    title: "İklim sunumu",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["web_research", "presentation_write"],
+  );
+});
+
 test("buildDesktopWorkOrder carries typed understanding without forwarding a raw execution prompt", () => {
   const envelope: UnderstandingEnvelope = {
     schema_version: "2026-07-understanding-envelope-v2",
@@ -103,4 +219,17 @@ test("buildDesktopWorkOrder carries typed understanding without forwarding a raw
   assert.equal(workOrder.planPreview.steps.some((step) => step.capability === "canvas_write"), true);
   assert.equal("message" in workOrder, false);
   assert.equal("prompt" in workOrder, false);
+});
+
+test("close-app browser task does not append a generic browser search step", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Chrome u kapat",
+    title: "Masaüstü görevi — Chrome u kapat — Bağlam: browser",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+
+  const capabilities = workOrder.planPreview.steps.map((step) => step.capability);
+  assert.equal(capabilities.includes("close_app"), true);
+  assert.equal(capabilities.includes("browser_control"), false);
 });

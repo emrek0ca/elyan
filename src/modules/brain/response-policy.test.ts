@@ -21,6 +21,12 @@ test("classifyElyanTurnIntent separates image generation, web research and URL r
   assert.equal(classifyElyanTurnIntent("Bu URL'yi incele: https://example.com"), "url_review");
 });
 
+test("response policy does not treat temporal small talk as web research", () => {
+  assert.equal(classifyElyanTurnIntent("Bugün biraz bunaldım"), "unknown");
+  assert.equal(responsePolicyForPrompt("Bugün için kısa bir tweet yaz").webRequired, false);
+  assert.equal(responsePolicyForPrompt("Bugünkü dolar kaç TL?").webRequired, true);
+});
+
 test("sanitizeFinalAssistantResponse removes robotic evidence language without deleting code fences", () => {
   const sanitized = sanitizeFinalAssistantResponse({
     prompt: "Bu kodu açıkla",
@@ -116,5 +122,17 @@ test("sanitizeFinalAssistantResponse prevents image-ready claims without a rende
   });
 
   assert.doesNotMatch(sanitized, /hazır|oluşturdum/iu);
+  assert.match(sanitized, /üretilemedi/iu);
+});
+
+test("sanitizeFinalAssistantResponse prevents document-ready claims without a renderable artifact", () => {
+  const sanitized = sanitizeFinalAssistantResponse({
+    prompt: "Bu içerikten PDF raporu oluştur",
+    text: "PDF dosyası hazır.",
+    workload: "document_generate",
+    artifactRequired: true,
+    hasRenderableOutput: false,
+  });
+  assert.doesNotMatch(sanitized, /dosyası hazır/iu);
   assert.match(sanitized, /üretilemedi/iu);
 });

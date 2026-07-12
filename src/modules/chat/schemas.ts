@@ -2,6 +2,7 @@ import { z } from "zod";
 import { chatSessionSourceSchema, chatSessionStatusSchema } from "../../contracts/domain.js";
 import { hasRawBinaryUploadHint } from "../../lib/derived-data.js";
 import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
+import { ephemeralVisionCarrierSchema } from "../brain/ephemeral-vision.js";
 
 export const createChatSessionBodySchema = z.object({
   targetDeviceId: z.string().uuid().optional(),
@@ -32,7 +33,63 @@ function contentFromInputBlocks(blocks: Array<z.infer<typeof chatInputBlockSchem
     .trim();
 }
 
-export const createChatMessageBodySchema = z.object({
+function normalizeAuthorizedLegacyVision(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const input = { ...(value as Record<string, unknown>) };
+  if (input.ephemeralVision) return input;
+  const metadataValue = input.metadata;
+  if (!metadataValue || typeof metadataValue !== "object" || Array.isArray(metadataValue)) return input;
+  const metadata = { ...(metadataValue as Record<string, unknown>) };
+  if (metadata.cloudVisionOptIn !== true || !Array.isArray(metadata.attachments)) return input;
+
+  const images: Array<Record<string, unknown>> = [];
+  const attachments = metadata.attachments.map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const attachment = { ...(value as Record<string, unknown>) };
+    if (!Array.isArray(attachment.clientAttachments)) return attachment;
+    const retained: unknown[] = [];
+    for (const nested of attachment.clientAttachments) {
+      if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+        retained.push(nested);
+        continue;
+      }
+      const item = nested as Record<string, unknown>;
+      if (item.attachmentType !== "image" || typeof item.base64Thumbnail !== "string") {
+        retained.push(nested);
+        continue;
+      }
+      images.push({
+        imageId: String(item.imageId ?? attachment.documentId ?? `legacy-image-${images.length + 1}`).slice(0, 120),
+        kind: "full_frame",
+        mimeType: ["image/jpeg", "image/png", "image/webp"].includes(String(item.mimeType))
+          ? item.mimeType
+          : "image/jpeg",
+        base64Data: item.base64Thumbnail,
+        width: Number(item.thumbnailWidth) || 512,
+        height: Number(item.thumbnailHeight) || 512,
+      });
+    }
+    if (retained.length > 0) attachment.clientAttachments = retained;
+    else delete attachment.clientAttachments;
+    return attachment;
+  });
+  if (images.length === 0) return input;
+  metadata.attachments = attachments;
+  input.metadata = metadata;
+  input.ephemeralVision = {
+    version: 1,
+    retention: "request_ephemeral",
+    privacy: {
+      metadataStripped: true,
+      userAuthorizedCloud: true,
+      localSensitivity: "personal",
+    },
+    images: images.slice(0, 4),
+  };
+  return input;
+}
+
+export const createChatMessageBodySchema = z.preprocess(normalizeAuthorizedLegacyVision, z.object({
   sessionId: z.string().uuid().optional(),
   chatSessionId: z.string().uuid().optional(),
   targetDeviceId: z.string().uuid().optional(),
@@ -46,6 +103,7 @@ export const createChatMessageBodySchema = z.object({
     .transform((values) => [...new Set(values)])
     .default([]),
   metadata: boundedJsonRecordSchema.optional(),
+  ephemeralVision: ephemeralVisionCarrierSchema.optional(),
 })
   .superRefine((input, ctx) => {
     const content = input.content?.trim() || contentFromInputBlocks(input.blocks);
@@ -74,7 +132,7 @@ export const createChatMessageBodySchema = z.object({
         message: "raw binary upload payload is not accepted; send processed data only",
       });
     }
-  })
+  }))
   .transform(({ chatSessionId, ...input }) => {
     const content = input.content?.trim() || contentFromInputBlocks(input.blocks);
     return {

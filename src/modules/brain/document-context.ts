@@ -170,7 +170,16 @@ export type DocumentContextResult = {
   imageCount: number;
   tableCount: number;
   hasContent: boolean;
-  visionImages: Array<{ imageId: string; mimeType: string; base64: string; label: string }>;
+  visionImages: Array<{
+    imageId: string;
+    mimeType: string;
+    base64: string;
+    label: string;
+    width: number;
+    height: number;
+    category?: ClientImageAttachment["imageCategory"];
+    transport: "request_ephemeral";
+  }>;
 };
 
 export async function buildDocumentContextBlock(
@@ -215,6 +224,10 @@ export async function buildDocumentContextBlock(
     mimeType: img.mimeType.startsWith("image/") ? img.mimeType : "image/jpeg",
     base64: img.base64Thumbnail,
     label: img.fileName,
+    width: img.thumbnailWidth,
+    height: img.thumbnailHeight,
+    category: img.imageCategory,
+    transport: "request_ephemeral" as const,
   }));
 
   return {

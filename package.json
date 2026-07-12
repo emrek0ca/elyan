@@ -20,6 +20,7 @@
     "benchmark": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/run-benchmarks.ts",
     "benchmark:security": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/run-benchmarks.ts security",
     "benchmark:routing": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/run-benchmarks.ts routing",
+    "benchmark:vision": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/run-benchmarks.ts vision-quality",
     "evaluate:block-output": "tsx src/scripts/evaluate-block-output.ts",
     "evaluate:block-output:dist": "node dist/scripts/evaluate-block-output.js",
     "report:ai-cost": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/report-ai-cost.ts",

@@ -1093,6 +1093,7 @@ test("decideCommandRoute routes to the desktop when dispatch is on and a desktop
   });
 
   assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
   assert.equal(decision.mode, "executable_task");
   assert.equal(decision.requiredRuntime, "desktop");
   assert.equal(decision.taskRoute?.target, "desktop_runtime");
