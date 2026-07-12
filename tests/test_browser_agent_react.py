@@ -98,6 +98,24 @@ def test_agent_stops_when_decider_repeats_same_action(_fake_session) -> None:
     assert excinfo.value.code == "REACT_STUCK"
 
 
+def test_agent_stops_after_consecutive_failures(_fake_session, monkeypatch) -> None:
+    # Her tıklama farklı seçiciyle başarısız olsun; STUCK yerine devre kesici devreye girmeli.
+    def _always_fail(selector="", text="", role=""):
+        raise SafeCapabilityError("ELEMENT_NOT_FOUND", "Öğe bulunamadı.")
+
+    monkeypatch.setattr(browser_agent.browser_session, "session_click", _always_fail)
+    counter = {"i": 0}
+
+    def _restless_click(_payload: dict[str, Any]) -> dict[str, Any]:
+        counter["i"] += 1
+        return {"action": "click", "selector": f"a#v{counter['i']}", "reason": "dene"}
+
+    browser_agent.register_decider(_restless_click)
+    with pytest.raises(SafeCapabilityError) as excinfo:
+        browser_agent.run("olmayan öğeye tıkla")
+    assert excinfo.value.code == "REACT_REPEATED_FAILURE"
+
+
 def test_agent_budget_exhaustion_is_explicit(_fake_session) -> None:
     # Hep farklı ama done'a ulaşmayan kararlar → bütçe bitince dürüst hata.
     counter = {"i": 0}

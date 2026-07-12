@@ -24,6 +24,7 @@ _MAX_TURNS_DEFAULT = 12
 _MAX_TURNS_CAP = 24
 _HISTORY_WINDOW = 6
 _OBSERVATION_ELEMENT_LIMIT = 40
+_MAX_CONSECUTIVE_FAILURES = 3
 
 _ALLOWED_ACTIONS = {"goto", "click", "type", "extract", "download", "snapshot", "done", "fail"}
 
@@ -122,6 +123,8 @@ def run(goal: str, max_turns: int = _MAX_TURNS_DEFAULT) -> dict[str, Any]:
     collected: list[dict[str, Any]] = []
     downloads: list[str] = []
     last_action_signature = ""
+    consecutive_failures = 0
+    last_failure_text = ""
 
     for turn in range(1, turns + 1):
         observation = _observe()
@@ -185,6 +188,18 @@ def run(goal: str, max_turns: int = _MAX_TURNS_DEFAULT) -> dict[str, Any]:
             outcome_result = {}
             outcome_text = f"Eylem başarısız: {exc.message}"
             ok = False
+
+        if ok:
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+            last_failure_text = outcome_text
+            if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                raise SafeCapabilityError(
+                    "REACT_REPEATED_FAILURE",
+                    f"Tarayıcı ajanı {consecutive_failures} kez üst üste başarısız oldu; "
+                    f"görev güvenle durduruldu. Son hata: {last_failure_text}",
+                )
 
         if action == "extract" and isinstance(outcome_result.get("items"), list):
             collected.extend(item for item in outcome_result["items"] if isinstance(item, dict))
