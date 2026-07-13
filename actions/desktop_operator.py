@@ -1611,6 +1611,28 @@ def run(
     _confirmed: bool = False,
 ) -> dict[str, Any]:
     require_macos("Visual Desktop Operator")
+    # Erken dürüstlük kapısı: operatör ekranı GÖREMİYOR ya da girdi
+    # GÖNDEREMİYORSA körlemesine deneyip "doğrulama başarısız" üretmek yerine
+    # eyleme başlamadan, kullanıcıya yol gösteren bir hatayla dur. (Canlı
+    # arıza: izinsiz makinede her operatör görevi VERIFICATION_FAILED oluyordu.)
+    status_detail = operator_runtime_status().get("detail", {})
+    status_detail = status_detail if isinstance(status_detail, dict) else {}
+    can_observe = bool(status_detail.get("screenObservationReady")) or bool(
+        status_detail.get("accessibilityReady")
+    )
+    can_act = bool(status_detail.get("inputControlReady"))
+    if not (can_observe and can_act):
+        missing: list[str] = []
+        if not bool(status_detail.get("screenObservationReady")):
+            missing.append("Ekran Kaydı")
+        if not bool(status_detail.get("accessibilityReady")):
+            missing.append("Erişilebilirlik")
+        raise SafeCapabilityError(
+            "PERMISSION_REQUIRED",
+            "Bilgisayar kontrolü için macOS izinleri eksik: "
+            + (", ".join(missing) or "Erişilebilirlik")
+            + ". Sistem Ayarları > Gizlilik ve Güvenlik bölümünden Elyan'a izin ver.",
+        )
     _cleanup_stale_screenshots()
     _clear_abort_flag()
     run_id = f"oprun_{int(time.time() * 1000)}_{_operator_hash(goal or action or target_text)[:8]}"

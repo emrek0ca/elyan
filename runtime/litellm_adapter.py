@@ -16,6 +16,10 @@ def _resolved_model(provider: str, model: str) -> str:
     cleaned = str(model or "").strip()
     if not cleaned:
         return ""
+    # Google GenAI biçimi ("models/gemini-2.5-flash") litellm'in tanımadığı bir
+    # önek taşır; litellm "gemini/<model>" bekler. Önce bunu soy.
+    if cleaned.startswith("models/"):
+        cleaned = cleaned[len("models/"):]
     if "/" in cleaned:
         return cleaned
     prefixes = {

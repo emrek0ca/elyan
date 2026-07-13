@@ -142,3 +142,30 @@ def test_agent_policy_gated_by_browser_permission() -> None:
     assert not denied.allowed and denied.code == "PERMISSION_REQUIRED"
     full_access = {"runtime": {"access": {"fullAccessSession": {"enabled": True}}}}
     assert safety_policy.evaluate_tool("browser_agent.run", {}, full_access).allowed
+
+
+def test_operator_run_fails_fast_without_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
+    # İzinsiz makinede operatör körlemesine deneyip VERIFICATION_FAILED üretmek
+    # yerine eyleme başlamadan yol gösteren bir hatayla durmalı.
+    from actions import desktop_operator
+
+    monkeypatch.setattr(desktop_operator.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        desktop_operator,
+        "operator_runtime_status",
+        lambda: {"detail": {"screenObservationReady": False, "accessibilityReady": False, "inputControlReady": False}},
+    )
+    with pytest.raises(SafeCapabilityError) as excinfo:
+        desktop_operator.run(goal="Ayarlarda karanlık modu aç")
+    assert excinfo.value.code == "PERMISSION_REQUIRED"
+    assert "Ekran Kaydı" in excinfo.value.message
+
+
+def test_browser_shaped_goal_detection() -> None:
+    from runtime.bridge import _goal_is_browser_shaped
+
+    assert _goal_is_browser_shaped("YouTube kanalıma girip son videoları listele")
+    assert _goal_is_browser_shaped("tarayıcıdan kedi resmi aç")
+    assert _goal_is_browser_shaped("https://example.com adresinden dosya indir")
+    assert not _goal_is_browser_shaped("Ayarlarda karanlık modu aç")
+    assert not _goal_is_browser_shaped("Notlar uygulamasına toplantı notu ekle")

@@ -9394,3 +9394,31 @@ def test_status_payload_carries_task_title_for_local_inbox(
     runtime._sync_task_inbox_status("44444444-4444-4444-8444-444444444444", payload)
     item = state_store.get_task_inbox_item("44444444-4444-4444-8444-444444444444")
     assert item is not None and item["title"] == "Chrome dan kedi resmi aç"
+
+
+def test_recoverable_replan_hands_browser_goal_from_failed_operator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Görsel operatör izin/doğrulama nedeniyle düşerse tarayıcı-şekilli hedefi
+    # tarayıcı ajanı devralır (canlı arıza regresyonu).
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    revised = runtime._recoverable_replan({
+        "reason": "verification_failure",
+        "failedCapability": "desktop_operator.run",
+        "errorCode": "VERIFICATION_FAILED",
+        "failedArgs": {"goal": "youtube kanalıma girip video linklerini topla"},
+        "remainingSteps": [],
+    })
+    assert [s["capability"] for s in revised] == ["browser_agent.run"]
+    assert revised[0]["args"]["goal"] == "youtube kanalıma girip video linklerini topla"
+
+    # Tarayıcı-şekilli OLMAYAN hedef devredilmez (native iş tarayıcıda yapılamaz).
+    revised_native = runtime._recoverable_replan({
+        "reason": "verification_failure",
+        "failedCapability": "desktop_operator.run",
+        "errorCode": "PERMISSION_REQUIRED",
+        "failedArgs": {"goal": "Ayarlarda karanlık modu aç"},
+        "remainingSteps": [],
+    })
+    assert revised_native == []

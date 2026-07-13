@@ -408,7 +408,7 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
             "appName": {"type": "STRING", "description": "Hedef uygulama."},
             "steps": {"type": "ARRAY", "description": "Elle verilen adımlar (varsa)."},
         },
-        usage="Bir uygulamada tıklama/yazma gerektiren çok adımlı işler için (API/yetenek yoksa). Güçlü — dikkatli kullan.",
+        usage="YALNIZ yerel (native) uygulama arayüzlerinde tıklama/yazma gerektiren işler için; macOS Ekran Kaydı + Erişilebilirlik izni ister. Web sitesi/tarayıcı işleri için HER ZAMAN browser_agent.run kullan (izin istemez, daha güvenilir).",
         examples=[{"args": {"goal": "System Settings'te karanlık modu aç", "appName": "System Settings"}}],
     ),
     _tool_decl(

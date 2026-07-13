@@ -3092,7 +3092,17 @@ def route_text_to_tool(
     if weekly_reminders is not None:
         return weekly_reminders
 
-    if "youtube" in q and any(token in q for token in ("istatistik", "kanal", "son video", "buyume", "analytics")):
+    # Kanal RAPORU yalnız istatistik sorularında; "youtube-transcript sitesine
+    # gir, transkript indir" gibi gezinme/indirme istekleri rapora KAPILMASIN
+    # (tarayıcı ajanı/LLM planlayıcı devralır).
+    if (
+        "youtube" in q
+        and any(token in q for token in ("istatistik", "kanal", "son video", "buyume", "analytics"))
+        and not any(
+            token in q
+            for token in ("sitesine", "siteye", "sitesi", "http", "www", "indir", "transkript", "transcript", "yapistir", "tikla", "girip")
+        )
+    ):
         return RoutedTask(
             "get_youtube_channel_report",
             {"query": original, "video_limit": 6},

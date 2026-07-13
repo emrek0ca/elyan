@@ -315,6 +315,12 @@ class RemoteTaskRunner:
                 error_code="TASK_PROMPT_MISSING",
             )
 
+        self._upsert_local_task(
+            task_id,
+            status="planning",
+            summary="Görev planlanıyor.",
+            title=title if title != "Elyan görevi" else prompt,
+        )
         self._report_lifecycle(task_id, task_run_id, "planning", "Görev planlanıyor.", task=task)
         plan_preview = self.host._remote_task_running_plan_preview(task, prompt, payload)
         readiness = self._readiness_for_plan(plan_preview)
@@ -1272,18 +1278,19 @@ class RemoteTaskRunner:
         *,
         status: str,
         summary: str = "",
+        title: str = "",
         approval_request: dict[str, Any] | None = None,
     ) -> None:
-        state_store.upsert_task_inbox_item(
-            {
-                "id": task_id,
-                "status": status,
-                "summary": summary,
-                "approvalRequest": approval_request or {},
-                "updatedAt": _utc_now_iso(),
-            },
-            last_synced_at=_utc_now_iso(),
-        )
+        item: dict[str, Any] = {
+            "id": task_id,
+            "status": status,
+            "summary": summary,
+            "approvalRequest": approval_request or {},
+            "updatedAt": _utc_now_iso(),
+        }
+        if str(title or "").strip():
+            item["title"] = _safe_text(title, 200)
+        state_store.upsert_task_inbox_item(item, last_synced_at=_utc_now_iso())
 
     def _mark_link_terminal(self, task_id: str, status: str) -> None:
         state_store.update_remote_task_link(

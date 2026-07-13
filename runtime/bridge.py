@@ -178,6 +178,40 @@ REMOTE_APPROVAL_CAPABILITIES = {
 # Hız için regex yolunda kalan basit doğrudan komutlar: LLM planlama gecikmesi
 # gereksiz olduğundan uygulama aç/kapat, medya ve sistem bilgisi burada tutulur.
 REMOTE_FAST_DIRECT_CAPABILITIES = {"open_app", "close_app", "play_media", "sys_info"}
+
+# Tarayıcı-şekilli hedef işaretleri: görsel operatör yerine tarayıcı ajanının
+# doğru araç olduğu görevleri yakalar (web sitesi/gezinme/indirme dili).
+_BROWSER_SHAPED_GOAL_TOKENS = (
+    "tarayici", "browser", "chrome", "safari", "firefox", "web", "site",
+    "http", "www", "url", "youtube", "google", "gmail", "instagram",
+    "twitter", "linkedin", "netflix", "sekme", "sayfa", "indir", "download",
+    "arama", "ara", "search",
+)
+
+
+def _goal_is_browser_shaped(goal: str) -> bool:
+    folded = _normalise_text(goal)
+    tokens = set(folded.split())
+    return any(
+        marker in tokens or (len(marker) > 4 and marker in folded)
+        for marker in _BROWSER_SHAPED_GOAL_TOKENS
+    )
+
+
+def _operator_can_act() -> bool:
+    """Görsel operatör bu makinede gerçekten gözleyip eyleyebilir mi?
+    (macOS Ekran Kaydı + Erişilebilirlik izinleri.) Yerel probe, ağ yok."""
+    try:
+        from actions.desktop_operator import operator_runtime_status
+
+        detail = operator_runtime_status().get("detail", {})
+        detail = detail if isinstance(detail, dict) else {}
+        can_observe = bool(detail.get("screenObservationReady")) or bool(
+            detail.get("accessibilityReady")
+        )
+        return can_observe and bool(detail.get("inputControlReady"))
+    except Exception:
+        return False
 # Güçlü sıralama işaretleri: bunlar açıkça "önce şunu, SONRA bunu" gibi sıralı
 # çok-adımlı görev bildirir. Zayıf " ve " kasıtlı olarak DIŞARIDA — tek başına
 # "müzik aç ve keyfini çıkar" gibi durumları yanlışça çok-adım saymamak için.
@@ -7942,7 +7976,30 @@ class RuntimeBridge:
         ):
             return remaining_steps
 
-        # 3) open_app hedefi bulunamadı ve hedef aslında "uygulama + içerik"
+        # 3) Görsel operatör izin/doğrulama nedeniyle düştü ve hedef tarayıcı
+        # işiyse: hazır olan tarayıcı ajanı devralır (canlı arıza: izinsiz
+        # makinede her operatör görevi "doğrulama başarısız" oluyordu).
+        if capability == "desktop_operator.run" and error_code in {
+            "PERMISSION_REQUIRED",
+            "OS_PERMISSION_REQUIRED",
+            "VERIFICATION_FAILED",
+        }:
+            operator_goal = str(failed_args.get("goal", "") or "").strip()
+            if operator_goal and _goal_is_browser_shaped(operator_goal) and bool(
+                capability_readiness(
+                    "browser_agent.run", state=self._state_with_access()
+                ).get("ready")
+            ):
+                return [
+                    {
+                        "capability": "browser_agent.run",
+                        "args": {"goal": operator_goal},
+                        "description": "Tarayıcı ajanı hedefi devralacak.",
+                    },
+                    *remaining_steps,
+                ]
+
+        # 4) open_app hedefi bulunamadı ve hedef aslında "uygulama + içerik"
         # kalıbıysa ("Chrome dan kedi resmi") planı yerinde düzelt: uygulamayı
         # aç + içerik için doğru adımı üret. Eski istemci/backend planlarından
         # gelen uydurma app adlarına karşı güvenlik ağı.
@@ -11459,13 +11516,32 @@ class RuntimeBridge:
                         }
                     )
             if "desktop_operator.run" in capabilities and "browser_control" not in capabilities:
-                steps.append(
-                    {
-                        "capability": "desktop_operator.run",
-                        "args": {"goal": natural_goal, "action": "run", "appName": ""},
-                        "description": f"Bilgisayar kontrolü ile görev yürütülecek: {topic}",
-                    }
+                # Görsel operatör ekranı göremiyorsa (izinler yok) ya da hedef
+                # tarayıcı işiyse, hazır olan tarayıcı ajanına ver — körlemesine
+                # operatör denemesi her seferinde doğrulamada düşüyordu.
+                agent_ready = bool(
+                    capability_readiness(
+                        "browser_agent.run", state=self._state_with_access()
+                    ).get("ready")
                 )
+                if agent_ready and (
+                    _goal_is_browser_shaped(natural_goal) or not _operator_can_act()
+                ):
+                    steps.append(
+                        {
+                            "capability": "browser_agent.run",
+                            "args": {"goal": natural_goal},
+                            "description": f"Tarayıcı ajanı hedefi uçtan uca yürütecek: {topic}",
+                        }
+                    )
+                else:
+                    steps.append(
+                        {
+                            "capability": "desktop_operator.run",
+                            "args": {"goal": natural_goal, "action": "run", "appName": ""},
+                            "description": f"Bilgisayar kontrolü ile görev yürütülecek: {topic}",
+                        }
+                    )
             if "web_research" in capabilities:
                 steps.append(
                     {

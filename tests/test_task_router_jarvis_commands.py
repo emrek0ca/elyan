@@ -357,3 +357,14 @@ def test_youtube_play_still_extracts_content_query() -> None:
     routed = route_text_to_tool("muse youtube da çal")
     assert routed is not None and routed.intent == "youtube_play"
     assert routed.args["query"] == "muse"
+
+
+def test_youtube_report_does_not_capture_site_navigation() -> None:
+    # "youtube-transcript sitesine gir ... indir" kanal RAPORU değildir.
+    routed = route_text_to_tool(
+        "youtube-transcript sitesine girip son videomun transkriptini indir"
+    )
+    assert routed is None or routed.intent != "youtube_report"
+    # Gerçek istatistik sorusu rapora gitmeye devam eder.
+    stats = route_text_to_tool("youtube kanal istatistiklerimi göster")
+    assert stats is not None and stats.intent == "youtube_report"
