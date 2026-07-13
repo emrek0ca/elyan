@@ -7,13 +7,26 @@ from pathlib import Path
 
 import pytest
 
-from runtime import bridge, state_store
+from actions import browser_session
+from runtime import bridge, state_store, task_router
 from runtime.backend_client import BackendResult
+from runtime.capability_registry import SafeCapabilityError
 
 VALID_DEVICE_ID = "11111111-1111-4111-8111-111111111111"
 VALID_CONNECTION_ID = "22222222-2222-4222-8222-222222222222"
 VALID_CHAT_SESSION_ID = "33333333-3333-4333-8333-333333333333"
 VALID_DEVICE_SECRET = "device-secret-123456"
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_ollama_tags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Testler canlı ollama'ya problamasın: yeni sözleşmede ollama ancak model
+    GERÇEKTEN kuruluysa aday olur; testlerde kurulu modelleri cache'e tohumla."""
+    monkeypatch.setattr(
+        bridge,
+        "_OLLAMA_TAGS_CACHE",
+        {"at": float("inf"), "names": ["llama3.2:3b", "llama3.1:8b", "qwen2.5:7b"]},
+    )
 
 
 def _isolate_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1096,6 +1109,243 @@ def test_typed_work_order_executes_without_redundant_route_decision(
     assert pending["query"] == prompt
     assert pending["steps"][0]["capability"] == "open_app"
     assert pending["steps"][0]["args"]["app_name"] == "Hesap Makinesi"
+
+
+def test_dispatch_prefers_local_deterministic_route_over_llm_planner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Bariz tek-adım iş ("masaüstündeki dosyaları listele") backend geniş
+    capability önerse ve server_brain hazır olsa bile LLM planlayıcıya
+    DELEGE EDİLMEZ — yerel yüksek-güven rota (directory_tree) kazanır.
+    (Canlı arıza: LLM operator.run seçti → doğrulama hatası → onay çıkmazı.)"""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(bridge, "_server_brain_ready", lambda _state: True)
+    monkeypatch.setattr(
+        runtime,
+        "send_conversation",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("yerel rota varken LLM'e delege edilmemeli")),
+    )
+    prompt = "Masaüstündeki dosyaları listele"
+    task = {
+        "id": "task-local-route-wins",
+        "title": "Masaüstü cowork görevi",
+        "status": "queued",
+        "payload": {
+            "prompt": prompt,
+            "metadata": {
+                "routeDecision": {
+                    "route": "desktop_runtime",
+                    "capabilities": ["desktop_operator.run"],
+                    "reason": "Masaüstü görevi.",
+                }
+            },
+        },
+    }
+
+    result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
+
+    assert result is not None, "deterministik yol LLM'e düşmemeli"
+    dumped = json.dumps(result, ensure_ascii=False, default=str)
+    assert "directory_tree" in dumped
+    assert "desktop_operator" not in dumped
+
+
+def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Gerçek mobil dispatch zarfındaki jenerik tek operator adımı, bariz
+    ve onaysız yerel directory_tree rotasını ezmemeli."""
+    _isolate_state(monkeypatch, tmp_path)
+    (tmp_path / "rapor.txt").write_text("yerel", encoding="utf-8")
+    monkeypatch.setattr(task_router, "_resolve_location_path", lambda _text: str(tmp_path))
+    runtime = bridge.RuntimeBridge()
+    prompt = "Masaüstündeki dosyaları listele"
+    task = {
+        "id": "task-generic-explicit-operator",
+        "title": prompt,
+        "status": "queued",
+        "payload": {
+            "prompt": prompt,
+            "metadata": {
+                "desktopDispatch": True,
+                "chatSurface": "mobile",
+                "routeDecision": {
+                    "route": "desktop_runtime",
+                    "capabilities": ["desktop_operator.run"],
+                    "reason": "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+                    "planPreview": {
+                        "summary": "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+                        "steps": [
+                            {
+                                "id": "step_1",
+                                "capability": "desktop_operator.run",
+                                "description": "Masaüstü görevi yürütülecek.",
+                                "args": {},
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+    }
+
+    result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
+
+    assert result is not None
+    assert result["chatOk"] is True
+    assert result["needsConfirmation"] is False
+    dumped = json.dumps(result, ensure_ascii=False, default=str)
+    assert "directory_tree" in dumped
+    assert "rapor.txt" in dumped
+    assert "desktop_operator.run" not in dumped
+
+
+def test_dispatch_keeps_specific_explicit_operator_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Spesifik GUI hedefi/argümanı taşıyan gerçek explicit operator planı
+    jenerik fallback sayılmamalı."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "Masaüstündeki dosyaları listele"
+    route_decision = {
+        "route": "desktop_runtime",
+        "capabilities": ["desktop_operator.run"],
+        "planPreview": {
+            "summary": "Finder içinde belirli GUI hedefi kullanılacak.",
+            "steps": [
+                {
+                    "capability": "desktop_operator.run",
+                    "args": {
+                        "goal": "Finder penceresinde Sıralama menüsünü aç.",
+                        "action": "run",
+                        "targetApp": "Finder",
+                    },
+                    "description": "Finder GUI hedefi yürütülecek.",
+                }
+            ],
+        },
+    }
+    task = {
+        "id": "task-specific-explicit-operator",
+        "title": prompt,
+        "payload": {"prompt": prompt, "metadata": {"routeDecision": route_decision}},
+    }
+
+    steps, _preview = runtime._remote_task_steps_from_route(
+        task,
+        prompt,
+        {"desktop_operator.run"},
+        route_decision,
+    )
+
+    assert [step["capability"] for step in steps] == ["desktop_operator.run"]
+    assert steps[0]["args"]["targetApp"] == "Finder"
+
+
+def test_remote_browser_agent_route_requires_approval(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Browser agent tıklama/yazma/indirme yapabildiği için mobil dispatch
+    planında doğrudan çalışmamalı; waiting-approval planı üretmeli."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "İnternetten Example Domain başlığını bul ve söyle"
+    task = {
+        "id": "task-browser-agent-approval",
+        "title": prompt,
+        "payload": {
+            "prompt": prompt,
+            "metadata": {
+                "desktopDispatch": True,
+                "routeDecision": {
+                    "route": "desktop_runtime",
+                    "capabilities": ["browser_control"],
+                    "reason": "Tarayıcı görevi.",
+                },
+            },
+        },
+    }
+
+    result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
+
+    assert result is not None
+    assert result["needsConfirmation"] is True
+    pending = state_store.get_pending_plan(result["pendingPlanId"])
+    assert pending is not None
+    assert [step["capability"] for step in pending["steps"]] == ["browser_agent.run"]
+
+
+def test_browser_snapshot_never_reads_form_values() -> None:
+    scripts: list[str] = []
+
+    class _Page:
+        url = "https://example.test/account"
+
+        @staticmethod
+        def title() -> str:
+            return "Hesap"
+
+        @staticmethod
+        def evaluate(script: str, _limit: int) -> list:
+            scripts.append(script)
+            return []
+
+    result = browser_session._SessionThread()._snapshot(_Page(), {"limit": 10})
+
+    assert result["elements"] == []
+    assert scripts and "el.value" not in scripts[0]
+    assert "isFormControl" in scripts[0]
+
+
+def test_browser_session_blocks_sensitive_fields_and_irreversible_clicks() -> None:
+    class _Locator:
+        def __init__(self, attrs: dict[str, str], text: str = "") -> None:
+            self.attrs = attrs
+            self.text = text
+            self.filled = False
+            self.clicked = False
+
+        def get_attribute(self, name: str) -> str:
+            return self.attrs.get(name, "")
+
+        @property
+        def first(self) -> "_Locator":
+            return self
+
+        def inner_text(self, timeout: int = 0) -> str:
+            return self.text
+
+        def fill(self, _value: str, timeout: int = 0) -> None:
+            self.filled = True
+
+        def click(self, timeout: int = 0) -> None:
+            self.clicked = True
+
+    class _Page:
+        def __init__(self, locator: _Locator) -> None:
+            self._target = locator
+
+        def locator(self, _selector: str) -> _Locator:
+            return self._target
+
+    session = browser_session._SessionThread()
+    card = _Locator({"type": "tel", "autocomplete": "cc-number"})
+    with pytest.raises(SafeCapabilityError) as field_error:
+        session._type(_Page(card), {"selector": "#card", "value": "4111111111111111"})
+    assert field_error.value.code == "SENSITIVE_FIELD_BLOCKED"
+    assert card.filled is False
+
+    purchase = _Locator({"type": "button"}, "Satın al")
+    with pytest.raises(SafeCapabilityError) as click_error:
+        session._click(_Page(purchase), {"selector": "#purchase"})
+    assert click_error.value.code == "SENSITIVE_ACTION_BLOCKED"
+    assert purchase.clicked is False
 
 
 def test_remote_task_runner_adds_canonical_run_payload(
@@ -7367,6 +7617,20 @@ def test_local_first_private_semantic_candidates_do_not_include_cloud() -> None:
     assert candidates == ["ollama"]
 
 
+def test_ollama_model_probe_requires_the_configured_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bridge,
+        "_OLLAMA_TAGS_CACHE",
+        {"at": float("inf"), "names": ["llama3.2:1b", "qwen2.5:latest"]},
+    )
+
+    assert bridge._ollama_model_installed({}, "llama3.2:3b") is False
+    assert bridge._ollama_model_installed({}, "llama3.2:1b") is True
+    assert bridge._ollama_model_installed({}, "qwen2.5") is True
+
+
 def test_state_store_normalizes_legacy_device_name(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -7493,6 +7757,125 @@ def test_confirmed_plan_records_success_intelligence(
     assert response["chatOk"] is True
     assert quality["successes"] == 1
     assert len(snapshot["confirmedPlanPatterns"]) == 1
+
+
+def test_confirmed_plan_stays_available_until_execution_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Onay round-trip'i planı yürütme başlamadan silmemeli; plan yalnız
+    yürütme sonucu oluştuktan sonra temizlenmeli."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    conversation = state_store.create_conversation("Plan")
+    plan = state_store.save_pending_plan(
+        {
+            "conversationId": conversation["id"],
+            "query": "Finder aç",
+            "intent": "open_app",
+            "capability": "open_app",
+            "confidence": 0.9,
+            "steps": [{"capability": "open_app", "args": {"app_name": "Finder"}}],
+        }
+    )
+    observed_during_execution: list[bool] = []
+
+    def fake_execute(_steps: list[dict]) -> tuple:
+        observed_during_execution.append(state_store.get_pending_plan(plan["id"]) is not None)
+        return True, "Finder açıldı.", [], "", {"kind": "open_app"}, []
+
+    monkeypatch.setattr(runtime, "_execute_plan_steps", fake_execute)
+
+    response = runtime.confirm_conversation_plan(conversation["id"], plan["id"], True)
+
+    assert response["chatOk"] is True
+    assert observed_during_execution == [True]
+    assert state_store.get_pending_plan(plan["id"]) is None
+
+
+def test_confirmed_plan_rejects_duplicate_execution_while_inflight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Plan yürütme boyunca state'te kaldığı için ikinci doğrudan confirm
+    aynı yan etkili adımları paralel başlatmamalı."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    conversation = state_store.create_conversation("Plan")
+    plan = state_store.save_pending_plan(
+        {
+            "conversationId": conversation["id"],
+            "query": "Finder aç",
+            "intent": "open_app",
+            "capability": "open_app",
+            "confidence": 0.9,
+            "steps": [{"capability": "open_app", "args": {"app_name": "Finder"}}],
+        }
+    )
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[int] = []
+    first_result: list[dict] = []
+
+    def fake_execute(_steps: list[dict]) -> tuple:
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(2.0)
+        return True, "Finder açıldı.", [], "", {"kind": "open_app"}, []
+
+    monkeypatch.setattr(runtime, "_execute_plan_steps", fake_execute)
+    worker = threading.Thread(
+        target=lambda: first_result.append(
+            runtime.confirm_conversation_plan(conversation["id"], plan["id"], True)
+        )
+    )
+    worker.start()
+    assert started.wait(1.0)
+    second_runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(second_runtime, "_execute_plan_steps", fake_execute)
+    try:
+        duplicate = second_runtime.confirm_conversation_plan(conversation["id"], plan["id"], True)
+    finally:
+        release.set()
+        worker.join(timeout=2.0)
+
+    assert calls == [1]
+    assert duplicate["executionMode"] == "plan_execution_in_progress"
+    assert first_result and first_result[0]["chatOk"] is True
+    assert state_store.get_pending_plan(plan["id"]) is None
+
+
+def test_interrupted_confirmed_plan_fails_closed_without_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    conversation = state_store.create_conversation("Plan")
+    plan = state_store.save_pending_plan(
+        {
+            "conversationId": conversation["id"],
+            "query": "mail gönder",
+            "intent": "email_send",
+            "capability": "email_send",
+            "executionState": "failed",
+            "executionErrorCode": "PLAN_EXECUTION_INTERRUPTED",
+            "steps": [{"capability": "email_send", "args": {"to": ["user@example.com"]}}],
+        }
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_execute_plan_steps",
+        lambda _steps: (_ for _ in ()).throw(AssertionError("kesintili plan replay edilmemeli")),
+    )
+
+    result = runtime.confirm_conversation_plan(conversation["id"], plan["id"], True)
+
+    assert result["chatOk"] is False
+    assert result["executionMode"] == "plan_execution_interrupted"
+    assert result["error"]["code"] == "PLAN_EXECUTION_INTERRUPTED"
+    assert state_store.get_pending_plan(plan["id"])["executionState"] == "failed"
 
 
 def test_bad_history_forces_semantic_plan_preview(
@@ -8399,6 +8782,43 @@ def test_live_progress_routes_to_active_task_and_throttles(
     assert pushed[1][2] == [("s1", "completed"), ("s2", "running")]
     # Görev bittiğinde throttle durumu temizlenir.
     assert "task-1" not in runtime._remote_progress_last_signature
+
+
+def test_websocket_approval_resume_is_idempotent_and_terminal_fenced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Aynı approval iki kez gelirse ikinci resume paralel başlamamalı; yerel
+    terminal görev de yeniden running durumuna diriltilmemeli."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    calls: list[str] = []
+
+    def fake_resume(task_id: str, approved: bool, answer: str = "") -> dict:
+        calls.append(task_id)
+        nested = None
+        if len(calls) == 1:
+            nested = runtime._resume_remote_task_after_approval(task_id, approved, answer)
+        return {"taskId": task_id, "ok": True, "status": "resumed", "nested": nested}
+
+    monkeypatch.setattr(runtime.remote_task_runner, "resume_after_approval", fake_resume)
+
+    first = runtime._resume_remote_task_after_approval("task-approval", True)
+
+    assert calls == ["task-approval"]
+    assert first["nested"]["status"] == "skipped_duplicate"
+
+    runtime._remember_terminal_assigned_task("task-approval")
+    terminal_retry = runtime._resume_remote_task_after_approval("task-approval", True)
+
+    assert terminal_retry["status"] == "skipped_recent_terminal"
+    assert calls == ["task-approval"]
+
+    state_store.upsert_task_inbox_item({"id": "task-failed", "status": "failed"})
+    persisted_terminal_retry = runtime._resume_remote_task_after_approval("task-failed", True)
+
+    assert persisted_terminal_retry["status"] == "skipped_local_terminal"
+    assert calls == ["task-approval"]
 
 
 def test_force_runtime_reconnect_requires_auth(

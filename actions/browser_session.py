@@ -4,12 +4,12 @@ browser_control "URL aç ve unut"tur; buradaki yetenekler ise AYNI sayfada
 kalarak adım adım ilerler: git → tıkla → yaz → çıkar → indir. Oturum stratejisi:
 
 1. Çalışan bir Chrome CDP ucu varsa (kullanıcı --remote-debugging-port ile
-   açtıysa) ona bağlan — kullanıcının gerçek profili.
-2. Yoksa Elyan'ın kalıcı profili ile Chrome başlat
-   (~/.elyan/browser/profile): kullanıcı sitelere BİR KEZ giriş yapar,
-   oturumlar kalıcıdır. (Chrome 136+ varsayılan profile CDP'yi güvenlik
-   gereği kapattı; bu yüzden "günlük profile doğrudan bağlan" ancak kullanıcı
-   debug portuyla açarsa mümkün.)
+   açtıysa) ona bağlan — kullanıcının gerçek profili, canlı oturum.
+2. Yoksa kullanıcının GERÇEK varsayılan Chrome profiliyle Chrome başlat.
+   Elyan ayrı bir profil TUTMAZ; kullanıcının kendi girişlerini/oturumlarını
+   kullanır (tam kişisel ajan). Profil zaten açıksa dizin kilitli olur →
+   kullanıcı tarayıcıyı kapatır ya da debug portuyla açar. Dizin
+   ELYAN_BROWSER_PROFILE_DIR ile geçersiz kılınabilir.
 
 Playwright sync API nesneleri oluşturuldukları thread'e bağlıdır; executor
 farklı thread'lerden çağırdığı için oturum TEK bir işçi thread'te yaşar,
@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import queue
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -34,7 +35,6 @@ try:
 except Exception:  # pragma: no cover
     requests = None  # type: ignore[assignment]
 
-_PROFILE_DIR = Path.home() / ".elyan" / "browser" / "profile"
 _DOWNLOAD_DIR = Path.home() / ".elyan" / "browser" / "downloads"
 _COMMAND_TIMEOUT_SECONDS = 60.0
 _NAV_TIMEOUT_MS = 30_000
@@ -44,6 +44,59 @@ _MAX_SNAPSHOT_ELEMENTS = 80
 
 # Şifre/hassas alanlara otomatik yazmayı reddet — operatör güvenlik sınırı.
 _SENSITIVE_INPUT_TYPES = {"password"}
+_SENSITIVE_FIELD_PATTERN = re.compile(
+    r"(?:\bpassword\b|\bpasscode\b|\bone[\s_-]*time[\s_-]*code\b|\botp\b|\bpin\b|"
+    r"\bcredit[\s_-]*card\b|\bcard[\s_-]*(?:number|no)\b|\bcc[\s_-]*number\b|"
+    r"\bcvc\b|\bcvv\b|\bsecurity[\s_-]*code\b|\bexpir(?:y|ation)\b|\biban\b|"
+    r"\brouting[\s_-]*number\b|\bbank[\s_-]*account\b|\bşifre\b|\bparola\b|"
+    r"\bkart[\s_-]*numaras[\u0131i]\b|\bson[\s_-]*kullanma\b|\bgüvenlik[\s_-]*kodu\b|"
+    r"\bbanka[\s_-]*hesab[\u0131i]\b)",
+    flags=re.IGNORECASE,
+)
+_BLOCKED_CLICK_PATTERN = re.compile(
+    r"(?:\bpay\b|\bpurchase\b|\bbuy[\s_-]*now\b|\bcheckout\b|"
+    r"\bplace[\s_-]*order\b|\bconfirm[\s_-]*(?:purchase|order|payment)\b|"
+    r"\bsend[\s_-]*money\b|\bwire[\s_-]*transfer\b|\btransfer[\s_-]*funds\b|"
+    r"\bdelete[\s_-]*account\b|\böde\b|\bödeme\b|\bsat[\u0131i]n[\s_-]*al\b|"
+    r"\bsipariş(?:i|i)[\s_-]*ver\b|\bpara[\s_-]*gönder\b|\bhavale\b|"
+    r"\bhesab[\u0131i][\s_-]*sil\b)",
+    flags=re.IGNORECASE,
+)
+
+
+def _locator_safety_text(locator: Any) -> str:
+    parts: list[str] = []
+    for attribute in ("type", "name", "autocomplete", "aria-label", "placeholder", "id"):
+        try:
+            parts.append(str(locator.get_attribute(attribute) or ""))
+        except Exception:
+            continue
+    try:
+        parts.append(str(locator.inner_text(timeout=1_000) or ""))
+    except Exception:
+        pass
+    return " ".join(" ".join(parts).split())[:800]
+
+
+def _default_chrome_profile_dir() -> Path:
+    """Kullanıcının GERÇEK varsayılan Chrome user-data dizini.
+
+    Elyan ayrı bir profil tutmaz — kullanıcının kendi tarayıcısını, kendi
+    oturumlarını/girişlerini kullanır. ELYAN_BROWSER_PROFILE_DIR ile elle
+    geçersiz kılınabilir (ör. Brave/Edge veya farklı bir profil için).
+    """
+    override = str(os.environ.get("ELYAN_BROWSER_PROFILE_DIR", "") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    home = Path.home()
+    platform = sys.platform
+    if platform == "darwin":
+        return home / "Library" / "Application Support" / "Google" / "Chrome"
+    if platform.startswith("win"):
+        local = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
+        return Path(local) / "Google" / "Chrome" / "User Data"
+    # Linux ve diğerleri
+    return home / ".config" / "google-chrome"
 
 
 def _cdp_candidates() -> list[str]:
@@ -149,11 +202,14 @@ class _SessionThread:
                 except Exception:
                     browser = context = None
                     continue
-            # 2) Elyan kalıcı profili ile Chrome başlat (girişler kalıcı).
-            _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            # 2) Kullanıcının GERÇEK Chrome profili ile başlat — ayrı profil YOK.
+            #    Elyan kullanıcının kendi oturumlarını/girişlerini kullanır.
+            #    (Chrome bu profille zaten açıksa dizin kilitlidir; kullanıcı
+            #    tarayıcıyı kapatır ya da debug portuyla açarsa CDP yoluna düşer.)
+            profile_dir = _default_chrome_profile_dir()
             _DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
             launch_kwargs: dict[str, Any] = {
-                "user_data_dir": str(_PROFILE_DIR),
+                "user_data_dir": str(profile_dir),
                 "headless": False,
                 "accept_downloads": True,
                 "viewport": None,
@@ -161,12 +217,41 @@ class _SessionThread:
             }
             try:
                 context = playwright.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
+                self.mode = "persistent"
             except Exception:
                 # Google Chrome kanalı yoksa paket Chromium'a düş.
-                context = playwright.chromium.launch_persistent_context(**launch_kwargs)
+                try:
+                    context = playwright.chromium.launch_persistent_context(**launch_kwargs)
+                    self.mode = "persistent"
+                except Exception as exc:
+                    # Profil kilitli (Chrome zaten açık). Görevi hard-fail etmek
+                    # yerine geçici (girişsiz) bir bağlama düş — herkese açık
+                    # görevler (arama, hava, açık sayfa okuma) yine tamamlanır.
+                    # Giriş gerektiren işler için kullanıcıya net yol göster.
+                    context = None
+                    try:
+                        browser = playwright.chromium.launch(
+                            channel="chrome", headless=False,
+                            args=["--no-first-run", "--no-default-browser-check", "--start-maximized"],
+                        )
+                    except Exception:
+                        try:
+                            browser = playwright.chromium.launch(headless=False)
+                        except Exception:
+                            browser = None
+                    if browser is not None:
+                        context = browser.new_context(accept_downloads=True, viewport=None)
+                        self.mode = "ephemeral"
+                    if context is None:
+                        _shutdown()
+                        raise SafeCapabilityError(
+                            "BROWSER_PROFILE_BUSY",
+                            "Chrome profiline erişilemedi — tarayıcı zaten açık olabilir. "
+                            "Chrome'u kapatıp tekrar deneyin ya da onu "
+                            "--remote-debugging-port=9222 ile açın.",
+                    ) from exc
             pages = context.pages
             page = pages[0] if pages else context.new_page()
-            self.mode = "persistent"
             return page
 
         while True:
@@ -236,6 +321,13 @@ class _SessionThread:
 
     def _click(self, page: Any, args: dict[str, Any]) -> dict[str, Any]:
         locator = self._locator(page, args)
+        safety_text = _locator_safety_text(locator)
+        if _BLOCKED_CLICK_PATTERN.search(safety_text):
+            raise SafeCapabilityError(
+                "SENSITIVE_ACTION_BLOCKED",
+                "Ödeme, para transferi, sipariş veya hesap silme gibi geri döndürülemez "
+                "tarayıcı eylemleri otomatik olarak yürütülemez.",
+            )
         locator.click(timeout=_ACTION_TIMEOUT_MS)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=5_000)
@@ -253,10 +345,12 @@ class _SessionThread:
             input_type = str(locator.get_attribute("type") or "").lower()
         except Exception:
             input_type = ""
-        if input_type in _SENSITIVE_INPUT_TYPES:
+        safety_text = _locator_safety_text(locator)
+        if input_type in _SENSITIVE_INPUT_TYPES or _SENSITIVE_FIELD_PATTERN.search(safety_text):
             raise SafeCapabilityError(
                 "SENSITIVE_FIELD_BLOCKED",
-                "Şifre alanına otomatik yazım güvenlik gereği engellendi; lütfen kendiniz girin.",
+                "Kimlik, doğrulama veya finansal bilgi alanına otomatik yazım "
+                "güvenlik gereği engellendi; lütfen kendiniz girin.",
             )
         locator.fill(value, timeout=_ACTION_TIMEOUT_MS)
         if bool(args.get("submit", False)):
@@ -309,7 +403,14 @@ class _SessionThread:
                     if (out.length >= limit) break;
                     const rect = el.getBoundingClientRect();
                     if (rect.width < 2 || rect.height < 2) continue;
-                    const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 120);
+                    // Form değerleri (autofill dahil) asla snapshot'a girmez;
+                    // gerçek profil gözlemi server_brain'e gidebilir.
+                    const isFormControl = ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+                    const text = (
+                        isFormControl
+                            ? (el.getAttribute('aria-label') || el.getAttribute('placeholder') || '')
+                            : (el.innerText || el.getAttribute('aria-label') || '')
+                    ).trim().slice(0, 120);
                     if (!text && el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') continue;
                     out.push({
                         tag: el.tagName.toLowerCase(),

@@ -2440,13 +2440,16 @@ def _list_dir_route(text: str) -> RoutedTask | None:
 
     location_path = _resolve_location_path(text)
     location_name = Path(location_path).name or "Ana dizin"
-    command = f'ls -la "{location_path}"'
     description = f"{location_name} klasörünün içeriği listeleniyor."
     summary = f"{location_name} içindeki dosya ve klasörleri listeleceğim."
-    steps = [{"capability": "shell_run", "args": {"command": command, "use_shell": False}, "description": description}]
+    # Salt-okunur listeleme shell DEĞİL: shell dispatch onayı kapsamı dışında
+    # kaldığından mobilde onay çıkmazına giriyordu ("Onay bekleyen plan
+    # bulunamadı"). directory_tree güvenli, onaysız ve yapılı sonuç döndürür.
+    args = {"path": location_path, "max_depth": 1, "max_entries": 200}
+    steps = [{"capability": "directory_tree", "args": dict(args), "description": description}]
     return RoutedTask(
-        "shell_run",
-        {"command": command, "use_shell": False},
+        "directory_tree",
+        args,
         "list_dir",
         intent="file_system_list",
         confidence=0.88,
@@ -2880,6 +2883,70 @@ def _compound_route(
     )
 
 
+_AGENTIC_BROWSE_SIGNALS = (
+    "tarayici", "tarayıcı", "internetten", "internette", "web den", "webden",
+    "web uzerinden", "web üzerinden", "google da", "google'da", "siteye gir",
+    "sitesine gir", "hava durumu", "haber", "fiyat", "borsa", "doviz", "döviz",
+    "kanalim", "kanalıma", "profilime", "linkini", "linklerini",
+)
+_AGENTIC_ANSWER_SIGNALS = (
+    "soyle", "söyle", "bul", "ogren", "öğren", "arastir", "araştır", "topla",
+    "getir", "kontrol et", "ne kadar", "ozetle", "özetle", "derece", "toparla",
+    "karsilastir", "karşılaştır",
+)
+
+
+_WEATHER_FILLER = {
+    "hava", "durumu", "durumuna", "durum", "bak", "bakar", "misin", "söyle",
+    "soyle", "ve", "nasil", "nasıl", "bugun", "bugün", "yarin", "yarın",
+    "weather", "sicaklik", "sıcaklık", "yagmur", "yağmur", "derece",
+    "derecesini", "derecesi", "kac", "kaç", "ne", "kadar", "için", "icin",
+    "bana", "lütfen", "lutfen", "dışarı", "disari", "dışarısı", "disarisi",
+    "dışarıda", "disarida", "şu", "su", "an", "anda", "şimdi", "simdi",
+}
+
+
+def _weather_location(original: str) -> str:
+    """Hava durumu isteğinden temiz şehir/konum çıkarır. Bulamazsa boş döner
+    (get_weather varsayılan konuma düşer) — çöp metni konum sanıp servisi
+    kırmaktansa dürüst varsayılan."""
+    # 1) İyelik kalıbı: "İstanbul'un derecesi", "Ankara nın havası"
+    m = re.search(
+        r"([A-Za-zÇĞİıÖŞÜçğıöşü]{3,})['’`]?\s*(?:n[ıiuü]n|[ıiuü]n)\s+"
+        r"(?:derece|sicaklik|sıcaklık|hava|hava durumu)",
+        original,
+        flags=re.IGNORECASE,
+    )
+    if m and _normalise(m.group(1)) not in _WEATHER_FILLER:
+        return m.group(1)
+    # 2) Tek anlamlı sözcük kaldıysa onu konum say.
+    tokens = re.findall(r"[A-Za-zÇĞİıÖŞÜçğıöşü]{3,}", original)
+    cands = [t for t in tokens if _normalise(t) not in _WEATHER_FILLER]
+    if len(cands) == 1:
+        return cands[0]
+    return ""
+
+
+def _agentic_browser_goal_route(original: str) -> "RoutedTask | None":
+    """Tarayıcıdan okuyup cevap/veri üreten serbest hedefleri ReAct ajanına
+    yönlendirir. "hava durumuna bak ve söyle", "kanalımdaki son videoların
+    linkini topla" gibi işler bir sekme açıp unutulacak iş DEĞİL — sayfaya
+    girip veriyi çıkaran kapalı-devre ajan gerekir."""
+    q = _normalise(original)
+    if not any(sig in q for sig in _AGENTIC_BROWSE_SIGNALS):
+        return None
+    if not any(sig in q for sig in _AGENTIC_ANSWER_SIGNALS):
+        return None
+    return RoutedTask(
+        "browser_agent.run",
+        {"goal": original},
+        "agentic_browser_goal",
+        intent="agentic_browser_goal",
+        confidence=0.82,
+        privacy_class="public_text",
+    )
+
+
 def route_text_to_tool(
     text: str,
     *,
@@ -3143,8 +3210,10 @@ def route_text_to_tool(
     if sys_query:
         return RoutedTask("sys_info", {"query": sys_query}, "system_info", intent="system_info", confidence=0.98, privacy_class="local_private")
 
-    if any(token in q for token in ("hava", "weather", "sicaklik", "yagmur")):
-        location = _extract_after([r"(?:hava|weather|sicaklik|yagmur)\s+(?:durumu\s+)?(.+)$"], original)
+    if any(token in q for token in ("hava", "weather", "sicaklik", "yagmur")) or (
+        "derece" in q and any(t in q for t in ("kac", "kaç", "sicak", "sıcak", "disari", "dışarı"))
+    ):
+        location = _weather_location(original)
         return RoutedTask("get_weather", {"location": location}, "weather", intent="weather", confidence=0.84)
 
     if any(token in q for token in ("takvim", "ajanda", "toplanti", "calendar")) and any(
@@ -3182,7 +3251,7 @@ def route_text_to_tool(
     youtube_query = _extract_after(
         [
             r"(.+?)\s+youtube(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?\s+(?:ac|aç|cal|çal|oynat)$",
-            r"youtube(?:['’]?(?:da|de|dan|den)|\s+(?:da|de|dan|den))?\s+(.+?)\s+(?:ac|aç|cal|çal|oynat|ara)$",
+            r"youtube(?:['’]?(?:da|de|dan|den|a|e|u|ü)|\s+(?:da|de|dan|den|a|e|u|ü))?\s+(?:gir(?:ip)?\s+(?:ve\s+)?)?(.+?)\s+(?:ac|aç|cal|çal|oynat|arat?|izle|bul)$",
         ],
         original,
     )
@@ -3387,6 +3456,12 @@ def route_text_to_tool(
     operator_task = _operator_action_route(original)
     if operator_task is not None:
         return operator_task
+
+    # ── Serbest, "oku ve cevapla / topla" tarayıcı hedefi → ReAct ajanı ───────
+    #    "arama açıldı" stub'ı yerine gerçekten sayfaya girip veriyi çıkarır.
+    agentic = _agentic_browser_goal_route(original)
+    if agentic is not None:
+        return agentic
 
     # ── General knowledge / web search fallback ──────────────────────────────
     _info_query_patterns = [
