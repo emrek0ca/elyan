@@ -1203,6 +1203,88 @@ def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
     assert "desktop_operator.run" not in dumped
 
 
+def test_assigned_dispatch_generic_operator_completes_via_directory_tree_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Canlı backend zarfının tam runner yolu: jenerik explicit operator
+    queued/running sonrası onaysız directory_tree ile completed olmalı."""
+    _isolate_state(monkeypatch, tmp_path)
+    (tmp_path / "dispatch-proof.txt").write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(task_router, "_resolve_location_path", lambda _text: str(tmp_path))
+    prompt = "Masaüstündeki dosyaları listele"
+    task = {
+        "id": "task-generic-operator-lifecycle",
+        "title": prompt,
+        "status": "queued",
+        "payload": {
+            "prompt": prompt,
+            "metadata": {
+                "desktopDispatch": True,
+                "chatSurface": "mobile",
+                "routeDecision": {
+                    "route": "desktop_runtime",
+                    "capabilities": ["desktop_operator.run"],
+                    "reason": "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+                    "planPreview": {
+                        "summary": "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+                        "steps": [
+                            {
+                                "id": "step_1",
+                                "capability": "desktop_operator.run",
+                                "description": "Masaüstü görevi yürütülecek.",
+                                "args": {},
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+    }
+
+    class _Backend:
+        def __init__(self) -> None:
+            self.status_updates: list[tuple[str, dict]] = []
+            self.heartbeats: list[dict] = []
+
+        def runtime_tasks_assigned(self) -> BackendResult:
+            return BackendResult(
+                ok=True,
+                request_id="req_dispatch_lifecycle",
+                status_code=200,
+                data={"tasks": [task]},
+            )
+
+        def runtime_task_status(self, task_id: str, payload: dict) -> BackendResult:
+            self.status_updates.append((task_id, payload))
+            return BackendResult(ok=True, request_id="req_status", status_code=200, data={"ok": True})
+
+        def heartbeat(self, payload: dict) -> BackendResult:
+            self.heartbeats.append(payload)
+            return BackendResult(ok=True, request_id="req_heartbeat", status_code=200, data={"ok": True})
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = _Backend()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        runtime,
+        "send_conversation",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("güvenli yerel rota LLM'e düşmemeli")),
+    )
+
+    result = runtime.execute_assigned_runtime_tasks()
+
+    assert result["ok"] is True
+    assert result["executions"][0]["status"] == "completed"
+    statuses = [payload["status"] for _, payload in runtime.backend.status_updates]  # type: ignore[attr-defined]
+    assert statuses[0] == "running"
+    assert statuses[-1] == "completed"
+    assert "waiting_approval" not in statuses
+    dumped = json.dumps(runtime.backend.status_updates, ensure_ascii=False, default=str)  # type: ignore[attr-defined]
+    assert "directory_tree" in dumped
+    assert "dispatch-proof.txt" in dumped
+    assert "desktop_operator.run" not in dumped
+
+
 def test_dispatch_keeps_specific_explicit_operator_step(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
