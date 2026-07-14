@@ -6260,7 +6260,14 @@ export async function generateSharedBrainReply(
               }),
               onDelta: undefined,
               timeoutMsOverride: Math.min(timeoutMs, 8_000),
-              maxCompletionTokensOverride: maxTokens,
+              // Refinement araç sonuçlarını nesir cevaba çevirir; fast turn'ün
+              // 224-token bütçesi 5 maillik bir özeti ortadan keser ve salvage
+              // yalnız giriş cümlesini kurtarır. Taban 768.
+              maxCompletionTokensOverride: Math.max(maxTokens, 768),
+              // Spread input.connectorToolContracts'ı taşır; bu refinement'ta
+              // envelope'u zorlar ve JSON overhead'i cevabı yer. Refinement
+              // araç istemez — kontrat duyurusu kapalı.
+              connectorToolContracts: [],
               internalEvaluation: {
                 ...input.internalEvaluation,
                 refinementPass: true,
