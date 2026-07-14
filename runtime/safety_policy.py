@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from runtime.capability_spec import policy_gate_for
+
 
 @dataclass(frozen=True)
 class PolicyDecision:
@@ -259,39 +261,30 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
             "Bu MCP aracı için açık onay gerekiyor.",
         )
 
-    if name == "browser_agent.run":
-        agent_gate = _permission_block(
-            state,
-            "allow_browser_control",
-            "Tarayıcı ve medya erişimi kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
-            "Tam yetki kapalı. Tarayıcı ajanı için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
-        )
-        if agent_gate.allowed:
-            return PolicyDecision(True)
-        return agent_gate
-
-    if name.startswith("browser_session."):
-        # Oturumu kapatmak her zaman güvenli (operator.cancel gibi temizlik).
-        if name == "browser_session.close":
-            return PolicyDecision(True)
-        session_gate = _permission_block(
-            state,
-            "allow_browser_control",
-            "Tarayıcı ve medya erişimi kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
-            "Tam yetki kapalı. Tarayıcı işlemleri için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
-        )
-        if session_gate.allowed:
-            return PolicyDecision(True)
-        return session_gate
-
-    if name in {"make_directory", "file_move"}:
+    # Tek Spec mimarisi: göç edilen yetenekler kapısını spec'ten alır —
+    # kural burada değil, yeteneğin tek kaydında yaşar.
+    spec_gate = policy_gate_for(name)
+    if spec_gate == "open":
+        return PolicyDecision(True)
+    if spec_gate == "confirm":
         if _truthy(args.get("_confirmed", False)):
             return PolicyDecision(True)
         return PolicyDecision(
             False,
             "PERMISSION_REQUIRED",
-            "Dosya sistemini değiştirmek için açık onay gerekiyor.",
+            "Bu işlem için açık onay gerekiyor.",
         )
+    if spec_gate.startswith("permission:"):
+        permission_key = spec_gate.split(":", 1)[1]
+        gate = _permission_block(
+            state,
+            permission_key,
+            "Bu yetenek için gizlilik izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
+            "Tam yetki kapalı. Bu işlem için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+        )
+        if gate.allowed:
+            return PolicyDecision(True)
+        return gate
 
     if name in {"browser_control", "play_media"}:
         browser_gate = _permission_block(

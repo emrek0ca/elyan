@@ -10,6 +10,8 @@ import shutil
 import sys
 from typing import Any, Callable
 
+from runtime import capability_spec
+
 from runtime.safety_policy import evaluate_tool
 
 
@@ -920,97 +922,12 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         ["text"],
         usage="Bir sonucu/metni kullanıcının yapıştırabilmesi için panoya koymak.",
     ),
-    _tool_decl(
-        "browser_session.goto",
-        "Kalıcı tarayıcı oturumunda bir adrese gider; sonraki adımlar AYNI sayfada devam eder.",
-        {"url": {"type": "STRING", "description": "Gidilecek http/https adresi."}},
-        ["url"],
-        usage="Çok adımlı tarayıcı işlerinde (gez → tıkla → çıkar → indir) ilk adım. Tek seferlik 'URL aç ve bırak' için browser_control kullan.",
-    ),
-    _tool_decl(
-        "browser_session.click",
-        "Oturumdaki sayfada bir öğeye tıklar (CSS selector, görünür metin ya da rol+metin ile).",
-        {
-            "selector": {"type": "STRING", "description": "CSS selector (en kesin yol)."},
-            "text": {"type": "STRING", "description": "Öğenin görünür metni."},
-            "role": {"type": "STRING", "description": "ARIA rolü (button, link, tab...)."},
-        },
-        usage="browser_session.snapshot ile öğeleri gördükten sonra hedefe tıklamak.",
-    ),
-    _tool_decl(
-        "browser_session.type",
-        "Oturumdaki sayfada bir alana metin yazar; submit=true ile Enter'a basar. Şifre alanlarına yazmaz.",
-        {
-            "value": {"type": "STRING", "description": "Yazılacak metin."},
-            "selector": {"type": "STRING", "description": "Hedef alanın CSS selector'ı."},
-            "text": {"type": "STRING", "description": "Alanın görünür etiketi/placeholder metni."},
-            "submit": {"type": "BOOLEAN", "description": "Yazdıktan sonra Enter'a bas."},
-        },
-        ["value"],
-        usage="Arama kutusu doldurma, form alanına URL yapıştırma gibi işlerde.",
-    ),
-    _tool_decl(
-        "browser_session.extract",
-        "Sayfadan yapılandırılmış veri çıkarır: selector eşleşmelerinin metni ve istenirse bir attribute'u (ör. href). Selector verilmezse sayfanın okunur metnini döndürür.",
-        {
-            "selector": {"type": "STRING", "description": "CSS selector (ör. 'a#video-title')."},
-            "attribute": {"type": "STRING", "description": "Çıkarılacak attribute (ör. 'href')."},
-            "limit": {"type": "NUMBER", "description": "En fazla öğe sayısı (varsayılan 20)."},
-        },
-        usage="Liste toplama işlerinde: video linkleri, başlıklar, tablo hücreleri.",
-    ),
-    _tool_decl(
-        "browser_session.snapshot",
-        "Sayfanın etkileşimli öğelerini (link/buton/alan, metinleriyle) listeler — sonraki tıklama/yazma adımını doğru hedefe yöneltmek için gözlem.",
-        {"limit": {"type": "NUMBER", "description": "En fazla öğe (varsayılan 80)."}},
-        usage="Sayfanın yapısı bilinmiyorken tıklamadan ÖNCE gözlem almak.",
-    ),
-    _tool_decl(
-        "browser_session.download",
-        "Sayfadan dosya indirir (indirme başlatan öğeye tıklayarak ya da doğrudan URL ile) ve dosya yolunu döndürür.",
-        {
-            "selector": {"type": "STRING", "description": "İndirmeyi başlatan öğenin CSS selector'ı."},
-            "text": {"type": "STRING", "description": "İndirme öğesinin görünür metni."},
-            "url": {"type": "STRING", "description": "Doğrudan indirme adresi."},
-            "output_dir": {"type": "STRING", "description": "Hedef klasör (varsayılan Elyan indirmeleri)."},
-        },
-        usage="Transcript/rapor/dosya indirme adımlarında; dönen outputPath sonraki file_move adımına verilir.",
-    ),
-    _tool_decl(
-        "browser_session.close",
-        "Kalıcı tarayıcı oturumunu kapatır.",
-        {},
-        usage="Çok adımlı tarayıcı işi bittiğinde temizlik.",
-    ),
-    _tool_decl(
-        "make_directory",
-        "Klasör oluşturur (üst klasörler dahil; varsa hata vermez).",
-        {"path": {"type": "STRING", "description": "Oluşturulacak klasör yolu (ör. ~/Desktop/youtube-transkript)."}},
-        ["path"],
-        usage="İndirilen/üretilen dosyaları toplamadan önce hedef klasörü hazırlamak.",
-    ),
-    _tool_decl(
-        "file_move",
-        "Dosyayı başka bir konuma taşır (hedef klasörse içine).",
-        {
-            "source": {"type": "STRING", "description": "Taşınacak dosyanın yolu."},
-            "destination": {"type": "STRING", "description": "Hedef yol ya da klasör."},
-            "overwrite": {"type": "BOOLEAN", "description": "Hedef varsa üzerine yaz (varsayılan hayır)."},
-        },
-        ["source", "destination"],
-        usage="İndirilen dosyaları kullanıcının istediği klasöre toplamak.",
-    ),
-    _tool_decl(
-        "browser_agent.run",
-        "Tarayıcıda hedefi KENDİ gözleyip karar vererek adım adım gerçekleştiren ajan: sayfayı gözler, tıklar, yazar, veri toplar, dosya indirir; hedef bitince özet ve toplanan verileri döndürür.",
-        {
-            "goal": {"type": "STRING", "description": "Doğal dille hedef (ör. 'YouTube kanalımdaki son 5 uzun videonun linkini topla')."},
-            "max_turns": {"type": "NUMBER", "description": "En fazla gözlem-eylem turu (varsayılan 12, üst sınır 24)."},
-        },
-        ["goal"],
-        usage="Sayfa yapısı önceden bilinmeyen çok adımlı tarayıcı görevlerinde TEK adım olarak kullan. Adımları kendin yazabiliyorsan browser_session.* daha hızlıdır; buradaki ajan keşif gerektiren işler içindir.",
-    ),
 ]
+
+# Tek Spec mimarisi: göç edilen yetenekler kataloğa spec'ten türetilerek girer.
+TOOL_DECLARATIONS.extend(
+    capability_spec.tool_declaration(item) for item in capability_spec.SPECS
+)
 
 
 _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
@@ -1079,17 +996,11 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "delete_memory": _AdapterSpec("memory.memory_manager", "delete_memory"),
     "clipboard_read": _AdapterSpec("actions.clipboard", "clipboard_read"),
     "clipboard_write": _AdapterSpec("actions.clipboard", "clipboard_write"),
-    "browser_session.goto": _AdapterSpec("actions.browser_session", "session_goto"),
-    "browser_session.click": _AdapterSpec("actions.browser_session", "session_click"),
-    "browser_session.type": _AdapterSpec("actions.browser_session", "session_type"),
-    "browser_session.extract": _AdapterSpec("actions.browser_session", "session_extract"),
-    "browser_session.snapshot": _AdapterSpec("actions.browser_session", "session_snapshot"),
-    "browser_session.download": _AdapterSpec("actions.browser_session", "session_download"),
-    "browser_session.close": _AdapterSpec("actions.browser_session", "session_close"),
-    "make_directory": _AdapterSpec("actions.file_write", "make_directory"),
-    "file_move": _AdapterSpec("actions.file_write", "file_move"),
-    "browser_agent.run": _AdapterSpec("runtime.browser_agent", "run"),
 }
+
+# Tek Spec: göç edilen yetenekler adapter tablosuna spec'ten girer.
+for _spec_item in capability_spec.SPECS:
+    _ADAPTER_SPECS[_spec_item.name] = _AdapterSpec(_spec_item.module, _spec_item.attribute)
 
 
 def capability_names() -> set[str]:
@@ -1102,16 +1013,6 @@ def capability_names() -> set[str]:
 _CAPABILITY_DISPLAY_NAMES: dict[str, str] = {
     "open_app": "Uygulama açma",
     "close_app": "Uygulama kapatma",
-    "browser_session.goto": "Tarayıcı oturumu — sayfaya git",
-    "browser_session.click": "Tarayıcı oturumu — tıkla",
-    "browser_session.type": "Tarayıcı oturumu — yaz",
-    "browser_session.extract": "Tarayıcı oturumu — veri çıkar",
-    "browser_session.snapshot": "Tarayıcı oturumu — sayfa gözlemi",
-    "browser_session.download": "Tarayıcı oturumu — dosya indir",
-    "browser_session.close": "Tarayıcı oturumu — kapat",
-    "browser_agent.run": "Tarayıcı ajanı",
-    "make_directory": "Klasör oluşturma",
-    "file_move": "Dosya taşıma",
     "sys_info": "Sistem bilgisi",
     "shell_run": "Terminal komutu",
     "browser_control": "Tarayıcı kontrolü",
@@ -1177,6 +1078,9 @@ _CAPABILITY_DISPLAY_NAMES: dict[str, str] = {
     "desktop_os.active_window": "Aktif pencere",
     "desktop_os.open_permission_settings": "İzin ayarlarını açma",
 }
+for _spec_item in capability_spec.SPECS:
+    if _spec_item.display_name:
+        _CAPABILITY_DISPLAY_NAMES[_spec_item.name] = _spec_item.display_name
 
 
 def capability_display_name(name: str) -> str:
@@ -1219,13 +1123,6 @@ _WRITE_CAPABILITIES = {
 _SIDE_EFFECT_CAPABILITIES = {
     "open_app",
     "close_app",
-    "browser_session.goto",
-    "browser_session.click",
-    "browser_session.type",
-    "browser_session.download",
-    "browser_agent.run",
-    "make_directory",
-    "file_move",
     "shell_run",
     "desktop_operator.focus_window",
     "desktop_operator.execute_action",
@@ -1250,6 +1147,9 @@ _SIDE_EFFECT_CAPABILITIES = {
     "git_commit",
     "git_branch",
 }
+_SIDE_EFFECT_CAPABILITIES.update(
+    _spec_item.name for _spec_item in capability_spec.SPECS if _spec_item.side_effect
+)
 _NON_RETRYABLE_SIDE_EFFECTS = {
     "open_app",
     "close_app",
@@ -1266,14 +1166,6 @@ _NON_RETRYABLE_SIDE_EFFECTS = {
 }
 _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
     "web_research": ("httpx",),
-    "browser_session.goto": ("playwright",),
-    "browser_session.click": ("playwright",),
-    "browser_session.type": ("playwright",),
-    "browser_session.extract": ("playwright",),
-    "browser_session.snapshot": ("playwright",),
-    "browser_session.download": ("playwright",),
-    "browser_session.close": ("playwright",),
-    "browser_agent.run": ("playwright",),
     "ocr_read": (),
     "image_read": ("pillow",),
     "math_solve": ("sympy",),
@@ -1300,6 +1192,9 @@ _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
     "quantum_compare_classical": ("qiskit", "qiskit_aer"),
     "quantum_generate_report": ("qiskit",),
 }
+for _spec_item in capability_spec.SPECS:
+    if _spec_item.dependency_keys:
+        _CAPABILITY_DEPENDENCY_KEYS[_spec_item.name] = tuple(_spec_item.dependency_keys)
 
 
 def _module_available(module_name: str) -> bool:
@@ -1532,8 +1427,11 @@ def capability_metadata(name: str) -> dict[str, Any]:
             retryable=False,
         ).to_dict()
 
-    category = "other"
-    if normalized in {"file_read", "file_search", "directory_tree", "git_status", "git_diff", "file_write", "file_patch", "git_commit", "git_branch"}:
+    migrated = capability_spec.spec_for(normalized)
+    category = migrated.category if migrated is not None else "other"
+    if migrated is not None:
+        pass  # kategori spec'ten geldi; aşağıdaki legacy zincir atlanır
+    elif normalized in {"file_read", "file_search", "directory_tree", "git_status", "git_diff", "file_write", "file_patch", "git_commit", "git_branch"}:
         category = "developer"
     elif normalized in {"web_research", "retrieve_context", "document_read", "ocr_read", "image_read", "image_fetch"}:
         category = "research_docs"
@@ -1545,10 +1443,8 @@ def capability_metadata(name: str) -> dict[str, Any]:
         category = "math_quantum"
     elif normalized in {"open_app", "close_app", "sys_info", "browser_control", "play_media", "analyze_screen", "shell_run", "desktop_os.status", "desktop_os.permissions", "desktop_os.open_permission_settings", "desktop_os.processes", "desktop_os.active_window", "speech_capture", "speech_to_text", "text_to_speech", "clipboard_read", "clipboard_write"}:
         category = "local_execution"
-    elif normalized.startswith("desktop_operator.") or normalized.startswith("browser_session.") or normalized.startswith("browser_agent."):
+    elif normalized.startswith("desktop_operator."):
         category = "local_execution"
-    elif normalized in {"make_directory", "file_move"}:
-        category = "developer"
 
     permissions: tuple[str, ...] = ()
     if normalized in {"browser_control", "play_media"}:
@@ -1578,8 +1474,12 @@ def capability_metadata(name: str) -> dict[str, Any]:
     else:
         permission_class = "read_only"
 
-    supported_platforms = ("darwin",) if normalized in _DARWIN_ONLY_CAPABILITIES else ("darwin", "win32", "linux")
-    verification_mode = "tool_result"
+    supported_platforms = (
+        tuple(migrated.platforms)
+        if migrated is not None
+        else (("darwin",) if normalized in _DARWIN_ONLY_CAPABILITIES else ("darwin", "win32", "linux"))
+    )
+    verification_mode = migrated.verification_mode if migrated is not None else "tool_result"
     if normalized == "open_app":
         verification_mode = "foreground_confirmed"
     elif normalized == "close_app":
@@ -1598,7 +1498,9 @@ def capability_metadata(name: str) -> dict[str, Any]:
         verification_mode = "operator_verified"
     elif normalized == "desktop_operator.cancel":
         verification_mode = "operator_cancelled"
-    if normalized in _WRITE_CAPABILITIES or normalized in {"image_fetch", "file_write", "file_patch", "browser_session.download", "file_move", "make_directory"}:
+    if migrated is not None:
+        pass  # doğrulama modu spec'ten geldi
+    elif normalized in _WRITE_CAPABILITIES or normalized in {"image_fetch", "file_write", "file_patch"}:
         verification_mode = "artifact_exists"
     elif normalized in {"document_read", "ocr_read", "image_read", "data_analyze", "math_solve", "latex_parse", "speech_to_text", "text_to_speech", "web_research", "retrieve_context", "email_draft", "quantum_model_problem", "quantum_compare_classical", "quantum_generate_report", "clipboard_read", "file_read", "file_search", "directory_tree", "git_status", "git_diff", "git_commit", "git_branch"}:
         verification_mode = "result_nonempty"
@@ -1841,6 +1743,9 @@ def capability_dependency_status(capability_name: str) -> dict[str, Any]:
         }
 
     status_function_names: list[str] = [f"{spec.attribute}_status"]
+    _migrated_status = capability_spec.spec_for(normalized)
+    if _migrated_status is not None and _migrated_status.status_function:
+        status_function_names.insert(0, _migrated_status.status_function)
     if spec.module == "actions.quantum":
         status_function_names.insert(0, "quantum_runtime_status")
     elif spec.module == "actions.retrieve_context":
@@ -1855,10 +1760,7 @@ def capability_dependency_status(capability_name: str) -> dict[str, Any]:
         status_function_names.insert(0, "desktop_os_runtime_status")
     elif spec.module == "actions.desktop_operator":
         status_function_names.insert(0, "operator_runtime_status")
-    elif spec.module == "actions.browser_session":
-        status_function_names.insert(0, "browser_session_status")
-    elif spec.module == "runtime.browser_agent":
-        status_function_names.insert(0, "browser_agent_status")
+
 
     for status_function_name in status_function_names:
         status_fn = getattr(module, status_function_name, None)
@@ -2004,47 +1906,9 @@ def _delete_memory(args: dict[str, Any]) -> str:
 
 
 def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
-    return {
+    handlers: dict[str, Callable[[dict[str, Any]], Any]] = {
         "open_app": lambda args: _load_adapter("open_app")(str(args.get("app_name", ""))),
         "close_app": lambda args: _load_adapter("close_app")(str(args.get("app_name", ""))),
-        "browser_session.goto": lambda args: _load_adapter("browser_session.goto")(str(args.get("url", "") or "")),
-        "browser_session.click": lambda args: _load_adapter("browser_session.click")(
-            selector=str(args.get("selector", "") or ""),
-            text=str(args.get("text", "") or ""),
-            role=str(args.get("role", "") or ""),
-        ),
-        "browser_session.type": lambda args: _load_adapter("browser_session.type")(
-            str(args.get("value", "") or args.get("text_value", "") or ""),
-            selector=str(args.get("selector", "") or ""),
-            text=str(args.get("text", "") or ""),
-            role=str(args.get("role", "") or ""),
-            submit=bool(args.get("submit", False)),
-        ),
-        "browser_session.extract": lambda args: _load_adapter("browser_session.extract")(
-            selector=str(args.get("selector", "") or ""),
-            attribute=str(args.get("attribute", "") or ""),
-            limit=_as_int(args.get("limit"), 20),
-        ),
-        "browser_session.snapshot": lambda args: _load_adapter("browser_session.snapshot")(
-            limit=_as_int(args.get("limit"), 80),
-        ),
-        "browser_session.download": lambda args: _load_adapter("browser_session.download")(
-            selector=str(args.get("selector", "") or ""),
-            text=str(args.get("text", "") or ""),
-            url=str(args.get("url", "") or ""),
-            output_dir=str(args.get("output_dir", "") or args.get("outputDir", "") or ""),
-        ),
-        "browser_session.close": lambda args: _load_adapter("browser_session.close")(),
-        "browser_agent.run": lambda args: _load_adapter("browser_agent.run")(
-            str(args.get("goal", "") or ""),
-            max_turns=_as_int(args.get("max_turns") or args.get("maxTurns"), 12),
-        ),
-        "make_directory": lambda args: _load_adapter("make_directory")(str(args.get("path", "") or "")),
-        "file_move": lambda args: _load_adapter("file_move")(
-            str(args.get("source", "") or ""),
-            str(args.get("destination", "") or ""),
-            overwrite=bool(args.get("overwrite", False)),
-        ),
         "sys_info": lambda args: _load_adapter("sys_info")(str(args.get("query", "all") or "all")),
         "get_weather": lambda args: _load_adapter("get_weather")(args.get("location") or None),
         "get_calendar_events": lambda args: _load_adapter("get_calendar_events")(
@@ -2395,6 +2259,11 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
         "clipboard_read": lambda args: _load_adapter("clipboard_read")(str(args.get("query", "") or "")),
         "clipboard_write": lambda args: _load_adapter("clipboard_write")(str(args.get("text", "") or "")),
     }
+    # Tek Spec: göç edilen yetenekler için handler spec'ten üretilir
+    # (eşleme + alias + tip dönüşümü tek yerde).
+    for _spec_item in capability_spec.SPECS:
+        handlers[_spec_item.name] = capability_spec.build_handler(_spec_item, _load_adapter)
+    return handlers
 
 
 def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str, Any]) -> dict[str, Any]:
