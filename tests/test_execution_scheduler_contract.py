@@ -159,10 +159,16 @@ def test_executor_preempts_only_after_completed_step_checkpoint(
         executor.request_preemption("exec_preempt", reason="urgent_task_ready")
         return {"ok": True, "output": capability, "result": {"kind": capability}, "artifacts": []}, []
 
+    # P3 ön koşulu girdi dosyasının gerçekten var olmasını ister.
+    file_a = tmp_path / "a.txt"
+    file_b = tmp_path / "b.txt"
+    file_a.write_text("a", encoding="utf-8")
+    file_b.write_text("b", encoding="utf-8")
+
     ok, _content, _events, error_code, _result, _artifacts = executor.execute_plan_steps(
         steps=[
-            {"id": "first", "capability": "file_read", "args": {"path": "a"}},
-            {"id": "second", "capability": "file_read", "args": {"path": "b"}, "dependsOn": ["first"]},
+            {"id": "first", "capability": "file_read", "args": {"path": str(file_a)}},
+            {"id": "second", "capability": "file_read", "args": {"path": str(file_b)}, "dependsOn": ["first"]},
         ],
         state_factory=lambda: {},
         execute_step=execute_step,
