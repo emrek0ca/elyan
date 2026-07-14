@@ -1,4 +1,4 @@
-"""Yapılandırılmış planlama sözleşmesi — elyan.plan.v1
+"""Yapılandırılmış planlama sözleşmesi — elyan.plan.v2
 
 Masaüstü ↔ sunucu beyni iletişimini düz metin prompttan çıkarıp tamamen
 veri sözleşmesine taşır:
@@ -22,7 +22,8 @@ from typing import Any
 from runtime.agent_planning import build_agent_plan
 from runtime.capability_registry import TOOL_DECLARATIONS, capability_metadata, capability_names
 
-PLAN_CONTRACT = "elyan.plan.v1"
+PLAN_CONTRACT = "elyan.plan.v2"
+GOAL_CONTRACT = "elyan.goal_contract.v1"
 # Cowork bağlam zarfı sözleşmesi: server_brain'e sohbet/cowork turunda giden
 # yapılandırılmış (düz metin değil) bağlam. Sorgu labeled alanda, bağlam metadata
 # JSON'unda — brain sunucuda yeniden türetmeden anlar/planlar (daha az yük).
@@ -118,11 +119,50 @@ def response_schema() -> dict[str, Any]:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
-        "required": ["contract", "intent", "confidence", "steps"],
+        "required": ["contract", "intent", "confidence", "goalContract", "steps"],
         "properties": {
             "contract": {"const": PLAN_CONTRACT},
             "intent": {"type": "string"},
             "goal": {"type": "string"},
+            "goalContract": {
+                "type": "object",
+                "required": [
+                    "contract",
+                    "objective",
+                    "deliverables",
+                    "constraints",
+                    "acceptanceCriteria",
+                    "prohibitedActions",
+                    "privacy",
+                    "risk",
+                    "priority",
+                    "missingInformation",
+                ],
+                "properties": {
+                    "contract": {"const": GOAL_CONTRACT},
+                    "objective": {"type": "string"},
+                    "deliverables": {"type": "array", "maxItems": 12, "items": {"type": "string"}},
+                    "constraints": {"type": "array", "maxItems": 12, "items": {"type": "string"}},
+                    "acceptanceCriteria": {"type": "array", "maxItems": 12, "items": {"type": "string"}},
+                    "prohibitedActions": {"type": "array", "maxItems": 12, "items": {"type": "string"}},
+                    "privacy": {"enum": ["local_private", "public_text"]},
+                    "risk": {"enum": ["low", "medium", "high", "critical"]},
+                    "priority": {"enum": ["low", "normal", "high", "urgent"]},
+                    "missingInformation": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {
+                            "type": "object",
+                            "required": ["id", "question", "blocking"],
+                            "properties": {
+                                "id": {"type": "string"},
+                                "question": {"type": "string"},
+                                "blocking": {"type": "boolean"},
+                            },
+                        },
+                    },
+                },
+            },
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             "privacyClass": {"enum": ["local_private", "public_text"]},
             "requiresConfirmation": {"type": "boolean"},
@@ -296,8 +336,34 @@ def build_planning_request(
             "role": "planner_only",
             "execution": "desktop_runtime",
             "outputFormat": "single_json_object",
-            "unknownRequest": {"intent": "chat", "steps": []},
-            "missingInformation": "set clarification.needed=true with one short question; never invent paths, apps, recipients or file contents",
+            "unknownRequest": {
+                "contract": PLAN_CONTRACT,
+                "intent": "chat",
+                "confidence": 1.0,
+                "goalContract": {
+                    "contract": GOAL_CONTRACT,
+                    "objective": "answer the user",
+                    "deliverables": [],
+                    "constraints": [],
+                    "acceptanceCriteria": [],
+                    "prohibitedActions": [],
+                    "privacy": "public_text",
+                    "risk": "low",
+                    "priority": "normal",
+                    "missingInformation": [],
+                },
+                "steps": [],
+            },
+            "goalContract": (
+                "always describe objective, deliverables, constraints, acceptanceCriteria, "
+                "prohibitedActions, privacy, risk, priority and missingInformation; encode "
+                "a forbidden tool as capability:<capability_name> in prohibitedActions"
+            ),
+            "missingInformation": (
+                "record every unknown in goalContract.missingInformation; if execution is "
+                "blocked set clarification.needed=true and ask only the first blocking "
+                "question; never invent paths, apps, recipients or file contents"
+            ),
             "sideEffects": "steps using sideEffect tools must set requiresConfirmation=true",
             "sequencing": (
                 "decompose multi-action requests into one ordered step per action; "
@@ -487,19 +553,204 @@ def _validate_step_args(capability: str, args: dict[str, Any]) -> tuple[dict[str
     return cleaned, errors
 
 
+def _text_list(value: Any, *, limit: int = 12, item_limit: int = 240) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    for item in value[:limit]:
+        text = " ".join(str(item or "").split())[:item_limit]
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _normalize_missing_information(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value[:8], start=1):
+        raw = item if isinstance(item, dict) else {"question": item}
+        question = " ".join(str(raw.get("question", "") or "").split())[:240]
+        if not question:
+            continue
+        normalized.append({
+            "id": " ".join(str(raw.get("id", "") or f"missing_{index}").split())[:80],
+            "question": question,
+            "blocking": bool(raw.get("blocking", True)),
+        })
+    return normalized
+
+
+def _normalize_goal_contract(
+    value: Any,
+    *,
+    intent: str,
+    goal: str,
+    privacy: str,
+    requires_confirmation: bool,
+    steps: list[dict[str, Any]],
+    legacy_clarification: dict[str, Any],
+) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    objective = " ".join(str(raw.get("objective", "") or goal or intent).split())[:1000]
+    deliverables = _text_list(raw.get("deliverables"))
+    if not deliverables and steps:
+        deliverables = _text_list([step.get("description", "") for step in steps])
+
+    missing_information = _normalize_missing_information(raw.get("missingInformation"))
+    legacy_question = " ".join(str(legacy_clarification.get("question", "") or "").split())[:240]
+    if legacy_clarification.get("needed") and legacy_question:
+        if not any(item["question"] == legacy_question for item in missing_information):
+            missing_information.insert(0, {
+                "id": "clarification_1",
+                "question": legacy_question,
+                "blocking": True,
+            })
+            missing_information = missing_information[:8]
+
+    normalized_privacy = str(raw.get("privacy", "") or privacy).strip()
+    if normalized_privacy not in {"local_private", "public_text"}:
+        normalized_privacy = "public_text"
+    risk = str(raw.get("risk", "") or "").strip().lower()
+    if risk not in {"low", "medium", "high", "critical"}:
+        risk = "high" if requires_confirmation else "low"
+    priority = str(raw.get("priority", "") or "").strip().lower()
+    if priority not in {"low", "normal", "high", "urgent"}:
+        priority = "normal"
+
+    return {
+        "contract": GOAL_CONTRACT,
+        "objective": objective,
+        "deliverables": deliverables,
+        "constraints": _text_list(raw.get("constraints")),
+        "acceptanceCriteria": _text_list(raw.get("acceptanceCriteria")),
+        "prohibitedActions": _text_list(raw.get("prohibitedActions")),
+        "privacy": normalized_privacy,
+        "risk": risk,
+        "priority": priority,
+        "missingInformation": missing_information,
+    }
+
+
+def _validate_goal_contract_input(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return ["goalContract nesnesi eksik"]
+
+    errors: list[str] = []
+    if str(value.get("contract", "") or "").strip() != GOAL_CONTRACT:
+        errors.append("goalContract.contract geçersiz")
+    if not isinstance(value.get("objective"), str) or not str(value.get("objective", "") or "").strip():
+        errors.append("goalContract.objective eksik")
+
+    for field in ("deliverables", "constraints", "acceptanceCriteria", "prohibitedActions"):
+        items = value.get(field)
+        if not isinstance(items, list):
+            errors.append(f"goalContract.{field} bir dizi değil")
+        elif len(items) > 12:
+            errors.append(f"goalContract.{field} 12 öğe sınırını aşıyor")
+        elif any(not isinstance(item, str) or not item.strip() for item in items):
+            errors.append(f"goalContract.{field} yalnız dolu metinler içermeli")
+
+    if str(value.get("privacy", "") or "").strip() not in {"local_private", "public_text"}:
+        errors.append("goalContract.privacy geçersiz")
+    if str(value.get("risk", "") or "").strip().lower() not in {"low", "medium", "high", "critical"}:
+        errors.append("goalContract.risk geçersiz")
+    if str(value.get("priority", "") or "").strip().lower() not in {"low", "normal", "high", "urgent"}:
+        errors.append("goalContract.priority geçersiz")
+
+    missing_information = value.get("missingInformation")
+    if not isinstance(missing_information, list):
+        errors.append("goalContract.missingInformation bir dizi değil")
+    else:
+        if len(missing_information) > 8:
+            errors.append("goalContract.missingInformation 8 öğe sınırını aşıyor")
+        for index, item in enumerate(missing_information[:8], start=1):
+            prefix = f"goalContract.missingInformation[{index}]"
+            if not isinstance(item, dict):
+                errors.append(f"{prefix} nesne değil")
+                continue
+            if not isinstance(item.get("id"), str) or not str(item.get("id", "") or "").strip():
+                errors.append(f"{prefix}.id eksik")
+            if not isinstance(item.get("question"), str) or not str(item.get("question", "") or "").strip():
+                errors.append(f"{prefix}.question eksik")
+            if not isinstance(item.get("blocking"), bool):
+                errors.append(f"{prefix}.blocking boolean değil")
+    return errors
+
+
+def _lint_plan_steps(steps: list[dict[str, Any]]) -> list[str]:
+    """Capability doğrulamasından geçmiş adımların DAG bütünlüğünü denetler."""
+    errors: list[str] = []
+    step_ids = [str(step.get("id", "") or "").strip() for step in steps]
+    known_ids = set(step_ids)
+    seen: set[str] = set()
+    for step_id in step_ids:
+        if not step_id or step_id in seen:
+            errors.append(f"plan linter: tekrarlı veya boş step id {step_id!r}")
+        seen.add(step_id)
+
+    dependencies: dict[str, set[str]] = {step_id: set() for step_id in step_ids if step_id}
+    for step in steps:
+        step_id = str(step.get("id", "") or "").strip()
+        for dependency in step.get("dependsOn", []) or []:
+            dependency_id = str(dependency or "").strip()
+            if dependency_id not in known_ids:
+                errors.append(
+                    f"plan linter: {step_id!r} bilinmeyen bağımlılık {dependency_id!r} içeriyor"
+                )
+                continue
+            dependencies.setdefault(step_id, set()).add(dependency_id)
+
+    if errors:
+        return errors
+
+    remaining = {step_id: set(items) for step_id, items in dependencies.items()}
+    resolved: set[str] = set()
+    while remaining:
+        ready = sorted(step_id for step_id, deps in remaining.items() if deps <= resolved)
+        if not ready:
+            cycle_nodes = ", ".join(sorted(remaining))
+            errors.append(f"plan linter: DAG döngüsü bulundu ({cycle_nodes})")
+            break
+        for step_id in ready:
+            resolved.add(step_id)
+            remaining.pop(step_id, None)
+    return errors
+
+
+def _lint_prohibited_actions(goal_contract: dict[str, Any], steps: list[dict[str, Any]]) -> list[str]:
+    prohibited_capabilities: set[str] = set()
+    for action in goal_contract.get("prohibitedActions", []) or []:
+        token = str(action or "").strip().lower()
+        if token.startswith("capability:"):
+            token = token.split(":", 1)[1].strip()
+        if token in capability_names():
+            prohibited_capabilities.add(token)
+
+    return [
+        f"plan linter: GoalContract {step['capability']!r} capability adımını yasaklıyor"
+        for step in steps
+        if str(step.get("capability", "") or "") in prohibited_capabilities
+    ]
+
+
 def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
     """Sunucudan gelen plan JSON'unu sözleşmeye göre doğrular ve normalize eder.
 
-    Dönen plan: {intent, goal, confidence, privacyClass, requiresConfirmation,
-    clarification{needed,question}, steps[{id,capability,args,description}]}.
+    Dönen plan: {intent, goal, goalContract, confidence, privacyClass,
+    requiresConfirmation, clarification{needed,question},
+    steps[{id,capability,args,description,dependsOn}]}.
     """
     errors: list[str] = []
+    blocking_errors: list[str] = []
     if not isinstance(payload, dict):
         return None, ["plan bir JSON nesnesi değil"]
 
     contract = str(payload.get("contract", "") or "")
-    if contract and contract != PLAN_CONTRACT:
-        errors.append(f"bilinmeyen sözleşme: {contract}")
+    if contract != PLAN_CONTRACT:
+        error = f"bilinmeyen sözleşme: {contract}"
+        errors.append(error)
+        blocking_errors.append(error)
 
     intent = str(payload.get("intent", "") or "").strip() or "chat"
     goal = str(payload.get("goal", "") or "").strip()
@@ -510,7 +761,10 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
         errors.append("confidence sayı değil")
 
     privacy = str(payload.get("privacyClass", "") or "").strip()
-    if privacy not in {"local_private", "public_text"}:
+    if privacy and privacy not in {"local_private", "public_text"}:
+        error = "privacyClass geçersiz"
+        errors.append(error)
+        blocking_errors.append(error)
         privacy = ""
 
     clarification_raw = payload.get("clarification")
@@ -519,27 +773,50 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
         "needed": bool(clarification_raw.get("needed", False)),
         "question": str(clarification_raw.get("question", "") or "").strip(),
     }
+    if clarification["needed"] and not clarification["question"]:
+        error = "clarification.needed true ancak tek hedefli soru eksik"
+        errors.append(error)
+        blocking_errors.append(error)
 
     raw_steps = payload.get("steps")
-    raw_steps = raw_steps if isinstance(raw_steps, list) else []
+    if not isinstance(raw_steps, list):
+        error = "steps bir dizi değil"
+        errors.append(error)
+        blocking_errors.append(error)
+        raw_steps = []
+    if len(raw_steps) > 8:
+        error = "plan linter: adım sayısı 8 sınırını aşıyor"
+        errors.append(error)
+        blocking_errors.append(error)
     known = capability_names()
     steps: list[dict[str, Any]] = []
     requires_confirmation = bool(payload.get("requiresConfirmation", False))
     for index, raw in enumerate(raw_steps[:8], start=1):
         if not isinstance(raw, dict):
-            errors.append(f"steps[{index}]: nesne değil")
+            error = f"steps[{index}]: nesne değil"
+            errors.append(error)
+            blocking_errors.append(error)
             continue
         capability = str(raw.get("capability", "") or "").strip()
         if not capability:
-            errors.append(f"steps[{index}]: capability boş")
+            error = f"steps[{index}]: capability boş"
+            errors.append(error)
+            blocking_errors.append(error)
             continue
         if capability not in known:
-            errors.append(f"steps[{index}]: bilinmeyen capability {capability!r}")
+            error = f"steps[{index}]: bilinmeyen capability {capability!r}"
+            errors.append(error)
+            blocking_errors.append(error)
             continue
         raw_args = raw.get("args", {})
-        raw_args = raw_args if isinstance(raw_args, dict) else {}
+        if not isinstance(raw_args, dict):
+            error = f"steps[{index}].args: nesne değil"
+            errors.append(error)
+            blocking_errors.append(error)
+            raw_args = {}
         args, arg_errors = _validate_step_args(capability, raw_args)
         errors.extend(arg_errors)
+        blocking_errors.extend(arg_errors)
         if any("zorunlu argüman eksik" in item for item in arg_errors):
             # Eksik zorunlu argümanla adım yürütülemez; adımı düşür — plan
             # tamamen boş kalırsa aşağıda reddedilir, üst katman netleştirme
@@ -549,6 +826,10 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
         if bool(metadata.get("sideEffect", False)) or str(metadata.get("permissionClass", "") or "") == "approval_required":
             requires_confirmation = True
         raw_depends = raw.get("dependsOn")
+        if raw_depends is not None and not isinstance(raw_depends, list):
+            error = f"steps[{index}].dependsOn: dizi değil"
+            errors.append(error)
+            blocking_errors.append(error)
         depends_on = (
             [str(item).strip() for item in raw_depends if str(item or "").strip()]
             if isinstance(raw_depends, list)
@@ -564,17 +845,54 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
             step_payload["dependsOn"] = depends_on
         steps.append(step_payload)
 
+    lint_errors = _lint_plan_steps(steps)
+    errors.extend(lint_errors)
+    blocking_errors.extend(lint_errors)
+
+    raw_goal_contract = payload.get("goalContract")
+    goal_contract_errors = _validate_goal_contract_input(raw_goal_contract)
+    errors.extend(goal_contract_errors)
+    blocking_errors.extend(goal_contract_errors)
+    goal_contract = _normalize_goal_contract(
+        raw_goal_contract,
+        intent=intent,
+        goal=goal,
+        privacy=privacy,
+        requires_confirmation=requires_confirmation,
+        steps=steps,
+        legacy_clarification=clarification,
+    )
+    goal_privacy = str(goal_contract.get("privacy", "") or "")
+    if privacy and goal_privacy != privacy:
+        error = "goalContract.privacy ile privacyClass uyuşmuyor"
+        errors.append(error)
+        blocking_errors.append(error)
+    privacy = privacy or goal_privacy
+    prohibition_errors = _lint_prohibited_actions(goal_contract, steps)
+    errors.extend(prohibition_errors)
+    blocking_errors.extend(prohibition_errors)
+    first_blocking_question = next(
+        (
+            item["question"]
+            for item in goal_contract["missingInformation"]
+            if item.get("blocking") and item.get("question")
+        ),
+        "",
+    )
+    if first_blocking_question:
+        clarification = {"needed": True, "question": first_blocking_question}
+
     plan = {
         "intent": intent,
         "goal": goal,
+        "goalContract": goal_contract,
         "confidence": confidence,
         "privacyClass": privacy,
         "requiresConfirmation": requires_confirmation,
         "clarification": clarification,
         "steps": steps,
     }
-    blocking = [e for e in errors if "zorunlu argüman eksik" in e or "bilinmeyen capability" in e]
-    if blocking and not steps:
+    if blocking_errors:
         return None, errors
     return plan, errors
 
@@ -626,6 +944,10 @@ def plan_to_semantic_payload(plan: dict[str, Any], *, fallback_privacy: str = "p
     steps = steps if isinstance(steps, list) else []
     steps = _order_steps_by_dependencies([s for s in steps if isinstance(s, dict)])
     clarification = plan.get("clarification", {}) if isinstance(plan.get("clarification"), dict) else {}
+    effective_privacy = str(plan.get("privacyClass", "") or fallback_privacy)
+    goal_contract = dict(plan.get("goalContract", {}) or {})
+    if goal_contract:
+        goal_contract["privacy"] = effective_privacy
     if clarification.get("needed") and clarification.get("question"):
         return {
             "intent": str(plan.get("intent", "") or "clarification"),
@@ -634,7 +956,8 @@ def plan_to_semantic_payload(plan: dict[str, Any], *, fallback_privacy: str = "p
             "confidence": float(plan.get("confidence", 0.0) or 0.0),
             "requiresConfirmation": False,
             "isMultiStep": False,
-            "privacyClass": str(plan.get("privacyClass", "") or fallback_privacy),
+            "privacyClass": effective_privacy,
+            "goalContract": goal_contract,
             "planPreview": None,
             "clarificationQuestion": str(clarification.get("question", "") or ""),
         }
@@ -646,7 +969,8 @@ def plan_to_semantic_payload(plan: dict[str, Any], *, fallback_privacy: str = "p
             "confidence": float(plan.get("confidence", 0.0) or 0.0),
             "requiresConfirmation": False,
             "isMultiStep": False,
-            "privacyClass": str(plan.get("privacyClass", "") or fallback_privacy),
+            "privacyClass": effective_privacy,
+            "goalContract": goal_contract,
             "planPreview": None,
         }
     first = steps[0]
@@ -658,16 +982,18 @@ def plan_to_semantic_payload(plan: dict[str, Any], *, fallback_privacy: str = "p
         "confidence": float(plan.get("confidence", 0.0) or 0.0),
         "requiresConfirmation": bool(plan.get("requiresConfirmation", False)) or is_multi,
         "isMultiStep": is_multi,
-        "privacyClass": str(plan.get("privacyClass", "") or fallback_privacy),
+        "privacyClass": effective_privacy,
+        "goalContract": goal_contract,
     }
-    if is_multi or plan.get("goal"):
-        summary = str(plan.get("goal", "") or "") or " → ".join(
+    if is_multi or plan.get("goal") or goal_contract.get("objective"):
+        summary = str(plan.get("goal", "") or goal_contract.get("objective", "") or "") or " → ".join(
             str(step.get("capability", "")) for step in steps
         )
         payload["planPreview"] = {
             "summary": summary,
             "steps": [dict(step) for step in steps],
             "privacyClass": payload["privacyClass"],
+            "goalContract": goal_contract,
             "agentPlan": build_agent_plan([dict(step) for step in steps], summary=summary),
         }
     else:

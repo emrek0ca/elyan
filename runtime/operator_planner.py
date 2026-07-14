@@ -1,6 +1,6 @@
 """Görsel operatör planlama sözleşmesi — elyan.operator.v1
 
-`structured_planner` (elyan.plan.v1) capability tabanlı görev planları üretir;
+`structured_planner` (elyan.plan.v2) capability tabanlı görev planları üretir;
 bu modül ikinci planlama yüzeyini — ekran otomasyonu (GUI) adımlarını — aynı
 veri sözleşmesi disiplinine taşır:
 

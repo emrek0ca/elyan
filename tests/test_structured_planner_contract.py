@@ -1,4 +1,4 @@
-"""elyan.plan.v1 yapılandırılmış planlama sözleşmesi testleri.
+"""elyan.plan.v2 yapılandırılmış planlama sözleşmesi testleri.
 
 Masaüstü ↔ sunucu beyni planlama iletişiminin tamamen veri (JSON) olarak
 gitmesini, yanıtların şemayla doğrulanmasını ve bozuk planların güvenle
@@ -25,6 +25,7 @@ def test_planning_request_is_pure_json_data() -> None:
     assert decoded["request"]["text"] == "safariyi aç"
     assert isinstance(decoded["toolCatalog"], list) and decoded["toolCatalog"]
     assert decoded["responseSchema"]["properties"]["contract"]["const"] == sp.PLAN_CONTRACT
+    assert decoded["responseSchema"]["properties"]["goalContract"]["properties"]["contract"]["const"] == sp.GOAL_CONTRACT
     assert decoded["rules"]["role"] == "planner_only"
 
 
@@ -51,6 +52,18 @@ def _plan(steps, **extra):
         "contract": sp.PLAN_CONTRACT,
         "intent": "task",
         "goal": "test",
+        "goalContract": {
+            "contract": sp.GOAL_CONTRACT,
+            "objective": "test",
+            "deliverables": [],
+            "constraints": [],
+            "acceptanceCriteria": [],
+            "prohibitedActions": [],
+            "privacy": "local_private",
+            "risk": "low",
+            "priority": "normal",
+            "missingInformation": [],
+        },
         "confidence": 0.9,
         "privacyClass": "local_private",
         "steps": steps,
@@ -65,10 +78,27 @@ def test_valid_single_step_plan() -> None:
     assert plan["steps"][0]["args"] == {"app_name": "Safari"}
     # open_app yan etkili → onay zorunlu hale gelir
     assert plan["requiresConfirmation"] is True
+    assert plan["goalContract"] == {
+        "contract": sp.GOAL_CONTRACT,
+        "objective": "test",
+        "deliverables": ["open_app"],
+        "constraints": [],
+        "acceptanceCriteria": [],
+        "prohibitedActions": [],
+        "privacy": "local_private",
+        "risk": "low",
+        "priority": "normal",
+        "missingInformation": [],
+    }
 
 
 def test_unknown_capability_rejected() -> None:
-    plan, errors = sp.validate_plan(_plan([{"capability": "rm_rf_everything", "args": {}}]))
+    plan, errors = sp.validate_plan(
+        _plan([
+            {"capability": "open_app", "args": {"app_name": "Safari"}},
+            {"capability": "rm_rf_everything", "args": {}},
+        ])
+    )
     assert plan is None
     assert any("bilinmeyen capability" in e for e in errors)
 
@@ -114,6 +144,35 @@ def test_clarification_plan_maps_to_question() -> None:
     assert payload["clarificationQuestion"] == "Hangi dosyayı özetleyeyim?"
 
 
+def test_goal_contract_asks_only_first_blocking_question() -> None:
+    plan, errors = sp.validate_plan(
+        _plan(
+            [],
+            goalContract={
+                "contract": sp.GOAL_CONTRACT,
+                "objective": "Rapor üret",
+                "deliverables": ["PDF rapor"],
+                "constraints": ["Mobile UI'a dokunma"],
+                "acceptanceCriteria": ["Dosya oluşmalı"],
+                "prohibitedActions": ["Dosya silme"],
+                "privacy": "local_private",
+                "risk": "medium",
+                "priority": "high",
+                "missingInformation": [
+                    {"id": "path", "question": "Hangi dosyayı kullanayım?", "blocking": True},
+                    {"id": "format", "question": "Hangi biçimde teslim edeyim?", "blocking": True},
+                ],
+            },
+        )
+    )
+    assert plan is not None
+    assert not errors
+    assert plan["goalContract"]["priority"] == "high"
+    payload = sp.plan_to_semantic_payload(plan)
+    assert payload["clarificationQuestion"] == "Hangi dosyayı kullanayım?"
+    assert payload["goalContract"]["missingInformation"][1]["id"] == "format"
+
+
 def test_multi_step_plan_maps_to_plan_preview() -> None:
     plan, _errors = sp.validate_plan(
         _plan([
@@ -152,6 +211,77 @@ def test_depends_on_preserved_through_validation() -> None:
     )
     assert plan is not None
     assert plan["steps"][1]["dependsOn"] == ["a"]
+
+
+def test_missing_step_dependency_is_rejected() -> None:
+    plan, errors = sp.validate_plan(
+        _plan([
+            {
+                "id": "write",
+                "capability": "document_write",
+                "args": {"prompt": "rapor"},
+                "dependsOn": ["research"],
+            },
+        ])
+    )
+    assert plan is None
+    assert any("bilinmeyen bağımlılık" in error for error in errors)
+
+
+def test_dependency_cycle_is_rejected_by_plan_linter() -> None:
+    plan, errors = sp.validate_plan(
+        _plan([
+            {"id": "a", "capability": "web_research", "args": {"query": "kuantum"}, "dependsOn": ["b"]},
+            {"id": "b", "capability": "document_write", "args": {"prompt": "rapor"}, "dependsOn": ["a"]},
+        ])
+    )
+    assert plan is None
+    assert any("DAG döngüsü" in error for error in errors)
+
+
+def test_goal_contract_mismatch_is_rejected_fail_closed() -> None:
+    invalid = _plan([{"capability": "open_app", "args": {"app_name": "Safari"}}])
+    invalid["goalContract"]["contract"] = "elyan.goal_contract.unknown"
+    plan, errors = sp.validate_plan(invalid)
+    assert plan is None
+    assert any("goalContract.contract geçersiz" in error for error in errors)
+
+
+def test_missing_goal_contract_is_rejected_fail_closed() -> None:
+    invalid = _plan([{"capability": "open_app", "args": {"app_name": "Safari"}}])
+    invalid.pop("goalContract")
+    plan, errors = sp.validate_plan(invalid)
+    assert plan is None
+    assert any("goalContract nesnesi eksik" in error for error in errors)
+
+
+def test_privacy_mismatch_is_rejected_fail_closed() -> None:
+    invalid = _plan([{"capability": "open_app", "args": {"app_name": "Safari"}}])
+    invalid["goalContract"]["privacy"] = "public_text"
+    plan, errors = sp.validate_plan(invalid)
+    assert plan is None
+    assert any("privacyClass uyuşmuyor" in error for error in errors)
+
+
+def test_goal_contract_prohibited_capability_is_rejected() -> None:
+    invalid = _plan([{"capability": "open_app", "args": {"app_name": "Safari"}}])
+    invalid["goalContract"]["prohibitedActions"] = ["capability:open_app"]
+    plan, errors = sp.validate_plan(invalid)
+    assert plan is None
+    assert any("capability adımını yasaklıyor" in error for error in errors)
+
+
+def test_single_step_without_legacy_goal_keeps_goal_contract_in_plan_preview() -> None:
+    raw = _plan([{"capability": "web_research", "args": {"query": "kuantum"}}])
+    raw["goal"] = ""
+    raw["goalContract"]["objective"] = "Kuantum gelişmelerini araştır"
+    raw["goalContract"]["privacy"] = "public_text"
+    raw["privacyClass"] = "public_text"
+    plan, errors = sp.validate_plan(raw)
+    assert plan is not None
+    assert not errors
+    payload = sp.plan_to_semantic_payload(plan)
+    assert payload["planPreview"]["goalContract"]["objective"] == "Kuantum gelişmelerini araştır"
 
 
 def test_multi_step_reordered_by_depends_on() -> None:

@@ -284,7 +284,7 @@ def test_planning_envelope_includes_native_desktop_truth_and_intelligence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    # Eski serbest metin prompt yerine yapılandırılmış zarf (elyan.plan.v1):
+    # Eski serbest metin prompt yerine yapılandırılmış zarf (elyan.plan.v2):
     # masaüstü canlı durumu ve öğrenilmiş rota geçmişi VERİ olarak taşınmalı.
     _isolate_state(monkeypatch, tmp_path)
     monkeypatch.setattr(
@@ -319,7 +319,7 @@ def test_planning_envelope_includes_native_desktop_truth_and_intelligence(
 
     envelope = bridge._build_structured_planning_request(state_store.snapshot(), "pencereyi aç")
 
-    assert envelope["contract"] == "elyan.plan.v1"
+    assert envelope["contract"] == "elyan.plan.v2"
     desktop = envelope["context"]["desktop"]
     assert desktop["activeWindow"]["appName"] == "Finder"
     assert desktop["operator"]["accessibilityReady"] is True
@@ -329,7 +329,7 @@ def test_planning_envelope_includes_native_desktop_truth_and_intelligence(
     assert all(isinstance(item, dict) for item in recent)
     # Araç kataloğu JSON Schema parametreli olmalı; düz metin talimat yok.
     assert isinstance(envelope["toolCatalog"], list) and envelope["toolCatalog"]
-    assert envelope["responseSchema"]["properties"]["contract"]["const"] == "elyan.plan.v1"
+    assert envelope["responseSchema"]["properties"]["contract"]["const"] == "elyan.plan.v2"
 
 
 def test_runtime_status_includes_operator_state(
