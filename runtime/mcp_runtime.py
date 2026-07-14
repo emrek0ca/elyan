@@ -512,9 +512,18 @@ class MCPRuntimeManager:
             }
         )
         output = content_text or _string(json.dumps(structured_result, ensure_ascii=False), limit=4000)
+        # Kanıt sözleşmesi ("prove it"): MCP aracının gerçekten çalıştığı
+        # makine-okur alanla işaretlenir — work-order doğrulaması bunu
+        # stateReadback kanıtı sayar (extract_state_readback: mcpToolExecuted).
+        readback_result: dict[str, Any] = (
+            dict(structured_result) if isinstance(structured_result, dict) else {}
+        )
+        readback_result.setdefault("mcpToolExecuted", True)
+        readback_result.setdefault("mcpServerId", str(server.get("id", "") or ""))
+        readback_result.setdefault("mcpToolName", tool_name)
         return {
             "output": output,
-            "result": structured_result,
+            "result": readback_result,
             "artifacts": artifacts,
         }
 

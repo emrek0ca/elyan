@@ -2427,6 +2427,7 @@ _READBACK_BOOL_FIELDS = (
     ("readBackVerified", "read_back_verified"),
     ("created", "created"),
     ("updated", "updated"),
+    ("mcpToolExecuted", "mcp_tool_executed"),
 )
 
 

@@ -76,9 +76,34 @@ tüm değişikliklerle yeniden başlatıldı (playwright ~/.elyan/venv'e kuruldu
   (`_activateComposerGoalMode`), plan modu, masaüstü dispatch, tam yetki.
 - Flutter analyze temiz, **584/584 test yeşil**. Commit'lendi (branch main).
 
+## Tek Spec, Üç Katman mimarisi (bu turda kuruldu)
+
+- `runtime/capability_spec.py` = TEK doğruluk kaynağı: yeni yetenek eklemek
+  tek spec bloğu; katalog/handler/güvenlik/doğrulama otomatik türer
+  (sözleşme: tests/test_capability_spec_contract.py).
+- Skill = görev tarifi: manifest'te id/forEach/{{steps...}} şablonları
+  executor'a kadar korunur; ilk tarif `web.collect_download`
+  (runtime/skill_catalog.py). Skill yetenek listesi spec'ten türer.
+- MCP kanalı: `elyan mcp list|add|remove|enable|disable|tools`; sunucular
+  state.skills.mcpServers'ta; MCP sonuçları kanıt sözleşmesine bağlı
+  (mcpToolExecuted → stateReadback).
+- Öğrenme döngüsü: `elyan tasks --report` başarısız görevleri hata sınıfına
+  göre toplar + yatırım rehberi (spec mi / skill mi / MCP mi).
+
+### Kalan spec göçü (68 yetenek) — SONRAKI OTURUM İÇİN OYUN PLANI
+Gruplar halinde taşı; her grupta: spec bloğu yaz → legacy decl/adapter/
+handler/display kayıtlarını sök → 654+ test paritesini koru. DİKKAT:
+- retryable/timeout hâlâ legacy kümelerden (_NON_RETRYABLE_SIDE_EFFECTS,
+  timeout if-zinciri) — spec'e alan ekleyip metadata'da migrated yoluna bağla.
+- requiredPermissions/permission_class legacy isim kümelerinden geliyor;
+  spec.policy'den türet.
+- Yazıcılar (document_write vb.) handler'da özel _writer_source_context
+  kullanır — build_handler'a custom hook gerekmedikçe en sona bırak.
+- Decl metinlerini AYNEN kopyala (planlayıcı davranışı değişmesin).
+
 ## ⚠️ Kalanlar / sıradaki işler (öncelik sırası)
 
-1. **npm publish 1.5.0** — kod hazır, `npm pack` temiz (1.0 MB / 94 dosya).
+1. **npm publish 1.6.0** (sürüm bump'landı; tüm mimari turları içerir) — kod hazır, `npm pack` temiz (1.0 MB / 94 dosya).
    Kullanıcı kendisi yayınlamalı (2FA): `npm login` → `npm publish --otp=<kod>`
    → `npm install -g elyan@1.5.0 && elyan restart`. Kimlik bilgisi/OTP'yi
    Claude'a verme; kullanıcı terminalde kendi girer.
