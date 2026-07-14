@@ -73,8 +73,11 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
 
     const auth = getRuntimeAuth(request);
 
+    const tasks = await listAssignedRuntimeTasks(app, auth);
     return {
-      tasks: await listAssignedRuntimeTasks(app, auth),
+      // Authenticated runtime channel binding: desktop WorkOrder v2 seals this
+      // backend-owned identity into its device-local execution ledger.
+      tasks: tasks.map((task) => ({ ...task, userId: auth.sub })),
     };
   });
 
