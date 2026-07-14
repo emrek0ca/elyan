@@ -12,6 +12,7 @@ from runtime.agent_planning import build_agent_plan
 from runtime.backend_client import BackendResult
 from runtime.capability_registry import capability_display_name, capability_readiness
 from runtime.desktop_work_order import validate_payload, verify_result
+from runtime.execution_trust import ExecutionLedger, TrustError, prepare_work_order_v2
 
 
 REMOTE_TASK_RUNNER_VERSION = "remote_task_orchestrator_v1"
@@ -277,6 +278,15 @@ class RemoteTaskRunner:
                 result_status="failed_closed",
             )
         work_order = work_order_validation.work_order
+        if work_order is None:
+            task_run_id = self._ensure_task_run_id(task_id)
+            return self._fail_safe(
+                task_id,
+                task_run_id,
+                message="Görev güvenli bir WorkOrder içermiyor; işlem durduruldu.",
+                error_code="WORK_ORDER_MISSING",
+                result_status="failed_closed",
+            )
         title = str(task.get("title", "") or payload.get("title", "") or "Elyan görevi")
         prompt = str(
             _desktop_work_order_topic(work_order)
@@ -289,6 +299,26 @@ class RemoteTaskRunner:
         # prompt olarak gelir; work-order konusundan türetilen prompt'u ezer.
         if str(prompt_override or "").strip():
             prompt = str(prompt_override).strip()
+        if isinstance(work_order, dict):
+            try:
+                work_order = prepare_work_order_v2(
+                    task,
+                    work_order,
+                    prompt=prompt,
+                    state=state_store.snapshot(),
+                )
+                delivery = ExecutionLedger().claim_delivery(work_order)
+                if not delivery.claimed:
+                    return {"taskId": task_id, "ok": True, "status": f"skipped_ledger_{delivery.status}"}
+            except TrustError as exc:
+                task_run_id = self._ensure_task_run_id(task_id)
+                return self._fail_safe(
+                    task_id,
+                    task_run_id,
+                    message="Görev güven bağı doğrulanamadı; işlem güvenli şekilde durduruldu.",
+                    error_code=exc.code,
+                    result_status="failed_closed",
+                )
         # Codex modeli: kullanıcı mobil composer'dan "plan modu" seçtiyse
         # metadata.planMode=true gelir → önce plan önizlemesi + onay, sonra
         # adım adım. Seçmediyse doğrudan adım adım yürüt (yalnız blocklist onar).
@@ -369,6 +399,7 @@ class RemoteTaskRunner:
         # executor her adım geçişinde backend'e canlı 'running' güncellemesi akıtır.
         progress_token = self.host._begin_active_remote_task(task_id, task_run_id)
         try:
+            trust_token = self.host._begin_trusted_work_order(work_order, "dispatch")
             local_result = self._execute_local_with_timeout(
                 task, prompt, title, task_id=task_id, plan_mode=plan_mode
             )
@@ -456,6 +487,7 @@ class RemoteTaskRunner:
             self._mark_link_terminal(task_id, result.get("status", "completed"))
             return result
         finally:
+            self.host._end_trusted_work_order(locals().get("trust_token"))
             self.host._end_active_remote_task(progress_token, task_id)
             self.host._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
 
@@ -521,7 +553,20 @@ class RemoteTaskRunner:
             task_run_id = str(link.get("taskRunId", "") or "").strip() or self._ensure_task_run_id(task_id)
             return self._resume_after_clarification(task_id, task_run_id, link, approved, answer)
 
+        stored_work_order = link.get("desktopWorkOrder") if isinstance(link, dict) else None
         if not approved:
+            if isinstance(stored_work_order, dict) and str(stored_work_order.get("schema", "") or "").endswith(".v2"):
+                try:
+                    if not ExecutionLedger().claim_approval(stored_work_order, False):
+                        return {"taskId": task_id, "ok": True, "status": "skipped_duplicate_approval"}
+                except TrustError as exc:
+                    return self._fail_safe(
+                        task_id,
+                        str((link or {}).get("taskRunId", "") or "") or self._ensure_task_run_id(task_id),
+                        message="Onay kararı güvenli şekilde doğrulanamadı.",
+                        error_code=exc.code,
+                        result_status="failed_closed",
+                    )
             self.host._cancel_remote_pending_task(task_id)
             self._mark_link_terminal(task_id, "canceled")
             return {"taskId": task_id, "ok": True, "status": "canceled"}
@@ -579,6 +624,10 @@ class RemoteTaskRunner:
 
         progress_token = self.host._begin_active_remote_task(task_id, task_run_id)
         try:
+            trust_token = self.host._begin_trusted_work_order(work_order, "approval")
+            if isinstance(work_order, dict) and str(work_order.get("schema", "") or "").endswith(".v2"):
+                if not ExecutionLedger().claim_approval(work_order, True):
+                    return {"taskId": task_id, "ok": True, "status": "skipped_duplicate_approval"}
             self._report_lifecycle(task_id, task_run_id, "repairing", "Onaylanan adım yürütülüyor.")
             local_result = self.host._run_with_approved_task_access(
                 task_id,
@@ -597,7 +646,16 @@ class RemoteTaskRunner:
             state_store.remove_remote_task_link(task_id)
             self._mark_link_terminal(task_id, result.get("status", "completed"))
             return result
+        except TrustError as exc:
+            return self._fail_safe(
+                task_id,
+                task_run_id,
+                message="Onaylanan adımın görev yetkisi doğrulanamadı.",
+                error_code=exc.code,
+                result_status="failed_closed",
+            )
         finally:
+            self.host._end_trusted_work_order(locals().get("trust_token"))
             self.host._end_active_remote_task(progress_token, task_id)
             self.host._set_runtime_task_heartbeat(False, "idle")
 
@@ -1293,6 +1351,18 @@ class RemoteTaskRunner:
         state_store.upsert_task_inbox_item(item, last_synced_at=_utc_now_iso())
 
     def _mark_link_terminal(self, task_id: str, status: str) -> None:
+        link = state_store.get_remote_task_link(task_id)
+        work_order = link.get("desktopWorkOrder") if isinstance(link, dict) else None
+        if isinstance(work_order, dict) and str(work_order.get("schema", "") or "").endswith(".v2"):
+            try:
+                ExecutionLedger().set_delivery_status(
+                    str(work_order.get("userId", "") or ""),
+                    str(work_order.get("taskId", "") or task_id),
+                    int(work_order.get("revision", 0) or 0),
+                    status,
+                )
+            except Exception:
+                pass
         state_store.update_remote_task_link(
             task_id,
             {

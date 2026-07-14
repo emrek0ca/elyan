@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from runtime.capability_spec import policy_gate_for
+from runtime.execution_trust import verify_grant_for_policy
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,10 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
     name = str(tool_name or "").strip()
     if not name:
         return PolicyDecision(False, "UNKNOWN_CAPABILITY", "Bilinmeyen araç.")
+
+    grant_error = verify_grant_for_policy(name, args, state)
+    if grant_error is not None:
+        return PolicyDecision(False, grant_error.code, "Görev yetkisi bu adıma uymuyor; işlem durduruldu.")
 
     if name == "shell_run":
         mode = str(args.get("mode", "") or "").strip().lower()

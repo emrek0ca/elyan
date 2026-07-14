@@ -674,6 +674,7 @@ class ExecutorCore:
         conversation_id: str = "",
         replan_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
         max_replans: int = 2,
+        authorize_step: Callable[[str, str, dict[str, Any], str, str], dict[str, Any] | None] | None = None,
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
         execution_id = self.begin_execution(
             source=source,
@@ -799,6 +800,26 @@ class ExecutorCore:
                         args["_previousResult"] = previous_result
                     if previous_artifacts:
                         args["_previousArtifacts"] = list(previous_artifacts)
+                    if authorize_step is not None:
+                        try:
+                            grant = authorize_step(step_id, capability, args, source, task_id)
+                        except Exception as exc:
+                            error_code = str(getattr(exc, "code", "CAPABILITY_GRANT_DENIED") or "CAPABILITY_GRANT_DENIED")
+                            message = str(getattr(exc, "message", "") or "Görev yetkisi bu adıma uymuyor.")
+                            self._record_step_result(
+                                execution_id,
+                                step_id=step_id,
+                                status="failed",
+                                verification_status="failed",
+                                output_preview=message,
+                                error_code=error_code,
+                                stop_reason=message,
+                            )
+                            self._set_stop_reason(execution_id, error_code.lower())
+                            self.finish_execution(execution_id, ok=False, detail=message)
+                            return False, message, events, error_code, structured_result, artifacts
+                        if isinstance(grant, dict):
+                            args["_capabilityGrant"] = grant
                     tool_result, step_events = execute_step(
                         capability,
                         args,

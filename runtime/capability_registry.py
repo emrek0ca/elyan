@@ -11,6 +11,7 @@ import sys
 from typing import Any, Callable
 
 from runtime import capability_spec
+from runtime.execution_trust import consume_grant_for_call, finish_grant_for_call
 
 from runtime.safety_policy import evaluate_tool
 
@@ -2308,8 +2309,22 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             "error": {"code": "CAPABILITY_UNAVAILABLE", "message": message},
         }
 
+    trust_context = state.get("runtime", {}).get("executionTrust", {}) if isinstance(state.get("runtime"), dict) else {}
+    grant_guarded = isinstance(trust_context, dict) and bool(trust_context)
+    grant_error = consume_grant_for_call(tool_name, payload, state)
+    if grant_error is not None:
+        return {
+            "ok": False,
+            "tool": tool_name,
+            "output": "Görev yetkisi daha önce kullanılmış veya bu adıma uymuyor.",
+            "error": {"code": grant_error.code, "message": "Görev yetkisi daha önce kullanılmış veya bu adıma uymuyor."},
+        }
+
+    output: Any = None
+    handler_completed = False
     try:
         output = handler(payload)
+        handler_completed = True
     except CapabilityLoadError as exc:
         return {
             "ok": False,
@@ -2381,6 +2396,12 @@ def run_capability(tool_name: str, args: dict[str, Any] | None, state: dict[str,
             "error": {"code": "TOOL_EXECUTION_FAILED", "message": "Araç güvenli şekilde tamamlanamadı."},
             "readiness": readiness,
         }
+    finally:
+        if grant_guarded:
+            try:
+                finish_grant_for_call(payload, ok=handler_completed, result=output)
+            except Exception:
+                pass
 
     structured_result: dict[str, Any] | None = None
     artifacts: list[dict[str, Any]] = []

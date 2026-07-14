@@ -55,6 +55,7 @@ from runtime import state_store
 from runtime.executor_core import ExecutorCore
 from runtime.remote_task_runner import RemoteTaskRunner
 from runtime.desktop_work_order import canonical_capability, validate_payload
+from runtime.execution_trust import ExecutionLedger, TrustError
 from runtime import native_file_indexer
 from runtime import mcp_runtime
 from runtime import skill_runtime
@@ -5276,6 +5277,10 @@ class RuntimeBridge:
             f"elyan_approved_task_{id(self)}",
             default="",
         )
+        self._execution_trust_context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+            f"elyan_execution_trust_{id(self)}",
+            default=None,
+        )
         # Canlı adım-adım ilerleme: yürütülen mobil görevi (task_id/run_id)
         # taşıyan bağlam. Executor her adım geçişinde progress emitter'ı çağırır;
         # emitter bu bağlamla ilerlemeyi doğru göreve yönlendirir (daemon dahil).
@@ -7380,6 +7385,55 @@ class RuntimeBridge:
         finally:
             self._approved_task_context.reset(token)
 
+    def _begin_trusted_work_order(self, work_order: dict[str, Any] | None, authorization: str) -> Any:
+        if not isinstance(work_order, dict) or str(work_order.get("schema", "") or "") != "elyan.desktop_work_order.v2":
+            return None
+        context = {
+            "userId": str(work_order.get("userId", "") or ""),
+            "taskId": str(work_order.get("taskId", "") or ""),
+            "revision": int(work_order.get("revision", 0) or 0),
+            "authorization": str(authorization or "dispatch"),
+            "workOrder": dict(work_order),
+            "stepId": "",
+        }
+        return self._execution_trust_context.set(context)
+
+    def _end_trusted_work_order(self, token: Any) -> None:
+        if token is not None:
+            self._execution_trust_context.reset(token)
+
+    def _authorize_plan_step(
+        self,
+        step_id: str,
+        capability: str,
+        args: dict[str, Any],
+        source: str,
+        task_id: str,
+    ) -> dict[str, Any] | None:
+        context = self._execution_trust_context.get()
+        if not isinstance(context, dict):
+            if source == "runtime_task" or str(self._approved_task_context.get() or "").strip():
+                raise TrustError("WORK_ORDER_TRUST_MISSING", "Remote görev için WorkOrder v2 güven bağı eksik.")
+            return None
+        work_order = context.get("workOrder")
+        if not isinstance(work_order, dict):
+            raise TrustError("WORK_ORDER_TRUST_MISSING", "Remote görev için WorkOrder v2 güven bağı eksik.")
+        expected_task_id = str(context.get("taskId", "") or "")
+        if task_id and expected_task_id != task_id:
+            raise TrustError("WORK_ORDER_TASK_MISMATCH", "Plan adımı farklı göreve ait.")
+        authorization = str(context.get("authorization", "") or "")
+        if authorization != "approval" and canonical_capability(capability) in REMOTE_APPROVAL_CAPABILITIES:
+            raise TrustError("EXPLICIT_APPROVAL_REQUIRED", "Bu capability için açık onay gerekiyor.")
+        grant = ExecutionLedger().issue_grant(
+            work_order,
+            step_id=step_id,
+            capability=capability,
+            args=args,
+            device_secret=str(STATE.snapshot().get("runtime", {}).get("deviceSecret", "") or ""),
+        )
+        self._execution_trust_context.set({**context, "stepId": step_id})
+        return grant
+
     def _state_with_access(self) -> dict[str, Any]:
         state = copy.deepcopy(STATE.snapshot())
         runtime = state.get("runtime", {})
@@ -7387,6 +7441,12 @@ class RuntimeBridge:
             runtime = {}
             state["runtime"] = runtime
         runtime["access"] = self._access_status()
+        trust_context = self._execution_trust_context.get()
+        if isinstance(trust_context, dict):
+            runtime["executionTrust"] = {
+                key: trust_context.get(key)
+                for key in ("userId", "taskId", "revision", "authorization", "stepId")
+            }
         return state
 
     def runtime_access_status(self) -> dict[str, Any]:
@@ -8090,6 +8150,7 @@ class RuntimeBridge:
             execute_step=self._execute_step_with_telemetry,
             source="confirmed_plan",
             replan_fn=self._recoverable_replan,
+            authorize_step=self._authorize_plan_step,
         )
 
     def revise_conversation_plan(self, conversation_id: str, pending_plan_id: str, revision_text: str) -> dict[str, Any]:
@@ -11854,6 +11915,7 @@ class RuntimeBridge:
                 task_id=str(task.get("id", "") or ""),
                 conversation_id=conversation_id,
                 replan_fn=self._recoverable_replan,
+                authorize_step=self._authorize_plan_step,
             )
         else:
             ok = True

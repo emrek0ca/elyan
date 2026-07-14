@@ -7,6 +7,7 @@ from typing import Any
 
 
 SCHEMA = "elyan.desktop_work_order.v1"
+V2_SCHEMA = "elyan.desktop_work_order.v2"
 MAX_STEPS = 8
 _SOURCE_HASH_RE = re.compile(r"^[a-f0-9]{24}$")
 _CONTENT_HASH_RE = re.compile(r"^(?:sha256:)?[a-f0-9]{64}$", re.IGNORECASE)
@@ -107,8 +108,26 @@ def validate_payload(payload: dict[str, Any]) -> WorkOrderValidation:
         return WorkOrderValidation(None, (_error("WORK_ORDER_INVALID", "desktopWorkOrder", "Work order nesne olmalı."),))
 
     errors: list[dict[str, str]] = []
-    if candidate.get("schema") != SCHEMA:
+    schema = str(candidate.get("schema", "") or "")
+    if schema not in {SCHEMA, V2_SCHEMA}:
         errors.append(_error("WORK_ORDER_SCHEMA_UNSUPPORTED", "desktopWorkOrder.schema", "Work order şeması desteklenmiyor."))
+
+    if schema == V2_SCHEMA:
+        required_text_fields = (
+            "userId", "taskId", "deviceId", "promptHash", "planHash", "expiresAt", "nonce", "signature",
+        )
+        for field in required_text_fields:
+            if not str(candidate.get(field, "") or "").strip():
+                errors.append(_error("WORK_ORDER_V2_BINDING_MISSING", f"desktopWorkOrder.{field}", "WorkOrder v2 güven bağı eksik."))
+        try:
+            revision = int(candidate.get("revision", 0) or 0)
+        except (TypeError, ValueError):
+            revision = 0
+        if revision < 1:
+            errors.append(_error("WORK_ORDER_REVISION_INVALID", "desktopWorkOrder.revision", "WorkOrder v2 revision alanı geçersiz."))
+        capability_scope = candidate.get("capabilityScope")
+        if not isinstance(capability_scope, list) or not capability_scope:
+            errors.append(_error("WORK_ORDER_SCOPE_MISSING", "desktopWorkOrder.capabilityScope", "WorkOrder v2 capability kapsamı eksik."))
 
     goal = candidate.get("goal")
     if not isinstance(goal, dict):
