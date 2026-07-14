@@ -11,7 +11,14 @@ from typing import Any, Callable
 from runtime import state_store
 from runtime.agent_planning import build_agent_plan
 from runtime.capability_registry import capability_metadata, capability_metadata_summary, capability_readiness
-from runtime.capability_validation import attach_step_evidence, precondition_error, readback_evidence
+from runtime.capability_validation import (
+    attach_step_evidence,
+    pre_execution_state,
+    precondition_error,
+    readback_evidence,
+)
+from runtime.execution_journal import ExecutionJournal
+from runtime.execution_journal import plan_hash as journal_plan_hash
 from runtime.execution_scheduler import (
     MAX_PARALLEL_READS,
     SchedulerPlanError,
@@ -586,6 +593,18 @@ class ExecutorCore:
                 self._metrics["completed"] += 1
             else:
                 self._metrics["failed"] += 1
+            trace = current.get("executionTrace") if isinstance(current.get("executionTrace"), dict) else {}
+            stop_reason = str(trace.get("stopReason", "") or "")
+            # P4: journal'ı kapat. Compensation yalnız doğrulama başarısızlığında
+            # çalışır (doğrulanamayan artefakt silinir); preemption ve diğer
+            # kesintilerde artefaktlar restart devamı için korunur.
+            try:
+                journal = ExecutionJournal()
+                journal.finish(execution_id, ok=ok, stop_reason=stop_reason or detail)
+                if not ok and stop_reason == "verification_failed":
+                    journal.compensate_failed_execution(execution_id)
+            except Exception:  # pragma: no cover - journal asla yürütmeyi düşürmesin
+                pass
             self._persist(
                 last_execution_at=_utc_now_iso(),
                 last_detail=detail,
@@ -884,10 +903,29 @@ class ExecutorCore:
             # revize edebilmek için indeks tabanlı, splice edilebilir döngü.
             # `steps` yerel bir kopya; replan_fn kalan adımları yeniden yazabilir.
             scheduler_state = state_factory()
+            # P4: şifreli journal — restart sonrası aynı görev+plan için son
+            # güvenli checkpoint'ten devam; tamamlanmış yan etkiler tekrarlanmaz.
+            plan_signature = journal_plan_hash(steps)
+            journal = ExecutionJournal()
+            if task_id:
+                restored = journal.resume_state(task_id, plan_signature)
+                for restored_id in restored.get("completedStepIds", []):
+                    completed_step_ids.add(str(restored_id))
+                for restored_id, payload in restored.get("stepOutputs", {}).items():
+                    if isinstance(payload, dict):
+                        step_outputs[str(restored_id)] = payload
+            journal.begin(execution_id, task_id=task_id, plan_signature=plan_signature)
+            # Scheduler sözleşmesi: tamamlanmış adımlar giriş listesinde yer almaz;
+            # bağımlılıkları completed_step_ids üzerinden karşılanmış sayılır.
             steps = schedule_steps(
-                [dict(step) for step in steps if isinstance(step, dict)],
+                [
+                    dict(step)
+                    for step in steps
+                    if isinstance(step, dict) and str(step.get("id", "") or "").strip() not in completed_step_ids
+                ],
                 metadata_provider=capability_metadata,
                 readiness_provider=lambda capability: capability_readiness(capability, state=scheduler_state),
+                completed_step_ids=completed_step_ids,
             )
             self._record_scheduler_plan(execution_id, steps)
             replans_used = 0
@@ -957,11 +995,17 @@ class ExecutorCore:
                     {},
                 )
                 step_id = str(step.get("id", "") or step_role.get("id", "") or f"step_{index}")
+                # P4: önceki koşuda tamamlanmış adım journal'dan geri yüklendi;
+                # yan etkiyi tekrarlama, çıktıları şablon havuzunda hazır tut.
+                if step_id in completed_step_ids:
+                    self.record_stage(execution_id, "step_restored", detail=capability)
+                    continue
                 step_phase = str(step.get("phase", "") or step_role.get("phase", "") or "act")
                 step_role_name = str(step.get("role", "") or step_role.get("role", "") or "operator")
                 self.record_stage(execution_id, "step_execution", detail=capability)
                 did_replan = False
                 attempt = 0
+                pre_state: dict[str, Any] | None = None
                 prefetched = prefetched_results.pop(step_id, None)
                 while True:
                     attempt += 1
@@ -1030,6 +1074,10 @@ class ExecutorCore:
                                 return False, message, events, error_code, structured_result, artifacts
                             if isinstance(grant, dict):
                                 args["_capabilityGrant"] = grant
+                        # P4: compensation için yürütme öncesi kaynak durumu
+                        # (yalnız ilk denemede; dosya adım tarafından yaratılmış olabilir).
+                        if pre_state is None:
+                            pre_state = pre_execution_state(capability, args)
                         # P3: yürütme öncesi ön koşul kapısı — ihlal, araç hiç
                         # çalıştırılmadan tool_failure yoluna (replan dahil) girer.
                         pre_error = precondition_error(capability, args, state_factory())
@@ -1208,6 +1256,26 @@ class ExecutorCore:
                 }
                 completed_step_ids.add(step_id)
                 self._record_checkpoint(execution_id, step_id)
+                # P4: kalıcı checkpoint — argümanlar yalnız hash, çıktı yalnız
+                # şifreli; restart sonrası bu noktadan devam edilir.
+                evidence_payload = tool_result.get("stepEvidence")
+                evidence_payload = dict(evidence_payload) if isinstance(evidence_payload, dict) else {}
+                if not evidence_payload.get("path") and (pre_state or {}).get("path"):
+                    evidence_payload["path"] = str(pre_state["path"])
+                try:
+                    journal.record_step_completed(
+                        execution_id,
+                        step_id,
+                        capability=capability,
+                        args=args if isinstance(args, dict) else {},
+                        output_payload=step_outputs.get(step_id),
+                        evidence=evidence_payload,
+                        side_effect=bool(metadata.get("sideEffect", False)),
+                        pre_existed=(pre_state or {}).get("preExisted"),
+                        attempt=attempt,
+                    )
+                except Exception:  # pragma: no cover - journal asla yürütmeyi düşürmesin
+                    pass
 
             summary = "\n".join(output for output in outputs if output).strip() or "İşlem tamamlandı."
             self.record_stage(execution_id, "finalize", detail=summary, status="completed")

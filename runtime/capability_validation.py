@@ -132,6 +132,17 @@ def precondition_error(capability: str, args: dict[str, Any], state: dict[str, A
     return None
 
 
+def pre_execution_state(capability: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Yürütme öncesi kaynak durumu (P4 compensation için): hedef dosya var mıydı?"""
+    name = str(capability or "").strip()
+    if name in _FILE_WRITE_CAPABILITIES and isinstance(args, dict):
+        raw = _first_text_arg(args, _OUTPUT_PATH_ARG_KEYS)
+        if raw:
+            candidate = Path(raw).expanduser()
+            return {"path": str(candidate), "preExisted": candidate.exists()}
+    return {}
+
+
 def file_evidence(path: str | Path) -> dict[str, Any]:
     """Diskten bağımsız readback: hash + boyut. Okunamazsa verified=False."""
     candidate = Path(str(path)).expanduser()
