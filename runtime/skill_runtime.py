@@ -96,7 +96,11 @@ def _builtin_skill_ids() -> set[str]:
 
 
 def _allowed_local_capabilities() -> set[str]:
-    return {
+    # Tek Spec mimarisi: spec'e kayıtlı her yetenek skill tariflerinde
+    # kullanılabilir — elle whitelist büyütmek yalnız legacy adlar için kaldı.
+    from runtime import capability_spec
+
+    return {spec.name for spec in capability_spec.SPECS} | {
         "document_read",
         "document_write",
         "spreadsheet_write",
@@ -427,8 +431,7 @@ def _normalize_steps(
                     f"{skill_id} icin izinli olmayan parametre kullanildi.",
                 )
             cleaned_mapping[target_name] = payload_name
-        normalized.append(
-            {
+        normalized_step: dict[str, Any] = {
                 "capability": capability,
                 "description": _string(item.get("description"), limit=160),
                 "args": args,
@@ -445,7 +448,15 @@ def _normalize_steps(
                 ],
                 "requiresReadOnlyMcp": bool(item.get("requiresReadOnlyMcp", False)),
             }
-        )
+        # Tarif dili: {{steps.<id>...}} referansları ve forEach fan-out
+        # manifest'ten executor'a kadar korunur.
+        step_id = _string(item.get("id"), limit=80)
+        if step_id:
+            normalized_step["id"] = step_id
+        for_each = item.get("forEach")
+        if isinstance(for_each, str) and for_each.strip():
+            normalized_step["forEach"] = for_each.strip()
+        normalized.append(normalized_step)
     return normalized
 
 
@@ -991,8 +1002,7 @@ def prepare_skill_run(
             if not bool(metadata.get("readOnly", False)):
                 raise SafeCapabilityError("PERMISSION_REQUIRED", "Bu skill yalniz read-only MCP araci calistirir.")
             args["_readOnlyHint"] = True
-        steps.append(
-            {
+        step_entry: dict[str, Any] = {
                 "capability": str(item.get("capability", "") or ""),
                 "args": args,
                 "description": str(item.get("description", "") or ""),
@@ -1003,7 +1013,16 @@ def prepare_skill_run(
                 if isinstance(item.get("argsFromPreviousOutput"), list)
                 else [],
             }
-        )
+        # Tarif dili: adım kimliği ({{steps.<id>...}} referansları için) ve
+        # forEach (liste çıktısı üzerinde fan-out) executor'a aynen taşınır —
+        # skill'ler artık çok adımlı, veri akışlı görev tarifleri yazabilir.
+        step_id = _string(item.get("id"), limit=80)
+        if step_id:
+            step_entry["id"] = step_id
+        for_each = item.get("forEach")
+        if isinstance(for_each, str) and for_each.strip():
+            step_entry["forEach"] = for_each.strip()
+        steps.append(step_entry)
     preview_steps = [
         {
             "capability": step.get("capability", ""),

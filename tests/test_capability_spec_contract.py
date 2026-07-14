@@ -65,3 +65,28 @@ def test_spec_handler_maps_aliases_and_types() -> None:
         {"text_value": "merhaba", "submit": "true"}
     )
     assert calls["value"] == "merhaba" and calls["submit"] is True
+
+
+def test_skill_recipes_carry_ids_and_foreach_to_executor() -> None:
+    # Adım 2: skill manifest'i artık veri-akışlı görev tarifi yazabilir —
+    # id ve forEach alanları executor'a aynen taşınmak zorunda.
+    from runtime import browser_agent
+    from runtime import skill_runtime
+
+    # Gerçek daemon'da decider bridge init'te bağlanır; testte sahtesi yeter.
+    browser_agent.register_decider(lambda payload: {"action": "done", "summary": "ok"})
+    skill_runtime.list_skill_runtime(refresh=True)  # builtin'leri sandbox'a kur
+    prepared = skill_runtime.prepare_skill_run(
+        "web.collect_download",
+        {"goal": "linkleri topla", "outputDir": "/tmp/elyan-test-indir"},
+    )
+    steps = prepared["steps"]
+    assert [s.get("id") for s in steps] == ["klasor", "topla", "indir"]
+    assert steps[2]["forEach"] == "{{steps.topla.result.collected}}"
+    assert steps[2]["args"]["url"] == "{{item.href}}"
+    assert steps[2]["args"]["output_dir"] == "/tmp/elyan-test-indir"
+    assert steps[1]["args"]["goal"] == "linkleri topla"
+    # Tarifteki her yetenek gerçek katalogda var olmalı.
+    catalog_names = {str(item.get("name", "")) for item in cr.TOOL_DECLARATIONS}
+    for step in steps:
+        assert step["capability"] in catalog_names, step["capability"]

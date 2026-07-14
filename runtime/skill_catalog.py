@@ -186,6 +186,46 @@ def _skill(defn: dict[str, Any]) -> dict[str, Any]:
 
 BUILTIN_SKILL_DEFINITIONS: list[dict[str, Any]] = [
     {
+        # İlk "görev tarifi" skill'i (Tek Spec, Üç Katman — Adım 2): sayfadan
+        # link listesi topla → hedef klasörü hazırla → HER linki indir.
+        # Kullanıcının "youtube-transkript" senaryosu bu tarifin bir örneğidir;
+        # goal serbest metindir, tarayıcı ajanı keşfi kendi yapar.
+        "id": "web.collect_download",
+        "name": "Web Collect & Download",
+        "description": "Bir web sayfasından link listesi toplar ve her birini belirtilen klasöre indirir.",
+        "category": "browser",
+        "adapter": "browser_agent.run",
+        "libraries": ["playwright"],
+        "requiresConfirmation": True,
+        "parameters": ["goal", "outputDir"],
+        "requiredParameters": ["goal", "outputDir"],
+        "intentTags": ["indir", "topla", "linkler", "transcript", "transkript", "download", "collect"],
+        "steps": [
+            {
+                "id": "klasor",
+                "capability": "make_directory",
+                "description": "Hedef klasörü hazırla",
+                "args": {},
+                "argsFromPayload": {"path": "outputDir"},
+            },
+            {
+                "id": "topla",
+                "capability": "browser_agent.run",
+                "description": "Sayfayı gezip istenen linkleri topla",
+                "args": {},
+                "argsFromPayload": {"goal": "goal"},
+            },
+            {
+                "id": "indir",
+                "capability": "browser_session.download",
+                "description": "{{index}}. bağlantı indiriliyor",
+                "forEach": "{{steps.topla.result.collected}}",
+                "args": {"url": "{{item.href}}"},
+                "argsFromPayload": {"output_dir": "outputDir"},
+            },
+        ],
+    },
+    {
         "id": "document.summary",
         "name": "Document Summary",
         "description": "Belgeyi kısa özet olarak çıkarır.",
