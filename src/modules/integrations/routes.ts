@@ -1,24 +1,118 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { getRequestContext } from "../../lib/http.js";
-import { getUserAuth } from "../../lib/request-auth.js";
+import { getRuntimeAuth, getUserAuth } from "../../lib/request-auth.js";
 import {
   connectionParamsSchema,
+  integrationAppParamsSchema,
   listConnectionsQuerySchema,
   oauthCallbackQuerySchema,
   oauthProviderParamsSchema,
   sendGmailBodySchema,
+  startAppOauthBodySchema,
   startOauthBodySchema,
 } from "./schemas.js";
 import {
+  disconnectIntegrationApp,
   disconnectIntegration,
   handleOauthCallback,
+  listIntegrationApps,
   listIntegrationProviders,
+  listRuntimeMcpConnections,
   listUserIntegrationConnections,
   sendGmailMessage,
+  startOauthAppConnection,
   startOauthConnection,
 } from "./service.js";
+import { getRuntimeConnectionByAuth } from "../runtime/service.js";
 
+function registerCuratedAppRoutes(app: FastifyInstance) {
+  app.get("/apps", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+    const auth = getUserAuth(request);
+    return { apps: await listIntegrationApps(app, auth.sub) };
+  });
+
+  app.post("/apps/:appId/oauth/start", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+    const params = integrationAppParamsSchema.parse(request.params);
+    const body = startAppOauthBodySchema.parse(request.body ?? {});
+    const auth = getUserAuth(request);
+    const context = getRequestContext(request);
+    return startOauthAppConnection(app, {
+      userId: auth.sub,
+      appId: params.appId,
+      redirectUri: body.redirectUri,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+  });
+
+  app.delete("/apps/:appId", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+    const params = integrationAppParamsSchema.parse(request.params);
+    const auth = getUserAuth(request);
+    const context = getRequestContext(request);
+    return disconnectIntegrationApp(app, {
+      userId: auth.sub,
+      appId: params.appId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+  });
+
+  app.get("/runtime/mcp", async (request, reply) => {
+    await app.authenticateRuntime(request, reply);
+    if (reply.sent) return;
+    const auth = getRuntimeAuth(request);
+    await getRuntimeConnectionByAuth(app, auth);
+    reply.header("Cache-Control", "no-store");
+    reply.header("Pragma", "no-cache");
+    return listRuntimeMcpConnections(app, auth.sub);
+  });
+}
+
+function registerOauthCallback(app: FastifyInstance) {
+  app.get("/oauth/:provider/callback", async (request, reply) => {
+    const params = oauthProviderParamsSchema.parse(request.params);
+    const query = oauthCallbackQuerySchema.parse(request.query);
+    const result = await handleOauthCallback(app, {
+      provider: params.provider,
+      state: query.state,
+      code: query.code,
+      error: query.error,
+      errorDescription: query.error_description,
+    });
+
+    if (result.redirectUri) {
+      return reply.redirect(
+        redirectWithQuery(result.redirectUri, {
+          status: result.status,
+          provider: result.provider,
+          appId: result.appId ?? "",
+          connectionId: result.connectionId ?? "",
+          error: result.error ?? "",
+        }),
+      );
+    }
+
+    return result;
+  });
+}
+
+/** Shipping surface: curated cards, app-scoped OAuth and runtime leases only. */
+export const integrationAppRoutes: FastifyPluginAsync = async (app) => {
+  registerCuratedAppRoutes(app);
+  registerOauthCallback(app);
+};
+
+/** Legacy/provider-admin surface kept for compatibility but not registered by V1. */
 export const integrationRoutes: FastifyPluginAsync = async (app) => {
+  registerCuratedAppRoutes(app);
+  registerOauthCallback(app);
+
   app.get("/providers", async () => ({
     providers: await listIntegrationProviders(app),
   }));
@@ -57,31 +151,6 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
     });
-  });
-
-  app.get("/oauth/:provider/callback", async (request, reply) => {
-    const params = oauthProviderParamsSchema.parse(request.params);
-    const query = oauthCallbackQuerySchema.parse(request.query);
-    const result = await handleOauthCallback(app, {
-      provider: params.provider,
-      state: query.state,
-      code: query.code,
-      error: query.error,
-      errorDescription: query.error_description,
-    });
-
-    if (result.redirectUri) {
-      return reply.redirect(
-        redirectWithQuery(result.redirectUri, {
-          status: result.status,
-          provider: result.provider,
-          connectionId: result.connectionId ?? "",
-          error: result.error ?? "",
-        }),
-      );
-    }
-
-    return result;
   });
 
   app.delete("/connections/:connectionId", async (request, reply) => {

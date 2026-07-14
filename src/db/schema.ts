@@ -1617,6 +1617,7 @@ export const integrationConnections = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     provider: connectionProviderEnum("provider").notNull(),
+    appId: varchar("app_id", { length: 80 }),
     authType: integrationAuthTypeEnum("auth_type").notNull(),
     status: integrationConnectionStatusEnum("status").notNull().default("pending"),
     displayName: varchar("display_name", { length: 160 }),
@@ -1631,6 +1632,10 @@ export const integrationConnections = pgTable(
   (table) => ({
     userIdx: index("integration_connections_user_idx").on(table.userId),
     providerIdx: index("integration_connections_provider_idx").on(table.provider),
+    userAppUniqueIdx: uniqueIndex("integration_connections_user_app_uidx").on(
+      table.userId,
+      table.appId,
+    ),
   }),
 );
 
@@ -1647,7 +1652,9 @@ export const integrationCredentials = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
-    connectionIdx: index("integration_credentials_connection_idx").on(table.connectionId),
+    connectionIdx: uniqueIndex("integration_credentials_connection_uidx").on(
+      table.connectionId,
+    ),
   }),
 );
 

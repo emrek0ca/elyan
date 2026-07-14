@@ -11,10 +11,10 @@ export const startOauthBodySchema = z.object({
 });
 
 export const oauthCallbackQuerySchema = z.object({
-  state: z.string().min(1),
-  code: z.string().optional(),
-  error: z.string().optional(),
-  error_description: z.string().optional(),
+  state: z.string().min(1).max(200),
+  code: z.string().max(4096).optional(),
+  error: z.string().max(120).optional(),
+  error_description: z.string().max(500).optional(),
 });
 
 export const listConnectionsQuerySchema = z.object({
@@ -23,6 +23,14 @@ export const listConnectionsQuerySchema = z.object({
 
 export const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
+});
+
+export const integrationAppParamsSchema = z.object({
+  appId: z.string().trim().min(1).max(80).regex(/^[a-z0-9-]+$/),
+});
+
+export const startAppOauthBodySchema = z.object({
+  redirectUri: z.string().url().optional(),
 });
 
 export const sendGmailBodySchema = z.object({
