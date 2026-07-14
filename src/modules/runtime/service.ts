@@ -12,7 +12,10 @@ import { activeTaskStatuses } from "../tasks/queue.js";
 import { deriveTaskDeliveryState, extractTaskRouteDecision } from "../tasks/service-helpers.js";
 import { getUserDevice } from "../devices/service.js";
 
-async function getRuntimeConnectionByAuth(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
+export async function getRuntimeConnectionByAuth(
+  app: FastifyInstance,
+  auth: RuntimeAuthTokenPayload,
+) {
   const rows = await app.db
     .select({
       id: runtimeConnections.id,
@@ -25,11 +28,13 @@ async function getRuntimeConnectionByAuth(app: FastifyInstance, auth: RuntimeAut
       lastHeartbeatAt: runtimeConnections.lastHeartbeatAt,
     })
     .from(runtimeConnections)
+    .innerJoin(devices, eq(runtimeConnections.deviceId, devices.id))
     .where(
       and(
         eq(runtimeConnections.id, auth.connectionId),
         eq(runtimeConnections.deviceId, auth.deviceId),
         eq(runtimeConnections.userId, auth.sub),
+        eq(devices.isActive, true),
         isNull(runtimeConnections.disconnectedAt),
       ),
     )
