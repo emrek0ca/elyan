@@ -625,6 +625,101 @@ def cmd_auto(_args: argparse.Namespace) -> int:
     return cmd_status(_args)
 
 
+def _mcp_servers_from_state() -> list[dict[str, Any]]:
+    snapshot = state_store.snapshot()
+    skills = snapshot.get("skills", {}) if isinstance(snapshot.get("skills"), dict) else {}
+    servers = skills.get("mcpServers", [])
+    return [dict(item) for item in servers if isinstance(item, dict)] if isinstance(servers, list) else []
+
+
+def _save_mcp_servers(servers: list[dict[str, Any]]) -> None:
+    state_store.update_state({"skills": {"mcpServers": servers}})
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """MCP sunucu yönetimi — büyüme kanalı: hazır araç ekosistemini tak.
+
+    Sunucular state'te yaşar (skills.mcpServers); daemon araç kataloğunu her
+    planlamada state'ten okur, yeniden başlatma gerekmez.
+    """
+    from runtime import mcp_runtime  # ağır import'u komuta kadar ertele
+
+    action = str(getattr(args, "mcp_action", "") or "list")
+
+    if action == "list":
+        servers = _mcp_servers_from_state()
+        if not servers:
+            print("Kayıtlı MCP sunucusu yok.")
+            print("Eklemek için: elyan mcp add <ad> --command npx --args -y,@modelcontextprotocol/server-filesystem,/tmp")
+            return 0
+        print("MCP sunucuları:")
+        for item in servers:
+            flag = "açık " if bool(item.get("enabled", True)) else "kapalı"
+            command_line = " ".join([str(item.get("command", "") or ""), *[str(a) for a in (item.get("args") or [])]])
+            print(f"  [{flag}] {item.get('id')}  {item.get('name')}  →  {command_line}")
+        return 0
+
+    if action == "add":
+        raw_args = [part for chunk in (getattr(args, "args", None) or []) for part in str(chunk).split(",") if part]
+        candidate = {
+            "name": str(getattr(args, "name", "") or ""),
+            "command": str(getattr(args, "command", "") or ""),
+            "args": raw_args,
+            "cwd": str(getattr(args, "cwd", "") or ""),
+            "enabled": True,
+        }
+        config = mcp_runtime.normalize_server_config(candidate)
+        servers = _mcp_servers_from_state()
+        servers.append(config)
+        _save_mcp_servers(servers)
+        print(f"Eklendi: {config['id']} ({config['name']})")
+        print("Araçları görmek için: elyan mcp tools")
+        return 0
+
+    if action == "remove":
+        target = str(getattr(args, "server_id", "") or "").strip()
+        servers = _mcp_servers_from_state()
+        remaining = [item for item in servers if str(item.get("id", "")) != target]
+        if len(remaining) == len(servers):
+            print(f"Bulunamadı: {target}")
+            return 1
+        _save_mcp_servers(remaining)
+        print(f"Kaldırıldı: {target}")
+        return 0
+
+    if action == "enable" or action == "disable":
+        target = str(getattr(args, "server_id", "") or "").strip()
+        servers = _mcp_servers_from_state()
+        found = False
+        for item in servers:
+            if str(item.get("id", "")) == target:
+                item["enabled"] = action == "enable"
+                found = True
+        if not found:
+            print(f"Bulunamadı: {target}")
+            return 1
+        _save_mcp_servers(servers)
+        print(f"{'Açıldı' if action == 'enable' else 'Kapatıldı'}: {target}")
+        return 0
+
+    if action == "tools":
+        status = mcp_runtime.list_mcp_tools(refresh=True)
+        tools = status.get("tools", []) if isinstance(status.get("tools"), list) else []
+        if not tools:
+            print("Keşfedilen MCP aracı yok. Sunucu ekle: elyan mcp add ...")
+            return 0
+        print(f"{len(tools)} MCP aracı:")
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            read_only = "salt-okur" if bool(tool.get("readOnly", False)) else "yan-etkili"
+            print(f"  [{read_only}] {tool.get('serverId')}::{tool.get('name')} — {str(tool.get('description', '') or '')[:80]}")
+        return 0
+
+    print(f"Bilinmeyen mcp komutu: {action}")
+    return 1
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     print(f"elyan {VERSION} ({_platform_name()}, python {platform.python_version()})")
     return 0
@@ -664,6 +759,23 @@ def build_parser() -> argparse.ArgumentParser:
     service = sub.add_parser("service", help="Açılışta otomatik başlatma")
     service.add_argument("action", choices=["install", "uninstall"])
     service.set_defaults(func=cmd_service)
+
+    mcp = sub.add_parser("mcp", help="MCP sunucu yönetimi (araç ekosistemi)")
+    mcp_sub = mcp.add_subparsers(dest="mcp_action")
+    mcp_sub.add_parser("list", help="Kayıtlı sunucuları listele")
+    mcp_add = mcp_sub.add_parser("add", help="stdio MCP sunucusu ekle")
+    mcp_add.add_argument("name", help="Sunucu adı")
+    mcp_add.add_argument("--command", required=True, help="Çalıştırılacak komut (ör. npx)")
+    mcp_add.add_argument("--args", action="append", default=[], help="Argümanlar (virgülle ya da tekrarla)")
+    mcp_add.add_argument("--cwd", default="", help="Çalışma dizini (opsiyonel)")
+    mcp_remove = mcp_sub.add_parser("remove", help="Sunucuyu kaldır")
+    mcp_remove.add_argument("server_id")
+    mcp_enable = mcp_sub.add_parser("enable", help="Sunucuyu aç")
+    mcp_enable.add_argument("server_id")
+    mcp_disable = mcp_sub.add_parser("disable", help="Sunucuyu kapat")
+    mcp_disable.add_argument("server_id")
+    mcp_sub.add_parser("tools", help="Keşfedilen araçları listele (sunucuları başlatır)")
+    mcp.set_defaults(func=cmd_mcp, mcp_action="list")
 
     sub.add_parser("version", help="Sürüm bilgisi").set_defaults(func=cmd_version)
     return parser
