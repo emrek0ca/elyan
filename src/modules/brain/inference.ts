@@ -63,7 +63,7 @@ import {
   summarizeToolResultsForMetadata,
 } from "./agent-loop.js";
 import type { AgentToolRequest, AgentToolResult } from "./tool-registry.js";
-import { connectorToolsForCapabilities } from "./connector-tools.js";
+import { connectorToolsForCapabilities, isConnectorTool } from "./connector-tools.js";
 import { listConnectedCapabilities } from "../integrations/service.js";
 import { isAgentEngineShadowEnabled, isAgentEngineV2Enabled } from "./agent-engine-policy.js";
 import {
@@ -4169,6 +4169,19 @@ export async function generateSharedBrainReply(
     cloudVisionActive,
   );
   const workloadProfile = getSharedBrainWorkloadProfile(workload);
+  const deterministicMathSurfaceResult = buildMathSurface3DResult(input, workload);
+  if (deterministicMathSurfaceResult) {
+    deterministicMathSurfaceResult.metadata = applyClaimConfidenceMetadata(app, {
+      userId: input.userId,
+      route: input.route,
+      workload,
+      routeDecision: input.routeDecision ?? null,
+      requestMetadata: input.requestMetadata,
+      understandingContext: input.understandingContext,
+      metadata: deterministicMathSurfaceResult.metadata,
+    });
+    return deterministicMathSurfaceResult;
+  }
   // Connector tools (gmail/calendar/drive read) are advertised only on
   // chat/planning-shaped turns where the agent loop can actually run them, and
   // only when the user has a matching integration connected. Resolved once and
@@ -4176,7 +4189,8 @@ export async function generateSharedBrainReply(
   if (
     input.connectorToolContracts === undefined &&
     !input.internalEvaluation?.refinementPass &&
-    (app.config.ELYAN_AGENT_LOOP_ENABLED === true ||
+    (app.config?.ELYAN_CONNECTOR_TOOLS_ENABLED === true ||
+      app.config?.ELYAN_AGENT_LOOP_ENABLED === true ||
       isAgentEngineV2Enabled(app, input.userId) ||
       isAgentEngineShadowEnabled(app)) &&
     CONNECTOR_TOOL_WORKLOADS.has(workload)
@@ -4199,19 +4213,6 @@ export async function generateSharedBrainReply(
       );
       input.connectorToolContracts = [];
     }
-  }
-  const deterministicMathSurfaceResult = buildMathSurface3DResult(input, workload);
-  if (deterministicMathSurfaceResult) {
-    deterministicMathSurfaceResult.metadata = applyClaimConfidenceMetadata(app, {
-      userId: input.userId,
-      route: input.route,
-      workload,
-      routeDecision: input.routeDecision ?? null,
-      requestMetadata: input.requestMetadata,
-      understandingContext: input.understandingContext,
-      metadata: deterministicMathSurfaceResult.metadata,
-    });
-    return deterministicMathSurfaceResult;
   }
   const planBrainProfile = normalizePlanBrainProfile(input.brainProfile);
   const cacheable = shouldUseResponseCache(input, workload);
@@ -6152,10 +6153,19 @@ export async function generateSharedBrainReply(
       };
       let agentToolResults: AgentToolResult[] = [];
 
+      // Full agent loop runs every registered tool (web/memory/goals/connectors).
+      // Connector-only mode ships integrations without turning on the write/goal
+      // tools: it runs the loop but restricts it to read-only connector tools.
+      const fullAgentLoopEnabled =
+        app.config.ELYAN_AGENT_LOOP_ENABLED === true ||
+        isAgentEngineV2Enabled(app, input.userId) ||
+        isAgentEngineShadowEnabled(app);
+      const connectorOnlyMode =
+        !fullAgentLoopEnabled &&
+        app.config.ELYAN_CONNECTOR_TOOLS_ENABLED === true;
+
       if (
-        (app.config.ELYAN_AGENT_LOOP_ENABLED === true ||
-          isAgentEngineV2Enabled(app, input.userId) ||
-          isAgentEngineShadowEnabled(app)) &&
+        (fullAgentLoopEnabled || connectorOnlyMode) &&
         turnEnvelope &&
         (turnEnvelope.tool_requests.length > 0 || (turnEnvelope.agent_plan?.steps.length ?? 0) > 0) &&
         !input.internalEvaluation?.refinementPass &&
@@ -6167,21 +6177,26 @@ export async function generateSharedBrainReply(
           turnEnvelope.tool_requests.length > 0
             ? turnEnvelope.tool_requests
             : turnEnvelope.agent_plan?.steps.map((step) => step.tool_request) ?? [];
+        const scopedToolRequests = connectorOnlyMode
+          ? requestedTools.filter((request) => isConnectorTool(request.tool))
+          : requestedTools;
         const safeToolRequests = filterVolatileExternalToolRequests(
-          requestedTools,
+          scopedToolRequests,
           webGrounding,
         );
         const toolPlan =
-          safeToolRequests.length === requestedTools.length
+          !connectorOnlyMode && safeToolRequests.length === requestedTools.length
             ? turnEnvelope.agent_plan ?? null
             : null;
-        const toolLoop = await runAgentToolLoop(app, {
+        const toolLoop = safeToolRequests.length === 0
+          ? null
+          : await runAgentToolLoop(app, {
           context: {
             userId: input.userId,
             taskId: input.taskId ?? null,
             sessionId: resolveDialogueStateSessionId(input.requestMetadata),
             workload,
-            allowStateWrites: true,
+            allowStateWrites: !connectorOnlyMode,
             allowSideEffects: false,
           },
           requests: safeToolRequests,

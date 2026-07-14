@@ -218,6 +218,10 @@ const envSchema = z.object({
   ELYAN_USER_MODEL_V2_ENABLED: booleanFlag(false),
   ELYAN_GOAL_STATE_V2_ENABLED: booleanFlag(false),
   ELYAN_AGENT_LOOP_ENABLED: booleanFlag(false),
+  // Enables server-side connector tools (Gmail/Calendar/Drive read) through the
+  // agent loop, restricted to connector tool_requests only. Independent of the
+  // full agent loop so connectors can ship without turning on write/goal tools.
+  ELYAN_CONNECTOR_TOOLS_ENABLED: booleanFlag(false),
   ELYAN_PROACTIVE_ENGINE_ENABLED: booleanFlag(false),
   ELYAN_CLOUD_VISION_ENABLED: booleanFlag(false),
   ELYAN_COST_GUARD_ENABLED: booleanFlag(false),
@@ -357,6 +361,7 @@ export type AppEnv = ParsedEnv & {
   ELYAN_USER_MODEL_V2_ENABLED: boolean;
   ELYAN_GOAL_STATE_V2_ENABLED: boolean;
   ELYAN_AGENT_LOOP_ENABLED: boolean;
+  ELYAN_CONNECTOR_TOOLS_ENABLED: boolean;
   ELYAN_PROACTIVE_ENGINE_ENABLED: boolean;
   ELYAN_CLOUD_VISION_ENABLED: boolean;
   ELYAN_COST_GUARD_ENABLED: boolean;
@@ -530,6 +535,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ELYAN_USER_MODEL_V2_ENABLED: parsed.ELYAN_USER_MODEL_V2_ENABLED,
     ELYAN_GOAL_STATE_V2_ENABLED: parsed.ELYAN_GOAL_STATE_V2_ENABLED,
     ELYAN_AGENT_LOOP_ENABLED: parsed.ELYAN_AGENT_LOOP_ENABLED,
+    ELYAN_CONNECTOR_TOOLS_ENABLED: parsed.ELYAN_CONNECTOR_TOOLS_ENABLED,
     ELYAN_PROACTIVE_ENGINE_ENABLED: parsed.ELYAN_PROACTIVE_ENGINE_ENABLED,
     ELYAN_CLOUD_VISION_ENABLED: parsed.ELYAN_CLOUD_VISION_ENABLED,
     ELYAN_COST_GUARD_ENABLED: parsed.ELYAN_COST_GUARD_ENABLED,
