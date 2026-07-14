@@ -425,25 +425,33 @@ async function refreshProviderOAuthAccessToken(
   return accessToken;
 }
 
+const PROVIDER_REVOKE_URLS: Partial<Record<ConnectionProvider, string>> = {
+  google: "https://oauth2.googleapis.com/revoke",
+  linear: "https://api.linear.app/oauth/revoke",
+};
+
+/**
+ * Best-effort remote authorization revocation. Providers with a known revoke
+ * endpoint must confirm success (fail-closed) so a live grant is not silently
+ * kept upstream. Providers without one return `false` — the caller still
+ * deletes the local encrypted credential, which is the security-meaningful
+ * action, instead of blocking disconnect forever.
+ */
 async function revokeProviderAuthorization(
   app: FastifyInstance,
   connectionId: string,
   provider: ConnectionProvider,
-): Promise<void> {
+): Promise<boolean> {
+  const revokeUrl = PROVIDER_REVOKE_URLS[provider];
+  if (!revokeUrl) {
+    return false;
+  }
+
   const { tokenPayload } = await loadGoogleOAuthTokenPayload(app, connectionId);
   const token = tokenPayload.refreshToken || tokenPayload.accessToken;
   if (!token) {
-    throw badRequest("Integration authorization cannot be revoked safely");
-  }
-
-  const revokeUrl =
-    provider === "google"
-      ? "https://oauth2.googleapis.com/revoke"
-      : provider === "linear"
-        ? "https://api.linear.app/oauth/revoke"
-        : null;
-  if (!revokeUrl) {
-    throw badRequest(`Provider ${provider} does not support secure disconnect`);
+    // Nothing to revoke upstream; local deletion still fully disconnects.
+    return false;
   }
 
   let response: Response;
@@ -463,6 +471,7 @@ async function revokeProviderAuthorization(
   if (!response.ok) {
     throw badRequest("Provider authorization could not be revoked");
   }
+  return true;
 }
 
 async function getGoogleMailAccessToken(
@@ -1188,9 +1197,11 @@ export async function disconnectIntegrationApp(
     throw notFound("Integration connection not found");
   }
 
-  // Disconnect is fail-closed: keep the encrypted credential locally if the
-  // provider cannot confirm revocation so the user can retry safely.
-  await revokeProviderAuthorization(
+  // Disconnect is fail-closed for providers that expose a revoke endpoint:
+  // if revocation fails there, this throws and the local credential is kept so
+  // the user can retry. Providers without a revoke endpoint return `false` and
+  // are disconnected by deleting the local encrypted credential below.
+  const remoteRevoked = await revokeProviderAuthorization(
     app,
     connection.id,
     catalogEntry.provider,
@@ -1219,7 +1230,11 @@ export async function disconnectIntegrationApp(
     status: "success",
     ipAddress: input.ipAddress,
     userAgent: input.userAgent,
-    payload: { provider: catalogEntry.provider, appId: input.appId },
+    payload: {
+      provider: catalogEntry.provider,
+      appId: input.appId,
+      remoteRevoked,
+    },
   });
 
   return {

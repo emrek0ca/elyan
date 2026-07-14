@@ -25,6 +25,29 @@ import {
 } from "./service.js";
 import { getRuntimeConnectionByAuth } from "../runtime/service.js";
 
+function registerGmailSend(app: FastifyInstance) {
+  app.post("/gmail/send", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+    const body = sendGmailBodySchema.parse(request.body);
+    const auth = getUserAuth(request);
+    const context = getRequestContext(request);
+    return sendGmailMessage(app, {
+      userId: auth.sub,
+      connectionId: body.connectionId,
+      to: body.to,
+      subject: body.subject,
+      body: body.body,
+      cc: body.cc,
+      bcc: body.bcc,
+      replyTo: body.replyTo,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      requestId: context.requestId,
+    });
+  });
+}
+
 function registerCuratedAppRoutes(app: FastifyInstance) {
   app.get("/apps", async (request, reply) => {
     await app.authenticateUser(request, reply);
@@ -102,9 +125,10 @@ function registerOauthCallback(app: FastifyInstance) {
   });
 }
 
-/** Shipping surface: curated cards, app-scoped OAuth and runtime leases only. */
+/** Shipping surface: curated cards, app-scoped OAuth, gmail send and runtime leases. */
 export const integrationAppRoutes: FastifyPluginAsync = async (app) => {
   registerCuratedAppRoutes(app);
+  registerGmailSend(app);
   registerOauthCallback(app);
 };
 

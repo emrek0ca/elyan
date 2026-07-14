@@ -35,6 +35,7 @@ import { chatRoutes } from "../modules/chat/routes.js";
 import { goalRoutes } from "../modules/goals/routes.js";
 import { consentRoutes } from "../modules/consents/routes.js";
 import { integrationAppRoutes } from "../modules/integrations/routes.js";
+import { mcpRoutes } from "../modules/mcp/routes.js";
 import { adminRoutes } from "../modules/admin/routes.js";
 import { trainPanelRoutes } from "../modules/admin/train-panel.js";
 import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
@@ -451,6 +452,7 @@ export async function buildApp(envInput?: AppEnv) {
   await app.register(goalRoutes, { prefix: "/v1/goals" });
   await app.register(consentRoutes, { prefix: "/v1/consents" });
   await app.register(integrationAppRoutes, { prefix: "/v1/integrations" });
+  await app.register(mcpRoutes, { prefix: "/v1/mcp" });
   await app.register(adminRoutes, { prefix: "/v1/admin" });
   await app.register(trainPanelRoutes);
   return app;
