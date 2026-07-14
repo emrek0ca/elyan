@@ -1336,6 +1336,7 @@ async function resolveTaskAttachmentContext(
   app: FastifyInstance,
   payload: Record<string, unknown>,
   prompt: string,
+  ephemeralVision?: EphemeralVisionCarrier,
 ) {
   return resolveAttachmentContextWithCache(app.services.reliability.store, {
     prompt,
@@ -1343,6 +1344,9 @@ async function resolveTaskAttachmentContext(
     sessionAttachmentCandidates: extractAttachmentCandidatesFromBrainContext(
       readRecord(payload.brainContext),
     ),
+    hasEphemeralVision:
+      app.config?.ELYAN_CLOUD_VISION_ENABLED === true &&
+      Boolean(ephemeralVision?.images.length),
   });
 }
 
@@ -3479,7 +3483,12 @@ async function processSharedBrainChatTask(
       !Array.isArray(runningTask.payload)
         ? (runningTask.payload as Record<string, unknown>)
         : {};
-    const attachmentContext = await resolveTaskAttachmentContext(app, runningPayload, input.prompt);
+    const attachmentContext = await resolveTaskAttachmentContext(
+      app,
+      runningPayload,
+      input.prompt,
+      input.ephemeralVision,
+    );
 
     /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
     const clientAttachments = extractClientAttachments(getPayloadMetadata(runningPayload));
@@ -4795,7 +4804,12 @@ export async function createTask(
         ? (runningTask.payload as Record<string, unknown>)
         : input.payload;
       const runningMetadata = getPayloadMetadata(runningPayload);
-      const attachmentContext = await resolveTaskAttachmentContext(app, runningPayload, prompt);
+      const attachmentContext = await resolveTaskAttachmentContext(
+        app,
+        runningPayload,
+        prompt,
+        input.ephemeralVision,
+      );
       const selectedWorkload = resolveSharedBrainWorkloadForUnderstanding({
         routeDecision,
         attachmentContextUsed: attachmentContext?.used === true,

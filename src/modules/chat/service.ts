@@ -1872,6 +1872,11 @@ export async function createChatMessage(
           prompt: input.content,
           metadata: requestChatMetadata,
           sessionAttachmentCandidates: priorChatContext.attachmentCandidates,
+          // Flag kapalıysa bypass da kapalı kalır: görsel modele hiç
+          // gitmeyecekse "okunabilir veri yok" netleştirmesi dürüst cevaptır.
+          hasEphemeralVision:
+            app.config?.ELYAN_CLOUD_VISION_ENABLED === true &&
+            Boolean(input.ephemeralVision?.images.length),
         })
       : null;
   const effectiveWorkload = resolveAttachmentAwareSharedBrainWorkload({

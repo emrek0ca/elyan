@@ -1556,6 +1556,7 @@ function resolveAttachmentContextFromCandidates(input: {
   maxChunks: number;
   maxChars: number;
   recoveredVisionBlocks?: VisionEvidence[];
+  hasEphemeralVision?: boolean;
 }): ResolvedAttachmentContext | null {
   const source: AttachmentContextSource =
     input.requestCandidates.length > 0 ? "request_attachments" : "session_recovery";
@@ -1583,6 +1584,12 @@ function resolveAttachmentContextFromCandidates(input: {
       };
     }
     if (input.requestCarrier) {
+      // Görsel baytları request-scoped ephemeralVision taşıyıcısında geliyor;
+      // metin/OCR türevi olmaması netleştirme gerektirmez — vision modeli
+      // görseli doğrudan görecek.
+      if (input.hasEphemeralVision === true) {
+        return null;
+      }
       return {
         used: false,
         source: "request_attachments",
@@ -1693,6 +1700,7 @@ export function resolveAttachmentContext(input: {
   maxAttachments?: number;
   maxChunks?: number;
   maxChars?: number;
+  hasEphemeralVision?: boolean;
 }): ResolvedAttachmentContext | null {
   const maxAttachments = input.maxAttachments ?? DEFAULT_MAX_ATTACHMENTS;
   const maxChunks = input.maxChunks ?? DEFAULT_MAX_CHUNKS;
@@ -1723,6 +1731,7 @@ export function resolveAttachmentContext(input: {
     recoveredVisionBlocks: !requestCarrier && promptReferencesSessionVisual(input.prompt)
       ? collectSessionVisionBlocks(input.sessionAttachmentCandidates)
       : [],
+    hasEphemeralVision: input.hasEphemeralVision,
   });
   return context;
 }
@@ -1736,6 +1745,7 @@ export async function resolveAttachmentContextWithCache(
     maxAttachments?: number;
     maxChunks?: number;
     maxChars?: number;
+    hasEphemeralVision?: boolean;
   },
 ): Promise<ResolvedAttachmentContext | null> {
   const maxAttachments = input.maxAttachments ?? DEFAULT_MAX_ATTACHMENTS;
@@ -1768,6 +1778,7 @@ export async function resolveAttachmentContextWithCache(
     recoveredVisionBlocks: !requestCarrier && promptReferencesSessionVisual(input.prompt)
       ? collectSessionVisionBlocks(input.sessionAttachmentCandidates)
       : [],
+    hasEphemeralVision: input.hasEphemeralVision,
   });
   return context;
 }

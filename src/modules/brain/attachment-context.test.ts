@@ -205,6 +205,53 @@ test("resolveAttachmentContext fails closed for a failed current attachment inst
   assert.match(context?.clarificationMessage ?? "", /yeniden ekle/i);
 });
 
+test("resolveAttachmentContext skips clarification when an image-only attachment travels via ephemeralVision", () => {
+  // Mobil görsel akışı: attachments[] yalnızca 'Görsel' taşıyıcı kaydı içerir
+  // (metin türevi ve OCR kanıtı yok); baytlar ephemeralVision'da. Netleştirme
+  // yerine null dönmeli ki inference vision yoluna geçebilsin.
+  const context = resolveAttachmentContext({
+    prompt: "Burada ne görüyorsun",
+    metadata: {
+      attachments: [
+        {
+          documentId: "attachment-image-1",
+          sourceType: "image",
+          name: "Görsel",
+          fileName: "Görsel",
+          mimeType: "image/jpeg",
+          processingState: "cloud_ready",
+          data_origin: "request_ephemeral",
+        },
+      ],
+      cloudVisionOptIn: true,
+    },
+    hasEphemeralVision: true,
+  });
+
+  assert.equal(context, null);
+});
+
+test("resolveAttachmentContext keeps clarification for image-only attachment without ephemeralVision", () => {
+  const context = resolveAttachmentContext({
+    prompt: "Burada ne görüyorsun",
+    metadata: {
+      attachments: [
+        {
+          documentId: "attachment-image-1",
+          sourceType: "image",
+          name: "Görsel",
+          fileName: "Görsel",
+          mimeType: "image/jpeg",
+          processingState: "cloud_ready",
+        },
+      ],
+    },
+  });
+
+  assert.ok(context);
+  assert.equal(context?.needsClarification, true);
+});
+
 test("resolveAttachmentContext does not produce multiple candidates when attachments[] and legacy fields coexist", () => {
   // Reproduces the "birden fazla belge görüyorum" false-positive clarification:
   // mobile sends attachments[0] that already contains nested document_analysis and
