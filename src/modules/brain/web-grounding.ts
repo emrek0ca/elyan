@@ -87,8 +87,8 @@ const PERSONAL_ONLY_PATTERNS = [
 ];
 
 const EXPLICIT_WEB_PATTERNS = [
-  /\b(internetten|webden|online|web araştır|web arastir|internet araştır|internet arastir|search the web|look up|browse)\b/i,
-  /\b(kaynaklı|kaynakli|kaynaklarla|kaynaklardan|resmi kaynak|kaynak göster|kaynak goster|source-backed|with sources|official sources|cite sources)\b/i,
+  /(?<!\p{L})(internetten|webden|online|web araştır|web arastir|internet araştır|internet arastir|search the web|look up|browse)(?!\p{L})/iu,
+  /(?<!\p{L})(kaynak\p{L}*|resmi kaynak\p{L}*|source-backed|with sources|official sources|cite sources)(?!\p{L})/iu,
 ];
 
 const STRONG_FRESHNESS_OR_EVIDENCE_PATTERN =
@@ -150,7 +150,7 @@ const FACTUAL_INTERROGATIVE_PATTERN =
 // Common Turkish/English sentence-initial words whose capitalisation is NOT a
 // proper-noun signal (question words, pronouns, greetings, fillers).
 const SENTENCE_INITIAL_STOPWORDS = new Set([
-  "bugün", "bugun", "nasıl", "nasil", "neden", "niye", "niçin", "nicin", "hangi",
+  "bugün", "bugun", "güncel", "guncel", "nasıl", "nasil", "neden", "niye", "niçin", "nicin", "hangi",
   "kim", "kimdir", "nedir", "ne", "nerede", "neresi", "nereli", "kaç", "kac",
   "lütfen", "lutfen", "bana", "benim", "ben", "sen", "siz", "biz", "bu", "şu", "su",
   "evet", "hayır", "hayir", "selam", "merhaba", "peki", "acaba", "en", "bir",
@@ -2079,7 +2079,6 @@ export function classifyWebGroundingDecision(input: {
   }
   if (
     explicitWebIntent ||
-    responsePolicy.webRequired ||
     (researchIntent && strongFreshnessOrEvidence) ||
     factuality.triggered ||
     promptLooksLikeUrl(normalized)

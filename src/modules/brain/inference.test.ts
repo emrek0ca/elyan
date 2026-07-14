@@ -5281,9 +5281,9 @@ test("prompt gating: dialogue state preferred name overrides stale profile name"
     }),
   );
 
-  assert.match(social, /casual greeting from Emre/);
+  assert.match(social, /preferred name is Emre/);
   assert.match(social, /speaking with Emre/);
-  assert.equal(social.includes("casual greeting from Zeynep"), false);
+  assert.equal(social.includes("Zeynep"), false);
 });
 
 // ── STALL-BASED STREAMING TIMEOUT FENCE ─────────────────────────────────

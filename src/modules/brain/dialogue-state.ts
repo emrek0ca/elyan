@@ -313,12 +313,12 @@ function deriveReferenceContext(
   previous: DialogueState["salience"],
   userMessage: string,
 ): Pick<DialogueState["salience"], "referenceMode" | "referentCandidates"> {
-  const compactUserMessage = userMessage.replace(/\s+/g, " ").trim();
-  const referenceMode = /^(?:devam|devam et|sürdür|surdur|continue|go on|keep going)\b/iu.test(compactUserMessage)
+  const compactUserMessage = normalizeSearchToken(userMessage.replace(/\s+/g, " "));
+  const referenceMode = /^(?:devam|devam et|surdur|continue|go on|keep going)\b/u.test(compactUserMessage)
     ? "continue"
-    : /^(?:bunu|şunu|sunu|onu|böyle|boyle|aynısını|aynisini|that|this|it)\b.{0,80}(?:düzelt|duzelt|değiştir|degistir|yeniden|revise|fix|change)/iu.test(compactUserMessage)
+    : /^(?:bunu|sunu|onu|boyle|aynisini|that|this|it)\b.{0,80}(?:duzelt|degistir|yeniden|revise|fix|change)/u.test(compactUserMessage)
       ? "revise"
-      : /^(?:bunu|şunu|sunu|onu|bu|şu|su|o|ikincisini|birincisini|sonuncusunu|that|this|it|the second|the first)\b/iu.test(compactUserMessage)
+      : /^(?:bunu|sunu|onu|bu|su|o|ikincisini|birincisini|sonuncusunu|that|this|it|the second|the first)\b/u.test(compactUserMessage)
         ? "resolve_pronoun"
         : "none";
   const referentCandidates = referenceMode === "none"

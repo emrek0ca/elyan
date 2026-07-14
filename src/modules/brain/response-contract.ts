@@ -147,14 +147,17 @@ function sentenceCount(text: string): number {
 }
 
 function hasRepeatedParagraph(text: string): boolean {
-  const seen = new Set<string>();
-  for (const paragraph of text.split(/\n{2,}/u)) {
-    const normalized = compact(paragraph).toLocaleLowerCase("tr-TR");
-    if (normalized.length < 24) continue;
-    if (seen.has(normalized)) return true;
-    seen.add(normalized);
-  }
-  return false;
+  const hasDuplicateUnit = (units: string[]): boolean => {
+    const seen = new Set<string>();
+    for (const unit of units) {
+      const normalized = compact(unit).toLocaleLowerCase("tr-TR");
+      if (normalized.length < 24) continue;
+      if (seen.has(normalized)) return true;
+      seen.add(normalized);
+    }
+    return false;
+  };
+  return hasDuplicateUnit(text.split(/\n{2,}/u)) || hasDuplicateUnit(text.split(/\n+/u));
 }
 
 function looksIncomplete(text: string): boolean {
@@ -179,7 +182,7 @@ export function inspectElyanFinalResponse(input: {
   const text = String(input.text ?? "").trim();
   const contract = buildElyanResponseContract(input);
   const issues: ElyanResponseQualityIssue[] = [];
-  if (!text) issues.push("empty_answer");
+  if (!text && input.hasRenderableArtifact !== true) issues.push("empty_answer");
   if (text && contract.intent !== "casual_chat" && GENERIC_NON_ANSWER_PATTERN.test(text)) {
     issues.push("non_answer");
   }

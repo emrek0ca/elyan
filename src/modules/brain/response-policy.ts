@@ -388,6 +388,9 @@ export function sanitizeFinalAssistantResponse(input: {
   if (cleaned.trim()) {
     return cleaned.trim();
   }
+  if (input.hasRenderableOutput === true) {
+    return "";
+  }
   const looksTurkish =
     /[çğıöşüÇĞİÖŞÜ]/u.test(input.prompt) ||
     /(?<!\p{L})(bana|bunu|şunu|sunu|nasıl|nasil|neden|bugün|bugun|görsel|gorsel)(?!\p{L})/iu.test(input.prompt);
