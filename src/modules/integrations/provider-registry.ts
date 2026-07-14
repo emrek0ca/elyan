@@ -53,6 +53,15 @@ export type IntegrationMcpAppCatalogEntry = {
   oauthClientSecretEnvKey?: keyof AppEnv;
   oauthScopes: string[];
   capabilities: string[];
+  /**
+   * How the connected capability is actually served:
+   * - "server_connector": the shared brain reads it directly via first-party
+   *   REST connector tools (no remote MCP server). Works for mobile-only users
+   *   and is never leased to the desktop runtime.
+   * - "remote_mcp": a real remote MCP server the desktop runtime connects to;
+   *   included in the runtime lease.
+   */
+  execution: "server_connector" | "remote_mcp";
 };
 
 export const integrationProviderCatalog: ProviderCatalogEntry[] = [
@@ -228,7 +237,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
     description: "E-postaları ara, oku ve güvenli biçimde taslak oluştur.",
     iconKey: "gmail",
     category: "productivity",
-    serverUrl: "https://gmailmcp.googleapis.com/mcp/v1",
+    serverUrl: "",
     stage: "preview",
     authStrategy: "provider_bearer",
     oauthClientIdEnvKey: "GMAIL_MCP_CLIENT_ID",
@@ -241,6 +250,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
       "https://www.googleapis.com/auth/gmail.compose",
     ],
     capabilities: ["gmail"],
+    execution: "server_connector",
   },
   {
     id: "google-drive",
@@ -249,7 +259,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
     description: "Drive dosyalarını bul, oku ve izin verilen içerikleri indir.",
     iconKey: "google_drive",
     category: "productivity",
-    serverUrl: "https://drivemcp.googleapis.com/mcp/v1",
+    serverUrl: "",
     stage: "preview",
     authStrategy: "provider_bearer",
     oauthClientIdEnvKey: "GOOGLE_DRIVE_MCP_CLIENT_ID",
@@ -261,6 +271,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
       "https://www.googleapis.com/auth/drive.readonly",
     ],
     capabilities: ["drive"],
+    execution: "server_connector",
   },
   {
     id: "google-calendar",
@@ -269,7 +280,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
     description: "Takvimleri ve etkinlikleri güvenli, salt okunur biçimde görüntüle.",
     iconKey: "google_calendar",
     category: "productivity",
-    serverUrl: "https://calendarmcp.googleapis.com/mcp/v1",
+    serverUrl: "",
     stage: "preview",
     authStrategy: "provider_bearer",
     oauthClientIdEnvKey: "GOOGLE_CALENDAR_MCP_CLIENT_ID",
@@ -283,6 +294,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
       "https://www.googleapis.com/auth/calendar.events.readonly",
     ],
     capabilities: ["calendar"],
+    execution: "server_connector",
   },
   {
     id: "notion",
@@ -296,6 +308,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
     authStrategy: "mcp_oauth",
     oauthScopes: [],
     capabilities: ["notion"],
+    execution: "remote_mcp",
   },
   {
     id: "linear",
@@ -309,6 +322,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
     authStrategy: "provider_bearer",
     oauthScopes: ["read", "write"],
     capabilities: ["linear"],
+    execution: "remote_mcp",
   },
   {
     id: "github",
@@ -322,6 +336,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
     authStrategy: "mcp_oauth",
     oauthScopes: ["repo", "read:user", "user:email"],
     capabilities: ["github"],
+    execution: "remote_mcp",
   },
   {
     id: "slack",
@@ -343,6 +358,7 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
       "chat:write",
     ],
     capabilities: ["slack"],
+    execution: "remote_mcp",
   },
 ];
 

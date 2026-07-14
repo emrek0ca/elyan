@@ -75,21 +75,32 @@ test("curated MCP app catalog has unique ids and trusted https endpoints", () =>
   assert.ok(ids.includes("google-calendar"));
 
   for (const entry of integrationMcpAppCatalog) {
-    const url = new URL(entry.serverUrl);
-    assert.equal(url.protocol, "https:");
     assert.ok(entry.displayName.length > 0);
     assert.ok(entry.capabilities.length > 0);
+    if (entry.execution === "remote_mcp") {
+      // Only real remote MCP servers carry (and are leased with) a URL.
+      const url = new URL(entry.serverUrl);
+      assert.equal(url.protocol, "https:");
+    } else {
+      // server_connector capabilities are served in-server via REST tools and
+      // must not advertise a remote MCP URL.
+      assert.equal(entry.serverUrl, "");
+    }
   }
 });
 
-test("Gmail app uses the official Google remote MCP endpoint and incremental scopes", () => {
+test("Gmail app is a server-side connector, not a leased remote MCP server", () => {
   const gmail = getIntegrationMcpApp("gmail");
   const drive = getIntegrationMcpApp("google-drive");
   const calendar = getIntegrationMcpApp("google-calendar");
   assert.ok(gmail);
   assert.ok(drive);
   assert.ok(calendar);
-  assert.equal(gmail.serverUrl, "https://gmailmcp.googleapis.com/mcp/v1");
+  // Google capabilities are read by the shared brain via REST connector tools,
+  // so they are served in-server and never leased to the desktop runtime.
+  assert.equal(gmail.execution, "server_connector");
+  assert.equal(drive.execution, "server_connector");
+  assert.equal(calendar.execution, "server_connector");
   assert.ok(gmail.oauthScopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
   assert.ok(gmail.oauthScopes.includes("https://www.googleapis.com/auth/gmail.compose"));
   assert.ok(!gmail.oauthScopes.includes("https://www.googleapis.com/auth/gmail.send"));
@@ -112,7 +123,7 @@ test("Gmail app uses the official Google remote MCP endpoint and incremental sco
   );
 });
 
-test("Google canonical userinfo grants satisfy catalog aliases in app and runtime views", async () => {
+test("Google canonical userinfo grants mark the app connected; connectors are not leased to runtime", async () => {
   const connection = gmailConnection([
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -130,11 +141,13 @@ test("Google canonical userinfo grants satisfy catalog aliases in app and runtim
   assert.equal(gmail.connected, true);
   assert.deepEqual(gmail.missingScopes, []);
 
+  // Gmail is a server_connector: the shared brain reads it via REST tools, so
+  // it must NOT appear in the desktop runtime MCP lease.
   const runtime = await listRuntimeMcpConnections(
     fakeIntegrationApp([[connection], []]),
     "user_1",
   );
-  assert.deepEqual(runtime.servers.map((server) => server.appId), ["gmail"]);
+  assert.deepEqual(runtime.servers, []);
 });
 
 test("missing a real Gmail app scope remains disconnected and excluded from runtime", async () => {

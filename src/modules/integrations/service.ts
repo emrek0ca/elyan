@@ -1401,6 +1401,11 @@ export async function listRuntimeMcpConnections(app: FastifyInstance, userId: st
         (entry) =>
           entry.id === connection.appId &&
           entry.provider === connection.provider &&
+          // Only real remote MCP servers are leased to the desktop runtime.
+          // server_connector capabilities (Gmail/Drive/Calendar) are served by
+          // the shared brain's REST connector tools, so they never need — and
+          // must not advertise — a remote MCP URL to the desktop.
+          entry.execution === "remote_mcp" &&
           entry.authStrategy === "provider_bearer" &&
           entry.stage !== "setup_required" &&
           missingOauthScopes(
