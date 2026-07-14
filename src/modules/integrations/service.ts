@@ -93,6 +93,35 @@ function stringList(value: unknown): string[] {
     .filter((item) => item.length > 0);
 }
 
+const GOOGLE_OAUTH_SCOPE_ALIASES = new Map<string, string>([
+  ["email", "email"],
+  ["https://www.googleapis.com/auth/userinfo.email", "email"],
+  ["profile", "profile"],
+  ["https://www.googleapis.com/auth/userinfo.profile", "profile"],
+]);
+
+function canonicalOauthScope(
+  provider: ConnectionProvider,
+  scope: string,
+): string {
+  return provider === "google"
+    ? GOOGLE_OAUTH_SCOPE_ALIASES.get(scope) ?? scope
+    : scope;
+}
+
+function missingOauthScopes(
+  provider: ConnectionProvider,
+  grantedScopes: string[],
+  requiredScopes: string[],
+): string[] {
+  const granted = new Set(
+    grantedScopes.map((scope) => canonicalOauthScope(provider, scope)),
+  );
+  return requiredScopes.filter(
+    (scope) => !granted.has(canonicalOauthScope(provider, scope)),
+  );
+}
+
 function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -635,8 +664,11 @@ export async function listIntegrationApps(app: FastifyInstance, userId?: string)
         item.status === "connected" &&
         item.appId === entry.id,
     );
-    const grantedScopes = new Set(stringList(connection?.scopes));
-    const missingScopes = entry.oauthScopes.filter((scope) => !grantedScopes.has(scope));
+    const missingScopes = missingOauthScopes(
+      entry.provider,
+      stringList(connection?.scopes),
+      entry.oauthScopes,
+    );
     const configured = isIntegrationMcpAppConfigured(app.config, entry);
     const connected = Boolean(connection && missingScopes.length === 0);
 
@@ -1238,7 +1270,6 @@ export async function listRuntimeMcpConnections(app: FastifyInstance, userId: st
     .where(and(eq(integrationConnections.userId, userId), eq(integrationConnections.status, "connected")));
 
   const candidates = rows.flatMap((connection) => {
-    const grantedScopes = new Set(stringList(connection.scopes));
     return integrationMcpAppCatalog
       .filter(
         (entry) =>
@@ -1246,7 +1277,11 @@ export async function listRuntimeMcpConnections(app: FastifyInstance, userId: st
           entry.provider === connection.provider &&
           entry.authStrategy === "provider_bearer" &&
           entry.stage !== "setup_required" &&
-          entry.oauthScopes.every((scope) => grantedScopes.has(scope)),
+          missingOauthScopes(
+            entry.provider,
+            stringList(connection.scopes),
+            entry.oauthScopes,
+          ).length === 0,
       )
       .map((entry) => ({ connection, entry }));
   }).sort((left, right) =>
