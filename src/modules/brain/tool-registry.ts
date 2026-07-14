@@ -17,6 +17,12 @@ import {
   searchPublicWebGrounding,
 } from "./web-grounding.js";
 import { fetchUrlContext } from "./url-context.js";
+import {
+  executeCalendarListEvents,
+  executeDriveSearch,
+  executeGmailRead,
+  executeGmailSearch,
+} from "./connector-tools.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
 export type AgentToolPermission = "read" | "write" | "side_effect";
@@ -128,6 +134,30 @@ const memoryWriteOutputSchema = z.object({
 }).passthrough();
 const goalOutputSchema = z.object({ goal: z.record(z.string(), z.unknown()).nullable() }).passthrough();
 const goalContextOutputSchema = z.object({ goal: z.record(z.string(), z.unknown()).nullable(), events: z.array(z.unknown()) }).passthrough();
+
+const gmailSearchArgsSchema = z.object({
+  query: z.string().trim().min(1).max(400),
+  limit: z.coerce.number().int().min(1).max(10).default(5),
+});
+const gmailReadArgsSchema = z.object({
+  messageId: z.string().trim().min(1).max(120),
+});
+const calendarListArgsSchema = z.object({
+  query: z.string().trim().max(200).optional(),
+  days: z.coerce.number().int().min(1).max(60).default(7),
+  limit: z.coerce.number().int().min(1).max(20).default(10),
+});
+const driveSearchArgsSchema = z.object({
+  query: z.string().trim().min(1).max(240),
+  limit: z.coerce.number().int().min(1).max(20).default(10),
+});
+const connectorListOutputSchema = z.object({
+  resultCount: z.number().int().nonnegative(),
+  results: z.array(z.unknown()),
+}).passthrough();
+const connectorMessageOutputSchema = z.object({
+  messageId: z.string(),
+}).passthrough();
 
 /**
  * Model kaynaklı yaygın argüman bozulmalarını deterministik onarır (tek
@@ -434,6 +464,50 @@ const toolDefinitions = [
         advancedTo: resolveGoalProgressText(args),
       });
       return { goal: advanced.goal };
+    },
+  },
+  {
+    name: "gmail.search",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 12_000,
+    outputSchema: connectorListOutputSchema,
+    argsSchema: gmailSearchArgsSchema,
+    async execute(app, context, args) {
+      return executeGmailSearch(app, context.userId, args);
+    },
+  },
+  {
+    name: "gmail.read",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 12_000,
+    outputSchema: connectorMessageOutputSchema,
+    argsSchema: gmailReadArgsSchema,
+    async execute(app, context, args) {
+      return executeGmailRead(app, context.userId, args);
+    },
+  },
+  {
+    name: "calendar.list_events",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 12_000,
+    outputSchema: connectorListOutputSchema,
+    argsSchema: calendarListArgsSchema,
+    async execute(app, context, args) {
+      return executeCalendarListEvents(app, context.userId, args);
+    },
+  },
+  {
+    name: "drive.search",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 12_000,
+    outputSchema: connectorListOutputSchema,
+    argsSchema: driveSearchArgsSchema,
+    async execute(app, context, args) {
+      return executeDriveSearch(app, context.userId, args);
     },
   },
 ] satisfies Array<AgentToolDefinition<z.ZodTypeAny>>;

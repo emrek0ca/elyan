@@ -1282,6 +1282,102 @@ async function getConnectionAccessToken(
   return tokenPayload.accessToken;
 }
 
+/**
+ * Server-side connector access: find the user's connected integration that
+ * grants a capability (gmail/calendar/drive/...) with all required scopes and
+ * return a fresh access token. Used by brain connector tools so a mobile-only
+ * user can read their integrations without a paired desktop. Throws a typed
+ * badRequest/notFound if nothing usable is connected.
+ */
+export async function getConnectorAccessToken(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    capability: string;
+    requiredScopes?: string[];
+    refreshTimeoutMs?: number;
+  },
+): Promise<{ connectionId: string; provider: ConnectionProvider; accessToken: string }> {
+  const rows = await app.db
+    .select({
+      id: integrationConnections.id,
+      appId: integrationConnections.appId,
+      provider: integrationConnections.provider,
+      scopes: integrationConnections.scopes,
+      capabilities: integrationConnections.capabilities,
+      updatedAt: integrationConnections.updatedAt,
+    })
+    .from(integrationConnections)
+    .where(
+      and(
+        eq(integrationConnections.userId, input.userId),
+        eq(integrationConnections.status, "connected"),
+      ),
+    )
+    .orderBy(desc(integrationConnections.updatedAt));
+
+  const match = rows.find((row) => {
+    const capabilities = Array.isArray(row.capabilities)
+      ? row.capabilities.map((value) => String(value ?? "").trim())
+      : [];
+    if (!capabilities.includes(input.capability)) {
+      return false;
+    }
+    if (!input.requiredScopes?.length) {
+      return true;
+    }
+    return (
+      missingOauthScopes(
+        row.provider,
+        stringList(row.scopes),
+        input.requiredScopes,
+      ).length === 0
+    );
+  });
+
+  if (!match) {
+    throw notFound(`No connected integration grants capability ${input.capability}`);
+  }
+
+  const accessToken = await getConnectionAccessToken(
+    app,
+    match.id,
+    match.provider,
+    match.appId ?? undefined,
+    input.refreshTimeoutMs ?? 8_000,
+  );
+  return { connectionId: match.id, provider: match.provider, accessToken };
+}
+
+/** Capabilities the user currently has connected with all required scopes. */
+export async function listConnectedCapabilities(
+  app: FastifyInstance,
+  userId: string,
+): Promise<string[]> {
+  const rows = await app.db
+    .select({
+      provider: integrationConnections.provider,
+      scopes: integrationConnections.scopes,
+      capabilities: integrationConnections.capabilities,
+    })
+    .from(integrationConnections)
+    .where(
+      and(
+        eq(integrationConnections.userId, userId),
+        eq(integrationConnections.status, "connected"),
+      ),
+    );
+  const capabilities = new Set<string>();
+  for (const row of rows) {
+    if (!Array.isArray(row.capabilities)) continue;
+    for (const capability of row.capabilities) {
+      const value = String(capability ?? "").trim();
+      if (value) capabilities.add(value);
+    }
+  }
+  return [...capabilities];
+}
+
 export async function listRuntimeMcpConnections(app: FastifyInstance, userId: string) {
   const runtimeTokenRefreshTimeoutMs = 4_000;
   const rows = await app.db

@@ -63,6 +63,8 @@ import {
   summarizeToolResultsForMetadata,
 } from "./agent-loop.js";
 import type { AgentToolRequest, AgentToolResult } from "./tool-registry.js";
+import { connectorToolsForCapabilities } from "./connector-tools.js";
+import { listConnectedCapabilities } from "../integrations/service.js";
 import { isAgentEngineShadowEnabled, isAgentEngineV2Enabled } from "./agent-engine-policy.js";
 import {
   applyCanonicalDialogueStateToMetadata,
@@ -319,6 +321,14 @@ import {
   resolveUsageIdentityContext,
 } from "../quota/service.js";
 
+const CONNECTOR_TOOL_WORKLOADS: ReadonlySet<SharedBrainWorkload> = new Set([
+  "mobile_chat_fast",
+  "mobile_chat_balanced",
+  "mobile_chat_deep_refine",
+  "fast_route",
+  "planning",
+]);
+
 const GROQ_PROVIDER_CIRCUIT_KEY = "circuit:brain:groq:*";
 const GROQ_PROVIDER_FAILURE_WINDOW_KEY = "circuit:brain:groq:failed-models";
 const GROQ_PROVIDER_FAILURE_MODEL_THRESHOLD = 3;
@@ -340,6 +350,13 @@ type SharedBrainInferenceInput = {
    * generateSharedBrainReply set eder; prompt builder'lar okur.
    */
   cloudVisionActive?: boolean;
+  /**
+   * Connector tools available for this user's connected integrations
+   * (gmail/calendar/drive read). generateSharedBrainReply resolves it once;
+   * the prompt builder advertises the contracts so the model can emit typed
+   * tool_requests. Empty/undefined means advertise nothing.
+   */
+  connectorToolContracts?: string[];
   requestMetadata?: Record<string, unknown>;
   route?: string;
   routeDecision?: CommandRouteDecision | null;
@@ -1955,6 +1972,10 @@ export function buildStructuredSystemPrompt(
     // ── SYSTEMS PROGRAMMING (only on C/C++ signals) ──
     systemsProgrammingRelevant
       ? "C/C++ expertise: answer as a senior systems programmer. State which language standard your code assumes (default to C17 / C++20 unless the user targets another). Write complete, compilable examples with the required #include lines — never pseudo-code fragments that won't build. In C++, follow RAII and the rule of zero/five; prefer smart pointers, std::string_view, std::span, and standard algorithms over raw pointers and manual loops when appropriate. In C, show explicit ownership, error handling on every allocation and I/O call, and bounds-checked buffer use. Proactively flag undefined behavior, lifetime bugs, data races, and memory-safety pitfalls in the user's code or in your own examples. When relevant, recommend concrete tooling: compiler flags (-Wall -Wextra -Werror, -fsanitize=address,undefined), CMake for builds, gdb/lldb for debugging, valgrind or sanitizers for memory issues. Explain performance and safety trade-offs briefly — the why, not just the how."
+      : null,
+    // ── CONNECTOR TOOLS (only when the user has connected integrations) ──
+    (input.connectorToolContracts?.length ?? 0) > 0
+      ? `Connected integration tools (read-only, run on the server): ${input.connectorToolContracts!.join(" | ")}. Emit these as tool_requests when the user asks about their email, calendar, or Drive. Use exact flat args matching each contract. Never claim to have read a mailbox/calendar/file without an ok tool result. To send an email or create an event, tell the user it needs their approval — you cannot perform writes from here.`
       : null,
     // ── TASK ROUTING (Elyan-specific infrastructure) ──
     taskRoutingPolicy,
@@ -4148,6 +4169,37 @@ export async function generateSharedBrainReply(
     cloudVisionActive,
   );
   const workloadProfile = getSharedBrainWorkloadProfile(workload);
+  // Connector tools (gmail/calendar/drive read) are advertised only on
+  // chat/planning-shaped turns where the agent loop can actually run them, and
+  // only when the user has a matching integration connected. Resolved once and
+  // cached on input so the sync prompt builder can advertise the contracts.
+  if (
+    input.connectorToolContracts === undefined &&
+    !input.internalEvaluation?.refinementPass &&
+    (app.config.ELYAN_AGENT_LOOP_ENABLED === true ||
+      isAgentEngineV2Enabled(app, input.userId) ||
+      isAgentEngineShadowEnabled(app)) &&
+    CONNECTOR_TOOL_WORKLOADS.has(workload)
+  ) {
+    try {
+      const connectedCapabilities = await listConnectedCapabilities(
+        app,
+        input.userId,
+      );
+      input.connectorToolContracts = connectorToolsForCapabilities(
+        connectedCapabilities,
+      ).map((entry) => entry.contract);
+    } catch (error) {
+      app.log.debug?.(
+        {
+          error:
+            error instanceof Error ? error.message : "connector_context_failed",
+        },
+        "connector tool advertisement skipped",
+      );
+      input.connectorToolContracts = [];
+    }
+  }
   const deterministicMathSurfaceResult = buildMathSurface3DResult(input, workload);
   if (deterministicMathSurfaceResult) {
     deterministicMathSurfaceResult.metadata = applyClaimConfidenceMetadata(app, {
