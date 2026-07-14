@@ -299,6 +299,12 @@ function limitSimpleAnswerLength(value: string, input: { simpleSelfContained: bo
   if (/```/u.test(value)) {
     return value;
   }
+  // Markdown listesi code fence gibi yapısaldır: cümle-sayısı kırpması
+  // "1." işaretçisini cümle sonu sanıp listeyi başından buduyor (araç
+  // sonuçlu "son 5 mail" özetleri ':' deyip bitiyordu).
+  if (/^\s{0,3}(?:[-*+]\s|\d{1,2}[.)]\s)/mu.test(value)) {
+    return value;
+  }
   if (
     input.workload &&
     !["mobile_chat_fast", "mobile_chat_balanced", "fast_route", "intent"].includes(
@@ -359,6 +365,9 @@ export function sanitizeFinalAssistantResponse(input: {
   imageGenerationRequested?: boolean;
   artifactRequired?: boolean;
   hasRenderableOutput?: boolean;
+  /** Araç sonuçlarından (connector/agent loop) üretilen cevap: refinement
+   * boyutu zaten belirledi — cümle-sayısı kırpması içeriği yok eder. */
+  toolGrounded?: boolean;
   freshData?: {
     freshnessRequired: boolean;
     status: string;
@@ -374,11 +383,15 @@ export function sanitizeFinalAssistantResponse(input: {
   cleaned = stripInternalLinesPreservingCodeFences(cleaned);
   cleaned = removeRoboticVerificationLanguage(cleaned, allowVerificationLanguage);
   cleaned = dedupeRepeatedParagraphs(cleaned);
-  cleaned = guardUnsupportedCurrentClaims({
-    prompt: input.prompt,
-    text: cleaned,
-    freshData: input.freshData,
-  });
+  if (input.toolGrounded !== true) {
+    // Araç sonuçları (gmail/calendar/drive) cevabın taze kanıtıdır; web
+    // kanıt yetersizliği tool-grounded cümleleri silmemeli.
+    cleaned = guardUnsupportedCurrentClaims({
+      prompt: input.prompt,
+      text: cleaned,
+      freshData: input.freshData,
+    });
+  }
   cleaned = guardMissingArtifact({
     prompt: input.prompt,
     text: cleaned,
@@ -386,11 +399,13 @@ export function sanitizeFinalAssistantResponse(input: {
     artifactRequired: input.artifactRequired,
     hasRenderableOutput: input.hasRenderableOutput,
   });
-  cleaned = limitSimpleAnswerLength(cleaned, {
-    simpleSelfContained: policy.simpleSelfContained,
-    requestedShortForm: policy.requestedShortForm,
-    workload: input.workload,
-  });
+  if (input.toolGrounded !== true) {
+    cleaned = limitSimpleAnswerLength(cleaned, {
+      simpleSelfContained: policy.simpleSelfContained,
+      requestedShortForm: policy.requestedShortForm,
+      workload: input.workload,
+    });
+  }
   if (cleaned.trim()) {
     return cleaned.trim();
   }

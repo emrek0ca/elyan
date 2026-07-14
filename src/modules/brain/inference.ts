@@ -6381,6 +6381,7 @@ export async function generateSharedBrainReply(
         imageGenerationRequested: responseContract.intent === "image_generation",
         artifactRequired: responseContract.artifactRequired,
         hasRenderableOutput: hasElyanRenderableArtifact(result.metadata.blocks),
+        toolGrounded: result.metadata.toolRefinementApplied === true,
         freshData: webGrounding.freshData,
       });
       result.metadata.responseQuality = inspectElyanFinalResponse({

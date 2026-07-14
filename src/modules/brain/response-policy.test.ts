@@ -136,3 +136,33 @@ test("sanitizeFinalAssistantResponse prevents document-ready claims without a re
   assert.doesNotMatch(sanitized, /dosyası hazır/iu);
   assert.match(sanitized, /üretilemedi/iu);
 });
+
+test("sanitizeFinalAssistantResponse keeps markdown lists intact on short-form prompts", () => {
+  const text = [
+    "Gelen kutunuzdaki son 5 e-posta şu şekilde:",
+    "1. Fatura hatırlatması — Elektrik dağıtım",
+    "2. Toplantı daveti — Ürün ekibi",
+    "3. Kargo bildirimi — Sipariş yolda",
+    "4. Bülten — Haftalık teknoloji özeti",
+    "5. Güvenlik uyarısı — Yeni giriş",
+  ].join("\n");
+  const sanitized = sanitizeFinalAssistantResponse({
+    prompt: "Son maillerimde ne var? Kısaca özetle.",
+    text,
+    workload: "mobile_chat_fast",
+  });
+  assert.match(sanitized, /Güvenlik uyarısı/u);
+  assert.match(sanitized, /Fatura hatırlatması/u);
+});
+
+test("sanitizeFinalAssistantResponse skips sentence trimming for tool-grounded answers", () => {
+  const text =
+    "Gelen kutunu kontrol ettim. Üç önemli mail var. İlki faturayla ilgili. İkincisi toplantı daveti. Üçüncüsü kargo bildirimi.";
+  const sanitized = sanitizeFinalAssistantResponse({
+    prompt: "Son maillerimde ne var? Kısaca özetle.",
+    text,
+    workload: "mobile_chat_fast",
+    toolGrounded: true,
+  });
+  assert.match(sanitized, /kargo bildirimi/u);
+});
