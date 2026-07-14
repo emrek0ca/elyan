@@ -71,6 +71,8 @@ rsync -az --delete \
   --exclude dist \
   --exclude .git \
   --exclude .codex-backups \
+  --exclude .codex-worktrees \
+  --exclude .blob-store \
   --exclude .env \
   --exclude '.env.*' \
   --exclude secrets \
