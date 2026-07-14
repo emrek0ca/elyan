@@ -10,7 +10,14 @@ from typing import Any, Callable
 
 from runtime import state_store
 from runtime.agent_planning import build_agent_plan
-from runtime.capability_registry import capability_metadata, capability_metadata_summary
+from runtime.capability_registry import capability_metadata, capability_metadata_summary, capability_readiness
+from runtime.execution_scheduler import (
+    MAX_PARALLEL_READS,
+    SchedulerPlanError,
+    parallel_read_batch,
+    run_parallel,
+    schedule_steps,
+)
 
 try:
     from langgraph.graph import END, START, StateGraph
@@ -130,6 +137,7 @@ class ExecutorCore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._current: dict[str, dict[str, Any]] = {}
+        self._preemption_requests: dict[str, str] = {}
         # Canlı checklist: adım geçişlerinde (conversation_id, task_trace bloğu)
         # ile çağrılır. Bridge bunu unsolicited event olarak masaüstüne akıtır.
         self._progress_emitter: Callable[[str, dict[str, Any]], None] | None = None
@@ -165,6 +173,12 @@ class ExecutorCore:
                 "lastStrategy": "",
                 "lastReason": "",
             },
+            "scheduler": {
+                "policyVersion": "p2.v1",
+                "orderedStepIds": [],
+                "maxParallelReads": MAX_PARALLEL_READS,
+            },
+            "checkpoints": [],
             "stopReason": "",
         }
 
@@ -288,6 +302,47 @@ class ExecutorCore:
             current["executionTrace"] = trace
             self._persist()
 
+    def request_preemption(self, execution_id: str, *, reason: str = "higher_priority_ready") -> bool:
+        """Request a stop that is consumed only between completed steps."""
+        with self._lock:
+            if execution_id not in self._current:
+                return False
+            self._preemption_requests[execution_id] = _safe_text(reason, limit=120) or "higher_priority_ready"
+            return True
+
+    def _take_preemption(self, execution_id: str) -> str:
+        with self._lock:
+            return self._preemption_requests.pop(execution_id, "")
+
+    def _record_checkpoint(self, execution_id: str, step_id: str) -> None:
+        with self._lock:
+            current = self._current.get(execution_id)
+            if not isinstance(current, dict):
+                return
+            trace = current.get("executionTrace")
+            trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+            checkpoints = trace.get("checkpoints")
+            checkpoints = list(checkpoints) if isinstance(checkpoints, list) else []
+            checkpoints.append({"stepId": step_id, "completedAt": _utc_now_iso()})
+            trace["checkpoints"] = checkpoints[-32:]
+            current["executionTrace"] = trace
+            self._persist()
+
+    def _record_scheduler_plan(self, execution_id: str, steps: list[dict[str, Any]]) -> None:
+        with self._lock:
+            current = self._current.get(execution_id)
+            if not isinstance(current, dict):
+                return
+            trace = current.get("executionTrace")
+            trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+            trace["scheduler"] = {
+                "policyVersion": "p2.v1",
+                "orderedStepIds": [str(step.get("id", "") or "") for step in steps],
+                "maxParallelReads": MAX_PARALLEL_READS,
+            }
+            current["executionTrace"] = trace
+            self._persist()
+
     def set_progress_emitter(self, emitter: Callable[[str, dict[str, Any]], None] | None) -> None:
         """Bridge, canlı checklist için burayı bağlar: her adım geçişinde
         (conversation_id, task_trace bloğu) ile çağrılır."""
@@ -315,6 +370,7 @@ class ExecutorCore:
         "open_app": "Uygulama açılıyor",
         "browser_control": "Tarayıcı",
         "web_search": "Web araması",
+        "mcp_call_tool": "Uygulama aracı",
     }
 
     @classmethod
@@ -521,6 +577,7 @@ class ExecutorCore:
         final_block: dict[str, Any] | None = None
         conversation_id = ""
         with self._lock:
+            self._preemption_requests.pop(execution_id, None)
             current = self._current.pop(execution_id, None)
             if current is None:
                 return
@@ -663,6 +720,121 @@ class ExecutorCore:
         ]
         return cleaned or None
 
+    def _prefetch_read_batch(
+        self,
+        *,
+        execution_id: str,
+        batch: list[dict[str, Any]],
+        planned_roles: list[dict[str, Any]],
+        state_factory: Callable[[], dict[str, Any]],
+        execute_step: Callable[[str, dict[str, Any], dict[str, Any], str], tuple[dict[str, Any], list[dict[str, Any]]]],
+        source: str,
+        previous_output: str,
+        previous_result: dict[str, Any] | None,
+        previous_artifacts: list[dict[str, Any]],
+        authorize_step: Callable[[str, str, dict[str, Any], str, str], dict[str, Any] | None] | None,
+        task_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        prepared: list[dict[str, Any]] = []
+        for index, step in enumerate(batch, start=1):
+            capability = str(step.get("capability", "") or "").strip()
+            step_id = str(step.get("id", "") or f"parallel_{index}")
+            metadata = capability_metadata(capability)
+            step_role = next(
+                (
+                    candidate for candidate in planned_roles
+                    if isinstance(candidate, dict)
+                    and str(candidate.get("capability", "") or "").strip() == capability
+                ),
+                {},
+            )
+            self._record_step_started(
+                execution_id,
+                step_id=step_id,
+                capability=capability,
+                phase=str(step.get("phase", "") or step_role.get("phase", "") or "gather"),
+                role=str(step.get("role", "") or step_role.get("role", "") or "observer"),
+                verification_mode=str(metadata.get("verificationMode", "tool_result") or "tool_result"),
+                attempt=1,
+            )
+            args = dict(step.get("args", {}) or {})
+            args["_confirmed"] = True
+            args["_retryAttempt"] = 1
+            if previous_output:
+                args["_previousOutput"] = previous_output
+            if previous_result:
+                args["_previousResult"] = dict(previous_result)
+            if previous_artifacts:
+                args["_previousArtifacts"] = list(previous_artifacts)
+            authorization_error: dict[str, Any] | None = None
+            if authorize_step is not None:
+                try:
+                    grant = authorize_step(step_id, capability, args, source, task_id)
+                    if isinstance(grant, dict):
+                        args["_capabilityGrant"] = grant
+                except Exception as exc:
+                    authorization_error = {
+                        "ok": False,
+                        "output": str(getattr(exc, "message", "") or "Görev yetkisi bu adıma uymuyor."),
+                        "error": {
+                            "code": str(getattr(exc, "code", "CAPABILITY_GRANT_DENIED") or "CAPABILITY_GRANT_DENIED"),
+                            "message": str(getattr(exc, "message", "") or "Görev yetkisi bu adıma uymuyor."),
+                        },
+                    }
+            captured_state = state_factory()
+            trust_state = captured_state.get("runtime", {}) if isinstance(captured_state, dict) else {}
+            trust_state = trust_state if isinstance(trust_state, dict) else {}
+            if isinstance(args.get("_capabilityGrant"), dict) and not isinstance(trust_state.get("executionTrust"), dict):
+                authorization_error = {
+                    "ok": False,
+                    "output": "CapabilityGrant güven bağlamı worker için doğrulanamadı.",
+                    "error": {
+                        "code": "WORK_ORDER_TRUST_MISSING",
+                        "message": "CapabilityGrant güven bağlamı worker için doğrulanamadı.",
+                    },
+                }
+            prepared.append({
+                "stepId": step_id,
+                "capability": capability,
+                "args": args,
+                "authorizationError": authorization_error,
+                "state": captured_state,
+            })
+
+        def worker(item: dict[str, Any]) -> dict[str, Any]:
+            if isinstance(item.get("authorizationError"), dict):
+                return {**item, "toolResult": dict(item["authorizationError"]), "events": []}
+            try:
+                tool_result, step_events = execute_step(
+                    str(item["capability"]),
+                    dict(item["args"]),
+                    dict(item.get("state", {}) or {}),
+                    source,
+                )
+                if not isinstance(tool_result, dict) or not isinstance(step_events, list):
+                    raise TypeError("invalid_step_result")
+                return {
+                    **item,
+                    "toolResult": tool_result,
+                    "events": [event for event in step_events if isinstance(event, dict)],
+                }
+            except Exception:
+                return {
+                    **item,
+                    "toolResult": {
+                        "ok": False,
+                        "output": "Read adımı güvenli şekilde tamamlanamadı.",
+                        "error": {
+                            "code": "PARALLEL_READ_FAILED",
+                            "message": "Read adımı güvenli şekilde tamamlanamadı.",
+                        },
+                    },
+                    "events": [],
+                }
+
+        results = run_parallel(prepared, worker, limit=MAX_PARALLEL_READS)
+        return {str(item["stepId"]): item for item in results}
+
     def execute_plan_steps(
         self,
         *,
@@ -675,6 +847,7 @@ class ExecutorCore:
         replan_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
         max_replans: int = 2,
         authorize_step: Callable[[str, str, dict[str, Any], str, str], dict[str, Any] | None] | None = None,
+        execution_id: str | None = None,
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
         execution_id = self.begin_execution(
             source=source,
@@ -686,6 +859,7 @@ class ExecutorCore:
                 if isinstance(step, dict)
             ),
             planned_steps=steps,
+            execution_id=execution_id,
         )
         outputs: list[str] = []
         events: list[dict[str, Any]] = []
@@ -698,6 +872,8 @@ class ExecutorCore:
         # Adım kimliği → yapılandırılmış çıktı; {{steps.<id>...}} şablonları ve
         # forEach fan-out buradan beslenir.
         step_outputs: dict[str, dict[str, Any]] = {}
+        completed_step_ids: set[str] = set()
+        prefetched_results: dict[str, dict[str, Any]] = {}
 
         try:
             self.record_stage(execution_id, "plan_execution", detail="steps")
@@ -706,11 +882,30 @@ class ExecutorCore:
             # ReAct: statik plan yerine adım sonucunu değerlendirip kalan planı
             # revize edebilmek için indeks tabanlı, splice edilebilir döngü.
             # `steps` yerel bir kopya; replan_fn kalan adımları yeniden yazabilir.
-            steps = [dict(step) for step in steps if isinstance(step, dict)]
+            scheduler_state = state_factory()
+            steps = schedule_steps(
+                [dict(step) for step in steps if isinstance(step, dict)],
+                metadata_provider=capability_metadata,
+                readiness_provider=lambda capability: capability_readiness(capability, state=scheduler_state),
+            )
+            self._record_scheduler_plan(execution_id, steps)
             replans_used = 0
             step_index = 0
             while step_index < len(steps):
+                preemption_reason = self._take_preemption(execution_id) if not prefetched_results else ""
+                if preemption_reason:
+                    message = "Görev daha yüksek öncelikli iş için güvenli checkpoint sınırında durduruldu."
+                    self.record_stage(execution_id, "preempted", detail=preemption_reason, status="preempted")
+                    self._set_stop_reason(execution_id, "preempted_at_checkpoint")
+                    self.finish_execution(execution_id, ok=False, detail=message)
+                    return False, message, events, "EXECUTION_PREEMPTED", structured_result, artifacts
                 step = steps[step_index]
+                scheduler_facts = step.get("_scheduler") if isinstance(step.get("_scheduler"), dict) else {}
+                if scheduler_facts.get("ready") is False:
+                    message = "Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi."
+                    self._set_stop_reason(execution_id, "capability_not_ready")
+                    self.finish_execution(execution_id, ok=False, detail=message)
+                    return False, message, events, "CAPABILITY_NOT_READY", structured_result, artifacts
                 # forEach fan-out: adım, önceki bir adımın liste çıktısının her
                 # elemanı için kopyalanır; döngü aynı indeksten (ilk kopya)
                 # devam eder.
@@ -724,6 +919,26 @@ class ExecutorCore:
                         return False, message, events, "TEMPLATE_UNRESOLVED", structured_result, artifacts
                     steps = steps[:step_index] + expanded + steps[step_index + 1 :]
                     continue
+                if not prefetched_results:
+                    batch = parallel_read_batch(
+                        steps,
+                        step_index,
+                        completed_step_ids=completed_step_ids,
+                    )
+                    if batch:
+                        prefetched_results = self._prefetch_read_batch(
+                            execution_id=execution_id,
+                            batch=batch,
+                            planned_roles=planned_roles,
+                            state_factory=state_factory,
+                            execute_step=execute_step,
+                            source=source,
+                            previous_output=previous_output,
+                            previous_result=previous_result,
+                            previous_artifacts=previous_artifacts,
+                            authorize_step=authorize_step,
+                            task_id=task_id,
+                        )
                 index = step_index + 1
                 step_index += 1
                 if not isinstance(step, dict):
@@ -746,66 +961,34 @@ class ExecutorCore:
                 self.record_stage(execution_id, "step_execution", detail=capability)
                 did_replan = False
                 attempt = 0
+                prefetched = prefetched_results.pop(step_id, None)
                 while True:
                     attempt += 1
-                    self._record_step_started(
-                        execution_id,
-                        step_id=step_id,
-                        capability=capability,
-                        phase=step_phase,
-                        role=step_role_name,
-                        verification_mode=str(metadata.get("verificationMode", "tool_result") or "tool_result"),
-                        attempt=attempt,
-                    )
-                    args = step.get("args", {})
-                    args = dict(args) if isinstance(args, dict) else {}
-                    # Önceki adımların yapılandırılmış çıktısına şablon referansı:
-                    # {{steps.<id>.result.items[0].href}}. Çözülemeyen referans
-                    # düzeltilebilir bir hatadır (replan bakabilir).
-                    try:
-                        args = _resolve_templates(args, {"steps": step_outputs})
-                    except TemplateResolutionError as exc:
-                        tool_result = {
-                            "ok": False,
-                            "tool": capability,
-                            "output": f"Adım argümanındaki referans çözülemedi: {exc.expression}",
-                            "error": {
-                                "code": "TEMPLATE_UNRESOLVED",
-                                "message": f"Adım argümanındaki referans çözülemedi: {exc.expression}",
-                            },
-                        }
-                        step_events = []
-                        args = dict(step.get("args", {}) or {})
-                        events.extend(step_events)
-                        error = tool_result["error"]
-                        error_code = error["code"]
-                        message = error["message"]
-                        self._record_step_result(
+                    if attempt == 1 and isinstance(prefetched, dict):
+                        args = dict(prefetched.get("args", {}) or {})
+                        tool_result = dict(prefetched.get("toolResult", {}) or {})
+                        step_events = [
+                            event for event in (prefetched.get("events", []) or [])
+                            if isinstance(event, dict)
+                        ]
+                    else:
+                        self._record_step_started(
                             execution_id,
                             step_id=step_id,
-                            status="failed",
-                            verification_status="failed",
-                            output_preview=message,
-                            error_code=error_code,
-                            stop_reason=message,
+                            capability=capability,
+                            phase=step_phase,
+                            role=step_role_name,
+                            verification_mode=str(metadata.get("verificationMode", "tool_result") or "tool_result"),
+                            attempt=attempt,
                         )
-                        self._set_stop_reason(execution_id, error_code.lower())
-                        self.finish_execution(execution_id, ok=False, detail=message)
-                        return False, message, events, error_code, structured_result, artifacts
-                    args["_confirmed"] = True
-                    args["_retryAttempt"] = attempt
-                    if previous_output:
-                        args["_previousOutput"] = previous_output
-                    if previous_result:
-                        args["_previousResult"] = previous_result
-                    if previous_artifacts:
-                        args["_previousArtifacts"] = list(previous_artifacts)
-                    if authorize_step is not None:
+                        args = step.get("args", {})
+                        args = dict(args) if isinstance(args, dict) else {}
+                        # Önceki adımların yapılandırılmış çıktısına şablon referansı.
                         try:
-                            grant = authorize_step(step_id, capability, args, source, task_id)
-                        except Exception as exc:
-                            error_code = str(getattr(exc, "code", "CAPABILITY_GRANT_DENIED") or "CAPABILITY_GRANT_DENIED")
-                            message = str(getattr(exc, "message", "") or "Görev yetkisi bu adıma uymuyor.")
+                            args = _resolve_templates(args, {"steps": step_outputs})
+                        except TemplateResolutionError as exc:
+                            message = f"Adım argümanındaki referans çözülemedi: {exc.expression}"
+                            error_code = "TEMPLATE_UNRESOLVED"
                             self._record_step_result(
                                 execution_id,
                                 step_id=step_id,
@@ -818,14 +1001,40 @@ class ExecutorCore:
                             self._set_stop_reason(execution_id, error_code.lower())
                             self.finish_execution(execution_id, ok=False, detail=message)
                             return False, message, events, error_code, structured_result, artifacts
-                        if isinstance(grant, dict):
-                            args["_capabilityGrant"] = grant
-                    tool_result, step_events = execute_step(
-                        capability,
-                        args,
-                        state_factory(),
-                        source,
-                    )
+                        args["_confirmed"] = True
+                        args["_retryAttempt"] = attempt
+                        if previous_output:
+                            args["_previousOutput"] = previous_output
+                        if previous_result:
+                            args["_previousResult"] = previous_result
+                        if previous_artifacts:
+                            args["_previousArtifacts"] = list(previous_artifacts)
+                        if authorize_step is not None:
+                            try:
+                                grant = authorize_step(step_id, capability, args, source, task_id)
+                            except Exception as exc:
+                                error_code = str(getattr(exc, "code", "CAPABILITY_GRANT_DENIED") or "CAPABILITY_GRANT_DENIED")
+                                message = str(getattr(exc, "message", "") or "Görev yetkisi bu adıma uymuyor.")
+                                self._record_step_result(
+                                    execution_id,
+                                    step_id=step_id,
+                                    status="failed",
+                                    verification_status="failed",
+                                    output_preview=message,
+                                    error_code=error_code,
+                                    stop_reason=message,
+                                )
+                                self._set_stop_reason(execution_id, error_code.lower())
+                                self.finish_execution(execution_id, ok=False, detail=message)
+                                return False, message, events, error_code, structured_result, artifacts
+                            if isinstance(grant, dict):
+                                args["_capabilityGrant"] = grant
+                        tool_result, step_events = execute_step(
+                            capability,
+                            args,
+                            state_factory(),
+                            source,
+                        )
                     events.extend(step_events)
                     if not tool_result.get("ok"):
                         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
@@ -857,11 +1066,21 @@ class ExecutorCore:
                                 "remainingCapabilities": [
                                     str(s.get("capability", "") or "") for s in steps[step_index:]
                                 ],
-                                "remainingSteps": [dict(s) for s in steps[step_index:]],
+                                "remainingSteps": [
+                                    {key: value for key, value in s.items() if key != "_scheduler"}
+                                    for s in steps[step_index:]
+                                ],
                             },
                         )
                         if revised is not None:
                             replans_used += 1
+                            prefetched_results.clear()
+                            revised = schedule_steps(
+                                revised,
+                                metadata_provider=capability_metadata,
+                                readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
+                                completed_step_ids=completed_step_ids,
+                            )
                             self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=message)
                             self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
                             steps = steps[: step_index - 1] + revised
@@ -911,11 +1130,21 @@ class ExecutorCore:
                                 "remainingCapabilities": [
                                     str(s.get("capability", "") or "") for s in steps[step_index:]
                                 ],
-                                "remainingSteps": [dict(s) for s in steps[step_index:]],
+                                "remainingSteps": [
+                                    {key: value for key, value in s.items() if key != "_scheduler"}
+                                    for s in steps[step_index:]
+                                ],
                             },
                         )
                         if revised is not None:
                             replans_used += 1
+                            prefetched_results.clear()
+                            revised = schedule_steps(
+                                revised,
+                                metadata_provider=capability_metadata,
+                                readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
+                                completed_step_ids=completed_step_ids,
+                            )
                             self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=verification.message)
                             self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
                             steps = steps[: step_index - 1] + revised
@@ -960,12 +1189,19 @@ class ExecutorCore:
                     "result": dict(result_payload) if isinstance(result_payload, dict) else {},
                     "artifacts": cleaned_artifacts,
                 }
+                completed_step_ids.add(step_id)
+                self._record_checkpoint(execution_id, step_id)
 
             summary = "\n".join(output for output in outputs if output).strip() or "İşlem tamamlandı."
             self.record_stage(execution_id, "finalize", detail=summary, status="completed")
             self._set_stop_reason(execution_id, "completed")
             self.finish_execution(execution_id, ok=True, detail=summary)
             return True, summary, events, error_code, structured_result, artifacts
+        except SchedulerPlanError:
+            message = "Plan scheduler tarafından güvenli şekilde reddedildi."
+            self._set_stop_reason(execution_id, "scheduler_plan_invalid")
+            self.finish_execution(execution_id, ok=False, detail=message)
+            return False, message, events, "SCHEDULER_PLAN_INVALID", structured_result, artifacts
         except Exception as exc:  # pragma: no cover - defensive safety net
             message = str(exc) or "executor_plan_failed"
             self._set_stop_reason(execution_id, "executor_plan_failed")

@@ -12,6 +12,7 @@ from runtime.agent_planning import build_agent_plan
 from runtime.backend_client import BackendResult
 from runtime.capability_registry import capability_display_name, capability_readiness
 from runtime.desktop_work_order import validate_payload, verify_result
+from runtime.execution_scheduler import SchedulerPlanError, schedule_tasks
 from runtime.execution_trust import ExecutionLedger, TrustError, prepare_work_order_v2
 
 
@@ -27,6 +28,8 @@ REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS = 300.0
 REMOTE_TASK_LONG_EXECUTION_TIMEOUT_SECONDS = 1200.0
 _LONG_RUNNING_CAPABILITY_PREFIXES = ("browser_agent.", "browser_session.", "desktop_operator.")
 _EXECUTION_TIMEOUT = object()
+_EXECUTION_CANCELLED = object()
+_MCP_CANCELLATION_GRACE_SECONDS = 2.0
 
 # Bir görev için üst üste kaç kez netleştirme sorulabilir. Aşılırsa görev
 # güvenle sonlandırılır (sonsuz "sor-cevapla-yine sor" döngüsünü önler).
@@ -188,6 +191,14 @@ class RemoteTaskRunner:
             self.host._runtime_diag("interrupted_task_sweep", count=swept)
         return swept
 
+    @staticmethod
+    def _task_ready_for_scheduler(task: dict[str, Any]) -> bool:
+        readiness = task.get("readiness")
+        readiness = readiness if isinstance(readiness, dict) else {}
+        if readiness.get("ready") is False or readiness.get("canExecute") is False:
+            return False
+        return str(task.get("status", "") or "").strip().lower() not in {"blocked", "waiting_dependency"}
+
     def execute_assigned_runtime_tasks(self, limit: int = 1) -> dict[str, Any]:
         self.host._assigned_task_fetch_requested.clear()
         self.host._last_assigned_task_fetch_at = time.monotonic()
@@ -203,6 +214,20 @@ class RemoteTaskRunner:
         tasks = data.get("tasks", [])
         if not isinstance(tasks, list):
             tasks = []
+        try:
+            tasks = schedule_tasks(
+                [task for task in tasks if isinstance(task, dict)],
+                readiness_provider=self._task_ready_for_scheduler,
+            )
+        except SchedulerPlanError:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "TASK_SCHEDULER_INVALID",
+                    "message": "Atanmış görev sırası güvenli şekilde oluşturulamadı.",
+                },
+                "result": {"tasks": []},
+            }
         self._sync_assigned_items(tasks)
 
         executions: list[dict[str, Any]] = []
@@ -210,6 +235,9 @@ class RemoteTaskRunner:
             if not isinstance(task, dict):
                 continue
             task_id = str(task.get("id", "") or "").strip()
+            if not self._task_ready_for_scheduler(task) or str(task.get("_schedulerBlockedReason", "") or ""):
+                executions.append({"taskId": task_id, "ok": True, "status": "deferred_not_ready"})
+                continue
             status = str(task.get("status", "") or "").strip().lower()
             if status in {"canceled", "cancelled"}:
                 self.host._discard_remote_pending_task_locally(task_id)
@@ -327,6 +355,8 @@ class RemoteTaskRunner:
         task_run_id = self._ensure_task_run_id(task_id)
         if not task_id:
             return {"taskId": "", "ok": False, "status": "missing_task_id"}
+        if self._task_cancellation_reason(task_id) == "task_cancelled":
+            return self._cancelled_execution_result(task_id)
 
         preflight_error = self.host._runtime_task_preflight_error(task, payload)
         if preflight_error is not None:
@@ -393,16 +423,41 @@ class RemoteTaskRunner:
         running = self.host._report_runtime_task_status(task_id, running_payload)
         if running is None or not running.ok:
             self.host._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
+            if self._task_cancellation_reason(task_id) == "task_cancelled":
+                return self._cancelled_execution_result(task_id)
             return {"taskId": task_id, "ok": False, "status": "running_rejected", "report": running.to_dict() if running else None}
 
         # Canlı adım-adım ilerleme: yürütme boyunca aktif görevi bağlama koy —
         # executor her adım geçişinde backend'e canlı 'running' güncellemesi akıtır.
-        progress_token = self.host._begin_active_remote_task(task_id, task_run_id)
+        try:
+            progress_token = self.host._begin_active_remote_task(task_id, task_run_id)
+        except Exception as exc:
+            self.host._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
+            return self._fail_safe(
+                task_id,
+                task_run_id,
+                message="Görev için güvenli iptal kapsamı açılamadı.",
+                error_code=str(getattr(exc, "code", "TASK_SCOPE_UNAVAILABLE") or "TASK_SCOPE_UNAVAILABLE"),
+                plan_preview=plan_preview,
+                capability_readiness_payload=readiness,
+            )
         try:
             trust_token = self.host._begin_trusted_work_order(work_order, "dispatch")
             local_result = self._execute_local_with_timeout(
                 task, prompt, title, task_id=task_id, plan_mode=plan_mode
             )
+            if local_result is _EXECUTION_CANCELLED:
+                cancellation_reason = self._task_cancellation_reason(task_id)
+                if cancellation_reason == "task_cancelled":
+                    return self._cancelled_execution_result(task_id)
+                return self._fail_safe(
+                    task_id,
+                    task_run_id,
+                    message="Görev zaman aşımı nedeniyle iptal edildi.",
+                    error_code="TASK_CANCELLED",
+                    plan_preview=plan_preview,
+                    capability_readiness_payload=readiness,
+                )
             if local_result is _EXECUTION_TIMEOUT:
                 return self._fail_safe(
                     task_id,
@@ -415,6 +470,8 @@ class RemoteTaskRunner:
                     plan_preview=plan_preview,
                     capability_readiness_payload=readiness,
                 )
+            if self._task_cancellation_reason(task_id):
+                return self._cancelled_execution_result(task_id)
             local_result = self._augment_local_result(
                 local_result,
                 task_id=task_id,
@@ -468,6 +525,9 @@ class RemoteTaskRunner:
                     capability_readiness_payload=readiness,
                 )
 
+            if self._task_cancellation_reason(task_id):
+                return self._cancelled_execution_result(task_id)
+
             self._report_lifecycle(
                 task_id,
                 task_run_id,
@@ -479,6 +539,8 @@ class RemoteTaskRunner:
             )
             if work_order is not None:
                 local_result = self._apply_work_order_verification(work_order, local_result)
+            if self._task_cancellation_reason(task_id):
+                return self._cancelled_execution_result(task_id)
             result = self.host._report_runtime_task_terminal_result(
                 task_id,
                 local_result,
@@ -497,10 +559,12 @@ class RemoteTaskRunner:
         """Yerel yürütmeyi kopyalanmış context içinde bir worker thread'de koşar
         ve zaman aşımı uygular. Context kopyası, canlı ilerleme emitter'ının
         (contextvar tabanlı) worker içinde de doğru göreve yönlenmesini sağlar
-        (bkz. _begin_active_remote_task). Zaman aşımında _EXECUTION_TIMEOUT döner;
-        worker daemon olduğundan terk edilir — geç biten terminal güncellemeler
-        backend'de dedup/geçiş kuralıyla elenir. `_execute_deterministic_remote_task`
-        None dönerse (LLM'e delege) gerçek None korunur, sentinel'la karışmaz."""
+        (bkz. _begin_active_remote_task). Zaman aşımında aktif MCP coroutine'i
+        varsa önce thread-safe iptal edilir; diğer işler için _EXECUTION_TIMEOUT
+        korunur. `_execute_deterministic_remote_task` None dönerse (LLM'e
+        delege) gerçek None sentinel'larla karışmaz."""
+        if self._task_cancellation_reason(task_id):
+            return _EXECUTION_CANCELLED
         box: dict[str, Any] = {}
 
         def _worker() -> None:
@@ -526,10 +590,68 @@ class RemoteTaskRunner:
         worker.join(self._execution_timeout_for(task))
         if worker.is_alive():
             self.host._runtime_diag("task_execution_timeout", task_id=task_id)
+            cancel_active = getattr(self.host, "_cancel_active_remote_task", None)
+            cancelled_calls = 0
+            if callable(cancel_active):
+                try:
+                    cancelled_calls = int(
+                        cancel_active(task_id, reason="task_execution_timeout") or 0
+                    )
+                except Exception:
+                    cancelled_calls = 0
+            if cancelled_calls > 0:
+                worker.join(_MCP_CANCELLATION_GRACE_SECONDS)
+                return _EXECUTION_CANCELLED
             return _EXECUTION_TIMEOUT
+        if self._task_cancellation_reason(task_id):
+            # Discard even a successful worker result when task.cancel won the
+            # race; the outer runner must never publish a late completion.
+            return _EXECUTION_CANCELLED
         if "error" in box:
             raise box["error"]
         return box.get("result")
+
+    def _task_cancellation_reason(self, task_id: str) -> str:
+        cancellation_reason = getattr(
+            self.host,
+            "_active_remote_task_cancellation_reason",
+            None,
+        )
+        if not callable(cancellation_reason):
+            return ""
+        try:
+            return str(cancellation_reason(task_id) or "").strip()
+        except Exception:
+            return ""
+
+    def _cancelled_execution_result(self, task_id: str) -> dict[str, Any]:
+        remove_link = getattr(self.host, "_remove_remote_task_local_link", None)
+        if callable(remove_link):
+            try:
+                remove_link(task_id)
+            except Exception:
+                pass
+        self._upsert_local_task(
+            task_id,
+            status="canceled",
+            summary="Görev iptal edildi.",
+            approval_request={},
+        )
+        remember_terminal = getattr(self.host, "_remember_terminal_assigned_task", None)
+        if callable(remember_terminal):
+            try:
+                remember_terminal(task_id)
+            except Exception:
+                pass
+        return {
+            "taskId": task_id,
+            "ok": False,
+            "status": "canceled",
+            "error": {
+                "code": "TASK_CANCELLED",
+                "message": "Görev iptal edildi.",
+            },
+        }
 
     def _execution_timeout_for(self, task: dict[str, Any]) -> float:
         """Görev tarayıcı ajanı/operatör içeriyorsa uzun bütçe, aksi halde standart."""
@@ -620,9 +742,20 @@ class RemoteTaskRunner:
         )
         if running is None or not running.ok:
             self.host._set_runtime_task_heartbeat(False, "idle")
+            if self._task_cancellation_reason(task_id) == "task_cancelled":
+                return self._cancelled_execution_result(task_id)
             return {"taskId": task_id, "ok": False, "status": "running_rejected", "report": running.to_dict() if running else None}
 
-        progress_token = self.host._begin_active_remote_task(task_id, task_run_id)
+        try:
+            progress_token = self.host._begin_active_remote_task(task_id, task_run_id)
+        except Exception as exc:
+            self.host._set_runtime_task_heartbeat(False, "idle")
+            return self._fail_safe(
+                task_id,
+                task_run_id,
+                message="Görev için güvenli iptal kapsamı açılamadı.",
+                error_code=str(getattr(exc, "code", "TASK_SCOPE_UNAVAILABLE") or "TASK_SCOPE_UNAVAILABLE"),
+            )
         try:
             trust_token = self.host._begin_trusted_work_order(work_order, "approval")
             if isinstance(work_order, dict) and str(work_order.get("schema", "") or "").endswith(".v2"):
@@ -633,10 +766,14 @@ class RemoteTaskRunner:
                 task_id,
                 lambda: self.host.confirm_conversation_plan(conversation_id, pending_plan_id, True),
             )
+            if self._task_cancellation_reason(task_id):
+                return self._cancelled_execution_result(task_id)
             local_result = self._augment_local_result(local_result, task_id=task_id, task_run_id=task_run_id)
             self._report_lifecycle(task_id, task_run_id, "verifying", "Görev sonucu doğrulanıyor.")
             if work_order is not None:
                 local_result = self._apply_work_order_verification(work_order, local_result)
+            if self._task_cancellation_reason(task_id):
+                return self._cancelled_execution_result(task_id)
             result = self.host._report_runtime_task_terminal_result(
                 task_id,
                 local_result,
@@ -837,6 +974,17 @@ class RemoteTaskRunner:
         plan_preview: dict[str, Any] | None = None,
         capability_readiness_payload: list[dict[str, Any]] | None = None,
     ) -> BackendResult | None:
+        if (
+            status in ACTIVE_STATUSES | LOCAL_TRACE_STATUSES
+            and self._task_cancellation_reason(task_id) == "task_cancelled"
+        ):
+            return BackendResult(
+                ok=False,
+                request_id="",
+                status_code=409,
+                data={"error": {"code": "TASK_CANCELLED", "message": "Görev iptal edildi."}},
+                error="TASK_CANCELLED",
+            )
         payload = self._status_payload(
             task_id,
             task_run_id,
@@ -877,6 +1025,8 @@ class RemoteTaskRunner:
         result_status: str = "failed",
         unavailable: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if self._task_cancellation_reason(task_id) == "task_cancelled":
+            return self._cancelled_execution_result(task_id)
         payload = self._status_payload(
             task_id,
             task_run_id,
@@ -1017,6 +1167,8 @@ class RemoteTaskRunner:
         *,
         work_order: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if self._task_cancellation_reason(task_id) == "task_cancelled":
+            return self._cancelled_execution_result(task_id)
         pending_plan_id = str(local_result.get("pendingPlanId", "") or "").strip()
         conversation_id = str(local_result.get("conversationId", "") or "").strip()
         permission_error = self.host._pending_plan_permission_error(pending_plan_id)
@@ -1072,6 +1224,8 @@ class RemoteTaskRunner:
         payload["result"] = {**payload["result"], **waiting_result}
         report = self.host._report_runtime_task_status(task_id, payload)
         self.host._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
+        if self._task_cancellation_reason(task_id) == "task_cancelled":
+            return self._cancelled_execution_result(task_id)
         return {
             "taskId": task_id,
             "ok": bool(report and report.ok),
@@ -1115,6 +1269,8 @@ class RemoteTaskRunner:
         task: dict[str, Any] | None = None,
         work_order: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if self._task_cancellation_reason(task_id) == "task_cancelled":
+            return self._cancelled_execution_result(task_id)
         question = str(local_result.get("clarificationQuestion", "") or "").strip()
         link = state_store.get_remote_task_link(task_id)
         link = link if isinstance(link, dict) else {}
@@ -1191,6 +1347,8 @@ class RemoteTaskRunner:
         payload["result"] = {**payload["result"], **waiting_result}
         report = self.host._report_runtime_task_status(task_id, payload)
         self.host._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
+        if self._task_cancellation_reason(task_id) == "task_cancelled":
+            return self._cancelled_execution_result(task_id)
         return {
             "taskId": task_id,
             "ok": bool(report and report.ok),
@@ -1339,6 +1497,14 @@ class RemoteTaskRunner:
         title: str = "",
         approval_request: dict[str, Any] | None = None,
     ) -> None:
+        existing = state_store.get_task_inbox_item(task_id) or {}
+        existing_status = str(existing.get("status", "") or "").strip().lower()
+        normalized_status = str(status or "").strip().lower()
+        if (
+            existing_status in {"completed", "failed", "canceled", "cancelled"}
+            and normalized_status in ACTIVE_STATUSES
+        ):
+            return
         item: dict[str, Any] = {
             "id": task_id,
             "status": status,

@@ -185,6 +185,10 @@ def response_schema() -> dict[str, Any]:
                         "args": {"type": "object"},
                         "description": {"type": "string"},
                         "dependsOn": {"type": "array", "items": {"type": "string"}},
+                        "priority": {"enum": ["low", "normal", "high", "urgent"]},
+                        "deadlineAt": {"type": "string"},
+                        "queuedAt": {"type": "string"},
+                        "resourceScope": {"type": "array", "items": {"type": "string"}},
                         # Önceki bir adımın liste çıktısı üzerinde fan-out:
                         # "{{steps.<id>.result.items}}" — kopyalarda {{item...}}
                         # ve {{index}} kullanılabilir (bkz. executor_core).
@@ -371,6 +375,11 @@ def build_planning_request(
                 "'and then', 'then' signal separate sequential steps; "
                 "list every step id in execution order; when a step needs a prior "
                 "step's result, put that prior step id in dependsOn"
+            ),
+            "scheduling": (
+                "set step priority only when it differs from goalContract.priority; "
+                "preserve explicit deadlineAt and resourceScope; never mark side-effect "
+                "capabilities as read-only or parallel-safe"
             ),
             "dataFlow": (
                 "a step's args may reference a prior step's structured output with "
@@ -843,6 +852,22 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
         }
         if depends_on:
             step_payload["dependsOn"] = depends_on
+        priority = str(raw.get("priority", raw.get("userPriority", "")) or "").strip().lower()
+        if priority in {"low", "normal", "high", "urgent"}:
+            step_payload["userPriority"] = priority
+        for field in ("deadlineAt", "queuedAt"):
+            value = str(raw.get(field, "") or "").strip()
+            if value:
+                step_payload[field] = value[:64]
+        resource_scope = raw.get("resourceScope")
+        if isinstance(resource_scope, list):
+            normalized_scope = [
+                " ".join(str(item or "").split())[:240]
+                for item in resource_scope[:12]
+                if str(item or "").strip()
+            ]
+            if normalized_scope:
+                step_payload["resourceScope"] = normalized_scope
         steps.append(step_payload)
 
     lint_errors = _lint_plan_steps(steps)
@@ -868,6 +893,8 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
         errors.append(error)
         blocking_errors.append(error)
     privacy = privacy or goal_privacy
+    for step in steps:
+        step.setdefault("userPriority", str(goal_contract.get("priority", "normal") or "normal"))
     prohibition_errors = _lint_prohibited_actions(goal_contract, steps)
     errors.extend(prohibition_errors)
     blocking_errors.extend(prohibition_errors)
