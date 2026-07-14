@@ -23,7 +23,6 @@
   "exclude": [
     "src/lib/crypto-seal.ts",
     "src/modules/ai/**/*",
-    "src/modules/integrations/**/*",
     "src/modules/mcp/**/*",
     "src/modules/security/**/*"
   ]

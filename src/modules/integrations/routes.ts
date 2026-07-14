@@ -14,6 +14,7 @@ import {
 import {
   disconnectIntegrationApp,
   disconnectIntegration,
+  getConnectionAccessTokenForProbe,
   handleOauthCallback,
   listIntegrationApps,
   listIntegrationProviders,
@@ -23,7 +24,37 @@ import {
   startOauthAppConnection,
   startOauthConnection,
 } from "./service.js";
+import { isRemoteMcpApp, probeConnectionMcpApps } from "./mcp-probe.js";
 import { getRuntimeConnectionByAuth } from "../runtime/service.js";
+import { notFound } from "../../lib/errors.js";
+
+/**
+ * Bağlantı sonrası MCP el sıkışma probu. Fire-and-forget: OAuth redirect'ini
+ * bekletmez; sonuç connection metadata'sına yazılır ve lease + apps listesinde
+ * görünür. userId her zaman OAuth state'in sahibidir — prob başka kullanıcının
+ * bağlantısına asla dokunamaz.
+ */
+function scheduleConnectionMcpProbe(
+  app: FastifyInstance,
+  input: { userId: string; connectionId: string; appId: string },
+) {
+  void probeConnectionMcpApps(app, {
+    userId: input.userId,
+    connectionId: input.connectionId,
+    appId: input.appId,
+    getAccessToken: (connectionId, provider, appId) =>
+      getConnectionAccessTokenForProbe(app, connectionId, provider, appId),
+  }).catch((error) => {
+    app.log.warn(
+      {
+        connectionId: input.connectionId,
+        appId: input.appId,
+        error: error instanceof Error ? error.message : "mcp_probe_failed",
+      },
+      "mcp handshake probe skipped",
+    );
+  });
+}
 
 function registerGmailSend(app: FastifyInstance) {
   app.post("/gmail/send", async (request, reply) => {
@@ -86,6 +117,31 @@ function registerCuratedAppRoutes(app: FastifyInstance) {
     });
   });
 
+  app.post("/apps/:appId/probe", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+    const params = integrationAppParamsSchema.parse(request.params);
+    const auth = getUserAuth(request);
+    if (!isRemoteMcpApp(params.appId)) {
+      throw notFound("App is not a remote MCP integration");
+    }
+    const connections = await listUserIntegrationConnections(app, auth.sub);
+    const connection = connections.find(
+      (item) => item.appId === params.appId && item.status === "connected",
+    );
+    if (!connection) {
+      throw notFound("Connected integration not found for this app");
+    }
+    const results = await probeConnectionMcpApps(app, {
+      userId: auth.sub,
+      connectionId: connection.id,
+      appId: params.appId,
+      getAccessToken: (connectionId, provider, appId) =>
+        getConnectionAccessTokenForProbe(app, connectionId, provider, appId),
+    });
+    return { appId: params.appId, results };
+  });
+
   app.get("/runtime/mcp", async (request, reply) => {
     await app.authenticateRuntime(request, reply);
     if (reply.sent) return;
@@ -108,6 +164,20 @@ function registerOauthCallback(app: FastifyInstance) {
       error: query.error,
       errorDescription: query.error_description,
     });
+
+    if (
+      result.status === "connected" &&
+      result.userId &&
+      result.connectionId &&
+      result.appId &&
+      isRemoteMcpApp(result.appId)
+    ) {
+      scheduleConnectionMcpProbe(app, {
+        userId: result.userId,
+        connectionId: result.connectionId,
+        appId: result.appId,
+      });
+    }
 
     if (result.redirectUri) {
       return reply.redirect(

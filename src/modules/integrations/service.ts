@@ -12,6 +12,7 @@ import { badRequest, notFound } from "../../lib/errors.js";
 import { createOpaqueCode } from "../../lib/auth-crypto.js";
 import { createPkcePair } from "../../lib/oauth-pkce.js";
 import { createAuditLog } from "../audit/service.js";
+import { readConnectionMcpProbe } from "./mcp-probe.js";
 import {
   getIntegrationMcpApp,
   getIntegrationProvider,
@@ -695,6 +696,12 @@ export async function listIntegrationApps(app: FastifyInstance, userId?: string)
     );
     const configured = isIntegrationMcpAppConfigured(app.config, entry);
     const connected = Boolean(connection && missingScopes.length === 0);
+    // Uzak MCP app'lerde bağlantı sonrası el sıkışma probu sonucu: mobil UI
+    // "bağlı ama sunucu cevap vermiyor" durumunu dürüstçe gösterebilsin.
+    const probe =
+      connected && entry.execution === "remote_mcp"
+        ? readConnectionMcpProbe(connection?.metadata, entry.id)
+        : null;
 
     return {
       id: entry.id,
@@ -715,6 +722,10 @@ export async function listIntegrationApps(app: FastifyInstance, userId?: string)
       connectionId: connected ? connection?.id ?? null : null,
       accountLabel: connected ? connection?.displayName ?? null : null,
       missingScopes,
+      probeStatus: probe?.status ?? (entry.execution === "remote_mcp" && connected ? "unknown" : null),
+      probedAt: probe?.probedAt ?? null,
+      probeErrorCode: probe?.errorCode ?? null,
+      probeToolCount: probe?.toolCount ?? null,
     };
   });
 }
@@ -1123,6 +1134,9 @@ export async function handleOauthCallback(
       provider: input.provider,
       appId: appId || undefined,
       connectionId: connection.id,
+      // Route katmanındaki bağlantı-sonrası MCP probu için; redirect
+      // query'sine ASLA yazılmaz.
+      userId: oauthState.userId,
     };
 }
 
@@ -1243,6 +1257,21 @@ export async function disconnectIntegrationApp(
     connected: false,
     remainingApps: [],
   };
+}
+
+/**
+ * MCP el sıkışma probu için token erişimi. Çağıran (mcp-probe) connection'ı
+ * userId ile doğrulamış olmalı — bu fonksiyon connection-scoped token'ı
+ * yeniler/döndürür, kullanıcı doğrulaması yapmaz.
+ */
+export async function getConnectionAccessTokenForProbe(
+  app: FastifyInstance,
+  connectionId: string,
+  provider: ConnectionProvider,
+  appId?: string,
+  refreshTimeoutMs = 8_000,
+) {
+  return getConnectionAccessToken(app, connectionId, provider, appId, refreshTimeoutMs);
 }
 
 async function getConnectionAccessToken(
@@ -1435,6 +1464,14 @@ export async function listRuntimeMcpConnections(app: FastifyInstance, userId: st
       authErrorCode = "MCP_AUTH_REQUIRED";
     }
 
+    // El sıkışma probu: "connected" yalnız OAuth başarısı; sunucunun gerçekten
+    // konuştuğunu son prob söyler. Prob başarısızsa lease'te disabled taşınır —
+    // desktop bağlanmayı denemez, mobil "yeniden bağlan" gösterebilir.
+    const probe = readConnectionMcpProbe(connection.metadata, entry.id);
+    if (!authErrorCode && probe?.status === "failed" && probe.errorCode === "MCP_AUTH_REQUIRED") {
+      authErrorCode = "MCP_AUTH_REQUIRED";
+    }
+
     return {
       id: `app_${entry.id}`,
       appId: entry.id,
@@ -1446,7 +1483,11 @@ export async function listRuntimeMcpConnections(app: FastifyInstance, userId: st
       authType: "bearer",
       accessToken,
       authErrorCode,
-      enabled: true,
+      enabled: !authErrorCode && probe?.status !== "failed",
+      probeStatus: probe?.status ?? "unknown",
+      probedAt: probe?.probedAt ?? null,
+      probeErrorCode: probe?.errorCode ?? null,
+      probeToolCount: probe?.toolCount ?? null,
       startupTimeoutSec: 15,
       callTimeoutSec: 45,
     };
