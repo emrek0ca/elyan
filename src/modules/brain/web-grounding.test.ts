@@ -212,6 +212,20 @@ test("classifyWebGroundingDecision separates no-web, optional and required cases
     "web_optional",
   );
   assert.equal(
+    classifyWebGroundingDecision({
+      prompt: "Oğuz, Kıpçak ve Karluk dillerini araştır",
+      workload: "mobile_chat_fast",
+    }).mode,
+    "web_optional",
+  );
+  assert.equal(
+    classifyWebGroundingDecision({
+      prompt: "Oğuz dillerini kaynaklı şekilde araştır",
+      workload: "mobile_chat_fast",
+    }).mode,
+    "web_required",
+  );
+  assert.equal(
     shouldUseWebGrounding({
       prompt: "Yapay zeka eğitim yaklaşımlarını karşılaştır",
       workload: "planning",

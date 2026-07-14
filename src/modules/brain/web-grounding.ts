@@ -2079,6 +2079,7 @@ export function classifyWebGroundingDecision(input: {
   }
   if (
     explicitWebIntent ||
+    responsePolicy.webRequired ||
     (researchIntent && strongFreshnessOrEvidence) ||
     factuality.triggered ||
     promptLooksLikeUrl(normalized)

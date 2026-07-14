@@ -1,4 +1,8 @@
-import type { SharedBrainWorkload } from "./workloads.js";
+import { classifyWebGroundingDecision } from "./web-grounding.js";
+import {
+  sharedBrainWorkloadValues,
+  type SharedBrainWorkload,
+} from "./workloads.js";
 import {
   classifyElyanTurnIntent,
   responsePolicyForPrompt,
@@ -67,6 +71,12 @@ function compact(value: string): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function responseContractWorkload(value: SharedBrainWorkload | string | null | undefined): SharedBrainWorkload {
+  return sharedBrainWorkloadValues.includes(value as SharedBrainWorkload)
+    ? (value as SharedBrainWorkload)
+    : "mobile_chat_fast";
+}
+
 function responseAction(prompt: string, intent: ElyanTurnIntent): ElyanResponseAction {
   if (intent === "web_research" || intent === "url_review") return "research";
   if (intent === "image_generation" || intent === "writing") return "execute";
@@ -81,13 +91,17 @@ export function buildElyanResponseContract(input: {
 }): ElyanResponseContract {
   const prompt = compact(input.prompt);
   const policy = responsePolicyForPrompt(prompt);
+  const webDecision = classifyWebGroundingDecision({
+    prompt,
+    workload: responseContractWorkload(input.workload),
+  });
   const action = responseAction(prompt, policy.intent);
   const length: ElyanResponseLength = policy.requestedLongForm
     ? "detailed"
     : policy.requestedShortForm || policy.simpleSelfContained
       ? "brief"
       : "balanced";
-  const toolPolicy: ElyanToolPolicy = policy.webRequired
+  const toolPolicy: ElyanToolPolicy = webDecision.mode === "web_required"
     ? "required"
     : policy.intent === "image_generation"
       ? "route_only"

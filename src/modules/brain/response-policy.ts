@@ -35,6 +35,8 @@ const TASK_EXECUTION_PATTERN =
   /(?<!\p{L})(yap|oluştur|olustur|hazırla|hazirla|çalıştır|calistir|araştır|arastir|incele|kontrol et|kaydet|export)(?!\p{L})/iu;
 const EXPLICIT_WEB_RESEARCH_PATTERN =
   /(?<!\p{L})(kaynaklı|kaynakli|kaynak göster|kaynak goster|source-backed|cite sources|webden|internetten|internette ara|web search|search the web|look up|browse|araştır|arastir)(?!\p{L})/iu;
+const EXPLICIT_WEB_REQUIRED_PATTERN =
+  /(?<!\p{L})(kaynak\p{L}*|resmi kaynak\p{L}*|source-backed|cite sources|with sources|official sources|online|webden|internetten|internette ara|web araştır|web arastir|internet araştır|internet arastir|web search|search the web|look up|browse)(?!\p{L})/iu;
 const LIVE_DATA_SUBJECT_PATTERN =
   /(?<!\p{L})(haber|news|fiyat|price|kur|dolar|usd|euro|eur|altın|altin|bitcoin|btc|ethereum|eth|kripto|borsa|hisse|hava durumu|weather|forecast|maç sonucu|mac sonucu|skor|puan durumu|fikstür|fikstur|cve|vulnerability|güvenlik açığı|guvenlik acigi|son sürüm|son surum|latest version|release notes?|changelog)(?!\p{L})/iu;
 const VERIFICATION_REQUIRED_SUBJECT_PATTERN =
@@ -115,7 +117,11 @@ export function responsePolicyForPrompt(prompt: string): {
     );
   return {
     intent,
-    webRequired: intent === "web_research" || intent === "url_review",
+    webRequired:
+      intent === "url_review" ||
+      EXPLICIT_WEB_REQUIRED_PATTERN.test(normalized) ||
+      LIVE_DATA_SUBJECT_PATTERN.test(normalized) ||
+      VERIFICATION_REQUIRED_SUBJECT_PATTERN.test(normalized),
     requestedLongForm,
     requestedShortForm,
     simpleSelfContained,
