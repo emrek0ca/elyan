@@ -1121,6 +1121,281 @@ test("generateSharedBrainReply feeds successful tool results into a bounded seco
   assert.equal(result.metadata.toolRefinementApplied, true);
 });
 
+test("generateSharedBrainReply enables TurnEnvelope for connector-only turns with advertised contracts", async () => {
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_CONNECTOR_TOOLS_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      assert.equal(url.endsWith("/chat/completions"), true);
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestedBodies.push(body);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  reply: { text: "Gelen kutuna bakıyorum.", lang: "tr", tone: "warm" },
+                  blocks: [],
+                  memory_ops: [],
+                  goal_ops: [],
+                  follow_ups: [],
+                  tool_requests: [],
+                  affect: { user_mood_guess: "focused", energy: "mid", register: "neutral" },
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Son maillerimde ne var?",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        connectorToolContracts: [
+          "gmail.search(query, maxResults<=10) -> {messages:[{id,from,subject,snippet,date}]}",
+        ],
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.text, "Gelen kutuna bakıyorum.");
+  assert.equal(result.metadata.turnEnvelopeMode, true);
+  assert.equal(result.metadata.turnEnvelopeParseOk, true);
+  assert.equal(
+    (requestedBodies[0].response_format as Record<string, unknown>).type,
+    "json_schema",
+  );
+  const allMessageContent = (requestedBodies[0].messages as Array<{ content?: string }>)
+    .map((message) => String(message.content ?? ""))
+    .join("\n");
+  assert.equal(allMessageContent.includes("Connected integration tools"), true);
+});
+
+test("generateSharedBrainReply keeps TurnEnvelope off when no connector contracts are advertised", async () => {
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_CONNECTOR_TOOLS_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      assert.equal(url.endsWith("/chat/completions"), true);
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requestedBodies.push(body);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "Merhaba, ben Elyan.",
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Selam",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        connectorToolContracts: [],
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.text, "Merhaba, ben Elyan.");
+  assert.equal(result.metadata.turnEnvelopeMode, false);
+  assert.equal(requestedBodies[0].response_format, undefined);
+});
+
+test("generateSharedBrainReply appends refined tool answer to a streaming turn", async () => {
+  let providerCallCount = 0;
+  const deltas: string[] = [];
+  let lastDeltaContent = "";
+  const app = {
+    db: createQuotaReadyDb([[], [], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+      ELYAN_AGENT_LOOP_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const firstEnvelope = JSON.stringify({
+    reply: { text: "Hafızaya bakıyorum.", lang: "tr", tone: "neutral" },
+    blocks: [],
+    memory_ops: [],
+    goal_ops: [],
+    follow_ups: [],
+    tool_requests: [
+      { tool: "memory.query", args: { query: "preferred_tone", limit: 3 } },
+    ],
+    affect: { user_mood_guess: "focused", energy: "mid", register: "technical" },
+  });
+  const refinedEnvelope = JSON.stringify({
+    reply: {
+      text: "Hafızada bu konuda kayıt bulamadım.",
+      lang: "tr",
+      tone: "neutral",
+    },
+    blocks: [],
+    memory_ops: [],
+    goal_ops: [],
+    follow_ups: [],
+    tool_requests: [],
+    affect: { user_mood_guess: "focused", energy: "mid", register: "technical" },
+  });
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (!url.endsWith("/chat/completions")) {
+        return new Response("", { status: 200 });
+      }
+      providerCallCount += 1;
+      if (providerCallCount === 1) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ choices: [{ delta: { content: firstEnvelope } }] })}\n\n`,
+              ),
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: refinedEnvelope } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Tercihimi hatırlıyor musun?",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        onDelta(delta) {
+          deltas.push(delta.delta);
+          lastDeltaContent = delta.content;
+        },
+        internalEvaluation: {
+          skipUsageValidation: true, skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: false,
+        },
+      }),
+  );
+
+  assert.equal(providerCallCount >= 2, true, JSON.stringify(result.metadata));
+  assert.equal(result.metadata.toolRefinementApplied, true);
+  assert.equal(result.metadata.toolRefinementMode, "streaming_append");
+  assert.equal(
+    result.text,
+    "Hafızaya bakıyorum.\n\nHafızada bu konuda kayıt bulamadım.",
+  );
+  assert.equal(lastDeltaContent, result.text);
+  assert.equal(deltas.join(""), result.text);
+  const blocks = result.metadata.blocks as Array<Record<string, unknown>>;
+  const textBlocks = blocks.filter((block) => block.type === "text");
+  const textMarkdown = textBlocks
+    .map((block) => String(block.markdown ?? ""))
+    .join("\n");
+  assert.equal(textMarkdown.includes("Hafızaya bakıyorum."), true);
+  assert.equal(textMarkdown.includes("Hafızada bu konuda kayıt bulamadım."), true);
+});
+
 test("generateSharedBrainReply falls back to legacy text when TurnEnvelope JSON is malformed", async () => {
   const requestedBodies: Array<Record<string, unknown>> = [];
   const app = {

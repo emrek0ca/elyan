@@ -4839,9 +4839,17 @@ export async function generateSharedBrainReply(
       }
       const usageAccess = usageBudget.access;
       const startedAt = Date.now();
+      // tool_requests yalnızca turn envelope üzerinden gelebilir: connector
+      // araçları bu turda duyurulduysa envelope, global flag kapalı olsa bile
+      // açılmak zorunda — yoksa model araç isteyemez ve connector-only mod
+      // hiç tetiklenmez.
+      const connectorToolsAdvertised =
+        app.config?.ELYAN_CONNECTOR_TOOLS_ENABLED === true &&
+        (input.connectorToolContracts?.length ?? 0) > 0;
       const turnEnvelopeEnabled =
         !input.responseSchemaOverride &&
         (app.config.ELYAN_TURN_ENVELOPE_ENABLED === true ||
+          connectorToolsAdvertised ||
           isAgentEngineV2Enabled(app, input.userId) ||
           isAgentEngineShadowEnabled(app));
 
@@ -6215,6 +6223,19 @@ export async function generateSharedBrainReply(
         });
         if (toolLoop) {
           agentToolResults = toolLoop.results;
+          // Prod'da loop'un gerçekten koştuğunun tek görünür kanıtı bu satır:
+          // hata yolları debug seviyesinde yutulduğu için info şart.
+          app.log.info(
+            {
+              connectorOnlyMode,
+              tools: toolLoop.results.map((toolResult) => toolResult.tool),
+              okCount: toolLoop.results.filter((toolResult) => toolResult.ok)
+                .length,
+              iterations: toolLoop.iterations,
+              durationMs: toolLoop.durationMs,
+            },
+            "agent tool loop executed",
+          );
           result.metadata.toolLoopIterations = toolLoop.iterations;
           result.metadata.toolMs = toolLoop.durationMs;
           result.metadata.toolLoopTimedOut = toolLoop.timedOut;
@@ -6229,9 +6250,7 @@ export async function generateSharedBrainReply(
           const hasUsableToolResult = toolLoop.results.some(
             (toolResult) => toolResult.ok,
           );
-          if (input.onDelta) {
-            result.metadata.toolRefinementSkippedReason = "streaming_monotonic";
-          } else if (hasUsableToolResult) {
+          if (hasUsableToolResult) {
             const refinementStartedAt = Date.now();
             const refined = await generateSharedBrainReply(app, {
               ...input,
@@ -6262,15 +6281,50 @@ export async function generateSharedBrainReply(
               return null;
             });
             if (refined) {
-              result.text = refined.text;
+              const refinedBlocks = Array.isArray(refined.metadata.blocks)
+                ? refined.metadata.blocks
+                : null;
+              if (input.onDelta) {
+                // Stream monotonik: yayınlanmış metin geri çekilemez, ama araç
+                // sonuçlarından gelen asıl cevap devam deltası olarak akıtılır.
+                // Öncesinde akan metin tipik olarak kısa bir "bakıyorum" onayı
+                // olduğu için append iki fazlı doğal bir yanıt gibi okunur.
+                const streamedText = result.text.trimEnd();
+                const combined = streamedText
+                  ? `${streamedText}\n\n${refined.text}`
+                  : refined.text;
+                await input.onDelta({
+                  delta: streamedText ? `\n\n${refined.text}` : refined.text,
+                  content: combined,
+                  provider: String(result.provider) as SharedBrainProvider,
+                  model: result.model,
+                  firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,
+                });
+                result.text = combined;
+                result.metadata.toolRefinementMode = "streaming_append";
+                const mergedBlocks = [
+                  ...assistantMetadataBlocks.filter(
+                    (block) => (block as { type?: string }).type !== "text",
+                  ),
+                  ...buildAssistantMessageBlocks(combined),
+                  ...(refinedBlocks ?? []).filter(
+                    (block) => (block as { type?: string }).type !== "text",
+                  ),
+                ] as typeof assistantMetadataBlocks;
+                result.metadata.blocks = mergedBlocks;
+                assistantMetadataBlocks = mergedBlocks;
+              } else {
+                result.text = refined.text;
+                result.metadata.toolRefinementMode = "replace";
+                if (refinedBlocks) {
+                  result.metadata.blocks = refinedBlocks;
+                  assistantMetadataBlocks = refinedBlocks;
+                }
+              }
               result.metadata.toolRefinementApplied = true;
               result.metadata.toolRefinementMs = Date.now() - refinementStartedAt;
               result.metadata.toolRefinementProvider = refined.provider;
               result.metadata.toolRefinementModel = refined.model;
-              if (Array.isArray(refined.metadata.blocks)) {
-                result.metadata.blocks = refined.metadata.blocks;
-                assistantMetadataBlocks = refined.metadata.blocks;
-              }
             } else {
               result.metadata.toolRefinementApplied = false;
               result.metadata.toolRefinementError = "refinement_failed";
