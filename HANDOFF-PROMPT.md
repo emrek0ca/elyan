@@ -101,13 +101,134 @@ handler/display kayıtlarını sök → 654+ test paritesini koru. DİKKAT:
   kullanır — build_handler'a custom hook gerekmedikçe en sona bırak.
 - Decl metinlerini AYNEN kopyala (planlayıcı davranışı değişmesin).
 
+## 🔌 CONNECTORS — "Gmail'i bağla" tek dokunuş OAuth (SONRAKİ BÜYÜK İŞ, DETAYLI PLAN)
+
+Hedef deneyim (ChatGPT/Claude connectors birebir): kullanıcı katalogdan
+**Gmail** kartına dokunur → Google'ın OAuth ekranı açılır → hesabına girer →
+bağlantı "Bağlı ✓" olur → Elyan görevlerinde Gmail araçları kullanılabilir.
+URL yapıştırmak YOK; katalog küratörlüdür.
+
+### Gerçekler (mimarî kararların dayanağı)
+- MCP Python SDK **1.28.1 kurulu ve yeterli**: `mcp.client.streamable_http.
+  streamablehttp_client` (uzak HTTP transport) + `mcp.client.auth.
+  OAuthClientProvider, TokenStorage` (OAuth 2.1: PKCE, RFC 9728 korumalı
+  kaynak metadata keşfi, RFC 7591 dinamik client kaydı) — bu oturumda import
+  doğrulandı.
+- İki tür servis var, İKİSİ AYRI KATMAN:
+  - **A) Gerçek remote MCP sunucusu olanlar** (Notion `https://mcp.notion.com/mcp`,
+    Linear `https://mcp.linear.app/sse`, Sentry, Asana, Atlassian...):
+    OAuth'u MCP spec'i üzerinden kendileri konuşur → SDK provider'ı yeter.
+  - **B) Resmî MCP'si OLMAYANLAR (Gmail/Google Takvim/Drive!)**: Google resmi
+    MCP sunucusu yayınlamıyor. ChatGPT/Claude bunlara KENDİ OAuth client'ları
+    + kendi gateway'leri ile bağlanır. Elyan da öyle yapmalı: backend
+    connector-gateway (aşağıda). Üçüncü parti hosted Gmail-MCP'leri (Composio
+    vb.) veriyi üçüncü partiden geçirir — ürün için ÖNERİLMEZ, plana alma.
+
+### Katman A — Remote MCP connectors (runtime, ~1 gün)
+1. `runtime/mcp_connectors.py` (YENİ): küratörlü katalog —
+   `{id, name, icon, serverUrl, transport: "http", auth: "oauth", category}`.
+   İlk liste: notion, linear, sentry, asana, atlassian, cloudflare, intercom,
+   plaid, paypal, square, zapier. (Her birinin güncel MCP URL'ini uygulama
+   sırasında sağlayıcı dokümanından doğrula; URL'ler değişebiliyor.)
+2. `runtime/mcp_runtime.py`:
+   - `normalize_server_config`: `transport: "http"` + `url` kabul et
+     (şu an stdio-only reddediyor).
+   - `_StateTokenStorage(server_id)` (TokenStorage impl): `get_tokens/
+     set_tokens/get_client_info/set_client_info` → state
+     `skills.mcpServers[i].auth = {tokens, clientInfo}` içinde saklar.
+     NOT: uzun vadede macOS Keychain'e taşınacak; ilk sürümde state kabul
+     (deviceSecret da orada), dosya izni 600 olduğundan emin ol.
+   - `_with_session`: transport http ise
+     `streamablehttp_client(url, auth=oauth_provider)`; stdio yolu aynen kalır.
+     Daemon (başsız) bağlamda redirect/callback handler'ları interaktif
+     OLAMAZ → token yoksa `SafeCapabilityError("MCP_AUTH_REQUIRED",
+     "elyan connect <id> ile yetkilendir")`. Refresh token varsa provider
+     sessizce yeniler (headless çalışır).
+3. OAuth akışı (interaktif, CLI/daemon-dışı süreç):
+   `run_connector_oauth(connector_id)` — 127.0.0.1'de geçici callback HTTP
+   sunucusu (rastgele port, tek istek), `OAuthClientMetadata(redirect_uris=
+   [o loopback URL], token_endpoint_auth_method="none", grant_types=
+   ["authorization_code","refresh_token"], response_types=["code"],
+   client_name="Elyan")`, `redirect_handler` = `webbrowser.open(auth_url)`,
+   `callback_handler` = sunucudan code/state bekle (timeout 180 sn).
+   Akış sonunda storage'a token düşer → sunucu configi `enabled: true` ile
+   `skills.mcpServers`'a eklenir → `elyan mcp tools` ile araçlar görünür.
+4. CLI: `elyan connect` (katalog listesi), `elyan connect notion` (akışı
+   başlat), `elyan connections` (durum: Bağlı/Bağlı değil + araç sayısı),
+   `elyan disconnect <id>` (token + sunucu kaydını sil).
+5. Testler: TokenStorage state roundtrip; http config normalize; MCP_AUTH_REQUIRED
+   headless hatası; katalog bütünlüğü (id benzersiz, url https). OAuth akışının
+   kendisi için sahte AS ile entegrasyon testi (aiohttp/http.server tabanlı
+   mini authorization server fixture) — SDK'nın test yardımcılarına bak.
+
+### Katman B — Google (Gmail/Calendar/Drive) connector-gateway (backend + runtime, ~2-3 gün)
+Google resmi MCP vermediği için OAuth client'ı ELYAN'a ait olmalı
+(ChatGPT/Claude modeli). Parçalar:
+1. **Google Cloud Console** (kullanıcı/işletme adımı — Emre yapacak):
+   proje aç, OAuth consent screen (external, publishing), client tipi
+   "Web application", redirect `https://api.elyan.dev/v1/connectors/google/callback`.
+   Scope'lar minimum: `gmail.readonly`, `gmail.send`, `calendar.events`,
+   `drive.readonly` (kademeli; ilk sürümde readonly+send yeter).
+   client_id/secret backend env'ine (AppEnv) girer.
+2. **Backend (`~/Desktop/elyan-backend`, yeni modül `src/modules/connectors/`)**:
+   - `GET /v1/connectors` — katalog + kullanıcının bağlantı durumları.
+   - `POST /v1/connectors/google/authorize` — state=JWT(userId, connectorId,
+     nonce) ile Google auth URL üret, döndür.
+   - `GET /v1/connectors/google/callback` — code'u token'a çevir, refresh
+     token'ı KULLANICI hesabına ŞİFRELİ sakla (mevcut secret şifreleme
+     altyapısı neyse onu kullan; yoksa libsodium sealed box + env master key),
+     başarı sayfası göster ("Elyan'a dönebilirsin").
+   - `POST /v1/connectors/google/token` — runtime/mobil için kısa ömürlü
+     access token servis et (refresh backend'de kalır; access token cihaza
+     iner, refresh token ASLA inmez).
+   - `DELETE /v1/connectors/google` — bağlantıyı kes + Google token revoke.
+   - Env fixture'larına yeni AppEnv alanlarını EKLEMEYİ UNUTMA (iyzico.test.ts
+     kırılır — bilinen tuzak).
+3. **Runtime**: `capability_spec.py`'a Google yetenekleri (Tek Spec ile —
+   tek blok/yetenek): `gmail.search`, `gmail.read`, `gmail.send`
+   (policy="confirm" + DISPATCH_AUTO_APPROVE_BLOCKLIST'e ekle),
+   `calendar.google.list`, `drive.search`... Adapter modülü
+   `actions/google_connector.py`: backend'den access token alır
+   (`backend_client`'a `connector_token("google")` metodu), Google REST
+   API'yi `requests` ile çağırır. Kanıt: sonuçlara `stateReadback` uyumlu
+   alanlar (ör. gmail.send → `messageId` → readback observed).
+4. **Mobil (chat-first!)**: ayrı ekran YOK — Ayarlar'daki "Bağlantılar"
+   bölümü VE composer + menüsünde "Uygulama bağla" girişi bir SHEET açar:
+   katalog kartları (ikon, ad, Bağla/Bağlı ✓/Kes). "Bağla" →
+   `authorize` endpoint'inden URL → `ASWebAuthenticationSession` (SFAuthenticationSession
+   değil) → callback backend'e döner → sheet durumu yeniler. Remote MCP
+   (Katman A) bağlantıları cihaz-yerel olduğundan mobilde "Masaüstünde
+   tamamla" düğmesi desktop'a bildirim/derin bağlantı yollar
+   (`elyan connect <id>` tetiklenir) — v1'de bu kabul edilebilir.
+5. **Planner/katalog**: bağlı connector araçları tool_catalog'a zaten düşer
+   (MCP yolundan veya spec'ten). `elyan.cowork.v1` bağlamındaki yetenek
+   adlarına gmail.* eklenince server_brain planlarında kullanılır.
+
+### Güvenlik kuralları (pazarlıksız)
+- Refresh token yalnız backend'de; cihaza kısa ömürlü access token iner.
+- `gmail.send`, `drive.write` gibi dışa dönük eylemler: policy="confirm"
+  + dispatch blocklist (telefondan açık onay).
+- MCP/connector araç sonuçları kanıt sözleşmesine bağlı kalır
+  (mcpToolExecuted / messageId readback).
+- Loopback callback yalnız 127.0.0.1'e bind edilir; state/nonce doğrulanır;
+  authorization code tek kullanımlık ve 3 dk timeout.
+- Scope'lar kademeli istenir (incremental auth); "hepsini iste" YASAK.
+
+### Uygulama sırası (önerilen)
+1. Katman A (runtime-only, backend'siz kazanım): http transport + TokenStorage
+   + `elyan connect notion` uçtan uca. → npm 1.7.0
+2. Katman B backend gateway + `gmail.readonly/send` + mobil Bağlantılar sheet'i.
+   → backend deploy + npm 1.8.0 + TestFlight
+3. Katalog genişletme + Keychain göçü + revoke/health (bağlantı koptu rozetı).
+
 ## ⚠️ Kalanlar / sıradaki işler (öncelik sırası)
 
 1. **npm publish 1.6.0** (sürüm bump'landı; tüm mimari turları içerir) — kod hazır, `npm pack` temiz (1.0 MB / 94 dosya).
    Kullanıcı kendisi yayınlamalı (2FA): `npm login` → `npm publish --otp=<kod>`
    → `npm install -g elyan@1.5.0 && elyan restart`. Kimlik bilgisi/OTP'yi
    Claude'a verme; kullanıcı terminalde kendi girer.
-2. **Uçtan uca canlı test**: telefondan (a) "YouTube aç", (b) "Chrome'dan kedi
+2. **Connectors planını uygula** (yukarıdaki 🔌 bölüm — Katman A'dan başla).
+3. **Uçtan uca canlı test**: telefondan (a) "YouTube aç", (b) "Chrome'dan kedi
    resmi aç", (c) serbest hedef: "tarayıcıdan YouTube kanalıma girip son 5
    videomun linkini topla" → browser_agent.run yolu. İlk çalıştırmada Elyan
    Chrome profili açılır; kullanıcı YouTube'a giriş yapmalı.
