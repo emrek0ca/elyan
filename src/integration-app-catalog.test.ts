@@ -184,6 +184,13 @@ test("OAuth completion redirects are limited to Elyan-owned destinations", () =>
   );
   assert.equal(
     normalizeOauthRedirectUri(
+      "elyan://connections?appId=gmail&flow=0123456789abcdef0123456789abcdef",
+      "https://api.elyan.dev",
+    ),
+    "elyan://connections?flow=0123456789abcdef0123456789abcdef",
+  );
+  assert.equal(
+    normalizeOauthRedirectUri(
       "https://api.elyan.dev/oauth/complete",
       "https://api.elyan.dev",
     ),
@@ -196,5 +203,13 @@ test("OAuth completion redirects are limited to Elyan-owned destinations", () =>
         "https://api.elyan.dev",
       ),
     /not allowed/i,
+  );
+  assert.throws(
+    () =>
+      normalizeOauthRedirectUri(
+        "elyan://connections?flow=guessable",
+        "https://api.elyan.dev",
+      ),
+    /correlation token/i,
   );
 });

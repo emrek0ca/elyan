@@ -162,9 +162,24 @@ export function normalizeOauthRedirectUri(
   if (
     target.protocol === "elyan:" &&
     ["connections", "oauth-complete"].includes(target.hostname) &&
-    (target.pathname === "" || target.pathname === "/")
+    (target.pathname === "" || target.pathname === "/") &&
+    !target.username &&
+    !target.password &&
+    !target.port &&
+    !target.hash
   ) {
-    return `${target.protocol}//${target.hostname}`;
+    const flowValues = target.searchParams.getAll("flow");
+    if (
+      flowValues.length > 1 ||
+      (flowValues[0] && !/^[a-f0-9]{32}$/i.test(flowValues[0]))
+    ) {
+      throw badRequest("OAuth redirect URI correlation token is invalid");
+    }
+    const safeTarget = new URL(`${target.protocol}//${target.hostname}`);
+    if (flowValues[0]) {
+      safeTarget.searchParams.set("flow", flowValues[0]);
+    }
+    return safeTarget.toString();
   }
 
   if (target.protocol === "https:" && target.origin === appBase.origin) {
