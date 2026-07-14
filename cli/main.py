@@ -361,6 +361,8 @@ def cmd_tasks(_args: argparse.Namespace) -> int:
     if not tasks:
         print("Görev yok. Mobilden bir görev gönderdiğinde burada görünür.")
         return 0
+    if bool(getattr(_args, "report", False)):
+        return _print_failure_report()
     print("Son görevler:")
     for task in tasks:
         title = str(task.get("title", "") or "Görev")[:60]
@@ -373,6 +375,40 @@ def cmd_tasks(_args: argparse.Namespace) -> int:
         error = str(task.get("error", "") or "")
         if error:
             print(f"                     ↳ {error[:100]}")
+    return 0
+
+
+def _print_failure_report() -> int:
+    """Öğrenme döngüsünün ilk halkası: son başarısız görevleri hata koduna
+    göre toplar — hangi görev tipi patlıyorsa oraya tool/skill/MCP yatırımı.
+    Tüm gelen kutusunu okur (recentTasks 10 ile sınırlı, rapor değil)."""
+    snapshot = state_store.snapshot()
+    inbox = snapshot.get("taskInbox", {}) if isinstance(snapshot.get("taskInbox"), dict) else {}
+    items = inbox.get("items", []) if isinstance(inbox.get("items"), list) else []
+    failures: dict[str, list[dict[str, Any]]] = {}
+    total = 0
+    for item in items:
+        if not isinstance(item, dict) or str(item.get("status", "")) != "failed":
+            continue
+        total += 1
+        code = str(item.get("error", "") or "").strip() or "(kodsuz)"
+        failures.setdefault(code, []).append(item)
+    if not failures:
+        print("Kayıtlı başarısız görev yok — zincir temiz görünüyor.")
+        return 0
+    print(f"Başarısız görev raporu ({total} görev, {len(failures)} hata sınıfı):\n")
+    for code, group in sorted(failures.items(), key=lambda kv: -len(kv[1])):
+        print(f"  {len(group):>3}×  {code}")
+        for sample in group[:2]:
+            title = str(sample.get("title", "") or "Görev")[:56]
+            summary_text = str(sample.get("summary", "") or "")[:80]
+            print(f"        · {title}" + (f" — {summary_text}" if summary_text else ""))
+    print(
+        "\nYatırım rehberi: aynı hata sınıfı tekrar ediyorsa eksik olan\n"
+        "  - yetenekse   → runtime/capability_spec.py'a spec ekle\n"
+        "  - tarif ise   → runtime/skill_catalog.py'a skill tarifi yaz\n"
+        "  - dış araçsa  → elyan mcp add ile sunucu tak"
+    )
     return 0
 
 
@@ -751,7 +787,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("restart", help="Daemon'u yeniden başlat").set_defaults(func=cmd_restart)
     sub.add_parser("run", help="Ön planda çalıştır (hata ayıklama)").set_defaults(func=cmd_run)
     sub.add_parser("status", help="Bağlantı ve görev durumu").set_defaults(func=cmd_status)
-    sub.add_parser("tasks", help="Son görevleri listele").set_defaults(func=cmd_tasks)
+    tasks_cmd = sub.add_parser("tasks", help="Son görevleri listele")
+    tasks_cmd.add_argument("--report", action="store_true", help="Başarısız görevleri hata sınıfına göre topla")
+    tasks_cmd.set_defaults(func=cmd_tasks)
     doctor = sub.add_parser("doctor", help="Kurulum sağlık kontrolü")
     doctor.add_argument("--fix", action="store_true", help="Bulunan sorunları otomatik onarmayı dene")
     doctor.set_defaults(func=cmd_doctor)
