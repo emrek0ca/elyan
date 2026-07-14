@@ -11,6 +11,7 @@ from typing import Any, Callable
 from runtime import state_store
 from runtime.agent_planning import build_agent_plan
 from runtime.capability_registry import capability_metadata, capability_metadata_summary, capability_readiness
+from runtime.capability_validation import attach_step_evidence, precondition_error, readback_evidence
 from runtime.execution_scheduler import (
     MAX_PARALLEL_READS,
     SchedulerPlanError,
@@ -1029,12 +1030,28 @@ class ExecutorCore:
                                 return False, message, events, error_code, structured_result, artifacts
                             if isinstance(grant, dict):
                                 args["_capabilityGrant"] = grant
-                        tool_result, step_events = execute_step(
-                            capability,
-                            args,
-                            state_factory(),
-                            source,
-                        )
+                        # P3: yürütme öncesi ön koşul kapısı — ihlal, araç hiç
+                        # çalıştırılmadan tool_failure yoluna (replan dahil) girer.
+                        pre_error = precondition_error(capability, args, state_factory())
+                        if pre_error is not None:
+                            tool_result, step_events = (
+                                {
+                                    "ok": False,
+                                    "tool": capability,
+                                    "output": pre_error["message"],
+                                    "result": {},
+                                    "artifacts": [],
+                                    "error": dict(pre_error),
+                                },
+                                [],
+                            )
+                        else:
+                            tool_result, step_events = execute_step(
+                                capability,
+                                args,
+                                state_factory(),
+                                source,
+                            )
                     events.extend(step_events)
                     if not tool_result.get("ok"):
                         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
@@ -1265,18 +1282,24 @@ class ExecutorCore:
                 return StepVerificationResult(True)
             return StepVerificationResult(False, "Operator durdurulamadı.")
         if mode == "artifact_exists":
-            explicit_output = str(args.get("outputPath", "") or args.get("output_path", "") or "").strip()
-            if explicit_output and Path(explicit_output).expanduser().exists():
+            # P3: varlık kontrolü yeterli değil — diskten bağımsız hash/boyut
+            # readback'i gerekir (boş dosya başarı sayılmaz).
+            evidence = readback_evidence(str(metadata.get("name", "") or ""), args, tool_result)
+            if evidence.get("verified"):
+                attach_step_evidence(tool_result, evidence)
                 return StepVerificationResult(True)
-            artifacts = tool_result.get("artifacts", [])
-            if isinstance(artifacts, list):
-                for artifact in artifacts:
-                    if not isinstance(artifact, dict):
-                        continue
-                    path = str(artifact.get("path", "") or "").strip()
-                    if path and Path(path).expanduser().exists():
-                        return StepVerificationResult(True)
-            return StepVerificationResult(False, "Çıktı dosyası doğrulanamadı.")
+            return StepVerificationResult(False, "Çıktı dosyası bağımsız doğrulamadan geçemedi (hash/boyut kanıtı yok).")
+        # P3: yan etkili adımlar boş olmayan çıktıyla değil, gerçek kanıtla
+        # (dosya hash'i, provider ID, gözlemlenen durum) doğrulanır.
+        if bool(metadata.get("sideEffect", False)):
+            evidence = readback_evidence(str(metadata.get("name", "") or ""), args, tool_result)
+            if evidence.get("verified"):
+                attach_step_evidence(tool_result, evidence)
+                return StepVerificationResult(True)
+            return StepVerificationResult(
+                False,
+                "Yan etkili adım için bağımsız kanıt bulunamadı (dosya hash'i, provider ID veya durum readback'i gerekli).",
+            )
         output = str(tool_result.get("output", "") or "").strip()
         artifacts = tool_result.get("artifacts", [])
         if output:
