@@ -52,7 +52,9 @@ from runtime.task_router import (
     route_text_to_tool,
 )
 from runtime import state_store
-from runtime.executor_core import ExecutorCore
+from runtime.execution_journal import ExecutionJournal
+from runtime.execution_journal import plan_hash as journal_plan_hash
+from runtime.executor_core import ExecutorCore, TemplateResolutionError, _resolve_templates
 from runtime.remote_task_runner import RemoteTaskRunner
 from runtime.desktop_work_order import canonical_capability, validate_payload
 from runtime.execution_trust import ExecutionLedger, TrustError
@@ -80,6 +82,10 @@ FULL_ACCESS_CRITICAL_ACTIONS = [
     "external_upload",
     "external_share",
 ]
+REMOTE_TASK_FENCE_LIMIT = 256
+REMOTE_TASK_CANCELLATION_TTL_SECONDS = 600.0
+REMOTE_TASK_TERMINAL_CLAIM_TTL_SECONDS = 60.0
+INTEGRATION_APP_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 GOOGLE_LIVE_MODEL_DEFAULT = "models/gemini-2.5-flash"
 LOCAL_MODELS_CAPABILITY_NAME = "local_models.api"
 RECOMMENDED_LOCAL_MODELS = [
@@ -264,6 +270,13 @@ def _canonical_capability_name(value: Any) -> str:
     if normalized.startswith("desktop_os."):
         return normalized
     return canonical_capability(normalized)
+
+
+def _normalized_integration_app_id(value: Any) -> str:
+    app_id = str(value or "").strip().lower()
+    if not app_id or len(app_id) > 80 or INTEGRATION_APP_ID_RE.fullmatch(app_id) is None:
+        return ""
+    return app_id
 
 
 def _extract_email_addresses_from_text(text: str) -> list[str]:
@@ -683,6 +696,9 @@ def _runtime_advertised_capabilities() -> list[str]:
             "backend.auth_oauth_login",
             "backend.auth_sync_session",
             "backend.device_deactivate",
+            "backend.integrations.apps",
+            "backend.integrations.oauth_start",
+            "backend.integrations.disconnect",
         }
     )
     # Routing policy checks high-level aliases; add them when underlying capabilities exist.
@@ -5291,6 +5307,9 @@ class RuntimeBridge:
         self._remote_progress_lock = threading.Lock()
         self._remote_progress_last_emit: dict[str, float] = {}
         self._remote_progress_last_signature: dict[str, str] = {}
+        self._remote_task_fence_lock = threading.RLock()
+        self._remote_task_cancellations: dict[str, tuple[str, float]] = {}
+        self._remote_task_terminal_claims: dict[str, float] = {}
         # Başsız daemon için de canlı ilerleme: emitter'ı burada bağla. IPC
         # main() bunu stdout+backend bileşiğiyle değiştirir (yerel Swift sohbeti
         # için). Her iki modda mobil görevler backend'e canlı adım akıtır.
@@ -5298,6 +5317,68 @@ class RuntimeBridge:
         self._start_runtime_register_retry_if_needed()
         self._start_pairing_claim_poll_if_needed()
         native_file_indexer.handle_state_change()
+        # Publish the provider only after every lock/worker field it may use is
+        # initialized. Another bridge/thread can refresh MCP immediately.
+        mcp_runtime.set_remote_server_provider(self._remote_mcp_servers)
+
+    def _remote_mcp_servers(self) -> dict[str, Any]:
+        """Fetch ephemeral remote MCP leases without persisting bearer tokens."""
+        runtime_state = STATE.snapshot().get("runtime", {})
+        runtime_state = runtime_state if isinstance(runtime_state, dict) else {}
+        stale_runtime_token = str(runtime_state.get("runtimeToken", "") or "").strip()
+        result = self.backend.runtime_mcp_connections()
+        if not result.ok and result.status_code in {401, 403}:
+            registration = self._recover_runtime_mcp_registration(stale_runtime_token)
+            recovered_runtime = STATE.snapshot().get("runtime", {})
+            recovered_runtime = recovered_runtime if isinstance(recovered_runtime, dict) else {}
+            recovered_token = str(recovered_runtime.get("runtimeToken", "") or "").strip()
+            if bool(registration.get("ok", False)) and recovered_token:
+                # Exactly one retry. A second auth failure is surfaced to the
+                # operator and never spins registration/network loops.
+                result = self.backend.runtime_mcp_connections()
+        if not result.ok or not isinstance(result.data, dict):
+            auth_required = result.status_code in {401, 403}
+            return {
+                "servers": [],
+                "errorCode": (
+                    "MCP_CONTROL_PLANE_AUTH_REQUIRED"
+                    if auth_required
+                    else "MCP_CONTROL_PLANE_UNAVAILABLE"
+                ),
+                "errorMessage": (
+                    "Masaüstü oturumunu yeniden bağla."
+                    if auth_required
+                    else "Bağlı uygulamalar şu anda yenilenemiyor."
+                ),
+                "revision": "",
+            }
+        servers = result.data.get("servers", [])
+        if not isinstance(servers, list):
+            return {
+                "servers": [],
+                "errorCode": "MCP_CONTROL_PLANE_UNAVAILABLE",
+                "errorMessage": "Bağlı uygulama yanıtı geçerli değil.",
+                "revision": "",
+            }
+        return {
+            "servers": [dict(item) for item in servers if isinstance(item, dict)],
+            "errorCode": "",
+            "errorMessage": "",
+            "revision": str(result.data.get("revision", "") or "").strip(),
+        }
+
+    def _recover_runtime_mcp_registration(self, stale_runtime_token: str) -> dict[str, Any]:
+        with self._runtime_registration_lock:
+            runtime_state = STATE.snapshot().get("runtime", {})
+            runtime_state = runtime_state if isinstance(runtime_state, dict) else {}
+            current_runtime_token = str(runtime_state.get("runtimeToken", "") or "").strip()
+            stale = str(stale_runtime_token or "").strip()
+            if current_runtime_token and (not stale or current_runtime_token != stale):
+                return {"ok": True, "reused": True}
+            # Force registration even if an old WebSocket object is still
+            # marked connected; ensure_runtime_registered would otherwise
+            # reuse that stale transport after BackendClient clears the token.
+            return self._register_runtime_locked({})
 
     def _runtime_diag(self, event: str, **details: Any) -> None:
         payload = " ".join(
@@ -5773,7 +5854,15 @@ class RuntimeBridge:
                         return
                     if not self._runtime_register_retry_should_continue(target, generation=generation):
                         return
-                result = self.ensure_runtime_registered()
+                with self._runtime_registration_lock:
+                    # An explicit registration may have completed after the
+                    # retry loop's outer eligibility check but before this
+                    # worker acquired the single-flight lock. Re-check while
+                    # holding the lock so a stale decision cannot overwrite a
+                    # freshly registered runtime with claimed_registering.
+                    if not self._runtime_register_retry_should_continue(target, generation=generation):
+                        return
+                    result = self._ensure_runtime_registered_locked()
                 if result.get("ok"):
                     return
                 register = result.get("register")
@@ -6199,6 +6288,13 @@ class RuntimeBridge:
 
     def _sync_task_inbox_status(self, task_id: str, payload: dict[str, Any]) -> None:
         existing = STATE.get_task_inbox_item(task_id) or {"id": task_id}
+        existing_status = str(existing.get("status", "") or "").strip().lower()
+        incoming_status = str(payload.get("status", "") or "").strip().lower()
+        if (
+            existing_status in {"completed", "failed", "canceled", "cancelled"}
+            and incoming_status in {"queued", "planning", "running", "waiting_approval"}
+        ):
+            return
         artifacts = payload.get("artifacts", [])
         artifact_count = existing.get("artifactCount", 0)
         if isinstance(artifacts, list):
@@ -6575,6 +6671,21 @@ class RuntimeBridge:
         dispatched_via_websocket: bool,
         separate_artifacts: bool = False,
     ) -> dict[str, Any]:
+        # Linearization fence shared with task.cancel: cancellation-first
+        # suppresses every artifact/status write; terminal-first makes a later
+        # cancel a no-op instead of allowing contradictory terminal states.
+        if not self._claim_remote_task_terminal(task_id):
+            return {
+                "taskId": task_id,
+                "ok": False,
+                "status": "canceled",
+                "report": None,
+                "artifactReport": None,
+                "error": {
+                    "code": "TASK_CANCELLED",
+                    "message": "Görev iptal edildi.",
+                },
+            }
         status_payload, artifacts, chat_ok = self._runtime_task_terminal_payload(local_result)
         artifact_report = None
         if artifacts:
@@ -7190,25 +7301,44 @@ class RuntimeBridge:
             backoff_seconds = 1.0
 
     def _refresh_runtime_registration_for_reconnect(self) -> bool:
-        payload = self._runtime_register_payload()
-        if payload is None:
-            return False
-        register = self.backend.register_runtime(payload)
-        if not register.ok:
+        observed_runtime = STATE.snapshot().get("runtime", {})
+        observed_runtime = observed_runtime if isinstance(observed_runtime, dict) else {}
+        observed_token = str(observed_runtime.get("runtimeToken", "") or "").strip()
+
+        with self._runtime_registration_lock:
+            current_runtime = STATE.snapshot().get("runtime", {})
+            current_runtime = current_runtime if isinstance(current_runtime, dict) else {}
+            device_id = str(current_runtime.get("deviceId", "") or "").strip()
+            device_secret = str(current_runtime.get("deviceSecret", "") or "").strip()
+            current_token = str(current_runtime.get("runtimeToken", "") or "").strip()
+            if self._runtime_ws_stop.is_set() or not device_id or not device_secret:
+                return False
+            if current_token and (
+                current_token != observed_token
+                or self._runtime_ws_connected
+                or bool(current_runtime.get("ready", False))
+            ):
+                return True
+
+            payload = self._runtime_register_payload()
+            if payload is None:
+                return False
+            register = self.backend.register_runtime(payload)
+            if not register.ok:
+                self._runtime_diag(
+                    "runtime_register_failed",
+                    status=register.status_code,
+                    request_id=register.x_request_id or register.request_id,
+                )
+                return False
+            self._apply_runtime_registration_result(register)
+            self._mark_runtime_connecting(register.x_request_id or register.request_id)
+            self._prime_runtime_task_delivery()
             self._runtime_diag(
-                "runtime_register_failed",
-                status=register.status_code,
+                "runtime_register_ok",
                 request_id=register.x_request_id or register.request_id,
             )
-            return False
-        self._apply_runtime_registration_result(register)
-        self._mark_runtime_connecting(register.x_request_id or register.request_id)
-        self._prime_runtime_task_delivery()
-        self._runtime_diag(
-            "runtime_register_ok",
-            request_id=register.x_request_id or register.request_id,
-        )
-        return True
+            return True
 
     def _handle_runtime_ws_message(self, raw_message: Any) -> None:
         try:
@@ -10197,6 +10327,48 @@ class RuntimeBridge:
             "conversations": _conversation_entries(),
         }
 
+    def backend_integration_apps(self) -> dict[str, Any]:
+        result = self.backend.integration_apps()
+        self._log_backend_result("integration_apps", result)
+        return {"ok": result.ok, "result": result.to_dict()}
+
+    def backend_integration_oauth_start(self, payload: dict[str, Any]) -> dict[str, Any]:
+        app_id = _normalized_integration_app_id(payload.get("appId") or payload.get("app_id"))
+        if not app_id:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "INTEGRATION_APP_INVALID",
+                    "message": "Uygulama kimliği geçerli değil.",
+                },
+            }
+        result = self.backend.start_integration_app_oauth(app_id)
+        self._log_backend_result("integration_oauth_start", result)
+        return {"ok": result.ok, "result": result.to_dict()}
+
+    def backend_integration_disconnect(self, payload: dict[str, Any]) -> dict[str, Any]:
+        app_id = _normalized_integration_app_id(payload.get("appId") or payload.get("app_id"))
+        if not app_id:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "INTEGRATION_APP_INVALID",
+                    "message": "Uygulama kimliği geçerli değil.",
+                },
+            }
+        decision = evaluate_tool("backend.integrations.disconnect", payload, self._state_with_access())
+        if not decision.allowed:
+            return {
+                "ok": False,
+                "error": {
+                    "code": decision.code or "PERMISSION_REQUIRED",
+                    "message": decision.message or "Uygulama bağlantısını kaldırmak için açık onay gerekiyor.",
+                },
+            }
+        result = self.backend.disconnect_integration_app(app_id)
+        self._log_backend_result("integration_disconnect", result)
+        return {"ok": result.ok, "result": result.to_dict()}
+
     def backend_tasks_list(self, payload: dict[str, Any]) -> dict[str, Any]:
         limit = int(payload.get("limit", 20) or 20)
         target_device_id = str(
@@ -10643,6 +10815,10 @@ class RuntimeBridge:
         return {"ok": result.ok, "result": result.to_dict(), "registration": registration}
 
     def register_runtime(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._runtime_registration_lock:
+            return self._register_runtime_locked(payload)
+
+    def _register_runtime_locked(self, payload: dict[str, Any]) -> dict[str, Any]:
         identity_error = self._runtime_register_identity_error()
         if identity_error is not None:
             if identity_error.get("code") == "RUNTIME_REGISTER_INVALID_IDENTITY":
@@ -10809,19 +10985,122 @@ class RuntimeBridge:
 
     def _begin_active_remote_task(self, task_id: str, task_run_id: str):
         """Yürütme süresince aktif mobil görevi bağlama koy — canlı ilerleme
-        emitter'ı bununla doğru göreve yönlenir. contextvars.Token döndürür."""
-        return self._active_remote_task_context.set((str(task_id or ""), str(task_run_id or "")))
+        emitter'ı bununla doğru göreve yönlenir. MCP görev scope'u aynı
+        context ile worker thread'e taşınır ve dışarıdan iptal edilebilir."""
+        progress_token = self._active_remote_task_context.set(
+            (str(task_id or ""), str(task_run_id or ""))
+        )
+        try:
+            mcp_token = mcp_runtime.begin_task_scope(task_id)
+        except BaseException:
+            self._active_remote_task_context.reset(progress_token)
+            raise
+        cancellation_reason = self._active_remote_task_cancellation_reason(task_id)
+        if cancellation_reason:
+            mcp_runtime.cancel_task(task_id, reason=cancellation_reason)
+        return progress_token, mcp_token
 
     def _end_active_remote_task(self, token, task_id: str = "") -> None:
+        progress_token = token
+        mcp_token = None
+        if isinstance(token, tuple) and len(token) == 2:
+            progress_token, mcp_token = token
         try:
-            self._active_remote_task_context.reset(token)
-        except (ValueError, LookupError):
-            pass
+            mcp_runtime.end_task_scope(mcp_token)
+        finally:
+            try:
+                self._active_remote_task_context.reset(progress_token)
+            except (ValueError, LookupError):
+                pass
         normalized = str(task_id or "").strip()
         if normalized:
             with self._remote_progress_lock:
                 self._remote_progress_last_emit.pop(normalized, None)
                 self._remote_progress_last_signature.pop(normalized, None)
+
+    def _prune_remote_task_fences_locked(self) -> None:
+        now = time.monotonic()
+        cancellation_cutoff = now - REMOTE_TASK_CANCELLATION_TTL_SECONDS
+        terminal_cutoff = now - REMOTE_TASK_TERMINAL_CLAIM_TTL_SECONDS
+        self._remote_task_cancellations = {
+            task_id: item
+            for task_id, item in self._remote_task_cancellations.items()
+            if item[1] >= cancellation_cutoff
+        }
+        self._remote_task_terminal_claims = {
+            task_id: timestamp
+            for task_id, timestamp in self._remote_task_terminal_claims.items()
+            if timestamp >= terminal_cutoff
+        }
+        if len(self._remote_task_cancellations) > REMOTE_TASK_FENCE_LIMIT:
+            self._remote_task_cancellations = dict(
+                sorted(
+                    self._remote_task_cancellations.items(),
+                    key=lambda item: item[1][1],
+                    reverse=True,
+                )[:REMOTE_TASK_FENCE_LIMIT]
+            )
+        if len(self._remote_task_terminal_claims) > REMOTE_TASK_FENCE_LIMIT:
+            self._remote_task_terminal_claims = dict(
+                sorted(
+                    self._remote_task_terminal_claims.items(),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )[:REMOTE_TASK_FENCE_LIMIT]
+            )
+
+    def _remember_remote_task_cancellation(self, task_id: str, reason: str) -> bool:
+        normalized = str(task_id or "").strip()[:160]
+        if not normalized:
+            return False
+        normalized_reason = str(reason or "task_cancelled").strip() or "task_cancelled"
+        with self._remote_task_fence_lock:
+            self._prune_remote_task_fences_locked()
+            if normalized in self._remote_task_terminal_claims:
+                return False
+            self._remote_task_cancellations[normalized] = (
+                normalized_reason,
+                time.monotonic(),
+            )
+            self._prune_remote_task_fences_locked()
+            return True
+
+    def _claim_remote_task_terminal(self, task_id: str) -> bool:
+        normalized = str(task_id or "").strip()[:160]
+        if not normalized:
+            return False
+        with self._remote_task_fence_lock:
+            self._prune_remote_task_fences_locked()
+            if normalized in self._remote_task_cancellations:
+                return False
+            self._remote_task_terminal_claims[normalized] = time.monotonic()
+            self._prune_remote_task_fences_locked()
+            return True
+
+    def _cancel_active_remote_task(self, task_id: str, *, reason: str = "task_cancelled") -> int:
+        """Remember cancellation and interrupt any task-scoped MCP calls.
+
+        -1 means a terminal report already won the shared linearization fence.
+        """
+        if not self._remember_remote_task_cancellation(task_id, reason):
+            return -1
+        try:
+            return mcp_runtime.cancel_task(task_id, reason=reason)
+        except Exception:
+            return 0
+
+    def _active_remote_task_cancellation_reason(self, task_id: str) -> str:
+        normalized = str(task_id or "").strip()[:160]
+        if normalized:
+            with self._remote_task_fence_lock:
+                self._prune_remote_task_fences_locked()
+                remembered = self._remote_task_cancellations.get(normalized)
+                if remembered is not None:
+                    return remembered[0]
+        try:
+            return mcp_runtime.task_cancellation_reason(task_id)
+        except Exception:
+            return ""
 
     def _emit_remote_task_progress(self, conversation_id: str, block: dict[str, Any]) -> None:
         """Executor adım geçişini aktif mobil göreve canlı 'running' güncellemesi
@@ -10907,6 +11186,17 @@ class RuntimeBridge:
 
     def _report_runtime_task_status(self, task_id: str, payload: dict[str, Any]) -> BackendResult | None:
         terminal_status = str(payload.get("status", "") or "").strip().lower()
+        if (
+            terminal_status != "canceled"
+            and self._active_remote_task_cancellation_reason(task_id) == "task_cancelled"
+        ):
+            return BackendResult(
+                ok=False,
+                request_id=_request_id(),
+                status_code=409,
+                data={"error": {"code": "TASK_CANCELLED", "message": "Görev iptal edildi."}},
+                error="TASK_CANCELLED",
+            )
         if self._send_runtime_socket_message({"type": "task.update", "taskId": task_id, "body": payload}):
             self._sync_task_inbox_status(task_id, payload)
             if terminal_status in {"completed", "failed", "canceled"}:
@@ -10922,6 +11212,14 @@ class RuntimeBridge:
         return result
 
     def _report_runtime_task_artifacts(self, task_id: str, artifacts: list[dict[str, Any]]) -> BackendResult | None:
+        if self._active_remote_task_cancellation_reason(task_id) == "task_cancelled":
+            return BackendResult(
+                ok=False,
+                request_id=_request_id(),
+                status_code=409,
+                data={"error": {"code": "TASK_CANCELLED", "message": "Görev iptal edildi."}},
+                error="TASK_CANCELLED",
+            )
         public_artifacts = [self._public_runtime_artifact(item) for item in artifacts if isinstance(item, dict)]
         if not public_artifacts:
             return None
@@ -11008,6 +11306,16 @@ class RuntimeBridge:
             )
 
     def _cancel_remote_pending_task(self, task_id: str) -> None:
+        if self._is_recent_terminal_assigned_task(task_id):
+            return
+        # Mark the task scope before touching local plan state. Any MCP call
+        # running in the copied worker context is interrupted on its own loop.
+        cancellation_result = self._cancel_active_remote_task(
+            task_id,
+            reason="task_cancelled",
+        )
+        if cancellation_result < 0:
+            return
         try:
             run_capability(
                 "desktop_operator.cancel",
@@ -11037,6 +11345,7 @@ class RuntimeBridge:
             },
             last_synced_at=_utc_now_iso(),
         )
+        self._remember_terminal_assigned_task(task_id)
 
     def _resume_remote_task_after_approval(self, task_id: str, approved: bool, answer: str = "") -> dict[str, Any]:
         gate = self._begin_assigned_task_execution(task_id)
@@ -11207,12 +11516,32 @@ class RuntimeBridge:
             route_decision=route_decision,
         )
         description = str(raw_step.get("description", "") or raw_step.get("summary", "") or capability).strip()
-        return {
+        normalized_step: dict[str, Any] = {
             "id": str(raw_step.get("id", "") or f"remote_step_{index}"),
             "capability": capability,
             "args": args,
             "description": self._truncate_text(description, 220),
         }
+        depends_on = raw_step.get("dependsOn")
+        if isinstance(depends_on, list):
+            normalized_step["dependsOn"] = [
+                str(item or "").strip() for item in depends_on if str(item or "").strip()
+            ]
+        priority = str(raw_step.get("userPriority", raw_step.get("priority", "")) or "").strip().lower()
+        if priority in {"low", "normal", "high", "urgent"}:
+            normalized_step["userPriority"] = priority
+        for field in ("deadlineAt", "queuedAt"):
+            value = str(raw_step.get(field, "") or "").strip()
+            if value:
+                normalized_step[field] = value[:64]
+        resource_scope = raw_step.get("resourceScope")
+        if isinstance(resource_scope, list):
+            normalized_step["resourceScope"] = [
+                self._truncate_text(item, 240)
+                for item in resource_scope[:12]
+                if str(item or "").strip()
+            ]
+        return normalized_step
 
     @staticmethod
     def _explicit_steps_are_generic_operator_fallback(
@@ -11959,11 +12288,46 @@ class RuntimeBridge:
             send_step: dict[str, Any] | None = None
             if any(_canonical_capability_name(step.get("capability")) == "email_send" for step in approval_steps):
                 send_step = self._email_send_step_from_draft(steps, structured_result)
+            # Onaya ayrılan adımların ön-onay aşamasında karşılanmış bağımlılıkları
+            # düşürülür; {{steps...}} şablonları journal'daki (şifreli) ön-onay
+            # çıktılarıyla çözülür. Aksi halde onay-sonrası koşuda scheduler
+            # missing_dependency / TEMPLATE_UNRESOLVED ile fail-closed olur.
+            satisfied_step_ids = {
+                str(step.get("id", "") or "").strip()
+                for step in pre_approval_steps
+                if isinstance(step, dict) and str(step.get("id", "") or "").strip()
+            }
+            satisfied_outputs: dict[str, Any] = {}
+            if pre_approval_steps and task_id:
+                try:
+                    satisfied_outputs = ExecutionJournal().step_outputs_for(
+                        task_id, journal_plan_hash(pre_approval_steps)
+                    )
+                except Exception:
+                    satisfied_outputs = {}
             for approval_step in approval_steps:
                 if _canonical_capability_name(approval_step.get("capability")) == "email_send" and send_step is not None:
                     pending_steps.append(send_step)
                     continue
-                pending_steps.append(dict(approval_step))
+                normalized_step = dict(approval_step)
+                remaining_depends = [
+                    dependency
+                    for dependency in (normalized_step.get("dependsOn") or [])
+                    if str(dependency or "").strip() and str(dependency).strip() not in satisfied_step_ids
+                ]
+                if remaining_depends:
+                    normalized_step["dependsOn"] = remaining_depends
+                else:
+                    normalized_step.pop("dependsOn", None)
+                if satisfied_outputs:
+                    try:
+                        normalized_step["args"] = _resolve_templates(
+                            dict(normalized_step.get("args", {}) or {}),
+                            {"steps": satisfied_outputs},
+                        )
+                    except TemplateResolutionError:
+                        pass  # çözülemeyen şablon orijinal haliyle kalır; executor fail-closed yakalar
+                pending_steps.append(normalized_step)
             if send_step is not None:
                 send_args = dict(send_step.get("args", {}) or {})
                 approval_structured = {
@@ -12460,6 +12824,12 @@ class RuntimeBridge:
                 result = self.backend_device_deactivate(device_id)
             elif capability == "backend.mobile_bootstrap":
                 result = self.backend_mobile_bootstrap()
+            elif capability == "backend.integrations.apps":
+                result = self.backend_integration_apps()
+            elif capability == "backend.integrations.oauth_start":
+                result = self.backend_integration_oauth_start(payload)
+            elif capability == "backend.integrations.disconnect":
+                result = self.backend_integration_disconnect(payload)
             elif capability == "backend.truth_refresh":
                 result = self.backend_truth_refresh()
             elif capability == "backend.brain_profile":

@@ -507,7 +507,9 @@ class RemoteTaskRunner:
                         dispatched_via_websocket,
                         work_order=work_order,
                     )
-                auto_result = self._auto_approve_dispatched_plan(task_id, task_run_id, local_result)
+                auto_result = self._auto_approve_dispatched_plan(
+                    task_id, task_run_id, local_result, work_order=work_order
+                )
                 if auto_result is None:
                     return self._pause_for_approval(
                         task_id,
@@ -546,7 +548,11 @@ class RemoteTaskRunner:
                 local_result,
                 dispatched_via_websocket=dispatched_via_websocket,
             )
-            self._mark_link_terminal(task_id, result.get("status", "completed"))
+            self._mark_link_terminal(
+                task_id,
+                result.get("status", "completed"),
+                work_order=work_order if isinstance(work_order, dict) else None,
+            )
             return result
         finally:
             self.host._end_trusted_work_order(locals().get("trust_token"))
@@ -780,8 +786,10 @@ class RemoteTaskRunner:
                 dispatched_via_websocket=False,
                 separate_artifacts=True,
             )
-            state_store.remove_remote_task_link(task_id)
+            # Önce terminal işaretle (ledger durumu + P5 öğrenme link'teki iş
+            # emrini okur), sonra link'i kaldır.
             self._mark_link_terminal(task_id, result.get("status", "completed"))
+            state_store.remove_remote_task_link(task_id)
             return result
         except TrustError as exc:
             return self._fail_safe(
@@ -1136,6 +1144,8 @@ class RemoteTaskRunner:
         task_id: str,
         task_run_id: str,
         local_result: dict[str, Any],
+        *,
+        work_order: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Dispatch onayı kapsamındaki planı hemen yürüt; olmazsa None (onaya düş)."""
         pending_plan_id = str(local_result.get("pendingPlanId", "") or "").strip()
@@ -1149,10 +1159,17 @@ class RemoteTaskRunner:
             "running",
             "Mobil dispatch onayı planı kapsıyor — adımlar otomatik yürütülüyor.",
         )
-        approved = self.host._run_with_approved_task_access(
-            task_id,
-            lambda: self.host.confirm_conversation_plan(conversation_id, pending_plan_id, True),
-        )
+        # Dispatch, kullanıcının bu göreve açık iradesidir; blocklist adımları
+        # buraya hiç düşmez (_plan_touches_blocklist onaya yönlendirir). P0
+        # güven kapısı bu yüzden bu koşuyu "approval" yetkisiyle görür.
+        approval_token = self.host._begin_trusted_work_order(work_order, "approval")
+        try:
+            approved = self.host._run_with_approved_task_access(
+                task_id,
+                lambda: self.host.confirm_conversation_plan(conversation_id, pending_plan_id, True),
+            )
+        finally:
+            self.host._end_trusted_work_order(approval_token)
         if not isinstance(approved, dict):
             return None
         return approved
@@ -1516,9 +1533,17 @@ class RemoteTaskRunner:
             item["title"] = _safe_text(title, 200)
         state_store.upsert_task_inbox_item(item, last_synced_at=_utc_now_iso())
 
-    def _mark_link_terminal(self, task_id: str, status: str, *, error_code: str = "") -> None:
+    def _mark_link_terminal(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        error_code: str = "",
+        work_order: dict[str, Any] | None = None,
+    ) -> None:
         link = state_store.get_remote_task_link(task_id)
-        work_order = link.get("desktopWorkOrder") if isinstance(link, dict) else None
+        if work_order is None:
+            work_order = link.get("desktopWorkOrder") if isinstance(link, dict) else None
         if isinstance(work_order, dict) and str(work_order.get("schema", "") or "").endswith(".v2"):
             try:
                 ExecutionLedger().set_delivery_status(

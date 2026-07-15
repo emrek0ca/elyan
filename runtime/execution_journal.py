@@ -256,6 +256,46 @@ class ExecutionJournal:
                 continue
         return {"executionId": execution_id, "completedStepIds": completed, "stepOutputs": outputs}
 
+    def step_outputs_for(self, task_id: str, plan_signature: str) -> dict[str, dict[str, Any]]:
+        """Aynı görev+plan imzasının SON koşusundaki adım çıktıları (şifresi çözülmüş).
+
+        resume_state'ten farkı: koşu tamamlanmış olsa da okur — onay için
+        bölünen planlarda ön-onay çıktılarının onay adımına taşınmasını sağlar.
+        """
+        task_id = str(task_id or "").strip()
+        if not task_id or not plan_signature:
+            return {}
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT execution_id FROM executions
+                WHERE task_id = ? AND plan_hash = ?
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (task_id, plan_signature),
+            ).fetchone()
+            if row is None:
+                return {}
+            steps = connection.execute(
+                "SELECT step_id, output_cipher FROM journal_steps WHERE execution_id = ? AND status = 'completed'",
+                (str(row["execution_id"]),),
+            ).fetchall()
+        outputs: dict[str, dict[str, Any]] = {}
+        fernet = _fernet()
+        if fernet is None:
+            return {}
+        for step in steps:
+            cipher = step["output_cipher"]
+            if not cipher:
+                continue
+            try:
+                payload = json.loads(fernet.decrypt(bytes(cipher)).decode("utf-8"))
+                if isinstance(payload, dict):
+                    outputs[str(step["step_id"])] = payload
+            except (InvalidToken, ValueError, TypeError):
+                continue
+        return outputs
+
     # ------------------------------------------------------------------ compensation
 
     def compensate_failed_execution(self, execution_id: str) -> list[dict[str, Any]]:
