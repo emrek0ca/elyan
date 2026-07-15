@@ -23,8 +23,10 @@ import socket
 import subprocess
 import sys
 import time
+import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -34,6 +36,15 @@ from runtime.daemon import LOG_PATH, PID_PATH, STOP_PATH, read_daemon_pid, runti
 
 VERSION = "1.0.0"
 SERVICE_LABEL = "dev.elyan.daemon"
+_OAUTH_AUTH_ENDPOINTS: dict[str, tuple[str, str]] = {
+    "gmail": ("accounts.google.com", "/o/oauth2/v2/auth"),
+    "google-drive": ("accounts.google.com", "/o/oauth2/v2/auth"),
+    "google-calendar": ("accounts.google.com", "/o/oauth2/v2/auth"),
+    "notion": ("api.notion.com", "/v1/oauth/authorize"),
+    "linear": ("linear.app", "/oauth/authorize"),
+    "github": ("github.com", "/login/oauth/authorize"),
+    "slack": ("slack.com", "/oauth/v2/authorize"),
+}
 
 
 # ─────────────────────────────── yardımcılar ────────────────────────────────
@@ -84,6 +95,42 @@ def _request(bridge: Any, capability: str, payload: dict[str, Any] | None = None
         }
     )
     return response if isinstance(response, dict) else {}
+
+
+def _backend_data_from_envelope(response: dict[str, Any]) -> dict[str, Any] | None:
+    if not bool(response.get("ok", False)):
+        return None
+    capability_result = response.get("result")
+    capability_result = capability_result if isinstance(capability_result, dict) else {}
+    backend_result = capability_result.get("result")
+    backend_result = backend_result if isinstance(backend_result, dict) else {}
+    data = backend_result.get("data")
+    return data if isinstance(data, dict) else None
+
+
+def _validated_oauth_authorization_url(app_id: str, value: Any) -> str:
+    normalized_app_id = str(app_id or "").strip().lower()
+    trusted_endpoint = _OAUTH_AUTH_ENDPOINTS.get(normalized_app_id)
+    if trusted_endpoint is None:
+        return ""
+    raw = str(value or "").strip()
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError:
+        return ""
+    trusted_host, trusted_path = trusted_endpoint
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.hostname != trusted_host
+        or port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or parsed.path != trusted_path
+    ):
+        return ""
+    return raw
 
 
 def _platform_name() -> str:
@@ -250,7 +297,19 @@ def cmd_pair(args: argparse.Namespace) -> int:
 
     print("Eşleştirildi ✓ — runtime kaydediliyor…")
     boot = _request(bridge, "runtime.bootstrap")
-    print("Kayıt:", "tamam ✓" if boot.get("ok") else "kısıtlı (elyan doctor ile bak)")
+
+    # Bağımsız readback: "tamam" demeden önce kayıt kanıtını STATE'ten doğrula.
+    # runtimeToken yoksa cihaz backend'de kayıtlı DEĞİLDİR ve görev alamaz.
+    verified = state_store.snapshot()
+    verified_runtime = verified.get("runtime", {}) if isinstance(verified.get("runtime"), dict) else {}
+    registered = bool(str(verified_runtime.get("runtimeToken", "") or "").strip())
+    device_id = str(verified_runtime.get("deviceId", "") or "")
+    if boot.get("ok") and registered:
+        print(f"Kurulum doğrulandı ✓  Bu bilgisayar kayıtlı: cihaz {device_id[:8]}…")
+    else:
+        print("UYARI: Eşleşme alındı ama cihaz kaydı DOĞRULANAMADI — görev GELMEZ.")
+        print("       Çöz: elyan doctor   sonra   elyan pair --force")
+        return 1
 
     if was_running or args.start:
         pid = _start_daemon_detached()
@@ -291,6 +350,81 @@ def cmd_logout(_args: argparse.Namespace) -> int:
     print("Oturum kapatıldı.")
     if was_running:
         print("Daemon durduruldu (oturumsuz görev alınamaz).")
+    print("Not: QR eşleşmesi hâlâ duruyor. Tamamen koparmak için: elyan unpair")
+    return 0
+
+
+def cmd_unpair(_args: argparse.Namespace) -> int:
+    """Bağlantıyı TAM kopar: cihazı backend'den kaldır + yerel kimliği sil.
+
+    Sıra önemli: önce sunucu tarafı (elimizde kimlik varken), sonra yerel
+    temizlik. Sunucuya ulaşılamasa bile yerel kimlik silinir — cihaz artık
+    görev alamaz; kalan sunucu kaydı bir dahaki pair'de self-heal düşürülür.
+    """
+    _stop_daemon()
+    snapshot = state_store.snapshot()
+    runtime = snapshot.get("runtime", {}) if isinstance(snapshot.get("runtime"), dict) else {}
+    pairing = snapshot.get("pairing", {}) if isinstance(snapshot.get("pairing"), dict) else {}
+    device_id = str(runtime.get("deviceId", "") or "").strip()
+    had_identity = bool(
+        device_id
+        or str(runtime.get("deviceSecret", "") or "").strip()
+        or str(runtime.get("runtimeToken", "") or "").strip()
+        or str(pairing.get("pairingToken", "") or "").strip()
+    )
+    if not had_identity:
+        print("Bağlı cihaz yok — koparılacak eşleşme bulunamadı.")
+        return 0
+
+    device_name = str(pairing.get("deviceName", "") or "") or (socket.gethostname() or "bu bilgisayar")
+    print(f"Koparılıyor: cihaz {device_id[:8] + '…' if device_id else '(kaydsız eşleşme)'} ({device_name})")
+
+    backend_removed = False
+    if device_id:
+        bridge = _bridge()
+        response = _request(bridge, "backend.device_deactivate", {"deviceId": device_id})
+        backend_removed = bool(response.get("ok"))
+        if backend_removed:
+            print("Sunucu kaydı kaldırıldı ✓")
+        else:
+            message = str((response.get("error") or {}).get("message", "") or "sunucuya ulaşılamadı")
+            print(f"Sunucu kaydı kaldırılamadı ({message}) — yerel kimlik yine siliniyor.")
+
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": "",
+                "deviceSecret": "",
+                "runtimeToken": "",
+                "connectionId": "",
+                "ready": False,
+                "lifecycleState": "stopped",
+                "websocketConnected": False,
+            },
+            "pairing": {
+                "pairingToken": "",
+                "pairingCode": "",
+                "manualEntryCode": "",
+                "qrText": "",
+                "qrDataUrl": "",
+                "lastSessionId": "",
+                "lastSessionStatus": "",
+                "connectedDevices": [],
+                "desktopDeviceId": "",
+            },
+        }
+    )
+
+    # Bağımsız readback: silindi demeden önce doğrula.
+    verify = state_store.snapshot().get("runtime", {})
+    verify = verify if isinstance(verify, dict) else {}
+    if str(verify.get("deviceSecret", "") or "").strip() or str(verify.get("runtimeToken", "") or "").strip():
+        print("HATA: Yerel kimlik silinemedi — elyan doctor ile bak.")
+        return 1
+    print("Yerel eşleşme kimliği silindi ✓ — bu bilgisayar artık görev alamaz.")
+    if not backend_removed and device_id:
+        print("Not: Sunucudaki kayıt duruyor olabilir; bir sonraki 'elyan pair' bayat cihazı otomatik düşürür.")
+    print("Yeniden bağlamak için: elyan pair")
     return 0
 
 
@@ -334,6 +468,20 @@ def cmd_status(_args: argparse.Namespace) -> int:
     summary = runtime_status_summary()
     pid = summary.get("pid", 0)
     lifecycle = summary.get("lifecycleState", "stopped")
+    paired = bool(summary.get("paired"))
+    registered = bool(summary.get("registered"))
+    device_id = str(summary.get("deviceId", "") or "")
+    device_name = str(summary.get("deviceName", "") or "")
+
+    # "Eşleşti" ≠ "kurulu": görev alabilmek için cihazın backend'de KAYITLI
+    # olması gerekir. İki durumu ayrı ve dürüst göster.
+    if paired and registered:
+        pairing_line = "tamam ✓ (cihaz kayıtlı, görev alabilir)"
+    elif paired:
+        pairing_line = "eşleşti ama cihaz kaydı YOK — görev ALAMAZ. Çöz: elyan pair --force"
+    else:
+        pairing_line = "yok — elyan pair"
+
     rows = [
         ("Daemon", f"çalışıyor (pid {pid})" if pid else "durdu"),
         ("Bağlantı", str(lifecycle)),
@@ -341,17 +489,33 @@ def cmd_status(_args: argparse.Namespace) -> int:
         (
             "Hesap",
             summary.get("email")
-            or ("QR eşleşmesi (telefon hesabı)" if summary.get("paired") else "giriş yok"),
+            or ("QR eşleşmesi (telefon hesabı)" if paired else "giriş yok"),
         ),
-        ("Eşleştirme", "tamam" if summary.get("paired") else "yok — elyan pair"),
-        ("Aktif görev", str(len(summary.get("activeTasks", [])))),
+        ("Eşleştirme", pairing_line),
     ]
+    if paired and device_id:
+        label = f"{device_id[:8]}…"
+        if device_name:
+            label += f" ({device_name})"
+        rows.append(("Bu cihaz", label))
+    phones = [
+        item.get("name") or item.get("platform") or "telefon"
+        for item in summary.get("connectedDevices", [])
+        if isinstance(item, dict)
+    ]
+    if phones:
+        rows.append(("Bağlı telefon", ", ".join(str(p) for p in phones[:3])))
+    if summary.get("pairedAt"):
+        rows.append(("Eşleşme zamanı", str(summary["pairedAt"])[:19].replace("T", " ")))
+    rows.append(("Aktif görev", str(len(summary.get("activeTasks", [])))))
     if summary.get("lastErrorCode"):
         rows.append(("Son hata", str(summary["lastErrorCode"])))
     print("Elyan durum:")
     _print_kv(rows)
     if not pid:
         print("\nBaşlat: elyan start   ·   Açılışta otomatik: elyan service install")
+    if paired:
+        print("Bağlantıyı koparmak için: elyan unpair")
     return 0
 
 
@@ -756,6 +920,71 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_apps(_args: argparse.Namespace) -> int:
+    response = _request(_bridge(), "backend.integrations.apps")
+    data = _backend_data_from_envelope(response)
+    if data is None:
+        print("Uygulama kataloğu alınamadı. Önce `elyan login` ile giriş yap.")
+        return 1
+    apps = data.get("apps", [])
+    if not isinstance(apps, list) or not apps:
+        print("Bağlanabilir uygulama bulunamadı.")
+        return 0
+    print("Elyan Uygulamaları:")
+    for item in apps:
+        if not isinstance(item, dict):
+            continue
+        if bool(item.get("connected", False)):
+            status = "Bağlı ✓"
+        elif bool(item.get("available", False)):
+            status = "Bağlanabilir"
+        else:
+            status = "Hazırlanıyor"
+        print(f"  [{status}] {item.get('id')} — {item.get('displayName')}")
+    print("Bağlamak için: elyan connect gmail")
+    return 0
+
+
+def cmd_connect(args: argparse.Namespace) -> int:
+    app_id = str(getattr(args, "app_id", "") or "").strip().lower()
+    response = _request(
+        _bridge(),
+        "backend.integrations.oauth_start",
+        {"appId": app_id},
+    )
+    data = _backend_data_from_envelope(response)
+    if data is None:
+        print("Bağlantı başlatılamadı. Önce `elyan login` ile giriş yap ve uygulamanın hazır olduğunu kontrol et.")
+        return 1
+    auth_url = _validated_oauth_authorization_url(app_id, data.get("authUrl"))
+    if not auth_url:
+        print("OAuth adresi güvenlik doğrulamasından geçmedi; tarayıcı açılmadı.")
+        return 1
+    try:
+        opened = webbrowser.open(auth_url, new=2)
+    except Exception:
+        opened = False
+    print(f"{app_id} için güvenli giriş ekranı {'açıldı' if opened else 'hazır'}.")
+    if not opened:
+        print(auth_url)
+    print("Hesabına giriş yaptığında bağlantı otomatik tamamlanacak.")
+    return 0
+
+
+def cmd_disconnect(args: argparse.Namespace) -> int:
+    app_id = str(getattr(args, "app_id", "") or "").strip().lower()
+    response = _request(
+        _bridge(),
+        "backend.integrations.disconnect",
+        {"appId": app_id, "_confirmed": True},
+    )
+    if not response.get("ok"):
+        print(f"Bağlantı kaldırılamadı: {app_id}")
+        return 1
+    print(f"Bağlantı kaldırıldı: {app_id}")
+    return 0
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     print(f"elyan {VERSION} ({_platform_name()}, python {platform.python_version()})")
     return 0
@@ -782,6 +1011,7 @@ def build_parser() -> argparse.ArgumentParser:
     login.set_defaults(func=cmd_login)
 
     sub.add_parser("logout", help="Oturumu kapat").set_defaults(func=cmd_logout)
+    sub.add_parser("unpair", help="Bağlantıyı tam kopar (sunucu kaydı + yerel kimlik)").set_defaults(func=cmd_unpair)
     sub.add_parser("start", help="Daemon'u arka planda başlat").set_defaults(func=cmd_start)
     sub.add_parser("stop", help="Daemon'u durdur").set_defaults(func=cmd_stop)
     sub.add_parser("restart", help="Daemon'u yeniden başlat").set_defaults(func=cmd_restart)
@@ -814,6 +1044,14 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_disable.add_argument("server_id")
     mcp_sub.add_parser("tools", help="Keşfedilen araçları listele (sunucuları başlatır)")
     mcp.set_defaults(func=cmd_mcp, mcp_action="list")
+
+    sub.add_parser("apps", help="Hazır uygulamaları ve bağlantı durumunu listele").set_defaults(func=cmd_apps)
+    connect = sub.add_parser("connect", help="Bir uygulamayı tek adımda OAuth ile bağla")
+    connect.add_argument("app_id", help="Uygulama kimliği (ör. gmail, notion, linear)")
+    connect.set_defaults(func=cmd_connect)
+    disconnect = sub.add_parser("disconnect", help="Uygulama bağlantısını kaldır")
+    disconnect.add_argument("app_id", help="Uygulama kimliği")
+    disconnect.set_defaults(func=cmd_disconnect)
 
     sub.add_parser("version", help="Sürüm bilgisi").set_defaults(func=cmd_version)
     return parser

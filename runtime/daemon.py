@@ -258,9 +258,32 @@ def runtime_status_summary() -> dict[str, Any]:
                 and str(runtime.get("deviceSecret", "") or "").strip()
             )
         ),
+        # Kayıt kanıtı eşleşmeden AYRIDIR: runtimeToken yoksa cihaz backend'de
+        # kayıtlı değildir ve görev ALAMAZ — durum bunu "tamam" diye gizlemez.
+        "registered": bool(str(runtime.get("runtimeToken", "") or "").strip()),
+        "deviceId": str(runtime.get("deviceId", "") or ""),
+        "deviceName": str(_pairing_map(state).get("deviceName", "") or ""),
+        "pairedAt": str(_pairing_map(state).get("lastClaimedAt", "") or ""),
+        "connectedDevices": [
+            {
+                "name": str(item.get("name", item.get("deviceName", "")) or ""),
+                "platform": str(item.get("platform", "") or ""),
+            }
+            for item in (
+                _pairing_map(state).get("connectedDevices", [])
+                if isinstance(_pairing_map(state).get("connectedDevices"), list)
+                else []
+            )
+            if isinstance(item, dict)
+        ],
         "activeTasks": active,
         "recentTasks": [item for item in items if isinstance(item, dict)][:10],
     }
+
+
+def _pairing_map(state: dict[str, Any]) -> dict[str, Any]:
+    pairing = state.get("pairing", {})
+    return pairing if isinstance(pairing, dict) else {}
 
 
 # -- giriş noktası -----------------------------------------------------------
