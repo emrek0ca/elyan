@@ -7,7 +7,7 @@ This file is the single engineering direction document for the desktop repo. Whe
 ## Current Product Shape
 
 - Desktop app lives at the repository root and is the shipping desktop product.
-- Desktop stack: macOS SwiftUI app in `apps/macos/ElyanMac`, Windows Flutter app in `apps/windows` (planned), and common Python runtime in `runtime/`.
+- Desktop stack: GUI YOK — tek Python motoru. `cli/` (kurulum + eşleştirme + daemon yönetimi), `runtime/` (başsız daemon + pystray tepsi ikonu). Swift yalnız `helpers/` altında başsız macOS izin köprüsü olarak yaşar (takvim/ekran/operator).
 - Mobile remains Flutter-only in `/Users/emrekoca/Desktop/mobile-elyan` for iOS and Android.
 - Backend/control-plane remains separate in `/Users/emrekoca/Desktop/elyan-backend`.
 
@@ -157,22 +157,24 @@ V1 is ready only when all of these are true:
 - Local private execution stays on desktop unless the product flow explicitly allows sharing.
 - Packaging works with optional PyInstaller runtime bundle and fallback/degraded runtime status.
 - Verification passes:
-  - `xcodebuild -project apps/macos/ElyanMac/ElyanMac.xcodeproj -target ElyanMac`
   - `python -m pytest tests/test_runtime_startup_contract.py tests/test_runtime_bridge_contract.py -q`
 
 ## Commands
 
-Run macOS desktop locally:
+Masaüstünde GUI YOKTUR: ürün CLI + başsız daemon + pystray tepsi ikonudur.
+Swift/Xcode hedefi kaldırıldı; `helpers/` altındaki Swift kaynakları GUI değil,
+başsız yeteneklerin (takvim/ekran/operator) macOS izin köprüleridir — kalır.
+
+Run the desktop runtime locally:
 
 ```bash
-xcodebuild -project apps/macos/ElyanMac/ElyanMac.xcodeproj -target ElyanMac
+python -m cli.main run     # ön planda (hata ayıklama); arka plan için: start
 ```
 
 Full verification:
 
 ```bash
-xcodebuild -project apps/macos/ElyanMac/ElyanMac.xcodeproj -target ElyanMac
-python -m pytest tests/test_runtime_startup_contract.py tests/test_runtime_bridge_contract.py -q
+python -m pytest tests/ -q
 ```
 
 ## Roadmap Discipline
