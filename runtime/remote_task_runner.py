@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any
 
-from runtime import state_store
+from runtime import learning_store, state_store
 from runtime.agent_planning import build_agent_plan
 from runtime.backend_client import BackendResult
 from runtime.capability_registry import capability_display_name, capability_readiness
@@ -1053,7 +1053,7 @@ class RemoteTaskRunner:
                 *(payload["result"].get("blocks", []) if isinstance(payload["result"].get("blocks"), list) else []),
             ]
         report = self.host._report_runtime_task_status(task_id, payload)
-        self._mark_link_terminal(task_id, "failed_safe")
+        self._mark_link_terminal(task_id, "failed_safe", error_code=str(error_code or "remote_task_failed"))
         return {
             "taskId": task_id,
             "ok": False,
@@ -1516,7 +1516,7 @@ class RemoteTaskRunner:
             item["title"] = _safe_text(title, 200)
         state_store.upsert_task_inbox_item(item, last_synced_at=_utc_now_iso())
 
-    def _mark_link_terminal(self, task_id: str, status: str) -> None:
+    def _mark_link_terminal(self, task_id: str, status: str, *, error_code: str = "") -> None:
         link = state_store.get_remote_task_link(task_id)
         work_order = link.get("desktopWorkOrder") if isinstance(link, dict) else None
         if isinstance(work_order, dict) and str(work_order.get("schema", "") or "").endswith(".v2"):
@@ -1526,6 +1526,20 @@ class RemoteTaskRunner:
                     str(work_order.get("taskId", "") or task_id),
                     int(work_order.get("revision", 0) or 0),
                     status,
+                )
+            except Exception:
+                pass
+        # P5: kullanıcıya özel izole öğrenme — yalnız sayaç/hata sınıfı; ham
+        # içerik yok, kullanıcılar arası paylaşım yok. İptal öğrenmeye girmez.
+        normalized_status = str(status or "").strip().lower()
+        if isinstance(work_order, dict) and normalized_status in {"completed", "failed", "failed_safe"}:
+            try:
+                scope = work_order.get("capabilityScope") or work_order.get("requiredCapabilities") or []
+                learning_store.record_plan_outcome(
+                    str(work_order.get("userId", "") or ""),
+                    ok=normalized_status == "completed",
+                    error_class=error_code,
+                    capabilities=scope if isinstance(scope, list) else [],
                 )
             except Exception:
                 pass
