@@ -123,7 +123,9 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
         duration: "P1M",
       },
       google: {
-        productId: "com.elyan.elyanMobile.solo.monthly",
+        // Google Play product IDs must be all-lowercase (no uppercase allowed),
+        // unlike App Store product IDs. Keep Apple's camelCase ID above intact.
+        productId: "com.elyan.elyanmobile.solo.monthly",
         basePlanId: "monthly",
       },
     },
@@ -168,7 +170,9 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
         duration: "P1M",
       },
       google: {
-        productId: "com.elyan.elyanMobile.pro.monthly",
+        // Google Play product IDs must be all-lowercase (no uppercase allowed),
+        // unlike App Store product IDs. Keep Apple's camelCase ID above intact.
+        productId: "com.elyan.elyanmobile.pro.monthly",
         basePlanId: "monthly",
       },
     },

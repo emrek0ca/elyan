@@ -638,7 +638,7 @@ test("billing catalog keeps desktop connections aligned with plan limits", () =>
   );
   assert.equal(
     solo.providerProducts.google?.productId,
-    "com.elyan.elyanMobile.solo.monthly",
+    "com.elyan.elyanmobile.solo.monthly",
   );
   assert.equal(pro.desktopLimit, 2);
   assert.equal(pro.monthlyPrice, 17.99);
@@ -649,7 +649,7 @@ test("billing catalog keeps desktop connections aligned with plan limits", () =>
   );
   assert.equal(
     pro.providerProducts.google?.productId,
-    "com.elyan.elyanMobile.pro.monthly",
+    "com.elyan.elyanmobile.pro.monthly",
   );
   assert.equal(canUseDesktopConnections("free"), false);
   assert.equal(canUseDesktopConnections("solo"), true);
