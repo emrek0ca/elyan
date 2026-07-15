@@ -240,6 +240,13 @@ def _start_daemon_detached() -> int:
 def cmd_pair(args: argparse.Namespace) -> int:
     """QR ile eşleştirme: terminalde QR göster, iOS uygulaması okusun,
     bridge claim'i otomatik uygulasın, ardından runtime kaydolsun."""
+    existing = runtime_status_summary()
+    if existing.get("registered") and not args.force:
+        device_id = str(existing.get("deviceId", "") or "")
+        print(f"Bu bilgisayar zaten eşleşmiş ve kayıtlı (cihaz {device_id[:8]}…).")
+        print("Durum: elyan status   ·   Koparıp yeniden bağla: elyan unpair && elyan pair")
+        print("Mevcut kaydı koruyup yeni oturum zorlamak için: elyan pair --force")
+        return 0
     was_running = _stop_daemon()
     bridge = _bridge()
 
@@ -257,35 +264,61 @@ def cmd_pair(args: argparse.Namespace) -> int:
     result = response.get("result", {})
     result = result.get("result", result) if isinstance(result, dict) else {}
     data = result.get("data", result) if isinstance(result, dict) else {}
-    code = str(data.get("manualEntryCode") or data.get("pairingCode") or "").strip()
-    qr_text = str(data.get("qrText") or code or "").strip()
-    if not response.get("ok") or not code:
+    session_id = str(data.get("sessionId") or data.get("id") or "").strip()
+    pairing_code = str(data.get("pairingCode") or "").strip()
+    manual_code = str(data.get("manualEntryCode") or pairing_code or "").strip()
+    if not response.get("ok") or not session_id or not pairing_code:
         message = str((response.get("error") or {}).get("message", "") or "Eşleştirme oturumu açılamadı.")
         print(f"HATA: {message}")
         print("İnternet bağlantını kontrol et ve tekrar dene: elyan pair")
         return 1
 
+    # QR içeriği iOS'un beklediği kanonik URI OLMALI (elyan://pair?...).
+    # Kaynak: backend truth'un STATE'e yazdığı qrText; yoksa aynı formatı kur.
+    # manualEntryCode ("uuid|KOD") QR'a ASLA basılmaz — telefon tanımaz ve
+    # "okutuyorum ama hiçbir şey olmuyor" arızası tam buydu.
+    state_pairing = state_store.snapshot().get("pairing", {})
+    state_pairing = state_pairing if isinstance(state_pairing, dict) else {}
+    qr_text = str(data.get("qrText") or state_pairing.get("qrText") or "").strip()
+    if not qr_text.startswith("elyan://"):
+        qr_text = f"elyan://pair?sessionId={session_id}&pairingCode={pairing_code}"
+
     print()
     print(_render_qr(qr_text))
     print()
-    print(f"  Kod: {code}")
+    print(f"  Elle giriş kodu: {manual_code}")
     print("  Elyan iOS uygulamasında 'Bilgisayar Eşleştir'i açıp bu QR'ı okut")
     print("  (ya da kodu elle gir). Bekleniyor…")
     print()
 
-    # Bridge'in kendi claim-poll thread'i claim'i uygular; biz STATE'i izleriz.
+    # Aktif yoklama: arka plan thread'ine güvenme — her turda backend'den
+    # oturum durumunu çek (claimed görülünce bridge kaydı da tetikler).
     deadline = time.monotonic() + 300
     paired = False
+    poll_error_count = 0
     while time.monotonic() < deadline:
-        time.sleep(2)
+        time.sleep(3)
+        session = _request(bridge, "pairing.get_session", {"sessionId": session_id})
+        session_result = session.get("result", {}) if isinstance(session.get("result"), dict) else {}
+        session_data = session_result.get("data", session_result) if isinstance(session_result, dict) else {}
+        status = str(session_data.get("status", "") or "").strip().lower()
+        if not session.get("ok"):
+            poll_error_count += 1
+            if poll_error_count >= 5:
+                print("\nHATA: Sunucuya art arda ulaşılamıyor — ağını kontrol edip tekrar dene: elyan pair")
+                return 1
+        elif status == "claimed":
+            paired = True
+            break
+        elif status in {"expired", "cancelled", "canceled"}:
+            print(f"\nOturum {status} — yeni QR için: elyan pair")
+            return 1
+        else:
+            poll_error_count = 0
+        # Yerel kanıt da yeterli (arka plan thread'i erken davranmış olabilir).
         snapshot = state_store.snapshot()
-        pairing = snapshot.get("pairing", {}) if isinstance(snapshot.get("pairing"), dict) else {}
         runtime = snapshot.get("runtime", {}) if isinstance(snapshot.get("runtime"), dict) else {}
-        claimed = str(pairing.get("lastSessionStatus", "") or "").strip().lower() == "claimed"
-        has_runtime_identity = bool(
-            str(runtime.get("deviceSecret", "") or "").strip() or str(runtime.get("runtimeToken", "") or "").strip()
-        )
-        if claimed or has_runtime_identity:
+        if str(runtime.get("runtimeToken", "") or "").strip() or str(runtime.get("deviceSecret", "") or "").strip():
             paired = True
             break
         print(".", end="", flush=True)
