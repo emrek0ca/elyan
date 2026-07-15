@@ -11767,6 +11767,23 @@ class RuntimeBridge:
                 recipients.append(address)
         return recipients
 
+    @staticmethod
+    def _chain_derived_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Capability listesinden türetilen şablon adımları SIRALI bir boru
+        hattıdır (draft, research çıktısını tüketir). P2 scheduler bağımsız
+        read'leri paralelleştirdiğinden, örtük sırayı açık dependsOn zincirine
+        çevirmeden bu planlar yarışa girer."""
+        previous_id = ""
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            step_id = str(step.get("id", "") or f"step_{index + 1}")
+            step["id"] = step_id
+            if previous_id and not step.get("dependsOn"):
+                step["dependsOn"] = [previous_id]
+            previous_id = step_id
+        return steps
+
     def _remote_task_steps_from_route(
         self,
         task: dict[str, Any],
@@ -11837,6 +11854,7 @@ class RuntimeBridge:
                         "description": "Teknik quantum deney raporu hazırlanacak.",
                     },
                 ]
+                steps = self._chain_derived_steps(steps)
                 return steps, {
                     "summary": decision_reason
                     or "Backend routeDecision kararına göre quantum deney pipeline'ı desktop runtime üzerinde yürütülecek.",
@@ -11962,6 +11980,7 @@ class RuntimeBridge:
                     }
                 )
             if steps:
+                steps = self._chain_derived_steps(steps)
                 has_browser = any(_canonical_capability_name(s.get("capability")) in {"browser_control", "desktop_operator.run"} for s in steps)
                 privacy_class = decision_privacy or ("side_effect" if ("email_send" in capabilities or has_browser) else "public_text")
                 return steps, {
@@ -12004,6 +12023,7 @@ class RuntimeBridge:
                     "description": "Teknik quantum deney raporu hazırlanacak.",
                 },
             ]
+            fallback_steps = self._chain_derived_steps(fallback_steps)
             return fallback_steps, {
                 "summary": "Backend routing kararına göre quantum deney pipeline'ı desktop runtime üzerinde yürütülecek.",
                 "steps": fallback_steps,

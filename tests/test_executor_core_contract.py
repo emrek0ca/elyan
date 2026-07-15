@@ -56,7 +56,10 @@ def test_executor_core_retries_verification_for_artifact_outputs(
     assert ok is True
     assert content == "tamam"
     assert error_code == ""
-    assert structured_result == {"kind": "document_write"}
+    # P3 kanıt sözleşmesi doğrulanan adımın sonucuna stepEvidence işler.
+    assert structured_result["kind"] == "document_write"
+    assert structured_result["stepEvidence"]["kind"] == "file_hash"
+    assert structured_result["stepEvidence"]["verified"] is True
     assert artifacts == [{"path": str(output_path)}]
     assert attempts["count"] == 2
     assert runtime_state["metrics"]["verificationRetries"] == 1

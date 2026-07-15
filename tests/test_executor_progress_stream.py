@@ -8,14 +8,17 @@ def _ok_step(cap, args, state, source):
     return {"ok": True, "output": f"{cap} tamam", "result": {"kind": cap}, "artifacts": [{"kind": "file", "name": "x"}]}, []
 
 
-def test_progress_emits_task_trace_blocks() -> None:
+def test_progress_emits_task_trace_blocks(tmp_path) -> None:
     ex = ExecutorCore()
     captured: list[dict] = []
     ex.set_progress_emitter(lambda cid, block: captured.append(block))
 
+    # P3 ön koşulu girdi dosyasının var olmasını ister.
+    source_file = tmp_path / "p.txt"
+    source_file.write_text("icerik", encoding="utf-8")
     steps = [
         {"id": "s1", "capability": "web_research", "args": {"query": "x"}},
-        {"id": "s2", "capability": "file_read", "args": {"path": "p"}, "dependsOn": ["s1"]},
+        {"id": "s2", "capability": "file_read", "args": {"path": str(source_file)}, "dependsOn": ["s1"]},
     ]
     ex.execute_plan_steps(
         steps=steps,
@@ -37,11 +40,13 @@ def test_progress_emits_task_trace_blocks() -> None:
     assert [s["label"] for s in final["steps"]] == ["Araştırılıyor", "Dosya okunuyor"]
 
 
-def test_no_emitter_is_safe() -> None:
+def test_no_emitter_is_safe(tmp_path) -> None:
     # Emitter bağlı değilse yürütme normal çalışır (progress opsiyonel).
+    source_file = tmp_path / "p.txt"
+    source_file.write_text("icerik", encoding="utf-8")
     ex = ExecutorCore()
     ok, _content, _events, _err, _res, _arts = ex.execute_plan_steps(
-        steps=[{"id": "s1", "capability": "file_read", "args": {"path": "p"}}],
+        steps=[{"id": "s1", "capability": "file_read", "args": {"path": str(source_file)}}],
         state_factory=lambda: {},
         execute_step=_ok_step,
         source="confirmed_plan",

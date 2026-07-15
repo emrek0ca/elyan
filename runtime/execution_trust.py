@@ -557,6 +557,7 @@ def prepare_work_order_v2(
     prompt: str,
     state: dict[str, Any],
     ledger: ExecutionLedger | None = None,
+    extra_read_scope: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime = state.get("runtime", {}) if isinstance(state, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
@@ -580,6 +581,15 @@ def prepare_work_order_v2(
         raise TrustError("WORK_ORDER_REVISION_INVALID", "İş emri revision alanı geçersiz.")
 
     scope = _capability_scope(work_order)
+    # Cihazın deterministik yönlendiricisi planı DAHA GÜVENLİ salt-okunur
+    # adımlarla ikame edebilir (ör. operator.run → directory_tree). Çağıran,
+    # yalnız read-only sınıfı yetenekleri geçirmekle yükümlüdür; kapsam
+    # imzadan ÖNCE genişletilir, yani bağ kriptografik kalır.
+    for extra in extra_read_scope or []:
+        normalized_extra = canonical_capability(extra)
+        if normalized_extra and normalized_extra not in scope:
+            scope.append(normalized_extra)
+    scope = sorted(scope)
     if not scope:
         raise TrustError("WORK_ORDER_SCOPE_MISSING", "İş emri capability kapsamı boş.")
     expected_prompt_hash = prompt_hash(prompt)

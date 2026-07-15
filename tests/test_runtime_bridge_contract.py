@@ -36,6 +36,61 @@ def _isolate_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(state_store, "LEGACY_STATE_PATH", tmp_path / "legacy.json")
 
 
+def _arm_device_identity() -> None:
+    """P0 güven zinciri: atanmış görev yürütmesi cihaz kimliği + sırrı ister."""
+    state_store.update_state(
+        {"runtime": {"deviceId": VALID_DEVICE_ID, "deviceSecret": VALID_DEVICE_SECRET}}
+    )
+
+
+def _work_order_envelope(
+    prompt: str,
+    capabilities: list[str],
+    steps: list[dict] | None = None,
+) -> dict:
+    if steps is None:
+        # Capability listesi sıralı bir boru hattıdır (draft, research çıktısını
+        # tüketir) — P2 scheduler bağımsız read'leri paralelleştirdiğinden örtük
+        # sıra açık dependsOn zincirine çevrilir.
+        steps = []
+        for index, capability in enumerate(capabilities):
+            step = {"id": f"step_{index + 1}", "capability": capability, "description": capability, "args": {}}
+            if index > 0:
+                step["dependsOn"] = [f"step_{index}"]
+            steps.append(step)
+    return {
+        "schema": "elyan.desktop_work_order.v1",
+        "source": "mobile_chat_dispatch",
+        "goal": {"kind": "computer_task", "summary": prompt, "language": "tr", "sourceTextHash": "a" * 24},
+        "entities": [],
+        "constraints": [],
+        "requiredCapabilities": list(capabilities),
+        "localContextNeeded": [],
+        "expectedOutputs": [{"kind": "chat_result", "format": "elyan_blocks.v2", "required": True}],
+        "verificationRules": [
+            {"id": "runtime_completed", "description": "Runtime completes.", "evidence": "runtime_status"},
+        ],
+        "execution": {"mode": "cowork_dispatch", "approvalPolicy": "capability_policy", "maxSteps": 8},
+        "planPreview": {"summary": prompt, "privacyClass": "local_private", "steps": steps},
+    }
+
+
+def _trusted_task(
+    task: dict,
+    *,
+    capabilities: list[str],
+    steps: list[dict] | None = None,
+    user_id: str = "user-tests",
+) -> dict:
+    """Atanmış görevi P0 WorkOrder güven bağı için gerekli alanlarla donat."""
+    payload = task.setdefault("payload", {})
+    prompt = str(payload.get("prompt") or task.get("title") or "")
+    payload.setdefault("desktopWorkOrder", _work_order_envelope(prompt, capabilities, steps))
+    task.setdefault("userId", user_id)
+    task.setdefault("targetDeviceId", VALID_DEVICE_ID)
+    return task
+
+
 def _write_native_desktop_snapshot(tmp_path: Path) -> Path:
     path = tmp_path / "desktop-runtime.json"
     path.write_text(
@@ -460,11 +515,14 @@ def test_execute_assigned_runtime_task_reports_local_result(
                 status_code=200,
                 data={
                     "tasks": [
-                        {
-                            "id": "task-1",
-                            "title": "Test görevi",
-                            "payload": {"prompt": "merhaba"},
-                        }
+                        _trusted_task(
+                            {
+                                "id": "task-1",
+                                "title": "Test görevi",
+                                "payload": {"prompt": "merhaba"},
+                            },
+                            capabilities=["retrieve_context"],
+                        )
                     ]
                 },
             )
@@ -484,16 +542,19 @@ def test_execute_assigned_runtime_task_reports_local_result(
         lambda _state, _conversation, text, **_kwargs: {"ok": True, "content": f"Yanıt: {text}", "provider": "test"},
     )
     runtime = bridge.RuntimeBridge()
+    _arm_device_identity()
     runtime.backend = fake_backend  # type: ignore[assignment]
 
     result = runtime.execute_assigned_runtime_tasks()
 
     assert result["ok"] is True
     assert result["executions"][0]["ok"] is True
+    assert result["executions"][0]["status"] == "completed"
     assert fake_backend.status_updates[0][1]["status"] == "running"
-    assert fake_backend.status_updates[1][1]["status"] == "completed"
-    assert fake_backend.status_updates[1][1]["result"]["assistantMessage"] == "Yanıt: merhaba"
-    assert fake_backend.status_updates[1][1]["artifacts"][0]["kind"] == "summary"
+    completed = fake_backend.status_updates[-1][1]
+    assert completed["status"] == "completed"
+    assert completed["result"]["assistantMessage"]
+    assert completed["artifacts"][0]["kind"] == "summary"
 
 
 def test_quantum_capabilities_are_registered() -> None:
@@ -526,7 +587,7 @@ def test_execute_assigned_quantum_task_uses_deterministic_pipeline(
                 status_code=200,
                 data={
                     "tasks": [
-                        {
+                        _trusted_task({
                             "id": "task-quantum",
                             "title": "Quantum demo",
                             "requestedCapabilities": [
@@ -553,7 +614,12 @@ def test_execute_assigned_quantum_task_uses_deterministic_pipeline(
                                     }
                                 },
                             },
-                        }
+                        }, capabilities=[
+                            "quantum_model_problem",
+                            "quantum_run_experiment",
+                            "quantum_compare_classical",
+                            "quantum_generate_report",
+                        ], steps=[])
                     ]
                 },
             )
@@ -578,6 +644,8 @@ def test_execute_assigned_quantum_task_uses_deterministic_pipeline(
         }
     )
     runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    _arm_device_identity()
 
     result = runtime.execute_assigned_runtime_tasks()
 
@@ -611,7 +679,7 @@ def test_execute_assigned_quantum_task_fails_safely_without_qiskit(
                 status_code=200,
                 data={
                     "tasks": [
-                        {
+                        _trusted_task({
                             "id": "task-quantum-missing-dep",
                             "title": "Quantum demo",
                             "requestedCapabilities": [
@@ -637,7 +705,12 @@ def test_execute_assigned_quantum_task_fails_safely_without_qiskit(
                                     }
                                 },
                             },
-                        }
+                        }, capabilities=[
+                            "quantum_model_problem",
+                            "quantum_run_experiment",
+                            "quantum_compare_classical",
+                            "quantum_generate_report",
+                        ], steps=[])
                     ]
                 },
             )
@@ -662,6 +735,8 @@ def test_execute_assigned_quantum_task_fails_safely_without_qiskit(
         }
     )
     runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    _arm_device_identity()
 
     result = runtime.execute_assigned_runtime_tasks()
 
@@ -719,15 +794,18 @@ def test_execute_assigned_runtime_task_waits_for_approval_without_terminal_repor
                 status_code=200,
                 data={
                     "tasks": [
-                        {
-                            "id": "task-waiting",
-                            "title": "Takvim görevi",
-                            "status": "queued",
-                            "payload": {
-                                "prompt": "takvime cuma 14:00 ürün toplantısı ekle",
-                                "metadata": {"planMode": True},
+                        _trusted_task(
+                            {
+                                "id": "task-waiting",
+                                "title": "Takvim görevi",
+                                "status": "queued",
+                                "payload": {
+                                    "prompt": "takvime cuma 14:00 ürün toplantısı ekle",
+                                    "metadata": {"planMode": True},
+                                },
                             },
-                        }
+                            capabilities=["add_calendar_event"],
+                        )
                     ]
                 },
             )
@@ -771,15 +849,16 @@ def test_execute_assigned_runtime_task_waits_for_approval_without_terminal_repor
         },
     )
 
+    _arm_device_identity()
+
     result = runtime.execute_assigned_runtime_tasks()
 
     assert result["ok"] is True
     assert result["executions"][0]["status"] == "waiting_approval"
-    assert [payload["status"] for _, payload in runtime.backend.status_updates] == [  # type: ignore[attr-defined]
-        "running",
-        "waiting_approval",
-    ]
-    assert runtime.backend.status_updates[1][1]["approvalRequest"]["summary"]  # type: ignore[attr-defined]
+    statuses = [payload["status"] for _, payload in runtime.backend.status_updates]  # type: ignore[attr-defined]
+    assert statuses[0] == "running"
+    assert statuses[-1] == "waiting_approval"
+    assert runtime.backend.status_updates[-1][1]["approvalRequest"]["summary"]  # type: ignore[attr-defined]
     link = state_store.get_remote_task_link("task-waiting")
     assert link is not None
     assert link["pendingPlanId"] == "plan_waiting"
@@ -874,7 +953,7 @@ def test_remote_research_email_send_uses_backend_route_decision_without_replanni
                 status_code=200,
                 data={
                     "tasks": [
-                        {
+                        _trusted_task({
                             "id": "task-email-send",
                             "title": "Atatürk araştırması",
                             "status": "queued",
@@ -892,7 +971,7 @@ def test_remote_research_email_send_uses_backend_route_decision_without_replanni
                                     }
                                 },
                             },
-                        }
+                        }, capabilities=["web_research", "email_draft", "email_send"])
                     ]
                 },
             )
@@ -918,6 +997,7 @@ def test_remote_research_email_send_uses_backend_route_decision_without_replanni
         "send_conversation",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("remote task should not replan")),
     )
+    _arm_device_identity()
 
     result = runtime.execute_assigned_runtime_tasks()
 
@@ -973,7 +1053,7 @@ def test_execute_assigned_runtime_task_uses_explicit_route_steps_without_replann
                 status_code=200,
                 data={
                     "tasks": [
-                        {
+                        _trusted_task({
                             "id": "task-explicit-route",
                             "title": "Desktop planlı görev",
                             "status": "queued",
@@ -1000,7 +1080,20 @@ def test_execute_assigned_runtime_task_uses_explicit_route_steps_without_replann
                                     }
                                 },
                             },
-                        }
+                        }, capabilities=["retrieve_context", "sys_info"], steps=[
+                            {
+                                "id": "step_1",
+                                "capability": "retrieve_context",
+                                "description": "Önce yerel bağlam kontrol edilecek.",
+                                "args": {"query": "son görev bağlamı"},
+                            },
+                            {
+                                "id": "step_2",
+                                "capability": "sys_info",
+                                "description": "Ardından cihaz durumu okunacak.",
+                                "args": {"query": "battery cpu memory"},
+                            },
+                        ])
                     ]
                 },
             )
@@ -1026,18 +1119,21 @@ def test_execute_assigned_runtime_task_uses_explicit_route_steps_without_replann
         "send_conversation",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("explicit route steps should not fall back to chat")),
     )
+    _arm_device_identity()
 
     result = runtime.execute_assigned_runtime_tasks()
 
     assert result["ok"] is True
     assert result["executions"][0]["status"] == "completed"
-    assert [name for name, _args in calls] == ["retrieve_context", "sys_info"]
+    # P2 scheduler: bağımsız read adımları sınırlı paralel koşabilir; çağrı
+    # sırası değil, kümenin tamamının yürütülmesi sözleşmedir.
+    assert sorted(name for name, _args in calls) == ["retrieve_context", "sys_info"]
     running = runtime.backend.status_updates[0][1]  # type: ignore[attr-defined]
     completed = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
     assert running["planPreview"]["agentPlan"]["stepCount"] == 2
     assert running["result"]["executionTrace"]["status"] == "running"
     assert completed["result"]["planPreview"]["agentPlan"]["executionStrategy"] == "balanced"
-    assert completed["result"]["planPreview"]["agentPlan"]["capabilities"] == ["retrieve_context", "sys_info"]
+    assert sorted(completed["result"]["planPreview"]["agentPlan"]["capabilities"]) == ["retrieve_context", "sys_info"]
     assert completed["result"]["executionTrace"]["status"] == "completed"
     inbox_item = state_store.get_task_inbox_item("task-explicit-route")
     assert inbox_item is not None
@@ -1159,11 +1255,12 @@ def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
     """Gerçek mobil dispatch zarfındaki jenerik tek operator adımı, bariz
     ve onaysız yerel directory_tree rotasını ezmemeli."""
     _isolate_state(monkeypatch, tmp_path)
+    _arm_device_identity()
     (tmp_path / "rapor.txt").write_text("yerel", encoding="utf-8")
     monkeypatch.setattr(task_router, "_resolve_location_path", lambda _text: str(tmp_path))
     runtime = bridge.RuntimeBridge()
     prompt = "Masaüstündeki dosyaları listele"
-    task = {
+    task = _trusted_task({
         "id": "task-generic-explicit-operator",
         "title": prompt,
         "status": "queued",
@@ -1190,9 +1287,22 @@ def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
                 },
             },
         },
-    }
+    }, capabilities=["desktop_operator.run"])
 
-    result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
+    # Doğrudan çağrı P0 güven bağlamını kendisi kurmaz; üretimdeki gibi
+    # cihazda mühürlenmiş v2 iş emriyle (salt-okunur ikame kapsamda) sar.
+    from runtime.desktop_work_order import validate_payload as _validate_payload
+    from runtime.execution_trust import prepare_work_order_v2 as _prepare_v2
+
+    raw_order = _validate_payload(task["payload"]).work_order
+    sealed_order = _prepare_v2(
+        task, raw_order, prompt=prompt, state=state_store.snapshot(), extra_read_scope=["directory_tree"]
+    )
+    trust_token = runtime._begin_trusted_work_order(sealed_order, "dispatch")
+    try:
+        result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
+    finally:
+        runtime._end_trusted_work_order(trust_token)
 
     assert result is not None
     assert result["chatOk"] is True
@@ -1210,10 +1320,11 @@ def test_assigned_dispatch_generic_operator_completes_via_directory_tree_lifecyc
     """Canlı backend zarfının tam runner yolu: jenerik explicit operator
     queued/running sonrası onaysız directory_tree ile completed olmalı."""
     _isolate_state(monkeypatch, tmp_path)
+    _arm_device_identity()
     (tmp_path / "dispatch-proof.txt").write_text("ok", encoding="utf-8")
     monkeypatch.setattr(task_router, "_resolve_location_path", lambda _text: str(tmp_path))
     prompt = "Masaüstündeki dosyaları listele"
-    task = {
+    task = _trusted_task({
         "id": "task-generic-operator-lifecycle",
         "title": prompt,
         "status": "queued",
@@ -1240,7 +1351,7 @@ def test_assigned_dispatch_generic_operator_completes_via_directory_tree_lifecyc
                 },
             },
         },
-    }
+    }, capabilities=["desktop_operator.run"])
 
     class _Backend:
         def __init__(self) -> None:
@@ -1447,7 +1558,7 @@ def test_remote_task_runner_adds_canonical_run_payload(
                 status_code=200,
                 data={
                     "tasks": [
-                        {
+                        _trusted_task({
                             "id": "task-canonical",
                             "title": "Canonical payload",
                             "status": "queued",
@@ -1466,7 +1577,14 @@ def test_remote_task_runner_adds_canonical_run_payload(
                                     }
                                 },
                             },
-                        }
+                        }, capabilities=["sys_info"], steps=[
+                            {
+                                "id": "step_1",
+                                "capability": "sys_info",
+                                "description": "Cihaz durumu okunacak.",
+                                "args": {"query": "battery"},
+                            }
+                        ])
                     ]
                 },
             )
@@ -1491,6 +1609,7 @@ def test_remote_task_runner_adds_canonical_run_payload(
     runtime = bridge.RuntimeBridge()
     runtime.backend = FakeBackend()  # type: ignore[assignment]
     monkeypatch.setattr(bridge, "run_capability", fake_run_capability)
+    _arm_device_identity()
 
     result = runtime.execute_assigned_runtime_tasks()
 
@@ -1527,7 +1646,7 @@ def test_remote_task_runner_readiness_failure_reports_safe_terminal(
                 status_code=200,
                 data={
                     "tasks": [
-                        {
+                        _trusted_task({
                             "id": "task-readiness-fail",
                             "title": "Readiness fail",
                             "status": "queued",
@@ -1546,7 +1665,14 @@ def test_remote_task_runner_readiness_failure_reports_safe_terminal(
                                     }
                                 },
                             },
-                        }
+                        }, capabilities=["document_write"], steps=[
+                            {
+                                "id": "step_1",
+                                "capability": "document_write",
+                                "description": "DOCX üretilecek.",
+                                "args": {"title": "Rapor"},
+                            }
+                        ])
                     ]
                 },
             )
@@ -1576,6 +1702,7 @@ def test_remote_task_runner_readiness_failure_reports_safe_terminal(
         "run_capability",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("readiness failure must not execute")),
     )
+    _arm_device_identity()
 
     result = runtime.execute_assigned_runtime_tasks()
 
@@ -1608,7 +1735,7 @@ def test_explicit_route_side_effect_waits_for_approval_before_execution(
                 status_code=200,
                 data={
                     "tasks": [
-                        {
+                        _trusted_task({
                             "id": "task-write-approval",
                             "title": "Mail gönder",
                             "status": "queued",
@@ -1630,7 +1757,14 @@ def test_explicit_route_side_effect_waits_for_approval_before_execution(
                                     }
                                 },
                             },
-                        }
+                        }, capabilities=["email_send"], steps=[
+                            {
+                                "id": "step_1",
+                                "capability": "email_send",
+                                "description": "E-posta gönderilecek.",
+                                "args": {"to": "ali@example.com", "subject": "Toplantı notları", "body": "Notlar ekte."},
+                            }
+                        ])
                     ]
                 },
             )
@@ -1650,6 +1784,7 @@ def test_explicit_route_side_effect_waits_for_approval_before_execution(
         "run_capability",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("side-effect step must wait for approval")),
     )
+    _arm_device_identity()
 
     result = runtime.execute_assigned_runtime_tasks()
 
@@ -1928,6 +2063,7 @@ def test_execute_assigned_runtime_task_fails_closed_on_capability_mismatch(
         {
             "runtime": {
                 "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
                 "capabilities": ["runtime.status"],
             }
         }
@@ -1944,13 +2080,13 @@ def test_execute_assigned_runtime_task_fails_closed_on_capability_mismatch(
                 status_code=200,
                 data={
                     "tasks": [
-                        {
+                        _trusted_task({
                             "id": "task-cap-mismatch",
                             "title": "Araştırma yap",
                             "targetDeviceId": VALID_DEVICE_ID,
                             "requestedCapabilities": ["web_research"],
                             "payload": {"prompt": "Elyan hakkında araştırma yap"},
-                        }
+                        }, capabilities=["web_research"])
                     ]
                 },
             )
@@ -2111,12 +2247,15 @@ def test_execute_assigned_runtime_task_fails_closed_without_personal_action_perm
                 status_code=200,
                 data={
                     "tasks": [
-                        {
-                            "id": "task-no-permission",
-                            "title": "Takvim görevi",
-                            "status": "queued",
-                            "payload": {"prompt": "takvime cuma 14:00 ürün toplantısı ekle"},
-                        }
+                        _trusted_task(
+                            {
+                                "id": "task-no-permission",
+                                "title": "Takvim görevi",
+                                "status": "queued",
+                                "payload": {"prompt": "takvime cuma 14:00 ürün toplantısı ekle"},
+                            },
+                            capabilities=["add_calendar_event"],
+                        )
                     ]
                 },
             )
@@ -2130,17 +2269,17 @@ def test_execute_assigned_runtime_task_fails_closed_without_personal_action_perm
             return BackendResult(ok=True, request_id="req_heartbeat", status_code=200, data={"ok": True})
 
     runtime = bridge.RuntimeBridge()
+    _arm_device_identity()
     runtime.backend = FakeBackend()  # type: ignore[assignment]
 
     result = runtime.execute_assigned_runtime_tasks()
 
     assert result["ok"] is True
     assert result["executions"][0]["status"] == "failed"
-    assert [payload["status"] for _, payload in runtime.backend.status_updates] == [  # type: ignore[attr-defined]
-        "running",
-        "failed",
-    ]
-    assert runtime.backend.status_updates[1][1]["error"] == "PERMISSION_REQUIRED"  # type: ignore[attr-defined]
+    statuses = [payload["status"] for _, payload in runtime.backend.status_updates]  # type: ignore[attr-defined]
+    assert statuses[0] == "running"
+    assert statuses[-1] == "failed"
+    assert runtime.backend.status_updates[-1][1]["error"] == "PERMISSION_REQUIRED"  # type: ignore[attr-defined]
     assert state_store.get_remote_task_link("task-no-permission") is None
 
 
@@ -2700,6 +2839,206 @@ def test_backend_task_wrappers_sync_task_inbox_state(
     inbox_item = state_store.get_task_inbox_item("task-list-1")
     assert inbox_item is not None
     assert inbox_item["artifactCount"] == 1
+
+
+def test_integration_app_commands_use_bridge_and_disconnect_requires_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    calls: list[tuple[str, str]] = []
+
+    class FakeBackend:
+        def integration_apps(self) -> BackendResult:
+            calls.append(("apps", ""))
+            return BackendResult(
+                ok=True,
+                request_id="req_apps",
+                status_code=200,
+                data={"apps": [{"id": "gmail", "displayName": "Gmail"}]},
+            )
+
+        def start_integration_app_oauth(self, app_id: str) -> BackendResult:
+            calls.append(("connect", app_id))
+            return BackendResult(
+                ok=True,
+                request_id="req_connect",
+                status_code=200,
+                data={"authUrl": "https://accounts.google.com/o/oauth2/v2/auth?state=safe"},
+            )
+
+        def disconnect_integration_app(self, app_id: str) -> BackendResult:
+            calls.append(("disconnect", app_id))
+            return BackendResult(
+                ok=True,
+                request_id="req_disconnect",
+                status_code=200,
+                data={"connected": False},
+            )
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+
+    apps = runtime.handle(
+        {"id": "req_apps", "taskId": "cli", "capability": "backend.integrations.apps", "payload": {}}
+    )
+    connect = runtime.handle(
+        {
+            "id": "req_connect",
+            "taskId": "cli",
+            "capability": "backend.integrations.oauth_start",
+            "payload": {"appId": "gmail"},
+        }
+    )
+    denied_disconnect = runtime.handle(
+        {
+            "id": "req_disconnect_denied",
+            "taskId": "cli",
+            "capability": "backend.integrations.disconnect",
+            "payload": {"appId": "gmail"},
+        }
+    )
+    confirmed_disconnect = runtime.handle(
+        {
+            "id": "req_disconnect",
+            "taskId": "cli",
+            "capability": "backend.integrations.disconnect",
+            "payload": {"appId": "gmail", "_confirmed": True},
+        }
+    )
+    invalid_app = runtime.handle(
+        {
+            "id": "req_invalid_app",
+            "taskId": "cli",
+            "capability": "backend.integrations.oauth_start",
+            "payload": {"appId": "../gmail"},
+        }
+    )
+
+    assert apps["ok"] is True
+    assert connect["ok"] is True
+    assert denied_disconnect["ok"] is False
+    assert denied_disconnect["error"]["code"] == "PERMISSION_REQUIRED"
+    assert confirmed_disconnect["ok"] is True
+    assert invalid_app["ok"] is False
+    assert invalid_app["error"]["code"] == "INTEGRATION_APP_INVALID"
+    assert calls == [("apps", ""), ("connect", "gmail"), ("disconnect", "gmail")]
+    advertised = bridge._runtime_advertised_capabilities()
+    assert "backend.integrations.apps" in advertised
+    assert "backend.integrations.oauth_start" in advertised
+    assert "backend.integrations.disconnect" in advertised
+
+
+def test_remote_mcp_unauthorized_forces_one_single_flight_registration_and_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "runtimeToken": "stale-runtime-token",
+                "ready": True,
+            }
+        }
+    )
+    calls = {"inventory": 0, "register": 0}
+
+    class FakeBackend:
+        def runtime_mcp_connections(self) -> BackendResult:
+            calls["inventory"] += 1
+            if calls["inventory"] == 1:
+                return BackendResult(
+                    ok=False,
+                    request_id="req_mcp_unauthorized",
+                    status_code=401,
+                    data=None,
+                    error="runtime_unauthorized",
+                )
+            return BackendResult(
+                ok=True,
+                request_id="req_mcp_retry",
+                status_code=200,
+                data={"servers": [], "revision": "rev_recovered"},
+            )
+
+        def register_runtime(self, payload: dict[str, object]) -> BackendResult:
+            calls["register"] += 1
+            assert payload["deviceId"] == VALID_DEVICE_ID
+            return BackendResult(
+                ok=True,
+                request_id="req_register",
+                status_code=200,
+                data={
+                    "runtime": {"deviceId": VALID_DEVICE_ID, "connectionId": VALID_CONNECTION_ID},
+                    "tokens": {"accessToken": "fresh-runtime-token"},
+                },
+            )
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+    monkeypatch.setattr(runtime, "_connect_runtime_transport", lambda: (False, None))
+    monkeypatch.setattr(runtime, "_prime_runtime_task_delivery", lambda: None)
+
+    result = runtime._remote_mcp_servers()
+
+    assert result["errorCode"] == ""
+    assert result["revision"] == "rev_recovered"
+    assert calls == {"inventory": 2, "register": 1}
+    assert state_store.snapshot()["runtime"]["runtimeToken"] == "fresh-runtime-token"
+
+
+def test_remote_mcp_auth_retry_is_bounded_when_second_attempt_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "runtimeToken": "stale-runtime-token",
+                "ready": True,
+            }
+        }
+    )
+    calls = {"inventory": 0, "register": 0}
+
+    class FakeBackend:
+        def runtime_mcp_connections(self) -> BackendResult:
+            calls["inventory"] += 1
+            return BackendResult(
+                ok=False,
+                request_id=f"req_mcp_{calls['inventory']}",
+                status_code=403,
+                data=None,
+                error="runtime_forbidden",
+            )
+
+        def register_runtime(self, _payload: dict[str, object]) -> BackendResult:
+            calls["register"] += 1
+            return BackendResult(
+                ok=True,
+                request_id="req_register",
+                status_code=200,
+                data={
+                    "runtime": {"deviceId": VALID_DEVICE_ID, "connectionId": VALID_CONNECTION_ID},
+                    "tokens": {"accessToken": "fresh-runtime-token"},
+                },
+            )
+
+    runtime = bridge.RuntimeBridge()
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+    monkeypatch.setattr(runtime, "_connect_runtime_transport", lambda: (False, None))
+    monkeypatch.setattr(runtime, "_prime_runtime_task_delivery", lambda: None)
+
+    result = runtime._remote_mcp_servers()
+
+    assert result["errorCode"] == "MCP_CONTROL_PLANE_AUTH_REQUIRED"
+    assert calls == {"inventory": 2, "register": 1}
 
 
 def test_runtime_tasks_execute_assigned_is_available_through_handle(
@@ -3677,6 +4016,84 @@ def test_runtime_register_uses_state_identity_and_advertised_capabilities(
     assert snapshot["runtime"]["lifecycleState"] == "runtime_connecting"
 
 
+def test_explicit_runtime_register_and_constructor_retry_are_single_flight(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+            }
+        }
+    )
+
+    retry_checked = threading.Event()
+    release_retry = threading.Event()
+    original_should_continue = bridge.RuntimeBridge._runtime_register_retry_should_continue
+
+    def controlled_should_continue(
+        runtime: bridge.RuntimeBridge,
+        target: dict[str, str],
+        *,
+        generation: int,
+    ) -> bool:
+        should_continue = original_should_continue(runtime, target, generation=generation)
+        if threading.current_thread().name == "elyan-runtime-register-retry" and not retry_checked.is_set():
+            retry_checked.set()
+            release_retry.wait(timeout=2)
+        return should_continue
+
+    monkeypatch.setattr(
+        bridge.RuntimeBridge,
+        "_runtime_register_retry_should_continue",
+        controlled_should_continue,
+    )
+
+    register_calls = 0
+
+    class FakeBackend:
+        configured = True
+        loopback = False
+
+        def register_runtime(self, _payload: dict[str, object]) -> BackendResult:
+            nonlocal register_calls
+            register_calls += 1
+            return BackendResult(
+                ok=True,
+                request_id="req_register_single_flight",
+                status_code=200,
+                data={
+                    "runtime": {"deviceId": VALID_DEVICE_ID, "connectionId": VALID_CONNECTION_ID},
+                    "tokens": {"accessToken": "runtime-token"},
+                },
+                x_request_id="req-server-register-single-flight",
+            )
+
+    runtime = bridge.RuntimeBridge()
+    assert retry_checked.wait(timeout=1)
+    retry_thread = runtime._runtime_register_retry_thread
+    assert retry_thread is not None
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+    monkeypatch.setattr(runtime, "_connect_runtime_transport", lambda: (False, None))
+    monkeypatch.setattr(runtime, "_prime_runtime_task_delivery", lambda: None)
+
+    try:
+        response = runtime.register_runtime({})
+    finally:
+        release_retry.set()
+    retry_thread.join(timeout=2)
+
+    snapshot = state_store.snapshot()
+    assert response["ok"] is True
+    assert register_calls == 1
+    assert retry_thread.is_alive() is False
+    assert snapshot["runtime"]["runtimeToken"] == "runtime-token"
+    assert snapshot["runtime"]["lifecycleState"] == "runtime_connecting"
+
+
 def test_runtime_register_rejects_invalid_identity_without_backend_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3794,6 +4211,85 @@ def test_concurrent_runtime_registration_is_single_flight(
     assert len(results) == 2
     assert all(result["ok"] is True for result in results)
     assert any(result.get("reused") is True for result in results)
+
+
+def test_reconnect_registration_reuses_concurrent_explicit_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "runtimeToken": "runtime-token-old",
+                "ready": False,
+            }
+        }
+    )
+    runtime = bridge.RuntimeBridge()
+
+    class SignalingRegistrationLock:
+        def __init__(self) -> None:
+            self._lock = threading.RLock()
+            self.reconnect_waiting = threading.Event()
+
+        def __enter__(self) -> SignalingRegistrationLock:
+            if threading.current_thread().name == "test-runtime-reconnect":
+                self.reconnect_waiting.set()
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+            self._lock.release()
+
+    registration_lock = SignalingRegistrationLock()
+    runtime._runtime_registration_lock = registration_lock  # type: ignore[assignment]
+
+    class FakeBackend:
+        configured = True
+        loopback = False
+
+        def __init__(self) -> None:
+            self.register_calls = 0
+
+        def register_runtime(self, _payload: dict[str, object]) -> BackendResult:
+            self.register_calls += 1
+            return BackendResult(
+                ok=True,
+                request_id="req_register_explicit",
+                status_code=200,
+                data={
+                    "runtime": {"deviceId": VALID_DEVICE_ID, "connectionId": VALID_CONNECTION_ID},
+                    "tokens": {"accessToken": "runtime-token-new"},
+                },
+                x_request_id="req-server-register-explicit",
+            )
+
+    runtime.backend = FakeBackend()  # type: ignore[assignment]
+    monkeypatch.setattr(runtime, "_connect_runtime_transport", lambda: (False, None))
+    monkeypatch.setattr(runtime, "_prime_runtime_task_delivery", lambda: None)
+    reconnect_results: list[bool] = []
+
+    with registration_lock:
+        reconnect_thread = threading.Thread(
+            target=lambda: reconnect_results.append(runtime._refresh_runtime_registration_for_reconnect()),
+            name="test-runtime-reconnect",
+        )
+        reconnect_thread.start()
+        assert registration_lock.reconnect_waiting.wait(timeout=1)
+        explicit_response = runtime.register_runtime({})
+
+    reconnect_thread.join(timeout=2)
+    snapshot = state_store.snapshot()
+
+    assert explicit_response["ok"] is True
+    assert reconnect_results == [True]
+    assert reconnect_thread.is_alive() is False
+    assert runtime.backend.register_calls == 1  # type: ignore[attr-defined]
+    assert snapshot["runtime"]["runtimeToken"] == "runtime-token-new"
+    assert snapshot["runtime"]["lifecycleState"] == "runtime_connecting"
 
 
 def test_ensure_runtime_registered_primes_assigned_task_fetch(
@@ -5364,10 +5860,12 @@ def test_confirm_plan_executes_local_steps(
     monkeypatch.setattr(
         bridge,
         "run_capability",
+        # P3 kanıt sözleşmesi: sağlayıcı adımı provider kimliği döndürür.
         lambda tool, args, _state: {
             "ok": True,
             "tool": tool,
             "output": f"{tool}:{args.get('title', args.get('app_name', 'ok'))}",
+            "result": {"kind": tool, "eventId": "evt_test_1"},
             "error": None,
         },
     )
@@ -8595,6 +9093,8 @@ def _dispatch_auto_approve_backend(task_capabilities: list[str]):
                             "id": "task-dispatch",
                             "title": "Chrome u kapat",
                             "status": "queued",
+                            "userId": "user-tests",
+                            "targetDeviceId": VALID_DEVICE_ID,
                             "payload": {
                                 "prompt": "Chrome u kapat",
                                 "desktopWorkOrder": _dispatch_work_order(task_capabilities),
@@ -8625,6 +9125,7 @@ def test_dispatched_plan_within_work_order_capabilities_auto_approves(
     """Mobil dispatch açık kullanıcı iradesidir: plan, iş emrinin bildirdiği
     yeteneklerin içinde kaldığı sürece ikinci onay istenmez ve görev biter."""
     _isolate_state(monkeypatch, tmp_path)
+    _arm_device_identity()
     runtime = bridge.RuntimeBridge()
     runtime.backend = _dispatch_auto_approve_backend(["close_app"])  # type: ignore[assignment]
 
@@ -8680,6 +9181,7 @@ def test_dispatched_plan_with_blocklisted_capability_still_waits_for_approval(
     açık onay ister."""
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
+    _arm_device_identity()
     runtime.backend = _dispatch_auto_approve_backend(["email_send"])  # type: ignore[assignment]
 
     monkeypatch.setattr(runtime, "_execute_deterministic_remote_task", lambda *_a, **_k: None)
@@ -8866,6 +9368,160 @@ def test_live_progress_routes_to_active_task_and_throttles(
     assert "task-1" not in runtime._remote_progress_last_signature
 
 
+def test_ws_cancel_reaches_copied_task_scope_and_discards_late_worker_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from runtime import mcp_runtime, remote_task_runner as rtr
+
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    entered = threading.Event()
+    release = threading.Event()
+    observed_task_ids: list[str] = []
+
+    def deterministic(*_args: object) -> dict[str, object]:
+        observed_task_ids.append(mcp_runtime.current_task_id())
+        entered.set()
+        assert release.wait(2.0)
+        return {"ok": True, "output": "must not escape"}
+
+    monkeypatch.setattr(runtime, "_execute_deterministic_remote_task", deterministic)
+
+    def cancel_from_socket() -> None:
+        assert entered.wait(1.0)
+        runtime._handle_runtime_ws_message(
+            json.dumps({"type": "task.cancel", "taskId": "task-scoped-cancel"})
+        )
+        release.set()
+
+    token = runtime._begin_active_remote_task("task-scoped-cancel", "run-1")
+    canceller = threading.Thread(target=cancel_from_socket, daemon=True)
+    try:
+        canceller.start()
+        result = runtime.remote_task_runner._execute_local_with_timeout(
+            {},
+            "prompt",
+            "title",
+            task_id="task-scoped-cancel",
+        )
+        canceller.join(2.0)
+
+        assert result is rtr._EXECUTION_CANCELLED
+        assert observed_task_ids == ["task-scoped-cancel"]
+        assert runtime._active_remote_task_cancellation_reason("task-scoped-cancel") == "task_cancelled"
+        inbox_item = state_store.get_task_inbox_item("task-scoped-cancel")
+        assert inbox_item is not None
+        assert inbox_item["status"] == "canceled"
+    finally:
+        release.set()
+        runtime._end_active_remote_task(token, "task-scoped-cancel")
+
+    # Bounded tombstone keeps a duplicate/retried dispatch canceled too.
+    assert runtime._active_remote_task_cancellation_reason("task-scoped-cancel") == "task_cancelled"
+
+
+def test_ws_cancel_before_scope_prevents_remote_task_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    executed: list[str] = []
+    monkeypatch.setattr(
+        runtime,
+        "_execute_deterministic_remote_task",
+        lambda *_args: executed.append("executed") or {"ok": True},
+    )
+
+    runtime._handle_runtime_ws_message(
+        json.dumps({"type": "task.cancel", "taskId": "task-cancel-before-scope"})
+    )
+    result = runtime.remote_task_runner.execute_runtime_task(
+        {"id": "task-cancel-before-scope", "payload": {"prompt": "çalışmamalı"}}
+    )
+
+    assert result["status"] == "canceled"
+    assert result["error"]["code"] == "TASK_CANCELLED"
+    assert executed == []
+    inbox_item = state_store.get_task_inbox_item("task-cancel-before-scope")
+    assert inbox_item is not None
+    assert inbox_item["status"] == "canceled"
+
+
+def test_cancel_first_terminal_fence_suppresses_artifacts_and_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    outbound: list[str] = []
+    monkeypatch.setattr(
+        runtime,
+        "_report_runtime_task_artifacts",
+        lambda *_args, **_kwargs: outbound.append("artifacts"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_report_runtime_task_status",
+        lambda *_args, **_kwargs: outbound.append("status"),
+    )
+
+    runtime._handle_runtime_ws_message(
+        json.dumps({"type": "task.cancel", "taskId": "task-terminal-race"})
+    )
+    result = runtime._report_runtime_task_terminal_result(
+        "task-terminal-race",
+        {
+            "chatOk": True,
+            "assistantMessage": "geç başarı",
+            "artifacts": [{"kind": "file", "path": "/tmp/late.txt"}],
+        },
+        dispatched_via_websocket=True,
+    )
+
+    assert result["status"] == "canceled"
+    assert result["error"]["code"] == "TASK_CANCELLED"
+    assert outbound == []
+
+
+def test_scope_limit_after_running_reports_safe_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    status_payloads: list[dict[str, object]] = []
+    monkeypatch.setattr(runtime, "_runtime_task_preflight_error", lambda *_args: None)
+    monkeypatch.setattr(runtime, "_remote_task_running_plan_preview", lambda *_args: {})
+    monkeypatch.setattr(runtime, "_set_runtime_task_heartbeat", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        runtime,
+        "_report_runtime_task_status",
+        lambda _task_id, payload: status_payloads.append(payload)
+        or BackendResult(ok=True, request_id="req", status_code=200, data={"ok": True}),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_begin_active_remote_task",
+        lambda *_args: (_ for _ in ()).throw(
+            SafeCapabilityError("TASK_SCOPE_LIMIT", "Çok fazla görev aynı anda çalışıyor.")
+        ),
+    )
+
+    _arm_device_identity()
+    result = runtime.remote_task_runner.execute_runtime_task(
+        _trusted_task(
+            {"id": "task-scope-limit", "payload": {"prompt": "kapsam sınırı"}},
+            capabilities=["retrieve_context"],
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert status_payloads[-1]["status"] == "failed"
+    assert status_payloads[-1]["error"] == "TASK_SCOPE_LIMIT"
+
+
 def test_websocket_approval_resume_is_idempotent_and_terminal_fenced(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -8972,6 +9628,41 @@ def test_execute_local_with_timeout_returns_sentinel_on_hang(
     result = runner._execute_local_with_timeout({}, "prompt", "title", task_id="task-xyz")
 
     assert result is rtr._EXECUTION_TIMEOUT
+
+
+def test_execute_local_timeout_cancels_active_mcp_before_returning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from runtime import remote_task_runner as rtr
+
+    monkeypatch.setattr(rtr, "REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS", 0.1)
+    released = threading.Event()
+    cancellation_calls: list[tuple[str, str]] = []
+
+    class _Host:
+        def _execute_deterministic_remote_task(self, *_args: object) -> object:
+            assert released.wait(2.0)
+            return {"ok": True, "output": "late"}
+
+        def send_conversation(self, *_args: object) -> object:  # pragma: no cover
+            return {"ok": True}
+
+        def _runtime_diag(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def _cancel_active_remote_task(self, task_id: str, *, reason: str) -> int:
+            cancellation_calls.append((task_id, reason))
+            released.set()
+            return 1
+
+        def _active_remote_task_cancellation_reason(self, _task_id: str) -> str:
+            return "task_execution_timeout" if cancellation_calls else ""
+
+    runner = rtr.RemoteTaskRunner(_Host())
+    result = runner._execute_local_with_timeout({}, "prompt", "title", task_id="task-mcp-timeout")
+
+    assert result is rtr._EXECUTION_CANCELLED
+    assert cancellation_calls == [("task-mcp-timeout", "task_execution_timeout")]
 
 
 def test_execute_local_with_timeout_delegates_none_to_conversation(

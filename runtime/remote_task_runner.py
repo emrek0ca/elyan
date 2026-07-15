@@ -10,7 +10,7 @@ from typing import Any
 from runtime import learning_store, state_store
 from runtime.agent_planning import build_agent_plan
 from runtime.backend_client import BackendResult
-from runtime.capability_registry import capability_display_name, capability_readiness
+from runtime.capability_registry import capability_display_name, capability_metadata, capability_readiness
 from runtime.desktop_work_order import validate_payload, verify_result
 from runtime.execution_scheduler import SchedulerPlanError, schedule_tasks
 from runtime.execution_trust import ExecutionLedger, TrustError, prepare_work_order_v2
@@ -327,13 +327,31 @@ class RemoteTaskRunner:
         # prompt olarak gelir; work-order konusundan türetilen prompt'u ezer.
         if str(prompt_override or "").strip():
             prompt = str(prompt_override).strip()
+        # Deterministik yerel rota planı güvenli (salt-okunur) adımlarla ikame
+        # edebilir; kapsam mühürlenmeden ÖNCE hesaplanır ki grant zinciri
+        # kopmasın. Yalnız read-only sınıfı yetenekler kapsama eklenebilir.
+        precomputed_preview = self.host._remote_task_running_plan_preview(task, prompt, payload)
         if isinstance(work_order, dict):
+            preview_steps = precomputed_preview.get("steps", []) if isinstance(precomputed_preview, dict) else []
+            extra_read_scope: list[str] = []
+            for step in preview_steps if isinstance(preview_steps, list) else []:
+                if not isinstance(step, dict):
+                    continue
+                step_capability = str(step.get("capability", "") or "").strip()
+                metadata = capability_metadata(step_capability)
+                if (
+                    step_capability
+                    and not bool(metadata.get("sideEffect", False))
+                    and str(metadata.get("permissionClass", "") or "") == "read_only"
+                ):
+                    extra_read_scope.append(step_capability)
             try:
                 work_order = prepare_work_order_v2(
                     task,
                     work_order,
                     prompt=prompt,
                     state=state_store.snapshot(),
+                    extra_read_scope=extra_read_scope,
                 )
                 delivery = ExecutionLedger().claim_delivery(work_order)
                 if not delivery.claimed:
@@ -382,7 +400,7 @@ class RemoteTaskRunner:
             title=title if title != "Elyan görevi" else prompt,
         )
         self._report_lifecycle(task_id, task_run_id, "planning", "Görev planlanıyor.", task=task)
-        plan_preview = self.host._remote_task_running_plan_preview(task, prompt, payload)
+        plan_preview = precomputed_preview
         readiness = self._readiness_for_plan(plan_preview)
         if plan_preview:
             self._report_lifecycle(

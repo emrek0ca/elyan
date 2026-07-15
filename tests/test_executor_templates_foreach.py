@@ -41,6 +41,12 @@ def test_step_output_templates_resolve_into_later_args() -> None:
             "output": "2 öğe",
             "result": {"items": [{"href": "https://a.example"}, {"href": "https://b.example"}]},
         },
+        # P3: yan etkili adım boş result ile doğrulanamaz — gözlemlenen durum döner.
+        "browser_session.goto": {
+            "ok": True,
+            "output": "gidildi",
+            "result": {"url": "https://a.example", "readBackVerified": True},
+        },
     }
     ok, _summary, error_code, calls = _run(steps, responses)
     assert ok, error_code
@@ -96,7 +102,8 @@ def test_whole_template_preserves_list_type() -> None:
 
     def _writer(args: dict[str, Any]):
         captured.update(args)
-        return {"ok": True, "output": "yazıldı", "result": {}}
+        # P3: yan etkili adım için gözlemlenen durum kanıtı.
+        return {"ok": True, "output": "yazıldı", "result": {"typed": True, "readBackVerified": True}}
 
     steps = [
         {"id": "kaynak", "capability": "browser_session.extract", "args": {}},
