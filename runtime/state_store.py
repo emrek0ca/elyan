@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import difflib
 import json
 import os
@@ -1807,9 +1808,35 @@ def reconcile_task_inbox(
             link = link_by_task_id.get(task_id, {})
             link_status = str(link.get("status", "") or "").strip()
             if status == "waiting_approval" or link_status == "waiting_approval":
-                normalized["status"] = "waiting_approval"
+                # Onay bekleyen görev backend aktif listesinden düştüyse
+                # (ör. onay başka kanaldan reddedildi/çözüldü) SONSUZA DEK
+                # sabitleme — kısa bir doğrulama penceresi tanı, sonra bilinen
+                # son uzak duruma indir. Eski davranış tepside kalıcı 'onay
+                # bekliyor' hayaletleri bırakıyordu.
+                previous_verified = str(item.get("lastVerifiedAt", "") or "").strip()
+                pin_expired = False
+                if previous_verified:
+                    try:
+                        seen = dt.datetime.fromisoformat(previous_verified.replace("Z", "+00:00"))
+                        if seen.tzinfo is None:
+                            seen = seen.replace(tzinfo=dt.timezone.utc)
+                        pin_expired = (
+                            dt.datetime.now(dt.timezone.utc) - seen
+                        ).total_seconds() > 600
+                    except ValueError:
+                        pin_expired = False
+                if not pin_expired:
+                    normalized["status"] = "waiting_approval"
+                    normalized["lastVerifiedAt"] = previous_verified or verified_at
+                    normalized["lastRemoteStatus"] = "waiting_approval"
+                    reconciled.append(normalized)
+                    continue
+                normalized["status"] = "canceled"
+                normalized["summary"] = normalized.get("summary") or (
+                    "Onay bekleyen görev sunucu tarafında çözüldü; yerel kayıt kapatıldı."
+                )
                 normalized["lastVerifiedAt"] = verified_at
-                normalized["lastRemoteStatus"] = "waiting_approval"
+                normalized["lastRemoteStatus"] = "canceled"
                 reconciled.append(normalized)
                 continue
             last_remote_status = str(normalized.get("lastRemoteStatus", "") or "").strip()
