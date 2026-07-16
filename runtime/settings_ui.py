@@ -1,10 +1,14 @@
-"""Yerel Ayarlar penceresi — menü çubuğundaki "Ayarlar…" öğesinden açılır.
+"""Yerel Ayarlar penceresi — menü çubuğu/tepsideki "Ayarlar…" öğesinden açılır.
 
 Native tkinter modalı (web GUI değil): macOS/Windows/Linux'ta Python'la gelen
-Tk ile ekranda küçük bir ayar penceresi açılır. pystray macOS'ta AppKit run
+Tk ile ekranda mobil uygulamayla AYNI tasarım dilinde (orman adaçayı paleti,
+kart yüzeyler) küçük bir ayar penceresi açılır. pystray macOS'ta AppKit run
 loop'unu ana thread'de tuttuğu için pencere AYRI SÜREÇTE çalışır
 (`python -m runtime.settings_ui`) — üç platformda da thread/run-loop
 çakışması yaşanmaz.
+
+Kimlik: pencere hiçbir yerde "Python" olarak görünmez — macOS'ta bundle adı
+ve Dock ikonu Elyan/logo.png yapılır; Windows/Linux'ta pencere ikonu logo'dur.
 
 Pencere STATE dosyasını okur/yazar (state_store); servis işlemleri
 (yeniden başlat / eşleşmeyi kopar) mevcut `elyan` CLI komutlarına delege
@@ -20,7 +24,19 @@ from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+_LOGO_PATH = _REPO_ROOT / "logo.png"
 _LOCK_PATH = Path.home() / ".elyan" / "settings-ui.pid"
+
+# Mobil uygulamanın koyu orman-adaçayı paleti (mobile_preferences.dart: elyan).
+_BG = "#1C2820"  # darkBackground
+_SURFACE = "#2A3A2E"  # darkSurface
+_SURFACE_MUTED = "#344538"  # darkSurfaceMuted
+_PRIMARY = "#86AA84"  # darkPrimary
+_PRIMARY_DARK = "#688A66"
+_TEXT = "#E9EDE7"
+_MUTED = "#9AA896"
+_DANGER = "#C96A5F"
+_OUTLINE = "#3A4A3E"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -73,9 +89,57 @@ def _elyan_cli(*args: str) -> None:
     )
 
 
+def _apply_elyan_identity(root: Any) -> None:
+    """Uygulama hiçbir yüzeyde "Python" görünmesin: ad Elyan, ikon logo.png.
+
+    * macOS: bundle adı (uygulama menüsü) + Dock ikonu AppKit ile ayarlanır.
+    * Windows/Linux: pencere ikonu iconphoto ile logo yapılır; Windows'ta
+      ayrıca AppUserModelID atanır ki görev çubuğu gruplaması Elyan olsun.
+    """
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSApplication, NSImage
+            from Foundation import NSBundle
+
+            info = NSBundle.mainBundle().infoDictionary()
+            if isinstance(info, object):
+                info["CFBundleName"] = "Elyan"
+            if _LOGO_PATH.exists():
+                image = NSImage.alloc().initWithContentsOfFile_(str(_LOGO_PATH))
+                if image is not None:
+                    NSApplication.sharedApplication().setApplicationIconImage_(image)
+        except Exception:
+            pass
+        return
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("dev.elyan.desktop")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    try:
+        import tkinter as tk
+
+        if _LOGO_PATH.exists():
+            icon = tk.PhotoImage(file=str(_LOGO_PATH))
+            root.iconphoto(True, icon)
+            root._elyan_icon_ref = icon  # GC koruması
+    except Exception:
+        pass
+
+
 def _run_window() -> int:
+    try:
+        import setproctitle
+
+        setproctitle.setproctitle("elyan-settings")
+    except Exception:
+        pass
+
     import tkinter as tk
-    from tkinter import messagebox, ttk
+    from tkinter import font as tkfont
+    from tkinter import messagebox
 
     from runtime import state_store
 
@@ -89,24 +153,40 @@ def _run_window() -> int:
     state = state_store.snapshot()
     pairing = state.get("pairing", {}) if isinstance(state.get("pairing"), dict) else {}
     privacy = state.get("privacy", {}) if isinstance(state.get("privacy"), dict) else {}
-    providers = state.get("providers", {}) if isinstance(state.get("providers"), dict) else {}
-    ollama = providers.get("ollama", {}) if isinstance(providers.get("ollama"), dict) else {}
 
     root = tk.Tk()
     root.title("Elyan Ayarları")
+    root.configure(bg=_BG)
     root.resizable(False, False)
+    _apply_elyan_identity(root)
     try:  # pencereyi öne getir
         root.attributes("-topmost", True)
         root.after(400, lambda: root.attributes("-topmost", False))
     except Exception:
         pass
 
-    style = ttk.Style(root)
-    if sys.platform == "darwin":
-        style.theme_use("aqua")
+    base_family = "SF Pro Text" if sys.platform == "darwin" else "Segoe UI" if sys.platform.startswith("win") else "Cantarell"
+    try:
+        tkfont.Font(family=base_family, size=12)
+    except Exception:
+        base_family = "TkDefaultFont"
+    font_body = (base_family, 12)
+    font_label = (base_family, 11)
+    font_section = (base_family, 11, "bold")
+    font_title = (base_family, 16, "bold")
 
-    outer = ttk.Frame(root, padding=16)
-    outer.grid(sticky="nsew")
+    outer = tk.Frame(root, bg=_BG, padx=20, pady=18)
+    outer.pack(fill="both", expand=True)
+
+    tk.Label(outer, text="Elyan", bg=_BG, fg=_TEXT, font=font_title, anchor="w").pack(fill="x")
+    tk.Label(
+        outer,
+        text="Ayarlar — değişiklikler anında kaydedilir",
+        bg=_BG,
+        fg=_MUTED,
+        font=font_label,
+        anchor="w",
+    ).pack(fill="x", pady=(0, 12))
 
     saved_var = tk.StringVar(value="")
 
@@ -121,31 +201,87 @@ def _run_window() -> int:
         except Exception:
             _flash_saved("Kaydedilemedi!")
 
-    def _section(title: str) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(outer, text=title, padding=(12, 8))
-        frame.pack(fill="x", pady=(0, 10))
-        return frame
+    def _card(title: str) -> tk.Frame:
+        """Mobil ElyanPreferenceGroup görünümünde kart."""
+        wrapper = tk.Frame(outer, bg=_SURFACE, padx=14, pady=12, highlightthickness=1)
+        wrapper.configure(highlightbackground=_OUTLINE, highlightcolor=_OUTLINE)
+        tk.Label(wrapper, text=title.upper(), bg=_SURFACE, fg=_MUTED, font=font_section, anchor="w").pack(
+            fill="x", pady=(0, 8)
+        )
+        wrapper.pack(fill="x", pady=(0, 10))
+        return wrapper
+
+    def _row(parent: tk.Frame) -> tk.Frame:
+        row = tk.Frame(parent, bg=_SURFACE)
+        row.pack(fill="x", pady=2)
+        return row
+
+    def _pill(parent: tk.Frame, var: tk.StringVar) -> tk.Label:
+        pill = tk.Label(
+            parent,
+            textvariable=var,
+            bg=_SURFACE_MUTED,
+            fg=_PRIMARY,
+            font=font_label,
+            padx=10,
+            pady=1,
+        )
+        pill.pack(side="right")
+        return pill
+
+    def _check(parent: tk.Frame, label: str, var: tk.BooleanVar, command: Any) -> None:
+        check = tk.Checkbutton(
+            parent,
+            text=label,
+            variable=var,
+            command=command,
+            bg=_SURFACE,
+            fg=_TEXT,
+            activebackground=_SURFACE,
+            activeforeground=_TEXT,
+            selectcolor=_SURFACE_MUTED,
+            highlightthickness=0,
+            font=font_body,
+            anchor="w",
+        )
+        check.pack(fill="x", pady=1)
+
+    def _button(parent: tk.Frame, label: str, command: Any, *, danger: bool = False, primary: bool = False) -> tk.Button:
+        bg = _PRIMARY if primary else _SURFACE_MUTED
+        fg = _BG if primary else (_DANGER if danger else _TEXT)
+        button = tk.Button(
+            parent,
+            text=label,
+            command=command,
+            bg=bg,
+            fg=fg,
+            activebackground=_PRIMARY_DARK if primary else _OUTLINE,
+            activeforeground=fg,
+            relief="flat",
+            font=font_label,
+            padx=12,
+            pady=5,
+            highlightthickness=0,
+            borderwidth=0,
+            cursor="hand2",
+        )
+        return button
 
     # --- Durum -------------------------------------------------------------
-    status_frame = _section("Durum")
+    status_card = _card("Durum")
     conn_var = tk.StringVar(value="…")
     account_var = tk.StringVar(value="…")
     device_var = tk.StringVar(value="…")
     tasks_var = tk.StringVar(value="…")
-    for row, (label, var) in enumerate(
-        (
-            ("Bağlantı", conn_var),
-            ("Hesap", account_var),
-            ("Cihaz kimliği", device_var),
-            ("Aktif görev", tasks_var),
-        )
+    for label, var in (
+        ("Bağlantı", conn_var),
+        ("Hesap", account_var),
+        ("Cihaz kimliği", device_var),
+        ("Aktif görev", tasks_var),
     ):
-        ttk.Label(status_frame, text=label).grid(row=row, column=0, sticky="w", pady=1)
-        ttk.Label(status_frame, textvariable=var, foreground="#557a53").grid(
-            row=row, column=1, sticky="e", pady=1
-        )
-    status_frame.columnconfigure(0, weight=1)
-    status_frame.columnconfigure(1, weight=1)
+        row = _row(status_card)
+        tk.Label(row, text=label, bg=_SURFACE, fg=_TEXT, font=font_body, anchor="w").pack(side="left")
+        _pill(row, var)
 
     def _refresh_status() -> None:
         summary = _summary()
@@ -153,10 +289,10 @@ def _run_window() -> int:
         runtime = runtime if isinstance(runtime, dict) else {}
         connected = bool(summary.get("websocketConnected", False))
         lifecycle = str(summary.get("lifecycleState", "") or "stopped")
-        conn_var.set("Bağlı ●" if connected else lifecycle)
+        conn_var.set("● Bağlı" if connected else lifecycle)
         email = str(summary.get("email", "") or "")
         paired = bool(str(runtime.get("runtimeToken", "") or "").strip())
-        account_var.set(email or ("QR eşleşmesi" if paired else "Bağlı değil"))
+        account_var.set(email or ("Telefon eşleşmesi" if paired else "Bağlı değil"))
         device_id = str(runtime.get("deviceId", "") or "")
         device_var.set(device_id[:8] + "…" if device_id else "—")
         active = summary.get("activeTasks", []) or []
@@ -164,11 +300,24 @@ def _run_window() -> int:
         root.after(3000, _refresh_status)
 
     # --- Cihaz -------------------------------------------------------------
-    device_frame = _section("Cihaz")
-    ttk.Label(device_frame, text="Cihaz adı").grid(row=0, column=0, sticky="w")
+    device_card = _card("Cihaz")
+    name_row = _row(device_card)
+    tk.Label(name_row, text="Cihaz adı", bg=_SURFACE, fg=_TEXT, font=font_body, anchor="w").pack(side="left")
     name_var = tk.StringVar(value=str(pairing.get("deviceName", "") or ""))
-    name_entry = ttk.Entry(device_frame, textvariable=name_var, width=24)
-    name_entry.grid(row=0, column=1, sticky="e", pady=2)
+    name_entry = tk.Entry(
+        name_row,
+        textvariable=name_var,
+        width=20,
+        bg=_SURFACE_MUTED,
+        fg=_TEXT,
+        insertbackground=_TEXT,
+        relief="flat",
+        font=font_body,
+        highlightthickness=1,
+        highlightbackground=_OUTLINE,
+        highlightcolor=_PRIMARY,
+    )
+    name_entry.pack(side="right", ipady=3)
 
     def _save_name(_event: Any = None) -> None:
         value = name_var.get().strip()[:64]
@@ -179,19 +328,19 @@ def _run_window() -> int:
     name_entry.bind("<Return>", _save_name)
 
     links_var = tk.BooleanVar(value=bool(pairing.get("allowNewLinks", True)))
-    ttk.Checkbutton(
-        device_frame,
-        text="Yeni eşleşmelere izin ver",
-        variable=links_var,
-        command=lambda: _apply({"pairing": {"allowNewLinks": links_var.get()}}),
-    ).grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
+    _check(
+        device_card,
+        "Yeni eşleşmelere izin ver",
+        links_var,
+        lambda: _apply({"pairing": {"allowNewLinks": links_var.get()}}),
+    )
 
-    button_row = ttk.Frame(device_frame)
-    button_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    button_row = tk.Frame(device_card, bg=_SURFACE)
+    button_row.pack(fill="x", pady=(8, 0))
 
     def _restart() -> None:
         _elyan_cli("restart")
-        _flash_saved("Daemon yeniden başlatılıyor…")
+        _flash_saved("Yeniden başlatılıyor…")
 
     def _unpair() -> None:
         if messagebox.askyesno(
@@ -202,86 +351,31 @@ def _run_window() -> int:
             _elyan_cli("unpair")
             _flash_saved("Eşleşme koparılıyor…")
 
-    ttk.Button(button_row, text="Daemon'u Yeniden Başlat", command=_restart).pack(
-        side="left", padx=(0, 8)
-    )
-    ttk.Button(button_row, text="Eşleşmeyi Kopar…", command=_unpair).pack(side="left")
-    device_frame.columnconfigure(0, weight=1)
+    _button(button_row, "Yeniden Başlat", _restart, primary=True).pack(side="left", padx=(0, 8))
+    _button(button_row, "Eşleşmeyi Kopar…", _unpair, danger=True).pack(side="left")
 
     # --- Gizlilik ----------------------------------------------------------
-    privacy_frame = _section("Gizlilik")
+    privacy_card = _card("Gizlilik")
     privacy_items = (
         ("localDataStaysLocal", "Yerel veri yerelde kalsın", True),
         ("analytics", "Anonim kullanım analitiği", False),
         ("redactCrashReports", "Çökme raporlarında kişisel veriyi maskele", True),
         ("autoClearHistory", "Geçmişi otomatik temizle", False),
     )
-    for row, (key, label, default) in enumerate(privacy_items):
+    for key, label, default in privacy_items:
         var = tk.BooleanVar(value=bool(privacy.get(key, default)))
-        ttk.Checkbutton(
-            privacy_frame,
-            text=label,
-            variable=var,
-            command=lambda k=key, v=var: _apply({"privacy": {k: v.get()}}),
-        ).grid(row=row, column=0, sticky="w", pady=1)
-
-    # --- Yerel model ---------------------------------------------------------
-    model_frame = _section("Yerel Model")
-    ttk.Label(model_frame, text="Çalışma zamanı").grid(row=0, column=0, sticky="w")
-    runtime_var = tk.StringVar(value=str(providers.get("defaultLocalRuntime", "") or "ollama"))
-    runtime_box = ttk.Combobox(
-        model_frame,
-        textvariable=runtime_var,
-        values=("ollama", "lmstudio", "llamacpp"),
-        state="readonly",
-        width=12,
-    )
-    runtime_box.grid(row=0, column=1, sticky="e", pady=2)
-    runtime_box.bind(
-        "<<ComboboxSelected>>",
-        lambda _e: _apply({"providers": {"defaultLocalRuntime": runtime_var.get()}}),
-    )
-
-    ttk.Label(model_frame, text="Ollama adresi").grid(row=1, column=0, sticky="w")
-    url_var = tk.StringVar(value=str(ollama.get("baseUrl", "") or "http://127.0.0.1:11434"))
-    url_entry = ttk.Entry(model_frame, textvariable=url_var, width=24)
-    url_entry.grid(row=1, column=1, sticky="e", pady=2)
-
-    def _save_url(_event: Any = None) -> None:
-        value = url_var.get().strip().rstrip("/")
-        if value.startswith(("http://", "https://")):
-            _apply({"providers": {"ollama": {"baseUrl": value}}})
-
-    url_entry.bind("<FocusOut>", _save_url)
-    url_entry.bind("<Return>", _save_url)
-
-    ttk.Label(model_frame, text="Varsayılan model").grid(row=2, column=0, sticky="w")
-    model_var = tk.StringVar(value=str(ollama.get("defaultModel", "") or ""))
-    model_entry = ttk.Entry(model_frame, textvariable=model_var, width=24)
-    model_entry.grid(row=2, column=1, sticky="e", pady=2)
-
-    def _save_model(_event: Any = None) -> None:
-        value = model_var.get().strip()[:120]
-        if value:
-            _apply({"providers": {"ollama": {"defaultModel": value}}})
-
-    model_entry.bind("<FocusOut>", _save_model)
-    model_entry.bind("<Return>", _save_model)
-
-    cloud_var = tk.BooleanVar(value=bool(providers.get("fallbackToCloud", True)))
-    ttk.Checkbutton(
-        model_frame,
-        text="Gerekirse buluta düş",
-        variable=cloud_var,
-        command=lambda: _apply({"providers": {"fallbackToCloud": cloud_var.get()}}),
-    ).grid(row=3, column=0, columnspan=2, sticky="w", pady=2)
-    model_frame.columnconfigure(0, weight=1)
+        _check(
+            privacy_card,
+            label,
+            var,
+            lambda k=key, v=var: _apply({"privacy": {k: v.get()}}),
+        )
 
     # --- Alt bilgi -----------------------------------------------------------
-    footer = ttk.Frame(outer)
-    footer.pack(fill="x")
-    ttk.Label(footer, textvariable=saved_var, foreground="#557a53").pack(side="left")
-    ttk.Button(footer, text="Kapat", command=root.destroy).pack(side="right")
+    footer = tk.Frame(outer, bg=_BG)
+    footer.pack(fill="x", pady=(4, 0))
+    tk.Label(footer, textvariable=saved_var, bg=_BG, fg=_PRIMARY, font=font_label).pack(side="left")
+    _button(footer, "Kapat", lambda: (_cleanup(), root.destroy())).pack(side="right")
 
     def _cleanup() -> None:
         try:
@@ -291,6 +385,7 @@ def _run_window() -> int:
 
     root.protocol("WM_DELETE_WINDOW", lambda: (_cleanup(), root.destroy()))
     _refresh_status()
+    root.update_idletasks()
     root.eval("tk::PlaceWindow . center")
     # Otomatik doğrulama modu: pencereyi kurup kısa süre sonra kendini kapatır
     # (CI/smoke-test; kullanıcı akışında etkisiz).

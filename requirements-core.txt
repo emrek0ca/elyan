@@ -13,3 +13,4 @@ langgraph
 google-genai
 mcp
 openpyxl==3.1.5
+setproctitle>=1.3

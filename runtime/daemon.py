@@ -351,6 +351,15 @@ def _pairing_map(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Süreç adı hiçbir yerde "Python" görünmesin (Aktivite Monitörü, ps, htop,
+    # Görev Yöneticisi). setproctitle yoksa sessizce geç — kozmetik bir kimlik.
+    try:
+        import setproctitle
+
+        setproctitle.setproctitle("elyan")
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(prog="elyan-daemon")
     parser.add_argument("--no-tray", action="store_true", help="Menü çubuğu ikonu olmadan çalış")
     args = parser.parse_args(argv)

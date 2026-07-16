@@ -40,30 +40,92 @@ _TASK_STATUS_LABELS = {
 }
 
 
-def _load_icon_image() -> Any:
-    """Repo logosundan tepsi ikonu — menü çubuğu için TEK RENK BEYAZ glif.
+_LOGO_PATH = Path(__file__).resolve().parent.parent / "logo.png"
 
-    Logonun alfa kanalı korunur, tüm opak pikseller beyaza boyanır (macOS
-    menü çubuğu ikon dili). Logo yoksa beyaz bir E rozeti çizilir."""
+
+def _glyph_image(color: tuple[int, int, int, int]) -> Any:
+    """Logo alfa kanalından tek renk glif üretir; logo yoksa E rozeti çizer."""
     from PIL import Image, ImageDraw
 
-    white = (255, 255, 255, 255)
-    logo = Path(__file__).resolve().parent.parent / "logo.png"
-    if logo.exists():
+    if _LOGO_PATH.exists():
         try:
-            image = Image.open(logo).convert("RGBA")
+            image = Image.open(_LOGO_PATH).convert("RGBA")
             image.thumbnail((64, 64), Image.LANCZOS)
             alpha = image.getchannel("A")
-            solid = Image.new("RGBA", image.size, white)
+            solid = Image.new("RGBA", image.size, color)
             solid.putalpha(alpha)
             return solid
         except Exception:
             pass
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.ellipse((4, 4, 60, 60), outline=white, width=5)
-    draw.text((22, 14), "E", fill=white)
+    draw.ellipse((4, 4, 60, 60), outline=color, width=5)
+    draw.text((22, 14), "E", fill=color)
     return image
+
+
+def _macos_dark_menubar() -> bool:
+    """macOS görünümü koyu mu? (Koyu menü çubuğu → beyaz glif.)"""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["defaults", "read", "-g", "AppleInterfaceStyle"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return "dark" in (result.stdout or "").strip().lower()
+    except Exception:
+        return True
+
+
+def _load_icon_image() -> Any:
+    """Platforma göre profesyonel tepsi ikonu.
+
+    * macOS: menü çubuğu ikon dili TEK RENK gliftir. Template modu pystray'de
+      doğrudan yoksa görünüme göre renk seçilir (koyu menübar → beyaz, açık →
+      siyah); `_maybe_mark_template` NSImage'ı template olarak işaretlemeyi
+      dener — başarılıysa macOS rengi kendisi uyarlarlar.
+    * Windows/Linux: sistem tepsisi renkli marka ikonu bekler → logo.png
+      olduğu gibi kullanılır.
+    """
+    import sys as _sys
+
+    from PIL import Image
+
+    if _sys.platform == "darwin":
+        color = (255, 255, 255, 255) if _macos_dark_menubar() else (20, 24, 20, 255)
+        return _glyph_image(color)
+    if _LOGO_PATH.exists():
+        try:
+            image = Image.open(_LOGO_PATH).convert("RGBA")
+            image.thumbnail((64, 64), Image.LANCZOS)
+            return image
+        except Exception:
+            pass
+    return _glyph_image((255, 255, 255, 255))
+
+
+def _maybe_mark_template(icon: Any) -> None:
+    """macOS: NSStatusBar ikonunu template olarak işaretle — sistem, açık/koyu
+    menü çubuğuna ve vurgu rengine göre glifi otomatik boyar. pystray bunu
+    doğrudan sunmadığından iç API'ye kibarca dokunulur; her sürümde çalışmasa
+    da güvenlidir (başarısızsa görünüm-tabanlı renk zaten doğru)."""
+    import sys as _sys
+
+    if _sys.platform != "darwin":
+        return
+    try:
+        status_item = getattr(icon, "_status_item", None)
+        if status_item is None:
+            return
+        button = status_item.button()
+        image = button.image()
+        if image is not None:
+            image.setTemplate_(True)
+    except Exception:
+        pass
 
 
 def run_tray(daemon: "ElyanDaemon") -> bool:
@@ -74,6 +136,23 @@ def run_tray(daemon: "ElyanDaemon") -> bool:
         import pystray
     except Exception:
         return False
+
+    import sys as _sys
+
+    if _sys.platform == "darwin":
+        # Arka plan ajanı: Dock'ta ve Cmd-Tab'da GÖRÜNME — yalnız menü çubuğu.
+        # (NSApplicationActivationPolicyAccessory; süreç adının "Python"
+        # görünmemesi için bundle adı da Elyan yapılır.)
+        try:
+            from AppKit import NSApplication
+            from Foundation import NSBundle
+
+            info = NSBundle.mainBundle().infoDictionary()
+            if isinstance(info, object):
+                info["CFBundleName"] = "Elyan"
+            NSApplication.sharedApplication().setActivationPolicy_(1)
+        except Exception:
+            pass
 
     from runtime.daemon import runtime_status_summary
 
@@ -143,7 +222,24 @@ def run_tray(daemon: "ElyanDaemon") -> bool:
             yield pystray.MenuItem("Aktif görev yok", None, enabled=False)
         yield pystray.Menu.SEPARATOR
         yield pystray.MenuItem("Ayarlar…", _open_settings)
+        yield pystray.MenuItem("Yeniden Başlat", _restart)
         yield pystray.MenuItem("Elyan'ı Durdur", _quit)
+
+    def _restart(_icon: Any, _item: Any = None) -> None:
+        # Ayrık süreçte `elyan restart`: bu daemon düzgün kapanır, yenisi başlar.
+        import subprocess
+        import sys as _sys
+
+        try:
+            subprocess.Popen(
+                [_sys.executable, "-m", "cli.main", "restart"],
+                cwd=str(Path(__file__).resolve().parent.parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            pass
 
     def _open_settings(_icon: Any, _item: Any = None) -> None:
         # Yerel ayar paneli (127.0.0.1, token korumalı) tarayıcıda açılır;
@@ -175,12 +271,24 @@ def run_tray(daemon: "ElyanDaemon") -> bool:
 
     def _setup(icon_ref: Any) -> None:
         icon_ref.visible = True
+        _maybe_mark_template(icon_ref)
+        import sys as _sys
         import threading
 
+        # Template işaretlenemediyse macOS'ta açık/koyu geçişini elle izle.
+        appearance_dark = _macos_dark_menubar() if _sys.platform == "darwin" else None
+
         def _tick() -> None:
+            nonlocal appearance_dark
             while icon_ref.visible and not daemon._stop.is_set():
                 try:
                     _refresh_tooltip(icon_ref)
+                    if _sys.platform == "darwin":
+                        now_dark = _macos_dark_menubar()
+                        if now_dark != appearance_dark:
+                            appearance_dark = now_dark
+                            icon_ref.icon = _load_icon_image()
+                            _maybe_mark_template(icon_ref)
                 except Exception:
                     pass
                 daemon._stop.wait(5)
