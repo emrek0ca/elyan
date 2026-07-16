@@ -6506,11 +6506,40 @@ export async function generateSharedBrainReply(
           }).catch(() => null)
         : null;
       const finalTextBlocks = buildAssistantMessageBlocks(finalText);
+      // Self-RAG dürüstlük sinyali: retrieval kullanıldı ama kanıt kapsaması
+      // düşük kaldıysa (orchestration.lowConfidence) kullanıcıya ince bir
+      // güven çipi göster — halüsinasyon şüphesinde sessiz kalma.
+      const retrievalOrchestration =
+        retrieval && typeof retrieval === "object" && "orchestration" in retrieval
+          ? (retrieval as { orchestration?: { lowConfidence?: boolean } })
+              .orchestration
+          : undefined;
+      const lowConfidenceBlocks =
+        retrievalOrchestration?.lowConfidence === true &&
+        retrieval.results.length > 0
+          ? [
+              {
+                type: "context_signal",
+                stableBlockId: "retrieval_low_confidence",
+                tone: "caution",
+                title: "Kaynak güveni düşük",
+                // Mobil InfoCard sözleşmesi: items[{label,value}].
+                items: [
+                  {
+                    label: "Uyarı",
+                    value:
+                      "Bu cevap için bulunan kaynaklar sınırlıydı; kritik bir konuysa doğrulamak isteyebilirsin.",
+                  },
+                ],
+              },
+            ]
+          : [];
       let assistantMetadataBlocks = [
         ...webGroundingBlocks,
         ...attachmentInsightBlocks,
         ...finalTextBlocks,
         ...extractedTypedBlocks,
+        ...lowConfidenceBlocks,
       ];
       const result: SharedBrainInferenceResult = {
         text: finalText,
