@@ -421,6 +421,80 @@ function buildLifecycleBlocks(
   return blocks.filter(Boolean);
 }
 
+// Mekanik görev sonuçlarını doğal dile çeviren hafif beyin geçişi. Yalnız
+// terminal durum + kısa/terse metin için çalışır; zengin (uzun/markdown)
+// cevaplara dokunmaz. Zaman aşımı/başarısızlıkta ham metin döner.
+const HUMANIZE_MAX_SOURCE_CHARS = 320;
+const HUMANIZE_TIMEOUT_MS = 6_000;
+
+async function humanizeTerminalTaskContent(
+  app: FastifyInstance,
+  input: {
+    task: typeof tasks.$inferSelect;
+    content: string;
+  },
+): Promise<string> {
+  const status = input.task.status;
+  const content = input.content.trim();
+  if (!content) return input.content;
+  if (status !== "completed" && status !== "failed") return input.content;
+  if (content.length > HUMANIZE_MAX_SOURCE_CHARS) return input.content;
+  // Markdown/çok satırlı zengin içerik zaten insan elinden çıkmış gibidir.
+  if (content.includes("\n") || /[#*`|]/.test(content)) return input.content;
+
+  const payload =
+    input.task.payload &&
+    typeof input.task.payload === "object" &&
+    !Array.isArray(input.task.payload)
+      ? (input.task.payload as Record<string, unknown>)
+      : {};
+  const userPrompt =
+    typeof payload.prompt === "string" ? payload.prompt.slice(0, 400) : "";
+
+  try {
+    const { generateGovernedSharedBrainReply } = await import(
+      "../brain/inference.js"
+    );
+    const inference = await generateGovernedSharedBrainReply(app, {
+      userId: input.task.userId,
+      taskId: input.task.id,
+      title: "Görev sonucu",
+      prompt: [
+        "Aşağıdaki masaüstü görev sonucunu kullanıcıya tek (en fazla iki) cümlelik doğal, samimi Türkçe ile aktar.",
+        "Teknik jargon, yol adlarını gereksiz tekrar ve 'doğrulama' dili kullanma; ne yapıldığını/ne olduğunu net söyle.",
+        "Başarısızsa dürüstçe söyle ve tek kısa öneri ekle. SADECE cevabı yaz.",
+        `Kullanıcının isteği: ${userPrompt || "(bilinmiyor)"}`,
+        `Görev durumu: ${status === "completed" ? "tamamlandı" : "başarısız"}`,
+        `Ham sonuç: ${content}`,
+      ].join("\n"),
+      workload: "mobile_chat_fast",
+      route: "task_result_humanize",
+      meteringSurface: "task",
+      maxCompletionTokensOverride: 120,
+      timeoutMsOverride: HUMANIZE_TIMEOUT_MS,
+      requestMetadata: { taskResultHumanize: true },
+      internalEvaluation: {
+        skipUsageValidation: true,
+        skipReviewLogging: true,
+        refinementPass: true,
+      },
+    });
+    const rewritten = inference.text.trim();
+    // Model saçmalarsa (boş, aşırı uzun, JSON/kod döndürmüş) ham metin kalır.
+    if (
+      !rewritten ||
+      rewritten.length > 400 ||
+      rewritten.startsWith("{") ||
+      rewritten.includes("```")
+    ) {
+      return input.content;
+    }
+    return rewritten;
+  } catch {
+    return input.content;
+  }
+}
+
 export async function syncChatTaskLifecycle(
   app: FastifyInstance,
   input: {
@@ -437,9 +511,17 @@ export async function syncChatTaskLifecycle(
   }
 
   const assistantStatus = mapTaskStatusToChatStatus(input.updatedTask.status);
-  const assistantContent = deriveAssistantContent({
+  let assistantContent = deriveAssistantContent({
     updatedTask: input.updatedTask,
     fallbackMessage: input.message,
+  });
+  // Doğal dil sonuç katmanı: terminal görevlerin kısa/mekanik sonuç metinleri
+  // ("Klasör hazır: /Users/…", "Operator doğrulaması başarısız oldu.") beyinden
+  // hafif bir insanileştirme geçişiyle 1-2 cümle doğal Türkçeye çevrilir.
+  // Herhangi bir hata/gecikmede ham metin aynen kalır (asla bloklamaz).
+  assistantContent = await humanizeTerminalTaskContent(app, {
+    task: input.updatedTask,
+    content: assistantContent,
   });
   const taskTraceBlock = buildTaskTraceBlock({
     task: input.updatedTask,
