@@ -477,19 +477,33 @@ class ExecutorCore:
             step_id = str(state.get("id", "") or f"step_{len(steps) + 1}")
             if mapped == "running":
                 active_step_id = step_id
-            steps.append(
-                {
-                    "id": step_id,
-                    "label": self._step_label(str(state.get("capability", "") or ""), str(state.get("label", "") or "")),
-                    "status": mapped,
-                    "capability": str(state.get("capability", "") or ""),
-                    "detail": _safe_text(str(state.get("outputPreview", "") or state.get("stopReason", "") or ""), limit=120),
-                }
-            )
+            step_payload: dict[str, Any] = {
+                "id": step_id,
+                "label": self._step_label(str(state.get("capability", "") or ""), str(state.get("label", "") or "")),
+                "status": mapped,
+                "capability": str(state.get("capability", "") or ""),
+                "detail": _safe_text(str(state.get("outputPreview", "") or state.get("stopReason", "") or ""), limit=120),
+            }
+            # Zengin telemetri (mobil canlı görev penceresi): adım süresi,
+            # doğrulama durumu, deneme sayısı — veri zaten stepStates'te vardı,
+            # bloğa çıkmıyordu.
+            started_at = str(state.get("startedAt", "") or "")
+            finished_at = str(state.get("finishedAt", "") or "")
+            if started_at:
+                step_payload["startedAt"] = started_at
+            if finished_at:
+                step_payload["completedAt"] = finished_at
+            verification_status = str(state.get("verificationStatus", "") or "")
+            if verification_status and verification_status != "pending":
+                step_payload["verificationStatus"] = verification_status
+            attempt_count = int(state.get("attemptCount", 0) or 0)
+            if attempt_count > 1:
+                step_payload["attemptCount"] = attempt_count
+            steps.append(step_payload)
         overall = "running"
         if final:
             overall = "failed" if any(s["status"] == "failed" for s in steps) else "completed"
-        return {
+        block: dict[str, Any] = {
             "type": "task_trace",
             "stableBlockId": f"tasktrace_{exec_id}",
             "taskId": exec_id,
@@ -498,6 +512,22 @@ class ExecutorCore:
             "activeStepId": active_step_id,
             "steps": steps,
         }
+        # Blok seviyesi telemetri: doğrulama özeti + onarım/replan sayacı.
+        verification = trace.get("verificationState")
+        if isinstance(verification, dict) and str(verification.get("status", "") or ""):
+            block["verification"] = {
+                "status": str(verification.get("status", "") or ""),
+                "checkedSteps": int(verification.get("checkedSteps", 0) or 0),
+            }
+        repair = trace.get("repair")
+        if isinstance(repair, dict):
+            repair_attempts = int(repair.get("repairAttempts", 0) or 0)
+            if repair_attempts > 0:
+                block["repairAttempts"] = repair_attempts
+        stop_reason = str(trace.get("stopReason", "") or "")
+        if stop_reason:
+            block["stopReason"] = stop_reason
+        return block
 
     def _emit_progress(self, execution_id: str, *, final: bool = False) -> None:
         emitter = self._progress_emitter
