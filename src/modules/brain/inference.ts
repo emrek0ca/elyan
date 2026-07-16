@@ -115,7 +115,7 @@ import {
   type TurnEnvelope,
 } from "./turn-envelope.js";
 import { createTurnEnvelopeReplyTextStreamParser } from "./turn-envelope-stream.js";
-import { searchKnowledge } from "./retrieval.js";
+import { searchKnowledge } from "./retrieval-orchestrator.js";
 import {
   buildBrainCorpusGuidanceBlock,
   buildBrainCorpusRetrievalQuery,

@@ -58,8 +58,8 @@ import {
 import {
   getRetrievalStatus,
   indexKnowledgeChunksForDocument,
-  searchKnowledge as searchKnowledgeWithMode,
 } from "./retrieval.js";
+import { searchKnowledge as searchKnowledgeWithMode } from "./retrieval-orchestrator.js";
 import {
   getBrainMemoryById,
   getBrainMemoryStatus,

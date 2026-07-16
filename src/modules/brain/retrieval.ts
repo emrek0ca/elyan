@@ -17,7 +17,7 @@ export const RETRIEVAL_EMBEDDING_MODEL = "elyan_hash_v1";
 const pgvectorAvailabilityCache = new WeakMap<FastifyInstance, Promise<boolean>>();
 const embeddingColumnAvailabilityCache = new WeakMap<FastifyInstance, Promise<boolean>>();
 
-type RetrievalSearchResult = {
+export type RetrievalSearchResult = {
   documentId: string;
   chunkId: string;
   title: string;
