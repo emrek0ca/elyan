@@ -4,6 +4,7 @@ import {
   classifyIntentSemantic,
   classifyIntentTransformer,
 } from "./intent-semantic.js";
+import { explicitMobileContextKindsForPrompt } from "./context-packets.js";
 
 const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = [
   {
@@ -171,6 +172,23 @@ function isExplicitPlanningRequest(text: string): boolean {
   );
 }
 
+export function isCurrentUserIdentityQuery(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  return [
+    /^(?:peki\s+)?ben kimim[?!.]*$/iu,
+    /^(?:peki\s+)?beni (?:ne kadar\s+)?tan[ıi]yor musun[?!.]*$/iu,
+    /^(?:benim hakk[ıi]mda|hakk[ıi]mda) ne biliyorsun[?!.]*$/iu,
+    /^kim oldu[ğg]umu biliyor musun[?!.]*$/iu,
+    /^(?:so,?\s+)?who am i[?!.]*$/iu,
+    /^(?:what|how much) do you know about me[?!.]*$/iu,
+    /^do you know (?:who i am|me)[?!.]*$/iu,
+    /^describe me[?!.]*$/iu,
+  ].some((pattern) => pattern.test(normalized));
+}
+
 function calculateReasoningMode(input: {
   primaryIntent: UnderstandingIntent;
   requiresRetrieval: boolean;
@@ -271,6 +289,9 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     const matched: UnderstandingIntent[] = [];
     const architecturePrompt = /\b(architecture|system design|ecosystem|ekosistem|mimari|how.*fit together|nasıl.*birlikte|ekosystem)\b/i.test(text);
     const briefProseRequest = isExplicitBriefProseRequest(text);
+    const currentUserIdentityQuery = isCurrentUserIdentityQuery(text);
+    const explicitMobileContextKinds =
+      explicitMobileContextKindsForPrompt(input.message);
 
     if (architecturePrompt && (!briefProseRequest || isExplicitPlanningRequest(text))) {
       matched.push("planning");
@@ -291,13 +312,24 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
         }
       }
     }
+    // Personal health/location/calendar questions are requests for already
+    // permission-filtered mobile context, not desktop-computer operations.
+    // Reuse the context-packet detector so routing and injection share one
+    // semantic truth instead of teaching the classifier another phrase list.
+    if (explicitMobileContextKinds.length > 0) {
+      matched.splice(0, matched.length);
+    }
 
     // Semantic fallback: when no regex rule matched, a paraphrased prompt would
     // otherwise collapse to "chat"/"unknown" and lose its real intent. Recover it
     // from the nearest prototype embedding (cheap, synchronous, only on this path).
     let semanticIntent: UnderstandingIntent | null = null;
     let semanticScore = 0;
-    if (matched.length === 0 && text.trim().length > 0) {
+    if (
+      explicitMobileContextKinds.length === 0 &&
+      matched.length === 0 &&
+      text.trim().length > 0
+    ) {
       const semantic = classifyIntentSemantic(text);
       if (semantic) {
         semanticIntent = semantic.intent;
@@ -306,7 +338,9 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     }
 
     const primaryIntent =
-      matched[0] ?? semanticIntent ?? (text.trim().length > 0 ? "chat" : "unknown");
+      explicitMobileContextKinds.length > 0
+        ? "chat"
+        : matched[0] ?? semanticIntent ?? (text.trim().length > 0 ? "chat" : "unknown");
     const secondaryIntents = unique(matched.filter((intent) => intent !== primaryIntent));
     const requiresLocalRuntime =
       ["automation", "browser", "computer"].includes(primaryIntent) ||
@@ -314,7 +348,9 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
       Boolean(/(?<!\p{L})(yerel|masaustu|masaüstü|dosya|klasör|klasor|terminal|tarayıcı|tarayici|ekran|pencere|uygulama aç|safari|chrome|firefox|finder|tuş kısayolu|tus kisayolu|ekran görüntüsü|ekran goruntusu|ekran kaydı|ekran kaydi|ses kayıt|ses kayit|bildirim gönder|takvim aç|kamera|mikrofon)(?!\p{L})/iu.test(text)) ||
       Boolean(/(?<!\p{L})(aç|ac|kapat|çalıştır|calistir|başlat|indir|kaydet|taşı|tasi|sil|kopyala)(?!\p{L}).{0,60}(?<!\p{L})(dosya|klasör|klasor|uygulama|safari|chrome|firefox|finder|terminal|masaüstü|masaustu)(?!\p{L})/iu.test(text));
     const requiresRetrieval =
-      primaryIntent === "research" || /\b(previous|past|memory|context|docs|retrieval|history)\b/i.test(text);
+      currentUserIdentityQuery ||
+      primaryIntent === "research" ||
+      /\b(previous|past|memory|context|docs|retrieval|history)\b/i.test(text);
     const requiresCitation = primaryIntent === "research" || /\b(cite|citation|source|kaynak)\b/i.test(text);
     const requiresToolUse =
       requiresLocalRuntime || ["coding", "debugging", "document", "image", "automation", "browser", "computer"].includes(primaryIntent);
@@ -327,7 +363,11 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
           ? "medium"
           : "low";
     const confidence =
-      matched.length > 0
+      currentUserIdentityQuery
+        ? 0.96
+        : explicitMobileContextKinds.length > 0
+          ? 0.95
+        : matched.length > 0
         ? Math.min(0.95, 0.62 + matched.length * 0.1)
         : semanticIntent
           ? Math.min(0.6, 0.4 + semanticScore)
@@ -360,14 +400,22 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
       privacyRisk,
       confidence,
       reason:
-        matched.length > 0
+        currentUserIdentityQuery
+          ? "user_identity_query"
+          : explicitMobileContextKinds.length > 0
+            ? `mobile_context_${explicitMobileContextKinds.join("_")}`
+          : matched.length > 0
           ? `matched_${primaryIntent}_rules`
           : semanticIntent
             ? `semantic_${primaryIntent}`
             : "no_rule_match",
       taskFrame: {
         goal:
-          primaryIntent === "research"
+          currentUserIdentityQuery
+            ? "describe the current user from verified current-user memory"
+            : explicitMobileContextKinds.length > 0
+              ? "answer from current permission-filtered mobile context"
+            : primaryIntent === "research"
             ? "understand or verify external facts"
             : primaryIntent === "planning"
               ? "break the request into a reliable plan"
@@ -390,9 +438,14 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
                               : primaryIntent === "automation"
                                 ? "execute a bounded workflow"
                                 : "answer naturally and directly",
-        likelyAnswerShape,
+        likelyAnswerShape: currentUserIdentityQuery
+          ? "grounded current-user profile summary or an honest empty-profile fallback"
+          : likelyAnswerShape,
         reasoningMode,
-        shouldClarify: confidence < 0.5 || (primaryIntent === "chat" && matched.length === 0 && text.trim().length < 12),
+        shouldClarify:
+          !currentUserIdentityQuery &&
+          explicitMobileContextKinds.length === 0 &&
+          (confidence < 0.5 || (primaryIntent === "chat" && matched.length === 0 && text.trim().length < 12)),
       },
       ecosystemHints: extractEcosystemFocus(text, primaryIntent),
       routingHints: calculateRoutingHints(primaryIntent, requiresLocalRuntime, requiresCitation),

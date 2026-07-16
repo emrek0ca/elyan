@@ -105,6 +105,22 @@ test("buildTypedUnderstandingEnvelope marks local private file requests for desk
   assert.equal(preferredWorkloadFromUnderstandingEnvelope(envelope), "desktop_handoff");
 });
 
+test("buildTypedUnderstandingEnvelope marks external account mutations as side effects", () => {
+  for (const message of [
+    "Ayşe'ye yarınki toplantı için e-posta gönder",
+    "Yarınki toplantıyı takvime ekle",
+  ]) {
+    const envelope = buildTypedUnderstandingEnvelope({
+      userId: "user_1",
+      message,
+      intent: intent("chat"),
+    });
+
+    assert.equal(envelope.risk.side_effect, true);
+    assert.equal(envelope.risk.reasons.includes("side_effect_possible"), true);
+  }
+});
+
 test("buildTypedUnderstandingEnvelope emits explicit latest name memory candidates", () => {
   const envelope = buildTypedUnderstandingEnvelope({
     userId: "user_1",

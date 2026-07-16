@@ -2,8 +2,13 @@ import type { FastifyPluginAsync } from "fastify";
 import { badRequest } from "../../lib/errors.js";
 import { getHeaderString } from "../../lib/http.js";
 import { getUserAuth } from "../../lib/request-auth.js";
-import { claimPairSessionBodySchema, createPairSessionBodySchema, pairSessionParamsSchema } from "./schemas.js";
-import { claimPairSession, createPairSession, getPairSessionStatus } from "./service.js";
+import {
+  claimPairSessionBodySchema,
+  claimPairSessionByCodeBodySchema,
+  createPairSessionBodySchema,
+  pairSessionParamsSchema,
+} from "./schemas.js";
+import { claimPairSession, claimPairSessionByCode, createPairSession, getPairSessionStatus } from "./service.js";
 
 export const pairingRoutes: FastifyPluginAsync = async (app) => {
   app.post("/sessions", async (request, reply) => {
@@ -36,6 +41,25 @@ export const pairingRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return getPairSessionStatus(app, params.sessionId, pairingToken);
+  });
+
+  // Kısa kodla eşleştirme (QR'sız): mobil yalnızca desktop'taki kısa kodu
+  // gönderir; session UUID'sine gerek yoktur (kod globally unique).
+  app.post("/sessions/claim-by-code", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const body = claimPairSessionByCodeBodySchema.parse(request.body);
+    const auth = getUserAuth(request);
+
+    return claimPairSessionByCode(app, {
+      userId: auth.sub,
+      pairingCode: body.pairingCode,
+      mobileDevice: body.mobileDevice,
+    });
   });
 
   app.post("/sessions/:sessionId/claim", async (request, reply) => {

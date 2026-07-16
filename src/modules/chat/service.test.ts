@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chatMessages, chatSessions, proactiveTriggers, userProactivePrefs } from "../../db/schema.js";
+import {
+  chatMessages,
+  chatSessions,
+  proactiveTriggers,
+  userProactivePrefs,
+} from "../../db/schema.js";
 import {
   buildChatDispatchDeliverySnapshot,
   buildChatTurnAdmissionLockKey,
@@ -94,8 +99,12 @@ class FakeDb {
 }
 
 class OpeningProactiveDb {
-  readonly insertedRows: Array<{ table: unknown; values: Record<string, unknown> }> = [];
-  readonly updates: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+  readonly insertedRows: Array<{
+    table: unknown;
+    values: Record<string, unknown>;
+  }> = [];
+  readonly updates: Array<{ table: unknown; values: Record<string, unknown> }> =
+    [];
   private claimConsumed = false;
 
   constructor(
@@ -135,14 +144,16 @@ class OpeningProactiveDb {
               ]);
             }
             if (table === chatMessages) {
-              return Promise.resolve(db.insertedRows
-                .filter((row) => row.table === chatMessages)
-                .map((row) => ({
-                  ...row.values,
-                  createdAt: row.values.createdAt,
-                  updatedAt: row.values.updatedAt,
-                }))
-                .slice(0, value ?? 30));
+              return Promise.resolve(
+                db.insertedRows
+                  .filter((row) => row.table === chatMessages)
+                  .map((row) => ({
+                    ...row.values,
+                    createdAt: row.values.createdAt,
+                    updatedAt: row.values.updatedAt,
+                  }))
+                  .slice(0, value ?? 30),
+              );
             }
             return Promise.resolve([]);
           },
@@ -189,7 +200,8 @@ class OpeningProactiveDb {
         return builder;
       },
       returning() {
-        const values = db.insertedRows[db.insertedRows.length - 1]?.values ?? {};
+        const values =
+          db.insertedRows[db.insertedRows.length - 1]?.values ?? {};
         return Promise.resolve([
           {
             ...values,
@@ -208,7 +220,11 @@ class OpeningProactiveDb {
   }
 }
 
-function conditionUsesColumn(value: unknown, columnName: string, seen = new WeakSet<object>()): boolean {
+function conditionUsesColumn(
+  value: unknown,
+  columnName: string,
+  seen = new WeakSet<object>(),
+): boolean {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -222,7 +238,9 @@ function conditionUsesColumn(value: unknown, columnName: string, seen = new Weak
   }
   const queryChunks = record.queryChunks;
   if (Array.isArray(queryChunks)) {
-    return queryChunks.some((chunk) => conditionUsesColumn(chunk, columnName, seen));
+    return queryChunks.some((chunk) =>
+      conditionUsesColumn(chunk, columnName, seen),
+    );
   }
   if (Array.isArray(value)) {
     return value.some((chunk) => conditionUsesColumn(chunk, columnName, seen));
@@ -233,20 +251,30 @@ function conditionUsesColumn(value: unknown, columnName: string, seen = new Weak
 class WorldSignalDb {
   readonly forbiddenFilterSeen: boolean[] = [];
 
+  constructor(
+    private readonly rows: Array<Record<string, unknown>> = [
+      {
+        signalId: "health-1",
+        source: "mobile",
+        kind: "health",
+        summary: "Enerji orta, stres yüksek.",
+        confidenceBps: 860,
+        facts: { energyLevel: "medium", stressLevel: "elevated" },
+        privacy: {
+          rawDataUploaded: false,
+          precision: "summary",
+          backendPlaintextAllowed: true,
+        },
+        renderHints: {},
+        visibility: "assistant_internal_by_default",
+        createdAt: new Date("2030-01-01T12:00:00.000Z"),
+      },
+    ],
+  ) {}
+
   select() {
     const forbiddenFilterSeen = this.forbiddenFilterSeen;
-    const row = {
-      signalId: "health-1",
-      source: "mobile",
-      kind: "health",
-      summary: "Enerji orta, stres yüksek.",
-      confidenceBps: 860,
-      facts: { energyLevel: "medium", stressLevel: "elevated" },
-      privacy: { rawDataUploaded: false, precision: "summary", backendPlaintextAllowed: true },
-      renderHints: {},
-      visibility: "assistant_internal_by_default",
-      createdAt: new Date("2030-01-01T12:00:00.000Z"),
-    };
+    const rows = this.rows;
     return {
       from() {
         return {
@@ -258,7 +286,7 @@ class WorldSignalDb {
             return {
               orderBy() {
                 return {
-                  limit: async () => (hasForbiddenFilter ? [] : [row]),
+                  limit: async () => (hasForbiddenFilter ? [] : rows),
                 };
               },
             };
@@ -391,18 +419,18 @@ test("resolveChatSessionTargetDeviceId carries the backend-selected desktop when
 
 test("enrichChatMetadataForRequest keeps fresh world signals user-scoped for server-brain chat", async () => {
   const db = new WorldSignalDb();
-  const metadata = await enrichChatMetadataForRequest(
-    { db } as never,
-    {
-      userId: "user-1",
-      sessionId: "session-1",
-      targetDeviceId: "shared-brain-device",
-      metadata: { smoke: true },
-    },
-  );
+  const metadata = await enrichChatMetadataForRequest({ db } as never, {
+    userId: "user-1",
+    sessionId: "session-1",
+    targetDeviceId: "shared-brain-device",
+    metadata: { smoke: true },
+  });
 
   const chatContext = metadata.chatContext as Record<string, unknown>;
-  const digest = chatContext.lastDerivedContextDigest as Record<string, unknown>;
+  const digest = chatContext.lastDerivedContextDigest as Record<
+    string,
+    unknown
+  >;
   const worldSignals = digest.worldSignals as Array<Record<string, unknown>>;
 
   assert.deepEqual(db.forbiddenFilterSeen, [false]);
@@ -418,6 +446,160 @@ test("enrichChatMetadataForRequest keeps fresh world signals user-scoped for ser
     precision: "summary",
     backendPlaintextAllowed: true,
   });
+});
+
+test("enrichChatMetadataForRequest preserves only boolean mobile permission truth", async () => {
+  const metadata = await enrichChatMetadataForRequest(
+    { db: new WorldSignalDb([]) } as never,
+    {
+      userId: "user-1",
+      sessionId: "session-1",
+      targetDeviceId: "shared-brain-device",
+      metadata: {
+        compactContext: {
+          mobileContextCapabilities: {
+            healthEnabled: true,
+            locationEnabled: false,
+            calendarEnabled: false,
+            healthSignalsAvailable: false,
+            injected: "must-not-survive",
+          },
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(
+    (metadata.compactContext as Record<string, unknown>)
+      .mobileContextCapabilities,
+    {
+      healthEnabled: true,
+      locationEnabled: false,
+      calendarEnabled: false,
+      healthSignalsAvailable: false,
+    },
+  );
+});
+
+test("enrichChatMetadataForRequest carries health location and calendar world signals into server-brain metadata", async () => {
+  const db = new WorldSignalDb([
+    {
+      signalId: "health-1",
+      source: "mobile",
+      kind: "health",
+      summary: "Bugünkü sağlık özeti güvenli türev veridir.",
+      confidenceBps: 910,
+      facts: {
+        stepsToday: 7420,
+        workoutCount: 1,
+        workoutDurationMinutes: 38,
+        sleepRemPercent: 22,
+        sleepDeepPercent: 18,
+      },
+      privacy: {
+        rawDataUploaded: false,
+        precision: "derived",
+        retention: "session",
+        backendPlaintextAllowed: true,
+      },
+      renderHints: {},
+      visibility: "assistant_internal_by_default",
+      createdAt: new Date("2030-01-01T12:00:00.000Z"),
+    },
+    {
+      signalId: "location-1",
+      source: "mobile",
+      kind: "location",
+      summary:
+        "Kullanıcı sabit bir konumda. Konum: İstanbul, Kadıköy, Türkiye.",
+      confidenceBps: 820,
+      facts: {
+        city: "İstanbul",
+        district: "Kadıköy",
+        country: "Türkiye",
+        countryCode: "TR",
+      },
+      privacy: {
+        rawDataUploaded: false,
+        precision: "coarse",
+        backendPlaintextAllowed: true,
+      },
+      renderHints: {},
+      visibility: "assistant_internal_by_default",
+      createdAt: new Date("2030-01-01T12:01:00.000Z"),
+    },
+    {
+      signalId: "calendar-1",
+      source: "mobile",
+      kind: "calendar",
+      summary: "Takvim yoğunluğu orta; kısa bir serbest odak bloğu var.",
+      confidenceBps: 880,
+      facts: {
+        nextEventMinutes: 45,
+        nextEventDurationMinutes: 30,
+        freeMinutesToday: 120,
+        longestFreeBlockMinutes: 50,
+        eventCount: 4,
+      },
+      privacy: {
+        rawDataUploaded: false,
+        precision: "derived",
+        backendPlaintextAllowed: true,
+      },
+      renderHints: {},
+      visibility: "assistant_internal_by_default",
+      createdAt: new Date("2030-01-01T12:02:00.000Z"),
+    },
+  ]);
+
+  const metadata = await enrichChatMetadataForRequest({ db } as never, {
+    userId: "user-1",
+    sessionId: "session-1",
+    targetDeviceId: "shared-brain-device",
+    metadata: { smoke: true },
+  });
+
+  const chatContext = metadata.chatContext as Record<string, unknown>;
+  const digest = chatContext.lastDerivedContextDigest as Record<
+    string,
+    unknown
+  >;
+  const worldSignals = digest.worldSignals as Array<Record<string, unknown>>;
+
+  assert.deepEqual(
+    worldSignals.map((signal) => signal.kind),
+    ["health", "location", "calendar"],
+  );
+  assert.deepEqual(
+    worldSignals.find((signal) => signal.kind === "health")?.facts,
+    {
+      stepsToday: 7420,
+      workoutCount: 1,
+      workoutDurationMinutes: 38,
+      sleepRemPercent: 22,
+      sleepDeepPercent: 18,
+    },
+  );
+  assert.deepEqual(
+    worldSignals.find((signal) => signal.kind === "location")?.facts,
+    {
+      city: "İstanbul",
+      district: "Kadıköy",
+      country: "Türkiye",
+      countryCode: "TR",
+    },
+  );
+  assert.deepEqual(
+    worldSignals.find((signal) => signal.kind === "calendar")?.facts,
+    {
+      nextEventMinutes: 45,
+      nextEventDurationMinutes: 30,
+      freeMinutesToday: 120,
+      longestFreeBlockMinutes: 50,
+      eventCount: 4,
+    },
+  );
+  assert.deepEqual(db.forbiddenFilterSeen, [false]);
 });
 
 test("buildChatDispatchDeliverySnapshot preserves desktop ack and lease truth", () => {
@@ -483,8 +665,14 @@ test("estimatePendingChatTokenDebit does not double-count reused, terminal, or d
   };
 
   assert.equal(estimatePendingChatTokenDebit({ ...base, reused: true }), 0);
-  assert.equal(estimatePendingChatTokenDebit({ ...base, taskStatus: "completed" }), 0);
-  assert.equal(estimatePendingChatTokenDebit({ ...base, route: "desktop_runtime" }), 0);
+  assert.equal(
+    estimatePendingChatTokenDebit({ ...base, taskStatus: "completed" }),
+    0,
+  );
+  assert.equal(
+    estimatePendingChatTokenDebit({ ...base, route: "desktop_runtime" }),
+    0,
+  );
 });
 
 test("estimatePendingChatTokenDebit supports the document analysis workload profile", () => {
@@ -604,13 +792,15 @@ test("extractAttachmentCandidatesFromChatRows recovers internal assistant visual
     sensitivity: "personal",
     cloudUsed: true,
   });
-  const candidates = extractAttachmentCandidatesFromChatRows([{
-    id: "assistant-vision-1",
-    role: "assistant",
-    content: "Soldaki uyarı E104.",
-    createdAt: new Date("2030-01-01T12:00:00.000Z"),
-    metadata: { visionBlock },
-  }]);
+  const candidates = extractAttachmentCandidatesFromChatRows([
+    {
+      id: "assistant-vision-1",
+      role: "assistant",
+      content: "Soldaki uyarı E104.",
+      createdAt: new Date("2030-01-01T12:00:00.000Z"),
+      metadata: { visionBlock },
+    },
+  ]);
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0]?.messageId, "assistant-vision-1");
   assert.deepEqual(candidates[0]?.metadata.visionBlock, visionBlock);
@@ -807,7 +997,8 @@ test("listChatSessionMessages injects a due proactive opening message on the fir
     payload: {
       source: "turn_envelope",
       topic: "Ingilizce hedefi",
-      nudge: "Dun Ingilizce hedefinin 3. adimindaydin, bugun 15 dakikan var mi?",
+      nudge:
+        "Dun Ingilizce hedefinin 3. adimindaydin, bugun 15 dakikan var mi?",
       dueHint: "tomorrow",
     },
     status: "pending",
@@ -843,10 +1034,16 @@ test("listChatSessionMessages injects a due proactive opening message on the fir
 
   assert.equal(page.messages.length, 1);
   assert.equal(page.messages[0]?.blocks?.[0]?.type, "text");
-  assert.match(page.messages[0]?.blocks?.[0]?.markdown ?? "", /Ingilizce hedefinin 3\. adimindaydin/);
+  assert.match(
+    page.messages[0]?.blocks?.[0]?.markdown ?? "",
+    /Ingilizce hedefinin 3\. adimindaydin/,
+  );
   assert.equal(db.insertedRows[0]?.table, chatMessages);
   assert.equal(
-    db.updates.some((entry) => entry.table === proactiveTriggers && entry.values.status === "fired"),
+    db.updates.some(
+      (entry) =>
+        entry.table === proactiveTriggers && entry.values.status === "fired",
+    ),
     true,
   );
   assert.deepEqual(
@@ -905,7 +1102,11 @@ test("getChatSessionDetail returns the latest window instead of eager full histo
     ]),
   };
 
-  const detail = await getChatSessionDetail(app as never, "user-1", "session-1");
+  const detail = await getChatSessionDetail(
+    app as never,
+    "user-1",
+    "session-1",
+  );
 
   assert.equal(detail.session.id, "session-1");
   assert.equal(detail.messages[0]?.content, "Bir");

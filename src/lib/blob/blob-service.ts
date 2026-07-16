@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, lte } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { AppEnv } from "../../config/env.js";
 import * as schema from "../../db/schema.js";
@@ -23,6 +23,7 @@ export type BlobScope =
   | "task_result"
   | "task_approval_request"
   | "artifact_body"
+  | "task_input_image"
   | "task_event_payload"
   | "realtime_event_payload";
 
@@ -31,7 +32,8 @@ export type BlobOwnerType =
   | "task"
   | "artifact"
   | "task_event"
-  | "realtime_event";
+  | "realtime_event"
+  | "media_input";
 
 export type StoredBlobDescriptor = {
   blobId: string;
@@ -122,6 +124,7 @@ export class BlobService {
     scope: BlobScope;
     value: Uint8Array;
     contentType: string;
+    expiresAt?: Date;
   }): Promise<StoredBlobDescriptor | null> {
     if (!this.isReady()) {
       return null;
@@ -332,6 +335,70 @@ export class BlobService {
     return this.store.createDownloadUrl(input);
   }
 
+  public async deleteOwnedReference(input: {
+    blobId: string;
+    userId: string;
+    ownerType: BlobOwnerType;
+    ownerId: string;
+  }): Promise<boolean> {
+    if (!(await this.verifyOwnerUser(input))) return false;
+    const rows = await this.db
+      .select({ id: schema.blobReferences.id, storageKey: schema.blobObjects.storageKey })
+      .from(schema.blobReferences)
+      .innerJoin(schema.blobObjects, eq(schema.blobObjects.id, schema.blobReferences.blobId))
+      .where(and(
+        eq(schema.blobReferences.blobId, input.blobId),
+        eq(schema.blobReferences.ownerType, input.ownerType),
+        eq(schema.blobReferences.ownerId, input.ownerId),
+        isNull(schema.blobReferences.deletedAt),
+      ));
+    if (!rows.length) return false;
+    const now = new Date();
+    await this.db
+      .update(schema.blobReferences)
+      .set({ deletedAt: now })
+      .where(and(
+        eq(schema.blobReferences.blobId, input.blobId),
+        eq(schema.blobReferences.ownerType, input.ownerType),
+        eq(schema.blobReferences.ownerId, input.ownerId),
+        isNull(schema.blobReferences.deletedAt),
+      ));
+    const remaining = await this.db
+      .select({ id: schema.blobReferences.id })
+      .from(schema.blobReferences)
+      .where(and(eq(schema.blobReferences.blobId, input.blobId), isNull(schema.blobReferences.deletedAt)))
+      .limit(1);
+    if (!remaining.length) {
+      await this.store.deleteObject(rows[0]!.storageKey).catch(() => undefined);
+      await this.db.delete(schema.blobObjects).where(eq(schema.blobObjects.id, input.blobId));
+    }
+    return true;
+  }
+
+  public async pruneExpiredMediaInputs(now = new Date(), limit = 100): Promise<number> {
+    const rows = await this.db
+      .select({ blobId: schema.blobReferences.blobId, ownerId: schema.blobReferences.ownerId })
+      .from(schema.blobReferences)
+      .where(and(
+        eq(schema.blobReferences.ownerType, "media_input"),
+        isNull(schema.blobReferences.deletedAt),
+        lte(schema.blobReferences.expiresAt, now),
+      ))
+      .limit(Math.max(1, Math.min(limit, 500)));
+    let deleted = 0;
+    for (const row of rows) {
+      const userId = row.ownerId.split(":", 1)[0] ?? "";
+      if (!userId) continue;
+      if (await this.deleteOwnedReference({
+        blobId: row.blobId,
+        userId,
+        ownerType: "media_input",
+        ownerId: row.ownerId,
+      })) deleted += 1;
+    }
+    return deleted;
+  }
+
   private async persistEncodedBlob(
     input: {
       ownerType: BlobOwnerType;
@@ -339,6 +406,7 @@ export class BlobService {
       userId?: string;
       slot: string;
       scope: BlobScope;
+      expiresAt?: Date;
     },
     encoded: EncodedBlob,
   ): Promise<StoredBlobDescriptor | null> {
@@ -356,6 +424,7 @@ export class BlobService {
         ownerId: input.ownerId,
         slot: input.slot,
         blobId: row.id,
+        expiresAt: input.expiresAt,
       })
       .onConflictDoNothing({
         target: [
@@ -477,6 +546,7 @@ export class BlobService {
           eq(schema.blobReferences.blobId, input.blobId),
           eq(schema.blobReferences.ownerType, input.ownerType),
           eq(schema.blobReferences.ownerId, input.ownerId),
+          isNull(schema.blobReferences.deletedAt),
         ),
       )
       .limit(1);
@@ -538,6 +608,9 @@ export class BlobService {
         .where(and(eq(schema.realtimeEvents.id, Number(input.ownerId)), eq(schema.realtimeEvents.userId, input.userId)))
         .limit(1);
       return rows.length > 0;
+    }
+    if (input.ownerType === "media_input") {
+      return input.ownerId.startsWith(`${input.userId}:`);
     }
     return false;
   }

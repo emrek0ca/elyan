@@ -36,7 +36,18 @@ function contentFromInputBlocks(blocks: Array<z.infer<typeof chatInputBlockSchem
 function normalizeAuthorizedLegacyVision(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const input = { ...(value as Record<string, unknown>) };
-  if (input.ephemeralVision) return input;
+  const directVision = input.ephemeralVision;
+  if (directVision && typeof directVision === "object" && !Array.isArray(directVision)) {
+    const carrier = directVision as Record<string, unknown>;
+    if (carrier.version === 2 && Array.isArray(carrier.inputRefs)) {
+      const metadata = input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
+        ? { ...(input.metadata as Record<string, unknown>) }
+        : {};
+      metadata.mediaInputRefs = carrier.inputRefs;
+      input.metadata = metadata;
+    }
+    return input;
+  }
   const metadataValue = input.metadata;
   if (!metadataValue || typeof metadataValue !== "object" || Array.isArray(metadataValue)) return input;
   const metadata = { ...(metadataValue as Record<string, unknown>) };

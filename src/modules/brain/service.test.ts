@@ -7,8 +7,11 @@ import {
   shapePublicBrainProfile,
   queueContinuousBrainTrainingJob,
   createModelArtifact,
+  summarizeIntegrationApps,
+  summarizeWorldContextReadiness,
 } from "./service.js";
 import { createKnowledgeDocumentBodySchema } from "./schemas.js";
+import { worldSignals } from "../../db/schema.js";
 
 class FakeQuery<T> {
   constructor(private readonly result: T) {}
@@ -48,7 +51,12 @@ class FakeDb {
   ) {}
 
   select() {
-    return new FakeQuery(this.results.shift() ?? []);
+    const results = this.results;
+    return {
+      from(table: unknown) {
+        return new FakeQuery(table === worldSignals ? [] : results.shift() ?? []);
+      },
+    };
   }
 
   insert(table: { _?: string } | Record<string, unknown>) {
@@ -103,6 +111,62 @@ async function withMockedFetch<T>(
     globalThis.fetch = originalFetch;
   }
 }
+
+test("integration readiness derives read tools from actual OAuth grants, not app-level write scopes", () => {
+  const readiness = summarizeIntegrationApps(
+    [
+      {
+        id: "gmail",
+        displayName: "Gmail",
+        serverUrl: "",
+        capabilities: ["gmail"],
+        configured: true,
+        available: true,
+        connected: false,
+        missingScopes: ["https://www.googleapis.com/auth/gmail.send"],
+      },
+    ],
+    true,
+    [
+      {
+        provider: "google",
+        capabilities: ["gmail"],
+        scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+      },
+    ],
+  );
+
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.connectedCapabilities, ["gmail"]);
+  assert.deepEqual(readiness.brainReadTools.sort(), ["gmail.read", "gmail.search"]);
+  assert.deepEqual(readiness.blockingReasons, []);
+  assert.equal(readiness.apps[0]?.connected, false);
+  assert.deepEqual(readiness.apps[0]?.missingScopes, [
+    "https://www.googleapis.com/auth/gmail.send",
+  ]);
+});
+
+test("world context readiness exposes only fresh signal kinds and timestamps", () => {
+  const now = new Date("2030-01-04T12:00:00.000Z");
+  const readiness = summarizeWorldContextReadiness(
+    [
+      { kind: "health", createdAt: "2030-01-04T10:00:00.000Z" },
+      { kind: "location", createdAt: new Date("2030-01-04T11:30:00.000Z") },
+      { kind: "calendar", createdAt: "2030-01-04T09:00:00.000Z" },
+      { kind: "health", createdAt: "2030-01-04T08:00:00.000Z" },
+      { kind: "device", createdAt: "2030-01-01T11:59:59.000Z" },
+      { kind: "", createdAt: "2030-01-04T11:00:00.000Z" },
+    ],
+    72,
+    now,
+  );
+
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.signalCount, 4);
+  assert.deepEqual(readiness.freshKinds, ["calendar", "health", "location"]);
+  assert.equal(readiness.latestSignalAt, "2030-01-04T11:30:00.000Z");
+  assert.deepEqual(readiness.blockingReasons, []);
+});
 
 function mockOllamaTags(models: string[], chatText = "OK") {
   return async (input: RequestInfo | URL) => {
@@ -435,6 +499,29 @@ test("shapePublicBrainProfile removes backend-private model gateway fields", () 
         },
       ],
     },
+    integrations: {
+      ready: true,
+      connectorToolsEnabled: true,
+      connectedCapabilities: ["email"],
+      brainReadTools: ["gmail.search", "gmail.read"],
+      blockingReasons: [],
+      apps: [
+        {
+          id: "gmail",
+          displayName: "Gmail",
+          execution: "server_connector",
+          capabilities: ["email"],
+          configured: true,
+          available: true,
+          connected: true,
+          missingScopes: [],
+          probeStatus: null,
+          probeErrorCode: null,
+          probeToolCount: null,
+          provider: "google",
+        },
+      ],
+    },
     quantum: null,
     retrieval: {
       readyDocuments: 0,
@@ -557,6 +644,10 @@ test("shapePublicBrainProfile removes backend-private model gateway fields", () 
   assert.equal(publicProfile.skills.enabled, true);
   assert.equal(publicProfile.skills.items[0]?.slashCommand, "/özetle");
   assert.equal(JSON.stringify(publicProfile.skills).includes("instructions"), false);
+  assert.equal(publicProfile.integrations.ready, true);
+  assert.deepEqual(publicProfile.integrations.connectedCapabilities, ["email"]);
+  assert.deepEqual(publicProfile.integrations.brainReadTools, ["gmail.search", "gmail.read"]);
+  assert.equal((publicProfile.integrations.apps[0] as any).provider, undefined);
   const publicPayload = JSON.stringify(publicProfile).toLowerCase();
   assert.equal(publicPayload.includes("openrouter"), false);
   assert.equal(publicPayload.includes("ollama"), false);

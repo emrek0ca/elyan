@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { franc } from "franc-min";
 import type {
@@ -20,10 +20,14 @@ import {
   modelArtifacts,
   runtimeConnections,
   trainingJobs,
+  worldSignals,
 } from "../../db/schema.js";
 import { badRequest, conflict, forbidden, notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
-import { getSharedBrainTargetDevice, listUserDevices } from "../devices/service.js";
+import {
+  getSharedBrainTargetDevice,
+  listUserDevices,
+} from "../devices/service.js";
 import { buildElyanModelLearningPolicy } from "./elyan-model-learning-policy.js";
 import { buildElyanModelProviderPlan } from "./elyan-model-provider-plan.js";
 import {
@@ -31,7 +35,10 @@ import {
   type FreshDataDomain,
 } from "./fresh-data-policy.js";
 import { probeSharedBrainInference } from "./inference.js";
-import { getBrainLatencySummary, type BrainLatencySummary } from "./latency-summary.js";
+import {
+  getBrainLatencySummary,
+  type BrainLatencySummary,
+} from "./latency-summary.js";
 import { resolveSharedBrainModel } from "./model-resolution.js";
 import { buildGroqModelCatalog } from "./groq-models.js";
 import { buildBrainProfileSections } from "./profile-sections.js";
@@ -65,7 +72,10 @@ import {
   updateBrainMemory,
 } from "./memory.js";
 import { selectSharedBrainRuntime } from "./runtime.js";
-import { isCompleteReadyBrainModelArtifact, type SharedBrainSelection } from "./selection.js";
+import {
+  isCompleteReadyBrainModelArtifact,
+  type SharedBrainSelection,
+} from "./selection.js";
 import {
   ELYAN_CONSTITUTION_GATE_READY,
   ELYAN_CONSTITUTION_VERSION,
@@ -73,9 +83,18 @@ import {
   constitutionRuleCount,
   listGateEnforcedRuleIds,
 } from "./constitution.js";
-import { getApprovedCorrectionDatasetState, getLatestBrainBenchmarkSummary } from "./review.js";
+import {
+  getApprovedCorrectionDatasetState,
+  getLatestBrainBenchmarkSummary,
+} from "./review.js";
 import { getSharedBrainWorkloadProfile } from "./workloads.js";
 import { getPublicSkillCatalog } from "../skills/registry.js";
+import {
+  listConnectedCapabilityGrants,
+  listIntegrationApps,
+  missingOauthScopes,
+} from "../integrations/service.js";
+import { connectorToolsForCapabilityGrants } from "./connector-tools.js";
 import { getBrainCorpusReadinessSummary } from "./corpus.js";
 import { encryptJson } from "../../lib/crypto-seal.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
@@ -92,6 +111,275 @@ const KNOWLEDGE_CHUNK_MAX_CHARS = 900;
 const SHARED_TRAINING_BACKEND = "pytorch";
 const SHARED_TRAINING_ADAPTER_STRATEGY = "lora";
 const SHARED_TRAINING_ADAPTER_MODE = "qlora";
+
+type BrainIntegrationAppSummary = {
+  id: string;
+  displayName: string;
+  execution: "server_connector" | "remote_mcp";
+  capabilities: string[];
+  configured: boolean;
+  available: boolean;
+  connected: boolean;
+  missingScopes: string[];
+  probeStatus: string | null;
+  probeErrorCode: string | null;
+  probeToolCount: number | null;
+};
+
+type BrainIntegrationReadiness = {
+  ready: boolean;
+  connectorToolsEnabled: boolean;
+  connectedCapabilities: string[];
+  brainReadTools: string[];
+  apps: BrainIntegrationAppSummary[];
+  blockingReasons: string[];
+};
+
+type BrainWorldContextReadiness = {
+  ready: boolean;
+  signalCount: number;
+  freshKinds: string[];
+  latestSignalAt: string | null;
+  maxAgeHours: number;
+  blockingReasons: string[];
+};
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+}
+
+function boolValue(value: unknown): boolean {
+  return value === true;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function nullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function summarizeWorldContextReadiness(
+  signals: Array<{ kind: string; createdAt: Date | string | null }>,
+  maxAgeHours = 72,
+  now = new Date(),
+): BrainWorldContextReadiness {
+  const cutoffMs = now.getTime() - maxAgeHours * 3_600_000;
+  const freshSignals = signals
+    .map((signal) => {
+      const createdAt =
+        signal.createdAt instanceof Date
+          ? signal.createdAt
+          : typeof signal.createdAt === "string"
+            ? new Date(signal.createdAt)
+            : null;
+      return {
+        kind: String(signal.kind ?? "")
+          .trim()
+          .toLowerCase(),
+        createdAt:
+          createdAt && Number.isFinite(createdAt.getTime()) ? createdAt : null,
+      };
+    })
+    .filter(
+      (signal) =>
+        signal.kind &&
+        signal.createdAt != null &&
+        signal.createdAt.getTime() >= cutoffMs,
+    );
+  const latestSignalAt =
+    freshSignals
+      .map((signal) => signal.createdAt)
+      .filter((date): date is Date => date != null)
+      .sort((left, right) => right.getTime() - left.getTime())[0] ?? null;
+  const freshKinds = [
+    ...new Set(freshSignals.map((signal) => signal.kind)),
+  ].sort();
+  const blockingReasons = [
+    freshSignals.length === 0 ? "no_fresh_world_signals" : null,
+  ].filter((reason): reason is string => Boolean(reason));
+  return {
+    ready: freshSignals.length > 0,
+    signalCount: freshSignals.length,
+    freshKinds,
+    latestSignalAt: latestSignalAt?.toISOString() ?? null,
+    maxAgeHours,
+    blockingReasons,
+  };
+}
+
+export function summarizeIntegrationApps(
+  apps: Array<Record<string, unknown>>,
+  connectorToolsEnabled: boolean,
+  capabilityGrants: Array<{
+    provider: string;
+    scopes: string[];
+    capabilities: string[];
+  }> = [],
+): BrainIntegrationReadiness {
+  const summaries = apps.map((app): BrainIntegrationAppSummary => {
+    const capabilities = stringArray(app.capabilities);
+    const missingScopes = stringArray(app.missingScopes);
+    return {
+      id: String(app.id ?? ""),
+      displayName: String(app.displayName ?? app.id ?? "Integration"),
+      execution: nullableString(app.serverUrl)
+        ? "remote_mcp"
+        : "server_connector",
+      capabilities,
+      configured: boolValue(app.configured),
+      available: boolValue(app.available),
+      connected: boolValue(app.connected),
+      missingScopes,
+      probeStatus: nullableString(app.probeStatus),
+      probeErrorCode: nullableString(app.probeErrorCode),
+      probeToolCount: nullableNumber(app.probeToolCount),
+    };
+  });
+  const grantBackedCapabilities = [
+    ...new Set(capabilityGrants.flatMap((grant) => grant.capabilities)),
+  ].sort();
+  const appBackedCapabilities = [
+    ...new Set(
+      summaries
+        .filter((app) => app.connected)
+        .flatMap((app) => app.capabilities),
+    ),
+  ].sort();
+  const connectedCapabilities =
+    grantBackedCapabilities.length > 0
+      ? grantBackedCapabilities
+      : appBackedCapabilities;
+  const brainReadTools = connectorToolsEnabled
+    ? connectorToolsForCapabilityGrants(
+        capabilityGrants,
+        (provider, grantedScopes, requiredScopes) =>
+          missingOauthScopes(provider, grantedScopes, requiredScopes).length ===
+          0,
+      ).map((entry) => entry.name)
+    : [];
+  const configuredApps = summaries.filter(
+    (app) => app.configured && app.available,
+  );
+  const blockingReasons = [
+    !connectorToolsEnabled ? "connector_tools_disabled" : null,
+    configuredApps.length === 0 ? "oauth_client_missing" : null,
+    summaries.some(
+      (app) =>
+        app.execution === "remote_mcp" &&
+        app.connected &&
+        app.probeStatus !== "ok",
+    )
+      ? "mcp_probe_not_ready"
+      : null,
+    connectedCapabilities.length === 0 ? "no_connected_integrations" : null,
+  ].filter((reason): reason is string => Boolean(reason));
+  return {
+    ready: connectorToolsEnabled && brainReadTools.length > 0,
+    connectorToolsEnabled,
+    connectedCapabilities,
+    brainReadTools,
+    apps: summaries,
+    blockingReasons,
+  };
+}
+
+async function buildBrainIntegrationReadiness(
+  app: FastifyInstance,
+  userId: string,
+): Promise<BrainIntegrationReadiness> {
+  const connectorToolsEnabled =
+    app.config?.ELYAN_CONNECTOR_TOOLS_ENABLED === true;
+  if (!connectorToolsEnabled) {
+    return {
+      ready: false,
+      connectorToolsEnabled,
+      connectedCapabilities: [],
+      brainReadTools: [],
+      apps: [],
+      blockingReasons: ["connector_tools_disabled"],
+    };
+  }
+  try {
+    const [apps, capabilityGrants] = await Promise.all([
+      listIntegrationApps(app, userId),
+      listConnectedCapabilityGrants(app, userId),
+    ]);
+    return summarizeIntegrationApps(
+      apps.map((entry) => entry as unknown as Record<string, unknown>),
+      connectorToolsEnabled,
+      capabilityGrants,
+    );
+  } catch (error) {
+    app.log?.debug?.(
+      {
+        userId,
+        error:
+          error instanceof Error
+            ? error.message
+            : "integration_readiness_failed",
+      },
+      "brain integration readiness skipped",
+    );
+    return {
+      ready: false,
+      connectorToolsEnabled,
+      connectedCapabilities: [],
+      brainReadTools: [],
+      apps: [],
+      blockingReasons: ["diagnostics_unavailable"],
+    };
+  }
+}
+
+async function buildBrainWorldContextReadiness(
+  app: FastifyInstance,
+  userId: string,
+): Promise<BrainWorldContextReadiness> {
+  const maxAgeHours = 72;
+  try {
+    const rows = await app.db
+      .select({
+        kind: worldSignals.kind,
+        createdAt: worldSignals.createdAt,
+      })
+      .from(worldSignals)
+      .where(
+        and(
+          eq(worldSignals.userId, userId),
+          gte(
+            worldSignals.createdAt,
+            new Date(Date.now() - maxAgeHours * 3_600_000),
+          ),
+        ),
+      )
+      .orderBy(desc(worldSignals.createdAt))
+      .limit(20);
+    return summarizeWorldContextReadiness(rows, maxAgeHours);
+  } catch (error) {
+    app.log?.debug?.(
+      {
+        userId,
+        error:
+          error instanceof Error
+            ? error.message
+            : "world_context_readiness_failed",
+      },
+      "brain world context readiness skipped",
+    );
+    return {
+      ready: false,
+      signalCount: 0,
+      freshKinds: [],
+      latestSignalAt: null,
+      maxAgeHours,
+      blockingReasons: ["diagnostics_unavailable"],
+    };
+  }
+}
 
 function compactText(value: string, maxLength?: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
@@ -144,7 +432,12 @@ function detectLanguageTags(text: string): string[] {
     return [detected];
   }
 
-  if (/[çğıöşüÇĞİÖŞÜ]/.test(compact) || /\b(ve|ile|ama|için|ben|sen|kullanıcı|öğret|geliştirici|dil|boy)\b/i.test(compact)) {
+  if (
+    /[çğıöşüÇĞİÖŞÜ]/.test(compact) ||
+    /\b(ve|ile|ama|için|ben|sen|kullanıcı|öğret|geliştirici|dil|boy)\b/i.test(
+      compact,
+    )
+  ) {
     return ["tr"];
   }
 
@@ -160,7 +453,10 @@ function readNumberMetadata(metadata: unknown, key: string): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function normalizeLanguageTags(tags: string[] | undefined, text: string): string[] {
+function normalizeLanguageTags(
+  tags: string[] | undefined,
+  text: string,
+): string[] {
   const requested = (tags ?? [])
     .map((tag) => normalizeLanguageTag(tag))
     .filter((tag): tag is string => Boolean(tag));
@@ -196,12 +492,17 @@ function redactSensitiveKnowledgeText(value: string): string {
   return compactText(redacted, 200_000);
 }
 
-function maybeSealPrivateKnowledgePayload(app: FastifyInstance, payload: Record<string, unknown>): Record<string, unknown> {
+function maybeSealPrivateKnowledgePayload(
+  app: FastifyInstance,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
   const tokenKey = String(app.config.TOKEN_ENCRYPTION_KEY ?? "").trim();
   if (!tokenKey) {
     return {
       mode: "hashed",
-      sha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex"),
+      sha256: createHash("sha256")
+        .update(JSON.stringify(payload))
+        .digest("hex"),
     };
   }
 
@@ -213,7 +514,9 @@ function maybeSealPrivateKnowledgePayload(app: FastifyInstance, payload: Record<
   } catch {
     return {
       mode: "hashed",
-      sha256: createHash("sha256").update(JSON.stringify(payload)).digest("hex"),
+      sha256: createHash("sha256")
+        .update(JSON.stringify(payload))
+        .digest("hex"),
     };
   }
 }
@@ -267,17 +570,23 @@ function sanitizeKnowledgeMetadata(
 
 function assertCreatableScope(scope: BrainScope): BrainScope {
   if (scope === "shared") {
-    throw forbidden("Elyan brain resources can only be promoted by a controlled server-side workflow");
+    throw forbidden(
+      "Elyan brain resources can only be promoted by a controlled server-side workflow",
+    );
   }
 
   return scope;
 }
 
-function normalizeRequiredArtifactField(value: string | null | undefined): string {
+function normalizeRequiredArtifactField(
+  value: string | null | undefined,
+): string {
   const normalized = String(value ?? "").trim();
 
   if (!normalized) {
-    throw badRequest("Ready model artifacts require storageUri, checksum, baseModel, and adapterKind");
+    throw badRequest(
+      "Ready model artifacts require storageUri, checksum, baseModel, and adapterKind",
+    );
   }
 
   return normalized;
@@ -323,8 +632,10 @@ async function getActiveKnowledgeCorpusSummary(app: FastifyInstance) {
     mode: "shared_global",
     readyDocuments: Number(documentCounts[0]?.readyDocuments ?? 0),
     readyDatasets: Number(datasetCounts[0]?.readyDatasets ?? 0),
-    latestDocumentUpdatedAt: documentCounts[0]?.latestDocumentUpdatedAt?.toISOString() ?? null,
-    latestDatasetUpdatedAt: datasetCounts[0]?.latestDatasetUpdatedAt?.toISOString() ?? null,
+    latestDocumentUpdatedAt:
+      documentCounts[0]?.latestDocumentUpdatedAt?.toISOString() ?? null,
+    latestDatasetUpdatedAt:
+      datasetCounts[0]?.latestDatasetUpdatedAt?.toISOString() ?? null,
   };
 }
 
@@ -360,10 +671,15 @@ function tokenize(text: string): string[] {
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
-function readString(record: Record<string, unknown> | null, key: string): string | null {
+function readString(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | null {
   if (!record) {
     return null;
   }
@@ -376,11 +692,15 @@ function hasApprovedCorrectionDatasetLineage(metadata: unknown): boolean {
   const record = readRecord(metadata);
   return (
     readString(record, "datasetRole") === "sft_ready_corrections_jsonl" &&
-    (record?.approvedCorrectionsOnly === true || readString(record, "sourceLineage") === "approved_corrections")
+    (record?.approvedCorrectionsOnly === true ||
+      readString(record, "sourceLineage") === "approved_corrections")
   );
 }
 
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+function readBoolean(
+  record: Record<string, unknown> | null,
+  key: string,
+): boolean | null {
   if (!record) {
     return null;
   }
@@ -388,7 +708,10 @@ function readBoolean(record: Record<string, unknown> | null, key: string): boole
   return typeof value === "boolean" ? value : null;
 }
 
-function readStringArray(record: Record<string, unknown> | null, key: string): string[] {
+function readStringArray(
+  record: Record<string, unknown> | null,
+  key: string,
+): string[] {
   const value = record?.[key];
   return Array.isArray(value)
     ? value
@@ -397,7 +720,9 @@ function readStringArray(record: Record<string, unknown> | null, key: string): s
     : [];
 }
 
-function resolveBrainServingMode(app: FastifyInstance): "groq_primary_direct" | "fast_first_hybrid" | "fast_first_local_only" {
+function resolveBrainServingMode(
+  app: FastifyInstance,
+): "groq_primary_direct" | "fast_first_hybrid" | "fast_first_local_only" {
   const groqKey = String(app.config.GROQ_API_KEY ?? "").trim();
   const anthropicKey = String(app.config.ANTHROPIC_API_KEY ?? "").trim();
   const openAiKey = String(app.config.OPENAI_API_KEY ?? "").trim();
@@ -417,7 +742,9 @@ function isSharedKnowledgeLearningRequested(input: {
   scope: BrainScope;
   learningMode: "retrieval_only" | "shared_corpus_train";
 }): boolean {
-  return input.scope === "shared" || input.learningMode === "shared_corpus_train";
+  return (
+    input.scope === "shared" || input.learningMode === "shared_corpus_train"
+  );
 }
 
 function resolveKnowledgeDocumentScope(input: {
@@ -446,7 +773,10 @@ export function scoreKnowledgeMatch(
 ): number {
   const haystack = `${input.title} ${input.content}`.toLowerCase();
   const queryTokens = tokenize(query);
-  const overlap = queryTokens.reduce((count, token) => count + (haystack.includes(token) ? 1 : 0), 0);
+  const overlap = queryTokens.reduce(
+    (count, token) => count + (haystack.includes(token) ? 1 : 0),
+    0,
+  );
   const exactBonus = haystack.includes(query.trim().toLowerCase()) ? 4 : 0;
   const scopeBonus = input.scope === "user" ? 1 : 0;
 
@@ -476,10 +806,16 @@ const KNOWLEDGE_DOCUMENT_MAX_CHUNKS = 256;
 const KNOWLEDGE_METADATA_SEGMENT_MAX = 48;
 
 function normalizeKnowledgeChunk(value: string): string {
-  return compactText(redactSensitiveKnowledgeText(value), KNOWLEDGE_CHUNK_MAX_CHARS);
+  return compactText(
+    redactSensitiveKnowledgeText(value),
+    KNOWLEDGE_CHUNK_MAX_CHARS,
+  );
 }
 
-function readMetadataString(record: Record<string, unknown> | null, keys: string[]): string | null {
+function readMetadataString(
+  record: Record<string, unknown> | null,
+  keys: string[],
+): string | null {
   for (const key of keys) {
     const value = record?.[key];
     if (typeof value === "string" && value.trim()) {
@@ -490,7 +826,10 @@ function readMetadataString(record: Record<string, unknown> | null, keys: string
   return null;
 }
 
-function readMetadataNumber(record: Record<string, unknown> | null, keys: string[]): number | null {
+function readMetadataNumber(
+  record: Record<string, unknown> | null,
+  keys: string[],
+): number | null {
   for (const key of keys) {
     const value = record?.[key];
     if (typeof value === "number" && Number.isFinite(value)) {
@@ -522,7 +861,9 @@ function splitLongSegment(segment: string, maxChars: number): string[] {
     .filter(Boolean);
 
   if (sentenceSegments.length > 1) {
-    return sentenceSegments.flatMap((sentence) => splitLongSegment(sentence, maxChars));
+    return sentenceSegments.flatMap((sentence) =>
+      splitLongSegment(sentence, maxChars),
+    );
   }
 
   const pieces: string[] = [];
@@ -544,7 +885,10 @@ function splitLongSegment(segment: string, maxChars: number): string[] {
   return pieces;
 }
 
-function splitTextIntoChunks(text: string, maxChars = KNOWLEDGE_CHUNK_MAX_CHARS): string[] {
+function splitTextIntoChunks(
+  text: string,
+  maxChars = KNOWLEDGE_CHUNK_MAX_CHARS,
+): string[] {
   const paragraphs = text
     .split(/\n{2,}/)
     .map((paragraph) => compactText(paragraph))
@@ -668,15 +1012,32 @@ function buildChunkMetadata(input: {
     ...(input.pageNumber != null ? { pageNumber: input.pageNumber } : {}),
     ...(input.blockIndex != null ? { blockIndex: input.blockIndex } : {}),
     ...(input.chunkMetadata ? { chunkMetadata: input.chunkMetadata } : {}),
-    source_device_id: readMetadataString(metadataRecord, ["source_device_id", "sourceDeviceId"]) ?? undefined,
-    content_hash: readMetadataString(metadataRecord, ["content_hash", "contentHash"]) ?? undefined,
-    clientArtifactId: readMetadataString(metadataRecord, ["clientArtifactId"]) ?? undefined,
+    source_device_id:
+      readMetadataString(metadataRecord, [
+        "source_device_id",
+        "sourceDeviceId",
+      ]) ?? undefined,
+    content_hash:
+      readMetadataString(metadataRecord, ["content_hash", "contentHash"]) ??
+      undefined,
+    clientArtifactId:
+      readMetadataString(metadataRecord, ["clientArtifactId"]) ?? undefined,
     mimeType: readMetadataString(metadataRecord, ["mimeType"]) ?? undefined,
-    originalName: readMetadataString(metadataRecord, ["originalName"]) ?? undefined,
-    summarySource: readMetadataString(metadataRecord, ["summarySource"]) ?? undefined,
-    analysisMode: readMetadataString(metadataRecord, ["analysisMode", "analysis_mode"]) ?? undefined,
-    extractionMode: readMetadataString(metadataRecord, ["extractionMode", "extraction_mode"]) ?? undefined,
-    user_intent: readMetadataString(metadataRecord, ["user_intent", "userIntent"]) ?? undefined,
+    originalName:
+      readMetadataString(metadataRecord, ["originalName"]) ?? undefined,
+    summarySource:
+      readMetadataString(metadataRecord, ["summarySource"]) ?? undefined,
+    analysisMode:
+      readMetadataString(metadataRecord, ["analysisMode", "analysis_mode"]) ??
+      undefined,
+    extractionMode:
+      readMetadataString(metadataRecord, [
+        "extractionMode",
+        "extraction_mode",
+      ]) ?? undefined,
+    user_intent:
+      readMetadataString(metadataRecord, ["user_intent", "userIntent"]) ??
+      undefined,
     languageTags: input.languageTags,
   });
 }
@@ -735,12 +1096,36 @@ function normalizeChunkInput(
     return null;
   }
 
-  const pageNumber = readMetadataNumber(record, ["pageNumber", "page_number", "pageIndex", "page_index"]);
-  const blockIndex = readMetadataNumber(record, ["blockIndex", "block_index", "ordinal", "index"]);
+  const pageNumber = readMetadataNumber(record, [
+    "pageNumber",
+    "page_number",
+    "pageIndex",
+    "page_index",
+  ]);
+  const blockIndex = readMetadataNumber(record, [
+    "blockIndex",
+    "block_index",
+    "ordinal",
+    "index",
+  ]);
   const chunkMetadata = readRecord(record.metadata);
   const chunkKind =
-    readMetadataString(record, ["kind", "type", "analysisMode", "analysis_mode", "extractionMode", "extraction_mode"]) ??
-    readMetadataString(chunkMetadata, ["kind", "type", "analysisMode", "analysis_mode", "extractionMode", "extraction_mode"]);
+    readMetadataString(record, [
+      "kind",
+      "type",
+      "analysisMode",
+      "analysis_mode",
+      "extractionMode",
+      "extraction_mode",
+    ]) ??
+    readMetadataString(chunkMetadata, [
+      "kind",
+      "type",
+      "analysisMode",
+      "analysis_mode",
+      "extractionMode",
+      "extraction_mode",
+    ]);
 
   return {
     content,
@@ -774,7 +1159,11 @@ function collectMetadataSegments(
   path: string[] = [],
   depth = 0,
 ): void {
-  if (depth > 6 || state.segments.length >= KNOWLEDGE_METADATA_SEGMENT_MAX || !value) {
+  if (
+    depth > 6 ||
+    state.segments.length >= KNOWLEDGE_METADATA_SEGMENT_MAX ||
+    !value
+  ) {
     return;
   }
 
@@ -806,7 +1195,15 @@ function collectMetadataSegments(
   }
 
   if (Array.isArray(value)) {
-    value.forEach((item, index) => collectMetadataSegments(item, input, state, [...path, String(index)], depth + 1));
+    value.forEach((item, index) =>
+      collectMetadataSegments(
+        item,
+        input,
+        state,
+        [...path, String(index)],
+        depth + 1,
+      ),
+    );
     return;
   }
 
@@ -816,13 +1213,40 @@ function collectMetadataSegments(
 
   const record = value as Record<string, unknown>;
   const sourceKind =
-    readMetadataString(record, ["kind", "type", "analysisMode", "analysis_mode", "extractionMode", "extraction_mode"]) ??
-    null;
-  const pageNumber = readMetadataNumber(record, ["pageNumber", "page_number", "pageIndex", "page_index"]);
-  const blockIndex = readMetadataNumber(record, ["blockIndex", "block_index", "ordinal", "index"]);
+    readMetadataString(record, [
+      "kind",
+      "type",
+      "analysisMode",
+      "analysis_mode",
+      "extractionMode",
+      "extraction_mode",
+    ]) ?? null;
+  const pageNumber = readMetadataNumber(record, [
+    "pageNumber",
+    "page_number",
+    "pageIndex",
+    "page_index",
+  ]);
+  const blockIndex = readMetadataNumber(record, [
+    "blockIndex",
+    "block_index",
+    "ordinal",
+    "index",
+  ]);
   const contextPath = path.length ? path.join(".") : "metadata";
 
-  for (const key of ["text", "content", "summary", "ocrText", "visualSummary", "caption", "heading", "label", "description", "note"]) {
+  for (const key of [
+    "text",
+    "content",
+    "summary",
+    "ocrText",
+    "visualSummary",
+    "caption",
+    "heading",
+    "label",
+    "description",
+    "note",
+  ]) {
     const text = readMetadataString(record, [key]);
     if (!text) {
       continue;
@@ -909,7 +1333,13 @@ function collectMetadataSegments(
     if (!(key in record)) {
       continue;
     }
-    collectMetadataSegments(record[key], input, state, [...path, key], depth + 1);
+    collectMetadataSegments(
+      record[key],
+      input,
+      state,
+      [...path, key],
+      depth + 1,
+    );
   }
 }
 
@@ -930,7 +1360,15 @@ function extractKnowledgeMetadataSegments(
     nextIndex: 0,
   };
 
-  collectMetadataSegments(metadata, { metadata, sourceType: input.sourceType, languageTags: input.languageTags }, state);
+  collectMetadataSegments(
+    metadata,
+    {
+      metadata,
+      sourceType: input.sourceType,
+      languageTags: input.languageTags,
+    },
+    state,
+  );
   return state.segments.slice(0, KNOWLEDGE_METADATA_SEGMENT_MAX);
 }
 
@@ -959,7 +1397,9 @@ function normalizeKnowledgeChunkSources(input: {
       }
     }
   } else if (input.text) {
-    const textChunks = splitTextIntoChunks(redactSensitiveKnowledgeText(compactText(input.text, 200_000)));
+    const textChunks = splitTextIntoChunks(
+      redactSensitiveKnowledgeText(compactText(input.text, 200_000)),
+    );
     for (const [index, chunk] of textChunks.entries()) {
       const normalized = normalizeChunkInput(chunk, {
         metadata: input.metadata,
@@ -1011,15 +1451,33 @@ function compactKnowledgeChunks(chunks: KnowledgeDocumentSourceChunk[]): {
     });
   }
 
-  const boundedChunks = normalizedChunks.slice(0, KNOWLEDGE_DOCUMENT_MAX_CHUNKS);
-  const normalizedCharacterCount = boundedChunks.reduce((total, chunk) => total + chunk.content.length, 0);
+  const boundedChunks = normalizedChunks.slice(
+    0,
+    KNOWLEDGE_DOCUMENT_MAX_CHUNKS,
+  );
+  const normalizedCharacterCount = boundedChunks.reduce(
+    (total, chunk) => total + chunk.content.length,
+    0,
+  );
   const sourceChunkCount = chunks.length;
-  const duplicateChunkCount = Math.max(0, sourceChunkCount - normalizedChunks.length);
-  const truncatedChunkCount = Math.max(0, normalizedChunks.length - boundedChunks.length);
+  const duplicateChunkCount = Math.max(
+    0,
+    sourceChunkCount - normalizedChunks.length,
+  );
+  const truncatedChunkCount = Math.max(
+    0,
+    normalizedChunks.length - boundedChunks.length,
+  );
   const compressionRatio =
-    inputCharacterCount > 0 ? Number((normalizedCharacterCount / inputCharacterCount).toFixed(4)) : 1;
-  const structuredChunkCount = boundedChunks.filter((chunk) => chunk.metadata.chunkSource !== "text_split").length;
-  const metadataSegmentCount = boundedChunks.filter((chunk) => chunk.metadata.chunkSource === "metadata_segment").length;
+    inputCharacterCount > 0
+      ? Number((normalizedCharacterCount / inputCharacterCount).toFixed(4))
+      : 1;
+  const structuredChunkCount = boundedChunks.filter(
+    (chunk) => chunk.metadata.chunkSource !== "text_split",
+  ).length;
+  const metadataSegmentCount = boundedChunks.filter(
+    (chunk) => chunk.metadata.chunkSource === "metadata_segment",
+  ).length;
 
   return {
     chunks: boundedChunks,
@@ -1075,7 +1533,11 @@ export function prepareKnowledgeDocument(input: {
   };
 }
 
-async function assertDatasetAccessible(app: FastifyInstance, datasetId: string, userId: string) {
+async function assertDatasetAccessible(
+  app: FastifyInstance,
+  datasetId: string,
+  userId: string,
+) {
   const rows = await app.db
     .select({
       id: datasetManifests.id,
@@ -1086,7 +1548,10 @@ async function assertDatasetAccessible(app: FastifyInstance, datasetId: string, 
     .where(
       and(
         eq(datasetManifests.id, datasetId),
-        or(eq(datasetManifests.scope, "shared"), eq(datasetManifests.ownerUserId, userId)),
+        or(
+          eq(datasetManifests.scope, "shared"),
+          eq(datasetManifests.ownerUserId, userId),
+        ),
       ),
     )
     .limit(1);
@@ -1098,7 +1563,11 @@ async function assertDatasetAccessible(app: FastifyInstance, datasetId: string, 
   return rows[0];
 }
 
-async function assertTrainingJobAccessible(app: FastifyInstance, trainingJobId: string, userId: string) {
+async function assertTrainingJobAccessible(
+  app: FastifyInstance,
+  trainingJobId: string,
+  userId: string,
+) {
   const rows = await app.db
     .select({
       id: trainingJobs.id,
@@ -1110,7 +1579,10 @@ async function assertTrainingJobAccessible(app: FastifyInstance, trainingJobId: 
     .where(
       and(
         eq(trainingJobs.id, trainingJobId),
-        or(eq(trainingJobs.scope, "shared"), eq(trainingJobs.ownerUserId, userId)),
+        or(
+          eq(trainingJobs.scope, "shared"),
+          eq(trainingJobs.ownerUserId, userId),
+        ),
       ),
     )
     .limit(1);
@@ -1122,7 +1594,10 @@ async function assertTrainingJobAccessible(app: FastifyInstance, trainingJobId: 
   return rows[0];
 }
 
-export async function getBrainProfile(app: FastifyInstance, userId: string): Promise<any> {
+export async function getBrainProfile(
+  app: FastifyInstance,
+  userId: string,
+): Promise<any> {
   const cached = readBrainProfileCache(app, userId);
   if (cached) {
     return cached as Awaited<ReturnType<typeof getBrainProfile>>;
@@ -1156,7 +1631,10 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       .where(
         and(
           eq(modelArtifacts.status, "ready"),
-          or(eq(modelArtifacts.scope, "shared"), eq(modelArtifacts.ownerUserId, userId)),
+          or(
+            eq(modelArtifacts.scope, "shared"),
+            eq(modelArtifacts.ownerUserId, userId),
+          ),
         ),
       )
       .orderBy(desc(modelArtifacts.scope), desc(modelArtifacts.updatedAt))
@@ -1167,11 +1645,17 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         chunks: sql<number>`count(${knowledgeChunks.id})`,
       })
       .from(knowledgeDocuments)
-      .leftJoin(knowledgeChunks, eq(knowledgeChunks.documentId, knowledgeDocuments.id))
+      .leftJoin(
+        knowledgeChunks,
+        eq(knowledgeChunks.documentId, knowledgeDocuments.id),
+      )
       .where(
         and(
           eq(knowledgeDocuments.status, "ready"),
-          or(eq(knowledgeDocuments.scope, "shared"), eq(knowledgeDocuments.ownerUserId, userId)),
+          or(
+            eq(knowledgeDocuments.scope, "shared"),
+            eq(knowledgeDocuments.ownerUserId, userId),
+          ),
         ),
       ),
     app.db
@@ -1180,14 +1664,24 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         running: sql<number>`count(*) filter (where ${trainingJobs.status} = 'running')`,
       })
       .from(trainingJobs)
-      .where(or(eq(trainingJobs.scope, "shared"), eq(trainingJobs.ownerUserId, userId))),
+      .where(
+        or(
+          eq(trainingJobs.scope, "shared"),
+          eq(trainingJobs.ownerUserId, userId),
+        ),
+      ),
     app.db
       .select({
         ready: sql<number>`count(*) filter (where ${datasetManifests.status} = 'ready')`,
         total: sql<number>`count(*)`,
       })
       .from(datasetManifests)
-      .where(or(eq(datasetManifests.scope, "shared"), eq(datasetManifests.ownerUserId, userId))),
+      .where(
+        or(
+          eq(datasetManifests.scope, "shared"),
+          eq(datasetManifests.ownerUserId, userId),
+        ),
+      ),
     app.db
       .select({
         safeEvents: sql<number>`count(*) filter (where ${learningEvents.privacyLevel} = 'safe')`,
@@ -1199,7 +1693,12 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         bridgeSignals: sql<number>`count(*) filter (where ${learningEvents.type} = 'bridge')`,
       })
       .from(learningEvents)
-      .where(or(eq(learningEvents.scope, "shared"), eq(learningEvents.userId, userId))),
+      .where(
+        or(
+          eq(learningEvents.scope, "shared"),
+          eq(learningEvents.userId, userId),
+        ),
+      ),
     app.db
       .select({
         thumbsUp: sql<number>`count(*) filter (where ${learningEvents.source} = 'feedback' and ${learningEvents.key} = 'positive_feedback' and ${learningEvents.value} = 'thumbs_up')`,
@@ -1225,7 +1724,10 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       .from(devices)
       .leftJoin(
         runtimeConnections,
-        and(eq(runtimeConnections.deviceId, devices.id), eq(runtimeConnections.userId, userId)),
+        and(
+          eq(runtimeConnections.deviceId, devices.id),
+          eq(runtimeConnections.userId, userId),
+        ),
       )
       .where(eq(devices.userId, userId)),
     app.db
@@ -1241,7 +1743,10 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       .where(
         and(
           eq(trainingJobs.scope, "shared"),
-          or(eq(trainingJobs.status, "queued"), eq(trainingJobs.status, "running")),
+          or(
+            eq(trainingJobs.status, "queued"),
+            eq(trainingJobs.status, "running"),
+          ),
         ),
       )
       .orderBy(desc(trainingJobs.updatedAt))
@@ -1280,7 +1785,8 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       value: item.content,
       confidence: Math.max(0, Math.min(1, item.confidence / 100)),
       scope: item.scope,
-      source: item.entityType === "episode" ? "episodic_memory" : item.memorySource,
+      source:
+        item.entityType === "episode" ? "episodic_memory" : item.memorySource,
       createdAt: new Date(item.updatedAt),
       staleness:
         item.lifecycleStatus === "contested"
@@ -1289,7 +1795,9 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
             ? "stale"
             : "fresh",
       conflictStatus: item.conflictStatus,
-      lastVerifiedAt: item.lastVerifiedAt ? new Date(item.lastVerifiedAt) : null,
+      lastVerifiedAt: item.lastVerifiedAt
+        ? new Date(item.lastVerifiedAt)
+        : null,
       importanceScore: item.importanceScore,
       isPinned: item.isPinned,
     })),
@@ -1306,12 +1814,20 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     toneSignals: Number(learningQualityCounts[0]?.toneSignals ?? 0),
     humorSignals: Number(learningQualityCounts[0]?.humorSignals ?? 0),
     brevitySignals: Number(learningQualityCounts[0]?.brevitySignals ?? 0),
-    helpfulnessSignals: Number(learningQualityCounts[0]?.helpfulnessSignals ?? 0),
-    taskRoutingSignals: Number(learningQualityCounts[0]?.taskRoutingSignals ?? 0),
+    helpfulnessSignals: Number(
+      learningQualityCounts[0]?.helpfulnessSignals ?? 0,
+    ),
+    taskRoutingSignals: Number(
+      learningQualityCounts[0]?.taskRoutingSignals ?? 0,
+    ),
   };
   const warmStyleVotes = Number(learningQualityCounts[0]?.warmStyleVotes ?? 0);
-  const formalStyleVotes = Number(learningQualityCounts[0]?.formalStyleVotes ?? 0);
-  const balancedStyleVotes = Number(learningQualityCounts[0]?.balancedStyleVotes ?? 0);
+  const formalStyleVotes = Number(
+    learningQualityCounts[0]?.formalStyleVotes ?? 0,
+  );
+  const balancedStyleVotes = Number(
+    learningQualityCounts[0]?.balancedStyleVotes ?? 0,
+  );
   const safeLearningEvents = Number(learningCounts[0]?.safeEvents ?? 0);
   const responseStylePreference: {
     code: "formal" | "balanced" | "warm";
@@ -1320,18 +1836,23 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
   } =
     warmStyleVotes > formalStyleVotes && warmStyleVotes >= balancedStyleVotes
       ? { code: "warm", label: "Daha sıcak", source: "learned" }
-      : formalStyleVotes > warmStyleVotes && formalStyleVotes >= balancedStyleVotes
+      : formalStyleVotes > warmStyleVotes &&
+          formalStyleVotes >= balancedStyleVotes
         ? { code: "formal", label: "Daha resmi", source: "learned" }
         : balancedStyleVotes > 0
           ? { code: "balanced", label: "Dengeli", source: "learned" }
           : { code: "balanced", label: "Dengeli", source: "default" };
-  const connectedDesktopDevices = Number(connectivityCounts[0]?.connectedDesktopDevices ?? 0);
+  const connectedDesktopDevices = Number(
+    connectivityCounts[0]?.connectedDesktopDevices ?? 0,
+  );
   const desktopDevices = Number(connectivityCounts[0]?.desktopDevices ?? 0);
   const mobileDevices = Number(connectivityCounts[0]?.mobileDevices ?? 0);
   const runtimeReady = runtimeSnapshot.ready;
   const bridgeReadiness = connectedDesktopDevices > 0;
   const totalRoutingSignals = routingSignals + bridgeSignals;
-  const routingQualityScore = Number(Math.min(1, totalRoutingSignals / 20).toFixed(2));
+  const routingQualityScore = Number(
+    Math.min(1, totalRoutingSignals / 20).toFixed(2),
+  );
   const routingQualityState =
     totalRoutingSignals === 0
       ? "cold_start"
@@ -1340,11 +1861,15 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         : "building";
 
   const readyModels = models.filter(isCompleteReadyBrainModelArtifact);
-  const activeSharedModel = readyModels.find((model) => model.scope === "shared") ?? null;
-  const activeUserModel = readyModels.find((model) => model.scope === "user") ?? null;
+  const activeSharedModel =
+    readyModels.find((model) => model.scope === "shared") ?? null;
+  const activeUserModel =
+    readyModels.find((model) => model.scope === "user") ?? null;
   const warmupJob = activeSharedJobs[0] ?? null;
   const readyDatasets = Number(datasetCounts[0]?.ready ?? 0);
-  const sharedReadyModels = readyModels.filter((model) => model.scope === "shared");
+  const sharedReadyModels = readyModels.filter(
+    (model) => model.scope === "shared",
+  );
   const rollbackSharedModel = sharedReadyModels[1] ?? null;
   const warmupPlan = readRecord(warmupJob?.config);
   const activeModelMetadata = readRecord(activeSharedModel?.metadata);
@@ -1368,15 +1893,19 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
   const userDevices = await listUserDevices(app, userId);
   const serverTargetDeviceId =
     sharedBrainTargetDevice?.id ??
-    userDevices.find((device) => device.type === "desktop" && device.canReceiveTasks)?.id ??
+    userDevices.find(
+      (device) => device.type === "desktop" && device.canReceiveTasks,
+    )?.id ??
     null;
-  const sharedBrainCapabilitySummary = sharedBrainTargetDevice?.runtime.capabilitySummary ?? null;
+  const sharedBrainCapabilitySummary =
+    sharedBrainTargetDevice?.runtime.capabilitySummary ?? null;
   const activeAdapter =
     readString(activeModelMetadata, "adapterStrategy") ??
     activeSharedModel?.adapterKind?.trim() ??
     "base";
   const serverBrainName = "Elyan";
-  const configuredBaseModel = app.config.ELYAN_SHARED_BRAIN_MODEL.trim() || "llama3.2";
+  const configuredBaseModel =
+    app.config.ELYAN_SHARED_BRAIN_MODEL.trim() || "llama3.2";
   const selectionBaseModel =
     activeSharedModel?.baseModel?.trim() ||
     warmupJob?.baseModel?.trim() ||
@@ -1421,7 +1950,10 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
   const brainRuntimeReady = Boolean(runtimeSnapshot.ready && serverBrainName);
   const probeReady = Boolean(inferenceProbe.ready);
   const servingProvider = inferenceProbe.provider ?? runtimeSnapshot.provider;
-  const baseModel = (modelResolution.resolvedBaseModel ?? modelResolution.configuredBaseModel) || "llama3.2";
+  const baseModel =
+    (modelResolution.resolvedBaseModel ??
+      modelResolution.configuredBaseModel) ||
+    "llama3.2";
   const modelMode = activeSharedModel != null ? "adapted" : "base";
   const trainingState =
     activeSharedModel != null
@@ -1431,7 +1963,9 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         : probeReady || brainRuntimeReady
           ? "base_serving"
           : "cold";
-  const inferenceReady = Boolean((probeReady || brainRuntimeReady) && baseModel);
+  const inferenceReady = Boolean(
+    (probeReady || brainRuntimeReady) && baseModel,
+  );
   const isChatUsable = Boolean(inferenceReady && serverBrainName);
   const memoryAwareChatReady = Boolean(
     isChatUsable && (memoryStatus.pipelineReady || retrievalStatus.hybridReady),
@@ -1457,7 +1991,9 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
   };
   const lastSharedRefreshAt =
     warmupJob?.updatedAt?.toISOString() ??
-    (activeSharedModel?.updatedAt ? activeSharedModel.updatedAt.toISOString() : null);
+    (activeSharedModel?.updatedAt
+      ? activeSharedModel.updatedAt.toISOString()
+      : null);
   const freshSignalRows = await app.db
     .select({
       freshSignals: sql<number>`count(*)`,
@@ -1474,9 +2010,15 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       ),
     );
   const signalFreshness = {
-    freshSignalsSinceLastSharedRefresh: Number(freshSignalRows[0]?.freshSignals ?? 0),
-    reconnectRecoveriesSinceLastSharedRefresh: Number(freshSignalRows[0]?.reconnectRecoveries ?? 0),
-    handoffQualitySignalsSinceLastSharedRefresh: Number(freshSignalRows[0]?.handoffQualitySignals ?? 0),
+    freshSignalsSinceLastSharedRefresh: Number(
+      freshSignalRows[0]?.freshSignals ?? 0,
+    ),
+    reconnectRecoveriesSinceLastSharedRefresh: Number(
+      freshSignalRows[0]?.reconnectRecoveries ?? 0,
+    ),
+    handoffQualitySignalsSinceLastSharedRefresh: Number(
+      freshSignalRows[0]?.handoffQualitySignals ?? 0,
+    ),
     lastSharedRefreshAt,
   };
   const activeModelPromotion = {
@@ -1490,26 +2032,38 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     rollbackSharedModelId: rollbackSharedModel?.id ?? null,
     rollbackSharedModelUpdatedAt: rollbackSharedModel?.updatedAt ?? null,
     promotedAt: activeSharedModel?.updatedAt ?? null,
-    evaluationState: readString(activeModelMetadata, "evaluationState") ?? "bounded_offline_eval",
+    evaluationState:
+      readString(activeModelMetadata, "evaluationState") ??
+      "bounded_offline_eval",
   };
   const desktopAvailable = bridgeReadiness;
   const quantumDesktop = userDevices.find((device) => {
     const capabilities = Array.isArray(device.runtime.capabilities)
-      ? device.runtime.capabilities.map((capability) => String(capability ?? "").trim().toLowerCase().replace(/[\s_]+/g, "."))
+      ? device.runtime.capabilities.map((capability) =>
+          String(capability ?? "")
+            .trim()
+            .toLowerCase()
+            .replace(/[\s_]+/g, "."),
+        )
       : [];
     return (
       device.type === "desktop" &&
       device.canReceiveTasks &&
-      ["quantum.model.problem", "quantum.run.experiment", "quantum.compare.classical", "quantum.generate.report"].every(
-        (capability) => capabilities.includes(capability),
-      )
+      [
+        "quantum.model.problem",
+        "quantum.run.experiment",
+        "quantum.compare.classical",
+        "quantum.generate.report",
+      ].every((capability) => capabilities.includes(capability))
     );
   });
   const quantumReady = Boolean(quantumDesktop);
   const quantum = {
     mode: "hybrid",
     ready: quantumReady,
-    supportedProblemClasses: quantumReady ? ["qubo", "ising", "qaoa", "vqe"] : [],
+    supportedProblemClasses: quantumReady
+      ? ["qubo", "ising", "qaoa", "vqe"]
+      : [],
     solver: quantumReady ? "qiskit_simulator" : null,
     problemClass: "optimization",
     benchmarkStatus: quantumReady ? "ready" : "waiting_desktop",
@@ -1567,19 +2121,23 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     sessionPageBytesP50: null,
     sessionPageBytesP95: null,
   }));
-  const benchmarkSummary = await getLatestBrainBenchmarkSummary(app).catch(() => ({
-    latestRunAt: null,
-    latestStatus: null,
-    latestOverallScore: null,
-    latestBoundaryScore: null,
-    latestReasoningScore: null,
-    latestClarificationScore: null,
-    latestToolUseScore: null,
-    latestLatencyScore: null,
-    caseCount: 0,
-    constitutionVersion: ELYAN_CONSTITUTION_VERSION,
-  }));
-  const approvedCorrectionDataset = await getApprovedCorrectionDatasetState(app).catch(() => ({
+  const benchmarkSummary = await getLatestBrainBenchmarkSummary(app).catch(
+    () => ({
+      latestRunAt: null,
+      latestStatus: null,
+      latestOverallScore: null,
+      latestBoundaryScore: null,
+      latestReasoningScore: null,
+      latestClarificationScore: null,
+      latestToolUseScore: null,
+      latestLatencyScore: null,
+      caseCount: 0,
+      constitutionVersion: ELYAN_CONSTITUTION_VERSION,
+    }),
+  );
+  const approvedCorrectionDataset = await getApprovedCorrectionDatasetState(
+    app,
+  ).catch(() => ({
     ready: false,
     datasetId: null,
     datasetVersion: null,
@@ -1600,30 +2158,46 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     oldestApprovedAt: null,
   }));
   const servingMode = resolveBrainServingMode(app);
-  const groqConfigured = String(app.config.GROQ_API_KEY ?? "").trim().length > 0;
-  const groqModelCatalog = groqConfigured ? buildGroqModelCatalog(app.config) : null;
+  const groqConfigured =
+    String(app.config.GROQ_API_KEY ?? "").trim().length > 0;
+  const groqModelCatalog = groqConfigured
+    ? buildGroqModelCatalog(app.config)
+    : null;
   const groqConfiguredModels = groqModelCatalog?.defaultModelByWorkload ?? null;
   const activeMobileDefaultProfile = {
     workload: "mobile_chat_fast",
     mode: servingMode,
     model: groqConfigured
-      ? (groqModelCatalog?.defaultModelByWorkload.mobile_chat_fast ?? modelResolution.resolvedBaseModel ?? modelResolution.configuredBaseModel ?? null)
-      : modelResolution.resolvedBaseModel ?? modelResolution.configuredBaseModel ?? null,
+      ? (groqModelCatalog?.defaultModelByWorkload.mobile_chat_fast ??
+        modelResolution.resolvedBaseModel ??
+        modelResolution.configuredBaseModel ??
+        null)
+      : (modelResolution.resolvedBaseModel ??
+        modelResolution.configuredBaseModel ??
+        null),
     timeoutMs: getSharedBrainWorkloadProfile("mobile_chat_fast").timeoutMs,
     maxTokens: getSharedBrainWorkloadProfile("mobile_chat_fast").maxTokens,
     fallbackActive: groqConfigured
       ? Boolean(groqModelCatalog?.fallbackModel)
-      : modelResolution.resolvedBaseModelSource === "installed_fallback" || Boolean(modelResolution.resolvedFallbackModel),
-    fallbackModel: groqConfigured ? groqModelCatalog?.fallbackModel ?? null : modelResolution.resolvedFallbackModel,
+      : modelResolution.resolvedBaseModelSource === "installed_fallback" ||
+        Boolean(modelResolution.resolvedFallbackModel),
+    fallbackModel: groqConfigured
+      ? (groqModelCatalog?.fallbackModel ?? null)
+      : modelResolution.resolvedFallbackModel,
   };
   const latestLatencyWarning =
     brainLatency.recentBrainTimeoutCount > 0
       ? "recent_timeouts_detected"
-      : (brainLatency.lastChatLatencyMs ?? 0) > getSharedBrainWorkloadProfile("mobile_chat_fast").timeoutMs
+      : (brainLatency.lastChatLatencyMs ?? 0) >
+          getSharedBrainWorkloadProfile("mobile_chat_fast").timeoutMs
         ? "mobile_chat_latency_high"
         : null;
   const recentLatencyPressure =
-    latestLatencyWarning === "mobile_chat_latency_high" ? "high" : (brainLatency.lastChatLatencyMs ?? 0) > 0 ? "normal" : "cold";
+    latestLatencyWarning === "mobile_chat_latency_high"
+      ? "high"
+      : (brainLatency.lastChatLatencyMs ?? 0) > 0
+        ? "normal"
+        : "cold";
   const recentTimeoutPressure =
     brainLatency.recentBrainTimeoutCount >= 3
       ? "high"
@@ -1633,12 +2207,14 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
   const activeArtifact = activeSharedModel ?? activeUserModel;
   const hostedConfigured = Boolean(
     app.config.ANTHROPIC_API_KEY ||
-      app.config.OPENAI_API_KEY ||
-      app.config.GROQ_API_KEY ||
-      app.config.GEMINI_API_KEY ||
-      app.config.OPENROUTER_API_KEY,
+    app.config.OPENAI_API_KEY ||
+    app.config.GROQ_API_KEY ||
+    app.config.GEMINI_API_KEY ||
+    app.config.OPENROUTER_API_KEY,
   );
-  const activeKnowledgeCorpusSnapshot = await getActiveKnowledgeCorpusSummary(app).catch(() => ({
+  const activeKnowledgeCorpusSnapshot = await getActiveKnowledgeCorpusSummary(
+    app,
+  ).catch(() => ({
     mode: "shared_global",
     readyDocuments: 0,
     readyDatasets: 0,
@@ -1691,31 +2267,49 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       planning: groqConfigured ? "groq" : "ollama",
     },
     localFallbackLadder: {
-      fastRoute: groqConfigured ? [] : ["qwen2.5-coder:3b", "qwen2.5:7b-instruct-q5_K_M", "llama3:8b"],
-      mobileChatFast: groqConfigured ? [] : ["qwen2.5-coder:3b", "qwen2.5:7b-instruct-q5_K_M", "llama3:8b"],
-      mobileChatBalanced: groqConfigured ? [] : ["qwen2.5:7b-instruct-q5_K_M", "deepseek-r1:8b", "llama3:8b"],
-      planning: groqConfigured ? [] : ["qwen2.5:7b-instruct-q5_K_M", "deepseek-r1:8b", "llama3:8b"],
+      fastRoute: groqConfigured
+        ? []
+        : ["qwen2.5-coder:3b", "qwen2.5:7b-instruct-q5_K_M", "llama3:8b"],
+      mobileChatFast: groqConfigured
+        ? []
+        : ["qwen2.5-coder:3b", "qwen2.5:7b-instruct-q5_K_M", "llama3:8b"],
+      mobileChatBalanced: groqConfigured
+        ? []
+        : ["qwen2.5:7b-instruct-q5_K_M", "deepseek-r1:8b", "llama3:8b"],
+      planning: groqConfigured
+        ? []
+        : ["qwen2.5:7b-instruct-q5_K_M", "deepseek-r1:8b", "llama3:8b"],
     },
     configuredModels: {
       fastRoute: groqConfigured
-        ? groqConfiguredModels?.fast_route ?? (app.config.ELYAN_SHARED_BRAIN_FAST_MODEL || "qwen2.5-coder:3b")
+        ? (groqConfiguredModels?.fast_route ??
+          (app.config.ELYAN_SHARED_BRAIN_FAST_MODEL || "qwen2.5-coder:3b"))
         : app.config.ELYAN_SHARED_BRAIN_FAST_MODEL || "qwen2.5-coder:3b",
       mobileChatFast: groqConfigured
-        ? groqConfiguredModels?.mobile_chat_fast ?? (app.config.ELYAN_SHARED_BRAIN_FAST_MODEL || "qwen2.5-coder:3b")
+        ? (groqConfiguredModels?.mobile_chat_fast ??
+          (app.config.ELYAN_SHARED_BRAIN_FAST_MODEL || "qwen2.5-coder:3b"))
         : app.config.ELYAN_SHARED_BRAIN_FAST_MODEL || "qwen2.5-coder:3b",
       mobileChatBalanced: groqConfigured
-        ? groqConfiguredModels?.mobile_chat_balanced ?? (app.config.ELYAN_SHARED_BRAIN_BALANCED_MODEL || "qwen2.5:7b-instruct-q5_K_M")
-        : app.config.ELYAN_SHARED_BRAIN_BALANCED_MODEL || "qwen2.5:7b-instruct-q5_K_M",
+        ? (groqConfiguredModels?.mobile_chat_balanced ??
+          (app.config.ELYAN_SHARED_BRAIN_BALANCED_MODEL ||
+            "qwen2.5:7b-instruct-q5_K_M"))
+        : app.config.ELYAN_SHARED_BRAIN_BALANCED_MODEL ||
+          "qwen2.5:7b-instruct-q5_K_M",
       planning: groqConfigured
-        ? groqConfiguredModels?.planning ?? (app.config.ELYAN_SHARED_BRAIN_PLANNING_MODEL || "qwen2.5:7b-instruct-q5_K_M")
-        : app.config.ELYAN_SHARED_BRAIN_PLANNING_MODEL || "qwen2.5:7b-instruct-q5_K_M",
+        ? (groqConfiguredModels?.planning ??
+          (app.config.ELYAN_SHARED_BRAIN_PLANNING_MODEL ||
+            "qwen2.5:7b-instruct-q5_K_M"))
+        : app.config.ELYAN_SHARED_BRAIN_PLANNING_MODEL ||
+          "qwen2.5:7b-instruct-q5_K_M",
     },
     webGrounding: {
       enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
       source:
-        app.config.ELYAN_SEARCH_PROVIDER === "searxng" && app.config.SEARXNG_BASE_URL
+        app.config.ELYAN_SEARCH_PROVIDER === "searxng" &&
+        app.config.SEARXNG_BASE_URL
           ? "searxng"
-          : app.config.ELYAN_SEARCH_PROVIDER === "brave" && app.config.BRAVE_SEARCH_API_KEY
+          : app.config.ELYAN_SEARCH_PROVIDER === "brave" &&
+              app.config.BRAVE_SEARCH_API_KEY
             ? "brave"
             : "duckduckgo_html",
       maxResults: app.config.ELYAN_WEB_GROUNDING_MAX_RESULTS,
@@ -1728,16 +2322,18 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         sourceTrustScoring: true,
         sourceFreshnessScoring: true,
         domains: Object.fromEntries(
-          ([
-            "news",
-            "market",
-            "weather",
-            "sports",
-            "regulation",
-            "software_security",
-            "software_release",
-            "url_review",
-          ] satisfies FreshDataDomain[]).map((domain) => {
+          (
+            [
+              "news",
+              "market",
+              "weather",
+              "sports",
+              "regulation",
+              "software_security",
+              "software_release",
+              "url_review",
+            ] satisfies FreshDataDomain[]
+          ).map((domain) => {
             const policy = freshDataPolicyForDomain(domain);
             return [
               domain,
@@ -1770,7 +2366,10 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     promotionGateReasons: promotionEligibility.reasons,
     approvedCorrectionDatasetReady: approvedCorrectionDataset.ready,
     compactDatasetEligible: approvedCorrectionDataset.compactDatasetEligible,
-    evaluationScore: readNumberMetadata(activeSharedModel?.metadata, "evaluationScore"),
+    evaluationScore: readNumberMetadata(
+      activeSharedModel?.metadata,
+      "evaluationScore",
+    ),
     benchmarkScore: benchmarkSummary.latestOverallScore,
     recentTimeoutCount: brainLatency.recentBrainTimeoutCount,
     weightTrainingAvailable: app.config.ELYAN_WEIGHT_TRAINING_ENABLED,
@@ -1785,9 +2384,15 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
     primaryEnabled: Boolean(app.config.ELYAN_MODEL_PRIMARY_ENABLED),
   });
   const skills = await getPublicSkillCatalog();
+  const [integrationReadiness, worldContextReadiness] = await Promise.all([
+    buildBrainIntegrationReadiness(app, userId),
+    buildBrainWorldContextReadiness(app, userId),
+  ]);
 
   const profile = {
     skills,
+    integrations: integrationReadiness,
+    worldContext: worldContextReadiness,
     constitution: {
       version: ELYAN_CONSTITUTION_VERSION,
       promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
@@ -1849,20 +2454,31 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       activeMobileDefaultProfile,
       workloadProfiles: {
         mobileChatFast: getSharedBrainWorkloadProfile("mobile_chat_fast"),
-        mobileChatBalanced: getSharedBrainWorkloadProfile("mobile_chat_balanced"),
-        mobileChatDeepRefine: getSharedBrainWorkloadProfile("mobile_chat_deep_refine"),
+        mobileChatBalanced: getSharedBrainWorkloadProfile(
+          "mobile_chat_balanced",
+        ),
+        mobileChatDeepRefine: getSharedBrainWorkloadProfile(
+          "mobile_chat_deep_refine",
+        ),
         planning: getSharedBrainWorkloadProfile("planning"),
         desktopHandoff: getSharedBrainWorkloadProfile("desktop_handoff"),
       },
       latencyBudgets: {
-        mobileChatFastFirstDeltaMs: getSharedBrainWorkloadProfile("mobile_chat_fast").firstDeltaBudgetMs,
-        mobileChatFastTimeoutMs: getSharedBrainWorkloadProfile("mobile_chat_fast").timeoutMs,
-        planningFirstDeltaMs: getSharedBrainWorkloadProfile("planning").firstDeltaBudgetMs,
+        mobileChatFastFirstDeltaMs:
+          getSharedBrainWorkloadProfile("mobile_chat_fast").firstDeltaBudgetMs,
+        mobileChatFastTimeoutMs:
+          getSharedBrainWorkloadProfile("mobile_chat_fast").timeoutMs,
+        planningFirstDeltaMs:
+          getSharedBrainWorkloadProfile("planning").firstDeltaBudgetMs,
         planningTimeoutMs: getSharedBrainWorkloadProfile("planning").timeoutMs,
       },
       fallbackStatus: {
-        active: groqConfigured ? false : activeMobileDefaultProfile.fallbackActive,
-        fallbackModel: groqConfigured ? null : activeMobileDefaultProfile.fallbackModel,
+        active: groqConfigured
+          ? false
+          : activeMobileDefaultProfile.fallbackActive,
+        fallbackModel: groqConfigured
+          ? null
+          : activeMobileDefaultProfile.fallbackModel,
         hostedConfigured: currentServingPolicy.hostedConfigured,
         mode: activeMobileDefaultProfile.mode,
       },
@@ -1904,11 +2520,13 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
         inferenceReady,
         realtimeReady: true,
         replaySupported: true,
-        resumeCursorTtlSeconds: app.config.REALTIME_EVENT_RETENTION_HOURS * 60 * 60,
+        resumeCursorTtlSeconds:
+          app.config.REALTIME_EVENT_RETENTION_HOURS * 60 * 60,
         sessionHydrationMode: "realtime_then_authoritative_refresh",
         degradedReason: !isChatUsable
           ? "server_brain_unavailable"
-          : retrievalStatus.mode === "lexical_fallback" && memoryStatus.memoryIndexCoverage <= 0
+          : retrievalStatus.mode === "lexical_fallback" &&
+              memoryStatus.memoryIndexCoverage <= 0
             ? "memory_index_cold"
             : null,
         serverBrainReady: isChatUsable,
@@ -1971,9 +2589,13 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
           factsDays: 365,
           episodesDays: 120,
         },
-        lastCompactedAt: memoryStatus.lastReconsolidatedAt ?? memoryStatus.lastConsolidatedAt,
+        lastCompactedAt:
+          memoryStatus.lastReconsolidatedAt ?? memoryStatus.lastConsolidatedAt,
       },
-      recallReady: memoryStatus.pipelineReady && (memoryStatus.semanticMemoryCount > 0 || memoryStatus.episodicMemoryCount > 0),
+      recallReady:
+        memoryStatus.pipelineReady &&
+        (memoryStatus.semanticMemoryCount > 0 ||
+          memoryStatus.episodicMemoryCount > 0),
       activeSemanticCount: memoryStatus.semanticMemoryCount,
       recentEpisodeCount: memoryStatus.episodicMemoryCount,
       episodicMemoryCount: memoryStatus.episodicMemoryCount,
@@ -2013,7 +2635,8 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       memoryIndexCoverage: memoryStatus.memoryIndexCoverage,
       memorySourceCoverage: memoryStatus.memorySources,
       memoryRecallMode:
-        retrievalStatus.mode === "hybrid" && memoryStatus.memoryIndexCoverage > 0
+        retrievalStatus.mode === "hybrid" &&
+        memoryStatus.memoryIndexCoverage > 0
           ? "hybrid_memory_plus_knowledge"
           : "lexical_memory_fallback",
     },
@@ -2026,9 +2649,15 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       connectivity: {
         mobileDevices: Number(connectivityCounts[0]?.mobileDevices ?? 0),
         desktopDevices: Number(connectivityCounts[0]?.desktopDevices ?? 0),
-        connectedDesktopDevices: Number(connectivityCounts[0]?.connectedDesktopDevices ?? 0),
+        connectedDesktopDevices: Number(
+          connectivityCounts[0]?.connectedDesktopDevices ?? 0,
+        ),
         bridgeMode: "mobile_desktop_sync",
-        bridgeTargets: ["task_handoff", "session_reconnect", "dispatch_resilience"],
+        bridgeTargets: [
+          "task_handoff",
+          "session_reconnect",
+          "dispatch_resilience",
+        ],
       },
       signalSummary: {
         interactionEvents: Number(learningCounts[0]?.interactionEvents ?? 0),
@@ -2048,10 +2677,14 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
       },
       trainingEligibility: {
         approvedCorrectionDatasetReady: approvedCorrectionDataset.ready,
-        compactDatasetEligible: approvedCorrectionDataset.compactDatasetEligible ?? approvedCorrectionDataset.ready,
-        compactDatasetQualityScore: approvedCorrectionDataset.compactionQualityScore ?? null,
+        compactDatasetEligible:
+          approvedCorrectionDataset.compactDatasetEligible ??
+          approvedCorrectionDataset.ready,
+        compactDatasetQualityScore:
+          approvedCorrectionDataset.compactionQualityScore ?? null,
         benchmarkBaselineReady: Boolean(benchmarkSummary.latestRunAt),
-        benchmarkScoreAttached: typeof benchmarkSummary.latestOverallScore === "number",
+        benchmarkScoreAttached:
+          typeof benchmarkSummary.latestOverallScore === "number",
         rawSignalDatasetsRejected: true,
       },
       promotionEligibility: {
@@ -2088,7 +2721,8 @@ export async function getBrainProfile(app: FastifyInstance, userId: string): Pro
           totalSignals: totalRoutingSignals,
           bridgeReadiness,
           runtimeReady,
-          readyForPromotion: runtimeReady && bridgeReadiness && routingQualityScore >= 0.72,
+          readyForPromotion:
+            runtimeReady && bridgeReadiness && routingQualityScore >= 0.72,
         },
         promotion: activeModelPromotion,
         inferenceReady,
@@ -2124,10 +2758,13 @@ export async function maybeQueueAutomaticSharedBrainRefresh(
   const qualityGate = profile.learning.qualityGate;
   const freshness = profile.training.signalFreshness;
 
-  const hasNoActiveSharedJob = !profile.training.pipeline.continuousImprovement.activeSharedJobId;
+  const hasNoActiveSharedJob =
+    !profile.training.pipeline.continuousImprovement.activeSharedJobId;
   const enoughFreshSignals = freshness.freshSignalsSinceLastSharedRefresh >= 6;
-  const enoughReconnectSignals = freshness.reconnectRecoveriesSinceLastSharedRefresh >= 1;
-  const enoughHandoffSignals = freshness.handoffQualitySignalsSinceLastSharedRefresh >= 1;
+  const enoughReconnectSignals =
+    freshness.reconnectRecoveriesSinceLastSharedRefresh >= 1;
+  const enoughHandoffSignals =
+    freshness.handoffQualitySignalsSinceLastSharedRefresh >= 1;
   const memoryReady =
     profile.memory.semanticMemoryCount > 0 ||
     profile.memory.episodicMemoryCount > 0 ||
@@ -2218,6 +2855,7 @@ const PRIVATE_BRAIN_PROFILE_KEYS = new Set([
   "prompt",
   "systemPrompt",
   "instructions",
+  "connectorWriteApprovalRequest",
   "storageUri",
   "checksum",
 ]);
@@ -2233,7 +2871,10 @@ export function sanitizePublicBrainValue<T>(value: T): T {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
       .filter(([key]) => !PRIVATE_BRAIN_PROFILE_KEYS.has(key))
-      .map(([key, nestedValue]) => [key, sanitizePublicBrainValue(nestedValue)]),
+      .map(([key, nestedValue]) => [
+        key,
+        sanitizePublicBrainValue(nestedValue),
+      ]),
   ) as T;
 }
 
@@ -2256,10 +2897,15 @@ export async function queueContinuousBrainTrainingJob(
     };
   }
   const profile = await getBrainProfile(app, input.userId);
-  const activeSharedJob = profile.training.pipeline.continuousImprovement.activeSharedJobId;
-  const elyanModelPolicy = profile.training.elyanModel ?? profile.learning.elyanModel ?? null;
+  const activeSharedJob =
+    profile.training.pipeline.continuousImprovement.activeSharedJobId;
+  const elyanModelPolicy =
+    profile.training.elyanModel ?? profile.learning.elyanModel ?? null;
   const elyanProviderPlan =
-    profile.training.elyanProviderPlan ?? profile.learning.elyanProviderPlan ?? profile.chat.elyanProviderPlan ?? null;
+    profile.training.elyanProviderPlan ??
+    profile.learning.elyanProviderPlan ??
+    profile.chat.elyanProviderPlan ??
+    null;
 
   if (activeSharedJob) {
     const rows = await app.db
@@ -2320,7 +2966,10 @@ export async function queueContinuousBrainTrainingJob(
   const approvedCorrectionDataset = profile.learning.correctionDatasetStatus;
   const benchmarkSummary = profile.benchmark;
 
-  if (!approvedCorrectionDataset.ready || !approvedCorrectionDataset.datasetId) {
+  if (
+    !approvedCorrectionDataset.ready ||
+    !approvedCorrectionDataset.datasetId
+  ) {
     await createAuditLog(app, {
       userId: input.userId,
       actorType: "user",
@@ -2346,7 +2995,10 @@ export async function queueContinuousBrainTrainingJob(
     };
   }
 
-  if (!benchmarkSummary.latestRunAt || typeof benchmarkSummary.latestOverallScore !== "number") {
+  if (
+    !benchmarkSummary.latestRunAt ||
+    typeof benchmarkSummary.latestOverallScore !== "number"
+  ) {
     await createAuditLog(app, {
       userId: input.userId,
       actorType: "user",
@@ -2379,26 +3031,62 @@ export async function queueContinuousBrainTrainingJob(
     .limit(1);
   const approvedDataset = approvedDatasetRows[0] ?? null;
   const approvedDatasetMetadata = readRecord(approvedDataset?.metadata);
-  const approvedDatasetVersion = readString(approvedDatasetMetadata, "datasetVersion");
+  const approvedDatasetVersion = readString(
+    approvedDatasetMetadata,
+    "datasetVersion",
+  );
   const approvedDatasetCompaction = {
     compactionMode: readString(approvedDatasetMetadata, "compactionMode"),
-    approvedCorrectionCount: readNumberMetadata(approvedDatasetMetadata, "approvedCorrectionCount"),
-    compactedRecordCount: readNumberMetadata(approvedDatasetMetadata, "compactedRecordCount"),
-    freshSignalCount: readNumberMetadata(approvedDatasetMetadata, "freshSignalCount"),
-    correctionDensity: readNumberMetadata(approvedDatasetMetadata, "correctionDensity"),
-    freshSignalRatio: readNumberMetadata(approvedDatasetMetadata, "freshSignalRatio"),
-    signalFreshnessScore: readNumberMetadata(approvedDatasetMetadata, "signalFreshnessScore"),
+    approvedCorrectionCount: readNumberMetadata(
+      approvedDatasetMetadata,
+      "approvedCorrectionCount",
+    ),
+    compactedRecordCount: readNumberMetadata(
+      approvedDatasetMetadata,
+      "compactedRecordCount",
+    ),
+    freshSignalCount: readNumberMetadata(
+      approvedDatasetMetadata,
+      "freshSignalCount",
+    ),
+    correctionDensity: readNumberMetadata(
+      approvedDatasetMetadata,
+      "correctionDensity",
+    ),
+    freshSignalRatio: readNumberMetadata(
+      approvedDatasetMetadata,
+      "freshSignalRatio",
+    ),
+    signalFreshnessScore: readNumberMetadata(
+      approvedDatasetMetadata,
+      "signalFreshnessScore",
+    ),
     lineageScore: readNumberMetadata(approvedDatasetMetadata, "lineageScore"),
-    compactionQualityScore: readNumberMetadata(approvedDatasetMetadata, "compactionQualityScore"),
-    compactDatasetEligible: readBoolean(approvedDatasetMetadata, "compactDatasetEligible"),
+    compactionQualityScore: readNumberMetadata(
+      approvedDatasetMetadata,
+      "compactionQualityScore",
+    ),
+    compactDatasetEligible: readBoolean(
+      approvedDatasetMetadata,
+      "compactDatasetEligible",
+    ),
     sourceLineage: readString(approvedDatasetMetadata, "sourceLineage"),
-    freshnessWindowDays: readNumberMetadata(approvedDatasetMetadata, "freshnessWindowDays"),
-    highSignalThreshold: readNumberMetadata(approvedDatasetMetadata, "highSignalThreshold"),
+    freshnessWindowDays: readNumberMetadata(
+      approvedDatasetMetadata,
+      "freshnessWindowDays",
+    ),
+    highSignalThreshold: readNumberMetadata(
+      approvedDatasetMetadata,
+      "highSignalThreshold",
+    ),
     latestApprovedAt: readString(approvedDatasetMetadata, "latestApprovedAt"),
     oldestApprovedAt: readString(approvedDatasetMetadata, "oldestApprovedAt"),
   };
 
-  if (!approvedDataset || !hasApprovedCorrectionDatasetLineage(approvedDataset.metadata)) {
+  if (
+    !approvedDataset ||
+    !hasApprovedCorrectionDatasetLineage(approvedDataset.metadata)
+  ) {
     await createAuditLog(app, {
       userId: input.userId,
       actorType: "user",
@@ -2432,7 +3120,11 @@ export async function queueContinuousBrainTrainingJob(
       name: "Elyan continuous brain refresh",
       kind: "lora",
       status: "queued",
-      baseModel: profile.chat.resolvedBaseModel || profile.chat.configuredBaseModel || app.config.ELYAN_SHARED_BRAIN_MODEL.trim() || "llama3.2",
+      baseModel:
+        profile.chat.resolvedBaseModel ||
+        profile.chat.configuredBaseModel ||
+        app.config.ELYAN_SHARED_BRAIN_MODEL.trim() ||
+        "llama3.2",
       datasetManifestId: approvedDataset.id,
       config: {
         bootstrap: false,
@@ -2443,13 +3135,15 @@ export async function queueContinuousBrainTrainingJob(
         adapterMode: SHARED_TRAINING_ADAPTER_MODE,
         serverBrainName: profile.chat.serverBrainName,
         sharedBrainDeviceId: sharedBrainDevice,
-        activeSharedModelId: profile.training.pipeline.promotion.activeSharedModelId,
+        activeSharedModelId:
+          profile.training.pipeline.promotion.activeSharedModelId,
         activeUserModelId: profile.chat.activeUserModel?.id ?? null,
         datasetManifestId: approvedDataset.id,
         datasetManifestStatus: approvedDataset.status,
         trainingPlan: SHARED_TRAINING_PLAN,
         learningSnapshot: {
-          safeLearningEvents: profile.training.pipeline.continuousImprovement.safeLearningEvents,
+          safeLearningEvents:
+            profile.training.pipeline.continuousImprovement.safeLearningEvents,
           routingSignals: profile.training.signalSummary.routingSignals,
           bridgeSignals: profile.training.signalSummary.bridgeSignals,
           bridgeReadiness: profile.training.pipeline.bridgeReadiness,
@@ -2493,7 +3187,8 @@ export async function queueContinuousBrainTrainingJob(
         providerStrategy: {
           primary: app.config.ELYAN_SHARED_BRAIN_PROVIDER,
           learningProvider: "elyan",
-          servingStrategy: elyanModelPolicy?.servingStrategy ?? "groq_primary_elyan_learning",
+          servingStrategy:
+            elyanModelPolicy?.servingStrategy ?? "groq_primary_elyan_learning",
           groqRole: elyanModelPolicy?.groqRole ?? "primary",
           elyanRole: elyanModelPolicy?.elyanRole ?? "learning",
           liveRoutingEnabled: elyanProviderPlan?.liveRoutingEnabled ?? false,
@@ -2505,7 +3200,8 @@ export async function queueContinuousBrainTrainingJob(
             elyanPrimaryPercent: 0,
           },
           fallback: ["elyan_shadow_until_quality_gate"],
-          retirementPolicy: "operator_approval_after_eval_benchmark_latency_gates",
+          retirementPolicy:
+            "operator_approval_after_eval_benchmark_latency_gates",
         },
         constitutionVersion: ELYAN_CONSTITUTION_VERSION,
         promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
@@ -2518,7 +3214,8 @@ export async function queueContinuousBrainTrainingJob(
         latestBoundaryScore: benchmarkSummary.latestBoundaryScore,
         approvedCorrectionDatasetId: approvedDataset.id,
         approvedCorrectionDatasetVersion: approvedDatasetVersion,
-        datasetLineage: approvedDatasetCompaction.sourceLineage ?? "approved_corrections",
+        datasetLineage:
+          approvedDatasetCompaction.sourceLineage ?? "approved_corrections",
         datasetCompaction: approvedDatasetCompaction,
         elyanModel: elyanModelPolicy,
         elyanProviderPlan,
@@ -2570,11 +3267,19 @@ export async function queueContinuousBrainTrainingJob(
   };
 }
 
-export async function listDatasetManifests(app: FastifyInstance, userId: string) {
+export async function listDatasetManifests(
+  app: FastifyInstance,
+  userId: string,
+) {
   return app.db
     .select()
     .from(datasetManifests)
-    .where(or(eq(datasetManifests.scope, "shared"), eq(datasetManifests.ownerUserId, userId)))
+    .where(
+      or(
+        eq(datasetManifests.scope, "shared"),
+        eq(datasetManifests.ownerUserId, userId),
+      ),
+    )
     .orderBy(desc(datasetManifests.updatedAt));
 }
 
@@ -2679,7 +3384,12 @@ async function ensureSharedTrainingDatasetManifest(
   const existingRows = await app.db
     .select()
     .from(datasetManifests)
-    .where(and(eq(datasetManifests.scope, "shared"), eq(datasetManifests.status, "ready")))
+    .where(
+      and(
+        eq(datasetManifests.scope, "shared"),
+        eq(datasetManifests.status, "ready"),
+      ),
+    )
     .orderBy(desc(datasetManifests.updatedAt))
     .limit(1);
 
@@ -2692,7 +3402,10 @@ async function ensureSharedTrainingDatasetManifest(
     };
   }
 
-  if (input.safeLearningEvents < BRAIN_QUALITY_GATE_THRESHOLDS.minSafeLearningEvents) {
+  if (
+    input.safeLearningEvents <
+    BRAIN_QUALITY_GATE_THRESHOLDS.minSafeLearningEvents
+  ) {
     return {
       dataset: null,
       created: false,
@@ -2807,7 +3520,12 @@ export async function updateDatasetManifest(
       metadata: input.metadata,
       updatedAt: new Date(),
     })
-    .where(and(eq(datasetManifests.id, input.datasetId), eq(datasetManifests.ownerUserId, input.userId)))
+    .where(
+      and(
+        eq(datasetManifests.id, input.datasetId),
+        eq(datasetManifests.ownerUserId, input.userId),
+      ),
+    )
     .returning();
 
   if (!rows[0]) {
@@ -2821,7 +3539,12 @@ export async function listTrainingJobs(app: FastifyInstance, userId: string) {
   return app.db
     .select()
     .from(trainingJobs)
-    .where(or(eq(trainingJobs.scope, "shared"), eq(trainingJobs.ownerUserId, userId)))
+    .where(
+      or(
+        eq(trainingJobs.scope, "shared"),
+        eq(trainingJobs.ownerUserId, userId),
+      ),
+    )
     .orderBy(desc(trainingJobs.updatedAt));
 }
 
@@ -2891,7 +3614,11 @@ export async function cancelTrainingJob(
     jobId: string;
   },
 ) {
-  const current = await assertTrainingJobAccessible(app, input.jobId, input.userId);
+  const current = await assertTrainingJobAccessible(
+    app,
+    input.jobId,
+    input.userId,
+  );
 
   if (current.ownerUserId !== input.userId) {
     throw forbidden("Only the owner can cancel this training job");
@@ -2910,7 +3637,12 @@ export async function cancelTrainingJob(
       completedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(and(eq(trainingJobs.id, input.jobId), eq(trainingJobs.ownerUserId, input.userId)))
+    .where(
+      and(
+        eq(trainingJobs.id, input.jobId),
+        eq(trainingJobs.ownerUserId, input.userId),
+      ),
+    )
     .returning();
 
   return rows[0];
@@ -2920,10 +3652,17 @@ export async function listModelArtifacts(app: FastifyInstance, userId: string) {
   const rows = await app.db
     .select()
     .from(modelArtifacts)
-    .where(or(eq(modelArtifacts.scope, "shared"), eq(modelArtifacts.ownerUserId, userId)))
+    .where(
+      or(
+        eq(modelArtifacts.scope, "shared"),
+        eq(modelArtifacts.ownerUserId, userId),
+      ),
+    )
     .orderBy(desc(modelArtifacts.updatedAt));
 
-  return rows.filter((row) => row.status !== "ready" || isCompleteReadyBrainModelArtifact(row));
+  return rows.filter(
+    (row) => row.status !== "ready" || isCompleteReadyBrainModelArtifact(row),
+  );
 }
 
 export async function createModelArtifact(
@@ -3014,7 +3753,12 @@ export async function updateModelArtifact(
   const existingRows = await app.db
     .select()
     .from(modelArtifacts)
-    .where(and(eq(modelArtifacts.id, input.artifactId), eq(modelArtifacts.ownerUserId, input.userId)))
+    .where(
+      and(
+        eq(modelArtifacts.id, input.artifactId),
+        eq(modelArtifacts.ownerUserId, input.userId),
+      ),
+    )
     .limit(1);
 
   const existing = existingRows[0];
@@ -3024,8 +3768,10 @@ export async function updateModelArtifact(
   }
 
   const nextStatus = input.status ?? existing.status;
-  const nextStorageUri = input.storageUri === undefined ? existing.storageUri : input.storageUri;
-  const nextChecksum = input.checksum === undefined ? existing.checksum : input.checksum;
+  const nextStorageUri =
+    input.storageUri === undefined ? existing.storageUri : input.storageUri;
+  const nextChecksum =
+    input.checksum === undefined ? existing.checksum : input.checksum;
   const nextMetadata = input.metadata ?? readRecord(existing.metadata) ?? {};
 
   assertReadyModelArtifactIntegrity({
@@ -3045,7 +3791,12 @@ export async function updateModelArtifact(
       metadata: nextMetadata,
       updatedAt: new Date(),
     })
-    .where(and(eq(modelArtifacts.id, input.artifactId), eq(modelArtifacts.ownerUserId, input.userId)))
+    .where(
+      and(
+        eq(modelArtifacts.id, input.artifactId),
+        eq(modelArtifacts.ownerUserId, input.userId),
+      ),
+    )
     .returning();
 
   return rows[0];
@@ -3097,7 +3848,8 @@ async function ensureKnowledgeDocumentDatasetManifest(
       source: "document_import",
       format: "document_corpus",
       status: input.chunkCount > 0 ? "ready" : "draft",
-      description: "Knowledge document corpus used for Elyan retrieval grounding and shared brain learning lineage.",
+      description:
+        "Knowledge document corpus used for Elyan retrieval grounding and shared brain learning lineage.",
       locator: `brain://knowledge-documents/${input.document.id}`,
       languageTags: input.languageTags,
       recordCount: input.chunkCount,
@@ -3169,7 +3921,10 @@ async function ensureKnowledgeDocumentRetrievalJob(
     .where(
       and(
         eq(trainingJobs.kind, "retrieval_index"),
-        or(eq(trainingJobs.status, "queued"), eq(trainingJobs.status, "running")),
+        or(
+          eq(trainingJobs.status, "queued"),
+          eq(trainingJobs.status, "running"),
+        ),
         sql`${trainingJobs.config} ->> 'sourceDocumentId' = ${input.document.id}`,
       ),
     )
@@ -3240,7 +3995,9 @@ export async function queueKnowledgeDocumentTrainingJob(
     throw notFound("Knowledge document not found");
   }
   if (document.scope !== "shared") {
-    throw badRequest("Only shared knowledge documents can be queued for shared Elyan learning");
+    throw badRequest(
+      "Only shared knowledge documents can be queued for shared Elyan learning",
+    );
   }
 
   const datasetRows = await app.db
@@ -3268,7 +4025,10 @@ export async function queueKnowledgeDocumentTrainingJob(
     .where(
       and(
         eq(trainingJobs.kind, "lora"),
-        or(eq(trainingJobs.status, "queued"), eq(trainingJobs.status, "running")),
+        or(
+          eq(trainingJobs.status, "queued"),
+          eq(trainingJobs.status, "running"),
+        ),
         sql`${trainingJobs.config} ->> 'sourceDocumentId' = ${document.id}`,
       ),
     )
@@ -3292,7 +4052,10 @@ export async function queueKnowledgeDocumentTrainingJob(
       name: `Knowledge grounding refresh · ${document.title}`,
       kind: "lora",
       status: "queued",
-      baseModel: app.config.ELYAN_SHARED_BRAIN_BALANCED_MODEL.trim() || app.config.ELYAN_SHARED_BRAIN_MODEL.trim() || "qwen2.5:7b-instruct-q5_K_M",
+      baseModel:
+        app.config.ELYAN_SHARED_BRAIN_BALANCED_MODEL.trim() ||
+        app.config.ELYAN_SHARED_BRAIN_MODEL.trim() ||
+        "qwen2.5:7b-instruct-q5_K_M",
       datasetManifestId: dataset.id,
       config: {
         source: "knowledge_document_train",
@@ -3389,7 +4152,9 @@ export async function createKnowledgeDocument(
     metadata: input.metadata,
     sourceType: input.sourceType,
   });
-  const languageTags = prepared.languageTags.length ? prepared.languageTags : normalizeLanguageTags(input.languageTags, prepared.summary);
+  const languageTags = prepared.languageTags.length
+    ? prepared.languageTags
+    : normalizeLanguageTags(input.languageTags, prepared.summary);
   const sanitizedMetadata = sanitizeKnowledgeMetadata(app, {
     metadata: input.metadata,
     sourceUri: input.sourceUri,
@@ -3414,7 +4179,10 @@ export async function createKnowledgeDocument(
     )
     .limit(1);
 
-  const tokenEstimate = prepared.chunks.reduce((total, chunk) => total + chunk.tokenEstimate, 0);
+  const tokenEstimate = prepared.chunks.reduce(
+    (total, chunk) => total + chunk.tokenEstimate,
+    0,
+  );
 
   if (existingRows[0]) {
     const existingDocument = existingRows[0];
@@ -3478,7 +4246,10 @@ export async function createKnowledgeDocument(
       title: input.title,
       sourceType: input.sourceType,
       status: "ready",
-      sourceUri: input.sourceUri && !isPrivateSourceUri(input.sourceUri) ? input.sourceUri : null,
+      sourceUri:
+        input.sourceUri && !isPrivateSourceUri(input.sourceUri)
+          ? input.sourceUri
+          : null,
       contentHash: prepared.contentHash,
       summary: prepared.summary,
       metadata: {
@@ -3486,9 +4257,15 @@ export async function createKnowledgeDocument(
         documentAnalysis: {
           sourceType: input.sourceType,
           sourceDeviceId:
-            readMetadataString(readRecord(input.metadata), ["source_device_id", "sourceDeviceId"]) ?? null,
+            readMetadataString(readRecord(input.metadata), [
+              "source_device_id",
+              "sourceDeviceId",
+            ]) ?? null,
           contentHash:
-            readMetadataString(readRecord(input.metadata), ["content_hash", "contentHash"]) ?? prepared.contentHash,
+            readMetadataString(readRecord(input.metadata), [
+              "content_hash",
+              "contentHash",
+            ]) ?? prepared.contentHash,
           chunkCount: prepared.normalization.normalizedChunkCount,
           sourceChunkCount: prepared.normalization.sourceChunkCount,
           structuredChunkCount: prepared.normalization.structuredChunkCount,
@@ -3500,7 +4277,8 @@ export async function createKnowledgeDocument(
           duplicateChunkCount: prepared.normalization.duplicateChunkCount,
           truncatedChunkCount: prepared.normalization.truncatedChunkCount,
           inputCharacterCount: prepared.normalization.inputCharacterCount,
-          normalizedCharacterCount: prepared.normalization.normalizedCharacterCount,
+          normalizedCharacterCount:
+            prepared.normalization.normalizedCharacterCount,
           compressionRatio: prepared.normalization.compressionRatio,
           structuredChunkCount: prepared.normalization.structuredChunkCount,
           metadataSegmentCount: prepared.normalization.metadataSegmentCount,
@@ -3631,9 +4409,11 @@ export async function searchKnowledge(
         "memorySource" in left
           ? left.memorySource === "semantic_memory" && left.isPinned
             ? 6
-            : left.memorySource === "episodic_memory" && left.staleness === "fresh"
+            : left.memorySource === "episodic_memory" &&
+                left.staleness === "fresh"
               ? 4
-              : left.memorySource === "self_model_memory" || left.memorySource === "reflective_memory"
+              : left.memorySource === "self_model_memory" ||
+                  left.memorySource === "reflective_memory"
                 ? 3
                 : left.memorySource === "semantic_memory"
                   ? 2
@@ -3643,15 +4423,20 @@ export async function searchKnowledge(
         "memorySource" in right
           ? right.memorySource === "semantic_memory" && right.isPinned
             ? 6
-            : right.memorySource === "episodic_memory" && right.staleness === "fresh"
+            : right.memorySource === "episodic_memory" &&
+                right.staleness === "fresh"
               ? 4
-              : right.memorySource === "self_model_memory" || right.memorySource === "reflective_memory"
+              : right.memorySource === "self_model_memory" ||
+                  right.memorySource === "reflective_memory"
                 ? 3
                 : right.memorySource === "semantic_memory"
                   ? 2
                   : 1
           : 5;
-      return rightPriority - leftPriority || Number(right.score ?? 0) - Number(left.score ?? 0);
+      return (
+        rightPriority - leftPriority ||
+        Number(right.score ?? 0) - Number(left.score ?? 0)
+      );
     })
     .slice(0, input.limit);
   const topResult = combined[0] ?? null;
@@ -3683,7 +4468,9 @@ export async function listBrainMemoryRecords(
     includeSoftDeleted: boolean;
     limit: number;
     surface: "all" | "facts" | "episodes";
-    lifecycle: Array<"active" | "contested" | "superseded" | "soft_deleted" | "stale">;
+    lifecycle: Array<
+      "active" | "contested" | "superseded" | "soft_deleted" | "stale"
+    >;
   },
 ) {
   return listBrainMemory(app, {

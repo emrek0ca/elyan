@@ -155,6 +155,19 @@ test("extractPreferenceSignals captures natural preferred-name corrections", () 
   );
 });
 
+test("extractPreferenceSignals strips Turkish remember suffixes from explicit names", () => {
+  const result = extractPreferenceSignals({
+    userId: "user_1",
+    taskId: "task_remember_name",
+    message: "Benim adım Zeynep'i hatırla.",
+  });
+
+  const names = result.signals.filter((signal) => signal.key === "name");
+  assert.equal(names.length, 1);
+  assert.equal(names[0]?.value, "Zeynep");
+  assert.equal(names[0]?.metadata?.explicit, true);
+});
+
 test("extractPreferenceSignals does not treat ordinary instructions as preferred names", () => {
   const result = extractPreferenceSignals({
     userId: "user_1",

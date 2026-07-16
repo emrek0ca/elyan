@@ -138,11 +138,17 @@ function deriveAssistantContent(input: {
             ? resultRecord.answer
             : typeof resultRecord.text === "string"
               ? resultRecord.text
-              : typeof resultRecord.message === "string"
-                ? resultRecord.message
-                : null;
+              : typeof resultRecord.assistantMessage === "string"
+                ? resultRecord.assistantMessage
+                : typeof resultRecord.message === "string"
+                  ? resultRecord.message
+                  : null;
     if (text?.trim()) {
       return finalize(text);
+    }
+    const blockText = extractResultAssistantText(input.updatedTask);
+    if (blockText) {
+      return finalize(blockText);
     }
   }
 
@@ -200,14 +206,36 @@ function buildAssistantMetadataFromTask(task: typeof tasks.$inferSelect): Record
   return metadata;
 }
 
-function extractResultAssistantBlocks(task: typeof tasks.$inferSelect): AssistantMessageBlock[] {
+function normalizeResultAssistantBlocks(
+  task: typeof tasks.$inferSelect,
+): AssistantMessageBlock[] {
   const result =
     task.result && typeof task.result === "object" && !Array.isArray(task.result)
       ? (task.result as Record<string, unknown>)
       : {};
+  const rawBlocks = Array.isArray(result.assistantBlocks)
+    ? result.assistantBlocks
+    : Array.isArray(result.blocks)
+      ? result.blocks
+      : [];
   return normalizeAssistantMessageBlocks({
-    blocks: Array.isArray(result.assistantBlocks) ? result.assistantBlocks : [],
-  }).filter((block) => block.type !== "text");
+    blocks: rawBlocks,
+  });
+}
+
+function extractResultAssistantText(task: typeof tasks.$inferSelect): string {
+  return normalizeResultAssistantBlocks(task)
+    .map((block) => (block.type === "text" ? block.markdown.trim() : ""))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function extractResultAssistantBlocks(
+  task: typeof tasks.$inferSelect,
+): AssistantMessageBlock[] {
+  return normalizeResultAssistantBlocks(task).filter(
+    (block) => block.type !== "text",
+  );
 }
 
 function clipSummaryText(value: string | null | undefined, maxLength: number) {

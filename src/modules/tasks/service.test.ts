@@ -1,14 +1,73 @@
 import assert from "node:assert/strict";
+import type { CommandRouteDecision } from "../routing-policy/service.js";
 import test from "node:test";
 import {
   appendTaskArtifacts,
   buildRuntimeTaskDispatchEnvelope,
   buildRouteDecisionLogEntry,
   createTask,
+  isRemoteMcpRouteDecisionStale,
   readServerBrainCompletionMetadata,
   reconcileStaleRuntimeTasks,
+  summarizeToolFlowForTrace,
   updateTaskFromRuntime,
 } from "./service.js";
+
+test("late remote MCP capability invalidates an earlier server-brain route", () => {
+  const staleServerRoute = {
+    route: "server_brain",
+    mode: "chat",
+    capabilities: [],
+    privacyClass: "public_text",
+    requiresApproval: false,
+    reason: "initial_chat_route",
+    intent: "normal_chat",
+    confidence: 0.8,
+    requiredRuntime: "server",
+    privacyLevel: "low",
+    shouldAskClarification: false,
+    failClosedReason: null,
+    selectedWorkload: "mobile_chat_fast",
+  } as const satisfies Partial<CommandRouteDecision> as CommandRouteDecision;
+
+  assert.equal(
+    isRemoteMcpRouteDecisionStale(staleServerRoute, ["mcp_call_tool"]),
+    true,
+  );
+  assert.equal(
+    isRemoteMcpRouteDecisionStale(
+      { ...staleServerRoute, capabilities: ["mcp_call_tool"] },
+      ["mcp_call_tool"],
+    ),
+    false,
+  );
+});
+
+test("tool flow trace exposes only the safe connector error code", () => {
+  const summary = summarizeToolFlowForTrace([
+    {
+      tool: "drive.search",
+      ok: false,
+      permission: "read",
+      durationMs: 42,
+      errorCode: "connector_auth_required",
+      output: null,
+    },
+  ]);
+
+  assert.deepEqual(summary, {
+    count: 1,
+    okCount: 0,
+    tools: [
+      {
+        name: "drive.search",
+        ok: false,
+        resultCount: null,
+        errorCode: "connector_auth_required",
+      },
+    ],
+  });
+});
 
 test("runtime dispatch envelope preserves the executable desktop work order", () => {
   const task = {

@@ -54,5 +54,7 @@ test("buildToolResultRefinementPrompt carries typed tool results without long ra
 
   assert.equal(prompt.includes("Altın fiyatını araştır"), true);
   assert.equal(prompt.includes("web.search"), true);
+  assert.match(prompt, /Return only the user-facing answer/);
+  assert.match(prompt, /group and deduplicate/);
   assert.equal(prompt.length < 9_000, true);
 });

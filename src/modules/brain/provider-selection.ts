@@ -9,6 +9,7 @@ import {
 import type { SharedBrainWorkload } from "./workloads.js";
 import type { VisionMediaProfile } from "./vision-media-policy.js";
 import type { VisionMediaDecision } from "./vision-media-policy.js";
+import { isGeminiFreeModelAllowed } from "./gemini-free-tier-guard.js";
 
 export type SharedBrainProviderCandidate = {
   provider: SharedBrainProvider;
@@ -130,15 +131,20 @@ function buildHostedProviderCandidates(
         : resolveGeminiFallbackModel(app.config, geminiPrimaryModel) ??
           geminiCatalog.fastModel;
   if (geminiApiKey && geminiBaseUrl && geminiPrimaryModel) {
-    hostedCandidates.push({
-      provider: "gemini",
-      baseUrl: geminiBaseUrl,
-      preferredModels: [geminiPrimaryModel, geminiFallbackModel].filter(
-        (model, index, values): model is string =>
-          Boolean(model) && values.indexOf(model) === index,
-      ),
-      hosted: true,
-    });
+    const preferredModels = [geminiPrimaryModel, geminiFallbackModel].filter(
+      (model, index, values): model is string =>
+        Boolean(model) &&
+        values.indexOf(model) === index &&
+        isGeminiFreeModelAllowed(app, model),
+    );
+    if (preferredModels.length > 0) {
+      hostedCandidates.push({
+        provider: "gemini",
+        baseUrl: geminiBaseUrl,
+        preferredModels,
+        hosted: true,
+      });
+    }
   }
 
   if (!isVisionWorkload(workload) && workload !== "document_analysis") {
@@ -164,6 +170,16 @@ function buildHostedProviderCandidates(
   // Gemini is the canonical multimodal adapter. The low-cost Flash-Lite model
   // handles fast/balanced requests; Groq remains a bounded provider fallback.
   const preferredProvider = "gemini";
+  if (
+    app.config.GEMINI_FREE_ONLY === true &&
+    privacyEligibleCandidates.some(
+      (candidate) => candidate.provider === preferredProvider,
+    )
+  ) {
+    return privacyEligibleCandidates.filter(
+      (candidate) => candidate.provider === preferredProvider,
+    );
+  }
   return [
     ...privacyEligibleCandidates.filter((candidate) => candidate.provider === preferredProvider),
     ...privacyEligibleCandidates.filter((candidate) => candidate.provider !== preferredProvider),

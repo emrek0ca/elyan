@@ -23,24 +23,37 @@ import {
   resolveAttachmentAwareSharedBrainWorkload,
   type SharedBrainWorkload,
 } from "../brain/workloads.js";
-import { canUseDesktopConnections, normalizePlanBrainProfile } from "../billing/catalog.js";
+import {
+  canUseDesktopConnections,
+  normalizePlanBrainProfile,
+} from "../billing/catalog.js";
 import {
   createUpgradeOrByokRequiredError,
   getBillingSummary,
   getUserUsageAccessTruth,
   shapePublicUsageSnapshot,
 } from "../billing/service.js";
-import { calculateBillablePlanTokens, estimateTextTokens } from "../billing/token-metering.js";
-import { assertTrialTaskQuotaAllowedFromUsage, getTrialQuotaUsage } from "../quota/service.js";
+import {
+  calculateBillablePlanTokens,
+  estimateTextTokens,
+} from "../billing/token-metering.js";
+import {
+  assertTrialTaskQuotaAllowedFromUsage,
+  getTrialQuotaUsage,
+} from "../quota/service.js";
 import { routeChatTurn } from "../routing-policy/service.js";
 import { resolveCommandTarget } from "../routing-policy/service.js";
 import { createTask, shapeTaskFeedItem } from "../tasks/service.js";
-import type { EphemeralVisionCarrier } from "../brain/ephemeral-vision.js";
+import {
+  countDistinctEphemeralImages,
+  type EphemeralVisionCarrier,
+} from "../brain/ephemeral-vision.js";
 import { isDeterministicDesktopFastWorkOrder } from "../tasks/desktop-work-order.js";
 import { sanitizePublicInferenceValue } from "../tasks/service-helpers.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import { sanitizeInboundContextRecord } from "../../lib/context-text-sanitizer.js";
 import { listFreshWorldSignals } from "../mobile/service.js";
+import { resolveRemoteMcpRequestedCapabilities } from "../integrations/service.js";
 import {
   type AssistantMessageBlock,
   shapeAssistantMessagePayload,
@@ -197,10 +210,14 @@ async function findRecentDuplicateChatTurn(
     ) {
       continue;
     }
-    const createdAtMs = row.createdAt instanceof Date
-      ? row.createdAt.getTime()
-      : new Date(row.createdAt).getTime();
-    if (!Number.isFinite(createdAtMs) || now - createdAtMs > RECENT_DUPLICATE_CHAT_TURN_WINDOW_MS) {
+    const createdAtMs =
+      row.createdAt instanceof Date
+        ? row.createdAt.getTime()
+        : new Date(row.createdAt).getTime();
+    if (
+      !Number.isFinite(createdAtMs) ||
+      now - createdAtMs > RECENT_DUPLICATE_CHAT_TURN_WINDOW_MS
+    ) {
       continue;
     }
 
@@ -213,7 +230,9 @@ async function findRecentDuplicateChatTurn(
     const taskRows = await app.db
       .select()
       .from(tasks)
-      .where(and(eq(tasks.id, assistantRow.taskId), eq(tasks.userId, input.userId)))
+      .where(
+        and(eq(tasks.id, assistantRow.taskId), eq(tasks.userId, input.userId)),
+      )
       .limit(1);
     const task = taskRows[0];
     if (!task) {
@@ -238,7 +257,9 @@ async function shapeDuplicateChatTurnResponse(
   },
   session: Awaited<ReturnType<typeof createChatSession>>,
   routeDecision: Awaited<ReturnType<typeof routeChatTurn>>,
-  duplicateTurn: NonNullable<Awaited<ReturnType<typeof findRecentDuplicateChatTurn>>>,
+  duplicateTurn: NonNullable<
+    Awaited<ReturnType<typeof findRecentDuplicateChatTurn>>
+  >,
 ) {
   const billing = await getBillingSummary(app, input.userId);
   const shapedTask = shapeTaskFeedItem(duplicateTurn.task);
@@ -248,8 +269,12 @@ async function shapeDuplicateChatTurnResponse(
     status: duplicateTurn.assistantMessage.status,
     content: duplicateTurn.assistantMessage.content,
   };
-  const taskBrainRecord = readRecord((shapedTask as Record<string, unknown>).brain);
-  const resultRecord = readRecord((duplicateTurn.task as Record<string, unknown>).result);
+  const taskBrainRecord = readRecord(
+    (shapedTask as Record<string, unknown>).brain,
+  );
+  const resultRecord = readRecord(
+    (duplicateTurn.task as Record<string, unknown>).result,
+  );
   const pendingTokenDebit = estimatePendingChatTokenDebit({
     route: routeDecision.route,
     reused: true,
@@ -300,25 +325,39 @@ function titleFromChatPreview(title: string | undefined, preview: string) {
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
-function readString(record: Record<string, unknown> | null, key: string): string | null {
+function readString(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
+function readNumber(
+  record: Record<string, unknown> | null,
+  key: string,
+): number | null {
   const value = record?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+function readBoolean(
+  record: Record<string, unknown> | null,
+  key: string,
+): boolean | null {
   const value = record?.[key];
   return typeof value === "boolean" ? value : null;
 }
 
-function readArray(record: Record<string, unknown> | null, key: string): unknown[] {
+function readArray(
+  record: Record<string, unknown> | null,
+  key: string,
+): unknown[] {
   const value = record?.[key];
   return Array.isArray(value) ? value : [];
 }
@@ -370,7 +409,12 @@ function sanitizeCompactRecentMessages(value: unknown) {
         content: scrubCompactText(content, 280),
       };
     })
-    .filter((item): item is { role: "system" | "user" | "assistant"; content: string } => item != null)
+    .filter(
+      (
+        item,
+      ): item is { role: "system" | "user" | "assistant"; content: string } =>
+        item != null,
+    )
     .slice(-10);
 }
 
@@ -396,7 +440,16 @@ function sanitizeCompactTurns(value: unknown) {
         ...(workload ? { workload: scrubCompactText(workload, 80) } : {}),
       };
     })
-    .filter((item): item is { at?: string; user: string; assistant?: string; workload?: string } => item != null)
+    .filter(
+      (
+        item,
+      ): item is {
+        at?: string;
+        user: string;
+        assistant?: string;
+        workload?: string;
+      } => item != null,
+    )
     .slice(0, 12);
 }
 
@@ -419,7 +472,9 @@ function sanitizeCompactSalience(value: unknown) {
     ...(assistantCommitment
       ? { assistantCommitment: scrubCompactText(assistantCommitment, 160) }
       : {}),
-    ...(emotionalTone ? { emotionalTone: scrubCompactText(emotionalTone, 80) } : {}),
+    ...(emotionalTone
+      ? { emotionalTone: scrubCompactText(emotionalTone, 80) }
+      : {}),
     ...(unresolved != null ? { unresolved } : {}),
     ...(updatedAt ? { updatedAt } : {}),
   };
@@ -431,7 +486,9 @@ function sanitizeStringList(value: unknown, limit = 4, maxLength = 120) {
     return [];
   }
   return value
-    .map((item) => (typeof item === "string" ? scrubCompactText(item, maxLength) : ""))
+    .map((item) =>
+      typeof item === "string" ? scrubCompactText(item, maxLength) : "",
+    )
     .filter(Boolean)
     .slice(0, limit);
 }
@@ -442,9 +499,16 @@ function sanitizeRollingSummaryRecord(value: unknown) {
     return null;
   }
   const sanitized = {
-    ...(readString(record, "userGoal") ? { userGoal: scrubCompactText(readString(record, "userGoal")!, 220) } : {}),
+    ...(readString(record, "userGoal")
+      ? { userGoal: scrubCompactText(readString(record, "userGoal")!, 220) }
+      : {}),
     ...(readString(record, "assistantState")
-      ? { assistantState: scrubCompactText(readString(record, "assistantState")!, 220) }
+      ? {
+          assistantState: scrubCompactText(
+            readString(record, "assistantState")!,
+            220,
+          ),
+        }
       : {}),
     ...(sanitizeStringList(record.openLoops, 4, 140).length > 0
       ? { openLoops: sanitizeStringList(record.openLoops, 4, 140) }
@@ -452,7 +516,9 @@ function sanitizeRollingSummaryRecord(value: unknown) {
     ...(sanitizeStringList(record.contextNotes, 4, 140).length > 0
       ? { contextNotes: sanitizeStringList(record.contextNotes, 4, 140) }
       : {}),
-    ...(readString(record, "updatedAt") ? { updatedAt: readString(record, "updatedAt") } : {}),
+    ...(readString(record, "updatedAt")
+      ? { updatedAt: readString(record, "updatedAt") }
+      : {}),
   };
   return Object.keys(sanitized).length > 0 ? sanitized : null;
 }
@@ -525,13 +591,35 @@ function buildSanitizedCompactContext(value: unknown) {
   const derivedContextDigest = {
     ...(worldSignals.length > 0 ? { worldSignals } : {}),
     ...(sanitizeAttachmentDigest(derivedContextDigestRecord?.attachments)
-      ? { attachments: sanitizeAttachmentDigest(derivedContextDigestRecord?.attachments) }
+      ? {
+          attachments: sanitizeAttachmentDigest(
+            derivedContextDigestRecord?.attachments,
+          ),
+        }
       : {}),
     ...(previousDigest ? { previousDigest } : {}),
   };
   const responseVerbosityHint = readString(record, "responseVerbosityHint");
   const wantsLongForm = readBoolean(record, "wantsLongForm");
-  const lastAssistantBlocksDigest = readString(record, "lastAssistantBlocksDigest");
+  const lastAssistantBlocksDigest = readString(
+    record,
+    "lastAssistantBlocksDigest",
+  );
+  const rawMobileCapabilities = readRecord(record.mobileContextCapabilities);
+  const mobileContextCapabilities = rawMobileCapabilities
+    ? Object.fromEntries(
+        [
+          "healthEnabled",
+          "locationEnabled",
+          "calendarEnabled",
+          "healthSignalsAvailable",
+          "locationSignalsAvailable",
+          "calendarSignalsAvailable",
+        ]
+          .filter((key) => typeof rawMobileCapabilities[key] === "boolean")
+          .map((key) => [key, rawMobileCapabilities[key]]),
+      )
+    : null;
   const compactContext = {
     ...(recentMessages.length > 0 ? { recentMessages } : {}),
     ...(turns.length > 0 ? { turns } : {}),
@@ -544,7 +632,16 @@ function buildSanitizedCompactContext(value: unknown) {
     ...(responseVerbosityHint ? { responseVerbosityHint } : {}),
     ...(wantsLongForm != null ? { wantsLongForm } : {}),
     ...(lastAssistantBlocksDigest
-      ? { lastAssistantBlocksDigest: scrubCompactText(lastAssistantBlocksDigest, 280) }
+      ? {
+          lastAssistantBlocksDigest: scrubCompactText(
+            lastAssistantBlocksDigest,
+            280,
+          ),
+        }
+      : {}),
+    ...(mobileContextCapabilities &&
+    Object.keys(mobileContextCapabilities).length > 0
+      ? { mobileContextCapabilities }
       : {}),
   };
   return Object.keys(compactContext).length > 0 ? compactContext : null;
@@ -554,8 +651,12 @@ function readChatContextRecord(metadata: Record<string, unknown> | undefined) {
   return readRecord(readRecord(metadata)?.chatContext);
 }
 
-function inferCompactContextLongFormHint(metadata: Record<string, unknown> | undefined) {
-  const compactContext = buildSanitizedCompactContext(readRecord(metadata)?.compactContext);
+function inferCompactContextLongFormHint(
+  metadata: Record<string, unknown> | undefined,
+) {
+  const compactContext = buildSanitizedCompactContext(
+    readRecord(metadata)?.compactContext,
+  );
   if (compactContext && compactContext.wantsLongForm === true) {
     return true;
   }
@@ -567,8 +668,12 @@ function inferCompactContextLongFormHint(metadata: Record<string, unknown> | und
   return responseHint === "expanded_when_needed" || responseHint === "detailed";
 }
 
-function buildSessionChatContextMetadata(metadata: Record<string, unknown> | undefined) {
-  const compactContext = buildSanitizedCompactContext(readRecord(metadata)?.compactContext);
+function buildSessionChatContextMetadata(
+  metadata: Record<string, unknown> | undefined,
+) {
+  const compactContext = buildSanitizedCompactContext(
+    readRecord(metadata)?.compactContext,
+  );
   const existingChatContext = readChatContextRecord(metadata) ?? {};
   const rollingSummary =
     sanitizeRollingSummaryRecord(compactContext?.rollingSummary) ??
@@ -576,7 +681,8 @@ function buildSessionChatContextMetadata(metadata: Record<string, unknown> | und
   const lastAssistantBlocksDigest =
     readString(compactContext, "lastAssistantBlocksDigest") ??
     readString(existingChatContext, "lastAssistantBlocksDigest");
-  const lastDerivedContextDigest = readRecord(compactContext?.derivedContextDigest) ??
+  const lastDerivedContextDigest =
+    readRecord(compactContext?.derivedContextDigest) ??
     readRecord(existingChatContext.lastDerivedContextDigest);
   return {
     ...(rollingSummary ? { rollingSummary } : {}),
@@ -596,7 +702,9 @@ export async function enrichChatMetadataForRequest(
 ) {
   const base = buildChatMetadata(input.metadata);
   const compactContext = buildSanitizedCompactContext(base.compactContext);
-  const existingDerivedDigest = readRecord(compactContext?.derivedContextDigest);
+  const existingDerivedDigest = readRecord(
+    compactContext?.derivedContextDigest,
+  );
   let freshWorldSignalDigest: Record<string, unknown>[] = [];
   const freshSignals = await listFreshWorldSignals(app, {
     userId: input.userId,
@@ -642,7 +750,9 @@ export async function enrichChatMetadataForRequest(
     responseVerbosityHint:
       readString(compactContext, "responseVerbosityHint") ??
       readString(readRecord(base), "responseVerbosityHint") ??
-      (inferCompactContextLongFormHint(base) ? "expanded_when_needed" : "concise"),
+      (inferCompactContextLongFormHint(base)
+        ? "expanded_when_needed"
+        : "concise"),
     chatContext,
   });
 }
@@ -668,20 +778,31 @@ function buildChatSessionMetadata(
       ...(existingChatHistory ?? {}),
       ...(input.titleHint ? { titleHint: input.titleHint } : {}),
       ...(input.preview ? { preview: input.preview } : {}),
-      ...(input.lastMessageRole ? { lastMessageRole: input.lastMessageRole } : {}),
+      ...(input.lastMessageRole
+        ? { lastMessageRole: input.lastMessageRole }
+        : {}),
       ...(input.lastMessageId ? { lastMessageId: input.lastMessageId } : {}),
-      ...(input.lastMessageAt ? { lastMessageAt: input.lastMessageAt.toISOString() } : {}),
+      ...(input.lastMessageAt
+        ? { lastMessageAt: input.lastMessageAt.toISOString() }
+        : {}),
     },
     ...(input.titleHint ? { titleHint: input.titleHint } : {}),
     ...(input.preview ? { preview: input.preview } : {}),
     ...(input.preview ? { lastMessagePreview: input.preview } : {}),
-    ...(input.lastMessageRole ? { lastMessageRole: input.lastMessageRole } : {}),
+    ...(input.lastMessageRole
+      ? { lastMessageRole: input.lastMessageRole }
+      : {}),
     ...(input.lastMessageId ? { lastMessageId: input.lastMessageId } : {}),
-    ...(input.lastMessageAt ? { lastMessageAt: input.lastMessageAt.toISOString() } : {}),
+    ...(input.lastMessageAt
+      ? { lastMessageAt: input.lastMessageAt.toISOString() }
+      : {}),
   });
 }
 
-function readChatSessionPreview(metadata: unknown, title: string | null | undefined) {
+function readChatSessionPreview(
+  metadata: unknown,
+  title: string | null | undefined,
+) {
   const record = readRecord(metadata);
   const chatHistory = readRecord(record?.chatHistory);
   const preview =
@@ -718,24 +839,34 @@ async function hydrateMessageContent(
   );
 }
 
-function shapeChatMessageForResponse<T extends typeof chatMessages.$inferSelect>(
-  message: T,
-): T & { blocks?: AssistantMessageBlock[]; content?: string } {
+function shapeChatMessageForResponse<
+  T extends typeof chatMessages.$inferSelect,
+>(message: T): T & { blocks?: AssistantMessageBlock[]; content?: string } {
   const shaped = shapeAssistantMessagePayload(message) as T & {
     blocks?: AssistantMessageBlock[];
     content?: string;
   };
   const record = shaped as Record<string, unknown>;
-  if (record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)) {
+  if (
+    record.metadata &&
+    typeof record.metadata === "object" &&
+    !Array.isArray(record.metadata)
+  ) {
     record.metadata = sanitizePublicInferenceValue(record.metadata);
   }
   return shaped;
 }
 
-function shapeChatSessionForResponse<T extends typeof chatSessions.$inferSelect>(session: T): T {
+function shapeChatSessionForResponse<
+  T extends typeof chatSessions.$inferSelect,
+>(session: T): T {
   const shaped = { ...session } as T;
   const record = shaped as Record<string, unknown>;
-  if (record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)) {
+  if (
+    record.metadata &&
+    typeof record.metadata === "object" &&
+    !Array.isArray(record.metadata)
+  ) {
     record.metadata = sanitizePublicInferenceValue(record.metadata);
   }
   return shaped;
@@ -753,7 +884,8 @@ function normalizeChatMessagePageLimit(input: {
     ? OLDER_CHAT_MESSAGE_PAGE_LIMIT
     : INITIAL_CHAT_MESSAGE_PAGE_LIMIT;
   const requestedLimit =
-    typeof input.requestedLimit === "number" && Number.isFinite(input.requestedLimit)
+    typeof input.requestedLimit === "number" &&
+    Number.isFinite(input.requestedLimit)
       ? Math.round(input.requestedLimit)
       : null;
   if (requestedLimit == null || requestedLimit <= 0) {
@@ -771,7 +903,9 @@ function decodeCursor<T extends ChatSessionCursor | ChatMessageCursor>(
     return null;
   }
   try {
-    const parsed = JSON.parse(Buffer.from(normalized, "base64url").toString("utf8")) as T;
+    const parsed = JSON.parse(
+      Buffer.from(normalized, "base64url").toString("utf8"),
+    ) as T;
     if (
       !parsed ||
       typeof parsed !== "object" ||
@@ -802,10 +936,7 @@ async function maybeInjectDueProactiveOpeningMessage(
     enabled: boolean;
   },
 ) {
-  if (
-    !input.enabled ||
-    input.cursor?.trim()
-  ) {
+  if (!input.enabled || input.cursor?.trim()) {
     return;
   }
 
@@ -816,9 +947,10 @@ async function maybeInjectDueProactiveOpeningMessage(
   }).catch((error) => {
     app.log.debug?.(
       {
-        error: error instanceof Error
-          ? error.message
-          : "proactive_opening_injection_failed",
+        error:
+          error instanceof Error
+            ? error.message
+            : "proactive_opening_injection_failed",
       },
       "proactive opening message injection skipped",
     );
@@ -909,13 +1041,16 @@ export function buildChatDispatchDeliverySnapshot(input: {
 }
 
 export function resolveChatSessionTargetDeviceId(
-  routeDecision: {
-    route?: string;
-    targetDeviceId?: string;
-    taskRoute?: {
-      needsDesktop?: boolean;
-    } | null;
-  } | null | undefined,
+  routeDecision:
+    | {
+        route?: string;
+        targetDeviceId?: string;
+        taskRoute?: {
+          needsDesktop?: boolean;
+        } | null;
+      }
+    | null
+    | undefined,
   requestedTargetDeviceId?: string,
 ) {
   const needsDesktop =
@@ -951,7 +1086,10 @@ function estimateConversationTokens(text: string) {
   return estimateTextTokens(text);
 }
 
-function getEstimatedMaxTokensForChatWorkload(workload: SharedBrainWorkload, brainProfileInput: unknown): number {
+function getEstimatedMaxTokensForChatWorkload(
+  workload: SharedBrainWorkload,
+  brainProfileInput: unknown,
+): number {
   const brainProfile = normalizePlanBrainProfile(brainProfileInput);
   const baseTokens = getSharedBrainWorkloadProfile(workload).maxTokens;
   if (brainProfile.tier !== "premium" && brainProfile.reasoningMultiplier < 5) {
@@ -964,11 +1102,11 @@ function getEstimatedMaxTokensForChatWorkload(workload: SharedBrainWorkload, bra
       ? 640
       : workload === "document_analysis"
         ? 480
-      : workload === "mobile_chat_balanced"
-        ? 360
-        : workload === "mobile_chat_fast"
-          ? 220
-          : baseTokens;
+        : workload === "mobile_chat_balanced"
+          ? 360
+          : workload === "mobile_chat_fast"
+            ? 220
+            : baseTokens;
 
   return Math.max(baseTokens, Math.min(scaledTokens, maxTokensByWorkload));
 }
@@ -985,7 +1123,11 @@ export function estimatePendingChatTokenDebit(input: {
     return 0;
   }
 
-  if (["completed", "failed", "canceled"].includes(String(input.taskStatus ?? "").trim())) {
+  if (
+    ["completed", "failed", "canceled"].includes(
+      String(input.taskStatus ?? "").trim(),
+    )
+  ) {
     return 0;
   }
 
@@ -995,7 +1137,10 @@ export function estimatePendingChatTokenDebit(input: {
     surface: "chat",
     userInputTokens,
     promptTokens: userInputTokens,
-    completionTokens: getEstimatedMaxTokensForChatWorkload(input.workload, input.brainProfile),
+    completionTokens: getEstimatedMaxTokensForChatWorkload(
+      input.workload,
+      input.brainProfile,
+    ),
     workload: input.workload,
   }).billableTokens;
 }
@@ -1058,8 +1203,12 @@ export function extractAttachmentCandidatesFromChatRows(
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index];
     const metadata =
-      row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
-        ? extractAttachmentMetadataCarrier(row.metadata as Record<string, unknown>)
+      row.metadata &&
+      typeof row.metadata === "object" &&
+      !Array.isArray(row.metadata)
+        ? extractAttachmentMetadataCarrier(
+            row.metadata as Record<string, unknown>,
+          )
         : null;
     if (!metadata) {
       continue;
@@ -1127,7 +1276,10 @@ async function loadChatConversation(
     rows.map(async (row) => ({
       ...row,
       userId: input.userId,
-      content: await hydrateMessageContent(app, { ...row, userId: input.userId }),
+      content: await hydrateMessageContent(app, {
+        ...row,
+        userId: input.userId,
+      }),
     })),
   );
   const chronologicalRows = hydratedRows.reverse();
@@ -1145,7 +1297,8 @@ async function loadChatConversation(
           ): item is {
             role: "system" | "user" | "assistant";
             content: string;
-          } => typeof item.content === "string" && item.content.trim().length > 0,
+          } =>
+            typeof item.content === "string" && item.content.trim().length > 0,
         ),
     ),
     attachmentCandidates: extractAttachmentCandidatesFromChatRows(
@@ -1189,7 +1342,10 @@ export async function listChatSessions(
     where ${chatMessages.sessionId} = ${chatSessions.id}
       and ${chatMessages.userId} = ${input.userId}
   )`;
-  const conditions = [eq(chatSessions.userId, input.userId), hasVisibleMessages];
+  const conditions = [
+    eq(chatSessions.userId, input.userId),
+    hasVisibleMessages,
+  ];
   if (input.status) {
     conditions.push(eq(chatSessions.status, input.status));
   }
@@ -1221,15 +1377,17 @@ export async function listChatSessions(
 
   const hasMore = sessions.length > input.limit;
   const pageRows = sessions.slice(0, input.limit);
-  const nextCursor = hasMore && pageRows.length > 0
-    ? encodeCursor({
-        timestamp:
-          (pageRows[pageRows.length - 1]?.lastMessageAt ??
-            pageRows[pageRows.length - 1]?.updatedAt)?.toISOString() ??
-          new Date().toISOString(),
-        id: pageRows[pageRows.length - 1]!.id,
-      })
-    : null;
+  const nextCursor =
+    hasMore && pageRows.length > 0
+      ? encodeCursor({
+          timestamp:
+            (
+              pageRows[pageRows.length - 1]?.lastMessageAt ??
+              pageRows[pageRows.length - 1]?.updatedAt
+            )?.toISOString() ?? new Date().toISOString(),
+          id: pageRows[pageRows.length - 1]!.id,
+        })
+      : null;
 
   return {
     sessions: pageRows.map((session) => {
@@ -1279,7 +1437,11 @@ export async function listChatSessionMessages(
     processProactiveOpening?: boolean;
   },
 ) {
-  const session = await assertOwnedChatSession(app, input.userId, input.sessionId);
+  const session = await assertOwnedChatSession(
+    app,
+    input.userId,
+    input.sessionId,
+  );
   await maybeInjectDueProactiveOpeningMessage(app, {
     userId: input.userId,
     sessionId: input.sessionId,
@@ -1322,12 +1484,13 @@ export async function listChatSessionMessages(
         }),
       ),
   );
-  const nextCursor = hasMore && pageMessages.length > 0
-    ? encodeCursor({
-        timestamp: pageMessages[0]!.createdAt.toISOString(),
-        id: pageMessages[0]!.id,
-      })
-    : null;
+  const nextCursor =
+    hasMore && pageMessages.length > 0
+      ? encodeCursor({
+          timestamp: pageMessages[0]!.createdAt.toISOString(),
+          id: pageMessages[0]!.id,
+        })
+      : null;
 
   return {
     session: shapeChatSessionForResponse(session),
@@ -1425,7 +1588,12 @@ export async function persistRollingSummaryToSession(
       const sessionRows = await tx
         .select({ metadata: chatSessions.metadata })
         .from(chatSessions)
-        .where(and(eq(chatSessions.id, input.sessionId), eq(chatSessions.userId, input.userId)))
+        .where(
+          and(
+            eq(chatSessions.id, input.sessionId),
+            eq(chatSessions.userId, input.userId),
+          ),
+        )
         .for("update");
       const persistedMetadata = readRecord(sessionRows[0]?.metadata) ?? {};
       const existing = {
@@ -1437,7 +1605,9 @@ export async function persistRollingSummaryToSession(
 
       // Önceki openLoops'ları koru, yenileri ekle
       const prevLoops: string[] = Array.isArray(existingRS?.openLoops)
-        ? (existingRS.openLoops as unknown[]).map((l) => String(l ?? "")).filter(Boolean)
+        ? (existingRS.openLoops as unknown[])
+            .map((l) => String(l ?? ""))
+            .filter(Boolean)
         : [];
 
       // Kullanıcı mesajından hedef ve açık döngüleri derive et
@@ -1447,9 +1617,11 @@ export async function persistRollingSummaryToSession(
 
       // Açık döngü tespiti: soru işareti veya açık kalan şey sinyali
       const newLoops: string[] = [];
-      const OPEN_LOOP_DETECT = /\b(yarın|sonra|daha sonra|follow up|remind me|let's continue|bekliyor|pending|onay bekleniyor)\b|\?$/i;
+      const OPEN_LOOP_DETECT =
+        /\b(yarın|sonra|daha sonra|follow up|remind me|let's continue|bekliyor|pending|onay bekleniyor)\b|\?$/i;
       if (OPEN_LOOP_DETECT.test(input.userMessage)) {
-        const snippet = userGoal.length > 100 ? `${userGoal.slice(0, 97)}…` : userGoal;
+        const snippet =
+          userGoal.length > 100 ? `${userGoal.slice(0, 97)}…` : userGoal;
         if (!prevLoops.includes(snippet)) newLoops.push(snippet);
       }
 
@@ -1473,7 +1645,12 @@ export async function persistRollingSummaryToSession(
       await tx
         .update(chatSessions)
         .set({ metadata: updatedMetadata, updatedAt: new Date() })
-        .where(and(eq(chatSessions.id, input.sessionId), eq(chatSessions.userId, input.userId)));
+        .where(
+          and(
+            eq(chatSessions.id, input.sessionId),
+            eq(chatSessions.userId, input.userId),
+          ),
+        );
     });
   } catch {
     // Başarısız olursa sessizce geç — kritik değil
@@ -1590,12 +1767,7 @@ export async function clearChatSessions(
 
   await app.db
     .delete(tasks)
-    .where(
-      and(
-        eq(tasks.userId, input.userId),
-        or(...taskCleanupConditions),
-      ),
-    );
+    .where(and(eq(tasks.userId, input.userId), or(...taskCleanupConditions)));
 
   if (sessions.length > 0) {
     await app.db.delete(chatSessions).where(and(...conditions));
@@ -1664,13 +1836,13 @@ export async function createChatSession(
       targetDeviceId: targetDevice.device.id,
       source: input.source,
       title: deriveChatTitle(input.title, input.title ?? "Yeni sohbet"),
-      metadata: buildChatSessionMetadata(
-        buildChatMetadata(input.metadata),
-        {
-          titleHint: deriveChatTitle(input.title, input.title ?? "Yeni sohbet"),
-          preview: compactSessionPreview(input.title ?? "Yeni sohbet", "Yeni sohbet"),
-        },
-      ),
+      metadata: buildChatSessionMetadata(buildChatMetadata(input.metadata), {
+        titleHint: deriveChatTitle(input.title, input.title ?? "Yeni sohbet"),
+        preview: compactSessionPreview(
+          input.title ?? "Yeni sohbet",
+          "Yeni sohbet",
+        ),
+      }),
     })
     .returning();
 
@@ -1723,7 +1895,14 @@ export async function createChatMessage(
     idempotencyKey?: string;
   },
 ) {
-  const usageAccess = await getUserUsageAccessTruth(app.db, input.userId);
+  const [usageAccess, effectiveRequestedCapabilities] = await Promise.all([
+    getUserUsageAccessTruth(app.db, input.userId),
+    resolveRemoteMcpRequestedCapabilities(app, {
+      userId: input.userId,
+      prompt: input.content,
+      requestedCapabilities: input.requestedCapabilities,
+    }),
+  ]);
   const routeDecision = await routeChatTurn(app, {
     userId: input.userId,
     message: input.content,
@@ -1732,7 +1911,7 @@ export async function createChatMessage(
     selectedDeviceId: input.targetDeviceId,
     metadata: input.metadata,
     desktopAllowed: canUseDesktopConnections(usageAccess.planCode),
-    requestedCapabilities: input.requestedCapabilities,
+    requestedCapabilities: effectiveRequestedCapabilities,
     bootstrap: undefined,
     brainProfile: usageAccess.brainProfile,
     quota: undefined,
@@ -1767,28 +1946,28 @@ export async function createChatMessage(
         sessionId: input.sessionId,
         targetDeviceId: sessionTargetDeviceId,
         source: input.source,
-      title: deriveChatTitle(input.title, input.content),
-      metadata: buildChatSessionMetadata(buildChatMetadata(routingMetadata), {
-        titleHint: initialTitle,
-        preview: initialPreview,
-      }),
-      requestId: input.requestId,
-      ipAddress: input.ipAddress,
-      userAgent: input.userAgent,
-    })
+        title: deriveChatTitle(input.title, input.content),
+        metadata: buildChatSessionMetadata(buildChatMetadata(routingMetadata), {
+          titleHint: initialTitle,
+          preview: initialPreview,
+        }),
+        requestId: input.requestId,
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+      })
     : await createChatSession(app, {
         userId: input.userId,
-      targetDeviceId: sessionTargetDeviceId,
-      source: input.source,
-      title: deriveChatTitle(input.title, input.content),
-      metadata: buildChatSessionMetadata(buildChatMetadata(routingMetadata), {
-        titleHint: initialTitle,
-        preview: initialPreview,
-      }),
-      requestId: input.requestId,
-      ipAddress: input.ipAddress,
-      userAgent: input.userAgent,
-    });
+        targetDeviceId: sessionTargetDeviceId,
+        source: input.source,
+        title: deriveChatTitle(input.title, input.content),
+        metadata: buildChatSessionMetadata(buildChatMetadata(routingMetadata), {
+          titleHint: initialTitle,
+          preview: initialPreview,
+        }),
+        requestId: input.requestId,
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+      });
   const requestChatMetadata = useDirectDesktopFastPath
     ? buildChatMetadata(routingMetadata)
     : await enrichChatMetadataForRequest(app, {
@@ -1868,23 +2047,26 @@ export async function createChatMessage(
   });
   const attachmentContext =
     routeDecision.route === "server_brain"
-      ? await resolveAttachmentContextWithCache(app.services.reliability.store, {
-          prompt: input.content,
-          metadata: requestChatMetadata,
-          sessionAttachmentCandidates: priorChatContext.attachmentCandidates,
-          // Flag kapalıysa bypass da kapalı kalır: görsel modele hiç
-          // gitmeyecekse "okunabilir veri yok" netleştirmesi dürüst cevaptır.
-          hasEphemeralVision:
-            app.config?.ELYAN_CLOUD_VISION_ENABLED === true &&
-            Boolean(input.ephemeralVision?.images.length),
-        })
+      ? await resolveAttachmentContextWithCache(
+          app.services.reliability.store,
+          {
+            prompt: input.content,
+            metadata: requestChatMetadata,
+            sessionAttachmentCandidates: priorChatContext.attachmentCandidates,
+            // Flag kapalıysa bypass da kapalı kalır: görsel modele hiç
+            // gitmeyecekse "okunabilir veri yok" netleştirmesi dürüst cevaptır.
+            hasEphemeralVision:
+              app.config?.ELYAN_CLOUD_VISION_ENABLED === true &&
+              countDistinctEphemeralImages(input.ephemeralVision) > 0,
+          },
+        )
       : null;
   const effectiveWorkload = resolveAttachmentAwareSharedBrainWorkload({
     route: routeDecision.route,
     selectedWorkload: routeDecision.selectedWorkload,
     attachmentContextUsed: attachmentContext?.used === true,
     hasVisionImage:
-      Boolean(input.ephemeralVision?.images.length) ||
+      countDistinctEphemeralImages(input.ephemeralVision) > 0 ||
       (Array.isArray(attachmentContext?.visionImages) &&
         (attachmentContext!.visionImages!.length ?? 0) > 0) ||
       (Array.isArray(attachmentContext?.visionBlocks) &&
@@ -2002,7 +2184,9 @@ export async function createChatMessage(
       .returning();
 
     responseAssistantMessage =
-      (assistantRows[0] ? shapeChatMessageForResponse(assistantRows[0]) : undefined) ??
+      (assistantRows[0]
+        ? shapeChatMessageForResponse(assistantRows[0])
+        : undefined) ??
       ({
         ...shapeChatMessageForResponse(assistantMessage),
         taskId: inputTask.id,
@@ -2015,7 +2199,8 @@ export async function createChatMessage(
       .set({
         title: titleFromChatPreview(session.title, input.content),
         metadata: buildChatSessionMetadata(
-          readRecord((session as Record<string, unknown>).metadata) ?? requestChatMetadata,
+          readRecord((session as Record<string, unknown>).metadata) ??
+            requestChatMetadata,
           {
             titleHint: titleFromChatPreview(session.title, input.content),
             preview: initialPreview,
@@ -2120,7 +2305,8 @@ export async function createChatMessage(
           : {}),
       },
     },
-    requestedCapabilities: input.requestedCapabilities,
+    requestedCapabilities: effectiveRequestedCapabilities,
+    requestedCapabilitiesResolved: true,
     ipAddress: input.ipAddress,
     userAgent: input.userAgent,
     requestId: input.requestId,
@@ -2163,7 +2349,9 @@ export async function createChatMessage(
     workload: effectiveWorkload,
     brainProfile: billing.subscription.brainProfile,
   });
-  const taskBrainRecord = readRecord((taskResult.task as Record<string, unknown>).brain);
+  const taskBrainRecord = readRecord(
+    (taskResult.task as Record<string, unknown>).brain,
+  );
   if (admissionLockAcquired && admissionLockKey) {
     await app.services.reliability.store.releaseLock(
       admissionLockKey,

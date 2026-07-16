@@ -32,6 +32,14 @@ export const runtimeTaskUpdateBodySchema = z.object({
   operator: boundedJsonRecordSchema.optional(),
   artifacts: z.array(artifactInputSchema).default([]),
 }).superRefine((input, ctx) => {
+  if (input.approvalRequest?.kind === "connector_write") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["approvalRequest"],
+      message: "server connector approvals cannot originate from a desktop runtime",
+    });
+  }
+
   if (hasRawBinaryUploadHint(input.approvalRequest)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

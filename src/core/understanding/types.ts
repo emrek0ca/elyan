@@ -475,6 +475,13 @@ export type UserUnderstandingContext = {
     cognitiveRevision: number;
   };
   cognitiveReadMs?: number;
+  /**
+   * The typed interpretation produced for this turn. Keeping it on the
+   * request-scoped understanding context makes the same semantic truth
+   * available to routing, inference and tool policy instead of making each
+   * layer reinterpret the raw user sentence.
+   */
+  understandingEnvelope?: UnderstandingEnvelope;
   tokenBudget: {
     maxHints: number;
     maxChars: number;

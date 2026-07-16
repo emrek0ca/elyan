@@ -599,6 +599,44 @@ Final answer: Fotoğrafı burada güvenli şekilde puanlamıyorum, ama istersen 
   );
 });
 
+test("sanitizeAssistantVisibleText strips internal connector tool JSON fences", () => {
+  const sanitized = sanitizeAssistantVisibleText(`
+Son gelen mailleri kontrol ediyorum.
+
+\`\`\`json
+{
+  "tool": "gmail.search",
+  "arguments": {
+    "query": "is:inbox newer_than:7d",
+    "limit": 5
+  }
+}
+\`\`\`
+
+Sonuçları birazdan düzenli şekilde paylaşacağım.
+  `);
+
+  assert.equal(
+    sanitized,
+    "Son gelen mailleri kontrol ediyorum.\n\nSonuçları birazdan düzenli şekilde paylaşacağım.",
+  );
+  assert.doesNotMatch(sanitized, /gmail\.search|arguments|newer_than/i);
+});
+
+test("sanitizeAssistantVisibleText removes connector reasoning narration", () => {
+  const sanitized = sanitizeAssistantVisibleText(`
+Son gelen beş e-posta:
+1. Apple'dan: "Aboneliğiniz Bitmek Üzere"
+
+However, I have access to gmail.search and gmail.read tools.
+The user's prompt "Son gelen mailler" is a request to search their email.
+I will search for recent emails.
+  `);
+
+  assert.match(sanitized, /Son gelen beş e-posta/);
+  assert.doesNotMatch(sanitized, /gmail\.search|gmail\.read|The user's prompt|I will search/i);
+});
+
 test("sanitizeAssistantVisibleText recovers the answer when the model wraps everything in <analysis>", () => {
   // Real production incident: model dumps the whole muscle-spasm answer inside
   // <analysis> tags with no plain-text answer after. Previously this collapsed

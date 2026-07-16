@@ -8,6 +8,8 @@ import { ReliabilityStore } from "../../lib/reliability/redis.js";
 import {
   calculateBillableAiCredits,
   buildContextualWebGroundingPrompt,
+  buildCurrentUserIdentityReply,
+  buildUnavailableRequestedUserContextReply,
   computeStreamVisibleText,
   createDeltaPublisher,
   extractAntiRepeatSignatures,
@@ -29,7 +31,14 @@ import {
   resolveReasoningEffort,
   shouldUseLegacyMemoryPrompt,
   shouldUseResponseCache,
+  unsafeResponseRepairFallback,
 } from "./inference.js";
+import { looksLikeLeakedToolCallText } from "./turn-envelope.js";
+import { emptyUnderstanding } from "../../core/understanding/user-understanding-service.js";
+import {
+  resetSemanticComputeWorkerForTests,
+  setSemanticComputeDispatcherForTests,
+} from "./semantic-compute-client.js";
 
 test("contextual web grounding carries only volatile entity keys into short follow-ups", () => {
   const prompt = buildContextualWebGroundingPrompt({
@@ -46,6 +55,43 @@ test("contextual web grounding carries only volatile entity keys into short foll
 
   assert.equal(prompt, "altın Peki dün?");
   assert.doesNotMatch(prompt, /Kullanıcı|canlı kaynaklar/u);
+});
+
+test("structured prompt consumes the existing UnderstandingEnvelope", () => {
+  const understanding = emptyUnderstanding(
+    {
+      userId: "user-1",
+      accountId: "user-1",
+      message: "Gelen kutumu kontrol et",
+    },
+    { includeEnvelope: true },
+  );
+  const prompt = buildStructuredSystemPrompt("System prompt", {
+    userId: "user-1",
+    prompt: "Gelen kutumu kontrol et",
+    workload: "mobile_chat_fast",
+    understandingContext: understanding.context,
+    connectorToolContracts: [
+      'gmail.search {query:string, limit?:1..10} — search the user\'s Gmail',
+    ],
+    connectorReadToolHint: {
+      tool: "gmail.search",
+      score: 0.91,
+      margin: 0.18,
+      source: "transformer",
+    },
+  } as never);
+
+  assert.match(prompt, /"typedUnderstanding"/);
+  assert.match(prompt, /2026-07-understanding-envelope-v2/);
+  assert.match(prompt, /"requiredCapabilities"/);
+  assert.match(prompt, /"connectorReadSelection"/);
+  assert.match(
+    prompt,
+    /"output":\s*"TurnEnvelope\.tool_requests"/,
+  );
+  assert.match(prompt, /High-confidence semantic connector selection/);
+  assert.match(prompt, /exactly one hidden tool_requests item for gmail\.search/);
 });
 
 test("response cache never stores current-data answers", () => {
@@ -1121,8 +1167,27 @@ test("generateSharedBrainReply feeds successful tool results into a bounded seco
   assert.equal(result.metadata.toolRefinementApplied, true);
 });
 
-test("generateSharedBrainReply enables TurnEnvelope for connector-only turns with advertised contracts", async () => {
+test("generateSharedBrainReply consumes a semantic connector hint in its TurnEnvelope prompt", async (t) => {
   const requestedBodies: Array<Record<string, unknown>> = [];
+  const vector = (index: number) => {
+    const value = new Array<number>(384).fill(0);
+    value[index] = 1;
+    return value;
+  };
+  resetSemanticComputeWorkerForTests();
+  t.after(() => resetSemanticComputeWorkerForTests());
+  setSemanticComputeDispatcherForTests(async ({ texts }) =>
+    texts.map((text) => {
+      const normalized = text.toLowerCase();
+      if (normalized.startsWith("query:")) return vector(0);
+      if (normalized.includes("gmail.search")) return vector(0);
+      if (normalized.includes("gmail.read")) return vector(1);
+      if (normalized.includes("explain, teach")) return vector(2);
+      if (normalized.includes("draft, rewrite")) return vector(3);
+      if (normalized.includes("create, send")) return vector(4);
+      return vector(5);
+    }),
+  );
   const app = {
     db: createQuotaReadyDb([[], []]),
     config: {
@@ -1140,6 +1205,7 @@ test("generateSharedBrainReply enables TurnEnvelope for connector-only turns wit
       ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
       ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
       ELYAN_CONNECTOR_TOOLS_ENABLED: true,
+      ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED: true,
     },
     log: {
       info() {},
@@ -1166,7 +1232,12 @@ test("generateSharedBrainReply enables TurnEnvelope for connector-only turns wit
                   memory_ops: [],
                   goal_ops: [],
                   follow_ups: [],
-                  tool_requests: [],
+                  tool_requests: [
+                    {
+                      tool: "gmail.search",
+                      args: { query: "newer_than:1d", limit: 5 },
+                    },
+                  ],
                   affect: { user_mood_guess: "focused", energy: "mid", register: "neutral" },
                 }),
               },
@@ -1196,6 +1267,7 @@ test("generateSharedBrainReply enables TurnEnvelope for connector-only turns wit
   assert.equal(result.text, "Gelen kutuna bakıyorum.");
   assert.equal(result.metadata.turnEnvelopeMode, true);
   assert.equal(result.metadata.turnEnvelopeParseOk, true);
+  assert.equal(result.metadata.connectorSemanticHintTool, "gmail.search");
   assert.equal(
     (requestedBodies[0].response_format as Record<string, unknown>).type,
     "json_schema",
@@ -1204,6 +1276,11 @@ test("generateSharedBrainReply enables TurnEnvelope for connector-only turns wit
     .map((message) => String(message.content ?? ""))
     .join("\n");
   assert.equal(allMessageContent.includes("Connected integration tools"), true);
+  assert.equal(allMessageContent.includes("connectorReadSelection"), true);
+  assert.equal(
+    allMessageContent.includes("exactly one hidden tool_requests item for gmail.search"),
+    true,
+  );
 });
 
 test("generateSharedBrainReply keeps TurnEnvelope off when no connector contracts are advertised", async () => {
@@ -1459,6 +1536,117 @@ test("generateSharedBrainReply falls back to legacy text when TurnEnvelope JSON 
   assert.equal(result.metadata.turnEnvelopeParseOk, null);
   assert.ok(requestedBodies.some((body) => body.response_format));
   assert.ok(requestedBodies.some((body) => !body.response_format));
+});
+
+test("connector turns retry only the structured protocol and never expose a prose tool plan", async () => {
+  const requestedBodies: Array<Record<string, unknown>> = [];
+  let callCount = 0;
+  let structuredCallCount = 0;
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_CONNECTOR_TOOLS_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const leakedPlan = [
+    "- I need to call gmail.search with a query and limit.",
+    "- Tool: gmail.search",
+    '- Args: query: "newer_than:1d", limit: 10',
+    "- I will emit this as a tool request.",
+  ].join("\n");
+
+  const result = await withMockedFetch(
+    async (_input: RequestInfo | URL, init?: RequestInit) => {
+      callCount += 1;
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<
+        string,
+        unknown
+      >;
+      requestedBodies.push(body);
+      const structured = Boolean(body.response_format);
+      if (structured) structuredCallCount += 1;
+      const content = !structured
+        ? "Gelen kutunu kontrol ediyorum."
+        : structuredCallCount === 1
+          ? leakedPlan
+          : JSON.stringify({
+              reply: { text: "Gelen kutunu kontrol ediyorum.", lang: "tr", tone: "neutral" },
+              blocks: [],
+              memory_ops: [],
+              goal_ops: [],
+              follow_ups: [],
+              tool_requests: [
+                {
+                  tool: "gmail.search",
+                  args: { query: "newer_than:1d", limit: 10 },
+                },
+              ],
+              affect: {
+                user_mood_guess: "focused",
+                energy: "mid",
+                register: "neutral",
+              },
+            });
+      return new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Bugün gelen mailler",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        connectorToolContracts: [
+          'gmail.search {query:string, limit?:1..10} — search the user\'s Gmail',
+        ],
+        internalEvaluation: {
+          skipUsageValidation: true,
+          skipConsentValidation: true,
+          skipInvocationLogging: true,
+          skipReviewLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(callCount >= 2, true);
+  assert.equal(structuredCallCount, 2);
+  const connectorAttemptBodies = requestedBodies.filter((body) =>
+    ((body.messages as Array<{ content?: string }> | undefined) ?? [])
+      .map((message) => String(message.content ?? ""))
+      .join("\n")
+      .includes("Connected integration tools"),
+  );
+  assert.equal(connectorAttemptBodies.length >= 2, true);
+  assert.equal(
+    connectorAttemptBodies.every((body) => Boolean(body.response_format)),
+    true,
+  );
+  assert.equal(result.metadata.turnEnvelopeMode, true);
+  assert.equal(result.metadata.turnEnvelopeParseOk, true);
+  assert.equal(result.text, "Gelen kutunu kontrol ediyorum.");
+  assert.equal(result.text.includes("gmail.search"), false);
+  assert.equal(result.text.includes("Tool:"), false);
 });
 
 test("generateSharedBrainReply streams only TurnEnvelope reply.text deltas", async () => {
@@ -1998,6 +2186,53 @@ test("extractTypedJsonBlocksFromText pulls a clean typed block and leaves prose"
   assert.equal(blocks.length, 1);
   assert.equal((blocks[0] as Record<string, unknown>).type, "math");
   assert.equal(visibleText, "Hesap tamamlandı.");
+});
+
+test("computeStreamVisibleText strips connector tool plans before mobile sees JSON", () => {
+  const text = `İşlem başlıyor.
+
+\`\`\`json
+{
+  "tool": "gmail.search",
+  "arguments": {
+    "query": "is:inbox newer_than:7d",
+    "limit": 5
+  }
+}
+\`\`\`
+
+Sonuçları düzenli göndereceğim.`;
+
+  const visible = computeStreamVisibleText(text);
+  assert.equal(visible.includes("İşlem başlıyor."), true);
+  assert.equal(visible.includes("Sonuçları düzenli göndereceğim."), true);
+  assert.equal(visible.includes("gmail.search"), false);
+  assert.equal(visible.includes("arguments"), false);
+});
+
+test("connector prose plans and repair-prompt echoes are never user-visible", () => {
+  const leakedPlan = [
+    "- I need to call gmail.search with a query and limit.",
+    "- Tool: gmail.search",
+    '- Args: query: "newer_than:1d", limit: 10',
+    "- I will emit this as a tool request.",
+  ].join("\n");
+  const leakedRepair = [
+    "The user provides a prompt that looks like a meta-instruction:",
+    '"Aşağıdaki Elyan yanıtı yarım kalmış veya biçim olarak bozuk olabilir.",',
+    leakedPlan,
+  ].join("\n");
+
+  assert.equal(looksLikeLeakedToolCallText(leakedPlan), true);
+  assert.equal(looksLikeLeakedToolCallText(leakedRepair), true);
+  assert.equal(
+    unsafeResponseRepairFallback(leakedRepair),
+    "Bu isteği güvenli biçimde tamamlayamadım. Lütfen tekrar dene.",
+  );
+  assert.equal(
+    unsafeResponseRepairFallback("Bugün 3 e-posta geldi; konu başlıkları şunlar."),
+    null,
+  );
 });
 
 test("generateSharedBrainReply streams Ollama deltas before final completion", async () => {
@@ -5242,6 +5477,44 @@ test("prompt gating: normal chat without memory drops the memory recall policy",
   assert.ok(prompt.includes("Task-routing policy"));
 });
 
+test("prompt gating: raw world digest cannot bypass context packet relevance", () => {
+  const userId = "00000000-0000-0000-0000-000000000001";
+  const sessionId = "00000000-0000-0000-0000-000000000002";
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({
+      userId,
+      prompt: "Selam",
+      requestMetadata: {
+        dialogueStateSource: "server_dialogue_state.v1",
+        dialogueStateUserId: userId,
+        dialogueStateSessionId: sessionId,
+        chat: { sessionId },
+        compactContext: {
+          source: "server_dialogue_state.v1",
+          ownerUserId: userId,
+          ownerSessionId: sessionId,
+          derivedContextDigest: {
+            worldSignals: [
+              {
+                kind: "location",
+                summary: "Konum: Kayseri, Melikgazi, Türkiye.",
+              },
+            ],
+          },
+        },
+      },
+      understandingContext: {
+        contextPackets: [],
+        packetKinds: [],
+      },
+    }),
+  );
+
+  assert.doesNotMatch(prompt, /Kayseri|world:\s*location/u);
+  assert.doesNotMatch(prompt, /\[ATTACH\]/u);
+});
+
 test("prompt gating: currentness signal reactivates web-grounding policies", () => {
   const prompt = buildStructuredSystemPrompt(
     "BASE",
@@ -5298,6 +5571,203 @@ test("prompt gating: elyan/founder keyword activates project identity rule", () 
   );
   assert.ok(withKeyword.includes("Osman Emre Koca"));
   assert.ok(!withoutKeyword.includes("Osman Emre Koca"));
+});
+
+test("prompt gating: current-user identity questions cannot be answered as Elyan self-introduction", () => {
+  const withProfile = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({
+      prompt: "Ben kimim?",
+      understandingContext: {
+        memoryEnabled: true,
+        memorySnapshot: {
+          summary: "Hatırlanan çekirdek: kimlik: Ad: Zeynep",
+          identityFacts: [{
+            key: "name",
+            label: "Ad",
+            value: "Zeynep",
+            confidence: 0.97,
+            source: "interaction",
+            staleness: "fresh",
+            updatedAt: "2030-01-01T00:00:00.000Z",
+          }],
+          preferenceFacts: [],
+          projectFacts: [],
+          derivedFacts: [],
+          recentEpisodes: [],
+          safetyNotes: [],
+          memoryCount: 1,
+          compactedCount: 0,
+          lastUpdatedAt: "2030-01-01T00:00:00.000Z",
+        },
+      } as never,
+    }),
+  );
+
+  assert.match(withProfile, /question is about the user, not Elyan/i);
+  assert.match(withProfile, /Zeynep/);
+  assert.match(withProfile, /do not introduce or describe Elyan/i);
+});
+
+test("current-user identity reply uses known facts and fails closed for an empty profile", () => {
+  const known = buildCurrentUserIdentityReply("Ben kimim?", {
+    memorySnapshot: {
+      identityFacts: [{ key: "name", label: "Ad", value: "Zeynep" }],
+      preferenceFacts: [{ key: "answer_length", label: "Uzunluk", value: "kısa" }],
+      projectFacts: [],
+    },
+  } as never);
+  const empty = buildCurrentUserIdentityReply("Who am I?", {
+    memorySnapshot: {
+      identityFacts: [],
+      preferenceFacts: [],
+      projectFacts: [],
+    },
+  } as never);
+
+  assert.match(known ?? "", /Zeynep/);
+  assert.match(known ?? "", /kısa/);
+  assert.doesNotMatch(known ?? "", /Benim adım Elyan|I am Elyan/i);
+  assert.match(empty ?? "", /don't know you well enough yet/i);
+  assert.doesNotMatch(empty ?? "", /Elyan/i);
+});
+
+test("unavailable current-user context replies fail closed without external substitutes", () => {
+  const health = buildUnavailableRequestedUserContextReply(
+    "Sağlık verilerim nedir?",
+    {
+      contextPackets: [{ relevanceReason: "health_context_unavailable" }],
+    } as never,
+  );
+  const location = buildUnavailableRequestedUserContextReply(
+    "Where am I?",
+    {
+      contextPackets: [{ relevanceReason: "location_context_disabled" }],
+    } as never,
+  );
+
+  assert.match(health ?? "", /güncel ve yetkilendirilmiş sağlık verine erişemiyorum/i);
+  assert.doesNotMatch(health ?? "", /e-?nabız|web|internet/i);
+  assert.match(location ?? "", /Location context is currently disabled/i);
+});
+
+test("unavailable context gate ignores unrelated and compound requests", () => {
+  const healthPacket = {
+    contextPackets: [{ relevanceReason: "health_context_unavailable" }],
+  } as never;
+  const calendarPacket = {
+    contextPackets: [{ relevanceReason: "calendar_context_unavailable" }],
+  } as never;
+
+  assert.equal(
+    buildUnavailableRequestedUserContextReply("Kuantumu adım adım anlat", healthPacket),
+    null,
+  );
+  assert.equal(
+    buildUnavailableRequestedUserContextReply("Yapay sinir ağlarında performansı artır", healthPacket),
+    null,
+  );
+  assert.equal(
+    buildUnavailableRequestedUserContextReply("Event loop nedir?", calendarPacket),
+    null,
+  );
+  assert.equal(
+    buildUnavailableRequestedUserContextReply("Bir sunum hazırla", calendarPacket),
+    null,
+  );
+  assert.equal(
+    buildUnavailableRequestedUserContextReply(
+      "Takvimimde ne var, ayrıca kuantumu açıkla",
+      calendarPacket,
+    ),
+    null,
+  );
+  assert.equal(
+    buildUnavailableRequestedUserContextReply(
+      "Takvimimde ne var? Sonra kuantumu açıkla.",
+      calendarPacket,
+    ),
+    null,
+  );
+  assert.equal(
+    buildUnavailableRequestedUserContextReply(
+      "Takvimimde ne var; kuantumu da açıkla.",
+      calendarPacket,
+    ),
+    null,
+  );
+});
+
+test("generateGovernedSharedBrainReply skips the provider when requested authorized context is unavailable", async () => {
+  let providerCalled = false;
+  const originalFetch = global.fetch;
+  global.fetch = (async () => {
+    providerCalled = true;
+    throw new Error("provider must not be called for unavailable authorized context");
+  }) as typeof fetch;
+
+  try {
+    const reply = await generateGovernedSharedBrainReply({} as never, {
+      userId: "user-1",
+      prompt: "Sağlık verilerim nedir?",
+      understandingContext: {
+        contextPackets: [{ relevanceReason: "health_context_unavailable" }],
+      } as never,
+      internalEvaluation: { skipReviewLogging: true },
+    });
+
+    assert.equal(providerCalled, false);
+    assert.equal(reply.answerSource, "backend_gate");
+    assert.equal(reply.metadata.responseCode, "authorized_user_context_unavailable");
+    assert.doesNotMatch(reply.text, /e-?nabız|web|internet/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("generateGovernedSharedBrainReply answers current-user identity queries without a provider call", async () => {
+  let providerCalled = false;
+  const originalFetch = global.fetch;
+  global.fetch = (async () => {
+    providerCalled = true;
+    throw new Error("provider must not be called for a grounded identity query");
+  }) as typeof fetch;
+
+  try {
+    const known = await generateGovernedSharedBrainReply({} as never, {
+      userId: "user-1",
+      prompt: "Ben kimim?",
+      understandingContext: {
+        memorySnapshot: {
+          identityFacts: [{ key: "name", label: "Ad", value: "Zeynep" }],
+          preferenceFacts: [],
+          projectFacts: [],
+        },
+      } as never,
+      internalEvaluation: { skipReviewLogging: true },
+    });
+    const empty = await generateGovernedSharedBrainReply({} as never, {
+      userId: "user-1",
+      prompt: "Who am I?",
+      understandingContext: {
+        memorySnapshot: {
+          identityFacts: [],
+          preferenceFacts: [],
+          projectFacts: [],
+        },
+      } as never,
+      internalEvaluation: { skipReviewLogging: true },
+    });
+
+    assert.equal(providerCalled, false);
+    assert.equal(known.answerSource, "backend_gate");
+    assert.match(known.text, /Zeynep/);
+    assert.doesNotMatch(known.text, /Elyan/i);
+    assert.match(empty.text, /don't know you well enough yet/i);
+    assert.doesNotMatch(empty.text, /Elyan/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("prompt gating: short followup profile is strictly smaller than full profile", () => {

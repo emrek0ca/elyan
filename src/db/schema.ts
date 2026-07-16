@@ -404,6 +404,7 @@ export const blobReferences = pgTable(
     blobId: uuid("blob_id")
       .notNull()
       .references(() => blobObjects.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
@@ -416,6 +417,7 @@ export const blobReferences = pgTable(
     ),
     blobIdx: index("blob_references_blob_idx").on(table.blobId),
     ownerIdx: index("blob_references_owner_idx").on(table.ownerType, table.ownerId),
+    expiresIdx: index("blob_references_expires_idx").on(table.expiresAt),
   }),
 );
 

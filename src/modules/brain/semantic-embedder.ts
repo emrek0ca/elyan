@@ -63,6 +63,8 @@ function compactText(value: string): string {
 export async function embedTextsForStorage(
   texts: string[],
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">,
+  cacheScope?: string,
+  timeoutMs?: number,
 ): Promise<number[][] | null> {
   if (texts.length === 0) return [];
   if (isEmbedderInCooldown()) return null;
@@ -71,6 +73,8 @@ export async function embedTextsForStorage(
     const vectors = await embedTextsWithSemanticWorker({
       modelName: STORAGE_SEMANTIC_MODEL,
       texts: prepared,
+      cacheScope,
+      timeoutMs,
       logger,
     });
     if (!vectors) {
@@ -97,12 +101,16 @@ export async function embedTextsForStorage(
 export async function embedQueryForStorage(
   query: string,
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">,
+  cacheScope?: string,
+  timeoutMs?: number,
 ): Promise<number[] | null> {
   if (isEmbedderInCooldown()) return null;
   try {
     const vectors = await embedTextsWithSemanticWorker({
       modelName: STORAGE_SEMANTIC_MODEL,
       texts: [`query: ${compactText(query).slice(0, MAX_TEXT_LENGTH)}`],
+      cacheScope,
+      timeoutMs,
       logger,
     });
     if (!vectors) {

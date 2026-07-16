@@ -5,6 +5,7 @@ import { getIdempotencyKey } from "../../lib/idempotency.js";
 import { getUserAuth } from "../../lib/request-auth.js";
 import { approvalBodySchema, createTaskBodySchema, feedbackBodySchema, listTasksQuerySchema, taskArtifactParamsSchema, taskParamsSchema } from "./schemas.js";
 import { cancelTask, createTask, getTaskArtifact, getTaskArtifactContent, getTaskArtifactRawContent, getTaskDetail, listTasks, resolveTaskApproval, submitTaskFeedback } from "./service.js";
+import { storeMediaInput } from "./media-inputs.js";
 
 function parseTaskParamsOrReply(request: FastifyRequest, reply: FastifyReply): { taskId: string } | null {
   const parsed = taskParamsSchema.safeParse(request.params);
@@ -38,6 +39,24 @@ function parseTaskArtifactParamsOrReply(
 }
 
 export const taskRoutes: FastifyPluginAsync = async (app) => {
+  app.addContentTypeParser(
+    ["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"],
+    { parseAs: "buffer", bodyLimit: 12 * 1024 * 1024 },
+    (_request, body, done) => done(null, body),
+  );
+
+  app.post("/media-inputs", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+    if (!Buffer.isBuffer(request.body)) {
+      return reply.status(400).send({ error: "validation_error", message: "Binary image body required" });
+    }
+    const auth = getUserAuth(request);
+    const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0] ?? "";
+    const name = String(request.headers["x-elyan-file-name"] ?? "image");
+    return storeMediaInput(app, { userId: auth.sub, body: request.body, contentType, name });
+  });
+
   app.post("/", async (request, reply) => {
     await app.authenticateUser(request, reply);
 

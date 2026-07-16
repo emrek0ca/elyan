@@ -1,6 +1,7 @@
 import { buildApp } from "./app/build-app.js";
 import { getBaseUrlReachability, loadEnv } from "./config/env.js";
 import { ensureElyanServerBrainBootstrap } from "./modules/brain/bootstrap.js";
+import { maybeStartSemanticV2Backfill } from "./modules/brain/retrieval.js";
 import { warmSharedBrainRuntime } from "./modules/brain/runtime.js";
 
 try {
@@ -27,6 +28,11 @@ if (reachability.warning) {
 }
 
 const app = await buildApp(env);
+
+// The API process owns the one bounded semantic warm/backfill job. Keeping it
+// out of buildApp prevents every queue worker from loading a duplicate model
+// merely because they share the application factory.
+maybeStartSemanticV2Backfill(app);
 
 try {
   const bootstrap = await ensureElyanServerBrainBootstrap(app);

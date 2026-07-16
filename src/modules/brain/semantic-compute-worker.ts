@@ -1,5 +1,5 @@
 import { parentPort } from "node:worker_threads";
-import { pipeline } from "@huggingface/transformers";
+import { env, pipeline } from "@huggingface/transformers";
 
 type SemanticComputeRequest = {
   id: number;
@@ -14,6 +14,16 @@ type Extractor = (
 ) => Promise<unknown>;
 
 const extractors = new Map<string, Promise<Extractor>>();
+
+const semanticModelCacheDir = process.env.ELYAN_SEMANTIC_MODEL_CACHE_DIR?.trim();
+if (semanticModelCacheDir) {
+  env.cacheDir = semanticModelCacheDir;
+}
+
+const semanticModelsLocalOnly =
+  process.env.ELYAN_SEMANTIC_MODEL_LOCAL_ONLY === "true";
+const semanticModelRevision =
+  process.env.ELYAN_SEMANTIC_MODEL_REVISION?.trim() || "main";
 
 function tensorOutputToVectors(output: unknown): number[][] {
   const tensor = output as {
@@ -63,6 +73,11 @@ function getExtractor(modelName: string): Promise<Extractor> {
   if (cached) return cached;
   const pending = pipeline("feature-extraction", modelName, {
     device: "cpu",
+    // The q8 artifact preserves the multilingual e5 model while reducing the
+    // production image/cold-start footprint from ~470 MB to ~118 MB.
+    dtype: "q8",
+    local_files_only: semanticModelsLocalOnly,
+    revision: semanticModelRevision,
   }) as Promise<Extractor>;
   extractors.set(modelName, pending);
   return pending;

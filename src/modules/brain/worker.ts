@@ -32,6 +32,7 @@ import {
 } from "./continuous-learning-pipeline.js";
 import { generateSharedBrainReply } from "./inference.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
+import { readVerifiedQuantumBenchmark } from "./quantum-benchmark.js";
 
 type TrainingJobRow = typeof trainingJobs.$inferSelect;
 type DatasetManifestRow = Pick<
@@ -43,6 +44,8 @@ type TrainingWorkerOptions = {
   idleDelayMs?: number;
   once?: boolean;
 };
+
+const EVALUATION_METRIC_VERSION = "bounded_offline_eval_v2";
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -128,10 +131,16 @@ function buildSafeEvaluationMetrics(input: {
   const datasetSnapshot = readRecord(config?.datasetSnapshot) ?? readRecord(datasetMetadata?.datasetSnapshot);
   const learningSnapshot = readRecord(config?.learningSnapshot);
   const qualitySignalSummaryRecord = readRecord(config?.qualitySignalSummary);
-  const requestedQuantumScore =
-    readNumber(config, "quantumBenchmarkScore") ??
-    readNumber(datasetMetadata, "quantumBenchmarkScore") ??
-    readNumber(datasetMetadata, "lastBenchmarkScore");
+  const datasetFingerprint = fingerprintSafeDatasetSignal({
+    jobId: input.job.id,
+    datasetManifestId: input.dataset.id,
+    trainingBackend: input.trainingBackend,
+    adapterMode: input.adapterMode,
+    dataset: input.dataset,
+  });
+  const verifiedQuantumBenchmark = readVerifiedQuantumBenchmark(input.job.metadata, {
+    expectedDatasetFingerprint: datasetFingerprint,
+  });
   const datasetSizeScore = clampScore(Math.min(input.dataset.recordCount, 2_000) / 2_000);
   const tokenCoverageScore = clampScore(Math.min(input.dataset.tokenEstimate, 250_000) / 250_000);
   const approvedCorrectionCount =
@@ -180,10 +189,19 @@ function buildSafeEvaluationMetrics(input: {
       lineageScore * 0.1,
   );
   const embeddingCoverageScore = clampScore(0.72 + datasetSizeScore * 0.14 + tokenCoverageScore * 0.08);
-  const quantumBenchmarkScore = clampScore(requestedQuantumScore ?? 0.74 + datasetSizeScore * 0.08);
-  const neuralEvalScore = clampScore(0.68 + embeddingCoverageScore * 0.12 + quantumBenchmarkScore * 0.08 + datasetQualityScore * 0.14);
+  const quantumBenchmarkScore = verifiedQuantumBenchmark?.score ?? null;
+  const neuralBaselineScore = clampScore(
+    0.7 + embeddingCoverageScore * 0.14 + datasetQualityScore * 0.16,
+  );
+  const neuralEvalScore = !verifiedQuantumBenchmark?.qualified
+    ? neuralBaselineScore
+    : clampScore(neuralBaselineScore * 0.92 + verifiedQuantumBenchmark.score * 0.08);
+  const evaluationInputs = [embeddingCoverageScore, neuralEvalScore, datasetQualityScore];
+  if (verifiedQuantumBenchmark?.qualified && quantumBenchmarkScore !== null) {
+    evaluationInputs.push(quantumBenchmarkScore);
+  }
   const evaluationScore = clampScore(
-    (embeddingCoverageScore + quantumBenchmarkScore + neuralEvalScore + datasetQualityScore) / 4,
+    evaluationInputs.reduce((sum, score) => sum + score, 0) / evaluationInputs.length,
   );
   const qualityGateRecord = readRecord(learningSnapshot?.qualityGate);
   const queueTimeQualityGate: BrainQualityGateSnapshot | null = qualityGateRecord
@@ -238,18 +256,24 @@ function buildSafeEvaluationMetrics(input: {
       : promotionEligibility.status === "ready"
         ? "blocked_quality"
         : promotionEligibility.status;
-  const datasetFingerprint = fingerprintSafeDatasetSignal({
-    jobId: input.job.id,
-    datasetManifestId: input.dataset.id,
-    trainingBackend: input.trainingBackend,
-    adapterMode: input.adapterMode,
-    dataset: input.dataset,
-  });
-
   return {
+    evaluationMetricVersion: EVALUATION_METRIC_VERSION,
     evaluationScore,
     neuralEvalScore,
     quantumBenchmarkScore,
+    quantumBenchmarkVerified: verifiedQuantumBenchmark !== null,
+    quantumBenchmarkSource: verifiedQuantumBenchmark?.source ?? null,
+    quantumClassicalBaselineScore: verifiedQuantumBenchmark?.classicalBaselineScore ?? null,
+    quantumBenchmarkMeasuredAt: verifiedQuantumBenchmark?.measuredAt ?? null,
+    quantumBenchmarkBackend: verifiedQuantumBenchmark?.backend ?? null,
+    quantumBenchmarkVersion: verifiedQuantumBenchmark?.version ?? null,
+    quantumBenchmarkProducer: verifiedQuantumBenchmark?.producer ?? null,
+    quantumBenchmarkRunId: verifiedQuantumBenchmark?.runId ?? null,
+    quantumBenchmarkMetric: verifiedQuantumBenchmark?.metric ?? null,
+    quantumBenchmarkDatasetFingerprint: verifiedQuantumBenchmark?.datasetFingerprint ?? null,
+    quantumBenchmarkSampleCount: verifiedQuantumBenchmark?.sampleCount ?? null,
+    quantumAdvantageScore: verifiedQuantumBenchmark?.advantageScore ?? null,
+    quantumBenchmarkQualified: verifiedQuantumBenchmark?.qualified ?? false,
     embeddingCoverageScore,
     datasetQualityScore,
     compactionQualityScore,
@@ -392,6 +416,7 @@ async function completeTrainingJob(
     trainingBackend: input.trainingBackend,
     adapterMode: input.adapterMode,
     evaluationState: metrics.evaluationState,
+    evaluationMetricVersion: metrics.evaluationMetricVersion,
     promotionGate: metrics.promotionGate,
     qualityGateStatus: metrics.qualityGateStatus,
     qualityGateReasons: metrics.qualityGateReasons,
@@ -411,6 +436,19 @@ async function completeTrainingJob(
     datasetFingerprint: metrics.datasetFingerprint,
     neuralEvalScore: metrics.neuralEvalScore,
     quantumBenchmarkScore: metrics.quantumBenchmarkScore,
+    quantumBenchmarkVerified: metrics.quantumBenchmarkVerified,
+    quantumBenchmarkSource: metrics.quantumBenchmarkSource,
+    quantumClassicalBaselineScore: metrics.quantumClassicalBaselineScore,
+    quantumBenchmarkMeasuredAt: metrics.quantumBenchmarkMeasuredAt,
+    quantumBenchmarkBackend: metrics.quantumBenchmarkBackend,
+    quantumBenchmarkVersion: metrics.quantumBenchmarkVersion,
+    quantumBenchmarkProducer: metrics.quantumBenchmarkProducer,
+    quantumBenchmarkRunId: metrics.quantumBenchmarkRunId,
+    quantumBenchmarkMetric: metrics.quantumBenchmarkMetric,
+    quantumBenchmarkDatasetFingerprint: metrics.quantumBenchmarkDatasetFingerprint,
+    quantumBenchmarkSampleCount: metrics.quantumBenchmarkSampleCount,
+    quantumAdvantageScore: metrics.quantumAdvantageScore,
+    quantumBenchmarkQualified: metrics.quantumBenchmarkQualified,
     completedBy: "training-worker",
   });
 
@@ -445,6 +483,7 @@ async function completeTrainingJob(
       servable: false,
       trainingMode: "bounded_cpu_eval",
       evaluationState: metrics.evaluationState,
+      evaluationMetricVersion: metrics.evaluationMetricVersion,
       promotionGate: metrics.promotionGate,
       qualityGateStatus: metrics.qualityGateStatus,
       qualityGateReasons: metrics.qualityGateReasons,
@@ -452,6 +491,19 @@ async function completeTrainingJob(
       datasetFingerprint: metrics.datasetFingerprint,
       neuralEvalScore: metrics.neuralEvalScore,
       quantumBenchmarkScore: metrics.quantumBenchmarkScore,
+      quantumBenchmarkVerified: metrics.quantumBenchmarkVerified,
+      quantumBenchmarkSource: metrics.quantumBenchmarkSource,
+      quantumClassicalBaselineScore: metrics.quantumClassicalBaselineScore,
+      quantumBenchmarkMeasuredAt: metrics.quantumBenchmarkMeasuredAt,
+      quantumBenchmarkBackend: metrics.quantumBenchmarkBackend,
+      quantumBenchmarkVersion: metrics.quantumBenchmarkVersion,
+      quantumBenchmarkProducer: metrics.quantumBenchmarkProducer,
+      quantumBenchmarkRunId: metrics.quantumBenchmarkRunId,
+      quantumBenchmarkMetric: metrics.quantumBenchmarkMetric,
+      quantumBenchmarkDatasetFingerprint: metrics.quantumBenchmarkDatasetFingerprint,
+      quantumBenchmarkSampleCount: metrics.quantumBenchmarkSampleCount,
+      quantumAdvantageScore: metrics.quantumAdvantageScore,
+      quantumBenchmarkQualified: metrics.quantumBenchmarkQualified,
       evaluationScore: metrics.evaluationScore,
       thumbsDownRate: metrics.thumbsDownRate,
       regenerateRate: metrics.regenerateRate,
@@ -477,6 +529,7 @@ async function completeTrainingJob(
     payload: {
       datasetManifestId: completedJob.datasetManifestId,
       evaluationState: metrics.evaluationState,
+      evaluationMetricVersion: metrics.evaluationMetricVersion,
       promotionGate: metrics.promotionGate,
       qualityGateStatus: metrics.qualityGateStatus,
       qualityGateReasons: metrics.qualityGateReasons,
@@ -484,6 +537,7 @@ async function completeTrainingJob(
       evaluationScore: metrics.evaluationScore,
       neuralEvalScore: metrics.neuralEvalScore,
       quantumBenchmarkScore: metrics.quantumBenchmarkScore,
+      quantumBenchmarkQualified: metrics.quantumBenchmarkQualified,
       datasetQualityScore: metrics.datasetQualityScore,
       compactionQualityScore: metrics.compactionQualityScore,
     },

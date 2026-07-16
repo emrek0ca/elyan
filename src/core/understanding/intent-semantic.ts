@@ -133,6 +133,118 @@ function dot(a: number[], b: number[]): number {
   return sum;
 }
 
+export type SemanticTextCandidate = {
+  id: string;
+  description: string;
+};
+
+export type SemanticTextCandidateMatch = {
+  id: string;
+  score: number;
+  margin: number;
+  source: "transformer" | "hash";
+};
+
+function bestCandidateMatch(
+  queryVector: number[],
+  candidates: SemanticTextCandidate[],
+  vectors: number[][],
+): { id: string; score: number; margin: number } | null {
+  // A capability may expose several multilingual semantic descriptions. Score
+  // each description, then keep only the strongest score per capability id so
+  // aliases/prototypes do not compete with themselves and inflate the margin.
+  const bestScoreById = new Map<string, number>();
+  candidates.forEach((candidate, index) => {
+    const score = dot(queryVector, vectors[index] ?? []);
+    const previous = bestScoreById.get(candidate.id);
+    if (previous === undefined || score > previous) {
+      bestScoreById.set(candidate.id, score);
+    }
+  });
+  const ranked = [...bestScoreById.entries()]
+    .map(([id, score]) => ({ id, score }))
+    .sort((left, right) => right.score - left.score);
+  const best = ranked[0];
+  if (!best) return null;
+  return {
+    ...best,
+    margin: best.score - (ranked[1]?.score ?? 0),
+  };
+}
+
+/**
+ * Generic semantic registry matcher. Callers supply current registry/catalog
+ * descriptions, so adding a new tool or MCP app teaches the router through its
+ * existing contract instead of adding another user-sentence regex.
+ *
+ * The multilingual e5 worker is primary. The existing hash embedding remains
+ * a cheap degraded-mode signal and is explicitly identified in the result so
+ * permission-sensitive callers can choose to fail closed.
+ */
+export async function rankSemanticTextCandidates(
+  text: string,
+  candidates: SemanticTextCandidate[],
+  options: {
+    transformerMinScore?: number;
+    transformerMinMargin?: number;
+    transformerTimeoutMs?: number;
+    hashMinScore?: number;
+    hashMinMargin?: number;
+  } = {},
+): Promise<SemanticTextCandidateMatch | null> {
+  const trimmed = text.replace(/\s+/g, " ").trim();
+  const usableCandidates = candidates.filter(
+    (candidate) => candidate.id.trim() && candidate.description.trim(),
+  );
+  if (!trimmed || usableCandidates.length === 0) return null;
+
+  const [semanticVectors, semanticQuery] = await Promise.all([
+    embedTextsForStorage(
+      usableCandidates.map((candidate) => candidate.description),
+      undefined,
+      "understanding-semantic-registry-v1",
+      options.transformerTimeoutMs,
+    ),
+    embedQueryForStorage(
+      trimmed,
+      undefined,
+      undefined,
+      options.transformerTimeoutMs,
+    ),
+  ]).catch(() => [null, null] as const);
+  if (semanticVectors && semanticQuery) {
+    const match = bestCandidateMatch(
+      semanticQuery,
+      usableCandidates,
+      semanticVectors,
+    );
+    if (
+      match &&
+      match.score >= (options.transformerMinScore ?? 0.62) &&
+      match.margin >= (options.transformerMinMargin ?? 0.015)
+    ) {
+      return { ...match, source: "transformer" };
+    }
+    return null;
+  }
+
+  const hashMatch = bestCandidateMatch(
+    buildHashedKnowledgeEmbedding(trimmed),
+    usableCandidates,
+    usableCandidates.map((candidate) =>
+      buildHashedKnowledgeEmbedding(candidate.description),
+    ),
+  );
+  if (
+    !hashMatch ||
+    hashMatch.score < (options.hashMinScore ?? 0.18) ||
+    hashMatch.margin < (options.hashMinMargin ?? 0.04)
+  ) {
+    return null;
+  }
+  return { ...hashMatch, source: "hash" };
+}
+
 /**
  * Returns the nearest intent prototype to `text` by cosine similarity, or null
  * when the text is empty or the best match is too weak to be meaningful.

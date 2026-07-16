@@ -1,6 +1,7 @@
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { trainingJobs } from "../../db/schema.js";
+import { readVerifiedQuantumBenchmark } from "./quantum-benchmark.js";
 
 const ML_WORKER_HEARTBEAT_KEY = "elyan:ml-worker:heartbeat";
 const ML_WORKER_STALE_AFTER_MS = 90_000;
@@ -91,9 +92,10 @@ export async function getNeuralBrainReadiness(app: FastifyInstance) {
     readNumber(latestMetrics, "qualityCompositeScore") ??
     readNumber(latestMetadata, "datasetQualityScore") ??
     readNumber(latestMetadata, "qualityCompositeScore");
-  const latestQuantumScore =
-    readNumber(latestMetrics, "quantumBenchmarkScore") ??
-    readNumber(latestMetadata, "quantumBenchmarkScore");
+  const latestQuantumBenchmark =
+    readVerifiedQuantumBenchmark(latestMetrics) ??
+    readVerifiedQuantumBenchmark(latestMetadata);
+  const latestQuantumScore = latestQuantumBenchmark?.score ?? null;
   const activeTrainingJobs = Number(activeRows[0]?.count ?? 0);
   const embeddingReady = trainingWorkerReady;
   const evaluationReady = trainingWorkerReady && (latestEvaluationScore !== null || latestQualityCompositeScore !== null);
@@ -117,6 +119,10 @@ export async function getNeuralBrainReadiness(app: FastifyInstance) {
     latestEvaluationScore,
     latestQualityCompositeScore,
     latestQuantumBenchmarkScore: latestQuantumScore,
+    latestQuantumClassicalBaselineScore: latestQuantumBenchmark?.classicalBaselineScore ?? null,
+    latestQuantumBenchmarkSource: latestQuantumBenchmark?.source ?? null,
+    latestQuantumAdvantageScore: latestQuantumBenchmark?.advantageScore ?? null,
+    latestQuantumBenchmarkQualified: latestQuantumBenchmark?.qualified ?? false,
     mlWorkerMode,
     mlWorkerLastJobAt,
     mlWorkerLastErrorCode,

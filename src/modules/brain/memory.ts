@@ -1298,7 +1298,7 @@ export async function searchBrainMemory(
       ? await ensureMemorySemanticV2Columns(app)
       : false;
     const semanticQueryVector = semanticV2Ready
-      ? await embedQueryForStorage(input.query, app.log).catch(() => null)
+      ? await embedQueryForStorage(input.query, app.log, `user:${input.userId}`).catch(() => null)
       : null;
     const semanticV2QueryVector = semanticQueryVector
       ? buildVectorSql(semanticQueryVector)
@@ -1582,6 +1582,7 @@ export async function searchBrainMemory(
         enabled: app.config.ELYAN_RAG_SEMANTIC_RERANK_ENABLED,
         modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
         windowSize: app.config.ELYAN_RAG_SEMANTIC_RERANK_WINDOW,
+        cacheScope: `user:${input.userId}`,
         logger: app.log,
       });
       return {
@@ -1664,6 +1665,7 @@ export async function searchBrainMemory(
       enabled: app.config.ELYAN_RAG_SEMANTIC_RERANK_ENABLED,
       modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
       windowSize: app.config.ELYAN_RAG_SEMANTIC_RERANK_WINDOW,
+      cacheScope: `user:${input.userId}`,
       logger: app.log,
     });
 
@@ -3467,15 +3469,17 @@ async function processMemoryIndexJob(app: FastifyInstance, job: typeof trainingJ
 
   const indexedAt = new Date().toISOString();
   const factV2Vectors = semanticV2Ready
-    ? await embedTextsForStorage(
+      ? await embedTextsForStorage(
         facts.map((fact) => fact.text),
         app.log,
+        `user:${userId}`,
       ).catch(() => null)
     : null;
   const episodeV2Vectors = semanticV2Ready
-    ? await embedTextsForStorage(
+      ? await embedTextsForStorage(
         episodes.map((episode) => episode.text),
         app.log,
+        `user:${userId}`,
       ).catch(() => null)
     : null;
   for (const fact of facts) {

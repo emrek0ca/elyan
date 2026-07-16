@@ -143,6 +143,12 @@ const LOCATION_RELEVANCE_PATTERN =
   /\b(nerede|neredeyim|konum|location|şehir|sehir|ilçe|ilce|yakın|yakin|çevre|cevre|mekan|restoran|yemek|hava|weather|sıcaklık|sicaklik|gezi|seyahat|rota|ulaşım|ulasim|öner|oner|meşhur|meshur|kayseri|hatay|istanbul|ankara|izmir|cafe|kafe|otel|hotel|park|market|eczane|hastane|havalimanı|havalimani|otogar|istasyon|sokak|cadde|semt|mahalle|bölge|bolge)\b/i;
 const SCHEDULE_RELEVANCE_PATTERN =
   /\b(takvim|calendar|program|plan|planla|saat|time|bugün|bugun|yarın|yarin|toplantı|toplanti|müsait|musait|boş|bos|deadline|son tarih|odak|focus|yoğun|yogun|rutin|ajanda|zaman|gün|gun|hafta|ay|randevu|etkinlik|event|görev|gorev|task|iş|is|çalışma|calisma|ödev|odev|ders|sınav|sinav|sunum|presentation)\b/i;
+const EXPLICIT_HEALTH_DATA_REQUEST_PATTERN =
+  /(?:sağlık|saglik)\s+(?:verilerim|bilgilerim|özetim|durumum)|(?:adımlarım|adimlarim|uykum|uyku\s+verim|nabzım|nabzim|kalorim|egzersizim|antrenmanım|antrenmanim)|(?:benim|bana\s+ait).{0,32}(?:sağlık|saglik|adım|adim|uyku|nabız|nabiz|kalori|egzersiz|antrenman)|my\s+(?:health|steps?|sleep|heart\s*rate|calories|workouts?|fitness)(?:\s+data)?|how\s+many\s+steps\s+(?:did|have)\s+i/iu;
+const EXPLICIT_LOCATION_DATA_REQUEST_PATTERN =
+  /neredeyim|konumum|bulunduğum\s+yer|bulundugum\s+yer|where\s+am\s+i|my\s+(?:current\s+)?location/iu;
+const EXPLICIT_CALENDAR_DATA_REQUEST_PATTERN =
+  /takvimim|ajandam|programım|programim|randevularım|randevularim|toplantılarım|toplantilarim|etkinliklerim|my\s+(?:calendar|schedule|appointments?|meetings?|events?)/iu;
 const NOTIFICATION_RELEVANCE_PATTERN =
   /\b(bildirim|notification|dikkat|attention|rahatsız|rahatsiz|odak|focus|sessiz|silent|acil|urgent|öncelik|oncelik)\b/i;
 const ADAPTIVE_WORK_PATTERN =
@@ -155,6 +161,47 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+export type ExplicitMobileContextKind = "health" | "location" | "calendar";
+
+export function explicitMobileContextKindsForPrompt(
+  requestText: string | undefined,
+): ExplicitMobileContextKind[] {
+  const message = normalizeText(requestText ?? "");
+  if (!message) return [];
+  const kinds: ExplicitMobileContextKind[] = [];
+  if (EXPLICIT_HEALTH_DATA_REQUEST_PATTERN.test(message)) kinds.push("health");
+  if (EXPLICIT_LOCATION_DATA_REQUEST_PATTERN.test(message)) kinds.push("location");
+  if (EXPLICIT_CALENDAR_DATA_REQUEST_PATTERN.test(message)) kinds.push("calendar");
+  return kinds;
+}
+
+export function isExclusiveMobileContextRequest(
+  requestText: string | undefined,
+  kinds = explicitMobileContextKindsForPrompt(requestText),
+): boolean {
+  if (kinds.length === 0) return false;
+  const tokens = normalizeText(requestText ?? "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/u)
+    .filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 28) return false;
+
+  const common = /^(?:benim|bana|ait|bugün\p{L}*|bugun\p{L}*|dün\p{L}*|dun\p{L}*|şu|su|anda|an|mevcut|güncel|guncel|kaç\p{L}*|kac\p{L}*|ne|nedir|neler|var|nasıl|nasil|göster\p{L}*|goster\p{L}*|söyle\p{L}*|soyle\p{L}*|özet\p{L}*|ozet\p{L}*|veri\p{L}*|bilgi\p{L}*|durum\p{L}*|current|today|yesterday|what|which|where|how|many|show|tell|give|take|me|do|did|have|has|is|are|am|i|my|the|any|on|for|this|turn|and|ve)$/iu;
+  const allowedByKind: Record<ExplicitMobileContextKind, RegExp> = {
+    health:
+      /^(?:sağlık\p{L}*|saglik\p{L}*|adım\p{L}*|adim\p{L}*|uyku\p{L}*|nabız\p{L}*|nabiz\p{L}*|kalori\p{L}*|egzersiz\p{L}*|antrenman\p{L}*|health|steps?|sleep|heart|rate|calories|workouts?|fitness|exercises?)$/iu,
+    location:
+      /^(?:nerede\p{L}*|konum\p{L}*|bulun\p{L}*|yer\p{L}*|location|located)$/iu,
+    calendar:
+      /^(?:takvim\p{L}*|ajanda\p{L}*|program\p{L}*|randevu\p{L}*|toplantı\p{L}*|toplanti\p{L}*|etkinlik\p{L}*|calendar|schedule|appointments?|meetings?|events?)$/iu,
+  };
+  return tokens.every(
+    (token) =>
+      common.test(token) || kinds.some((kind) => allowedByKind[kind].test(token)),
+  );
 }
 
 function readArray(value: unknown): unknown[] {
@@ -588,7 +635,12 @@ function extractWorldSignalRecords(metadata: Record<string, unknown> | undefined
         continue;
       }
       const signalId = readString(record, "signalId");
-      const key = `${signalId ?? ""}:${kind}:${summary}`.toLowerCase();
+      // The same signal can arrive through compact, chat and snapshot metadata
+      // with differently clipped summaries. Prefer its stable id so one source
+      // produces one packet; fall back to content only for legacy id-less rows.
+      const key = signalId
+        ? `id:${signalId}`.toLowerCase()
+        : `content:${kind}:${summary}`.toLowerCase();
       if (seen.has(key)) {
         continue;
       }
@@ -598,6 +650,133 @@ function extractWorldSignalRecords(metadata: Record<string, unknown> | undefined
   }
 
   return records;
+}
+
+function mobileContextCapabilities(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
+  const root = readRecord(metadata);
+  const compactContext = readRecord(root?.compactContext);
+  return readRecord(compactContext?.mobileContextCapabilities);
+}
+
+function isSignalAllowedByMobileCapabilities(
+  kind: string,
+  capabilities: Record<string, unknown> | null,
+): boolean {
+  if (!capabilities) {
+    return true;
+  }
+  if (kind === "health") return capabilities.healthEnabled !== false;
+  if (kind === "location") return capabilities.locationEnabled !== false;
+  if (kind === "calendar") return capabilities.calendarEnabled !== false;
+  return true;
+}
+
+function buildRequestedContextAvailabilityPackets(
+  metadata: Record<string, unknown> | undefined,
+  requestText: string | undefined,
+  existingPackets: ContextPacket[],
+): ContextPacket[] {
+  const message = normalizeText(requestText ?? "");
+  if (!message) {
+    return [];
+  }
+  const capabilities = mobileContextCapabilities(metadata);
+  if (!capabilities) {
+    return [];
+  }
+  const explicitlyRequestedKinds = new Set(
+    explicitMobileContextKindsForPrompt(requestText),
+  );
+
+  const hasSignal = (kind: string): boolean =>
+    existingPackets.some((packet) => packet.signalKinds.includes(kind));
+  const packet = (input: {
+    kind: ContextPacketKind;
+    signalKind: string;
+    title: string;
+    summary: string;
+    privacyClass: ContextPacket["privacyClass"];
+    relevanceReason: string;
+    allowedUse: string[];
+  }): ContextPacket => ({
+    kind: input.kind,
+    source: "conversation",
+    title: input.title,
+    summary: input.summary,
+    confidence: 1,
+    freshness: "fresh",
+    privacyClass: input.privacyClass,
+    evidenceCount: 0,
+    createdAt: null,
+    expiresAt: null,
+    renderHint: "context_signal",
+    signalKinds: [input.signalKind],
+    mentionPolicy: "explicit_when_relevant",
+    relevanceReason: input.relevanceReason,
+    allowedUse: input.allowedUse,
+  });
+
+  const packets: ContextPacket[] = [];
+  if (explicitlyRequestedKinds.has("health") && !hasSignal("health")) {
+    const enabled = capabilities.healthEnabled === true;
+    packets.push(packet({
+      kind: "health_context",
+      signalKind: "health_availability",
+      title: "Sağlık bağlamı erişim durumu",
+      summary: enabled
+        ? "Health context is enabled, but no current authorized health signal was available for this turn."
+        : "Health context is disabled in Elyan app settings for this turn.",
+      privacyClass: "health_ephemeral",
+      relevanceReason: enabled ? "health_context_unavailable" : "health_context_disabled",
+      allowedUse: [
+        "state clearly that current authorized health data is unavailable",
+        "do not substitute web results, e-Nabız, or generic health records for the user's data",
+        "do not claim access to health data",
+      ],
+    }));
+  }
+
+  if (explicitlyRequestedKinds.has("location") && !hasSignal("location")) {
+    const enabled = capabilities.locationEnabled === true;
+    packets.push(packet({
+      kind: "world_context",
+      signalKind: "location_availability",
+      title: "Konum bağlamı erişim durumu",
+      summary: enabled
+        ? "Location context is enabled, but no current authorized location signal was available for this turn."
+        : "Location context is disabled in Elyan app settings for this turn.",
+      privacyClass: "ephemeral",
+      relevanceReason: enabled ? "location_context_unavailable" : "location_context_disabled",
+      allowedUse: [
+        "state clearly that the current authorized location is unavailable",
+        "do not infer the user's location from web results or unrelated context",
+        "do not claim access to location data",
+      ],
+    }));
+  }
+
+  if (explicitlyRequestedKinds.has("calendar") && !hasSignal("calendar")) {
+    const enabled = capabilities.calendarEnabled === true;
+    packets.push(packet({
+      kind: "calendar_context",
+      signalKind: "calendar_availability",
+      title: "Takvim bağlamı erişim durumu",
+      summary: enabled
+        ? "Calendar context is enabled, but no current authorized calendar signal was available for this turn."
+        : "Calendar context is disabled in Elyan app settings for this turn.",
+      privacyClass: "ephemeral",
+      relevanceReason: enabled ? "calendar_context_unavailable" : "calendar_context_disabled",
+      allowedUse: [
+        "state clearly that current authorized calendar context is unavailable",
+        "do not invent events or availability",
+        "do not claim access to calendar data",
+      ],
+    }));
+  }
+
+  return packets;
 }
 
 function buildHealthPacket(signal: Record<string, unknown>, now: Date): ContextPacket | null {
@@ -739,9 +918,13 @@ export function buildContextPacketsFromMetadata(
 ): ContextPacket[] {
   const now = options.now ?? new Date();
   const packets: ContextPacket[] = [];
+  const capabilities = mobileContextCapabilities(metadata);
 
   for (const signal of extractWorldSignalRecords(metadata)) {
     const kind = (readString(signal, "kind") ?? "").toLowerCase();
+    if (!isSignalAllowedByMobileCapabilities(kind, capabilities)) {
+      continue;
+    }
     const packet = kind === "health"
       ? buildHealthPacket(signal, now)
       : kind === "calendar"
@@ -802,6 +985,8 @@ export function buildContextPacketsFromMetadata(
       }
     }
   }
+
+  packets.push(...buildRequestedContextAvailabilityPackets(metadata, options.requestText, packets));
 
   return packets
     .sort((left, right) => {

@@ -124,6 +124,24 @@ export class ReliabilityStore {
     return current;
   }
 
+  public async incrementBy(key: string, amount: number, ttlMs: number): Promise<number> {
+    const safeAmount = Math.max(0, Math.trunc(amount));
+    if (safeAmount === 0) {
+      return Number((await this.get(key)) ?? "0");
+    }
+    if (await this.canUseRedis()) {
+      const value = await this.redis!.incrby(key, safeAmount);
+      if (value === safeAmount) {
+        await this.redis!.pexpire(key, ttlMs);
+      }
+      return value;
+    }
+
+    const current = Number(this.getMemory(key) ?? "0") + safeAmount;
+    this.setMemory(key, String(current), ttlMs);
+    return current;
+  }
+
   public async acquireLock(key: string, owner: string, ttlMs: number): Promise<boolean> {
     if (await this.canUseRedis()) {
       const result = await this.redis!.set(key, owner, "PX", ttlMs, "NX");

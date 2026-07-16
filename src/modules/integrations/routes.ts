@@ -195,10 +195,16 @@ function registerOauthCallback(app: FastifyInstance) {
   });
 }
 
-/** Shipping surface: curated cards, app-scoped OAuth, gmail send and runtime leases. */
+/** Shipping surface: curated cards, app-scoped OAuth and runtime leases.
+ *
+ * Gmail/calendar write actions are deliberately not exposed here. Server-brain
+ * connector writes must go through `/v1/brain/connector-writes/:token`, where a
+ * model-produced draft is staged and replayed only after explicit user
+ * approval. Keeping the public integration surface read/connect-only prevents
+ * accidental side-effect bypasses.
+ */
 export const integrationAppRoutes: FastifyPluginAsync = async (app) => {
   registerCuratedAppRoutes(app);
-  registerGmailSend(app);
   registerOauthCallback(app);
 };
 

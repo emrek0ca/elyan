@@ -5,9 +5,15 @@ import { getRequestContext } from "../../lib/http.js";
 import { getUserAuth, getUserScopedAuth } from "../../lib/request-auth.js";
 import { users } from "../../db/schema.js";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
-import { buildUserContext } from "../../core/understanding/context-builder.js";
+import {
+  buildTaskUnderstanding,
+  recordTaskLearningFromCreation,
+} from "../../core/understanding/user-understanding-service.js";
 import {
   brainChatBodySchema,
+  desktopPlanBodySchema,
+  connectorWriteApprovalBodySchema,
+  connectorWriteApprovalParamsSchema,
   approveBrainReviewBodySchema,
   listBrainReviewQuerySchema,
   brainProfileQuerySchema,
@@ -56,6 +62,8 @@ import {
 } from "./service.js";
 import { decideCommandRoute } from "../routing-policy/service.js";
 import { generateGovernedSharedBrainReply } from "./inference.js";
+import { generateDesktopPlan } from "./desktop-plan.js";
+import { resolveConnectorWriteApproval } from "../tasks/service.js";
 import { buildLocalRenderRecipe } from "../../core/understanding/render-recipe.js";
 import {
   approveBrainInteractionCorrection,
@@ -66,8 +74,15 @@ import {
 } from "./review.js";
 import { runBrainBenchmark } from "./benchmark.js";
 
-async function assertAdmin(app: FastifyInstance, userId: string): Promise<void> {
-  const rows = await app.db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+async function assertAdmin(
+  app: FastifyInstance,
+  userId: string,
+): Promise<void> {
+  const rows = await app.db
+    .select({ role: users.role })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
   if (rows[0]?.role !== "admin") {
     throw forbidden("Admin access required");
   }
@@ -98,17 +113,34 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
     const auth = getUserAuth(request);
     await assertAdmin(app, auth.sub);
 
-    const understandingContext = await buildUserContext(app, {
+    const requestContext = getRequestContext(request);
+    const captureIntent = classifyIntent({
       userId: auth.sub,
       message: body.prompt,
       title: body.title,
       source: "mobile",
-      intent: classifyIntent({
-        userId: auth.sub,
-        message: body.prompt,
-        title: body.title,
-        source: "mobile",
-      }),
+    });
+
+    await recordTaskLearningFromCreation(app, {
+      userId: auth.sub,
+      accountId: auth.sub,
+      message: body.prompt,
+      title: body.title,
+      source: "mobile",
+      intent: captureIntent,
+      requestId: requestContext.requestId,
+    });
+
+    const understanding = await buildTaskUnderstanding(app, {
+      userId: auth.sub,
+      accountId: auth.sub,
+      message: body.prompt,
+      title: body.title,
+      source: "mobile",
+      routeContext: "brain.chat",
+      metadata: {
+        requestId: requestContext.requestId,
+      },
     });
 
     const routeDecision = await decideCommandRoute(app, {
@@ -131,7 +163,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
       route: "shared_brain",
       routeDecision,
       workload: routeDecision.selectedWorkload,
-      understandingContext,
+      understandingContext: understanding.context,
       internalEvaluation: {
         skipUsageValidation: true,
         skipInvocationLogging: true,
@@ -141,7 +173,9 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
     const renderRecipe = buildLocalRenderRecipe({
       prompt: body.prompt,
       responseText: replyResult.text,
-      assistantBlocks: Array.isArray(replyResult.metadata.blocks) ? replyResult.metadata.blocks : [],
+      assistantBlocks: Array.isArray(replyResult.metadata.blocks)
+        ? replyResult.metadata.blocks
+        : [],
       metadata: {
         routeDecision,
         workload: routeDecision.selectedWorkload,
@@ -149,7 +183,8 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
         title: body.title,
         latencyMs: replyResult.latencyMs,
       },
-      renderOn: routeDecision.route === "desktop_runtime" ? "desktop" : "mobile",
+      renderOn:
+        routeDecision.route === "desktop_runtime" ? "desktop" : "mobile",
       taskId: undefined,
     });
 
@@ -164,6 +199,91 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
         renderRecipe: renderRecipe ?? null,
       },
       routeDecision,
+    };
+  });
+
+  // Desktop yapılandırılmış planlama (elyan.plan.v2): masaüstü runtime'ı
+  // planlama zarfını buraya gönderir; persona/blok/typewriter pipeline'ı
+  // ATLANIR, "planning" workload profiliyle saf plan JSON'u döner. Doğrulama
+  // masaüstünde kalır. Runtime token kabul edilir (anonim QR eşleşmesi).
+  app.post("/desktop/plan", async (request, reply) => {
+    await app.authenticateUserOrRuntime(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const body = desktopPlanBodySchema.parse(request.body);
+    const auth = getUserScopedAuth(request);
+    const requestContext = getRequestContext(request);
+
+    const result = await generateDesktopPlan(app, {
+      userId: auth.sub,
+      prompt: body.prompt,
+      contract: body.contract,
+      repair: body.repair,
+      taskId: body.taskId,
+      requestId: requestContext.requestId,
+    });
+
+    return {
+      ok: result.ok,
+      contract: result.contract,
+      plan: result.plan,
+      text: result.plan === null ? result.text.slice(0, 4_000) : "",
+      provider: result.provider,
+      model: result.model,
+      latencyMs: result.latencyMs,
+      error: result.error ?? null,
+    };
+  });
+
+  // Onay kapısı: Elyan bir yazma aracı (gmail.send/calendar.create_event)
+  // taslağı ürettiğinde çağrı staged edilir; kullanıcı bu endpoint'le açıkça
+  // onaylayınca allowSideEffects:true ile çalışır. Taslak onaysız asla gönderilmez.
+  app.post("/connector-writes/:token", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const params = connectorWriteApprovalParamsSchema.parse(request.params);
+    const body = connectorWriteApprovalBodySchema.parse(request.body);
+    const auth = getUserAuth(request);
+
+    const outcome = await resolveConnectorWriteApproval(app, {
+      userId: auth.sub,
+      token: params.token,
+      approved: body.approved,
+      requestId: request.id,
+    });
+
+    if (outcome.status === "not_found") {
+      return reply.code(404).send({
+        error: {
+          code: "connector_write_not_found",
+          message: "Bu taslak bulunamadı veya süresi doldu.",
+        },
+      });
+    }
+    if (outcome.status === "rejected") {
+      return { status: "rejected", tool: outcome.tool };
+    }
+    if (!outcome.result.ok) {
+      return reply.code(502).send({
+        status: "failed",
+        tool: outcome.tool,
+        error: outcome.result.error ?? {
+          code: "connector_write_failed",
+          message: "Aksiyon tamamlanamadı.",
+        },
+      });
+    }
+    return {
+      status: "executed",
+      tool: outcome.tool,
+      result: sanitizePublicBrainValue(outcome.result.output ?? {}),
     };
   });
 
@@ -379,7 +499,8 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
     const body = createKnowledgeDocumentBodySchema.parse(request.body);
     const auth = getUserAuth(request);
     const context = getRequestContext(request);
-    const sharedLearningRequested = body.scope === "shared" || body.learningMode === "shared_corpus_train";
+    const sharedLearningRequested =
+      body.scope === "shared" || body.learningMode === "shared_corpus_train";
 
     if (sharedLearningRequested) {
       await assertAdmin(app, auth.sub);
@@ -459,42 +580,48 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.post("/review/interactions/:interactionId/approve", async (request, reply) => {
-    await app.authenticateUser(request, reply);
-    if (reply.sent) {
-      return;
-    }
-    const auth = getUserAuth(request);
-    await assertAdmin(app, auth.sub);
-    const params = reviewInteractionParamsSchema.parse(request.params);
-    const body = approveBrainReviewBodySchema.parse(request.body ?? {});
-    const context = getRequestContext(request);
-    return approveBrainInteractionCorrection(app, {
-      interactionId: params.interactionId,
-      actorUserId: auth.sub,
-      correctedAnswer: body.correctedAnswer,
-      reason: body.reason ?? null,
-      requestId: context.requestId,
-    });
-  });
+  app.post(
+    "/review/interactions/:interactionId/approve",
+    async (request, reply) => {
+      await app.authenticateUser(request, reply);
+      if (reply.sent) {
+        return;
+      }
+      const auth = getUserAuth(request);
+      await assertAdmin(app, auth.sub);
+      const params = reviewInteractionParamsSchema.parse(request.params);
+      const body = approveBrainReviewBodySchema.parse(request.body ?? {});
+      const context = getRequestContext(request);
+      return approveBrainInteractionCorrection(app, {
+        interactionId: params.interactionId,
+        actorUserId: auth.sub,
+        correctedAnswer: body.correctedAnswer,
+        reason: body.reason ?? null,
+        requestId: context.requestId,
+      });
+    },
+  );
 
-  app.post("/review/interactions/:interactionId/reject", async (request, reply) => {
-    await app.authenticateUser(request, reply);
-    if (reply.sent) {
-      return;
-    }
-    const auth = getUserAuth(request);
-    await assertAdmin(app, auth.sub);
-    const params = reviewInteractionParamsSchema.parse(request.params);
-    const body = rejectBrainReviewBodySchema.parse(request.body ?? {});
-    const context = getRequestContext(request);
-    return rejectBrainInteractionCorrection(app, {
-      interactionId: params.interactionId,
-      actorUserId: auth.sub,
-      reason: body.reason ?? null,
-      requestId: context.requestId,
-    });
-  });
+  app.post(
+    "/review/interactions/:interactionId/reject",
+    async (request, reply) => {
+      await app.authenticateUser(request, reply);
+      if (reply.sent) {
+        return;
+      }
+      const auth = getUserAuth(request);
+      await assertAdmin(app, auth.sub);
+      const params = reviewInteractionParamsSchema.parse(request.params);
+      const body = rejectBrainReviewBodySchema.parse(request.body ?? {});
+      const context = getRequestContext(request);
+      return rejectBrainInteractionCorrection(app, {
+        interactionId: params.interactionId,
+        actorUserId: auth.sub,
+        reason: body.reason ?? null,
+        requestId: context.requestId,
+      });
+    },
+  );
 
   app.post("/review/export/approved-corrections", async (request, reply) => {
     await app.authenticateUser(request, reply);
@@ -555,7 +682,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
 
     return listBrainMemoryRecords(app, {
       actorUserId: auth.sub,
-      targetUserId: actingAsAdmin ? query.userId ?? auth.sub : auth.sub,
+      targetUserId: actingAsAdmin ? (query.userId ?? auth.sub) : auth.sub,
       isAdmin: actingAsAdmin,
       includeSoftDeleted: query.includeSoftDeleted,
       limit: query.limit,
@@ -572,7 +699,9 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const params = brainMemoryParamsSchema.parse(request.params);
-    const query = listBrainMemoryQuerySchema.pick({ userId: true }).parse(request.query ?? {});
+    const query = listBrainMemoryQuerySchema
+      .pick({ userId: true })
+      .parse(request.query ?? {});
     const auth = getUserAuth(request);
     const actingAsAdmin = Boolean(query.userId && query.userId !== auth.sub);
     if (actingAsAdmin) {
@@ -581,7 +710,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
 
     return getBrainMemoryRecord(app, {
       actorUserId: auth.sub,
-      targetUserId: actingAsAdmin ? query.userId ?? auth.sub : auth.sub,
+      targetUserId: actingAsAdmin ? (query.userId ?? auth.sub) : auth.sub,
       isAdmin: actingAsAdmin,
       memoryId: params.memoryId,
     });
@@ -604,7 +733,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
 
     return setBrainMemoryPinState(app, {
       actorUserId: auth.sub,
-      targetUserId: actingAsAdmin ? body.userId ?? auth.sub : auth.sub,
+      targetUserId: actingAsAdmin ? (body.userId ?? auth.sub) : auth.sub,
       isAdmin: actingAsAdmin,
       memoryId: params.memoryId,
       pinned: true,
@@ -632,7 +761,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
 
     return setBrainMemoryPinState(app, {
       actorUserId: auth.sub,
-      targetUserId: actingAsAdmin ? body.userId ?? auth.sub : auth.sub,
+      targetUserId: actingAsAdmin ? (body.userId ?? auth.sub) : auth.sub,
       isAdmin: actingAsAdmin,
       memoryId: params.memoryId,
       pinned: false,
@@ -660,7 +789,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
 
     return setBrainMemoryContestState(app, {
       actorUserId: auth.sub,
-      targetUserId: actingAsAdmin ? body.userId ?? auth.sub : auth.sub,
+      targetUserId: actingAsAdmin ? (body.userId ?? auth.sub) : auth.sub,
       isAdmin: actingAsAdmin,
       memoryId: params.memoryId,
       supersedesMemoryId: body.supersedesMemoryId ?? null,
@@ -688,7 +817,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
 
     return softDeleteBrainMemoryRecord(app, {
       actorUserId: auth.sub,
-      targetUserId: actingAsAdmin ? body.userId ?? auth.sub : auth.sub,
+      targetUserId: actingAsAdmin ? (body.userId ?? auth.sub) : auth.sub,
       isAdmin: actingAsAdmin,
       memoryId: params.memoryId,
       reason: body.reason ?? "user_requested_soft_delete",
@@ -715,7 +844,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
 
     return updateBrainMemoryRecord(app, {
       actorUserId: auth.sub,
-      targetUserId: actingAsAdmin ? body.userId ?? auth.sub : auth.sub,
+      targetUserId: actingAsAdmin ? (body.userId ?? auth.sub) : auth.sub,
       isAdmin: actingAsAdmin,
       memoryId: params.memoryId,
       title: body.title ?? null,
@@ -744,7 +873,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
 
     return restoreBrainMemoryRecord(app, {
       actorUserId: auth.sub,
-      targetUserId: actingAsAdmin ? body.userId ?? auth.sub : auth.sub,
+      targetUserId: actingAsAdmin ? (body.userId ?? auth.sub) : auth.sub,
       isAdmin: actingAsAdmin,
       memoryId: params.memoryId,
       reason: body.reason ?? null,

@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 
+// Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
+// görevler masaüstünde WORK_ORDER_STEP_BUDGET_EXCEEDED ile reddediliyordu.
+// Desktop planner MAX_PLAN_STEPS=16 ile hizalandı (runtime/desktop_work_order.py
+// MAX_STEPS ile birlikte güncellenir).
+export const MAX_WORK_ORDER_STEPS = 16;
+
 export type DesktopWorkOrderStep = {
   id: string;
   capability: string;
@@ -157,7 +163,10 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
   const entities: DesktopWorkOrder["entities"] = [];
   const seen = new Set<string>();
   const add = (type: DesktopWorkOrder["entities"][number]["type"], value: string) => {
-    const normalized = compactText(value, 240);
+    // The topic is the runtime planner's canonical natural-language goal.
+    // Keep the complete bounded request; short structural entities still use
+    // the tighter limit so they cannot bloat the work-order envelope.
+    const normalized = compactText(value, type === "topic" ? 4_000 : 240);
     const key = `${type}:${normalized.toLocaleLowerCase("tr-TR")}`;
     if (!normalized || seen.has(key)) return;
     seen.add(key);
@@ -186,7 +195,7 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
     message
       .replace(/https?:\/\/\S+/gi, " ")
       .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " "),
-    180,
+    4_000,
   );
   if (topic) add("topic", topic);
   return entities.slice(0, 16);
@@ -216,9 +225,32 @@ function inferLocalContext(message: string, capabilities: string[]): string[] {
   return [...contexts];
 }
 
+function isImageEditCommand(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  const explicitEditVerb =
+    /\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|netleştir|netlestir|kırp|kirp|retouch|edit|remove|replace|change|erase|enhance|upscale|crop)\b/iu.test(normalized);
+  const visualTarget =
+    /\b(görsel|gorsel|resim|fotoğraf|fotograf|image|photo|arka plan|yüz|yuz|saç|sac|kıyafet|kiyafet|renk|ışık|isik|kontrast)\b/iu.test(normalized);
+  const explicitEdit = explicitEditVerb && visualTarget;
+  const sourceTransform =
+    /\b(bunu|şunu|sunu|onu|görseli|gorseli|resmi|fotoğrafı|fotografi|this|it|the image|the photo)\b.{0,80}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/iu.test(normalized) ||
+    /\b(anime|çizgi film|cizgi film|sinematik|cinematic|vintage|retro|noir|fotogerçekçi|fotogercekci|photorealistic|3d|sulu boya|watercolor|yağlı boya|yagli boya|tarzında|tarzinda|stilinde)\b.{0,60}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/iu.test(normalized) ||
+    /\b(make|turn|transform)\s+(this|it|the image|the photo)\b/iu.test(normalized);
+  return explicitEdit || sourceTransform;
+}
+
 function inferKind(routeDecision: CommandRouteDecision, message: string): string {
   const normalized = message.toLocaleLowerCase("tr-TR");
+  if (routeDecision.capabilities.includes("mcp_call_tool")) return "remote_mcp";
   if (parseDirectImageFetchCommand(message)) return "image_fetch";
+  if (
+    routeDecision.capabilities.some((capability) =>
+      capability === "image_edit" || capability === "image.edit"
+    ) ||
+    isImageEditCommand(message)
+  ) return "image_edit";
+  if (/\b(görsel|gorsel|resim|image|illustration|poster|afiş|afis)\b/iu.test(normalized)
+    && /\b(üret|uret|oluştur|olustur|çiz|ciz|generate|create|draw)\b/iu.test(normalized)) return "image_generate";
   if (/\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)) return "presentation_task";
   if (routeDecision.capabilities.includes("email_send")) return "email_send";
   if (routeDecision.capabilities.includes("email_draft")) return "email_draft";
@@ -241,6 +273,7 @@ function canonicalRuntimeCapability(value: string): string | null {
     "chart.generate": "chart_generate",
     "image.read": "image_read",
     "image.generate": "image_generate",
+    "image.edit": "image_edit",
     "svg.generate": "canvas_write",
     "browser.read": "browser_control",
     "desktop.file_access": "document_read",
@@ -279,12 +312,28 @@ function inferCapabilities(
     && /\b(?:hazırla|hazirla|oluştur|olustur|üret|uret|yap|çevir|cevir|kaydet|save|create|prepare)\b/iu.test(normalized);
   const directAppCommand = parseDirectDesktopAppCommand(message);
   const directImageFetch = parseDirectImageFetchCommand(message);
+  const imageEditRequested =
+    capabilities.has("image_edit") ||
+    isImageEditCommand(message);
+  const imageGenerateRequested = !imageEditRequested
+    && /\b(görsel|gorsel|resim|image|illustration|poster|afiş|afis)\b/iu.test(normalized)
+    && /\b(üret|uret|oluştur|olustur|çiz|ciz|generate|create|draw)\b/iu.test(normalized);
   if (directAppCommand) {
     capabilities.add(directAppCommand.capability);
     capabilities.delete("desktop_operator.run");
   }
   if (directImageFetch) {
     capabilities.add("image_fetch");
+    capabilities.delete("desktop_operator.run");
+  }
+  if (imageEditRequested) {
+    capabilities.add("image_edit");
+    capabilities.delete("image_read");
+    capabilities.delete("canvas_write");
+    capabilities.delete("desktop_operator.run");
+  } else if (imageGenerateRequested) {
+    capabilities.add("image_generate");
+    capabilities.delete("canvas_write");
     capabilities.delete("desktop_operator.run");
   }
   if (researchRequested) capabilities.add("web_research");
@@ -328,6 +377,16 @@ function inferExpectedOutputs(
     addOutput({ kind: "artifact", format: "artifact_reference", required: true });
     addOutput({ kind: "file_update", format: "state_readback", required: true });
   }
+  if (
+    isImageEditCommand(message) ||
+    (
+      /\b(görsel|gorsel|resim|fotoğraf|fotograf|image|photo)\b/iu.test(normalized) &&
+      /\b(üret|uret|oluştur|olustur|çiz|ciz|generate|create|draw)\b/iu.test(normalized)
+    )
+  ) {
+    addOutput({ kind: "artifact", format: "image", required: true });
+    addOutput({ kind: "file_update", format: "state_readback", required: true });
+  }
   const presentationRequested = /\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)
     && /\b(?:hazırla|hazirla|oluştur|olustur|üret|uret|yap|çevir|cevir|kaydet|save|create|prepare)\b/iu.test(normalized);
   if (presentationRequested) {
@@ -359,6 +418,7 @@ function buildSteps(input: {
   capabilities: string[];
   entities: DesktopWorkOrder["entities"];
   envelope?: UnderstandingEnvelope;
+  inputRefs?: string[];
 }): DesktopWorkOrderStep[] {
   const steps: DesktopWorkOrderStep[] = [];
   const url = input.entities.find((entity) => entity.type === "url")?.value;
@@ -395,6 +455,23 @@ function buildSteps(input: {
         query: directImageFetch.query,
         destination: directImageFetch.destination,
         count: directImageFetch.count,
+      },
+    });
+  }
+  for (const capability of ["image_generate", "image_edit"] as const) {
+    if (!input.capabilities.includes(capability)) continue;
+    steps.push({
+      id: `step_${capability}`,
+      capability,
+      description: capability === "image_edit"
+        ? "Kullanıcının yüksek kaliteli kaynak görseli Gemini ile istenen şekilde düzenlenecek."
+        : "Kullanıcının istemi Gemini ile yüksek kaliteli görsele dönüştürülecek.",
+      args: {
+        prompt: topic || semanticBrief,
+        imageSize: /\b4k\b/iu.test(topic) ? "4K" : "2K",
+        ...(capability === "image_edit" && input.inputRefs?.length
+          ? { inputRefs: input.inputRefs }
+          : {}),
       },
     });
   }
@@ -481,7 +558,7 @@ function buildSteps(input: {
       },
     });
   }
-  if (steps.length === 0) {
+  if (steps.length === 0 && !input.capabilities.includes("mcp_call_tool")) {
     steps.push({
       id: "step_desktop_execute",
       capability: "desktop_operator.run",
@@ -493,7 +570,7 @@ function buildSteps(input: {
       },
     });
   }
-  return steps.slice(0, 8);
+  return steps.slice(0, MAX_WORK_ORDER_STEPS);
 }
 
 export function buildDesktopWorkOrder(input: {
@@ -503,6 +580,7 @@ export function buildDesktopWorkOrder(input: {
   requestedCapabilities: string[];
   understandingEnvelope?: UnderstandingEnvelope;
   source?: "mobile_chat_dispatch" | "backend_task_route";
+  inputRefs?: string[];
 }): DesktopWorkOrder {
   const message = compactText(input.message, 4_000);
   const kind = inferKind(input.routeDecision, message);
@@ -516,7 +594,11 @@ export function buildDesktopWorkOrder(input: {
   );
   const summary = compactText(
     [
-      kind === "desktop_cowork" ? "Masaüstü cowork görevi" : "Masaüstü görevi",
+      kind === "remote_mcp"
+        ? "Bağlı uygulama görevi"
+        : kind === "desktop_cowork"
+          ? "Masaüstü cowork görevi"
+          : "Masaüstü görevi",
       input.title,
       inferLocalContext(message, capabilities).length > 0 ? `Bağlam: ${inferLocalContext(message, capabilities).join(", ")}` : "",
     ].filter(Boolean).join(" — "),
@@ -542,6 +624,7 @@ export function buildDesktopWorkOrder(input: {
     capabilities,
     entities,
     envelope: input.understandingEnvelope,
+    inputRefs: input.inputRefs,
   });
   for (const step of steps) {
     if (!capabilities.includes(step.capability)) capabilities.push(step.capability);
@@ -564,13 +647,18 @@ export function buildDesktopWorkOrder(input: {
     execution: {
       mode: "cowork_dispatch",
       approvalPolicy: "capability_policy",
-      maxSteps: 8,
+      maxSteps: MAX_WORK_ORDER_STEPS,
     },
     planPreview: {
       summary,
-      privacyClass: input.understandingEnvelope?.risk.side_effect
+      privacyClass:
+        input.routeDecision.privacyClass === "side_effect" ||
+        input.understandingEnvelope?.risk.side_effect
         ? "side_effect"
-        : localContextNeeded.length > 0 || input.understandingEnvelope?.risk.local_private
+        : kind === "remote_mcp" ||
+            input.routeDecision.privacyClass === "local_private" ||
+            localContextNeeded.length > 0 ||
+            input.understandingEnvelope?.risk.local_private
           ? "local_private"
           : "public_text",
       steps,

@@ -159,16 +159,7 @@ export function buildPreferencePromptBlock(
   ]) {
     pushHint(hint);
   }
-  for (const hint of (context.relationshipContextDigest ?? []).slice(0, 2)) {
-    pushHint(hint);
-  }
   for (const hint of (context.speakingStyleDirectives ?? []).slice(0, 3)) {
-    pushHint(hint);
-  }
-  for (const hint of [
-    ...(context.behavioralHints ?? []).slice(0, 2),
-    ...(context.environmentHints ?? []).slice(0, 2),
-  ]) {
     pushHint(hint);
   }
 

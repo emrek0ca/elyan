@@ -265,6 +265,7 @@ function extractIdentitySignals(input: TaskUnderstandingInput): LearningSignal[]
   };
 
   const nameMatch =
+    text.match(/\b(?:benim adım|adım)\s+([A-Za-zÇĞİÖŞÜçğıöşü-]+(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü-]+){0,2}?)(?:['’](?:ı|i|u|ü|yı|yi|yu|yü))?\s+(?:hat[ıi]rla|unutma|akl[ıi]nda tut)\b/iu) ??
     text.match(/\b(?:benim adım|adım)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü'-]+){0,2})/iu) ??
     text.match(/\bmy name is\s+([A-Za-z][A-Za-z' -]{1,60})/iu);
   if (nameMatch?.[1]) {

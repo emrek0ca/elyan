@@ -158,8 +158,20 @@ const envSchema = z.object({
   GEMINI_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
   GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-image"),
   GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image"),
-  GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("1K"),
-  GEMINI_IMAGE_PRO_ENABLED: booleanFlag(false),
+  GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("2K"),
+  GEMINI_IMAGE_PRO_ENABLED: booleanFlag(true),
+  GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: z.coerce.number().int().positive().max(10_000).default(50),
+  GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT: z.coerce.number().int().positive().max(1_000).default(5),
+  GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT: z.coerce.number().int().positive().max(1_000).default(2),
+  ELYAN_GEMINI_FREE_FEATURES_ENABLED: booleanFlag(true),
+  GEMINI_FREE_ONLY: booleanFlag(true),
+  GEMINI_FREE_DATA_USAGE_ATTESTED: booleanFlag(false),
+  GEMINI_FREE_MODEL_ALLOWLIST: z.string().default("gemini-3.1-flash-lite"),
+  GEMINI_FREE_DAILY_REQUEST_LIMIT: z.coerce.number().int().positive().max(10_000).default(200),
+  GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT: z.coerce.number().int().positive().max(10_000_000).default(250_000),
+  GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT: z.coerce.number().int().positive().max(2_000_000).default(50_000),
+  GEMINI_FREE_USER_DAILY_REQUEST_LIMIT: z.coerce.number().int().positive().max(1_000).default(25),
+  GEMINI_FREE_UTILITY_SAMPLE_PERCENT: z.coerce.number().int().min(0).max(100).default(10),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().optional(),
   IYZICO_API_KEY: z.string().optional(),
@@ -209,7 +221,7 @@ const envSchema = z.object({
   ELYAN_PERSONALIZATION_ENABLED: booleanFlag(true),
   ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: booleanFlag(true),
   ELYAN_LEARNING_EXTRACTION_ENABLED: booleanFlag(true),
-  ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED: booleanFlag(false),
+  ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED: booleanFlag(true),
   ELYAN_UNDERSTANDING_ENVELOPE_SHADOW_ENABLED: booleanFlag(false),
   ELYAN_UNDERSTANDING_ENVELOPE_MODEL_FALLBACK_ENABLED: booleanFlag(false),
   ELYAN_TURN_ENVELOPE_ENABLED: booleanFlag(false),
@@ -221,9 +233,9 @@ const envSchema = z.object({
   // Enables server-side connector tools (Gmail/Calendar/Drive read) through the
   // agent loop, restricted to connector tool_requests only. Independent of the
   // full agent loop so connectors can ship without turning on write/goal tools.
-  ELYAN_CONNECTOR_TOOLS_ENABLED: booleanFlag(false),
+  ELYAN_CONNECTOR_TOOLS_ENABLED: booleanFlag(true),
   ELYAN_PROACTIVE_ENGINE_ENABLED: booleanFlag(false),
-  ELYAN_CLOUD_VISION_ENABLED: booleanFlag(false),
+  ELYAN_CLOUD_VISION_ENABLED: booleanFlag(true),
   ELYAN_COST_GUARD_ENABLED: booleanFlag(false),
   ELYAN_MODEL_CANARY_ENABLED: booleanFlag(false),
   ELYAN_MODEL_PRIMARY_ENABLED: booleanFlag(false),
@@ -303,6 +315,18 @@ export type AppEnv = ParsedEnv & {
   GEMINI_IMAGE_PRO_MODEL: string;
   GEMINI_IMAGE_SIZE: "1K" | "2K" | "4K";
   GEMINI_IMAGE_PRO_ENABLED: boolean;
+  GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: number;
+  GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT: number;
+  GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT: number;
+  ELYAN_GEMINI_FREE_FEATURES_ENABLED: boolean;
+  GEMINI_FREE_ONLY: boolean;
+  GEMINI_FREE_DATA_USAGE_ATTESTED: boolean;
+  GEMINI_FREE_MODEL_ALLOWLIST: string;
+  GEMINI_FREE_DAILY_REQUEST_LIMIT: number;
+  GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT: number;
+  GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT: number;
+  GEMINI_FREE_USER_DAILY_REQUEST_LIMIT: number;
+  GEMINI_FREE_UTILITY_SAMPLE_PERCENT: number;
   OPENROUTER_API_KEY: string;
   OPENROUTER_BASE_URL: string;
   TOKEN_ENCRYPTION_KEY?: string;
@@ -504,6 +528,18 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GEMINI_IMAGE_PRO_MODEL: parsed.GEMINI_IMAGE_PRO_MODEL,
     GEMINI_IMAGE_SIZE: parsed.GEMINI_IMAGE_SIZE,
     GEMINI_IMAGE_PRO_ENABLED: parsed.GEMINI_IMAGE_PRO_ENABLED,
+    GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: parsed.GEMINI_IMAGE_DAILY_GLOBAL_LIMIT,
+    GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT: parsed.GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT,
+    GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT: parsed.GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT,
+    ELYAN_GEMINI_FREE_FEATURES_ENABLED: parsed.ELYAN_GEMINI_FREE_FEATURES_ENABLED,
+    GEMINI_FREE_ONLY: parsed.GEMINI_FREE_ONLY,
+    GEMINI_FREE_DATA_USAGE_ATTESTED: parsed.GEMINI_FREE_DATA_USAGE_ATTESTED,
+    GEMINI_FREE_MODEL_ALLOWLIST: parsed.GEMINI_FREE_MODEL_ALLOWLIST,
+    GEMINI_FREE_DAILY_REQUEST_LIMIT: parsed.GEMINI_FREE_DAILY_REQUEST_LIMIT,
+    GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT: parsed.GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT,
+    GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT: parsed.GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT,
+    GEMINI_FREE_USER_DAILY_REQUEST_LIMIT: parsed.GEMINI_FREE_USER_DAILY_REQUEST_LIMIT,
+    GEMINI_FREE_UTILITY_SAMPLE_PERCENT: parsed.GEMINI_FREE_UTILITY_SAMPLE_PERCENT,
     OPENROUTER_API_KEY: parsed.OPENROUTER_API_KEY ?? "",
     OPENROUTER_BASE_URL: parsed.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
     TOKEN_ENCRYPTION_KEY: parsed.TOKEN_ENCRYPTION_KEY ?? "",

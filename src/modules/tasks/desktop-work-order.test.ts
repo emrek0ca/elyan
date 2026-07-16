@@ -72,6 +72,23 @@ test("buildDesktopWorkOrder keeps private file requests local and evidence-gated
   assert.equal(workOrder.verificationRules.some((rule) => rule.evidence === "tool_result"), true);
 });
 
+test("remote MCP work orders keep least-privilege scope and private routing", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "GitHub repolarımı göster",
+    title: "GitHub repoları",
+    routeDecision: routeDecision({ capabilities: ["mcp_call_tool"] }),
+    requestedCapabilities: ["mcp_call_tool"],
+  });
+
+  assert.deepEqual(workOrder.requiredCapabilities, ["mcp_call_tool"]);
+  assert.deepEqual(workOrder.planPreview.steps, []);
+  assert.equal(
+    workOrder.requiredCapabilities.includes("desktop_operator.run"),
+    false,
+  );
+  assert.equal(workOrder.planPreview.privacyClass, "local_private");
+});
+
 test("buildDesktopWorkOrder emits a direct app capability with the parsed application name", () => {
   const workOrder = buildDesktopWorkOrder({
     message: "Hesap Makinesi uygulamasını aç ve açıldığını doğrula.",

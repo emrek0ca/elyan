@@ -200,8 +200,11 @@ export function buildToolResultRefinementPrompt(input: {
     "Typed tool results from Elyan server agent loop:",
     JSON.stringify(safeResults, null, 2).slice(0, 8_000),
     "",
-    "Use the typed tool results above to answer the original user request.",
-    "Do not expose hidden reasoning. Do not claim a tool succeeded if its ok field is false.",
+    "Use the typed tool results above to answer the original user request in the user's language.",
+    "Return only the user-facing answer. Do not expose tool names, JSON, arguments, query syntax, hidden reasoning, provider names, or planning text.",
+    "For mailbox/calendar/drive results, group and deduplicate the useful fields (sender/title/date/summary) into a compact readable list instead of narrating how the tool was called.",
+    "If an ok read result is present, do not ask for the same permission again; answer from the result. If no ok result is present, explain the missing access briefly.",
+    "Do not claim a tool succeeded if its ok field is false.",
     "If a write/side-effect tool was blocked for approval, say that the action needs approval instead of pretending it was done.",
   ].join("\n");
 }

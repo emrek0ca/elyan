@@ -261,14 +261,127 @@ function describeContext(task: TaskTraceSource): {
   };
 }
 
+type ToolFlowTraceSummary = {
+  okCount: number;
+  tools: Array<{ name: string; resultCount: number | null }>;
+};
+
+const TOOL_APP_LABELS: Record<string, string> = {
+  gmail: "Gmail",
+  calendar: "Takvim",
+  "google-calendar": "Takvim",
+  gcal: "Takvim",
+  drive: "Drive",
+  "google-drive": "Drive",
+  notion: "Notion",
+  linear: "Linear",
+  github: "GitHub",
+  slack: "Slack",
+};
+
+function appLabelForTool(name: string): string {
+  const normalized = String(name ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return "Araç";
+  }
+  const prefix = normalized.split(/[.\/:_-]/)[0] || normalized;
+  return (
+    TOOL_APP_LABELS[normalized] ??
+    TOOL_APP_LABELS[prefix] ??
+    (prefix ? `${prefix.charAt(0).toUpperCase()}${prefix.slice(1)}` : "Araç")
+  );
+}
+
+// task-trace kartında görünen araç akışı özeti. Kaynak, ham task result'ın
+// düz `toolFlow` alanı (server_brain completion) veya feed-şekilli
+// `brain.toolFlow` olabilir; her iki şekli de savunmacı okur.
+function readToolFlow(
+  result: Record<string, unknown> | null,
+): ToolFlowTraceSummary | null {
+  if (!result) {
+    return null;
+  }
+  const brain = readRecord(result.brain);
+  for (const candidate of [result.toolFlow, brain?.toolFlow]) {
+    const record = readRecord(candidate);
+    if (!record) {
+      continue;
+    }
+    const rawTools = Array.isArray(record.tools) ? record.tools : [];
+    const tools: Array<{ name: string; resultCount: number | null }> = [];
+    let derivedOkCount = 0;
+    for (const item of rawTools) {
+      const toolRecord = readRecord(item);
+      const name =
+        readString(toolRecord, "name") ?? readString(toolRecord, "tool");
+      if (!name) {
+        continue;
+      }
+      if (readBoolean(toolRecord, "ok") === true) {
+        derivedOkCount += 1;
+      }
+      tools.push({ name, resultCount: readNumber(toolRecord, "resultCount") });
+      if (tools.length >= 8) {
+        break;
+      }
+    }
+    if (tools.length === 0) {
+      continue;
+    }
+    const declaredOkCount = readNumber(record, "okCount");
+    return {
+      okCount: declaredOkCount != null ? declaredOkCount : derivedOkCount,
+      tools,
+    };
+  }
+  return null;
+}
+
+function describeToolFlow(toolFlow: ToolFlowTraceSummary): string {
+  const appLabels: string[] = [];
+  let totalResults = 0;
+  let hasResultCount = false;
+  for (const tool of toolFlow.tools) {
+    const label = appLabelForTool(tool.name);
+    if (!appLabels.includes(label)) {
+      appLabels.push(label);
+    }
+    if (typeof tool.resultCount === "number") {
+      hasResultCount = true;
+      totalResults += tool.resultCount;
+    }
+  }
+  const label = appLabels.slice(0, 3).join(", ") || "Araç";
+  if (toolFlow.okCount === 0) {
+    return `${label} denendi`;
+  }
+  if (hasResultCount) {
+    return `${label} · ${totalResults} sonuç`;
+  }
+  return `${label} kullanıldı`;
+}
+
 function describeTool(task: TaskTraceSource) {
   const routeDecision = extractTaskRouteDecision(task.payload);
   const result = readRecord(task.result);
   const operator = readRecord(result?.operator);
+  const toolFlow = readToolFlow(result);
   const usedDesktop =
     routeDecision?.taskRoute?.operationalRoute === "desktop_runtime" ||
     routeDecision?.route === "desktop_runtime";
   const activeApp = readString(operator, "activeApp");
+
+  // Sunucu-taraflı connector/agent araçları (Gmail/Takvim/Drive vb.): önceden
+  // operator olmadığı için "Araç gerekmedi" görünüyordu. Artık gerçek çağrı
+  // görünür.
+  if (toolFlow) {
+    return {
+      needed: true,
+      detail: describeToolFlow(toolFlow),
+    };
+  }
 
   if (usedDesktop || operator) {
     return {

@@ -5,6 +5,8 @@ import { users, runtimeConnections, tasks, taskEvents } from "../../db/schema.js
 import { getReadiness } from "../health/service.js";
 import { activeTaskStatuses } from "../tasks/queue.js";
 import { aggregateTaskFailures, deriveTaskFailureSignature } from "../tasks/task-failure-analytics.js";
+import { getSemanticComputeMetrics } from "../brain/semantic-compute-client.js";
+import { getGeminiFreeBudgetSnapshot } from "../brain/gemini-free-tier-guard.js";
 
 async function assertAdmin(app: FastifyInstance, userId: string): Promise<void> {
   const rows = await app.db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
@@ -22,6 +24,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
     await assertAdmin(app, request.auth!.sub);
     const readiness = await getReadiness(app);
+    const geminiFree = await getGeminiFreeBudgetSnapshot(app);
     const taskStatusRows = await app.db
       .select({
         status: tasks.status,
@@ -78,6 +81,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         lastChatLatencyMs: readiness.agent.lastChatLatencyMs,
         lastStreamingFirstDeltaMs: readiness.agent.lastStreamingFirstDeltaMs,
         recentTimeoutCount: readiness.agent.recentBrainTimeoutCount,
+        geminiFree,
       },
       brain: {
         neuralReady: readiness.agent.neuralReady,
@@ -103,6 +107,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         correctionDatasetId: readiness.brainControl.correctionDatasetId,
         activeMobileDefaultProfile: readiness.brainControl.activeMobileDefaultProfile,
         latestLatencyWarning: readiness.brainControl.latestLatencyWarning,
+        semanticCompute: getSemanticComputeMetrics(),
       },
       recentSafeEventCodes: recentErrorRows.map((row) => ({
         code: row.status,

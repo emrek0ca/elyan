@@ -1145,10 +1145,15 @@ export async function decideCommandRoute(
   });
 
   // `desktopDispatch` is the explicit cowork switch from the mobile laptop icon.
+  // A connected remote MCP account request is also explicit user intent: the
+  // backend adds mcp_call_tool only after matching the named connected app.
   // When it is on and a ready desktop exists, the turn is a desktop-runtime
   // chat task. If no desktop is ready, chat must continue on the server brain
   // instead of surfacing a blocking "desktop required" failure.
-  const userWantsDesktop = metadata.desktopDispatch === true;
+  const runtimeMcpRequested = normalizeRuntimeCapabilities(
+    input.requestedCapabilities ?? [],
+  ).includes("mcp.call.tool");
+  const userWantsDesktop = metadata.desktopDispatch === true || runtimeMcpRequested;
 
   if (userWantsDesktop) {
     if (!desktopAllowed) {
@@ -1185,14 +1190,16 @@ export async function decideCommandRoute(
       input.selectedDeviceId,
     );
     if (candidates.selectedDevice && candidates.canUseSelectedDevice) {
-      const dispatchPrivacyClass: CommandPrivacyClass = hasDesktopActionSignal(message)
+      const dispatchPrivacyClass: CommandPrivacyClass = runtimeMcpRequested || hasDesktopActionSignal(message)
         ? "local_private"
         : "public_text";
       const taskRoute = buildTaskRoute({
         target: "desktop_runtime",
         operationalRoute: "desktop_runtime",
         executionPlan: ["desktop_runtime"],
-        reason: "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+        reason: runtimeMcpRequested
+          ? "Kullanıcı bağlı uzak MCP hesabındaki veriyi açıkça istedi."
+          : "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
         needsDesktop: true,
         needsPrivateDesktopData: dispatchPrivacyClass === "local_private",
         needsUserApproval: false,
@@ -1206,7 +1213,9 @@ export async function decideCommandRoute(
         capabilities: input.requestedCapabilities ?? [],
         privacyClass: dispatchPrivacyClass,
         requiresApproval: false,
-        reason: "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+        reason: runtimeMcpRequested
+          ? "Kullanıcı bağlı uzak MCP hesabındaki veriyi açıkça istedi."
+          : "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
         userFacingMessage: "Bu görev masaüstünde çalışacak.",
         primaryIntent: classification.primaryIntent,
         confidence: classification.confidence,
@@ -1219,6 +1228,33 @@ export async function decideCommandRoute(
     // Toggle ON but no ready desktop: do not block chat. The server brain keeps
     // answering, while metadata tells the clients why desktop execution did not
     // attach for this turn.
+    if (runtimeMcpRequested) {
+      return buildDecision({
+        route: "pairing_required",
+        taskRoute: buildTaskRoute({
+          target: "desktop_runtime",
+          operationalRoute: "desktop_runtime",
+          executionPlan: ["desktop_runtime"],
+          reason: "Bağlı uzak MCP uygulaması masaüstü runtime üzerinden çalışır; hazır masaüstü bulunamadı.",
+          needsDesktop: true,
+          needsPrivateDesktopData: true,
+          needsUserApproval: false,
+          requiredCapabilities: input.requestedCapabilities ?? [],
+        }),
+        mode: "executable_task",
+        capabilities: input.requestedCapabilities ?? [],
+        privacyClass: "local_private",
+        requiresApproval: false,
+        reason: "Bağlı uzak MCP uygulaması için hazır masaüstü runtime bulunamadı.",
+        userFacingMessage: resolveDesktopUnavailableMessage(candidates),
+        primaryIntent: classification.primaryIntent,
+        confidence: classification.confidence,
+        requiresLocalRuntime: true,
+        message,
+        failClosedReason: "remote_mcp_runtime_unavailable",
+      });
+    }
+
     return buildDecision({
       route: "server_brain",
       taskRoute: buildTaskRoute({

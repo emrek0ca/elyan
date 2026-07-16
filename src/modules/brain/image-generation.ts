@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { ArtifactInput } from "../../contracts/domain.js";
 import { tryAcquireLoadSheddingPermit } from "../../lib/reliability/load-shedding.js";
@@ -20,12 +18,19 @@ import {
   type HostedImageProviderConfig,
 } from "./media/hosted-image-adapter.js";
 
+export type HostedImageSource = {
+  base64Data: string;
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+};
+
 type HostedImageArtifactInput = {
   prompt: string;
-  responseText: string;
+  /** Legacy caller compatibility only; never forwarded to Gemini. */
+  responseText?: string;
   metadata?: Record<string, unknown>;
   userId?: string;
   taskId?: string;
+  sourceImages?: HostedImageSource[];
 };
 
 // ── Çoklu-kullanıcı dayanıklılık ayarları ─────────────────────────────────
@@ -34,13 +39,13 @@ type HostedImageArtifactInput = {
 // depleted) her isteğin timeout slotunu boşa harcamasını ve aynı istemin
 // tekrar tekrar dış sağlayıcıya gitmesini engelleyen katman.
 const IMAGE_GLOBAL_MAX_CONCURRENT = 6;
-const IMAGE_GLOBAL_PERMIT_TTL_MS = 90_000;
+const IMAGE_GLOBAL_PERMIT_TTL_MS = 180_000;
 const IMAGE_GLOBAL_PERMIT_RETRIES = 3;
 const IMAGE_GLOBAL_PERMIT_RETRY_DELAY_MS = 350;
 // Kullanıcı başına aynı anda en fazla bu kadar üretim; aşınca metin cevabı
 // yine döner ama görsel bu turda üretilmez (adil sıralama).
 const IMAGE_MAX_INFLIGHT_PER_USER = 2;
-const IMAGE_PER_USER_TTL_MS = 90_000;
+const IMAGE_PER_USER_TTL_MS = 180_000;
 // Sağlayıcı+model bazında devre kesici.
 const IMAGE_CIRCUIT_FAILURE_THRESHOLD = 2;
 const IMAGE_CIRCUIT_OPEN_MS = 60_000;
@@ -149,52 +154,25 @@ const DATA_VISUALIZATION_REQUEST_PATTERNS = [
   /\bf\s*\(\s*x\s*\)/i, // f(x) = ... ifadesinin grafiği
 ];
 
-// Pro model SADECE açık, pahalıyı hak eden taleplerde denenir. Eski liste
-// ("detaylı", "gerçekçi", "afiş", "kapak"...) neredeyse her yaratıcı istemi
-// premium'a yükseltiyordu — tek görsel ~10 TL'ye çıkıyordu. Genel kelimeler
-// bilinçli olarak çıkarıldı; ayrıca GEMINI_IMAGE_PRO_ENABLED flag'i kapalıyken
-// (default) Pro hiç kullanılmaz.
+// Pro model yalnız açık kalite, kimlik/ürün sadakati veya karmaşık kompozisyon
+// sinyallerinde seçilir. Basit düzenlemeler Flash ile kalır.
 const PREMIUM_IMAGE_REQUEST_PATTERNS = [
   /\b(en kaliteli|yüksek kalite|yuksek kalite|profesyonel|premium|ultra kalite|photorealistic|stüdyo çekimi|studyo cekimi|product shot)\b/i,
-  /\b(2k|4k|high resolution|hi-res|yüksek çözünürlük|yuksek cozunurluk)\b/i,
 ];
 
-const HIGH_RESOLUTION_REQUEST_PATTERN =
-  /\b(2k|4k|high resolution|hi-res|yüksek çözünürlük|yuksek cozunurluk)\b/i;
-
-/** Gemini çıktı boyutu: config değeri tavan davranır. Default tavan "1K" —
- * 2K/4K yalnızca operatör GEMINI_IMAGE_SIZE'ı yükselttiyse VE kullanıcı
- * açıkça yüksek çözünürlük istediyse kullanılır. Maliyetin ana kolu bu. */
+/** Varsayılan 2K'dır; 4K yalnız kullanıcı açıkça isterse seçilir. */
 function resolveGeminiImageSize(
   prompt: string,
   configuredMax: "1K" | "2K" | "4K",
 ): "1K" | "2K" | "4K" {
-  if (configuredMax === "1K") {
-    return "1K";
-  }
-  return HIGH_RESOLUTION_REQUEST_PATTERN.test(compactText(prompt).toLowerCase())
-    ? configuredMax
-    : "1K";
+  const normalized = compactText(prompt).toLowerCase();
+  if (/\b4k\b/i.test(normalized)) return "4K";
+  if (configuredMax === "1K") return "1K";
+  return "2K";
 }
 
 function compactText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readArray(record: Record<string, unknown> | null, key: string): unknown[] {
-  const value = record?.[key];
-  return Array.isArray(value) ? value : [];
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function shouldGenerateHostedImage(prompt: string): boolean {
@@ -217,6 +195,28 @@ export function isHostedImageGenerationRequest(prompt: string): boolean {
   return shouldGenerateHostedImage(prompt);
 }
 
+const IMAGE_EDIT_REQUEST_PATTERNS = [
+  /\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|netleştir|netlestir|bulanıklaştır|bulaniklastir|kırp|kirp|büyüt|buyut|küçült|kucult|retouch|edit|remove|replace|erase|add|enhance|upscale|crop|blur)\b/i,
+  /\b(arka plan|rengini|stilini|ışığı|isigi|kontrastı|kontrasti)\b/i,
+  /\b(bunu|görseli|gorseli|resmi|fotoğrafı|fotografi)\b.{0,60}\b(yap|çevir|cevir)\b/i,
+  /\b(beni|bizi|onu|şunu|sunu|bunu|saçımı|sacimi|kıyafetimi|kiyafetimi)\b.{0,80}\b(yap|göster|goster|çevir|cevir)\b/i,
+  /\b(anime|çizgi film|cizgi film|sinematik|cinematic|vintage|retro|noir|fotogerçekçi|fotogercekci|photorealistic|3d|sulu boya|watercolor|yağlı boya|yagli boya)\b.{0,50}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/i,
+  /\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b.{0,50}\b(anime|çizgi film|cizgi film|sinematik|cinematic|vintage|retro|noir|fotogerçekçi|fotogercekci|photorealistic|3d|sulu boya|watercolor|yağlı boya|yagli boya)\b/i,
+  /\b(tarzında|tarzinda|stilinde|style(?:\s+of)?|look like)\b.{0,60}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/i,
+  /\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b.{0,60}\b(tarzında|tarzinda|stilinde|style(?:\s+of)?|look like)\b/i,
+  /\b(make|turn|transform)\s+(this|it|the image|the photo)\b/i,
+];
+
+export function isHostedImageEditRequest(prompt: string, sourceImageCount: number): boolean {
+  if (sourceImageCount <= 0) return false;
+  return isHostedImageEditIntent(prompt);
+}
+
+export function isHostedImageEditIntent(prompt: string): boolean {
+  const normalized = compactText(prompt);
+  return IMAGE_EDIT_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 function joinUrl(baseUrl: string, path: string): string {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -234,19 +234,44 @@ function inferImageSize(prompt: string): "1024x1024" | "1024x1536" | "1536x1024"
   return "1024x1024";
 }
 
-function inferGeminiAspectRatio(prompt: string): "1:1" | "2:3" | "3:2" | "9:16" | "16:9" {
+function inferGeminiAspectRatio(prompt: string):
+  | "1:1"
+  | "2:3"
+  | "3:2"
+  | "3:4"
+  | "4:3"
+  | "4:5"
+  | "5:4"
+  | "9:16"
+  | "16:9"
+  | "21:9" {
   const normalized = compactText(prompt).toLowerCase();
-  if (/\b(afiş|afis|poster|flyer|dikey|vertical|story|reels|tiktok)\b/i.test(normalized)) {
-    return "2:3";
-  }
   if (/\b(telefon duvar kağıdı|telefon duvar kagidi|lock screen|story|reels|tiktok|9:16)\b/i.test(normalized)) {
     return "9:16";
+  }
+  if (/\b(21:9|ultrawide|ultra wide|sinemaskop|cinemascope)\b/i.test(normalized)) {
+    return "21:9";
+  }
+  if (/\b(4:5|instagram portrait|instagram dikey)\b/i.test(normalized)) {
+    return "4:5";
+  }
+  if (/\b(5:4)\b/i.test(normalized)) {
+    return "5:4";
+  }
+  if (/\b(3:4)\b/i.test(normalized)) {
+    return "3:4";
+  }
+  if (/\b(4:3)\b/i.test(normalized)) {
+    return "4:3";
   }
   if (/\b(banner|kapak|cover|thumbnail|hero|wide|yatay|landscape|16:9)\b/i.test(normalized)) {
     return "16:9";
   }
   if (/\b(3:2)\b/i.test(normalized)) {
     return "3:2";
+  }
+  if (/\b(afiş|afis|poster|flyer|dikey|vertical|2:3)\b/i.test(normalized)) {
+    return "2:3";
   }
   return "1:1";
 }
@@ -255,58 +280,137 @@ function shouldPreferPremiumImageModel(
   prompt: string,
   proEnabled: boolean,
 ): boolean {
-  if (!proEnabled) {
-    return false;
-  }
+  if (!proEnabled) return false;
   const normalized = compactText(prompt).toLowerCase();
   return PREMIUM_IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-function inferAttachmentSummary(metadata: Record<string, unknown> | undefined): string | null {
-  const record = readRecord(metadata);
-  if (!record) {
-    return null;
-  }
-
-  const attachments = readArray(record, "attachments")
-    .map((item) => readRecord(item))
-    .filter((item): item is Record<string, unknown> => item != null);
-
-  for (const attachment of attachments) {
-    const deepContext = readRecord(attachment.deepContext);
-    const fastPreview = readRecord(attachment.fastPreview);
-    const deepAnalysis = readRecord(deepContext?.document_analysis);
-    const summary =
-      readString(fastPreview, "summary") ??
-      readString(deepAnalysis, "summary") ??
-      readString(attachment, "summary") ??
-      readString(readRecord(attachment.document_analysis), "summary");
-    if (summary) {
-      return summary;
-    }
-  }
-
-  return (
-    readString(readRecord(record.document_analysis), "summary") ??
-    readString(readRecord(record.documentAnalysis), "summary")
+function isSharedImageCacheEligible(prompt: string): boolean {
+  const normalized = compactText(prompt);
+  if (!normalized || normalized.length > 600) return false;
+  return !/\b(benim|beni|bizim|bizi|ailem|çocuğum|cocugum|yüzüm|yuzum|adım|adim|adres|telefon|e-?posta|şirketim|sirketim|müşterim|musterim|özel|ozel|private|personal|my face|my family|my child|my company|my customer)\b/iu.test(
+    normalized,
   );
 }
 
+function requestsPremiumImageWork(input: HostedImageArtifactInput): boolean {
+  const normalized = compactText(input.prompt).toLowerCase();
+  const sourceCount = input.sourceImages?.length ?? 0;
+  const fidelityCritical = /\b(yüz|yuzu|yüzü|kişi|kisi|ürün|urun|marka|logo|karakter|face|person|product|brand|character)\b/iu.test(normalized)
+    && /\b(aynı|ayni|koru|değiştirme|degistirme|sadık|sadik|preserve|identical|consistent|do not change)\b/iu.test(normalized);
+  const personalIdentityEdit = sourceCount > 0
+    && /\b(beni|bizi|yüzüm|yuzum|suratım|suratim|saçım|sacim|kıyafetim|kiyafetim|my face|my hair|my clothes)\b/iu.test(normalized)
+    && IMAGE_EDIT_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
+  const complexComposition = /\b(karmaşık kompozisyon|karmasik kompozisyon|çoklu sahne|coklu sahne|complex composition|multi-scene)\b/iu.test(normalized);
+  return fidelityCritical || personalIdentityEdit || complexComposition
+    || PREMIUM_IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+async function consumePremiumImageBudget(
+  app: FastifyInstance,
+  input: HostedImageArtifactInput,
+  allowance: ImageGenerationUsageAllowance | null,
+): Promise<boolean> {
+  if (app.config.GEMINI_IMAGE_PRO_ENABLED !== true || !requestsPremiumImageWork(input)) return false;
+  if (!input.userId) return false;
+  const store = resolveReliabilityStore(app);
+  if (!store) return false;
+  const dailyLimit = allowance?.planCode === "pro" ? 3 : allowance?.planCode === "solo" ? 1 : 0;
+  if (dailyLimit <= 0) return false;
+  const now = new Date();
+  const nextUtcDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  const ttlMs = Math.max(60_000, nextUtcDay - now.getTime());
+  const day = now.toISOString().slice(0, 10);
+  const [globalCount, count] = await Promise.all([
+    store.increment(`image:pro:daily:${day}:global`, ttlMs),
+    store.increment(`image:pro:daily:${day}:${input.userId}`, ttlMs),
+  ]).catch(() => [app.config.GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT + 1, dailyLimit + 1]);
+  if (
+    globalCount > app.config.GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT ||
+    count > dailyLimit
+  ) {
+    app.log.warn({ userId: input.userId, dailyLimit }, "Gemini Pro image budget exhausted; using Flash");
+    return false;
+  }
+  return true;
+}
+
+async function consumeGlobalImageDailyBudget(
+  app: FastifyInstance,
+  input: HostedImageArtifactInput,
+): Promise<boolean> {
+  const store = resolveReliabilityStore(app);
+  if (!store) {
+    setImageGenerationBlockReason(input.metadata, "image_generation_budget_store_unavailable");
+    return false;
+  }
+  const now = new Date();
+  const nextUtcDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  const ttlMs = Math.max(60_000, nextUtcDay - now.getTime());
+  const day = now.toISOString().slice(0, 10);
+  const fourKRequested =
+    resolveGeminiImageSize(
+      input.prompt,
+      app.config.GEMINI_IMAGE_SIZE ?? "2K",
+    ) === "4K";
+  const [count, fourKCount] = await Promise.all([
+    store.increment(`image:daily:${day}:global`, ttlMs),
+    fourKRequested
+      ? store.increment(`image:4k:daily:${day}:global`, ttlMs)
+      : Promise.resolve(0),
+  ]).catch(() => [
+    app.config.GEMINI_IMAGE_DAILY_GLOBAL_LIMIT + 1,
+    app.config.GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT + 1,
+  ]);
+  if (count > app.config.GEMINI_IMAGE_DAILY_GLOBAL_LIMIT) {
+    setImageGenerationBlockReason(input.metadata, "image_generation_daily_budget_exhausted", {
+      limit: app.config.GEMINI_IMAGE_DAILY_GLOBAL_LIMIT,
+    });
+    return false;
+  }
+  if (
+    fourKRequested &&
+    fourKCount > app.config.GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT
+  ) {
+    setImageGenerationBlockReason(input.metadata, "image_generation_4k_budget_exhausted", {
+      limit: app.config.GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT,
+    });
+    return false;
+  }
+  return true;
+}
+
 function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
-  const attachmentSummary = inferAttachmentSummary(input.metadata);
-  const sections = [
-    "Create one polished production-ready image for a mobile user.",
-    // "User request:" etiketiyle verilen istem, modelin istem METNİNİ görselin
-    // üstüne yazmasına yol açıyordu ("kedi resmi çiz" yazılı kedi görseli).
-    // İstem "çizilecek konu" olarak veriliyor ve metin çizimi açıkça yasaklanıyor.
-    `Depict the following subject (this is a description of WHAT to draw, never text to render): ${compactText(input.prompt)}`,
-    attachmentSummary ? `Attachment summary: ${attachmentSummary}` : null,
-    compactText(input.responseText)
-      ? `Approved content brief: ${compactText(input.responseText)}`
-      : null,
-    "CRITICAL: Do not render ANY text, words, letters, captions, labels, instructions, watermarks, signatures, or logos inside the image. The image must be completely text-free — the ONLY exception is when the user explicitly asked for specific wording (e.g. a poster title or a sign); in that case render exactly that requested text and nothing else. Never write the request itself onto the image. No UI chrome.",
-  ];
-  return sections.filter((value): value is string => Boolean(value)).join("\n\n");
+  return String(input.prompt ?? "").trim();
+}
+
+async function validateHostedImageOutput(base64: string): Promise<{
+  base64: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+}> {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(base64) || base64.length % 4 !== 0) {
+    throw new Error("invalid Gemini image encoding");
+  }
+  const body = Buffer.from(base64, "base64");
+  if (!body.byteLength || body.byteLength > 25 * 1024 * 1024) {
+    throw new Error("invalid Gemini image size");
+  }
+  const { default: sharp } = await import("sharp");
+  const metadata = await sharp(body, {
+    failOn: "warning",
+    limitInputPixels: 150_000_000,
+  }).metadata();
+  const mimeType = metadata.format === "png"
+    ? "image/png"
+    : metadata.format === "webp"
+      ? "image/webp"
+      : metadata.format === "jpeg"
+        ? "image/jpeg"
+        : null;
+  if (!mimeType || !metadata.width || !metadata.height) {
+    throw new Error("invalid Gemini image output");
+  }
+  return { base64: body.toString("base64"), mimeType };
 }
 
 function buildArtifactName(prompt: string, mimeType: string): string {
@@ -321,9 +425,8 @@ function buildArtifactName(prompt: string, mimeType: string): string {
   return `elyan-image.${extension}`;
 }
 
-/** Aynı çıktıyı belirleyen sinyallerden önbellek anahtarı üretir. Farklı
- * kullanıcıların aynı istemi (aynı oran/boyut/kalite) tek çağrıda paylaşması
- * için istem metni + oran + boyut + kalite katmanı üzerinden hash'lenir. */
+/** Yalnız ortak cache'e uygun, kaynak görselsiz istemlerde kullanılan anahtar.
+ * Kişisel sinyalli veya herhangi bir kaynak byte'ı içeren çağrı bu yola girmez. */
 function imageCacheKey(prompt: string, proEnabled: boolean, geminiSize: string): string {
   const seed = [
     compactText(prompt).toLowerCase(),
@@ -526,12 +629,10 @@ export async function maybeGenerateHostedImageArtifact(
   app: FastifyInstance,
   input: HostedImageArtifactInput,
 ): Promise<HostedImageArtifactResult | null> {
-  if (!shouldGenerateHostedImage(input.prompt)) {
-    return null;
-  }
-
-  const providers = buildHostedImageProviderConfigs(app, input.prompt);
-  if (!providers.length) {
+  const sourceImageCount = input.sourceImages?.length ?? 0;
+  const hasSourceImages = sourceImageCount > 0;
+  const editing = isHostedImageEditRequest(input.prompt, sourceImageCount);
+  if (!shouldGenerateHostedImage(input.prompt) && !editing) {
     return null;
   }
 
@@ -541,17 +642,25 @@ export async function maybeGenerateHostedImageArtifact(
   }
 
   const store = resolveReliabilityStore(app);
+  const sharedCacheAllowed =
+    !hasSourceImages && isSharedImageCacheEligible(input.prompt);
+  const premiumRequested = app.config.GEMINI_IMAGE_PRO_ENABLED === true && requestsPremiumImageWork(input);
   const cacheKey = imageCacheKey(
     input.prompt,
-    app.config.GEMINI_IMAGE_PRO_ENABLED === true,
-    resolveGeminiImageSize(input.prompt, app.config.GEMINI_IMAGE_SIZE ?? "1K"),
+    premiumRequested,
+    resolveGeminiImageSize(input.prompt, app.config.GEMINI_IMAGE_SIZE ?? "2K"),
   );
 
   // 1) Önbellek: aynı istem yakın zamanda üretildiyse dış çağrı yok.
-  const cached = await readCachedImage(store, cacheKey, input.prompt);
+  const cached = sharedCacheAllowed
+    ? await readCachedImage(store, cacheKey, input.prompt)
+    : null;
   if (cached) {
     await recordSuccessfulImageGenerationUsage(app, input, allowance);
     return cached;
+  }
+  if (!buildHostedImageProviderConfigs(app, input.prompt, false).length) {
+    return null;
   }
 
   // 2) Single-flight: aynı istemi eşzamanlı üreten diğer istekler kilidi
@@ -559,7 +668,7 @@ export async function maybeGenerateHostedImageArtifact(
   const lockKey = `lock:image:gen:${cacheKey}`;
   const lockOwner = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
   let holdsLock = true;
-  if (store) {
+  if (store && sharedCacheAllowed) {
     holdsLock = await store
       .acquireLock(lockKey, lockOwner, IMAGE_SINGLEFLIGHT_LOCK_TTL_MS)
       .catch(() => true);
@@ -575,12 +684,11 @@ export async function maybeGenerateHostedImageArtifact(
 
   const rateLimitAllowed = await consumeImageGenerationRateLimit(app, input, allowance);
   if (!rateLimitAllowed) {
-    if (store && holdsLock) {
+    if (store && holdsLock && sharedCacheAllowed) {
       await store.releaseLock(lockKey, lockOwner).catch(() => undefined);
     }
     return null;
   }
-
   // 3) Kullanıcı başına adil eşzamanlılık: bir kullanıcı tüm slotları yiyemez.
   const perUserPermit = input.userId
     ? await tryAcquireLoadSheddingPermit(app, {
@@ -596,7 +704,7 @@ export async function maybeGenerateHostedImageArtifact(
       }).catch(() => null);
   if (input.userId && !perUserPermit) {
     app.log.warn({ userId: input.userId }, "hosted image generation deferred: per-user cap reached");
-    if (store && holdsLock) {
+    if (store && holdsLock && sharedCacheAllowed) {
       await store.releaseLock(lockKey, lockOwner).catch(() => undefined);
     }
     return null;
@@ -619,23 +727,43 @@ export async function maybeGenerateHostedImageArtifact(
   if (!globalPermit) {
     app.log.warn("hosted image generation shed due to load");
     await perUserPermit?.release().catch(() => undefined);
-    if (store && holdsLock) {
+    if (store && holdsLock && sharedCacheAllowed) {
       await store.releaseLock(lockKey, lockOwner).catch(() => undefined);
     }
     return null;
   }
 
   try {
+    const dailyBudgetAllowed = await consumeGlobalImageDailyBudget(app, input);
+    if (!dailyBudgetAllowed) return null;
+
+    // Pro kotasını yalnız istek bütün rate, günlük bütçe ve eşzamanlılık
+    // kapılarından geçtikten sonra tüket.
+    const usePremium = await consumePremiumImageBudget(
+      app,
+      input,
+      allowance,
+    );
+    const providers = buildHostedImageProviderConfigs(app, input.prompt, usePremium);
+    if (!providers.length) return null;
     const result = await generateHostedImageArtifactWithPermit(app, input, providers);
     if (result) {
-      await writeCachedImage(store, cacheKey, result);
+      const premiumModel = String(
+        app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
+      ).trim();
+      const cacheMatchesRequestedTier =
+        !premiumRequested ||
+        (usePremium && result.model === premiumModel);
+      if (sharedCacheAllowed && cacheMatchesRequestedTier) {
+        await writeCachedImage(store, cacheKey, result);
+      }
       await recordSuccessfulImageGenerationUsage(app, input, allowance);
     }
     return result;
   } finally {
     await globalPermit.release().catch(() => undefined);
     await perUserPermit?.release().catch(() => undefined);
-    if (store && holdsLock) {
+    if (store && holdsLock && sharedCacheAllowed) {
       await store.releaseLock(lockKey, lockOwner).catch(() => undefined);
     }
   }
@@ -662,59 +790,6 @@ async function waitForSharedImage(
 /** Üretilen görselden mobil-uyumlu artifact sonucu kurar. Sağlayıcı/model adı
  * BİLİNÇLİ olarak artifact metadata/payload'ına YAZILMAZ — kullanıcı yüzeyinden
  * hangi dış sağlayıcının kullanıldığı asla anlaşılmamalı. */
-// ── Elyan filigranı (dosyaya gömülü) ─────────────────────────────────────
-// Üretilen her görselin sağ üst köşesine arkaplansız Elyan logosu bir kez,
-// üretim anında bake edilir (SynthID tarzı görünür işaret). Kaydet/paylaş
-// dahil her kopyada kalır; render katmanında ekstra maliyet sıfır. sharp
-// dinamik yüklenir ve asset/işlem hatasında orijinal görsel değişmeden döner
-// (filigran asla üretimi düşürmez).
-let watermarkAssetPromise: Promise<Buffer | null> | null = null;
-
-function loadWatermarkAsset(): Promise<Buffer | null> {
-  watermarkAssetPromise ??= readFile(
-    path.resolve(process.cwd(), "assets/elyan-watermark.png"),
-  ).catch(() => null);
-  return watermarkAssetPromise;
-}
-
-async function applyElyanWatermark(
-  app: FastifyInstance,
-  base64: string,
-  mimeType: string,
-): Promise<string> {
-  try {
-    const [sharpModule, watermark] = await Promise.all([
-      import("sharp"),
-      loadWatermarkAsset(),
-    ]);
-    if (!watermark) {
-      return base64;
-    }
-    const sharp = sharpModule.default;
-    const source = Buffer.from(base64, "base64");
-    const metadata = await sharp(source).metadata();
-    const width = metadata.width ?? 0;
-    const height = metadata.height ?? 0;
-    if (width < 128 || height < 128) {
-      return base64;
-    }
-    const markWidth = Math.max(48, Math.round(width * 0.075));
-    const margin = Math.max(14, Math.round(width * 0.03));
-    const mark = await sharp(watermark).resize(markWidth).png().toBuffer();
-    const composited = sharp(source).composite([
-      { input: mark, top: margin, left: width - markWidth - margin },
-    ]);
-    const output =
-      mimeType === "image/png"
-        ? await composited.png().toBuffer()
-        : await composited.jpeg({ quality: 90 }).toBuffer();
-    return output.toString("base64");
-  } catch (error) {
-    app.log.warn({ err: error }, "elyan watermark embed failed; using original image");
-    return base64;
-  }
-}
-
 function buildImageArtifactResult(params: {
   prompt: string;
   base64: string;
@@ -754,9 +829,9 @@ function buildImageArtifactResult(params: {
 function buildHostedImageProviderConfigs(
   app: FastifyInstance,
   prompt: string,
+  usePremium: boolean,
 ): HostedImageProviderConfig[] {
   const geminiApiKey = String(app.config.GEMINI_API_KEY ?? "").trim();
-  const openAiApiKey = String(app.config.OPENAI_API_KEY ?? "").trim();
   const providers: HostedImageProviderConfig[] = [];
 
   if (geminiApiKey) {
@@ -772,7 +847,7 @@ function buildHostedImageProviderConfigs(
     ).trim();
     const imageSize = resolveGeminiImageSize(
       prompt,
-      app.config.GEMINI_IMAGE_SIZE ?? "1K",
+      app.config.GEMINI_IMAGE_SIZE ?? "2K",
     );
     const addGeminiProvider = (model: string) => {
       if (
@@ -791,27 +866,12 @@ function buildHostedImageProviderConfigs(
       });
     };
 
-    if (
-      shouldPreferPremiumImageModel(
-        prompt,
-        app.config.GEMINI_IMAGE_PRO_ENABLED === true,
-      )
-    ) {
+    if (usePremium) {
       addGeminiProvider(premiumImageModel);
       addGeminiProvider(fastImageModel);
     } else {
       addGeminiProvider(fastImageModel);
     }
-  }
-
-  if (openAiApiKey) {
-    providers.push({
-      provider: "openai",
-      apiKey: openAiApiKey,
-      baseUrl: String(app.config.OPENAI_BASE_URL ?? "https://api.openai.com/v1").trim(),
-      model: "gpt-image-1",
-      source: "elyan_image_generation",
-    });
   }
 
   return providers.filter((provider) => provider.apiKey && provider.baseUrl && provider.model);
@@ -822,8 +882,8 @@ async function generateHostedImageArtifactWithPermit(
   input: HostedImageArtifactInput,
   providers: HostedImageProviderConfig[],
 ): Promise<HostedImageArtifactResult | null> {
-  const size = inferImageSize(input.prompt);
   const store = resolveReliabilityStore(app);
+  const editing = (input.sourceImages?.length ?? 0) > 0;
 
   for (const providerConfig of providers) {
     const circuitKey = imageCircuitKey(providerConfig.provider, providerConfig.model);
@@ -842,8 +902,8 @@ async function generateHostedImageArtifactWithPermit(
       const request = buildHostedImageProviderRequest({
         config: providerConfig,
         prompt: buildHostedImagePrompt(input),
-        aspectRatio: inferGeminiAspectRatio(input.prompt),
-        openAiSize: size,
+        aspectRatio: editing ? undefined : inferGeminiAspectRatio(input.prompt),
+        sourceImages: input.sourceImages,
       });
       const response = await fetch(joinUrl(providerConfig.baseUrl, request.path), {
         method: "POST",
@@ -873,17 +933,15 @@ async function generateHostedImageArtifactWithPermit(
         continue;
       }
 
-      const mimeType = extractedImage.mimeType ?? request.defaultMimeType;
+      const validatedImage = await validateHostedImageOutput(base64);
+      const mimeType = validatedImage.mimeType;
       const revisedPrompt = compactText(extractedImage.revisedPrompt) || null;
       if (store) {
         await recordCircuitSuccess(store, circuitKey, IMAGE_CIRCUIT_OPEN_MS).catch(() => undefined);
       }
-      // Filigran üretim anında gömülür — önbellek ve kalıcı artifact de
-      // işaretli kopyayı taşır.
-      const watermarkedBase64 = await applyElyanWatermark(app, base64, mimeType);
       return buildImageArtifactResult({
         prompt: input.prompt,
-        base64: watermarkedBase64,
+        base64: validatedImage.base64,
         mimeType,
         revisedPrompt,
         model: providerConfig.model,

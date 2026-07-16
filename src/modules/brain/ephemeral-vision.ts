@@ -32,14 +32,16 @@ const ephemeralVisionImageSchema = z.object({
   }
 });
 
-export const ephemeralVisionCarrierSchema = z.object({
+const ephemeralVisionPrivacySchema = z.object({
+  metadataStripped: z.literal(true),
+  userAuthorizedCloud: z.literal(true),
+  localSensitivity: z.enum(["none", "personal", "sensitive", "restricted"]),
+});
+
+const ephemeralVisionV1CarrierSchema = z.object({
   version: z.literal(1),
   retention: z.literal("request_ephemeral"),
-  privacy: z.object({
-    metadataStripped: z.literal(true),
-    userAuthorizedCloud: z.literal(true),
-    localSensitivity: z.enum(["none", "personal", "sensitive", "restricted"]),
-  }),
+  privacy: ephemeralVisionPrivacySchema,
   images: z.array(ephemeralVisionImageSchema).min(1).max(4),
 }).superRefine((carrier, ctx) => {
   const total = carrier.images.reduce((sum, image) => sum + image.base64Data.length, 0);
@@ -56,9 +58,30 @@ export const ephemeralVisionCarrierSchema = z.object({
   }
 });
 
+const ephemeralVisionInputRefSchema = z.object({
+  inputRef: z.string().trim().min(32).max(4096),
+  name: z.string().trim().min(1).max(255),
+  contentType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+  byteLength: z.number().int().positive().max(12 * 1024 * 1024),
+  expiresAt: z.string().datetime(),
+});
+
+const ephemeralVisionV2CarrierSchema = z.object({
+  version: z.literal(2),
+  retention: z.literal("request_ephemeral"),
+  privacy: ephemeralVisionPrivacySchema,
+  inputRefs: z.array(ephemeralVisionInputRefSchema).min(1).max(4),
+}).transform((carrier) => ({ ...carrier, images: [] as never[] }));
+
+export const ephemeralVisionCarrierSchema = z.union([
+  ephemeralVisionV1CarrierSchema,
+  ephemeralVisionV2CarrierSchema,
+]);
+
 export type EphemeralVisionCarrier = z.infer<typeof ephemeralVisionCarrierSchema>;
 
 export function countDistinctEphemeralImages(carrier: EphemeralVisionCarrier | undefined): number {
+  if (carrier?.version === 2) return carrier.inputRefs.length;
   return new Set((carrier?.images ?? []).map((image) => image.imageId)).size;
 }
 
@@ -122,4 +145,5 @@ export function clearEphemeralVisionCarrier(carrier: EphemeralVisionCarrier | un
   if (!carrier) return;
   for (const image of carrier.images) image.base64Data = "";
   carrier.images.length = 0;
+  if (carrier.version === 2) carrier.inputRefs.length = 0;
 }

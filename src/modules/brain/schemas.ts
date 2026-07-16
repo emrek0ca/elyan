@@ -12,7 +12,13 @@ import { hasRawBinaryUploadHint } from "../../lib/derived-data.js";
 import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
 const jsonRecordSchema = boundedJsonRecordSchema;
-const memoryLifecycleStatusSchema = z.enum(["active", "contested", "superseded", "soft_deleted", "stale"]);
+const memoryLifecycleStatusSchema = z.enum([
+  "active",
+  "contested",
+  "superseded",
+  "soft_deleted",
+  "stale",
+]);
 const memorySurfaceSchema = z.enum(["all", "facts", "episodes"]);
 const brainChatConversationItemSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
@@ -20,7 +26,10 @@ const brainChatConversationItemSchema = z.object({
 });
 
 function looksLikeDataUri(value: unknown): boolean {
-  return typeof value === "string" && /^data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i.test(value.trim());
+  return (
+    typeof value === "string" &&
+    /^data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i.test(value.trim())
+  );
 }
 
 const knowledgeDocumentChunkObjectSchema = z
@@ -46,7 +55,8 @@ const knowledgeDocumentChunkObjectSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["text"],
-        message: "raw binary upload payload is not accepted; send text/chunks only",
+        message:
+          "raw binary upload payload is not accepted; send text/chunks only",
       });
     }
 
@@ -54,12 +64,16 @@ const knowledgeDocumentChunkObjectSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["metadata"],
-        message: "raw binary upload payload is not accepted; send text/chunks only",
+        message:
+          "raw binary upload payload is not accepted; send text/chunks only",
       });
     }
   });
 
-const knowledgeDocumentChunkSchema = z.union([z.string().min(1).max(8_000), knowledgeDocumentChunkObjectSchema]);
+const knowledgeDocumentChunkSchema = z.union([
+  z.string().min(1).max(8_000),
+  knowledgeDocumentChunkObjectSchema,
+]);
 
 export const brainProfileQuerySchema = z.object({});
 
@@ -67,6 +81,28 @@ export const brainChatBodySchema = z.object({
   prompt: z.string().trim().min(1).max(20_000),
   title: z.string().trim().min(1).max(200).optional(),
   conversation: z.array(brainChatConversationItemSchema).max(24).default([]),
+});
+
+// Desktop yapılandırılmış planlama isteği (elyan.plan.v2). `prompt` masaüstünün
+// structured_planner.planning_prompt() çıktısıdır; büyük olabilir (araç
+// kataloğu + bağlam + yanıt şeması tek zarf).
+export const desktopPlanBodySchema = z.object({
+  contract: z.literal("elyan.plan.v2"),
+  prompt: z.string().trim().min(1).max(48_000),
+  repair: z.boolean().default(false),
+  taskId: z.string().trim().max(120).optional(),
+});
+
+export const connectorWriteApprovalParamsSchema = z.object({
+  token: z
+    .string()
+    .regex(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    ),
+});
+
+export const connectorWriteApprovalBodySchema = z.object({
+  approved: z.boolean(),
 });
 
 export const datasetParamsSchema = z.object({
@@ -142,7 +178,9 @@ export const createKnowledgeDocumentBodySchema = z
     sourceUri: z.string().max(4_000).optional(),
     text: z.string().max(200_000).optional(),
     chunks: z.array(knowledgeDocumentChunkSchema).max(256).optional(),
-    learningMode: z.enum(["retrieval_only", "shared_corpus_train"]).default("retrieval_only"),
+    learningMode: z
+      .enum(["retrieval_only", "shared_corpus_train"])
+      .default("retrieval_only"),
     languageTags: z.array(z.string().min(2).max(32)).max(16).default([]),
     autoQueueTraining: z.boolean().optional(),
     metadata: jsonRecordSchema.default({}),
@@ -152,7 +190,8 @@ export const createKnowledgeDocumentBodySchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["text"],
-        message: "raw binary upload payload is not accepted; send text/chunks only",
+        message:
+          "raw binary upload payload is not accepted; send text/chunks only",
       });
     }
 
@@ -160,7 +199,8 @@ export const createKnowledgeDocumentBodySchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["chunks"],
-        message: "raw binary upload payload is not accepted; send text/chunks only",
+        message:
+          "raw binary upload payload is not accepted; send text/chunks only",
       });
     }
 
@@ -176,15 +216,20 @@ export const createKnowledgeDocumentBodySchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["metadata"],
-        message: "raw binary upload payload is not accepted; send text/chunks only",
+        message:
+          "raw binary upload payload is not accepted; send text/chunks only",
       });
     }
 
-    if (hasRawBinaryUploadHint(input.text) || hasRawBinaryUploadHint(input.chunks)) {
+    if (
+      hasRawBinaryUploadHint(input.text) ||
+      hasRawBinaryUploadHint(input.chunks)
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["text"],
-        message: "raw binary upload payload is not accepted; send text/chunks only",
+        message:
+          "raw binary upload payload is not accepted; send text/chunks only",
       });
     }
   });

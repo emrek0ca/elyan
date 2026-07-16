@@ -49,9 +49,12 @@ export type SharedBrainConversationMessage = {
   content: string;
 };
 
-export type TaskDeliveryState = "queued" | "dispatched" | "acked" | "recovering";
-export type TaskArtifactViewerHint = "text" | "markdown" | "pdf" | "image" | "document" | "structured" | "file";
-export type TaskArtifactContentFamily = "text" | "image" | "document" | "structured" | "binary";
+export type TaskDeliveryState =
+  "queued" | "dispatched" | "acked" | "recovering";
+export type TaskArtifactViewerHint =
+  "text" | "markdown" | "pdf" | "image" | "document" | "structured" | "file";
+export type TaskArtifactContentFamily =
+  "text" | "image" | "document" | "structured" | "binary";
 export type TaskArtifactRecord = {
   id: string;
   taskId: string;
@@ -102,8 +105,15 @@ function normalizeTaskTitle(raw: unknown): string {
   return `${text.slice(0, TASK_TITLE_MAX_LENGTH - 1).trimEnd()}…`;
 }
 
-export function canonicalTaskTitle(input: { title?: unknown; prompt?: unknown }): string {
-  return normalizeTaskTitle(input.title) || normalizeTaskTitle(input.prompt) || TASK_TITLE_FALLBACK;
+export function canonicalTaskTitle(input: {
+  title?: unknown;
+  prompt?: unknown;
+}): string {
+  return (
+    normalizeTaskTitle(input.title) ||
+    normalizeTaskTitle(input.prompt) ||
+    TASK_TITLE_FALLBACK
+  );
 }
 
 export function shapeTaskFeedItem(
@@ -118,11 +128,15 @@ export function shapeTaskFeedItem(
   const operator = extractTaskOperatorSummary(task.result);
   const brain = extractTaskBrainMetadata(task.result);
   const resultRecord =
-    task.result && typeof task.result === "object" && !Array.isArray(task.result)
+    task.result &&
+    typeof task.result === "object" &&
+    !Array.isArray(task.result)
       ? (task.result as Record<string, unknown>)
       : null;
   const renderRecipe =
-    resultRecord?.renderRecipe && typeof resultRecord.renderRecipe === "object" && !Array.isArray(resultRecord.renderRecipe)
+    resultRecord?.renderRecipe &&
+    typeof resultRecord.renderRecipe === "object" &&
+    !Array.isArray(resultRecord.renderRecipe)
       ? resultRecord.renderRecipe
       : null;
   return {
@@ -133,14 +147,17 @@ export function shapeTaskFeedItem(
     chatSessionId: extractTaskChatSessionId(task.payload),
     presentation,
     queuePosition: task.queuePosition,
-    requestedCapabilities: Array.isArray(task.requestedCapabilities) ? task.requestedCapabilities : [],
+    requestedCapabilities: Array.isArray(task.requestedCapabilities)
+      ? task.requestedCapabilities
+      : [],
     runtimeConnectionId: task.runtimeConnectionId ?? null,
     dispatchLeaseId: task.dispatchLeaseId ?? null,
     dispatchLeaseExpiresAt: task.dispatchLeaseExpiresAt ?? null,
     dispatchAckAt: task.dispatchAckAt ?? null,
     lastAckAt: task.dispatchAckAt ?? null,
     deliveryAttemptCount: task.dispatchAttemptCount ?? 0,
-    lastDispatchAttemptAt: task.dispatchLeaseIssuedAt ?? task.dispatchAckAt ?? null,
+    lastDispatchAttemptAt:
+      task.dispatchLeaseIssuedAt ?? task.dispatchAckAt ?? null,
     deliveryState: deriveTaskDeliveryState(task),
     selectedDesktopOnline: options?.selectedDesktopOnline ?? null,
     routeDecision,
@@ -159,7 +176,9 @@ export function shapeTaskFeedItem(
   };
 }
 
-export function shapeTaskArtifact<T extends TaskArtifactRecord>(artifact: T): T & ShapedTaskArtifact {
+export function shapeTaskArtifact<T extends TaskArtifactRecord>(
+  artifact: T,
+): T & ShapedTaskArtifact {
   const viewerHint =
     typeof artifact.viewerHint === "string" && artifact.viewerHint.trim()
       ? (artifact.viewerHint.trim() as TaskArtifactViewerHint)
@@ -168,12 +187,25 @@ export function shapeTaskArtifact<T extends TaskArtifactRecord>(artifact: T): T 
   return {
     ...artifact,
     downloadName: normalizeArtifactName(artifact.name) || artifact.id,
-    downloadable: Boolean(artifact.downloadable ?? artifact.storageKey ?? artifact.bodyBlobId),
-    downloadUrl: typeof artifact.downloadUrl === "string" && artifact.downloadUrl.trim() ? artifact.downloadUrl : null,
-    contentHash: typeof artifact.contentHash === "string" && artifact.contentHash.trim() ? artifact.contentHash : null,
-    byteLength: typeof artifact.byteLength === "number" && Number.isFinite(artifact.byteLength) ? artifact.byteLength : null,
+    downloadable: Boolean(
+      artifact.downloadable ?? artifact.storageKey ?? artifact.bodyBlobId,
+    ),
+    downloadUrl:
+      typeof artifact.downloadUrl === "string" && artifact.downloadUrl.trim()
+        ? artifact.downloadUrl
+        : null,
+    contentHash:
+      typeof artifact.contentHash === "string" && artifact.contentHash.trim()
+        ? artifact.contentHash
+        : null,
+    byteLength:
+      typeof artifact.byteLength === "number" &&
+      Number.isFinite(artifact.byteLength)
+        ? artifact.byteLength
+        : null,
     contentEncoding:
-      typeof artifact.contentEncoding === "string" && artifact.contentEncoding.trim()
+      typeof artifact.contentEncoding === "string" &&
+      artifact.contentEncoding.trim()
         ? artifact.contentEncoding.trim()
         : null,
     viewerHint,
@@ -182,11 +214,20 @@ export function shapeTaskArtifact<T extends TaskArtifactRecord>(artifact: T): T 
   };
 }
 
-function inferArtifactViewerHint(kind: string, contentType: string): TaskArtifactViewerHint {
-  const normalizedKind = String(kind ?? "").trim().toLowerCase();
+function inferArtifactViewerHint(
+  kind: string,
+  contentType: string,
+): TaskArtifactViewerHint {
+  const normalizedKind = String(kind ?? "")
+    .trim()
+    .toLowerCase();
   const mime = normalizeMimeType(contentType);
 
-  if (normalizedKind === "markdown" || mime === "text/markdown" || mime.endsWith("+markdown")) {
+  if (
+    normalizedKind === "markdown" ||
+    mime === "text/markdown" ||
+    mime.endsWith("+markdown")
+  ) {
     return "markdown";
   }
 
@@ -226,7 +267,9 @@ function inferArtifactViewerHint(kind: string, contentType: string): TaskArtifac
   return "file";
 }
 
-function inferArtifactContentFamily(viewerHint: TaskArtifactViewerHint): TaskArtifactContentFamily {
+function inferArtifactContentFamily(
+  viewerHint: TaskArtifactViewerHint,
+): TaskArtifactContentFamily {
   switch (viewerHint) {
     case "image":
       return "image";
@@ -244,7 +287,9 @@ function inferArtifactContentFamily(viewerHint: TaskArtifactViewerHint): TaskArt
   }
 }
 
-function extractArtifactPreviewText(artifact: TaskArtifactRecord): string | null {
+function extractArtifactPreviewText(
+  artifact: TaskArtifactRecord,
+): string | null {
   const textContent = normalizePreviewSource(artifact.textContent);
   if (textContent) {
     return compactPreviewText(textContent);
@@ -283,11 +328,13 @@ function normalizePreviewSource(value: unknown): string {
 }
 
 function normalizeMimeType(contentType: string): string {
-  return String(contentType ?? "")
-    .trim()
-    .toLowerCase()
-    .split(";")[0]
-    ?.trim() ?? "";
+  return (
+    String(contentType ?? "")
+      .trim()
+      .toLowerCase()
+      .split(";")[0]
+      ?.trim() ?? ""
+  );
 }
 
 function normalizeArtifactName(name: string): string {
@@ -296,11 +343,87 @@ function normalizeArtifactName(name: string): string {
     .trim();
 }
 
+function extractToolFlowSummary(result: Record<string, unknown>) {
+  const record = readRecord(result.toolFlow);
+  if (!record) {
+    return null;
+  }
+  const rawTools = Array.isArray(record.tools) ? record.tools : [];
+  const tools: Array<{
+    name: string;
+    ok: boolean;
+    resultCount: number | null;
+  }> = [];
+  let derivedOkCount = 0;
+  for (const item of rawTools) {
+    const toolRecord = readRecord(item);
+    const name =
+      readString(toolRecord, "name") ?? readString(toolRecord, "tool");
+    if (!name) {
+      continue;
+    }
+    const ok = readBoolean(toolRecord, "ok") === true;
+    if (ok) {
+      derivedOkCount += 1;
+    }
+    tools.push({
+      name,
+      ok,
+      resultCount: readNumber(toolRecord, "resultCount"),
+    });
+    if (tools.length >= 8) {
+      break;
+    }
+  }
+  if (tools.length === 0) {
+    return null;
+  }
+  const declaredOkCount = readNumber(record, "okCount");
+  return {
+    count: tools.length,
+    okCount: declaredOkCount != null ? declaredOkCount : derivedOkCount,
+    tools,
+  };
+}
+
+function extractConnectorWriteApproval(result: Record<string, unknown>) {
+  const record = readRecord(result.connectorWriteApproval);
+  if (!record) {
+    return null;
+  }
+  const token = readString(record, "token");
+  const tool = readString(record, "tool");
+  const title = readString(record, "title");
+  if (!token || !tool || !title) {
+    return null;
+  }
+  const rawLines = Array.isArray(record.lines) ? record.lines : [];
+  const lines = rawLines
+    .map((item) => {
+      const line = readRecord(item);
+      const label = readString(line, "label");
+      const value = readString(line, "value");
+      return label && value ? { label, value } : null;
+    })
+    .filter((item): item is { label: string; value: string } => item != null)
+    .slice(0, 8);
+  return {
+    token,
+    tool,
+    title,
+    appLabel: readString(record, "appLabel") ?? "",
+    expiresAt: readNumber(record, "expiresAt"),
+    lines,
+  };
+}
+
 function extractTaskBrainMetadata(value: unknown) {
   const result = readRecord(value);
   if (!result) {
     return null;
   }
+  const toolFlow = extractToolFlowSummary(result);
+  const connectorWriteApproval = extractConnectorWriteApproval(result);
   const metadata = {
     firstDeltaMs: readNumber(result, "firstDeltaMs"),
     groundingUsed: readBoolean(result, "groundingUsed"),
@@ -322,8 +445,12 @@ function extractTaskBrainMetadata(value: unknown) {
     contextPacketCount: readNumber(result, "contextPacketCount"),
     contextPacketKinds: readStringList(result, "contextPacketKinds"),
     healthContextUsed: readBoolean(result, "healthContextUsed"),
+    toolFlow,
+    connectorWriteApproval,
   };
-  return Object.values(metadata).some((value) => (Array.isArray(value) ? value.length > 0 : value !== null))
+  return Object.values(metadata).some((value) =>
+    Array.isArray(value) ? value.length > 0 : value !== null,
+  )
     ? metadata
     : null;
 }
@@ -373,6 +500,9 @@ const INTERNAL_INFERENCE_KEYS = new Set([
   "toolRequests",
   "toolrequests",
   "toolResults",
+  "connectorWriteApprovalRequest",
+  "connectorCall",
+  "pendingCall",
   "toolresults",
   "toolTrace",
   "tooltrace",
@@ -396,7 +526,10 @@ const INTERNAL_INFERENCE_KEYS = new Set([
 ]);
 
 function normalizePublicInferenceKey(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
 const NORMALIZED_INTERNAL_INFERENCE_KEYS = new Set(
@@ -453,13 +586,20 @@ const INTERNAL_EVENT_PAYLOAD_KEYS = new Set([
 ]);
 
 const NORMALIZED_INTERNAL_EVENT_PAYLOAD_KEYS = new Set(
-  [...INTERNAL_EVENT_PAYLOAD_KEYS].map((key) => normalizePublicInferenceKey(key)),
+  [...INTERNAL_EVENT_PAYLOAD_KEYS].map((key) =>
+    normalizePublicInferenceKey(key),
+  ),
 );
 
-function isInternalInferenceKey(key: string, internalKeys: Set<string>): boolean {
+function isInternalInferenceKey(
+  key: string,
+  internalKeys: Set<string>,
+): boolean {
   const normalized = normalizePublicInferenceKey(key);
   if (internalKeys.has(key) || internalKeys.has(normalized)) return true;
-  return /(?:provider|model|engine|apikey|credential|secret|systemprompt|reasoningtrace|tooltrace|visionblock)$/u.test(normalized);
+  return /(?:provider|model|engine|apikey|credential|secret|systemprompt|reasoningtrace|tooltrace|visionblock)$/u.test(
+    normalized,
+  );
 }
 
 function clipPublicString(value: string, maxLength: number): string {
@@ -476,7 +616,11 @@ function sanitizeBoundedPublicJson(
   internalKeys: Set<string>,
   depth = 0,
 ): unknown {
-  if (value == null || typeof value === "number" || typeof value === "boolean") {
+  if (
+    value == null ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return value;
   }
   if (typeof value === "string") {
@@ -499,33 +643,59 @@ function sanitizeBoundedPublicJson(
 
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .filter(
-        ([key]) => !isInternalInferenceKey(key, internalKeys),
-      )
+      .filter(([key]) => !isInternalInferenceKey(key, internalKeys))
       .slice(0, 80)
       .map(([key, nestedValue]) => {
-        if (normalizePublicInferenceKey(key) === "blocks" && Array.isArray(nestedValue)) {
+        if (
+          normalizePublicInferenceKey(key) === "blocks" &&
+          Array.isArray(nestedValue)
+        ) {
           nestedValue = nestedValue.filter((block) => {
-            if (!block || typeof block !== "object" || Array.isArray(block)) return true;
-            const type = String((block as Record<string, unknown>).type ?? "").trim().toLowerCase();
-            return !["task_trace", "security_decision", "reasoning_trace", "tool_trace"].includes(type);
+            if (!block || typeof block !== "object" || Array.isArray(block))
+              return true;
+            const type = String((block as Record<string, unknown>).type ?? "")
+              .trim()
+              .toLowerCase();
+            return ![
+              "task_trace",
+              "security_decision",
+              "reasoning_trace",
+              "tool_trace",
+            ].includes(type);
           });
         }
         const nestedKeys =
           normalizePublicInferenceKey(key) === "metadata"
             ? NORMALIZED_INTERNAL_INFERENCE_KEYS
             : internalKeys;
-        return [key, sanitizeBoundedPublicJson(nestedValue, nestedKeys, depth + 1)];
+        return [
+          key,
+          sanitizeBoundedPublicJson(nestedValue, nestedKeys, depth + 1),
+        ];
       }),
   );
 }
 
-export function sanitizePublicInferenceValue(value: unknown, depth = 0): unknown {
-  return sanitizeBoundedPublicJson(value, NORMALIZED_INTERNAL_INFERENCE_KEYS, depth);
+export function sanitizePublicInferenceValue(
+  value: unknown,
+  depth = 0,
+): unknown {
+  return sanitizeBoundedPublicJson(
+    value,
+    NORMALIZED_INTERNAL_INFERENCE_KEYS,
+    depth,
+  );
 }
 
-export function sanitizePublicTaskEventPayload(value: unknown, depth = 0): unknown {
-  return sanitizeBoundedPublicJson(value, NORMALIZED_INTERNAL_EVENT_PAYLOAD_KEYS, depth);
+export function sanitizePublicTaskEventPayload(
+  value: unknown,
+  depth = 0,
+): unknown {
+  return sanitizeBoundedPublicJson(
+    value,
+    NORMALIZED_INTERNAL_EVENT_PAYLOAD_KEYS,
+    depth,
+  );
 }
 
 function extractTaskOperatorSummary(value: unknown) {
@@ -548,34 +718,56 @@ function extractTaskOperatorSummary(value: unknown) {
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
-function readString(record: Record<string, unknown> | null, key: string): string | null {
+function readString(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
+function readBoolean(
+  record: Record<string, unknown> | null,
+  key: string,
+): boolean | null {
   const value = record?.[key];
   return typeof value === "boolean" ? value : null;
 }
 
-function readStringList(record: Record<string, unknown> | null, key: string): string[] {
+function readStringList(
+  record: Record<string, unknown> | null,
+  key: string,
+): string[] {
   const value = record?.[key];
   return Array.isArray(value)
     ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
     : [];
 }
 
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
+function readNumber(
+  record: Record<string, unknown> | null,
+  key: string,
+): number | null {
   const value = record?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function hasQuantumCapability(task: MobileTaskFeedRow): boolean {
-  const requested = Array.isArray(task.requestedCapabilities) ? task.requestedCapabilities : [];
-  return requested.some((capability) => String(capability ?? "").trim().toLowerCase().replace(/[\s_]+/g, ".").startsWith("quantum."));
+  const requested = Array.isArray(task.requestedCapabilities)
+    ? task.requestedCapabilities
+    : [];
+  return requested.some((capability) =>
+    String(capability ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_]+/g, ".")
+      .startsWith("quantum."),
+  );
 }
 
 function normalizeTaskQuantumSnapshot(value: unknown) {
@@ -616,7 +808,12 @@ function extractTaskQuantumSnapshot(task: MobileTaskFeedRow) {
     supportedProblemClasses: ["qubo", "ising", "qaoa", "vqe"],
     solver: "qiskit_simulator",
     problemClass: "optimization",
-    benchmarkStatus: task.status === "completed" ? "completed" : task.status === "failed" ? "failed" : "pending",
+    benchmarkStatus:
+      task.status === "completed"
+        ? "completed"
+        : task.status === "failed"
+          ? "failed"
+          : "pending",
     fallbackReason: task.error ?? undefined,
     lastBenchmarkScore: undefined,
   };
@@ -638,7 +835,9 @@ export function extractTaskChatSessionId(payload: unknown): string | null {
   }
 
   const sessionId = (chat as Record<string, unknown>).sessionId;
-  return typeof sessionId === "string" && sessionId.trim().length > 0 ? sessionId.trim() : null;
+  return typeof sessionId === "string" && sessionId.trim().length > 0
+    ? sessionId.trim()
+    : null;
 }
 
 export function extractTaskPresentation(payload: unknown): "chat" | "task" {
@@ -648,14 +847,18 @@ export function extractTaskPresentation(payload: unknown): "chat" | "task" {
     return explicit;
   }
 
-  const routeDecision = readRecord(metadata?.routeDecision) ?? readRecord(metadata?.routingDecision);
+  const routeDecision =
+    readRecord(metadata?.routeDecision) ??
+    readRecord(metadata?.routingDecision);
   const route = readString(routeDecision, "route");
   return route === "server_brain" ? "chat" : "task";
 }
 
 export function extractTaskRouteDecision(payload: unknown) {
   const metadata = readRecord(readRecord(payload)?.metadata);
-  const routeDecision = readRecord(metadata?.routeDecision) ?? readRecord(metadata?.routingDecision);
+  const routeDecision =
+    readRecord(metadata?.routeDecision) ??
+    readRecord(metadata?.routingDecision);
   if (!routeDecision) {
     return null;
   }
@@ -670,9 +873,15 @@ export function extractTaskRouteDecision(payload: unknown) {
           executionPlan: readStringList(taskRoute, "executionPlan"),
           reason: readString(taskRoute, "reason"),
           needsDesktop: readBoolean(taskRoute, "needsDesktop"),
-          needsPrivateDesktopData: readBoolean(taskRoute, "needsPrivateDesktopData"),
+          needsPrivateDesktopData: readBoolean(
+            taskRoute,
+            "needsPrivateDesktopData",
+          ),
           needsUserApproval: readBoolean(taskRoute, "needsUserApproval"),
-          requiredCapabilities: readStringList(taskRoute, "requiredCapabilities"),
+          requiredCapabilities: readStringList(
+            taskRoute,
+            "requiredCapabilities",
+          ),
         }
       : null,
     mode: readString(routeDecision, "mode"),
@@ -682,7 +891,10 @@ export function extractTaskRouteDecision(payload: unknown) {
     privacyLevel: readString(routeDecision, "privacyLevel"),
     requiresApproval: readBoolean(routeDecision, "requiresApproval"),
     requiredRuntime: readString(routeDecision, "requiredRuntime"),
-    shouldAskClarification: readBoolean(routeDecision, "shouldAskClarification"),
+    shouldAskClarification: readBoolean(
+      routeDecision,
+      "shouldAskClarification",
+    ),
     failClosedReason: readString(routeDecision, "failClosedReason"),
     selectedWorkload: readString(routeDecision, "selectedWorkload"),
     reason: readString(routeDecision, "reason"),
@@ -693,13 +905,21 @@ export function extractTaskRouteDecision(payload: unknown) {
 export function deriveTaskDeliveryState(
   task: Pick<
     MobileTaskFeedRow,
-    "status" | "runtimeConnectionId" | "dispatchLeaseId" | "dispatchLeaseExpiresAt" | "dispatchAckAt"
+    | "status"
+    | "runtimeConnectionId"
+    | "dispatchLeaseId"
+    | "dispatchLeaseExpiresAt"
+    | "dispatchAckAt"
   >,
 ): TaskDeliveryState {
   if (task.dispatchLeaseId && task.dispatchLeaseExpiresAt) {
     return "dispatched";
   }
-  if (task.dispatchAckAt || task.status === "running" || task.status === "waiting_approval") {
+  if (
+    task.dispatchAckAt ||
+    task.status === "running" ||
+    task.status === "waiting_approval"
+  ) {
     return "acked";
   }
   if (task.runtimeConnectionId) {
@@ -708,10 +928,14 @@ export function deriveTaskDeliveryState(
   return "queued";
 }
 
-export function getPayloadMetadata(payload: Record<string, unknown>): Record<string, unknown> {
+export function getPayloadMetadata(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
   const metadata = payload.metadata;
   return normalizeLocalDerivedMetadata(
-    metadata && typeof metadata === "object" && !Array.isArray(metadata) ? { ...metadata } : {},
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? { ...metadata }
+      : {},
   );
 }
 
@@ -723,7 +947,11 @@ export function extractSharedBrainConversation(
   payload: Record<string, unknown>,
 ): SharedBrainConversationMessage[] | undefined {
   const brainContext = payload.brainContext;
-  if (!brainContext || typeof brainContext !== "object" || Array.isArray(brainContext)) {
+  if (
+    !brainContext ||
+    typeof brainContext !== "object" ||
+    Array.isArray(brainContext)
+  ) {
     return undefined;
   }
 
@@ -758,7 +986,10 @@ export function extractSharedBrainConversation(
     .filter((item): item is SharedBrainConversationMessage => item != null);
 }
 
-export function getSharedBrainFallbackMessage(error: unknown, fallback = "Elyan beyni şu anda yanıt veremiyor") {
+export function getSharedBrainFallbackMessage(
+  error: unknown,
+  fallback = "Elyan beyni şu anda yanıt veremiyor",
+) {
   if (error instanceof Error && error.message.trim()) {
     const message = error.message.trim();
     return looksLikeUnsafeBackendError(message) ? fallback : message;
@@ -829,23 +1060,36 @@ export function resolveIdempotentTaskMatch<T extends IdempotentTaskRow>(
   }
 
   if (existingTask.idempotencyFingerprint !== input.fingerprint) {
-    throw new AppError(409, "idempotency_conflict", "Idempotency key is already bound to a different task payload", {
-      idempotencyKey: input.idempotencyKey,
-      existingTaskId: existingTask.id,
-    });
+    throw new AppError(
+      409,
+      "idempotency_conflict",
+      "Idempotency key is already bound to a different task payload",
+      {
+        idempotencyKey: input.idempotencyKey,
+        existingTaskId: existingTask.id,
+      },
+    );
   }
 
   return existingTask;
 }
 
-export function assertOwnedDesktopTaskTarget(device: OwnedDesktopTaskTarget, targetDeviceId: string): void {
+export function assertOwnedDesktopTaskTarget(
+  device: OwnedDesktopTaskTarget,
+  targetDeviceId: string,
+): void {
   if (!device.isActive) {
-    throw new AppError(409, "device_inactive", "Target desktop runtime is inactive", {
-      targetDeviceId,
-      canReceiveTasks: device.canReceiveTasks,
-      isOnline: device.isOnline,
-      targetStatus: device.targetStatus,
-    });
+    throw new AppError(
+      409,
+      "device_inactive",
+      "Target desktop runtime is inactive",
+      {
+        targetDeviceId,
+        canReceiveTasks: device.canReceiveTasks,
+        isOnline: device.isOnline,
+        targetStatus: device.targetStatus,
+      },
+    );
   }
 
   if (device.targetStatus === "backend_unreachable") {
@@ -877,30 +1121,43 @@ export function assertOwnedDesktopTaskTarget(device: OwnedDesktopTaskTarget, tar
   }
 
   if (device.targetStatus === "runtime_stale") {
-    throw new AppError(409, "runtime_unavailable", "Target desktop runtime heartbeat is stale", {
-      targetDeviceId,
-      canReceiveTasks: device.canReceiveTasks,
-      isOnline: device.isOnline,
-      targetStatus: device.targetStatus,
-      lastHeartbeatAt: device.runtime.lastHeartbeatAt,
-    });
+    throw new AppError(
+      409,
+      "runtime_unavailable",
+      "Target desktop runtime heartbeat is stale",
+      {
+        targetDeviceId,
+        canReceiveTasks: device.canReceiveTasks,
+        isOnline: device.isOnline,
+        targetStatus: device.targetStatus,
+        lastHeartbeatAt: device.runtime.lastHeartbeatAt,
+      },
+    );
   }
 
   if (!device.isOnline || !device.canReceiveTasks) {
-    throw new AppError(409, "device_offline", "Target desktop runtime is offline or has not registered", {
-      targetDeviceId,
-      canReceiveTasks: device.canReceiveTasks,
-      isOnline: device.isOnline,
-      targetStatus: device.targetStatus,
-      lastHeartbeatAt: device.runtime.lastHeartbeatAt,
-    });
+    throw new AppError(
+      409,
+      "device_offline",
+      "Target desktop runtime is offline or has not registered",
+      {
+        targetDeviceId,
+        canReceiveTasks: device.canReceiveTasks,
+        isOnline: device.isOnline,
+        targetStatus: device.targetStatus,
+        lastHeartbeatAt: device.runtime.lastHeartbeatAt,
+      },
+    );
   }
 }
 
-export function createInvalidTargetDeviceError(targetDeviceId: string): AppError {
+export function createInvalidTargetDeviceError(
+  targetDeviceId: string,
+): AppError {
   return unprocessableEntity("Target device is not a valid desktop runtime", {
     targetDeviceId,
-    expectedTarget: "Use the desktop device `id` returned by /v1/mobile/bootstrap.devices",
+    expectedTarget:
+      "Use the desktop device `id` returned by /v1/mobile/bootstrap.devices",
     expectedDeviceType: "desktop",
     error: "invalid_target",
   });
@@ -912,16 +1169,25 @@ export function createRuntimeCapabilityMismatchError(input: {
   availableCapabilities: string[];
   missingCapabilities: string[];
 }): AppError {
-  return new AppError(409, "runtime_capability_mismatch", "Target desktop runtime does not support the requested capability set", {
-    targetDeviceId: input.targetDeviceId,
-    requestedCapabilities: input.requestedCapabilities,
-    availableCapabilities: input.availableCapabilities,
-    missingCapabilities: input.missingCapabilities,
-  });
+  return new AppError(
+    409,
+    "runtime_capability_mismatch",
+    "Target desktop runtime does not support the requested capability set",
+    {
+      targetDeviceId: input.targetDeviceId,
+      requestedCapabilities: input.requestedCapabilities,
+      availableCapabilities: input.availableCapabilities,
+      missingCapabilities: input.missingCapabilities,
+    },
+  );
 }
 
 export function createStaleRuntimeConnectionError(): AppError {
-  return new AppError(401, "unauthorized", "Runtime connection is stale or has been replaced");
+  return new AppError(
+    401,
+    "unauthorized",
+    "Runtime connection is stale or has been replaced",
+  );
 }
 
 export function createTaskRuntimeOwnershipConflictError(input: {
@@ -929,9 +1195,14 @@ export function createTaskRuntimeOwnershipConflictError(input: {
   activeConnectionId: string;
   owningConnectionId: string;
 }): AppError {
-  return new AppError(409, "task_runtime_owner_conflict", "Task is owned by another active runtime connection", {
-    taskId: input.taskId,
-    activeConnectionId: input.activeConnectionId,
-    owningConnectionId: input.owningConnectionId,
-  });
+  return new AppError(
+    409,
+    "task_runtime_owner_conflict",
+    "Task is owned by another active runtime connection",
+    {
+      taskId: input.taskId,
+      activeConnectionId: input.activeConnectionId,
+      owningConnectionId: input.owningConnectionId,
+    },
+  );
 }

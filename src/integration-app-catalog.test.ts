@@ -1,21 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
+import type { ConnectionProvider } from "./contracts/domain.js";
+import { encryptJson } from "./lib/crypto-seal.js";
 import {
   getIntegrationMcpApp,
   getIntegrationProvider,
+  inferRequestedRemoteMcpApps,
+  inferRequestedRemoteMcpAppsSemantic,
   integrationMcpAppCatalog,
 } from "./modules/integrations/provider-registry.js";
+import {
+  resetSemanticComputeWorkerForTests,
+  setSemanticComputeDispatcherForTests,
+} from "./modules/brain/semantic-compute-client.js";
 import {
   listIntegrationApps,
   listRuntimeMcpConnections,
   normalizeOauthRedirectUri,
+  resolveRemoteMcpRequestedCapabilities,
 } from "./modules/integrations/service.js";
 
 type IntegrationConnectionRow = {
   id: string;
-  appId: string;
-  provider: "google";
+  appId: string | null;
+  provider: ConnectionProvider;
   status: "connected";
   displayName: string;
   scopes: string[];
@@ -24,8 +33,16 @@ type IntegrationConnectionRow = {
   updatedAt: Date;
 };
 
+type IntegrationCredentialRow = {
+  id: string;
+  encryptedPayload: string;
+  expiresAt: Date | null;
+};
+
 function fakeIntegrationApp(
-  queryResults: IntegrationConnectionRow[][],
+  queryResults: Array<
+    Array<IntegrationConnectionRow | IntegrationCredentialRow>
+  >,
 ): FastifyInstance {
   let selectIndex = 0;
   const db = {
@@ -37,7 +54,9 @@ function fakeIntegrationApp(
       query.orderBy = () => Promise.resolve(rows);
       query.limit = () => Promise.resolve(rows);
       query.then = (
-        onfulfilled?: (value: IntegrationConnectionRow[]) => unknown,
+        onfulfilled?: (
+          value: Array<IntegrationConnectionRow | IntegrationCredentialRow>,
+        ) => unknown,
         onrejected?: (reason: unknown) => unknown,
       ) => Promise.resolve(rows).then(onfulfilled, onrejected);
       return query;
@@ -47,6 +66,7 @@ function fakeIntegrationApp(
   return {
     db,
     config: {
+      TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64url"),
       GMAIL_MCP_CLIENT_ID: "test-client-id",
       GMAIL_MCP_CLIENT_SECRET: "test-client-secret",
     },
@@ -67,12 +87,30 @@ function gmailConnection(scopes: string[]): IntegrationConnectionRow {
   };
 }
 
+function legacyGoogleConnection(
+  capabilities: string[],
+  scopes: string[],
+): IntegrationConnectionRow {
+  return {
+    id: "connection_google_legacy",
+    appId: null,
+    provider: "google",
+    status: "connected",
+    displayName: "legacy@example.com",
+    scopes,
+    capabilities,
+    metadata: {},
+    updatedAt: new Date("2026-07-14T09:21:57.000Z"),
+  };
+}
+
 test("curated MCP app catalog has unique ids and trusted https endpoints", () => {
   const ids = integrationMcpAppCatalog.map((entry) => entry.id);
   assert.equal(new Set(ids).size, ids.length);
   assert.ok(ids.includes("gmail"));
   assert.ok(ids.includes("google-drive"));
   assert.ok(ids.includes("google-calendar"));
+  assert.ok(ids.includes("dropbox"));
 
   for (const entry of integrationMcpAppCatalog) {
     assert.ok(entry.displayName.length > 0);
@@ -101,9 +139,24 @@ test("Gmail app is a server-side connector, not a leased remote MCP server", () 
   assert.equal(gmail.execution, "server_connector");
   assert.equal(drive.execution, "server_connector");
   assert.equal(calendar.execution, "server_connector");
-  assert.ok(gmail.oauthScopes.includes("https://www.googleapis.com/auth/gmail.readonly"));
-  assert.ok(gmail.oauthScopes.includes("https://www.googleapis.com/auth/gmail.compose"));
-  assert.ok(!gmail.oauthScopes.includes("https://www.googleapis.com/auth/gmail.send"));
+  assert.ok(
+    gmail.oauthScopes.includes(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ),
+  );
+  assert.ok(
+    gmail.oauthScopes.includes("https://www.googleapis.com/auth/gmail.send"),
+  );
+  assert.ok(
+    calendar.oauthScopes.includes(
+      "https://www.googleapis.com/auth/calendar.events",
+    ),
+  );
+  assert.ok(
+    !gmail.oauthScopes.includes(
+      "https://www.googleapis.com/auth/gmail.compose",
+    ),
+  );
   assert.equal(gmail.provider, "google");
   assert.equal(gmail.oauthClientIdEnvKey, "GMAIL_MCP_CLIENT_ID");
   assert.equal(drive.oauthClientIdEnvKey, "GOOGLE_DRIVE_MCP_CLIENT_ID");
@@ -129,7 +182,6 @@ test("Google canonical userinfo grants mark the app connected; connectors are no
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.compose",
   ]);
 
   const apps = await listIntegrationApps(
@@ -150,7 +202,7 @@ test("Google canonical userinfo grants mark the app connected; connectors are no
   assert.deepEqual(runtime.servers, []);
 });
 
-test("missing a real Gmail app scope remains disconnected and excluded from runtime", async () => {
+test("Gmail read-only app connection is connected and excluded from runtime", async () => {
   const connection = gmailConnection([
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -164,9 +216,61 @@ test("missing a real Gmail app scope remains disconnected and excluded from runt
   );
   const gmail = apps.find((entry) => entry.id === "gmail");
   assert.ok(gmail);
+  assert.equal(gmail.connected, true);
+  assert.deepEqual(gmail.missingScopes, []);
+
+  const runtime = await listRuntimeMcpConnections(
+    fakeIntegrationApp([[connection]]),
+    "user_1",
+  );
+  assert.deepEqual(runtime.servers, []);
+});
+
+test("legacy provider-level Google grants still mark server connector apps connected", async () => {
+  const connection = legacyGoogleConnection(
+    ["gmail"],
+    [
+      "openid",
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ],
+  );
+
+  const apps = await listIntegrationApps(
+    fakeIntegrationApp([[connection]]),
+    "user_1",
+  );
+  const gmail = apps.find((entry) => entry.id === "gmail");
+  assert.ok(gmail);
+  assert.equal(gmail.connected, true);
+  assert.equal(gmail.connectionId, "connection_google_legacy");
+  assert.equal(gmail.accountLabel, "legacy@example.com");
+  assert.deepEqual(gmail.missingScopes, []);
+
+  const runtime = await listRuntimeMcpConnections(
+    fakeIntegrationApp([[connection]]),
+    "user_1",
+  );
+  assert.deepEqual(runtime.servers, []);
+});
+
+test("missing Gmail read scope remains disconnected and excluded from runtime", async () => {
+  const connection = gmailConnection([
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+  ]);
+
+  const apps = await listIntegrationApps(
+    fakeIntegrationApp([[connection]]),
+    "user_1",
+  );
+  const gmail = apps.find((entry) => entry.id === "gmail");
+  assert.ok(gmail);
   assert.equal(gmail.connected, false);
   assert.deepEqual(gmail.missingScopes, [
-    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.readonly",
   ]);
 
   const runtime = await listRuntimeMcpConnections(
@@ -176,15 +280,208 @@ test("missing a real Gmail app scope remains disconnected and excluded from runt
   assert.deepEqual(runtime.servers, []);
 });
 
-test("MCP-native OAuth apps stay unavailable until the dedicated client flow exists", () => {
+test("MCP-native OAuth apps are available once provider credentials are configured", () => {
   const notion = getIntegrationMcpApp("notion");
   const github = getIntegrationMcpApp("github");
   const slack = getIntegrationMcpApp("slack");
   assert.ok(notion && github && slack);
   assert.equal(notion.authStrategy, "mcp_oauth");
-  assert.equal(notion.stage, "setup_required");
-  assert.equal(github.stage, "setup_required");
-  assert.equal(slack.stage, "setup_required");
+  assert.equal(notion.stage, "available");
+  assert.equal(github.stage, "available");
+  assert.equal(slack.stage, "available");
+});
+
+test("connected MCP-native OAuth apps are leased to the desktop runtime", async () => {
+  const tokenEnv = {
+    TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64url"),
+  };
+  const connection: IntegrationConnectionRow = {
+    id: "connection_github",
+    appId: "github",
+    provider: "github",
+    status: "connected",
+    displayName: "octocat",
+    scopes: ["repo", "read:user", "user:email"],
+    capabilities: ["github"],
+    metadata: {},
+    updatedAt: new Date("2026-07-15T09:20:57.000Z"),
+  };
+  const credential: IntegrationCredentialRow = {
+    id: "credential_github",
+    encryptedPayload: encryptJson(tokenEnv as never, {
+      accessToken: "github-access-token",
+      refreshToken: null,
+    }),
+    expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+  };
+
+  const runtime = await listRuntimeMcpConnections(
+    fakeIntegrationApp([[connection], [credential]]),
+    "user_1",
+  );
+
+  assert.equal(runtime.servers.length, 1);
+  assert.equal(runtime.servers[0]?.appId, "github");
+  assert.equal(runtime.servers[0]?.authType, "bearer");
+  assert.equal(runtime.servers[0]?.accessToken, "github-access-token");
+  assert.equal(runtime.servers[0]?.enabled, true);
+});
+
+test("remote MCP routing requires an explicit connected account-data request", () => {
+  assert.deepEqual(
+    inferRequestedRemoteMcpApps("GitHub repolarımı göster", ["github"]).map(
+      (entry) => entry.id,
+    ),
+    ["github"],
+  );
+  assert.deepEqual(
+    inferRequestedRemoteMcpApps("GitHub nedir?", ["github"]),
+    [],
+  );
+  assert.deepEqual(
+    inferRequestedRemoteMcpApps("Bana GitHub'ın ne olduğunu anlat", ["github"]),
+    [],
+  );
+  assert.deepEqual(
+    inferRequestedRemoteMcpApps("GitHub özelliklerini göster", ["github"]),
+    [],
+  );
+  assert.deepEqual(
+    inferRequestedRemoteMcpApps("GitHub issue'larımı listele", ["github"]).map(
+      (entry) => entry.id,
+    ),
+    ["github"],
+  );
+  assert.deepEqual(
+    inferRequestedRemoteMcpApps("GitHub repolarımı göster", ["notion"]),
+    [],
+  );
+});
+
+test("remote MCP routing uses semantic catalog intent instead of requiring a phrase pattern", async () => {
+  resetSemanticComputeWorkerForTests();
+  const vector = (index: number) => {
+    const value = new Array<number>(384).fill(0);
+    value[index] = 1;
+    return value;
+  };
+  setSemanticComputeDispatcherForTests(async ({ texts }) =>
+    texts.map((text) => {
+      const normalized = text.toLowerCase();
+      if (normalized.startsWith("query:")) {
+        return normalized.includes("sdk") ? vector(2) : vector(0);
+      }
+      if (normalized.includes("read, search")) return vector(0);
+      if (normalized.includes("create, send")) return vector(1);
+      if (normalized.includes("explain what")) return vector(2);
+      if (normalized.includes("draft, rewrite")) return vector(3);
+      return vector(4);
+    }),
+  );
+
+  try {
+    assert.deepEqual(
+      inferRequestedRemoteMcpApps(
+        "GitHub'daki bana ait çalışma öğelerini dök",
+        ["github"],
+      ),
+      [],
+      "legacy phrase matcher should not know this paraphrase",
+    );
+    assert.deepEqual(
+      (
+        await inferRequestedRemoteMcpAppsSemantic(
+          "GitHub'daki bana ait çalışma öğelerini dök",
+          ["github"],
+        )
+      ).map((entry) => entry.id),
+      ["github"],
+    );
+    assert.deepEqual(
+      await inferRequestedRemoteMcpAppsSemantic(
+        "GitHub SDK'sını açıkla",
+        ["github"],
+      ),
+      [],
+    );
+    assert.deepEqual(
+      await inferRequestedRemoteMcpAppsSemantic(
+        "GitHub'daki bana ait çalışma öğelerini dök",
+        ["notion"],
+      ),
+      [],
+    );
+  } finally {
+    resetSemanticComputeWorkerForTests();
+  }
+});
+
+test("remote MCP capability resolution binds semantic intent to a connected app", async () => {
+  resetSemanticComputeWorkerForTests();
+  const vector = (index: number) => {
+    const value = new Array<number>(384).fill(0);
+    value[index] = 1;
+    return value;
+  };
+  setSemanticComputeDispatcherForTests(async ({ texts }) =>
+    texts.map((text) => {
+      const normalized = text.toLowerCase();
+      if (normalized.startsWith("query:")) {
+        return normalized.includes("sdk") ? vector(2) : vector(0);
+      }
+      if (normalized.includes("read, search")) return vector(0);
+      if (normalized.includes("create, send")) return vector(1);
+      if (normalized.includes("explain what")) return vector(2);
+      if (normalized.includes("draft, rewrite")) return vector(3);
+      return vector(4);
+    }),
+  );
+  const connection: IntegrationConnectionRow = {
+    id: "connection_github",
+    appId: "github",
+    provider: "github",
+    status: "connected",
+    displayName: "octocat",
+    scopes: ["repo", "read:user", "user:email"],
+    capabilities: ["github"],
+    metadata: {},
+    updatedAt: new Date("2026-07-15T09:20:57.000Z"),
+  };
+
+  try {
+    assert.deepEqual(
+      await resolveRemoteMcpRequestedCapabilities(
+        fakeIntegrationApp([[connection]]),
+        {
+          userId: "user_1",
+          prompt: "GitHub'daki bana ait çalışma öğelerini dök",
+          requestedCapabilities: [],
+        },
+      ),
+      ["mcp_call_tool"],
+    );
+    assert.deepEqual(
+      await resolveRemoteMcpRequestedCapabilities(fakeIntegrationApp([]), {
+        userId: "user_1",
+        prompt: "GitHub SDK'sını açıkla",
+        requestedCapabilities: [],
+      }),
+      [],
+    );
+    assert.deepEqual(
+      await resolveRemoteMcpRequestedCapabilities(
+        fakeIntegrationApp([[{ ...connection, capabilities: ["notion"] }]]),
+        {
+          userId: "user_1",
+          prompt: "GitHub'daki bana ait çalışma öğelerini dök",
+          requestedCapabilities: [],
+        },
+      ),
+      [],
+    );
+  } finally {
+    resetSemanticComputeWorkerForTests();
+  }
 });
 
 test("OAuth completion redirects are limited to Elyan-owned destinations", () => {

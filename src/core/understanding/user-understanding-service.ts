@@ -19,6 +19,7 @@ import { extractFeedbackSignals, extractPreferenceSignals } from "./preference-e
 import { filterLearningSignals } from "./personalization-policy.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import { startStage } from "../../lib/perf-telemetry.js";
+import { enhanceIntentWithGeminiFree } from "../../modules/brain/gemini-intent-router.js";
 import type {
   ClarificationDiagnostics,
   FeedbackType,
@@ -143,6 +144,7 @@ export function emptyUnderstanding(
         stalePacketCount: 0,
       },
       retrievedMemory: [],
+      ...(envelope ? { understandingEnvelope: envelope } : {}),
       tokenBudget: {
         maxHints: 12,
         maxChars: 4000,
@@ -170,7 +172,12 @@ export async function buildTaskUnderstanding(
     // Real-semantic upgrade via the same e5-small transformer that powers
     // storage embeddings. Only fires when the sync classifier was unsure
     // (chat/unknown/<0.6 confidence) — keeps the fast path fast.
-    const intent = await enhanceIntentWithTransformer(input.message ?? "", baseIntent);
+    const semanticIntent = await enhanceIntentWithTransformer(input.message ?? "", baseIntent);
+    const intent = await enhanceIntentWithGeminiFree(app, {
+      userId: input.userId,
+      message: input.message ?? "",
+      current: semanticIntent,
+    }).catch(() => semanticIntent);
     app.log.info(
       {
         requestId: input.metadata?.requestId,
@@ -178,7 +185,8 @@ export async function buildTaskUnderstanding(
         intent: intent.primaryIntent,
         confidence: intent.confidence,
         privacyRisk: intent.privacyRisk,
-        upgradedByTransformer: intent !== baseIntent,
+        upgradedByTransformer: semanticIntent !== baseIntent,
+        upgradedByGeminiFree: intent !== semanticIntent,
       },
       "understanding intent classified",
     );
@@ -243,6 +251,7 @@ export async function buildTaskUnderstanding(
     }
 
     if (envelope) {
+      context.understandingEnvelope = envelope;
       app.log.info(
         {
           requestId: input.metadata?.requestId,

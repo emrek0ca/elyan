@@ -16,13 +16,18 @@ import { readConnectionMcpProbe } from "./mcp-probe.js";
 import {
   getIntegrationMcpApp,
   getIntegrationProvider,
+  inferRequestedRemoteMcpApps,
+  inferRequestedRemoteMcpAppsSemantic,
   integrationMcpAppCatalog,
   integrationProviderCatalog,
   isIntegrationMcpAppConfigured,
   isProviderConfigured,
 } from "./provider-registry.js";
 
-function getCallbackUrl(app: FastifyInstance, provider: ConnectionProvider): string {
+function getCallbackUrl(
+  app: FastifyInstance,
+  provider: ConnectionProvider,
+): string {
   return `${app.config.APP_BASE_URL}/v1/integrations/oauth/${provider}/callback`;
 }
 
@@ -44,7 +49,12 @@ function getOauthClientCredentials(
     providerEntry.oauth.clientSecretEnvKey;
   const clientId = app.config[clientIdKey];
   const clientSecret = app.config[clientSecretKey];
-  if (typeof clientId !== "string" || typeof clientSecret !== "string" || !clientId || !clientSecret) {
+  if (
+    typeof clientId !== "string" ||
+    typeof clientSecret !== "string" ||
+    !clientId ||
+    !clientSecret
+  ) {
     throw badRequest(`Provider ${provider} is not configured`);
   }
   return {
@@ -58,7 +68,10 @@ function joinScopes(scopes: string[], separator = " "): string {
   return scopes.join(separator);
 }
 
-function redirectWithStatus(baseUrl: string, params: Record<string, string>): string {
+function redirectWithStatus(
+  baseUrl: string,
+  params: Record<string, string>,
+): string {
   const url = new URL(baseUrl);
 
   for (const [key, value] of Object.entries(params)) {
@@ -68,7 +81,9 @@ function redirectWithStatus(baseUrl: string, params: Record<string, string>): st
   return url.toString();
 }
 
-function getExpiresAtFromTokenPayload(tokenPayload: Record<string, unknown>): Date | undefined {
+function getExpiresAtFromTokenPayload(
+  tokenPayload: Record<string, unknown>,
+): Date | undefined {
   const expiresIn = tokenPayload.expires_in;
   if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn)) {
     return undefined;
@@ -102,16 +117,16 @@ const GOOGLE_OAUTH_SCOPE_ALIASES = new Map<string, string>([
 ]);
 
 function canonicalOauthScope(
-  provider: ConnectionProvider,
+  provider: ConnectionProvider | string,
   scope: string,
 ): string {
   return provider === "google"
-    ? GOOGLE_OAUTH_SCOPE_ALIASES.get(scope) ?? scope
+    ? (GOOGLE_OAUTH_SCOPE_ALIASES.get(scope) ?? scope)
     : scope;
 }
 
-function missingOauthScopes(
-  provider: ConnectionProvider,
+export function missingOauthScopes(
+  provider: ConnectionProvider | string,
   grantedScopes: string[],
   requiredScopes: string[],
 ): string[] {
@@ -130,7 +145,14 @@ function recordValue(value: unknown): Record<string, unknown> {
 }
 
 function mergeUnique(...lists: string[][]): string[] {
-  return [...new Set(lists.flat().map((item) => item.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      lists
+        .flat()
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function grantedOauthScopes(
@@ -141,7 +163,9 @@ function grantedOauthScopes(
     .split(/[\s,]+/)
     .map((scope) => scope.trim())
     .filter(Boolean);
-  return granted.length > 0 ? mergeUnique(granted) : stringList(requestedScopes);
+  return granted.length > 0
+    ? mergeUnique(granted)
+    : stringList(requestedScopes);
 }
 
 export function normalizeOauthRedirectUri(
@@ -199,10 +223,7 @@ function buildEmailMimeMessage(input: {
   subject: string;
   body: string;
 }) {
-  const lines = [
-    `From: ${input.from}`,
-    `To: ${input.to.join(", ")}`,
-  ];
+  const lines = [`From: ${input.from}`, `To: ${input.to.join(", ")}`];
   if (input.cc?.length) {
     lines.push(`Cc: ${input.cc.join(", ")}`);
   }
@@ -228,9 +249,14 @@ async function loadGoogleOAuthConnection(
     connectionId?: string;
   },
 ) {
-  const connectionConditions = [eq(integrationConnections.userId, input.userId), eq(integrationConnections.provider, "google")];
+  const connectionConditions = [
+    eq(integrationConnections.userId, input.userId),
+    eq(integrationConnections.provider, "google"),
+  ];
   if (input.connectionId) {
-    connectionConditions.push(eq(integrationConnections.id, input.connectionId));
+    connectionConditions.push(
+      eq(integrationConnections.id, input.connectionId),
+    );
   }
 
   const rows = await app.db
@@ -251,14 +277,22 @@ async function loadGoogleOAuthConnection(
     .where(and(...connectionConditions))
     .orderBy(desc(integrationConnections.updatedAt));
 
-  const connection = rows.find((row) => row.status === "connected" && Array.isArray(row.capabilities) && row.capabilities.includes("gmail"));
+  const connection = rows.find(
+    (row) =>
+      row.status === "connected" &&
+      Array.isArray(row.capabilities) &&
+      row.capabilities.includes("gmail"),
+  );
   if (!connection) {
     throw notFound("Connected Google Gmail integration not found");
   }
   return connection;
 }
 
-async function loadGoogleOAuthTokenPayload(app: FastifyInstance, connectionId: string) {
+async function loadGoogleOAuthTokenPayload(
+  app: FastifyInstance,
+  connectionId: string,
+) {
   const rows = await app.db
     .select({
       id: integrationCredentials.id,
@@ -276,7 +310,10 @@ async function loadGoogleOAuthTokenPayload(app: FastifyInstance, connectionId: s
 
   return {
     credential,
-    tokenPayload: decryptJson<GoogleOAuthPayload>(app.config, credential.encryptedPayload),
+    tokenPayload: decryptJson<GoogleOAuthPayload>(
+      app.config,
+      credential.encryptedPayload,
+    ),
   };
 }
 
@@ -287,8 +324,11 @@ async function refreshGoogleOAuthAccessToken(
   appId?: string,
   timeoutMs = 12_000,
 ) {
-  const { providerEntry: provider, clientId, clientSecret } =
-    getOauthClientCredentials(app, "google", appId);
+  const {
+    providerEntry: provider,
+    clientId,
+    clientSecret,
+  } = getOauthClientCredentials(app, "google", appId);
 
   const response = await fetch(provider.oauth.tokenUrl, {
     signal: AbortSignal.timeout(timeoutMs),
@@ -304,20 +344,28 @@ async function refreshGoogleOAuthAccessToken(
       client_secret: clientSecret,
     }).toString(),
   });
-  const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+  const payload = (await parseJsonResponse(response)) as Record<
+    string,
+    unknown
+  >;
   if (!response.ok || payload.error) {
     throw badRequest("Google access token refresh failed", payload);
   }
 
-  const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
+  const accessToken =
+    typeof payload.access_token === "string" ? payload.access_token : "";
   if (!accessToken) {
     throw badRequest("Google provider did not return an access token");
   }
 
   const encryptedPayload = encryptJson(app.config, {
     accessToken,
-    refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : refreshToken,
-    tokenType: typeof payload.token_type === "string" ? payload.token_type : "Bearer",
+    refreshToken:
+      typeof payload.refresh_token === "string"
+        ? payload.refresh_token
+        : refreshToken,
+    tokenType:
+      typeof payload.token_type === "string" ? payload.token_type : "Bearer",
     scope: typeof payload.scope === "string" ? payload.scope : null,
     raw: payload,
   });
@@ -333,7 +381,10 @@ async function refreshGoogleOAuthAccessToken(
 
   return {
     accessToken,
-    refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : refreshToken,
+    refreshToken:
+      typeof payload.refresh_token === "string"
+        ? payload.refresh_token
+        : refreshToken,
   };
 }
 
@@ -345,8 +396,11 @@ async function refreshProviderOAuthAccessToken(
   appId?: string,
   timeoutMs = 12_000,
 ): Promise<string> {
-  const { providerEntry: entry, clientId, clientSecret } =
-    getOauthClientCredentials(app, provider, appId);
+  const {
+    providerEntry: entry,
+    clientId,
+    clientSecret,
+  } = getOauthClientCredentials(app, provider, appId);
   const requestPayload = {
     grant_type: "refresh_token",
     refresh_token: refreshToken,
@@ -394,14 +448,19 @@ async function refreshProviderOAuthAccessToken(
   } catch {
     throw badRequest(`OAuth access token refresh failed for ${provider}`);
   }
-  const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+  const payload = (await parseJsonResponse(response)) as Record<
+    string,
+    unknown
+  >;
   if (!response.ok || payload.error) {
     throw badRequest(`OAuth access token refresh failed for ${provider}`);
   }
   const accessToken =
     typeof payload.access_token === "string" ? payload.access_token : "";
   if (!accessToken) {
-    throw badRequest(`OAuth provider ${provider} did not return an access token`);
+    throw badRequest(
+      `OAuth provider ${provider} did not return an access token`,
+    );
   }
 
   await app.db
@@ -414,7 +473,9 @@ async function refreshProviderOAuthAccessToken(
             ? payload.refresh_token
             : refreshToken,
         tokenType:
-          typeof payload.token_type === "string" ? payload.token_type : "Bearer",
+          typeof payload.token_type === "string"
+            ? payload.token_type
+            : "Bearer",
         scope: typeof payload.scope === "string" ? payload.scope : null,
         raw: payload,
       }),
@@ -481,7 +542,10 @@ async function getGoogleMailAccessToken(
   appId?: string,
   refreshTimeoutMs = 12_000,
 ) {
-  const { credential, tokenPayload } = await loadGoogleOAuthTokenPayload(app, connectionId);
+  const { credential, tokenPayload } = await loadGoogleOAuthTokenPayload(
+    app,
+    connectionId,
+  );
   if (credential.expiresAt && credential.expiresAt.getTime() <= Date.now()) {
     if (!tokenPayload.refreshToken) {
       throw badRequest("Google Gmail connection needs re-authentication");
@@ -539,8 +603,11 @@ async function exchangeOAuthCode(
   codeVerifier: string | null,
   appId?: string,
 ) {
-  const { providerEntry: entry, clientId, clientSecret } =
-    getOauthClientCredentials(app, provider, appId);
+  const {
+    providerEntry: entry,
+    clientId,
+    clientSecret,
+  } = getOauthClientCredentials(app, provider, appId);
 
   const requestPayload: Record<string, string> = {
     grant_type: "authorization_code",
@@ -595,7 +662,10 @@ async function exchangeOAuthCode(
     ...requestInit,
     signal: AbortSignal.timeout(12_000),
   });
-  const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+  const payload = (await parseJsonResponse(response)) as Record<
+    string,
+    unknown
+  >;
 
   if (!response.ok || payload.error) {
     throw badRequest(`OAuth token exchange failed for ${provider}`, payload);
@@ -604,14 +674,23 @@ async function exchangeOAuthCode(
   return payload;
 }
 
-async function fetchProviderIdentity(provider: ConnectionProvider, accessToken: string) {
+async function fetchProviderIdentity(
+  provider: ConnectionProvider,
+  accessToken: string,
+) {
   switch (provider) {
     case "google": {
-      const response = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        signal: AbortSignal.timeout(10_000),
-      });
-      const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+      const response = await fetch(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      const payload = (await parseJsonResponse(response)) as Record<
+        string,
+        unknown
+      >;
       return {
         externalAccountId: String(payload.sub ?? payload.email ?? ""),
         displayName: String(payload.name ?? payload.email ?? "Google"),
@@ -626,7 +705,10 @@ async function fetchProviderIdentity(provider: ConnectionProvider, accessToken: 
           Accept: "application/vnd.github+json",
         },
       });
-      const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+      const payload = (await parseJsonResponse(response)) as Record<
+        string,
+        unknown
+      >;
       return {
         externalAccountId: String(payload.id ?? payload.login ?? ""),
         displayName: String(payload.login ?? payload.name ?? "GitHub"),
@@ -638,7 +720,10 @@ async function fetchProviderIdentity(provider: ConnectionProvider, accessToken: 
         headers: { Authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(10_000),
       });
-      const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+      const payload = (await parseJsonResponse(response)) as Record<
+        string,
+        unknown
+      >;
       return {
         externalAccountId: String(payload.id ?? ""),
         displayName: String(payload.username ?? "Discord"),
@@ -646,15 +731,26 @@ async function fetchProviderIdentity(provider: ConnectionProvider, accessToken: 
       };
     }
     case "dropbox": {
-      const response = await fetch("https://api.dropboxapi.com/2/users/get_current_account", {
-        method: "POST",
-        signal: AbortSignal.timeout(10_000),
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+      const response = await fetch(
+        "https://api.dropboxapi.com/2/users/get_current_account",
+        {
+          method: "POST",
+          signal: AbortSignal.timeout(10_000),
+          headers: { Authorization: `Bearer ${accessToken}` },
+        },
+      );
+      const payload = (await parseJsonResponse(response)) as Record<
+        string,
+        unknown
+      >;
       return {
         externalAccountId: String(payload.account_id ?? ""),
-        displayName: String(payload.name && typeof payload.name === "object" ? (payload.name as { display_name?: string }).display_name ?? "Dropbox" : "Dropbox"),
+        displayName: String(
+          payload.name && typeof payload.name === "object"
+            ? ((payload.name as { display_name?: string }).display_name ??
+                "Dropbox")
+            : "Dropbox",
+        ),
         metadata: payload,
       };
     }
@@ -678,21 +774,39 @@ export async function listIntegrationProviders(app: FastifyInstance) {
   }));
 }
 
-export async function listIntegrationApps(app: FastifyInstance, userId?: string) {
+export async function listIntegrationApps(
+  app: FastifyInstance,
+  userId?: string,
+) {
   const connections = userId
     ? await listUserIntegrationConnections(app, userId)
     : [];
 
   return integrationMcpAppCatalog.map((entry) => {
-    const connection = connections.find(
-      (item) =>
-        item.status === "connected" &&
-        item.appId === entry.id,
+    const exactConnection = connections.find(
+      (item) => item.status === "connected" && item.appId === entry.id,
     );
+    const legacyProviderConnection =
+      entry.execution === "server_connector"
+        ? connections.find((item) => {
+            if (
+              item.status !== "connected" ||
+              item.provider !== entry.provider ||
+              item.appId
+            ) {
+              return false;
+            }
+            const capabilities = stringList(item.capabilities);
+            return entry.capabilities.every((capability) =>
+              capabilities.includes(capability),
+            );
+          })
+        : undefined;
+    const connection = exactConnection ?? legacyProviderConnection;
     const missingScopes = missingOauthScopes(
       entry.provider,
       stringList(connection?.scopes),
-      entry.oauthScopes,
+      entry.connectionScopes ?? entry.oauthScopes,
     );
     const configured = isIntegrationMcpAppConfigured(app.config, entry);
     const connected = Boolean(connection && missingScopes.length === 0);
@@ -719,10 +833,12 @@ export async function listIntegrationApps(app: FastifyInstance, userId?: string)
       configured,
       available: configured && entry.stage !== "setup_required",
       connected,
-      connectionId: connected ? connection?.id ?? null : null,
-      accountLabel: connected ? connection?.displayName ?? null : null,
+      connectionId: connected ? (connection?.id ?? null) : null,
+      accountLabel: connected ? (connection?.displayName ?? null) : null,
       missingScopes,
-      probeStatus: probe?.status ?? (entry.execution === "remote_mcp" && connected ? "unknown" : null),
+      probeStatus:
+        probe?.status ??
+        (entry.execution === "remote_mcp" && connected ? "unknown" : null),
       probedAt: probe?.probedAt ?? null,
       probeErrorCode: probe?.errorCode ?? null,
       probeToolCount: probe?.toolCount ?? null,
@@ -752,7 +868,10 @@ export async function listUserIntegrationConnections(
     .from(integrationConnections)
     .where(
       provider
-        ? and(eq(integrationConnections.userId, userId), eq(integrationConnections.provider, provider))
+        ? and(
+            eq(integrationConnections.userId, userId),
+            eq(integrationConnections.provider, provider),
+          )
         : eq(integrationConnections.userId, userId),
     )
     .orderBy(desc(integrationConnections.updatedAt));
@@ -778,8 +897,13 @@ export async function startOauthConnection(
     throw badRequest(`Provider ${input.provider} does not support OAuth2`);
   }
 
-  const catalogEntry = input.appId ? getIntegrationMcpApp(input.appId) : undefined;
-  if (input.appId && (!catalogEntry || catalogEntry.provider !== input.provider)) {
+  const catalogEntry = input.appId
+    ? getIntegrationMcpApp(input.appId)
+    : undefined;
+  if (
+    input.appId &&
+    (!catalogEntry || catalogEntry.provider !== input.provider)
+  ) {
     throw badRequest("Integration app configuration is invalid");
   }
   if (
@@ -812,8 +936,13 @@ export async function startOauthConnection(
           ),
         )
         .limit(1);
-  const requestedScopes = input.scopes?.length ? input.scopes : entry.oauth.defaultScopes;
-  const scopes = mergeUnique(stringList(existingRows[0]?.scopes), requestedScopes);
+  const requestedScopes = input.scopes?.length
+    ? input.scopes
+    : entry.oauth.defaultScopes;
+  const scopes = mergeUnique(
+    stringList(existingRows[0]?.scopes),
+    requestedScopes,
+  );
   const pkce = entry.oauth.usePkce ? createPkcePair() : null;
   const expiresAt = new Date(Date.now() + 10 * 60_000);
 
@@ -835,7 +964,10 @@ export async function startOauthConnection(
   authUrl.searchParams.set("state", state);
 
   if (scopes.length > 0) {
-    authUrl.searchParams.set("scope", joinScopes(scopes, entry.oauth.scopeSeparator));
+    authUrl.searchParams.set(
+      "scope",
+      joinScopes(scopes, entry.oauth.scopeSeparator),
+    );
   }
 
   if (pkce) {
@@ -843,7 +975,9 @@ export async function startOauthConnection(
     authUrl.searchParams.set("code_challenge", pkce.challenge);
   }
 
-  for (const [key, value] of Object.entries(entry.oauth.extraAuthParams ?? {})) {
+  for (const [key, value] of Object.entries(
+    entry.oauth.extraAuthParams ?? {},
+  )) {
     authUrl.searchParams.set(key, value);
   }
 
@@ -859,7 +993,9 @@ export async function startOauthConnection(
     userAgent: input.userAgent,
     payload: {
       provider: input.provider,
-      scopeHash: createHash("sha256").update(JSON.stringify(scopes)).digest("hex"),
+      scopeHash: createHash("sha256")
+        .update(JSON.stringify(scopes))
+        .digest("hex"),
     },
   });
 
@@ -909,235 +1045,251 @@ export async function handleOauthCallback(
     errorDescription?: string;
   },
 ) {
-    const stateRows = await app.db
-      .select()
-      .from(oauthStates)
-      .where(and(eq(oauthStates.state, input.state), eq(oauthStates.provider, input.provider)))
-      .limit(1);
+  const stateRows = await app.db
+    .select()
+    .from(oauthStates)
+    .where(
+      and(
+        eq(oauthStates.state, input.state),
+        eq(oauthStates.provider, input.provider),
+      ),
+    )
+    .limit(1);
 
-    const oauthState = stateRows[0];
+  const oauthState = stateRows[0];
 
-    if (!oauthState) {
-      throw notFound("OAuth state not found");
-    }
+  if (!oauthState) {
+    throw notFound("OAuth state not found");
+  }
 
-    const oauthMetadata = recordValue(oauthState.metadata);
-    const appId = typeof oauthMetadata.appId === "string" ? oauthMetadata.appId.trim() : "";
+  const oauthMetadata = recordValue(oauthState.metadata);
+  const appId =
+    typeof oauthMetadata.appId === "string" ? oauthMetadata.appId.trim() : "";
 
-    if (oauthState.status !== "pending") {
-      throw badRequest("OAuth state has already been used");
-    }
+  if (oauthState.status !== "pending") {
+    throw badRequest("OAuth state has already been used");
+  }
 
-    if (oauthState.expiresAt.getTime() <= Date.now()) {
-      await app.db
-        .update(oauthStates)
-        .set({
-          status: "expired",
-        })
-        .where(eq(oauthStates.id, oauthState.id));
-      throw badRequest("OAuth state has expired");
-    }
-
-    const claimedRows = await app.db
+  if (oauthState.expiresAt.getTime() <= Date.now()) {
+    await app.db
       .update(oauthStates)
-      .set({ status: "expired", consumedAt: new Date() })
-      .where(and(eq(oauthStates.id, oauthState.id), eq(oauthStates.status, "pending")))
-      .returning({ id: oauthStates.id });
-    if (!claimedRows[0]) {
-      throw badRequest("OAuth state has already been used");
-    }
+      .set({
+        status: "expired",
+      })
+      .where(eq(oauthStates.id, oauthState.id));
+    throw badRequest("OAuth state has expired");
+  }
 
-    if (input.error) {
-      return {
-        redirectUri: oauthState.redirectUri,
-        status: "error" as const,
-        provider: input.provider,
-        appId: appId || undefined,
-        error: input.errorDescription ?? input.error,
-      };
-    }
+  const claimedRows = await app.db
+    .update(oauthStates)
+    .set({ status: "expired", consumedAt: new Date() })
+    .where(
+      and(eq(oauthStates.id, oauthState.id), eq(oauthStates.status, "pending")),
+    )
+    .returning({ id: oauthStates.id });
+  if (!claimedRows[0]) {
+    throw badRequest("OAuth state has already been used");
+  }
 
-    if (!input.code) {
-      throw badRequest("OAuth callback code is missing");
-    }
-
-    const tokenPayload = await exchangeOAuthCode(
-      app,
-      input.provider,
-      input.code,
-      oauthState.codeVerifier,
-      appId || undefined,
-    );
-    const accessToken = tokenPayload.access_token;
-
-    if (typeof accessToken !== "string" || !accessToken) {
-      throw badRequest("OAuth provider did not return an access token");
-    }
-
-    const identity = await fetchProviderIdentity(input.provider, accessToken);
-    const effectiveScopes = grantedOauthScopes(
-      tokenPayload,
-      oauthState.requestedScopes,
-    );
-    const connection = await app.db.transaction(async (tx) => {
-      const lockKey = `${oauthState.userId}:${appId || input.provider}`;
-      await tx.execute(
-        sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
-      );
-
-      const existingConnectionRows = await tx
-        .select({
-          id: integrationConnections.id,
-          metadata: integrationConnections.metadata,
-        })
-        .from(integrationConnections)
-        .where(
-          appId
-            ? and(
-                eq(integrationConnections.userId, oauthState.userId),
-                eq(integrationConnections.appId, appId),
-              )
-            : and(
-                eq(integrationConnections.userId, oauthState.userId),
-                eq(integrationConnections.provider, input.provider),
-              ),
-        )
-        .limit(1);
-
-      const previousMetadata = recordValue(existingConnectionRows[0]?.metadata);
-      const enabledMcpApps = appId
-        ? [appId]
-        : stringList(previousMetadata.enabledMcpApps);
-      const mergedMetadata = {
-        ...previousMetadata,
-        ...(identity.metadata ?? {}),
-        ...(enabledMcpApps.length > 0 ? { enabledMcpApps } : {}),
-      };
-      const connectionValues = {
-        userId: oauthState.userId,
-        appId: appId || null,
-        provider: input.provider,
-        authType: getIntegrationProvider(input.provider)?.authType ?? "oauth2" as const,
-        status: "connected" as const,
-        displayName: identity.displayName,
-        externalAccountId: identity.externalAccountId,
-        scopes: effectiveScopes,
-        capabilities: appId
-          ? getIntegrationMcpApp(appId)?.capabilities ?? []
-          : getIntegrationProvider(input.provider)?.capabilities ?? [],
-        metadata: mergedMetadata,
-        lastSyncedAt: new Date(),
-        updatedAt: new Date(),
-      };
-      const connectionRows = existingConnectionRows[0]
-        ? await tx
-            .update(integrationConnections)
-            .set(connectionValues)
-            .where(eq(integrationConnections.id, existingConnectionRows[0].id))
-            .returning()
-        : appId
-          ? await tx
-              .insert(integrationConnections)
-              .values(connectionValues)
-              .onConflictDoUpdate({
-                target: [integrationConnections.userId, integrationConnections.appId],
-                set: connectionValues,
-              })
-              .returning()
-          : await tx
-              .insert(integrationConnections)
-              .values(connectionValues)
-              .returning();
-      const nextConnection = connectionRows[0];
-      if (!nextConnection) {
-        throw badRequest("OAuth connection could not be stored");
-      }
-
-      const existingCredentialRows = await tx
-        .select({ encryptedPayload: integrationCredentials.encryptedPayload })
-        .from(integrationCredentials)
-        .where(eq(integrationCredentials.connectionId, nextConnection.id))
-        .limit(1);
-      let previousRefreshToken: string | null = null;
-      if (existingCredentialRows[0]?.encryptedPayload) {
-        try {
-          previousRefreshToken = decryptJson<GoogleOAuthPayload>(
-            app.config,
-            existingCredentialRows[0].encryptedPayload,
-          ).refreshToken;
-        } catch {
-          previousRefreshToken = null;
-        }
-      }
-      const refreshToken =
-        typeof tokenPayload.refresh_token === "string" && tokenPayload.refresh_token
-          ? tokenPayload.refresh_token
-          : previousRefreshToken;
-      const encryptedPayload = encryptJson(app.config, {
-        accessToken,
-        refreshToken,
-        tokenType: typeof tokenPayload.token_type === "string" ? tokenPayload.token_type : "Bearer",
-        scope: typeof tokenPayload.scope === "string" ? tokenPayload.scope : null,
-        raw: tokenPayload,
-      });
-      const expiresAt = getExpiresAtFromTokenPayload(tokenPayload);
-
-      await tx
-        .insert(integrationCredentials)
-        .values({
-          connectionId: nextConnection.id,
-          encryptedPayload,
-          expiresAt,
-        })
-        .onConflictDoUpdate({
-          target: integrationCredentials.connectionId,
-          set: {
-            encryptedPayload,
-            expiresAt,
-            updatedAt: new Date(),
-          },
-        });
-
-      const completedStateRows = await tx
-        .update(oauthStates)
-        .set({ status: "completed", consumedAt: new Date() })
-        .where(
-          and(
-            eq(oauthStates.id, oauthState.id),
-            eq(oauthStates.status, "expired"),
-          ),
-        )
-        .returning({ id: oauthStates.id });
-      if (!completedStateRows[0]) {
-        throw badRequest("OAuth state completion failed");
-      }
-      return nextConnection;
-    });
-
-    await createAuditLog(app, {
-      userId: oauthState.userId,
-      actorType: "user",
-      actorId: oauthState.userId,
-      action: "integration.oauth.callback",
-      resourceType: "integration_connection",
-      resourceId: connection.id,
-      status: "success",
-      payload: {
-        provider: input.provider,
-        ...(appId ? { appId } : {}),
-      },
-    });
-
+  if (input.error) {
     return {
       redirectUri: oauthState.redirectUri,
-      status: "connected" as const,
+      status: "error" as const,
       provider: input.provider,
       appId: appId || undefined,
-      connectionId: connection.id,
-      // Route katmanındaki bağlantı-sonrası MCP probu için; redirect
-      // query'sine ASLA yazılmaz.
-      userId: oauthState.userId,
+      error: input.errorDescription ?? input.error,
     };
+  }
+
+  if (!input.code) {
+    throw badRequest("OAuth callback code is missing");
+  }
+
+  const tokenPayload = await exchangeOAuthCode(
+    app,
+    input.provider,
+    input.code,
+    oauthState.codeVerifier,
+    appId || undefined,
+  );
+  const accessToken = tokenPayload.access_token;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    throw badRequest("OAuth provider did not return an access token");
+  }
+
+  const identity = await fetchProviderIdentity(input.provider, accessToken);
+  const effectiveScopes = grantedOauthScopes(
+    tokenPayload,
+    oauthState.requestedScopes,
+  );
+  const connection = await app.db.transaction(async (tx) => {
+    const lockKey = `${oauthState.userId}:${appId || input.provider}`;
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`,
+    );
+
+    const existingConnectionRows = await tx
+      .select({
+        id: integrationConnections.id,
+        metadata: integrationConnections.metadata,
+      })
+      .from(integrationConnections)
+      .where(
+        appId
+          ? and(
+              eq(integrationConnections.userId, oauthState.userId),
+              eq(integrationConnections.appId, appId),
+            )
+          : and(
+              eq(integrationConnections.userId, oauthState.userId),
+              eq(integrationConnections.provider, input.provider),
+            ),
+      )
+      .limit(1);
+
+    const previousMetadata = recordValue(existingConnectionRows[0]?.metadata);
+    const enabledMcpApps = appId
+      ? [appId]
+      : stringList(previousMetadata.enabledMcpApps);
+    const mergedMetadata = {
+      ...previousMetadata,
+      ...(identity.metadata ?? {}),
+      ...(enabledMcpApps.length > 0 ? { enabledMcpApps } : {}),
+    };
+    const connectionValues = {
+      userId: oauthState.userId,
+      appId: appId || null,
+      provider: input.provider,
+      authType:
+        getIntegrationProvider(input.provider)?.authType ?? ("oauth2" as const),
+      status: "connected" as const,
+      displayName: identity.displayName,
+      externalAccountId: identity.externalAccountId,
+      scopes: effectiveScopes,
+      capabilities: appId
+        ? (getIntegrationMcpApp(appId)?.capabilities ?? [])
+        : (getIntegrationProvider(input.provider)?.capabilities ?? []),
+      metadata: mergedMetadata,
+      lastSyncedAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const connectionRows = existingConnectionRows[0]
+      ? await tx
+          .update(integrationConnections)
+          .set(connectionValues)
+          .where(eq(integrationConnections.id, existingConnectionRows[0].id))
+          .returning()
+      : appId
+        ? await tx
+            .insert(integrationConnections)
+            .values(connectionValues)
+            .onConflictDoUpdate({
+              target: [
+                integrationConnections.userId,
+                integrationConnections.appId,
+              ],
+              set: connectionValues,
+            })
+            .returning()
+        : await tx
+            .insert(integrationConnections)
+            .values(connectionValues)
+            .returning();
+    const nextConnection = connectionRows[0];
+    if (!nextConnection) {
+      throw badRequest("OAuth connection could not be stored");
+    }
+
+    const existingCredentialRows = await tx
+      .select({ encryptedPayload: integrationCredentials.encryptedPayload })
+      .from(integrationCredentials)
+      .where(eq(integrationCredentials.connectionId, nextConnection.id))
+      .limit(1);
+    let previousRefreshToken: string | null = null;
+    if (existingCredentialRows[0]?.encryptedPayload) {
+      try {
+        previousRefreshToken = decryptJson<GoogleOAuthPayload>(
+          app.config,
+          existingCredentialRows[0].encryptedPayload,
+        ).refreshToken;
+      } catch {
+        previousRefreshToken = null;
+      }
+    }
+    const refreshToken =
+      typeof tokenPayload.refresh_token === "string" &&
+      tokenPayload.refresh_token
+        ? tokenPayload.refresh_token
+        : previousRefreshToken;
+    const encryptedPayload = encryptJson(app.config, {
+      accessToken,
+      refreshToken,
+      tokenType:
+        typeof tokenPayload.token_type === "string"
+          ? tokenPayload.token_type
+          : "Bearer",
+      scope: typeof tokenPayload.scope === "string" ? tokenPayload.scope : null,
+      raw: tokenPayload,
+    });
+    const expiresAt = getExpiresAtFromTokenPayload(tokenPayload);
+
+    await tx
+      .insert(integrationCredentials)
+      .values({
+        connectionId: nextConnection.id,
+        encryptedPayload,
+        expiresAt,
+      })
+      .onConflictDoUpdate({
+        target: integrationCredentials.connectionId,
+        set: {
+          encryptedPayload,
+          expiresAt,
+          updatedAt: new Date(),
+        },
+      });
+
+    const completedStateRows = await tx
+      .update(oauthStates)
+      .set({ status: "completed", consumedAt: new Date() })
+      .where(
+        and(
+          eq(oauthStates.id, oauthState.id),
+          eq(oauthStates.status, "expired"),
+        ),
+      )
+      .returning({ id: oauthStates.id });
+    if (!completedStateRows[0]) {
+      throw badRequest("OAuth state completion failed");
+    }
+    return nextConnection;
+  });
+
+  await createAuditLog(app, {
+    userId: oauthState.userId,
+    actorType: "user",
+    actorId: oauthState.userId,
+    action: "integration.oauth.callback",
+    resourceType: "integration_connection",
+    resourceId: connection.id,
+    status: "success",
+    payload: {
+      provider: input.provider,
+      ...(appId ? { appId } : {}),
+    },
+  });
+
+  return {
+    redirectUri: oauthState.redirectUri,
+    status: "connected" as const,
+    provider: input.provider,
+    appId: appId || undefined,
+    connectionId: connection.id,
+    // Route katmanındaki bağlantı-sonrası MCP probu için; redirect
+    // query'sine ASLA yazılmaz.
+    userId: oauthState.userId,
+  };
 }
 
 export async function disconnectIntegration(
@@ -1155,7 +1307,12 @@ export async function disconnectIntegration(
       status: "revoked",
       updatedAt: new Date(),
     })
-    .where(and(eq(integrationConnections.id, input.connectionId), eq(integrationConnections.userId, input.userId)))
+    .where(
+      and(
+        eq(integrationConnections.id, input.connectionId),
+        eq(integrationConnections.userId, input.userId),
+      ),
+    )
     .returning();
 
   const connection = rows[0];
@@ -1271,7 +1428,13 @@ export async function getConnectionAccessTokenForProbe(
   appId?: string,
   refreshTimeoutMs = 8_000,
 ) {
-  return getConnectionAccessToken(app, connectionId, provider, appId, refreshTimeoutMs);
+  return getConnectionAccessToken(
+    app,
+    connectionId,
+    provider,
+    appId,
+    refreshTimeoutMs,
+  );
 }
 
 async function getConnectionAccessToken(
@@ -1283,16 +1446,17 @@ async function getConnectionAccessToken(
 ) {
   if (provider === "google") {
     return (
-      await getGoogleMailAccessToken(
-        app,
-        connectionId,
-        appId,
-        refreshTimeoutMs,
-      )
+      await getGoogleMailAccessToken(app, connectionId, appId, refreshTimeoutMs)
     ).accessToken;
   }
-  const { credential, tokenPayload } = await loadGoogleOAuthTokenPayload(app, connectionId);
-  if (credential.expiresAt && credential.expiresAt.getTime() <= Date.now() + 30_000) {
+  const { credential, tokenPayload } = await loadGoogleOAuthTokenPayload(
+    app,
+    connectionId,
+  );
+  if (
+    credential.expiresAt &&
+    credential.expiresAt.getTime() <= Date.now() + 30_000
+  ) {
     if (!tokenPayload.refreshToken) {
       throw badRequest("Integration connection needs re-authentication");
     }
@@ -1324,9 +1488,14 @@ export async function getConnectorAccessToken(
     userId: string;
     capability: string;
     requiredScopes?: string[];
+    acceptedScopeSets?: string[][];
     refreshTimeoutMs?: number;
   },
-): Promise<{ connectionId: string; provider: ConnectionProvider; accessToken: string }> {
+): Promise<{
+  connectionId: string;
+  provider: ConnectionProvider;
+  accessToken: string;
+}> {
   const rows = await app.db
     .select({
       id: integrationConnections.id,
@@ -1355,17 +1524,20 @@ export async function getConnectorAccessToken(
     if (!input.requiredScopes?.length) {
       return true;
     }
-    return (
-      missingOauthScopes(
-        row.provider,
-        stringList(row.scopes),
-        input.requiredScopes,
-      ).length === 0
+    const acceptedScopeSets = input.acceptedScopeSets?.length
+      ? input.acceptedScopeSets
+      : [input.requiredScopes];
+    return acceptedScopeSets.some(
+      (scopeSet) =>
+        missingOauthScopes(row.provider, stringList(row.scopes), scopeSet)
+          .length === 0,
     );
   });
 
   if (!match) {
-    throw notFound(`No connected integration grants capability ${input.capability}`);
+    throw notFound(
+      `No connected integration grants capability ${input.capability}`,
+    );
   }
 
   const accessToken = await getConnectionAccessToken(
@@ -1383,6 +1555,72 @@ export async function listConnectedCapabilities(
   app: FastifyInstance,
   userId: string,
 ): Promise<string[]> {
+  const grants = await listConnectedCapabilityGrants(app, userId);
+  return [...new Set(grants.flatMap((grant) => grant.capabilities))];
+}
+
+/**
+ * Resolve a natural-language remote MCP request against the user's actually
+ * connected capabilities. Both chat routing and task creation consume this
+ * function so a late semantic match cannot disagree with an earlier route.
+ */
+export async function resolveRemoteMcpRequestedCapabilities(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    prompt: string;
+    requestedCapabilities: string[];
+  },
+): Promise<string[]> {
+  const requestedCapabilities = [...new Set(input.requestedCapabilities)];
+  if (requestedCapabilities.includes("mcp_call_tool")) {
+    return requestedCapabilities;
+  }
+
+  const remoteMcpCapabilities = new Set(
+    integrationMcpAppCatalog
+      .filter((entry) => entry.execution === "remote_mcp")
+      .flatMap((entry) => entry.capabilities),
+  );
+  const connectedCapabilities = new Set(
+    await listConnectedCapabilities(app, input.userId).catch(
+      () => [] as string[],
+    ),
+  );
+  const connectedRemoteMcpCapabilities = [...connectedCapabilities].filter(
+    (capability) => remoteMcpCapabilities.has(capability),
+  );
+  if (connectedRemoteMcpCapabilities.length === 0) {
+    return requestedCapabilities;
+  }
+
+  const requestedApps = await inferRequestedRemoteMcpAppsSemantic(
+    input.prompt,
+    connectedRemoteMcpCapabilities,
+  ).catch(() =>
+    inferRequestedRemoteMcpApps(input.prompt, connectedRemoteMcpCapabilities),
+  );
+  if (requestedApps.length === 0) return requestedCapabilities;
+  const connectedAppRequested = requestedApps.some((entry) =>
+    entry.capabilities.some((capability) =>
+      connectedCapabilities.has(capability),
+    ),
+  );
+  return connectedAppRequested
+    ? [...requestedCapabilities, "mcp_call_tool"]
+    : requestedCapabilities;
+}
+
+export async function listConnectedCapabilityGrants(
+  app: FastifyInstance,
+  userId: string,
+): Promise<
+  Array<{
+    provider: ConnectionProvider;
+    scopes: string[];
+    capabilities: string[];
+  }>
+> {
   const rows = await app.db
     .select({
       provider: integrationConnections.provider,
@@ -1396,18 +1634,19 @@ export async function listConnectedCapabilities(
         eq(integrationConnections.status, "connected"),
       ),
     );
-  const capabilities = new Set<string>();
-  for (const row of rows) {
-    if (!Array.isArray(row.capabilities)) continue;
-    for (const capability of row.capabilities) {
-      const value = String(capability ?? "").trim();
-      if (value) capabilities.add(value);
-    }
-  }
-  return [...capabilities];
+  return rows
+    .map((row) => ({
+      provider: row.provider,
+      scopes: stringList(row.scopes),
+      capabilities: stringList(row.capabilities),
+    }))
+    .filter((row) => row.capabilities.length > 0);
 }
 
-export async function listRuntimeMcpConnections(app: FastifyInstance, userId: string) {
+export async function listRuntimeMcpConnections(
+  app: FastifyInstance,
+  userId: string,
+) {
   const runtimeTokenRefreshTimeoutMs = 4_000;
   const rows = await app.db
     .select({
@@ -1422,76 +1661,91 @@ export async function listRuntimeMcpConnections(app: FastifyInstance, userId: st
       updatedAt: integrationConnections.updatedAt,
     })
     .from(integrationConnections)
-    .where(and(eq(integrationConnections.userId, userId), eq(integrationConnections.status, "connected")));
+    .where(
+      and(
+        eq(integrationConnections.userId, userId),
+        eq(integrationConnections.status, "connected"),
+      ),
+    );
 
-  const candidates = rows.flatMap((connection) => {
-    return integrationMcpAppCatalog
-      .filter(
-        (entry) =>
-          entry.id === connection.appId &&
-          entry.provider === connection.provider &&
-          // Only real remote MCP servers are leased to the desktop runtime.
-          // server_connector capabilities (Gmail/Drive/Calendar) are served by
-          // the shared brain's REST connector tools, so they never need — and
-          // must not advertise — a remote MCP URL to the desktop.
-          entry.execution === "remote_mcp" &&
-          entry.authStrategy === "provider_bearer" &&
-          entry.stage !== "setup_required" &&
-          missingOauthScopes(
-            entry.provider,
-            stringList(connection.scopes),
-            entry.oauthScopes,
-          ).length === 0,
-      )
-      .map((entry) => ({ connection, entry }));
-  }).sort((left, right) =>
-    left.entry.id.localeCompare(right.entry.id) ||
-    left.connection.id.localeCompare(right.connection.id),
+  const candidates = rows
+    .flatMap((connection) => {
+      return integrationMcpAppCatalog
+        .filter(
+          (entry) =>
+            entry.id === connection.appId &&
+            entry.provider === connection.provider &&
+            // Only real remote MCP servers are leased to the desktop runtime.
+            // server_connector capabilities (Gmail/Drive/Calendar) are served by
+            // the shared brain's REST connector tools, so they never need — and
+            // must not advertise — a remote MCP URL to the desktop.
+            entry.execution === "remote_mcp" &&
+            (entry.authStrategy === "provider_bearer" ||
+              entry.authStrategy === "mcp_oauth") &&
+            entry.stage !== "setup_required" &&
+            missingOauthScopes(
+              entry.provider,
+              stringList(connection.scopes),
+              entry.oauthScopes,
+            ).length === 0,
+        )
+        .map((entry) => ({ connection, entry }));
+    })
+    .sort(
+      (left, right) =>
+        left.entry.id.localeCompare(right.entry.id) ||
+        left.connection.id.localeCompare(right.connection.id),
+    );
+
+  const servers = await Promise.all(
+    candidates.map(async ({ connection, entry }) => {
+      let accessToken = "";
+      let authErrorCode = "";
+      try {
+        accessToken = await getConnectionAccessToken(
+          app,
+          connection.id,
+          connection.provider,
+          connection.appId ?? undefined,
+          runtimeTokenRefreshTimeoutMs,
+        );
+      } catch {
+        authErrorCode = "MCP_AUTH_REQUIRED";
+      }
+
+      // El sıkışma probu: "connected" yalnız OAuth başarısı; sunucunun gerçekten
+      // konuştuğunu son prob söyler. Prob başarısızsa lease'te disabled taşınır —
+      // desktop bağlanmayı denemez, mobil "yeniden bağlan" gösterebilir.
+      const probe = readConnectionMcpProbe(connection.metadata, entry.id);
+      if (
+        !authErrorCode &&
+        probe?.status === "failed" &&
+        probe.errorCode === "MCP_AUTH_REQUIRED"
+      ) {
+        authErrorCode = "MCP_AUTH_REQUIRED";
+      }
+
+      return {
+        id: `app_${entry.id}`,
+        appId: entry.id,
+        connectionId: connection.id,
+        provider: entry.provider,
+        name: entry.displayName,
+        transport: "streamable_http",
+        url: entry.serverUrl,
+        authType: "bearer",
+        accessToken,
+        authErrorCode,
+        enabled: !authErrorCode && probe?.status !== "failed",
+        probeStatus: probe?.status ?? "unknown",
+        probedAt: probe?.probedAt ?? null,
+        probeErrorCode: probe?.errorCode ?? null,
+        probeToolCount: probe?.toolCount ?? null,
+        startupTimeoutSec: 15,
+        callTimeoutSec: 45,
+      };
+    }),
   );
-
-  const servers = await Promise.all(candidates.map(async ({ connection, entry }) => {
-    let accessToken = "";
-    let authErrorCode = "";
-    try {
-      accessToken = await getConnectionAccessToken(
-        app,
-        connection.id,
-        connection.provider,
-        connection.appId ?? undefined,
-        runtimeTokenRefreshTimeoutMs,
-      );
-    } catch {
-      authErrorCode = "MCP_AUTH_REQUIRED";
-    }
-
-    // El sıkışma probu: "connected" yalnız OAuth başarısı; sunucunun gerçekten
-    // konuştuğunu son prob söyler. Prob başarısızsa lease'te disabled taşınır —
-    // desktop bağlanmayı denemez, mobil "yeniden bağlan" gösterebilir.
-    const probe = readConnectionMcpProbe(connection.metadata, entry.id);
-    if (!authErrorCode && probe?.status === "failed" && probe.errorCode === "MCP_AUTH_REQUIRED") {
-      authErrorCode = "MCP_AUTH_REQUIRED";
-    }
-
-    return {
-      id: `app_${entry.id}`,
-      appId: entry.id,
-      connectionId: connection.id,
-      provider: entry.provider,
-      name: entry.displayName,
-      transport: "streamable_http",
-      url: entry.serverUrl,
-      authType: "bearer",
-      accessToken,
-      authErrorCode,
-      enabled: !authErrorCode && probe?.status !== "failed",
-      probeStatus: probe?.status ?? "unknown",
-      probedAt: probe?.probedAt ?? null,
-      probeErrorCode: probe?.errorCode ?? null,
-      probeToolCount: probe?.toolCount ?? null,
-      startupTimeoutSec: 15,
-      callTimeoutSec: 45,
-    };
-  }));
 
   const revision = createHash("sha256")
     .update(
@@ -1528,7 +1782,9 @@ export async function sendGmailMessage(
     userId: input.userId,
     connectionId: input.connectionId,
   });
-  const scopes = Array.isArray(connection.scopes) ? connection.scopes.map((value) => String(value ?? "").trim()) : [];
+  const scopes = Array.isArray(connection.scopes)
+    ? connection.scopes.map((value) => String(value ?? "").trim())
+    : [];
   if (!scopes.includes("https://www.googleapis.com/auth/gmail.send")) {
     throw badRequest("Google Gmail send scope is missing");
   }
@@ -1548,19 +1804,25 @@ export async function sendGmailMessage(
     body: input.body,
   });
 
-  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-    signal: AbortSignal.timeout(15_000),
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token.accessToken}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
+  const response = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    {
+      signal: AbortSignal.timeout(15_000),
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token.accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        raw: Buffer.from(mimeMessage, "utf8").toString("base64url"),
+      }),
     },
-    body: JSON.stringify({
-      raw: Buffer.from(mimeMessage, "utf8").toString("base64url"),
-    }),
-  });
-  const payload = (await parseJsonResponse(response)) as Record<string, unknown>;
+  );
+  const payload = (await parseJsonResponse(response)) as Record<
+    string,
+    unknown
+  >;
   if (!response.ok || payload.error) {
     throw badRequest("Gmail message send failed", payload);
   }
@@ -1568,7 +1830,9 @@ export async function sendGmailMessage(
   const messageId = typeof payload.id === "string" ? payload.id : "";
   const threadId = typeof payload.threadId === "string" ? payload.threadId : "";
   const labelIds = Array.isArray(payload.labelIds)
-    ? payload.labelIds.map((value) => String(value ?? "").trim()).filter(Boolean)
+    ? payload.labelIds
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean)
     : [];
 
   await createAuditLog(app, {

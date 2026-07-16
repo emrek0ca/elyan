@@ -5,7 +5,7 @@ import {
   extractHostedGeneratedImage,
 } from "./hosted-image-adapter.js";
 
-test("Gemini image adapter defaults to the cost-safe 1K Interactions request", () => {
+test("Gemini image adapter defaults to a 2K PNG Interactions request", () => {
   const request = buildHostedImageProviderRequest({
     config: {
       provider: "gemini",
@@ -16,18 +16,38 @@ test("Gemini image adapter defaults to the cost-safe 1K Interactions request", (
     },
     prompt: "Warm editorial illustration",
     aspectRatio: "3:2",
-    openAiSize: "1536x1024",
   });
 
   assert.equal(request.path, "/interactions");
   assert.equal(request.headers["x-goog-api-key"], "secret-test-key");
   assert.deepEqual(request.body.response_format, {
     type: "image",
-    mime_type: "image/jpeg",
+    mime_type: "image/png",
     aspect_ratio: "3:2",
-    image_size: "1K",
+    image_size: "2K",
   });
   assert.doesNotMatch(JSON.stringify(request.body), /secret-test-key/u);
+});
+
+test("Gemini image adapter sends exact prompt and source image for editing", () => {
+  const request = buildHostedImageProviderRequest({
+    config: {
+      provider: "gemini",
+      apiKey: "secret-test-key",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      model: "gemini-3-pro-image-preview",
+      source: "test",
+      imageSize: "2K",
+    },
+    prompt: "Arka planı gün batımı yap, kişiyi değiştirme",
+    sourceImages: [{ base64Data: "YWJjZA==", mimeType: "image/png" }],
+  });
+
+  assert.deepEqual(request.body.input, [
+    { type: "text", text: "Arka planı gün batımı yap, kişiyi değiştirme" },
+    { type: "image", data: "YWJjZA==", mime_type: "image/png" },
+  ]);
+  assert.equal((request.body.response_format as Record<string, unknown>).aspect_ratio, undefined);
 });
 
 test("hosted image adapter normalizes Gemini inline image output", () => {

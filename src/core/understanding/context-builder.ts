@@ -385,9 +385,6 @@ function buildRelationshipContextDigest(input: {
   memorySnapshot?: MemoryProfileSnapshot;
   continuitySummary: UserUnderstandingContext["continuitySummary"];
   continuityBoundary: ContinuityBoundary;
-  situationalHints: string[];
-  behavioralHints: string[];
-  environmentHints: string[];
   projectHints: string[];
   technicalHints: string[];
 }): string[] {
@@ -424,15 +421,6 @@ function buildRelationshipContextDigest(input: {
   }
   if (input.continuityBoundary.carryContinuity && input.continuitySummary.openLoops.length > 0) {
     pushDigestLine(digest, `Open follow-up to keep track of: ${input.continuitySummary.openLoops[0]}`);
-  }
-  if (input.situationalHints.length > 0) {
-    pushDigestLine(digest, `Current situational context: ${input.situationalHints[0]}`);
-  }
-  if (input.behavioralHints.length > 0) {
-    pushDigestLine(digest, `Planning/interaction adaptation: ${input.behavioralHints[0]}`);
-  }
-  if (input.environmentHints.length > 0) {
-    pushDigestLine(digest, `Local/environment context: ${input.environmentHints[0]}`);
   }
   if (input.projectHints.length > 0) {
     pushDigestLine(digest, `Relevant project context: ${input.projectHints[0]}`);
@@ -1385,8 +1373,18 @@ export function buildUserContextFromMemory(input: {
   contextPackets?: ContextPacket[];
   activeGoal?: ActiveGoalContext | null;
 }): UserUnderstandingContext {
-  const filteredMemory = filterRetrievedMemory(input.memory).slice(0, MAX_HINTS);
-  const memorySnapshot = buildMemoryProfileSnapshot(filteredMemory);
+  const eligibleMemory = filterRetrievedMemory(input.memory);
+  // World signals are short-lived request context, not durable profile facts.
+  // Keep them available to the relevance-aware derived-hint builder below,
+  // but never let them enter the user's memory/profile snapshot or generic
+  // personalization hints.
+  const profileMemory = eligibleMemory
+    .filter((item) => !isWorldDerivedMemory(item))
+    .slice(0, MAX_HINTS);
+  const worldContextMemory = eligibleMemory
+    .filter((item) => isWorldDerivedMemory(item))
+    .slice(0, 4);
+  const memorySnapshot = buildMemoryProfileSnapshot(profileMemory);
   const userProfile = buildUserProfileSnapshot({
     profile: input.profile,
     memorySnapshot,
@@ -1452,28 +1450,12 @@ export function buildUserContextFromMemory(input: {
       state,
     );
   }
-  for (const packet of contextPackets) {
-    if (packet.mentionPolicy === "explicit_when_relevant") {
-      pushBounded(
-        situationalHints,
-        `Relevant live context available if directly useful: ${packet.kind}: ${packet.summary}`,
-        state,
-      );
-    } else if (packet.mentionPolicy === "implicit") {
-      pushBounded(
-        behavioralHints,
-        `Silently adapt using ${packet.kind}: ${(packet.allowedUse ?? ["pacing"]).join(", ")}`,
-        state,
-      );
-    }
-  }
-
   for (const hint of extractProjectHints(input.task)) {
     pushBounded(projectHints, hint, state);
   }
 
   const now = Date.now();
-  for (const item of filteredMemory) {
+  for (const item of profileMemory) {
     // Temporal etiket: ne kadar önce öğrenildi
     const ageDays = Math.max(
       0,
@@ -1517,7 +1499,7 @@ export function buildUserContextFromMemory(input: {
   }
 
   const derivedHints = buildDerivedHintBuckets({
-    memory: filteredMemory.map((item) => ({
+    memory: worldContextMemory.map((item) => ({
       key: item.key,
       value: item.value,
       metadata:
@@ -1592,9 +1574,6 @@ export function buildUserContextFromMemory(input: {
     memorySnapshot,
     continuitySummary,
     continuityBoundary,
-    situationalHints,
-    behavioralHints,
-    environmentHints,
     projectHints,
     technicalHints,
   });
@@ -1638,7 +1617,7 @@ export function buildUserContextFromMemory(input: {
     memoryEnabled,
     personalizationPrompt,
     memoryRelevanceSummary: buildMemoryRelevanceSummary({
-      memory: filteredMemory,
+      memory: profileMemory,
       continuitySummary,
       continuityBoundary,
     }),
@@ -1646,7 +1625,7 @@ export function buildUserContextFromMemory(input: {
     healthContextUsed,
     packetKinds,
     freshness: summarizeContextFreshness(contextPackets),
-    retrievedMemory: filteredMemory,
+    retrievedMemory: profileMemory,
     memorySnapshot,
     userProfile,
     tokenBudget: {
@@ -1665,62 +1644,6 @@ async function extractQuickFacts(message: string): Promise<{ name?: string; city
     if (f.k === "city" && f.v) result.city = f.v;
   }
   return result;
-}
-
-/* ── Derive C-level behavioral hints from world signals ───────────────── */
-async function deriveCHintsFromWorldSignals(
-  signals: Awaited<ReturnType<typeof listFreshWorldSignals>>,
-): Promise<{ situational: string[]; behavioral: string[]; environmental: string[] }> {
-  if (!nlpDaemon.isAvailable() || signals.length === 0) {
-    return { situational: [], behavioral: [], environmental: [] };
-  }
-
-  const allHints = (
-    await Promise.all(
-      signals.slice(0, 6).map((signal) => {
-        const facts = signal.facts as Record<string, unknown> | null;
-        const readRecord = (v: unknown) =>
-          v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-        const rf = readRecord(facts);
-        const readNum = (k: string) => {
-          const v = rf?.[k];
-          return typeof v === "number" && Number.isFinite(v) ? v : null;
-        };
-        const readStr = (k: string) => {
-          const v = rf?.[k];
-          return typeof v === "string" && v.trim() ? v.trim() : null;
-        };
-
-        return nlpDaemon.deriveHints({
-          kind:        signal.kind,
-          summary:     signal.summary,
-          energy:      readStr("energyLevel") ?? readStr("energy"),
-          readiness:   readNum("readiness"),
-          mobility:    readStr("mobility"),
-          busyness:    readStr("busyness") ?? readStr("busyLevel"),
-          attention:   readStr("attentionLoad") ?? readStr("notificationLoad"),
-          city:        readStr("city"),
-          freeMinutes: readNum("freeMinutesToday"),
-        }).catch(() => []);
-      }),
-    )
-  ).flat();
-
-  const situational:   string[] = [];
-  const behavioral:    string[] = [];
-  const environmental: string[] = [];
-
-  for (const h of allHints) {
-    if (h.bucket === "situational"   && !situational.includes(h.hint))   situational.push(h.hint);
-    if (h.bucket === "behavioral"    && !behavioral.includes(h.hint))    behavioral.push(h.hint);
-    if (h.bucket === "environmental" && !environmental.includes(h.hint)) environmental.push(h.hint);
-  }
-
-  return {
-    situational:   situational.slice(0, 4),
-    behavioral:    behavioral.slice(0, 4),
-    environmental: environmental.slice(0, 4),
-  };
 }
 
 export async function buildUserContext(
@@ -1764,8 +1687,8 @@ export async function buildUserContext(
     !isSocialTurn && nlpDaemon.isAvailable()
       ? extractQuickFacts(input.message).catch(() => ({ name: undefined, city: undefined }))
       : Promise.resolve({ name: undefined, city: undefined }),
-    !isSocialTurn
-      ? listCachedFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 72 }).catch(() => [])
+    !isSocialTurn && contextPackets.some((packet) => packet.source === "world_signal")
+      ? listCachedFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 24 }).catch(() => [])
       : Promise.resolve([]),
     (foundationEnabled || shadowReadEnabled) && memoryEnabled
       ? buildCognitiveContextPacket(app, {
@@ -1880,10 +1803,40 @@ export async function buildUserContext(
           .orderBy(desc(learningEvents.createdAt))
           .limit(40);
 
+  // The DB-backed signal path may enrich a packet with safe derived facts, but
+  // it must inherit the typed packet's permission, relevance and TTL decision.
+  // A signal kind absent from the current packet set is never injected.
+  const relevantSignalTtlHours = new Map<string, number>();
+  for (const packet of contextPackets) {
+    if (packet.source !== "world_signal") continue;
+    const createdAt = packet.createdAt ? new Date(packet.createdAt) : null;
+    const expiresAt = packet.expiresAt ? new Date(packet.expiresAt) : null;
+    const ttlHours =
+      createdAt &&
+      expiresAt &&
+      Number.isFinite(createdAt.getTime()) &&
+      Number.isFinite(expiresAt.getTime())
+        ? Math.max(0, (expiresAt.getTime() - createdAt.getTime()) / 3_600_000)
+        : 0;
+    if (ttlHours <= 0) continue;
+    for (const kind of packet.signalKinds) {
+      relevantSignalTtlHours.set(
+        kind.toLowerCase(),
+        Math.max(relevantSignalTtlHours.get(kind.toLowerCase()) ?? 0, ttlHours),
+      );
+    }
+  }
+  const relevantWorldSignals = freshWorldSignals.filter((signal) => {
+    const ttlHours = relevantSignalTtlHours.get(signal.kind.toLowerCase());
+    if (!ttlHours) return false;
+    const ageHours = Math.max(0, now.getTime() - signal.createdAt.getTime()) / 3_600_000;
+    return Number.isFinite(ageHours) && ageHours <= ttlHours;
+  });
+
   const worldDerivedMemory = !memoryEnabled
     ? []
     : deriveLearningSignalsFromWorldSignals(
-        freshWorldSignals.map((signal) =>
+        relevantWorldSignals.map((signal) =>
           toDerivedSignalInput({
             signalId:   signal.signalId,
             kind:       signal.kind,
@@ -1956,11 +1909,6 @@ export async function buildUserContext(
       .sort((left, right) => scoreMemory(right as RetrievedMemory, queryTokens) - scoreMemory(left as RetrievedMemory, queryTokens))
       .slice(0, MAX_HINTS);
   }
-
-  /* Derive rich behavioral hints from world signals via C daemon */
-  const cHints = await deriveCHintsFromWorldSignals(freshWorldSignals).catch(() => ({
-    situational: [], behavioral: [], environmental: [],
-  }));
 
   const legacyContinuitySummary = deriveContinuitySummary(input.metadata, {
     userId: input.userId,
@@ -2044,15 +1992,6 @@ export async function buildUserContext(
       now,
     });
   }
-
-  /* Merge C-derived hints into the context (deduplicated, bounded) */
-  const mergeHints = (target: string[], incoming: string[]) => {
-    const state = { chars: target.reduce((s, h) => s + h.length, 0) };
-    for (const h of incoming) pushBounded(target, h, state);
-  };
-  mergeHints(ctx.situationalHints,   cHints.situational);
-  mergeHints(ctx.behavioralHints,    cHints.behavioral);
-  mergeHints(ctx.environmentHints,   cHints.environmental);
 
   return ctx;
 }

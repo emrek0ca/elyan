@@ -231,10 +231,22 @@ export async function backfillSemanticV2Embeddings(
 export function maybeStartSemanticV2Backfill(app: FastifyInstance): void {
   if (semanticV2BackfillStarted.has(app)) return;
   semanticV2BackfillStarted.add(app);
-  void backfillSemanticV2Embeddings(app)
-    .then((result) =>
-      app.log?.info?.(result, "semantic v2 embedding backfill complete"),
-    )
+  // Warm the existing semantic worker in the background even when there are no
+  // knowledge chunks to backfill. Otherwise the first real understanding turn
+  // pays model cold-start and can time out into the weak hash fallback.
+  void (async () => {
+    const warmup = await embedTextsForStorage(
+      ["Elyan semantic capability routing readiness"],
+      app.log,
+      "semantic-worker-warmup-v1",
+      30_000,
+    );
+    const result = await backfillSemanticV2Embeddings(app);
+    app.log?.info?.(
+      { ...result, semanticWorkerWarmed: Boolean(warmup?.[0]) },
+      "semantic v2 embedding backfill complete",
+    );
+  })()
     .catch((error) => app.log?.warn?.({ error }, "semantic v2 backfill failed"));
 }
 
@@ -405,7 +417,7 @@ async function searchKnowledgeHybrid(
   // so the upgrade is incremental and zero-downtime.
   const v2ColumnReady = await ensureSemanticV2Column(app);
   const semanticQueryVector = v2ColumnReady
-    ? await embedQueryForStorage(input.query, app.log).catch(() => null)
+    ? await embedQueryForStorage(input.query, app.log, `user:${input.userId}`).catch(() => null)
     : null;
   const hashVector = buildVectorSql(await buildEmbedding(input.query));
   const candidateLimit = Math.max(input.limit * 6, 24);
@@ -532,6 +544,7 @@ export async function searchKnowledge(
     enabled: app.config.ELYAN_RAG_SEMANTIC_RERANK_ENABLED,
     modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
     windowSize: app.config.ELYAN_RAG_SEMANTIC_RERANK_WINDOW,
+    cacheScope: `user:${input.userId}`,
     logger: app.log,
   });
 

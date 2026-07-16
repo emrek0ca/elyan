@@ -122,6 +122,7 @@ test("buildTaskUnderstanding only adds neutral envelope when envelope flags are 
   } as never, input);
   assert.equal(enabled.envelope?.schema_version, "2026-07-understanding-envelope-v2");
   assert.equal(enabled.envelopeSource, "legacy_fallback");
+  assert.deepEqual(enabled.context.understandingEnvelope, enabled.envelope);
 });
 
 test("persistLearningSignals stores only policy-approved safe events", async () => {

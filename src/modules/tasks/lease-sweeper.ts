@@ -86,6 +86,7 @@ export function startTaskLeaseSweeper(app: FastifyInstance): () => void {
     state.running = true;
     const now = new Date();
     try {
+      await app.services.blobs.pruneExpiredMediaInputs(now, 100);
       const scopes = await collectStaleRuntimeTaskScopes(app, now);
       for (const scope of scopes) {
         if (state.stopped) {

@@ -1,6 +1,6 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { AppEnv } from "../../config/env.js";
 
@@ -121,6 +121,14 @@ export class BlobStore {
     } catch {
       return null;
     }
+  }
+
+  public async deleteObject(storageKey: string): Promise<void> {
+    if (!this.client) {
+      await rm(this.localPathForStorageKey(storageKey), { force: true });
+      return;
+    }
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: storageKey }));
   }
 
   public async createDownloadUrl(input: {

@@ -116,6 +116,50 @@ function tryParseTypedJsonObject(
   return coerceMalformedTypedBlock(candidate);
 }
 
+function tryParseJsonObject(candidate: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(repairLooseJsonObject(candidate)) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function isInternalToolOrDebugJsonObject(record: Record<string, unknown>): boolean {
+  const lowerKeys = new Set(Object.keys(record).map((key) => key.toLowerCase()));
+  if (
+    typeof record.tool === "string" &&
+    (lowerKeys.has("arguments") || lowerKeys.has("args")) &&
+    /^(?:gmail|calendar|drive|memory|web|goals|connector|mcp)\./i.test(record.tool)
+  ) {
+    return true;
+  }
+  if (Array.isArray(record.tool_requests) || Array.isArray(record.toolRequests)) {
+    return true;
+  }
+  if (
+    lowerKeys.has("reasoning") ||
+    lowerKeys.has("analysis") ||
+    lowerKeys.has("tool_trace") ||
+    lowerKeys.has("tooltrace") ||
+    lowerKeys.has("route_decision") ||
+    lowerKeys.has("routedecision") ||
+    lowerKeys.has("system_prompt") ||
+    lowerKeys.has("systemprompt")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isInternalToolOrDebugJson(candidate: string): boolean {
+  const parsed = tryParseJsonObject(candidate);
+  return parsed ? isInternalToolOrDebugJsonObject(parsed) : false;
+}
+
 function findBalancedObjectEnd(text: string, braceIdx: number): number {
   let depth = 0;
   let inString = false;
@@ -172,6 +216,10 @@ export function extractTypedJsonBlocksFromText(text: string): {
   while ((match = fencePattern.exec(text)) !== null) {
     const candidate = match[1].trim();
     if (!candidate.startsWith("{")) continue;
+    if (isInternalToolOrDebugJson(candidate)) {
+      visibleText = visibleText.replace(match[0], "").trim();
+      continue;
+    }
     const parsed = tryParseTypedJsonObject(candidate);
     if (parsed) {
       const dedupKey = JSON.stringify(parsed);
@@ -196,6 +244,10 @@ export function extractTypedJsonBlocksFromText(text: string): {
         break;
       }
       const candidate = working.slice(braceIdx, end + 1);
+      if (isInternalToolOrDebugJson(candidate)) {
+        working = (working.slice(0, braceIdx) + working.slice(end + 1)).trim();
+        continue;
+      }
       const parsed = tryParseTypedJsonObject(candidate);
       if (parsed) {
         const dedupKey = JSON.stringify(parsed);
@@ -241,7 +293,10 @@ export function computeStreamVisibleText(full: string): string {
   const fencesToStrip: string[] = [];
   while ((fenceMatch = fencePattern.exec(full)) !== null) {
     const inner = fenceMatch[1].trim();
-    if (inner.startsWith("{") && tryParseTypedJsonObject(inner)) {
+    if (
+      inner.startsWith("{") &&
+      (tryParseTypedJsonObject(inner) || isInternalToolOrDebugJson(inner))
+    ) {
       fencesToStrip.push(fenceMatch[0]);
     }
   }
@@ -274,7 +329,11 @@ export function computeStreamVisibleText(full: string): string {
     }
     const candidate = working.slice(braceIdx, end + 1);
     out += working.slice(0, braceIdx);
-    if (!tryParseTypedJsonObject(candidate)) {
+    if (isInternalToolOrDebugJson(candidate)) {
+      // Hidden tool plans/debug envelopes are control-plane metadata, not user
+      // content. Strip them from stream-visible text before mobile receives a
+      // raw JSON widget.
+    } else if (!tryParseTypedJsonObject(candidate)) {
       out += unwrapPlainBraceSentence(candidate) || candidate;
     }
     working = working.slice(end + 1);

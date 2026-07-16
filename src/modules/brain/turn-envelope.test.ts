@@ -154,3 +154,41 @@ test("parseTurnEnvelope accepts a typed agent plan without treating it as comple
   assert.equal(parsed.ok, true);
   assert.equal(parsed.ok ? parsed.envelope.agent_plan?.steps[0]?.id : null, "research");
 });
+
+test("parseTurnEnvelopeText coerces a bare tool-call array into tool_requests (no leak)", () => {
+  const result = parseTurnEnvelopeText(
+    '[{"tool": "drive.search", "args": {"query": "modifiedTime > 2024", "limit": 20}}]',
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.envelope.tool_requests.length, 1);
+  assert.equal(result.ok && result.envelope.tool_requests[0]?.tool, "drive.search");
+  // Görünür yanıt boş kalır; tool_requests yürütülür.
+  assert.equal(result.ok && result.envelope.reply.text, "");
+});
+
+test("parseTurnEnvelopeText strips a ```json code fence before parsing", () => {
+  const fenced = '```json\n[{"tool": "drive.search", "args": {"query": "q"}}]\n```';
+  const result = parseTurnEnvelopeText(fenced);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.envelope.tool_requests[0]?.tool, "drive.search");
+});
+
+test("parseTurnEnvelope wraps a bare single tool-call object", () => {
+  const result = parseTurnEnvelope({ tool: "gmail.search", args: { q: "unread" } });
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.envelope.tool_requests[0]?.tool, "gmail.search");
+});
+
+test("looksLikeLeakedToolCallText flags raw tool-call dumps, not normal prose", async () => {
+  const { looksLikeLeakedToolCallText } = await import("./turn-envelope.js");
+  assert.equal(
+    looksLikeLeakedToolCallText('[{"tool":"drive.search","args":{"query":"x"}}]'),
+    true,
+  );
+  assert.equal(
+    looksLikeLeakedToolCallText('```json\n{"tool":"x","args":{}}\n```'),
+    true,
+  );
+  assert.equal(looksLikeLeakedToolCallText("Drive'da 3 dosya buldum: rapor, sunum, bütçe."), false);
+  assert.equal(looksLikeLeakedToolCallText("[1, 2, 3] listesi hazır."), false);
+});

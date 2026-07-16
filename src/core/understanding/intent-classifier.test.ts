@@ -26,6 +26,32 @@ test("classifyIntent marks research requests as retrieval and citation work", ()
   assert.equal(result.routingHints.mode, "research");
 });
 
+test("classifyIntent treats self-referential identity questions as current-user memory retrieval", () => {
+  for (const message of ["Ben kimim?", "Who am I?"]) {
+    const result = classifyIntent({ userId: "user_1", message });
+
+    assert.equal(result.primaryIntent, "chat");
+    assert.equal(result.requiresRetrieval, true);
+    assert.equal(result.requiresCitation, false);
+    assert.equal(result.taskFrame.shouldClarify, false);
+    assert.equal(result.reason, "user_identity_query");
+  }
+});
+
+test("classifyIntent keeps explicit mobile context questions on server chat", () => {
+  for (const message of [
+    "Şu an neredeyim?",
+    "Sağlık verilerim nedir?",
+    "Takvimimde bugün ne var?",
+  ]) {
+    const result = classifyIntent({ userId: "user-1", message });
+    assert.equal(result.primaryIntent, "chat", message);
+    assert.equal(result.requiresLocalRuntime, false, message);
+    assert.equal(result.taskFrame.shouldClarify, false, message);
+    assert.match(result.reason, /^mobile_context_/u, message);
+  }
+});
+
 test("classifyIntent recognizes Turkish document-reading prompts", () => {
   const result = classifyIntent({
     userId: "user_1",

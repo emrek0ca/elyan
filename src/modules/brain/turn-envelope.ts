@@ -89,8 +89,36 @@ export type TurnEnvelopeParseResult =
   | { ok: true; envelope: TurnEnvelope }
   | { ok: false; error: string };
 
-function readEnvelopeCandidate(value: unknown): unknown {
+function isToolRequestShape(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.tool === "string" &&
+    record.tool.trim().length > 0 &&
+    "args" in record &&
+    typeof record.args === "object" &&
+    record.args !== null &&
+    !Array.isArray(record.args) &&
+    record.reply === undefined &&
+    record.blocks === undefined
+  );
+}
+
+function readEnvelopeCandidate(value: unknown): unknown {
+  // Model bazen turn-envelope yerine ÇIPLAK tool-call üretiyor:
+  //   [{"tool":"drive.search","args":{...}}]   ya da   {"tool":..,"args":..}
+  // Bunları geçerli bir envelope'a sar ki tool_requests ayıklanıp YÜRÜTÜLSÜN;
+  // aksi halde şema reddediyor, ham JSON görünür yanıta sızıyor ve mobilde
+  // block widget'ı bir kod bloğu olarak bozuyordu.
+  if (Array.isArray(value)) {
+    if (value.length > 0 && value.every(isToolRequestShape)) {
+      return { tool_requests: value };
+    }
+    return value;
+  }
+  if (!value || typeof value !== "object") {
     return value;
   }
   const record = value as Record<string, unknown>;
@@ -103,6 +131,9 @@ function readEnvelopeCandidate(value: unknown): unknown {
   if (record.turn_envelope && typeof record.turn_envelope === "object") {
     return record.turn_envelope;
   }
+  if (isToolRequestShape(record) && record.tool_requests === undefined) {
+    return { tool_requests: [record] };
+  }
   return record;
 }
 
@@ -114,8 +145,19 @@ export function parseTurnEnvelope(value: unknown): TurnEnvelopeParseResult {
   return { ok: true, envelope: parsed.data as TurnEnvelope };
 }
 
-export function parseTurnEnvelopeText(text: string): TurnEnvelopeParseResult {
+/**
+ * Modelin JSON'u sardığı markdown kod çitini (```json … ```) soyar. Model
+ * bazen envelope/tool-call'ı kod bloğu olarak üretiyor; çit soyulmazsa
+ * JSON.parse başarısız olup ham blok mobilde kod bloğu olarak sızıyordu.
+ */
+function stripCodeFence(text: string): string {
   const trimmed = text.trim();
+  const fenced = /^```(?:json|jsonc|json5)?\s*\n?([\s\S]*?)\n?```$/i.exec(trimmed);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+export function parseTurnEnvelopeText(text: string): TurnEnvelopeParseResult {
+  const trimmed = stripCodeFence(text);
   if (!trimmed) {
     return { ok: false, error: "empty_turn_envelope" };
   }
@@ -137,6 +179,37 @@ export function looksLikeTurnEnvelopeJson(text: string): boolean {
       /"tool_requests"\s*:/.test(trimmed) ||
       /"blocks"\s*:/.test(trimmed))
   );
+}
+
+/**
+ * Görünür yanıta ASLA düşmemesi gereken ham çıktıyı yakalar: modelin
+ * envelope yerine ürettiği çıplak/çitli tool-call JSON'u (`[{"tool":..,"args":..}]`).
+ * Part 1 (readEnvelopeCandidate) bunları parse edilebildiğinde yürütmeye çevirir;
+ * bu koruma ise parse edilemeyen (ör. prose + JSON karışık) sızıntıyı görünür
+ * yanıttan temizlemek içindir — savunma katmanı.
+ */
+export function looksLikeLeakedToolCallText(text: string): boolean {
+  const trimmed = stripCodeFence(text);
+  if (
+    (trimmed.startsWith("[") || trimmed.startsWith("{")) &&
+    /"tool"\s*:\s*"[^"]+"/.test(trimmed) &&
+    /"args"\s*:/.test(trimmed)
+  ) {
+    return true;
+  }
+  const internalRepairPromptLeak =
+    /Aşağıdaki Elyan yanıtı yarım kalmış|The user provides a prompt that looks like a meta-instruction|yalnız görünür cevabı tamamla ve temizle/iu.test(
+      trimmed,
+    );
+  const proseToolPlan =
+    /(?:^|\n)\s*[-*]\s*(?:Tool|Args?)\s*:|\b(?:I need to|I must|I will|I'll)\s+(?:call|emit|output|use).{0,100}\b(?:tool|gmail\.search|calendar\.list_events|drive\.search)\b|\bhidden\s+tool_requests?\b/iu.test(
+      trimmed,
+    );
+  const namedInternalToolPlan =
+    /\b(?:gmail\.(?:search|read|send)|calendar\.(?:list_events|create_event)|drive\.search)\b/iu.test(
+      trimmed,
+    ) && /\b(?:tool|args?|query|limit|call|request)\b/iu.test(trimmed);
+  return internalRepairPromptLeak || proseToolPlan || namedInternalToolPlan;
 }
 
 export const TURN_ENVELOPE_SYSTEM_INSTRUCTION = [

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { chatMessages, chatSessions, proactiveTriggers } from "../../db/schema.js";
 import {
@@ -8,6 +9,10 @@ import {
   processNextQueuedTrainingJob,
   startInProcessMemoryWorker,
 } from "./worker.js";
+import {
+  QUANTUM_BENCHMARK_PRODUCER,
+  QUANTUM_BENCHMARK_VERSION,
+} from "./quantum-benchmark.js";
 
 class FakeSelectQuery<T> {
   constructor(private readonly result: T) {}
@@ -335,6 +340,17 @@ test("processBrainWorkerIteration runs continuous learning only behind its flags
 });
 
 test("processNextQueuedTrainingJob completes shared jobs with bounded neural evaluation metadata", async () => {
+  const datasetFingerprint = createHash("sha256").update(JSON.stringify({
+    jobId: "job-1",
+    datasetManifestId: "dataset-1",
+    datasetScope: "shared",
+    recordCount: 128,
+    tokenEstimate: 12_000,
+    sourceKind: null,
+    problemClass: "quantum_optimization",
+    trainingBackend: "pytorch_cpu_safe",
+    adapterMode: null,
+  })).digest("hex");
   const trainingJobsRows = [
     {
       id: "job-1",
@@ -385,7 +401,21 @@ test("processNextQueuedTrainingJob completes shared jobs with bounded neural eva
           taskRoutingSignals: 2,
         },
       },
-      metadata: {},
+      metadata: {
+        quantumBenchmarkAttestation: {
+          version: QUANTUM_BENCHMARK_VERSION,
+          producer: QUANTUM_BENCHMARK_PRODUCER,
+          runId: "run-job-1",
+          metric: "routing_accuracy",
+          datasetFingerprint,
+          sampleCount: 128,
+          score: 0.81,
+          source: "measured",
+          classicalBaselineScore: 0.78,
+          measuredAt: "2030-01-01T00:00:00.000Z",
+          backend: "qiskit_aer",
+        },
+      },
       metrics: {},
       error: null,
       startedAt: null,
@@ -408,7 +438,6 @@ test("processNextQueuedTrainingJob completes shared jobs with bounded neural eva
             tokenEstimate: 12_000,
             metadata: {
               problemClass: "quantum_optimization",
-              quantumBenchmarkScore: 0.81,
             },
           },
         ],
@@ -439,6 +468,13 @@ test("processNextQueuedTrainingJob completes shared jobs with bounded neural eva
   assert.equal(typeof metrics.evaluationScore, "number");
   assert.equal(typeof metrics.neuralEvalScore, "number");
   assert.equal(metrics.quantumBenchmarkScore, 0.81);
+  assert.equal(metrics.quantumBenchmarkVerified, true);
+  assert.equal(metrics.quantumBenchmarkSource, "measured");
+  assert.equal(metrics.quantumClassicalBaselineScore, 0.78);
+  assert.equal(metrics.quantumAdvantageScore, 0.03);
+  assert.equal(metrics.quantumBenchmarkQualified, true);
+  assert.equal(metrics.quantumBenchmarkDatasetFingerprint, datasetFingerprint);
+  assert.equal(metrics.evaluationMetricVersion, "bounded_offline_eval_v2");
   const datasetQualityScore = metrics.datasetQualityScore as number;
   assert.equal(typeof datasetQualityScore, "number");
   assert.equal(datasetQualityScore >= 0.7, true);
@@ -553,6 +589,9 @@ test("processNextQueuedTrainingJob keeps artifact draft when quality gate blocks
   });
   assert.equal((artifactInsert?.values as Record<string, unknown> | undefined)?.status, "draft");
   assert.equal(((trainingJobsRows[0].metrics as Record<string, unknown>).datasetQualityScore as number) < 0.6, true);
+  assert.equal((trainingJobsRows[0].metrics as Record<string, unknown>).quantumBenchmarkScore, null);
+  assert.equal((trainingJobsRows[0].metrics as Record<string, unknown>).quantumBenchmarkVerified, false);
+  assert.equal((trainingJobsRows[0].metrics as Record<string, unknown>).quantumBenchmarkQualified, false);
 });
 
 test("processNextQueuedTrainingJob completes memory extraction jobs and queues follow-up memory work", async () => {

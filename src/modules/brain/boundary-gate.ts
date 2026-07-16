@@ -20,7 +20,8 @@ export type BrainBoundaryGateResult = {
     | "clarification_required"
     | "protected_internal_configuration"
     | "security_refusal"
-    | "verified_identity";
+    | "verified_identity"
+    | "authorized_user_context_unavailable";
   failureType: string;
   enforcedByBackend: true;
   responseCode:
@@ -30,7 +31,8 @@ export type BrainBoundaryGateResult = {
     | "clarification_required"
     | "protected_internal_configuration"
     | "security_refusal"
-    | "verified_identity";
+    | "verified_identity"
+    | "authorized_user_context_unavailable";
   modelAnswerSkipped: true;
   securityDecision?: SecurityDecision;
 };

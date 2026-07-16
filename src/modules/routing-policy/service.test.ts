@@ -123,6 +123,36 @@ test("decideCommandRoute keeps public chat on the shared brain", async () => {
   assert.equal(decision.requiredRuntime, "server");
 });
 
+test("decideCommandRoute sends an explicit remote MCP request to a capable desktop", async () => {
+  const app = createDesktopReadyApp(["mcp_call_tool"]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "GitHub repolarımı göster",
+    source: "mobile",
+    selectedDeviceId: "desktop-1",
+    requestedCapabilities: ["mcp_call_tool"],
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.privacyClass, "local_private");
+  assert.deepEqual(decision.capabilities, ["mcp_call_tool"]);
+});
+
+test("decideCommandRoute fails closed when remote MCP runtime is unavailable", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "GitHub repolarımı göster",
+    source: "mobile",
+    requestedCapabilities: ["mcp_call_tool"],
+  });
+
+  assert.equal(decision.route, "pairing_required");
+  assert.equal(decision.requiredRuntime, "desktop");
+  assert.equal(decision.failClosedReason, "remote_mcp_runtime_unavailable");
+});
+
 test("decideCommandRoute keeps greetings on the fast shared-brain path", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {

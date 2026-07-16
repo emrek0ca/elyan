@@ -1323,6 +1323,136 @@ test("buildContextPacketsFromMetadata reads world signals from mobile memory sna
   assert.match(packets[0]?.summary ?? "", /district=Kadıköy/);
 });
 
+test("buildContextPacketsFromMetadata reports requested mobile context availability without web substitution", () => {
+  const healthPackets = buildContextPacketsFromMetadata(
+    {
+      compactContext: {
+        mobileContextCapabilities: {
+          healthEnabled: true,
+          healthSignalsAvailable: false,
+        },
+      },
+    },
+    { requestText: "Sağlık verilerim nedir?", intent: "chat" },
+  );
+  const healthPacket = healthPackets.find((packet) => packet.kind === "health_context");
+  assert.equal(healthPacket?.relevanceReason, "health_context_unavailable");
+  assert.equal(healthPacket?.mentionPolicy, "explicit_when_relevant");
+  assert.match(healthPacket?.summary ?? "", /no current authorized health signal/i);
+  assert.ok(healthPacket?.allowedUse?.some((use) => use.includes("do not substitute web results")));
+
+  const locationPackets = buildContextPacketsFromMetadata(
+    {
+      compactContext: {
+        mobileContextCapabilities: {
+          locationEnabled: false,
+          locationSignalsAvailable: false,
+        },
+      },
+    },
+    { requestText: "Şu an neredeyim?", intent: "chat" },
+  );
+  const locationPacket = locationPackets.find((packet) => packet.kind === "world_context");
+  assert.equal(locationPacket?.relevanceReason, "location_context_disabled");
+  assert.match(locationPacket?.summary ?? "", /disabled in Elyan app settings/i);
+  assert.ok(locationPacket?.allowedUse?.some((use) => use.includes("do not infer")));
+});
+
+test("buildContextPacketsFromMetadata does not mistake generic technical words for personal context requests", () => {
+  const metadata = {
+    compactContext: {
+      mobileContextCapabilities: {
+        healthEnabled: true,
+        calendarEnabled: true,
+        healthSignalsAvailable: false,
+        calendarSignalsAvailable: false,
+      },
+    },
+  };
+
+  for (const requestText of [
+    "Kuantumu adım adım anlat",
+    "Yapay sinir ağlarında performansı artır",
+    "Event loop nedir?",
+    "Bir sunum hazırla",
+  ]) {
+    assert.equal(
+      buildContextPacketsFromMetadata(metadata, { requestText, intent: "chat" }).length,
+      0,
+    );
+  }
+});
+
+test("buildContextPacketsFromMetadata does not add availability packet when the requested signal exists", () => {
+  const packets = buildContextPacketsFromMetadata(
+    {
+      compactContext: {
+        mobileContextCapabilities: {
+          locationEnabled: true,
+          locationSignalsAvailable: true,
+        },
+        derivedContextDigest: {
+          worldSignals: [
+            {
+              signalId: "location-current",
+              kind: "location",
+              summary: "Konum: Ankara, Türkiye.",
+              confidence: 0.9,
+              createdAt: "2030-01-01T11:59:00.000Z",
+              facts: { city: "Ankara", country: "Türkiye" },
+              privacy: { backendPlaintextAllowed: true },
+            },
+          ],
+        },
+      },
+    },
+    {
+      now: new Date("2030-01-01T12:00:00.000Z"),
+      requestText: "Şu an neredeyim?",
+      intent: "chat",
+    },
+  );
+
+  assert.equal(packets.filter((packet) => packet.kind === "world_context").length, 1);
+  assert.equal(packets[0]?.signalKinds.includes("location"), true);
+  assert.equal(packets[0]?.signalKinds.includes("location_availability"), false);
+});
+
+test("buildContextPacketsFromMetadata rejects cached sensitive signals after mobile permission is disabled", () => {
+  const packets = buildContextPacketsFromMetadata(
+    {
+      compactContext: {
+        mobileContextCapabilities: {
+          locationEnabled: false,
+          locationSignalsAvailable: false,
+        },
+        derivedContextDigest: {
+          worldSignals: [
+            {
+              signalId: "location-disabled-cache",
+              kind: "location",
+              summary: "Konum: Ankara, Türkiye.",
+              confidence: 0.9,
+              createdAt: "2030-01-01T11:59:00.000Z",
+              facts: { city: "Ankara", country: "Türkiye" },
+              privacy: { backendPlaintextAllowed: true },
+            },
+          ],
+        },
+      },
+    },
+    {
+      now: new Date("2030-01-01T12:00:00.000Z"),
+      requestText: "Şu an neredeyim?",
+      intent: "chat",
+    },
+  );
+
+  assert.equal(packets.length, 1);
+  assert.equal(packets[0]?.relevanceReason, "location_context_disabled");
+  assert.doesNotMatch(packets[0]?.summary ?? "", /Ankara/);
+});
+
 test("buildUserContextFromMemory exposes packet flags and health safety hint", () => {
   const intent = classifyIntent({
     userId: "user_1",

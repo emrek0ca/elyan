@@ -103,7 +103,7 @@ const fencePattern = /^\s*(```|~~~)/;
 const bulletPrefixPattern = /^\s*(?:[-*•]|\d+\.)\s+/;
 const hiddenAssistantTagPattern = /<\/?(?:think|analysis)>/i;
 const internalAssistantPattern =
-  /^(?:analyze user input|analyze constraints|check attachment context|system prompt|developer message|looking at the system prompt|we need to|user says|the user says|the user is|the user wants|request:|language:|given the attachment context|attachment context(?: shows| provided)?|ocr\/summary text|page \d+ content|summary\/content|detected text|extracted text|visible text|the ocr output|context:|i am elyan|i started answering|prompt continuation|analysis:|reasoning:|plan:|thinking:|intent:|constraint check|check constraints|systeminstructions|system instructions|output format:|data source:|user-? ?language|<think>|<\/think>|<analysis>|<\/analysis>)/i;
+  /^(?:analyze user input|analyze constraints|check attachment context|system prompt|developer message|looking at the system prompt|we need to|user says|the user says|the user is|the user wants|the user's prompt|request:|language:|given the attachment context|attachment context(?: shows| provided)?|ocr\/summary text|page \d+ content|summary\/content|detected text|extracted text|visible text|the ocr output|context:|i am elyan|i started answering|prompt continuation|analysis:|reasoning:|plan:|thinking:|intent:|constraint check|check constraints|systeminstructions|system instructions|output format:|data source:|user-? ?language|however,\s*i have access to\b|i have access to\b.*\btools?\b|i should use\b|i will search\b|the tool\b.*\bavailable\b|<think>|<\/think>|<analysis>|<\/analysis>)/i;
 // Reasoning-dump preambles that some models write INTO the content channel
 // (e.g. "Here's a thinking process:" repeated through the reply). Matched as a
 // substring because streaming concat can glue them mid-line
@@ -403,6 +403,54 @@ function stripFenceWrapper(value: string): string {
     return trimmed;
   }
   return lines.slice(1, -1).join("\n").trim();
+}
+
+function tryParseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function isInternalToolOrDebugRecord(record: Record<string, unknown>): boolean {
+  const lowerKeys = new Set(Object.keys(record).map((key) => key.toLowerCase()));
+  if (
+    typeof record.tool === "string" &&
+    (lowerKeys.has("arguments") || lowerKeys.has("args")) &&
+    /^(?:gmail|calendar|drive|memory|web|goals|connector|mcp)\./i.test(record.tool)
+  ) {
+    return true;
+  }
+  return (
+    Array.isArray(record.tool_requests) ||
+    Array.isArray(record.toolRequests) ||
+    lowerKeys.has("reasoning") ||
+    lowerKeys.has("analysis") ||
+    lowerKeys.has("tool_trace") ||
+    lowerKeys.has("tooltrace") ||
+    lowerKeys.has("route_decision") ||
+    lowerKeys.has("routedecision") ||
+    lowerKeys.has("system_prompt") ||
+    lowerKeys.has("systemprompt")
+  );
+}
+
+function isInternalToolOrDebugFence(value: string): boolean {
+  const trimmed = value.trim();
+  if (!/^(```|~~~)/.test(trimmed)) {
+    return false;
+  }
+  const inner = stripFenceWrapper(trimmed);
+  if (!inner.startsWith("{")) {
+    return false;
+  }
+  const parsed = tryParseJsonRecord(inner);
+  return parsed ? isInternalToolOrDebugRecord(parsed) : false;
 }
 
 function readStructuredVisibleText(record: Record<string, unknown>): string | null {
@@ -718,6 +766,9 @@ export function sanitizeAssistantVisibleText(
   for (const paragraph of source.split(/\n{2,}/)) {
     const trimmed = paragraph.trim();
     if (!trimmed) {
+      continue;
+    }
+    if (isInternalToolOrDebugFence(trimmed)) {
       continue;
     }
     if (fencePattern.test(trimmed)) {

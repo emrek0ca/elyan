@@ -495,6 +495,7 @@ export async function claimPairSession(
         sessionId: pairSession.id,
         desktopDeviceId: pairSession.desktopDeviceId,
         status: "claimed" as const,
+        retargetedTaskCount: 0,
       };
     }
 
@@ -577,4 +578,46 @@ export async function claimPairSession(
     status: "claimed" as const,
     retargetedTaskCount,
   };
+}
+
+/**
+ * Kısa kodla eşleştirme (QR'sız). `pairingCode` DB'de globally UNIQUE olduğu
+ * için mobil yalnızca desktop'ta gösterilen kısa kodu girer; session UUID'sine
+ * gerek yoktur. Kod → session çözülür, ardından tüm doğrulamalar (süre, sahiplik,
+ * kod eşleşmesi, plan limiti) `claimPairSession` içinde aynen uygulanır.
+ */
+export async function claimPairSessionByCode(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    pairingCode: string;
+    mobileDevice?: {
+      label: string;
+      platform: string;
+      appVersion?: string;
+    };
+  },
+) {
+  const normalizedCode = normalizePairingCode(input.pairingCode);
+  if (normalizedCode.length === 0) {
+    throw new AppError(409, "pairing_invalid_code", "Pairing code does not match");
+  }
+
+  const rows = await app.db
+    .select({ id: pairSessions.id })
+    .from(pairSessions)
+    .where(eq(pairSessions.pairingCode, normalizedCode))
+    .limit(1);
+
+  const pairSession = rows[0];
+  if (!pairSession) {
+    throw new AppError(404, "pairing_pending", "Pair session not found");
+  }
+
+  return claimPairSession(app, {
+    sessionId: pairSession.id,
+    userId: input.userId,
+    pairingCode: normalizedCode,
+    mobileDevice: input.mobileDevice,
+  });
 }

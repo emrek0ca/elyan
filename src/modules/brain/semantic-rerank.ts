@@ -17,6 +17,7 @@ export type SemanticRerankInput<T extends SemanticRerankCandidate> = {
   enabled: boolean;
   modelName?: string;
   windowSize?: number;
+  cacheScope?: string;
   embedder?: SemanticEmbedder;
   logger?: Pick<FastifyBaseLogger, "warn" | "debug">;
 };
@@ -84,6 +85,7 @@ function buildCandidateText(input: SemanticRerankCandidate): string {
 async function loadSemanticEmbedder(
   modelName: string,
   logger?: Pick<FastifyBaseLogger, "warn" | "debug">,
+  cacheScope?: string,
 ): Promise<SemanticEmbedder | null> {
   const modelKey = compactText(modelName) || DEFAULT_SEMANTIC_MODEL;
   return {
@@ -94,6 +96,7 @@ async function loadSemanticEmbedder(
       const vectors = await embedTextsWithSemanticWorker({
         modelName: modelKey,
         texts: promptBatch,
+        cacheScope,
         logger,
       });
       if (!vectors) {
@@ -122,7 +125,11 @@ export async function rerankSemanticCandidates<T extends SemanticRerankCandidate
 
   const windowSize = Math.max(2, Math.min(input.windowSize ?? 8, input.candidates.length));
   const windowCandidates = input.candidates.slice(0, windowSize);
-  const embedder = input.embedder ?? (await loadSemanticEmbedder(input.modelName ?? DEFAULT_SEMANTIC_MODEL, input.logger));
+  const embedder = input.embedder ?? (await loadSemanticEmbedder(
+    input.modelName ?? DEFAULT_SEMANTIC_MODEL,
+    input.logger,
+    input.cacheScope,
+  ));
   if (!embedder) {
     return {
       results: input.candidates,

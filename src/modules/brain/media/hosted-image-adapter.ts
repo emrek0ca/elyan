@@ -1,5 +1,5 @@
 export type HostedImageProviderConfig = {
-  provider: "gemini" | "openai";
+  provider: "gemini";
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -18,47 +18,63 @@ export type HostedImageProviderRequest = {
 export function buildHostedImageProviderRequest(input: {
   config: HostedImageProviderConfig;
   prompt: string;
-  aspectRatio: "1:1" | "2:3" | "3:2" | "9:16" | "16:9";
-  openAiSize: "1024x1024" | "1024x1536" | "1536x1024";
+  aspectRatio?:
+    | "1:1"
+    | "2:3"
+    | "3:2"
+    | "3:4"
+    | "4:3"
+    | "4:5"
+    | "5:4"
+    | "9:16"
+    | "16:9"
+    | "21:9";
+  sourceImages?: Array<{ base64Data: string; mimeType: "image/jpeg" | "image/png" | "image/webp" }>;
 }): HostedImageProviderRequest {
-  if (input.config.provider === "gemini") {
-    return {
-      path: "/interactions",
-      headers: {
-        "x-goog-api-key": input.config.apiKey,
-        "content-type": "application/json",
-      },
-      body: {
-        model: input.config.model,
-        input: input.prompt,
-        response_format: {
-          type: "image",
-          mime_type: "image/jpeg",
-          aspect_ratio: input.aspectRatio,
-          image_size: input.config.imageSize ?? "1K",
-        },
-      },
-      timeoutMs: 60_000,
-      defaultMimeType: "image/jpeg",
-    };
-  }
-
+  const sourceImages = input.sourceImages ?? [];
+  const editing = sourceImages.length > 0;
+  const premiumEditing =
+    editing && /\bpro\b/i.test(input.config.model);
+  const responseFormat: Record<string, string> = {
+    type: "image",
+    mime_type: "image/png",
+    image_size: input.config.imageSize ?? "2K",
+  };
+  if (input.aspectRatio) responseFormat.aspect_ratio = input.aspectRatio;
   return {
-    path: "/images/generations",
+    path: "/interactions",
     headers: {
-      Authorization: `Bearer ${input.config.apiKey}`,
+      "x-goog-api-key": input.config.apiKey,
       "content-type": "application/json",
     },
     body: {
       model: input.config.model,
-      prompt: input.prompt,
-      size: input.openAiSize,
-      response_format: "b64_json",
-      n: 1,
-      quality: "medium",
-      output_format: "png",
+      store: false,
+      input: sourceImages.length > 0
+        ? [
+            { type: "text", text: input.prompt },
+            ...sourceImages.map((image) => ({
+              type: "image",
+              data: image.base64Data,
+              mime_type: image.mimeType,
+            })),
+          ]
+        : input.prompt,
+      system_instruction: sourceImages.length > 0
+        ? [
+            "Treat the first supplied image as the primary canvas to edit, not as inspiration for a new recreation.",
+            "Treat any additional images only as ordered identity, character, product, style, or object references.",
+            "Apply only the user's requested visual delta.",
+            "Preserve every unmentioned face, identity, body, product geometry, logo, text, object, crop, camera angle, lighting, texture, color, transparency, and composition detail.",
+            "Do not add, remove, beautify, restyle, retouch, or rewrite anything unless the user explicitly requested it.",
+          ].join(" ")
+        : "Follow the user's visual request precisely. Do not add unrequested text, logos, watermarks, or objects.",
+      ...(premiumEditing
+        ? { generation_config: { thinking_level: "high" } }
+        : {}),
+      response_format: responseFormat,
     },
-    timeoutMs: 45_000,
+    timeoutMs: 150_000,
     defaultMimeType: "image/png",
   };
 }

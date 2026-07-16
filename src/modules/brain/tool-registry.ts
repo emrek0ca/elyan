@@ -18,10 +18,12 @@ import {
 } from "./web-grounding.js";
 import { fetchUrlContext } from "./url-context.js";
 import {
+  executeCalendarCreateEvent,
   executeCalendarListEvents,
   executeDriveSearch,
   executeGmailRead,
   executeGmailSearch,
+  executeGmailSend,
 } from "./connector-tools.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
@@ -148,8 +150,23 @@ const calendarListArgsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(10),
 });
 const driveSearchArgsSchema = z.object({
-  query: z.string().trim().min(1).max(240),
+  query: z.string().trim().max(240).default(""),
   limit: z.coerce.number().int().min(1).max(20).default(10),
+});
+const gmailSendArgsSchema = z.object({
+  to: z.string().trim().email().max(320),
+  subject: z.string().trim().min(1).max(320),
+  body: z.string().trim().min(1).max(10_000),
+  cc: z.string().trim().email().max(320).optional(),
+  bcc: z.string().trim().email().max(320).optional(),
+});
+const calendarCreateArgsSchema = z.object({
+  title: z.string().trim().min(1).max(320),
+  start: z.string().trim().datetime({ offset: true }),
+  end: z.string().trim().datetime({ offset: true }),
+  description: z.string().trim().max(4_000).optional(),
+  location: z.string().trim().max(320).optional(),
+  attendees: z.array(z.string().trim().email().max(320)).max(25).optional(),
 });
 const connectorListOutputSchema = z.object({
   resultCount: z.number().int().nonnegative(),
@@ -157,6 +174,14 @@ const connectorListOutputSchema = z.object({
 }).passthrough();
 const connectorMessageOutputSchema = z.object({
   messageId: z.string(),
+}).passthrough();
+const gmailSendOutputSchema = z.object({
+  messageId: z.string(),
+  sent: z.boolean(),
+}).passthrough();
+const calendarCreateOutputSchema = z.object({
+  eventId: z.string(),
+  created: z.boolean(),
 }).passthrough();
 
 /**
@@ -510,6 +535,31 @@ const toolDefinitions = [
       return executeDriveSearch(app, context.userId, args);
     },
   },
+  {
+    // side_effect: executeAgentTool blocks this unless context.allowSideEffects
+    // is set, which only the post-approval resume does. The model can draft it,
+    // but the send never reaches Google without the user's explicit approval.
+    name: "gmail.send",
+    permission: "side_effect",
+    idempotency: "non_idempotent",
+    timeoutMs: 15_000,
+    outputSchema: gmailSendOutputSchema,
+    argsSchema: gmailSendArgsSchema,
+    async execute(app, context, args) {
+      return executeGmailSend(app, context.userId, args);
+    },
+  },
+  {
+    name: "calendar.create_event",
+    permission: "side_effect",
+    idempotency: "non_idempotent",
+    timeoutMs: 15_000,
+    outputSchema: calendarCreateOutputSchema,
+    argsSchema: calendarCreateArgsSchema,
+    async execute(app, context, args) {
+      return executeCalendarCreateEvent(app, context.userId, args);
+    },
+  },
 ] satisfies Array<AgentToolDefinition<z.ZodTypeAny>>;
 
 const registry = new Map<string, AgentToolDefinition<z.ZodTypeAny>>(
@@ -542,6 +592,29 @@ export function getAgentToolMetadata(name: string): AgentToolMetadata | null {
     idempotency,
     parallelSafe: tool.permission === "read" && idempotency === "read_only",
   };
+}
+
+/**
+ * Normalize and validate a tool call with the exact schema used at execution.
+ * Approval staging uses this so the call shown to the user cannot differ from
+ * the call that will later execute after approval.
+ */
+export function readCanonicalAgentToolArgs(
+  name: string,
+  rawArgs: unknown,
+): Record<string, unknown> | null {
+  const tool = registry.get(name);
+  if (!tool) return null;
+  const parsed = tool.argsSchema.safeParse(normalizeToolArgs(rawArgs));
+  if (
+    !parsed.success ||
+    !parsed.data ||
+    typeof parsed.data !== "object" ||
+    Array.isArray(parsed.data)
+  ) {
+    return null;
+  }
+  return { ...(parsed.data as Record<string, unknown>) };
 }
 
 // ── Per-user tool rate limiting ──────────────────────────────────────
