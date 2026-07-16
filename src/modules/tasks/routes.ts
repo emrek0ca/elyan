@@ -2,7 +2,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { TaskStatus } from "../../contracts/domain.js";
 import { getRequestContext, serializeZodError } from "../../lib/http.js";
 import { getIdempotencyKey } from "../../lib/idempotency.js";
-import { getUserAuth } from "../../lib/request-auth.js";
+import { getUserAuth, getUserScopedAuth } from "../../lib/request-auth.js";
 import { approvalBodySchema, createTaskBodySchema, feedbackBodySchema, listTasksQuerySchema, taskArtifactParamsSchema, taskParamsSchema } from "./schemas.js";
 import { cancelTask, createTask, getTaskArtifact, getTaskArtifactContent, getTaskArtifactRawContent, getTaskDetail, listTasks, resolveTaskApproval, submitTaskFeedback } from "./service.js";
 import { storeMediaInput } from "./media-inputs.js";
@@ -191,8 +191,12 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  // Runtime token da kabul edilir (sub = cihaz sahibinin userId'si): QR ile
+  // anonim eşleşmiş masaüstünde kullanıcı token'ı yoktur ama makinenin
+  // başındaki kullanıcı tepsi menüsünden bekleyen onayı çözebilmelidir —
+  // aksi halde mobil onay kartı kaçırıldığında görev sonsuza dek takılır.
   app.post("/:taskId/approval", async (request, reply) => {
-    await app.authenticateUser(request, reply);
+    await app.authenticateUserOrRuntime(request, reply);
 
     if (reply.sent) {
       return;
@@ -203,7 +207,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       return;
     }
     const body = approvalBodySchema.parse(request.body);
-    const auth = getUserAuth(request);
+    const auth = getUserScopedAuth(request);
     const context = getRequestContext(request);
 
     return resolveTaskApproval(app, {
