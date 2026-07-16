@@ -158,15 +158,35 @@ export async function generateDesktopPlan(
     },
   });
 
+  // Güvenlik/kimlik kapıları (backend_gate) planlama zarfını normal kullanıcı
+  // metni sanıp yakalayabilir ("shell", "komut" gibi kelimeler). Kapı yanıtı
+  // plan değildir — açıkça başarısız dön ki masaüstü kendi fallback zincirine
+  // (chat yolu / yerel model / deterministik) düşsün.
+  if (inference.answerSource === "backend_gate") {
+    return {
+      ok: false,
+      contract: DESKTOP_PLAN_CONTRACT,
+      plan: null,
+      text: "",
+      provider: inference.provider,
+      model: inference.model,
+      latencyMs: inference.latencyMs,
+      error: "planning_blocked_by_gate",
+    };
+  }
+
   const plan = extractFirstJsonObject(inference.text);
+  const validPlan =
+    plan !== null &&
+    (typeof plan.contract === "string" || Array.isArray(plan.steps));
   return {
-    ok: plan !== null,
+    ok: validPlan,
     contract: DESKTOP_PLAN_CONTRACT,
-    plan,
+    plan: validPlan ? plan : null,
     text: inference.text,
     provider: inference.provider,
     model: inference.model,
     latencyMs: inference.latencyMs,
-    error: plan === null ? "plan_json_not_found" : undefined,
+    error: validPlan ? undefined : "plan_json_not_found",
   };
 }

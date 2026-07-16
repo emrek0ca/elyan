@@ -88,6 +88,16 @@ function estimateMessageTokens(value: string) {
   return Math.max(1, Math.ceil(normalized.length / 4));
 }
 
+// Yönlendirme katmanının iç gerekçe cümleleri ("Kullanıcı dispatch butonu ile
+// bu görevi masaüstüne yönlendirdi.") task.summary'ye sızabiliyor; bunlar
+// asistan cevabı DEĞİLDİR ve kullanıcıya asla gösterilmez.
+const INTERNAL_ROUTING_SUMMARY_PATTERN =
+  /dispatch butonu|masaüstüne yönlendirdi|masaustune yonlendirdi|açıkça istedi|acikca istedi/i;
+
+function isInternalRoutingSummary(value: string): boolean {
+  return INTERNAL_ROUTING_SUMMARY_PATTERN.test(value);
+}
+
 function deriveAssistantContent(input: {
   updatedTask: typeof tasks.$inferSelect;
   fallbackMessage?: string;
@@ -153,7 +163,7 @@ function deriveAssistantContent(input: {
   }
 
   const summary = typeof input.updatedTask.summary === "string" ? input.updatedTask.summary : "";
-  if (summary.trim()) {
+  if (summary.trim() && !isInternalRoutingSummary(summary)) {
     return finalize(summary);
   }
 
@@ -164,6 +174,16 @@ function deriveAssistantContent(input: {
   const error = typeof input.updatedTask.error === "string" ? input.updatedTask.error : "";
   if (error.trim()) {
     return finalize(error);
+  }
+
+  // Terminal duruma gelmiş ama hiç kullanıcıya gösterilebilir metin
+  // üretememiş görev: sessiz kalma ya da iç log basma — dürüst bir durum
+  // cümlesi göster.
+  if (input.updatedTask.status === "completed") {
+    return "Görev masaüstünde tamamlandı ama sonuç metni iletilmedi. Ayrıntı için görev geçmişine bakabilirsin.";
+  }
+  if (input.updatedTask.status === "failed") {
+    return "Görev masaüstünde tamamlanamadı. Tekrar denemek istersen görevi yeniden gönderebilirsin.";
   }
 
   return "";
