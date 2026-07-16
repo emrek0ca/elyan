@@ -656,20 +656,41 @@ class RemoteTaskRunner:
 
         def _worker() -> None:
             try:
-                # Plan modunda deterministik hız-yolunu atla: LLM planlayıcı
-                # her görev için (tek adım bile) plan önizlemesi + onay üretsin.
-                result = None
-                if not plan_mode:
-                    result = self.host._execute_deterministic_remote_task(task, prompt, title)
-                if result is None:
-                    result = self.host.send_conversation(
-                        "",
-                        prompt,
-                        title,
-                        plan_mode=plan_mode,
-                        force_structured_planning=True,
-                    )
-                box["result"] = result
+                # Mobil sohbet oturumu bağlamı: server_brain çağrıları görevle
+                # aynı backend session'ı kullansın ("onu sil", "bir tane daha"
+                # gibi bağlamlı komutlar çalışsın).
+                payload_map = task.get("payload", {})
+                payload_map = payload_map if isinstance(payload_map, dict) else {}
+                metadata_map = payload_map.get("metadata", {})
+                metadata_map = metadata_map if isinstance(metadata_map, dict) else {}
+                chat_map = metadata_map.get("chat", {})
+                chat_map = chat_map if isinstance(chat_map, dict) else {}
+                session_id = str(chat_map.get("sessionId", "") or "").strip()
+                session_token = None
+                if session_id:
+                    from runtime import bridge as bridge_module
+
+                    session_token = bridge_module._ACTIVE_DISPATCH_SESSION_ID.set(session_id)
+                try:
+                    # Plan modunda deterministik hız-yolunu atla: LLM planlayıcı
+                    # her görev için (tek adım bile) plan önizlemesi + onay üretsin.
+                    result = None
+                    if not plan_mode:
+                        result = self.host._execute_deterministic_remote_task(task, prompt, title)
+                    if result is None:
+                        result = self.host.send_conversation(
+                            "",
+                            prompt,
+                            title,
+                            plan_mode=plan_mode,
+                            force_structured_planning=True,
+                        )
+                    box["result"] = result
+                finally:
+                    if session_token is not None:
+                        from runtime import bridge as bridge_module
+
+                        bridge_module._ACTIVE_DISPATCH_SESSION_ID.reset(session_token)
             except BaseException as exc:  # yürütme hatası ana thread'e taşınır
                 box["error"] = exc
 

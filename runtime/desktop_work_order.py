@@ -83,7 +83,10 @@ def _artifact_has_evidence(artifact: dict[str, Any]) -> bool:
     if path_value:
         try:
             path = Path(path_value).expanduser()
-            return path.is_file()
+            # Dizin artifact'leri (make_directory) de kanıttır — is_file()
+            # klasörleri reddedince başarılı iş "doğrulanamadı" diye
+            # raporlanıyordu (canlı arıza: klasör oluştu ama cevap hatalı).
+            return path.is_file() or path.is_dir()
         except (OSError, RuntimeError, ValueError):
             return False
 

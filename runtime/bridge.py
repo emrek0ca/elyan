@@ -3038,6 +3038,15 @@ def _await_server_brain_final_message(
     return last_assistant
 
 
+# Mobil dispatch görevinin backend sohbet oturumu (metadata.chat.sessionId).
+# Remote task runner yürütme başlarken set eder; server_brain çağrıları yerel
+# conversation_id UUID değilken bu oturumu kullanır (bağlam kaybı olmasın).
+_ACTIVE_DISPATCH_SESSION_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "elyan_active_dispatch_session_id",
+    default="",
+)
+
+
 def _invoke_provider_chat_with_context(
     state: dict[str, Any],
     provider: str,
@@ -3239,6 +3248,14 @@ def _invoke_provider_chat(
             }
             if _is_uuid_value(conversation_id):
                 payload["sessionId"] = conversation_id
+            else:
+                # Mobil dispatch görevi: sohbetin backend sessionId'si görev
+                # payload'unda gelir (metadata.chat.sessionId). Bunu taşımak
+                # server brain'in aynı oturum bağlamıyla ("onu sil", "bir tane
+                # daha") planlamasını/yanıtlamasını sağlar.
+                dispatch_session_id = _ACTIVE_DISPATCH_SESSION_ID.get() or ""
+                if _is_uuid_value(dispatch_session_id):
+                    payload["sessionId"] = dispatch_session_id
             result = backend.chat_messages(payload)
             if result.ok and isinstance(result.data, dict):
                 data = _map_from(result.data)

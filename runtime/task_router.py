@@ -2985,12 +2985,27 @@ def _file_delete_route(text: str) -> RoutedTask | None:
     q = _normalise(text)
     if not any(tok in q for tok in ("sil", "delete", "remove", "kaldir", "kaldır", "cop kutusuna", "çöp kutusuna")):
         return None
-    # Be conservative — require explicit file reference or quoted name
+    # Be conservative — require explicit file reference, quoted name, or a
+    # clear "X klasörünü/dosyasını sil" pattern.
     src_explicit = _explicit_path_for_suffixes(text, _DOCUMENT_SUFFIXES | _IMAGE_SUFFIXES | _DATA_SUFFIXES | _AUDIO_SUFFIXES)
     quoted = _extract_quoted_name(text)
+    named = ""
     if not src_explicit and not quoted:
+        # "Masaüstündeki Emre klasörünü sil" / "rapor dosyasını çöp kutusuna at"
+        named_match = re.search(
+            r"([\w][\w .-]{0,60}?)\s+(?:adlı\s+|adli\s+)?(?:klasör(?:ü|u)?n[üu]|klasor(?:u)?nu|dizinini|dosyas[ıi]n[ıi])\s",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if named_match:
+            candidate = named_match.group(1).strip()
+            if candidate and _normalise(candidate) not in _FOLDER_NAME_STOPWORDS:
+                named = candidate
+    if not src_explicit and not quoted and not named:
         return None
-    src = src_explicit or str(Path.home() / "Desktop" / quoted)
+    target_name = quoted or named
+    location_path = _resolve_location_path(text) if _mentions_location(text) else str(Path.home() / "Desktop")
+    src = src_explicit or str(Path(location_path) / target_name)
     # Move to trash instead of hard delete for safety
     trash_cmd = f'osascript -e \'tell application "Finder" to delete POSIX file "{src}"\''
     description = f'"{Path(src).name}" çöp kutusuna taşınacak.'
