@@ -173,6 +173,10 @@ _OPERATOR_GRAB_VERBS = ("bul", "kaydet", "indir", "download")
 _IMAGE_FIND_VERBS = ("bul", "ara", "goster", "göster", "ac", "aç", "getir", "indir", "kaydet", "bulur musun")
 _IMAGE_DRAW_VERBS = ("ciz", "çiz", "olustur", "oluştur", "uret", "üret", "generate", "yap", "tasarla")
 _IMAGE_RESOURCE_WORDS = ("resim", "resmi", "resmini", "gorsel", "görsel", "gorseli", "görseli", "foto", "fotograf", "fotoğraf", "image", "picture")
+_IMAGE_EDIT_VERBS = (
+    "duzenle", "düzenle", "degistir", "değiştir", "kaldir", "kaldır",
+    "arka plan", "rengini", "stilini", "retouch", "edit", "remove", "replace",
+)
 # "kaydet/indir" varsa görseli GERÇEKTEN indirip diske yazan image_fetch'e gider;
 # yoksa sadece tarayıcıda arama açılır.
 _IMAGE_SAVE_VERBS = ("kaydet", "indir", "download", "save", "kaydeder")
@@ -737,7 +741,7 @@ def _resolve_output_path(text: str, extension: str, *, hint: str) -> str:
 
 
 _DOCUMENT_SUFFIXES = {".pdf", ".docx", ".doc", ".txt", ".md", ".markdown", ".json", ".csv", ".rtf", ".html", ".htm"}
-_DATA_SUFFIXES = {".csv", ".json"}
+_DATA_SUFFIXES = {".csv", ".json", ".xlsx", ".xls"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 _OCR_SUFFIXES = _IMAGE_SUFFIXES | {".pdf"}
 _AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".mp4", ".webm"}
@@ -870,6 +874,102 @@ def _resolve_image_target(text: str, selected_artifacts: list[dict[str, Any]] | 
     return (selected, [selected]) if selected else ("", [])
 
 
+def _image_output_options(text: str, *, editing: bool = False) -> tuple[str, str]:
+    q = _normalise(text)
+    if "21:9" in q:
+        ratio = "21:9"
+    elif "9:16" in q or any(token in q for token in ("story", "reels", "tiktok", "telefon duvar kagidi", "telefon duvar kağıdı")):
+        ratio = "9:16"
+    elif "16:9" in q or any(token in q for token in ("banner", "thumbnail", "kapak", "yatay", "landscape")):
+        ratio = "16:9"
+    elif "3:2" in q:
+        ratio = "3:2"
+    elif "2:3" in q or any(token in q for token in ("afis", "afiş", "poster", "dikey", "vertical")):
+        ratio = "2:3"
+    else:
+        ratio = "1:1"
+    image_size = "4K" if re.search(r"\b4k\b", q, flags=re.IGNORECASE) else "2K"
+    return ratio, image_size
+
+
+def _image_edit_route(
+    text: str,
+    selected_artifacts: list[dict[str, Any]] | None = None,
+) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(token in q for token in _IMAGE_EDIT_VERBS):
+        return None
+    source_path, selected_paths = _resolve_image_target(text, selected_artifacts)
+    if not source_path:
+        return None
+    inferred_ratio, image_size = _image_output_options(text, editing=True)
+    explicit_ratio = inferred_ratio if re.search(r"\b(?:21:9|16:9|9:16|3:2|2:3|1:1)\b", q) else ""
+    output_path = _default_output_path(".png", f"{Path(source_path).stem}-edited")
+    args: dict[str, Any] = {
+        "prompt": str(text or "").strip(),
+        "sourcePath": source_path,
+        "sourcePaths": [source_path],
+        "outputPath": output_path,
+        "aspectRatio": explicit_ratio,
+        "imageSize": image_size,
+        "overwrite": False,
+    }
+    if selected_paths:
+        args["_selectedPaths"] = selected_paths
+    return RoutedTask(
+        "image_edit",
+        args,
+        "selected_image_edit",
+        intent="image_edit",
+        confidence=0.96,
+        requires_confirmation=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(
+            f"{Path(source_path).name} Gemini ile düzenlenecek ve {Path(output_path).name} oluşturulacak.",
+            [{"capability": "image_edit", "args": args, "description": "Seçili görsel Gemini ile düzenlenecek."}],
+            "local_private",
+        ),
+    )
+
+
+def _image_generate_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    if any(token in q for token in ("canvas", "kanvas", "tuval")):
+        return None
+    if any(token in q for token in ("grafik", "grafi", "grafig", "chart", "plot", "histogram", "denklem", "fonksiyon")):
+        return None
+    explicit_draw = re.search(r"(?<!\w)(?:çiz|ciz|draw|paint|illustrate)(?!\w)", q, flags=re.IGNORECASE)
+    has_resource = any(token in q for token in _IMAGE_RESOURCE_WORDS) or any(
+        token in q for token in ("afis", "afiş", "poster", "banner", "logo", "ikon", "avatar", "illüstrasyon", "illustration")
+    )
+    has_generate = any(token in q for token in ("olustur", "oluştur", "uret", "üret", "generate", "tasarla", "create"))
+    if not explicit_draw and not (has_resource and has_generate):
+        return None
+    aspect_ratio, image_size = _image_output_options(text)
+    output_path = _resolve_output_path(text, ".png", hint="elyan-image")
+    args = {
+        "prompt": str(text or "").strip(),
+        "outputPath": output_path,
+        "aspectRatio": aspect_ratio,
+        "imageSize": image_size,
+        "overwrite": False,
+    }
+    return RoutedTask(
+        "image_generate",
+        args,
+        "image_generate",
+        intent="image_generate",
+        confidence=0.94,
+        requires_confirmation=True,
+        privacy_class="public_text",
+        plan_preview=_build_plan_summary(
+            f"Gemini ile {Path(output_path).name} görseli üretilecek.",
+            [{"capability": "image_generate", "args": args, "description": "İstek Gemini ile görsele dönüştürülecek."}],
+            "public_text",
+        ),
+    )
+
+
 def _embedded_attachment_payload(text: str) -> tuple[str, list[str]]:
     original = str(text or "").strip()
     if not original:
@@ -917,6 +1017,13 @@ def _document_mode(text: str) -> str:
 
 def _ocr_mode(text: str) -> str:
     return _document_mode(text)
+
+
+def _has_ocr_intent(text: str, *, selected_visual: bool = False) -> bool:
+    q = _normalise(text)
+    if any(token in q for token in ("ocr", "yazi", "yazı", "metin", "karakter")):
+        return True
+    return selected_visual and any(token in q for token in ("oku", "okur musun", "read text"))
 
 
 def _image_read_mode(text: str) -> str:
@@ -1587,7 +1694,7 @@ def _ocr_route(text: str, selected_artifacts: list[dict[str, Any]] | None = None
         token in q for token in ("gorsel", "görsel", "ocr", "resim", "fotograf", "fotoğraf", "png", "jpg", "jpeg", "pdf")
     ):
         return None
-    if not any(token in q for token in ("yazi", "yazı", "metin", "oku", "cikar", "çıkar", "ocr")):
+    if not _has_ocr_intent(text, selected_visual=bool(selected_visual)):
         return None
     path, selected_paths = _resolve_ocr_target(text, selected_artifacts)
     if not path:
@@ -1645,7 +1752,7 @@ def _data_analyze_route(text: str, selected_artifacts: list[dict[str, Any]] | No
         kinds={"document"},
         suffixes=_DATA_SUFFIXES,
     )
-    if not selected_data and not any(token in q for token in ("csv", "json", "tablo", "veri", "dataset")):
+    if not selected_data and not any(token in q for token in ("csv", "json", "xlsx", "xls", "excel", "sheet", "tablo", "veri", "dataset")):
         return None
     if not any(token in q for token in ("analiz", "incele", "profil", "istatistik", "preview", "onizleme", "önizleme")):
         return None
@@ -1672,7 +1779,7 @@ def _chart_generate_route(text: str, selected_artifacts: list[dict[str, Any]] | 
         kinds={"document"},
         suffixes=_DATA_SUFFIXES,
     )
-    if not selected_data and not any(token in q for token in ("csv", "json", "tablo", "veri", "dataset")):
+    if not selected_data and not any(token in q for token in ("csv", "json", "xlsx", "xls", "excel", "sheet", "tablo", "veri", "dataset")):
         return None
     if not any(token in q for token in ("grafik", "chart", "histogram", "scatter", "bar", "line")):
         return None
@@ -1805,6 +1912,284 @@ def _canvas_write_route(text: str) -> RoutedTask | None:
     )
 
 
+def _pdf_report_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    if "pdf" not in q:
+        return None
+    if not any(token in q for token in ("rapor", "arastirma", "araştırma", "belge", "dokuman", "doküman")):
+        return None
+    if not any(token in q for token in ("hazirla", "hazırla", "olustur", "oluştur", "yap", "uret", "üret", "yaz")):
+        return None
+
+    topic, specific = _research_request_profile(text)
+    topic_match = re.search(r"(.{1,160}?)\s+hakk[ıi]nda", text, flags=re.IGNORECASE)
+    if topic_match:
+        topic = topic_match.group(1)
+        topic = re.sub(
+            r"^(?:masaüstümde|masaustumde|masaüstünde|masaustunde|masaüstüne|masaustune|desktop(?:ta|a)?|bilgisayarımda|bilgisayarimda)\s+",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        )
+        specific = True
+    if not specific:
+        topic = _strip_leading_fillers(text)
+    topic = topic.strip(" .,!?:;") or "araştırma konusu"
+    page_count = _extract_page_count(text) or 4
+    output_path = _resolve_output_path(text, ".pdf", hint=f"{topic}-rapor")
+    output_path = _relocate_to_requested_folder(text, output_path)
+    prompt = (
+        f"{topic} hakkında kaynakçalı, düzenli, yaklaşık {page_count} sayfalık araştırma raporu hazırla. "
+        "Başlık, kısa giriş, ana bölümler, sonuç ve kaynakça olsun."
+    )
+    steps = [
+        {
+            "capability": "web_research",
+            "args": {"query": topic, "max_results": 6},
+            "description": f"{topic} hakkında web araştırması yapılacak.",
+        },
+        {
+            "capability": "canvas_write",
+            "args": {
+                "prompt": prompt,
+                "title": f"{topic} Araştırma Raporu",
+                "outputPath": output_path,
+                "outputFormat": "pdf",
+                "width": 595,
+                "height": 842,
+                "overwrite": False,
+            },
+            "description": f"{Path(output_path).name} PDF raporu oluşturulacak.",
+            "dependsOn": ["step_1"],
+        },
+    ]
+    steps[0]["id"] = "step_1"
+    steps[1]["id"] = "step_2"
+    summary = f"{topic} araştırılacak ve {Path(output_path).name} olarak tek PDF raporu oluşturulacak."
+    return RoutedTask(
+        "canvas_write",
+        {
+            "prompt": prompt,
+            "title": f"{topic} Araştırma Raporu",
+            "outputPath": output_path,
+            "outputFormat": "pdf",
+            "width": 595,
+            "height": 842,
+            "overwrite": False,
+        },
+        "pdf_report",
+        intent="pdf_report",
+        confidence=0.93,
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _relocate_to_requested_folder(text: str, output_path: str) -> str:
+    candidate = Path(output_path)
+    default_parents = {_workspace_root(), _workspace_root() / "elyan_output"}
+    if _mentions_location(text) and candidate.parent in default_parents:
+        return str((Path(_resolve_location_path(text)) / candidate.name).resolve())
+    return output_path
+
+
+def _sample_budget_table(normalized_text: str) -> tuple[list[str], list[dict[str, Any]]] | None:
+    """Return typed demo data only when the user explicitly asks for a sample."""
+    q = str(normalized_text or "")
+    if not any(token in q for token in ("ornek", "örnek", "sample", "demo", "senaryo")):
+        return None
+    if not any(token in q for token in ("butce", "bütçe", "budget")):
+        return None
+
+    months = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran"]
+    categories = [
+        ("Gelir", "gelir", [52000, 52500, 53000, 54000, 54500, 55000]),
+        ("Kira", "gider", [14500, 14500, 15000, 15000, 15000, 15500]),
+        ("Market", "gider", [8200, 8600, 9000, 9400, 9700, 10100]),
+        ("Ulaşım", "gider", [2100, 2250, 2350, 2400, 2500, 2600]),
+        ("Fatura", "gider", [3800, 3600, 3400, 3200, 3000, 3100]),
+        ("Eğitim", "gider", [2500, 2500, 2800, 2800, 3000, 3000]),
+        ("Birikim", "birikim", [9000, 9200, 9400, 9800, 10000, 10200]),
+    ]
+    rows = [
+        {"Ay": month, "Kategori": category, "Tür": kind, "Tutar": values[month_index]}
+        for month_index, month in enumerate(months)
+        for category, kind, values in categories
+    ]
+    return ["Ay", "Kategori", "Tür", "Tutar"], rows
+
+
+def _data_artifact_pipeline_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    wants_sheet = any(token in q for token in ("xlsx", "excel", "tablo", "sheet"))
+    wants_chart = any(token in q for token in ("grafik", "chart", "png", "gorsel", "görsel"))
+    wants_pdf = "pdf" in q and any(token in q for token in ("rapor", "ozet", "özet", "analiz"))
+    if not (wants_sheet and wants_chart and wants_pdf):
+        return None
+    if not any(token in q for token in ("hazirla", "hazırla", "olustur", "oluştur", "uret", "üret", "kaydet", "yap")):
+        return None
+    sample_table = _sample_budget_table(q)
+    if sample_table is None:
+        return None
+
+    sheet_path = _relocate_to_requested_folder(
+        text,
+        _resolve_output_path(text, ".xlsx", hint="veri-analizi"),
+    )
+    chart_path = _relocate_to_requested_folder(
+        text,
+        _resolve_output_path(text, ".png", hint=f"{Path(sheet_path).stem}-grafik"),
+    )
+    report_path = _relocate_to_requested_folder(
+        text,
+        _resolve_output_path(text, ".pdf", hint=f"{Path(sheet_path).stem}-rapor"),
+    )
+    title = Path(report_path).stem.replace("_", " ").replace("-", " ").strip().title() or "Veri Analizi Raporu"
+    steps = [
+        {
+            "id": "step_1",
+            "capability": "spreadsheet_write",
+            "args": {
+                "prompt": text,
+                "title": Path(sheet_path).stem[:31] or "Veri Analizi",
+                "columns": sample_table[0],
+                "rows": sample_table[1],
+                "outputPath": sheet_path,
+                "overwrite": False,
+            },
+            "description": f"{Path(sheet_path).name} veri tablosu oluşturulacak.",
+        },
+        {
+            "id": "step_2",
+            "capability": "chart_generate",
+            "args": {
+                "path": sheet_path,
+                "chartType": "bar",
+                "xColumn": "Kategori",
+                "yColumn": "Tutar",
+                "title": title,
+                "outputPath": chart_path,
+                "_selectedPaths": [sheet_path],
+            },
+            "description": f"{Path(sheet_path).name} verisinden {Path(chart_path).name} grafiği üretilecek.",
+            "dependsOn": ["step_1"],
+        },
+        {
+            "id": "step_3",
+            "capability": "canvas_write",
+            "args": {
+                "prompt": text,
+                "title": title,
+                "sourcePath": chart_path,
+                "sourceContext": f"{Path(sheet_path).name} ve {Path(chart_path).name} çıktılarından kısa analiz raporu üret.",
+                "outputPath": report_path,
+                "outputFormat": "pdf",
+                "width": 595,
+                "height": 842,
+                "overwrite": False,
+                "_selectedPaths": [chart_path],
+            },
+            "description": f"Bulgular {Path(report_path).name} PDF raporunda özetlenecek.",
+            "dependsOn": ["step_2"],
+        },
+    ]
+    summary = (
+        f"{Path(sheet_path).name} oluşturulacak, {Path(chart_path).name} grafiği üretilecek "
+        f"ve {Path(report_path).name} PDF raporu hazırlanacak."
+    )
+    return RoutedTask(
+        "spreadsheet_write",
+        dict(steps[0]["args"]),
+        "data_artifact_pipeline",
+        intent="data_artifact_pipeline",
+        confidence=0.94,
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _research_spreadsheet_route(text: str) -> RoutedTask | None:
+    q = _normalise(text)
+    wants_sheet = any(token in q for token in ("xlsx", "excel", "tablo", "cizelge", "çizelge", "sheet"))
+    explicit_public_research = any(
+        token in q for token in ("arastir", "araştır", "internetten", "webden", "kaynakli", "kaynaklı")
+    )
+    public_report = (
+        "raporla" in q
+        and re.search(r"\b(?:19|20)\d{2}\b", q) is not None
+        and any(token in q for token in ("turkiye", "türkiye", "dunya", "dünya", "global", "ulusal", "uluslararasi", "uluslararası"))
+    )
+    private_data_signal = any(
+        token in q
+        for token in (
+            "dosyam", "tablom", "excelim", "verilerim", "butcem", "bütçem",
+            "gelirim", "giderim", "satislarim", "satışlarım", "musterilerim", "müşterilerim",
+        )
+    )
+    needs_public_data = (explicit_public_research or public_report) and not private_data_signal
+    if not (wants_sheet and needs_public_data):
+        return None
+
+    query = re.sub(
+        r"^(?:masaust(?:umde|une|unde|u)?|masaüst(?:ümde|üne|ünde|ü)?|desktop(?:umda|a)?)\s+",
+        "",
+        str(text or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r"\s+(?:hakkinda\s+|hakkında\s+)?(?:arastir|araştır|raporla|internetten|webden).*$",
+        "",
+        query,
+        flags=re.IGNORECASE,
+    ).strip(" .,!?:;")
+    query = query or str(text or "").strip()
+    output_path = _relocate_to_requested_folder(
+        text,
+        _resolve_output_path(text, ".xlsx", hint=query or "arastirma-verileri"),
+    )
+    steps = [
+        {
+            "id": "step_1",
+            "capability": "web_research",
+            "args": {"query": query, "max_results": 6, "languageHint": "tr"},
+            "description": f"{query} için güncel ve kaynaklı veriler araştırılacak.",
+        },
+        {
+            "id": "step_2",
+            "capability": "spreadsheet_write",
+            "args": {
+                "prompt": text,
+                "title": query[:31] or "Araştırma Verileri",
+                "columns": ["Başlık", "URL", "Özet"],
+                "rows": "{{steps.step_1.result.sources}}",
+                "outputPath": output_path,
+                "overwrite": False,
+            },
+            "description": f"Araştırma kaynakları {Path(output_path).name} dosyasına yapılandırılmış satırlar olarak yazılacak.",
+            "dependsOn": ["step_1"],
+        },
+    ]
+    summary = f"{query} araştırılacak ve kaynaklı veriler {Path(output_path).name} Excel dosyasına yazılacak."
+    return RoutedTask(
+        "web_research",
+        dict(steps[0]["args"]),
+        "research_spreadsheet",
+        intent="research_spreadsheet",
+        confidence=0.94,
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
 def _spreadsheet_write_route(text: str) -> RoutedTask | None:
     q = _normalise(text)
     if not any(token in q for token in ("xlsx", "excel", "tablo", "cizelge", "çizelge", "sheet")):
@@ -1863,6 +2248,73 @@ def _presentation_write_route(text: str) -> RoutedTask | None:
             steps,
             "local_private",
         ),
+        steps=tuple(steps),
+    )
+
+
+def _selected_document_transform_route(
+    text: str,
+    selected_artifacts: list[dict[str, Any]] | None,
+) -> RoutedTask | None:
+    q = _normalise(text)
+    if not any(token in q for token in ("cevir", "çevir", "donustur", "dönüştür", "olustur", "oluştur", "hazirla", "hazırla")):
+        return None
+    source_path, selected_paths = _resolve_document_target(text, selected_artifacts)
+    if not source_path:
+        return None
+
+    source = Path(source_path)
+    target_capability = ""
+    extension = ""
+    label = ""
+    read_mode = "read"
+    if any(token in q for token in ("pptx", "powerpoint", "sunum", "slayt", "slide")):
+        target_capability, extension, label = "presentation_write", ".pptx", "PPTX sunumu"
+    elif any(token in q for token in ("docx", "word", "belge", "dokuman", "doküman")):
+        target_capability, extension, label = "document_write", ".docx", "DOCX belgesi"
+        if any(token in q for token in ("ozet", "özet", "summary")):
+            read_mode = "summary"
+    else:
+        return None
+
+    explicit_output = _explicit_path_for_suffixes(text, {extension})
+    output_path = explicit_output or _default_output_path(extension, f"{source.stem}-{target_capability}")
+    title = source.stem.replace("-", " ").replace("_", " ").strip().title()
+    reader_args: dict[str, Any] = {"path": source_path, "mode": read_mode}
+    if selected_paths:
+        reader_args["_selectedPaths"] = selected_paths
+    writer_args = {
+        "prompt": text,
+        "title": title,
+        "outputPath": output_path,
+        "overwrite": False,
+    }
+    steps = [
+        {
+            "id": "step_1",
+            "capability": "document_read",
+            "args": reader_args,
+            "description": f"{source.name} içeriği güvenli biçimde okunacak.",
+        },
+        {
+            "id": "step_2",
+            "capability": target_capability,
+            "args": writer_args,
+            "description": f"Okunan içerikten {Path(output_path).name} {label} oluşturulacak.",
+            "dependsOn": ["step_1"],
+        },
+    ]
+    summary = f"{source.name} okunacak ve {Path(output_path).name} olarak dönüştürülecek."
+    return RoutedTask(
+        target_capability,
+        writer_args,
+        "selected_document_transform",
+        intent="document_transform",
+        confidence=0.91,
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
         steps=tuple(steps),
     )
 
@@ -2181,7 +2633,7 @@ def artifact_target_clarification(
     )
     ocr_requested = any(
         token in q for token in ("gorsel", "görsel", "ocr", "resim", "fotograf", "fotoğraf", "png", "jpg", "jpeg", "pdf")
-    ) and any(token in q for token in ("yazi", "yazı", "metin", "oku", "cikar", "çıkar", "ocr"))
+    ) and _has_ocr_intent(text)
     audio_requested = any(
         token in q
         for token in (
@@ -2279,6 +2731,7 @@ _COMMON_LOCATIONS: dict[str, str] = {
 }
 
 _LOCATION_TRIGGER_PATTERNS = {
+    "masaustume", "masaüstüme", "masaustumde", "masaüstümde",
     "masaustune", "masaüstüne", "masaustunde", "masaüstünde", "masaustundeki",
     "masaüstündeki", "masaustundan", "masaüstünden", "masaustu", "masaüstü",
     "indirilenlere", "indirilenler", "indirilenlerden", "indirilenlerdeki",
@@ -2395,19 +2848,20 @@ def _mkdir_route(text: str) -> RoutedTask | None:
 
     if folder_name:
         target_path = str(Path(location_path) / folder_name)
-        command = f'mkdir -p "{target_path}"'
         description = f'"{folder_name}" klasörü {Path(location_path).name} içinde oluşturulacak.'
         summary = f'{Path(location_path).name} konumunda "{folder_name}" adlı klasör oluşturacağım.'
     else:
-        target_path = location_path
-        command = f'mkdir -p "{target_path}/Yeni Klasör"'
+        target_path = str(Path(location_path) / "Yeni Klasör")
         description = f"{Path(location_path).name} içinde yeni klasör oluşturulacak."
         summary = f'{Path(location_path).name} konumuna yeni bir klasör oluşturacağım.'
 
-    steps = [{"capability": "shell_run", "args": {"command": command, "use_shell": False}, "description": description}]
+    # shell_run DEĞİL: shell dispatch onay blocklist'inde olduğundan basit
+    # klasör oluşturma mobilde onay çıkmazına giriyordu. make_directory
+    # zararsız + geri alınabilir → onaysız çalışır.
+    steps = [{"capability": "make_directory", "args": {"path": target_path}, "description": description}]
     return RoutedTask(
-        "shell_run",
-        {"command": command, "use_shell": False},
+        "make_directory",
+        {"path": target_path},
         "mkdir",
         intent="file_system_mkdir",
         confidence=0.95,
@@ -2824,6 +3278,81 @@ def _compound_route(
                 "args": dict(routed.args),
                 "description": description,
             })
+
+    deduplicated_steps: list[dict[str, Any]] = []
+    data_mode_rank = {"preview": 0, "summary": 1, "profile": 2}
+    document_mode_rank = {"read": 0, "bullets": 1, "summary": 2}
+    image_mode_rank = {"metadata": 0, "palette": 1, "summary": 2}
+    for step in steps:
+        capability = str(step.get("capability", "") or "").strip()
+        args = dict(step.get("args") or {})
+        duplicate = next(
+            (
+                existing
+                for existing in deduplicated_steps
+                if str(existing.get("capability", "") or "").strip() == capability
+                and dict(existing.get("args") or {}) == args
+            ),
+            None,
+        )
+        if duplicate is not None:
+            continue
+        if capability == "data_analyze":
+            same_target = next(
+                (
+                    existing
+                    for existing in deduplicated_steps
+                    if str(existing.get("capability", "") or "").strip() == capability
+                    and str((existing.get("args") or {}).get("path", "") or "") == str(args.get("path", "") or "")
+                ),
+                None,
+            )
+            if same_target is not None:
+                existing_args = dict(same_target.get("args") or {})
+                existing_mode = str(existing_args.get("mode", "summary") or "summary")
+                incoming_mode = str(args.get("mode", "summary") or "summary")
+                if data_mode_rank.get(incoming_mode, 0) > data_mode_rank.get(existing_mode, 0):
+                    existing_args["mode"] = incoming_mode
+                    same_target["args"] = existing_args
+                continue
+        if capability == "document_read":
+            same_target = next(
+                (
+                    existing
+                    for existing in deduplicated_steps
+                    if str(existing.get("capability", "") or "").strip() == capability
+                    and str((existing.get("args") or {}).get("path", "") or "") == str(args.get("path", "") or "")
+                ),
+                None,
+            )
+            if same_target is not None:
+                existing_args = dict(same_target.get("args") or {})
+                existing_mode = str(existing_args.get("mode", "read") or "read")
+                incoming_mode = str(args.get("mode", "read") or "read")
+                if document_mode_rank.get(incoming_mode, 0) > document_mode_rank.get(existing_mode, 0):
+                    existing_args["mode"] = incoming_mode
+                    same_target["args"] = existing_args
+                continue
+        if capability == "image_read":
+            same_target = next(
+                (
+                    existing
+                    for existing in deduplicated_steps
+                    if str(existing.get("capability", "") or "").strip() == capability
+                    and str((existing.get("args") or {}).get("path", "") or "") == str(args.get("path", "") or "")
+                ),
+                None,
+            )
+            if same_target is not None:
+                existing_args = dict(same_target.get("args") or {})
+                existing_mode = str(existing_args.get("mode", "summary") or "summary")
+                incoming_mode = str(args.get("mode", "summary") or "summary")
+                if image_mode_rank.get(incoming_mode, 0) > image_mode_rank.get(existing_mode, 0):
+                    existing_args["mode"] = incoming_mode
+                    same_target["args"] = existing_args
+                continue
+        deduplicated_steps.append(step)
+    steps = deduplicated_steps
     if len(steps) < 2:
         return None
 
@@ -2875,7 +3404,7 @@ def _compound_route(
         "compound_task",
         intent="compound_task",
         confidence=min(routed.confidence for _, routed in parts),
-        requires_confirmation=True,
+        requires_confirmation=any(routed.requires_confirmation for _, routed in parts),
         is_multi_step=True,
         privacy_class=privacy_class,
         plan_preview=_build_plan_summary(summary, steps, privacy_class),
@@ -2958,6 +3487,34 @@ def route_text_to_tool(
         return None
     q = _normalise(original)
 
+    image_edit = _image_edit_route(original, selected_artifacts)
+    if image_edit is not None:
+        return image_edit
+
+    image_generate = _image_generate_route(original)
+    if image_generate is not None:
+        return image_generate
+
+    data_pipeline = _data_artifact_pipeline_route(original)
+    if data_pipeline is not None:
+        return data_pipeline
+
+    research_spreadsheet = _research_spreadsheet_route(original)
+    if research_spreadsheet is not None:
+        return research_spreadsheet
+
+    pdf_report = _pdf_report_route(original)
+    if pdf_report is not None:
+        return pdf_report
+
+    document_transform = _selected_document_transform_route(original, selected_artifacts)
+    if document_transform is not None:
+        return document_transform
+
+    multi_step = _multi_step_browser_route(original)
+    if multi_step is not None:
+        return multi_step
+
     if _allow_compound:
         compound = _compound_route(original, selected_artifacts)
         if compound is not None:
@@ -3011,10 +3568,6 @@ def route_text_to_tool(
     reminder_add = _reminder_add_route(original)
     if reminder_add is not None:
         return reminder_add
-
-    multi_step = _multi_step_browser_route(original)
-    if multi_step is not None:
-        return multi_step
 
     site_visit = _site_visit_route(original)
     if site_visit is not None:

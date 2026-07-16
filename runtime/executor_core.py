@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -28,6 +29,10 @@ from runtime.execution_scheduler import (
 )
 
 try:
+    # LangChain'in Pydantic v1 uyumluluk katmanı Python 3.14'te henüz güvenli
+    # değil. Runtime bu sürümde yerleşik sıralı yürütücüye temizce düşer.
+    if sys.version_info >= (3, 14):
+        raise ImportError("langgraph_python_314_unsupported")
     from langgraph.graph import END, START, StateGraph
 except Exception:  # pragma: no cover - optional dependency
     END = START = None
@@ -49,6 +54,25 @@ def _safe_text(value: Any, limit: int = 160) -> str:
     return text
 
 
+def _user_facing_execution_summary(
+    outputs: list[str],
+    step_outputs: dict[str, dict[str, Any]],
+) -> str:
+    """Artifact üreten planlarda ara okuma/araştırma dökümlerini gizler."""
+    artifact_outputs: list[str] = []
+    seen: set[str] = set()
+    for payload in step_outputs.values():
+        artifacts = payload.get("artifacts")
+        output = str(payload.get("output", "") or "").strip()
+        if not output or not isinstance(artifacts, list) or not artifacts:
+            continue
+        if output not in seen:
+            seen.add(output)
+            artifact_outputs.append(output)
+    visible_outputs = artifact_outputs or [output for output in outputs if output]
+    return "\n".join(visible_outputs).strip() or "İşlem tamamlandı."
+
+
 # ── Adım çıktısı şablonları + forEach ────────────────────────────────────────
 # Bir adımın args'ı önceki adımların YAPILANDIRILMIŞ çıktısına referans
 # verebilir: {{steps.<id>.result.items[0].href}}. Bir adım "forEach" taşıyorsa
@@ -56,8 +80,10 @@ def _safe_text(value: Any, limit: int = 160) -> str:
 # eleman değerleriyle doldurulur. Bu, "5 linki topla, HER BİRİ için indir"
 # görevlerinin plan diliyle ifade edilebilmesini sağlar.
 
-_TEMPLATE_RE = re.compile(r"\{\{\s*([a-zA-Z_][\w\.\[\]]*)\s*\}\}")
-_WHOLE_TEMPLATE_RE = re.compile(r"^\{\{\s*([a-zA-Z_][\w\.\[\]]*)\s*\}\}$")
+_TEMPLATE_RE = re.compile(r"\{\{\s*([a-zA-Z_][\w\-\.\[\]]*)\s*\}\}")
+_WHOLE_TEMPLATE_RE = re.compile(r"^\{\{\s*([a-zA-Z_][\w\-\.\[\]]*)\s*\}\}$")
+_STEP_TEMPLATE_RE = re.compile(r"\{\{\s*steps\.([A-Za-z0-9_\-]+)")
+_STEP_TEMPLATE_PREFIX_RE = re.compile(r"(\{\{\s*steps\.)([A-Za-z0-9_\-]+)")
 _MAX_FOREACH_ITEMS = 20
 _TEMPLATE_MISSING = object()
 
@@ -110,7 +136,42 @@ def _resolve_templates(value: Any, namespace: dict[str, Any]) -> Any:
     return _TEMPLATE_RE.sub(_substitute, value)
 
 
-def _expand_for_each(step: dict[str, Any], step_outputs: dict[str, Any]) -> list[dict[str, Any]]:
+def _template_step_ids(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        result: set[str] = set()
+        for item in value.values():
+            result |= _template_step_ids(item)
+        return result
+    if isinstance(value, list):
+        result: set[str] = set()
+        for item in value:
+            result |= _template_step_ids(item)
+        return result
+    if isinstance(value, str):
+        return set(_STEP_TEMPLATE_RE.findall(value))
+    return set()
+
+
+def _remap_step_templates(value: Any, id_remap: dict[str, str]) -> Any:
+    if isinstance(value, dict):
+        return {key: _remap_step_templates(item, id_remap) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_remap_step_templates(item, id_remap) for item in value]
+    if not isinstance(value, str) or not id_remap:
+        return value
+
+    def replace(match: "re.Match[str]") -> str:
+        return f"{match.group(1)}{id_remap.get(match.group(2), match.group(2))}"
+
+    return _STEP_TEMPLATE_PREFIX_RE.sub(replace, value)
+
+
+def _expand_for_each(
+    step: dict[str, Any],
+    step_outputs: dict[str, Any],
+    *,
+    reserved_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """forEach taşıyan adımı, çözülen listenin her elemanı için bir kopyaya açar."""
     source = step.get("forEach")
     if isinstance(source, str):
@@ -120,9 +181,19 @@ def _expand_for_each(step: dict[str, Any], step_outputs: dict[str, Any]) -> list
     items = source[:_MAX_FOREACH_ITEMS]
     base_id = str(step.get("id", "") or "step")
     expanded: list[dict[str, Any]] = []
+    used_ids = set(reserved_ids or set())
     for position, element in enumerate(items):
         clone = {key: value for key, value in step.items() if key != "forEach"}
-        clone["id"] = f"{base_id}_{position + 1}"
+        candidate = f"{base_id}__item_{position + 1}"
+        suffix = 1
+        while candidate in used_ids:
+            suffix += 1
+            candidate = f"{base_id}__item_{position + 1}_{suffix}"
+        used_ids.add(candidate)
+        clone["id"] = candidate
+        clone["_forEachParentId"] = base_id
+        clone["_forEachPosition"] = position + 1
+        clone["_forEachCount"] = len(items)
         namespace = {"steps": step_outputs, "item": element, "index": position + 1}
         clone["args"] = _resolve_templates(dict(clone.get("args", {}) or {}), namespace)
         description = str(clone.get("description", "") or "")
@@ -740,6 +811,53 @@ class ExecutorCore:
         ]
         return cleaned or None
 
+    @staticmethod
+    def _prepare_revised_steps(
+        revised: list[dict[str, Any]],
+        *,
+        completed_step_ids: set[str],
+        replan_round: int,
+    ) -> list[dict[str, Any]]:
+        prepared: list[dict[str, Any]] = []
+        used_ids = set(completed_step_ids)
+        id_remap: dict[str, str] = {}
+        for index, raw in enumerate(revised, start=1):
+            if not isinstance(raw, dict):
+                continue
+            step = dict(raw)
+            original_step_id = str(step.get("id", "") or "").strip()
+            step_id = original_step_id
+            if original_step_id and original_step_id in completed_step_ids:
+                capability = str(step.get("capability", "") or "")
+                if bool(capability_metadata(capability).get("sideEffect", False)):
+                    continue
+                step_id = ""
+            if not step_id:
+                base_id = f"repair_{max(1, replan_round)}_{index}"
+                step_id = base_id
+                suffix = 1
+                while step_id in used_ids:
+                    suffix += 1
+                    step_id = f"{base_id}_{suffix}"
+                step["id"] = step_id
+                if original_step_id:
+                    id_remap[original_step_id] = step_id
+            used_ids.add(step_id)
+            prepared.append(step)
+
+        remapped: list[dict[str, Any]] = []
+        for step in prepared:
+            current = _remap_step_templates(step, id_remap)
+            dependencies = current.get("dependsOn")
+            if isinstance(dependencies, list):
+                current["dependsOn"] = [
+                    id_remap.get(str(item or "").strip(), str(item or "").strip())
+                    for item in dependencies
+                    if str(item or "").strip()
+                ]
+            remapped.append(current)
+        return remapped
+
     def _prefetch_read_batch(
         self,
         *,
@@ -754,6 +872,7 @@ class ExecutorCore:
         previous_artifacts: list[dict[str, Any]],
         authorize_step: Callable[[str, str, dict[str, Any], str, str], dict[str, Any] | None] | None,
         task_id: str,
+        confirmed: bool,
     ) -> dict[str, dict[str, Any]]:
         prepared: list[dict[str, Any]] = []
         for index, step in enumerate(batch, start=1):
@@ -778,7 +897,7 @@ class ExecutorCore:
                 attempt=1,
             )
             args = dict(step.get("args", {}) or {})
-            args["_confirmed"] = True
+            args["_confirmed"] = bool(confirmed)
             args["_retryAttempt"] = 1
             if previous_output:
                 args["_previousOutput"] = previous_output
@@ -825,6 +944,24 @@ class ExecutorCore:
             if isinstance(item.get("authorizationError"), dict):
                 return {**item, "toolResult": dict(item["authorizationError"]), "events": []}
             try:
+                pre_error = precondition_error(
+                    str(item["capability"]),
+                    dict(item["args"]),
+                    dict(item.get("state", {}) or {}),
+                )
+                if pre_error is not None:
+                    return {
+                        **item,
+                        "toolResult": {
+                            "ok": False,
+                            "tool": str(item["capability"]),
+                            "output": pre_error["message"],
+                            "result": {},
+                            "artifacts": [],
+                            "error": dict(pre_error),
+                        },
+                        "events": [],
+                    }
                 tool_result, step_events = execute_step(
                     str(item["capability"]),
                     dict(item["args"]),
@@ -866,7 +1003,11 @@ class ExecutorCore:
         conversation_id: str = "",
         replan_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
         max_replans: int = 2,
+        goal_context: dict[str, Any] | None = None,
+        verify_goal: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        confirmed: bool = True,
         authorize_step: Callable[[str, str, dict[str, Any], str, str], dict[str, Any] | None] | None = None,
+        should_cancel: Callable[[], str | bool] | None = None,
         execution_id: str | None = None,
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
         execution_id = self.begin_execution(
@@ -894,6 +1035,40 @@ class ExecutorCore:
         step_outputs: dict[str, dict[str, Any]] = {}
         completed_step_ids: set[str] = set()
         prefetched_results: dict[str, dict[str, Any]] = {}
+        execution_goal = dict(goal_context) if isinstance(goal_context, dict) else {}
+
+        def cancellation_reason() -> str:
+            if should_cancel is None:
+                return ""
+            try:
+                value = should_cancel()
+            except Exception:
+                return ""
+            if isinstance(value, str):
+                return value.strip()
+            return "execution_cancelled" if value else ""
+
+        def cancelled_result(reason: str):
+            timed_out = reason == "task_execution_timeout"
+            message = (
+                "Görev zaman aşımı nedeniyle güvenli adım sınırında durduruldu."
+                if timed_out
+                else "Görev iptal edildi."
+            )
+            error = "TASK_EXECUTION_TIMEOUT" if timed_out else "EXECUTION_CANCELLED"
+            self._set_stop_reason(
+                execution_id,
+                "execution_timeout" if timed_out else "execution_cancelled",
+            )
+            self.finish_execution(execution_id, ok=False, detail=message)
+            return (
+                False,
+                message,
+                events,
+                error,
+                structured_result,
+                artifacts,
+            )
 
         try:
             self.record_stage(execution_id, "plan_execution", detail="steps")
@@ -906,6 +1081,7 @@ class ExecutorCore:
             # P4: şifreli journal — restart sonrası aynı görev+plan için son
             # güvenli checkpoint'ten devam; tamamlanmış yan etkiler tekrarlanmaz.
             plan_signature = journal_plan_hash(steps)
+            original_steps = [dict(step) for step in steps if isinstance(step, dict)]
             journal = ExecutionJournal()
             if task_id:
                 restored = journal.resume_state(task_id, plan_signature)
@@ -914,6 +1090,30 @@ class ExecutorCore:
                 for restored_id, payload in restored.get("stepOutputs", {}).items():
                     if isinstance(payload, dict):
                         step_outputs[str(restored_id)] = payload
+                ordered_restored_ids = [
+                    str(step.get("id", "") or "").strip()
+                    for step in original_steps
+                    if str(step.get("id", "") or "").strip() in step_outputs
+                ]
+                ordered_restored_ids.extend(
+                    sorted(set(step_outputs) - set(ordered_restored_ids))
+                )
+                for restored_id in ordered_restored_ids:
+                    payload = step_outputs[restored_id]
+                    restored_output = str(payload.get("output", "") or "").strip()
+                    if restored_output:
+                        outputs.append(restored_output)
+                        previous_output = restored_output
+                    restored_result = payload.get("result")
+                    if isinstance(restored_result, dict):
+                        structured_result = dict(restored_result)
+                        previous_result = dict(restored_result)
+                    restored_artifacts = payload.get("artifacts")
+                    if isinstance(restored_artifacts, list):
+                        previous_artifacts = [
+                            item for item in restored_artifacts if isinstance(item, dict)
+                        ]
+                        artifacts.extend(previous_artifacts)
             journal.begin(execution_id, task_id=task_id, plan_signature=plan_signature)
             # Scheduler sözleşmesi: tamamlanmış adımlar giriş listesinde yer almaz;
             # bağımlılıkları completed_step_ids üzerinden karşılanmış sayılır.
@@ -930,7 +1130,78 @@ class ExecutorCore:
             self._record_scheduler_plan(execution_id, steps)
             replans_used = 0
             step_index = 0
-            while step_index < len(steps):
+            while True:
+                cancel_reason = cancellation_reason()
+                if cancel_reason:
+                    return cancelled_result(cancel_reason)
+                if step_index >= len(steps):
+                    if verify_goal is None:
+                        break
+                    summary = "\n".join(output for output in outputs if output).strip() or "İşlem tamamlandı."
+                    try:
+                        goal_verification = verify_goal({
+                            "goalContext": execution_goal,
+                            "summary": summary,
+                            "outputs": list(outputs),
+                            "stepOutputs": dict(step_outputs),
+                            "structuredResult": dict(structured_result) if isinstance(structured_result, dict) else {},
+                            "artifacts": list(artifacts),
+                            "events": list(events),
+                        })
+                    except Exception:
+                        goal_verification = {
+                            "passed": False,
+                            "message": "Görev hedefi doğrulanamadı.",
+                            "missingEvidence": ["goal_verifier_error"],
+                        }
+                    if bool(goal_verification.get("passed", False)):
+                        self.record_stage(execution_id, "goal_verification", detail="passed", status="completed")
+                        break
+                    message = str(goal_verification.get("message", "") or "Görev hedefi doğrulanamadı.")
+                    missing_evidence = goal_verification.get("missingEvidence", [])
+                    revised = self._replan_remaining(
+                        replan_fn,
+                        replans_used,
+                        max_replans,
+                        {
+                            "reason": "goal_verification_failure",
+                            "goal": str(execution_goal.get("goalContract", {}).get("objective", "") or ""),
+                            "goalContext": execution_goal,
+                            "failedStepId": "goal_verification",
+                            "failedCapability": "",
+                            "errorCode": "GOAL_VERIFICATION_FAILED",
+                            "message": message,
+                            "missingEvidence": missing_evidence,
+                            "completedOutputs": list(outputs),
+                            "stepOutputs": dict(step_outputs),
+                            "failedArgs": {},
+                            "remainingCapabilities": [],
+                            "remainingSteps": [],
+                            "verification": goal_verification,
+                        },
+                    )
+                    if revised is not None:
+                        revised = self._prepare_revised_steps(
+                            revised,
+                            completed_step_ids=completed_step_ids,
+                            replan_round=replans_used + 1,
+                        )
+                        if revised:
+                            replans_used += 1
+                            scheduled = schedule_steps(
+                                revised,
+                                metadata_provider=capability_metadata,
+                                readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
+                                completed_step_ids=completed_step_ids,
+                            )
+                            self._record_repair_attempt(execution_id, strategy="goal_replan", reason=message)
+                            self.record_stage(execution_id, "replan", detail="goal_verification")
+                            steps.extend(scheduled)
+                            continue
+                    self.record_stage(execution_id, "goal_verification", detail=message, status="failed")
+                    self._set_stop_reason(execution_id, "goal_verification_failed")
+                    self.finish_execution(execution_id, ok=False, detail=message)
+                    return False, message, events, "GOAL_VERIFICATION_FAILED", structured_result, artifacts
                 preemption_reason = self._take_preemption(execution_id) if not prefetched_results else ""
                 if preemption_reason:
                     message = "Görev daha yüksek öncelikli iş için güvenli checkpoint sınırında durduruldu."
@@ -950,12 +1221,30 @@ class ExecutorCore:
                 # devam eder.
                 if isinstance(step, dict) and step.get("forEach") is not None:
                     try:
-                        expanded = _expand_for_each(step, step_outputs)
+                        reserved_ids = {
+                            str(candidate.get("id", "") or "").strip()
+                            for candidate in steps
+                            if isinstance(candidate, dict) and candidate is not step
+                        }
+                        expanded = _expand_for_each(
+                            step,
+                            step_outputs,
+                            reserved_ids=reserved_ids,
+                        )
                     except TemplateResolutionError as exc:
                         message = f"forEach listesi çözülemedi: {exc.expression}"
                         self._set_stop_reason(execution_id, "template_unresolved")
                         self.finish_execution(execution_id, ok=False, detail=message)
                         return False, message, events, "TEMPLATE_UNRESOLVED", structured_result, artifacts
+                    if not expanded:
+                        parent_id = str(step.get("id", "") or f"step_{step_index + 1}")
+                        step_outputs[parent_id] = {
+                            "output": "",
+                            "result": {"items": [], "executions": [], "count": 0},
+                            "artifacts": [],
+                            "verification": {"status": "passed", "reason": "empty_fanout"},
+                        }
+                        completed_step_ids.add(parent_id)
                     steps = steps[:step_index] + expanded + steps[step_index + 1 :]
                     continue
                 if not prefetched_results:
@@ -977,6 +1266,7 @@ class ExecutorCore:
                             previous_artifacts=previous_artifacts,
                             authorize_step=authorize_step,
                             task_id=task_id,
+                            confirmed=confirmed,
                         )
                 index = step_index + 1
                 step_index += 1
@@ -1008,6 +1298,9 @@ class ExecutorCore:
                 pre_state: dict[str, Any] | None = None
                 prefetched = prefetched_results.pop(step_id, None)
                 while True:
+                    cancel_reason = cancellation_reason()
+                    if cancel_reason:
+                        return cancelled_result(cancel_reason)
                     attempt += 1
                     if attempt == 1 and isinstance(prefetched, dict):
                         args = dict(prefetched.get("args", {}) or {})
@@ -1028,6 +1321,15 @@ class ExecutorCore:
                         )
                         args = step.get("args", {})
                         args = dict(args) if isinstance(args, dict) else {}
+                        dependency_ids = {
+                            str(item or "").strip()
+                            for item in (step.get("dependsOn", []) or [])
+                            if str(item or "").strip()
+                        }
+                        dependency_ids |= _template_step_ids({
+                            "args": args,
+                            "forEach": step.get("forEach"),
+                        })
                         # Önceki adımların yapılandırılmış çıktısına şablon referansı.
                         try:
                             args = _resolve_templates(args, {"steps": step_outputs})
@@ -1046,7 +1348,7 @@ class ExecutorCore:
                             self._set_stop_reason(execution_id, error_code.lower())
                             self.finish_execution(execution_id, ok=False, detail=message)
                             return False, message, events, error_code, structured_result, artifacts
-                        args["_confirmed"] = True
+                        args["_confirmed"] = bool(confirmed)
                         args["_retryAttempt"] = attempt
                         if previous_output:
                             args["_previousOutput"] = previous_output
@@ -1054,6 +1356,22 @@ class ExecutorCore:
                             args["_previousResult"] = previous_result
                         if previous_artifacts:
                             args["_previousArtifacts"] = list(previous_artifacts)
+                        dependency_payloads = {
+                            dep_id: step_outputs[dep_id]
+                            for dep_id in sorted(dependency_ids)
+                            if dep_id in step_outputs
+                        }
+                        if dependency_payloads:
+                            args["_dependencyResults"] = {
+                                dep_id: dict(payload.get("result", {}))
+                                for dep_id, payload in dependency_payloads.items()
+                                if isinstance(payload.get("result"), dict)
+                            }
+                            args["_dependencyArtifacts"] = {
+                                dep_id: list(payload.get("artifacts", []))
+                                for dep_id, payload in dependency_payloads.items()
+                                if isinstance(payload.get("artifacts"), list)
+                            }
                         if authorize_step is not None:
                             try:
                                 grant = authorize_step(step_id, capability, args, source, task_id)
@@ -1100,6 +1418,9 @@ class ExecutorCore:
                                 state_factory(),
                                 source,
                             )
+                    cancel_reason = cancellation_reason()
+                    if cancel_reason:
+                        return cancelled_result(cancel_reason)
                     events.extend(step_events)
                     if not tool_result.get("ok"):
                         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
@@ -1120,10 +1441,14 @@ class ExecutorCore:
                             max_replans,
                             {
                                 "reason": "tool_failure",
+                                "goal": str(execution_goal.get("goalContract", {}).get("objective", "") or ""),
+                                "goalContext": execution_goal,
+                                "failedStepId": step_id,
                                 "failedCapability": capability,
                                 "errorCode": error_code,
                                 "message": message,
                                 "completedOutputs": list(outputs),
+                                "stepOutputs": dict(step_outputs),
                                 "failedArgs": {
                                     k: v for k, v in (step.get("args") or {}).items()
                                     if not str(k).startswith("_")
@@ -1138,21 +1463,27 @@ class ExecutorCore:
                             },
                         )
                         if revised is not None:
-                            replans_used += 1
                             prefetched_results.clear()
-                            revised = schedule_steps(
+                            revised = self._prepare_revised_steps(
                                 revised,
-                                metadata_provider=capability_metadata,
-                                readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
                                 completed_step_ids=completed_step_ids,
+                                replan_round=replans_used + 1,
                             )
-                            self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=message)
-                            self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
-                            steps = steps[: step_index - 1] + revised
-                            step_index = step_index - 1
-                            did_replan = True
-                            error_code = ""  # revize edildi; hata kodu temizlenir
-                            break
+                            if revised:
+                                replans_used += 1
+                                revised = schedule_steps(
+                                    revised,
+                                    metadata_provider=capability_metadata,
+                                    readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
+                                    completed_step_ids=completed_step_ids,
+                                )
+                                self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=message)
+                                self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
+                                steps = steps[: step_index - 1] + revised
+                                step_index = step_index - 1
+                                did_replan = True
+                                error_code = ""  # revize edildi; hata kodu temizlenir
+                                break
                         self._set_stop_reason(execution_id, error_code.lower())
                         self.finish_execution(execution_id, ok=False, detail=message)
                         return False, message, events, error_code, structured_result, artifacts
@@ -1184,10 +1515,19 @@ class ExecutorCore:
                             max_replans,
                             {
                                 "reason": "verification_failure",
+                                "goal": str(execution_goal.get("goalContract", {}).get("objective", "") or ""),
+                                "goalContext": execution_goal,
+                                "failedStepId": step_id,
                                 "failedCapability": capability,
                                 "errorCode": error_code,
                                 "message": verification.message,
                                 "completedOutputs": list(outputs),
+                                "stepOutputs": dict(step_outputs),
+                                "verification": {
+                                    "status": "failed",
+                                    "message": verification.message,
+                                    "mode": str(metadata.get("verificationMode", "tool_result") or "tool_result"),
+                                },
                                 "failedArgs": {
                                     k: v for k, v in (step.get("args") or {}).items()
                                     if not str(k).startswith("_")
@@ -1202,21 +1542,27 @@ class ExecutorCore:
                             },
                         )
                         if revised is not None:
-                            replans_used += 1
                             prefetched_results.clear()
-                            revised = schedule_steps(
+                            revised = self._prepare_revised_steps(
                                 revised,
-                                metadata_provider=capability_metadata,
-                                readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
                                 completed_step_ids=completed_step_ids,
+                                replan_round=replans_used + 1,
                             )
-                            self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=verification.message)
-                            self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
-                            steps = steps[: step_index - 1] + revised
-                            step_index = step_index - 1
-                            did_replan = True
-                            error_code = ""  # revize edildi; hata kodu temizlenir
-                            break
+                            if revised:
+                                replans_used += 1
+                                revised = schedule_steps(
+                                    revised,
+                                    metadata_provider=capability_metadata,
+                                    readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
+                                    completed_step_ids=completed_step_ids,
+                                )
+                                self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=verification.message)
+                                self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
+                                steps = steps[: step_index - 1] + revised
+                                step_index = step_index - 1
+                                did_replan = True
+                                error_code = ""  # revize edildi; hata kodu temizlenir
+                                break
                         self._set_stop_reason(execution_id, "verification_failed")
                         self.finish_execution(execution_id, ok=False, detail=verification.message)
                         return False, verification.message or "Doğrulama başarısız oldu.", events, error_code, structured_result, artifacts
@@ -1249,19 +1595,63 @@ class ExecutorCore:
                     cleaned_artifacts = [item for item in step_artifacts if isinstance(item, dict)]
                     artifacts.extend(cleaned_artifacts)
                     previous_artifacts = cleaned_artifacts
-                step_outputs[step_id] = {
-                    "output": output,
-                    "result": dict(result_payload) if isinstance(result_payload, dict) else {},
-                    "artifacts": cleaned_artifacts,
-                }
-                completed_step_ids.add(step_id)
-                self._record_checkpoint(execution_id, step_id)
-                # P4: kalıcı checkpoint — argümanlar yalnız hash, çıktı yalnız
-                # şifreli; restart sonrası bu noktadan devam edilir.
                 evidence_payload = tool_result.get("stepEvidence")
                 evidence_payload = dict(evidence_payload) if isinstance(evidence_payload, dict) else {}
                 if not evidence_payload.get("path") and (pre_state or {}).get("path"):
                     evidence_payload["path"] = str(pre_state["path"])
+                step_outputs[step_id] = {
+                    "capability": capability,
+                    "args": {
+                        key: value for key, value in args.items() if not str(key).startswith("_")
+                    },
+                    "output": output,
+                    "result": dict(result_payload) if isinstance(result_payload, dict) else {},
+                    "artifacts": cleaned_artifacts,
+                    "verification": {
+                        "status": "repaired" if attempt > 1 else "passed",
+                        "mode": str(metadata.get("verificationMode", "tool_result") or "tool_result"),
+                        "evidence": evidence_payload,
+                    },
+                }
+                parent_id = str(step.get("_forEachParentId", "") or "").strip()
+                if parent_id:
+                    aggregate = step_outputs.setdefault(parent_id, {
+                        "output": "",
+                        "result": {"items": [], "executions": [], "count": 0},
+                        "artifacts": [],
+                        "verification": {"status": "passed", "reason": "fanout_aggregate"},
+                    })
+                    aggregate_result = aggregate.get("result")
+                    aggregate_result = aggregate_result if isinstance(aggregate_result, dict) else {"items": []}
+                    aggregate_items = aggregate_result.get("items")
+                    aggregate_items = aggregate_items if isinstance(aggregate_items, list) else []
+                    aggregate_items.append(dict(step_outputs[step_id].get("result", {})))
+                    aggregate_executions = aggregate_result.get("executions")
+                    aggregate_executions = (
+                        aggregate_executions if isinstance(aggregate_executions, list) else []
+                    )
+                    aggregate_executions.append(dict(step_outputs[step_id]))
+                    aggregate_result["items"] = aggregate_items
+                    aggregate_result["executions"] = aggregate_executions
+                    aggregate_result["count"] = len(aggregate_items)
+                    aggregate["result"] = aggregate_result
+                    aggregate["output"] = "\n".join(
+                        str(item.get("output", "") or "")
+                        for item in aggregate_executions
+                        if item.get("output")
+                    )
+                    aggregate["artifacts"] = [
+                        artifact
+                        for item in aggregate_executions
+                        for artifact in (item.get("artifacts", []) if isinstance(item.get("artifacts"), list) else [])
+                        if isinstance(artifact, dict)
+                    ]
+                    if int(step.get("_forEachPosition", 0) or 0) >= int(step.get("_forEachCount", 0) or 0):
+                        completed_step_ids.add(parent_id)
+                completed_step_ids.add(step_id)
+                self._record_checkpoint(execution_id, step_id)
+                # P4: kalıcı checkpoint — argümanlar yalnız hash, çıktı yalnız
+                # şifreli; restart sonrası bu noktadan devam edilir.
                 try:
                     journal.record_step_completed(
                         execution_id,
@@ -1277,7 +1667,7 @@ class ExecutorCore:
                 except Exception:  # pragma: no cover - journal asla yürütmeyi düşürmesin
                     pass
 
-            summary = "\n".join(output for output in outputs if output).strip() or "İşlem tamamlandı."
+            summary = _user_facing_execution_summary(outputs, step_outputs)
             self.record_stage(execution_id, "finalize", detail=summary, status="completed")
             self._set_stop_reason(execution_id, "completed")
             self.finish_execution(execution_id, ok=True, detail=summary)
@@ -1287,8 +1677,8 @@ class ExecutorCore:
             self._set_stop_reason(execution_id, "scheduler_plan_invalid")
             self.finish_execution(execution_id, ok=False, detail=message)
             return False, message, events, "SCHEDULER_PLAN_INVALID", structured_result, artifacts
-        except Exception as exc:  # pragma: no cover - defensive safety net
-            message = str(exc) or "executor_plan_failed"
+        except Exception:  # pragma: no cover - defensive safety net
+            message = "Yürütme güvenli şekilde tamamlanamadı."
             self._set_stop_reason(execution_id, "executor_plan_failed")
             self.finish_execution(execution_id, ok=False, detail=message)
             return False, message, events, "EXECUTOR_PLAN_FAILED", structured_result, artifacts

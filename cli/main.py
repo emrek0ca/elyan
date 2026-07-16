@@ -1,5 +1,5 @@
 """
-`elyan` komutu — kurulum, QR ile eşleştirme ve daemon yönetimi.
+`elyan` komutu — kurulum, kod ile eşleştirme ve daemon yönetimi.
 
 Tasarım ilkeleri:
 - GUI yok. Kurulum ve eşleştirme CLI'dan yapılır; sonrası sessiz daemon +
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib.util
 import json
 import os
 import platform
@@ -27,6 +28,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from xml.sax.saxutils import escape as xml_escape
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -34,7 +36,16 @@ sys.path.insert(0, str(REPO_ROOT))
 from runtime import state_store  # noqa: E402
 from runtime.daemon import LOG_PATH, PID_PATH, STOP_PATH, read_daemon_pid, runtime_status_summary  # noqa: E402
 
-VERSION = "1.0.0"
+
+def _package_version() -> str:
+    try:
+        payload = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
+    except Exception:
+        return "0.0.0"
+    return str(payload.get("version", "") or "0.0.0")
+
+
+VERSION = _package_version()
 SERVICE_LABEL = "dev.elyan.daemon"
 _OAUTH_AUTH_ENDPOINTS: dict[str, tuple[str, str]] = {
     "gmail": ("accounts.google.com", "/o/oauth2/v2/auth"),
@@ -51,16 +62,18 @@ _OAUTH_AUTH_ENDPOINTS: dict[str, tuple[str, str]] = {
 
 
 def _python_executable() -> str:
-    """Daemon'u başlatacak yorumlayıcı — venv öncelikli (~/.elyan sonra repo)."""
+    """Daemon'u CLI ile aynı ortamda başlat; sonra bilinen venv'lere düş."""
     home_venv = Path.home() / ".elyan" / "venv"
     candidates = (
         [
+            Path(sys.executable),
             home_venv / "Scripts" / "python.exe",
             REPO_ROOT / "venv" / "Scripts" / "python.exe",
             REPO_ROOT / ".venv" / "Scripts" / "python.exe",
         ]
         if os.name == "nt"
         else [
+            Path(sys.executable),
             home_venv / "bin" / "python3",
             REPO_ROOT / "venv" / "bin" / "python3",
             REPO_ROOT / ".venv" / "bin" / "python3",
@@ -76,6 +89,13 @@ def _print_kv(rows: list[tuple[str, str]]) -> None:
     width = max(len(key) for key, _ in rows) if rows else 0
     for key, value in rows:
         print(f"  {key.ljust(width)}  {value}")
+
+
+def _module_available(module: str) -> bool:
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
 
 
 def _bridge():
@@ -141,33 +161,62 @@ def _platform_name() -> str:
     return "linux"
 
 
-def _render_qr(text: str) -> str:
-    """Terminale unicode-blok QR çizer (iOS uygulaması kameryla okur)."""
-    try:
-        import qrcode
-    except Exception:
-        return "(qrcode paketi yok — kodu elle gir)"
-    qr = qrcode.QRCode(border=2, error_correction=qrcode.constants.ERROR_CORRECT_M)
-    qr.add_data(text)
-    qr.make(fit=True)
-    matrix = qr.get_matrix()
-    lines: list[str] = []
-    # İki satırı tek karakter satırına sıkıştır (▀ ▄ █) — terminalde kare kalır.
-    for y in range(0, len(matrix), 2):
-        row_top = matrix[y]
-        row_bottom = matrix[y + 1] if y + 1 < len(matrix) else [False] * len(row_top)
-        line = ""
-        for top, bottom in zip(row_top, row_bottom):
-            if top and bottom:
-                line += "█"
-            elif top:
-                line += "▀"
-            elif bottom:
-                line += "▄"
-            else:
-                line += " "
-        lines.append(line)
-    return "\n".join(lines)
+# Bağımlılıksız 5 satırlık blok font — eşleştirme kodunu terminalde iri gösterir.
+# QR kaldırıldı: telefon kodu KAMERAYLA değil, ELLE okunur; bu yüzden kod
+# okunması kolay, büyük ve tek satırda net görünmelidir.
+_BIG_FONT: dict[str, tuple[str, str, str, str, str]] = {
+    "0": (" ███ ", "█   █", "█   █", "█   █", " ███ "),
+    "1": ("  █  ", " ██  ", "  █  ", "  █  ", " ███ "),
+    "2": (" ███ ", "█   █", "   █ ", "  █  ", "█████"),
+    "3": ("████ ", "    █", " ███ ", "    █", "████ "),
+    "4": ("█  █ ", "█  █ ", "█████", "   █ ", "   █ "),
+    "5": ("█████", "█    ", "████ ", "    █", "████ "),
+    "6": (" ███ ", "█    ", "████ ", "█   █", " ███ "),
+    "7": ("█████", "    █", "   █ ", "  █  ", "  █  "),
+    "8": (" ███ ", "█   █", " ███ ", "█   █", " ███ "),
+    "9": (" ███ ", "█   █", " ████", "    █", " ███ "),
+    "A": (" ███ ", "█   █", "█████", "█   █", "█   █"),
+    "B": ("████ ", "█   █", "████ ", "█   █", "████ "),
+    "C": (" ████", "█    ", "█    ", "█    ", " ████"),
+    "D": ("████ ", "█   █", "█   █", "█   █", "████ "),
+    "E": ("█████", "█    ", "███  ", "█    ", "█████"),
+    "F": ("█████", "█    ", "███  ", "█    ", "█    "),
+    "G": (" ████", "█    ", "█  ██", "█   █", " ███ "),
+    "H": ("█   █", "█   █", "█████", "█   █", "█   █"),
+    "I": ("█████", "  █  ", "  █  ", "  █  ", "█████"),
+    "J": ("█████", "   █ ", "   █ ", "█  █ ", " ██  "),
+    "K": ("█   █", "█  █ ", "███  ", "█  █ ", "█   █"),
+    "L": ("█    ", "█    ", "█    ", "█    ", "█████"),
+    "M": ("█   █", "██ ██", "█ █ █", "█   █", "█   █"),
+    "N": ("█   █", "██  █", "█ █ █", "█  ██", "█   █"),
+    "O": (" ███ ", "█   █", "█   █", "█   █", " ███ "),
+    "P": ("████ ", "█   █", "████ ", "█    ", "█    "),
+    "Q": (" ███ ", "█   █", "█ █ █", "█  █ ", " ██ █"),
+    "R": ("████ ", "█   █", "████ ", "█  █ ", "█   █"),
+    "S": (" ████", "█    ", " ███ ", "    █", "████ "),
+    "T": ("█████", "  █  ", "  █  ", "  █  ", "  █  "),
+    "U": ("█   █", "█   █", "█   █", "█   █", " ███ "),
+    "V": ("█   █", "█   █", "█   █", " █ █ ", "  █  "),
+    "W": ("█   █", "█   █", "█ █ █", "██ ██", "█   █"),
+    "X": ("█   █", " █ █ ", "  █  ", " █ █ ", "█   █"),
+    "Y": ("█   █", " █ █ ", "  █  ", "  █  ", "  █  "),
+    "Z": ("█████", "   █ ", "  █  ", " █   ", "█████"),
+    "-": ("     ", "     ", "█████", "     ", "     "),
+    " ": ("     ", "     ", "     ", "     ", "     "),
+}
+
+
+def _render_big_code(code: str) -> str:
+    """Eşleştirme kodunu 5 satırlık iri blok fontla döndürür (bağımlılıksız)."""
+    code = str(code or "").strip().upper()
+    if not code:
+        return ""
+    rows = ["", "", "", "", ""]
+    for ch in code:
+        glyph = _BIG_FONT.get(ch, _BIG_FONT["-"])
+        for i in range(5):
+            rows[i] += glyph[i] + "  "
+    return "\n".join(row.rstrip() for row in rows)
 
 
 def _daemon_running() -> int:
@@ -218,28 +267,59 @@ def _stop_daemon(quiet: bool = False) -> bool:
 
 
 def _start_daemon_detached() -> int:
-    state_store.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    log_handle = open(LOG_PATH, "a", encoding="utf-8")
-    kwargs: dict[str, Any] = {
-        "stdout": log_handle,
-        "stderr": log_handle,
-        "stdin": subprocess.DEVNULL,
-        "cwd": str(REPO_ROOT),
-    }
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
-    process = subprocess.Popen([_python_executable(), "-m", "runtime.daemon"], **kwargs)
+    try:
+        state_store.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_PATH, "a", encoding="utf-8") as log_handle:
+            kwargs: dict[str, Any] = {
+                "stdout": log_handle,
+                "stderr": log_handle,
+                "stdin": subprocess.DEVNULL,
+                "cwd": str(REPO_ROOT),
+            }
+            if os.name == "nt":
+                kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
+            else:
+                kwargs["start_new_session"] = True
+            process = subprocess.Popen(
+                [_python_executable(), "-m", "runtime.daemon"],
+                **kwargs,
+            )
+    except OSError:
+        return 0
     return process.pid
+
+
+def _wait_for_daemon(timeout_seconds: float = 3.0) -> int:
+    deadline = time.monotonic() + max(0.5, timeout_seconds)
+    while time.monotonic() < deadline:
+        running = _daemon_running()
+        if running:
+            return running
+        time.sleep(0.1)
+    return 0
+
+
+def _start_daemon_and_wait(timeout_seconds: float = 3.0) -> int:
+    running = _daemon_running()
+    if running:
+        return running
+    started_pid = _start_daemon_detached()
+    if not started_pid:
+        return 0
+    return _wait_for_daemon(timeout_seconds)
+
+
+def _restore_daemon(was_running: bool) -> int:
+    return _start_daemon_and_wait() if was_running else 0
 
 
 # ─────────────────────────────── komutlar ───────────────────────────────────
 
 
 def cmd_pair(args: argparse.Namespace) -> int:
-    """QR ile eşleştirme: terminalde QR göster, iOS uygulaması okusun,
-    bridge claim'i otomatik uygulasın, ardından runtime kaydolsun."""
+    """Kod ile eşleştirme: terminalde 6+ karakterlik kodu İRİ fontla göster,
+    kullanıcı Elyan telefon uygulamasına ELLE girsin; CLI backend'i yoklayıp
+    'claimed' görünce runtime'ı otomatik kaydeder. QR yoktur."""
     existing = runtime_status_summary()
     if existing.get("registered") and not args.force:
         device_id = str(existing.get("deviceId", "") or "")
@@ -248,7 +328,12 @@ def cmd_pair(args: argparse.Namespace) -> int:
         print("Mevcut kaydı koruyup yeni oturum zorlamak için: elyan pair --force")
         return 0
     was_running = _stop_daemon()
-    bridge = _bridge()
+    try:
+        bridge = _bridge()
+    except Exception:
+        _restore_daemon(was_running)
+        print("HATA: Yerel runtime güvenli şekilde başlatılamadı. Ayrıntı için: elyan doctor")
+        return 1
 
     print("Eşleştirme oturumu oluşturuluyor…")
     response = _request(
@@ -266,29 +351,29 @@ def cmd_pair(args: argparse.Namespace) -> int:
     data = result.get("data", result) if isinstance(result, dict) else {}
     session_id = str(data.get("sessionId") or data.get("id") or "").strip()
     pairing_code = str(data.get("pairingCode") or "").strip()
-    manual_code = str(data.get("manualEntryCode") or pairing_code or "").strip()
     if not response.get("ok") or not session_id or not pairing_code:
         message = str((response.get("error") or {}).get("message", "") or "Eşleştirme oturumu açılamadı.")
         print(f"HATA: {message}")
         print("İnternet bağlantını kontrol et ve tekrar dene: elyan pair")
+        _restore_daemon(was_running)
         return 1
 
-    # QR içeriği iOS'un beklediği kanonik URI OLMALI (elyan://pair?...).
-    # Kaynak: backend truth'un STATE'e yazdığı qrText; yoksa aynı formatı kur.
-    # manualEntryCode ("uuid|KOD") QR'a ASLA basılmaz — telefon tanımaz ve
-    # "okutuyorum ama hiçbir şey olmuyor" arızası tam buydu.
-    state_pairing = state_store.snapshot().get("pairing", {})
-    state_pairing = state_pairing if isinstance(state_pairing, dict) else {}
-    qr_text = str(data.get("qrText") or state_pairing.get("qrText") or "").strip()
-    if not qr_text.startswith("elyan://"):
-        qr_text = f"elyan://pair?sessionId={session_id}&pairingCode={pairing_code}"
+    baseline_state = state_store.snapshot()
+    baseline_runtime = baseline_state.get("runtime", {}) if isinstance(baseline_state.get("runtime"), dict) else {}
+    baseline_runtime_token = str(baseline_runtime.get("runtimeToken", "") or "").strip()
+    baseline_device_secret = str(baseline_runtime.get("deviceSecret", "") or "").strip()
+
+    # QR YOK. Telefon kodu ELLE girer; bu yüzden claim'in beklediği tam kod
+    # (pairingCode) iri fontla, tek satırda, okunması kolay biçimde gösterilir.
+    # manualEntryCode ("uuid|KOD") telefona GİRİLMEZ — telefon yalnız kodu ister.
+    display_code = pairing_code.upper()
 
     print()
-    print(_render_qr(qr_text))
+    print(_render_big_code(display_code))
     print()
-    print(f"  Elle giriş kodu: {manual_code}")
-    print("  Elyan iOS uygulamasında 'Bilgisayar Eşleştir'i açıp bu QR'ı okut")
-    print("  (ya da kodu elle gir). Bekleniyor…")
+    print(f"  Eşleştirme kodu:  {display_code}")
+    print("  Elyan telefon uygulamasında 'Bilgisayar Eşleştir' → bu kodu gir.")
+    print("  Kod 5 dakika geçerli. Bekleniyor…")
     print()
 
     # Aktif yoklama: arka plan thread'ine güvenme — her turda backend'den
@@ -296,36 +381,48 @@ def cmd_pair(args: argparse.Namespace) -> int:
     deadline = time.monotonic() + 300
     paired = False
     poll_error_count = 0
-    while time.monotonic() < deadline:
-        time.sleep(3)
-        session = _request(bridge, "pairing.get_session", {"sessionId": session_id})
-        session_result = session.get("result", {}) if isinstance(session.get("result"), dict) else {}
-        session_data = session_result.get("data", session_result) if isinstance(session_result, dict) else {}
-        status = str(session_data.get("status", "") or "").strip().lower()
-        if not session.get("ok"):
-            poll_error_count += 1
-            if poll_error_count >= 5:
-                print("\nHATA: Sunucuya art arda ulaşılamıyor — ağını kontrol edip tekrar dene: elyan pair")
+    try:
+        while time.monotonic() < deadline:
+            time.sleep(3)
+            session = _request(bridge, "pairing.get_session", {"sessionId": session_id})
+            session_result = session.get("result", {}) if isinstance(session.get("result"), dict) else {}
+            session_data = session_result.get("data", session_result) if isinstance(session_result, dict) else {}
+            status = str(session_data.get("status", "") or "").strip().lower()
+            if not session.get("ok"):
+                poll_error_count += 1
+                if poll_error_count >= 5:
+                    print("\nHATA: Sunucuya art arda ulaşılamıyor — ağını kontrol edip tekrar dene: elyan pair")
+                    _restore_daemon(was_running)
+                    return 1
+            elif status == "claimed":
+                paired = True
+                break
+            elif status in {"expired", "cancelled", "canceled"}:
+                print(f"\nOturum {status} — yeni kod için: elyan pair")
+                _restore_daemon(was_running)
                 return 1
-        elif status == "claimed":
-            paired = True
-            break
-        elif status in {"expired", "cancelled", "canceled"}:
-            print(f"\nOturum {status} — yeni QR için: elyan pair")
-            return 1
-        else:
-            poll_error_count = 0
-        # Yerel kanıt da yeterli (arka plan thread'i erken davranmış olabilir).
-        snapshot = state_store.snapshot()
-        runtime = snapshot.get("runtime", {}) if isinstance(snapshot.get("runtime"), dict) else {}
-        if str(runtime.get("runtimeToken", "") or "").strip() or str(runtime.get("deviceSecret", "") or "").strip():
-            paired = True
-            break
-        print(".", end="", flush=True)
+            else:
+                poll_error_count = 0
+            # Yalnız bu oturum sırasında değişen kimlik yerel eşleşme kanıtıdır.
+            snapshot = state_store.snapshot()
+            runtime = snapshot.get("runtime", {}) if isinstance(snapshot.get("runtime"), dict) else {}
+            current_token = str(runtime.get("runtimeToken", "") or "").strip()
+            current_secret = str(runtime.get("deviceSecret", "") or "").strip()
+            if (
+                (current_token and current_token != baseline_runtime_token)
+                or (current_secret and current_secret != baseline_device_secret)
+            ):
+                paired = True
+                break
+            print(".", end="", flush=True)
+    except KeyboardInterrupt:
+        _restore_daemon(was_running)
+        raise
     print()
 
     if not paired:
         print("Eşleştirme zaman aşımına uğradı (5 dk). Tekrar dene: elyan pair")
+        _restore_daemon(was_running)
         return 1
 
     print("Eşleştirildi ✓ — runtime kaydediliyor…")
@@ -342,10 +439,14 @@ def cmd_pair(args: argparse.Namespace) -> int:
     else:
         print("UYARI: Eşleşme alındı ama cihaz kaydı DOĞRULANAMADI — görev GELMEZ.")
         print("       Çöz: elyan doctor   sonra   elyan pair --force")
+        _restore_daemon(was_running)
         return 1
 
     if was_running or args.start:
-        pid = _start_daemon_detached()
+        pid = _start_daemon_and_wait()
+        if not pid:
+            print(f"Daemon başlatılamadı — log: {LOG_PATH}")
+            return 1
         print(f"Daemon başlatıldı (pid {pid}). Artık mobilden görev gönderebilirsin.")
     else:
         print("Başlatmak için: elyan start   (açılışta otomatik: elyan service install)")
@@ -353,7 +454,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
 
 
 def cmd_login(args: argparse.Namespace) -> int:
-    """E-posta/şifre ile giriş (QR'sız alternatif)."""
+    """E-posta/şifre ile giriş (kodsuz, telefonsuz alternatif — self-pair)."""
     email = args.email or input("E-posta: ").strip()
     password = getpass.getpass("Şifre: ")
     if not email or not password:
@@ -361,19 +462,38 @@ def cmd_login(args: argparse.Namespace) -> int:
         return 1
 
     was_running = _stop_daemon()
-    bridge = _bridge()
-    response = _request(bridge, "backend.auth_login", {"email": email, "password": password})
-    if not response.get("ok"):
-        message = str((response.get("error") or {}).get("message", "") or "Giriş başarısız.")
-        print(f"HATA: {message}")
+    try:
+        bridge = _bridge()
+        response = _request(bridge, "backend.auth_login", {"email": email, "password": password})
+        if not response.get("ok"):
+            message = str((response.get("error") or {}).get("message", "") or "Giriş başarısız.")
+            print(f"HATA: {message}")
+            _restore_daemon(was_running)
+            return 1
+        print("Giriş tamam ✓ — runtime kaydediliyor (self-pairing)…")
+        boot = _request(bridge, "runtime.bootstrap")
+        snapshot = state_store.snapshot()
+        runtime = snapshot.get("runtime", {}) if isinstance(snapshot.get("runtime"), dict) else {}
+        registered = bool(str(runtime.get("runtimeToken", "") or "").strip())
+        if not boot.get("ok") or not registered:
+            print("Kayıt doğrulanamadı — görev alınamaz. Ayrıntı için: elyan doctor")
+            _restore_daemon(was_running)
+            return 1
+        print("Kayıt: tamam ✓")
+        if was_running:
+            pid = _start_daemon_and_wait()
+            if not pid:
+                print(f"Daemon yeniden başlatılamadı — log: {LOG_PATH}")
+                return 1
+            print(f"Daemon yeniden başlatıldı (pid {pid}).")
+        return 0
+    except KeyboardInterrupt:
+        _restore_daemon(was_running)
+        raise
+    except Exception:
+        _restore_daemon(was_running)
+        print("HATA: Giriş akışı güvenli şekilde tamamlanamadı. Ayrıntı için: elyan doctor")
         return 1
-    print("Giriş tamam ✓ — runtime kaydediliyor (self-pairing)…")
-    boot = _request(bridge, "runtime.bootstrap")
-    print("Kayıt:", "tamam ✓" if boot.get("ok") else "kısıtlı (elyan doctor ile bak)")
-    if was_running:
-        pid = _start_daemon_detached()
-        print(f"Daemon yeniden başlatıldı (pid {pid}).")
-    return 0
 
 
 def cmd_logout(_args: argparse.Namespace) -> int:
@@ -383,7 +503,7 @@ def cmd_logout(_args: argparse.Namespace) -> int:
     print("Oturum kapatıldı.")
     if was_running:
         print("Daemon durduruldu (oturumsuz görev alınamaz).")
-    print("Not: QR eşleşmesi hâlâ duruyor. Tamamen koparmak için: elyan unpair")
+    print("Not: Kod eşleşmesi hâlâ duruyor. Tamamen koparmak için: elyan unpair")
     return 0
 
 
@@ -465,9 +585,8 @@ def cmd_start(_args: argparse.Namespace) -> int:
     if _daemon_running():
         print(f"Daemon zaten çalışıyor (pid {_daemon_running()}).")
         return 0
-    pid = _start_daemon_detached()
-    time.sleep(1.5)
-    if _daemon_running():
+    pid = _start_daemon_and_wait()
+    if pid:
         print(f"Daemon başladı (pid {pid}). Log: {LOG_PATH}")
         return 0
     print(f"Daemon başlatılamadı — log'a bak: {LOG_PATH}")
@@ -522,7 +641,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
         (
             "Hesap",
             summary.get("email")
-            or ("QR eşleşmesi (telefon hesabı)" if paired else "giriş yok"),
+            or ("kod eşleşmesi (telefon hesabı)" if paired else "giriş yok"),
         ),
         ("Eşleştirme", pairing_line),
     ]
@@ -612,17 +731,49 @@ def _print_failure_report() -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     checks: list[tuple[str, bool, str]] = []
 
-    version_ok = sys.version_info >= (3, 10)
-    checks.append(("Python ≥ 3.10", version_ok, platform.python_version()))
+    version_ok = (3, 10) <= sys.version_info[:2] < (3, 14)
+    checks.append(("Python 3.10–3.13", version_ok, platform.python_version()))
 
-    try:
-        import requests  # noqa: F401
-        import websocket  # noqa: F401
-
-        deps_ok, deps_note = True, "requests + websocket"
-    except Exception as exc:
-        deps_ok, deps_note = False, f"eksik: {exc}"
+    core_modules = {
+        "requests": "requests",
+        "httpx": "httpx",
+        "websocket": "websocket-client",
+        "psutil": "psutil",
+        "PIL": "pillow",
+        "openpyxl": "openpyxl",
+        "litellm": "litellm",
+        "langgraph": "langgraph",
+        "google.genai": "google-genai",
+    }
+    missing_core = [
+        label
+        for module, label in core_modules.items()
+        if not _module_available(module)
+    ]
+    deps_ok = not missing_core
+    deps_note = "çekirdek hazır" if deps_ok else f"eksik: {', '.join(missing_core)}"
     checks.append(("Bağımlılıklar", deps_ok, deps_note))
+
+    dependency_blocked: list[str] = []
+    try:
+        from runtime.capability_registry import capability_names, capability_readiness
+
+        runtime_state = state_store.snapshot()
+        capability_set = sorted(capability_names())
+        for capability in capability_set:
+            readiness = capability_readiness(capability, state=runtime_state)
+            if str(readiness.get("errorCode", "") or "") == "DEPENDENCY_UNAVAILABLE":
+                dependency_blocked.append(capability)
+        capability_note = f"{len(capability_set)} kayıtlı"
+        if dependency_blocked:
+            capability_note += f", {len(dependency_blocked)} bağımlılık bekliyor"
+        else:
+            capability_note += ", bağımlılık engeli yok"
+        capabilities_ok = not dependency_blocked
+    except Exception as exc:
+        capabilities_ok = False
+        capability_note = f"durum okunamadı: {str(exc)[:48]}"
+    checks.append(("Yetenek motoru", capabilities_ok, capability_note))
 
     try:
         import pystray  # noqa: F401
@@ -636,15 +787,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         import requests as _requests
 
-        response = _requests.get("https://api.elyan.dev/health", timeout=8)
-        backend_ok = response.status_code < 500
+        response = _requests.get("https://api.elyan.dev/healthz", timeout=8)
+        backend_ok = 200 <= response.status_code < 300
         backend_note = f"HTTP {response.status_code}"
     except Exception as exc:
         backend_note = str(exc)[:60]
     checks.append(("server_brain erişimi", backend_ok, backend_note))
 
     summary = runtime_status_summary()
-    checks.append(("Hesap", bool(summary.get("signedIn")), summary.get("email") or "elyan pair ile bağlan"))
+    account_ready = bool(summary.get("signedIn") or summary.get("paired"))
+    account_note = summary.get("email") or ("telefon hesabı ile eşleşti" if summary.get("paired") else "elyan pair ile bağlan")
+    checks.append(("Hesap", account_ready, account_note))
     checks.append(("Eşleştirme", bool(summary.get("paired")), "runtime kayıtlı" if summary.get("paired") else "elyan pair"))
     checks.append(("Daemon", bool(summary.get("pid")), f"pid {summary.get('pid')}" if summary.get("pid") else "elyan start"))
 
@@ -672,6 +825,45 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if not deps_ok:
         manual.append("Bağımlılıklar eksik — yeniden kur: npm install -g elyan")
 
+    repair_daemon_was_running = bool(_daemon_running())
+    repair_daemon_stopped = False
+    repair_daemon_restarted = False
+    if dependency_blocked:
+        extras = REPO_ROOT / "scripts" / "install_extras.py"
+        if repair_daemon_was_running:
+            repair_daemon_stopped = _stop_daemon()
+        if repair_daemon_was_running and not repair_daemon_stopped:
+            install_result = None
+            manual.append("Daemon durdurulamadığı için paket onarımı uygulanmadı.")
+        else:
+            try:
+                install_result = subprocess.run(
+                    [sys.executable, str(extras), "--force"],
+                    cwd=str(REPO_ROOT),
+                    timeout=1800,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                install_result = None
+            if install_result is not None and install_result.returncode == 0:
+                repaired.append("Eksik yetenek paketleri kuruldu.")
+            else:
+                manual.append(
+                    "Yetenek paketleri tamamlanamadı; `elyan doctor --fix` ile tekrar dene."
+                )
+        if repair_daemon_stopped:
+            pid = _start_daemon_detached()
+            time.sleep(1.5)
+            if _daemon_running():
+                repair_daemon_restarted = True
+                repaired.append(
+                    f"Daemon güncel paketlerle yeniden başlatıldı (pid {pid})."
+                )
+            else:
+                manual.append(f"Daemon yeniden başlatılamadı — log: {LOG_PATH}")
+
+    summary = runtime_status_summary()
+
     if not summary.get("signedIn") and not summary.get("paired"):
         manual.append("Eşleştirme yok — telefonla bağla: elyan pair")
     elif str(summary.get("lastErrorCode") or "") == "desktop_runtime_device_not_found":
@@ -687,7 +879,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 repaired.append(f"Daemon başlatıldı (pid {pid}).")
             else:
                 manual.append(f"Daemon başlatılamadı — log: {LOG_PATH}")
-    else:
+    elif not repair_daemon_restarted:
         # Daemon çalışıyor ama bağlantı düşükse yeniden başlatarak taze
         # kayıt + WS bağlantısı zorla (uyanış/askı sonrası takılmayı çözer).
         lifecycle = str(summary.get("lifecycleState") or "")
@@ -714,7 +906,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _launchd_plist() -> str:
-    python = _python_executable()
+    python = xml_escape(_python_executable())
+    working_directory = xml_escape(str(REPO_ROOT))
+    log_path = xml_escape(str(LOG_PATH))
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -726,25 +920,29 @@ def _launchd_plist() -> str:
         <string>-m</string>
         <string>runtime.daemon</string>
     </array>
-    <key>WorkingDirectory</key><string>{REPO_ROOT}</string>
+    <key>WorkingDirectory</key><string>{working_directory}</string>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-    <key>StandardOutPath</key><string>{LOG_PATH}</string>
-    <key>StandardErrorPath</key><string>{LOG_PATH}</string>
+    <key>StandardOutPath</key><string>{log_path}</string>
+    <key>StandardErrorPath</key><string>{log_path}</string>
 </dict>
 </plist>
 """
 
 
 def _systemd_unit() -> str:
-    python = _python_executable()
+    def quote(value: str) -> str:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    python = quote(_python_executable())
+    working_directory = quote(str(REPO_ROOT))
     return f"""[Unit]
 Description=Elyan masaüstü ajanı
 After=network-online.target
 
 [Service]
 ExecStart={python} -m runtime.daemon
-WorkingDirectory={REPO_ROOT}
+WorkingDirectory={working_directory}
 Restart=on-failure
 RestartSec=5
 
@@ -760,15 +958,27 @@ def cmd_service(args: argparse.Namespace) -> int:
     if system == "macos":
         plist_path = Path.home() / "Library" / "LaunchAgents" / f"{SERVICE_LABEL}.plist"
         if action == "install":
-            _stop_daemon()
+            was_running = _stop_daemon()
             plist_path.parent.mkdir(parents=True, exist_ok=True)
-            plist_path.write_text(_launchd_plist())
-            subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
-            result = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
+            plist_path.write_text(_launchd_plist(), encoding="utf-8")
+            try:
+                subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
+                result = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
+            except OSError:
+                _restore_daemon(was_running)
+                print("launchctl çalıştırılamadı; servis kurulmadı.")
+                return 1
             if result.returncode != 0:
+                _restore_daemon(was_running)
                 print(f"launchctl hatası: {result.stderr.strip()}")
                 return 1
-            print(f"Servis kuruldu ✓ ({plist_path}) — açılışta otomatik başlar.")
+            pid = _wait_for_daemon(5.0)
+            if not pid:
+                subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
+                _restore_daemon(was_running)
+                print(f"Servis kaydedildi ancak daemon başlamadı — log: {LOG_PATH}")
+                return 1
+            print(f"Servis kuruldu ✓ ({plist_path}) — daemon pid {pid}, açılışta otomatik başlar.")
             return 0
         if action == "uninstall":
             subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
@@ -780,18 +990,30 @@ def cmd_service(args: argparse.Namespace) -> int:
     elif system == "linux":
         unit_path = Path.home() / ".config" / "systemd" / "user" / "elyan.service"
         if action == "install":
-            _stop_daemon()
+            was_running = _stop_daemon()
             unit_path.parent.mkdir(parents=True, exist_ok=True)
-            unit_path.write_text(_systemd_unit())
+            unit_path.write_text(_systemd_unit(), encoding="utf-8")
             for command in (
                 ["systemctl", "--user", "daemon-reload"],
                 ["systemctl", "--user", "enable", "--now", "elyan.service"],
             ):
-                result = subprocess.run(command, capture_output=True, text=True)
+                try:
+                    result = subprocess.run(command, capture_output=True, text=True)
+                except OSError:
+                    _restore_daemon(was_running)
+                    print("systemctl çalıştırılamadı; servis kurulmadı.")
+                    return 1
                 if result.returncode != 0:
+                    _restore_daemon(was_running)
                     print(f"systemctl hatası: {result.stderr.strip()}")
                     return 1
-            print(f"Servis kuruldu ✓ ({unit_path}) — açılışta otomatik başlar.")
+            pid = _wait_for_daemon(5.0)
+            if not pid:
+                subprocess.run(["systemctl", "--user", "disable", "--now", "elyan.service"], capture_output=True)
+                _restore_daemon(was_running)
+                print(f"Servis kaydedildi ancak daemon başlamadı — log: {LOG_PATH}")
+                return 1
+            print(f"Servis kuruldu ✓ ({unit_path}) — daemon pid {pid}, açılışta otomatik başlar.")
             return 0
         if action == "uninstall":
             subprocess.run(["systemctl", "--user", "disable", "--now", "elyan.service"], capture_output=True)
@@ -802,18 +1024,37 @@ def cmd_service(args: argparse.Namespace) -> int:
     elif system == "windows":
         task_name = "ElyanDaemon"
         if action == "install":
-            _stop_daemon()
-            command = f'"{_python_executable()}" -m runtime.daemon'
-            result = subprocess.run(
-                ["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", task_name, "/TR", command],
-                capture_output=True,
-                text=True,
+            was_running = _stop_daemon()
+            bootstrap_code = (
+                "import runpy,sys;"
+                f"sys.path.insert(0,{str(REPO_ROOT)!r});"
+                "runpy.run_module('runtime.daemon',run_name='__main__')"
             )
+            command = subprocess.list2cmdline(
+                [_python_executable(), "-c", bootstrap_code]
+            )
+            try:
+                result = subprocess.run(
+                    ["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", task_name, "/TR", command],
+                    capture_output=True,
+                    text=True,
+                )
+            except OSError:
+                _restore_daemon(was_running)
+                print("schtasks çalıştırılamadı; servis kurulmadı.")
+                return 1
             if result.returncode != 0:
+                _restore_daemon(was_running)
                 print(f"schtasks hatası: {result.stderr.strip()}")
                 return 1
-            subprocess.run(["schtasks", "/Run", "/TN", task_name], capture_output=True)
-            print("Servis kuruldu ✓ (Zamanlanmış Görev: ElyanDaemon) — oturum açılışında başlar.")
+            run_result = subprocess.run(["schtasks", "/Run", "/TN", task_name], capture_output=True)
+            pid = _wait_for_daemon(5.0) if run_result.returncode == 0 else 0
+            if not pid:
+                subprocess.run(["schtasks", "/Delete", "/F", "/TN", task_name], capture_output=True)
+                _restore_daemon(was_running)
+                print(f"Zamanlanmış görev kaydedildi ancak daemon başlamadı — log: {LOG_PATH}")
+                return 1
+            print(f"Servis kuruldu ✓ (Zamanlanmış Görev: ElyanDaemon) — daemon pid {pid}.")
             return 0
         if action == "uninstall":
             subprocess.run(["schtasks", "/Delete", "/F", "/TN", task_name], capture_output=True)
@@ -828,7 +1069,7 @@ def cmd_service(args: argparse.Namespace) -> int:
 def cmd_auto(_args: argparse.Namespace) -> int:
     """`elyan` (argümansız) — durumu anla, kullanıcıyı kendisi yönlendir.
 
-    1. Eşleşme yoksa → QR eşleştirmeyi hemen başlat, bitince servisi kur.
+    1. Eşleşme yoksa → kod eşleştirmeyi hemen başlat, bitince servisi kur.
     2. Eşleşme var ama daemon kapalıysa → başlat (servis yoksa kur).
     3. Her şey çalışıyorsa → kısa durum özeti göster.
     """
@@ -1034,12 +1275,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=False)
 
-    pair = sub.add_parser("pair", help="QR ile telefonuna bağla (kurulumun tamamı)")
+    pair = sub.add_parser("pair", help="Kod ile telefonuna bağla (kurulumun tamamı)")
     pair.add_argument("--force", action="store_true", help="Yeni eşleştirme oturumu zorla")
     pair.add_argument("--start", action="store_true", help="Eşleşince daemon'u hemen başlat")
     pair.set_defaults(func=cmd_pair)
 
-    login = sub.add_parser("login", help="E-posta/şifre ile giriş (QR'sız alternatif)")
+    login = sub.add_parser("login", help="E-posta/şifre ile giriş (kodsuz, telefonsuz alternatif)")
     login.add_argument("--email", default="", help="E-posta (verilmezse sorulur)")
     login.set_defaults(func=cmd_login)
 

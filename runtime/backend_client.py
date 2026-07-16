@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from app_config import get_app_config_value
 from runtime.capability_registry import capability_names
@@ -320,11 +320,17 @@ class BackendClient:
         self._capabilities_provider = capabilities_provider
         self._session_local = threading.local()
         self._user_refresh_lock = threading.Lock()
+        self._runtime_unauthorized_lock = threading.Lock()
 
     @staticmethod
     def _normalize_base_url(base_url: str | None) -> str | None:
+        # Constructor argümanı açık operatör seçimidir. Özellikle yerel backend
+        # geliştirmesinde APP_BASE_URL=localhost değerini kullanıcı config'indeki
+        # production URL ile sessizce ezme.
+        explicit = BackendClient._canonicalize_base_url(base_url)
+        if explicit:
+            return explicit
         candidates = (
-            base_url,
             os.environ.get("APP_BASE_URL"),
             os.environ.get("ELYAN_BACKEND_BASE_URL"),
             get_app_config_value("backend_base_url", ""),
@@ -478,6 +484,73 @@ class BackendClient:
             ),
             x_request_id=response.headers.get("x-request-id")
             or response.headers.get("X-Request-Id"),
+        )
+
+    def _runtime_binary_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        _retry_after_rotation: bool = True,
+    ) -> BackendResult:
+        request_id = _request_id()
+        token = self._runtime_token()
+        requests_mod = _requests_module()
+        if not self.base_url:
+            return BackendResult(False, request_id, None, None, "backend_unconfigured")
+        if not token:
+            return BackendResult(False, request_id, None, None, "runtime_token_missing")
+        if requests_mod is None:
+            return BackendResult(False, request_id, None, None, "requests_unavailable")
+        request_headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Request-Id": request_id,
+            "Accept": "application/json" if method.upper() != "GET" else "*/*",
+            **(headers or {}),
+        }
+        try:
+            session = self._session_for_thread()
+            if session is None:
+                return BackendResult(False, request_id, None, None, "requests_unavailable")
+            response = session.request(
+                method,
+                urljoin(self.base_url + "/", path.lstrip("/")),
+                data=body,
+                headers=request_headers,
+                timeout=(self.connect_timeout, max(self.read_timeout, 90)),
+            )
+        except requests_mod.RequestException as exc:
+            return BackendResult(False, request_id, None, None, _request_exception_code(exc))
+        if response.status_code == 401:
+            retry_with_rotated_token = False
+            with self._runtime_unauthorized_lock:
+                current_runtime_token = self._runtime_token()
+                if current_runtime_token and current_runtime_token != token:
+                    retry_with_rotated_token = method.upper() in {"GET", "HEAD"}
+                elif current_runtime_token == token:
+                    self._clear_runtime_session(error_code="runtime_unauthorized")
+            if retry_with_rotated_token and _retry_after_rotation:
+                return self._runtime_binary_request(
+                    method,
+                    path,
+                    body=body,
+                    headers=headers,
+                    _retry_after_rotation=False,
+                )
+        if response.ok and method.upper() == "GET":
+            payload: Any = bytes(response.content or b"")
+        else:
+            text = response.text or ""
+            payload = _safe_json(text) if text else {}
+        return BackendResult(
+            ok=response.ok,
+            request_id=request_id,
+            status_code=response.status_code,
+            data=payload,
+            error=None if response.ok else _normalize_error_message(payload) or response.reason,
+            x_request_id=response.headers.get("x-request-id"),
         )
 
     def _user_access_token(self) -> str:
@@ -968,7 +1041,24 @@ class BackendClient:
             request_id=request_id,
         )
         if token_kind == "runtime" and result.status_code == 401:
-            self._clear_runtime_session()
+            with self._runtime_unauthorized_lock:
+                current_runtime_token = self._runtime_token()
+                if current_runtime_token and current_runtime_token != token:
+                    # Another request already rotated/re-registered the runtime.
+                    # Retry this stale response once with the new token instead
+                    # of clearing the fresh session.
+                    headers["Authorization"] = f"Bearer {current_runtime_token}"
+                    result = self._request(
+                        method,
+                        path,
+                        json_body,
+                        headers=headers,
+                        request_id=request_id,
+                    )
+                    if result.status_code == 401 and self._runtime_token() == current_runtime_token:
+                        self._clear_runtime_session()
+                elif current_runtime_token == token:
+                    self._clear_runtime_session()
         if token_kind != "user" or not refresh_on_401 or result.status_code != 401:
             return result
 
@@ -1567,11 +1657,14 @@ class BackendClient:
         normalized_notes = str(notes or "").strip()
         if normalized_notes:
             payload["notes"] = normalized_notes[:500]
+        # Backend bu rotada runtime token da kabul eder (sub = cihaz sahibi):
+        # QR eşleşmiş masaüstünde kullanıcı token'ı yoktur; tepsiden onay/iptal
+        # runtime token ile çalışmalı.
         return self._authorized_request(
             "POST",
             f"/v1/tasks/{task_id}/approval",
             payload,
-            token_kind="user",
+            token_kind=self._user_scoped_token_kind(),
             refresh_on_401=True,
         )
 
@@ -1594,6 +1687,18 @@ class BackendClient:
         elif not result.ok:
             state_store.update_state({"controlPlane": {"brainProfile": None}})
         return result
+
+    def desktop_plan(self, payload: dict[str, Any]) -> BackendResult:
+        """Yapılandırılmış planlama (elyan.plan.v2): planlama zarfını sohbet
+        pipeline'ına sokmadan doğrudan sunucu planlayıcısına gönderir; saf plan
+        JSON'u döner. Eski backend'lerde 404 döner — çağıran chat yoluna düşer."""
+        return self._authorized_request(
+            "POST",
+            "/v1/brain/desktop/plan",
+            dict(payload),
+            token_kind=self._user_scoped_token_kind(),
+            refresh_on_401=True,
+        )
 
     def chat_messages(self, payload: dict[str, Any]) -> BackendResult:
         return self._authorized_request(
@@ -1904,6 +2009,47 @@ class BackendClient:
             refresh_on_401=True,
         )
 
+    def integration_apps(self) -> BackendResult:
+        return self._authorized_request(
+            "GET",
+            "/v1/integrations/apps",
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def start_integration_app_oauth(
+        self,
+        app_id: str,
+        *,
+        redirect_uri: str | None = None,
+    ) -> BackendResult:
+        payload: dict[str, Any] = {}
+        normalized_redirect = str(redirect_uri or "").strip()
+        if normalized_redirect:
+            payload["redirectUri"] = normalized_redirect
+        return self._authorized_request(
+            "POST",
+            f"/v1/integrations/apps/{str(app_id or '').strip()}/oauth/start",
+            payload,
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def disconnect_integration_app(self, app_id: str) -> BackendResult:
+        return self._authorized_request(
+            "DELETE",
+            f"/v1/integrations/apps/{str(app_id or '').strip()}",
+            token_kind="user",
+            refresh_on_401=True,
+        )
+
+    def runtime_mcp_connections(self) -> BackendResult:
+        return self._authorized_request(
+            "GET",
+            "/v1/integrations/runtime/mcp",
+            token_kind="runtime",
+        )
+
     def runtime_session(self) -> BackendResult:
         result = self._authorized_request(
             "GET",
@@ -1999,6 +2145,32 @@ class BackendClient:
         if result.status_code == 401:
             self._clear_runtime_session(error_code="runtime_unauthorized")
         return result
+
+    def runtime_task_binary_artifact(
+        self,
+        task_id: str,
+        body: bytes,
+        *,
+        name: str,
+        content_type: str,
+        sha256: str,
+    ) -> BackendResult:
+        return self._runtime_binary_request(
+            "POST",
+            f"/v1/runtime/tasks/{task_id}/artifacts/binary",
+            body=body,
+            headers={
+                "Content-Type": content_type,
+                "X-Elyan-File-Name": name,
+                "X-Content-Sha256": sha256,
+            },
+        )
+
+    def runtime_task_input_content(self, task_id: str, input_ref: str) -> BackendResult:
+        return self._runtime_binary_request(
+            "GET",
+            f"/v1/runtime/tasks/{task_id}/inputs/{quote(input_ref, safe='')}/content",
+        )
 
     def disconnect_runtime(self) -> BackendResult:
         result = self._authorized_request(

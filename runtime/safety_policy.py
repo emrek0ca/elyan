@@ -80,6 +80,7 @@ WRITE_CAPABILITIES = {
     "presentation_write",
     "canvas_write",
     "image_generate",
+    "image_edit",
     "file_write",
     "file_patch",
 }
@@ -192,6 +193,15 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
             False,
             "PERMISSION_REQUIRED",
             "E-posta göndermek için açık onay gerekiyor.",
+        )
+
+    if name == "backend.integrations.disconnect":
+        if _truthy(args.get("_confirmed", False)):
+            return PolicyDecision(True)
+        return PolicyDecision(
+            False,
+            "PERMISSION_REQUIRED",
+            "Uygulama bağlantısını kaldırmak için açık onay gerekiyor.",
         )
 
     if name in {"delete_memory", "delete_calendar_event"}:

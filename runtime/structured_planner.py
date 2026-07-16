@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import sys
 from functools import lru_cache
 from typing import Any
@@ -28,6 +29,12 @@ GOAL_CONTRACT = "elyan.goal_contract.v1"
 # yapılandırılmış (düz metin değil) bağlam. Sorgu labeled alanda, bağlam metadata
 # JSON'unda — brain sunucuda yeniden türetmeden anlar/planlar (daha az yük).
 COWORK_CONTRACT = "elyan.cowork.v1"
+
+# Bir planın taşıyabileceği azami adım sayısı. Eskiden 8'e sabitliydi ve
+# çok-adımlı ("karmaşık") görevler sessizce 8 adıma kırpılıp yarım
+# yürütülüyordu. Zincirleme (dependsOn) + fan-out ile daha derin planlara
+# izin vermek için yükseltildi; executor'da ayrıca sabit tavan yok.
+MAX_PLAN_STEPS = 16
 
 # Argüman enum kısıtları — daha önce bridge._semantic_route içinde dağınık
 # if bloklarıydı; artık sözleşmenin parçası.
@@ -43,6 +50,62 @@ ENUM_CONSTRAINTS: dict[str, dict[str, set[str]]] = {
 }
 
 _TYPE_MAP = {"STRING": "string", "NUMBER": "number", "BOOLEAN": "boolean", "OBJECT": "object", "ARRAY": "array"}
+
+_COMMON_RESULT_PROPERTIES: dict[str, dict[str, Any]] = {
+    "kind": {"type": "string"},
+}
+
+_RESULT_PROPERTIES: dict[str, dict[str, dict[str, Any]]] = {
+    "web_research": {
+        "summary": {"type": "string"},
+        "sources": {"type": "array", "items": {"type": "object"}},
+    },
+    "retrieve_context": {
+        "matches": {"type": "array", "items": {"type": "object"}},
+        "summary": {"type": "string"},
+    },
+    "document_read": {
+        "text": {"type": "string"},
+        "summary": {"type": "string"},
+        "bullets": {"type": "array", "items": {"type": "string"}},
+    },
+    "ocr_read": {
+        "text": {"type": "string"},
+        "summary": {"type": "string"},
+    },
+    "data_analyze": {
+        "rowCount": {"type": "number"},
+        "columns": {"type": "array", "items": {"type": "string"}},
+        "previewRows": {"type": "array", "items": {"type": "object"}},
+        "profile": {"type": "object"},
+        "summary": {"type": "string"},
+    },
+    "browser_session.extract": {
+        "items": {"type": "array", "items": {"type": "object"}},
+        "text": {"type": "string"},
+    },
+    "spreadsheet_write": {
+        "outputPath": {"type": "string"},
+        "columns": {"type": "array", "items": {"type": "string"}},
+        "rows": {"type": "array", "items": {"type": "array"}},
+        "rowCount": {"type": "number"},
+    },
+    "document_write": {
+        "outputPath": {"type": "string"},
+        "summary": {"type": "string"},
+        "bullets": {"type": "array", "items": {"type": "string"}},
+    },
+    "presentation_write": {
+        "outputPath": {"type": "string"},
+        "slideCount": {"type": "number"},
+        "summary": {"type": "string"},
+    },
+    "canvas_write": {"outputPath": {"type": "string"}},
+    "chart_generate": {"outputPath": {"type": "string"}},
+    "image_generate": {"outputPath": {"type": "string"}},
+    "image_edit": {"outputPath": {"type": "string"}, "sourcePaths": {"type": "array", "items": {"type": "string"}}},
+    "file_search": {"items": {"type": "array", "items": {"type": "object"}}},
+}
 
 
 def _declaration_index() -> dict[str, dict[str, Any]]:
@@ -99,6 +162,13 @@ def _tool_catalog_cached(platform: str) -> list[dict[str, Any]]:
             },
             "sideEffect": bool(metadata.get("sideEffect", False)),
             "requiresApproval": str(metadata.get("permissionClass", "") or "") == "approval_required",
+            "resultSchema": {
+                "type": "object",
+                "properties": {
+                    **_COMMON_RESULT_PROPERTIES,
+                    **_RESULT_PROPERTIES.get(name, {}),
+                },
+            },
         }
         required = raw_params.get("required")
         if isinstance(required, list) and required:
@@ -175,7 +245,7 @@ def response_schema() -> dict[str, Any]:
             },
             "steps": {
                 "type": "array",
-                "maxItems": 8,
+                "maxItems": MAX_PLAN_STEPS,
                 "items": {
                     "type": "object",
                     "required": ["capability"],
@@ -203,31 +273,72 @@ def response_schema() -> dict[str, Any]:
 REPLAN_CONTRACT = "elyan.replan.v1"
 
 
+def _bounded_json(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 4:
+        return "[bounded]"
+    if isinstance(value, dict):
+        return {
+            str(key)[:80]: _bounded_json(item, depth=depth + 1)
+            for key, item in list(value.items())[:16]
+            if not str(key).startswith("_")
+        }
+    if isinstance(value, list):
+        return [_bounded_json(item, depth=depth + 1) for item in value[:20]]
+    if isinstance(value, tuple):
+        return [_bounded_json(item, depth=depth + 1) for item in value[:20]]
+    if isinstance(value, str):
+        return value[:600]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:240]
+
+
 def build_replan_observation(context: dict[str, Any]) -> dict[str, Any]:
     """Yürütme sırasında bir adım başarısız/doğrulanamaz olunca üretilen
     yapılandırılmış gözlem (elyan.replan.v1) — düz metin değil, labeled JSON.
-    Deterministik kurtarma bunu tanılamaya yazar; deploy turunda server_brain
-    bu gözlemle akıllı replan üretecek (plan→adım→gözlem→uyarla döngüsü)."""
+    Deterministik kurtarma ve yapılandırılmış model yeniden planlaması aynı
+    gözlemi kullanır (plan -> adım -> gözlem -> uyarla döngüsü)."""
     ctx = context if isinstance(context, dict) else {}
     completed: list[dict[str, Any]] = []
-    for output in (ctx.get("completedOutputs") or [])[:8]:
-        preview = " ".join(str(output or "").split())[:200]
-        if preview:
-            completed.append({"outputPreview": preview})
+    step_outputs = ctx.get("stepOutputs")
+    if isinstance(step_outputs, dict):
+        for step_id, payload in list(step_outputs.items())[:12]:
+            if not isinstance(payload, dict):
+                continue
+            completed.append({
+                "id": str(step_id)[:80],
+                "outputPreview": " ".join(str(payload.get("output", "") or "").split())[:240],
+                "result": _bounded_json(payload.get("result", {})),
+                "artifacts": _bounded_json(payload.get("artifacts", [])),
+                "verification": _bounded_json(payload.get("verification", {})),
+            })
+    else:
+        for output in (ctx.get("completedOutputs") or [])[:8]:
+            preview = " ".join(str(output or "").split())[:200]
+            if preview:
+                completed.append({"outputPreview": preview})
     failed_args = ctx.get("failedArgs")
     failed_args = failed_args if isinstance(failed_args, dict) else {}
     remaining: list[dict[str, Any]] = []
     for step in (ctx.get("remainingSteps") or []):
         if isinstance(step, dict) and str(step.get("capability", "") or "").strip():
-            remaining.append({
+            remaining_step = {
+                "id": str(step.get("id", "") or "")[:80],
                 "capability": str(step.get("capability", "") or "").strip(),
                 "description": " ".join(str(step.get("description", "") or "").split())[:160],
-            })
+                "args": _bounded_json(step.get("args", {})),
+                "dependsOn": _bounded_json(step.get("dependsOn", [])),
+            }
+            if step.get("forEach") is not None:
+                remaining_step["forEach"] = str(step.get("forEach", ""))[:240]
+            remaining.append(remaining_step)
     failed_step: dict[str, Any] = {
+        "id": str(ctx.get("failedStepId", "") or "")[:80],
         "capability": str(ctx.get("failedCapability", "") or ""),
         "errorCode": str(ctx.get("errorCode", "") or ""),
         "message": " ".join(str(ctx.get("message", "") or "").split())[:300],
-        "args": {k: v for k, v in failed_args.items() if not str(k).startswith("_")},
+        "args": _bounded_json({k: v for k, v in failed_args.items() if not str(k).startswith("_")}),
+        "verification": _bounded_json(ctx.get("verification", {})),
     }
     # APP_NOT_FOUND gibi düzeltilebilir hatalarda planlayıcıya somut alternatif
     # adaylar ver (ör. kurulu uygulama adları) — "adı düzelt" sinyali.
@@ -238,9 +349,11 @@ def build_replan_observation(context: dict[str, Any]) -> dict[str, Any]:
         "contract": REPLAN_CONTRACT,
         "reason": str(ctx.get("reason", "") or "tool_failure"),
         "goal": " ".join(str(ctx.get("goal", "") or "").split())[:200],
+        "goalContext": _bounded_json(ctx.get("goalContext", {})),
         "completedSteps": completed,
         "failedStep": failed_step,
         "remainingSteps": remaining,
+        "missingEvidence": _bounded_json(ctx.get("missingEvidence", [])),
     }
 
 
@@ -289,12 +402,15 @@ def build_planning_request(
     text: str,
     *,
     locale: str = "tr",
+    conversation_turns: list[dict[str, Any]] | None = None,
     selected_artifacts: list[dict[str, Any]] | None = None,
     retrieval_matches: list[dict[str, Any]] | None = None,
     skills: list[dict[str, Any]] | None = None,
     mcp_tools: list[dict[str, Any]] | None = None,
     recent_intents: list[dict[str, Any]] | None = None,
     desktop_snapshot: dict[str, Any] | None = None,
+    planner_hint: dict[str, Any] | None = None,
+    goal_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Düz metin prompt yerine gönderilen planlama isteği zarfı."""
     platform = "darwin" if sys.platform == "darwin" else sys.platform
@@ -305,6 +421,21 @@ def build_planning_request(
             for item in selected_artifacts
             if isinstance(item, dict)
         ]
+    if conversation_turns:
+        turns: list[dict[str, str]] = []
+        for turn in conversation_turns[-12:]:
+            if not isinstance(turn, dict):
+                continue
+            role = str(turn.get("role", "") or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            turn_text = " ".join(
+                str(turn.get("text", "") or turn.get("content", "") or "").split()
+            )[:600]
+            if turn_text:
+                turns.append({"role": role, "text": turn_text})
+        if turns:
+            context["conversationTurns"] = turns
     if retrieval_matches:
         context["retrieval"] = retrieval_matches[:6]
     if skills:
@@ -324,6 +455,10 @@ def build_planning_request(
         context["recentIntents"] = recent_intents[:13]
     if desktop_snapshot:
         context["desktop"] = desktop_snapshot
+    if planner_hint:
+        context["deterministicPlanHint"] = planner_hint
+    if goal_context:
+        context["executionGoal"] = goal_context
 
     return {
         "type": "elyan.plan.request",
@@ -384,7 +519,9 @@ def build_planning_request(
             "dataFlow": (
                 "a step's args may reference a prior step's structured output with "
                 "{{steps.<stepId>.result.<path>}} (e.g. {{steps.listele.result.items[0].href}}); "
-                "give steps short stable ids to enable this"
+                "give steps short stable ids to enable this; use each tool's resultSchema and "
+                "bind structured writer inputs such as rows, columns, sections, blocks or slides "
+                "directly instead of flattening them into prose"
             ),
             "fanOut": (
                 "to repeat one step for EVERY element of a prior step's list output, "
@@ -479,14 +616,45 @@ def build_repair_request(
         "type": "elyan.plan.repair",
         "contract": PLAN_CONTRACT,
         "request": request_envelope.get("request", {}),
+        "context": _bounded_json(request_envelope.get("context", {})),
         "toolCatalog": request_envelope.get("toolCatalog", []),
         "rules": {
             **(request_envelope.get("rules", {}) if isinstance(request_envelope.get("rules"), dict) else {}),
             "repair": "fix validationErrors and return one corrected JSON object conforming to responseSchema; no prose",
         },
         "responseSchema": request_envelope.get("responseSchema", {}),
-        "invalidResponse": invalid_response if isinstance(invalid_response, (dict, list, str)) else str(invalid_response),
+        "invalidResponse": _bounded_json(
+            invalid_response
+            if isinstance(invalid_response, (dict, list, str))
+            else str(invalid_response)
+        ),
         "validationErrors": [str(item) for item in errors[:12]],
+    }
+
+
+def build_replan_request(
+    planning_request: dict[str, Any],
+    observation: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a bounded remaining-plan request using the normal plan schema."""
+    context = planning_request.get("context")
+    context = dict(context) if isinstance(context, dict) else {}
+    context["executionObservation"] = observation
+    return {
+        "type": "elyan.plan.replan",
+        "contract": PLAN_CONTRACT,
+        "request": planning_request.get("request", {}),
+        "context": context,
+        "toolCatalog": planning_request.get("toolCatalog", []),
+        "rules": {
+            **(planning_request.get("rules", {}) if isinstance(planning_request.get("rules"), dict) else {}),
+            "replan": (
+                "return only replacement steps that are still needed; never repeat completed "
+                "side effects, never widen capability scope, preserve the execution goal and "
+                "use completed structured results as data"
+            ),
+        },
+        "responseSchema": planning_request.get("responseSchema", response_schema()),
     }
 
 
@@ -494,6 +662,10 @@ def build_repair_request(
 
 
 def _coerce_value(value: Any, expected: str) -> tuple[Any, bool]:
+    if isinstance(value, str) and re.fullmatch(r"\s*\{\{.+?\}\}\s*", value):
+        # Deferred values are type-checked after their producing step runs. Keep
+        # the template intact so arrays/numbers/objects are not rejected early.
+        return value, True
     if expected == "string":
         return ("" if value is None else str(value)), True
     if expected == "number":
@@ -520,21 +692,23 @@ def _coerce_value(value: Any, expected: str) -> tuple[Any, bool]:
 
 def _validate_step_args(capability: str, args: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
+    public_args = {
+        str(key): value
+        for key, value in args.items()
+        if not str(key).startswith("_")
+    }
     decl = _declaration_index().get(capability)
     if decl is None:
         # Bildirimi olmayan capability (ör. dinamik MCP/skill) — argümanları
-        # olduğu gibi bırak; özel doğrulama çağıran tarafta.
-        return dict(args), errors
+        # koru; runtime'a ait alt çizgili güven bayraklarını modelden alma.
+        return public_args, errors
     params = decl.get("parameters", {}) if isinstance(decl.get("parameters"), dict) else {}
     props = params.get("properties", {}) if isinstance(params.get("properties"), dict) else {}
     required = [str(item) for item in params.get("required", []) or []]
 
     cleaned: dict[str, Any] = {}
-    for key, value in args.items():
+    for key, value in public_args.items():
         key_text = str(key)
-        if key_text.startswith("_"):
-            cleaned[key_text] = value  # runtime iç bayrakları geçer
-            continue
         spec = props.get(key_text)
         if not isinstance(spec, dict):
             continue  # bilinmeyen argüman: buda
@@ -547,6 +721,8 @@ def _validate_step_args(capability: str, args: dict[str, Any]) -> tuple[dict[str
 
     for arg_name, allowed in ENUM_CONSTRAINTS.get(capability, {}).items():
         if arg_name in cleaned:
+            if isinstance(cleaned[arg_name], str) and "{{" in cleaned[arg_name]:
+                continue
             normalized = str(cleaned[arg_name] or "").strip().lower()
             match = next((item for item in allowed if item.lower() == normalized), None)
             if match is None:
@@ -699,6 +875,7 @@ def _lint_plan_steps(steps: list[dict[str, Any]]) -> list[str]:
         seen.add(step_id)
 
     dependencies: dict[str, set[str]] = {step_id: set() for step_id in step_ids if step_id}
+    reference_pattern = re.compile(r"\{\{\s*steps\.([A-Za-z0-9_\-]+)")
     for step in steps:
         step_id = str(step.get("id", "") or "").strip()
         for dependency in step.get("dependsOn", []) or []:
@@ -709,6 +886,18 @@ def _lint_plan_steps(steps: list[dict[str, Any]]) -> list[str]:
                 )
                 continue
             dependencies.setdefault(step_id, set()).add(dependency_id)
+        referenced = set(reference_pattern.findall(json.dumps({
+            "args": step.get("args", {}),
+            "forEach": step.get("forEach"),
+        }, ensure_ascii=False)))
+        for dependency_id in sorted(referenced):
+            if dependency_id not in known_ids:
+                errors.append(
+                    f"plan linter: {step_id!r} bilinmeyen veri referansı {dependency_id!r} içeriyor"
+                )
+                continue
+            if dependency_id != step_id:
+                dependencies.setdefault(step_id, set()).add(dependency_id)
 
     if errors:
         return errors
@@ -725,6 +914,41 @@ def _lint_plan_steps(steps: list[dict[str, Any]]) -> list[str]:
             resolved.add(step_id)
             remaining.pop(step_id, None)
     return errors
+
+
+def _normalize_data_dependencies(steps: list[dict[str, Any]]) -> None:
+    """Şablon veri referanslarını açık DAG bağımlılıklarına dönüştür.
+
+    Model `{{steps.read.result.items}}` yazıp `dependsOn` alanını unutursa veri
+    tüketen adım üreticiden önce schedule edilmemeli. Bilinmeyen referanslar
+    burada korunur; hemen ardından çalışan linter bunları güvenli biçimde
+    reddeder.
+    """
+    reference_pattern = re.compile(r"\{\{\s*steps\.([A-Za-z0-9_\-]+)")
+    for step in steps:
+        step_id = str(step.get("id", "") or "").strip()
+        dependencies: list[str] = []
+        for item in (step.get("dependsOn", []) or [])[:MAX_PLAN_STEPS]:
+            dependency_id = str(item or "").strip()[:80]
+            if dependency_id and dependency_id not in dependencies:
+                dependencies.append(dependency_id)
+        referenced = reference_pattern.findall(
+            json.dumps(
+                {
+                    "args": step.get("args", {}),
+                    "forEach": step.get("forEach"),
+                    "resourceScope": step.get("resourceScope", []),
+                },
+                ensure_ascii=False,
+            )
+        )
+        for dependency_id in referenced:
+            if dependency_id != step_id and dependency_id not in dependencies:
+                dependencies.append(dependency_id)
+        if dependencies:
+            step["dependsOn"] = dependencies
+        else:
+            step.pop("dependsOn", None)
 
 
 def _lint_prohibited_actions(goal_contract: dict[str, Any], steps: list[dict[str, Any]]) -> list[str]:
@@ -793,14 +1017,14 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
         errors.append(error)
         blocking_errors.append(error)
         raw_steps = []
-    if len(raw_steps) > 8:
-        error = "plan linter: adım sayısı 8 sınırını aşıyor"
+    if len(raw_steps) > MAX_PLAN_STEPS:
+        error = f"plan linter: adım sayısı {MAX_PLAN_STEPS} sınırını aşıyor"
         errors.append(error)
         blocking_errors.append(error)
     known = capability_names()
     steps: list[dict[str, Any]] = []
     requires_confirmation = bool(payload.get("requiresConfirmation", False))
-    for index, raw in enumerate(raw_steps[:8], start=1):
+    for index, raw in enumerate(raw_steps[:MAX_PLAN_STEPS], start=1):
         if not isinstance(raw, dict):
             error = f"steps[{index}]: nesne değil"
             errors.append(error)
@@ -840,18 +1064,31 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
             errors.append(error)
             blocking_errors.append(error)
         depends_on = (
-            [str(item).strip() for item in raw_depends if str(item or "").strip()]
+            [
+                str(item).strip()[:80]
+                for item in raw_depends[:MAX_PLAN_STEPS]
+                if str(item or "").strip()
+            ]
             if isinstance(raw_depends, list)
             else []
         )
+        depends_on = list(dict.fromkeys(depends_on))
         step_payload: dict[str, Any] = {
-            "id": str(raw.get("id", "") or f"step_{index}"),
+            "id": str(raw.get("id", "") or f"step_{index}").strip()[:80],
             "capability": capability,
             "args": args,
             "description": str(raw.get("description", "") or "").strip() or capability,
         }
         if depends_on:
             step_payload["dependsOn"] = depends_on
+        for_each = raw.get("forEach")
+        if for_each is not None:
+            if not isinstance(for_each, str) or not for_each.strip():
+                error = f"steps[{index}].forEach: dolu şablon metni değil"
+                errors.append(error)
+                blocking_errors.append(error)
+            else:
+                step_payload["forEach"] = for_each.strip()
         priority = str(raw.get("priority", raw.get("userPriority", "")) or "").strip().lower()
         if priority in {"low", "normal", "high", "urgent"}:
             step_payload["userPriority"] = priority
@@ -870,6 +1107,7 @@ def validate_plan(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:
                 step_payload["resourceScope"] = normalized_scope
         steps.append(step_payload)
 
+    _normalize_data_dependencies(steps)
     lint_errors = _lint_plan_steps(steps)
     errors.extend(lint_errors)
     blocking_errors.extend(lint_errors)

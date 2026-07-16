@@ -357,3 +357,294 @@ def test_executor_react_no_replan_fn_keeps_static_abort(
 
     assert ok is False
     assert error_code == "NETWORK_FAILED"
+
+
+def test_executor_fanout_aggregates_structured_results_for_writer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+    output_path = tmp_path / "fanout.xlsx"
+    captured_rows: list[dict[str, object]] = []
+
+    def execute_step(capability: str, args: dict, _state: dict, _source: str):
+        if capability == "retrieve_context":
+            return {
+                "ok": True,
+                "output": "two expressions",
+                "result": {
+                    "items": [
+                        {"expression": "1+1"},
+                        {"expression": "2+2"},
+                    ]
+                },
+                "artifacts": [],
+            }, []
+        if capability == "math_solve":
+            expression = str(args["expression"])
+            return {
+                "ok": True,
+                "output": f"solved {expression}",
+                "result": {
+                    "expression": expression,
+                    "value": 2 if expression == "1+1" else 4,
+                },
+                "artifacts": [],
+            }, []
+        captured_rows.extend(args["rows"])
+        output_path.write_bytes(b"xlsx")
+        return {
+            "ok": True,
+            "output": "sheet ready",
+            "result": {"kind": "spreadsheet_write", "outputPath": str(output_path)},
+            "artifacts": [{"path": str(output_path)}],
+        }, []
+
+    ok, _content, _events, error_code, result, artifacts = executor.execute_plan_steps(
+        steps=[
+            {"id": "collect", "capability": "retrieve_context", "args": {"query": "math"}},
+            {
+                "id": "solve",
+                "capability": "math_solve",
+                "forEach": "{{steps.collect.result.items}}",
+                "args": {"expression": "{{item.expression}}"},
+            },
+            {
+                "id": "sheet",
+                "capability": "spreadsheet_write",
+                "dependsOn": ["solve"],
+                "args": {
+                    "columns": ["expression", "value"],
+                    "rows": "{{steps.solve.result.items}}",
+                    "outputPath": str(output_path),
+                },
+            },
+        ],
+        state_factory=state_store.snapshot,
+        execute_step=execute_step,
+        source="confirmed_plan",
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert captured_rows == [
+        {"expression": "1+1", "value": 2},
+        {"expression": "2+2", "value": 4},
+    ]
+    assert result["kind"] == "spreadsheet_write"
+    assert artifacts == [{"path": str(output_path)}]
+
+
+def test_executor_hides_intermediate_reader_output_when_writer_creates_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+    input_path = tmp_path / "input.pdf"
+    input_path.write_bytes(b"pdf")
+    output_path = tmp_path / "summary.pptx"
+
+    def execute_step(capability: str, _args: dict, _state: dict, _source: str):
+        if capability == "document_read":
+            return {
+                "ok": True,
+                "output": "çok uzun ara belge özeti",
+                "result": {"kind": "document_read", "summary": "özet"},
+                "artifacts": [],
+            }, []
+        output_path.write_bytes(b"pptx")
+        return {
+            "ok": True,
+            "output": "PPTX oluşturuldu: summary.pptx",
+            "result": {"kind": "presentation_write", "outputPath": str(output_path)},
+            "artifacts": [{"path": str(output_path)}],
+        }, []
+
+    ok, content, _events, error_code, _result, _artifacts = executor.execute_plan_steps(
+        steps=[
+            {"id": "read", "capability": "document_read", "args": {"path": str(input_path)}},
+            {
+                "id": "write",
+                "capability": "presentation_write",
+                "dependsOn": ["read"],
+                "args": {"outputPath": str(output_path)},
+            },
+        ],
+        state_factory=state_store.snapshot,
+        execute_step=execute_step,
+        source="confirmed_plan",
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert content == "PPTX oluşturuldu: summary.pptx"
+
+
+def test_goal_verification_can_add_collision_free_repair_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+    output_path = tmp_path / "report.docx"
+    calls: list[str] = []
+    replan_contexts: list[dict] = []
+
+    def execute_step(capability: str, _args: dict, _state: dict, _source: str):
+        calls.append(capability)
+        if capability == "retrieve_context":
+            return {
+                "ok": True,
+                "output": "research ready",
+                "result": {"summary": "research"},
+                "artifacts": [],
+            }, []
+        output_path.write_bytes(b"docx")
+        return {
+            "ok": True,
+            "output": "report ready",
+            "result": {"kind": "document_write", "outputPath": str(output_path)},
+            "artifacts": [{"path": str(output_path)}],
+        }, []
+
+    def verify_goal(context: dict) -> dict:
+        if context["artifacts"]:
+            return {"passed": True, "missingEvidence": []}
+        return {
+            "passed": False,
+            "message": "report artifact missing",
+            "missingEvidence": ["artifact"],
+        }
+
+    def replan(context: dict) -> list[dict]:
+        replan_contexts.append(context)
+        return [
+            {
+                "capability": "document_write",
+                "args": {"prompt": "research report", "outputPath": str(output_path)},
+            }
+        ]
+
+    ok, _content, _events, error_code, _result, artifacts = executor.execute_plan_steps(
+        steps=[{"capability": "retrieve_context", "args": {"query": "topic"}}],
+        state_factory=state_store.snapshot,
+        execute_step=execute_step,
+        source="confirmed_plan",
+        goal_context={
+            "goalContract": {
+                "objective": "create report",
+                "acceptanceCriteria": ["report artifact exists"],
+            }
+        },
+        verify_goal=verify_goal,
+        replan_fn=replan,
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert calls == ["retrieve_context", "document_write"]
+    assert artifacts == [{"path": str(output_path)}]
+    assert replan_contexts[0]["reason"] == "goal_verification_failure"
+    assert replan_contexts[0]["stepOutputs"]["step_1"]["result"]["summary"] == "research"
+
+
+def test_replan_collision_rewrites_dependencies_and_templates() -> None:
+    revised = [
+        {
+            "id": "collect",
+            "capability": "retrieve_context",
+            "args": {"query": "fresh"},
+        },
+        {
+            "id": "write",
+            "capability": "spreadsheet_write",
+            "dependsOn": ["collect"],
+            "forEach": "{{steps.collect.result.items}}",
+            "resourceScope": ["{{steps.collect.result.outputPath}}"],
+            "args": {"rows": "{{steps.collect.result.items}}"},
+        },
+    ]
+
+    prepared = ExecutorCore._prepare_revised_steps(
+        revised,
+        completed_step_ids={"collect"},
+        replan_round=2,
+    )
+
+    replacement_id = prepared[0]["id"]
+    assert replacement_id != "collect"
+    assert prepared[1]["dependsOn"] == [replacement_id]
+    assert prepared[1]["forEach"] == f"{{{{steps.{replacement_id}.result.items}}}}"
+    assert prepared[1]["args"]["rows"] == f"{{{{steps.{replacement_id}.result.items}}}}"
+    assert prepared[1]["resourceScope"] == [f"{{{{steps.{replacement_id}.result.outputPath}}}}"]
+
+
+def test_journal_resume_rehydrates_outputs_results_and_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    artifact_path = tmp_path / "restored.docx"
+    artifact_path.write_bytes(b"restored")
+    restored_payload = {
+        "capability": "document_write",
+        "output": "DOCX oluşturuldu: restored.docx",
+        "result": {"kind": "document_write", "outputPath": str(artifact_path)},
+        "artifacts": [{"path": str(artifact_path)}],
+        "verification": {"status": "passed"},
+    }
+
+    class FakeJournal:
+        def resume_state(self, _task_id: str, _signature: str) -> dict:
+            return {
+                "executionId": "old",
+                "completedStepIds": ["write"],
+                "stepOutputs": {"write": restored_payload},
+            }
+
+        def begin(self, *_args, **_kwargs) -> None:
+            return None
+
+        def finish(self, *_args, **_kwargs) -> None:
+            return None
+
+        def compensate_failed_execution(self, *_args, **_kwargs) -> None:
+            return None
+
+        def record_step_completed(self, *_args, **_kwargs) -> None:
+            raise AssertionError("restored step must not execute again")
+
+    monkeypatch.setattr("runtime.executor_core.ExecutionJournal", FakeJournal)
+    verifier_context: dict = {}
+
+    def verify_goal(context: dict) -> dict:
+        verifier_context.update(context)
+        return {"passed": bool(context["artifacts"]), "missingEvidence": []}
+
+    executor = ExecutorCore()
+    ok, content, _events, error_code, result, artifacts = executor.execute_plan_steps(
+        steps=[
+            {
+                "id": "write",
+                "capability": "document_write",
+                "args": {"outputPath": str(artifact_path)},
+            }
+        ],
+        state_factory=state_store.snapshot,
+        execute_step=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("restored step must not execute again")
+        ),
+        source="runtime_task",
+        task_id="resume-task",
+        verify_goal=verify_goal,
+    )
+
+    assert ok is True
+    assert content == "DOCX oluşturuldu: restored.docx"
+    assert error_code == ""
+    assert result == restored_payload["result"]
+    assert artifacts == restored_payload["artifacts"]
+    assert verifier_context["outputs"] == [restored_payload["output"]]
+    assert verifier_context["structuredResult"] == restored_payload["result"]

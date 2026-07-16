@@ -99,6 +99,7 @@ def _inferred_latency_class(defn: dict[str, Any]) -> str:
         "presentation_write",
         "canvas_write",
         "image_generate",
+        "image_edit",
         "desktop_operator.run",
         "desktop_operator.execute_action",
     }:
@@ -658,12 +659,12 @@ BUILTIN_SKILL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "id": "image.generate",
         "name": "Image Generate",
-        "description": "OpenAI Images API ile görsel üretir.",
+        "description": "Gemini Interactions API ile yüksek kaliteli görsel üretir.",
         "category": "image",
         "adapter": "image_generate",
-        "libraries": ["openai", "requests"],
+        "libraries": ["google-genai", "Pillow"],
         "requiresConfirmation": True,
-        "parameters": ["prompt", "outputPath", "title", "size", "quality", "background"],
+        "parameters": ["prompt", "outputPath", "title", "aspectRatio", "imageSize"],
         "requiredParameters": ["prompt", "outputPath"],
         "steps": [
             {
@@ -673,12 +674,30 @@ BUILTIN_SKILL_DEFINITIONS: list[dict[str, Any]] = [
                     "prompt": "prompt",
                     "outputPath": "outputPath",
                     "title": "title",
-                    "size": "size",
-                    "quality": "quality",
-                    "background": "background",
+                    "aspectRatio": "aspectRatio",
+                    "imageSize": "imageSize",
                 },
             }
         ],
+    },
+    {
+        "id": "image.edit",
+        "name": "Image Edit",
+        "description": "Seçili görseli Gemini ile düzenler ve yeni dosya üretir.",
+        "category": "image",
+        "adapter": "image_edit",
+        "libraries": ["google-genai", "Pillow"],
+        "requiresConfirmation": True,
+        "parameters": ["prompt", "sourcePath", "sourcePaths", "outputPath", "title", "aspectRatio", "imageSize"],
+        "requiredParameters": ["prompt", "sourcePath", "outputPath"],
+        "steps": [{
+            "capability": "image_edit",
+            "description": "Görsel düzenle",
+            "argsFromPayload": {
+                "prompt": "prompt", "sourcePath": "sourcePath", "sourcePaths": "sourcePaths",
+                "outputPath": "outputPath", "title": "title", "aspectRatio": "aspectRatio", "imageSize": "imageSize",
+            },
+        }],
     },
     {
         "id": "browser.search",

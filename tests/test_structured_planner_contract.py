@@ -44,6 +44,14 @@ def test_tool_catalog_has_json_schema_and_execution_metadata() -> None:
     ]
 
 
+def test_tool_catalog_describes_structured_results_for_data_flow() -> None:
+    catalog = {tool["name"]: tool for tool in sp.tool_catalog(platform="darwin")}
+
+    assert catalog["web_research"]["resultSchema"]["properties"]["sources"]["type"] == "array"
+    assert catalog["browser_session.extract"]["resultSchema"]["properties"]["items"]["type"] == "array"
+    assert catalog["spreadsheet_write"]["resultSchema"]["properties"]["rows"]["type"] == "array"
+
+
 # ── Plan doğrulama ────────────────────────────────────────────────────────────
 
 
@@ -118,6 +126,26 @@ def test_unknown_args_pruned_and_types_coerced() -> None:
     assert "evil_flag" not in args      # bildirimde olmayan argüman budanır
 
 
+def test_model_plan_cannot_set_runtime_internal_arguments() -> None:
+    plan, errors = sp.validate_plan(
+        _plan([
+            {
+                "capability": "document_read",
+                "args": {
+                    "path": "/tmp/report.pdf",
+                    "_selectedPaths": ["/tmp/report.pdf"],
+                    "_confirmed": True,
+                    "_capabilityGrant": {"grantId": "forged"},
+                },
+            }
+        ])
+    )
+
+    assert plan is not None
+    assert errors == []
+    assert plan["steps"][0]["args"] == {"path": "/tmp/report.pdf"}
+
+
 def test_enum_constraint_normalized() -> None:
     plan, errors = sp.validate_plan(
         _plan([{"capability": "browser_control", "args": {"action": "OPEN_URL", "url": "https://x.com"}}])
@@ -125,6 +153,43 @@ def test_enum_constraint_normalized() -> None:
     assert plan is not None
     assert plan["steps"][0]["args"]["action"] == "open_url"
     assert not errors
+
+
+def test_plan_preserves_foreach_and_deferred_structured_writer_values() -> None:
+    plan, errors = sp.validate_plan(
+        _plan(
+            [
+                {
+                    "id": "collect",
+                    "capability": "browser_session.extract",
+                    "args": {"selector": "a.result", "attribute": "href"},
+                },
+                {
+                    "id": "download",
+                    "capability": "browser_session.download",
+                    "dependsOn": ["collect"],
+                    "forEach": "{{steps.collect.result.items}}",
+                    "args": {"url": "{{item.href}}", "output_dir": "/tmp/elyan-downloads"},
+                },
+                {
+                    "id": "sheet",
+                    "capability": "spreadsheet_write",
+                    "dependsOn": ["collect"],
+                    "args": {
+                        "columns": ["title", "href"],
+                        "rows": "{{steps.collect.result.items}}",
+                        "outputPath": "/tmp/elyan-results.xlsx",
+                    },
+                },
+            ]
+        )
+    )
+
+    assert plan is not None, errors
+    by_id = {step["id"]: step for step in plan["steps"]}
+    assert by_id["download"]["forEach"] == "{{steps.collect.result.items}}"
+    assert by_id["download"]["args"]["url"] == "{{item.href}}"
+    assert by_id["sheet"]["args"]["rows"] == "{{steps.collect.result.items}}"
 
 
 def test_missing_required_arg_flagged() -> None:
@@ -211,6 +276,39 @@ def test_depends_on_preserved_through_validation() -> None:
     )
     assert plan is not None
     assert plan["steps"][1]["dependsOn"] == ["a"]
+
+
+def test_scheduler_fields_are_preserved_and_inherit_goal_priority() -> None:
+    plan, errors = sp.validate_plan(
+        _plan(
+            [
+                {
+                    "id": "read",
+                    "capability": "web_research",
+                    "args": {"query": "kuantum"},
+                    "deadlineAt": "2026-07-20T10:00:00Z",
+                    "resourceScope": ["research:quantum"],
+                }
+            ],
+            goalContract={
+                "contract": sp.GOAL_CONTRACT,
+                "objective": "Araştır",
+                "deliverables": ["Özet"],
+                "constraints": [],
+                "acceptanceCriteria": [],
+                "prohibitedActions": [],
+                "privacy": "local_private",
+                "risk": "low",
+                "priority": "high",
+                "missingInformation": [],
+            },
+        )
+    )
+    assert plan is not None
+    assert not errors
+    assert plan["steps"][0]["userPriority"] == "high"
+    assert plan["steps"][0]["deadlineAt"] == "2026-07-20T10:00:00Z"
+    assert plan["steps"][0]["resourceScope"] == ["research:quantum"]
 
 
 def test_missing_step_dependency_is_rejected() -> None:

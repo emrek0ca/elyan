@@ -52,6 +52,7 @@ def test_runtime_status_summary_reads_real_schema(
                 "items": [
                     {"id": "t1", "title": "Sunum", "status": "running"},
                     {"id": "t2", "title": "Eski", "status": "completed"},
+                    {"id": "t3", "title": "Bozuk kayıt", "status": "unknown"},
                 ]
             },
         }
@@ -184,6 +185,14 @@ def test_cli_parser_covers_mvp_commands() -> None:
     assert parser.parse_args(["doctor"]).fix is False
 
 
+def test_cli_version_uses_package_json() -> None:
+    import cli.main as cli_main
+
+    expected = json.loads((Path(cli_main.REPO_ROOT) / "package.json").read_text(encoding="utf-8"))["version"]
+
+    assert cli_main.VERSION == expected
+
+
 def test_daemon_run_forever_forces_reconnect_on_wake_gap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -283,12 +292,17 @@ def test_service_definitions_run_daemon_module() -> None:
     assert "Restart=on-failure" in unit
 
 
-def test_render_qr_produces_block_matrix() -> None:
-    from cli.main import _render_qr
+def test_render_big_code_produces_five_line_banner() -> None:
+    from cli.main import _render_big_code
 
-    rendered = _render_qr("elyan://pair?sessionId=abc&pairingCode=123456")
-    assert len(rendered.splitlines()) > 10
-    assert any(ch in rendered for ch in "█▀▄")
+    rendered = _render_big_code("PWGSFB5B")
+    lines = rendered.splitlines()
+    # QR yok: kod 5 satırlık iri blok fontla basılır, telefonla ELLE okunur.
+    assert len(lines) == 5
+    assert "█" in rendered
+    # Kısa/uzun her kod tek satıra sığmalı ve boş dönmemeli.
+    assert _render_big_code("ABC123").count("\n") == 4
+    assert _render_big_code("") == ""
 
 
 class _FakeResult:

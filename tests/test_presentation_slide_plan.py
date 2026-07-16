@@ -64,6 +64,19 @@ def test_presentation_write_honors_page_target(tmp_path: Path) -> None:
         return " ".join(sh.text_frame.text for sh in slide.shapes if sh.has_text_frame)
     contents = [slide_text(s) for s in slides[1:-1]]
     assert len(set(contents)) == len(contents)
+    assert all(content.count("•") <= 5 for content in contents)
+    assert deck.slide_width > deck.slide_height
+
+    body_sizes = []
+    for slide in slides[1:-1]:
+        for shape in slide.shapes:
+            if not shape.has_text_frame or "•" not in shape.text_frame.text:
+                continue
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    if run.font.size is not None:
+                        body_sizes.append(run.font.size.pt)
+    assert body_sizes and min(body_sizes) >= 19
 
 
 def test_presentation_write_without_target_still_multi_slide(tmp_path: Path) -> None:

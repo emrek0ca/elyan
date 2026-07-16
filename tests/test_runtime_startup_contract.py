@@ -963,6 +963,7 @@ def test_image_read_returns_structured_metadata(
     assert result["result"]["height"] == 1
     assert isinstance(result["result"]["palette"], list)
     assert "poster.png" in result["output"]
+    assert "1×1px" in result["output"]
 
 
 def test_image_read_missing_dependency_fails_safely(
@@ -992,7 +993,7 @@ def test_image_read_missing_dependency_fails_safely(
     assert result["error"]["code"] == "DEPENDENCY_UNAVAILABLE"
 
 
-def test_image_generate_falls_back_to_gpt_image_1_and_writes_png(
+def test_image_generate_uses_gemini_and_writes_png(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1000,19 +1001,36 @@ def test_image_generate_falls_back_to_gpt_image_1_and_writes_png(
     import actions.image_generate as image_generate
     import runtime.capability_registry as registry
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
+    monkeypatch.setattr(
+        image_generate,
+        "image_status",
+        lambda **_kwargs: {"available": True},
+    )
     monkeypatch.setattr(image_generate, "_workspace_root", lambda: tmp_path)
     calls: list[str] = []
 
     def fake_generate(**kwargs: object) -> tuple[bytes, dict[str, object]]:
         model = str(kwargs.get("model", "") or "")
         calls.append(model)
-        if model == "gpt-image-2":
-            raise image_generate._ProviderImageError("invalid_value", "The model 'gpt-image-2' does not exist.", 400)
-        return _ONE_PIXEL_PNG, {"source": "b64_json"}
+        return _ONE_PIXEL_PNG, {
+            "source": "interaction.output_image",
+            "mimeType": "image/png",
+            "width": 1,
+            "height": 1,
+        }
 
     monkeypatch.setattr(image_generate, "_generate_image_bytes", fake_generate)
+    import actions._gemini_image as gemini_image
+
+    monkeypatch.setattr(
+        gemini_image,
+        "provider_settings",
+        lambda **_kwargs: {
+            "provider": "gemini",
+            "api_key": "test-key",
+            "model": "gemini-3.1-flash-image",
+        },
+    )
 
     result = registry.run_capability(
         "image_generate",
@@ -1026,9 +1044,10 @@ def test_image_generate_falls_back_to_gpt_image_1_and_writes_png(
 
     artifact_path = Path(result["result"]["outputPath"])
     assert result["ok"] is True
-    assert calls == ["gpt-image-2", "gpt-image-1"]
+    assert calls == ["gemini-3.1-flash-image"]
     assert result["result"]["kind"] == "image_generate"
-    assert result["result"]["model"] == "gpt-image-1"
+    assert result["result"]["provider"] == "gemini"
+    assert result["result"]["model"] == "gemini-3.1-flash-image"
     assert artifact_path.exists()
     assert artifact_path.read_bytes() == _ONE_PIXEL_PNG
     assert result["artifacts"][0]["contentType"] == "image/png"
@@ -1042,9 +1061,18 @@ def test_image_generate_missing_api_key_fails_safely(
     import actions.image_generate as image_generate
     import runtime.capability_registry as registry
 
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_IMAGE_MODEL", raising=False)
     monkeypatch.setattr(image_generate, "_workspace_root", lambda: tmp_path)
+    import actions._gemini_image as gemini_image
+
+    monkeypatch.setattr(
+        gemini_image,
+        "provider_settings",
+        lambda **_kwargs: {
+            "provider": "gemini",
+            "api_key": "",
+            "model": "gemini-3.1-flash-image",
+        },
+    )
 
     result = registry.run_capability(
         "image_generate",
@@ -1792,3 +1820,93 @@ def test_full_access_does_not_unlock_critical_shell_actions_without_confirmation
     assert result["ok"] is False
     assert result["error"]["code"] == "PERMISSION_REQUIRED"
     assert invoked is False
+
+
+@pytest.mark.parametrize(
+    ("module_name", "function_name", "extension", "structured_args"),
+    [
+        (
+            "actions.document_write",
+            "document_write",
+            ".docx",
+            lambda image: {"blocks": [{"kind": "image", "path": str(image)}]},
+        ),
+        (
+            "actions.presentation_write",
+            "presentation_write",
+            ".pptx",
+            lambda image: {
+                "slides": [{"title": "Private", "blocks": [{"kind": "image", "path": str(image)}]}]
+            },
+        ),
+    ],
+)
+def test_visual_writers_block_unselected_external_images(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    module_name: str,
+    function_name: str,
+    extension: str,
+    structured_args,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside_image = tmp_path / "private.png"
+    outside_image.write_bytes(_ONE_PIXEL_PNG)
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(module, "_workspace_root", lambda: workspace)
+
+    with pytest.raises(module.SafeCapabilityError) as exc_info:
+        getattr(module, function_name)(
+            prompt="structured output",
+            output_path=str(workspace / f"blocked{extension}"),
+            **structured_args(outside_image),
+        )
+
+    assert exc_info.value.code == "ACCESS_DENIED"
+
+
+@pytest.mark.parametrize(
+    ("module_name", "function_name", "extension", "structured_args"),
+    [
+        (
+            "actions.document_write",
+            "document_write",
+            ".docx",
+            lambda image: {"blocks": [{"kind": "image", "path": str(image)}]},
+        ),
+        (
+            "actions.presentation_write",
+            "presentation_write",
+            ".pptx",
+            lambda image: {
+                "slides": [{"title": "Selected", "blocks": [{"kind": "image", "path": str(image)}]}]
+            },
+        ),
+    ],
+)
+def test_visual_writers_allow_task_selected_external_images(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    module_name: str,
+    function_name: str,
+    extension: str,
+    structured_args,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside_image = tmp_path / "selected.png"
+    outside_image.write_bytes(_ONE_PIXEL_PNG)
+    output_path = workspace / f"allowed{extension}"
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(module, "_workspace_root", lambda: workspace)
+
+    result = getattr(module, function_name)(
+        prompt="structured output",
+        output_path=str(output_path),
+        _selectedPaths=[str(outside_image)],
+        **structured_args(outside_image),
+    )
+
+    assert output_path.exists()
+    assert result["artifacts"][0]["path"] == str(output_path)

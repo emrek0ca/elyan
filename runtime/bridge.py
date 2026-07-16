@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -30,6 +31,7 @@ from runtime.backend_client import BackendClient, BackendResult
 from runtime.capability_registry import (
     TOOL_DECLARATIONS as REGISTRY_TOOL_DECLARATIONS,
     SafeCapabilityError,
+    capability_metadata,
     capability_readiness,
     capability_metadata_summary,
     capability_names,
@@ -42,6 +44,7 @@ from runtime.capability_registry import (
 from runtime.safety_policy import PERSONAL_ACTION_CAPABILITIES, evaluate_tool
 from runtime.agent_planning import build_agent_plan
 from runtime import structured_planner
+from runtime import reasoning_policy
 from runtime import browser_agent
 from runtime import operator_planner
 from runtime.task_router import (
@@ -56,7 +59,7 @@ from runtime.execution_journal import ExecutionJournal
 from runtime.execution_journal import plan_hash as journal_plan_hash
 from runtime.executor_core import ExecutorCore, TemplateResolutionError, _resolve_templates
 from runtime.remote_task_runner import RemoteTaskRunner
-from runtime.desktop_work_order import canonical_capability, validate_payload
+from runtime.desktop_work_order import canonical_capability, validate_payload, verify_result
 from runtime.execution_trust import ExecutionLedger, TrustError
 from runtime import native_file_indexer
 from runtime import mcp_runtime
@@ -75,6 +78,15 @@ FULL_ACCESS_PERMISSION_KEYS = {
     "allow_system_inspection",
     "allow_browser_control",
 }
+
+
+@lru_cache(maxsize=1)
+def _package_version() -> str:
+    try:
+        payload = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
+    except Exception:
+        return "0.0.0"
+    return str(payload.get("version", "") or "0.0.0")
 FULL_ACCESS_CRITICAL_ACTIONS = [
     "credential_access",
     "payment",
@@ -1606,34 +1618,50 @@ def _semantic_candidate_providers(
     policy = _routing_policy(state)
     fallback_to_cloud = _is_truthy(state.get("providers", {}).get("fallbackToCloud", True))
     cloud_candidates = ["openai", "gemini", "anthropic", "groq", "custom"]
+    local_candidates = ["ollama", "lmstudio", "llamacpp"]
 
     def configured(provider: str) -> bool:
         target = "ollama" if provider == "local" else provider
         return _provider_enabled(state, target) and _provider_is_configured_for_chat(state, target)
 
+    def configured_locals() -> list[str]:
+        ordered: list[str] = []
+        active_local = _local_runtime_family_from_state(state) if active == "local" else active
+        if active_local in local_candidates and configured(active_local):
+            ordered.append(active_local)
+        for provider in local_candidates:
+            if provider not in ordered and configured(provider):
+                ordered.append(provider)
+        return ordered
+
+    # Local-private prompts and context must never cross the device boundary.
+    # Apply this before routing-policy branches so cloud_fallback/provider_lock
+    # cannot accidentally bypass the privacy contract.
+    if privacy_class != "public_text":
+        if policy == "provider_lock" and active not in {"local", *local_candidates}:
+            return []
+        return configured_locals()
+
     if policy == "provider_lock":
-        locked = "ollama" if active in {"local", "ollama"} else active
+        locked = _local_runtime_family_from_state(state) if active == "local" else active
         return [locked] if configured(locked) else []
 
     if policy == "cloud_fallback":
         ordered: list[str] = []
-        if active not in {"local", "ollama"} and configured(active):
+        if active not in {"local", *local_candidates} and configured(active):
             ordered.append(active)
         for provider in cloud_candidates:
             if provider != active and configured(provider):
                 ordered.append(provider)
-        if configured("ollama"):
-            ordered.append("ollama")
+        for provider in configured_locals():
+            if provider not in ordered:
+                ordered.append(provider)
         return ordered
 
-    ordered = []
-    if configured("ollama"):
-        ordered.append("ollama")
+    ordered = configured_locals()
     if fallback_to_cloud:
-        # server_brain = Elyan'ın KENDİ sunucu beyni (üçüncü taraf değil). Planlama
-        # için yalnız görev metni + tool catalog alır (dosya İÇERİĞİ değil) → hem
-        # public_text hem local_private görevlerde plan üretebilir. Hesap girişi
-        # yeterli, API anahtarı istemez. Kullanıcı bunu açıkça yetkilendirdi.
+        # server_brain receives only public planning requests. Private planning
+        # remains on-device regardless of routing policy.
         account = _map_from(state.get("account"))
         runtime_map = _map_from(state.get("runtime"))
         if backend is not None and (
@@ -2481,8 +2509,13 @@ def _semantic_missing_argument_question(capability: str, args: dict[str, Any]) -
             if capability == "ocr_read":
                 return "Hangi belge veya görseldeki metni okuyayım?"
             return "Hangi belgeyi açayım?"
-    if capability == "image_generate" and not str(payload.get("prompt", "") or "").strip():
-        return "Nasıl bir görsel üretmemi istiyorsun?"
+    if capability in {"image_generate", "image_edit"} and not str(payload.get("prompt", "") or "").strip():
+        return "Görselde nasıl bir sonuç istiyorsun?" if capability == "image_edit" else "Nasıl bir görsel üretmemi istiyorsun?"
+    if capability == "image_edit":
+        source_path = str(payload.get("sourcePath", "") or payload.get("source_path", "") or "").strip()
+        source_paths = payload.get("sourcePaths") or payload.get("source_paths") or []
+        if not source_path and not source_paths:
+            return "Düzenlememi istediğin görseli seç veya dosya yolunu yaz."
     if capability in {"math_solve", "latex_parse"}:
         if not str(payload.get("expression", "") or "").strip():
             return "Hangi ifadeyi çözmemi istiyorsun?"
@@ -2673,6 +2706,26 @@ def _plan_preview_with_retrieval(plan_preview: dict[str, Any] | None, retrieval:
         plan_preview = dict(plan_preview)
         plan_preview["summary"] = (summary + source_summary).strip()
     return plan_preview
+
+
+# Yönlendirme katmanının İÇ gerekçe cümleleri — kullanıcıya asistan cevabı
+# gibi görünmemeli. Plan özeti bu kalıplardan biriyse boş sayılır.
+_INTERNAL_ROUTING_PHRASES = (
+    "dispatch butonu",
+    "masaüstüne yönlendirdi",
+    "açıkça istedi",
+    "acikca istedi",
+)
+
+
+def _user_facing_plan_summary(value: Any) -> str:
+    summary = str(value or "").strip()
+    if not summary:
+        return ""
+    folded = summary.casefold().replace("ı", "i")
+    if any(phrase in folded for phrase in _INTERNAL_ROUTING_PHRASES):
+        return ""
+    return summary
 
 
 def _retrieval_result_metadata(retrieval: dict[str, Any] | None) -> dict[str, Any]:
@@ -3165,8 +3218,6 @@ def _invoke_provider_chat(
             try:
                 cowork_context = structured_planner.build_cowork_context(
                     capabilities=sorted(capability_names()),
-                    desktop_snapshot=_compact_desktop_snapshot(),
-                    recent_intents=structured_planner.intelligence_context(state),
                     conversation_turns=conversation,
                 )
             except Exception:
@@ -3341,22 +3392,89 @@ def _compact_desktop_snapshot() -> dict[str, Any] | None:
     return compact
 
 
+def _server_brain_structured_plan(
+    backend: BackendClient,
+    prompt: str,
+    *,
+    repair: bool = False,
+) -> dict[str, Any] | None:
+    """Planlama zarfını adanmış /v1/brain/desktop/plan endpoint'ine gönderir.
+
+    Başarıda `_invoke_provider_chat` ile aynı şekle sahip {"ok": True,
+    "content": <plan JSON metni>} döner; endpoint yoksa/başarısızsa None →
+    çağıran eski chat yoluna düşer (geriye dönük uyum)."""
+    try:
+        plan_result = backend.desktop_plan(
+            {
+                "contract": structured_planner.PLAN_CONTRACT,
+                "prompt": prompt,
+                "repair": bool(repair),
+            }
+        )
+    except Exception:
+        return None
+    if not getattr(plan_result, "ok", False):
+        return None
+    data = getattr(plan_result, "data", None)
+    if not isinstance(data, dict):
+        return None
+    plan = data.get("plan")
+    if isinstance(plan, dict) and plan:
+        _record_server_brain_outcome(True)
+        return {
+            "ok": True,
+            "content": json.dumps(plan, ensure_ascii=False),
+            "provider": "server_brain",
+            "router": "desktop_plan",
+            "model": str(data.get("model", "") or ""),
+            "toolEvents": [],
+        }
+    raw_text = str(data.get("text", "") or "").strip()
+    if raw_text:
+        # Sunucu JSON çıkaramadı ama ham metni döndürdü — yerel kurtarma
+        # (_extract_json_object) şansını kullan.
+        return {
+            "ok": True,
+            "content": raw_text,
+            "provider": "server_brain",
+            "router": "desktop_plan_raw",
+            "model": str(data.get("model", "") or ""),
+            "toolEvents": [],
+        }
+    return None
+
+
 def _build_structured_planning_request(
     state: dict[str, Any],
     text: str,
     *,
+    conversation_turns: list[dict[str, Any]] | None = None,
     retrieval_matches: list[dict[str, Any]] | None = None,
     skills: list[dict[str, Any]] | None = None,
     mcp_tools: list[dict[str, Any]] | None = None,
+    planner_hint: dict[str, Any] | None = None,
+    goal_context: dict[str, Any] | None = None,
+    include_local_context: bool = True,
 ) -> dict[str, Any]:
     return structured_planner.build_planning_request(
         text,
-        selected_artifacts=STATE.get_selected_artifacts(),
+        conversation_turns=conversation_turns,
+        selected_artifacts=(
+            STATE.get_selected_artifacts() if include_local_context else None
+        ),
         retrieval_matches=retrieval_matches,
         skills=skills,
         mcp_tools=mcp_tools,
-        recent_intents=structured_planner.intelligence_context(state),
-        desktop_snapshot=_compact_desktop_snapshot(),
+        recent_intents=(
+            structured_planner.intelligence_context(state)
+            if include_local_context
+            else None
+        ),
+        desktop_snapshot=(
+            _compact_desktop_snapshot() if include_local_context else None
+        ),
+        planner_hint=planner_hint,
+        goal_context=goal_context,
     )
 
 
@@ -3367,6 +3485,8 @@ def _semantic_route(
     *,
     conversation_id: str = "",
     backend: BackendClient | None = None,
+    planner_hint: dict[str, Any] | None = None,
+    goal_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     privacy_class = "local_private" if any(
         token in _normalise_text(text)
@@ -3394,6 +3514,10 @@ def _semantic_route(
             "sistem",
         )
     ) else "public_text"
+    execution_goal = goal_context.get("goalContract") if isinstance(goal_context, dict) else {}
+    execution_goal = execution_goal if isinstance(execution_goal, dict) else {}
+    if str(execution_goal.get("privacy", "") or "") == "local_private":
+        privacy_class = "local_private"
     retrieval = (
         _retrieve_planning_context(state, text, conversation_id)
         if _should_retrieve_context(text, privacy_class)
@@ -3417,20 +3541,39 @@ def _semantic_route(
         planning_request = _build_structured_planning_request(
             state,
             text,
+            # Ham konuşmayı provider mesajlarına eklemiyoruz. Yerel modeller
+            # için son turlar, plan zarfında sınırlı ve tipli veri olarak taşınır;
+            # server_brain kendi sessionId geçmişini kullanır, doğrudan bulut
+            # planlayıcılarına geçmiş masaüstü bağlamı gönderilmez.
+            conversation_turns=(
+                conversation
+                if provider in {"local", "ollama", "lmstudio", "llamacpp"}
+                else None
+            ),
             retrieval_matches=retrieval_matches,
             skills=skills_data,
             mcp_tools=mcp_tools_data,
+            planner_hint=planner_hint,
+            goal_context=goal_context,
+            include_local_context=provider
+            in {"local", "ollama", "lmstudio", "llamacpp"},
         )
         prompt = structured_planner.planning_prompt(planning_request)
-        seeded_conversation = [{"role": "system", "text": prompt}]
-        result = _invoke_provider_chat_with_context(
-            state,
-            provider,
-            seeded_conversation,
-            text,
-            backend=backend,
-            conversation_id=conversation_id,
-        )
+        # server_brain: planlama zarfı sohbet pipeline'ına (persona + blok +
+        # typewriter) girmesin — adanmış /v1/brain/desktop/plan endpoint'i saf
+        # plan JSON'u döner. Eski backend'lerde (404/hata) chat yoluna düşer.
+        result: dict[str, Any] | None = None
+        if provider == "server_brain" and backend is not None and hasattr(backend, "desktop_plan"):
+            result = _server_brain_structured_plan(backend, prompt)
+        if result is None:
+            result = _invoke_provider_chat_with_context(
+                state,
+                provider,
+                [],
+                prompt,
+                backend=backend,
+                conversation_id=conversation_id,
+            )
         if not result.get("ok"):
             continue
         raw_content = str(result.get("content", "") or "")
@@ -3455,14 +3598,19 @@ def _semantic_route(
                 payload if payload is not None else raw_content[:2000],
                 plan_errors,
             )
-            repair_result = _invoke_provider_chat_with_context(
-                state,
-                provider,
-                [{"role": "system", "text": structured_planner.planning_prompt(repair_request)}],
-                text,
-                backend=backend,
-                conversation_id=conversation_id,
-            )
+            repair_prompt = structured_planner.planning_prompt(repair_request)
+            repair_result: dict[str, Any] | None = None
+            if provider == "server_brain" and backend is not None and hasattr(backend, "desktop_plan"):
+                repair_result = _server_brain_structured_plan(backend, repair_prompt, repair=True)
+            if repair_result is None:
+                repair_result = _invoke_provider_chat_with_context(
+                    state,
+                    provider,
+                    [],
+                    repair_prompt,
+                    backend=backend,
+                    conversation_id=conversation_id,
+                )
             if repair_result.get("ok"):
                 repaired = _extract_json_object(str(repair_result.get("content", "") or ""))
                 if isinstance(repaired, dict):
@@ -3541,6 +3689,11 @@ def _semantic_route(
             privacy_class = "local_private"
         if capability in LOCAL_PRIVATE_CAPABILITIES:
             privacy_class = "local_private"
+        payload_privacy = str(
+            payload.get("privacyClass", privacy_class) or privacy_class
+        )
+        if privacy_class != "public_text":
+            payload_privacy = "local_private"
         return {
             "intent": intent,
             "capability": capability,
@@ -3548,8 +3701,9 @@ def _semantic_route(
             "confidence": confidence,
             "requiresConfirmation": bool(payload.get("requiresConfirmation", False)),
             "isMultiStep": bool(payload.get("isMultiStep", False)),
-            "privacyClass": str(payload.get("privacyClass", privacy_class) or privacy_class),
+            "privacyClass": payload_privacy,
             "planPreview": payload.get("planPreview") if isinstance(payload.get("planPreview"), dict) else None,
+            "goalContract": payload.get("goalContract") if isinstance(payload.get("goalContract"), dict) else {},
             "clarificationQuestion": str(payload.get("clarificationQuestion", "") or ""),
             "provider": provider,
             "model": str(result.get("model", "") or ""),
@@ -4090,7 +4244,14 @@ def _default_plan_preview(intent: str, capability: str, args: dict[str, Any], st
         description = f"{Path(output_path).name or 'elyan-canvas.pdf'} canvas çıktısı oluşturulacak."
     elif capability == "image_generate":
         output_path = str(args.get("outputPath", "") or args.get("output_path", "") or "")
-        description = f"{Path(output_path).name or 'elyan-output.png'} görseli üretilecek."
+        description = f"İstek Gemini'ye gönderilecek ve {Path(output_path).name or 'elyan-output.png'} görseli üretilecek."
+    elif capability == "image_edit":
+        output_path = str(args.get("outputPath", "") or args.get("output_path", "") or "")
+        source_path = str(args.get("sourcePath", "") or args.get("source_path", "") or "")
+        description = (
+            f"{Path(source_path).name or 'Seçili görsel'} Gemini'ye gönderilecek ve "
+            f"{Path(output_path).name or 'elyan-edited.png'} yeni görseli oluşturulacak."
+        )
     elif capability == "mcp_call_tool":
         server_id = str(args.get("serverId", "") or args.get("server_id", "") or "").strip()
         tool_name = str(args.get("toolName", "") or args.get("tool_name", "") or "").strip()
@@ -4598,6 +4759,21 @@ def _chat_provider_candidates(
         # (backend chat/brain rotaları runtime token kabul eder).
         auth_ready = bool(str(_map_from(state.get("runtime")).get("runtimeToken", "") or "").strip())
 
+    # Keep private conversation content on-device before evaluating a cloud
+    # preference such as cloud_fallback or a cloud provider lock.
+    if privacy_class != "public_text":
+        local_candidates: list[str] = []
+        active_local = _local_runtime_family_from_state(state) if active == "local" else active
+        if active_local in {"ollama", "lmstudio", "llamacpp"}:
+            if _provider_enabled(state, active_local) and _provider_is_configured_for_chat(state, active_local):
+                append_unique(local_candidates, active_local)
+        for provider in ("ollama", "lmstudio", "llamacpp"):
+            if _provider_enabled(state, provider) and _provider_is_configured_for_chat(state, provider):
+                append_unique(local_candidates, provider)
+        if policy == "provider_lock" and active not in {"local", "ollama", "lmstudio", "llamacpp"}:
+            return []
+        return local_candidates
+
     if policy == "provider_lock":
         if active == "local":
             local_cfg = _map_from(_map_from(state.get("providers")).get("local"))
@@ -4676,8 +4852,12 @@ def _route_chat(
     selected_artifacts: list[dict[str, Any]] | None = None,
     backend: BackendClient | None = None,
     plan_mode: bool = False,
+    force_structured_planning: bool = False,
+    goal_context: dict[str, Any] | None = None,
+    plan_executor: Callable[..., tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]] | None = None,
 ) -> dict[str, Any]:
     routed = route_text_to_tool(text, selected_artifacts=selected_artifacts)
+    deterministic_fallback: RoutedTask | None = None
     contextual = _contextual_route(conversation_id, conversation, text)
     if contextual is not None and (
         routed is None
@@ -4718,6 +4898,9 @@ def _route_chat(
             question=app_clarification,
         )
         return _clarification_response(app_clarification, intent="clarification", privacy_class="local_private")
+    if force_structured_planning and routed is not None and not _deterministic_only_enabled():
+        deterministic_fallback = routed
+        routed = None
     if routed is not None:
         if plan_mode or routed.requires_confirmation or routed.is_multi_step:
             try:
@@ -4753,14 +4936,39 @@ def _route_chat(
                     "privacyClass": routed.privacy_class,
                     "steps": _plan_steps_from_routed_task(routed),
                     "source": "deterministic_router",
+                    "goalContract": (
+                        goal_context.get("goalContract")
+                        if isinstance(goal_context, dict) and isinstance(goal_context.get("goalContract"), dict)
+                        else reasoning_policy.build_goal_context(query=text).get("goalContract", {})
+                    ),
                 },
             }
-        tool_result, events = _execute_capability_with_preprocessing(
-            routed.tool_name,
-            routed.args,
-            state,
-            source="deterministic_router",
-        )
+        routed_steps = _plan_steps_from_routed_task(routed) or [{
+            "id": "step_1",
+            "capability": routed.tool_name,
+            "args": dict(routed.args),
+            "description": routed.intent or routed.reason or routed.tool_name,
+        }]
+        if plan_executor is not None:
+            ok, content, events, error_code, structured_result, artifacts = plan_executor(
+                routed_steps,
+                "deterministic_router",
+                goal_context,
+            )
+            tool_result = {
+                "ok": ok,
+                "output": content,
+                "result": structured_result,
+                "artifacts": artifacts,
+                "error": None if ok else {"code": error_code, "message": content},
+            }
+        else:
+            tool_result, events = _execute_capability_with_preprocessing(
+                routed.tool_name,
+                routed.args,
+                state,
+                source="deterministic_router",
+            )
         if tool_result.get("ok"):
             _record_successful_route(
                 text,
@@ -4859,8 +5067,10 @@ def _route_chat(
             text,
             conversation_id=conversation_id,
             backend=backend,
+            planner_hint=reasoning_policy.deterministic_plan_hint(deterministic_fallback),
+            goal_context=goal_context,
         )
-        if tool_capable_request or local_private_request
+        if tool_capable_request or local_private_request or force_structured_planning
         else None
     )
     if semantic and not semantic.get("capability"):
@@ -5027,16 +5237,38 @@ def _route_chat(
                     "privacyClass": privacy_class,
                     "steps": steps,
                     "source": "semantic_router",
+                    "goalContract": semantic.get("goalContract")
+                    if isinstance(semantic.get("goalContract"), dict)
+                    else {},
                     "retrieval": semantic.get("retrieval") if isinstance(semantic.get("retrieval"), dict) else None,
                 },
                 **retrieval_metadata,
             }
-        tool_result, events = _execute_capability_with_preprocessing(
-            capability,
-            args,
-            state,
-            source="semantic_router",
+        semantic_goal_context = reasoning_policy.build_goal_context(
+            query=text,
+            goal_contract=semantic.get("goalContract") if isinstance(semantic.get("goalContract"), dict) else None,
+            work_order=(goal_context or {}).get("workOrder") if isinstance(goal_context, dict) else None,
         )
+        if plan_executor is not None:
+            ok, content, events, error_code, structured_result, artifacts = plan_executor(
+                [dict(step) for step in steps if isinstance(step, dict)],
+                "semantic_router",
+                semantic_goal_context,
+            )
+            tool_result = {
+                "ok": ok,
+                "output": content,
+                "result": structured_result,
+                "artifacts": artifacts,
+                "error": None if ok else {"code": error_code, "message": content},
+            }
+        else:
+            tool_result, events = _execute_capability_with_preprocessing(
+                capability,
+                args,
+                state,
+                source="semantic_router",
+            )
         if tool_result.get("ok"):
             _record_successful_route(
                 text,
@@ -5104,6 +5336,20 @@ def _route_chat(
             **retrieval_metadata,
         }
 
+    if force_structured_planning and deterministic_fallback is not None:
+        return _route_chat(
+            state,
+            conversation,
+            text,
+            conversation_id=conversation_id,
+            selected_artifacts=selected_artifacts,
+            backend=backend,
+            plan_mode=plan_mode,
+            force_structured_planning=False,
+            goal_context=goal_context,
+            plan_executor=plan_executor,
+        )
+
     if _requires_tool_capable_route(text):
         question = "Bu görev için daha net bir ifade veya desteklenen bir yerel araç gerekiyor."
         _record_task_intelligence_outcome(
@@ -5151,7 +5397,11 @@ def _route_chat(
                 "Bu yerel görev için açık hedef veya açık izin olmadan bulut yükseltmesi kullanamam."
             )
 
-    for provider in _chat_provider_candidates(state, privacy_class="public_text", backend=backend):
+    for provider in _chat_provider_candidates(
+        state,
+        privacy_class=chat_privacy_class,
+        backend=backend,
+    ):
         filtered_retrieval = _filter_retrieval_matches(
             local_chat_retrieval,
             allowed_sources=_retrieval_sources_for_provider(provider),
@@ -5186,9 +5436,15 @@ def _route_chat(
             "reused": bool(result.get("reused", False)),
             "intent": "chat",
             "confidence": 0.56 if provider == "ollama" else 0.62,
-            "executionMode": "server_brain" if provider == "server_brain" else ("local_model" if provider == "ollama" else "cloud_model"),
+            "executionMode": (
+                "server_brain"
+                if provider == "server_brain"
+                else "local_model"
+                if provider in {"local", "ollama", "lmstudio", "llamacpp"}
+                else "cloud_model"
+            ),
             "needsConfirmation": False,
-            "privacyClass": "public_text",
+            "privacyClass": chat_privacy_class,
             "planPreview": None,
             **_retrieval_result_metadata(filtered_retrieval),
         }
@@ -5494,7 +5750,7 @@ class RuntimeBridge:
         conversation_id: str,
         task_id: str,
         text: str,
-        route_fn: Callable[[], dict[str, Any]],
+        route_fn: Callable[[str], dict[str, Any]],
     ) -> dict[str, Any]:
         execution_id = self.executor_core.begin_execution(
             source=source,
@@ -5504,7 +5760,7 @@ class RuntimeBridge:
         )
         try:
             self.executor_core.record_stage(execution_id, "planning", detail=source)
-            result = route_fn()
+            result = route_fn(execution_id)
             plan_preview = result.get("planPreview") if isinstance(result, dict) else None
             if isinstance(plan_preview, dict):
                 self.executor_core.record_agent_plan(
@@ -5809,6 +6065,8 @@ class RuntimeBridge:
                     self._pairing_claim_poll_thread = None
 
     def _start_runtime_register_retry_if_needed(self) -> None:
+        if not callable(getattr(self.backend, "register_runtime", None)):
+            return
         snapshot = self._runtime_register_retry_snapshot()
         if not self._runtime_register_retry_eligible(snapshot):
             return
@@ -5861,6 +6119,8 @@ class RuntimeBridge:
                     # holding the lock so a stale decision cannot overwrite a
                     # freshly registered runtime with claimed_registering.
                     if not self._runtime_register_retry_should_continue(target, generation=generation):
+                        return
+                    if not callable(getattr(self.backend, "register_runtime", None)):
                         return
                     result = self._ensure_runtime_registered_locked()
                 if result.get("ok"):
@@ -7024,7 +7284,7 @@ class RuntimeBridge:
         return {
             "deviceId": device_id,
             "deviceSecret": device_secret,
-            "runtimeVersion": "1.0.0",
+            "runtimeVersion": _package_version(),
             "capabilities": runtime_capabilities,
             "capabilityStates": _runtime_capability_states_payload(
                 runtime_capabilities,
@@ -8097,12 +8357,9 @@ class RuntimeBridge:
     def _recoverable_replan(self, context: dict[str, Any]) -> list[dict[str, Any]]:
         """ReAct replan: bir adım başarısız/doğrulanamaz olduğunda yapılandırılmış
         gözlemi (elyan.replan.v1) değerlendirip deterministik, güvenli alternatife
-        revize eder. Bilinmeyen/kurtarılamaz hatalarda boş liste döner (executor
-        normal iptale düşer). Ağa/dış servise bağlı değil.
-
-        Not: server_brain ile akıllı replan (gözlemle danışıp yeni plan) deploy
-        turuna bırakıldı; gözlem zarfı burada üretilip tanılamaya yazılıyor ki o
-        adımda hazır olsun."""
+        revize eder. Yerel kalıplar çözemezse gizlilik sınıfına uygun planlayıcıya
+        aynı gözlem zarfıyla danışır; geçerli ve kapsam içi bir plan yoksa executor
+        normal güvenli iptale düşer."""
         pre_capability = str(context.get("failedCapability", "") or "")
         pre_error_code = str(context.get("errorCode", "") or "").upper()
         pre_args = context.get("failedArgs")
@@ -8209,6 +8466,124 @@ class RuntimeBridge:
                     *remaining_steps,
                 ]
 
+        return self._semantic_replan(observation, context)
+
+    def _semantic_replan(
+        self,
+        observation: dict[str, Any],
+        context: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        goal_context = context.get("goalContext")
+        goal_context = (
+            dict(goal_context)
+            if isinstance(goal_context, dict)
+            else self._goal_context(str(context.get("goal", "") or ""))
+        )
+        goal_contract = goal_context.get("goalContract")
+        goal_contract = goal_contract if isinstance(goal_contract, dict) else {}
+        privacy_class = str(goal_contract.get("privacy", "") or "public_text")
+        state = self._state_with_access()
+        providers = _semantic_candidate_providers(
+            state,
+            privacy_class=privacy_class,
+            backend=self.backend,
+        )
+        if privacy_class == "local_private":
+            providers = [
+                provider
+                for provider in providers
+                if provider in {"local", "ollama", "lmstudio", "llamacpp"}
+            ]
+        if not providers:
+            return []
+
+        objective = str(
+            goal_contract.get("objective", "")
+            or context.get("goal", "")
+            or "Görevi tamamla"
+        )
+        allowed = reasoning_policy.allowed_capabilities(goal_context)
+        canonical_allowed = {canonical_capability(item) for item in allowed}
+        work_order = goal_context.get("workOrder")
+        work_order = work_order if isinstance(work_order, dict) else {}
+        try:
+            max_steps = int(work_order.get("maxSteps", structured_planner.MAX_PLAN_STEPS))
+        except (TypeError, ValueError):
+            max_steps = structured_planner.MAX_PLAN_STEPS
+        max_steps = max(1, min(structured_planner.MAX_PLAN_STEPS, max_steps))
+
+        completed_fingerprints: set[tuple[str, str]] = set()
+        completed_payloads = context.get("stepOutputs")
+        completed_payloads = completed_payloads if isinstance(completed_payloads, dict) else {}
+        for payload in completed_payloads.values():
+            if not isinstance(payload, dict):
+                continue
+            completed_capability = str(payload.get("capability", "") or "")
+            completed_args = payload.get("args")
+            completed_args = completed_args if isinstance(completed_args, dict) else {}
+            completed_fingerprints.add(
+                (
+                    completed_capability,
+                    json.dumps(
+                        completed_args,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                )
+            )
+
+        for provider in providers:
+            planning_request = _build_structured_planning_request(
+                state,
+                objective,
+                planner_hint={"remainingSteps": observation.get("remainingSteps", [])},
+                goal_context=goal_context,
+                include_local_context=provider
+                in {"local", "ollama", "lmstudio", "llamacpp"},
+            )
+            request = structured_planner.build_replan_request(
+                planning_request,
+                observation,
+            )
+            prompt = structured_planner.planning_prompt(request)
+            try:
+                result = _invoke_provider_chat_with_context(
+                    state,
+                    provider,
+                    [],
+                    prompt,
+                    backend=self.backend,
+                )
+            except Exception:
+                continue
+            if not result.get("ok"):
+                continue
+            payload = _extract_json_object(str(result.get("content", "") or ""))
+            plan, _errors = structured_planner.validate_plan(payload)
+            if plan is None:
+                continue
+            revised: list[dict[str, Any]] = []
+            for step in plan.get("steps", [])[:max_steps]:
+                if not isinstance(step, dict):
+                    continue
+                capability = str(step.get("capability", "") or "")
+                if canonical_allowed and canonical_capability(capability) not in canonical_allowed:
+                    continue
+                args = step.get("args")
+                args = args if isinstance(args, dict) else {}
+                fingerprint = (
+                    capability,
+                    json.dumps(args, ensure_ascii=False, sort_keys=True, default=str),
+                )
+                if (
+                    bool(capability_metadata(capability).get("sideEffect", False))
+                    and fingerprint in completed_fingerprints
+                ):
+                    continue
+                revised.append(dict(step))
+            if revised:
+                return revised
         return []
 
     def _browser_agent_decide(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -8270,17 +8645,183 @@ class RuntimeBridge:
             pass
         return tool_result, step_events
 
+    def _current_work_order(self) -> dict[str, Any] | None:
+        context = self._execution_trust_context.get()
+        if not isinstance(context, dict):
+            return None
+        work_order = context.get("workOrder")
+        return dict(work_order) if isinstance(work_order, dict) else None
+
+    def _goal_context(self, query: str = "", goal_contract: dict[str, Any] | None = None) -> dict[str, Any]:
+        return reasoning_policy.build_goal_context(
+            query=query,
+            goal_contract=goal_contract,
+            work_order=self._current_work_order(),
+        )
+
+    @staticmethod
+    def _remap_skill_step_references(value: Any, id_map: dict[str, str]) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: RuntimeBridge._remap_skill_step_references(item, id_map)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [RuntimeBridge._remap_skill_step_references(item, id_map) for item in value]
+        if not isinstance(value, str) or "{{" not in value:
+            return value
+        remapped = value
+        for original_id, mapped_id in sorted(id_map.items(), key=lambda item: len(item[0]), reverse=True):
+            remapped = re.sub(
+                rf"(\{{\{{\s*steps\.){re.escape(original_id)}(?=[.\s}}])",
+                rf"\g<1>{mapped_id}",
+                remapped,
+            )
+        return remapped
+
+    def _expand_skill_plan_steps(self, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        expanded: list[dict[str, Any]] = []
+        state = self._state_with_access()
+        for index, raw in enumerate(steps, start=1):
+            if not isinstance(raw, dict):
+                continue
+            step = dict(raw)
+            if str(step.get("capability", "") or "") != "run_skill":
+                expanded.append(step)
+                continue
+            args = step.get("args") if isinstance(step.get("args"), dict) else {}
+            skill_id = str(args.get("skillId", "") or args.get("skill_id", "") or "").strip()
+            skill_payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+            try:
+                prepared = skill_runtime.prepare_skill_run(skill_id, skill_payload, state)
+            except SafeCapabilityError:
+                expanded.append(step)
+                continue
+            child_steps = [dict(item) for item in prepared.get("steps", []) if isinstance(item, dict)]
+            if not child_steps:
+                expanded.append(step)
+                continue
+            parent_id = str(step.get("id", "") or f"step_{index}")
+            parent_dependencies = [str(item) for item in step.get("dependsOn", []) if str(item or "").strip()]
+            id_map = {
+                str(child.get("id", "") or f"step_{child_index}"): (
+                    parent_id
+                    if child_index == len(child_steps)
+                    else f"{parent_id}__{str(child.get('id', '') or f'step_{child_index}')}"
+                )
+                for child_index, child in enumerate(child_steps, start=1)
+            }
+            previous_child_id = ""
+            for child_index, child in enumerate(child_steps, start=1):
+                original_id = str(child.get("id", "") or f"step_{child_index}")
+                child["id"] = id_map[original_id]
+                dependencies = [
+                    id_map.get(str(item), str(item))
+                    for item in child.get("dependsOn", []) or []
+                    if str(item or "").strip()
+                ]
+                if not dependencies:
+                    dependencies = [previous_child_id] if previous_child_id else list(parent_dependencies)
+                if dependencies:
+                    child["dependsOn"] = dependencies
+                child_args = self._remap_skill_step_references(
+                    dict(child.get("args", {}) or {}),
+                    id_map,
+                )
+                if previous_child_id:
+                    for target in child.get("argsFromPreviousOutput", []) or []:
+                        target_name = str(target or "").strip()
+                        if target_name:
+                            child_args[target_name] = f"{{{{steps.{previous_child_id}.output}}}}"
+                    result_map = child.get("argsFromPreviousResult", {})
+                    if isinstance(result_map, dict):
+                        for target, source_key in result_map.items():
+                            target_name = str(target or "").strip()
+                            source_name = str(source_key or "").strip()
+                            if target_name and source_name:
+                                child_args[target_name] = f"{{{{steps.{previous_child_id}.result.{source_name}}}}}"
+                child["args"] = child_args
+                if child.get("forEach") is not None:
+                    child["forEach"] = self._remap_skill_step_references(
+                        child.get("forEach"),
+                        id_map,
+                    )
+                if child.get("resourceScope") is not None:
+                    child["resourceScope"] = self._remap_skill_step_references(
+                        child.get("resourceScope"),
+                        id_map,
+                    )
+                child.pop("argsFromPreviousOutput", None)
+                child.pop("argsFromPreviousResult", None)
+                expanded.append(child)
+                previous_child_id = child["id"]
+        return expanded
+
+    @staticmethod
+    def _verify_execution_goal(context: dict[str, Any]) -> dict[str, Any]:
+        goal_context = context.get("goalContext") if isinstance(context.get("goalContext"), dict) else {}
+        work_order = goal_context.get("workOrder") if isinstance(goal_context.get("workOrder"), dict) else {}
+        summary = str(context.get("summary", "") or "")
+        local_result = {
+            "chatOk": True,
+            "assistantMessage": summary,
+            "structuredResult": context.get("structuredResult", {}),
+            "artifacts": context.get("artifacts", []),
+            "toolEvents": context.get("events", []),
+            "executionTrace": {"status": "completed"},
+        }
+        if work_order.get("expectedOutputs") or work_order.get("verificationRules"):
+            verification = verify_result(work_order, local_result)
+            if verification.get("passed") is not True:
+                return {
+                    "passed": False,
+                    "message": "Görevin beklenen çıktıları henüz doğrulanamadı.",
+                    "missingEvidence": verification.get("missingEvidence", []),
+                    "verification": verification,
+                }
+        goal_contract = goal_context.get("goalContract") if isinstance(goal_context.get("goalContract"), dict) else {}
+        criteria = [str(item or "").casefold() for item in goal_contract.get("acceptanceCriteria", [])]
+        artifacts = [item for item in context.get("artifacts", []) if isinstance(item, dict)]
+        file_markers = ("dosya", "file", "pdf", "xlsx", "docx", "pptx", "artifact")
+        if any(any(marker in criterion for marker in file_markers) for criterion in criteria) and not artifacts:
+            return {
+                "passed": False,
+                "message": "İstenen dosya çıktısı oluşmadı.",
+                "missingEvidence": ["artifact"],
+            }
+        return {"passed": True, "message": "Görev hedefi doğrulandı.", "missingEvidence": []}
+
     def _execute_plan_steps(
         self,
         steps: list[dict[str, Any]],
+        *,
+        source: str = "confirmed_plan",
+        task_id: str = "",
+        conversation_id: str = "",
+        goal_context: dict[str, Any] | None = None,
+        execution_id: str | None = None,
+        verify_goal: bool = True,
+        confirmed: bool = True,
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
+        normalized_steps = self._expand_skill_plan_steps(steps)
         return self.executor_core.execute_plan_steps(
-            steps=steps,
+            steps=normalized_steps,
             state_factory=self._state_with_access,
             execute_step=self._execute_step_with_telemetry,
-            source="confirmed_plan",
+            source=source,
+            task_id=task_id,
+            conversation_id=conversation_id,
             replan_fn=self._recoverable_replan,
+            goal_context=goal_context or self._goal_context(),
+            verify_goal=self._verify_execution_goal if verify_goal else None,
+            confirmed=confirmed,
             authorize_step=self._authorize_plan_step,
+            should_cancel=(
+                (lambda: self._active_remote_task_cancellation_reason(task_id))
+                if task_id
+                else None
+            ),
+            execution_id=execution_id,
         )
 
     def revise_conversation_plan(self, conversation_id: str, pending_plan_id: str, revision_text: str) -> dict[str, Any]:
@@ -8546,7 +9087,15 @@ class RuntimeBridge:
         if not isinstance(steps, list):
             steps = []
         try:
-            ok, content, tool_events, error_code, structured_result, artifacts = self._execute_plan_steps(steps)
+            ok, content, tool_events, error_code, structured_result, artifacts = self._execute_plan_steps(
+                steps,
+                source="confirmed_plan",
+                conversation_id=active_conversation_id,
+                goal_context=self._goal_context(
+                    str(plan.get("query", "") or ""),
+                    plan.get("goalContract") if isinstance(plan.get("goalContract"), dict) else None,
+                ),
+            )
         except BaseException:
             STATE.revise_pending_plan(
                 pending_plan_id,
@@ -8652,6 +9201,7 @@ class RuntimeBridge:
         selected_artifacts: list[dict[str, Any]] | None = None,
         *,
         plan_mode: bool = False,
+        force_structured_planning: bool = False,
     ) -> dict[str, Any]:
         state = STATE.snapshot()
         normalized_selected = STATE.normalize_selected_artifacts(
@@ -8710,11 +9260,31 @@ class RuntimeBridge:
         # retrieval_search) yerel komutu ~1 sn geciktiriyordu. LLM planlaması
         # gereken serbest metinlerde bağlam yine çekilir.
         deterministic_hit = route_text_to_tool(text, selected_artifacts=normalized_selected)
+        current_work_order = self._current_work_order()
+        reasoning_decision = reasoning_policy.decide_reasoning_path(
+            deterministic_hit,
+            plan_mode=plan_mode,
+            work_order=current_work_order,
+            deterministic_only=_deterministic_only_enabled(),
+        )
+        use_structured_planner = bool(
+            force_structured_planning or reasoning_decision.use_structured_planner
+        ) and not _deterministic_only_enabled()
+        execution_goal = reasoning_policy.build_goal_context(
+            query=text,
+            work_order=current_work_order,
+            privacy=(
+                str(getattr(deterministic_hit, "privacy_class", "") or "")
+                if deterministic_hit is not None
+                else ("local_private" if normalized_selected else "")
+            ),
+        )
         # SAF DETERMİNİSTİK MOD: hiç backend retrieval yapma (dış bağımlılık yok).
         skip_shared_context = _deterministic_only_enabled() or (
             deterministic_hit is not None and float(
                 getattr(deterministic_hit, "confidence", 0.0) or 0.0
             ) >= 0.8
+            and not use_structured_planner
         )
         if skip_shared_context:
             shared_prompt_context, shared_metadata, _shared_profile = "", {
@@ -8738,7 +9308,7 @@ class RuntimeBridge:
             conversation_id=conversation_id,
             task_id="",
             text=text,
-            route_fn=lambda: _route_chat(
+            route_fn=lambda execution_id: _route_chat(
                 state,
                 route_conversation,
                 text,
@@ -8746,6 +9316,17 @@ class RuntimeBridge:
                 selected_artifacts=normalized_selected,
                 backend=self.backend,
                 plan_mode=plan_mode,
+                force_structured_planning=use_structured_planner,
+                goal_context=execution_goal,
+                plan_executor=lambda steps, step_source, step_goal: self._execute_plan_steps(
+                    steps,
+                    source=step_source,
+                    task_id=str((current_work_order or {}).get("taskId", "") or ""),
+                    conversation_id=conversation_id,
+                    goal_context=step_goal or execution_goal,
+                    execution_id=execution_id,
+                    confirmed=False,
+                ),
             ),
         )
         self._record_executor_retrieval_usage(result, shared_metadata=shared_metadata)
@@ -10737,7 +11318,7 @@ class RuntimeBridge:
         create_payload = {
             "deviceLabel": label,
             "platform": str(payload.get("platform", "") or "macos"),
-            "runtimeVersion": str(payload.get("runtimeVersion", "") or "1.0.0"),
+            "runtimeVersion": str(payload.get("runtimeVersion", "") or _package_version()),
             "forceNew": True,
         }
         create = self.backend.pairing_create_session(create_payload)
@@ -10913,6 +11494,17 @@ class RuntimeBridge:
             websocket_connected=False,
             error_code="",
         )
+        if not callable(getattr(self.backend, "register_runtime", None)):
+            return {
+                "ok": False,
+                "register": None,
+                "heartbeat": None,
+                "transport": {"mode": "unavailable", "connected": False},
+                "error": {
+                    "code": "RUNTIME_BACKEND_UNAVAILABLE",
+                    "message": "Runtime backend istemcisi kayıt çağrısını desteklemiyor.",
+                },
+            }
         register = self.backend.register_runtime(payload)
         self._log_backend_result("runtime_register", register)
         if not register.ok:
@@ -11220,7 +11812,32 @@ class RuntimeBridge:
                 data={"error": {"code": "TASK_CANCELLED", "message": "Görev iptal edildi."}},
                 error="TASK_CANCELLED",
             )
-        public_artifacts = [self._public_runtime_artifact(item) for item in artifacts if isinstance(item, dict)]
+        binary_results: list[BackendResult] = []
+        metadata_artifacts: list[dict[str, Any]] = []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            path_text = str(artifact.get("path", "") or artifact.get("outputPath", "") or "").strip()
+            content_type = str(artifact.get("contentType", "") or artifact.get("mimeType", "") or "").strip().lower()
+            shareable = artifact.get("shareable") is True
+            path = Path(path_text).expanduser() if path_text else None
+            if shareable and path is not None and path.is_file() and content_type in {"image/png", "image/jpeg", "image/webp"}:
+                body = path.read_bytes()
+                result = self.backend.runtime_task_binary_artifact(
+                    task_id,
+                    body,
+                    name=str(artifact.get("name", "") or path.name),
+                    content_type=content_type,
+                    sha256=hashlib.sha256(body).hexdigest(),
+                )
+                binary_results.append(result)
+                if not result.ok:
+                    return result
+                continue
+            metadata_artifacts.append(artifact)
+        public_artifacts = [self._public_runtime_artifact(item) for item in metadata_artifacts]
+        if binary_results and not public_artifacts:
+            return binary_results[-1]
         if not public_artifacts:
             return None
         if self._send_runtime_socket_message({"type": "task.artifacts", "taskId": task_id, "artifacts": public_artifacts}):
@@ -11232,6 +11849,58 @@ class RuntimeBridge:
         if result.ok:
             self._sync_task_inbox_artifacts(task_id, public_artifacts)
         return result
+
+    def _hydrate_remote_task_media_inputs(self, task: dict[str, Any]) -> list[Path]:
+        task_id = str(task.get("id", "") or "").strip()
+        payload = task.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        metadata = payload.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        refs = metadata.get("mediaInputRefs")
+        if not task_id or not isinstance(refs, list) or not refs:
+            return []
+        temp_root = Path(tempfile.mkdtemp(prefix=f"elyan-image-input-{task_id[:8]}-"))
+        hydrated: list[dict[str, Any]] = []
+        paths: list[Path] = []
+        for index, item in enumerate(refs[:4], start=1):
+            record = item if isinstance(item, dict) else {}
+            input_ref = str(record.get("inputRef", "") or "").strip()
+            if not input_ref:
+                continue
+            result = self.backend.runtime_task_input_content(task_id, input_ref)
+            if not result.ok or not isinstance(result.data, (bytes, bytearray)) or not result.data:
+                raise SafeCapabilityError("IMAGE_SOURCE_UNAVAILABLE", "Düzenlenecek görsel güvenli şekilde indirilemedi.")
+            content_type = str(record.get("contentType", "") or "image/jpeg").lower()
+            suffix = {"image/png": ".png", "image/webp": ".webp"}.get(content_type, ".jpg")
+            name = Path(str(record.get("name", "") or f"source-{index}{suffix}")).name
+            if Path(name).suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+                name = f"source-{index}{suffix}"
+            target = temp_root / name
+            target.write_bytes(bytes(result.data))
+            paths.append(target)
+            hydrated.append({"path": str(target), "kind": "image", "contentType": content_type, "name": name})
+        if not hydrated:
+            temp_root.rmdir()
+            return []
+        metadata["_localSelectedArtifacts"] = hydrated
+        payload["metadata"] = metadata
+        task["payload"] = payload
+        return paths
+
+    @staticmethod
+    def _cleanup_remote_task_media_inputs(paths: list[Path]) -> None:
+        parents: set[Path] = set()
+        for path in paths:
+            parents.add(path.parent)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        for parent in parents:
+            try:
+                parent.rmdir()
+            except OSError:
+                pass
 
     def _public_runtime_artifact(self, artifact: dict[str, Any]) -> dict[str, Any]:
         path = str(artifact.get("path", "") or artifact.get("outputPath", "") or "").strip()
@@ -11400,11 +12069,11 @@ class RuntimeBridge:
         metadata = metadata if isinstance(metadata, dict) else {}
         sources: list[Any] = []
         for container in (
+            self._remote_task_work_order_plan_preview(payload),
             route_decision,
             route_decision.get("planPreview") if isinstance(route_decision.get("planPreview"), dict) else None,
             route_decision.get("plan") if isinstance(route_decision.get("plan"), dict) else None,
             payload.get("planPreview") if isinstance(payload.get("planPreview"), dict) else None,
-            self._remote_task_work_order_plan_preview(payload),
             metadata.get("planPreview") if isinstance(metadata.get("planPreview"), dict) else None,
             task.get("planPreview") if isinstance(task.get("planPreview"), dict) else None,
         ):
@@ -11453,6 +12122,20 @@ class RuntimeBridge:
                 args["goal"] = str(args.get("prompt", "") or args.get("query", "") or prompt)
             if not str(args.get("action", "") or "").strip():
                 args["action"] = "run"
+        elif capability == "image_edit":
+            local_sources = task_payload.get("metadata", {})
+            local_sources = local_sources if isinstance(local_sources, dict) else {}
+            selected = local_sources.get("_localSelectedArtifacts")
+            selected = selected if isinstance(selected, list) else []
+            source_paths = [
+                str(item.get("path", "") or "").strip()
+                for item in selected
+                if isinstance(item, dict) and str(item.get("path", "") or "").strip()
+            ]
+            if source_paths and not args.get("sourcePath") and not args.get("sourcePaths"):
+                args["sourcePaths"] = source_paths
+            if not str(args.get("prompt", "") or "").strip():
+                args["prompt"] = prompt
         elif capability in {"open_app", "close_app"} and not str(args.get("app_name", "") or "").strip():
             routed = route_text_to_tool(prompt)
             if routed is not None and _canonical_capability_name(routed.tool_name) == capability:
@@ -11527,6 +12210,9 @@ class RuntimeBridge:
             normalized_step["dependsOn"] = [
                 str(item or "").strip() for item in depends_on if str(item or "").strip()
             ]
+        for_each = raw_step.get("forEach")
+        if isinstance(for_each, str) and for_each.strip():
+            normalized_step["forEach"] = for_each.strip()
         priority = str(raw_step.get("userPriority", raw_step.get("priority", "")) or "").strip().lower()
         if priority in {"low", "normal", "high", "urgent"}:
             normalized_step["userPriority"] = priority
@@ -11548,30 +12234,61 @@ class RuntimeBridge:
         steps: list[dict[str, Any]],
         prompt: str,
     ) -> bool:
-        """Tek adımlık desktop_operator.run planı mı? (Backend'in 'joker' planı —
-        spesifik GUI niyeti taşımaz, görev metnini operator'a devreder.)"""
-        if len(steps) != 1 or not isinstance(steps[0], dict):
-            return False
-        step = steps[0]
-        if _canonical_capability_name(step.get("capability")) != "desktop_operator.run":
-            return False
-        args = step.get("args")
-        args = dict(args) if isinstance(args, dict) else {}
-        # Normalizer, boş backend fallback'ine yalnız goal=<prompt> ve
-        # action=run ekler. Başka her anahtar ya da prompt'tan farklı bir hedef
-        # gerçek/spesifik GUI planıdır ve aynen korunmalıdır.
-        generic_keys = {"goal", "prompt", "query", "action"}
-        if set(args).difference(generic_keys):
-            return False
-        action = str(args.get("action", "") or "").strip().casefold()
-        if action not in {"", "run"}:
-            return False
+        """Backend'in 'joker' planı mı? Spesifik niyet taşımayan planlar:
+
+        - tek adımlık desktop_operator.run (goal=<prompt>), VEYA
+        - generic operator adımı + argümansız yazıcı 'dolgu' adımları
+          (backend buildSteps'in kalıbı: document_write benzeri adım hiçbir
+          içerik/çıktı argümanı taşımaz). Böyle planlar yüksek-güvenli yerel
+          rota varken aynen yürütülmemeli — canlı arıza: "Emre adında klasör
+          oluştur" → document_write + operator → onay çıkmazı.
+        """
         normalized_prompt = " ".join(str(prompt or "").split()).casefold()
-        for key in ("goal", "prompt", "query"):
-            value = " ".join(str(args.get(key, "") or "").split()).casefold()
-            if value and value != normalized_prompt:
+
+        def _is_generic_operator(step: dict[str, Any]) -> bool:
+            if _canonical_capability_name(step.get("capability")) != "desktop_operator.run":
                 return False
-        return True
+            args = step.get("args")
+            args = dict(args) if isinstance(args, dict) else {}
+            # Normalizer, boş backend fallback'ine yalnız goal=<prompt>,
+            # action=run (ve work-order etiketi) ekler. Başka her anahtar ya da
+            # prompt'tan farklı bir hedef gerçek/spesifik GUI planıdır.
+            generic_keys = {"goal", "prompt", "query", "action", "workOrderKind", "work_order_kind"}
+            if set(args).difference(generic_keys):
+                return False
+            action = str(args.get("action", "") or "").strip().casefold()
+            if action not in {"", "run"}:
+                return False
+            for key in ("goal", "prompt", "query"):
+                value = " ".join(str(args.get(key, "") or "").split()).casefold()
+                if value and value != normalized_prompt:
+                    return False
+            return True
+
+        def _is_argless_writer_filler(step: dict[str, Any]) -> bool:
+            capability = _canonical_capability_name(step.get("capability"))
+            if capability not in {
+                "document_write", "spreadsheet_write", "presentation_write", "canvas_write",
+            }:
+                return False
+            args = step.get("args")
+            args = dict(args) if isinstance(args, dict) else {}
+            # İçerik/çıktı belirtmeyen yazıcı adımı dolgudur (yalnız biçim
+            # ipucu taşıyabilir).
+            meaningful = {
+                key for key, value in args.items()
+                if str(value or "").strip() and key not in {"output_format", "outputFormat"}
+            }
+            return not meaningful
+
+        candidates = [step for step in steps if isinstance(step, dict)]
+        if not candidates or len(candidates) != len(steps):
+            return False
+        operator_steps = [step for step in candidates if _is_generic_operator(step)]
+        if len(operator_steps) != 1:
+            return False
+        others = [step for step in candidates if step is not operator_steps[0]]
+        return all(_is_argless_writer_filler(step) for step in others)
 
     def _remote_task_explicit_steps_from_route(
         self,
@@ -11603,9 +12320,11 @@ class RuntimeBridge:
             return [], {}
         plan_preview = route_decision.get("planPreview")
         plan_preview = dict(plan_preview) if isinstance(plan_preview, dict) else {}
+        # route_decision.reason İÇ yönlendirme gerekçesidir ("Kullanıcı dispatch
+        # butonu ile...") — asla kullanıcıya görünen özete düşmez; görev sonuç
+        # metni üretmeden biterse bu cümle chat'e asistan cevabı gibi sızıyordu.
         summary = str(
-            plan_preview.get("summary", "")
-            or route_decision.get("reason", "")
+            _user_facing_plan_summary(plan_preview.get("summary", ""))
             or "Mobil görev desktop runtime üzerinde adım adım yürütülecek."
         ).strip()
         privacy_class = str(
@@ -11808,11 +12527,28 @@ class RuntimeBridge:
                 local_routed = route_text_to_tool(prompt)
                 local_steps = _plan_steps_from_routed_task(local_routed) if local_routed is not None else []
                 local_steps = [dict(step) for step in local_steps if isinstance(step, dict)]
+                # Backend'in bildirdiği yetenek listesi sezgisel ve çoğu zaman
+                # eksik (ör. klasör oluşturma isteğinde make_directory yok).
+                # Zararsız, salt-yerel yetenekler bu listeye bakılmaksızın
+                # yerel rotada kullanılabilir — aksi halde jenerik plan kazanıp
+                # onay çıkmazına giriyor.
+                _SAFE_LOCAL_OVERRIDE = {
+                    "make_directory", "directory_tree", "file_read",
+                    "file_search", "sys_info",
+                }
+                _local_caps = {
+                    canonical_capability(step.get("capability"))
+                    for step in local_steps
+                    if canonical_capability(step.get("capability"))
+                }
                 if (
                     local_routed is not None
                     and local_steps
                     and local_routed.confidence >= 0.8
                     and not local_routed.requires_confirmation
+                    and (_local_caps - _SAFE_LOCAL_OVERRIDE).issubset(
+                        {canonical_capability(item) for item in capabilities}
+                    )
                 ):
                     local_preview = (
                         dict(local_routed.plan_preview)
@@ -11879,7 +12615,14 @@ class RuntimeBridge:
                 local_routed = route_text_to_tool(natural_goal)
                 local_steps = _plan_steps_from_routed_task(local_routed) if local_routed is not None else []
                 local_steps = [dict(step) for step in local_steps if isinstance(step, dict)]
-                if local_steps:
+                local_capabilities = {
+                    canonical_capability(step.get("capability"))
+                    for step in local_steps
+                    if canonical_capability(step.get("capability"))
+                }
+                if local_steps and local_capabilities.issubset(
+                    {canonical_capability(item) for item in capabilities}
+                ):
                     local_preview = (
                         dict(local_routed.plan_preview)
                         if local_routed is not None and isinstance(local_routed.plan_preview, dict)
@@ -12184,13 +12927,6 @@ class RuntimeBridge:
             return None
 
         capabilities = self._remote_task_capabilities(task, payload)
-        # Merge mobile-suggested capabilities when present
-        mobile_suggested_caps = [
-            str(c or "").strip() for c in (mobile_metadata.get("suggestedCapabilities") or [])
-            if str(c or "").strip()
-        ]
-        if mobile_suggested_caps:
-            capabilities = capabilities | {_canonical_capability_name(c) for c in mobile_suggested_caps}
 
         # LLM-ÖNCE: serbest-metin cowork görevlerinde backend'in regex planına
         # körlemesine güvenme. Runtime'ın kataloglu + doğrulamalı LLM planlayıcısı
@@ -12256,15 +12992,14 @@ class RuntimeBridge:
         conversation = STATE.create_conversation(title or "Remote task")
         conversation_id = str(conversation.get("id", "") or "")
         if pre_approval_steps:
-            ok, content, tool_events, error_code, structured_result, artifacts = self.executor_core.execute_plan_steps(
-                steps=pre_approval_steps,
-                state_factory=self._state_with_access,
-                execute_step=self._execute_step_with_telemetry,
+            ok, content, tool_events, error_code, structured_result, artifacts = self._execute_plan_steps(
+                pre_approval_steps,
                 source="runtime_task",
                 task_id=str(task.get("id", "") or ""),
                 conversation_id=conversation_id,
-                replan_fn=self._recoverable_replan,
-                authorize_step=self._authorize_plan_step,
+                goal_context=self._goal_context(prompt),
+                verify_goal=not approval_requested,
+                confirmed=False,
             )
         else:
             ok = True

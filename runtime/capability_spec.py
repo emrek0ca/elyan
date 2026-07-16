@@ -285,12 +285,15 @@ SPECS: tuple[CapabilitySpec, ...] = (
         attribute="make_directory",
         description="Klasör oluşturur (üst klasörler dahil; varsa hata vermez).",
         args=(ArgSpec("path", description="Oluşturulacak klasör yolu (ör. ~/Desktop/youtube-transkript).", required=True),),
-        usage="İndirilen/üretilen dosyaları toplamadan önce hedef klasörü hazırlamak.",
+        usage="İndirilen/üretilen dosyaları toplamadan önce hedef klasörü hazırlamak veya kullanıcının istediği klasörü açmak.",
         display_name="Klasör oluşturma",
         category="developer",
         side_effect=True,
         verification_mode="artifact_exists",
-        policy="confirm",
+        # Zararsız + geri alınabilir (yalnız YENİ klasör; silme/üzerine yazma
+        # yok) → açık izin. "confirm" iken mobil dispatch'te görev onaya
+        # takılıp kullanıcı kartı göremeyince sonsuz bekliyordu.
+        policy="open",
     ),
     CapabilitySpec(
         name="file_move",

@@ -88,6 +88,86 @@ def test_desktop_os_status_returns_structured_native_snapshot(
     assert result["result"]["processInspectionAvailable"] is True
 
 
+def test_desktop_os_uses_safe_python_fallback_without_native_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    monkeypatch.delenv("ELYAN_DESKTOP_NATIVE_STATE_PATH", raising=False)
+    import actions.desktop_os as desktop_os
+
+    monkeypatch.setattr(
+        desktop_os,
+        "_fallback_processes",
+        lambda **_kwargs: {
+            "available": True,
+            "total": 1,
+            "items": [{"pid": 42, "name": "Elyan", "executablePath": "/elyan", "bundleId": "", "frontmost": False}],
+        },
+    )
+    monkeypatch.setattr(
+        desktop_os,
+        "_fallback_active_window",
+        lambda: {
+            "available": True,
+            "appName": "Elyan",
+            "windowTitle": "",
+            "processId": 42,
+            "executablePath": "/elyan",
+            "bundleId": "",
+            "source": "test_fallback",
+            "confidence": 0.8,
+        },
+    )
+
+    status = desktop_os.desktop_os_runtime_status()
+    processes = capability_registry.run_capability(
+        "desktop_os.processes",
+        {},
+        _dangerous_state(allow_system_inspection=True),
+    )
+    active = capability_registry.run_capability(
+        "desktop_os.active_window",
+        {},
+        _dangerous_state(allow_system_inspection=True),
+    )
+
+    assert status["available"] is True
+    assert status["detail"]["source"] == "python_fallback"
+    assert processes["ok"] is True
+    assert processes["result"]["items"][0]["name"] == "Elyan"
+    assert active["ok"] is True
+    assert active["result"]["appName"] == "Elyan"
+
+    stale_state = state_store._ensure_defaults({
+        "runtime": {
+            "capabilityStates": {
+                "desktop_os.status": {
+                    "available": False,
+                    "ready": False,
+                    "errorCode": "native_snapshot_unavailable",
+                }
+            }
+        }
+    })
+    recovered = capability_registry.capability_readiness("desktop_os.status", state=stale_state)
+    assert recovered["ready"] is True
+
+
+def test_non_macos_fallback_never_assumes_screen_capture_permission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import actions.desktop_os as desktop_os
+
+    monkeypatch.setattr(desktop_os.sys, "platform", "linux")
+    monkeypatch.setattr(desktop_os.os, "name", "posix")
+
+    _model, _permissions, permission_probe, screen_capture = desktop_os._fallback_permissions()
+
+    assert permission_probe is True
+    assert screen_capture is False
+
+
 def test_desktop_os_permissions_preserve_additive_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

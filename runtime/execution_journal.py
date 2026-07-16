@@ -78,9 +78,20 @@ def _fernet() -> "Fernet | None":
 
 
 def plan_hash(steps: list[dict[str, Any]]) -> str:
-    """Adım kimliği + capability üzerinden deterministik plan imzası."""
+    """Bind resume state to the complete executable plan shape."""
     shape = [
-        {"id": str(step.get("id", "") or ""), "capability": str(step.get("capability", "") or "")}
+        {
+            "id": str(step.get("id", "") or ""),
+            "capability": str(step.get("capability", "") or ""),
+            "args": {
+                str(key): value
+                for key, value in (step.get("args", {}) if isinstance(step.get("args"), dict) else {}).items()
+                if not str(key).startswith("_")
+            },
+            "dependsOn": list(step.get("dependsOn", []) or []),
+            "forEach": step.get("forEach"),
+            "resourceScope": list(step.get("resourceScope", []) or []),
+        }
         for step in steps
         if isinstance(step, dict)
     ]
@@ -236,7 +247,7 @@ class ExecutionJournal:
                 return empty
             execution_id = str(row["execution_id"])
             steps = connection.execute(
-                "SELECT step_id, output_cipher FROM journal_steps WHERE execution_id = ? AND status = 'completed'",
+                "SELECT step_id, output_cipher, side_effect FROM journal_steps WHERE execution_id = ? AND status = 'completed'",
                 (execution_id,),
             ).fetchall()
         completed: list[str] = []
@@ -244,15 +255,19 @@ class ExecutionJournal:
         fernet = _fernet()
         for step in steps:
             step_id = str(step["step_id"])
-            completed.append(step_id)
             cipher = step["output_cipher"]
             if fernet is None or not cipher:
+                if bool(step["side_effect"]):
+                    completed.append(step_id)
                 continue
             try:
                 payload = json.loads(fernet.decrypt(bytes(cipher)).decode("utf-8"))
                 if isinstance(payload, dict):
                     outputs[step_id] = payload
+                    completed.append(step_id)
             except (InvalidToken, ValueError, TypeError):
+                if bool(step["side_effect"]):
+                    completed.append(step_id)
                 continue
         return {"executionId": execution_id, "completedStepIds": completed, "stepOutputs": outputs}
 
@@ -337,5 +352,4 @@ class ExecutionJournal:
                     (action["action"], action["status"], _utc_iso(), execution_id, step_id),
                 )
         return actions
-
 

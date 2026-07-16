@@ -1,0 +1,10 @@
+{
+  "name": "Elyan",
+  "short_name": "Elyan",
+  "description": "Bilgisayarını kullanan kişisel yapay zekâ.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c0f0d",
+  "theme_color": "#0c0f0d",
+  "icons": [{"src":"/logo.png","sizes":"1024x1024","type":"image/png"}]
+}

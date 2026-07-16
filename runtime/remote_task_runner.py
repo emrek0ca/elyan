@@ -10,7 +10,10 @@ from typing import Any
 from runtime import learning_store, state_store
 from runtime.agent_planning import build_agent_plan
 from runtime.backend_client import BackendResult
-from runtime.capability_registry import capability_display_name, capability_metadata, capability_readiness
+from runtime.capability_registry import (
+    capability_display_name,
+    capability_readiness,
+)
 from runtime.desktop_work_order import validate_payload, verify_result
 from runtime.execution_scheduler import SchedulerPlanError, schedule_tasks
 from runtime.execution_trust import ExecutionLedger, TrustError, prepare_work_order_v2
@@ -49,10 +52,28 @@ DISPATCH_AUTO_APPROVE_BLOCKLIST = {
     "desktop_operator.run",
     "desktop_operator.execute_action",
 }
-BACKEND_TASK_STATUSES = {"queued", "planning", "running", "waiting_approval", "completed", "failed", "canceled"}
-TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled"}
-ACTIVE_STATUSES = {"queued", "planning", "running", "waiting_approval"}
-LOCAL_TRACE_STATUSES = {"readiness_check", "verifying", "repairing", "failed_safe"}
+# ⑤: Görev yaşam-döngüsü durum taksonomisi — TEK KAYNAK. Magic string yerine
+# adlandırılmış sabitler; durum kümeleri bunlardan türetilir ki taksonomi
+# tutarlı kalsın, typo/drift olmasın ve mobil ile aynı sözlüğü paylaşsın.
+STATUS_QUEUED = "queued"
+STATUS_PLANNING = "planning"
+STATUS_READINESS_CHECK = "readiness_check"
+STATUS_RUNNING = "running"
+STATUS_VERIFYING = "verifying"
+STATUS_REPAIRING = "repairing"
+STATUS_WAITING_APPROVAL = "waiting_approval"
+STATUS_COMPLETED = "completed"
+STATUS_FAILED = "failed"
+STATUS_FAILED_SAFE = "failed_safe"
+STATUS_CANCELED = "canceled"
+
+BACKEND_TASK_STATUSES = {
+    STATUS_QUEUED, STATUS_PLANNING, STATUS_RUNNING, STATUS_WAITING_APPROVAL,
+    STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELED,
+}
+TERMINAL_STATUSES = {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELED, "cancelled"}
+ACTIVE_STATUSES = {STATUS_QUEUED, STATUS_PLANNING, STATUS_RUNNING, STATUS_WAITING_APPROVAL}
+LOCAL_TRACE_STATUSES = {STATUS_READINESS_CHECK, STATUS_VERIFYING, STATUS_REPAIRING, STATUS_FAILED_SAFE}
 
 
 def _utc_now_iso() -> str:
@@ -191,6 +212,34 @@ class RemoteTaskRunner:
             self.host._runtime_diag("interrupted_task_sweep", count=swept)
         return swept
 
+    # Cevapsız onayın azami bekleme süresi. Mobil onay kartı kaybolmuş/hiç
+    # gösterilmemiş olabilir; bu süreden sonra görev dürüstçe iptal edilir
+    # (sonsuz 'onay bekliyor' takılması yerine).
+    APPROVAL_WAIT_TTL_SECONDS = 45 * 60
+
+    def _approval_wait_expired(
+        self,
+        task: dict[str, Any],
+        approval_request: dict[str, Any],
+    ) -> bool:
+        raw = str(
+            approval_request.get("requestedAt", "")
+            or approval_request.get("createdAt", "")
+            or task.get("updatedAt", "")
+            or task.get("createdAt", "")
+            or ""
+        ).strip()
+        if not raw:
+            return False
+        try:
+            requested = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if requested.tzinfo is None:
+            requested = requested.replace(tzinfo=dt.timezone.utc)
+        age = (dt.datetime.now(dt.timezone.utc) - requested).total_seconds()
+        return age >= self.APPROVAL_WAIT_TTL_SECONDS
+
     @staticmethod
     def _task_ready_for_scheduler(task: dict[str, Any]) -> bool:
         readiness = task.get("readiness")
@@ -275,6 +324,21 @@ class RemoteTaskRunner:
                         # Mobil dispatch onayı bekleyen planı zaten kapsıyor —
                         # (ör. eski sürümde onaya takılmış görev) otomatik sürdür.
                         executions.append(self.resume_after_approval(task_id, True))
+                    elif self._approval_wait_expired(task, approval_request):
+                        # Onay TTL'i doldu: kullanıcı hiç yanıtlamadı (mobil
+                        # kartı görmemiş olabilir). Sonsuza dek 'onay bekliyor'
+                        # diye takılı kalma — dürüstçe iptal et; kullanıcı
+                        # isterse görevi yeniden gönderir.
+                        executions.append(self.resume_after_approval(task_id, False))
+                        self._upsert_local_task(
+                            task_id,
+                            status="canceled",
+                            summary=(
+                                "Onay 45 dakika içinde gelmediği için görev güvenle iptal edildi. "
+                                "İstersen tekrar gönderebilirsin."
+                            ),
+                            approval_request={},
+                        )
                     else:
                         executions.append({"taskId": task_id, "ok": True, "status": "waiting_approval"})
                     continue
@@ -317,41 +381,24 @@ class RemoteTaskRunner:
             )
         title = str(task.get("title", "") or payload.get("title", "") or "Elyan görevi")
         prompt = str(
-            _desktop_work_order_topic(work_order)
-            or payload.get("prompt", "")
-            or _desktop_work_order_summary(work_order)
+            payload.get("prompt", "")
             or payload.get("message", "")
+            or _desktop_work_order_summary(work_order)
+            or _desktop_work_order_topic(work_order)
             or title
         ).strip()
         # Netleştirme sürdürmesi: orijinal görev + kullanıcı yanıtı birleşik
         # prompt olarak gelir; work-order konusundan türetilen prompt'u ezer.
         if str(prompt_override or "").strip():
             prompt = str(prompt_override).strip()
-        # Deterministik yerel rota planı güvenli (salt-okunur) adımlarla ikame
-        # edebilir; kapsam mühürlenmeden ÖNCE hesaplanır ki grant zinciri
-        # kopmasın. Yalnız read-only sınıfı yetenekler kapsama eklenebilir.
         precomputed_preview = self.host._remote_task_running_plan_preview(task, prompt, payload)
         if isinstance(work_order, dict):
-            preview_steps = precomputed_preview.get("steps", []) if isinstance(precomputed_preview, dict) else []
-            extra_read_scope: list[str] = []
-            for step in preview_steps if isinstance(preview_steps, list) else []:
-                if not isinstance(step, dict):
-                    continue
-                step_capability = str(step.get("capability", "") or "").strip()
-                metadata = capability_metadata(step_capability)
-                if (
-                    step_capability
-                    and not bool(metadata.get("sideEffect", False))
-                    and str(metadata.get("permissionClass", "") or "") == "read_only"
-                ):
-                    extra_read_scope.append(step_capability)
             try:
                 work_order = prepare_work_order_v2(
                     task,
                     work_order,
                     prompt=prompt,
                     state=state_store.snapshot(),
-                    extra_read_scope=extra_read_scope,
                 )
                 delivery = ExecutionLedger().claim_delivery(work_order)
                 if not delivery.claimed:
@@ -461,9 +508,24 @@ class RemoteTaskRunner:
             )
         try:
             trust_token = self.host._begin_trusted_work_order(work_order, "dispatch")
-            local_result = self._execute_local_with_timeout(
-                task, prompt, title, task_id=task_id, plan_mode=plan_mode
-            )
+            hydrated_media_paths = self.host._hydrate_remote_task_media_inputs(task)
+            try:
+                local_result = self._execute_local_with_timeout(
+                    task,
+                    prompt,
+                    title,
+                    task_id=task_id,
+                    plan_mode=plan_mode,
+                )
+            except Exception:
+                return self._fail_safe(
+                    task_id,
+                    task_run_id,
+                    message="Yerel yürütme güvenli şekilde tamamlanamadı.",
+                    error_code="LOCAL_EXECUTION_FAILED",
+                    plan_preview=plan_preview,
+                    capability_readiness_payload=readiness,
+                )
             if local_result is _EXECUTION_CANCELLED:
                 cancellation_reason = self._task_cancellation_reason(task_id)
                 if cancellation_reason == "task_cancelled":
@@ -472,7 +534,7 @@ class RemoteTaskRunner:
                     task_id,
                     task_run_id,
                     message="Görev zaman aşımı nedeniyle iptal edildi.",
-                    error_code="TASK_CANCELLED",
+                    error_code="task_execution_timeout",
                     plan_preview=plan_preview,
                     capability_readiness_payload=readiness,
                 )
@@ -573,6 +635,7 @@ class RemoteTaskRunner:
             )
             return result
         finally:
+            self.host._cleanup_remote_task_media_inputs(locals().get("hydrated_media_paths", []))
             self.host._end_trusted_work_order(locals().get("trust_token"))
             self.host._end_active_remote_task(progress_token, task_id)
             self.host._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
@@ -599,7 +662,13 @@ class RemoteTaskRunner:
                 if not plan_mode:
                     result = self.host._execute_deterministic_remote_task(task, prompt, title)
                 if result is None:
-                    result = self.host.send_conversation("", prompt, title, plan_mode=plan_mode)
+                    result = self.host.send_conversation(
+                        "",
+                        prompt,
+                        title,
+                        plan_mode=plan_mode,
+                        force_structured_planning=True,
+                    )
                 box["result"] = result
             except BaseException as exc:  # yürütme hatası ana thread'e taşınır
                 box["error"] = exc
@@ -785,7 +854,10 @@ class RemoteTaskRunner:
             if isinstance(work_order, dict) and str(work_order.get("schema", "") or "").endswith(".v2"):
                 if not ExecutionLedger().claim_approval(work_order, True):
                     return {"taskId": task_id, "ok": True, "status": "skipped_duplicate_approval"}
-            self._report_lifecycle(task_id, task_run_id, "repairing", "Onaylanan adım yürütülüyor.")
+            # ⑤: Onaylanan adımın yürütülmesi bir ONARIM değil, yürütmedir.
+            # Eskiden "repairing" bildiriliyordu; bu hem kullanıcıya "onarılıyor"
+            # gösteriyor hem de sahte bir "repair attempt" metadata'sı üretiyordu.
+            self._report_lifecycle(task_id, task_run_id, STATUS_RUNNING, "Onaylanan adım yürütülüyor.")
             local_result = self.host._run_with_approved_task_access(
                 task_id,
                 lambda: self.host.confirm_conversation_plan(conversation_id, pending_plan_id, True),

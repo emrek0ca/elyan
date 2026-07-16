@@ -46,6 +46,66 @@ def test_scheduler_order_is_dependency_safe_and_deterministic() -> None:
     ]
 
 
+def test_template_reference_infers_implicit_dependency_without_explicit_dependson() -> None:
+    """④ zincir-yarış güvenliği: bir adım başka bir adımın çıktısına
+    `{{steps.<id>.result...}}` ile atıfta bulunuyorsa, planlayıcı `dependsOn`'ı
+    UNUTSA bile scheduler örtük bağımlılık kurar → dependent, referans edilen
+    adımdan SONRA sıralanır ve onunla paralel koşmaz. Aksi halde dependent daha
+    yüksek öncelikliyse önce koşup çözülmemiş şablonla fail ediyordu."""
+    ordered = schedule_steps(
+        [
+            # Yüksek öncelikli ama r1'in çıktısını tüketiyor; dependsOn YOK.
+            {"id": "r2", "capability": "read_b", "priority": "urgent", "args": {"path": "{{steps.r1.result.path}}"}},
+            {"id": "r1", "capability": "read_a", "priority": "normal"},
+        ],
+        metadata_provider=_metadata,
+        readiness_provider=_ready,
+    )
+    order = [step["id"] for step in ordered]
+    # Referans edilen adım önce sıralanır.
+    assert order.index("r1") < order.index("r2")
+    # Şablon içeren adım paralel-güvenli sayılmaz.
+    by_id = {step["id"]: step for step in ordered}
+    assert by_id["r2"]["_scheduler"]["parallelSafe"] is False
+    # Paralel batch, şablon-bağımlı adımı referans edilenle aynı gruba almaz.
+    batch = parallel_read_batch(ordered, 0, completed_step_ids=set())
+    assert "r2" not in [step["id"] for step in batch]
+
+
+def test_foreach_reference_infers_dependency_without_explicit_dependson() -> None:
+    ordered = schedule_steps(
+        [
+            {
+                "id": "download",
+                "capability": "read_download",
+                "priority": "urgent",
+                "forEach": "{{steps.collect.result.items}}",
+                "args": {"url": "{{item.href}}"},
+            },
+            {"id": "collect", "capability": "read_collect", "priority": "normal"},
+        ],
+        metadata_provider=_metadata,
+        readiness_provider=_ready,
+    )
+
+    assert [step["id"] for step in ordered] == ["collect", "download"]
+    assert ordered[1]["_scheduler"]["parallelSafe"] is False
+
+
+def test_unknown_template_reference_is_ignored_not_a_hard_error() -> None:
+    """Bilinmeyen bir `{{steps.<id>}}` atfı planlamayı düşürmez; şablon çözücü
+    onu çalışma anında güvenle ele alır. Yalnız GERÇEK adım kimlikleri örtük
+    bağımlılığa çevrilir."""
+    ordered = schedule_steps(
+        [
+            {"id": "only", "capability": "read_a", "args": {"path": "{{steps.ghost.result}}"}},
+        ],
+        metadata_provider=_metadata,
+        readiness_provider=_ready,
+    )
+    assert [step["id"] for step in ordered] == ["only"]
+
+
 def test_parallel_batch_contains_only_ready_independent_reads() -> None:
     ordered = schedule_steps(
         [
@@ -117,6 +177,8 @@ def test_executor_runs_independent_reads_with_bounded_parallelism(
     release = threading.Event()
     active = 0
     max_active = 0
+    file_a = tmp_path / "a.txt"
+    file_a.write_text("a", encoding="utf-8")
 
     def execute_step(capability, _args, _state, _source):
         nonlocal active, max_active
@@ -132,7 +194,7 @@ def test_executor_runs_independent_reads_with_bounded_parallelism(
 
     ok, content, _events, error_code, _result, _artifacts = executor.execute_plan_steps(
         steps=[
-            {"id": "r1", "capability": "file_read", "args": {"path": "a"}},
+            {"id": "r1", "capability": "file_read", "args": {"path": str(file_a)}},
             {"id": "r2", "capability": "git_status", "args": {}},
         ],
         state_factory=lambda: {},
@@ -215,6 +277,8 @@ def test_parallel_grants_capture_step_specific_trust_state(
     executor = ExecutorCore()
     current_step = {"id": ""}
     observed: list[tuple[str, str]] = []
+    file_a = tmp_path / "a.txt"
+    file_a.write_text("a", encoding="utf-8")
 
     def authorize(step_id, _capability, _args, _source, _task_id):
         current_step["id"] = step_id
@@ -229,7 +293,7 @@ def test_parallel_grants_capture_step_specific_trust_state(
 
     ok, *_rest = executor.execute_plan_steps(
         steps=[
-            {"id": "r1", "capability": "file_read", "args": {"path": "a"}},
+            {"id": "r1", "capability": "file_read", "args": {"path": str(file_a)}},
             {"id": "r2", "capability": "git_status", "args": {}},
         ],
         state_factory=state_factory,
@@ -249,6 +313,10 @@ def test_parallel_batch_is_one_preemption_checkpoint_group(
     _isolate_state(monkeypatch, tmp_path)
     executor = ExecutorCore()
     calls: list[str] = []
+    file_a = tmp_path / "a.txt"
+    file_b = tmp_path / "b.txt"
+    file_a.write_text("a", encoding="utf-8")
+    file_b.write_text("b", encoding="utf-8")
 
     def execute_step(capability, _args, _state, _source):
         calls.append(capability)
@@ -257,9 +325,9 @@ def test_parallel_batch_is_one_preemption_checkpoint_group(
 
     ok, _content, _events, error_code, _result, _artifacts = executor.execute_plan_steps(
         steps=[
-            {"id": "r1", "capability": "file_read", "args": {"path": "a"}},
+            {"id": "r1", "capability": "file_read", "args": {"path": str(file_a)}},
             {"id": "r2", "capability": "git_status", "args": {}},
-            {"id": "after", "capability": "file_read", "args": {"path": "b"}, "dependsOn": ["r1", "r2"]},
+            {"id": "after", "capability": "file_read", "args": {"path": str(file_b)}, "dependsOn": ["r1", "r2"]},
         ],
         state_factory=lambda: {},
         execute_step=execute_step,

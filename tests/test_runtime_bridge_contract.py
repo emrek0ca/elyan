@@ -1231,10 +1231,10 @@ def test_dispatch_prefers_local_deterministic_route_over_llm_planner(
         "payload": {
             "prompt": prompt,
             "metadata": {
-                "routeDecision": {
-                    "route": "desktop_runtime",
-                    "capabilities": ["desktop_operator.run"],
-                    "reason": "Masaüstü görevi.",
+                    "routeDecision": {
+                        "route": "desktop_runtime",
+                        "capabilities": ["desktop_operator.run", "directory_tree"],
+                        "reason": "Masaüstü görevi.",
                 }
             },
         },
@@ -1287,7 +1287,14 @@ def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
                 },
             },
         },
-    }, capabilities=["desktop_operator.run"])
+    }, capabilities=["desktop_operator.run", "directory_tree"], steps=[
+        {
+            "id": "step_1",
+            "capability": "desktop_operator.run",
+            "description": "Masaüstü görevi yürütülecek.",
+            "args": {},
+        }
+    ])
 
     # Doğrudan çağrı P0 güven bağlamını kendisi kurmaz; üretimdeki gibi
     # cihazda mühürlenmiş v2 iş emriyle (salt-okunur ikame kapsamda) sar.
@@ -1295,9 +1302,7 @@ def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
     from runtime.execution_trust import prepare_work_order_v2 as _prepare_v2
 
     raw_order = _validate_payload(task["payload"]).work_order
-    sealed_order = _prepare_v2(
-        task, raw_order, prompt=prompt, state=state_store.snapshot(), extra_read_scope=["directory_tree"]
-    )
+    sealed_order = _prepare_v2(task, raw_order, prompt=prompt, state=state_store.snapshot())
     trust_token = runtime._begin_trusted_work_order(sealed_order, "dispatch")
     try:
         result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
@@ -1351,7 +1356,14 @@ def test_assigned_dispatch_generic_operator_completes_via_directory_tree_lifecyc
                 },
             },
         },
-    }, capabilities=["desktop_operator.run"])
+    }, capabilities=["desktop_operator.run", "directory_tree"], steps=[
+        {
+            "id": "step_1",
+            "capability": "desktop_operator.run",
+            "description": "Masaüstü görevi yürütülecek.",
+            "args": {},
+        }
+    ])
 
     class _Backend:
         def __init__(self) -> None:
@@ -1438,6 +1450,43 @@ def test_dispatch_keeps_specific_explicit_operator_step(
 
     assert [step["capability"] for step in steps] == ["desktop_operator.run"]
     assert steps[0]["args"]["targetApp"] == "Finder"
+
+
+def test_dispatch_does_not_replace_backend_scope_with_local_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "Masaüstündeki dosyaları listele"
+    decision = {
+        "route": "desktop_runtime",
+        "capabilities": ["desktop_operator.run"],
+        "planPreview": {
+            "summary": prompt,
+            "steps": [
+                {
+                    "id": "step_1",
+                    "capability": "desktop_operator.run",
+                    "args": {},
+                    "description": prompt,
+                }
+            ],
+        },
+    }
+    task = {
+        "id": "scope-bound",
+        "payload": {"prompt": prompt, "metadata": {"routeDecision": decision}},
+    }
+
+    steps, _preview = runtime._remote_task_steps_from_route(
+        task,
+        prompt,
+        {"desktop_operator.run"},
+        decision,
+    )
+
+    assert [step["capability"] for step in steps] == ["desktop_operator.run"]
 
 
 def test_remote_browser_agent_route_requires_approval(
@@ -5189,6 +5238,148 @@ def test_direct_document_write_requires_confirmation(
     assert response["error"]["code"] == "PERMISSION_REQUIRED"
 
 
+def test_pdf_report_request_routes_to_research_then_pdf_canvas() -> None:
+    routed = bridge.route_text_to_tool(
+        "Masaüstümde Atatürk hakkında kaynaklı, düzenli, yaklaşık 4 sayfalık bir araştırma raporu hazırla. "
+        "Başlık, kısa giriş, ana bölümler, sonuç ve kaynakça olsun. "
+        "Raporu PDF olarak oluştur ve ataturk_arastirma_raporu.pdf adıyla kaydet."
+    )
+
+    assert routed is not None
+    assert routed.tool_name == "canvas_write"
+    assert routed.intent == "pdf_report"
+    assert routed.requires_confirmation is True
+    assert routed.plan_preview is not None
+    steps = routed.plan_preview["steps"]
+    assert [step["capability"] for step in steps] == ["web_research", "canvas_write"]
+    assert steps[1]["args"]["outputFormat"] == "pdf"
+    assert steps[1]["args"]["width"] == 595
+    assert steps[1]["args"]["height"] == 842
+    assert steps[1]["args"]["outputPath"].endswith("ataturk_arastirma_raporu.pdf")
+    assert Path(steps[1]["args"]["outputPath"]).parent == Path.home() / "Desktop"
+
+
+def test_pdf_report_honors_location_mentioned_at_end_of_request() -> None:
+    routed = bridge.route_text_to_tool(
+        "Atatürk hakkında kaynaklı 4 sayfalık araştırma raporu hazırla ve PDF olarak Masaüstüne kaydet"
+    )
+
+    assert routed is not None
+    assert routed.intent == "pdf_report"
+    assert Path(routed.args["outputPath"]).parent == Path.home() / "Desktop"
+
+
+def test_budget_pipeline_routes_to_spreadsheet_chart_and_pdf() -> None:
+    routed = bridge.route_text_to_tool(
+        "Masaüstümde 2026 ilk 6 ay için örnek kişisel bütçe analizi hazırla. "
+        "Gelir, kira, market, ulaşım, fatura, eğitim ve birikim kategorileri olsun. "
+        "Önce verileri tablo halinde Excel dosyasına kaydet, sonra aynı veriden kategori bazlı grafik üret, "
+        "son olarak bulguları kısa bir PDF raporda özetle. "
+        "Dosya adları butce_analizi.xlsx, butce_grafigi.png ve butce_raporu.pdf olsun."
+    )
+
+    assert routed is not None
+    assert routed.intent == "data_artifact_pipeline"
+    assert routed.requires_confirmation is True
+    assert routed.plan_preview is not None
+    steps = routed.plan_preview["steps"]
+    assert [step["capability"] for step in steps] == ["spreadsheet_write", "chart_generate", "canvas_write"]
+    assert steps[0]["args"]["outputPath"].endswith("butce_analizi.xlsx")
+    assert steps[1]["args"]["path"].endswith("butce_analizi.xlsx")
+    assert steps[1]["args"]["outputPath"].endswith("butce_grafigi.png")
+    assert steps[2]["args"]["sourcePath"].endswith("butce_grafigi.png")
+    assert steps[2]["args"]["outputPath"].endswith("butce_raporu.pdf")
+    assert Path(steps[0]["args"]["outputPath"]).parent == Path.home() / "Desktop"
+    assert steps[0]["args"]["columns"] == ["Ay", "Kategori", "Tür", "Tutar"]
+    assert len(steps[0]["args"]["rows"]) == 42
+
+
+def test_budget_spreadsheet_can_feed_chart_output(tmp_path: Path) -> None:
+    from actions.chart_generate import chart_generate
+    from actions.spreadsheet_write import spreadsheet_write
+
+    sheet_path = tmp_path / "butce_analizi.xlsx"
+    chart_path = tmp_path / "butce_grafigi.png"
+    routed = task_router._data_artifact_pipeline_route(
+        "2026 ilk 6 ay için örnek bütçe analizi hazırla; Excel, grafik ve PDF üret"
+    )
+    assert routed is not None
+    writer_args = routed.steps[0]["args"]
+    sheet = spreadsheet_write(
+        prompt=str(writer_args["prompt"]),
+        output_path=str(sheet_path),
+        title="butce_analizi",
+        columns=writer_args["columns"],
+        rows=writer_args["rows"],
+        overwrite=False,
+    )
+    chart = chart_generate(
+        str(sheet_path),
+        chartType="bar",
+        xColumn="Kategori",
+        yColumn="Tutar",
+        title="Bütçe Analizi",
+        outputPath=str(chart_path),
+        _selectedPaths=[str(sheet_path)],
+    )
+
+    assert sheet_path.exists()
+    assert chart_path.exists()
+    assert sheet["result"]["rowCount"] == 42
+    assert sheet["result"]["columns"] == ["Ay", "Kategori", "Tür", "Tutar"]
+    assert chart["result"]["outputPath"] == str(chart_path)
+    assert chart["result"]["aggregation"] == "sum"
+    assert chart["result"]["dataPointCount"] == 7
+    assert chart["artifacts"][0]["path"] == str(chart_path)
+
+
+def test_spreadsheet_writer_does_not_invent_rows_from_prompt(tmp_path: Path) -> None:
+    from actions.spreadsheet_write import spreadsheet_write
+
+    result = spreadsheet_write(
+        prompt="Kişisel bütçe: gelir, kira ve market",
+        output_path=str(tmp_path / "plain.xlsx"),
+    )
+
+    assert result["result"]["columns"] == []
+    assert result["result"]["rowCount"] == 0
+
+
+def test_canvas_write_expands_pdf_report_prompt_to_paginated_report(tmp_path: Path) -> None:
+    from actions.canvas_write import canvas_write
+
+    output = tmp_path / "ataturk_arastirma_raporu.pdf"
+    result = canvas_write(
+        prompt="Atatürk hakkında kaynakçalı, düzenli, yaklaşık 4 sayfalık araştırma raporu hazırla.",
+        title="Atatürk Araştırma Raporu",
+        output_path=str(output),
+        output_format="pdf",
+        width=595,
+        height=842,
+        source_context=(
+            '[step_1] {"sources":[{"title":"Atatürk Araştırma Merkezi",'
+            '"url":"https://example.test/ataturk","summary":"Kurumsal kaynak özeti"}]}'
+        ),
+        overwrite=False,
+    )
+
+    import fitz  # type: ignore[reportMissingImports]
+
+    doc = fitz.open(output)
+    try:
+        text = "\n".join(page.get_text() for page in doc)
+        assert doc.page_count == 4
+        assert "Milli Mücadele" in text
+        assert "Kaynakça" in text
+        assert "Araştırma" in text
+        assert "https://example.test/ataturk" in text
+        assert "■" not in text
+        assert "yaklaşık 4 sayfalık araştırma raporu hazırla" not in text
+    finally:
+        doc.close()
+    assert result["result"]["outputFormat"] == "pdf"
+
+
 def test_direct_image_generate_requires_confirmation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5498,6 +5689,65 @@ def test_router_builds_image_read_route_for_selected_image() -> None:
     assert routed.args["_selectedPaths"] == ["/tmp/poster.png"]
 
 
+def test_selected_image_attributes_stay_single_read_only_task() -> None:
+    artifact = {
+        "id": "artifact_image",
+        "name": "poster.png",
+        "path": "/tmp/poster.png",
+        "mimeType": "image/png",
+        "kind": "image",
+    }
+
+    routed = bridge.route_text_to_tool(
+        "Bu görseli incele; boyut, biçim ve temel renk bilgisini çıkar",
+        selected_artifacts=[artifact],
+    )
+
+    assert routed is not None
+    assert routed.tool_name == "image_read"
+    assert routed.is_multi_step is False
+    assert routed.requires_confirmation is False
+    assert routed.args["mode"] == "palette"
+
+
+def test_selected_image_color_extraction_is_not_misrouted_to_ocr() -> None:
+    routed = bridge.route_text_to_tool(
+        "temel renk bilgisini çıkar",
+        selected_artifacts=[{
+            "id": "artifact_image",
+            "name": "poster.png",
+            "path": "/tmp/poster.png",
+            "mimeType": "image/png",
+            "kind": "image",
+        }],
+    )
+
+    assert routed is not None
+    assert routed.tool_name == "image_read"
+
+
+def test_router_builds_selected_pdf_to_presentation_pipeline() -> None:
+    routed = bridge.route_text_to_tool(
+        "bu PDF dosyasını 6 slaytlık PowerPoint sunumuna dönüştür ve /tmp/report-deck.pptx yoluna kaydet",
+        selected_artifacts=[
+            {
+                "id": "report",
+                "name": "report.pdf",
+                "path": "/tmp/report.pdf",
+                "mimeType": "application/pdf",
+                "kind": "document",
+            }
+        ],
+    )
+
+    assert routed is not None
+    assert routed.intent == "document_transform"
+    assert routed.requires_confirmation is True
+    assert [step["capability"] for step in routed.steps] == ["document_read", "presentation_write"]
+    assert routed.steps[0]["args"]["_selectedPaths"] == ["/tmp/report.pdf"]
+    assert routed.steps[1]["args"]["outputPath"] == "/private/tmp/report-deck.pptx"
+
+
 def test_router_builds_data_analyze_route_for_selected_csv() -> None:
     routed = bridge.route_text_to_tool(
         "bu csvyi analiz et",
@@ -5518,6 +5768,17 @@ def test_router_builds_data_analyze_route_for_selected_csv() -> None:
     assert routed.args["path"] == "/tmp/sales.csv"
     assert routed.args["mode"] == "summary"
     assert routed.args["_selectedPaths"] == ["/tmp/sales.csv"]
+
+
+def test_router_builds_data_analyze_route_for_explicit_xlsx_path() -> None:
+    routed = bridge.route_text_to_tool(
+        "/tmp/elyan-release/butce.xlsx dosyasını analiz et ve özet istatistikleri çıkar"
+    )
+
+    assert routed is not None
+    assert routed.tool_name == "data_analyze"
+    assert routed.args["path"].endswith("/tmp/elyan-release/butce.xlsx")
+    assert routed.args["mode"] == "profile"
 
 
 def test_router_builds_chart_generate_route_for_selected_csv() -> None:
@@ -5568,6 +5829,106 @@ def test_router_builds_spreadsheet_write_plan() -> None:
     assert routed.requires_confirmation is True
     assert routed.plan_preview is not None
     assert routed.args["outputPath"].endswith(".xlsx")
+
+
+def test_public_research_spreadsheet_uses_structured_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("runtime.task_router._resolve_location_path", lambda _text: str(tmp_path))
+
+    routed = bridge.route_text_to_tool(
+        "Masaüstümde 2026 Türkiye yangınlarını raporla excel tablosu oluştur"
+    )
+
+    assert routed is not None
+    assert routed.intent == "research_spreadsheet"
+    assert routed.is_multi_step is True
+    assert [step["capability"] for step in routed.steps] == ["web_research", "spreadsheet_write"]
+    assert routed.steps[0]["args"]["query"] == "2026 Türkiye yangınlarını"
+    writer_args = routed.steps[1]["args"]
+    assert writer_args["columns"] == ["Başlık", "URL", "Özet"]
+    assert writer_args["rows"] == "{{steps.step_1.result.sources}}"
+    assert Path(writer_args["outputPath"]).parent == tmp_path
+
+
+def test_npm_bootstrap_and_tool_contract_expose_structured_data_stack() -> None:
+    root = Path(__file__).resolve().parents[1]
+    core_requirements = (root / "requirements-core.txt").read_text(encoding="utf-8").splitlines()
+    launcher = (root / "bin" / "elyan.js").read_text(encoding="utf-8")
+    shell_installer = (root / "scripts" / "install.sh").read_text(encoding="utf-8")
+
+    assert "openpyxl==3.1.5" in core_requirements
+    assert "openpyxl" in launcher
+    for optional_package in ("pandas", "matplotlib", "reportlab"):
+        assert not any(item.startswith(optional_package) for item in core_requirements)
+    assert "PACKAGE_VERSION" in launcher
+    assert "coreReady()" in launcher
+    assert "shouldRestartDaemon" in launcher
+    assert "minor < 14" in launcher
+    assert "shouldReplaceVenv" in launcher
+    assert "detached: true" not in launcher
+    assert "install_extras.py" in launcher
+    repair_block = launcher[launcher.index("if (shouldRepair)") :]
+    assert repair_block.index("shouldRestartDaemon && !run") < repair_block.index("bootstrap({ recreateVenv")
+    assert "Uyumsuz Python sanal ortamı yenileniyor" in shell_installer
+
+
+def test_private_spreadsheet_report_does_not_trigger_web_research() -> None:
+    routed = bridge.route_text_to_tool("2026 bütçemi raporla excel tablosu oluştur")
+
+    assert routed is not None
+    assert routed.intent == "spreadsheet_write"
+
+
+
+def test_spreadsheet_write_neutralizes_formula_cells_and_preserves_numbers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import actions.spreadsheet_write as spreadsheet_module
+    from openpyxl import load_workbook
+
+    monkeypatch.setattr(spreadsheet_module, "_workspace_root", lambda: tmp_path)
+    output = tmp_path / "safe.xlsx"
+    spreadsheet_module.spreadsheet_write(
+        prompt="Güvenli veri",
+        output_path=str(output),
+        columns=["Başlık", "Sayı"],
+        rows=[["=HYPERLINK(\"https://example.invalid\",\"x\")", -42]],
+    )
+
+    values = list(load_workbook(output, read_only=True).active.iter_rows(values_only=True))
+    assert values[1][0].startswith("'=")
+    assert values[1][1] == -42
+
+
+def test_spreadsheet_write_infers_and_aligns_dictionary_columns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import actions.spreadsheet_write as spreadsheet_module
+    from openpyxl import load_workbook
+
+    monkeypatch.setattr(spreadsheet_module, "_workspace_root", lambda: tmp_path)
+    output = tmp_path / "aligned.xlsx"
+    result = spreadsheet_module.spreadsheet_write(
+        output_path=str(output),
+        rows=[
+            {"name": "first", "score": 10},
+            {"score": 20, "name": "second"},
+        ],
+    )
+
+    workbook = load_workbook(output, read_only=False)
+    sheet = workbook.active
+    values = list(sheet.iter_rows(values_only=True))
+    assert values == [
+        ("name", "score"),
+        ("first", 10),
+        ("second", 20),
+    ]
+    assert sheet.freeze_panes == "A2"
+    assert sheet.auto_filter.ref == "A1:B3"
+    assert sheet.tables
+    assert sheet["A1"].font.bold is True
+    assert sheet.column_dimensions["A"].width >= 10
+    assert result["result"]["columns"] == ["name", "score"]
+    assert result["result"]["rowCount"] == 2
 
 
 def test_router_builds_presentation_write_plan() -> None:
@@ -5759,6 +6120,8 @@ def test_conversation_send_routes_selected_artifact_and_clears_composer_state(
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
     captured: dict[str, object] = {}
+    image_path = tmp_path / "poster.png"
+    image_path.write_bytes(b"test-image")
 
     def fake_run(capability: str, args: dict[str, object], _state: dict[str, object]) -> dict[str, object]:
         captured["capability"] = capability
@@ -5767,7 +6130,7 @@ def test_conversation_send_routes_selected_artifact_and_clears_composer_state(
             "ok": True,
             "tool": capability,
             "output": "image_read:poster.png",
-            "result": {"kind": "image_read", "sourcePath": "/tmp/poster.png"},
+            "result": {"kind": "image_read", "sourcePath": str(image_path)},
             "artifacts": [],
             "error": None,
         }
@@ -5786,7 +6149,7 @@ def test_conversation_send_routes_selected_artifact_and_clears_composer_state(
                     {
                         "id": "artifact_image",
                         "name": "poster.png",
-                        "path": "/tmp/poster.png",
+                        "path": str(image_path),
                         "mimeType": "image/png",
                         "sizeBytes": 64,
                         "kind": "image",
@@ -5799,11 +6162,12 @@ def test_conversation_send_routes_selected_artifact_and_clears_composer_state(
     assert response["ok"] is True
     assert response["result"]["chatOk"] is True
     assert captured["capability"] == "image_read"
-    assert captured["args"] == {
-        "path": "/tmp/poster.png",
-        "mode": "summary",
-        "_selectedPaths": ["/tmp/poster.png"],
-    }
+    captured_args = captured["args"]
+    assert isinstance(captured_args, dict)
+    assert captured_args["path"] == str(image_path)
+    assert captured_args["mode"] == "summary"
+    assert captured_args["_selectedPaths"] == [str(image_path)]
+    assert captured_args["_confirmed"] is False
     assert response["result"]["state"]["composer"]["selectedArtifacts"] == []
 
 
@@ -6054,6 +6418,11 @@ def test_follow_up_closes_last_opened_app(
             "ok": True,
             "tool": tool,
             "output": f"{tool}:{args.get('app_name', '')}",
+            "result": {
+                "appName": args.get("app_name", ""),
+                "foregroundConfirmed": tool == "open_app",
+                "closedConfirmed": tool == "close_app",
+            },
             "error": None,
         },
     )
@@ -6096,6 +6465,10 @@ def test_focus_app_route_uses_open_app_capability(
             "ok": True,
             "tool": tool,
             "output": f"{tool}:{args.get('app_name', '')}",
+            "result": {
+                "appName": args.get("app_name", ""),
+                "foregroundConfirmed": tool == "open_app",
+            },
             "error": None,
         },
     )
@@ -7289,7 +7662,8 @@ def test_semantic_route_filters_workspace_context_for_cloud_provider(
 
     def fake_invoke(_state: dict, provider: str, conversation: list[dict[str, str]], _text: str) -> dict[str, str]:
         captured["provider"] = provider
-        captured["prompt"] = conversation[0]["text"]
+        captured["prompt"] = _text
+        captured["conversation"] = conversation
         return {
             "ok": True,
             "content": '{"intent":"chat","capability":"","args":{},"confidence":0.7,"requiresConfirmation":false,"isMultiStep":false,"privacyClass":"public_text"}',
@@ -7298,12 +7672,58 @@ def test_semantic_route_filters_workspace_context_for_cloud_provider(
 
     monkeypatch.setattr(bridge, "_invoke_provider_chat", fake_invoke)
 
-    result = bridge._semantic_route(state, [], "önceki proje konuşmasını özetle", conversation_id="")
+    result = bridge._semantic_route(
+        state,
+        [{"role": "user", "text": "önceki özel konuşma içeriği"}],
+        "önceki proje konuşmasını özetle",
+        conversation_id="",
+    )
 
     assert result is not None
     assert captured["provider"] == "openai"
+    assert captured["conversation"] == []
     assert "conversation snippet" in captured["prompt"]
     assert "workspace only snippet" not in captured["prompt"]
+    assert "önceki özel konuşma içeriği" not in captured["prompt"]
+    planning_envelope = json.loads(captured["prompt"])
+    assert planning_envelope["type"] == "elyan.plan.request"
+    assert planning_envelope["request"]["text"] == "önceki proje konuşmasını özetle"
+
+
+def test_semantic_route_never_uses_cloud_for_local_private_goal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = state_store._ensure_defaults(
+        {
+            "providers": {
+                "routingPolicy": "cloud_fallback",
+                "active": "openai",
+                "openai": {
+                    "enabled": True,
+                    "apiKey": "key",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "defaultModel": "gpt-4.1-mini",
+                },
+                "ollama": {"enabled": False, "defaultModel": ""},
+            }
+        }
+    )
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        bridge,
+        "_invoke_provider_chat",
+        lambda _state, provider, _conversation, _text: invoked.append(provider),
+    )
+
+    result = bridge._semantic_route(
+        state,
+        [],
+        "summarize this",
+        goal_context={"goalContract": {"privacy": "local_private"}},
+    )
+
+    assert result is None
+    assert invoked == []
 
 
 def test_operator_planner_uses_local_first_then_cloud_with_sanitized_observation(
@@ -7779,6 +8199,70 @@ def test_runtime_payloads_publish_computed_capability_readiness(
     assert status["runtimeCapabilityStates"]["math_solve"]["ready"] is True
 
 
+def test_runtime_payloads_refresh_stale_dependency_unavailable_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "capabilityStates": {
+                    "math_solve": {
+                        "available": False,
+                        "ready": False,
+                        "errorCode": "DEPENDENCY_UNAVAILABLE",
+                        "missingDependencies": ["sympy"],
+                    },
+                },
+            }
+        }
+    )
+    monkeypatch.setattr(
+        bridge,
+        "dependency_status_snapshot",
+        lambda: {
+            "sympy": {"available": True, "label": "SymPy"},
+        },
+    )
+
+    runtime = bridge.RuntimeBridge()
+    register_payload = runtime._runtime_register_payload()
+
+    assert register_payload is not None
+    assert register_payload["runtimeVersion"] == bridge._package_version()
+    assert register_payload["capabilityStates"]["math_solve"]["available"] is True
+    assert register_payload["capabilityStates"]["math_solve"]["ready"] is True
+    assert register_payload["capabilityStates"]["math_solve"]["missingDependencies"] == []
+
+
+def test_runtime_register_retry_does_not_start_without_backend_register_method(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    assert runtime._runtime_register_retry_thread is None
+
+    state_store.update_state(
+        {
+            "runtime": {
+                "deviceId": VALID_DEVICE_ID,
+                "deviceSecret": VALID_DEVICE_SECRET,
+                "lifecycleState": "offline",
+                "lastErrorCode": "runtime_unauthorized",
+            }
+        }
+    )
+
+    runtime.backend = object()  # type: ignore[assignment]
+    runtime._start_runtime_register_retry_if_needed()
+
+    assert runtime._runtime_register_retry_thread is None
+
+
 def test_mcp_server_upsert_invalid_config_returns_safe_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -8197,6 +8681,31 @@ def test_local_first_private_semantic_candidates_do_not_include_cloud() -> None:
     assert candidates == ["ollama"]
 
 
+def test_cloud_fallback_private_chat_candidates_do_not_include_cloud() -> None:
+    state = state_store._ensure_defaults(
+        {
+            "providers": {
+                "routingPolicy": "cloud_fallback",
+                "active": "openai",
+                "openai": {
+                    "enabled": True,
+                    "apiKey": "key",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "defaultModel": "gpt-4.1-mini",
+                },
+                "ollama": {
+                    "enabled": True,
+                    "defaultModel": "llama3.2:3b",
+                },
+            }
+        }
+    )
+
+    candidates = bridge._chat_provider_candidates(state, privacy_class="local_private")
+
+    assert candidates == ["ollama"]
+
+
 def test_ollama_model_probe_requires_the_configured_tag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8326,7 +8835,7 @@ def test_confirmed_plan_records_success_intelligence(
     monkeypatch.setattr(
         runtime,
         "_execute_plan_steps",
-        lambda _steps: (True, "notes.docx hazır.", [], "", {"kind": "document_write"}, []),
+        lambda _steps, **_context: (True, "notes.docx hazır.", [], "", {"kind": "document_write"}, []),
     )
 
     response = runtime.confirm_conversation_plan(conversation["id"], plan["id"], True)
@@ -8360,7 +8869,7 @@ def test_confirmed_plan_stays_available_until_execution_finishes(
     )
     observed_during_execution: list[bool] = []
 
-    def fake_execute(_steps: list[dict]) -> tuple:
+    def fake_execute(_steps: list[dict], **_context: object) -> tuple:
         observed_during_execution.append(state_store.get_pending_plan(plan["id"]) is not None)
         return True, "Finder açıldı.", [], "", {"kind": "open_app"}, []
 
@@ -8397,7 +8906,7 @@ def test_confirmed_plan_rejects_duplicate_execution_while_inflight(
     calls: list[int] = []
     first_result: list[dict] = []
 
-    def fake_execute(_steps: list[dict]) -> tuple:
+    def fake_execute(_steps: list[dict], **_context: object) -> tuple:
         calls.append(len(calls) + 1)
         if len(calls) == 1:
             started.set()
@@ -8864,6 +9373,62 @@ def test_recoverable_replan_falls_back_web_research_to_local_context(
     assert [s["capability"] for s in revised] == ["retrieve_context", "document_write"]
     assert revised[0]["args"]["query"] == "elyan nedir"
     assert revised[1]["args"]["outputPath"] == "r.docx"  # yazıcı hedefi korunur
+
+
+def test_skill_expansion_preserves_parent_dependencies_and_template_references(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(
+        bridge.skill_runtime,
+        "prepare_skill_run",
+        lambda _skill_id, _payload, _state: {
+            "steps": [
+                {
+                    "id": "collect",
+                    "capability": "retrieve_context",
+                    "args": {"query": "topic"},
+                },
+                {
+                    "id": "solve",
+                    "capability": "math_solve",
+                    "forEach": "{{steps.collect.result.items}}",
+                    "args": {"expression": "{{item.expression}}"},
+                },
+            ]
+        },
+    )
+
+    expanded = runtime._expand_skill_plan_steps(
+        [
+            {"id": "before", "capability": "sys_info", "args": {"query": "all"}},
+            {
+                "id": "skill",
+                "capability": "run_skill",
+                "dependsOn": ["before"],
+                "args": {"skillId": "test.skill", "payload": {}},
+            },
+            {
+                "id": "after",
+                "capability": "document_write",
+                "dependsOn": ["skill"],
+                "args": {"sections": "{{steps.skill.result.items}}"},
+            },
+        ]
+    )
+
+    assert [step["id"] for step in expanded] == [
+        "before",
+        "skill__collect",
+        "skill",
+        "after",
+    ]
+    assert expanded[1]["dependsOn"] == ["before"]
+    assert expanded[2]["dependsOn"] == ["skill__collect"]
+    assert expanded[2]["forEach"] == "{{steps.skill__collect.result.items}}"
+    assert expanded[3]["dependsOn"] == ["skill"]
 
 
 def test_recoverable_replan_ignores_non_recoverable_failures(

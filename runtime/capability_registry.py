@@ -5,6 +5,7 @@ from functools import lru_cache
 from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
+import json
 import os
 import shutil
 import sys
@@ -521,19 +522,35 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
     ),
     _tool_decl(
         "image_generate",
-        "Metin isteminden yapay zekâ ile görsel üretir ve dosyaya kaydeder.",
+        "Metin isteminden Gemini ile yüksek kaliteli görsel üretir ve dosyaya kaydeder.",
         {
             "prompt": {"type": "STRING", "description": "Üretilecek görselin ayrıntılı tarifi."},
             "outputPath": {"type": "STRING", "description": "Kaydedilecek yol (verilmezse akıllı seçilir)."},
             "title": {"type": "STRING", "description": "Görsel başlığı/dosya adı."},
-            "size": {"type": "STRING", "description": "Boyut, örn. '1024x1024'."},
-            "quality": {"type": "STRING", "description": "Kalite (varsa)."},
-            "background": {"type": "STRING", "description": "Arka plan: 'transparent' vb."},
+            "aspectRatio": {"type": "STRING", "description": "En-boy oranı, örn. '1:1', '16:9' veya '9:16'."},
+            "imageSize": {"type": "STRING", "description": "Çözünürlük: '1K', '2K' veya açık istekle '4K'."},
             "overwrite": {"type": "BOOLEAN", "description": "Üzerine yaz."},
         },
         ["prompt"],
         usage="Sıfırdan görsel/illüstrasyon üretmek için. Web'den hazır görsel indirmek için image_fetch.",
-        examples=[{"args": {"prompt": "minimalist dağ manzarası, düz renkler", "size": "1024x1024"}}],
+        examples=[{"args": {"prompt": "minimalist dağ manzarası, düz renkler", "aspectRatio": "1:1", "imageSize": "2K"}}],
+    ),
+    _tool_decl(
+        "image_edit",
+        "Kullanıcının seçtiği yerel görseli Gemini ile isteğe uygun şekilde düzenler ve yeni dosya oluşturur.",
+        {
+            "prompt": {"type": "STRING", "description": "Görsele uygulanacak değişiklik; kullanıcı isteği aynen korunur."},
+            "sourcePath": {"type": "STRING", "description": "Düzenlenecek ana görsel yolu."},
+            "sourcePaths": {"type": "ARRAY", "description": "İsteğe bağlı ek referans görsel yolları."},
+            "outputPath": {"type": "STRING", "description": "Yeni görselin kaydedileceği yol."},
+            "title": {"type": "STRING", "description": "Çıktı başlığı/dosya adı."},
+            "aspectRatio": {"type": "STRING", "description": "Çıktı en-boy oranı."},
+            "imageSize": {"type": "STRING", "description": "Çözünürlük: '1K', '2K' veya '4K'."},
+            "overwrite": {"type": "BOOLEAN", "description": "Üzerine yaz."},
+        },
+        ["prompt", "sourcePath"],
+        usage="Seçili/yüklenmiş görselde öğe ekleme, kaldırma, arka plan veya stil değiştirme için. Yalnız inceleme için image_read.",
+        examples=[{"args": {"prompt": "Arka planı gün batımı yap, kişiyi değiştirme", "sourcePath": "portrait.png", "imageSize": "2K"}}],
     ),
     _tool_decl(
         "image_fetch",
@@ -667,9 +684,9 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
     ),
     _tool_decl(
         "data_analyze",
-        "CSV veya JSON verisini yerel olarak analiz eder (özet/profil/önizleme).",
+        "CSV, JSON veya Excel verisini yerel olarak analiz eder (özet/profil/önizleme).",
         {
-            "path": {"type": "STRING", "description": "Veri dosyası yolu (.csv/.json)."},
+            "path": {"type": "STRING", "description": "Veri dosyası yolu (.csv/.json/.xlsx/.xls)."},
             "mode": {"type": "STRING", "description": "'summary', 'profile' veya 'preview'."},
             "columns": {"type": "ARRAY", "description": "Odaklanılacak sütun adları (varsa)."},
         },
@@ -678,13 +695,14 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
     ),
     _tool_decl(
         "chart_generate",
-        "CSV veya JSON verisinden yerel PNG grafik üretir.",
+        "CSV, JSON veya Excel verisinden yerel PNG grafik üretir.",
         {
             "path": {"type": "STRING", "description": "Veri dosyası yolu."},
             "chartType": {"type": "STRING", "description": "Tür: 'bar', 'line', 'scatter' veya 'histogram'."},
             "xColumn": {"type": "STRING", "description": "X ekseni sütunu."},
             "yColumn": {"type": "STRING", "description": "Y ekseni sütunu."},
             "title": {"type": "STRING", "description": "Grafik başlığı."},
+            "outputPath": {"type": "STRING", "description": "Grafiğin kaydedileceği PNG yolu."},
         },
         ["path"],
         usage="Veriyi görselleştirmek için. Önce veriyi anlamak istersen data_analyze.",
@@ -756,6 +774,8 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
             "prompt": {"type": "STRING", "description": "Belge içeriği için talimat/konu. Önceki adımın çıktısı otomatik bağlam olur."},
             "outputPath": {"type": "STRING", "description": "Kaydedilecek dosya yolu (verilmezse akıllı seçilir)."},
             "title": {"type": "STRING", "description": "Belge başlığı."},
+            "sections": {"type": "ARRAY", "description": "Yapılandırılmış bölüm listesi; önceki adım sonucundan şablonla bağlanabilir."},
+            "blocks": {"type": "ARRAY", "description": "Metin, tablo, görsel ve grafik blokları."},
             "sourcePath": {"type": "STRING", "description": "Dönüştürülecek kaynak dosya yolu (varsa)."},
             "sourceContext": {"type": "STRING", "description": "Ek bağlam metni."},
             "overwrite": {"type": "BOOLEAN", "description": "Var olan dosyanın üzerine yaz."},
@@ -770,6 +790,8 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
             "prompt": {"type": "STRING", "description": "Tablo içeriği/yapısı için talimat. Önceki adım çıktısı bağlam olur."},
             "outputPath": {"type": "STRING", "description": "Kaydedilecek yol (verilmezse akıllı seçilir)."},
             "title": {"type": "STRING", "description": "Çalışma sayfası başlığı."},
+            "columns": {"type": "ARRAY", "description": "Sütun adları; örn. {{steps.analiz.result.columns}}."},
+            "rows": {"type": "ARRAY", "description": "Yapılandırılmış satırlar; örn. {{steps.analiz.result.previewRows}}."},
             "sourceContext": {"type": "STRING", "description": "Ek bağlam/veri metni."},
             "overwrite": {"type": "BOOLEAN", "description": "Üzerine yaz."},
         },
@@ -783,6 +805,8 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
             "prompt": {"type": "STRING", "description": "Sunum konusu/anahatları için talimat. Önceki adım çıktısı bağlam olur."},
             "outputPath": {"type": "STRING", "description": "Kaydedilecek yol (verilmezse akıllı seçilir)."},
             "title": {"type": "STRING", "description": "Sunum başlığı."},
+            "slides": {"type": "ARRAY", "description": "Başlık, gövde ve madde alanları taşıyan yapılandırılmış slayt listesi."},
+            "blocks": {"type": "ARRAY", "description": "Tekrarlanabilir görsel içerik blokları."},
             "sourceContext": {"type": "STRING", "description": "Ek bağlam metni."},
             "overwrite": {"type": "BOOLEAN", "description": "Üzerine yaz."},
         },
@@ -961,6 +985,7 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "ocr_read": _AdapterSpec("actions.ocr_read", "ocr_read"),
     "image_read": _AdapterSpec("actions.image_read", "image_read"),
     "image_generate": _AdapterSpec("actions.image_generate", "image_generate"),
+    "image_edit": _AdapterSpec("actions.image_edit", "image_edit"),
     "image_fetch": _AdapterSpec("actions.image_fetch", "image_fetch"),
     "file_read": _AdapterSpec("actions.filesystem", "file_read"),
     "file_search": _AdapterSpec("actions.filesystem", "file_search"),
@@ -1037,6 +1062,7 @@ _CAPABILITY_DISPLAY_NAMES: dict[str, str] = {
     "image_read": "Görsel inceleme",
     "image_fetch": "Görsel indirme",
     "image_generate": "Görsel üretme",
+    "image_edit": "Görsel düzenleme",
     "document_write": "Belge oluşturma",
     "spreadsheet_write": "Tablo oluşturma",
     "presentation_write": "Sunum oluşturma",
@@ -1119,6 +1145,7 @@ _WRITE_CAPABILITIES = {
     "presentation_write",
     "canvas_write",
     "image_generate",
+    "image_edit",
     "chart_generate",
 }
 _SIDE_EFFECT_CAPABILITIES = {
@@ -1140,6 +1167,7 @@ _SIDE_EFFECT_CAPABILITIES = {
     "presentation_write",
     "canvas_write",
     "image_generate",
+    "image_edit",
     "chart_generate",
     "run_skill",
     "mcp_call_tool",
@@ -1324,6 +1352,27 @@ def _runtime_capability_state_aliases(name: str) -> tuple[str, ...]:
     return tuple(alias for alias in aliases if alias)
 
 
+def _desktop_os_runtime_recovered(name: str) -> bool:
+    if not str(name or "").startswith("desktop_os."):
+        return False
+    try:
+        module = import_module("actions.desktop_os")
+        status = module.desktop_os_runtime_status()
+        detail = status.get("detail", {}) if isinstance(status, dict) else {}
+        detail = detail if isinstance(detail, dict) else {}
+        if name == "desktop_os.permissions":
+            permissions = module.desktop_os_permissions()
+            result = permissions.get("result", {}) if isinstance(permissions, dict) else {}
+            return bool(isinstance(result, dict) and result.get("available", False))
+        if name == "desktop_os.processes":
+            return bool(detail.get("processInspectionAvailable", False))
+        if name == "desktop_os.active_window":
+            return bool(detail.get("activeWindowAvailable", False))
+        return bool(status.get("available", False))
+    except Exception:
+        return False
+
+
 def capability_readiness(
     name: str,
     *,
@@ -1347,15 +1396,32 @@ def capability_readiness(
     runtime = runtime if isinstance(runtime, dict) else {}
     runtime_states = runtime.get("capabilityStates", {})
     runtime_states = runtime_states if isinstance(runtime_states, dict) else {}
+    dependencies = metadata.get("dependencyKeys", [])
+    dependencies = [str(item or "").strip() for item in dependencies if str(item or "").strip()]
+    snapshot = dependency_status if isinstance(dependency_status, dict) else dependency_status_snapshot()
     for alias in _runtime_capability_state_aliases(normalized):
         observed = runtime_states.get(alias)
         if isinstance(observed, dict) and (
             observed.get("ready") is False or observed.get("available") is False
         ):
             observed_error = str(observed.get("errorCode", "") or "CAPABILITY_UNAVAILABLE")
+            if normalized.startswith("desktop_os.") and observed_error in {
+                "",
+                "CAPABILITY_UNAVAILABLE",
+                "native_snapshot_unavailable",
+            } and _desktop_os_runtime_recovered(normalized):
+                break
             if normalized.startswith("desktop_operator.") and observed_error in {"", "CAPABILITY_UNAVAILABLE", "native_snapshot_unavailable", "desktop_operator_unavailable"}:
                 dependency = capability_dependency_status(normalized)
                 if dependency.get("available") is True:
+                    break
+            if observed_error == "DEPENDENCY_UNAVAILABLE" and dependencies:
+                missing_now = [
+                    key
+                    for key in dependencies
+                    if not bool((snapshot.get(key) or {}).get("available", False))
+                ]
+                if not missing_now:
                     break
             return {
                 **metadata,
@@ -1383,9 +1449,6 @@ def capability_readiness(
             **system_permission,
         }
 
-    dependencies = metadata.get("dependencyKeys", [])
-    dependencies = [str(item or "").strip() for item in dependencies if str(item or "").strip()]
-    snapshot = dependency_status if isinstance(dependency_status, dict) else dependency_status_snapshot()
     missing = [
         key
         for key in dependencies
@@ -1436,7 +1499,7 @@ def capability_metadata(name: str) -> dict[str, Any]:
         category = "developer"
     elif normalized in {"web_research", "retrieve_context", "document_read", "ocr_read", "image_read", "image_fetch"}:
         category = "research_docs"
-    elif normalized in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write", "image_generate", "chart_generate"}:
+    elif normalized in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write", "image_generate", "image_edit", "chart_generate"}:
         category = "research_docs"
     elif normalized in {"email_draft", "email_send", "send_whatsapp_message", "save_whatsapp_contact", "add_calendar_event", "delete_calendar_event", "get_calendar_events", "get_reminders", "add_reminder", "run_skill", "mcp_call_tool"}:
         category = "communication_approval"
@@ -1520,8 +1583,8 @@ def capability_metadata(name: str) -> dict[str, Any]:
 
     dependency_keys = _CAPABILITY_DEPENDENCY_KEYS.get(normalized, ())
     timeout_seconds = 60
-    if normalized in {"web_research", "document_write", "spreadsheet_write", "presentation_write", "canvas_write", "quantum_run_experiment", "image_generate", "image_fetch", "ocr_read", "file_search", "desktop_operator.observe_screen", "desktop_operator.locate", "desktop_operator.execute_action", "desktop_operator.run"}:
-        timeout_seconds = 120
+    if normalized in {"web_research", "document_write", "spreadsheet_write", "presentation_write", "canvas_write", "quantum_run_experiment", "image_generate", "image_edit", "image_fetch", "ocr_read", "file_search", "desktop_operator.observe_screen", "desktop_operator.locate", "desktop_operator.execute_action", "desktop_operator.run"}:
+        timeout_seconds = 180 if normalized in {"image_generate", "image_edit"} else 120
     elif normalized == "shell_run":
         timeout_seconds = 180
 
@@ -1577,6 +1640,7 @@ _CAPABILITY_GROUP_DEFINITIONS: tuple[tuple[str, str, set[str]], ...] = (
             "ocr_read",
             "image_read",
             "image_generate",
+            "image_edit",
             "image_fetch",
             "data_analyze",
             "chart_generate",
@@ -1820,14 +1884,116 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _writer_structured_context(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep the useful part of an upstream result bounded and JSON-compatible."""
+    structured: dict[str, Any] = {}
+    for key in (
+        "kind",
+        "query",
+        "languageHint",
+        "summary",
+        "sources",
+        "columns",
+        "previewRows",
+        "rows",
+        "profile",
+        "items",
+    ):
+        value = payload.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if key == "sources" and isinstance(value, list):
+            cleaned_sources: list[dict[str, str]] = []
+            for source in value[:8]:
+                if not isinstance(source, dict):
+                    continue
+                title = " ".join(str(source.get("title", "") or "").split())[:220]
+                url = str(source.get("url", "") or "").strip()[:1000]
+                summary = " ".join(
+                    str(source.get("summary", "") or source.get("snippet", "") or "").split()
+                )[:1200]
+                if title or url or summary:
+                    cleaned_sources.append({"title": title, "url": url, "summary": summary})
+            if cleaned_sources:
+                structured[key] = cleaned_sources
+            continue
+        if key in {"previewRows", "rows", "items"} and isinstance(value, list):
+            structured[key] = value[:100]
+            continue
+        structured[key] = value[:12000] if isinstance(value, str) else value
+    return structured
+
+
 def _writer_source_context(args: dict[str, Any]) -> str:
     """Yazıcı araçlar (document/spreadsheet/presentation/canvas) için içerik
     bağlamı: açık sourceContext yoksa zincirdeki önceki adımın çıktısına düşer.
     Böylece "araştır ve belgele" gibi çok adımlı planlarda rapor, araştırma
     içeriğiyle dolu üretilir — boş şablon değil."""
     explicit = str(args.get("sourceContext", "") or args.get("source_context", "") or "").strip()
-    if explicit:
-        return explicit
+    dependency_results = args.get("_dependencyResults")
+    if isinstance(dependency_results, dict) and dependency_results:
+        parts: list[str] = []
+        for step_id, payload in list(dependency_results.items())[:8]:
+            if not isinstance(payload, dict):
+                continue
+            kind = str(payload.get("kind", "") or "").strip()
+            if kind == "document_read":
+                mode = str(payload.get("mode", "read") or "read").strip()
+                if mode == "summary":
+                    readable = str(payload.get("summary", "") or "").strip()
+                elif mode == "bullets":
+                    readable = "\n".join(
+                        f"- {str(item).strip()}"
+                        for item in payload.get("bullets", []) or []
+                        if str(item).strip()
+                    )
+                else:
+                    readable = str(payload.get("text", "") or payload.get("summary", "") or "").strip()
+                if readable:
+                    parts.append(readable[:12000])
+                    continue
+
+            readable_parts: list[str] = []
+            for key in ("summary", "text", "body"):
+                value = str(payload.get(key, "") or "").strip()
+                if value:
+                    readable_parts.append(value)
+                    break
+            bullets = payload.get("bullets")
+            if isinstance(bullets, list) and not readable_parts:
+                readable_parts.extend(
+                    f"- {str(item).strip()}" for item in bullets if str(item).strip()
+                )
+            sources = payload.get("sources")
+            if isinstance(sources, list):
+                source_lines: list[str] = []
+                for source in sources[:8]:
+                    if not isinstance(source, dict):
+                        continue
+                    title = str(source.get("title", "") or "").strip()
+                    url = str(source.get("url", "") or "").strip()
+                    summary = " ".join(
+                        str(source.get("summary", "") or source.get("snippet", "") or "").split()
+                    )[:700]
+                    label = f"{title} - {url}" if title and url else title or url
+                    if label:
+                        source_lines.append(f"- {label}: {summary}".rstrip(": "))
+                if source_lines:
+                    readable_parts.append("Kaynaklar:\n" + "\n".join(source_lines))
+            structured = _writer_structured_context(payload)
+            if structured:
+                readable_parts.insert(
+                    0,
+                    "Yapılandırılmış veri:\n"
+                    + json.dumps(structured, ensure_ascii=False, default=str)
+                )
+            if readable_parts:
+                parts.append(f"[{step_id}]\n" + "\n\n".join(readable_parts)[:24000])
+        if parts:
+            context = "\n\n".join(parts)[:48000]
+            if explicit:
+                context += "\n\n[Yazım talimatı]\n" + explicit[:12000]
+            return context[:60000]
     previous = args.get("_previousResult")
     if isinstance(previous, dict):
         parts: list[str] = []
@@ -1852,9 +2018,22 @@ def _writer_source_context(args: dict[str, Any]) -> str:
                         lines.append(f"- {label}: {snippet}".rstrip(": "))
             if lines:
                 parts.append("Kaynaklar:\n" + "\n".join(lines))
+        structured = _writer_structured_context(previous)
+        if structured:
+            parts.insert(
+                0,
+                "Yapılandırılmış veri:\n"
+                + json.dumps(structured, ensure_ascii=False, default=str)
+            )
         if parts:
-            return "\n\n".join(parts)
-    return str(args.get("_previousOutput", "") or "").strip()
+            context = "\n\n".join(parts)[:48000]
+            if explicit:
+                context += "\n\n[Yazım talimatı]\n" + explicit[:12000]
+            return context[:60000]
+    previous_output = str(args.get("_previousOutput", "") or "").strip()
+    if previous_output and explicit:
+        return (previous_output[:48000] + "\n\n[Yazım talimatı]\n" + explicit[:12000])[:60000]
+    return explicit[:60000] or previous_output[:60000]
 
 
 def _string_from_exception(exc: Exception) -> str:
@@ -2044,10 +2223,23 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             prompt=str(args.get("prompt", "") or ""),
             outputPath=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
             title=str(args.get("title", "") or ""),
-            size=str(args.get("size", "1024x1024") or "1024x1024"),
-            quality=str(args.get("quality", "auto") or "auto"),
+            aspectRatio=str(args.get("aspectRatio", "") or args.get("aspect_ratio", "") or ""),
+            imageSize=str(args.get("imageSize", "") or args.get("image_size", "") or ""),
             background=str(args.get("background", "auto") or "auto"),
             overwrite=bool(args.get("overwrite", False)),
+            size=str(args.get("size", "") or ""),
+            quality=str(args.get("quality", "") or ""),
+        ),
+        "image_edit": lambda args: _load_adapter("image_edit")(
+            prompt=str(args.get("prompt", "") or ""),
+            sourcePath=str(args.get("sourcePath", "") or args.get("source_path", "") or ""),
+            sourcePaths=list(args.get("sourcePaths", []) or args.get("source_paths", []) or []),
+            outputPath=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
+            title=str(args.get("title", "") or ""),
+            aspectRatio=str(args.get("aspectRatio", "") or args.get("aspect_ratio", "") or ""),
+            imageSize=str(args.get("imageSize", "") or args.get("image_size", "") or ""),
+            overwrite=bool(args.get("overwrite", False)),
+            _selectedPaths=list(args.get("_selectedPaths", []) or []),
         ),
         "image_fetch": lambda args: _load_adapter("image_fetch")(
             query=str(args.get("query", "") or args.get("subject", "") or ""),
@@ -2119,6 +2311,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             str(args.get("xColumn", "") or args.get("x_column", "") or ""),
             str(args.get("yColumn", "") or args.get("y_column", "") or ""),
             str(args.get("title", "") or ""),
+            str(args.get("outputPath", "") or args.get("output_path", "") or ""),
             list(args.get("_selectedPaths", []) or []),
         ),
         "math_solve": lambda args: _load_adapter("math_solve")(
@@ -2157,6 +2350,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             source_path=str(args.get("sourcePath", "") or args.get("source_path", "") or ""),
             source_context=_writer_source_context(args),
             overwrite=bool(args.get("overwrite", False)),
+            _selectedPaths=list(args.get("_selectedPaths", []) or []),
         ),
         "canvas_write": lambda args: _load_adapter("canvas_write")(
             prompt=str(args.get("prompt", "") or ""),
@@ -2171,6 +2365,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             source_context=_writer_source_context(args),
             source_path=str(args.get("sourcePath", "") or args.get("source_path", "") or ""),
             overwrite=bool(args.get("overwrite", False)),
+            _selectedPaths=list(args.get("_selectedPaths", []) or []),
         ),
         "spreadsheet_write": lambda args: _load_adapter("spreadsheet_write")(
             prompt=str(args.get("prompt", "") or ""),
@@ -2189,6 +2384,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             blocks=args.get("blocks") if isinstance(args.get("blocks"), list) else None,
             source_context=_writer_source_context(args),
             overwrite=bool(args.get("overwrite", False)),
+            _selectedPaths=list(args.get("_selectedPaths", []) or []),
         ),
         "retrieve_context": lambda args: _load_adapter("retrieve_context")(
             str(args.get("query", "") or ""),

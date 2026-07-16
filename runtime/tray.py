@@ -41,21 +41,28 @@ _TASK_STATUS_LABELS = {
 
 
 def _load_icon_image() -> Any:
-    """Repo logosundan tepsi ikonu; bulunamazsa basit bir E rozeti çizer."""
+    """Repo logosundan tepsi ikonu — menü çubuğu için TEK RENK BEYAZ glif.
+
+    Logonun alfa kanalı korunur, tüm opak pikseller beyaza boyanır (macOS
+    menü çubuğu ikon dili). Logo yoksa beyaz bir E rozeti çizilir."""
     from PIL import Image, ImageDraw
 
+    white = (255, 255, 255, 255)
     logo = Path(__file__).resolve().parent.parent / "logo.png"
     if logo.exists():
         try:
             image = Image.open(logo).convert("RGBA")
             image.thumbnail((64, 64), Image.LANCZOS)
-            return image
+            alpha = image.getchannel("A")
+            solid = Image.new("RGBA", image.size, white)
+            solid.putalpha(alpha)
+            return solid
         except Exception:
             pass
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.ellipse((4, 4, 60, 60), fill=(30, 30, 28, 255))
-    draw.text((22, 14), "E", fill=(242, 238, 229, 255))
+    draw.ellipse((4, 4, 60, 60), outline=white, width=5)
+    draw.text((22, 14), "E", fill=white)
     return image
 
 
@@ -76,6 +83,36 @@ def run_tray(daemon: "ElyanDaemon") -> bool:
         except Exception:
             return {}
 
+    def _resolve_approval(task_id: str, approved: bool) -> None:
+        """Onay kararını backend'e bildirir; backend ws task.approval mesajıyla
+        runner'ı sürdürür/iptal eder. Tepsi thread'ini bloklamamak için ayrı
+        thread'de koşar."""
+        import threading
+
+        def _run() -> None:
+            try:
+                daemon.bridge.backend_task_approval(task_id, approved)
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=_run,
+            name=f"elyan-tray-approval-{task_id[:8]}",
+            daemon=True,
+        ).start()
+
+    def _approval_actions(task_id: str) -> Any:
+        return pystray.Menu(
+            pystray.MenuItem(
+                "Onayla ve Sürdür",
+                lambda *_a, tid=task_id: _resolve_approval(tid, True),
+            ),
+            pystray.MenuItem(
+                "Reddet ve İptal Et",
+                lambda *_a, tid=task_id: _resolve_approval(tid, False),
+            ),
+        )
+
     def _menu_items() -> Any:
         summary = _summary()
         lifecycle = str(summary.get("lifecycleState", "") or "stopped")
@@ -90,14 +127,33 @@ def run_tray(daemon: "ElyanDaemon") -> bool:
             yield pystray.MenuItem(f"Aktif görevler ({len(active)})", None, enabled=False)
             for task in active[:8]:
                 title = str(task.get("title", "") or "Görev")[:48]
-                status = _TASK_STATUS_LABELS.get(
-                    str(task.get("status", "")), str(task.get("status", ""))
-                )
-                yield pystray.MenuItem(f"  {title} — {status}", None, enabled=False)
+                raw_status = str(task.get("status", "") or "")
+                status = _TASK_STATUS_LABELS.get(raw_status, raw_status)
+                task_id = str(task.get("id", "") or "").strip()
+                if raw_status == "waiting_approval" and task_id:
+                    # Onay bekleyen görev tepsiden çözülebilir — mobil kartı
+                    # kaçırıldıysa kullanıcı burada sıkışıp kalmaz.
+                    yield pystray.MenuItem(
+                        f"  {title} — {status}",
+                        _approval_actions(task_id),
+                    )
+                else:
+                    yield pystray.MenuItem(f"  {title} — {status}", None, enabled=False)
         else:
             yield pystray.MenuItem("Aktif görev yok", None, enabled=False)
         yield pystray.Menu.SEPARATOR
+        yield pystray.MenuItem("Ayarlar…", _open_settings)
         yield pystray.MenuItem("Elyan'ı Durdur", _quit)
+
+    def _open_settings(_icon: Any, _item: Any = None) -> None:
+        # Yerel ayar paneli (127.0.0.1, token korumalı) tarayıcıda açılır;
+        # tepsi thread'ini bloklamamak için tembel sunucu zaten daemon thread.
+        try:
+            from runtime.settings_ui import open_settings
+
+            open_settings()
+        except Exception:
+            pass
 
     def _quit(icon: Any, _item: Any = None) -> None:
         daemon.stop()

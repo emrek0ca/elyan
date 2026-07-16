@@ -115,6 +115,57 @@ def test_runtime_unauthorized_clears_runtime_without_user_session(
     assert state["account"]["refreshToken"] == "refresh-token"
 
 
+def test_stale_runtime_unauthorized_retries_rotated_token_without_clearing_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state(
+        {
+            "runtime": {
+                "runtimeToken": "stale-runtime-token",
+                "connectionId": VALID_CONNECTION_ID,
+                "ready": True,
+            }
+        }
+    )
+    client = BackendClient("http://backend.example")
+    authorization_headers: list[str] = []
+
+    def fake_request(*_args: Any, **kwargs: Any) -> BackendResult:
+        headers = kwargs.get("headers")
+        headers = headers if isinstance(headers, dict) else {}
+        authorization_headers.append(str(headers.get("Authorization", "")))
+        if len(authorization_headers) == 1:
+            # Simulate another request completing registration while this
+            # stale-token request is still in flight.
+            state_store.update_state({"runtime": {"runtimeToken": "fresh-runtime-token", "ready": True}})
+            return BackendResult(
+                ok=False,
+                request_id="req_stale",
+                status_code=401,
+                data={"error": "stale_runtime"},
+                error="stale_runtime",
+            )
+        return BackendResult(
+            ok=True,
+            request_id="req_retry",
+            status_code=200,
+            data={"ok": True},
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    result = client._authorized_request("GET", "/v1/integrations/runtime/mcp", token_kind="runtime")
+
+    assert result.ok is True
+    assert authorization_headers == [
+        "Bearer stale-runtime-token",
+        "Bearer fresh-runtime-token",
+    ]
+    assert state_store.snapshot()["runtime"]["runtimeToken"] == "fresh-runtime-token"
+
+
 # The shipping desktop is headless, so Python owns token refresh again. User
 # auth expiry must never tear down the independent QR-paired runtime session.
 def test_terminal_user_refresh_failure_clears_user_tokens_but_preserves_runtime(
@@ -1946,3 +1997,40 @@ def test_chat_messages_falls_back_to_runtime_auth_when_no_user_token(
 
     assert client.chat_messages({"content": "selam", "source": "desktop"}).ok is True
     assert captured == {"token_kind": "runtime", "path": "/v1/chat/messages"}
+
+
+def test_runtime_mcp_connections_uses_runtime_token_surface(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    client = BackendClient("http://backend.example")
+    captured: dict[str, Any] = {}
+
+    def fake_authorized_request(
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        *,
+        token_kind: str = "user",
+        refresh_on_401: bool = False,
+    ) -> BackendResult:
+        captured.update(
+            method=method,
+            path=path,
+            json=json_body,
+            token_kind=token_kind,
+            refresh_on_401=refresh_on_401,
+        )
+        return BackendResult(ok=True, request_id="req_mcp", status_code=200, data={"servers": []})
+
+    monkeypatch.setattr(client, "_authorized_request", fake_authorized_request)
+
+    assert client.runtime_mcp_connections().ok is True
+    assert captured == {
+        "method": "GET",
+        "path": "/v1/integrations/runtime/mcp",
+        "json": None,
+        "token_kind": "runtime",
+        "refresh_on_401": False,
+    }

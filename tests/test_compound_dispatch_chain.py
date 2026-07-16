@@ -45,6 +45,52 @@ def test_compound_requires_confirmation_and_multi_step() -> None:
     assert routed.plan_preview is not None
 
 
+def test_duplicate_read_only_data_intents_collapse_to_one_profile() -> None:
+    routed = route_text_to_tool(
+        "bu Excel dosyasını analiz et ve özet istatistikleri çıkar",
+        selected_artifacts=[
+            {
+                "id": "budget",
+                "name": "butce.xlsx",
+                "path": "/tmp/butce.xlsx",
+                "kind": "document",
+            }
+        ],
+    )
+
+    assert routed is not None
+    assert routed.intent == "data_analyze"
+    assert routed.args["mode"] == "profile"
+    assert routed.requires_confirmation is False
+
+
+def test_read_only_compound_math_does_not_require_confirmation() -> None:
+    routed = route_text_to_tool("2+2 hesapla ve 3*3 hesapla")
+
+    assert routed is not None
+    assert routed.intent == "compound_task"
+    assert routed.requires_confirmation is False
+
+
+def test_duplicate_document_read_intents_collapse_to_summary() -> None:
+    routed = route_text_to_tool(
+        "bu PDF dosyasını oku ve özetle",
+        selected_artifacts=[
+            {
+                "id": "report",
+                "name": "report.pdf",
+                "path": "/tmp/report.pdf",
+                "kind": "document",
+            }
+        ],
+    )
+
+    assert routed is not None
+    assert routed.intent == "document_read"
+    assert routed.args["mode"] == "summary"
+    assert routed.requires_confirmation is False
+
+
 def test_ve_inside_single_topic_not_split() -> None:
     # "tuz ve biber araştır" tek araştırma görevi kalmalı.
     routed = route_text_to_tool("tuz ve biber araştır")
@@ -171,6 +217,23 @@ def test_writer_context_falls_back_to_previous_result() -> None:
     assert "Kuantum bilgisayarlar hızla gelişiyor." in context
     assert "Nature" in context
     assert "Kaynaklar:" in context
+
+
+def test_writer_context_uses_requested_document_read_shape() -> None:
+    context = _writer_source_context(
+        {
+            "_dependencyResults": {
+                "read": {
+                    "kind": "document_read",
+                    "mode": "summary",
+                    "summary": "Kısa belge özeti.",
+                    "text": "Yazıcıya taşınmaması gereken uzun tam metin.",
+                }
+            }
+        }
+    )
+
+    assert context == "Kısa belge özeti."
 
 
 def test_writer_context_falls_back_to_previous_output() -> None:

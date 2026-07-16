@@ -109,6 +109,7 @@ def _allowed_local_capabilities() -> set[str]:
         "ocr_read",
         "image_read",
         "image_generate",
+        "image_edit",
         "web_research",
         "browser_control",
         "data_analyze",

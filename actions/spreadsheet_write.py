@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -14,17 +16,126 @@ def _workspace_root() -> Path:
     return workspace_root()
 
 
-def _normalize_rows(rows: Any) -> list[list[str]]:
-    normalized: list[list[str]] = []
+def _safe_cell_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    text = str(value)
+    if text.startswith(("=", "+", "-", "@")):
+        return f"'{text}"
+    return text
+
+
+_COLUMN_ALIAS_GROUPS = (
+    {"title", "baslik", "konu", "name", "ad"},
+    {"url", "href", "link", "adres", "sourceurl", "kaynakurl"},
+    {"summary", "ozet", "snippet", "description", "aciklama", "text", "icerik"},
+    {"source", "kaynak", "origin"},
+    {"date", "tarih", "datetime", "timestamp"},
+    {"amount", "tutar", "value", "deger", "price", "fiyat"},
+)
+
+
+def _normalized_key(value: Any) -> str:
+    folded = unicodedata.normalize(
+        "NFKD",
+        str(value or "").casefold().replace("ı", "i"),
+    )
+    return "".join(char for char in folded if char.isalnum())
+
+
+def _column_candidates(column: str) -> set[str]:
+    normalized = _normalized_key(column)
+    for group in _COLUMN_ALIAS_GROUPS:
+        if normalized in group:
+            return group
+    return {normalized}
+
+
+def _row_value(row: dict[Any, Any], column: str) -> Any:
+    if column in row:
+        return row[column]
+    by_key = {
+        _normalized_key(key): value
+        for key, value in row.items()
+        if _normalized_key(key)
+    }
+    for candidate in _column_candidates(column):
+        if candidate in by_key:
+            return by_key[candidate]
+    return None
+
+
+def _normalized_columns(columns: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    used: set[str] = set()
+    for index, item in enumerate(columns or [], start=1):
+        base = (" ".join(str(item or "").split()) or f"Column {index}")[:120]
+        candidate = base
+        suffix = 2
+        key = _normalized_key(candidate)
+        while not key or key in used:
+            suffix_text = f" {suffix}"
+            candidate = f"{base[: 120 - len(suffix_text)]}{suffix_text}"
+            suffix += 1
+            key = _normalized_key(candidate)
+        used.add(key)
+        normalized.append(candidate)
+    return normalized
+
+
+def _safe_sheet_title(value: str) -> str:
+    cleaned = re.sub(r"[\\/*?:\[\]]", " ", str(value or ""))
+    cleaned = " ".join(cleaned.split()).strip(" '")
+    return (cleaned or "Elyan Sheet")[:31]
+
+
+def _inferred_columns(rows: Any) -> list[str]:
+    if not isinstance(rows, list):
+        return []
+    columns: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in row:
+            name = str(key).strip()
+            if name and name not in columns:
+                columns.append(name)
+            if len(columns) >= 128:
+                return columns
+    if columns:
+        return columns
+    matrix_width = max(
+        (
+            len(row)
+            if isinstance(row, (list, tuple))
+            else 1
+            if row is not None
+            else 0
+        )
+        for row in rows
+    ) if rows else 0
+    if matrix_width:
+        return [f"Column {index}" for index in range(1, min(matrix_width, 128) + 1)]
+    return columns
+
+
+def _normalize_rows(rows: Any, columns: list[str] | None = None) -> list[list[Any]]:
+    normalized: list[list[Any]] = []
     if not isinstance(rows, list):
         return normalized
+    target_width = len(columns or [])
     for row in rows:
         if isinstance(row, dict):
-            normalized.append([str(value) for value in row.values()])
+            values = [_row_value(row, column) for column in columns] if columns else list(row.values())
         elif isinstance(row, (list, tuple)):
-            normalized.append([str(value) for value in row])
+            values = list(row)
         elif row is not None:
-            normalized.append([str(row)])
+            values = [row]
+        else:
+            continue
+        if target_width:
+            values = values[:target_width] + [None] * max(0, target_width - len(values))
+        normalized.append([_safe_cell_value(value) for value in values])
     return normalized
 
 
@@ -38,6 +149,9 @@ def spreadsheet_write(
     overwrite: bool = False,
 ) -> dict[str, Any]:
     from openpyxl import Workbook  # type: ignore[reportMissingImports]
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.table import Table, TableStyleInfo
 
     resolved_output = ensure_allowed_output_path(
         output_path,
@@ -52,10 +166,13 @@ def spreadsheet_write(
 
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = (str(title or "Elyan Sheet").strip() or "Elyan Sheet")[:31]
+    sheet.title = _safe_sheet_title(title)
 
-    normalized_columns = [str(item) for item in (columns or []) if str(item).strip()]
-    normalized_rows = _normalize_rows(rows)
+    normalized_columns = _normalized_columns(columns)
+    if not normalized_columns:
+        normalized_columns = _normalized_columns(_inferred_columns(rows))
+    normalized_rows = _normalize_rows(rows, normalized_columns)
+    written_rows = list(normalized_rows)
     if normalized_columns:
         sheet.append(normalized_columns)
     if normalized_rows:
@@ -65,8 +182,39 @@ def spreadsheet_write(
         header = normalized_columns or ["Content"]
         if not normalized_columns:
             sheet.append(header)
-        for bullet in bulletize_text(seed_text, limit=24):
-            sheet.append([bullet])
+        written_rows = [[bullet] for bullet in bulletize_text(seed_text, limit=24)]
+        for row in written_rows:
+            sheet.append(row)
+
+    if sheet.max_row >= 1 and sheet.max_column >= 1:
+        header_fill = PatternFill("solid", fgColor="243447")
+        for cell in sheet[1]:
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.fill = header_fill
+            cell.alignment = Alignment(vertical="center")
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        if normalized_columns and sheet.max_row > 1:
+            table = Table(displayName="ElyanData", ref=sheet.dimensions)
+            table.tableStyleInfo = TableStyleInfo(
+                name="TableStyleMedium2",
+                showFirstColumn=False,
+                showLastColumn=False,
+                showRowStripes=True,
+                showColumnStripes=False,
+            )
+            sheet.add_table(table)
+        numeric_names = {"tutar", "amount", "fiyat", "price", "gelir", "gider", "deger", "değer", "value"}
+        for column_index in range(1, sheet.max_column + 1):
+            header = str(sheet.cell(1, column_index).value or "").strip().casefold()
+            values = [sheet.cell(row_index, column_index).value for row_index in range(1, sheet.max_row + 1)]
+            width = min(48, max(10, max((len(str(value)) for value in values if value is not None), default=8) + 2))
+            sheet.column_dimensions[get_column_letter(column_index)].width = width
+            if header in numeric_names:
+                for row_index in range(2, sheet.max_row + 1):
+                    cell = sheet.cell(row_index, column_index)
+                    if isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
+                        cell.number_format = "#,##0.00" if isinstance(cell.value, float) else "#,##0"
 
     workbook.save(str(resolved_output))
     return {
@@ -79,6 +227,9 @@ def spreadsheet_write(
             "created": True,
             "title": sheet.title,
             "summary": summarize_text(seed_text or "Spreadsheet created.", max_chars=260),
+            "columns": normalized_columns,
+            "rows": written_rows[:12],
+            "rowCount": len(written_rows),
         },
         "artifacts": [artifact_payload(resolved_output)],
     }

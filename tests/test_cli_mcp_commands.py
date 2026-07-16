@@ -55,3 +55,104 @@ def test_mcp_add_list_disable_remove_roundtrip(
     assert state_store.snapshot()["skills"]["mcpServers"] == []
     # olmayan id → hata kodu
     assert cmd_mcp(argparse.Namespace(mcp_action="remove", server_id="yok")) == 1
+
+
+def test_curated_app_commands_use_oauth_without_manual_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    from cli import main as cli_main
+
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class FakeBridge:
+        def handle(self, request: dict[str, object]) -> dict[str, object]:
+            capability = str(request.get("capability", ""))
+            payload = request.get("payload")
+            payload = payload if isinstance(payload, dict) else {}
+            calls.append((capability, payload))
+            data: dict[str, object]
+            if capability == "backend.integrations.apps":
+                data = {
+                    "apps": [
+                        {
+                            "id": "gmail",
+                            "displayName": "Gmail",
+                            "available": True,
+                            "connected": False,
+                        }
+                    ]
+                }
+            elif capability == "backend.integrations.oauth_start":
+                data = {"authUrl": "https://accounts.google.com/o/oauth2/v2/auth?state=safe"}
+            else:
+                data = {"connected": False}
+            return {
+                "ok": True,
+                "result": {
+                    "ok": True,
+                    "result": {"ok": True, "statusCode": 200, "data": data},
+                },
+            }
+
+    opened: list[str] = []
+    fake_bridge = FakeBridge()
+    monkeypatch.setattr(cli_main, "_bridge", lambda: fake_bridge)
+    monkeypatch.setattr(
+        cli_main.webbrowser,
+        "open",
+        lambda url, new=0: opened.append(url) or True,
+    )
+
+    assert cli_main.cmd_apps(argparse.Namespace()) == 0
+    assert "gmail" in capsys.readouterr().out
+    assert cli_main.cmd_connect(argparse.Namespace(app_id="gmail")) == 0
+    assert opened == ["https://accounts.google.com/o/oauth2/v2/auth?state=safe"]
+    assert cli_main.cmd_disconnect(argparse.Namespace(app_id="gmail")) == 0
+    assert calls == [
+        ("backend.integrations.apps", {}),
+        ("backend.integrations.oauth_start", {"appId": "gmail"}),
+        ("backend.integrations.disconnect", {"appId": "gmail", "_confirmed": True}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "auth_url",
+    [
+        "http://accounts.google.com/o/oauth2/v2/auth?state=safe",
+        "https://evil.example/o/oauth2/v2/auth?state=safe",
+        "https://accounts.google.com.evil.example/o/oauth2/v2/auth?state=safe",
+        "https://user@accounts.google.com/o/oauth2/v2/auth?state=safe",
+        "https://accounts.google.com:444/o/oauth2/v2/auth?state=safe",
+        "https://accounts.google.com/o/oauth2/v2/auth?state=safe#fragment",
+        "https://linear.app/oauth/authorize?state=safe",
+    ],
+)
+def test_connect_rejects_untrusted_oauth_url_without_opening_browser(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    auth_url: str,
+) -> None:
+    from cli import main as cli_main
+
+    class FakeBridge:
+        def handle(self, _request: dict[str, object]) -> dict[str, object]:
+            return {
+                "ok": True,
+                "result": {
+                    "ok": True,
+                    "result": {
+                        "ok": True,
+                        "statusCode": 200,
+                        "data": {"authUrl": auth_url},
+                    },
+                },
+            }
+
+    opened: list[str] = []
+    monkeypatch.setattr(cli_main, "_bridge", lambda: FakeBridge())
+    monkeypatch.setattr(cli_main.webbrowser, "open", lambda url, new=0: opened.append(url) or True)
+
+    assert cli_main.cmd_connect(argparse.Namespace(app_id="gmail")) == 1
+    assert opened == []
+    assert "güvenlik doğrulamasından geçmedi" in capsys.readouterr().out

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import html
+import ipaddress
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 from runtime.capability_registry import SafeCapabilityError
 
@@ -14,6 +15,39 @@ class ResearchSource:
     title: str
     url: str
     summary: str
+
+
+def _is_public_http_url(value: str) -> bool:
+    try:
+        parsed = urlparse(str(value or "").strip())
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    hostname = parsed.hostname.rstrip(".").casefold()
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith((".local", ".internal")):
+        return False
+    try:
+        return ipaddress.ip_address(hostname).is_global
+    except ValueError:
+        return True
+
+
+def _search_result_target(value: str) -> str:
+    raw_url = html.unescape(str(value or "").strip())
+    if raw_url.startswith("//"):
+        raw_url = f"https:{raw_url}"
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return ""
+    if parsed.netloc.casefold().endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        if target:
+            raw_url = unquote(target)
+    return raw_url if _is_public_http_url(raw_url) else ""
 
 
 def _http_client():
@@ -35,6 +69,8 @@ def _trafilatura():
 
 
 def _fetch_text(url: str) -> str:
+    if not _is_public_http_url(url):
+        raise SafeCapabilityError("UNSAFE_URL", "Araştırma kaynağı güvenli bir web adresi değil.")
     httpx = _http_client()
     if httpx is None:
         raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "Web research için httpx gerekli.")
@@ -73,9 +109,7 @@ def _playwright_search(query: str, limit: int = 5) -> list[tuple[str, str]]:
             for index in range(min(limit, links.count())):
                 link = links.nth(index)
                 title = " ".join((link.inner_text(timeout=5_000) or "").split())
-                href = str(link.get_attribute("href") or "").strip()
-                if href.startswith("//"):
-                    href = f"https:{href}"
+                href = _search_result_target(str(link.get_attribute("href") or ""))
                 if href:
                     results.append((title or href, href))
             return results
@@ -104,16 +138,9 @@ def _duckduckgo_search(query: str, limit: int = 5) -> list[tuple[str, str]]:
         html_text,
         flags=re.IGNORECASE | re.DOTALL,
     ):
-        raw_url = html.unescape(match.group(1))
+        raw_url = _search_result_target(match.group(1))
         title = re.sub(r"(?is)<.*?>", " ", match.group(2))
         title = " ".join(html.unescape(title).split())
-        parsed = urlparse(raw_url)
-        if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
-            target = parse_qs(parsed.query).get("uddg", [""])[0]
-            if target:
-                raw_url = unquote(target)
-        if raw_url.startswith("//"):
-            raw_url = f"https:{raw_url}"
         if raw_url and title:
             results.append((title, raw_url))
         if len(results) >= limit:
@@ -134,10 +161,14 @@ def web_research(query: str, max_results: int = 4, language_hint: str = "") -> d
         raise SafeCapabilityError("INVALID_ARGUMENT", "Araştırma için konu belirtilmedi.")
 
     try:
-        search_results = _duckduckgo_search(topic, max(1, min(int(max_results or 4), 6)))
+        desired_results = max(1, min(int(max_results or 4), 6))
+    except (TypeError, ValueError):
+        desired_results = 4
+
+    try:
+        search_results = _duckduckgo_search(topic, min(10, desired_results + 3))
     except Exception as exc:
-        fallback = str(exc)
-        raise SafeCapabilityError("WEB_RESEARCH_FAILED", f"Web araştırması başlatılamadı: {fallback}") from exc
+        raise SafeCapabilityError("WEB_RESEARCH_FAILED", "Web araştırması güvenli şekilde başlatılamadı.") from exc
 
     sources: list[ResearchSource] = []
     for title, url in search_results:
@@ -151,10 +182,10 @@ def web_research(query: str, max_results: int = 4, language_hint: str = "") -> d
             ResearchSource(
                 title=title,
                 url=url,
-                summary=_summarize(content, 700),
+                summary=_summarize(content, 900),
             )
         )
-        if len(sources) >= max(1, min(int(max_results or 4), 6)):
+        if len(sources) >= desired_results:
             break
 
     if not sources:

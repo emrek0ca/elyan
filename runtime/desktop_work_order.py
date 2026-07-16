@@ -8,7 +8,10 @@ from typing import Any
 
 SCHEMA = "elyan.desktop_work_order.v1"
 V2_SCHEMA = "elyan.desktop_work_order.v2"
-MAX_STEPS = 8
+# Backend'in MAX_WORK_ORDER_STEPS'i ile hizalı (src/modules/tasks/
+# desktop-work-order.ts). Eskiden 8'di ve karmaşık çok-adımlı görevler
+# WORK_ORDER_STEP_BUDGET_EXCEEDED ile reddediliyordu; planner MAX_PLAN_STEPS=16.
+MAX_STEPS = 16
 _SOURCE_HASH_RE = re.compile(r"^[a-f0-9]{24}$")
 _CONTENT_HASH_RE = re.compile(r"^(?:sha256:)?[a-f0-9]{64}$", re.IGNORECASE)
 _ALLOWED_OUTPUT_KINDS = {"chat_result", "artifact", "file_update", "browser_state", "system_state"}
@@ -26,6 +29,7 @@ def canonical_capability(value: Any) -> str:
         "chart.generate": "chart_generate",
         "image.read": "image_read",
         "image.generate": "image_generate",
+        "image.edit": "image_edit",
         "svg.generate": "canvas_write",
         "browser.read": "browser_control",
         "desktop.file_access": "document_read",
@@ -151,7 +155,7 @@ def validate_payload(payload: dict[str, Any]) -> WorkOrderValidation:
     except (TypeError, ValueError):
         max_steps = MAX_STEPS + 1
     if max_steps < 1 or max_steps > MAX_STEPS:
-        errors.append(_error("WORK_ORDER_STEP_BUDGET_INVALID", "desktopWorkOrder.execution.maxSteps", "Adım bütçesi 1-8 arasında olmalı."))
+        errors.append(_error("WORK_ORDER_STEP_BUDGET_INVALID", "desktopWorkOrder.execution.maxSteps", f"Adım bütçesi 1-{MAX_STEPS} arasında olmalı."))
 
     preview = candidate.get("planPreview")
     if not isinstance(preview, dict):

@@ -12,3 +12,4 @@ litellm
 langgraph
 google-genai
 mcp
+openpyxl==3.1.5

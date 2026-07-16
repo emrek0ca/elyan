@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import PurePath
 from typing import Any, Callable, TypeVar
@@ -93,6 +94,26 @@ def _contains_template(value: Any) -> bool:
     return isinstance(value, str) and "{{" in value
 
 
+_STEP_REF_PATTERN = re.compile(r"\{\{\s*steps\.([A-Za-z0-9_\-]+)")
+
+
+def _template_step_references(value: Any) -> set[str]:
+    """Bir adımın args'ındaki `{{steps.<id>...}}` veri-akışı atıflarından adım
+    kimliklerini çıkarır. Örtük bağımlılık kurmak için: planlayıcı `dependsOn`'ı
+    unutsa bile, başka bir adımın çıktısını tüketen adım o adımdan SONRA
+    sıralanmalı; aksi halde çözülmemiş şablonla yürütülüp fail ediyordu."""
+    refs: set[str] = set()
+    if isinstance(value, dict):
+        for item in value.values():
+            refs |= _template_step_references(item)
+    elif isinstance(value, list):
+        for item in value:
+            refs |= _template_step_references(item)
+    elif isinstance(value, str):
+        refs.update(_STEP_REF_PATTERN.findall(value))
+    return refs
+
+
 def schedule_steps(
     steps: list[dict[str, Any]],
     *,
@@ -148,7 +169,19 @@ def schedule_steps(
         unknown = dependency_ids - ids
         if unknown:
             raise SchedulerPlanError("missing_dependency")
-        dependencies[step["id"]] = dependency_ids
+        # ④: `{{steps.<id>...}}` veri-akışı atıflarından ÖRTÜK bağımlılık çıkar.
+        # Planlayıcı dependsOn'ı unutsa bile, bir adım başka adımın çıktısını
+        # tüketiyorsa o adımdan SONRA sıralanır (yoksa çözülmemiş şablonla fail
+        # ediyordu). Yalnız bilinen, kendisi olmayan, tamamlanmamış adımlar
+        # eklenir; bilinmeyen atıflar yok sayılır (şablon çözücü onları ele alır).
+        inferred = _template_step_references({
+            "args": step.get("args", {}),
+            "forEach": step.get("forEach"),
+        })
+        inferred &= ids
+        inferred.discard(step["id"])
+        inferred -= completed
+        dependencies[step["id"]] = dependency_ids | inferred
 
     ordered: list[dict[str, Any]] = []
     resolved: set[str] = set(completed)

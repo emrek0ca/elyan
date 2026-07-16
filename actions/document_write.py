@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from actions._read_only_common import bulletize_text, ensure_allowed_path, summarize_text
-from actions._visual_block_common import normalize_visual_blocks, render_chart_block_to_png, split_text_blocks, table_ensure_width
+from actions._visual_block_common import (
+    normalize_visual_blocks,
+    render_chart_block_to_png,
+    split_text_blocks,
+    table_ensure_width,
+    validate_visual_block_paths,
+)
 from actions._write_common import artifact_payload, ensure_allowed_output_path, normalize_source_context
 from actions.document_read import _ALLOWED_SUFFIXES as _READ_ALLOWED_SUFFIXES
 from actions.document_read import _extract_document_text
@@ -34,6 +40,7 @@ def _resolve_source_text(
     prompt: str,
     *,
     allow_empty: bool = False,
+    selected_paths: list[str] | None = None,
 ) -> tuple[str, str]:
     if str(source_context or "").strip():
         text = str(source_context or "").strip()
@@ -42,6 +49,7 @@ def _resolve_source_text(
         resolved = ensure_allowed_path(
             source_path,
             allowed_suffixes=_READ_ALLOWED_SUFFIXES,
+            selected_paths=selected_paths,
             root_resolver=_workspace_root,
         )
         extracted, _ = _extract_document_text(resolved)
@@ -158,6 +166,7 @@ def document_write(
     source_path: str = "",
     source_context: str = "",
     overwrite: bool = False,
+    _selectedPaths: list[str] | None = None,
 ) -> dict[str, Any]:
     from docx import Document  # type: ignore[reportMissingImports]
 
@@ -173,6 +182,7 @@ def document_write(
         source_context,
         prompt,
         allow_empty=bool((blocks or []) or (sections or [])),
+        selected_paths=_selectedPaths,
     )
 
     document = Document()
@@ -184,6 +194,11 @@ def document_write(
         normalized_blocks = normalize_visual_blocks(
             [*(blocks or []), *_section_blocks([item for item in (sections or []) if isinstance(item, dict)])],
             fallback_text=body_text,
+        )
+        normalized_blocks = validate_visual_block_paths(
+            normalized_blocks,
+            selected_paths=_selectedPaths,
+            root_resolver=_workspace_root,
         )
         _add_blocks(document, normalized_blocks, temp_paths=temp_paths)
 

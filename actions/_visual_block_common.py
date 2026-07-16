@@ -3,6 +3,34 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from actions._read_only_common import ensure_allowed_path
+
+
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+
+
+def validate_visual_block_paths(
+    blocks: list[dict[str, Any]],
+    *,
+    selected_paths: list[str] | None = None,
+    root_resolver,
+) -> list[dict[str, Any]]:
+    """Resolve model-provided image paths through the task-scoped file gate."""
+    validated: list[dict[str, Any]] = []
+    for block in blocks:
+        current = dict(block)
+        if str(current.get("kind", "") or "").strip().lower() == "image":
+            current["path"] = str(
+                ensure_allowed_path(
+                    str(current.get("path", "") or ""),
+                    allowed_suffixes=_IMAGE_SUFFIXES,
+                    selected_paths=selected_paths,
+                    root_resolver=root_resolver,
+                )
+            )
+        validated.append(current)
+    return validated
+
 
 def _clean_text(value: Any, *, limit: int = 240) -> str:
     text = " ".join(str(value or "").split()).strip()
@@ -319,6 +347,9 @@ def normalize_visual_blocks(
                 spacer_block = _normalize_spacer_block(item)
                 if spacer_block is not None:
                     normalized.append(spacer_block)
+                continue
+            if kind in {"page_break", "pagebreak"}:
+                normalized.append({"kind": "page_break"})
                 continue
             text_block = _normalize_text_block(item)
             if text_block is not None:

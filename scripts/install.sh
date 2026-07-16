@@ -9,14 +9,17 @@ INSTALL_DIR="${ELYAN_HOME:-$HOME/.elyan}"
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 
-# 1) Python 3.10+
-PY_BIN="$(command -v python3 || true)"
+# 1) Python 3.10–3.13 (LangGraph/Pydantic zincirinin desteklediği aralık)
+PY_BIN=""
+for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+  resolved="$(command -v "$candidate" || true)"
+  if [ -n "$resolved" ] && "$resolved" -c 'import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,14) else 1)'; then
+    PY_BIN="$resolved"
+    break
+  fi
+done
 if [ -z "$PY_BIN" ]; then
-  say "HATA: python3 bulunamadı. Önce Python 3.10+ kur."
-  exit 1
-fi
-if ! "$PY_BIN" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)'; then
-  say "HATA: Python 3.10+ gerekli (bulunan: $("$PY_BIN" -V))."
+  say "HATA: uyumlu Python bulunamadı. Python 3.10–3.13 kur."
   exit 1
 fi
 
@@ -36,9 +39,16 @@ fi
 # 3) venv + bağımlılıklar
 say "Sanal ortam hazırlanıyor…"
 cd "$ROOT"
+if [ -x venv/bin/python ] && ! venv/bin/python -c 'import sys; sys.exit(0 if (3,10) <= sys.version_info[:2] < (3,14) else 1)'; then
+  say "Uyumsuz Python sanal ortamı yenileniyor…"
+  rm -rf -- "$ROOT/venv"
+fi
 [ -d venv ] || "$PY_BIN" -m venv venv
 ./venv/bin/python -m pip install --quiet --upgrade pip
-./venv/bin/python -m pip install --quiet -r requirements.txt
+./venv/bin/python -m pip install --quiet -r requirements-core.txt
+if ! ./venv/bin/python scripts/install_extras.py; then
+  say "NOT: Bazı opsiyonel yetenekler kurulamadı; çekirdek çalışma hazır. Ayrıntı için: elyan doctor"
+fi
 
 # 4) `elyan` komutu
 BIN_TARGET="$HOME/.local/bin"

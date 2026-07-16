@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
+import sys
+import datetime as dt
+import importlib.util
 from typing import Any
 
 from runtime.capability_registry import SafeCapabilityError
@@ -65,10 +70,247 @@ def _default_snapshot() -> dict[str, Any]:
     }
 
 
+def _utc_now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _permission_record(
+    *,
+    granted: bool | None,
+    source: str,
+    required: bool = True,
+) -> dict[str, Any]:
+    return {
+        "required": required,
+        "granted": granted,
+        "status": "granted" if granted is True else "denied" if granted is False else "unknown",
+        "source": source,
+        "settingsDeepLinkAvailable": sys.platform == "darwin",
+        "lastCheckedAt": _utc_now_iso(),
+    }
+
+
+def _macos_permission_value(framework: str, symbol: str) -> bool | None:
+    try:
+        import ctypes
+
+        library = ctypes.CDLL(framework)
+        probe = getattr(library, symbol)
+        probe.argtypes = []
+        probe.restype = ctypes.c_bool
+        return bool(probe())
+    except Exception:
+        return None
+
+
+def _fallback_permissions() -> tuple[str, dict[str, Any], bool, bool]:
+    if sys.platform != "darwin":
+        model = "windows_desktop" if os.name == "nt" else "linux_desktop"
+        return model, {}, True, False
+    application_services = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+    core_graphics = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+    accessibility = _macos_permission_value(application_services, "AXIsProcessTrusted")
+    screen_recording = _macos_permission_value(core_graphics, "CGPreflightScreenCaptureAccess")
+    input_monitoring = _macos_permission_value(core_graphics, "CGPreflightListenEventAccess")
+    permissions = {
+        "accessibility": _permission_record(granted=accessibility, source="python_ctypes_ax"),
+        "screenRecording": _permission_record(granted=screen_recording, source="python_ctypes_cg"),
+        "inputMonitoring": _permission_record(granted=input_monitoring, source="python_ctypes_cg"),
+        "automation": _permission_record(granted=None, source="probe_unavailable"),
+    }
+    return "macos_privacy_tcc", permissions, True, bool(screen_recording)
+
+
+def _fallback_processes(*, limit: int = 128) -> dict[str, Any]:
+    try:
+        import psutil  # type: ignore[reportMissingImports]
+    except Exception:
+        return {"available": False, "total": 0, "items": []}
+    items: list[dict[str, Any]] = []
+    for process in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            info = process.info
+            items.append(
+                {
+                    "pid": int(info.get("pid") or 0),
+                    "name": str(info.get("name") or ""),
+                    "executablePath": str(info.get("exe") or ""),
+                    "bundleId": "",
+                    "frontmost": False,
+                }
+            )
+        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+            continue
+        if len(items) >= max(1, min(limit, 256)):
+            break
+    items.sort(key=lambda item: int(item.get("pid", 0) or 0))
+    return {"available": True, "total": len(items), "items": items}
+
+
+def _macos_active_application() -> dict[str, Any]:
+    executable = Path("/usr/bin/lsappinfo")
+    if not executable.exists():
+        return {"available": False}
+    try:
+        front = subprocess.run(
+            [str(executable), "front"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        asn = str(front.stdout or "").strip()
+        if front.returncode != 0 or not asn:
+            return {"available": False}
+        info = subprocess.run(
+            [str(executable), "info", "-only", "name,pid,bundleid", asn],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        payload = str(info.stdout or "")
+        name_match = re.search(r'"LSDisplayName"="([^"]*)"', payload)
+        pid_match = re.search(r'"pid"=(\d+)', payload)
+        bundle_match = re.search(r'"CFBundleIdentifier"="([^"]*)"', payload)
+        pid = int(pid_match.group(1)) if pid_match else None
+        executable_path = ""
+        if pid:
+            try:
+                import psutil  # type: ignore[reportMissingImports]
+
+                executable_path = str(psutil.Process(pid).exe() or "")
+            except Exception:
+                executable_path = ""
+        return {
+            "available": bool(name_match),
+            "appName": name_match.group(1) if name_match else "",
+            "windowTitle": "",
+            "processId": pid,
+            "executablePath": executable_path,
+            "bundleId": bundle_match.group(1) if bundle_match else "",
+            "source": "lsappinfo_frontmost",
+            "confidence": 0.82 if name_match else 0.0,
+        }
+    except Exception:
+        return {"available": False}
+
+
+def _windows_active_window() -> dict[str, Any]:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return {"available": False}
+        length = user32.GetWindowTextLengthW(hwnd)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        import psutil  # type: ignore[reportMissingImports]
+
+        process = psutil.Process(int(pid.value))
+        return {
+            "available": True,
+            "appName": process.name(),
+            "windowTitle": buffer.value,
+            "processId": int(pid.value),
+            "executablePath": process.exe(),
+            "bundleId": "",
+            "source": "win32_foreground_window",
+            "confidence": 0.95,
+        }
+    except Exception:
+        return {"available": False}
+
+
+def _linux_active_window() -> dict[str, Any]:
+    executable = shutil.which("xdotool")
+    if not executable or not os.environ.get("DISPLAY"):
+        return {"available": False}
+    try:
+        window = subprocess.run(
+            [executable, "getactivewindow"], capture_output=True, text=True, timeout=3, check=False
+        )
+        window_id = str(window.stdout or "").strip()
+        if window.returncode != 0 or not window_id:
+            return {"available": False}
+        title = subprocess.run(
+            [executable, "getwindowname", window_id], capture_output=True, text=True, timeout=3, check=False
+        )
+        pid_result = subprocess.run(
+            [executable, "getwindowpid", window_id], capture_output=True, text=True, timeout=3, check=False
+        )
+        pid_text = str(pid_result.stdout or "").strip()
+        pid = int(pid_text) if pid_text.isdigit() else None
+        app_name = ""
+        executable_path = ""
+        if pid:
+            try:
+                import psutil  # type: ignore[reportMissingImports]
+
+                process = psutil.Process(pid)
+                app_name = process.name()
+                executable_path = process.exe()
+            except Exception:
+                pass
+        return {
+            "available": True,
+            "appName": app_name,
+            "windowTitle": str(title.stdout or "").strip(),
+            "processId": pid,
+            "executablePath": executable_path,
+            "bundleId": "",
+            "source": "xdotool_active_window",
+            "confidence": 0.85,
+        }
+    except Exception:
+        return {"available": False}
+
+
+def _fallback_active_window() -> dict[str, Any]:
+    if sys.platform == "darwin":
+        return _macos_active_application()
+    if os.name == "nt":
+        return _windows_active_window()
+    return _linux_active_window()
+
+
+def _fallback_snapshot() -> dict[str, Any]:
+    os_model, permissions, permission_probe, screen_capture = _fallback_permissions()
+    process_probe_available = importlib.util.find_spec("psutil") is not None
+    active_probe_available = (
+        (sys.platform == "darwin" and Path("/usr/bin/lsappinfo").exists())
+        or os.name == "nt"
+        or bool(shutil.which("xdotool") and os.environ.get("DISPLAY"))
+    )
+    snapshot = _default_snapshot()
+    snapshot.update(
+        {
+            "available": bool(process_probe_available or active_probe_available),
+            "source": "python_fallback",
+            "collectedAt": _utc_now_iso(),
+            "platform": "darwin" if sys.platform == "darwin" else "windows" if os.name == "nt" else "linux",
+            "osPermissionModel": os_model,
+            "processInspectionAvailable": process_probe_available,
+            "activeWindowAvailable": active_probe_available,
+            "permissionProbeAvailable": permission_probe,
+            "screenCaptureAvailable": screen_capture,
+            "permissions": permissions,
+            "processes": {"available": process_probe_available, "total": 0, "items": []},
+            "lastErrorCode": "",
+        }
+    )
+    return snapshot
+
+
 def _load_snapshot() -> dict[str, Any]:
     path = _snapshot_path()
     if path is None or not path.exists():
-        return _default_snapshot()
+        return _fallback_snapshot()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -304,7 +546,11 @@ def desktop_os_open_permission_settings(permission: str = "privacy") -> dict[str
 
 def desktop_os_processes(query: str = "", limit: int = 20) -> dict[str, Any]:
     snapshot = _load_snapshot()
-    processes = snapshot.get("processes", {})
+    processes = (
+        _fallback_processes(limit=256)
+        if str(snapshot.get("source", "") or "") == "python_fallback"
+        else snapshot.get("processes", {})
+    )
     processes = processes if isinstance(processes, dict) else {}
     if not bool(processes.get("available", False)):
         raise SafeCapabilityError("CAPABILITY_UNAVAILABLE", "Yerel proses görünürlüğü bu cihazda hazır değil.")
@@ -337,7 +583,11 @@ def desktop_os_processes(query: str = "", limit: int = 20) -> dict[str, Any]:
 
 def desktop_os_active_window() -> dict[str, Any]:
     snapshot = _load_snapshot()
-    active_window = snapshot.get("activeWindow", {})
+    active_window = (
+        _fallback_active_window()
+        if str(snapshot.get("source", "") or "") == "python_fallback"
+        else snapshot.get("activeWindow", {})
+    )
     active_window = active_window if isinstance(active_window, dict) else {}
     if not bool(active_window.get("available", False)):
         raise SafeCapabilityError("CAPABILITY_UNAVAILABLE", "Aktif pencere görünürlüğü bu cihazda hazır değil.")

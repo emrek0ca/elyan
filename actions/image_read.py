@@ -93,11 +93,11 @@ def _user_facing_text(
 ) -> str:
     if mode == "metadata":
         details = [f"{key}: {value}" for key, value in metadata.items()]
-        return f"{path.name}\n" + ("\n".join(details) if details else summary)
+        return f"{path.name}\n{summary}" + (("\n" + "\n".join(details)) if details else "")
     if mode == "palette":
         if not palette:
-            return f"{path.name}\nBelirgin renk paleti çıkarılamadı."
-        return f"{path.name}\n" + "\n".join(
+            return f"{path.name}\n{summary}\nBelirgin renk paleti çıkarılamadı."
+        return f"{path.name}\n{summary}\n" + "\n".join(
             f"• {item.get('hex', '')} ({round(float(item.get('ratio', 0.0)) * 100)}%)"
             for item in palette
         )

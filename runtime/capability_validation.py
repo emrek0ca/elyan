@@ -28,10 +28,10 @@ _PROVIDER_ID_KEYS = (
     "providerId", "provider_id", "externalId", "external_id", "uid",
 )
 
-_INPUT_FILE_CAPABILITIES = {"file_read", "document_read", "ocr_read", "image_read"}
+_INPUT_FILE_CAPABILITIES = {"file_read", "document_read", "ocr_read", "image_read", "image_edit"}
 _FILE_WRITE_CAPABILITIES = {
     "document_write", "spreadsheet_write", "presentation_write", "canvas_write",
-    "file_write", "file_patch", "image_generate", "image_fetch", "chart_generate",
+    "file_write", "file_patch", "image_generate", "image_edit", "image_fetch", "chart_generate",
 }
 _PROVIDER_EVIDENCE_CAPABILITIES = {
     "add_calendar_event", "delete_calendar_event", "add_reminder",

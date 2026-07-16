@@ -1,12 +1,16 @@
-"""Ağır/opsiyonel paketleri arka planda tek tek kurar.
+"""Ağır/opsiyonel paketleri kontrollü biçimde tek tek kurar.
 
-`bin/elyan.js` ilk kurulumdan sonra bunu ayrık (detached) başlatır. Paketler
+`bin/elyan.js` ilk kurulumda bunun tamamlanmasını bekleyerek çalıştırır. Paketler
 tek tek kurulur ki biri derlenemezse (ör. portaudio'suz pyaudio) kalanlar
-etkilenmesin. Çıktı ~/.elyan/extras.log dosyasına yazılır.
+etkilenmesin. CLI süreç boyunca ilerlemeyi doğrudan terminale yazar.
 """
 
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -31,27 +35,66 @@ def _packages(path: Path) -> list[str]:
     return lines
 
 
-def main() -> int:
-    if DONE_MARKER.exists():
+def _manifest_hash() -> str:
+    digest = hashlib.sha256()
+    for path in (CORE, FULL):
+        digest.update(path.read_bytes() if path.exists() else b"")
+    return digest.hexdigest()
+
+
+def _marker_is_current() -> bool:
+    try:
+        payload = json.loads(DONE_MARKER.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(payload.get("complete")) and payload.get("manifestHash") == _manifest_hash()
+
+
+def _write_marker(*, failures: list[str]) -> None:
+    payload = {
+        "version": 1,
+        "complete": not failures,
+        "manifestHash": _manifest_hash(),
+        "failedPackages": failures,
+    }
+    DONE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    temporary = DONE_MARKER.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(DONE_MARKER)
+
+
+def main(*, force: bool = False) -> int:
+    if not force and _marker_is_current():
         return 0
     core_names = {p.split(">")[0].split("=")[0].strip().lower() for p in _packages(CORE)}
-    failures = 0
+    failures: list[str] = []
+    try:
+        timeout_seconds = int(os.environ.get("ELYAN_EXTRAS_PACKAGE_TIMEOUT_SECONDS", "900") or 900)
+    except (TypeError, ValueError):
+        timeout_seconds = 900
+    timeout_seconds = max(60, min(timeout_seconds, 3600))
     for package in _packages(FULL):
         name = package.split(">")[0].split("=")[0].strip().lower()
         if name in core_names:
             continue
         print(f"--- pip install {package}", flush=True)
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet", package],
-        )
-        if result.returncode != 0:
-            failures += 1
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", package],
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            result = None
+        if result is None or result.returncode != 0:
+            failures.append(package)
             print(f"!!! kurulamadı: {package} (atlandı)", flush=True)
-    DONE_MARKER.parent.mkdir(parents=True, exist_ok=True)
-    DONE_MARKER.write_text(f"failures={failures}\n")
-    print(f"Bitti. Başarısız paket: {failures}", flush=True)
-    return 0
+    _write_marker(failures=failures)
+    print(f"Bitti. Başarısız paket: {len(failures)}", flush=True)
+    return 0 if not failures else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true")
+    raise SystemExit(main(force=parser.parse_args().force))

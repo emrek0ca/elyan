@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from pathlib import Path
 
 from actions import _data_common
+from actions._write_common import artifact_payload, ensure_allowed_output_path
 from runtime import state_store
 from runtime.capability_registry import SafeCapabilityError
 
@@ -60,6 +60,17 @@ def _series(frame, column: str):
     return frame[column]
 
 
+def _prepare_chart_frame(frame, *, chart_type: str, x_column: str, y_column: str):
+    if chart_type == "histogram":
+        return frame[[x_column]].dropna(subset=[x_column]).copy(), "none"
+    selected = frame[[x_column, y_column]].dropna(subset=[x_column, y_column]).copy()
+    if chart_type != "bar" or selected.empty or not bool(selected[x_column].duplicated().any()):
+        return selected, "none"
+    selected[y_column] = selected[y_column].astype(float)
+    grouped = selected.groupby(x_column, sort=False, dropna=False, as_index=False)[y_column].sum()
+    return grouped, "sum"
+
+
 def _render_chart(
     frame,
     *,
@@ -105,6 +116,7 @@ def chart_generate(
     xColumn: str = "",
     yColumn: str = "",
     title: str = "",
+    outputPath: str = "",
     _selectedPaths: list[str] | None = None,
 ) -> dict:
     resolved = _data_common.resolve_data_path(path, _selectedPaths)
@@ -118,16 +130,32 @@ def chart_generate(
         x_column=xColumn,
         y_column=yColumn,
     )
-    output_path = _chart_path(chart_type)
-    _render_chart(
+    render_frame, aggregation = _prepare_chart_frame(
         frame,
+        chart_type=chart_type,
+        x_column=x_column,
+        y_column=y_column,
+    )
+    if str(outputPath or "").strip():
+        output_path = ensure_allowed_output_path(
+            outputPath,
+            extension=".png",
+            overwrite=False,
+            hint=title or f"{resolved.stem}-{chart_type}",
+            root_resolver=_data_common._workspace_root,
+        )
+    else:
+        output_path = _chart_path(chart_type)
+    _render_chart(
+        render_frame,
         chart_type=chart_type,
         x_column=x_column,
         y_column=y_column,
         title=title,
         output_path=output_path,
     )
-    _prune_artifacts()
+    if not str(outputPath or "").strip():
+        _prune_artifacts()
     display_title = title.strip() or f"{Path(path).stem or resolved.stem} {chart_type}"
     summary = f"{resolved.name} verisinden {chart_type} grafik üretildi."
     return {
@@ -139,17 +167,13 @@ def chart_generate(
             "chartType": chart_type,
             "xColumn": x_column,
             "yColumn": y_column,
+            "aggregation": aggregation,
+            "dataPointCount": int(getattr(render_frame, "shape", (0, 0))[0] or 0),
             "title": display_title,
             "artifactPath": str(output_path),
+            "outputPath": str(output_path),
             "created": True,
             "summary": summary,
         },
-        "artifacts": [
-            {
-                "kind": "file",
-                "name": output_path.name,
-                "path": str(output_path),
-                "contentType": "image/png",
-            }
-        ],
+        "artifacts": [artifact_payload(output_path)],
     }

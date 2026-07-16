@@ -537,8 +537,22 @@ def _assert_not_expired(expires_at: Any, code: str) -> None:
         raise TrustError(code, "Görev yetkisi sona ermiş.")
 
 
+# Her iş emri kapsamına dahil edilen zararsız, salt-yerel yetenekler.
+# Backend'in sezgisel yetenek listesi çoğu zaman eksik (ör. "klasör oluştur"
+# isteğinde make_directory yok); yüksek-güvenli yerel rota jenerik planı
+# değiştirdiğinde CAPABILITY_SCOPE_MISMATCH ile ölmesin. Riskli yetenekler
+# (shell, mail, silme...) bilinçli olarak LİSTEDE YOK — fail-closed korunur.
+_SAFE_BASELINE_SCOPE = (
+    "make_directory",
+    "directory_tree",
+    "file_read",
+    "file_search",
+    "sys_info",
+)
+
+
 def _capability_scope(work_order: dict[str, Any]) -> list[str]:
-    values: list[Any] = []
+    values: list[Any] = list(_SAFE_BASELINE_SCOPE)
     raw_scope = work_order.get("requiredCapabilities")
     if isinstance(raw_scope, list):
         values.extend(raw_scope)
@@ -557,7 +571,6 @@ def prepare_work_order_v2(
     prompt: str,
     state: dict[str, Any],
     ledger: ExecutionLedger | None = None,
-    extra_read_scope: list[str] | None = None,
 ) -> dict[str, Any]:
     runtime = state.get("runtime", {}) if isinstance(state, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
@@ -581,15 +594,6 @@ def prepare_work_order_v2(
         raise TrustError("WORK_ORDER_REVISION_INVALID", "İş emri revision alanı geçersiz.")
 
     scope = _capability_scope(work_order)
-    # Cihazın deterministik yönlendiricisi planı DAHA GÜVENLİ salt-okunur
-    # adımlarla ikame edebilir (ör. operator.run → directory_tree). Çağıran,
-    # yalnız read-only sınıfı yetenekleri geçirmekle yükümlüdür; kapsam
-    # imzadan ÖNCE genişletilir, yani bağ kriptografik kalır.
-    for extra in extra_read_scope or []:
-        normalized_extra = canonical_capability(extra)
-        if normalized_extra and normalized_extra not in scope:
-            scope.append(normalized_extra)
-    scope = sorted(scope)
     if not scope:
         raise TrustError("WORK_ORDER_SCOPE_MISSING", "İş emri capability kapsamı boş.")
     expected_prompt_hash = prompt_hash(prompt)
