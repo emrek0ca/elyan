@@ -91,6 +91,39 @@ export function parseDirectDesktopAppCommand(message: string): DirectDesktopAppC
   };
 }
 
+export type DirectFolderCreateCommand = {
+  folderName: string;
+  locationHint: string;
+};
+
+/**
+ * "Masaüstüne Emre adında klasör oluştur" gibi doğrudan klasör isteği.
+ * Bunu tanımayınca work order jenerik operator planına düşüyor ve masaüstünde
+ * onay çıkmazı üretiyordu — klasör oluşturma zararsız `make_directory`
+ * adımına gider.
+ */
+export function parseDirectFolderCreateCommand(
+  message: string,
+): DirectFolderCreateCommand | null {
+  const compact = compactText(message, 240);
+  const normalized = compact.toLocaleLowerCase("tr-TR");
+  const wantsFolder = /\b(?:klasör|klasor|dizin|folder)\b/iu.test(normalized);
+  const wantsCreate = /\b(?:oluştur|olustur|yarat|aç|ac|create|make|mkdir)\b/iu.test(normalized);
+  if (!wantsFolder || !wantsCreate) return null;
+  const nameMatch = compact.match(
+    /(?:["'«»](?<quoted>[^"'«»]{1,80})["'«»]|(?<plain>[\p{L}\p{N}_-]{1,60}))\s+(?:adında|adinda|adlı|adli|isimli|ismiyle|named)\s+(?:bir\s+)?(?:klasör|klasor|dizin|folder)/iu,
+  );
+  const folderName = (nameMatch?.groups?.quoted ?? nameMatch?.groups?.plain ?? "").trim();
+  const locationHint = /masaüstü|masaustu|desktop/iu.test(normalized)
+    ? "~/Desktop"
+    : /indirilenler|downloads/iu.test(normalized)
+      ? "~/Downloads"
+      : /belgeler|documents/iu.test(normalized)
+        ? "~/Documents"
+        : "~/Desktop";
+  return { folderName, locationHint };
+}
+
 export function parseDirectImageFetchCommand(message: string): DirectImageFetchCommand | null {
   const compact = compactText(message, 400);
   const normalized = compact.toLocaleLowerCase("tr-TR");
@@ -426,6 +459,19 @@ function buildSteps(input: {
   const appHint = input.entities.find((entity) => entity.type === "app_hint")?.value;
   const topic = input.entities.find((entity) => entity.type === "topic")?.value ?? "";
   const directImageFetch = parseDirectImageFetchCommand(topic);
+  const directFolderCreate = parseDirectFolderCreateCommand(topic || input.title);
+  if (directFolderCreate) {
+    const folderLabel = directFolderCreate.folderName || "Yeni Klasör";
+    steps.push({
+      id: "step_make_directory",
+      capability: "make_directory",
+      description: `"${folderLabel}" klasörü ${directFolderCreate.locationHint} içinde oluşturulacak.`,
+      args: {
+        path: `${directFolderCreate.locationHint}/${folderLabel}`,
+      },
+    });
+    return steps;
+  }
   const researchRequested = input.capabilities.includes("web_research");
   const semanticBrief = compactText([
     input.envelope?.intent.topic,
