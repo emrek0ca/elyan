@@ -362,7 +362,11 @@ import {
   sanitizeAssistantVisibleText,
   validateAssistantBlockContract,
 } from "../chat/message-blocks.js";
-import { buildConnectorResultBlocks } from "./connector-result-blocks.js";
+import {
+  buildConnectorResultBlocks,
+  connectorResultFallbackText,
+  mergeAuthoritativeConnectorResultBlocks,
+} from "./connector-result-blocks.js";
 import {
   buildGeminiWebSynthesisPromptBlock,
   synthesizeWebGroundingWithGeminiFree,
@@ -7279,6 +7283,14 @@ export async function generateSharedBrainReply(
             const connectorResultBlocks = buildConnectorResultBlocks(
               toolLoop.results,
             );
+            if (connectorResultBlocks.length > 0) {
+              const authoritativeBlocks = mergeAuthoritativeConnectorResultBlocks(
+                assistantMetadataBlocks,
+                connectorResultBlocks,
+              ) as typeof assistantMetadataBlocks;
+              result.metadata.blocks = authoritativeBlocks;
+              assistantMetadataBlocks = authoritativeBlocks;
+            }
             const refined = await generateSharedBrainReply(app, {
               ...input,
               prompt: buildToolResultRefinementPrompt({
@@ -7424,6 +7436,45 @@ export async function generateSharedBrainReply(
             } else {
               result.metadata.toolRefinementApplied = false;
               result.metadata.toolRefinementError = "refinement_failed";
+              if (connectorResultBlocks.length > 0) {
+                result.text = connectorResultFallbackText(
+                  connectorResultBlocks,
+                  toolLoop.results,
+                );
+                const retainedBlocks = assistantMetadataBlocks.filter(
+                  (block) =>
+                    (block as { type?: string }).type !== "text" &&
+                    (block as { type?: string }).type !== "connector_result",
+                );
+                const fallbackBlocks = mergeAuthoritativeConnectorResultBlocks(
+                  [...retainedBlocks, ...buildAssistantMessageBlocks(result.text)],
+                  connectorResultBlocks,
+                ) as typeof assistantMetadataBlocks;
+                result.metadata.blocks = fallbackBlocks;
+                assistantMetadataBlocks = fallbackBlocks;
+                result.metadata.toolRefinementMode = "deterministic_fallback";
+              }
+              if (connectorResultBlocks.length === 0) {
+                const successfulConnectorResults = toolLoop.results.filter(
+                  (toolResult) => toolResult.ok && isConnectorTool(toolResult.tool),
+                );
+                if (successfulConnectorResults.length > 0) {
+                  result.text = connectorResultFallbackText(
+                    [],
+                    successfulConnectorResults,
+                  );
+                  const retainedBlocks = assistantMetadataBlocks.filter(
+                    (block) => (block as { type?: string }).type !== "text",
+                  );
+                  const fallbackBlocks = [
+                    ...retainedBlocks,
+                    ...buildAssistantMessageBlocks(result.text),
+                  ] as typeof assistantMetadataBlocks;
+                  result.metadata.blocks = fallbackBlocks;
+                  assistantMetadataBlocks = fallbackBlocks;
+                  result.metadata.toolRefinementMode = "deterministic_fallback";
+                }
+              }
             }
           } else {
             result.metadata.toolRefinementSkippedReason =

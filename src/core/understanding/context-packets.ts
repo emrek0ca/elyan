@@ -6,6 +6,7 @@ import type {
   ContextPacketMentionPolicy,
   UnderstandingIntent,
 } from "./types.js";
+import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 
 const MAX_PACKETS = 10;
 const MAX_PACKET_SUMMARY_CHARS = 360;
@@ -155,28 +156,50 @@ const SAFE_LOCATION_FACT_LABELS = new Map<string, string>([
 
 const GREETING_PATTERN =
   /^(selam|selamlar|merhaba|mrb|hey|hi|hello|günaydın|gunaydin|iyi akşamlar|iyi aksamlar|iyi geceler|naber|nasılsın|nasilsin)[\s!.?]*$/i;
-const DEVICE_RELEVANCE_PATTERN =
-  /\b(cihaz|device|pil|battery|şarj|sarj|ağ|ag|network|wifi|internet|bağlantı|baglanti|online|offline|kopuyor|çevrim|performans|yavaş|yavas|hata|problem|sorun|çöktü|crash|timeout)\b/i;
-const HEALTH_RELEVANCE_PATTERN =
-  /\b(sağlık|saglik|health|uyku|sleep|enerji|energy|yorgun|dinlen|adım|adim|steps?|spor|egzersiz|workout|fitness|stres|stress|odak|focus|rutin|wellbeing|iyi oluş|iyi olus|tempo|kalori|calor|nabız|nabiz|heart|yürü|yuru|koş|kos|walk|run|form|kondisyon|performans|kilo|weight|diyet|diet|beslenme|nutrition|vitamin|protein|su içtim|su ictim|antrenman|hissediyorum|kendimi|nasılım|nasilim|vücud|vucut|body)\b/i;
-const LOCATION_RELEVANCE_PATTERN =
-  /\b(nerede|neredeyim|konum|location|şehir|sehir|ilçe|ilce|yakın|yakin|çevre|cevre|mekan|restoran|yemek|hava|weather|sıcaklık|sicaklik|gezi|seyahat|rota|ulaşım|ulasim|öner|oner|meşhur|meshur|kayseri|hatay|istanbul|ankara|izmir|cafe|kafe|otel|hotel|park|market|eczane|hastane|havalimanı|havalimani|otogar|istasyon|sokak|cadde|semt|mahalle|bölge|bolge)\b/i;
-const SCHEDULE_RELEVANCE_PATTERN =
-  /\b(takvim|calendar|program|plan|planla|saat|time|bugün|bugun|yarın|yarin|toplantı|toplanti|müsait|musait|boş|bos|deadline|son tarih|odak|focus|yoğun|yogun|rutin|ajanda|zaman|gün|gun|hafta|ay|randevu|etkinlik|event|görev|gorev|task|iş|is|çalışma|calisma|ödev|odev|ders|sınav|sinav|sunum|presentation)\b/i;
+// DİKKAT: Bu kalıplar unicodeWordPattern ile kurulur. Ham `\b` ASCII tabanlıdır;
+// ş/ğ/ı/ü/ö/ç kenarlı alternatifler (şarj, ağ, yavaş, çöktü, şehir, boş…) hiç
+// eşleşmeden sessizce ölüyordu — canlıda "pilim ne durumda?" cihaz paketi
+// üretmiyordu. Türkçe eklemeli dil olduğu için sık isimlere `\p{L}*` ek
+// toleransı da verilir (pil→pilim/pili, şarj→şarjda, ağ yalnız kısa ekler:
+// "ağaç/ağla" yanlış pozitifine karşı sınırlı liste).
+const DEVICE_RELEVANCE_PATTERN = unicodeWordPattern(
+  String.raw`\b(cihaz\p{L}*|device|pil(?:im|in|i|e|de|den|ler\p{L}*)?|batarya\p{L}*|battery|şarj\p{L}*|sarj\p{L}*|ağ(?:ım|ın|ı|a|da|dan)?|ag(?:im|in|i|a|da|dan)?|network|wifi|internet\p{L}*|bağlantı\p{L}*|baglanti\p{L}*|online|offline|kopuyor|çevrim\p{L}*|cevrim\p{L}*|performans\p{L}*|yavaş\p{L}*|yavas\p{L}*|hata(?!y)\p{L}*|problem\p{L}*|sorun\p{L}*|çöktü|cöktü|coktu|crash|timeout)\b`,
+  "i",
+);
+const HEALTH_RELEVANCE_PATTERN = unicodeWordPattern(
+  String.raw`\b(sağlı\p{L}*|sagli\p{L}*|health|uyku\p{L}*|sleep|enerji\p{L}*|energy|yorgun\p{L}*|dinlen\p{L}*|adım\p{L}*|adim\p{L}*|steps?|spor\p{L}*|egzersiz\p{L}*|workout|fitness|stres\p{L}*|stress|odak|focus|rutin\p{L}*|wellbeing|iyi oluş|iyi olus|tempo|kalori\p{L}*|calor\p{L}*|nabız\p{L}*|nabiz\p{L}*|heart|yürü\p{L}*|yuru\p{L}*|koş\p{L}*|kos(?:u|tum|arım|arim)?|walk|run|form(?:um|da)?|kondisyon\p{L}*|performans\p{L}*|kilo\p{L}*|weight|diyet\p{L}*|diet|beslenme\p{L}*|nutrition|vitamin\p{L}*|protein\p{L}*|su içtim|su ictim|antrenman\p{L}*|hissediyorum|kendimi|nasılım|nasilim|vücu\p{L}*|vucu\p{L}*|body)\b`,
+  "i",
+);
+const LOCATION_RELEVANCE_PATTERN = unicodeWordPattern(
+  String.raw`\b(nerede\p{L}*|konum\p{L}*|location|şehir\p{L}*|sehir\p{L}*|ilçe\p{L}*|ilce\p{L}*|yakın\p{L}*|yakin\p{L}*|çevre\p{L}*|cevre\p{L}*|mekan\p{L}*|restoran\p{L}*|yemek\p{L}*|hava|weather|sıcaklık\p{L}*|sicaklik\p{L}*|gezi\p{L}*|seyahat\p{L}*|rota\p{L}*|ulaşım\p{L}*|ulasim\p{L}*|öner\p{L}*|oner\p{L}*|meşhur|meshur|kayseri|hatay|istanbul|ankara|izmir|cafe|kafe\p{L}*|otel\p{L}*|hotel|park\p{L}*|market\p{L}*|eczane\p{L}*|hastane\p{L}*|havaliman\p{L}*|otogar\p{L}*|istasyon\p{L}*|sokak\p{L}*|cadde\p{L}*|semt\p{L}*|mahalle\p{L}*|bölge\p{L}*|bolge\p{L}*)\b`,
+  "i",
+);
+const SCHEDULE_RELEVANCE_PATTERN = unicodeWordPattern(
+  String.raw`\b(takvim\p{L}*|calendar|program\p{L}*|plan\p{L}*|saat\p{L}*|time|bugün\p{L}*|bugun\p{L}*|yarın\p{L}*|yarin\p{L}*|toplantı\p{L}*|toplanti\p{L}*|müsait\p{L}*|musait\p{L}*|boş(?:um|luk\p{L}*|ta)?|bos(?:um|luk\p{L}*|ta)?|deadline|son tarih|odak|focus|yoğun\p{L}*|yogun\p{L}*|rutin\p{L}*|ajanda\p{L}*|zaman\p{L}*|gün\p{L}*|gun\p{L}*|hafta\p{L}*|randevu\p{L}*|etkinlik\p{L}*|event\p{L}*|görev\p{L}*|gorev\p{L}*|task\p{L}*|iş(?:im|in|i|ler\p{L}*|te|e)?|çalışma\p{L}*|calisma\p{L}*|ödev\p{L}*|odev\p{L}*|ders\p{L}*|sınav\p{L}*|sinav\p{L}*|sunum\p{L}*|presentation)\b`,
+  "i",
+);
 const EXPLICIT_HEALTH_DATA_REQUEST_PATTERN =
   /(?:sağlık|saglik)\s+(?:verilerim|bilgilerim|özetim|durumum)|(?:adımlarım|adimlarim|uykum|uyku\s+verim|nabzım|nabzim|kalorim|egzersizim|antrenmanım|antrenmanim)|(?:benim|bana\s+ait).{0,32}(?:sağlık|saglik|adım|adim|uyku|nabız|nabiz|kalori|egzersiz|antrenman)|my\s+(?:health|steps?|sleep|heart\s*rate|calories|workouts?|fitness)(?:\s+data)?|how\s+many\s+steps\s+(?:did|have)\s+i/iu;
 const EXPLICIT_LOCATION_DATA_REQUEST_PATTERN =
   /neredeyim|konumum|bulunduğum\s+yer|bulundugum\s+yer|where\s+am\s+i|my\s+(?:current\s+)?location/iu;
 const EXPLICIT_CALENDAR_DATA_REQUEST_PATTERN =
   /takvimim|ajandam|programım|programim|randevularım|randevularim|toplantılarım|toplantilarim|etkinliklerim|my\s+(?:calendar|schedule|appointments?|meetings?|events?)/iu;
-const NOTIFICATION_RELEVANCE_PATTERN =
-  /\b(bildirim|notification|dikkat|attention|rahatsız|rahatsiz|odak|focus|sessiz|silent|acil|urgent|öncelik|oncelik)\b/i;
-const ADAPTIVE_WORK_PATTERN =
-  /\b(plan|planla|planning|program|schedule|bugün|bugun|yarın|yarin|task|görev|gorev|workflow|routine|rutin|araştır|arastir|research|debug|kod|code|odak|focus|hazırla|hazirla|çıkar|cikar|optimize|iyileştir|iyilestir|prepare)\b/i;
-const EDUCATIONAL_HELP_PATTERN =
-  /\b(açıkla|acikla|anlat|öğret|ogret|explain|teach|öğren|ogren|learn|ders|lesson|adım adım|step by step|rehber|guide)\b/i;
-const CASUAL_OR_CREATIVE_ONLY_PATTERN =
-  /\b(sohbet|chat|şaka|saka|joke|şiir|siir|poem|tweet|caption|başlık|baslik|isim söyle|name one|yaratıcı|creative|garip|weird|hayvan|animal)\b/i;
+const NOTIFICATION_RELEVANCE_PATTERN = unicodeWordPattern(
+  String.raw`\b(bildirim\p{L}*|notification\p{L}*|dikkat\p{L}*|attention|rahatsız\p{L}*|rahatsiz\p{L}*|odak\p{L}*|focus|sessiz\p{L}*|silent|acil\p{L}*|urgent|öncelik\p{L}*|oncelik\p{L}*)\b`,
+  "i",
+);
+const ADAPTIVE_WORK_PATTERN = unicodeWordPattern(
+  String.raw`\b(plan\p{L}*|planning|program\p{L}*|schedule|bugün\p{L}*|bugun\p{L}*|yarın\p{L}*|yarin\p{L}*|task\p{L}*|görev\p{L}*|gorev\p{L}*|workflow|routine|rutin\p{L}*|araştır\p{L}*|arastir\p{L}*|research|debug|kod\p{L}*|code|odak\p{L}*|focus|hazırla\p{L}*|hazirla\p{L}*|çıkar\p{L}*|cikar\p{L}*|optimize|iyileştir\p{L}*|iyilestir\p{L}*|prepare)\b`,
+  "i",
+);
+const EDUCATIONAL_HELP_PATTERN = unicodeWordPattern(
+  String.raw`\b(açıkla\p{L}*|acikla\p{L}*|anlat\p{L}*|öğret\p{L}*|ogret\p{L}*|explain|teach|öğren\p{L}*|ogren\p{L}*|learn|ders\p{L}*|lesson|adım adım|adim adim|step by step|rehber\p{L}*|guide)\b`,
+  "i",
+);
+const CASUAL_OR_CREATIVE_ONLY_PATTERN = unicodeWordPattern(
+  String.raw`\b(sohbet\p{L}*|chat|şaka\p{L}*|saka\p{L}*|joke|şiir\p{L}*|siir\p{L}*|poem|tweet\p{L}*|caption|başlık\p{L}*|baslik\p{L}*|isim söyle|name one|yaratıcı\p{L}*|yaratici\p{L}*|creative|garip\p{L}*|weird|hayvan\p{L}*|animal)\b`,
+  "i",
+);
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

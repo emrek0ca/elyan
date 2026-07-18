@@ -1,6 +1,10 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { buildConnectorResultBlocks } from "./connector-result-blocks.js";
+import {
+  buildConnectorResultBlocks,
+  connectorResultFallbackText,
+  mergeAuthoritativeConnectorResultBlocks,
+} from "./connector-result-blocks.js";
 import type { AgentToolResult } from "./tool-registry.js";
 
 function ok(tool: string, output: Record<string, unknown>): AgentToolResult {
@@ -110,4 +114,47 @@ test("remote MCP list-shaped connector outputs get a generic connector result bl
   assert.equal((blocks[0] as { title?: string }).title, "GitHub sonuçları");
   assert.equal((blocks[1] as { title?: string }).title, "Notion sonuçları");
   assert.equal((blocks[0] as { type?: string }).type, "connector_result");
+});
+
+test("successful connector blocks survive a failed optional refinement pass", () => {
+  const connectorBlocks = buildConnectorResultBlocks([
+    ok("gmail.search", {
+      results: [
+        { from: "Ali <ali@example.com>", subject: "Toplantı" },
+        { from: "Ayşe <ayse@example.com>", subject: "Fatura" },
+      ],
+    }),
+  ]);
+  const merged = mergeAuthoritativeConnectorResultBlocks(
+    [
+      { type: "text", markdown: "Maillerini inceliyorum." },
+      { type: "table", columns: ["Konu"], rows: [["eski tekrar"]] },
+    ],
+    connectorBlocks,
+  ) as Array<Record<string, unknown>>;
+
+  assert.deepEqual(merged.map((block) => block.type), ["text", "table", "connector_result"]);
+  assert.equal(
+    (merged[2]?.items as unknown[]).length,
+    2,
+    "tool verisi refinement sonucundan bağımsız kalmalı",
+  );
+  assert.equal(connectorResultFallbackText(connectorBlocks), "Gelen kutusu — 2 e-posta");
+});
+
+test("non-list and empty connector successes have deterministic fallbacks", () => {
+  assert.equal(
+    connectorResultFallbackText([], [
+      ok("gmail.read", {
+        from: "Ali <ali@example.com>",
+        subject: "Toplantı",
+        body: "Yarın saat 10:00 için uygunum.",
+      }),
+    ]),
+    "Toplantı — Ali\n\nYarın saat 10:00 için uygunum.",
+  );
+  assert.equal(
+    connectorResultFallbackText([], [ok("gmail.search", { resultCount: 0, results: [] })]),
+    "Gelen kutusunda eşleşen e-posta bulunamadı.",
+  );
 });

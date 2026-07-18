@@ -168,7 +168,7 @@ test("semantic connector contract gate narrows on hint, keeps all on miss", () =
   assert.match(selected[0] ?? "", /^gmail\.search\b/u);
   // Reklamda olmayan bir ipucu aracı da listeyi boşaltmaz.
   assert.deepEqual(
-    connectorContractsForSemanticReadHint(contracts, "notion.search"),
+    connectorContractsForSemanticReadHint(contracts, "slack.search"),
     contracts,
   );
 });
@@ -318,3 +318,7 @@ test("connector writes stage a durable task-bound approval without process state
     null,
   );
 });
+
+// ── Notion + GitHub kataloğa bağlandı ────────────────────────────────
+// integration_connections'ta connected duran notion/github hesapları katalogda
+// araç taşımıyordu — bağlı hesap beyne bağlanmamıştı.

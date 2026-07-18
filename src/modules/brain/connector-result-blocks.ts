@@ -301,3 +301,56 @@ export function buildConnectorResultBlocks(
   }
   return blocks;
 }
+
+/**
+ * Connector list blocks are authoritative tool output. Persist them before the
+ * optional prose-refinement pass so a timeout or provider failure cannot turn a
+ * successful connector call into an empty "checking..." assistant message.
+ */
+export function mergeAuthoritativeConnectorResultBlocks(
+  existingBlocks: unknown[],
+  connectorBlocks: unknown[],
+): unknown[] {
+  if (connectorBlocks.length === 0) return existingBlocks;
+  const retained = existingBlocks.filter((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) return true;
+    const type = String((block as { type?: unknown }).type ?? "");
+    return type !== "connector_result";
+  });
+  return [...retained, ...connectorBlocks];
+}
+
+export function connectorResultFallbackText(
+  blocks: unknown[],
+  results: AgentToolResult[] = [],
+): string {
+  const first = blocks.find(
+    (block): block is Record<string, unknown> =>
+      Boolean(block) && typeof block === "object" && !Array.isArray(block),
+  );
+  if (first) {
+    const title = str(first.title).trim();
+    const summary = str(first.summary).trim();
+    const blockText = [title, summary].filter(Boolean).join(" — ");
+    if (blockText) return blockText;
+  }
+
+  const successful = results.find((result) => result.ok && result.output);
+  if (!successful?.output) return "Bağlı hesaptaki sonuçlar hazır.";
+  if (successful.tool === "gmail.read") {
+    const subject = str(successful.output.subject).trim() || "(konu yok)";
+    const from = displayFrom(successful.output.from) || "Gönderen bilinmiyor";
+    const body = str(successful.output.body || successful.output.snippet).trim();
+    return [`${subject} — ${from}`, body].filter(Boolean).join("\n\n");
+  }
+  if (successful.tool === "gmail.search") {
+    return "Gelen kutusunda eşleşen e-posta bulunamadı.";
+  }
+  if (successful.tool === "calendar.list_events") {
+    return "Bu aralıkta eşleşen takvim etkinliği bulunamadı.";
+  }
+  if (successful.tool === "drive.search") {
+    return "Drive'da eşleşen dosya bulunamadı.";
+  }
+  return "Bağlı hesap isteği tamamlandı.";
+}

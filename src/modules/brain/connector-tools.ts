@@ -167,10 +167,9 @@ export function connectorToolsForCapabilities(
 export function connectorRequiredScopeSets(
   contract: ConnectorToolContract,
 ): string[][] {
-  return [
-    contract.requiredScopes,
-    ...(contract.alternativeScopeSets ?? []),
-  ].filter((scopeSet) => scopeSet.length > 0);
+  return [contract.requiredScopes, ...(contract.alternativeScopeSets ?? [])].filter(
+    (scopeSet) => scopeSet.length > 0,
+  );
 }
 
 function connectorToolsForCapabilityGrantsByPermission(
