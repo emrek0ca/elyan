@@ -4,6 +4,7 @@ import {
   buildToolResultRefinementPrompt,
   runAgentToolLoop,
   summarizeToolResultsForMetadata,
+  trimEnumeratedListForStructuredCard,
 } from "./agent-loop.js";
 
 test("runAgentToolLoop executes bounded tool requests and summarizes safe metadata", async () => {
@@ -57,4 +58,46 @@ test("buildToolResultRefinementPrompt carries typed tool results without long ra
   assert.match(prompt, /Return only the user-facing answer/);
   assert.match(prompt, /group and deduplicate/);
   assert.equal(prompt.length < 9_000, true);
+});
+
+test("buildToolResultRefinementPrompt: kart render edilecekse enumerasyonu yasaklar", () => {
+  const prompt = buildToolResultRefinementPrompt({
+    originalPrompt: "Mailleri oku",
+    results: [
+      {
+        tool: "gmail.search",
+        ok: true,
+        permission: "read",
+        durationMs: 20,
+        output: { results: [{ subject: "A" }, { subject: "B" }] },
+        error: null,
+      },
+    ],
+    structuredBlocksWillRender: true,
+  });
+  assert.match(prompt, /Do NOT enumerate the items/);
+  assert.match(prompt, /1-2 sentences/);
+  assert.doesNotMatch(prompt, /group and deduplicate/);
+});
+
+test("trimEnumeratedListForStructuredCard: 3+ satırlık listeyi kırpar, girişi korur", () => {
+  const text = [
+    "Gelen kutunda 5 yeni e-posta var, çoğu LinkedIn bildirimi.",
+    "",
+    "1. **Glassdoor** – Java rolü – 18 Tem",
+    "2. **Product Hunt** – Japan – 18 Tem",
+    "3. **LinkedIn** – başvuru – 18 Tem",
+  ].join("\n");
+  assert.equal(
+    trimEnumeratedListForStructuredCard(text),
+    "Gelen kutunda 5 yeni e-posta var, çoğu LinkedIn bildirimi.",
+  );
+  // Giriş yoksa boş döner (kart tek başına durur).
+  assert.equal(
+    trimEnumeratedListForStructuredCard("- a\n- b\n- c"),
+    "",
+  );
+  // Kısa (1-2 maddelik) listeler meşru cevap olabilir: dokunma.
+  const short = "Özet:\n1. tek madde\n2. iki madde";
+  assert.equal(trimEnumeratedListForStructuredCard(short), short);
 });

@@ -65,6 +65,7 @@ import {
 } from "./factuality-gate.js";
 import {
   buildToolResultRefinementPrompt,
+  trimEnumeratedListForStructuredCard,
   runAgentToolLoop,
   summarizeToolResultsForMetadata,
 } from "./agent-loop.js";
@@ -7271,11 +7272,19 @@ export async function generateSharedBrainReply(
           );
           if (hasUsableToolResult) {
             const refinementStartedAt = Date.now();
+            // Bloklar refinement'tan ÖNCE hesaplanır: liste-şekilli sonuçlar
+            // zaten yapılandırılmış kart olarak render edileceği için nesir
+            // aynı listeyi bir de numaralı metin olarak tekrarlamamalı
+            // (canlıda aynı 5 mail üç formatta üst üste basılıyordu).
+            const connectorResultBlocks = buildConnectorResultBlocks(
+              toolLoop.results,
+            );
             const refined = await generateSharedBrainReply(app, {
               ...input,
               prompt: buildToolResultRefinementPrompt({
                 originalPrompt: input.prompt,
                 results: toolLoop.results,
+                structuredBlocksWillRender: connectorResultBlocks.length > 0,
               }),
               onDelta: undefined,
               timeoutMsOverride: Math.min(timeoutMs, 8_000),
@@ -7307,6 +7316,27 @@ export async function generateSharedBrainReply(
               return null;
             });
             if (refined) {
+              if (connectorResultBlocks.length > 0) {
+                // Kart tam listeyi zaten gösterecek: nesirde kalan numaralı
+                // tekrar listesi deterministik kırpılır (prompt'a uymayan
+                // küçük model güvenlik ağı). Giriş cümlesi kalmadıysa blok
+                // başlık+özetinden kısa, dilinde-yerelleşmiş bir satır kur.
+                const trimmed = trimEnumeratedListForStructuredCard(
+                  refined.text,
+                );
+                if (trimmed !== refined.text) {
+                  const firstBlock = connectorResultBlocks[0] as {
+                    title?: string;
+                    summary?: string;
+                  };
+                  refined.text =
+                    trimmed ||
+                    [firstBlock?.title, firstBlock?.summary]
+                      .filter(Boolean)
+                      .join(" — ") ||
+                    refined.text;
+                }
+              }
               const refinedBlocks = Array.isArray(refined.metadata.blocks)
                 ? refined.metadata.blocks
                 : null;
@@ -7358,7 +7388,7 @@ export async function generateSharedBrainReply(
                     (block) => (block as { type?: string }).type !== "text",
                   ),
                   ...buildAssistantMessageBlocks(combined),
-                  ...buildConnectorResultBlocks(toolLoop.results),
+                  ...connectorResultBlocks,
                   ...(refinedBlocks ?? []).filter(
                     (block) =>
                       (block as { type?: string }).type !== "text" &&
@@ -7373,17 +7403,14 @@ export async function generateSharedBrainReply(
               } else {
                 result.text = refined.text;
                 result.metadata.toolRefinementMode = "replace";
-                const connectorBlocks = buildConnectorResultBlocks(
-                  toolLoop.results,
-                );
-                if (refinedBlocks || connectorBlocks.length > 0) {
+                if (refinedBlocks || connectorResultBlocks.length > 0) {
                   const proseBlocks =
                     refinedBlocks ?? buildAssistantMessageBlocks(refined.text);
                   const replaceBlocks = [
                     ...proseBlocks.filter(
                       (block) => (block as { type?: string }).type !== "table",
                     ),
-                    ...connectorBlocks,
+                    ...connectorResultBlocks,
                   ] as NonNullable<typeof refinedBlocks>;
                   result.metadata.blocks = replaceBlocks;
                   assistantMetadataBlocks = replaceBlocks;

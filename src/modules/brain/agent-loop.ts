@@ -182,9 +182,32 @@ function compactToolOutput(value: unknown, depth = 0): unknown {
   return String(value);
 }
 
+/**
+ * Yapılandırılmış connector kartı render edilecekken nesirde kalan numaralı/
+ * madde imli tekrar listesini deterministik kırpar (prompt talimatına uymayan
+ * küçük model için güvenlik ağı). 3+ liste satırı varsa liste atılır, giriş
+ * cümlesi korunur. Giriş cümlesi yoksa boş döner — kart tek başına durur.
+ */
+export function trimEnumeratedListForStructuredCard(text: string): string {
+  const lines = text.split("\n");
+  const isListLine = (line: string) => /^\s*(\d+[.)]|[-*•])\s+\S/.test(line);
+  const listStart = lines.findIndex(isListLine);
+  if (listStart === -1) return text;
+  const listLineCount = lines.slice(listStart).filter(isListLine).length;
+  if (listLineCount < 3) return text;
+  return lines.slice(0, listStart).join("\n").trim();
+}
+
 export function buildToolResultRefinementPrompt(input: {
   originalPrompt: string;
   results: AgentToolResult[];
+  /**
+   * true ise liste-şekilli sonuçlar ayrıca yapılandırılmış connector_result
+   * kartı olarak render edilecek: nesir aynı listeyi tekrar SAYMAMALI.
+   * Canlıda aynı 5 mail hem numaralı metin hem kart hem tablo olarak üst
+   * üste basılıyordu — tek veri tek yüzeyde gösterilir.
+   */
+  structuredBlocksWillRender?: boolean;
 }): string {
   const safeResults = input.results.map((result) => ({
     tool: result.tool,
@@ -193,6 +216,15 @@ export function buildToolResultRefinementPrompt(input: {
     error: result.error,
     output: compactToolOutput(result.output),
   }));
+  const listStyleRule = input.structuredBlocksWillRender
+    ? [
+        "A structured card widget will already display the full item list (senders, titles, dates) below your text.",
+        "Therefore write ONLY a short natural-language lead-in of 1-2 sentences in the user's language: state how many items were found and the single most notable highlight or pattern (e.g. unread count, an urgent-looking message, a meeting starting soon).",
+        "Do NOT enumerate the items. No numbered or bulleted list, no per-item lines, no markdown table — the card already shows them.",
+      ]
+    : [
+        "For mailbox/calendar/drive results, group and deduplicate the useful fields (sender/title/date/summary) into a compact readable list instead of narrating how the tool was called.",
+      ];
   return [
     "Original user request:",
     clipString(input.originalPrompt, 2_000),
@@ -202,7 +234,7 @@ export function buildToolResultRefinementPrompt(input: {
     "",
     "Use the typed tool results above to answer the original user request in the user's language.",
     "Return only the user-facing answer. Do not expose tool names, JSON, arguments, query syntax, hidden reasoning, provider names, or planning text.",
-    "For mailbox/calendar/drive results, group and deduplicate the useful fields (sender/title/date/summary) into a compact readable list instead of narrating how the tool was called.",
+    ...listStyleRule,
     "If an ok read result is present, do not ask for the same permission again; answer from the result. If no ok result is present, explain the missing access briefly.",
     "Do not claim a tool succeeded if its ok field is false.",
     "If a write/side-effect tool was blocked for approval, say that the action needs approval instead of pretending it was done.",
