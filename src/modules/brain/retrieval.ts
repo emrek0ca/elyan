@@ -265,6 +265,25 @@ async function ensureSemanticV2Column(app: FastifyInstance): Promise<boolean> {
         alter table knowledge_chunks
           add column if not exists embedding_v2 vector(384)
       `);
+      // Birincil semantik filtre embedding_v2 <=> sorgusu; indeks olmadan her
+      // arama sequential scan'dı (prod'da HİÇ indeks yoktu). hnsw (pgvector
+      // ≥0.5) recall+gecikmede ivfflat'ten iyi; eski sürümde ivfflat'e düş.
+      try {
+        await app.db.execute(sql`
+          create index if not exists knowledge_chunks_embedding_v2_hnsw_idx
+            on knowledge_chunks using hnsw (embedding_v2 vector_cosine_ops)
+        `);
+      } catch (indexError) {
+        app.log?.warn?.(
+          { error: indexError },
+          "hnsw index unavailable; falling back to ivfflat for embedding_v2",
+        );
+        await app.db.execute(sql`
+          create index if not exists knowledge_chunks_embedding_v2_ivfflat_idx
+            on knowledge_chunks using ivfflat (embedding_v2 vector_cosine_ops)
+            with (lists = 100)
+        `).catch(() => undefined);
+      }
       return true;
     } catch (error) {
       app.log?.warn?.({ error }, "failed to ensure embedding_v2 column");

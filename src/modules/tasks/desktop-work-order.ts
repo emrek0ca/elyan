@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 import type { RemoteMcpSelectionMetadata } from "../integrations/provider-registry.js";
@@ -110,8 +111,8 @@ export function parseDirectFolderCreateCommand(
 ): DirectFolderCreateCommand | null {
   const compact = compactText(message, 240);
   const normalized = compact.toLocaleLowerCase("tr-TR");
-  const wantsFolder = /\b(?:klasör|klasor|dizin|folder)\b/iu.test(normalized);
-  const wantsCreate = /\b(?:oluştur|olustur|yarat|aç|ac|create|make|mkdir)\b/iu.test(normalized);
+  const wantsFolder = unicodeWordPattern(String.raw`\b(?:klasör|klasor|dizin|folder)\b`, "i").test(normalized);
+  const wantsCreate = unicodeWordPattern(String.raw`\b(?:oluştur|olustur|yarat|aç|ac|create|make|mkdir)\b`, "i").test(normalized);
   if (!wantsFolder || !wantsCreate) return null;
   const nameMatch = compact.match(
     /(?:["'«»](?<quoted>[^"'«»]{1,80})["'«»]|(?<plain>[\p{L}\p{N}_-]{1,60}))\s+(?:adında|adinda|adlı|adli|isimli|ismiyle|named)\s+(?:bir\s+)?(?:klasör|klasor|dizin|folder)/iu,
@@ -130,13 +131,13 @@ export function parseDirectFolderCreateCommand(
 export function parseDirectImageFetchCommand(message: string): DirectImageFetchCommand | null {
   const compact = compactText(message, 400);
   const normalized = compact.toLocaleLowerCase("tr-TR");
-  const hasImage = /\b(?:resim|resmi|resmini|görsel|gorsel|görseli|gorseli|foto|fotoğraf|fotograf|image|picture)\b/iu.test(normalized);
+  const hasImage = unicodeWordPattern(String.raw`\b(?:resim|resmi|resmini|görsel|gorsel|görseli|gorseli|foto|fotoğraf|fotograf|image|picture)\b`, "i").test(normalized);
   const hasSave = /\b(?:indir|kaydet|download|save)\b/iu.test(normalized);
-  const hasGeneration = /\b(?:çiz|ciz|oluştur|olustur|üret|uret|generate|tasarla|yap)\b/iu.test(normalized);
+  const hasGeneration = unicodeWordPattern(String.raw`\b(?:çiz|ciz|oluştur|olustur|üret|uret|generate|tasarla|yap)\b`, "i").test(normalized);
   if (!hasImage || !hasSave || hasGeneration) return null;
 
   const subjectMatch = compact.match(
-    /(.+?)\s+(?:resim|resmi|resmini|görsel|gorsel|görseli|gorseli|foto(?:ğraf|graf)?|image|picture)\b/iu,
+    unicodeWordPattern(String.raw`(.+?)\s+(?:resim|resmi|resmini|görsel|gorsel|görseli|gorseli|foto(?:ğraf|graf)?|image|picture)\b`, "i"),
   );
   let query = subjectMatch?.[1]?.trim() ?? "";
   query = query
@@ -148,7 +149,7 @@ export function parseDirectImageFetchCommand(message: string): DirectImageFetchC
 
   let destination: DirectImageFetchCommand["destination"] = "~/Desktop";
   if (/\b(?:indirilenler(?:e|den|de)?|downloads?)\b/iu.test(normalized)) destination = "~/Downloads";
-  else if (/\b(?:resimler|pictures|fotoğraflar|fotograflar)\b/iu.test(normalized)) destination = "~/Pictures";
+  else if (unicodeWordPattern(String.raw`\b(?:resimler|pictures|fotoğraflar|fotograflar)\b`, "i").test(normalized)) destination = "~/Pictures";
   else if (/\b(?:belgeler|documents?)\b/iu.test(normalized)) destination = "~/Documents";
   const countMatch = normalized.match(/\b([1-5])\s+(?:adet\b)?/iu);
   return { query: compactText(query, 160), destination, count: Number(countMatch?.[1] ?? 1) };
@@ -190,7 +191,7 @@ function sourceHash(value: string): string {
 
 function detectLanguage(value: string): "tr" | "en" | "unknown" {
   if (!value.trim()) return "unknown";
-  return /[çğıöşü]/i.test(value) || /\b(bunu|şunu|dosya|masaüstü|bilgisayar|yap|hazırla|özetle)\b/i.test(value)
+  return /[çğıöşü]/i.test(value) || unicodeWordPattern(String.raw`\b(bunu|şunu|dosya|masaüstü|bilgisayar|yap|hazırla|özetle)\b`, "i").test(value)
     ? "tr"
     : "en";
 }
@@ -214,14 +215,14 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
 
   for (const match of message.matchAll(/https?:\/\/\S+/gi)) add("url", match[0]);
   for (const match of message.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)) add("email", match[0]);
-  for (const match of message.matchAll(/\b[\wÇĞİÖŞÜçğıöşü ._-]{1,80}\.(?:pdf|docx|xlsx|csv|txt|png|jpg|jpeg|svg)\b/giu)) {
+  for (const match of message.matchAll(unicodeWordPattern(String.raw`\b[\wÇĞİÖŞÜçğıöşü ._-]{1,80}\.(?:pdf|docx|xlsx|csv|txt|png|jpg|jpeg|svg)\b`, "gi"))) {
     add("file_hint", match[0]);
   }
   for (const match of message.matchAll(/\b(vs ?code|visual studio code|chrome|safari|finder|terminal|excel|word|numbers|pages)\b/gi)) {
     add("app_hint", match[0]);
   }
   for (const match of message.matchAll(
-    /\b([\p{L}\p{N}][\p{L}\p{N} ._-]{0,60}?)\s+(?:uygulamasını|uygulamasini|uygulamayı|uygulamayi|programını|programini|programı|programi)\s+(?:aç|ac|kapat|başlat|baslat)(?=$|[\s.,!?])/giu,
+    unicodeWordPattern(String.raw`\b([\p{L}\p{N}][\p{L}\p{N} ._-]{0,60}?)\s+(?:uygulamasını|uygulamasini|uygulamayı|uygulamayi|programını|programini|programı|programi)\s+(?:aç|ac|kapat|başlat|baslat)(?=$|[\s.,!?])`, "gi"),
   )) {
     const appName = match[1]?.replace(/^(?:(?:lütfen|lutfen|şimdi|simdi|bana)\s+)+/i, "").trim();
     if (appName) add("app_hint", appName);
@@ -240,13 +241,13 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
 function inferLocalContext(message: string, capabilities: string[]): string[] {
   const normalized = message.toLocaleLowerCase("tr-TR");
   const contexts = new Set<string>();
-  if (/\b(masaüstü|masaustu|desktop|indirilenler|downloads|klasör|klasor|dosya|belge|pdf)\b/i.test(normalized)) {
+  if (unicodeWordPattern(String.raw`\b(masaüstü\p{L}*|masaustu\p{L}*|desktop|indirilenler\p{L}*|downloads|klasör\p{L}*|klasor\p{L}*|dosya\p{L}*|belge\p{L}*|pdf)\b`, "i").test(normalized)) {
     contexts.add("filesystem");
   }
-  if (/\b(ekran|screenshot|görüntü|goruntu)\b/i.test(normalized) || capabilities.includes("screen_context")) {
+  if (unicodeWordPattern(String.raw`\b(ekran|screenshot|görüntü|goruntu)\b`, "i").test(normalized) || capabilities.includes("screen_context")) {
     contexts.add("screen");
   }
-  if (/\b(chrome|safari|browser|tarayıcı|tarayici)\b/i.test(normalized) || capabilities.includes("browser_control")) {
+  if (unicodeWordPattern(String.raw`\b(chrome|safari|browser|tarayıcı|tarayici)\b`, "i").test(normalized) || capabilities.includes("browser_control")) {
     contexts.add("browser");
   }
   if (/\b(terminal|komut|shell)\b/i.test(normalized) || capabilities.includes("shell_run")) {
@@ -264,13 +265,13 @@ function inferLocalContext(message: string, capabilities: string[]): string[] {
 function isImageEditCommand(message: string): boolean {
   const normalized = message.toLocaleLowerCase("tr-TR");
   const explicitEditVerb =
-    /\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|netleştir|netlestir|kırp|kirp|retouch|edit|remove|replace|change|erase|enhance|upscale|crop)\b/iu.test(normalized);
+    unicodeWordPattern(String.raw`\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|netleştir|netlestir|kırp|kirp|retouch|edit|remove|replace|change|erase|enhance|upscale|crop)\b`, "i").test(normalized);
   const visualTarget =
-    /\b(görsel|gorsel|resim|fotoğraf|fotograf|image|photo|arka plan|yüz|yuz|saç|sac|kıyafet|kiyafet|renk|ışık|isik|kontrast)\b/iu.test(normalized);
+    unicodeWordPattern(String.raw`\b(görsel|gorsel|resim|fotoğraf|fotograf|image|photo|arka plan|yüz|yuz|saç|sac|kıyafet|kiyafet|renk|ışık|isik|kontrast)\b`, "i").test(normalized);
   const explicitEdit = explicitEditVerb && visualTarget;
   const sourceTransform =
-    /\b(bunu|şunu|sunu|onu|görseli|gorseli|resmi|fotoğrafı|fotografi|this|it|the image|the photo)\b.{0,80}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/iu.test(normalized) ||
-    /\b(anime|çizgi film|cizgi film|sinematik|cinematic|vintage|retro|noir|fotogerçekçi|fotogercekci|photorealistic|3d|sulu boya|watercolor|yağlı boya|yagli boya|tarzında|tarzinda|stilinde)\b.{0,60}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/iu.test(normalized) ||
+    unicodeWordPattern(String.raw`\b(bunu|şunu|sunu|onu|görseli|gorseli|resmi|fotoğrafı|fotografi|this|it|the image|the photo)\b.{0,80}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b`, "i").test(normalized) ||
+    unicodeWordPattern(String.raw`\b(anime|çizgi film|cizgi film|sinematik|cinematic|vintage|retro|noir|fotogerçekçi|fotogercekci|photorealistic|3d|sulu boya|watercolor|yağlı boya|yagli boya|tarzında|tarzinda|stilinde)\b.{0,60}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b`, "i").test(normalized) ||
     /\b(make|turn|transform)\s+(this|it|the image|the photo)\b/iu.test(normalized);
   return explicitEdit || sourceTransform;
 }
@@ -285,12 +286,12 @@ function inferKind(routeDecision: CommandRouteDecision, message: string): string
     ) ||
     isImageEditCommand(message)
   ) return "image_edit";
-  if (/\b(görsel|gorsel|resim|image|illustration|poster|afiş|afis)\b/iu.test(normalized)
-    && /\b(üret|uret|oluştur|olustur|çiz|ciz|generate|create|draw)\b/iu.test(normalized)) return "image_generate";
+  if (unicodeWordPattern(String.raw`\b(görsel|gorsel|resim|image|illustration|poster|afiş|afis)\b`, "i").test(normalized)
+    && unicodeWordPattern(String.raw`\b(üret\p{L}*|uret\p{L}*|oluştur\p{L}*|olustur\p{L}*|çiz\p{L}*|ciz\p{L}*|generate|create|draw)\b`, "i").test(normalized)) return "image_generate";
   if (/\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)) return "presentation_task";
   if (routeDecision.capabilities.includes("email_send")) return "email_send";
   if (routeDecision.capabilities.includes("email_draft")) return "email_draft";
-  if (/\b(pdf|docx|xlsx|excel|belge|doküman|dokuman|rapor)\b/i.test(normalized)) return "document_task";
+  if (unicodeWordPattern(String.raw`\b(pdf|docx|xlsx|excel|belge|doküman|dokuman|rapor)\b`, "i").test(normalized)) return "document_task";
   if (/\b(browser|chrome|safari|web|site|url|link)\b/i.test(normalized)) return "browser_task";
   if (/\b(terminal|komut|shell)\b/i.test(normalized)) return "terminal_task";
   if (/\b(ekran|screenshot|uygulama|program|app)\b/i.test(normalized)) return "computer_task";
@@ -343,17 +344,17 @@ function inferCapabilities(
     if (canonical) capabilities.add(canonical);
   }
   const normalized = message.toLocaleLowerCase("tr-TR");
-  const researchRequested = /\b(?:araştır|arastir|araştırma|arastirma|research|bilgi\s+topla|kaynak\s+topla)\b/iu.test(normalized);
+  const researchRequested = unicodeWordPattern(String.raw`\b(?:araştır\p{L}*|arastir\p{L}*|research|bilgi\s+topla\p{L}*|kaynak\s+topla\p{L}*)\b`, "i").test(normalized);
   const presentationRequested = /\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)
-    && /\b(?:hazırla|hazirla|oluştur|olustur|üret|uret|yap|çevir|cevir|kaydet|save|create|prepare)\b/iu.test(normalized);
+    && unicodeWordPattern(String.raw`\b(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yap\p{L}*|çevir\p{L}*|cevir\p{L}*|kaydet\p{L}*|save|create|prepare)\b`, "i").test(normalized);
   const directAppCommand = parseDirectDesktopAppCommand(message);
   const directImageFetch = parseDirectImageFetchCommand(message);
   const imageEditRequested =
     capabilities.has("image_edit") ||
     isImageEditCommand(message);
   const imageGenerateRequested = !imageEditRequested
-    && /\b(görsel|gorsel|resim|image|illustration|poster|afiş|afis)\b/iu.test(normalized)
-    && /\b(üret|uret|oluştur|olustur|çiz|ciz|generate|create|draw)\b/iu.test(normalized);
+    && unicodeWordPattern(String.raw`\b(görsel|gorsel|resim|image|illustration|poster|afiş|afis)\b`, "i").test(normalized)
+    && unicodeWordPattern(String.raw`\b(üret\p{L}*|uret\p{L}*|oluştur\p{L}*|olustur\p{L}*|çiz\p{L}*|ciz\p{L}*|generate|create|draw)\b`, "i").test(normalized);
   if (directAppCommand) {
     capabilities.add(directAppCommand.capability);
     capabilities.delete("desktop_operator.run");
@@ -377,24 +378,24 @@ function inferCapabilities(
     capabilities.add("presentation_write");
     capabilities.delete("desktop_operator.run");
   }
-  if (/\b(masaüstü|masaustu|desktop|indirilenler|downloads|klasör|klasor|dosya|belge|pdf)\b/i.test(normalized)) {
+  if (unicodeWordPattern(String.raw`\b(masaüstü\p{L}*|masaustu\p{L}*|desktop|indirilenler\p{L}*|downloads|klasör\p{L}*|klasor\p{L}*|dosya\p{L}*|belge\p{L}*|pdf)\b`, "i").test(normalized)) {
     capabilities.add("document_read");
   }
-  if (/\b(kaydet|save|yaz|oluştur|olustur|düzenle|duzenle|export|dışa aktar|disa aktar)\b/i.test(normalized)) {
+  if (unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
     if (presentationRequested) capabilities.add("presentation_write");
-    else if (/\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b/i.test(normalized)) capabilities.add("spreadsheet_write");
-    else if (/\b(pdf|svg|canvas|görsel|gorsel)\b/i.test(normalized)) capabilities.add("canvas_write");
+    else if (unicodeWordPattern(String.raw`\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b`, "i").test(normalized)) capabilities.add("spreadsheet_write");
+    else if (unicodeWordPattern(String.raw`\b(pdf|svg|canvas|görsel|gorsel)\b`, "i").test(normalized)) capabilities.add("canvas_write");
     else capabilities.add("document_write");
   }
   if (
-    /\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b/iu.test(normalized)
+    unicodeWordPattern(String.raw`\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b`, "i").test(normalized)
     || (/\bweb\b/iu.test(normalized) && !researchRequested)
     || /https?:\/\//i.test(message)
   ) {
     capabilities.add("browser_control");
   }
   if (/\b(terminal|komut|shell)\b/i.test(normalized)) capabilities.add("shell_run");
-  if (/\b(ekran|screenshot|görüntü|goruntu)\b/i.test(normalized)) capabilities.add("desktop_operator.observe_screen");
+  if (unicodeWordPattern(String.raw`\b(ekran|screenshot|görüntü|goruntu)\b`, "i").test(normalized)) capabilities.add("desktop_operator.observe_screen");
   return [...capabilities].slice(0, 16);
 }
 
@@ -416,15 +417,15 @@ function inferExpectedOutputs(
   if (
     isImageEditCommand(message) ||
     (
-      /\b(görsel|gorsel|resim|fotoğraf|fotograf|image|photo)\b/iu.test(normalized) &&
-      /\b(üret|uret|oluştur|olustur|çiz|ciz|generate|create|draw)\b/iu.test(normalized)
+      unicodeWordPattern(String.raw`\b(görsel|gorsel|resim|fotoğraf|fotograf|image|photo)\b`, "i").test(normalized) &&
+      unicodeWordPattern(String.raw`\b(üret\p{L}*|uret\p{L}*|oluştur\p{L}*|olustur\p{L}*|çiz\p{L}*|ciz\p{L}*|generate|create|draw)\b`, "i").test(normalized)
     )
   ) {
     addOutput({ kind: "artifact", format: "image", required: true });
     addOutput({ kind: "file_update", format: "state_readback", required: true });
   }
   const presentationRequested = /\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)
-    && /\b(?:hazırla|hazirla|oluştur|olustur|üret|uret|yap|çevir|cevir|kaydet|save|create|prepare)\b/iu.test(normalized);
+    && unicodeWordPattern(String.raw`\b(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yap\p{L}*|çevir\p{L}*|cevir\p{L}*|kaydet\p{L}*|save|create|prepare)\b`, "i").test(normalized);
   if (presentationRequested) {
     addOutput({ kind: "artifact", format: "artifact_reference", required: true });
     addOutput({ kind: "file_update", format: "state_readback", required: true });
@@ -434,14 +435,14 @@ function inferExpectedOutputs(
   ) ?? false;
   const explicitArtifactCreation =
     /\b(pdf|docx|xlsx|pptx|csv|svg|dosya|belge|rapor|sunum|slayt|presentation)\b/i.test(normalized) &&
-    /\b(oluştur|olustur|hazırla|hazirla|dönüştür|donustur|export|dışa aktar|disa aktar|kaydet|yap)\b/i.test(normalized);
+    unicodeWordPattern(String.raw`\b(oluştur|olustur|hazırla|hazirla|dönüştür|donustur|export|dışa aktar|disa aktar|kaydet|yap)\b`, "i").test(normalized);
   if (typedArtifactRequested || explicitArtifactCreation) {
     addOutput({ kind: "artifact", format: "artifact_reference", required: true });
   }
-  if (/\b(kaydet|save|düzenle|duzenle|yaz|oluştur|olustur|hazırla|hazirla|üret|uret)\b/i.test(normalized)) {
+  if (unicodeWordPattern(String.raw`\b(kaydet|save|düzenle|duzenle|yaz|oluştur|olustur|hazırla|hazirla|üret|uret)\b`, "i").test(normalized)) {
     addOutput({ kind: "file_update", format: "state_readback", required: true });
   }
-  if (/\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b/i.test(normalized)) {
+  if (unicodeWordPattern(String.raw`\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b`, "i").test(normalized)) {
     addOutput({ kind: "browser_state", format: "tool_result", required: false });
   }
   return outputs;
@@ -564,7 +565,7 @@ function buildSteps(input: {
     if (!researchRequested) args.sourceContext = semanticBrief;
     if (
       capability === "presentation_write"
-      && /\b(?:masaüstü|masaustu|desktop)\b/iu.test(topic)
+      && unicodeWordPattern(String.raw`\b(?:masaüstü\p{L}*|masaustu\p{L}*|desktop)\b`, "i").test(topic)
     ) {
       const filename = topic
         .toLocaleLowerCase("tr-TR")
@@ -574,7 +575,7 @@ function buildSteps(input: {
         .replace(/[şŞ]/g, "s")
         .replace(/[öÖ]/g, "o")
         .replace(/[çÇ]/g, "c")
-        .replace(/\b(?:webden|web'den|araştır|arastir|araştırıp|arastirip|sonuçları|sonuclari|sunum|slayt|pptx|powerpoint|hazırla|hazirla|oluştur|olustur|masaüstüne|masaustune|desktop)\b/giu, " ")
+        .replace(unicodeWordPattern(String.raw`\b(?:webden|web'den|araştır|arastir|araştırıp|arastirip|sonuçları|sonuclari|sunum|slayt|pptx|powerpoint|hazırla|hazirla|oluştur|olustur|masaüstüne|masaustune|desktop)\b`, "gi"), " ")
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "")
         .slice(0, 64) || "elyan-sunum";

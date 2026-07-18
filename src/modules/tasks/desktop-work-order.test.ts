@@ -250,3 +250,41 @@ test("close-app browser task does not append a generic browser search step", () 
   assert.equal(capabilities.includes("close_app"), true);
   assert.equal(capabilities.includes("browser_control"), false);
 });
+
+// ── Türkçe kelime sınırı dönüşümü ölçümü ─────────────────────────────
+// Dönüşümden önce bu ifadeler HİÇBİR kalıba takılmıyordu: "afiş" (ş ile
+// biter), "üret"/"çevir" (ü/ç ile başlar), "şunu" — ham ASCII \b bu
+// kenarlarda asla eşleşmez, istek jenerik desktop_cowork'e düşüyordu.
+
+test("saf Türkçe 'afiş üret' image_generate rotasına gider", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Bana bir afiş üret lütfen",
+    title: "Afiş",
+    routeDecision: routeDecision({ capabilities: [] }),
+    requestedCapabilities: [],
+  });
+  assert.equal(workOrder.goal.kind, "image_generate");
+});
+
+test("saf Türkçe 'şunu anime tarzında çevir' image_edit sayılır", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Şunu anime tarzında çevir",
+    title: "Görsel",
+    routeDecision: routeDecision({ capabilities: [] }),
+    requestedCapabilities: [],
+  });
+  assert.equal(workOrder.goal.kind, "image_edit");
+});
+
+test("saf Türkçe 'masaüstüne kaydet' dosya yeteneğini işaretler", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Raporu masaüstüne kaydet",
+    title: "Rapor",
+    routeDecision: routeDecision({ capabilities: [] }),
+    requestedCapabilities: [],
+  });
+  // "masaüstüne" → document_read, "kaydet" → document_write; dönüşümden
+  // önce her iki alternatif de (ü-başlangıç/ş-kenar) hiç eşleşmiyordu.
+  assert.equal(workOrder.requiredCapabilities.includes("document_read"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("document_write"), true);
+});

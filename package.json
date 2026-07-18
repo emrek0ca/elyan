@@ -37,7 +37,8 @@
     "test": "npm run build && node --test $(find dist -name '*.test.js' -type f | sort)",
     "db:generate": "npm run build && drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:push": "npm run build && drizzle-kit push"
+    "db:push": "npm run build && drizzle-kit push",
+    "retrieval:eval": "tsx scripts/retrieval-eval.mts"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",

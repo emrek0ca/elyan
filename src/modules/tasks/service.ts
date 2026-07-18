@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { ArtifactInput, TaskStatus } from "../../contracts/domain.js";
@@ -309,7 +310,7 @@ function buildPromptEchoRecoveryAnswer(prompt: string) {
 
   const asksAnimalName =
     /\bhayvan\b/u.test(normalized) &&
-    /\b(isim|ismi|ad|adı|adi|soyle|söyle|oner|öner|bul)\b/u.test(normalized);
+    unicodeWordPattern(String.raw`\b(isim|ismi|ad|adı|adi|soyle|söyle|oner|öner|bul)\b`, "").test(normalized);
   if (asksAnimalName) {
     return "Yıldız burunlu köstebek. Burnunda yıldız şeklinde 22 dokunaç bulunan, çok az bilinen ve oldukça sıra dışı görünümlü bir memeli.";
   }
