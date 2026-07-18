@@ -5,7 +5,7 @@ import {
   extractHostedGeneratedImage,
 } from "./hosted-image-adapter.js";
 
-test("Gemini image adapter defaults to a 1K PNG Interactions request", () => {
+test("Gemini image adapter builds a minimal Interactions text-to-image request", () => {
   const request = buildHostedImageProviderRequest({
     config: {
       provider: "gemini",
@@ -20,12 +20,15 @@ test("Gemini image adapter defaults to a 1K PNG Interactions request", () => {
 
   assert.equal(request.path, "/interactions");
   assert.equal(request.headers["x-goog-api-key"], "secret-test-key");
-  assert.deepEqual(request.body.response_format, {
-    type: "image",
-    mime_type: "image/png",
-    aspect_ratio: "3:2",
-    image_size: "1K",
-  });
+  assert.deepEqual(request.body.input, [
+    {
+      type: "text",
+      text: "Warm editorial illustration\n\nRequested aspect ratio: 3:2.",
+    },
+  ]);
+  assert.equal("response_format" in request.body, false);
+  assert.equal("store" in request.body, false);
+  assert.equal("system_instruction" in request.body, false);
   assert.doesNotMatch(JSON.stringify(request.body), /secret-test-key/u);
 });
 
@@ -44,10 +47,13 @@ test("Gemini image adapter sends exact prompt and source image for editing", () 
   });
 
   assert.deepEqual(request.body.input, [
-    { type: "text", text: "Arka planı gün batımı yap, kişiyi değiştirme" },
+    {
+      type: "text",
+      text: "Arka planı gün batımı yap, kişiyi değiştirme\n\nRequested image size: 2K.",
+    },
     { type: "image", data: "YWJjZA==", mime_type: "image/png" },
   ]);
-  assert.equal((request.body.response_format as Record<string, unknown>).aspect_ratio, undefined);
+  assert.equal("response_format" in request.body, false);
 });
 
 test("hosted image adapter normalizes Gemini inline image output", () => {

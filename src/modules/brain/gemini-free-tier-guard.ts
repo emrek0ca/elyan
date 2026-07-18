@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 
 export type GeminiFreeFeature =
   | "brain_response"
@@ -63,14 +64,23 @@ const GEMINI_FREE_COOLDOWN_KEY = "gemini:free:provider_cooldown";
 const DEFAULT_GEMINI_FREE_COOLDOWN_MS = 120_000;
 const MAX_GEMINI_FREE_COOLDOWN_MS = 15 * 60_000;
 
-const PRIVATE_ACCOUNT_OPERATION_PATTERN =
-  /\b(?:my|mine|benim|bana\s+ait|hesabım(?:da|daki)?|hesabim(?:da|daki)?|bağlı\s+hesabım|bagli\s+hesabim|gelen\s+kutum|inbox(?:ım)?|maillerim|mesajlarım|mesajlarim|takvimim|ajandam|dosyalarım|dosyalarim|repolar[ıi]m|issue(?:lar)?[ıi]m|pull\s+requestlerim|kanallar[ıi]m|sayfalar[ıi]m|projelerim)\b/iu;
-const PRIVATE_ACCOUNT_DATA_PATTERN =
-  /\b(?:gmail|drive|google\s+drive|calendar|takvim|slack|notion|github|linear|mail|e-?posta|email|inbox|mesaj|message|repo|repository|issue|pull\s+request|channel|workspace|account|hesap)\b/iu;
+const PRIVATE_ACCOUNT_OPERATION_PATTERN = unicodeWordPattern(
+  "(?:my|mine|benim|bana\\s+ait|hesabım(?:da|daki)?|hesabim(?:da|daki)?|bağlı\\s+hesabım|bagli\\s+hesabim|gelen\\s+kutum|inbox(?:ım)?|mailim|maillerim|mesajlarım|mesajlarim|takvimim|ajandam|dosyalarım|dosyalarim|repolar[ıi]m|issue(?:lar)?[ıi]m|pull\\s+requestlerim|kanallar[ıi]m|sayfalar[ıi]m|projelerim)",
+  "iu",
+);
+const PRIVATE_ACCOUNT_DATA_PATTERN = unicodeWordPattern(
+  "(?:gmail|drive|google\\s+drive|calendar|takvim|slack|notion|github|linear|mail|e-?posta|email|inbox|mesaj|message|repo|repository|issue|pull\\s+request|channel|workspace|account|hesap)",
+  "iu",
+);
 const PRIVATE_RAW_CONTENT_PATTERN =
-  /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?:\/\/\S+|file:\/\/|\/Users\/|[A-Za-z]:\\|\b(?:password|parola|şifre|sifre|token|secret|credential|kimlik|sağlık|saglik|adresim|telefonum|özel|ozel|private)\b)/iu;
-const FIRST_PERSON_PERSONAL_PATTERN =
-  /(?:\b(?:ben|bana|beni|benim|bende|adım|adim|ismim|yaşım|yasim|yaşıyorum|yasiyorum|konumum|evim|işim|isim|ailem|my|mine|me|myself)\b|\bI\s+(?:am|have|live|work|need|want|feel)\b)/iu;
+  new RegExp(
+    `(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}|https?:\\/\\/\\S+|file:\\/\\/|\\/Users\\/|[A-Za-z]:\\\\|${unicodeWordPattern("(?:password|parola|şifre|sifre|token|secret|credential|kimlik|sağlık|saglik|adresim|telefonum|özel|ozel|private)", "iu").source})`,
+    "iu",
+  );
+const FIRST_PERSON_PERSONAL_PATTERN = new RegExp(
+  `(?:${unicodeWordPattern("(?:ben|bana|beni|benim|bende|adım|adim|ismim|yaşım|yasim|yaşıyorum|yasiyorum|konumum|evim|işim|isim|ailem|my|mine|me|myself)", "iu").source}|\\bI\\s+(?:am|have|live|work|need|want|feel)\\b)`,
+  "iu",
+);
 
 function featureBudgetLimit(total: number, feature: GeminiFreeFeature): number {
   return Math.max(1, Math.floor(total * FEATURE_BUDGET_SHARE[feature]));

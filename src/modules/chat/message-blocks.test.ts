@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    buildAssistantConnectorResultBlock,
     buildAssistantSummaryBlock,
     buildAssistantMessageBlocks,
     normalizeAssistantMessageBlocks,
@@ -1162,4 +1163,86 @@ test("mobile render fixtures produce schema-valid elyan_blocks.v2 payloads", () 
       assert.equal((block as { visibility?: string }).visibility, "user_visible");
     }
   }
+});
+
+// ── Modern blok tipleri compose zincirinden sağ çıkmalı ──────────────
+// Canlı vaka: inference connector_result üretiyordu ama parseAssistantBlock'ta
+// case olmadığı için compose bloğu yutuyor, mobil widget hiç açılmıyordu.
+
+test("composeAssistantMessageBlocks connector_result bloğunu olduğu gibi geçirir", () => {
+  const block = buildAssistantConnectorResultBlock({
+    provider: "gmail",
+    tool: "gmail.search",
+    title: "Gelen kutusu",
+    kind: "email_list",
+    summary: "2 e-posta",
+    items: [
+      { title: "Fatura", subtitle: "Ali Veli", timestamp: "12 Tem 10:00" },
+      { title: "Haftalık rapor" },
+    ],
+    columns: ["Kimden", "Konu", "Tarih"],
+    rows: [["Ali Veli", "Fatura", "12 Tem"]],
+  });
+  assert.ok(block);
+  const composed = composeAssistantMessageBlocks({
+    blocks: [block],
+    content: "",
+  });
+  const kept = composed.find(
+    (item) => (item as { type?: string }).type === "connector_result",
+  ) as Record<string, unknown> | undefined;
+  assert.ok(kept, "connector_result compose'dan düşmemeli");
+  assert.equal(kept.provider, "gmail");
+  assert.equal(
+    (kept.items as Array<Record<string, unknown>>).length,
+    2,
+  );
+  assert.equal(kept.visibility, "user_visible");
+});
+
+test("compose passthrough tipleri korur, bozuk connector_result yine düşer", () => {
+  const passthroughBlocks = [
+    { type: "clarification", question: "Hangisi?", visibility: "user_visible" },
+    {
+      type: "capability_unavailable",
+      capability: "desktop",
+      title: "Masaüstü bağlı değil",
+      visibility: "user_visible",
+    },
+    { type: "terminal", command: "ls", output: "a.txt", visibility: "user_visible" },
+    {
+      type: "goal_progress",
+      goalId: "3f6f0b1e-aaaa-bbbb-cccc-121212121212",
+      step: 1,
+      ofSteps: 3,
+      advancedTo: "ilk adım bitti",
+      blocker: null,
+      done: false,
+    },
+  ];
+  const composed = composeAssistantMessageBlocks({
+    blocks: passthroughBlocks,
+    content: "",
+  });
+  const keptTypes = composed.map((item) => (item as { type?: string }).type);
+  for (const expected of [
+    "clarification",
+    "capability_unavailable",
+    "terminal",
+    "goal_progress",
+  ]) {
+    assert.ok(keptTypes.includes(expected), `${expected} düşmemeli`);
+  }
+
+  // Şema doğrulaması gevşemedi: items'sız connector_result hâlâ elenir.
+  const invalid = composeAssistantMessageBlocks({
+    blocks: [
+      { type: "connector_result", provider: "gmail", tool: "gmail.search", title: "X", items: [] },
+    ],
+    content: "",
+  });
+  assert.equal(
+    invalid.some((item) => (item as { type?: string }).type === "connector_result"),
+    false,
+  );
 });

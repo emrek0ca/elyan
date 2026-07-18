@@ -4,11 +4,16 @@ import { integrationConnections, mcpServers } from "../../db/schema.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
 
+const MCP_SHELL_CONTROL_PATTERN = /[\0\r\n;&|`$<>]/u;
+const MCP_INLINE_SECRET_ARG_PATTERN =
+  /(?:^|[-_])(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer|password|passwd|secret|client[-_]?secret)(?:=|:|$)/iu;
+
 function validateMcpInput(input: {
   transport?: "stdio" | "remote" | "oauth_remote" | "streamable_http";
   authType?: "none" | "bearer" | "oauth2" | "api_key";
   baseUrl?: string;
   command?: string;
+  args?: string[];
   integrationConnectionId?: string;
 }) {
   if (input.transport === "stdio" && !input.command) {
@@ -21,6 +26,19 @@ function validateMcpInput(input: {
 
   if (input.authType === "oauth2" && !input.integrationConnectionId) {
     throw badRequest("oauth2 MCP servers require integrationConnectionId");
+  }
+
+  if (input.command && MCP_SHELL_CONTROL_PATTERN.test(input.command)) {
+    throw badRequest("MCP command cannot contain shell control characters");
+  }
+
+  for (const arg of input.args ?? []) {
+    if (MCP_SHELL_CONTROL_PATTERN.test(arg)) {
+      throw badRequest("MCP args cannot contain shell control characters");
+    }
+    if (MCP_INLINE_SECRET_ARG_PATTERN.test(arg)) {
+      throw badRequest("MCP args cannot include inline secrets");
+    }
   }
 }
 

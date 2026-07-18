@@ -35,12 +35,15 @@ export function buildHostedImageProviderRequest(input: {
   const editing = sourceImages.length > 0;
   const premiumEditing =
     editing && /\bpro\b/i.test(input.config.model);
-  const responseFormat: Record<string, string> = {
-    type: "image",
-    mime_type: "image/png",
-    image_size: input.config.imageSize ?? "1K",
-  };
-  if (input.aspectRatio) responseFormat.aspect_ratio = input.aspectRatio;
+  const requestHints = [
+    input.aspectRatio ? `Requested aspect ratio: ${input.aspectRatio}.` : null,
+    input.config.imageSize && input.config.imageSize !== "1K"
+      ? `Requested image size: ${input.config.imageSize}.`
+      : null,
+  ].filter(Boolean);
+  const textPrompt = requestHints.length > 0
+    ? `${input.prompt}\n\n${requestHints.join("\n")}`
+    : input.prompt;
   return {
     path: "/interactions",
     headers: {
@@ -49,30 +52,19 @@ export function buildHostedImageProviderRequest(input: {
     },
     body: {
       model: input.config.model,
-      store: false,
       input: sourceImages.length > 0
         ? [
-            { type: "text", text: input.prompt },
+            { type: "text", text: textPrompt },
             ...sourceImages.map((image) => ({
               type: "image",
               data: image.base64Data,
               mime_type: image.mimeType,
             })),
           ]
-        : input.prompt,
-      system_instruction: sourceImages.length > 0
-        ? [
-            "Treat the first supplied image as the primary canvas to edit, not as inspiration for a new recreation.",
-            "Treat any additional images only as ordered identity, character, product, style, or object references.",
-            "Apply only the user's requested visual delta.",
-            "Preserve every unmentioned face, identity, body, product geometry, logo, text, object, crop, camera angle, lighting, texture, color, transparency, and composition detail.",
-            "Do not add, remove, beautify, restyle, retouch, or rewrite anything unless the user explicitly requested it.",
-          ].join(" ")
-        : "Follow the user's visual request precisely. Do not add unrequested text, logos, watermarks, or objects.",
+        : [{ type: "text", text: textPrompt }],
       ...(premiumEditing
         ? { generation_config: { thinking_level: "high" } }
         : {}),
-      response_format: responseFormat,
     },
     timeoutMs: 150_000,
     defaultMimeType: "image/png",

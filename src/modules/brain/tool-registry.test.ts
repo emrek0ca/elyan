@@ -5,6 +5,7 @@ import {
   executeAgentTool,
   getAgentToolMetadata,
   listAgentTools,
+  readCanonicalAgentToolArgs,
 } from "./tool-registry.js";
 
 function createFakeMemoryApp() {
@@ -316,4 +317,76 @@ test("executeAgentTool: geçersiz argümanda alan yollu hata mesajı döner", as
   assert.equal(result.ok, false);
   assert.equal(result.error?.code, "invalid_tool_args");
   assert.match(result.error?.message ?? "", /query/);
+});
+
+// ── Connector read arg toleransı ─────────────────────────────────────
+// Canlı vaka: "Mailleri oku" turunda model gmail.search'e boş/eksik query
+// üretti → invalid_tool_args → kullanıcıya "araç kataloğu doğrulayamıyor".
+// Read araçları model bozulmalarına deterministik onarımla dayanmalı.
+
+test("gmail.search: boş args gelen kutusu listelemeye çözülür", () => {
+  const args = readCanonicalAgentToolArgs("gmail.search", {});
+  assert.deepEqual(args, { query: "in:inbox", limit: 5 });
+});
+
+test("gmail.search: boş string query default'a düşer", () => {
+  const args = readCanonicalAgentToolArgs("gmail.search", { query: "  " });
+  assert.equal(args?.query, "in:inbox");
+});
+
+test("gmail.search: q/max_results alias'ları kanonik anahtara taşınır", () => {
+  const args = readCanonicalAgentToolArgs("gmail.search", {
+    q: "from:ali is:unread",
+    max_results: 3,
+  });
+  assert.equal(args?.query, "from:ali is:unread");
+  assert.equal(args?.limit, 3);
+});
+
+test("gmail.search: null query silinir ve default devreye girer", () => {
+  const args = readCanonicalAgentToolArgs("gmail.search", {
+    query: null,
+    count: 2,
+  });
+  assert.equal(args?.query, "in:inbox");
+  assert.equal(args?.limit, 2);
+});
+
+test("calendar.list_events ve drive.search boş args kabul eder", () => {
+  assert.deepEqual(readCanonicalAgentToolArgs("calendar.list_events", {}), {
+    days: 7,
+    limit: 10,
+  });
+  assert.deepEqual(readCanonicalAgentToolArgs("drive.search", {}), {
+    query: "",
+    limit: 10,
+  });
+});
+
+test("gmail.read: id alias'ı çalışır ama boş args hâlâ reddedilir", () => {
+  assert.deepEqual(readCanonicalAgentToolArgs("gmail.read", { id: "abc123" }), {
+    messageId: "abc123",
+  });
+  assert.equal(readCanonicalAgentToolArgs("gmail.read", {}), null);
+});
+
+test("yazma araçları gevşemez: gmail.send boş args reddedilir", () => {
+  assert.equal(readCanonicalAgentToolArgs("gmail.send", {}), null);
+  assert.equal(
+    readCanonicalAgentToolArgs("calendar.create_event", { title: "x" }),
+    null,
+  );
+});
+
+test("executeAgentTool: bozuk gmail.search args'ı invalid_tool_args üretmez", async () => {
+  const fake = createFakeMemoryApp();
+  const result = await executeAgentTool(
+    fake.app,
+    { userId: "user-1", sessionId: null, workload: "mobile_chat_fast", allowStateWrites: false, allowSideEffects: false },
+    // query sayı: alias onarımı da kurtaramaz → salt-default fallback yolu.
+    { tool: "gmail.search", args: { query: 42 } as never },
+  );
+  // Fallback {} parse'ı geçer, yürütme fake app'te başka sebeple düşebilir;
+  // kritik olan sözleşme hatasının kullanıcıya sızmaması.
+  assert.notEqual(result.error?.code, "invalid_tool_args");
 });

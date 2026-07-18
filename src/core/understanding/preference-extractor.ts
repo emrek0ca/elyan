@@ -8,6 +8,7 @@ import type {
 import { filterLearningSignals } from "./personalization-policy.js";
 import { extractProjectHints } from "./project-context.js";
 import { detectTurkicLanguagePreference } from "./turkic-language.js";
+import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 
 const stackKeywords = [
   "typescript",
@@ -30,6 +31,80 @@ const stackKeywords = [
 
 const IDENTITY_EXTRACTOR_VERSION = "identity_v1";
 const STYLE_CORRECTION_EXTRACTOR_VERSION = "style_correction_v1";
+const explicitConciseCorrectionPattern = unicodeWordPattern(
+  String.raw`\b(daha\s+k[ıi]sa|k[ıi]sa\s+(?:yaz|cevap\s+ver|tut|kes|ge[çc]|anlat)|gereksiz\s+uzatma|uzatma|(?:cevap|yan[ıi]t|yazd[ıi][ğg][ıi]n|bu)\s+(?:çok|cok|fazla)\s+uzun|(?:çok|cok|fazla)\s+uzun\s+(?:oldu|geldi|yazd[ıi]n)|shorter|more\s+concise|be\s+concise|keep\s+it\s+short)\b`,
+  "i",
+);
+const warmTeachingStyleWordPattern = unicodeWordPattern(
+  String.raw`\b(doğal|dogal|samimi|sıcakkanlı|sicakkanli|yakın|yakin|olgun|açıklayıcı|aciklayici|öğretici|ogretici|natural|warm|warmer|personable|close|closer|mature|explanatory|teaching|teacherly)\b`,
+  "i",
+);
+const warmTeachingScopeWordPattern = unicodeWordPattern(
+  String.raw`\b(cevap|yanıt|yanit|konuş|konus|üslup|uslup|ton|kişilik|kisilik|karakter|tarz|style|tone|personality|reply|response|answer|every language|all languages|her dil|elyan)\b`,
+  "i",
+);
+const warmTeachingDirectiveWordPattern = unicodeWordPattern(
+  String.raw`\b(daha|biraz daha|olmasını|olmasini|sağla|sagla|geliştir|gelistir|istiyorum|tercih|should be|make it|be more|become|improve)\b`,
+  "i",
+);
+const nameRememberPattern = unicodeWordPattern(
+  String.raw`\b(?:benim adım|adım)\s+([A-Za-zÇĞİÖŞÜçğıöşü-]+(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü-]+){0,2}?)(?:['’](?:ı|i|u|ü|yı|yi|yu|yü))?\s+(?:hat[ıi]rla|unutma|akl[ıi]nda tut)\b`,
+  "i",
+);
+const nameStatementPattern = unicodeWordPattern(
+  String.raw`\b(?:benim adım|adım)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü'-]+){0,2})`,
+  "i",
+);
+const englishNameStatementPattern = unicodeWordPattern(String.raw`\bmy name is\s+([A-Za-z][A-Za-z' -]{1,60})`, "i");
+const preferredNameCallPattern = unicodeWordPattern(
+  String.raw`\b(?:bana|beni)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+)\s+(?:diye\s+)?(?:çağır|cagir)\b`,
+  "i",
+);
+const preferredNameAddressPattern = unicodeWordPattern(
+  String.raw`\b(?:bundan\s+sonra\s+)?(?:bana|beni)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+)\s+(?:diye\s+)?(?:de|seslen|hitap\s+et)\b`,
+  "i",
+);
+const englishPreferredNamePattern = unicodeWordPattern(String.raw`\bcall me\s+([A-Za-z][A-Za-z' -]{1,60})`, "i");
+const jobSelfStatementPattern = unicodeWordPattern(
+  String.raw`\b(?:ben|i[' ]?m|i am)\s+(?:bir\s+|an?\s+)?([^.,\n]{2,60})\s+(?:olarak\s+)?çalışıyorum\b`,
+  "i",
+);
+const jobRoleStatementPattern = unicodeWordPattern(String.raw`\b([^.,\n]{2,60})\s+olarak\s+çalışıyorum\b`, "i");
+const englishWorkAsPattern = unicodeWordPattern(String.raw`\bi work as\s+([^.,\n]{2,60})`, "i");
+const englishJobStatementPattern = unicodeWordPattern(String.raw`\bi[' ]?m\s+an?\s+([^.,\n]{2,60})`, "i");
+const companyWorkplacePattern = unicodeWordPattern(
+  String.raw`\b([^.,\n]{2,80})\s+(?:şirketinde|firmasında)\s+çalışıyorum\b`,
+  "i",
+);
+const englishWorkAtPattern = unicodeWordPattern(String.raw`\bi work at\s+([^.,\n]{2,80})`, "i");
+const locationLivingPattern = unicodeWordPattern(String.raw`\b([^.,\n]{2,60})['’]?(?:da|de|ta|te)\s+yaşıyorum\b`, "i");
+const englishLiveInPattern = unicodeWordPattern(String.raw`\bi live in\s+([^.,\n]{2,60})`, "i");
+const locationStatementPattern = unicodeWordPattern(String.raw`\bkonumum\s+([^.,\n]{2,60})`, "i");
+const timezoneStatementPattern = unicodeWordPattern(
+  String.raw`\b(?:saat dilimim|time ?zone(?: is)?|timezone(?: is)?)\s+([A-Za-z0-9_+\-:/]{2,40})`,
+  "i",
+);
+const explicitLanguageStatementPattern = unicodeWordPattern(
+  String.raw`\b(?:tercih ettiğim dil|tercih ettigim dil|preferred language(?: is)?)\s+([^.,\n]{2,32})`,
+  "i",
+);
+const conciseKeywordPattern = unicodeWordPattern(String.raw`\b(concise|short|brief|kisa|kısa|terse)\b`, "i");
+const detailedKeywordPattern = unicodeWordPattern(
+  String.raw`\b(detailed|thorough|detayli|detaylı|ayrintili|ayrıntılı)\b`,
+  "i",
+);
+const feedbackStyleKeywordPattern = unicodeWordPattern(
+  String.raw`\b(shorter|longer|concise|detailed|turkish|english|warm|warmer|natural|personable|mature|teaching|explanatory|kısa|detaylı|türkçe|ingilizce|samimi|sıcakkanlı|sicakkanli|doğal|dogal|olgun|öğretici|ogretici|açıklayıcı|aciklayici)\b`,
+  "i",
+);
+const preferredAnswerPattern = unicodeWordPattern(
+  String.raw`\b(format|style|tone|concise|detailed|bullet|türkçe|turkish)\b`,
+  "i",
+);
+const implementationBoundaryPattern = unicodeWordPattern(
+  String.raw`\b(do not|don't|never|asla|yapma|dokunma|bozma|redesign|replace)\b`,
+  "i",
+);
 const PREFERRED_NAME_STOP_WORDS = new Set([
   "cevap",
   "yanıt",
@@ -154,9 +229,7 @@ function buildIdentitySignal(input: {
 }
 
 function isExplicitConciseCorrection(text: string): boolean {
-  return /\b(daha\s+k[ıi]sa|k[ıi]sa\s+(?:yaz|cevap\s+ver|tut|kes|ge[çc]|anlat)|gereksiz\s+uzatma|uzatma|(?:cevap|yan[ıi]t|yazd[ıi][ğg][ıi]n|bu)\s+(?:çok|cok|fazla)\s+uzun|(?:çok|cok|fazla)\s+uzun\s+(?:oldu|geldi|yazd[ıi]n)|shorter|more\s+concise|be\s+concise|keep\s+it\s+short)\b/iu.test(
-    text,
-  );
+  return explicitConciseCorrectionPattern.test(text);
 }
 
 function isExplicitWarmTeachingStylePreference(text: string): boolean {
@@ -164,13 +237,11 @@ function isExplicitWarmTeachingStylePreference(text: string): boolean {
   if (!compact) {
     return false;
   }
-  const styleWords =
-    /\b(doğal|dogal|samimi|sıcakkanlı|sicakkanli|yakın|yakin|olgun|açıklayıcı|aciklayici|öğretici|ogretici|natural|warm|warmer|personable|close|closer|mature|explanatory|teaching|teacherly)\b/iu;
-  const scopeWords =
-    /\b(cevap|yanıt|yanit|konuş|konus|üslup|uslup|ton|kişilik|kisilik|karakter|tarz|style|tone|personality|reply|response|answer|every language|all languages|her dil|elyan)\b/iu;
-  const directiveWords =
-    /\b(daha|biraz daha|olmasını|olmasini|sağla|sagla|geliştir|gelistir|istiyorum|tercih|should be|make it|be more|become|improve)\b/iu;
-  return styleWords.test(compact) && scopeWords.test(compact) && directiveWords.test(compact);
+  return (
+    warmTeachingStyleWordPattern.test(compact) &&
+    warmTeachingScopeWordPattern.test(compact) &&
+    warmTeachingDirectiveWordPattern.test(compact)
+  );
 }
 
 function buildWarmTeachingStyleSignals(input: {
@@ -265,54 +336,54 @@ function extractIdentitySignals(input: TaskUnderstandingInput): LearningSignal[]
   };
 
   const nameMatch =
-    text.match(/\b(?:benim adım|adım)\s+([A-Za-zÇĞİÖŞÜçğıöşü-]+(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü-]+){0,2}?)(?:['’](?:ı|i|u|ü|yı|yi|yu|yü))?\s+(?:hat[ıi]rla|unutma|akl[ıi]nda tut)\b/iu) ??
-    text.match(/\b(?:benim adım|adım)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+(?:\s+[A-Za-zÇĞİÖŞÜçğıöşü'-]+){0,2})/iu) ??
-    text.match(/\bmy name is\s+([A-Za-z][A-Za-z' -]{1,60})/iu);
+    text.match(nameRememberPattern) ??
+    text.match(nameStatementPattern) ??
+    text.match(englishNameStatementPattern);
   if (nameMatch?.[1]) {
     push(buildIdentitySignal({ key: "name", value: nameMatch[1], taskId: input.taskId, confidence: 0.97 }));
   }
 
   const preferredNameMatch =
-    text.match(/\b(?:bana|beni)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+)\s+(?:diye\s+)?(?:çağır|cagir)\b/iu) ??
-    text.match(/\b(?:bundan\s+sonra\s+)?(?:bana|beni)\s+([A-Za-zÇĞİÖŞÜçğıöşü'-]+)\s+(?:diye\s+)?(?:de|seslen|hitap\s+et)\b/iu) ??
-    text.match(/\bcall me\s+([A-Za-z][A-Za-z' -]{1,60})/iu);
+    text.match(preferredNameCallPattern) ??
+    text.match(preferredNameAddressPattern) ??
+    text.match(englishPreferredNamePattern);
   if (preferredNameMatch?.[1] && isPlausiblePreferredName(preferredNameMatch[1])) {
     push(buildIdentitySignal({ key: "preferred_name", value: preferredNameMatch[1], taskId: input.taskId, confidence: 0.96 }));
   }
 
   const jobMatch =
-    text.match(/\b(?:ben|i[' ]?m|i am)\s+(?:bir\s+|an?\s+)?([^.,\n]{2,60})\s+(?:olarak\s+)?çalışıyorum\b/iu) ??
-    text.match(/\b([^.,\n]{2,60})\s+olarak\s+çalışıyorum\b/iu) ??
-    text.match(/\bi work as\s+([^.,\n]{2,60})/iu) ??
-    text.match(/\bi[' ]?m\s+an?\s+([^.,\n]{2,60})/iu);
+    text.match(jobSelfStatementPattern) ??
+    text.match(jobRoleStatementPattern) ??
+    text.match(englishWorkAsPattern) ??
+    text.match(englishJobStatementPattern);
   if (jobMatch?.[1]) {
     push(buildIdentitySignal({ key: "job_title", value: jobMatch[1], taskId: input.taskId, confidence: 0.93 }));
   }
 
   const companyMatch =
     text.match(/(?:şirketim|firmam)\s+([^.,\n]{2,80})/iu) ??
-    text.match(/\b([^.,\n]{2,80})\s+(?:şirketinde|firmasında)\s+çalışıyorum\b/iu) ??
-    text.match(/\bi work at\s+([^.,\n]{2,80})/iu);
+    text.match(companyWorkplacePattern) ??
+    text.match(englishWorkAtPattern);
   if (companyMatch?.[1]) {
     push(buildIdentitySignal({ key: "company", value: companyMatch[1], taskId: input.taskId, confidence: 0.9 }));
   }
 
   const locationMatch =
-    text.match(/\b([^.,\n]{2,60})['’]?(?:da|de|ta|te)\s+yaşıyorum\b/iu) ??
-    text.match(/\bi live in\s+([^.,\n]{2,60})/iu) ??
-    text.match(/\bkonumum\s+([^.,\n]{2,60})/iu);
+    text.match(locationLivingPattern) ??
+    text.match(englishLiveInPattern) ??
+    text.match(locationStatementPattern);
   if (locationMatch?.[1]) {
     push(buildIdentitySignal({ key: "location", value: locationMatch[1], taskId: input.taskId, confidence: 0.88 }));
   }
 
   const timezoneMatch =
-    text.match(/\b(?:saat dilimim|time ?zone(?: is)?|timezone(?: is)?)\s+([A-Za-z0-9_+\-:/]{2,40})/iu);
+    text.match(timezoneStatementPattern);
   if (timezoneMatch?.[1]) {
     push(buildIdentitySignal({ key: "timezone", value: timezoneMatch[1], taskId: input.taskId, confidence: 0.9 }));
   }
 
   const explicitLanguageMatch =
-    text.match(/\b(?:tercih ettiğim dil|tercih ettigim dil|preferred language(?: is)?)\s+([^.,\n]{2,32})/iu);
+    text.match(explicitLanguageStatementPattern);
   if (explicitLanguageMatch?.[1]) {
     push(buildIdentitySignal({ key: "preferred_language", value: explicitLanguageMatch[1], taskId: input.taskId, confidence: 0.9 }));
   }
@@ -365,7 +436,7 @@ export function extractPreferenceSignals(input: TaskUnderstandingInput & { inten
     );
   }
 
-  if (!explicitConciseCorrection && /\b(concise|short|brief|kisa|kısa|terse)\b/i.test(text)) {
+  if (!explicitConciseCorrection && conciseKeywordPattern.test(text)) {
     signals.push(
       baseSignal({
         type: "style",
@@ -379,7 +450,7 @@ export function extractPreferenceSignals(input: TaskUnderstandingInput & { inten
     );
   }
 
-  if (/\b(detailed|thorough|detayli|detaylı|ayrintili|ayrıntılı)\b/i.test(text)) {
+  if (detailedKeywordPattern.test(text)) {
     signals.push(
       baseSignal({
         type: "style",
@@ -393,7 +464,7 @@ export function extractPreferenceSignals(input: TaskUnderstandingInput & { inten
     );
   }
 
-  if (/\b(do not|don't|never|asla|yapma|dokunma|bozma|redesign|replace)\b/i.test(text)) {
+  if (implementationBoundaryPattern.test(text)) {
     signals.push(
       baseSignal({
         type: "correction",
@@ -722,7 +793,7 @@ export function extractFeedbackSignals(input: {
 
   const correction = input.correction?.replace(/\s+/g, " ").trim();
 
-  if (correction && /\b(shorter|longer|concise|detailed|turkish|english|warm|warmer|natural|personable|mature|teaching|explanatory|kısa|detaylı|türkçe|ingilizce|samimi|sıcakkanlı|sicakkanli|doğal|dogal|olgun|öğretici|ogretici|açıklayıcı|aciklayici)\b/i.test(correction)) {
+  if (correction && feedbackStyleKeywordPattern.test(correction)) {
     signals.push(
       baseSignal({
         type: "style",
@@ -756,7 +827,7 @@ export function extractFeedbackSignals(input: {
     );
   }
 
-  if (input.preferredAnswer && /\b(format|style|tone|concise|detailed|bullet|türkçe|turkish)\b/i.test(input.preferredAnswer)) {
+  if (input.preferredAnswer && preferredAnswerPattern.test(input.preferredAnswer)) {
     signals.push(
       baseSignal({
         type: "style",

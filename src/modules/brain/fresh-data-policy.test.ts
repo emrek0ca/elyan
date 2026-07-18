@@ -124,7 +124,7 @@ test("news publication age is separate from the short response cache TTL", () =>
   );
 });
 
-test("news evidence requires a dated source before it is sufficient", () => {
+test("news evidence can be sufficient from fresh independent sources even when page dates are missing", () => {
   const policy = resolveFreshDataPolicy("Bugünkü haberler");
   const envelope = buildFreshDataEnvelope({
     policy,
@@ -136,7 +136,7 @@ test("news evidence requires a dated source before it is sufficient", () => {
     datedSourceCount: 0,
     independentHostCount: 2,
   });
-  assert.equal(envelope.evidence.sufficient, false);
+  assert.equal(envelope.evidence.sufficient, true);
 });
 
 test("normalizeFreshDataEnvelope validates and trims persisted JSON envelopes", () => {

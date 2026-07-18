@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { stripVisionProviderAttribution } from "./vision-provider-privacy.js";
 
 const boxSchema = z.object({
   x: z.number().min(0).max(1),
@@ -243,7 +244,7 @@ export function formatVisionEvidencePrompt(blocks: VisionBlockV2[]): string | nu
   blocks.slice(0, 4).forEach((block, index) => {
     const evidence = interpretVisionBlock(block);
     lines.push(
-      `VisionBlock ${index + 1}: input_kind=${evidence.inputKind} platform=${block.source.platform} engine=${block.source.engine} overall=${block.confidence.overall.toFixed(2)} ocr=${block.confidence.ocr.toFixed(2)} status=${block.render.status ?? "ready"}`,
+      `VisionBlock ${index + 1}: input_kind=${evidence.inputKind} overall=${block.confidence.overall.toFixed(2)} ocr=${block.confidence.ocr.toFixed(2)} status=${block.render.status ?? "ready"}`,
     );
     if (block.summary_for_llm.trim()) {
       lines.push(`Summary: ${bounded(block.summary_for_llm, 700)}`);
@@ -271,10 +272,9 @@ export function formatVisionEvidencePrompt(blocks: VisionBlockV2[]): string | nu
 }
 
 function bounded(value: string, maxChars: number): string {
-  const compact = value.replace(/\s+/g, " ").trim();
+  const compact = stripVisionProviderAttribution(value).replace(/\s+/g, " ").trim();
   if (compact.length <= maxChars) {
     return compact;
   }
   return `${compact.slice(0, maxChars - 1).trimEnd()}…`;
 }
-

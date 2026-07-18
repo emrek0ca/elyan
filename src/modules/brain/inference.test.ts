@@ -1283,6 +1283,100 @@ test("generateSharedBrainReply consumes a semantic connector hint in its TurnEnv
   );
 });
 
+test("generateSharedBrainReply reports connector failures without web source blocks", async () => {
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+      ELYAN_AGENT_LOOP_ENABLED: true,
+      ELYAN_CONNECTOR_TOOLS_ENABLED: true,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("gmail.googleapis.com")) {
+        return new Response(
+          JSON.stringify({ error: { message: "Invalid Credentials" } }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        );
+      }
+      assert.equal(url.endsWith("/chat/completions"), true);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  reply: { text: "Maillerine bakıyorum.", lang: "tr", tone: "neutral" },
+                  blocks: [],
+                  memory_ops: [],
+                  goal_ops: [],
+                  follow_ups: [],
+                  tool_requests: [
+                    {
+                      tool: "gmail.search",
+                      args: { query: "in:inbox", limit: 3 },
+                    },
+                  ],
+                  affect: { user_mood_guess: "focused", energy: "mid", register: "neutral" },
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        taskId: "task-connector-failure",
+        prompt: "Gelen kutumu kontrol et",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        connectorToolContracts: [
+          "gmail.search(query, maxResults<=10) -> {messages:[{id,from,subject,snippet,date}]}",
+        ],
+        internalEvaluation: {
+          skipUsageValidation: true,
+          skipConsentValidation: true,
+          skipInvocationLogging: true,
+        },
+      }),
+  );
+
+  assert.match(result.text, /erişim izni/u);
+  assert.equal(result.metadata.connectorTool, "gmail.search");
+  assert.equal(result.metadata.connectorErrorCode, "connector_auth_required");
+  assert.equal(result.metadata.connectorFailureKind, "auth_required");
+  assert.equal(result.metadata.webGroundingUsed, false);
+  assert.equal(result.metadata.webSourceCount, 0);
+  assert.deepEqual(result.metadata.webSources, []);
+  const blocks = result.metadata.blocks as Array<Record<string, unknown>>;
+  assert.equal(blocks.some((block) => block.type === "web_search"), false);
+});
+
 test("generateSharedBrainReply keeps TurnEnvelope off when no connector contracts are advertised", async () => {
   const requestedBodies: Array<Record<string, unknown>> = [];
   const app = {
@@ -2597,6 +2691,10 @@ test("generateSharedBrainReply uses web grounding for short research prompts", a
               <a class="result__a" href="https://example.com/apple-news">Apple Newsroom</a>
               <a class="result__snippet">Kısa resmi güncelleme.</a>
             </div>
+            <div class="result">
+              <a class="result__a" href="https://news.example.org/economy">Economy News</a>
+              <a class="result__snippet">Güncel ekonomi özeti.</a>
+            </div>
           `,
           {
             status: 200,
@@ -2614,6 +2712,24 @@ test("generateSharedBrainReply uses web grounding for short research prompts", a
                 <meta name="description" content="Official newsroom update." />
               </head>
               <body><p>Announcement body.</p></body>
+            </html>
+          `,
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        );
+      }
+
+      if (url === "https://news.example.org/economy") {
+        return new Response(
+          `
+            <html>
+              <head>
+                <title>Economy News</title>
+                <meta name="description" content="Current economy summary." />
+              </head>
+              <body><p>Economy update body.</p></body>
             </html>
           `,
           {
@@ -2649,16 +2765,17 @@ test("generateSharedBrainReply uses web grounding for short research prompts", a
     async () =>
       generateSharedBrainReply(app as never, {
         userId: "user-1",
-        prompt: "Apple news?",
+        prompt: "Güncel ekonomi haberleri",
         route: "shared_brain",
         internalEvaluation: { skipUsageValidation: true, skipConsentValidation: true },
       }),
   );
 
-  assert.equal(result.text, "I couldn't establish this from enough current sources right now.");
+  assert.equal(result.text, "Güncel bilgiyle yanıt.");
   assert.equal(requestedPaths.some((path) => path.includes("duckduckgo.com/html")), true);
   assert.equal(result.metadata.webGroundingUsed, true);
-  assert.equal(result.metadata.webGroundingConfidence, "low");
+  assert.equal(result.metadata.webGroundingConfidence, "high");
+  assert.equal(result.metadata.freshDataEvidenceSufficient, true);
   assert.equal(Array.isArray(result.metadata.webGroundingQueries), true);
   assert.equal(Array.isArray(result.metadata.webSources), true);
   assert.equal((result.metadata.webSources as Array<Record<string, unknown>>)[0]?.url, "https://example.com/apple-news");

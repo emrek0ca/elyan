@@ -3419,6 +3419,9 @@ async function completeServerBrainTask(
       payloadMetadata.imageGenerationBlockedReason ===
       "image_generation_limit_reached"
         ? "Bu ayki görsel üretim hakkın doldu. Plan limitin yenilendiğinde tekrar görsel üretebilirsin."
+        : payloadMetadata.imageGenerationBlockedReason ===
+          "image_generation_provider_quota"
+          ? "Görsel üretim kapasitesi şu anda dolu. Birkaç dakika sonra tekrar dene."
         : "Görsel şu anda üretilemedi. Lütfen biraz sonra tekrar dene.";
     resolvedAssistantBlocks = [];
   }

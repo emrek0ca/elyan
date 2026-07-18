@@ -128,12 +128,33 @@ const BLOCKED_DEBUG_KEYS = new Set([
   "stacktrace",
   "trace",
 ]);
+const BLOCKED_KEY_FRAGMENT_PATTERNS = [
+  /(?:^|raw)(?:image|audio|video|file|binary|bytes|payload|sample|content)/u,
+  /(?:image|audio|video|file|binary|bytes|payload|sample|content)(?:raw|base64|bytes|blob|data)$/u,
+  /(?:access|auth|bearer|refresh|session|id)?token$/u,
+  /(?:password|passwd|secret|credential|privatekey)$/u,
+  /(?:stacktrace|debugpayload|providerresponse|reasoningtrace)$/u,
+];
+const DATA_URI_PATTERN = /^data:(?:image|audio|video|application)\/[a-z0-9.+-]+;base64,/iu;
+const BASE64_LIKE_PATTERN = /^[A-Za-z0-9+/]{512,}={0,2}$/u;
 
 function normalizeKey(value: string) {
   return value
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
+}
+
+function isBlockedWorldSignalKey(normalizedKey: string): boolean {
+  return (
+    BLOCKED_SECRET_KEYS.has(normalizedKey) ||
+    BLOCKED_BINARY_KEYS.has(normalizedKey) ||
+    BLOCKED_PRECISE_LOCATION_KEYS.has(normalizedKey) ||
+    BLOCKED_HEALTH_KEYS.has(normalizedKey) ||
+    BLOCKED_CALENDAR_KEYS.has(normalizedKey) ||
+    BLOCKED_DEBUG_KEYS.has(normalizedKey) ||
+    BLOCKED_KEY_FRAGMENT_PATTERNS.some((pattern) => pattern.test(normalizedKey))
+  );
 }
 
 function looksLikeLocalPath(value: string) {
@@ -143,6 +164,18 @@ function looksLikeLocalPath(value: string) {
     value.startsWith("~/") ||
     /^[A-Za-z]:\\/.test(value)
   );
+}
+
+function looksLikeRawEncodedPayload(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (DATA_URI_PATTERN.test(trimmed)) {
+    return true;
+  }
+  const compact = trimmed.replace(/\s+/g, "");
+  return compact.length > 768 && BASE64_LIKE_PATTERN.test(compact);
 }
 
 function assertWorldSignalValueSafe(value: unknown, key = ""): void {
@@ -155,6 +188,13 @@ function assertWorldSignalValueSafe(value: unknown, key = ""): void {
         422,
         "local_path_blocked",
         "Local file paths cannot be uploaded.",
+      );
+    }
+    if (looksLikeRawEncodedPayload(value)) {
+      throw new AppError(
+        422,
+        "raw_payload_blocked",
+        "Raw private content cannot be uploaded.",
       );
     }
     return;
@@ -178,46 +218,46 @@ function assertWorldSignalValueSafe(value: unknown, key = ""): void {
   if (typeof value === "object") {
     for (const [entryKey, entryValue] of Object.entries(value)) {
       const normalizedKey = normalizeKey(entryKey);
-      if (BLOCKED_SECRET_KEYS.has(normalizedKey)) {
-        throw new AppError(
-          422,
-          "secret_blocked",
-          "Secrets cannot be uploaded.",
-        );
-      }
-      if (BLOCKED_BINARY_KEYS.has(normalizedKey)) {
+      if (isBlockedWorldSignalKey(normalizedKey)) {
+        if (BLOCKED_SECRET_KEYS.has(normalizedKey)) {
+          throw new AppError(
+            422,
+            "secret_blocked",
+            "Secrets cannot be uploaded.",
+          );
+        }
+        if (BLOCKED_PRECISE_LOCATION_KEYS.has(normalizedKey)) {
+          throw new AppError(
+            422,
+            "precise_location_blocked",
+            "Precise coordinates cannot be uploaded.",
+          );
+        }
+        if (BLOCKED_HEALTH_KEYS.has(normalizedKey)) {
+          throw new AppError(
+            422,
+            "raw_health_blocked",
+            "Raw health values cannot be uploaded.",
+          );
+        }
+        if (BLOCKED_CALENDAR_KEYS.has(normalizedKey)) {
+          throw new AppError(
+            422,
+            "raw_calendar_blocked",
+            "Raw calendar fields cannot be uploaded.",
+          );
+        }
+        if (BLOCKED_DEBUG_KEYS.has(normalizedKey)) {
+          throw new AppError(
+            422,
+            "debug_payload_blocked",
+            "Debug or reasoning payloads cannot be uploaded.",
+          );
+        }
         throw new AppError(
           422,
           "raw_payload_blocked",
           "Raw private content cannot be uploaded.",
-        );
-      }
-      if (BLOCKED_PRECISE_LOCATION_KEYS.has(normalizedKey)) {
-        throw new AppError(
-          422,
-          "precise_location_blocked",
-          "Precise coordinates cannot be uploaded.",
-        );
-      }
-      if (BLOCKED_HEALTH_KEYS.has(normalizedKey)) {
-        throw new AppError(
-          422,
-          "raw_health_blocked",
-          "Raw health values cannot be uploaded.",
-        );
-      }
-      if (BLOCKED_CALENDAR_KEYS.has(normalizedKey)) {
-        throw new AppError(
-          422,
-          "raw_calendar_blocked",
-          "Raw calendar fields cannot be uploaded.",
-        );
-      }
-      if (BLOCKED_DEBUG_KEYS.has(normalizedKey)) {
-        throw new AppError(
-          422,
-          "debug_payload_blocked",
-          "Debug or reasoning payloads cannot be uploaded.",
         );
       }
       assertWorldSignalValueSafe(entryValue, normalizedKey);

@@ -69,6 +69,10 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
       // Bu kalıplar canlıda eşik altında kalıp aracı tamamen düşürüyordu.
       "Son mailimi oku; en son gelen e-postayı bul, aç ve içeriğini söyle; son 10 mailimi listele.",
       "Mailime bak; maillerimi kontrol et; posta kutuma bak; e-postalarımı kontrol eder misin?",
+      // Canlıda kıl payı elenen emir kipi kalıplar: "Mailleri oku" 0.860
+      // skorla eşiği rahat geçerken margin 0.0117 < 0.012 ile düşüyordu.
+      "Mailleri oku; maillerimi oku; gelen kutumu oku; postalarımı göster; e-postalarımı oku.",
+      "Read my emails; read my mail; show my inbox; open my mailbox.",
       "Check my connected Gmail inbox and list emails that arrived today, recent or unread messages, or search my mailbox by sender, date, and subject.",
       "Do I have any unread or new email in my inbox; what messages arrived today?",
       "Read my latest email; open the most recent message and tell me what it says; check my mail.",
@@ -352,7 +356,11 @@ export async function selectSemanticConnectorReadToolHint(
     ],
     {
       transformerMinScore: 0.78,
-      transformerMinMargin: 0.012,
+      // 0.012 canlıda meşru "Mailleri oku" kalıbını 0.0003 farkla eledi
+      // (margin 0.0117, ikinci sıra bir negative çapasıydı). Yazma riski
+      // zaten sideEffectDetected + negative çapalarla ayrı kapıda; margin
+      // burada yalnız araçlar-arası belirsizliği ölçmeli.
+      transformerMinMargin: 0.008,
       transformerTimeoutMs: 20_000,
       // Permission-sensitive routing must never be decided by the degraded
       // lexical/hash approximation.
@@ -488,14 +496,27 @@ async function resolveToken(
   userId: string,
   contract: ConnectorToolContract,
 ): Promise<string> {
-  const { accessToken } = await getConnectorAccessToken(app, {
-    userId,
-    capability: contract.capability,
-    requiredScopes: contract.requiredScopes,
-    acceptedScopeSets: connectorRequiredScopeSets(contract),
-    refreshTimeoutMs: 8_000,
-  });
-  return accessToken;
+  try {
+    const { accessToken } = await getConnectorAccessToken(app, {
+      userId,
+      capability: contract.capability,
+      requiredScopes: contract.requiredScopes,
+      acceptedScopeSets: connectorRequiredScopeSets(contract),
+      refreshTimeoutMs: 8_000,
+    });
+    return accessToken;
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+    if (code === "not_found" || code === "bad_request" || code === "unauthorized") {
+      throw Object.assign(new Error("Connector authorization is required."), {
+        code: "connector_auth_required",
+      });
+    }
+    throw error;
+  }
 }
 
 export async function executeGmailSearch(

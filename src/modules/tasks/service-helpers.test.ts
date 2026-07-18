@@ -276,21 +276,22 @@ test("extractSharedBrainConversation keeps only valid conversation items", () =>
 });
 
 test("getSharedBrainFallbackMessage preserves explicit error text and default fallback", () => {
+  const fallback = "Yanıt üretimi şu anda yoğun. Birkaç saniye sonra tekrar deneyebilirsin.";
   assert.equal(
     getSharedBrainFallbackMessage(new Error("  Shared brain failed  ")),
     "Shared brain failed",
   );
   assert.equal(
     getSharedBrainFallbackMessage(new Error("Provider endpoint http://127.0.0.1:11434 failed")),
-    "Elyan beyni şu anda yanıt veremiyor",
+    fallback,
   );
   assert.equal(
     getSharedBrainFallbackMessage(new Error("fetch failed")),
-    "Elyan beyni şu anda yanıt veremiyor",
+    fallback,
   );
   assert.equal(
     getSharedBrainFallbackMessage({}),
-    "Elyan beyni şu anda yanıt veremiyor",
+    fallback,
   );
 });
 

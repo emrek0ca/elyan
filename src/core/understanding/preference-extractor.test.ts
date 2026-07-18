@@ -53,6 +53,27 @@ test("extractFeedbackSignals converts bounded feedback into learning signals", (
   assert.ok(result.signals.some((signal) => signal.key === "feedback_style"));
 });
 
+test("extractFeedbackSignals matches Turkish feedback and preferred-answer words with Unicode boundaries", () => {
+  const feedback = extractFeedbackSignals({
+    feedbackType: "user_correction",
+    taskId: "task_feedback_unicode",
+    correction: "Bundan sonra daha kısa cevap ver.",
+    preferredAnswer: "Kısa Türkçe maddelerle yazılmış bir cevap.",
+  });
+
+  assert.ok(feedback.signals.some((signal) => signal.key === "feedback_style"));
+  assert.ok(
+    feedback.signals.some(
+      (signal) =>
+        signal.key === "answer_length" &&
+        signal.value === "concise" &&
+        signal.metadata?.explicit === true &&
+        signal.metadata?.sourceTurnId === "task_feedback_unicode",
+    ),
+  );
+  assert.ok(feedback.signals.some((signal) => signal.key === "preferred_answer_pattern"));
+});
+
 test("extractFeedbackSignals converts compact reason tags into safe quality signals", () => {
   const result = extractFeedbackSignals({
     feedbackType: "thumbs_down",
@@ -107,6 +128,37 @@ test("extractPreferenceSignals captures explicit warm mature teaching response s
   );
   assert.ok(result.signals.some((signal) => signal.key === "preferred_tone" && signal.value === "warm_close_mature"));
   assert.ok(result.signals.some((signal) => signal.key === "explanation_style" && signal.value === "explanatory_teaching"));
+});
+
+test("extractPreferenceSignals matches Turkish style words with Unicode boundaries", () => {
+  const concise = extractPreferenceSignals({
+    userId: "user_1",
+    taskId: "task_unicode_short",
+    message: "Bundan sonra cevapları kısa tut.",
+  });
+  assert.ok(
+    concise.signals.some(
+      (signal) =>
+        signal.key === "answer_length" &&
+        signal.value === "concise" &&
+        signal.metadata?.explicit === true &&
+        signal.metadata?.sourceTurnId === "task_unicode_short",
+    ),
+  );
+
+  const detailed = extractPreferenceSignals({
+    userId: "user_1",
+    message: "Gerektiğinde detaylı anlatmanı tercih ederim.",
+  });
+  assert.ok(
+    detailed.signals.some((signal) => signal.key === "answer_length" && signal.value === "detailed when needed"),
+  );
+
+  const warm = extractPreferenceSignals({
+    userId: "user_1",
+    message: "Elyan cevaplarında daha doğal ve öğretici olmasını istiyorum.",
+  });
+  assert.ok(warm.signals.some((signal) => signal.key === "explanation_style" && signal.value === "explanatory_teaching"));
 });
 
 test("extractPreferenceSignals does not persist one-off warm writing instructions as global style", () => {
@@ -193,6 +245,28 @@ test("extractPreferenceSignals does not treat ordinary instructions as preferred
         signal.metadata?.explicit === true,
     ),
   );
+});
+
+test("extractPreferenceSignals does not treat ordinary work requests as global style corrections", () => {
+  for (const message of ["Dosyayı yazdır.", "Sunumu göster.", "Raporu paylaş."]) {
+    const result = extractPreferenceSignals({
+      userId: "user_1",
+      message,
+      intent: "writing",
+    });
+
+    assert.equal(
+      result.signals.some(
+        (signal) =>
+          signal.key === "answer_length" ||
+          signal.key === "response_style_preference" ||
+          signal.key === "preferred_tone" ||
+          signal.key === "explanation_style",
+      ),
+      false,
+      message,
+    );
+  }
 });
 
 test("extractPreferenceSignals does not infer identity from non-explicit wording", () => {

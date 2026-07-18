@@ -191,6 +191,7 @@ export const elyanAssistantBlockTypeValues = [
   "summary",
   "next_steps",
   "status",
+  "security_decision",
   "task_trace",
   "attachment_context",
   "context_signal",
@@ -202,12 +203,26 @@ export const elyanAssistantBlockTypeValues = [
   "math",
   "svg",
   "file",
+  "artifact",
   "actionable",
   "block_group",
+  "memory_echo",
+  "proactive_touch",
   "document_block",
   "attachment_ack",
   "image_analysis",
+  "vision",
   "goal_progress",
+  "desktop_suggestion",
+  "document_block_skeleton",
+  "pdf_generate",
+  "pdf_viewer",
+  "terminal",
+  "automation",
+  "reasoning_trace",
+  "capability_unavailable",
+  "clarification",
+  "connector_result",
 ] as const;
 export const elyanAssistantBlockVisibilityValues = [
   "user_visible",
@@ -755,6 +770,70 @@ export const elyanAssistantGoalProgressBlockSchema =
     done: z.boolean(),
   });
 
+const elyanConnectorProviderSchema = z.enum([
+  "gmail",
+  "drive",
+  "calendar",
+  "notion",
+  "github",
+  "slack",
+  "linear",
+  "mcp",
+  "connector",
+]);
+const elyanConnectorResultItemSchema = z
+  .object({
+    title: z.string().min(1).max(240),
+    subtitle: z.string().min(1).max(240).optional(),
+    detail: z.string().min(1).max(400).optional(),
+    timestamp: z.string().min(1).max(120).optional(),
+    url: z.string().min(1).max(2_000).optional(),
+    kind: z.string().min(1).max(80).optional(),
+    status: z.string().min(1).max(80).optional(),
+    metadata: z.record(z.any()).optional(),
+  })
+  .passthrough();
+export const elyanAssistantConnectorResultBlockSchema =
+  elyanAssistantBlockBaseSchema.extend({
+    type: z.literal("connector_result"),
+    provider: elyanConnectorProviderSchema,
+    tool: z.string().min(1).max(160),
+    title: z.string().min(1).max(160),
+    kind: z.string().min(1).max(80).optional(),
+    summary: z.string().min(1).max(240).optional(),
+    items: z.array(elyanConnectorResultItemSchema).min(1).max(80),
+    columns: z.array(z.string().min(1).max(120)).min(1).max(8).optional(),
+    rows: z.array(z.array(z.string().max(240)).min(1).max(8)).min(1).max(80).optional(),
+    nextAction: z
+      .object({
+        kind: z.enum(["reauth", "open", "retry"]).optional(),
+        label: z.string().min(1).max(80).optional(),
+        url: z.string().min(1).max(2_000).optional(),
+      })
+      .optional(),
+  });
+
+export const elyanAssistantPassthroughBlockSchema = elyanAssistantBlockBaseSchema
+  .extend({
+    type: z.enum([
+      "vision",
+      "desktop_suggestion",
+      "document_block_skeleton",
+      "pdf_generate",
+      "pdf_viewer",
+      "terminal",
+      "automation",
+      // reasoning_trace BİLEREK yok: ham düşünce zinciri kalıcı bloklara
+      // geçmez (normalizeAssistantMessageBlocks düşürme testi bunu korur);
+      // mobil reasoning widget'ı ayrı stream kanalından beslenir.
+      "capability_unavailable",
+      "clarification",
+      "memory_echo",
+      "proactive_touch",
+    ]),
+  })
+  .passthrough();
+
 export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantTextBlockSchema,
   elyanAssistantSummaryBlockSchema,
@@ -778,6 +857,8 @@ export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
   elyanAssistantAttachmentAckBlockSchema,
   elyanAssistantImageAnalysisBlockSchema,
   elyanAssistantGoalProgressBlockSchema,
+  elyanAssistantConnectorResultBlockSchema,
+  elyanAssistantPassthroughBlockSchema,
 ]);
 
 export type DeviceType = z.infer<typeof deviceTypeSchema>;
@@ -904,6 +985,9 @@ export type ElyanAssistantImageAnalysisBlock = z.infer<
 >;
 export type ElyanAssistantGoalProgressBlock = z.infer<
   typeof elyanAssistantGoalProgressBlockSchema
+>;
+export type ElyanAssistantConnectorResultBlock = z.infer<
+  typeof elyanAssistantConnectorResultBlockSchema
 >;
 export type ElyanAssistantSecurityDecisionBlock = z.infer<
   typeof elyanAssistantSecurityDecisionBlockSchema

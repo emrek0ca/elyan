@@ -118,7 +118,7 @@ const DOMAIN_CONFIG: Record<
     allowStaleIfError: false,
     minimumSources: 2,
     minimumVerifiedSources: 1,
-    minimumDatedSources: 1,
+    minimumDatedSources: 0,
     preferredHosts: ["aa.com.tr", "reuters.com", "apnews.com", "bbc.com", "trthaber.com"],
     searchCategory: "news",
   },

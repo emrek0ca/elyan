@@ -485,6 +485,30 @@ function buildGeminiFreeInferenceDataLineage(
   const publicOperationFrame = buildGeminiFreePublicOperationFrame(
     input.mediaIntentPrompt ?? input.prompt,
   );
+  const publicTextOnly =
+    publicOperationFrame != null &&
+    input.routeDecision?.privacyClass === "public_text" &&
+    (input.connectorToolContracts?.length ?? 0) === 0 &&
+    input.connectorReadToolHint == null &&
+    input.internalEvaluation?.refinementPass !== true &&
+    input.attachmentContext?.used !== true &&
+    (input.clientAttachments?.length ?? 0) === 0 &&
+    !input.ephemeralVision;
+
+  if (publicTextOnly) {
+    return {
+      profile: false,
+      memory: false,
+      worldContext: false,
+      contextPacket: false,
+      mcp: false,
+      connector: false,
+      accountData: false,
+      toolResult: false,
+      attachment: false,
+      conversationHistory: false,
+    };
+  }
 
   return {
     profile: hasProfile,
@@ -1547,20 +1571,71 @@ function advertisedConnectorReadToolHint(
 }
 
 function connectorFailureReply(errorCode: string | null | undefined): string {
-  if (errorCode === "connector_auth_required") {
+  const normalized = connectorFailureKind(errorCode);
+  if (normalized === "auth_required") {
     return "Bağlı hesabın için erişim izni geçersiz veya süresi dolmuş. Uygulamalar bölümünden bağlantıyı yenileyip tekrar deneyebilirsin.";
   }
-  if (errorCode === "tool_timeout") {
+  if (normalized === "timeout") {
     return "Bağlı uygulama zamanında yanıt vermedi. Bağlantı açık kalacak; biraz sonra tekrar deneyebilirsin.";
   }
+  if (normalized === "tool_contract") {
+    // Bu bir auth sorunu değil; "bağlantıyı yenile" tavsiyesi kullanıcıyı
+    // yanlış yere gönderiyordu. Dürüst geçici-hata dili kullan.
+    return "İsteğini bağlı uygulamada çalıştırırken teknik bir sorun oldu. Birazdan tekrar dener misin?";
+  }
+  if (normalized === "provider_request") {
+    return "Bağlı uygulama şu anda yanıt vermedi. Bağlantı açık kalacak; biraz sonra tekrar deneyebilirsin.";
+  }
+  if (normalized === "rate_limited") {
+    return "Bağlı uygulama için kısa süreli istek sınırına takıldım. Biraz sonra tekrar deneyebilirsin.";
+  }
+  return "Bağlı hesabındaki verilere şu anda erişemedim. Biraz sonra tekrar deneyebilirsin.";
+}
+
+function connectorFailureKind(
+  errorCode: string | null | undefined,
+):
+  | "auth_required"
+  | "timeout"
+  | "tool_contract"
+  | "provider_request"
+  | "rate_limited"
+  | "unknown" {
+  if (errorCode === "connector_auth_required") return "auth_required";
+  if (errorCode === "tool_timeout") return "timeout";
   if (
     errorCode === "tool_not_found" ||
     errorCode === "tool_args_invalid" ||
-    errorCode === "tool_output_invalid"
+    errorCode === "tool_output_invalid" ||
+    errorCode === "unknown_tool" ||
+    errorCode === "invalid_tool_args" ||
+    errorCode === "invalid_tool_output"
   ) {
-    return "Bağlı uygulamanın araç kataloğu bu işlemi şu anda doğrulayamıyor. Bağlantıyı yenileyip tekrar deneyebilirsin.";
+    return "tool_contract";
   }
-  return "Bağlı hesabındaki verilere şu anda erişemedim. Biraz sonra tekrar deneyebilirsin.";
+  if (errorCode === "connector_request_failed" || errorCode === "tool_failed") {
+    return "provider_request";
+  }
+  if (errorCode === "tool_rate_limited") return "rate_limited";
+  return "unknown";
+}
+
+function removeWebGroundingFromConnectorFailureMetadata(
+  metadata: Record<string, unknown>,
+): void {
+  metadata.webGroundingUsed = false;
+  metadata.webSourceCount = 0;
+  metadata.webSources = [];
+  metadata.webGroundingConfidence = "none";
+  metadata.webGroundingQueries = [];
+  metadata.webGroundingDecisionReasons = [];
+}
+
+function dropWebSearchBlocks<T extends unknown[]>(blocks: T): T {
+  return blocks.filter((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) return true;
+    return (block as { type?: unknown }).type !== "web_search";
+  }) as T;
 }
 
 function turnEnvelopeSatisfiesConnectorReadHint(
@@ -6343,7 +6418,7 @@ export async function generateSharedBrainReply(
         throw new AppError(
           503,
           "server_brain_unavailable",
-          "Elyan beyni şu anda yanıt veremiyor",
+          "Yanıt üretimi şu anda yoğun. Birkaç saniye sonra tekrar deneyebilirsin.",
           {
             route: input.route ?? "shared_brain",
             workload,
@@ -6926,7 +7001,9 @@ export async function generateSharedBrainReply(
           connectorToolResultCount: 0,
           connectorToolSuccessCount: 0,
           connectorResultUsed: false,
+          connectorTool: null,
           connectorErrorCode: null,
+          connectorFailureKind: null,
           toolLoopIterations: 0,
           toolMs: null,
           streamContinuationHops,
@@ -7166,6 +7243,13 @@ export async function generateSharedBrainReply(
               tools: toolLoop.results.map((toolResult) => toolResult.tool),
               okCount: toolLoop.results.filter((toolResult) => toolResult.ok)
                 .length,
+              failures: toolLoop.results
+                .filter((toolResult) => !toolResult.ok)
+                .map((toolResult) => ({
+                  tool: toolResult.tool,
+                  errorCode: toolResult.error?.code ?? null,
+                  failureKind: connectorFailureKind(toolResult.error?.code),
+                })),
               iterations: toolLoop.iterations,
               durationMs: toolLoop.durationMs,
             },
@@ -7321,15 +7405,21 @@ export async function generateSharedBrainReply(
               const failedTool = toolLoop.results.find(
                 (toolResult) => !toolResult.ok,
               );
-              result.text = connectorFailureReply(failedTool?.error?.code);
+              const failedToolCode = failedTool?.error?.code ?? null;
+              const failedToolKind = connectorFailureKind(failedToolCode);
+              result.text = connectorFailureReply(failedToolCode);
               const failureBlocks = [
-                ...assistantMetadataBlocks.filter(
+                ...dropWebSearchBlocks(assistantMetadataBlocks).filter(
                   (block) => (block as { type?: string }).type !== "text",
                 ),
                 ...buildAssistantMessageBlocks(result.text),
               ] as typeof assistantMetadataBlocks;
               result.metadata.blocks = failureBlocks;
               assistantMetadataBlocks = failureBlocks;
+              result.metadata.connectorTool = failedTool?.tool ?? null;
+              result.metadata.connectorErrorCode = failedToolCode;
+              result.metadata.connectorFailureKind = failedToolKind;
+              removeWebGroundingFromConnectorFailureMetadata(result.metadata);
             }
           }
         }

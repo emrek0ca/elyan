@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import {
   elyanAssistantArtifactBlockSchema,
   elyanAssistantBlockSchema,
+  elyanAssistantConnectorResultBlockSchema,
+  elyanAssistantGoalProgressBlockSchema,
+  elyanAssistantPassthroughBlockSchema,
 } from "../../contracts/domain.js";
 import {
   containsProtectedElyanDisclosure,
@@ -13,6 +16,7 @@ import type {
   ElyanAssistantBlock,
   ElyanAssistantChartBlock,
   ElyanAssistantCodeBlock,
+  ElyanAssistantConnectorResultBlock,
   ElyanAssistantDocumentBlock,
   ElyanAssistantFileBlock,
   ElyanAssistantBlockGroupBlock,
@@ -1775,6 +1779,76 @@ export function buildAssistantWebSearchBlock(
   } as ElyanAssistantWebSearchBlock;
 }
 
+export function buildAssistantConnectorResultBlock(
+  input: {
+    provider: ElyanAssistantConnectorResultBlock["provider"];
+    tool: string;
+    title: string;
+    kind?: string | null;
+    summary?: string | null;
+    items: Array<{
+      title: string;
+      subtitle?: string | null;
+      detail?: string | null;
+      timestamp?: string | null;
+      url?: string | null;
+      kind?: string | null;
+      status?: string | null;
+      metadata?: Record<string, unknown> | null;
+    }>;
+    columns?: unknown;
+    rows?: unknown;
+  },
+  options: AssistantBlockCommon = {},
+): ElyanAssistantConnectorResultBlock | null {
+  const title = normalizeTextValue(input.title, 160);
+  const tool = normalizeTextValue(input.tool, 160);
+  if (!title || !tool) return null;
+  const items = input.items
+    .map((item) => {
+      const itemTitle = normalizeTextValue(item.title, 240);
+      if (!itemTitle) return null;
+      const metadata =
+        item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+          ? (normalizeRenderHintValue(item.metadata, 0) as Record<string, unknown> | undefined)
+          : undefined;
+      return {
+        title: itemTitle,
+        ...(normalizeTextValue(item.subtitle, 240) ? { subtitle: normalizeTextValue(item.subtitle, 240)! } : {}),
+        ...(normalizeTextValue(item.detail, 400) ? { detail: normalizeTextValue(item.detail, 400)! } : {}),
+        ...(normalizeTextValue(item.timestamp, 120) ? { timestamp: normalizeTextValue(item.timestamp, 120)! } : {}),
+        ...(normalizeTextValue(item.url, 2_000) ? { url: normalizeTextValue(item.url, 2_000)! } : {}),
+        ...(normalizeTextValue(item.kind, 80) ? { kind: normalizeTextValue(item.kind, 80)! } : {}),
+        ...(normalizeTextValue(item.status, 80) ? { status: normalizeTextValue(item.status, 80)! } : {}),
+        ...(metadata ? { metadata } : {}),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null)
+    .slice(0, 80);
+  if (items.length === 0) return null;
+  const columns = normalizeTableColumns(input.columns);
+  const rows = normalizeTableRows(input.rows, columns.length);
+  return {
+    type: "connector_result",
+    provider: input.provider,
+    tool,
+    title,
+    ...(normalizeTextValue(input.kind, 80) ? { kind: normalizeTextValue(input.kind, 80)! } : {}),
+    ...(normalizeTextValue(input.summary, 240) ? { summary: normalizeTextValue(input.summary, 240)! } : {}),
+    items,
+    ...(columns.length > 0 && rows.length > 0 ? { columns, rows } : {}),
+    ...withAssistantBlockDefaults("connector_result", {}, {
+      priority: options.priority ?? 1,
+      renderHints: mergeRenderHints({
+        sectionRole: "connector_result",
+        renderer: "native_connector_result",
+        density: "regular",
+      }, options.renderHints),
+      ...options,
+    }),
+  };
+}
+
 function isTaskTraceBlock(block: AssistantMessageBlock): block is ElyanTaskTraceBlock {
   return block.type === "task_trace";
 }
@@ -2450,6 +2524,66 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
       },
       parseCommonMetadata(record),
     );
+  }
+  // Sözleşmede tanımlı ama burada özel parse case'i olmayan tipler: şemadan
+  // geçiyorsa OLDUĞU GİBİ geçir. Eskiden bu tipler (connector_result,
+  // reasoning_trace, clarification, goal_progress, terminal…) sessizce null'a
+  // düşüyordu — inference doğru bloğu üretse bile compose zinciri onu yutuyor,
+  // mobil widget hiç açılmıyordu. Ampirik kanıt: block-parity probe'unda
+  // resmi buildAssistantConnectorResultBlock çıktısı bile compose'dan boş
+  // dönüyordu. Şema doğrulaması korunur; geçersiz blok yine düşer.
+  if (type === "connector_result") {
+    const parsed = elyanAssistantConnectorResultBlockSchema.safeParse(record);
+    if (!parsed.success) return null;
+    return {
+      ...parsed.data,
+      ...withAssistantBlockDefaults("connector_result", {}, {
+        visibility: normalizeVisibility(record.visibility),
+        confidence: normalizeConfidence(record.confidence),
+        priority: normalizePriority(record.priority),
+        stableBlockId: normalizeBlockStableId(record.stableBlockId),
+        cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
+        renderHints: normalizeRenderHints(record.renderHints) ?? {
+          sectionRole: "connector_result",
+          renderer: "native_connector_result",
+        },
+      }),
+    } as AssistantMessageBlock;
+  }
+  if (type === "goal_progress") {
+    const parsed = elyanAssistantGoalProgressBlockSchema.safeParse(record);
+    if (!parsed.success) return null;
+    return {
+      ...parsed.data,
+      ...withAssistantBlockDefaults("goal_progress", {}, {
+        visibility: normalizeVisibility(record.visibility),
+        confidence: normalizeConfidence(record.confidence),
+        priority: normalizePriority(record.priority),
+        stableBlockId: normalizeBlockStableId(record.stableBlockId),
+        cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
+        renderHints: normalizeRenderHints(record.renderHints) ?? {
+          sectionRole: "goal_progress",
+        },
+      }),
+    } as AssistantMessageBlock;
+  }
+  {
+    const passthrough = elyanAssistantPassthroughBlockSchema.safeParse(record);
+    if (passthrough.success) {
+      return {
+        ...passthrough.data,
+        ...withAssistantBlockDefaults(type, {}, {
+          visibility: normalizeVisibility(record.visibility),
+          confidence: normalizeConfidence(record.confidence),
+          priority: normalizePriority(record.priority),
+          stableBlockId: normalizeBlockStableId(record.stableBlockId),
+          cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
+          renderHints: normalizeRenderHints(record.renderHints) ?? {
+            sectionRole: type,
+          },
+        }),
+      } as AssistantMessageBlock;
+    }
   }
   const markdown = normalizeMarkdown(
     typeof record.markdown === "string"

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import type { ArtifactInput } from "../../contracts/domain.js";
 import { tryAcquireLoadSheddingPermit } from "../../lib/reliability/load-shedding.js";
@@ -58,6 +59,9 @@ const IMAGE_CIRCUIT_QUOTA_OPEN_MS = 5 * 60_000;
 // paylaşılır — "kedi resmi çiz" gibi popüler istemlerde en büyük tasarruf.
 const IMAGE_CACHE_TTL_MS = 6 * 60 * 60_000;
 const IMAGE_CACHE_MAX_BASE64_LENGTH = 1_800_000; // ~1.3MB görsel; daha büyüğü önbelleğe alınmaz
+const IMAGE_BRANDING_VERSION = "watermark_v2";
+const ELYAN_WATERMARK_URL = new URL("../../../assets/elyan-watermark.png", import.meta.url);
+let cachedWatermark: Promise<Buffer | null> | null = null;
 const IMAGE_SINGLEFLIGHT_LOCK_TTL_MS = 75_000;
 const IMAGE_SINGLEFLIGHT_WAIT_MS = 12_000;
 const IMAGE_SINGLEFLIGHT_POLL_MS = 300;
@@ -74,11 +78,42 @@ const IMAGE_RATE_LIMITS_BY_PLAN: Record<string, number> = {
   pro: 8,
 };
 
+type HostedImageFailureKind =
+  | "bad_request"
+  | "auth_or_model_access"
+  | "quota_or_rate"
+  | "provider_error";
+
+function classifyHostedImageFailure(status: number): HostedImageFailureKind {
+  if (status === 400 || status === 404 || status === 422) return "bad_request";
+  if (status === 401 || status === 403) return "auth_or_model_access";
+  if (status === 402 || status === 429) return "quota_or_rate";
+  return "provider_error";
+}
+
+async function readHostedImageFailureReason(response: Response): Promise<string | null> {
+  const raw = await response.text().catch(() => "");
+  const compact = raw.replace(/\s+/g, " ").trim();
+  if (!compact) return null;
+  try {
+    const parsed = JSON.parse(compact) as Record<string, unknown>;
+    const error = parsed.error && typeof parsed.error === "object" && !Array.isArray(parsed.error)
+      ? parsed.error as Record<string, unknown>
+      : null;
+    const status = typeof error?.status === "string" ? error.status : null;
+    const message = typeof error?.message === "string" ? error.message : null;
+    return [status, message].filter(Boolean).join(": ").slice(0, 240) || null;
+  } catch {
+    return compact.slice(0, 240);
+  }
+}
+
 type CachedImagePayload = {
   base64: string;
   mimeType: string;
   revisedPrompt: string | null;
   model: string;
+  brandingVersion?: string;
 };
 
 type ImageGenerationUsageAllowance = {
@@ -412,6 +447,74 @@ async function validateHostedImageOutput(base64: string): Promise<{
   return { base64: body.toString("base64"), mimeType };
 }
 
+async function readElyanWatermark(): Promise<Buffer | null> {
+  cachedWatermark ??= readFile(ELYAN_WATERMARK_URL).catch(() => null);
+  return cachedWatermark;
+}
+
+async function applyElyanImageBranding(input: {
+  base64: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+}): Promise<{
+  base64: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+}> {
+  const imageBody = Buffer.from(input.base64, "base64");
+  const watermark = await readElyanWatermark();
+  if (!watermark) {
+    return input;
+  }
+
+  const { default: sharp } = await import("sharp");
+  const image = sharp(imageBody, {
+    failOn: "warning",
+    limitInputPixels: 150_000_000,
+  });
+  const metadata = await image.metadata();
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  if (width <= 0 || height <= 0) {
+    return input;
+  }
+
+  const watermarkSize = Math.max(34, Math.min(96, Math.round(Math.min(width, height) * 0.12)));
+  const margin = Math.max(12, Math.round(watermarkSize * 0.32));
+  const overlay = await sharp(watermark, { failOn: "warning" })
+    .resize({
+      width: watermarkSize,
+      height: watermarkSize,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .png()
+    .toBuffer();
+
+  let composed = sharp(imageBody, {
+    failOn: "warning",
+    limitInputPixels: 150_000_000,
+  }).composite([
+    {
+      input: overlay,
+      top: margin,
+      left: Math.max(margin, width - watermarkSize - margin),
+    },
+  ]);
+
+  if (input.mimeType === "image/jpeg") {
+    composed = composed.jpeg({ quality: 92, mozjpeg: true });
+  } else if (input.mimeType === "image/webp") {
+    composed = composed.webp({ quality: 92 });
+  } else {
+    composed = composed.png({ compressionLevel: 9 });
+  }
+
+  const branded = await composed.toBuffer();
+  return {
+    base64: branded.toString("base64"),
+    mimeType: input.mimeType,
+  };
+}
+
 function buildArtifactName(prompt: string, mimeType: string): string {
   const normalizedPrompt = compactText(prompt).toLowerCase();
   const extension = mimeType === "image/jpeg" ? "jpg" : mimeType === "image/webp" ? "webp" : "png";
@@ -433,9 +536,10 @@ function imageCacheKey(prompt: string, proEnabled: boolean, geminiSize: string):
     inferImageSize(prompt),
     geminiSize,
     shouldPreferPremiumImageModel(prompt, proEnabled) ? "premium" : "standard",
+    IMAGE_BRANDING_VERSION,
   ].join("|");
   const digest = createHash("sha256").update(seed).digest("hex").slice(0, 32);
-  return `image:cache:v1:${digest}`;
+  return `image:cache:v2:${digest}`;
 }
 
 async function readCachedImage(
@@ -453,6 +557,9 @@ async function readCachedImage(
   try {
     const parsed = JSON.parse(raw) as CachedImagePayload;
     if (!parsed.base64) {
+      return null;
+    }
+    if (parsed.brandingVersion !== IMAGE_BRANDING_VERSION) {
       return null;
     }
     return buildImageArtifactResult({
@@ -486,6 +593,7 @@ async function writeCachedImage(
     mimeType: result.mimeType,
     revisedPrompt: result.revisedPrompt,
     model: result.model,
+    brandingVersion: IMAGE_BRANDING_VERSION,
   };
   await store.set(cacheKey, JSON.stringify(payload), IMAGE_CACHE_TTL_MS).catch(() => undefined);
 }
@@ -912,10 +1020,19 @@ async function generateHostedImageArtifactWithPermit(
       });
 
       if (!response.ok) {
+        const failureKind = classifyHostedImageFailure(response.status);
+        const safeReason = await readHostedImageFailureReason(response);
+        if (failureKind === "quota_or_rate") {
+          setImageGenerationBlockReason(input.metadata, "image_generation_provider_quota", {
+            retryAfterSeconds: 300,
+          });
+        }
         app.log.warn(
           {
             provider: providerConfig.provider,
             statusCode: response.status,
+            failureKind,
+            safeReason,
           },
           "hosted image generation request failed",
         );
@@ -933,14 +1050,19 @@ async function generateHostedImageArtifactWithPermit(
       }
 
       const validatedImage = await validateHostedImageOutput(base64);
-      const mimeType = validatedImage.mimeType;
+      const brandedImage = await applyElyanImageBranding(validatedImage);
+      if (input.metadata?.imageGenerationBlockedReason === "image_generation_provider_quota") {
+        delete input.metadata.imageGenerationBlockedReason;
+        delete input.metadata.imageGenerationBlockedDetails;
+      }
+      const mimeType = brandedImage.mimeType;
       const revisedPrompt = compactText(extractedImage.revisedPrompt) || null;
       if (store) {
         await recordCircuitSuccess(store, circuitKey, IMAGE_CIRCUIT_OPEN_MS).catch(() => undefined);
       }
       return buildImageArtifactResult({
         prompt: input.prompt,
-        base64: validatedImage.base64,
+        base64: brandedImage.base64,
         mimeType,
         revisedPrompt,
         model: providerConfig.model,

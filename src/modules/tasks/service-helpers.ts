@@ -988,7 +988,7 @@ export function extractSharedBrainConversation(
 
 export function getSharedBrainFallbackMessage(
   error: unknown,
-  fallback = "Elyan beyni şu anda yanıt veremiyor",
+  fallback = "Yanıt üretimi şu anda yoğun. Birkaç saniye sonra tekrar deneyebilirsin.",
 ) {
   if (error instanceof Error && error.message.trim()) {
     const message = error.message.trim();

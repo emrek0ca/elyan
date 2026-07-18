@@ -58,6 +58,18 @@ type AgentToolDefinition<TArgs extends z.ZodTypeAny> = {
   outputSchema?: z.ZodType<Record<string, unknown>>;
   timeoutMs?: number;
   idempotency?: "read_only" | "idempotent_write" | "non_idempotent";
+  /**
+   * Model kaynaklı yaygın anahtar varyantları (q→query, max_results→limit).
+   * Kanonik anahtar yoksa alias'ın değeri kopyalanır; şema gevşemez, parse
+   * yine kanonik şemadan geçer. Yalnız read araçlarında kullanılır.
+   */
+  argAliases?: Record<string, string[] | undefined>;
+  /**
+   * Args parse başarısız olduğunda şema salt-default `{}` parse'ını kabul
+   * ediyorsa onunla çalıştır (read-only listeleme araçları için güvenli:
+   * en kötü sonuç filtresiz liste). Yazma araçlarında ASLA kullanılmaz.
+   */
+  allowEmptyArgsFallback?: boolean;
   argsSchema: TArgs;
   execute: (
     app: FastifyInstance,
@@ -138,7 +150,15 @@ const goalOutputSchema = z.object({ goal: z.record(z.string(), z.unknown()).null
 const goalContextOutputSchema = z.object({ goal: z.record(z.string(), z.unknown()).nullable(), events: z.array(z.unknown()) }).passthrough();
 
 const gmailSearchArgsSchema = z.object({
-  query: z.string().trim().min(1).max(400),
+  // "Mailleri oku" gibi sorgusuz isteklerde model boş/eksik query üretir;
+  // boş sorgu gelen kutusu listelemek demektir. min(1) burada canlıda
+  // invalid_tool_args → "araç kataloğu doğrulayamıyor" hatasına dönüşüyordu.
+  query: z
+    .string()
+    .trim()
+    .max(400)
+    .default("in:inbox")
+    .transform((value) => (value.length > 0 ? value : "in:inbox")),
   limit: z.coerce.number().int().min(1).max(10).default(5),
 });
 const gmailReadArgsSchema = z.object({
@@ -214,6 +234,43 @@ function normalizeToolArgs(raw: unknown): unknown {
     }
   }
   return args;
+}
+
+/**
+ * Alias onarımı + null temizliği. Kanonik anahtar eksik/boşken bilinen bir
+ * varyant doluysa değeri kanonik anahtara taşır; null değerler silinir ki
+ * şema default'ları devreye girebilsin ({query: null} → {} → "in:inbox").
+ * Şemayı gevşetmez: sonuç yine tool.argsSchema.parse'tan geçer.
+ */
+function applyArgAliases(
+  raw: unknown,
+  aliases: Record<string, string[] | undefined> | undefined,
+): unknown {
+  if (!aliases || !raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const record: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+  for (const key of Object.keys(record)) {
+    if (record[key] === null || record[key] === undefined) {
+      delete record[key];
+    }
+  }
+  for (const [canonical, variants] of Object.entries(aliases)) {
+    if (!variants) continue;
+    const current = record[canonical];
+    const missing =
+      current === undefined ||
+      (typeof current === "string" && current.trim().length === 0);
+    if (!missing) continue;
+    for (const variant of variants) {
+      const value = record[variant];
+      if (value !== undefined && value !== null) {
+        record[canonical] = value;
+        break;
+      }
+    }
+  }
+  return record;
 }
 
 function compactError(error: unknown): { code: string; message: string } {
@@ -497,6 +554,11 @@ const toolDefinitions = [
     idempotency: "read_only",
     timeoutMs: 12_000,
     outputSchema: connectorListOutputSchema,
+    argAliases: {
+      query: ["q", "search", "search_query", "searchQuery", "text", "keywords"],
+      limit: ["max", "max_results", "maxResults", "count", "n"],
+    },
+    allowEmptyArgsFallback: true,
     argsSchema: gmailSearchArgsSchema,
     async execute(app, context, args) {
       return executeGmailSearch(app, context.userId, args);
@@ -508,6 +570,9 @@ const toolDefinitions = [
     idempotency: "read_only",
     timeoutMs: 12_000,
     outputSchema: connectorMessageOutputSchema,
+    argAliases: {
+      messageId: ["id", "message_id", "messageID", "mail_id", "email_id"],
+    },
     argsSchema: gmailReadArgsSchema,
     async execute(app, context, args) {
       return executeGmailRead(app, context.userId, args);
@@ -519,6 +584,12 @@ const toolDefinitions = [
     idempotency: "read_only",
     timeoutMs: 12_000,
     outputSchema: connectorListOutputSchema,
+    argAliases: {
+      query: ["q", "search", "text"],
+      days: ["day", "range_days", "window_days"],
+      limit: ["max", "max_results", "maxResults", "count", "n"],
+    },
+    allowEmptyArgsFallback: true,
     argsSchema: calendarListArgsSchema,
     async execute(app, context, args) {
       return executeCalendarListEvents(app, context.userId, args);
@@ -530,6 +601,11 @@ const toolDefinitions = [
     idempotency: "read_only",
     timeoutMs: 12_000,
     outputSchema: connectorListOutputSchema,
+    argAliases: {
+      query: ["q", "search", "text", "name", "filename", "file_name"],
+      limit: ["max", "max_results", "maxResults", "count", "n"],
+    },
+    allowEmptyArgsFallback: true,
     argsSchema: driveSearchArgsSchema,
     async execute(app, context, args) {
       return executeDriveSearch(app, context.userId, args);
@@ -605,7 +681,9 @@ export function readCanonicalAgentToolArgs(
 ): Record<string, unknown> | null {
   const tool = registry.get(name);
   if (!tool) return null;
-  const parsed = tool.argsSchema.safeParse(normalizeToolArgs(rawArgs));
+  const parsed = tool.argsSchema.safeParse(
+    applyArgAliases(normalizeToolArgs(rawArgs), tool.argAliases),
+  );
   if (
     !parsed.success ||
     !parsed.data ||
@@ -694,7 +772,33 @@ export async function executeAgentTool(
     return stateWriteBlocked(tool);
   }
   try {
-    const args = tool.argsSchema.parse(normalizeToolArgs(request.args));
+    const normalizedArgs = applyArgAliases(
+      normalizeToolArgs(request.args),
+      tool.argAliases,
+    );
+    let args: unknown;
+    const parsedArgs = tool.argsSchema.safeParse(normalizedArgs);
+    if (parsedArgs.success) {
+      args = parsedArgs.data;
+    } else if (tool.allowEmptyArgsFallback === true) {
+      // Read-only listeleme araçları: model argümanı bozduysa salt-default
+      // çalıştırma, "araç kataloğu doğrulayamıyor" cevabından her zaman
+      // iyidir (en kötü sonuç filtresiz liste). Şeması {} kabul etmeyen
+      // araçlar (gmail.read gibi) burada yine orijinal hatayla düşer.
+      const fallback = tool.argsSchema.safeParse({});
+      if (!fallback.success) {
+        throw parsedArgs.error;
+      }
+      args = fallback.data;
+      app.log?.info?.(
+        { tool: tool.name, droppedArgs: Object.keys(
+          (normalizedArgs as Record<string, unknown> | null) ?? {},
+        ) },
+        "connector tool args repaired to defaults",
+      );
+    } else {
+      throw parsedArgs.error;
+    }
     const timeoutMs = Math.max(100, Math.min(tool.timeoutMs ?? 8_000, 30_000));
     const timeout = new Promise<never>((_, reject) => {
       const timer = setTimeout(() => reject(Object.assign(new Error("Tool timed out."), { code: "tool_timeout" })), timeoutMs);

@@ -194,12 +194,13 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     // Maliyet politikası: "poster" tek başına artık premium değil (Pro flag
     // default kapalı) ve açık çözünürlük istenmedikçe 1K üretilir.
     assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image");
-    assert.deepEqual(requests[0]?.body.response_format, {
-      type: "image",
-      mime_type: "image/png",
-      aspect_ratio: "2:3",
-      image_size: "1K",
-    });
+    assert.equal("response_format" in requests[0]!.body, false);
+    assert.deepEqual(requests[0]?.body.input, [
+      {
+        type: "text",
+        text: "Yeni sürüm için poster oluştur\n\nRequested aspect ratio: 2:3.",
+      },
+    ]);
     assert.equal(result.previewText, "Görsel hazır.");
     assert.equal(result.mimeType, "image/jpeg");
     assert.equal(result.artifact.contentType, "image/jpeg");
@@ -210,7 +211,7 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     assert.equal(result.artifact.metadata?.contentFamily, "image");
     assert.equal(result.artifact.payload?.source, "elyan_image_generation");
     assert.equal(result.artifact.payload?.model, undefined);
-    assert.deepEqual([...result.binaryBody], [...jpegBody]);
+    assert.notDeepEqual([...result.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -245,6 +246,38 @@ test("maybeGenerateHostedImageArtifact does not fall back to billed OpenAI when 
 
     assert.equal(result, null);
     assert.equal(requests.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("maybeGenerateHostedImageArtifact records provider quota failures safely", async () => {
+  const originalFetch = globalThis.fetch;
+  const metadata: Record<string, unknown> = {};
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        error: {
+          message: "You exceeded your current quota, please check your plan and billing details.",
+        },
+      }),
+      { status: 429, headers: { "content-type": "application/json" } },
+    );
+
+  try {
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig({ GEMINI_API_KEY: "gemini-test-key" }),
+      {
+        prompt: "Kırmızı bir Mercedes çiz",
+        responseText: "",
+        metadata,
+      },
+    );
+
+    assert.equal(result, null);
+    assert.equal(metadata.imageGenerationBlockedReason, "image_generation_provider_quota");
+    assert.deepEqual(metadata.imageGenerationBlockedDetails, { retryAfterSeconds: 300 });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -310,7 +343,7 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
       ["gemini-3-pro-image", "gemini-3.1-flash-image"],
     );
     assert.equal(result.mimeType, "image/jpeg");
-    assert.deepEqual([...result.binaryBody], [...jpegBody]);
+    assert.notDeepEqual([...result.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -354,7 +387,7 @@ test("maybeGenerateHostedImageArtifact treats Turkish draw prompts as image gene
     );
     assert.equal(result.previewText, "Görsel hazır.");
     assert.equal(result.artifact.textContent, "Görsel hazır.");
-    assert.deepEqual([...result.binaryBody], [...jpegBody]);
+    assert.notDeepEqual([...result.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -441,7 +474,8 @@ test("repeat identical prompt is served from cache without a second upstream cal
     assert.ok(first);
     assert.ok(second);
     assert.equal(calls, 1, "second identical request must hit the cache");
-    assert.deepEqual([...second.binaryBody], [...jpegBody]);
+    assert.deepEqual([...second.binaryBody], [...first.binaryBody]);
+    assert.notDeepEqual([...second.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -648,8 +682,8 @@ test("concurrent identical prompts collapse into a single upstream call (single-
     assert.ok(a);
     assert.ok(b);
     assert.equal(calls, 1, "concurrent identical requests must share one upstream call");
-    assert.deepEqual([...a.binaryBody], [...jpegBody]);
-    assert.deepEqual([...b.binaryBody], [...jpegBody]);
+    assert.deepEqual([...a.binaryBody], [...b.binaryBody]);
+    assert.notDeepEqual([...a.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -708,16 +742,20 @@ test("explicit high-resolution prompts get the configured max size, others stay 
       responseText: "",
     });
 
-    const sizes = requests.map(
-      (request) => (request.response_format as Record<string, unknown>).image_size,
-    );
-    assert.deepEqual(sizes, ["2K", "1K"]);
+    const textPrompts = requests.map((request) => {
+      const input = request.input as Array<Record<string, unknown>>;
+      return String(input[0]?.text ?? "");
+    });
+    assert.deepEqual(textPrompts.map((prompt) => prompt.includes("Requested image size: 2K.")), [
+      true,
+      false,
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("generated images are validated as real image bytes without mutation", async () => {
+test("generated images are validated and branded as real image bytes", async () => {
   const originalFetch = globalThis.fetch;
   // 256x256 gerçek bir JPEG üret — sharp compose edebilsin.
   const sharp = (await import("sharp")).default;
@@ -739,10 +777,11 @@ test("generated images are validated as real image bytes without mutation", asyn
     );
 
     assert.ok(result);
-    assert.deepEqual([...result.binaryBody], [...realJpeg]);
+    assert.notDeepEqual([...result.binaryBody], [...realJpeg]);
     const meta = await sharp(Buffer.from(result.binaryBody)).metadata();
     assert.equal(meta.format, "jpeg");
     assert.equal(meta.width, 256);
+    assert.equal(meta.height, 256);
   } finally {
     globalThis.fetch = originalFetch;
   }
