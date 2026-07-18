@@ -282,6 +282,18 @@ const CONNECTOR_SEMANTIC_NEGATIVE_CANDIDATES = [
     description:
       "Gmail API nasıl kullanılır; e-posta, takvim veya Drive uygulaması nasıl çalışır; SDK ve kod örneği ver; kişisel hesaba erişmeden genel teknik açıklama yap.",
   },
+  // "notion nedir anlatır mısın" canlıda notion.search hint'i alıyordu:
+  // eğitsel "nedir/nasıl çalışır" soruları hesap verisi okumadan yanıtlanır.
+  {
+    id: "negative:explain",
+    description:
+      "Notion nedir; GitHub nasıl çalışır; Slack ne işe yarar; bir uygulamanın, servisin veya aracın ne olduğunu hesabımdaki verilere bakmadan anlat ve tanıt.",
+  },
+  {
+    id: "negative:explain",
+    description:
+      "What is Notion; how does GitHub work; describe what an app, service, or tool does in general without reading my connected account data.",
+  },
   {
     id: "negative:compose",
     description:
