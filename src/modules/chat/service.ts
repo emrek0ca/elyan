@@ -53,7 +53,8 @@ import { sanitizePublicInferenceValue } from "../tasks/service-helpers.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import { sanitizeInboundContextRecord } from "../../lib/context-text-sanitizer.js";
 import { listFreshWorldSignals } from "../mobile/service.js";
-import { resolveRemoteMcpRequestedCapabilities } from "../integrations/service.js";
+import { fuseWorldSignalRecordsByKind } from "../../core/understanding/context-packets.js";
+import { resolveRemoteMcpRequest } from "../integrations/service.js";
 import {
   type AssistantMessageBlock,
   shapeAssistantMessagePayload,
@@ -117,9 +118,14 @@ export function buildChatTurnAdmissionLockKey(input: {
   userId: string;
   sessionId: string;
   content: string;
+  idempotencyKey?: string;
 }): string | null {
+  // İstemci idempotency anahtarı gönderiyorsa kilidi ona bağla: aynı isteğin
+  // yeniden gönderimi kesin olarak yakalanır, kullanıcının bilerek tekrarladığı
+  // ("evet", "devam et") turlar ise yeni anahtarla geldiği için engellenmez.
+  const idempotencyKey = input.idempotencyKey?.trim();
   const normalizedContent = normalizeChatTitle(input.content).toLowerCase();
-  if (!normalizedContent) {
+  if (!idempotencyKey && !normalizedContent) {
     return null;
   }
   const digest = createHash("sha256")
@@ -127,7 +133,7 @@ export function buildChatTurnAdmissionLockKey(input: {
     .update("\0")
     .update(input.sessionId)
     .update("\0")
-    .update(normalizedContent)
+    .update(idempotencyKey ? `idem:${idempotencyKey}` : normalizedContent)
     .digest("hex")
     .slice(0, 32);
   return `lock:chat-turn:${digest}`;
@@ -221,23 +227,29 @@ async function findRecentDuplicateChatTurn(
       continue;
     }
 
+    // Düz sohbet cevaplarının taskId'si yoktur. Daha önce burada taskId şartı
+    // aranıyordu; bu yüzden görev üretmeyen turlarda mükerrer hiç yakalanmıyor
+    // ve aynı soru ikinci kez baştan cevaplanıyordu.
     const assistantRow = orderedRows
       .slice(index + 1)
-      .find((candidate) => candidate.role === "assistant" && candidate.taskId);
-    if (!assistantRow?.taskId) {
+      .find((candidate) => candidate.role === "assistant");
+    if (!assistantRow) {
       continue;
     }
-    const taskRows = await app.db
-      .select()
-      .from(tasks)
-      .where(
-        and(eq(tasks.id, assistantRow.taskId), eq(tasks.userId, input.userId)),
-      )
-      .limit(1);
-    const task = taskRows[0];
-    if (!task) {
-      continue;
+
+    // Görev varsa iliştir; yoksa tur yine de mükerrerdir.
+    let task: typeof tasks.$inferSelect | null = null;
+    if (assistantRow.taskId) {
+      const taskRows = await app.db
+        .select()
+        .from(tasks)
+        .where(
+          and(eq(tasks.id, assistantRow.taskId), eq(tasks.userId, input.userId)),
+        )
+        .limit(1);
+      task = taskRows[0] ?? null;
     }
+
     return {
       userMessage: row,
       assistantMessage: assistantRow,
@@ -262,7 +274,10 @@ async function shapeDuplicateChatTurnResponse(
   >,
 ) {
   const billing = await getBillingSummary(app, input.userId);
-  const shapedTask = shapeTaskFeedItem(duplicateTurn.task);
+  // Görev üretmeyen sohbet turlarında task null olur; yanıt şekli korunur.
+  const shapedTask = duplicateTurn.task
+    ? shapeTaskFeedItem(duplicateTurn.task)
+    : null;
   const shapedAssistantMessage = {
     ...shapeChatMessageForResponse(duplicateTurn.assistantMessage),
     taskId: duplicateTurn.assistantMessage.taskId,
@@ -270,15 +285,15 @@ async function shapeDuplicateChatTurnResponse(
     content: duplicateTurn.assistantMessage.content,
   };
   const taskBrainRecord = readRecord(
-    (shapedTask as Record<string, unknown>).brain,
+    (shapedTask as Record<string, unknown> | null)?.brain,
   );
   const resultRecord = readRecord(
-    (duplicateTurn.task as Record<string, unknown>).result,
+    (duplicateTurn.task as Record<string, unknown> | null)?.result,
   );
   const pendingTokenDebit = estimatePendingChatTokenDebit({
     route: routeDecision.route,
     reused: true,
-    taskStatus: duplicateTurn.task.status,
+    taskStatus: duplicateTurn.task?.status,
     content: input.content,
     workload: routeDecision.selectedWorkload ?? "mobile_chat_fast",
     brainProfile: billing.subscription.brainProfile,
@@ -291,7 +306,7 @@ async function shapeDuplicateChatTurnResponse(
     renderRecipe: resultRecord?.renderRecipe ?? null,
     routeDecision,
     delivery: buildChatDispatchDeliverySnapshot({
-      task: shapedTask,
+      task: shapedTask ?? {},
       routeDecision,
       requestedTargetDeviceId: input.targetDeviceId,
     }),
@@ -553,6 +568,8 @@ function sanitizeWorldSignalDigest(value: unknown) {
       const kind = readString(item, "kind");
       const summary = readString(item, "summary");
       const confidence = readNumber(item, "confidence");
+      const fusionEvidenceCount = readNumber(item, "fusionEvidenceCount");
+      const conflictSuppressedCount = readNumber(item, "conflictSuppressedCount");
       const createdAt = readString(item, "createdAt");
       const facts = sanitizeCompactContextRecord(item.facts);
       const privacy = sanitizeCompactContextRecord(item.privacy);
@@ -564,13 +581,59 @@ function sanitizeWorldSignalDigest(value: unknown) {
         kind,
         summary: scrubCompactText(summary, 140),
         ...(confidence != null ? { confidence } : {}),
+        ...(fusionEvidenceCount != null ? { fusionEvidenceCount } : {}),
+        ...(conflictSuppressedCount != null ? { conflictSuppressedCount } : {}),
         ...(createdAt ? { createdAt } : {}),
         ...(facts ? { facts } : {}),
         ...(privacy ? { privacy } : {}),
       };
     })
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, 10);
+}
+
+function sanitizeMobileContextCapabilities(value: unknown) {
+  const record = readRecord(value);
+  if (!record) return null;
+  const capabilities = Object.fromEntries(
+    [
+      "healthEnabled",
+      "locationEnabled",
+      "calendarEnabled",
+      "healthSignalsAvailable",
+      "locationSignalsAvailable",
+      "calendarSignalsAvailable",
+    ]
+      .filter((key) => typeof record[key] === "boolean")
+      .map((key) => [key, record[key]]),
+  );
+  return Object.keys(capabilities).length > 0 ? capabilities : null;
+}
+
+function isWorldSignalAllowedByCapabilities(
+  kind: string,
+  capabilities: Record<string, unknown> | null,
+  privacy: Record<string, unknown> | null,
+) {
+  const normalizedKind = kind.trim().toLowerCase();
+  const legacyCapturePermission =
+    !capabilities && privacy?.backendPlaintextAllowed === true;
+  if (normalizedKind === "health") {
+    return capabilities
+      ? capabilities.healthEnabled === true
+      : legacyCapturePermission;
+  }
+  if (normalizedKind === "location") {
+    return capabilities
+      ? capabilities.locationEnabled === true
+      : legacyCapturePermission;
+  }
+  if (normalizedKind === "calendar") {
+    return capabilities
+      ? capabilities.calendarEnabled === true
+      : legacyCapturePermission;
+  }
+  return true;
 }
 
 function buildSanitizedCompactContext(value: unknown) {
@@ -605,21 +668,9 @@ function buildSanitizedCompactContext(value: unknown) {
     record,
     "lastAssistantBlocksDigest",
   );
-  const rawMobileCapabilities = readRecord(record.mobileContextCapabilities);
-  const mobileContextCapabilities = rawMobileCapabilities
-    ? Object.fromEntries(
-        [
-          "healthEnabled",
-          "locationEnabled",
-          "calendarEnabled",
-          "healthSignalsAvailable",
-          "locationSignalsAvailable",
-          "calendarSignalsAvailable",
-        ]
-          .filter((key) => typeof rawMobileCapabilities[key] === "boolean")
-          .map((key) => [key, rawMobileCapabilities[key]]),
-      )
-    : null;
+  const mobileContextCapabilities = sanitizeMobileContextCapabilities(
+    record.mobileContextCapabilities,
+  );
   const compactContext = {
     ...(recentMessages.length > 0 ? { recentMessages } : {}),
     ...(turns.length > 0 ? { turns } : {}),
@@ -705,30 +756,60 @@ export async function enrichChatMetadataForRequest(
   const existingDerivedDigest = readRecord(
     compactContext?.derivedContextDigest,
   );
+  const mobileContextCapabilities = sanitizeMobileContextCapabilities(
+    compactContext?.mobileContextCapabilities,
+  );
   let freshWorldSignalDigest: Record<string, unknown>[] = [];
   const freshSignals = await listFreshWorldSignals(app, {
     userId: input.userId,
-    limit: 10,
+    sessionId: input.sessionId,
+    // `targetDeviceId` is the execution target (desktop/shared brain), not the
+    // phone that observed the signal. Scope by authenticated user + current
+    // session, then admit unscoped account signals only through current
+    // per-kind capability truth or legacy capture-time derived-data consent.
+    includeUnscopedSession: true,
+    limit: 48,
     maxAgeHours: 72,
   });
-  freshWorldSignalDigest = freshSignals.map((signal) => ({
-    signalId: signal.signalId,
-    kind: signal.kind,
-    summary: scrubCompactText(signal.summary, 220),
-    confidence: signal.confidence,
-    createdAt: signal.createdAt.toISOString(),
-    facts: sanitizeCompactContextRecord(signal.facts) ?? {},
-    privacy: sanitizeCompactContextRecord(signal.privacy) ?? {},
-  }));
+  freshWorldSignalDigest = fuseWorldSignalRecordsByKind(freshSignals)
+    .filter((signal) =>
+      isWorldSignalAllowedByCapabilities(
+        signal.kind,
+        mobileContextCapabilities,
+        signal.privacy,
+      ),
+    )
+    .map((signal) => ({
+      signalId: signal.signalId,
+      kind: signal.kind,
+      summary: scrubCompactText(signal.summary, 220),
+      confidence: signal.confidence,
+      fusionEvidenceCount: signal.fusionEvidenceCount,
+      conflictSuppressedCount: signal.conflictSuppressedCount,
+      createdAt: signal.createdAt.toISOString(),
+      facts: sanitizeCompactContextRecord(signal.facts) ?? {},
+      privacy: sanitizeCompactContextRecord(signal.privacy) ?? {},
+    }));
 
+  // Current permission/session truth is authoritative. Never carry a prior
+  // worldSignals array forward when the fresh authorized set is empty (for
+  // example after the user disables Health/Location/Calendar access).
+  const existingDerivedDigestWithoutWorldSignals = existingDerivedDigest
+    ? Object.fromEntries(
+        Object.entries(existingDerivedDigest).filter(
+          ([key]) => key !== "worldSignals",
+        ),
+      )
+    : {};
   const mergedDerivedContextDigest = {
-    ...(existingDerivedDigest ?? {}),
+    ...existingDerivedDigestWithoutWorldSignals,
     ...(freshWorldSignalDigest.length > 0
       ? { worldSignals: freshWorldSignalDigest }
       : {}),
   };
   const chatContext = {
     ...buildSessionChatContextMetadata(base),
+    ...(mobileContextCapabilities ? { mobileContextCapabilities } : {}),
     ...(Object.keys(mergedDerivedContextDigest).length > 0
       ? { lastDerivedContextDigest: mergedDerivedContextDigest }
       : {}),
@@ -1895,14 +1976,16 @@ export async function createChatMessage(
     idempotencyKey?: string;
   },
 ) {
-  const [usageAccess, effectiveRequestedCapabilities] = await Promise.all([
+  const [usageAccess, remoteMcpResolution] = await Promise.all([
     getUserUsageAccessTruth(app.db, input.userId),
-    resolveRemoteMcpRequestedCapabilities(app, {
+    resolveRemoteMcpRequest(app, {
       userId: input.userId,
       prompt: input.content,
       requestedCapabilities: input.requestedCapabilities,
     }),
   ]);
+  const effectiveRequestedCapabilities =
+    remoteMcpResolution.requestedCapabilities;
   const routeDecision = await routeChatTurn(app, {
     userId: input.userId,
     message: input.content,
@@ -1920,6 +2003,9 @@ export async function createChatMessage(
     ...input.metadata,
     routeDecision,
     presentation: presentationForRoute(routeDecision),
+    ...(remoteMcpResolution.selection
+      ? { remoteMcpSelection: remoteMcpResolution.selection }
+      : {}),
   };
   const useDirectDesktopFastPath = isDeterministicDesktopFastWorkOrder(
     routeDecision,
@@ -1980,6 +2066,7 @@ export async function createChatMessage(
     userId: input.userId,
     sessionId: session.id,
     content: input.content,
+    idempotencyKey: input.idempotencyKey,
   });
   const admissionLockOwner = randomUUID();
   let admissionLockAcquired = false;

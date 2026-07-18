@@ -160,15 +160,14 @@ const PREMIUM_IMAGE_REQUEST_PATTERNS = [
   /\b(en kaliteli|yüksek kalite|yuksek kalite|profesyonel|premium|ultra kalite|photorealistic|stüdyo çekimi|studyo cekimi|product shot)\b/i,
 ];
 
-/** Varsayılan 2K'dır; 4K yalnız kullanıcı açıkça isterse seçilir. */
+/** Varsayılan 1K'dır; açık yüksek çözünürlük isteği operatör tavanını aşamaz. */
 function resolveGeminiImageSize(
   prompt: string,
   configuredMax: "1K" | "2K" | "4K",
 ): "1K" | "2K" | "4K" {
   const normalized = compactText(prompt).toLowerCase();
-  if (/\b4k\b/i.test(normalized)) return "4K";
-  if (configuredMax === "1K") return "1K";
-  return "2K";
+  if (/\b4k\b/i.test(normalized)) return configuredMax;
+  return "1K";
 }
 
 function compactText(value: unknown): string {
@@ -351,7 +350,7 @@ async function consumeGlobalImageDailyBudget(
   const fourKRequested =
     resolveGeminiImageSize(
       input.prompt,
-      app.config.GEMINI_IMAGE_SIZE ?? "2K",
+      app.config.GEMINI_IMAGE_SIZE ?? "1K",
     ) === "4K";
   const [count, fourKCount] = await Promise.all([
     store.increment(`image:daily:${day}:global`, ttlMs),
@@ -648,7 +647,7 @@ export async function maybeGenerateHostedImageArtifact(
   const cacheKey = imageCacheKey(
     input.prompt,
     premiumRequested,
-    resolveGeminiImageSize(input.prompt, app.config.GEMINI_IMAGE_SIZE ?? "2K"),
+    resolveGeminiImageSize(input.prompt, app.config.GEMINI_IMAGE_SIZE ?? "1K"),
   );
 
   // 1) Önbellek: aynı istem yakın zamanda üretildiyse dış çağrı yok.
@@ -847,7 +846,7 @@ function buildHostedImageProviderConfigs(
     ).trim();
     const imageSize = resolveGeminiImageSize(
       prompt,
-      app.config.GEMINI_IMAGE_SIZE ?? "2K",
+      app.config.GEMINI_IMAGE_SIZE ?? "1K",
     );
     const addGeminiProvider = (model: string) => {
       if (

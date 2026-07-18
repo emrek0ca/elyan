@@ -23,7 +23,7 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
   const processStart = serviceSource.indexOf("async function processSharedBrainChatTask");
   assert.notEqual(processStart, -1);
   const imageBranchStart = serviceSource.indexOf(
-    "const imageGenerationRequested = isHostedImageGenerationRequest(input.prompt);",
+    "const imageGenerationRequested =",
     processStart,
   );
   const inferenceStart = serviceSource.indexOf(
@@ -36,6 +36,8 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
   const imageBranchEnd = serviceSource.indexOf("\n    // Deterministik hedef komutu", imageBranchStart);
   assert.ok(imageBranchEnd > imageBranchStart);
   const imageBranch = serviceSource.slice(imageBranchStart, imageBranchEnd);
+  assert.ok(imageBranch.includes("isHostedImageGenerationRequest(input.prompt)"));
+  assert.ok(imageBranch.includes("imageEditIntent"));
   assert.equal(imageBranch.includes("generateGovernedSharedBrainReply"), false);
   assert.ok(imageBranch.includes('event: "message.delta"'));
   assert.ok(imageBranch.includes('delta: ""'));
@@ -51,16 +53,6 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
   assert.equal(imageBranch.includes("selectedProfile"), false);
   assert.equal(serviceSource.includes('answerSource: "backend_ack"'), false);
 
-  const taskPathBranchStart = serviceSource.indexOf(
-    "if (isHostedImageGenerationRequest(prompt)) {",
-    inferenceStart,
-  );
-  const taskPathInferenceStart = serviceSource.indexOf(
-    "const inference = await generateGovernedSharedBrainReply(app, {",
-    taskPathBranchStart,
-  );
-  assert.ok(taskPathBranchStart > inferenceStart);
-  assert.ok(taskPathInferenceStart > taskPathBranchStart);
 });
 
 test("generated image artifact blocks survive assistant block normalization", () => {

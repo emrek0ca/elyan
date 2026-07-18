@@ -427,6 +427,55 @@ function buildLifecycleBlocks(
 const HUMANIZE_MAX_SOURCE_CHARS = 320;
 const HUMANIZE_TIMEOUT_MS = 6_000;
 
+// Jenerik durum/tamamlanma kelimeleri BİLGİ taşımaz. Bunlar dayanak sayılırsa
+// "işlem tamam" gibi boş bir sonuç, "Son dört e-postayı okudum, tamamlandı."
+// uydurmasını doğrulamış gibi görünür (tamam↔tamamlandı). Kapı yalnız ANLAMLI
+// örtüşmeyi kabul etmeli.
+const GROUNDING_STOP_STEMS = new Set([
+  "tamam", "islem", "basar", "hazir", "gorev", "oldu", "sonuc", "yapil",
+  "gerce", "devam", "lutfe", "durum", "bilgi", "asama", "calis", "olust",
+  "kayde", "guncel", "verdi", "aldim", "ettim", "edild", "ldi", "sizin",
+]);
+
+/** Türkçe ekleri ve aksanları normalleştirerek kaba kök çıkarır. */
+function groundingStems(value: string): Set<string> {
+  const stems = new Set<string>();
+  const normalized = value
+    .toLocaleLowerCase("tr")
+    .replace(/ı/g, "i")
+    .replace(/ş/g, "s")
+    .replace(/ç/g, "c")
+    .replace(/ğ/g, "g")
+    .replace(/ö/g, "o")
+    .replace(/ü/g, "u");
+  for (const raw of normalized.split(/[^\p{L}\p{N}]+/u)) {
+    if (raw.length < 4) continue;
+    const stem = raw.slice(0, 5);
+    if (GROUNDING_STOP_STEMS.has(stem)) continue;
+    stems.add(stem);
+  }
+  return stems;
+}
+
+/**
+ * Yeniden ifade, kaynak metne dayanmak ZORUNDA. Kaynakta hiçbir anlamlı kelimeye
+ * değmeyen bir çıktı, yeniden ifade değil uydurmadır ("Son dört e-postayı
+ * okudum" gibi) ve reddedilir. Kaynakta anlamlı kelime yoksa kapı uygulanmaz.
+ */
+export function isGroundedRewrite(source: string, rewritten: string): boolean {
+  const sourceStems = groundingStems(source);
+  // Kaynakta anlamlı hiçbir kelime yoksa ("işlem tamam", "Görev tamamlandı.")
+  // yeniden ifade edilecek bir bilgi de yoktur. Bu durumda her türlü zengin
+  // çıktı uydurmadır — ham metin aynen korunur. (Eskiden burada true dönülüyordu
+  // ve kapı tam da en tehlikeli vakada devre dışı kalıyordu.)
+  if (sourceStems.size === 0) return false;
+  const rewrittenStems = groundingStems(rewritten);
+  for (const stem of rewrittenStems) {
+    if (sourceStems.has(stem)) return true;
+  }
+  return false;
+}
+
 async function humanizeTerminalTaskContent(
   app: FastifyInstance,
   input: {
@@ -442,30 +491,26 @@ async function humanizeTerminalTaskContent(
   // Markdown/çok satırlı zengin içerik zaten insan elinden çıkmış gibidir.
   if (content.includes("\n") || /[#*`|]/.test(content)) return input.content;
 
-  const payload =
-    input.task.payload &&
-    typeof input.task.payload === "object" &&
-    !Array.isArray(input.task.payload)
-      ? (input.task.payload as Record<string, unknown>)
-      : {};
-  const userPrompt =
-    typeof payload.prompt === "string" ? payload.prompt.slice(0, 400) : "";
-
   try {
     const { generateGovernedSharedBrainReply } = await import(
       "../brain/inference.js"
     );
+    // KRİTİK: Bu geçişe kullanıcının isteği ve görev durumu VERİLMEZ. Daha önce
+    // veriliyordu ve zayıf fast-model, içeriğe hiç bakmadan istekten+durumdan
+    // başarı cümlesi uyduruyordu ("Mailleri oku son 4 maili" + "tamamlandı" →
+    // "Son dört e-postayı okudum, tamamlandı." — hiç mail verisi olmadan).
+    // Model artık YALNIZ ham metni görür; yeniden ifade edebilir, iddia üretemez.
     const inference = await generateGovernedSharedBrainReply(app, {
       userId: input.task.userId,
       taskId: input.task.id,
       title: "Görev sonucu",
       prompt: [
-        "Aşağıdaki masaüstü görev sonucunu kullanıcıya tek (en fazla iki) cümlelik doğal, samimi Türkçe ile aktar.",
-        "Teknik jargon, yol adlarını gereksiz tekrar ve 'doğrulama' dili kullanma; ne yapıldığını/ne olduğunu net söyle.",
-        "Başarısızsa dürüstçe söyle ve tek kısa öneri ekle. SADECE cevabı yaz.",
-        `Kullanıcının isteği: ${userPrompt || "(bilinmiyor)"}`,
-        `Görev durumu: ${status === "completed" ? "tamamlandı" : "başarısız"}`,
-        `Ham sonuç: ${content}`,
+        "Aşağıdaki metni kullanıcıya tek (en fazla iki) cümlelik doğal, samimi Türkçe ile yeniden ifade et.",
+        "SADECE bu metinde yazan bilgiyi kullan. Metinde olmayan hiçbir eylem, sonuç, veri veya başarı iddiası EKLEME.",
+        "Bir şeyi okuduğunu, getirdiğinin, hazırladığını veya tamamladığını metin bunu söylemiyorsa ASLA yazma.",
+        "Teknik jargon ve yol adlarını tekrar etme. SADECE yeniden ifade edilmiş metni yaz.",
+        "---",
+        content,
       ].join("\n"),
       workload: "mobile_chat_fast",
       route: "task_result_humanize",
@@ -479,13 +524,30 @@ async function humanizeTerminalTaskContent(
         refinementPass: true,
       },
     });
-    const rewritten = inference.text.trim();
-    // Model saçmalarsa (boş, aşırı uzun, JSON/kod döndürmüş) ham metin kalır.
+    let rewritten = inference.text.trim();
+    // Zayıf fast-model bazen prompt etiketlerini ("Görev durumu: tamamlandı",
+    // "Ham sonuç: ...", "Görev tamamlandı.") çıktıya papağanlar; bunları
+    // temizle. Baştaki bu iskele parçaları soyulunca geriye doğal cevap kalır
+    // ("Selam! Görev tamamlandı. Ham sonuç: X" → "X").
+    rewritten = rewritten
+      .replace(
+        /^(?:selam[!.]?\s*)?(?:g[öo]rev\s+(?:durumu\s*:?\s*)?(?:tamamland[ıi]|ba[şs]ar[ıi]s[ıi]z(?:\s+oldu)?)[.:]?\s*)+/i,
+        "",
+      )
+      .replace(/(?:^|\s)ham\s+sonu[çc]\s*:\s*/i, " ")
+      .replace(/(?:^|\s)kullan[ıi]c[ıi]n[ıi]n\s+iste[ğg]i\s*:.*$/i, "")
+      .trim();
+    // Model saçmalarsa (boş, aşırı uzun, JSON/kod döndürmüş) ya da temizleme
+    // sonrası hâlâ iskele sızıntısı varsa ham metin kalır — ham içerik zaten
+    // masaüstünün ürettiği doğal cümledir ("Merhaba ..., buradayım.").
     if (
       !rewritten ||
       rewritten.length > 400 ||
       rewritten.startsWith("{") ||
-      rewritten.includes("```")
+      rewritten.includes("```") ||
+      /ham\s+sonu[çc]\s*:|g[öo]rev\s+durumu\s*:/i.test(rewritten) ||
+      // Kaynağa dayanmayan çıktı = uydurma. Ham içerik her zaman daha dürüst.
+      !isGroundedRewrite(content, rewritten)
     ) {
       return input.content;
     }

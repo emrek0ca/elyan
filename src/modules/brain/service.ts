@@ -42,6 +42,7 @@ import {
 import { resolveSharedBrainModel } from "./model-resolution.js";
 import { buildGroqModelCatalog } from "./groq-models.js";
 import { buildBrainProfileSections } from "./profile-sections.js";
+import { getWorldSignalTtlHours } from "../../core/understanding/context-packets.js";
 import {
   assertAttachmentQuotaAllowedFromUsage,
   getTrialQuotaPolicy,
@@ -164,10 +165,11 @@ function nullableNumber(value: unknown): number | null {
 
 export function summarizeWorldContextReadiness(
   signals: Array<{ kind: string; createdAt: Date | string | null }>,
-  maxAgeHours = 72,
+  maxAgeHours = 24,
   now = new Date(),
 ): BrainWorldContextReadiness {
   const cutoffMs = now.getTime() - maxAgeHours * 3_600_000;
+  const maxFutureMs = now.getTime() + 5 * 60_000;
   const freshSignals = signals
     .map((signal) => {
       const createdAt =
@@ -188,7 +190,10 @@ export function summarizeWorldContextReadiness(
       (signal) =>
         signal.kind &&
         signal.createdAt != null &&
-        signal.createdAt.getTime() >= cutoffMs,
+        signal.createdAt.getTime() >= cutoffMs &&
+        signal.createdAt.getTime() <= maxFutureMs &&
+        now.getTime() - signal.createdAt.getTime() <=
+          Math.min(maxAgeHours, getWorldSignalTtlHours(signal.kind)) * 3_600_000,
     );
   const latestSignalAt =
     freshSignals
@@ -339,7 +344,7 @@ async function buildBrainWorldContextReadiness(
   app: FastifyInstance,
   userId: string,
 ): Promise<BrainWorldContextReadiness> {
-  const maxAgeHours = 72;
+  const maxAgeHours = 24;
   try {
     const rows = await app.db
       .select({

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
+import type { RemoteMcpSelectionMetadata } from "../integrations/provider-registry.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
 // görevler masaüstünde WORK_ORDER_STEP_BUDGET_EXCEEDED ile reddediliyordu.
@@ -51,6 +52,8 @@ export type DesktopWorkOrder = {
     privacyClass: "public_text" | "local_private" | "side_effect";
     steps: DesktopWorkOrderStep[];
   };
+  /** Safe target/evidence only; credentials and raw MCP config never enter a work order. */
+  remoteMcp?: RemoteMcpSelectionMetadata;
   understanding?: {
     schemaVersion: UnderstandingEnvelope["schema_version"];
     intent: UnderstandingEnvelope["intent"];
@@ -625,6 +628,7 @@ export function buildDesktopWorkOrder(input: {
   routeDecision: CommandRouteDecision;
   requestedCapabilities: string[];
   understandingEnvelope?: UnderstandingEnvelope;
+  remoteMcpSelection?: RemoteMcpSelectionMetadata;
   source?: "mobile_chat_dispatch" | "backend_task_route";
   inputRefs?: string[];
 }): DesktopWorkOrder {
@@ -709,6 +713,9 @@ export function buildDesktopWorkOrder(input: {
           : "public_text",
       steps,
     },
+    ...(kind === "remote_mcp" && input.remoteMcpSelection
+      ? { remoteMcp: input.remoteMcpSelection }
+      : {}),
     ...(input.understandingEnvelope
       ? {
           understanding: {

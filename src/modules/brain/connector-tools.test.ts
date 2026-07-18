@@ -150,13 +150,15 @@ test("semantic connector selector fails closed on ambiguous and low-confidence m
   }
 });
 
-test("semantic connector contract gate advertises only the selected read tool", () => {
+test("semantic connector contract gate narrows on hint, keeps all on miss", () => {
   const contracts = CONNECTOR_TOOL_CONTRACTS.filter(
     (entry) => entry.permission === "read",
   ).map((entry) => entry.contract);
+  // İpucu yoksa reklam listesi sökülmez — araçsız kalan model "erişimim yok"
+  // diyordu; yürütme kapıları (scope/izin) zaten ayrıca devrede.
   assert.deepEqual(
     connectorContractsForSemanticReadHint(contracts, null),
-    [],
+    contracts,
   );
   const selected = connectorContractsForSemanticReadHint(
     contracts,
@@ -164,6 +166,11 @@ test("semantic connector contract gate advertises only the selected read tool", 
   );
   assert.equal(selected.length, 1);
   assert.match(selected[0] ?? "", /^gmail\.search\b/u);
+  // Reklamda olmayan bir ipucu aracı da listeyi boşaltmaz.
+  assert.deepEqual(
+    connectorContractsForSemanticReadHint(contracts, "notion.search"),
+    contracts,
+  );
 });
 
 test("connectorToolsForCapabilities advertises only connected capabilities", () => {

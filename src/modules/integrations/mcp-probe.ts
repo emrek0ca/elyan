@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { ConnectionProvider } from "../../contracts/domain.js";
@@ -18,6 +19,9 @@ import { getIntegrationMcpApp, integrationMcpAppCatalog } from "./provider-regis
 export const MCP_PROBE_PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 const MAX_RECORDED_TOOL_NAMES = 24;
+const MAX_RECORDED_TOOL_DESCRIPTION_LENGTH = 240;
+const MAX_MCP_PROBE_RESPONSE_BYTES = 512 * 1024;
+export const MCP_PROBE_TTL_MS = 15 * 60_000;
 
 export type McpProbeErrorCode =
   | "MCP_AUTH_REQUIRED"
@@ -33,8 +37,15 @@ export type McpProbeResult = {
   serverName: string | null;
   toolCount: number | null;
   toolNames: string[];
+  tools: Array<{
+    name: string;
+    description: string;
+    inputSchemaDigest: string | null;
+  }>;
+  toolCatalogDigest: string | null;
   latencyMs: number;
   probedAt: string;
+  expiresAt: string;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -52,25 +63,32 @@ function asRecord(value: unknown): JsonRecord {
  */
 async function readJsonRpcBody(response: Response): Promise<JsonRecord> {
   const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("text/event-stream")) {
-    return asRecord(await response.json());
-  }
+  const isEventStream = contentType.includes("text/event-stream");
   const reader = response.body?.getReader();
   if (!reader) {
-    throw new Error("empty_sse_body");
+    throw new Error("empty_mcp_body");
   }
   const decoder = new TextDecoder();
   let buffer = "";
+  let receivedBytes = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (value) {
+        receivedBytes += value.byteLength;
+        if (receivedBytes > MAX_MCP_PROBE_RESPONSE_BYTES) {
+          throw new Error("mcp_probe_response_too_large");
+        }
         buffer += decoder.decode(value, { stream: true });
+        if (!isEventStream) {
+          if (done) break;
+          continue;
+        }
         // Event sınırı: boş satır. İlk JSON-RPC cevabını taşıyan event yeter.
-        const events = buffer.split(/\n\n/u);
+        const events = buffer.split(/\r?\n\r?\n/u);
         for (const event of events.slice(0, -1)) {
           const data = event
-            .split(/\n/u)
+            .split(/\r?\n/u)
             .filter((line) => line.startsWith("data:"))
             .map((line) => line.slice(5).trim())
             .join("\n");
@@ -87,6 +105,10 @@ async function readJsonRpcBody(response: Response): Promise<JsonRecord> {
         buffer = events[events.length - 1] ?? "";
       }
       if (done) break;
+    }
+    buffer += decoder.decode();
+    if (!isEventStream) {
+      return asRecord(JSON.parse(buffer));
     }
   } finally {
     await reader.cancel().catch(() => {});
@@ -141,6 +163,7 @@ export async function probeMcpServer(input: {
   const timeoutMs = input.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   const startedAt = Date.now();
   const probedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + MCP_PROBE_TTL_MS).toISOString();
   const fail = (
     errorCode: McpProbeErrorCode,
     httpStatus: number | null = null,
@@ -152,8 +175,11 @@ export async function probeMcpServer(input: {
     serverName: null,
     toolCount: null,
     toolNames: [],
+    tools: [],
+    toolCatalogDigest: null,
     latencyMs: Date.now() - startedAt,
     probedAt,
+    expiresAt,
   });
 
   let initialize: Awaited<ReturnType<typeof postJsonRpc>>;
@@ -228,6 +254,28 @@ export async function probeMcpServer(input: {
   if (!Array.isArray(tools)) {
     return fail("MCP_PROTOCOL_ERROR", toolsList.httpStatus);
   }
+  const boundedTools = tools
+    .slice(0, MAX_RECORDED_TOOL_NAMES)
+    .map((tool) => {
+      const record = asRecord(tool);
+      const name = String(record.name ?? "").trim().slice(0, 160);
+      if (!name) return null;
+      const description =
+        typeof record.description === "string"
+          ? record.description
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, MAX_RECORDED_TOOL_DESCRIPTION_LENGTH)
+          : "";
+      const serializedInputSchema = record.inputSchema
+        ? (JSON.stringify(record.inputSchema) ?? "").slice(0, 100_000)
+        : "";
+      const inputSchemaDigest = serializedInputSchema
+        ? createHash("sha256").update(serializedInputSchema).digest("hex")
+        : null;
+      return { name, description, inputSchemaDigest };
+    })
+    .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
 
   return {
     status: "ok",
@@ -235,16 +283,21 @@ export async function probeMcpServer(input: {
     httpStatus: toolsList.httpStatus,
     protocolVersion:
       typeof initResult.protocolVersion === "string"
-        ? initResult.protocolVersion
+        ? initResult.protocolVersion.trim().slice(0, 80)
         : null,
-    serverName: typeof serverInfo.name === "string" ? serverInfo.name : null,
+    serverName:
+      typeof serverInfo.name === "string"
+        ? serverInfo.name.trim().slice(0, 160)
+        : null,
     toolCount: tools.length,
-    toolNames: tools
-      .map((tool) => String(asRecord(tool).name ?? "").trim())
-      .filter(Boolean)
-      .slice(0, MAX_RECORDED_TOOL_NAMES),
+    toolNames: boundedTools.map((tool) => tool.name),
+    tools: boundedTools,
+    toolCatalogDigest: createHash("sha256")
+      .update(JSON.stringify(boundedTools))
+      .digest("hex"),
     latencyMs: Date.now() - startedAt,
     probedAt,
+    expiresAt,
   };
 }
 
@@ -333,8 +386,11 @@ export async function probeConnectionMcpApps(
         serverName: null,
         toolCount: null,
         toolNames: [],
+        tools: [],
+        toolCatalogDigest: null,
         latencyMs: 0,
         probedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + MCP_PROBE_TTL_MS).toISOString(),
       };
     }
     summaries.push({ appId: entry.id, serverUrl: entry.serverUrl, result });
@@ -389,6 +445,16 @@ export function readConnectionMcpProbe(
     return null;
   }
   return record as McpProbeResult;
+}
+
+export function isConnectionMcpProbeFresh(
+  probe: McpProbeResult,
+  nowMs = Date.now(),
+): boolean {
+  const explicitExpiry = Date.parse(probe.expiresAt ?? "");
+  if (Number.isFinite(explicitExpiry)) return explicitExpiry > nowMs;
+  const probedAt = Date.parse(probe.probedAt ?? "");
+  return Number.isFinite(probedAt) && probedAt + MCP_PROBE_TTL_MS > nowMs;
 }
 
 export function isRemoteMcpApp(appId: string | null | undefined): boolean {

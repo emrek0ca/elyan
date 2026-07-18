@@ -166,19 +166,36 @@ test("buildUserContext caches profile and world signals per user", async () => {
   };
   const intent = classifyIntent({
     userId: "user-a",
-    message: "Kuantum konusunu açıkla",
+    message: "Pil durumum sohbeti etkiler mi?",
   });
+  const metadata = {
+    memoryEnabled: false,
+    chatContext: {
+      lastDerivedContextDigest: {
+        worldSignals: [
+          {
+            signalId: "device-current",
+            kind: "device",
+            summary: "Pil düşük, ağ wifi.",
+            confidence: 0.8,
+            createdAt: new Date().toISOString(),
+            facts: { batteryLevel: 0.2, connectivity: "wifi" },
+          },
+        ],
+      },
+    },
+  };
 
   await buildUserContext(app as never, {
     userId: "user-a",
-    message: "Kuantum konusunu açıkla",
-    metadata: { memoryEnabled: false },
+    message: "Pil durumum sohbeti etkiler mi?",
+    metadata,
     intent,
   });
   await buildUserContext(app as never, {
     userId: "user-a",
-    message: "Kuantum konusunu açıkla",
-    metadata: { memoryEnabled: false },
+    message: "Pil durumum sohbeti etkiler mi?",
+    metadata,
     intent,
   });
 
@@ -186,16 +203,16 @@ test("buildUserContext caches profile and world signals per user", async () => {
   assert.equal(db.identitySelects, 1);
   assert.equal(db.worldSelects, 1);
   assert.equal(cache.ttlMs.get("understanding:profile:user-a"), 60_000);
-  assert.equal(cache.ttlMs.get("understanding:world:user-a"), 30_000);
+  assert.equal(cache.ttlMs.get("understanding:world:user-a:global"), 30_000);
 
   const intentB = classifyIntent({
     userId: "user-b",
-    message: "Kuantum konusunu açıkla",
+    message: "Pil durumum sohbeti etkiler mi?",
   });
   await buildUserContext(app as never, {
     userId: "user-b",
-    message: "Kuantum konusunu açıkla",
-    metadata: { memoryEnabled: false },
+    message: "Pil durumum sohbeti etkiler mi?",
+    metadata,
     intent: intentB,
   });
 
@@ -204,8 +221,8 @@ test("buildUserContext caches profile and world signals per user", async () => {
   assert.equal(db.worldSelects, 2);
   assert.equal(cache.values.has("understanding:profile:user-a"), true);
   assert.equal(cache.values.has("understanding:profile:user-b"), true);
-  assert.equal(cache.values.has("understanding:world:user-a"), true);
-  assert.equal(cache.values.has("understanding:world:user-b"), true);
+  assert.equal(cache.values.has("understanding:world:user-a:global"), true);
+  assert.equal(cache.values.has("understanding:world:user-b:global"), true);
 });
 
 test("buildUserContextFromMemory keeps only one correction-style memory and suppresses contested noise", () => {
@@ -516,7 +533,7 @@ test("buildUserContextFromMemory ignores suspicious memory-derived names", () =>
   assert.equal(context.relationshipContextDigest.some((item) => item.includes("Attım Bugün Kaç")), false);
 });
 
-test("buildUserContextFromMemory promotes derived world-signal memory into situational and behavioral hints", () => {
+test("buildUserContextFromMemory suppresses world-derived memory without a current authorized packet", () => {
   const intent = classifyIntent({
     userId: "user_1",
     message: "Bugün planımı buna göre ayarla.",
@@ -572,9 +589,9 @@ test("buildUserContextFromMemory promotes derived world-signal memory into situa
     ],
   });
 
-  assert.ok(context.situationalHints.some((hint) => hint.includes("low energy window")));
-  assert.ok(context.behavioralHints.some((hint) => hint.includes("compact time-boxed")));
-  assert.equal(context.memorySnapshot?.derivedFacts.length, 2);
+  assert.equal(context.situationalHints.some((hint) => hint.includes("low energy window")), false);
+  assert.equal(context.behavioralHints.some((hint) => hint.includes("compact time-boxed")), false);
+  assert.equal(context.memorySnapshot?.derivedFacts.length, 0);
 });
 
 test("buildUserContextFromMemory builds a clean continuity digest and memory shortlist", () => {
@@ -1015,6 +1032,7 @@ test("buildContextPacketsFromMetadata packages health signals without raw measur
               summary: "Nabız 90 bpm, uyku 7 saat, enerji iyi.",
               confidence: 0.91,
               createdAt: "2030-01-01T11:30:00.000Z",
+              privacy: { backendPlaintextAllowed: true },
               facts: {
                 readiness: 0.82,
                 stressLevel: "orta",
@@ -1051,6 +1069,7 @@ test("buildContextPacketsFromMetadata packages calendar device notification and 
               summary: "Bugün yoğun ama öğleden sonra kısa bir odak aralığı var.",
               confidence: 0.86,
               createdAt: "2030-01-01T10:30:00.000Z",
+              privacy: { backendPlaintextAllowed: true },
               facts: {
                 meetingLoad: "orta",
                 focusWindow: "öğleden sonra",
@@ -1212,6 +1231,7 @@ test("buildContextPacketsFromMetadata exposes only relevant world context", () =
             summary: "Enerji orta, uyku düşük.",
             confidence: 0.9,
             createdAt: "2030-01-01T11:55:00.000Z",
+            privacy: { backendPlaintextAllowed: true },
             facts: { energy: "orta", sleepQuality: "düşük" },
           },
           {
@@ -1220,6 +1240,7 @@ test("buildContextPacketsFromMetadata exposes only relevant world context", () =
             summary: "Konum: Kayseri, Türkiye.",
             confidence: 0.82,
             createdAt: "2030-01-01T11:57:00.000Z",
+            privacy: { backendPlaintextAllowed: true },
             facts: { city: "Kayseri", country: "Türkiye" },
           },
         ],
@@ -1303,6 +1324,7 @@ test("buildContextPacketsFromMetadata reads world signals from mobile memory sna
             kind: "location",
             summary: "Konum: İstanbul, Kadıköy, Türkiye.",
             confidence: 0.82,
+            createdAt: "2030-01-01T11:59:00.000Z",
             facts: { city: "İstanbul", district: "Kadıköy", country: "Türkiye" },
             privacy: { precision: "coarse", backendPlaintextAllowed: true },
           },

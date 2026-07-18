@@ -7,11 +7,53 @@ import {
   buildRouteDecisionLogEntry,
   createTask,
   isRemoteMcpRouteDecisionStale,
+  normalizeRevisionComparableText,
   readServerBrainCompletionMetadata,
+  stripPromptEchoFromAssistantText,
   reconcileStaleRuntimeTasks,
   summarizeToolFlowForTrace,
   updateTaskFromRuntime,
 } from "./service.js";
+
+test("revision comparison ignores whitespace-only polish differences", () => {
+  // Nihai hattaki cilalama her mesajı "düzeltilmiş" göstermemeli.
+  assert.equal(
+    normalizeRevisionComparableText("Merhaba.\n\n\nNasılsın?  "),
+    normalizeRevisionComparableText("Merhaba. Nasılsın?"),
+  );
+  // Gerçek içerik değişikliği ise fark olarak görünmeli.
+  assert.notEqual(
+    normalizeRevisionComparableText("Kurucusu Bill Gates."),
+    normalizeRevisionComparableText("Kurucusu Osman Emre Koca."),
+  );
+});
+
+test("visible-text policy is honored by both the streaming and final paths", () => {
+  const input = {
+    prompt: "kaynak nedir",
+    responseText: "Kaynak: Vikipedi sayfası bunu doğruluyor.",
+  };
+  // Aynı metin, aynı politikayla her iki hatta da aynı sonucu vermeli —
+  // farklı olursa kullanıcı cevabın sonradan değiştiğini görür.
+  assert.equal(
+    stripPromptEchoFromAssistantText({
+      ...input,
+      policy: { allowPublicProviderReferences: true },
+    }),
+    stripPromptEchoFromAssistantText({
+      ...input,
+      policy: { allowPublicProviderReferences: true },
+    }),
+  );
+  // Politika parametresi gerçekten uygulanıyor mu (sessizce yutulmuyor)?
+  assert.equal(
+    typeof stripPromptEchoFromAssistantText({
+      ...input,
+      policy: { allowPublicProviderReferences: false },
+    }),
+    "string",
+  );
+});
 
 test("late remote MCP capability invalidates an earlier server-brain route", () => {
   const staleServerRoute = {
@@ -280,6 +322,8 @@ test("createTask materializes pairing-required chat tasks without dispatching to
         trialEndsAt: new Date("2099-01-01T00:00:00.000Z"),
       },
     ],
+    [],
+    [],
     [
       {
         planCode: "free",

@@ -1,27 +1,34 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   integrationConnections,
   integrationCredentials,
+  mcpServers,
   oauthStates,
 } from "../../db/schema.js";
 import type { ConnectionProvider } from "../../contracts/domain.js";
 import { decryptJson, encryptJson } from "../../lib/crypto-seal.js";
-import { badRequest, notFound } from "../../lib/errors.js";
+import { AppError, badRequest, notFound } from "../../lib/errors.js";
 import { createOpaqueCode } from "../../lib/auth-crypto.js";
 import { createPkcePair } from "../../lib/oauth-pkce.js";
 import { createAuditLog } from "../audit/service.js";
-import { readConnectionMcpProbe } from "./mcp-probe.js";
 import {
+  isConnectionMcpProbeFresh,
+  readConnectionMcpProbe,
+} from "./mcp-probe.js";
+import { rankSemanticTextCandidates } from "../../core/understanding/intent-semantic.js";
+import {
+  classifyConnectedDataOperationSemantic,
   getIntegrationMcpApp,
   getIntegrationProvider,
-  inferRequestedRemoteMcpApps,
-  inferRequestedRemoteMcpAppsSemantic,
+  inferRequestedRemoteMcpSelectionSemantic,
   integrationMcpAppCatalog,
   integrationProviderCatalog,
   isIntegrationMcpAppConfigured,
   isProviderConfigured,
+  type RemoteMcpSelectionMetadata,
 } from "./provider-registry.js";
 
 function getCallbackUrl(
@@ -317,6 +324,48 @@ async function loadGoogleOAuthTokenPayload(
   };
 }
 
+/**
+ * Ölü refresh token'lı bağlantıyı görünür şekilde işaretler: status →
+ * "error" (enum'daki mevcut değer; neden ayrımı audit kaydında).
+ * listConnectedCapabilityGrants yalnız "connected" filtreler, dolayısıyla
+ * yetenek reklamı otomatik düşer; mobil liste uçları da yalnız "connected"ı
+ * bağlı sayar → uygulama dürüstçe "Bağlan" gösterir. Yalnız "connected" satır
+ * güncellenir (revoked/error ezilmez); işaretleme hatası asıl
+ * connector_auth_required hatasını asla gölgelemez.
+ */
+export async function markConnectionAuthExpired(
+  app: FastifyInstance,
+  connectionId: string,
+  provider: string,
+): Promise<void> {
+  try {
+    const rows = await app.db
+      .update(integrationConnections)
+      .set({ status: "error", updatedAt: new Date() })
+      .where(
+        and(
+          eq(integrationConnections.id, connectionId),
+          eq(integrationConnections.status, "connected"),
+        ),
+      )
+      .returning({ userId: integrationConnections.userId });
+    const userId = rows[0]?.userId;
+    if (!userId) return;
+    await createAuditLog(app, {
+      userId,
+      actorType: "system",
+      actorId: "connector-auth",
+      action: "integration.auth.expired",
+      resourceType: "integration_connection",
+      resourceId: connectionId,
+      status: "success",
+      payload: { provider, reason: "invalid_grant" },
+    });
+  } catch {
+    // İşaretleme başarısız olsa da akış connector_auth_required ile sürer.
+  }
+}
+
 async function refreshGoogleOAuthAccessToken(
   app: FastifyInstance,
   connectionId: string,
@@ -349,6 +398,15 @@ async function refreshGoogleOAuthAccessToken(
     unknown
   >;
   if (!response.ok || payload.error) {
+    // invalid_grant = refresh token ölü — kullanıcı bağlantıyı yenilemeli.
+    if (payload.error === "invalid_grant") {
+      await markConnectionAuthExpired(app, connectionId, "google");
+      throw new AppError(
+        400,
+        "connector_auth_required",
+        "Google refresh token is no longer valid; the user must reconnect the integration",
+      );
+    }
     throw badRequest("Google access token refresh failed", payload);
   }
 
@@ -453,6 +511,18 @@ async function refreshProviderOAuthAccessToken(
     unknown
   >;
   if (!response.ok || payload.error) {
+    // invalid_grant = refresh token ölü (süre doldu / kullanıcı iptal etti).
+    // Tek çözüm kullanıcının bağlantıyı yeniden kurması — connector katmanı
+    // bu kodla "bağlantıyı yenile" yönlendirmesi gösterir; jenerik "sonra
+    // tekrar dene" mesajı kullanıcıyı çıkmaza sokuyordu.
+    if (payload.error === "invalid_grant") {
+      await markConnectionAuthExpired(app, connectionId, provider);
+      throw new AppError(
+        400,
+        "connector_auth_required",
+        `OAuth refresh token is no longer valid for ${provider}; the user must reconnect the integration`,
+      );
+    }
     throw badRequest(`OAuth access token refresh failed for ${provider}`);
   }
   const accessToken =
@@ -548,7 +618,7 @@ async function getGoogleMailAccessToken(
   );
   if (credential.expiresAt && credential.expiresAt.getTime() <= Date.now()) {
     if (!tokenPayload.refreshToken) {
-      throw badRequest("Google Gmail connection needs re-authentication");
+      throw new AppError(400, "connector_auth_required", "Google Gmail connection needs re-authentication");
     }
     return refreshGoogleOAuthAccessToken(
       app,
@@ -560,7 +630,7 @@ async function getGoogleMailAccessToken(
   }
   if (!tokenPayload.accessToken) {
     if (!tokenPayload.refreshToken) {
-      throw badRequest("Google Gmail connection needs re-authentication");
+      throw new AppError(400, "connector_auth_required", "Google Gmail connection needs re-authentication");
     }
     return refreshGoogleOAuthAccessToken(
       app,
@@ -1458,7 +1528,7 @@ async function getConnectionAccessToken(
     credential.expiresAt.getTime() <= Date.now() + 30_000
   ) {
     if (!tokenPayload.refreshToken) {
-      throw badRequest("Integration connection needs re-authentication");
+      throw new AppError(400, "connector_auth_required", "Integration connection needs re-authentication");
     }
     return refreshProviderOAuthAccessToken(
       app,
@@ -1559,11 +1629,290 @@ export async function listConnectedCapabilities(
   return [...new Set(grants.flatMap((grant) => grant.capabilities))];
 }
 
+export type RemoteMcpRequestResolution = {
+  requestedCapabilities: string[];
+  selection: RemoteMcpSelectionMetadata | null;
+};
+
+function normalizedMcpName(value: string): string {
+  return value
+    .toLocaleLowerCase("tr-TR")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function safeMcpMetadataDescription(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const description = (value as Record<string, unknown>).description;
+  return typeof description === "string"
+    ? description.replace(/\s+/g, " ").trim().slice(0, 320)
+    : "";
+}
+
+function boundedMcpCapabilities(value: unknown, limit = 24): string[] {
+  return [
+    ...new Set(
+      stringList(value)
+        .map((capability) => capability.replace(/\s+/g, " ").trim().slice(0, 120))
+        .filter(Boolean),
+    ),
+  ].slice(0, limit);
+}
+
+function normalizeSafePublicMcpUrl(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    const hostname = url.hostname.toLowerCase();
+    const blockedHostSuffixes = [
+      "localhost",
+      ".localhost",
+      ".local",
+      ".internal",
+      ".lan",
+      ".home",
+      ".test",
+      ".invalid",
+      ".example",
+    ];
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      (url.port && url.port !== "443") ||
+      !hostname.includes(".") ||
+      isIP(hostname) !== 0 ||
+      blockedHostSuffixes.some(
+        (suffix) => hostname === suffix || hostname.endsWith(suffix),
+      )
+    ) {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeRemoteMcpSelectionMetadata(
+  value: unknown,
+): RemoteMcpSelectionMetadata | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.targetKind !== "curated_app" && record.targetKind !== "mcp_server") {
+    return null;
+  }
+  const clippedId = (candidate: unknown) =>
+    typeof candidate === "string" && candidate.trim()
+      ? candidate.trim().slice(0, 160)
+      : null;
+  const operation =
+    record.operation === "read" || record.operation === "write"
+      ? record.operation
+      : "unknown";
+  const allowedSources = new Set<RemoteMcpSelectionMetadata["source"]>([
+    "semantic_transformer",
+    "legacy_pattern",
+    "explicit_name",
+    "requested_capability",
+  ]);
+  const source = allowedSources.has(record.source as RemoteMcpSelectionMetadata["source"])
+    ? (record.source as RemoteMcpSelectionMetadata["source"])
+    : "requested_capability";
+  const boundedNumber = (candidate: unknown) =>
+    typeof candidate === "number" && Number.isFinite(candidate)
+      ? Math.max(0, Math.min(1, candidate))
+      : 0;
+  const selection: RemoteMcpSelectionMetadata = {
+    targetKind: record.targetKind,
+    appId: clippedId(record.appId),
+    connectionId: clippedId(record.connectionId),
+    serverId: clippedId(record.serverId),
+    operation,
+    confidence: boundedNumber(record.confidence),
+    margin: boundedNumber(record.margin),
+    source,
+  };
+  if (selection.targetKind === "curated_app") {
+    return selection.appId && selection.connectionId ? selection : null;
+  }
+  return selection.serverId ? selection : null;
+}
+
 /**
- * Resolve a natural-language remote MCP request against the user's actually
- * connected capabilities. Both chat routing and task creation consume this
- * function so a late semantic match cannot disagree with an earlier route.
+ * Resolve the target from current connection/server registries and retain the
+ * bounded evidence needed by routing and the desktop work order. No MCP config,
+ * credential, URL or token crosses this metadata boundary.
  */
+export async function resolveRemoteMcpRequest(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    prompt: string;
+    requestedCapabilities: string[];
+  },
+): Promise<RemoteMcpRequestResolution> {
+  const requestedCapabilities = [...new Set(input.requestedCapabilities)];
+  const remoteMcpCapabilities = new Set(
+    integrationMcpAppCatalog
+      .filter((entry) => entry.execution === "remote_mcp")
+      .flatMap((entry) => entry.capabilities),
+  );
+  const connectionQuery = app.db
+      .select({
+        id: integrationConnections.id,
+        appId: integrationConnections.appId,
+        provider: integrationConnections.provider,
+        capabilities: integrationConnections.capabilities,
+      })
+      .from(integrationConnections)
+      .where(
+        and(
+          eq(integrationConnections.userId, input.userId),
+          eq(integrationConnections.status, "connected"),
+        ),
+      );
+  const registeredServerQuery = app.db
+      .select({
+        id: mcpServers.id,
+        integrationConnectionId: mcpServers.integrationConnectionId,
+        name: mcpServers.name,
+        transport: mcpServers.transport,
+        status: mcpServers.status,
+        authType: mcpServers.authType,
+        baseUrl: mcpServers.baseUrl,
+        command: mcpServers.command,
+        capabilities: mcpServers.capabilities,
+        metadata: mcpServers.metadata,
+      })
+      .from(mcpServers)
+      .where(eq(mcpServers.userId, input.userId));
+  const [connections, registeredServers] = await Promise.all([
+    Promise.resolve(connectionQuery).catch(() => []),
+    Promise.resolve(registeredServerQuery).catch(() => []),
+  ]);
+  const connectedCapabilities = new Set(
+    connections.flatMap((connection) => stringList(connection.capabilities)),
+  );
+  const connectedRemoteMcpCapabilities = [...connectedCapabilities].filter(
+    (capability) => remoteMcpCapabilities.has(capability),
+  );
+
+  const catalogSelection = connectedRemoteMcpCapabilities.length
+    ? await inferRequestedRemoteMcpSelectionSemantic(
+        input.prompt,
+        connectedRemoteMcpCapabilities,
+      ).catch(() => null)
+    : null;
+  if (catalogSelection) {
+    const connection = connections.find(
+      (candidate) =>
+        candidate.appId === catalogSelection.entry.id &&
+        candidate.provider === catalogSelection.entry.provider &&
+        catalogSelection.entry.capabilities.some((capability) =>
+          stringList(candidate.capabilities).includes(capability),
+        ),
+    );
+    if (connection) {
+      const operationResolved = catalogSelection.operation !== "unknown";
+      return {
+        requestedCapabilities:
+          requestedCapabilities.includes("mcp_call_tool") || !operationResolved
+            ? requestedCapabilities
+            : [...requestedCapabilities, "mcp_call_tool"],
+        selection: {
+          targetKind: "curated_app",
+          appId: catalogSelection.entry.id,
+          connectionId: connection.id,
+          serverId: null,
+          operation: catalogSelection.operation,
+          confidence: catalogSelection.confidence,
+          margin: catalogSelection.margin,
+          source: catalogSelection.source,
+        },
+      };
+    }
+  }
+
+  // Generic registered servers become semantic candidates from their existing
+  // name/capability/description fields. A row must be explicitly connected;
+  // the default `configured` state is never execution authorization.
+  const executableServers = registeredServers.filter(
+    (server) =>
+      server.status === "connected" &&
+      ((server.transport === "stdio" && Boolean(server.command?.trim())) ||
+        ((server.transport === "remote" ||
+          server.transport === "streamable_http" ||
+          server.transport === "oauth_remote") &&
+          server.authType === "none" &&
+          normalizeSafePublicMcpUrl(server.baseUrl) != null)),
+  );
+  const operation = executableServers.length
+    ? await classifyConnectedDataOperationSemantic(input.prompt).catch(() => null)
+    : null;
+  if (operation) {
+    const normalizedPrompt = ` ${normalizedMcpName(input.prompt)} `;
+    const explicitlyNamed = executableServers.filter((server) => {
+      const name = normalizedMcpName(server.name);
+      return name.length >= 3 && normalizedPrompt.includes(` ${name} `);
+    });
+    let selected = explicitlyNamed.length === 1 ? explicitlyNamed[0] : null;
+    let source: RemoteMcpSelectionMetadata["source"] = "explicit_name";
+    let confidence = operation.confidence;
+    let margin = operation.margin;
+    if (!selected && explicitlyNamed.length === 0) {
+      const target = await rankSemanticTextCandidates(
+        input.prompt,
+        executableServers.map((server) => ({
+          id: server.id,
+          description: [
+            `Access the user's connected ${server.name} application through MCP.`,
+            safeMcpMetadataDescription(server.metadata),
+            boundedMcpCapabilities(server.capabilities, 16).join(", "),
+          ]
+            .filter(Boolean)
+            .join(" "),
+        })),
+        {
+          transformerMinScore: 0.68,
+          transformerMinMargin: 0.03,
+          hashMinScore: 1,
+          hashMinMargin: 1,
+        },
+      ).catch(() => null);
+      if (target?.source === "transformer") {
+        selected = executableServers.find((server) => server.id === target.id) ?? null;
+        source = "semantic_transformer";
+        confidence = Math.min(confidence, target.score);
+        margin = Math.min(margin, target.margin);
+      }
+    }
+    if (selected) {
+      return {
+        requestedCapabilities: requestedCapabilities.includes("mcp_call_tool")
+          ? requestedCapabilities
+          : [...requestedCapabilities, "mcp_call_tool"],
+        selection: {
+          targetKind: "mcp_server",
+          appId: null,
+          connectionId: selected.integrationConnectionId ?? null,
+          serverId: selected.id,
+          operation: operation.operation,
+          confidence,
+          margin,
+          source,
+        },
+      };
+    }
+  }
+
+  return { requestedCapabilities, selection: null };
+}
+
+/** Backwards-compatible capability-only projection for existing callers. */
 export async function resolveRemoteMcpRequestedCapabilities(
   app: FastifyInstance,
   input: {
@@ -1572,43 +1921,7 @@ export async function resolveRemoteMcpRequestedCapabilities(
     requestedCapabilities: string[];
   },
 ): Promise<string[]> {
-  const requestedCapabilities = [...new Set(input.requestedCapabilities)];
-  if (requestedCapabilities.includes("mcp_call_tool")) {
-    return requestedCapabilities;
-  }
-
-  const remoteMcpCapabilities = new Set(
-    integrationMcpAppCatalog
-      .filter((entry) => entry.execution === "remote_mcp")
-      .flatMap((entry) => entry.capabilities),
-  );
-  const connectedCapabilities = new Set(
-    await listConnectedCapabilities(app, input.userId).catch(
-      () => [] as string[],
-    ),
-  );
-  const connectedRemoteMcpCapabilities = [...connectedCapabilities].filter(
-    (capability) => remoteMcpCapabilities.has(capability),
-  );
-  if (connectedRemoteMcpCapabilities.length === 0) {
-    return requestedCapabilities;
-  }
-
-  const requestedApps = await inferRequestedRemoteMcpAppsSemantic(
-    input.prompt,
-    connectedRemoteMcpCapabilities,
-  ).catch(() =>
-    inferRequestedRemoteMcpApps(input.prompt, connectedRemoteMcpCapabilities),
-  );
-  if (requestedApps.length === 0) return requestedCapabilities;
-  const connectedAppRequested = requestedApps.some((entry) =>
-    entry.capabilities.some((capability) =>
-      connectedCapabilities.has(capability),
-    ),
-  );
-  return connectedAppRequested
-    ? [...requestedCapabilities, "mcp_call_tool"]
-    : requestedCapabilities;
+  return (await resolveRemoteMcpRequest(app, input)).requestedCapabilities;
 }
 
 export async function listConnectedCapabilityGrants(
@@ -1648,25 +1961,45 @@ export async function listRuntimeMcpConnections(
   userId: string,
 ) {
   const runtimeTokenRefreshTimeoutMs = 4_000;
-  const rows = await app.db
-    .select({
-      id: integrationConnections.id,
-      appId: integrationConnections.appId,
-      provider: integrationConnections.provider,
-      status: integrationConnections.status,
-      displayName: integrationConnections.displayName,
-      scopes: integrationConnections.scopes,
-      capabilities: integrationConnections.capabilities,
-      metadata: integrationConnections.metadata,
-      updatedAt: integrationConnections.updatedAt,
-    })
-    .from(integrationConnections)
-    .where(
-      and(
-        eq(integrationConnections.userId, userId),
-        eq(integrationConnections.status, "connected"),
+  const [rows, registeredMcpServers] = await Promise.all([
+    app.db
+      .select({
+        id: integrationConnections.id,
+        appId: integrationConnections.appId,
+        provider: integrationConnections.provider,
+        status: integrationConnections.status,
+        displayName: integrationConnections.displayName,
+        scopes: integrationConnections.scopes,
+        capabilities: integrationConnections.capabilities,
+        metadata: integrationConnections.metadata,
+        updatedAt: integrationConnections.updatedAt,
+      })
+      .from(integrationConnections)
+      .where(
+        and(
+          eq(integrationConnections.userId, userId),
+          eq(integrationConnections.status, "connected"),
+        ),
       ),
-    );
+    // mcp_servers used to be CRUD-only. Read only the minimum lease fields;
+    // config/metadata/env and every stored credential stay out.
+    app.db
+      .select({
+        id: mcpServers.id,
+        integrationConnectionId: mcpServers.integrationConnectionId,
+        name: mcpServers.name,
+        transport: mcpServers.transport,
+        authType: mcpServers.authType,
+        status: mcpServers.status,
+        baseUrl: mcpServers.baseUrl,
+        command: mcpServers.command,
+        args: mcpServers.args,
+        capabilities: mcpServers.capabilities,
+        updatedAt: mcpServers.updatedAt,
+      })
+      .from(mcpServers)
+      .where(eq(mcpServers.userId, userId)),
+  ]);
 
   const candidates = rows
     .flatMap((connection) => {
@@ -1697,7 +2030,7 @@ export async function listRuntimeMcpConnections(
         left.connection.id.localeCompare(right.connection.id),
     );
 
-  const servers = await Promise.all(
+  const curatedServers = await Promise.all(
     candidates.map(async ({ connection, entry }) => {
       let accessToken = "";
       let authErrorCode = "";
@@ -1717,6 +2050,7 @@ export async function listRuntimeMcpConnections(
       // konuştuğunu son prob söyler. Prob başarısızsa lease'te disabled taşınır —
       // desktop bağlanmayı denemez, mobil "yeniden bağlan" gösterebilir.
       const probe = readConnectionMcpProbe(connection.metadata, entry.id);
+      const probeFresh = probe ? isConnectionMcpProbeFresh(probe) : false;
       if (
         !authErrorCode &&
         probe?.status === "failed" &&
@@ -1724,6 +2058,11 @@ export async function listRuntimeMcpConnections(
       ) {
         authErrorCode = "MCP_AUTH_REQUIRED";
       }
+      const freshTransientFailure = Boolean(
+        probeFresh &&
+          probe?.status === "failed" &&
+          probe.errorCode !== "MCP_AUTH_REQUIRED",
+      );
 
       return {
         id: `app_${entry.id}`,
@@ -1736,30 +2075,134 @@ export async function listRuntimeMcpConnections(
         authType: "bearer",
         accessToken,
         authErrorCode,
-        enabled: !authErrorCode && probe?.status !== "failed",
-        probeStatus: probe?.status ?? "unknown",
+        catalogSource: "integration_catalog" as const,
+        // Auth failures always fail closed. A transient failed probe disables
+        // only until its TTL; after expiry runtime may reconnect and self-heal.
+        enabled: !authErrorCode && !freshTransientFailure,
+        probeStatus:
+          probe?.status === "failed" && !probeFresh
+            ? "stale"
+            : (probe?.status ?? "unknown"),
+        probeFresh,
         probedAt: probe?.probedAt ?? null,
+        probeExpiresAt: probe?.expiresAt ?? null,
         probeErrorCode: probe?.errorCode ?? null,
         probeToolCount: probe?.toolCount ?? null,
+        probeToolCatalogDigest: probe?.toolCatalogDigest ?? null,
+        probeToolNames: probe?.toolNames?.slice(0, 24) ?? [],
         startupTimeoutSec: 15,
         callTimeoutSec: 45,
       };
     }),
   );
 
+  const registeredStdioServers = registeredMcpServers
+    .filter(
+      (server) =>
+        server.status === "connected" &&
+        server.transport === "stdio" &&
+        Boolean(server.command?.trim()),
+    )
+    .map((server) => ({
+      id: server.id,
+      appId: null,
+      connectionId: server.integrationConnectionId,
+      provider: null,
+      name: String(server.name ?? "MCP server").slice(0, 160),
+      transport: "stdio" as const,
+      command: server.command!.trim().slice(0, 512),
+      args: stringList(server.args)
+        .slice(0, 32)
+        .map((argument) => argument.slice(0, 512)),
+      enabled: true,
+      catalogSource: "mcp_servers" as const,
+      registeredCapabilities: boundedMcpCapabilities(server.capabilities),
+      startupTimeoutSec: 15,
+      callTimeoutSec: 45,
+    }));
+  const registeredRemoteServers = registeredMcpServers.flatMap((server) => {
+    if (
+      server.status !== "connected" ||
+      (server.transport !== "remote" &&
+        server.transport !== "streamable_http" &&
+        server.transport !== "oauth_remote") ||
+      server.authType !== "none"
+    ) {
+      return [];
+    }
+    const safeUrl = normalizeSafePublicMcpUrl(server.baseUrl);
+    if (!safeUrl) return [];
+    return [
+      {
+        id: server.id,
+        appId: null,
+        connectionId: server.integrationConnectionId,
+        provider: null,
+        name: String(server.name ?? "MCP server").slice(0, 160),
+        transport: "streamable_http" as const,
+        url: safeUrl,
+        authType: "none" as const,
+        accessToken: "",
+        authErrorCode: "",
+        enabled: true,
+        catalogSource: "mcp_servers" as const,
+        registeredCapabilities: boundedMcpCapabilities(server.capabilities),
+        startupTimeoutSec: 15,
+        callTimeoutSec: 45,
+      },
+    ];
+  });
+  const servers = [
+    ...curatedServers,
+    ...registeredStdioServers,
+    ...registeredRemoteServers,
+  ];
+  const leasedRegisteredIds = new Set(
+    [...registeredStdioServers, ...registeredRemoteServers].map(
+      (server) => server.id,
+    ),
+  );
+  const unavailableServers = registeredMcpServers
+    .filter((server) => !leasedRegisteredIds.has(server.id))
+    .map((server) => ({
+      id: server.id,
+      name: String(server.name ?? "MCP server").slice(0, 160),
+      status: server.status,
+      transport: server.transport,
+      reason:
+        server.status !== "connected"
+          ? "not_active"
+          : server.authType !== "none"
+            ? "auth_secret_not_leasable"
+            : (server.transport === "remote" ||
+                  server.transport === "streamable_http" ||
+                  server.transport === "oauth_remote") &&
+                !normalizeSafePublicMcpUrl(server.baseUrl)
+              ? "unsafe_remote_url"
+            : "transport_not_leasable",
+    }));
+
   const revision = createHash("sha256")
     .update(
       JSON.stringify(
-        rows.map((connection) => ({
-          id: connection.id,
-          appId: connection.appId,
-          status: connection.status,
-          updatedAt: connection.updatedAt.toISOString(),
-        })),
+        {
+          connections: rows.map((connection) => ({
+            id: connection.id,
+            appId: connection.appId,
+            status: connection.status,
+            updatedAt: connection.updatedAt.toISOString(),
+          })),
+          registeredServers: registeredMcpServers.map((server) => ({
+            id: server.id,
+            status: server.status,
+            transport: server.transport,
+            updatedAt: server.updatedAt.toISOString(),
+          })),
+        },
       ),
     )
     .digest("hex");
-  return { servers, revision };
+  return { servers, unavailableServers, revision };
 }
 
 export async function sendGmailMessage(

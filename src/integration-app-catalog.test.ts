@@ -316,7 +316,7 @@ test("connected MCP-native OAuth apps are leased to the desktop runtime", async 
   };
 
   const runtime = await listRuntimeMcpConnections(
-    fakeIntegrationApp([[connection], [credential]]),
+    fakeIntegrationApp([[connection], [], [credential]]),
     "user_1",
   );
 

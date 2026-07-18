@@ -38,7 +38,7 @@ export function buildHostedImageProviderRequest(input: {
   const responseFormat: Record<string, string> = {
     type: "image",
     mime_type: "image/png",
-    image_size: input.config.imageSize ?? "2K",
+    image_size: input.config.imageSize ?? "1K",
   };
   if (input.aspectRatio) responseFormat.aspect_ratio = input.aspectRatio;
   return {

@@ -3,6 +3,20 @@ import test from "node:test";
 import type { FastifyInstance } from "fastify";
 import { maybeGenerateHostedImageArtifact } from "./image-generation.js";
 
+async function createTestJpeg(seed = 40) {
+  const { default: sharp } = await import("sharp");
+  return sharp({
+    create: {
+      width: 48,
+      height: 48,
+      channels: 3,
+      background: { r: seed % 255, g: 80, b: 60 },
+    },
+  })
+    .jpeg()
+    .toBuffer();
+}
+
 /** Redis olmadan devre-kesici/önbellek/kilit yollarını sürebilmek için küçük
  * bellek-içi ReliabilityStore taklidi. */
 function createMemoryStore() {
@@ -66,7 +80,11 @@ function appWithConfig(
       GEMINI_INTERACTIONS_BASE_URL: "https://generativelanguage.googleapis.com/v1beta",
       GEMINI_IMAGE_MODEL: "gemini-3.1-flash-image",
       GEMINI_IMAGE_PRO_MODEL: "gemini-3-pro-image",
-      GEMINI_IMAGE_SIZE: "2K",
+      GEMINI_IMAGE_SIZE: "1K",
+      GEMINI_IMAGE_PRO_ENABLED: false,
+      GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: 50,
+      GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT: 5,
+      GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT: 2,
       OPENAI_API_KEY: "",
       OPENAI_BASE_URL: "https://api.openai.com/v1",
       ...config,
@@ -74,9 +92,7 @@ function appWithConfig(
     log: {
       warn: () => undefined,
     },
-    services: options.store
-      ? { reliability: { store: options.store } }
-      : undefined,
+    services: { reliability: { store: options.store ?? createMemoryStore() } },
     ...(options.db ? { db: options.db } : {}),
   } as unknown as FastifyInstance;
 }
@@ -139,7 +155,8 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     geminiKey: string | null;
     body: Record<string, unknown>;
   }> = [];
-  const jpegBase64 = Buffer.from("fake-jpeg").toString("base64");
+  const jpegBody = await createTestJpeg(40);
+  const jpegBase64 = jpegBody.toString("base64");
 
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({
@@ -179,7 +196,7 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image");
     assert.deepEqual(requests[0]?.body.response_format, {
       type: "image",
-      mime_type: "image/jpeg",
+      mime_type: "image/png",
       aspect_ratio: "2:3",
       image_size: "1K",
     });
@@ -193,13 +210,13 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     assert.equal(result.artifact.metadata?.contentFamily, "image");
     assert.equal(result.artifact.payload?.source, "elyan_image_generation");
     assert.equal(result.artifact.payload?.model, undefined);
-    assert.deepEqual([...result.binaryBody], [...Buffer.from("fake-jpeg")]);
+    assert.deepEqual([...result.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("maybeGenerateHostedImageArtifact falls back to OpenAI when standard Gemini request fails", async () => {
+test("maybeGenerateHostedImageArtifact does not fall back to billed OpenAI when Gemini fails", async () => {
   const originalFetch = globalThis.fetch;
   const requests: string[] = [];
 
@@ -226,10 +243,8 @@ test("maybeGenerateHostedImageArtifact falls back to OpenAI when standard Gemini
       },
     );
 
-    assert.ok(result);
-    assert.equal(requests.length, 2);
-    assert.equal(result.artifact.metadata?.provider, undefined);
-    assert.equal(result.artifact.payload?.source, "elyan_image_generation");
+    assert.equal(result, null);
+    assert.equal(requests.length, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -238,7 +253,8 @@ test("maybeGenerateHostedImageArtifact falls back to OpenAI when standard Gemini
 test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash for high-quality prompts", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
-  const jpegBase64 = Buffer.from("flash-after-pro").toString("base64");
+  const jpegBody = await createTestJpeg(41);
+  const jpegBase64 = jpegBody.toString("base64");
 
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -255,14 +271,36 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
   };
 
   try {
+    const db = new FakeDb([
+      [
+        {
+          userId: "pro-user",
+          planCode: "pro",
+          status: "active",
+          taskLimitMonthly: 1_000,
+          aiCreditsMonthly: 3_000,
+          currentPeriodStartedAt: new Date("2030-01-01T00:00:00.000Z"),
+          periodEndsAt: new Date("2030-02-01T00:00:00.000Z"),
+        },
+      ],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [{ used: 0 }],
+      [{ granted: 0, used: 0 }],
+      [],
+    ]);
     const result = await maybeGenerateHostedImageArtifact(
-      appWithConfig({
-        GEMINI_API_KEY: "gemini-test-key",
-        GEMINI_IMAGE_PRO_ENABLED: true,
-      }),
+      appWithConfig(
+        {
+          GEMINI_API_KEY: "gemini-test-key",
+          GEMINI_IMAGE_PRO_ENABLED: true,
+        },
+        { db },
+      ),
       {
         prompt: "Profesyonel kapak görseli oluştur",
         responseText: "",
+        userId: "pro-user",
       },
     );
 
@@ -272,7 +310,7 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
       ["gemini-3-pro-image", "gemini-3.1-flash-image"],
     );
     assert.equal(result.mimeType, "image/jpeg");
-    assert.deepEqual([...result.binaryBody], [...Buffer.from("flash-after-pro")]);
+    assert.deepEqual([...result.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -281,7 +319,8 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
 test("maybeGenerateHostedImageArtifact treats Turkish draw prompts as image generation", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
-  const jpegBase64 = Buffer.from("dog-jpeg").toString("base64");
+  const jpegBody = await createTestJpeg(42);
+  const jpegBase64 = jpegBody.toString("base64");
 
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
@@ -315,7 +354,7 @@ test("maybeGenerateHostedImageArtifact treats Turkish draw prompts as image gene
     );
     assert.equal(result.previewText, "Görsel hazır.");
     assert.equal(result.artifact.textContent, "Görsel hazır.");
-    assert.deepEqual([...result.binaryBody], [...Buffer.from("dog-jpeg")]);
+    assert.deepEqual([...result.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -324,7 +363,7 @@ test("maybeGenerateHostedImageArtifact treats Turkish draw prompts as image gene
 test("detects bare imperative draw command without an explicit image noun", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
-  const jpegBase64 = Buffer.from("red-car").toString("base64");
+  const jpegBase64 = (await createTestJpeg(43)).toString("base64");
 
   globalThis.fetch = async () => {
     calls += 1;
@@ -381,7 +420,8 @@ test("does not treat non-drawing 'çiz*' words as image generation", async () =>
 test("repeat identical prompt is served from cache without a second upstream call", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
-  const jpegBase64 = Buffer.from("cached-dog").toString("base64");
+  const jpegBody = await createTestJpeg(44);
+  const jpegBase64 = jpegBody.toString("base64");
 
   globalThis.fetch = async () => {
     calls += 1;
@@ -401,7 +441,7 @@ test("repeat identical prompt is served from cache without a second upstream cal
     assert.ok(first);
     assert.ok(second);
     assert.equal(calls, 1, "second identical request must hit the cache");
-    assert.deepEqual([...second.binaryBody], [...Buffer.from("cached-dog")]);
+    assert.deepEqual([...second.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -450,7 +490,7 @@ test("plan image limit blocks hosted generation before any provider call", async
 
 test("successful hosted generation records plan-scoped image usage", async () => {
   const originalFetch = globalThis.fetch;
-  const jpegBase64 = Buffer.from("recorded-image").toString("base64");
+  const jpegBase64 = (await createTestJpeg(45)).toString("base64");
 
   globalThis.fetch = async () =>
     Response.json({ output_image: { data: jpegBase64, mime_type: "image/jpeg" } });
@@ -507,7 +547,7 @@ test("successful hosted generation records plan-scoped image usage", async () =>
 test("hosted image rate limit blocks burst traffic before provider calls", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
-  const jpegBase64 = Buffer.from("rate-limited-image").toString("base64");
+  const jpegBase64 = (await createTestJpeg(46)).toString("base64");
   const metadata: Record<string, unknown> = {};
 
   globalThis.fetch = async () => {
@@ -585,7 +625,8 @@ test("provider circuit opens after repeated failures and skips further upstream 
 test("concurrent identical prompts collapse into a single upstream call (single-flight)", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
-  const jpegBase64 = Buffer.from("shared-image").toString("base64");
+  const jpegBody = await createTestJpeg(47);
+  const jpegBase64 = jpegBody.toString("base64");
 
   globalThis.fetch = async () => {
     calls += 1;
@@ -607,8 +648,8 @@ test("concurrent identical prompts collapse into a single upstream call (single-
     assert.ok(a);
     assert.ok(b);
     assert.equal(calls, 1, "concurrent identical requests must share one upstream call");
-    assert.deepEqual([...a.binaryBody], [...Buffer.from("shared-image")]);
-    assert.deepEqual([...b.binaryBody], [...Buffer.from("shared-image")]);
+    assert.deepEqual([...a.binaryBody], [...jpegBody]);
+    assert.deepEqual([...b.binaryBody], [...jpegBody]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -617,7 +658,7 @@ test("concurrent identical prompts collapse into a single upstream call (single-
 test("premium prompts stay on Flash while GEMINI_IMAGE_PRO_ENABLED is off (cost guard)", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
-  const jpegBase64 = Buffer.from("cheap-flash").toString("base64");
+  const jpegBase64 = (await createTestJpeg(48)).toString("base64");
 
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -646,7 +687,7 @@ test("premium prompts stay on Flash while GEMINI_IMAGE_PRO_ENABLED is off (cost 
 test("explicit high-resolution prompts get the configured max size, others stay 1K", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
-  const jpegBase64 = Buffer.from("size-test").toString("base64");
+  const jpegBase64 = (await createTestJpeg(49)).toString("base64");
 
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -676,7 +717,7 @@ test("explicit high-resolution prompts get the configured max size, others stay 
   }
 });
 
-test("generated images carry the embedded Elyan watermark (real jpeg grows, fake bytes fail open)", async () => {
+test("generated images are validated as real image bytes without mutation", async () => {
   const originalFetch = globalThis.fetch;
   // 256x256 gerçek bir JPEG üret — sharp compose edebilsin.
   const sharp = (await import("sharp")).default;
@@ -698,9 +739,7 @@ test("generated images carry the embedded Elyan watermark (real jpeg grows, fake
     );
 
     assert.ok(result);
-    // Filigran gömüldüyse çıktı bayt dizisi orijinalden farklıdır ve hâlâ
-    // geçerli bir JPEG'dir (sharp ile açılabilir).
-    assert.notDeepEqual([...result.binaryBody], [...realJpeg]);
+    assert.deepEqual([...result.binaryBody], [...realJpeg]);
     const meta = await sharp(Buffer.from(result.binaryBody)).metadata();
     assert.equal(meta.format, "jpeg");
     assert.equal(meta.width, 256);

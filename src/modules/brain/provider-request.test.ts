@@ -135,3 +135,33 @@ test("buildSharedBrainRequestAttempt adds TurnEnvelope response_format only for 
   assert.equal(ollamaGenerateAttempt.turnEnvelopeMode, false);
   assert.equal("response_format" in ollamaGenerateAttempt.body, false);
 });
+
+test("TurnEnvelope format degrades to json_object for Groq models without json_schema support", () => {
+  const chatBody = (model: string) => ({
+    model,
+    messages: [{ role: "user", content: "Selam" }],
+  });
+  // json_schema destekleyen model aynen kalır.
+  const gptOss = buildSharedBrainRequestAttempt({
+    provider: "groq",
+    path: getChatCompletionPath("groq"),
+    body: chatBody("openai/gpt-oss-20b"),
+    turnEnvelopeEnabled: true,
+  });
+  assert.equal(
+    (gptOss.body.response_format as Record<string, unknown>).type,
+    "json_schema",
+  );
+  // Desteklemeyen model (qwen, Groq 400: "does not support response format
+  // json_schema") json_object'e düşer; şema anayasası system mesajına taşınır.
+  const qwen = buildSharedBrainRequestAttempt({
+    provider: "groq",
+    path: getChatCompletionPath("groq"),
+    body: chatBody("qwen/qwen3.6-27b"),
+    turnEnvelopeEnabled: true,
+  });
+  assert.equal(qwen.turnEnvelopeMode, true);
+  assert.deepEqual(qwen.body.response_format, { type: "json_object" });
+  const qwenSystem = (qwen.body.messages as Array<Record<string, unknown>>)[0];
+  assert.match(String(qwenSystem?.content ?? ""), /must contain exactly these keys/u);
+});

@@ -47,9 +47,20 @@ export const ANALYTICAL_GENERATION_TEMPERATURE = 0.25;
 export const BALANCED_GENERATION_TEMPERATURE = 0.4;
 export const CONVERSATIONAL_GENERATION_TEMPERATURE = 0.6;
 
+/**
+ * Persistent affective read (from dialogue-state's deriveAffectiveStance) used
+ * to modulate expressive variety. Optional: absent stance keeps legacy behavior.
+ */
+export type GenerationAffect = {
+  mood: "positive" | "frustrated" | "anxious" | "sad" | "tired" | "curious" | "neutral";
+  rapport: number;
+  volatility: number;
+};
+
 export function resolveGenerationTemperature(input: {
   workload: SharedBrainWorkload | undefined;
   prompt: string;
+  affect?: GenerationAffect | null;
 }): number {
   const workload = input.workload;
   if (
@@ -72,11 +83,35 @@ export function resolveGenerationTemperature(input: {
   ) {
     return ANALYTICAL_GENERATION_TEMPERATURE;
   }
+  let base: number;
   if (isSocialChatPrompt(input.prompt)) {
-    return CONVERSATIONAL_GENERATION_TEMPERATURE;
+    base = CONVERSATIONAL_GENERATION_TEMPERATURE;
+  } else if (workload === "mobile_chat_fast" || workload === "fast_route") {
+    base = CONVERSATIONAL_GENERATION_TEMPERATURE;
+  } else {
+    base = BALANCED_GENERATION_TEMPERATURE;
   }
-  if (workload === "mobile_chat_fast" || workload === "fast_route") {
-    return CONVERSATIONAL_GENERATION_TEMPERATURE;
+  return applyAffectToTemperature(base, input.affect);
+}
+
+/**
+ * Nudge expressive variety by the persistent affective stance — a behavioral
+ * dial, not a prompt line. Established rapport + a positive/curious read warms
+ * the voice (more alive); distress or an unstable mood steadies it (calmer, less
+ * erratic). Bounded so it never overrides the analytical floor.
+ */
+function applyAffectToTemperature(
+  base: number,
+  affect: GenerationAffect | null | undefined,
+): number {
+  if (!affect) return base;
+  let delta = 0;
+  if (affect.mood === "positive" || affect.mood === "curious") delta += 0.08;
+  if (affect.mood === "frustrated" || affect.mood === "anxious" || affect.mood === "sad") {
+    delta -= 0.1;
   }
-  return BALANCED_GENERATION_TEMPERATURE;
+  if (affect.rapport >= 0.55) delta += 0.06;
+  if (affect.volatility >= 0.6) delta -= 0.08;
+  const adjusted = base + delta;
+  return Math.max(0.3, Math.min(0.72, Math.round(adjusted * 100) / 100));
 }

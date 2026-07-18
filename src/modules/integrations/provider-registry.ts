@@ -70,6 +70,29 @@ export type IntegrationMcpAppCatalogEntry = {
   execution: "server_connector" | "remote_mcp";
 };
 
+export type RemoteMcpSelectionMetadata = {
+  targetKind: "curated_app" | "mcp_server";
+  appId: string | null;
+  connectionId: string | null;
+  serverId: string | null;
+  operation: "read" | "write" | "unknown";
+  confidence: number;
+  margin: number;
+  source:
+    | "semantic_transformer"
+    | "legacy_pattern"
+    | "explicit_name"
+    | "requested_capability";
+};
+
+export type RemoteMcpCatalogSelection = {
+  entry: IntegrationMcpAppCatalogEntry;
+  operation: "read" | "write" | "unknown";
+  confidence: number;
+  margin: number;
+  source: "semantic_transformer" | "legacy_pattern";
+};
+
 export const integrationProviderCatalog: ProviderCatalogEntry[] = [
   {
     code: "google",
@@ -503,26 +526,21 @@ export async function inferRequestedRemoteMcpAppsSemantic(
   prompt: string,
   connectedCapabilities: string[],
 ): Promise<IntegrationMcpAppCatalogEntry[]> {
-  const connected = new Set(
-    connectedCapabilities.map((capability) => capability.trim().toLowerCase()),
+  const selection = await inferRequestedRemoteMcpSelectionSemantic(
+    prompt,
+    connectedCapabilities,
   );
-  const eligible = integrationMcpAppCatalog.filter(
-    (entry) =>
-      entry.execution === "remote_mcp" &&
-      entry.capabilities.some((capability) => connected.has(capability)),
-  );
-  if (!prompt.trim() || eligible.length === 0) return [];
+  return selection ? [selection.entry] : [];
+}
 
-  // Remote MCP execution is private desktop work. Require one unambiguous app
-  // identity before paying for semantic action classification; a bare
-  // "mesajlarımı göster" could refer to several connected services and must
-  // clarify rather than guessing.
-  const explicitlyNamed = explicitlyNamedRemoteMcpApps(prompt, eligible);
-  if (explicitlyNamed.length !== 1) {
-    return inferRequestedRemoteMcpApps(prompt, connectedCapabilities);
-  }
-
-  const operation = await rankSemanticTextCandidates(
+export async function classifyConnectedDataOperationSemantic(
+  prompt: string,
+): Promise<{
+  operation: "read" | "write";
+  confidence: number;
+  margin: number;
+} | null> {
+  const match = await rankSemanticTextCandidates(
     prompt,
     [...CONNECTED_DATA_OPERATION_CANDIDATES],
     {
@@ -533,14 +551,71 @@ export async function inferRequestedRemoteMcpAppsSemantic(
     },
   );
   if (
-    !operation ||
-    operation.source !== "transformer" ||
-    (operation.id !== "read_account_data" &&
-      operation.id !== "write_account_data")
+    !match ||
+    match.source !== "transformer" ||
+    (match.id !== "read_account_data" &&
+      match.id !== "write_account_data")
   ) {
-    return inferRequestedRemoteMcpApps(prompt, connectedCapabilities);
+    return null;
   }
-  return explicitlyNamed;
+  return {
+    operation: match.id === "write_account_data" ? "write" : "read",
+    confidence: match.score,
+    margin: match.margin,
+  };
+}
+
+/** Same conservative route as above, plus the decision evidence kept for the work order. */
+export async function inferRequestedRemoteMcpSelectionSemantic(
+  prompt: string,
+  connectedCapabilities: string[],
+): Promise<RemoteMcpCatalogSelection | null> {
+  const connected = new Set(
+    connectedCapabilities.map((capability) => capability.trim().toLowerCase()),
+  );
+  const eligible = integrationMcpAppCatalog.filter(
+    (entry) =>
+      entry.execution === "remote_mcp" &&
+      entry.capabilities.some((capability) => connected.has(capability)),
+  );
+  if (!prompt.trim() || eligible.length === 0) return null;
+
+  // Remote MCP execution is private desktop work. Require one unambiguous app
+  // identity before paying for semantic action classification; a bare
+  // "mesajlarımı göster" could refer to several connected services and must
+  // clarify rather than guessing.
+  const explicitlyNamed = explicitlyNamedRemoteMcpApps(prompt, eligible);
+  if (explicitlyNamed.length !== 1) {
+    const legacy = inferRequestedRemoteMcpApps(prompt, connectedCapabilities);
+    return legacy.length === 1
+      ? {
+          entry: legacy[0],
+          operation: "unknown",
+          confidence: 0.7,
+          margin: 0,
+          source: "legacy_pattern",
+        }
+      : null;
+  }
+
+  const operation = await classifyConnectedDataOperationSemantic(prompt);
+  if (!operation) {
+    const legacy = inferRequestedRemoteMcpApps(prompt, connectedCapabilities);
+    return legacy.length === 1
+      ? {
+          entry: legacy[0],
+          operation: "unknown",
+          confidence: 0.7,
+          margin: 0,
+          source: "legacy_pattern",
+        }
+      : null;
+  }
+  return {
+    entry: explicitlyNamed[0],
+    ...operation,
+    source: "semantic_transformer",
+  };
 }
 
 export function getIntegrationProvider(provider: ConnectionProvider) {

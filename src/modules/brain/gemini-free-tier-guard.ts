@@ -13,6 +13,19 @@ export type GeminiFreeFeature =
 
 export type GeminiDataSensitivity = "none" | "personal" | "sensitive" | "restricted";
 
+export type GeminiFreeDataLineage = Partial<{
+  profile: boolean;
+  memory: boolean;
+  worldContext: boolean;
+  contextPacket: boolean;
+  mcp: boolean;
+  connector: boolean;
+  accountData: boolean;
+  toolResult: boolean;
+  attachment: boolean;
+  conversationHistory: boolean;
+}>;
+
 export type GeminiFreePermit = {
   allowed: boolean;
   reason:
@@ -22,14 +35,104 @@ export type GeminiFreePermit = {
     | "data_usage_not_attested"
     | "model_not_allowlisted"
     | "private_data_blocked"
+    | "provider_cooldown"
     | "global_request_limit"
     | "user_request_limit"
+    | "feature_request_limit"
     | "input_token_limit"
+    | "feature_input_token_limit"
     | "output_token_limit"
+    | "feature_output_token_limit"
     | "budget_store_unavailable";
   model: string;
   estimatedInputTokens: number;
 };
+
+const FEATURE_BUDGET_SHARE: Record<GeminiFreeFeature, number> = {
+  brain_response: 0.28,
+  intent_route: 0.18,
+  attachment_analyze: 0.12,
+  execution_validate: 0.1,
+  quality_judge: 0.1,
+  web_synthesize: 0.1,
+  translate: 0.07,
+  accessibility: 0.05,
+};
+
+const GEMINI_FREE_COOLDOWN_KEY = "gemini:free:provider_cooldown";
+const DEFAULT_GEMINI_FREE_COOLDOWN_MS = 120_000;
+const MAX_GEMINI_FREE_COOLDOWN_MS = 15 * 60_000;
+
+const PRIVATE_ACCOUNT_OPERATION_PATTERN =
+  /\b(?:my|mine|benim|bana\s+ait|hesabım(?:da|daki)?|hesabim(?:da|daki)?|bağlı\s+hesabım|bagli\s+hesabim|gelen\s+kutum|inbox(?:ım)?|maillerim|mesajlarım|mesajlarim|takvimim|ajandam|dosyalarım|dosyalarim|repolar[ıi]m|issue(?:lar)?[ıi]m|pull\s+requestlerim|kanallar[ıi]m|sayfalar[ıi]m|projelerim)\b/iu;
+const PRIVATE_ACCOUNT_DATA_PATTERN =
+  /\b(?:gmail|drive|google\s+drive|calendar|takvim|slack|notion|github|linear|mail|e-?posta|email|inbox|mesaj|message|repo|repository|issue|pull\s+request|channel|workspace|account|hesap)\b/iu;
+const PRIVATE_RAW_CONTENT_PATTERN =
+  /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|https?:\/\/\S+|file:\/\/|\/Users\/|[A-Za-z]:\\|\b(?:password|parola|şifre|sifre|token|secret|credential|kimlik|sağlık|saglik|adresim|telefonum|özel|ozel|private)\b)/iu;
+const FIRST_PERSON_PERSONAL_PATTERN =
+  /(?:\b(?:ben|bana|beni|benim|bende|adım|adim|ismim|yaşım|yasim|yaşıyorum|yasiyorum|konumum|evim|işim|isim|ailem|my|mine|me|myself)\b|\bI\s+(?:am|have|live|work|need|want|feel)\b)/iu;
+
+function featureBudgetLimit(total: number, feature: GeminiFreeFeature): number {
+  return Math.max(1, Math.floor(total * FEATURE_BUDGET_SHARE[feature]));
+}
+
+export function hasPrivateGeminiFreeDataLineage(
+  lineage: GeminiFreeDataLineage | null | undefined,
+): boolean {
+  return Boolean(lineage && Object.values(lineage).some((value) => value === true));
+}
+
+/**
+ * Returns only text that is safe to use as a public operation-classification
+ * frame. Private account requests are skipped instead of trying to redact the
+ * user's mailbox, calendar, MCP or connector wording heuristically.
+ */
+export function buildGeminiFreePublicOperationFrame(value: string): string | null {
+  const compact = value.replace(/\s+/g, " ").trim().slice(0, 2_000);
+  if (!compact) return null;
+  if (
+    PRIVATE_RAW_CONTENT_PATTERN.test(compact) ||
+    FIRST_PERSON_PERSONAL_PATTERN.test(compact) ||
+    (PRIVATE_ACCOUNT_OPERATION_PATTERN.test(compact) &&
+      PRIVATE_ACCOUNT_DATA_PATTERN.test(compact))
+  ) {
+    return null;
+  }
+  return compact
+    .replace(/\b\d{5,}\b/g, "[number]")
+    .replace(/["'“”‘’][^"'“”‘’]{1,160}["'“”‘’]/g, "[quoted_text]");
+}
+
+export function isGeminiFreeResourceExhausted(
+  status: number,
+  payload?: unknown,
+): boolean {
+  if (status === 429) return true;
+  const text = typeof payload === "string" ? payload : JSON.stringify(payload ?? null);
+  return /RESOURCE_EXHAUSTED|quota[_ -]?exceeded|rate[_ -]?limit/iu.test(text.slice(0, 8_000));
+}
+
+export function readGeminiRetryAfterMs(headers: Headers): number | null {
+  const raw = headers.get("retry-after")?.trim();
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000);
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
+}
+
+export async function recordGeminiFreeCooldown(
+  app: FastifyInstance,
+  retryAfterMs?: number | null,
+): Promise<void> {
+  const store = app.services?.reliability?.store;
+  if (!store) return;
+  const ttlMs = Math.min(
+    MAX_GEMINI_FREE_COOLDOWN_MS,
+    Math.max(30_000, retryAfterMs ?? DEFAULT_GEMINI_FREE_COOLDOWN_MS),
+  );
+  await store.set(GEMINI_FREE_COOLDOWN_KEY, "1", ttlMs);
+}
 
 function csv(value: unknown): string[] {
   return String(value ?? "")
@@ -75,6 +178,7 @@ export async function acquireGeminiFreePermit(
     estimatedInputTokensOverride?: number;
     sensitivity?: GeminiDataSensitivity;
     userAuthorizedCloud?: boolean;
+    dataLineage?: GeminiFreeDataLineage;
   },
 ): Promise<GeminiFreePermit> {
   const model = String(input.model || app.config.GEMINI_FAST_MODEL || "").trim();
@@ -97,7 +201,11 @@ export async function acquireGeminiFreePermit(
     return denied("data_usage_not_attested");
   }
   if (!model || !isGeminiFreeModelAllowed(app, model)) return denied("model_not_allowlisted");
+  const { attachment: attachmentLineage, ...nonAttachmentLineage } =
+    input.dataLineage ?? {};
   if (
+    hasPrivateGeminiFreeDataLineage(nonAttachmentLineage) ||
+    (attachmentLineage === true && input.userAuthorizedCloud !== true) ||
     input.sensitivity === "restricted" ||
     input.sensitivity === "sensitive" ||
     (input.sensitivity === "personal" && input.userAuthorizedCloud !== true)
@@ -108,26 +216,97 @@ export async function acquireGeminiFreePermit(
   const store = app.services?.reliability?.store;
   if (!store) return denied("budget_store_unavailable");
   const { day, ttlMs } = utcBudgetWindow();
+  const userKey = userBudgetKey(input.userId);
+  const prefix = `gemini:free:${day}`;
+  const exhaustedKeys = {
+    globalRequests: `${prefix}:requests_exhausted`,
+    userRequests: `${prefix}:user:${userKey}:requests_exhausted`,
+    globalInput: `${prefix}:input_exhausted`,
+    featureRequests: `${prefix}:feature:${input.feature}:requests_exhausted`,
+    featureInput: `${prefix}:feature:${input.feature}:input_exhausted`,
+  };
+  if ((await store.get(GEMINI_FREE_COOLDOWN_KEY).catch(() => "1")) === "1") {
+    return denied("provider_cooldown");
+  }
   if ((await store.get(`gemini:free:${day}:output_exhausted`).catch(() => "1")) === "1") {
     return denied("output_token_limit");
   }
-  const userKey = userBudgetKey(input.userId);
-  const prefix = `gemini:free:${day}`;
-  const [globalRequests, userRequests, inputTokens] = await Promise.all([
+  if (
+    (await store
+      .get(`gemini:free:${day}:feature:${input.feature}:output_exhausted`)
+      .catch(() => "1")) === "1"
+  ) {
+    return denied("feature_output_token_limit");
+  }
+  const exhaustedValues = await Promise.all(
+    Object.values(exhaustedKeys).map((key) =>
+      store.get(key).catch(() => "1"),
+    ),
+  );
+  if (exhaustedValues[0] === "1") return denied("global_request_limit");
+  if (exhaustedValues[1] === "1") return denied("user_request_limit");
+  if (exhaustedValues[2] === "1") return denied("input_token_limit");
+  if (exhaustedValues[3] === "1") return denied("feature_request_limit");
+  if (exhaustedValues[4] === "1") return denied("feature_input_token_limit");
+  const [
+    globalRequests,
+    userRequests,
+    inputTokens,
+    featureRequests,
+    featureInputTokens,
+  ] = await Promise.all([
     store.increment(`${prefix}:requests`, ttlMs),
     store.increment(`${prefix}:user:${userKey}:requests`, ttlMs),
     store.incrementBy(`${prefix}:input_tokens`, estimatedInputTokens, ttlMs),
     store.increment(`${prefix}:feature:${input.feature}`, ttlMs),
-  ]).catch(() => [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+    store.incrementBy(
+      `${prefix}:feature:${input.feature}:input_tokens`,
+      estimatedInputTokens,
+      ttlMs,
+    ),
+  ]).catch(() => [
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+  ]);
 
   if (globalRequests > app.config.GEMINI_FREE_DAILY_REQUEST_LIMIT) {
+    await store
+      .set(exhaustedKeys.globalRequests, "1", ttlMs)
+      .catch(() => undefined);
     return denied("global_request_limit");
   }
   if (userRequests > app.config.GEMINI_FREE_USER_DAILY_REQUEST_LIMIT) {
+    await store
+      .set(exhaustedKeys.userRequests, "1", ttlMs)
+      .catch(() => undefined);
     return denied("user_request_limit");
   }
+  if (
+    featureRequests >
+    featureBudgetLimit(app.config.GEMINI_FREE_DAILY_REQUEST_LIMIT, input.feature)
+  ) {
+    await store
+      .set(exhaustedKeys.featureRequests, "1", ttlMs)
+      .catch(() => undefined);
+    return denied("feature_request_limit");
+  }
   if (inputTokens > app.config.GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT) {
+    await store
+      .set(exhaustedKeys.globalInput, "1", ttlMs)
+      .catch(() => undefined);
     return denied("input_token_limit");
+  }
+  if (
+    featureInputTokens >
+    featureBudgetLimit(app.config.GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT, input.feature)
+  ) {
+    await store
+      .set(exhaustedKeys.featureInput, "1", ttlMs)
+      .catch(() => undefined);
+    return denied("feature_input_token_limit");
   }
   return { allowed: true, reason: "allowed", model, estimatedInputTokens };
 }
@@ -135,6 +314,7 @@ export async function acquireGeminiFreePermit(
 export async function recordGeminiFreeOutput(
   app: FastifyInstance,
   output: unknown,
+  feature?: GeminiFreeFeature,
 ): Promise<void> {
   const store = app.services?.reliability?.store;
   if (!store) return;
@@ -144,13 +324,41 @@ export async function recordGeminiFreeOutput(
   if (total > app.config.GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT) {
     await store.set(`gemini:free:${day}:output_exhausted`, "1", ttlMs);
   }
+  if (feature) {
+    const featureTotal = await store.incrementBy(
+      `gemini:free:${day}:feature:${feature}:output_tokens`,
+      tokens,
+      ttlMs,
+    );
+    if (
+      featureTotal >
+      featureBudgetLimit(app.config.GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT, feature)
+    ) {
+      await store.set(
+        `gemini:free:${day}:feature:${feature}:output_exhausted`,
+        "1",
+        ttlMs,
+      );
+    }
+  }
 }
 
-export async function isGeminiFreeOutputBudgetAvailable(app: FastifyInstance): Promise<boolean> {
+export async function isGeminiFreeOutputBudgetAvailable(
+  app: FastifyInstance,
+  feature?: GeminiFreeFeature,
+): Promise<boolean> {
   const store = app.services?.reliability?.store;
   if (!store) return false;
   const { day } = utcBudgetWindow();
-  return (await store.get(`gemini:free:${day}:output_exhausted`).catch(() => "1")) !== "1";
+  const keys = [
+    `gemini:free:${day}:output_exhausted`,
+    ...(feature
+      ? [`gemini:free:${day}:feature:${feature}:output_exhausted`]
+      : []),
+    GEMINI_FREE_COOLDOWN_KEY,
+  ];
+  const values = await Promise.all(keys.map((key) => store.get(key).catch(() => "1")));
+  return values.every((value) => value !== "1");
 }
 
 export function shouldSampleGeminiUtility(

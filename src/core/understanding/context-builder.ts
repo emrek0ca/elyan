@@ -6,7 +6,11 @@ import {
   readCanonicalMemoryState,
   searchBrainMemory,
 } from "../../modules/brain/memory.js";
-import { buildContextPacketsFromMetadata, summarizeContextFreshness } from "./context-packets.js";
+import {
+  buildContextPacketsFromMetadata,
+  fuseWorldSignalRecordsByKind,
+  summarizeContextFreshness,
+} from "./context-packets.js";
 import { buildMemoryProfileSnapshot, EPISODIC_LABELS } from "./memory-profile.js";
 import { filterRetrievedMemory } from "./personalization-policy.js";
 import { extractProjectHints } from "./project-context.js";
@@ -921,9 +925,10 @@ async function listCachedFreshWorldSignals(
     userId: string;
     limit: number;
     maxAgeHours: number;
+    sessionId?: string | null;
   },
 ): Promise<FreshWorldSignals> {
-  const cacheKey = `understanding:world:${input.userId}`;
+  const cacheKey = `understanding:world:${input.userId}:${input.sessionId ?? "global"}`;
   const cached = await readUnderstandingCache<FreshWorldSignals>(
     app,
     cacheKey,
@@ -1063,6 +1068,7 @@ function extractSalienceFromMetadata(
   userIntent: string | null;
   assistantCommitment: string | null;
   emotionalTone: string | null;
+  affectiveDirective: string | null;
   unresolved: boolean;
 } {
   const root = readRecord(metadata);
@@ -1070,6 +1076,7 @@ function extractSalienceFromMetadata(
     ? readRecord(root?.compactContext)
     : null;
   const salience = readRecord(compactContext?.salience);
+  const affectiveStance = readRecord(compactContext?.affectiveStance);
   const topics = Array.isArray(salience?.topics)
     ? salience.topics.map(String).filter(Boolean).slice(0, 8)
     : [];
@@ -1082,6 +1089,7 @@ function extractSalienceFromMetadata(
     userIntent: readStringValue(salience, "userIntent"),
     assistantCommitment: readStringValue(salience, "assistantCommitment"),
     emotionalTone: readStringValue(salience, "emotionalTone"),
+    affectiveDirective: readStringValue(affectiveStance, "directive"),
     unresolved: readBooleanValue(salience, "unresolved") === true,
   };
 }
@@ -1145,7 +1153,7 @@ function deriveContinuitySummary(
   const recentTurns = input ? extractTurnTracesFromMetadata(metadata, input) : [];
   const salience = input
     ? extractSalienceFromMetadata(metadata, input)
-    : { topics: [], entities: [], userIntent: null, assistantCommitment: null, emotionalTone: null, unresolved: false };
+    : { topics: [], entities: [], userIntent: null, assistantCommitment: null, emotionalTone: null, affectiveDirective: null, unresolved: false };
 
   const derivedLoops =
     storedLoops.length === 0
@@ -1383,7 +1391,7 @@ export function buildUserContextFromMemory(input: {
     .slice(0, MAX_HINTS);
   const worldContextMemory = eligibleMemory
     .filter((item) => isWorldDerivedMemory(item))
-    .slice(0, 4);
+    .slice(0, MAX_HINTS);
   const memorySnapshot = buildMemoryProfileSnapshot(profileMemory);
   const userProfile = buildUserProfileSnapshot({
     profile: input.profile,
@@ -1443,7 +1451,16 @@ export function buildUserContextFromMemory(input: {
       state,
     );
   }
-  if (turnSalience.emotionalTone) {
+  // Biriken duygusal duruş (moodTrend + yakınlık + oynaklıktan türetilmiş) tek
+  // seferlik tone kelimesinin yerini alır: model, oturum boyunca taşınan bir ruh
+  // haline göre davranır. Duruş yoksa eski tek-tur sinyaline düşer.
+  if (turnSalience.affectiveDirective) {
+    pushBounded(
+      behavioralHints,
+      `Affective stance (persistent): ${turnSalience.affectiveDirective}`,
+      state,
+    );
+  } else if (turnSalience.emotionalTone) {
     pushBounded(
       behavioralHints,
       `User affect signal: ${turnSalience.emotionalTone}; adapt warmth without mentioning the signal.`,
@@ -1509,6 +1526,7 @@ export function buildUserContextFromMemory(input: {
       staleness: item.staleness,
     })),
     requestText: input.task.message,
+    contextPackets,
   });
 
   for (const hint of derivedHints.situationalHints) {
@@ -1688,7 +1706,12 @@ export async function buildUserContext(
       ? extractQuickFacts(input.message).catch(() => ({ name: undefined, city: undefined }))
       : Promise.resolve({ name: undefined, city: undefined }),
     !isSocialTurn && contextPackets.some((packet) => packet.source === "world_signal")
-      ? listCachedFreshWorldSignals(app, { userId: input.userId, limit: 12, maxAgeHours: 24 }).catch(() => [])
+      ? listCachedFreshWorldSignals(app, {
+          userId: input.userId,
+          sessionId,
+          limit: 48,
+          maxAgeHours: 24,
+        }).catch(() => [])
       : Promise.resolve([]),
     (foundationEnabled || shadowReadEnabled) && memoryEnabled
       ? buildCognitiveContextPacket(app, {
@@ -1791,6 +1814,8 @@ export async function buildUserContext(
             confidence: learningEvents.confidence,
             scope:      learningEvents.scope,
             source:     learningEvents.source,
+            metadata:   learningEvents.metadata,
+            expiresAt:  learningEvents.expiresAt,
             createdAt:  learningEvents.createdAt,
           })
           .from(learningEvents)
@@ -1826,7 +1851,10 @@ export async function buildUserContext(
       );
     }
   }
-  const relevantWorldSignals = freshWorldSignals.filter((signal) => {
+  const relevantWorldSignals = fuseWorldSignalRecordsByKind(
+    freshWorldSignals,
+    { now },
+  ).filter((signal) => {
     const ttlHours = relevantSignalTtlHours.get(signal.kind.toLowerCase());
     if (!ttlHours) return false;
     const ageHours = Math.max(0, now.getTime() - signal.createdAt.getTime()) / 3_600_000;
@@ -1864,10 +1892,14 @@ export async function buildUserContext(
         metadata:       signal.metadata,
       }));
 
+  const durableFallbackMemory = fallbackRows
+    .map((row) => ({ ...row, confidence: row.confidence / 100 }))
+    .filter((row) => !isWorldDerivedMemory(row as RetrievedMemory));
+
   const allMemory = [
     ...stableMemory,
     ...worldDerivedMemory,
-    ...fallbackRows.map((row) => ({ ...row, confidence: row.confidence / 100 })),
+    ...durableFallbackMemory,
   ];
 
   /* Average document length for BM25 normalization */

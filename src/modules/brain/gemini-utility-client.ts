@@ -4,9 +4,13 @@ import { joinProviderUrl, postJson } from "./provider-http.js";
 import { extractResponseText } from "./provider-response.js";
 import {
   acquireGeminiFreePermit,
+  isGeminiFreeResourceExhausted,
   isGeminiFreeOutputBudgetAvailable,
+  readGeminiRetryAfterMs,
+  recordGeminiFreeCooldown,
   recordGeminiFreeOutput,
   type GeminiDataSensitivity,
+  type GeminiFreeDataLineage,
   type GeminiFreeFeature,
 } from "./gemini-free-tier-guard.js";
 
@@ -40,13 +44,14 @@ export async function callGeminiFreeStructured<T>(
     jsonSchema: Record<string, unknown>;
     sensitivity?: GeminiDataSensitivity;
     userAuthorizedCloud?: boolean;
+    dataLineage?: GeminiFreeDataLineage;
     maxOutputTokens?: number;
     timeoutMs?: number;
     images?: Array<{ base64Data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" }>;
   },
 ): Promise<T | null> {
   const model = String(app.config.GEMINI_FAST_MODEL || "").trim();
-  if (!(await isGeminiFreeOutputBudgetAvailable(app))) return null;
+  if (!(await isGeminiFreeOutputBudgetAvailable(app, input.feature))) return null;
   const userContent: unknown = input.images?.length
     ? [
         { type: "text", text: JSON.stringify(input.payload) },
@@ -76,6 +81,10 @@ export async function callGeminiFreeStructured<T>(
     requestPayload: requestBody,
     sensitivity: input.sensitivity,
     userAuthorizedCloud: input.userAuthorizedCloud,
+    dataLineage: {
+      ...input.dataLineage,
+      ...(input.images?.length ? { attachment: true } : {}),
+    },
   });
   if (!permit.allowed) {
     app.log.debug?.({ feature: input.feature, reason: permit.reason }, "Gemini free utility skipped");
@@ -89,10 +98,24 @@ export async function callGeminiFreeStructured<T>(
     requestBody,
     Math.min(8_000, Math.max(1_000, input.timeoutMs ?? 5_000)),
   ).catch(() => null);
-  if (!response?.ok) return null;
+  if (!response) return null;
   const providerPayload = await response.json().catch(() => null);
-  const parsed = input.schema.safeParse(extractJson(extractResponseText("gemini", providerPayload)));
+  if (!response.ok) {
+    if (isGeminiFreeResourceExhausted(response.status, providerPayload)) {
+      await recordGeminiFreeCooldown(
+        app,
+        readGeminiRetryAfterMs(response.headers),
+      ).catch(() => undefined);
+    }
+    return null;
+  }
+  const responseText = extractResponseText("gemini", providerPayload);
+  // Count every successful provider response, including malformed JSON, so a
+  // parse failure cannot consume free-tier output outside the local budget.
+  await recordGeminiFreeOutput(app, responseText, input.feature).catch(
+    () => undefined,
+  );
+  const parsed = input.schema.safeParse(extractJson(responseText));
   if (!parsed.success) return null;
-  await recordGeminiFreeOutput(app, parsed.data).catch(() => undefined);
   return parsed.data;
 }

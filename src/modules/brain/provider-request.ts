@@ -7,6 +7,7 @@ import type { SharedBrainProvider } from "./runtime.js";
 import {
   buildTurnEnvelopeSystemInstruction,
   buildTurnEnvelopeResponseFormat,
+  TURN_ENVELOPE_COMPACT_SCHEMA_INSTRUCTION,
 } from "./turn-envelope.js";
 
 export type SharedBrainConversationMessage = {
@@ -198,10 +199,34 @@ function supportsTurnEnvelopeResponseFormat(
   );
 }
 
+/**
+ * Groq'ta `json_schema` yalnız yapılandırılmış çıktı destekleyen modellerde
+ * çalışır; qwen gibi modeller isteği 400 "does not support response format
+ * json_schema" ile reddeder (canlıda tüm sağlayıcı zincirini düşürüyordu).
+ * Desteklemeyen modeller `json_object` moduna düşer — şema anayasası prompt'a
+ * taşınır, otoriter doğrulama zaten Zod parser'dadır.
+ */
+function modelSupportsJsonSchemaFormat(
+  provider: SharedBrainProvider,
+  model: unknown,
+): boolean {
+  if (provider !== "groq") return true;
+  const name = String(model ?? "").toLowerCase();
+  return name.includes("gpt-oss") || name.startsWith("moonshotai/kimi-k2");
+}
+
 function withTurnEnvelopeResponseFormat(
+  provider: SharedBrainProvider,
   body: Record<string, unknown>,
   proactiveOpsEnabled: boolean,
 ): Record<string, unknown> {
+  const jsonSchemaSupported = modelSupportsJsonSchemaFormat(
+    provider,
+    body.model,
+  );
+  const systemInstruction = jsonSchemaSupported
+    ? buildTurnEnvelopeSystemInstruction(proactiveOpsEnabled)
+    : `${buildTurnEnvelopeSystemInstruction(proactiveOpsEnabled)} ${TURN_ENVELOPE_COMPACT_SCHEMA_INSTRUCTION}`;
   const messages = Array.isArray(body.messages)
     ? (body.messages as SharedBrainConversationMessage[])
     : null;
@@ -212,13 +237,15 @@ function withTurnEnvelopeResponseFormat(
           messages: [
             {
               role: "system",
-              content: buildTurnEnvelopeSystemInstruction(proactiveOpsEnabled),
+              content: systemInstruction,
             },
             ...messages,
           ],
         }
       : {}),
-    response_format: buildTurnEnvelopeResponseFormat(proactiveOpsEnabled),
+    response_format: jsonSchemaSupported
+      ? buildTurnEnvelopeResponseFormat(proactiveOpsEnabled)
+      : { type: "json_object" },
   };
 }
 
@@ -235,7 +262,11 @@ export function buildSharedBrainRequestAttempt(input: {
   return {
     path: input.path,
     body: turnEnvelopeMode
-      ? withTurnEnvelopeResponseFormat(input.body, input.proactiveOpsEnabled === true)
+      ? withTurnEnvelopeResponseFormat(
+          input.provider,
+          input.body,
+          input.proactiveOpsEnabled === true,
+        )
       : input.body,
     turnEnvelopeMode,
   };

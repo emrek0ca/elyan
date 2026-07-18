@@ -286,7 +286,7 @@ async function getOperationalCounts(app: FastifyInstance) {
   const staleTaskRows = await app.db
     .select({
       staleActiveTaskCount: sql<number>`count(*) filter (where ${tasks.status} in ('queued', 'planning', 'running', 'waiting_approval'))::int`,
-      staleBlockingTaskCount: sql<number>`count(*) filter (where ${tasks.status} in ('queued', 'planning', 'running'))::int`,
+      staleBlockingTaskCount: sql<number>`count(*) filter (where ${tasks.status} in ('planning', 'running'))::int`,
       staleApprovalTaskCount: sql<number>`count(*) filter (where ${tasks.status} = 'waiting_approval')::int`,
     })
     .from(tasks)

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   chatSessions,
@@ -27,8 +27,10 @@ import {
   sanitizeInboundContextRecord,
   sanitizeInboundContextText,
 } from "../../lib/context-text-sanitizer.js";
+import { getWorldSignalTtlHours } from "../../core/understanding/context-packets.js";
 
 const MAX_WORLD_SIGNAL_PAYLOAD_BYTES = 24 * 1024;
+const MAX_WORLD_SIGNAL_FUTURE_SKEW_MS = 5 * 60_000;
 const BLOCKED_SECRET_KEYS = new Set([
   "accesstoken",
   "authorization",
@@ -445,23 +447,48 @@ export async function ingestWorldSignals(
   }
   const scopedSessionId = scopedSession?.id ?? null;
 
+  // Resolve device/session ownership before validating observation details so
+  // an unauthorized scope always fails closed at the authorization boundary.
+  const ingestNow = new Date();
+  for (const signal of input.body.signals) {
+    const observedAt = new Date(signal.createdAt);
+    if (
+      !Number.isFinite(observedAt.getTime()) ||
+      observedAt.getTime() - ingestNow.getTime() > MAX_WORLD_SIGNAL_FUTURE_SKEW_MS
+    ) {
+      throw new AppError(
+        422,
+        "invalid_signal_time",
+        "World signal observation time is not valid.",
+      );
+    }
+  }
+
   const payloadBytes = Buffer.byteLength(JSON.stringify(input.body), "utf8");
   // GÜVENLİK ÇEKİRDEĞİ: summary + string fact değerleri buradan sonra memory
   // fact'lerine, context packet'lerine ve SİSTEM PROMPT'una akar. Tek arınma
   // noktası burasıdır — prompt-injection kalıpları, rol etiketleri, model
   // kontrol tokenleri ve zero-width karakterler girişte etkisizleştirilir;
   // downstream her zaman temiz metinle çalışır.
-  const sanitizedSignals = input.body.signals.map((signal) => ({
-    ...signal,
-    summary: sanitizeInboundContextText(signal.summary, 480).text,
-    facts: sanitizeInboundContextRecord(signal.facts),
-    privacy: sanitizeInboundContextRecord(signal.privacy),
-    renderHints: signal.renderHints
-      ? sanitizeInboundContextRecord(signal.renderHints)
-      : undefined,
-  }));
+  const sanitizedSignals = [
+    ...new Map(
+      input.body.signals.map((signal) => [
+        signal.signalId,
+        {
+          ...signal,
+          summary: sanitizeInboundContextText(signal.summary, 480).text,
+          facts: sanitizeInboundContextRecord(signal.facts),
+          privacy: sanitizeInboundContextRecord(signal.privacy),
+          renderHints: signal.renderHints
+            ? sanitizeInboundContextRecord(signal.renderHints)
+            : undefined,
+          createdAt: new Date(signal.createdAt),
+        },
+      ]),
+    ).values(),
+  ];
 
-  await app.db
+  const insertedSignals = await app.db
     .insert(worldSignals)
     .values(
       sanitizedSignals.map((signal) => ({
@@ -481,16 +508,21 @@ export async function ingestWorldSignals(
         privacy: signal.privacy,
         renderHints: signal.renderHints ?? {},
         visibility: signal.visibility ?? "assistant_internal_by_default",
-        createdAt: new Date(signal.createdAt),
+        createdAt: signal.createdAt,
       })),
     )
     .onConflictDoNothing({
       target: [worldSignals.userId, worldSignals.signalId],
-    });
+    })
+    .returning({ signalId: worldSignals.signalId });
+  const insertedSignalIds = new Set(insertedSignals.map((row) => row.signalId));
+  const newlyStoredSignals = sanitizedSignals.filter((signal) =>
+    insertedSignalIds.has(signal.signalId),
+  );
 
   const derivedLearningSignals = filterLearningSignals(
     deriveLearningSignalsFromWorldSignals(
-      sanitizedSignals.map((signal) =>
+      newlyStoredSignals.map((signal) =>
         toDerivedSignalInput({
           signalId: signal.signalId,
           kind: signal.kind,
@@ -498,35 +530,60 @@ export async function ingestWorldSignals(
           confidence: signal.confidence,
           facts: signal.facts,
           privacy: signal.privacy,
-          createdAt: new Date(signal.createdAt),
+          createdAt: signal.createdAt,
         }),
       ),
     ),
   );
+  const observedAtBySignalId = new Map(
+    newlyStoredSignals.map((signal) => [signal.signalId, signal.createdAt]),
+  );
+  const liveDerivedLearningSignals = derivedLearningSignals.filter((signal) => {
+    const signalId = String(signal.metadata?.signalId ?? "");
+    const observedAt = observedAtBySignalId.get(signalId);
+    if (!observedAt || !signal.ttlDays) return true;
+    return observedAt.getTime() + signal.ttlDays * 86_400_000 > ingestNow.getTime();
+  });
 
-  if (derivedLearningSignals.length > 0) {
+  if (liveDerivedLearningSignals.length > 0) {
     await app.db.insert(learningEvents).values(
-      derivedLearningSignals.map((signal) => ({
-        userId: input.userId,
-        accountId: input.userId,
-        taskId: scopedSessionId ? null : null,
-        type: signal.type,
-        key: signal.key,
-        value: signal.value,
-        confidence: Math.round(signal.confidence * 100),
-        scope: signal.scope,
-        source: signal.source,
-        privacyLevel: "safe",
-        metadata: {
-          ...signal.metadata,
-          clientRequestId: input.body.clientRequestId,
-          sessionId: scopedSessionId,
-        },
-        expiresAt: signal.ttlDays
-          ? new Date(Date.now() + signal.ttlDays * 86_400_000)
-          : null,
-      })),
+      liveDerivedLearningSignals.map((signal) => {
+        const signalId = String(signal.metadata?.signalId ?? "");
+        const observedAt = observedAtBySignalId.get(signalId) ?? ingestNow;
+        return {
+          userId: input.userId,
+          accountId: input.userId,
+          taskId: scopedSessionId ? null : null,
+          type: signal.type,
+          key: signal.key,
+          value: signal.value,
+          confidence: Math.round(signal.confidence * 100),
+          scope: signal.scope,
+          source: signal.source,
+          privacyLevel: "safe",
+          metadata: {
+            ...signal.metadata,
+            clientRequestId: input.body.clientRequestId,
+            sessionId: scopedSessionId,
+            trainingEligible: false,
+          },
+          expiresAt: signal.ttlDays
+            ? new Date(observedAt.getTime() + signal.ttlDays * 86_400_000)
+            : null,
+        };
+      }),
     );
+  }
+
+  if (insertedSignalIds.size > 0) {
+    const cacheStore = app.services?.reliability?.store;
+    await Promise.all([
+      cacheStore?.del(`understanding:world:${input.userId}`),
+      cacheStore?.del(`understanding:world:${input.userId}:global`),
+      ...(scopedSessionId
+        ? [cacheStore?.del(`understanding:world:${input.userId}:${scopedSessionId}`)]
+        : []),
+    ]).catch(() => undefined);
   }
 
   app.log.info(
@@ -547,6 +604,8 @@ export async function ingestWorldSignals(
   return {
     ok: true,
     acceptedCount: input.body.signals.length,
+    storedCount: insertedSignalIds.size,
+    dedupedCount: input.body.signals.length - insertedSignalIds.size,
     deviceId: ownedDevice.id,
     sessionId: scopedSessionId,
   };
@@ -558,10 +617,13 @@ export async function listFreshWorldSignals(
     userId: string;
     deviceId?: string;
     sessionId?: string | null;
+    includeUnscopedSession?: boolean;
     limit?: number;
     maxAgeHours?: number;
   },
 ) {
+  const now = new Date();
+  const maxAgeHours = input.maxAgeHours ?? 24;
   const rows = await app.db
     .select({
       signalId: worldSignals.signalId,
@@ -581,27 +643,42 @@ export async function listFreshWorldSignals(
         eq(worldSignals.userId, input.userId),
         input.deviceId ? eq(worldSignals.deviceId, input.deviceId) : undefined,
         input.sessionId
-          ? eq(worldSignals.sessionId, input.sessionId)
+          ? input.includeUnscopedSession
+            ? or(
+                isNull(worldSignals.sessionId),
+                eq(worldSignals.sessionId, input.sessionId),
+              )
+            : eq(worldSignals.sessionId, input.sessionId)
           : undefined,
         gte(
           worldSignals.createdAt,
-          new Date(Date.now() - 1000 * 60 * 60 * (input.maxAgeHours ?? 24)),
+          new Date(now.getTime() - 1000 * 60 * 60 * maxAgeHours),
+        ),
+        lte(
+          worldSignals.createdAt,
+          new Date(now.getTime() + MAX_WORLD_SIGNAL_FUTURE_SKEW_MS),
         ),
       ),
     )
     .orderBy(desc(worldSignals.createdAt))
     .limit(input.limit ?? 20);
 
-  return rows.map((row) => ({
-    signalId: row.signalId,
-    source: row.source,
-    kind: row.kind,
-    summary: sanitizeInboundContextText(row.summary, 480).text,
-    confidence: row.confidenceBps / 1000,
-    facts: sanitizeStoredWorldSignalRecord(row.facts),
-    privacy: sanitizeStoredWorldSignalRecord(row.privacy),
-    renderHints: sanitizeStoredWorldSignalRecord(row.renderHints),
-    visibility: row.visibility,
-    createdAt: row.createdAt,
-  }));
+  return rows
+    .filter((row) => {
+      const ttlHours = Math.min(maxAgeHours, getWorldSignalTtlHours(row.kind));
+      const ageHours = Math.max(0, now.getTime() - row.createdAt.getTime()) / 3_600_000;
+      return Number.isFinite(ageHours) && ageHours <= ttlHours;
+    })
+    .map((row) => ({
+      signalId: row.signalId,
+      source: row.source,
+      kind: row.kind,
+      summary: sanitizeInboundContextText(row.summary, 480).text,
+      confidence: row.confidenceBps / 1000,
+      facts: sanitizeStoredWorldSignalRecord(row.facts),
+      privacy: sanitizeStoredWorldSignalRecord(row.privacy),
+      renderHints: sanitizeStoredWorldSignalRecord(row.renderHints),
+      visibility: row.visibility,
+      createdAt: row.createdAt,
+    }));
 }

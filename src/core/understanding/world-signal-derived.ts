@@ -1,4 +1,4 @@
-import type { LearningSignal } from "./types.js";
+import type { ContextPacket, LearningSignal } from "./types.js";
 
 type FreshWorldSignal = {
   signalId?: string;
@@ -338,6 +338,9 @@ export function buildDerivedHintBuckets(input: {
     staleness?: string;
   }>;
   requestText: string;
+  contextPackets?: Array<
+    Pick<ContextPacket, "signalKinds" | "mentionPolicy" | "relevanceReason">
+  >;
 }): DerivedHintBucket {
   const situationalHints: string[] = [];
   const behavioralHints: string[] = [];
@@ -349,6 +352,12 @@ export function buildDerivedHintBuckets(input: {
   const wantsLocation = LOCATION_RELEVANCE_PATTERN.test(request);
   const wantsNotifications = NOTIFICATION_RELEVANCE_PATTERN.test(request);
   const wantsAdaptiveHelp = ADAPTIVE_WORK_PATTERN.test(request);
+  const packetGuidanceBySignalKind = new Map(
+    (input.contextPackets ?? []).flatMap((packet) =>
+      packet.signalKinds.map((kind) => [kind.toLowerCase(), packet] as const),
+    ),
+  );
+  const usePacketGuidance = input.contextPackets !== undefined;
 
   for (const item of input.memory) {
     if (item.staleness === "stale" || item.staleness === "contested") {
@@ -359,8 +368,29 @@ export function buildDerivedHintBuckets(input: {
       continue;
     }
     const category = readString(metadata, "derivedTraitCategory");
+    const sourceKind = readString(metadata, "sourceKind")?.toLowerCase() ?? null;
+    const guidedPacket = sourceKind
+      ? packetGuidanceBySignalKind.get(sourceKind)
+      : undefined;
+    if (
+      usePacketGuidance &&
+      (!guidedPacket || guidedPacket.mentionPolicy === "silent")
+    ) {
+      continue;
+    }
     const value = sanitizeDerivedValue(item.value, 160);
     if (!value) {
+      continue;
+    }
+
+    if (usePacketGuidance) {
+      if (category === "situational") {
+        maybePush(situationalHints, value);
+      } else if (category === "behavioral") {
+        maybePush(behavioralHints, value);
+      } else if (category === "environmental") {
+        maybePush(environmentHints, value);
+      }
       continue;
     }
 

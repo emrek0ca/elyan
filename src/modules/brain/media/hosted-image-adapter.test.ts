@@ -5,7 +5,7 @@ import {
   extractHostedGeneratedImage,
 } from "./hosted-image-adapter.js";
 
-test("Gemini image adapter defaults to a 2K PNG Interactions request", () => {
+test("Gemini image adapter defaults to a 1K PNG Interactions request", () => {
   const request = buildHostedImageProviderRequest({
     config: {
       provider: "gemini",
@@ -24,7 +24,7 @@ test("Gemini image adapter defaults to a 2K PNG Interactions request", () => {
     type: "image",
     mime_type: "image/png",
     aspect_ratio: "3:2",
-    image_size: "2K",
+    image_size: "1K",
   });
   assert.doesNotMatch(JSON.stringify(request.body), /secret-test-key/u);
 });

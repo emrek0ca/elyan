@@ -9,12 +9,32 @@ import type {
 
 const MAX_PACKETS = 10;
 const MAX_PACKET_SUMMARY_CHARS = 360;
-const HEALTH_CONTEXT_TTL_HOURS = 24;
-const CALENDAR_CONTEXT_TTL_HOURS = 18;
-const DEVICE_CONTEXT_TTL_HOURS = 6;
-const NOTIFICATION_CONTEXT_TTL_HOURS = 4;
-const TIME_CONTEXT_TTL_HOURS = 8;
-const WORLD_CONTEXT_TTL_HOURS = 12;
+const MAX_FUTURE_CLOCK_SKEW_MS = 5 * 60_000;
+const WORLD_SIGNAL_FUSION_WINDOW_MS = 5 * 60_000;
+export const WORLD_SIGNAL_TTL_HOURS_BY_KIND = Object.freeze({
+  health: 24,
+  calendar: 18,
+  device: 6,
+  notification: 4,
+  time: 8,
+  location: 12,
+  camera: 12,
+  speech: 12,
+  attachment: 12,
+} as const);
+
+export function getWorldSignalTtlHours(kind: string): number {
+  return WORLD_SIGNAL_TTL_HOURS_BY_KIND[
+    kind.trim().toLowerCase() as keyof typeof WORLD_SIGNAL_TTL_HOURS_BY_KIND
+  ] ?? 12;
+}
+
+const HEALTH_CONTEXT_TTL_HOURS = getWorldSignalTtlHours("health");
+const CALENDAR_CONTEXT_TTL_HOURS = getWorldSignalTtlHours("calendar");
+const DEVICE_CONTEXT_TTL_HOURS = getWorldSignalTtlHours("device");
+const NOTIFICATION_CONTEXT_TTL_HOURS = getWorldSignalTtlHours("notification");
+const TIME_CONTEXT_TTL_HOURS = getWorldSignalTtlHours("time");
+const WORLD_CONTEXT_TTL_HOURS = getWorldSignalTtlHours("location");
 
 const SAFE_HEALTH_FACT_LABELS = new Map<string, string>([
   // Qualitative derived
@@ -447,9 +467,104 @@ function parseDate(value: unknown): Date | null {
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
+function worldSignalConfidence(record: Record<string, unknown>): number {
+  const direct = readNumber(record, "confidence");
+  const bps = readNumber(record, "confidenceBps");
+  return normalizeConfidence(direct ?? (bps == null ? null : bps / 1000));
+}
+
+function stableEvidenceValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableEvidenceValue);
+  const record = readRecord(value);
+  if (!record) return value;
+  return Object.fromEntries(
+    Object.entries(record)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, stableEvidenceValue(nested)]),
+  );
+}
+
+function worldSignalEvidenceKey(record: Record<string, unknown>): string {
+  return JSON.stringify({
+    summary: normalizeText(readString(record, "summary") ?? ""),
+    facts: stableEvidenceValue(record.facts),
+  });
+}
+
+/**
+ * Keeps one current record per signal kind. Within the newest five-minute
+ * cohort confidence wins and recency breaks ties. Exact corroborating records
+ * increase evidence; differing alternatives are suppressed instead of being
+ * copied into the prompt as contradictory packets.
+ */
+export function fuseWorldSignalRecordsByKind<T extends object>(
+  values: T[],
+  options: { now?: Date } = {},
+): Array<T & { fusionEvidenceCount: number; conflictSuppressedCount: number }> {
+  const now = options.now ?? new Date();
+  const grouped = new Map<string, Array<{ value: T; record: Record<string, unknown> }>>();
+  for (const value of values) {
+    const record = readRecord(value);
+    const kind = (readString(record, "kind") ?? "").toLowerCase();
+    if (!record || !kind) continue;
+    const observedAt = parseDate(record.createdAt);
+    if (
+      !observedAt ||
+      observedAt.getTime() - now.getTime() > MAX_FUTURE_CLOCK_SKEW_MS
+    ) {
+      continue;
+    }
+    const bucket = grouped.get(kind) ?? [];
+    bucket.push({ value, record });
+    grouped.set(kind, bucket);
+  }
+
+  return [...grouped.values()]
+    .map((bucket) => {
+      const latestObservedAt = Math.max(
+        ...bucket.map(({ record }) => parseDate(record.createdAt)?.getTime() ?? 0),
+      );
+      const contenders = bucket.filter(({ record }) => {
+        const observedAt = parseDate(record.createdAt)?.getTime() ?? 0;
+        return latestObservedAt - observedAt <= WORLD_SIGNAL_FUSION_WINDOW_MS;
+      });
+      const winner = [...contenders].sort((left, right) => {
+        const confidenceDelta =
+          worldSignalConfidence(right.record) - worldSignalConfidence(left.record);
+        if (confidenceDelta !== 0) return confidenceDelta;
+        return (
+          (parseDate(right.record.createdAt)?.getTime() ?? 0) -
+          (parseDate(left.record.createdAt)?.getTime() ?? 0)
+        );
+      })[0] ?? bucket[0]!;
+      const evidenceKey = worldSignalEvidenceKey(winner.record);
+      const fusionEvidenceCount = contenders.filter(
+        ({ record }) => worldSignalEvidenceKey(record) === evidenceKey,
+      ).length;
+      return {
+        ...winner.value,
+        fusionEvidenceCount: Math.max(1, fusionEvidenceCount),
+        conflictSuppressedCount: Math.max(
+          0,
+          contenders.length - fusionEvidenceCount,
+        ),
+      };
+    })
+    .sort(
+      (left, right) =>
+        (parseDate(readRecord(right)?.createdAt)?.getTime() ?? 0) -
+          (parseDate(readRecord(left)?.createdAt)?.getTime() ?? 0) ||
+        worldSignalConfidence(readRecord(right) ?? {}) -
+          worldSignalConfidence(readRecord(left) ?? {}),
+    );
+}
+
 function classifyFreshness(createdAt: Date | null, now: Date, ttlHours: number): ContextPacketFreshness {
   if (!createdAt) {
     return "unknown";
+  }
+  if (createdAt.getTime() - now.getTime() > MAX_FUTURE_CLOCK_SKEW_MS) {
+    return "stale";
   }
   const ageHours = Math.max(0, now.getTime() - createdAt.getTime()) / 3_600_000;
   if (ageHours > ttlHours) {
@@ -484,10 +599,6 @@ function qualitativeScore(value: number): string {
 
 function safeFactValue(value: unknown, options: { allowPlaintext?: boolean } = {}): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {
-    // When plaintext is allowed, show the actual number for user-owned derived data.
-    if (options.allowPlaintext) {
-      return String(Number.isInteger(value) ? value : value.toFixed(1));
-    }
     return qualitativeScore(value);
   }
   if (typeof value === "boolean") {
@@ -500,10 +611,10 @@ function safeFactValue(value: unknown, options: { allowPlaintext?: boolean } = {
   if (!compact) {
     return null;
   }
-  if (!options.allowPlaintext && RAW_HEALTH_TEXT_PATTERN.test(compact)) {
+  if (RAW_HEALTH_TEXT_PATTERN.test(compact)) {
     return null;
   }
-  return options.allowPlaintext ? compact : compact.replace(RAW_MEASUREMENT_PATTERN, "ölçüm");
+  return compact.replace(RAW_MEASUREMENT_PATTERN, "ölçüm");
 }
 
 function safeDerivedFactValue(value: unknown): string | null {
@@ -526,10 +637,6 @@ function safeDerivedFactValue(value: unknown): string | null {
 function scrubHealthSummary(value: string, options: { allowPlaintext?: boolean } = {}): string {
   if (!value.trim()) {
     return "";
-  }
-  if (options.allowPlaintext) {
-    // User explicitly allowed plaintext: only clip, do not scrub measurements.
-    return clipCompactText(value, 240);
   }
   const compact = clipCompactText(value.replace(RAW_MEASUREMENT_PATTERN, "ölçüm"), 180);
   if (!compact) {
@@ -606,7 +713,10 @@ function buildDerivedFactsSummary(
   return parts;
 }
 
-function extractWorldSignalRecords(metadata: Record<string, unknown> | undefined): Record<string, unknown>[] {
+function extractWorldSignalRecords(
+  metadata: Record<string, unknown> | undefined,
+  now: Date,
+): Record<string, unknown>[] {
   const root = readRecord(metadata);
   const compactContext = readRecord(root?.compactContext);
   const chatContext = readRecord(root?.chatContext);
@@ -649,7 +759,17 @@ function extractWorldSignalRecords(metadata: Record<string, unknown> | undefined
     }
   }
 
-  return records;
+  return fuseWorldSignalRecordsByKind(records, { now });
+}
+
+function fusedPacketEvidenceCount(
+  signal: Record<string, unknown>,
+  baseEvidenceCount: number,
+): number {
+  return Math.max(
+    baseEvidenceCount,
+    Math.round(readNumber(signal, "fusionEvidenceCount") ?? 1),
+  );
 }
 
 function mobileContextCapabilities(
@@ -657,19 +777,35 @@ function mobileContextCapabilities(
 ): Record<string, unknown> | null {
   const root = readRecord(metadata);
   const compactContext = readRecord(root?.compactContext);
-  return readRecord(compactContext?.mobileContextCapabilities);
+  const chatContext = readRecord(root?.chatContext);
+  return (
+    readRecord(compactContext?.mobileContextCapabilities) ??
+    readRecord(chatContext?.mobileContextCapabilities) ??
+    readRecord(root?.mobileContextCapabilities)
+  );
 }
 
 function isSignalAllowedByMobileCapabilities(
   kind: string,
   capabilities: Record<string, unknown> | null,
+  signal: Record<string, unknown>,
 ): boolean {
-  if (!capabilities) {
-    return true;
+  // New clients send current boolean capability truth. For legacy clients,
+  // accept only a signal that carried explicit capture-time permission for
+  // derived plaintext; an explicit false/missing kind on a present capability
+  // record still fails closed.
+  const capturePermission =
+    !capabilities &&
+    readRecord(signal.privacy)?.backendPlaintextAllowed === true;
+  if (kind === "health") {
+    return capabilities ? capabilities.healthEnabled === true : capturePermission;
   }
-  if (kind === "health") return capabilities.healthEnabled !== false;
-  if (kind === "location") return capabilities.locationEnabled !== false;
-  if (kind === "calendar") return capabilities.calendarEnabled !== false;
+  if (kind === "location") {
+    return capabilities ? capabilities.locationEnabled === true : capturePermission;
+  }
+  if (kind === "calendar") {
+    return capabilities ? capabilities.calendarEnabled === true : capturePermission;
+  }
   return true;
 }
 
@@ -806,7 +942,7 @@ function buildHealthPacket(signal: Record<string, unknown>, now: Date): ContextP
     confidence: normalizeConfidence(readNumber(signal, "confidence")),
     freshness,
     privacyClass: "health_ephemeral",
-    evidenceCount: 1 + factsSummary.length,
+    evidenceCount: fusedPacketEvidenceCount(signal, 1 + factsSummary.length),
     createdAt: createdAt?.toISOString() ?? null,
     expiresAt: expiresAt(createdAt, HEALTH_CONTEXT_TTL_HOURS),
     renderHint: "context_signal",
@@ -855,7 +991,7 @@ function buildDerivedWorldPacket(
     confidence: normalizeConfidence(readNumber(signal, "confidence")),
     freshness,
     privacyClass: options.privacyClass,
-    evidenceCount: 1 + factsSummary.length,
+    evidenceCount: fusedPacketEvidenceCount(signal, 1 + factsSummary.length),
     createdAt: createdAt?.toISOString() ?? null,
     expiresAt: expiresAt(createdAt, options.ttlHours),
     renderHint: "context_signal",
@@ -886,7 +1022,7 @@ function buildWorldPacket(signal: Record<string, unknown>, now: Date): ContextPa
     confidence: normalizeConfidence(readNumber(signal, "confidence")),
     freshness,
     privacyClass: "ephemeral",
-    evidenceCount: 1,
+    evidenceCount: fusedPacketEvidenceCount(signal, 1),
     createdAt: createdAt?.toISOString() ?? null,
     expiresAt: expiresAt(createdAt, WORLD_CONTEXT_TTL_HOURS),
     renderHint: "context_signal",
@@ -894,7 +1030,10 @@ function buildWorldPacket(signal: Record<string, unknown>, now: Date): ContextPa
   };
 }
 
-export function summarizeContextFreshness(packets: ContextPacket[]): ContextFreshnessSummary {
+export function summarizeContextFreshness(
+  packets: ContextPacket[],
+  now = new Date(),
+): ContextFreshnessSummary {
   const dates = packets
     .map((packet) => parseDate(packet.createdAt))
     .filter((date): date is Date => date != null)
@@ -905,8 +1044,8 @@ export function summarizeContextFreshness(packets: ContextPacket[]): ContextFres
     newestContextAt: newest?.toISOString() ?? null,
     oldestContextAt: oldest?.toISOString() ?? null,
     maxAgeHours:
-      newest && oldest
-        ? Number(Math.max(0, (newest.getTime() - oldest.getTime()) / 3_600_000).toFixed(2))
+      oldest
+        ? Number(Math.max(0, (now.getTime() - oldest.getTime()) / 3_600_000).toFixed(2))
         : null,
     stalePacketCount: packets.filter((packet) => packet.freshness === "stale").length,
   };
@@ -920,9 +1059,9 @@ export function buildContextPacketsFromMetadata(
   const packets: ContextPacket[] = [];
   const capabilities = mobileContextCapabilities(metadata);
 
-  for (const signal of extractWorldSignalRecords(metadata)) {
+  for (const signal of extractWorldSignalRecords(metadata, now)) {
     const kind = (readString(signal, "kind") ?? "").toLowerCase();
-    if (!isSignalAllowedByMobileCapabilities(kind, capabilities)) {
+    if (!isSignalAllowedByMobileCapabilities(kind, capabilities, signal)) {
       continue;
     }
     const packet = kind === "health"

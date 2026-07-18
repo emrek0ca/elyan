@@ -13,7 +13,7 @@ function createEnv(): AppEnv {
     LOG_LEVEL: "silent",
     APP_BASE_URL: "https://api.example.com",
     DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/elyan_backend",
-    JWT_SECRET: "change-me-please-1234",
+    JWT_SECRET: "change-me-please-1234-at-least-32",
     RUNTIME_SECRET_PEPPER: "change-me-runtime-pepper-1234",
     IYZICO_API_KEY: "sandbox-api-key",
     IYZICO_SECRET_KEY: "sandbox-secret",

@@ -69,6 +69,16 @@ export const turnMetricQualitySchema = z.object({
   verified_evidence_count: nonNegativeIntSchema.default(0),
   contested_memory_count: nonNegativeIntSchema.default(0),
   claim_self_check_applied: z.boolean().default(false),
+  context_packet_count: nonNegativeIntSchema.default(0),
+  context_packet_explicit_count: nonNegativeIntSchema.default(0),
+  context_packet_implicit_count: nonNegativeIntSchema.default(0),
+  context_packet_stale_count: nonNegativeIntSchema.default(0),
+  context_grounding_used: z.boolean().default(false),
+  connector_requested: z.boolean().default(false),
+  connector_tool_result_count: nonNegativeIntSchema.default(0),
+  connector_tool_success_count: nonNegativeIntSchema.default(0),
+  connector_result_used: z.boolean().default(false),
+  connector_error_code: z.string().trim().max(80).nullable().default(null),
 });
 
 export const turnMetricInputSchema = z.object({
@@ -292,6 +302,21 @@ export function buildTurnMetricInputFromInference(input: {
       verified_evidence_count: readNumber(input.metadata.verifiedEvidenceCount) ?? 0,
       contested_memory_count: readNumber(input.metadata.contestedMemoryCount) ?? 0,
       claim_self_check_applied: readBoolean(input.metadata.selfCheckApplied),
+      context_packet_count: readNumber(input.metadata.contextPacketCount) ?? 0,
+      context_packet_explicit_count:
+        readNumber(input.metadata.contextPacketExplicitCount) ?? 0,
+      context_packet_implicit_count:
+        readNumber(input.metadata.contextPacketImplicitCount) ?? 0,
+      context_packet_stale_count:
+        readNumber(input.metadata.contextPacketStaleCount) ?? 0,
+      context_grounding_used: readBoolean(input.metadata.answerGroundedByContext),
+      connector_requested: readBoolean(input.metadata.connectorRequested),
+      connector_tool_result_count:
+        readNumber(input.metadata.connectorToolResultCount) ?? 0,
+      connector_tool_success_count:
+        readNumber(input.metadata.connectorToolSuccessCount) ?? 0,
+      connector_result_used: readBoolean(input.metadata.connectorResultUsed),
+      connector_error_code: readString(input.metadata.connectorErrorCode),
     },
   };
 }

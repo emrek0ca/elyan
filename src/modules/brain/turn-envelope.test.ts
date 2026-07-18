@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildTurnEnvelopeResponseFormat,
+  claimsConnectorReadWithoutToolRequest,
   looksLikeTurnEnvelopeJson,
   parseTurnEnvelope,
   parseTurnEnvelopeText,
@@ -191,4 +192,78 @@ test("looksLikeLeakedToolCallText flags raw tool-call dumps, not normal prose", 
   );
   assert.equal(looksLikeLeakedToolCallText("Drive'da 3 dosya buldum: rapor, sunum, bütçe."), false);
   assert.equal(looksLikeLeakedToolCallText("[1, 2, 3] listesi hazır."), false);
+});
+
+test("claimsConnectorReadWithoutToolRequest catches fabricated mailbox reads", () => {
+  const envelope = (
+    toolRequests: Array<{ tool: string; args: Record<string, unknown> }>,
+  ) => {
+    const parsed = parseTurnEnvelope({
+      reply: { text: "x", lang: "tr", tone: "neutral" },
+      blocks: [],
+      memory_ops: [],
+      goal_ops: [],
+      follow_ups: [],
+      tool_requests: toolRequests,
+      affect: { user_mood_guess: "nötr", energy: "mid", register: "samimi" },
+      proactive_ops: [],
+    });
+    return parsed.ok ? parsed.envelope : null;
+  };
+
+  // Canlıda yakalanan gerçek uydurma cevaplar:
+  assert.equal(
+    claimsConnectorReadWithoutToolRequest(
+      envelope([]),
+      "Son e-postanızı okudum. İçeriği şu şekilde: ...",
+    ),
+    true,
+  );
+  assert.equal(
+    claimsConnectorReadWithoutToolRequest(
+      envelope([]),
+      "Gelen kutunuzu kontrol ettim, 5 yeni mesaj var.",
+    ),
+    true,
+  );
+  assert.equal(
+    claimsConnectorReadWithoutToolRequest(envelope([]), "I checked your inbox and found 3 messages."),
+    true,
+  );
+  // Gerçek araç çağrısı varsa iddia meşrudur:
+  assert.equal(
+    claimsConnectorReadWithoutToolRequest(
+      envelope([{ tool: "gmail.search", args: { query: "in:inbox", limit: 5 } }]),
+      "Son e-postanızı okudum.",
+    ),
+    false,
+  );
+  // Masum metinler tetiklenmez:
+  assert.equal(
+    claimsConnectorReadWithoutToolRequest(envelope([]), "E-posta yazmak istersen taslak hazırlayabilirim."),
+    false,
+  );
+  assert.equal(claimsConnectorReadWithoutToolRequest(null, "Son e-postanızı okudum."), false);
+});
+
+test("looksLikeConnectorPermissionAsk flags consent-seeking pre-tool text", async () => {
+  const { looksLikeConnectorPermissionAsk } = await import("./turn-envelope.js");
+  // Canlı kanıt turundaki gerçek ön-metin:
+  assert.equal(
+    looksLikeConnectorPermissionAsk(
+      "Son e-postanızı okuyabilmem için Gmail hesabınıza erişim izni gereklidir.",
+    ),
+    true,
+  );
+  assert.equal(looksLikeConnectorPermissionAsk("İzin verir misiniz?"), true);
+  assert.equal(
+    looksLikeConnectorPermissionAsk("I need your permission to access the inbox."),
+    true,
+  );
+  // Gerçek cevaplar tetiklenmez:
+  assert.equal(
+    looksLikeConnectorPermissionAsk("Gelen kutunda 3 okunmamış mesaj var."),
+    false,
+  );
+  assert.equal(looksLikeConnectorPermissionAsk("Toplantın yarın 14:00'te."), false);
 });

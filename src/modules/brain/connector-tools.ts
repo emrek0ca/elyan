@@ -64,8 +64,14 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
     semanticDescriptions: [
       "Kendi bağlı Gmail hesabımdaki gelen kutusunu kontrol et; bugün gelen, yeni veya okunmamış e-postaları listele; mesajları gönderen, tarih veya konuya göre ara.",
       "Kendi Gmail gelen kutumda okunmamış veya yeni e-posta var mı; bugün hangi mailler geldi; gelen kutumda neler birikti?",
+      // Tekil-mail ve gündelik kısa kalıplar da aramayla başlar (id'siz
+      // gmail.read çağrılamaz): "son mailimi oku" önce son maili bulmaktır.
+      // Bu kalıplar canlıda eşik altında kalıp aracı tamamen düşürüyordu.
+      "Son mailimi oku; en son gelen e-postayı bul, aç ve içeriğini söyle; son 10 mailimi listele.",
+      "Mailime bak; maillerimi kontrol et; posta kutuma bak; e-postalarımı kontrol eder misin?",
       "Check my connected Gmail inbox and list emails that arrived today, recent or unread messages, or search my mailbox by sender, date, and subject.",
       "Do I have any unread or new email in my inbox; what messages arrived today?",
+      "Read my latest email; open the most recent message and tell me what it says; check my mail.",
     ],
   },
   {
@@ -93,7 +99,10 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
       "calendar.list_events {query?:string, days?:1..60, limit?:1..20} — list upcoming primary-calendar events within the next `days` (default 7); returns title, start, end, location.",
     semanticDescriptions: [
       "Kendi bağlı takvimimde bugün, yarın veya gelecek hafta hangi toplantı, randevu ve etkinliklerin olduğunu listele; ajandamı göster.",
+      // Gündelik kısa kalıplar (gmail'de eşik altı kalıp dersinin takvim eşi):
+      "Takvimime bak; bugün toplantım var mı; yarın neyim var; bu hafta programım nasıl?",
       "List actual meetings, appointments, events, and agenda items from my connected calendar for today, tomorrow, or a requested date range.",
+      "Check my calendar; do I have any meetings today; what's on my schedule?",
     ],
   },
   {
@@ -105,7 +114,10 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
       "drive.search {query:string, limit?:1..20} — search the user's Google Drive by name/full text; returns file id, name, mimeType, modifiedTime, link.",
     semanticDescriptions: [
       "Kendi bağlı Drive hesabımda dosya, belge, tablo veya sunum ara ve eşleşen gerçek dosyaları listele.",
+      // Gündelik kısa kalıplar:
+      "Drive'ıma bak; drive'da şu dosyayı bul; son yüklediğim belgeleri göster.",
       "Search my connected Drive for an actual file, document, spreadsheet, or presentation and list matches.",
+      "Check my Drive; find that file in my Drive; show my recent documents.",
     ],
   },
   {
@@ -157,8 +169,9 @@ export function connectorRequiredScopeSets(
   ].filter((scopeSet) => scopeSet.length > 0);
 }
 
-export function connectorToolsForCapabilityGrants(
+function connectorToolsForCapabilityGrantsByPermission(
   grants: ConnectorCapabilityGrant[],
+  permission: ConnectorToolPermission,
   hasRequiredScopes: (
     provider: string,
     grantedScopes: string[],
@@ -166,7 +179,7 @@ export function connectorToolsForCapabilityGrants(
   ) => boolean,
 ): ConnectorToolContract[] {
   return CONNECTOR_TOOL_CONTRACTS.filter((entry) => {
-    if (entry.permission !== "read") {
+    if (entry.permission !== permission) {
       return false;
     }
     return grants.some((grant) => {
@@ -178,6 +191,48 @@ export function connectorToolsForCapabilityGrants(
       );
     });
   });
+}
+
+export function connectorToolsForCapabilityGrants(
+  grants: ConnectorCapabilityGrant[],
+  hasRequiredScopes: (
+    provider: string,
+    grantedScopes: string[],
+    requiredScopes: string[],
+  ) => boolean,
+): ConnectorToolContract[] {
+  return connectorToolsForCapabilityGrantsByPermission(
+    grants,
+    "read",
+    hasRequiredScopes,
+  );
+}
+
+/**
+ * Which side_effect (write) connector contracts — gmail.send,
+ * calendar.create_event — are authorized for a user's grants. These are
+ * advertised to the model so a "send this email" / "create this event" request
+ * can be drafted; the draft never reaches Google without the explicit approval
+ * gate (side_effect requests are staged, not executed inline).
+ *
+ * A write contract needs its own send/write scope (e.g. gmail.send), which is a
+ * different scope from the read scope. A user connected read-only will not see
+ * the write tool advertised, which correctly surfaces as "reconnect for send
+ * permission" instead of a silent failure at execution time.
+ */
+export function connectorWriteToolsForCapabilityGrants(
+  grants: ConnectorCapabilityGrant[],
+  hasRequiredScopes: (
+    provider: string,
+    grantedScopes: string[],
+    requiredScopes: string[],
+  ) => boolean,
+): ConnectorToolContract[] {
+  return connectorToolsForCapabilityGrantsByPermission(
+    grants,
+    "side_effect",
+    hasRequiredScopes,
+  );
 }
 
 const CONNECTOR_SEMANTIC_NEGATIVE_CANDIDATES = [
@@ -235,11 +290,21 @@ export function connectorContractsForSemanticReadHint(
   advertisedContracts: string[],
   selectedTool: string | null | undefined,
 ): string[] {
-  if (!selectedTool) return [];
-  return advertisedContracts.filter(
-    (contract) =>
-      contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1] === selectedTool,
-  );
+  // İpucu yalnız önceliklendirme sinyalidir. Üretilemediyse (eşik altı skor,
+  // worker zaman aşımı, tekil-mail gibi aday listesinde olmayan ifadeler)
+  // reklam listesi OLDUĞU GİBİ kalır: burada fail-closed olmak "Son mailimi
+  // oku" gibi meşru istekleri araçsız bırakıp "erişimim yok" cevabı üretiyordu.
+  // Yürütme zaten advertised-tool + OAuth scope + izin kapılarından geçer.
+  if (!selectedTool) return advertisedContracts;
+  const filtered = advertisedContracts.filter((contract) => {
+    const name = contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1];
+    if (name === selectedTool) return true;
+    // A read hint prioritizes one read tool, but it must never strip the
+    // side_effect (write) contracts from the advertisement: dropping gmail.send
+    // here is what left "send this email" with no draftable tool.
+    return CONNECTOR_TOOL_BY_NAME.get(name ?? "")?.permission === "side_effect";
+  });
+  return filtered.length > 0 ? filtered : advertisedContracts;
 }
 
 /**

@@ -212,12 +212,71 @@ export function looksLikeLeakedToolCallText(text: string): boolean {
   return internalRepairPromptLeak || proseToolPlan || namedInternalToolPlan;
 }
 
+const CONNECTOR_READ_CLAIM_PATTERN =
+  /\b(?:e-?postan[ıi]z?[ıi]?|mail(?:ler)?in(?:iz)?i?|gelen kutu(?:su|nu|nuzu)?|posta kutu(?:mu|nu|nuzu)?|takvimin(?:iz)?i?)\b[^.!?\n]{0,60}\b(?:okudum|kontrol ettim|bakt[ıi]m|inceledim|listeledim|özetledim|taradım)\b|\b(?:okudum|kontrol ettim|bakt[ıi]m|inceledim)\b[^.!?\n]{0,40}\b(?:e-?posta|mail|gelen kutusu|takvim)\b|\bI (?:have )?(?:read|checked|reviewed|looked at|scanned)\b[^.!?\n]{0,40}\b(?:email|inbox|mailbox|calendar|drive|files?)\b/iu;
+
+/**
+ * Metin, bağlı hesaptan okuma yapılmış İDDİASI taşıyor mu? ("mailinizi
+ * okudum", "gelen kutunuzu kontrol ettim", "I checked your inbox"...)
+ */
+export function looksLikeConnectorReadClaim(visibleText: string): boolean {
+  return CONNECTOR_READ_CLAIM_PATTERN.test(visibleText ?? "");
+}
+
+// tr-TR küçük harflenmiş metne uygulanır ("İzin" → "izin"; /i bayrağı Türkçe
+// İ'yi yakalayamıyor). Ek çekimleri (\w* — "gerekiyor/gereklidir/vermelisiniz")
+// tek gövdeyle karşılanır.
+const CONNECTOR_PERMISSION_ASK_PATTERN =
+  /\b(?:erişim(?:im)?|izin|izni|yetki|onay)\b[^.!?\n]{0,60}(?:\bgerek\w*|\blazım\b|\bşart\b|\bver(?:in\b|iniz\b|ir mi\w*|melisiniz\b))|\blütfen izin\b|\b(?:requires?|needs?)\b[^.!?\n]{0,40}\b(?:permission|authorization|access|consent)\b|\bplease (?:grant|authorize|allow)\b/u;
+
+/**
+ * Metin, bağlı hesap için İZİN/ONAY mı istiyor? ("erişim izni gereklidir",
+ * "izin verir misiniz", "requires your permission"...). Read araçları zaten
+ * yetkilidir — araç sonucu varken bu ön-metin cevaba eklenmemeli, atılmalı.
+ */
+export function looksLikeConnectorPermissionAsk(visibleText: string): boolean {
+  return CONNECTOR_PERMISSION_ASK_PATTERN.test(
+    (visibleText ?? "").toLocaleLowerCase("tr-TR"),
+  );
+}
+
+/**
+ * Uydurma bağlı-hesap okuması tespiti: zarf hiçbir araç çağrısı taşımazken
+ * görünür cevap "mailinizi okudum / gelen kutunuzu kontrol ettim" iddiası
+ * içeriyorsa true döner. Gerçek araç sonucu olan turlarda (tool_requests ya da
+ * agent_plan dolu) hiç tetiklenmez; refinement geçişlerinde çağıran atlamalı.
+ */
+export function claimsConnectorReadWithoutToolRequest(
+  envelope: TurnEnvelope | null,
+  visibleText: string,
+): boolean {
+  if (!envelope) return false;
+  const requests =
+    envelope.tool_requests.length > 0
+      ? envelope.tool_requests
+      : (envelope.agent_plan?.steps.map((step) => step.tool_request) ?? []);
+  if (requests.length > 0) return false;
+  return looksLikeConnectorReadClaim(visibleText);
+}
+
 export const TURN_ENVELOPE_SYSTEM_INSTRUCTION = [
   "Return one TurnEnvelope JSON object without markdown or hidden reasoning.",
   "Keep visible prose only in reply.text and renderable UI only in blocks.",
   "Encode explicit preferences and corrections in memory_ops; use op=forget when the user asks to forget a memory key. Use the other typed arrays for goals, follow-ups, and tools, or [] when absent.",
   "For multi-step tool tasks, emit agent_plan.v2 with explicit dependencies and evidence rules; never mark execution complete in prose.",
+  // gpt-oss ailesi zarf yerine native function-calling token'ları üretmeye
+  // meylediyor; Groq bunu "tool_use_failed" 400'üyle reddediyor. Açık yasak
+  // bu kaymayı ciddi azaltır (kalan nadir vakalar retry ile toparlanır).
+  "Never use native function calling or tool-call tokens; request tools ONLY as entries of the tool_requests array inside the JSON envelope.",
 ].join(" ");
+
+/**
+ * json_object moduna düşen modeller (json_schema desteklemeyenler) için kısa
+ * şema anayasası: zorunlu anahtarlar prompt'ta taşınır, otoriter doğrulama
+ * yine Zod parser'da kalır.
+ */
+export const TURN_ENVELOPE_COMPACT_SCHEMA_INSTRUCTION =
+  'The JSON object must contain exactly these keys: reply{text,lang,tone:"warm"|"neutral"|"technical"}, blocks[], memory_ops[], goal_ops[], follow_ups[], tool_requests[{tool,args}], affect{user_mood_guess,energy:"low"|"mid"|"high",register}, proactive_ops[]. Use [] for empty arrays.';
 
 export function buildTurnEnvelopeSystemInstruction(includeProactiveOps = false): string {
   return includeProactiveOps

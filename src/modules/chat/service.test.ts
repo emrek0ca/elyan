@@ -49,6 +49,39 @@ test("buildChatTurnAdmissionLockKey normalizes same prompt for admission dedupe"
   );
 });
 
+test("admission lock keys on the idempotency key when the client sends one", () => {
+  const base = {
+    userId: "user-1",
+    sessionId: "session-1",
+    content: "evet",
+  };
+  // Aynı anahtarla yeniden gönderim = aynı kilit (mükerrer yakalanır).
+  assert.equal(
+    buildChatTurnAdmissionLockKey({ ...base, idempotencyKey: "req-a" }),
+    buildChatTurnAdmissionLockKey({ ...base, idempotencyKey: "req-a" }),
+  );
+  // Kullanıcının bilerek tekrarladığı tur yeni anahtarla gelir = ayrı kilit,
+  // "evet"/"devam et" gibi meşru tekrarlar bloklanmaz.
+  assert.notEqual(
+    buildChatTurnAdmissionLockKey({ ...base, idempotencyKey: "req-a" }),
+    buildChatTurnAdmissionLockKey({ ...base, idempotencyKey: "req-b" }),
+  );
+  // Anahtar yoksa eski içerik-hash davranışı korunur.
+  assert.equal(
+    buildChatTurnAdmissionLockKey(base),
+    buildChatTurnAdmissionLockKey({ ...base, content: "  EVET " }),
+  );
+  // Anahtar varsa boş içerik artık kilidi düşürmez.
+  assert.notEqual(
+    buildChatTurnAdmissionLockKey({
+      ...base,
+      content: "   ",
+      idempotencyKey: "req-a",
+    }),
+    null,
+  );
+});
+
 class FakeQuery<T> {
   private readonly result: T;
   private readonly onLimit?: (value: number | undefined) => void;
@@ -249,7 +282,8 @@ function conditionUsesColumn(
 }
 
 class WorldSignalDb {
-  readonly forbiddenFilterSeen: boolean[] = [];
+  readonly deviceFilterSeen: boolean[] = [];
+  readonly sessionFilterSeen: boolean[] = [];
 
   constructor(
     private readonly rows: Array<Record<string, unknown>> = [
@@ -267,26 +301,33 @@ class WorldSignalDb {
         },
         renderHints: {},
         visibility: "assistant_internal_by_default",
-        createdAt: new Date("2030-01-01T12:00:00.000Z"),
+        createdAt: new Date(),
       },
     ],
   ) {}
 
   select() {
-    const forbiddenFilterSeen = this.forbiddenFilterSeen;
+    const deviceFilterSeen = this.deviceFilterSeen;
+    const sessionFilterSeen = this.sessionFilterSeen;
     const rows = this.rows;
     return {
       from() {
         return {
           where(condition: unknown) {
-            const hasForbiddenFilter =
-              conditionUsesColumn(condition, "device_id") ||
-              conditionUsesColumn(condition, "session_id");
-            forbiddenFilterSeen.push(hasForbiddenFilter);
+            const hasDeviceFilter = conditionUsesColumn(
+              condition,
+              "device_id",
+            );
+            const hasSessionFilter = conditionUsesColumn(
+              condition,
+              "session_id",
+            );
+            deviceFilterSeen.push(hasDeviceFilter);
+            sessionFilterSeen.push(hasSessionFilter);
             return {
               orderBy() {
                 return {
-                  limit: async () => (hasForbiddenFilter ? [] : rows),
+                  limit: async () => (hasDeviceFilter ? [] : rows),
                 };
               },
             };
@@ -433,7 +474,8 @@ test("enrichChatMetadataForRequest keeps fresh world signals user-scoped for ser
   >;
   const worldSignals = digest.worldSignals as Array<Record<string, unknown>>;
 
-  assert.deepEqual(db.forbiddenFilterSeen, [false]);
+  assert.deepEqual(db.deviceFilterSeen, [false]);
+  assert.deepEqual(db.sessionFilterSeen, [true]);
   assert.equal(worldSignals.length, 1);
   assert.equal(worldSignals[0]?.kind, "health");
   assert.match(String(worldSignals[0]?.summary ?? ""), /Enerji orta/);
@@ -504,7 +546,7 @@ test("enrichChatMetadataForRequest carries health location and calendar world si
       },
       renderHints: {},
       visibility: "assistant_internal_by_default",
-      createdAt: new Date("2030-01-01T12:00:00.000Z"),
+      createdAt: new Date(),
     },
     {
       signalId: "location-1",
@@ -526,7 +568,7 @@ test("enrichChatMetadataForRequest carries health location and calendar world si
       },
       renderHints: {},
       visibility: "assistant_internal_by_default",
-      createdAt: new Date("2030-01-01T12:01:00.000Z"),
+      createdAt: new Date(),
     },
     {
       signalId: "calendar-1",
@@ -548,7 +590,7 @@ test("enrichChatMetadataForRequest carries health location and calendar world si
       },
       renderHints: {},
       visibility: "assistant_internal_by_default",
-      createdAt: new Date("2030-01-01T12:02:00.000Z"),
+      createdAt: new Date(),
     },
   ]);
 
@@ -567,8 +609,8 @@ test("enrichChatMetadataForRequest carries health location and calendar world si
   const worldSignals = digest.worldSignals as Array<Record<string, unknown>>;
 
   assert.deepEqual(
-    worldSignals.map((signal) => signal.kind),
-    ["health", "location", "calendar"],
+    worldSignals.map((signal) => signal.kind).sort(),
+    ["calendar", "health", "location"],
   );
   assert.deepEqual(
     worldSignals.find((signal) => signal.kind === "health")?.facts,
@@ -599,7 +641,8 @@ test("enrichChatMetadataForRequest carries health location and calendar world si
       eventCount: 4,
     },
   );
-  assert.deepEqual(db.forbiddenFilterSeen, [false]);
+  assert.deepEqual(db.deviceFilterSeen, [false]);
+  assert.deepEqual(db.sessionFilterSeen, [true]);
 });
 
 test("buildChatDispatchDeliverySnapshot preserves desktop ack and lease truth", () => {

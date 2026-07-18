@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { IntentClassification, UnderstandingIntent } from "../../core/understanding/types.js";
+import { buildGeminiFreePublicOperationFrame } from "./gemini-free-tier-guard.js";
 import { callGeminiFreeStructured } from "./gemini-utility-client.js";
 
 const intents = [
@@ -58,10 +59,11 @@ export async function enhanceIntentWithGeminiFree(
   input: { userId: string; message: string; current: IntentClassification },
 ): Promise<IntentClassification> {
   const message = input.message.replace(/\s+/g, " ").trim();
+  const publicOperationFrame = buildGeminiFreePublicOperationFrame(message);
   if (
+    !publicOperationFrame ||
     message.length < 12 ||
     message.length > 2_000 ||
-    /\b(password|parola|şifre|sifre|token|secret|credential|kimlik|sağlık|saglik|adresim|telefonum|e-?postam|özel|ozel|private)\b/iu.test(message) ||
     input.current.confidence >= 0.58 ||
     input.current.privacyRisk !== "low" ||
     input.current.requiresLocalRuntime
@@ -72,7 +74,7 @@ export async function enhanceIntentWithGeminiFree(
     userId: input.userId,
     system: "Classify the user's operational intent. Return JSON only. Never infer private facts or invent a requested action.",
     payload: {
-      userRequest: message,
+      publicOperationFrame,
       deterministicIntent: input.current.primaryIntent,
       allowedIntents: intents,
     },

@@ -2969,7 +2969,12 @@ test("generateSharedBrainReply expands complete-answer budget for packaged conte
   const systemMessage = (requestedBodies[0].messages as Array<{ role: string; content: string }>).find(
     (message) => message.role === "system",
   );
-  assert.equal(systemMessage?.content.includes("use explicit packet summaries only when mentionPolicy is explicit_when_relevant"), true);
+  assert.equal(
+    systemMessage?.content.includes(
+      "explicit_when_relevant = use the actual data to answer directly",
+    ),
+    true,
+  );
   assert.equal(systemMessage?.content.includes("Greeting policy:"), false);
   assert.equal(result.metadata.contextPacketCount, 1);
   assert.equal(result.metadata.responseBudgetReason, "long_form_expanded");
@@ -4928,6 +4933,10 @@ test("generateGovernedSharedBrainReply honors a valid skillHint with attachment 
 });
 
 test("vision skill sends ephemeral image to Gemini Flash-Lite with JSON schema", async () => {
+  const store = new ReliabilityStore({
+    REDIS_URL: "",
+    RELIABILITY_REDIS_REQUIRED: false,
+  });
   const app = {
     db: new FakeDb([], []),
     config: {
@@ -4944,9 +4953,19 @@ test("vision skill sends ephemeral image to Gemini Flash-Lite with JSON schema",
       GEMINI_TEXT_MODEL: "gemini-quality",
       GEMINI_VISION_MODEL: "gemini-vision",
       GEMINI_VISION_SENSITIVE_DATA_ATTESTED: false,
+      ELYAN_GEMINI_FREE_FEATURES_ENABLED: true,
+      GEMINI_FREE_ONLY: true,
+      GEMINI_FREE_DATA_USAGE_ATTESTED: true,
+      GEMINI_FREE_MODEL_ALLOWLIST: "gemini-fast,gemini-vision",
+      GEMINI_FREE_DAILY_REQUEST_LIMIT: 200,
+      GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT: 250_000,
+      GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT: 50_000,
+      GEMINI_FREE_USER_DAILY_REQUEST_LIMIT: 25,
+      GEMINI_FREE_UTILITY_SAMPLE_PERCENT: 100,
       GROQ_API_KEY: "",
     },
     log: { info() {}, warn() {}, debug() {} },
+    services: { reliability: { store } },
   };
   const requests: Record<string, unknown>[] = [];
   const pixels = Buffer.alloc(256 * 256 * 3);
@@ -4959,9 +4978,15 @@ test("vision skill sends ephemeral image to Gemini Flash-Lite with JSON schema",
       .toBuffer()
   ).toString("base64");
 
-  const result = await withMockedFetch(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  try {
+    const result = await withMockedFetch(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
       if (url.endsWith("/api/tags")) {
         return new Response(JSON.stringify({ models: [] }), {
           status: 200,
@@ -5077,18 +5102,21 @@ test("vision skill sends ephemeral image to Gemini Flash-Lite with JSON schema",
       }),
   );
 
-  assert.equal(
-    result.metadata.skillId,
-    "vision_analysis",
-    JSON.stringify({ text: result.text, metadata: result.metadata }),
-  );
-  assert.match(result.text, /iki kişi/u);
-  assert.ok(requests.length >= 1);
-  assert.equal(requests[0]?.model, "gemini-fast");
-  assert.ok(requests[0]?.response_format);
-  const messages = requests[0]?.messages as Array<Record<string, unknown>>;
-  const content = messages.at(-1)?.content as Array<Record<string, unknown>>;
-  assert.equal(content.some((part) => part.type === "image_url"), true);
+    assert.equal(
+      result.metadata.skillId,
+      "vision_analysis",
+      JSON.stringify({ text: result.text, metadata: result.metadata }),
+    );
+    assert.match(result.text, /iki kişi/u);
+    assert.ok(requests.length >= 1);
+    assert.equal(requests[0]?.model, "gemini-fast");
+    assert.ok(requests[0]?.response_format);
+    const messages = requests[0]?.messages as Array<Record<string, unknown>>;
+    const content = messages.at(-1)?.content as Array<Record<string, unknown>>;
+    assert.equal(content.some((part) => part.type === "image_url"), true);
+  } finally {
+    await store.close();
+  }
 });
 
 test("generateGovernedSharedBrainReply does not set targetDeviceId for server-brain attachment flows without desktop intent", async () => {

@@ -185,7 +185,10 @@ import {
 import { enqueueTaskDispatch } from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
 import { canUseDesktopConnections } from "../billing/catalog.js";
-import { resolveRemoteMcpRequestedCapabilities } from "../integrations/service.js";
+import {
+  normalizeRemoteMcpSelectionMetadata,
+  resolveRemoteMcpRequest,
+} from "../integrations/service.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import {
   buildLocalRenderRecipe,
@@ -232,16 +235,47 @@ function normalizePromptEchoText(value: string | null | undefined) {
     .trim();
 }
 
+/**
+ * Görünür metin politikası. Akış hattı ile nihai hat aynı opsiyonları
+ * kullanmazsa kullanıcı akışta bir metin görüp sonra başkasına dönüştüğüne
+ * tanık olur ("cevap sonradan değişti"). Bu yüzden opsiyon artık sabit değil,
+ * her iki çağıranın da açıkça geçirdiği bir parametre.
+ */
+export type AssistantVisibleTextPolicy = {
+  allowPublicProviderReferences?: boolean;
+};
+
+/**
+ * "Cevap düzeltildi" sinyali için karşılaştırma normalizasyonu. Nihai hattaki
+ * cilalama (fazla boş satır, satır sonu boşluk) her mesajı "düzeltilmiş"
+ * göstermesin; yalnızca içerik gerçekten değiştiyse işaretle.
+ */
+export function normalizeRevisionComparableText(
+  value: string | null | undefined,
+): string {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function stripPromptEchoFromAssistantText(input: {
   prompt: string;
   responseText: string;
+  policy?: AssistantVisibleTextPolicy;
 }) {
-  const responseText = sanitizeAssistantVisibleText(input.responseText, {
+  const sanitizerOptions = {
     fallback: "",
-  }).trim();
-  const prompt = sanitizeAssistantVisibleText(input.prompt, {
-    fallback: "",
-  }).trim();
+    allowPublicProviderReferences:
+      input.policy?.allowPublicProviderReferences === true,
+  };
+  const responseText = sanitizeAssistantVisibleText(
+    input.responseText,
+    sanitizerOptions,
+  ).trim();
+  const prompt = sanitizeAssistantVisibleText(
+    input.prompt,
+    sanitizerOptions,
+  ).trim();
   if (!prompt || !responseText) {
     return responseText;
   }
@@ -286,6 +320,7 @@ function buildPromptEchoRecoveryAnswer(prompt: string) {
 export function resolveNonEchoAssistantText(input: {
   prompt: string;
   responseText: string;
+  policy?: AssistantVisibleTextPolicy;
 }) {
   const stripped = stripPromptEchoFromAssistantText(input);
   if (stripped) {
@@ -4506,8 +4541,17 @@ async function processSharedBrainChatTask(
     }
 
     // Only sanitized visible content streams to chat; provider reasoning stays internal.
+    // Akış ve nihai metin aynı politikayı paylaşır; aksi halde iki hat farklı
+    // metin üretir ve cevap tamamlanınca kullanıcının gözü önünde değişir.
+    // Grounding sinyali ancak inference metadata'sıyla kesinleştiği için akış
+    // sırasında muhafazakâr (kapalı) başlar.
+    const visibleTextPolicy: AssistantVisibleTextPolicy = {
+      allowPublicProviderReferences: false,
+    };
     let lastVisibleStreamingContent = sanitizeAssistantVisibleText(ackText, {
       fallback: ackText,
+      allowPublicProviderReferences:
+        visibleTextPolicy.allowPublicProviderReferences,
     });
 
     // Session varsa önceki mesajları DB'den yükle — inference'ı bloke etmemek için 1.5s timeout
@@ -4605,12 +4649,15 @@ async function processSharedBrainChatTask(
               delta.content,
               {
                 fallback: "",
+                allowPublicProviderReferences:
+                  visibleTextPolicy.allowPublicProviderReferences,
               },
             );
             const nonEchoVisibleContent = incomingVisibleContent
               ? stripPromptEchoFromAssistantText({
                   prompt: input.prompt,
                   responseText: incomingVisibleContent,
+                  policy: visibleTextPolicy,
                 })
               : "";
             const visibleContent =
@@ -4684,6 +4731,11 @@ async function processSharedBrainChatTask(
       }
     });
     endInferenceStage();
+    // Grounding sonucu ancak burada kesinleşir. Politikayı güncelle ki nihai
+    // metin ile akış metni aynı kurallardan geçsin.
+    visibleTextPolicy.allowPublicProviderReferences =
+      inference.metadata.webGroundingUsed === true ||
+      Number(inference.metadata.webSourceCount ?? 0) > 0;
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     const agentRunState = readAgentRunState(inference.metadata);
     if (agentRunState && agentRunState !== "completed") {
@@ -4699,6 +4751,7 @@ async function processSharedBrainChatTask(
       responseText: resolveNonEchoAssistantText({
         prompt: input.prompt,
         responseText: inference.text,
+          policy: visibleTextPolicy,
       }),
       provider: inference.provider,
       model: inference.model,
@@ -4728,6 +4781,7 @@ async function processSharedBrainChatTask(
       assistantReply: resolveNonEchoAssistantText({
         prompt: input.prompt,
         responseText: inference.text,
+          policy: visibleTextPolicy,
       }),
       intent: input.understanding.intent.primaryIntent,
       requestId: input.requestId,
@@ -4744,6 +4798,7 @@ async function processSharedBrainChatTask(
         assistantReply: resolveNonEchoAssistantText({
           prompt: input.prompt,
           responseText: inference.text,
+            policy: visibleTextPolicy,
         }),
       }).catch(() => undefined);
     }
@@ -4845,6 +4900,12 @@ async function processSharedBrainChatTask(
         payload: {
           content: visibleText,
           blocks: finalBlocks,
+          // Nihai metin akışta gösterilenden farklıysa bunu sessizce değiştirme:
+          // istemci "cevap düzeltildi" göstergesi sunabilsin. Fark kaçınılmaz
+          // olabilir (düzeltici, yarım yanıt tamamlama, blok çıkarımı ancak
+          // metin bitince bilinir) ama sessiz olmamalı.
+          revised: normalizeRevisionComparableText(visibleText) !==
+            normalizeRevisionComparableText(lastVisibleStreamingContent),
           assistantMessage: shapeAssistantMessagePayload({
             id: chatStreaming.assistantMessageId,
             role: "assistant",
@@ -5002,16 +5063,24 @@ export async function createTask(
   const prompt = getTaskPrompt(input.payload);
   const payloadMetadata = getPayloadMetadata(input.payload);
   bindAuthorizedMediaInputRefs(payloadMetadata, input.ephemeralVision);
-  const [usageAccess, effectiveRequestedCapabilities] = await Promise.all([
+  const [usageAccess, remoteMcpResolution] = await Promise.all([
     getUserUsageAccessTruth(app.db, input.userId),
     input.requestedCapabilitiesResolved
-      ? Promise.resolve(input.requestedCapabilities)
-      : resolveRemoteMcpRequestedCapabilities(app, {
+      ? Promise.resolve({
+          requestedCapabilities: input.requestedCapabilities,
+          selection: normalizeRemoteMcpSelectionMetadata(
+            payloadMetadata.remoteMcpSelection,
+          ),
+        })
+      : resolveRemoteMcpRequest(app, {
           userId: input.userId,
           prompt,
           requestedCapabilities: input.requestedCapabilities,
         }),
   ]);
+  const effectiveRequestedCapabilities =
+    remoteMcpResolution.requestedCapabilities;
+  const remoteMcpSelection = remoteMcpResolution.selection;
   const remoteMcpRequested = effectiveRequestedCapabilities.includes(
     "mcp_call_tool",
   );
@@ -5147,6 +5216,7 @@ export async function createTask(
       ...payloadMetadata,
       routeDecision,
       requestId: input.requestId,
+      ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
     },
   };
   const understanding = useDirectDesktopFastPath
@@ -5160,6 +5230,7 @@ export async function createTask(
         title: canonicalTitle,
         routeDecision,
         requestedCapabilities: routeCapabilities,
+        remoteMcpSelection: remoteMcpSelection ?? undefined,
         understandingEnvelope: understanding.envelope,
         inputRefs: (
           Array.isArray(payloadMetadata.mediaInputRefs)
@@ -5194,6 +5265,7 @@ export async function createTask(
         naturalLanguageGoal: prompt,
         workOrderSchema: desktopWorkOrder?.schema ?? null,
         structuredSteps: desktopWorkOrder?.planPreview.steps ?? null,
+        ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
       }
     : null;
   const enrichedPayload = {
@@ -5225,6 +5297,7 @@ export async function createTask(
     metadata: {
       ...payloadMetadata,
       routeDecision,
+      ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
       ...(buildQuantumTaskSnapshot({
         capabilities: routeCapabilities,
         status: "pending",

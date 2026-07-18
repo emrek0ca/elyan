@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { dialogueStates } from "../../db/schema.js";
+import { brainMemoryFacts, dialogueStates } from "../../db/schema.js";
 import type { AssistantMessageBlock } from "../chat/message-blocks.js";
 import type { AgentToolResult } from "./tool-registry.js";
 import { resolveCanonicalMemoryKey } from "./memory-key-policy.js";
@@ -527,6 +527,8 @@ export function applyCanonicalDialogueStateToMetadata(input: {
   metadata?: Record<string, unknown>;
   snapshot: DialogueStateSnapshot;
   userMessage?: string;
+  /** Kullanıcı düzeyinde kalıcı etkileşim derinliği (oturumlar arası rapport). */
+  userInteractionCount?: number;
 }): Record<string, unknown> {
   const existing = input.metadata ?? {};
   const compactContext = readRecord(existing.compactContext) ?? {};
@@ -562,6 +564,13 @@ export function applyCanonicalDialogueStateToMetadata(input: {
       },
       lastAssistantBlocksDigest: state.lastAssistantDigest,
       conversationDynamics: state.conversationDynamics,
+      // Biriken duygusal duruş: moodTrend/register/turnCount + kullanıcı-düzeyi
+      // kalıcı etkileşim derinliğinden türetilir ve downstream (context-builder,
+      // generation) yapısal olarak tüketir. Ayrı bir sistem değil, aynı state'in
+      // davranışa dönmüş hâli.
+      affectiveStance: deriveAffectiveStance(state, {
+        userInteractionCount: input.userInteractionCount,
+      }),
       userMemory: state.userMemory,
     },
   };
@@ -756,6 +765,282 @@ export function mergeDialogueState(input: {
         : previous.memoryRefs,
     }),
   );
+}
+
+// ── Affective stance ─────────────────────────────────────────────────────────
+// Elyan'ın "ruhu" ayrı bir sistem değil: zaten biriken dialogue-state alanlarını
+// (moodTrend geçmişi, userRegister, turnCount) kalıcı bir duygusal duruşa
+// indirger. Model her turda duyguyu sıfırdan tahmin edip unutmak yerine, oturum
+// boyunca taşınan bir ruh haline ve BÜYÜYEN bir yakınlığa göre davranır. Bu saf
+// türetme hem bağlam direktifini hem de generation sıcaklığını besler (yalnız
+// prompt değil, davranışsal dial).
+
+export type AffectiveMood =
+  | "positive"
+  | "frustrated"
+  | "anxious"
+  | "sad"
+  | "tired"
+  | "curious"
+  | "neutral";
+
+export type AffectiveStance = {
+  mood: AffectiveMood;
+  energy: "low" | "mid" | "high";
+  register: string | null;
+  /** 0..1, oturum sürdükçe doygunlaşarak büyüyen kurulmuş yakınlık. */
+  rapport: number;
+  /** 0..1, son turlardaki ruh hali oynaklığı (istikrar sinyali). */
+  volatility: number;
+  /** Modele giden tek, biriken-durumdan türetilmiş yapısal direktif. */
+  directive: string;
+};
+
+const AFFECTIVE_MOOD_KEYWORDS: Array<[AffectiveMood, RegExp]> = [
+  [
+    "frustrated",
+    /sinir|öfke|ofke|kızg|kizg|hayal\s*kır|hayal\s*kir|bık|bik|frustrat|angry|annoy|upset|irritat/i,
+  ],
+  [
+    "anxious",
+    /kayg|endişe|endise|stres|gergin|panik|anxious|worried|worry|stress|nervous|overwhelm/i,
+  ],
+  [
+    "sad",
+    /üzg|uzg|hüzün|huzun|mutsuz|kötü\s*his|kotu\s*his|sad|down|unhappy|depress|lonely|yalnız|yalniz/i,
+  ],
+  ["tired", /yorgun|bitkin|bitap|tükendi|tukendi|tired|exhaust|burn.?out|drained/i],
+  [
+    "positive",
+    /mutlu|sevin|keyif|heyecan|memnun|harika|müthiş|muthis|happy|excited|glad|great|joy|positive|pleased/i,
+  ],
+  ["curious", /merak|ilgi|öğrenmek\s*ist|ogrenmek\s*ist|curious|interested|intrigued/i],
+];
+
+function classifyMood(raw: string): AffectiveMood {
+  const value = raw.trim().toLowerCase();
+  if (!value || value === "unknown" || value === "neutral") return "neutral";
+  for (const [mood, pattern] of AFFECTIVE_MOOD_KEYWORDS) {
+    if (pattern.test(value)) return mood;
+  }
+  return "neutral";
+}
+
+/**
+ * Fold the persisted dialogue state into a stable affective stance. Pure over
+ * existing fields — no new persistence. Returns null only when there is nothing
+ * to say (fresh, moodless session), so callers keep their neutral default.
+ */
+export function deriveAffectiveStance(
+  state: DialogueState,
+  options: { userInteractionCount?: number } = {},
+): AffectiveStance | null {
+  const parsed = dialogueStateSchema.parse(state ?? {});
+  const trend = parsed.moodTrend; // newest-first
+  // Rapport, oturum içi turlarla kullanıcı düzeyinde KALICI etkileşim
+  // derinliğini birleştirir: dönen bir kullanıcı, yeni oturuma sıfırdan değil,
+  // önceki oturumlarda kurulmuş yakınlıkla başlar. userInteractionCount yoksa
+  // (eski çağrı) yalnız oturum turları kullanılır — davranış değişmez.
+  const persistentDepth = Math.max(0, Math.round(options.userInteractionCount ?? 0));
+  const turnCount = parsed.conversationDynamics.turnCount + persistentDepth;
+  const register = parsed.userRegister ? clip(parsed.userRegister, 60) : null;
+
+  // Recency-weighted mood vote over the recent window (newest weighs most).
+  const window = trend.slice(0, 6);
+  const votes = new Map<AffectiveMood, number>();
+  window.forEach((item, index) => {
+    const mood = classifyMood(item.mood);
+    if (mood === "neutral") return;
+    votes.set(mood, (votes.get(mood) ?? 0) + 1 / (index + 1));
+  });
+  let mood: AffectiveMood = "neutral";
+  let best = 0;
+  for (const [candidate, score] of votes) {
+    if (score > best) {
+      best = score;
+      mood = candidate;
+    }
+  }
+
+  const energy =
+    window.find((item) => classifyMood(item.mood) !== "neutral")?.energy ??
+    window[0]?.energy ??
+    "mid";
+
+  // Volatility: fraction of adjacent mood changes across the recent window.
+  let changes = 0;
+  for (let i = 1; i < window.length; i += 1) {
+    if (classifyMood(window[i].mood) !== classifyMood(window[i - 1].mood)) {
+      changes += 1;
+    }
+  }
+  const volatility = window.length > 1 ? changes / (window.length - 1) : 0;
+
+  // Rapport grows with sustained interaction and saturates — the concrete
+  // backing for "grows closer over time" instead of a hollow prompt claim.
+  const rapport = turnCount > 0 ? turnCount / (turnCount + 8) : 0;
+
+  if (mood === "neutral" && rapport < 0.2 && !register) {
+    return null;
+  }
+
+  return {
+    mood,
+    energy,
+    register,
+    rapport,
+    volatility,
+    directive: buildStanceDirective({ mood, energy, rapport, volatility }),
+  };
+}
+
+function buildStanceDirective(input: {
+  mood: AffectiveMood;
+  energy: AffectiveStance["energy"];
+  rapport: number;
+  volatility: number;
+}): string {
+  const parts: string[] = [];
+  const close = input.rapport >= 0.55;
+  const familiar = input.rapport >= 0.3;
+
+  switch (input.mood) {
+    case "frustrated":
+      parts.push(
+        "Kullanıcı son turlarda gergin/zorlanıyor: önce kısa ve insanca kabullen, savunmaya geçme ya da fazla özür dizme; sonra doğrudan çöz",
+      );
+      break;
+    case "anxious":
+      parts.push(
+        "Kullanıcıda kaygı/stres sinyali var: sakinleştirici, net ve adımlı ol; belirsizliği azalt, yükünü hafiflet",
+      );
+      break;
+    case "sad":
+      parts.push(
+        "Kullanıcı düşük/hüzünlü: önce içtenlikle yanında ol, aceleyle çözüme atlama; sıcak ve yumuşak bir tonla eşlik et",
+      );
+      break;
+    case "tired":
+      parts.push(
+        "Kullanıcı yorgun: kısa tut, gereksiz detaydan kaçın, en pratik yolu ver",
+      );
+      break;
+    case "positive":
+      parts.push(
+        "Hava olumlu: enerjisine eşlik et, rahat ve canlı ol, yeri gelirse hafif espriye açık",
+      );
+      break;
+    case "curious":
+      parts.push(
+        "Kullanıcı meraklı: öğretici ol ama boğma; bir adım ötesini açacak küçük bir kanca bırak",
+      );
+      break;
+    default:
+      parts.push("Sıcak, doğal ve olgun bir arkadaş gibi konuş");
+  }
+
+  if (close) {
+    parts.push(
+      "kurulu yakınlık yüksek: samimi ve senli-benli ol, ismini doğal kullan, resmiyeti bırak",
+    );
+  } else if (familiar) {
+    parts.push("tanışıklık oturmuş: içten ol ama abartma");
+  }
+
+  if (input.volatility >= 0.6) {
+    parts.push("ruh hali dalgalı: dengeli ve istikrarlı dur, ani ton değişimi yapma");
+  }
+
+  parts.push("bu iç sinyali asla açıkça söyleme");
+  return parts.join("; ") + ".";
+}
+
+// ── User-level persistent relationship depth ─────────────────────────────────
+// Kümülatif etkileşim derinliği, mevcut brain_memory_facts tablosunda tek bir
+// canonical satırda tutulur (yeni tablo yok). Oturumlar arası büyüyen yakınlığın
+// kaynağı budur; rapport'a userInteractionCount olarak beslenir.
+const RELATIONSHIP_DEPTH_KEY = "relationship_depth";
+
+export async function readRelationshipDepthOnDb(
+  db: DialogueDb,
+  userId: string,
+): Promise<number> {
+  try {
+    const rows = await db
+      .select({ value: brainMemoryFacts.value })
+      .from(brainMemoryFacts)
+      .where(
+        and(
+          eq(brainMemoryFacts.userId, userId),
+          eq(brainMemoryFacts.canonicalKey, RELATIONSHIP_DEPTH_KEY),
+          eq(brainMemoryFacts.lifecycleStatus, "active"),
+          eq(brainMemoryFacts.conflictStatus, "active"),
+        ),
+      )
+      .orderBy(desc(brainMemoryFacts.updatedAt))
+      .limit(1);
+    const parsed = Number.parseInt(rows[0]?.value ?? "0", 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export async function readRelationshipDepth(
+  app: FastifyInstance,
+  userId: string,
+): Promise<number> {
+  return readRelationshipDepthOnDb(app.db, userId);
+}
+
+/** Best-effort +1 to the user's lifetime interaction depth. Never throws. */
+export async function bumpRelationshipDepthOnDb(
+  db: DialogueDb,
+  userId: string,
+): Promise<void> {
+  try {
+    const rows = await db
+      .select({ id: brainMemoryFacts.id, value: brainMemoryFacts.value })
+      .from(brainMemoryFacts)
+      .where(
+        and(
+          eq(brainMemoryFacts.userId, userId),
+          eq(brainMemoryFacts.canonicalKey, RELATIONSHIP_DEPTH_KEY),
+          eq(brainMemoryFacts.lifecycleStatus, "active"),
+          eq(brainMemoryFacts.conflictStatus, "active"),
+        ),
+      )
+      .orderBy(desc(brainMemoryFacts.updatedAt))
+      .limit(1);
+    const existing = rows[0];
+    if (existing) {
+      const current = Number.parseInt(existing.value ?? "0", 10);
+      const next = Math.min((Number.isFinite(current) ? current : 0) + 1, 1_000_000);
+      await db
+        .update(brainMemoryFacts)
+        .set({ value: String(next), updatedAt: new Date() })
+        .where(eq(brainMemoryFacts.id, existing.id));
+      return;
+    }
+    await db.insert(brainMemoryFacts).values({
+      userId,
+      scope: "user",
+      factType: "semantic",
+      canonicalKey: RELATIONSHIP_DEPTH_KEY,
+      key: RELATIONSHIP_DEPTH_KEY,
+      value: "1",
+      sourceKind: "relationship_meter",
+    });
+  } catch {
+    /* warmth counter is best-effort; never block a turn on it */
+  }
+}
+
+export async function bumpRelationshipDepth(
+  app: FastifyInstance,
+  userId: string,
+): Promise<void> {
+  return bumpRelationshipDepthOnDb(app.db, userId);
 }
 
 export async function readDialogueState(
