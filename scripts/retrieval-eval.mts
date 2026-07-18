@@ -67,6 +67,13 @@ async function main() {
   const app = await buildApp();
   const docIdByKey = new Map<string, string>();
   try {
+    // Eval sahibi: FK için gerçek bir users satırı gerekir. Giriş yapılamayan
+    // (rastgele hash) sabit kimlikli sentetik kullanıcı; idempotent.
+    await app.db.execute(sql`
+      insert into users (id, email, password_hash)
+      values (${EVAL_USER_ID}, 'retrieval-eval@internal.elyan.invalid', ${`eval-locked-${randomUUID()}`})
+      on conflict (id) do nothing
+    `);
     // Eski eval kalıntılarını temizle (idempotent koşum).
     await app.db.execute(sql`delete from knowledge_chunks where owner_user_id = ${EVAL_USER_ID}`);
     await app.db.execute(sql`delete from knowledge_documents where owner_user_id = ${EVAL_USER_ID}`);
@@ -77,7 +84,7 @@ async function main() {
       const contentHash = createHash("sha256").update(doc.content).digest("hex");
       await app.db.execute(sql`
         insert into knowledge_documents (id, owner_user_id, scope, source_type, title, summary, status, content_hash, metadata, created_at, updated_at)
-        values (${documentId}, ${EVAL_USER_ID}, 'user', 'note', ${doc.title}, ${doc.title}, 'ready', ${contentHash}, '{"evalSet":"retrieval-v1"}', now(), now())
+        values (${documentId}, ${EVAL_USER_ID}, 'user', 'manual', ${doc.title}, ${doc.title}, 'ready', ${contentHash}, '{"evalSet":"retrieval-v1"}', now(), now())
       `);
       await app.db.execute(sql`
         insert into knowledge_chunks (id, document_id, owner_user_id, scope, ordinal, content, token_estimate, metadata, created_at)
