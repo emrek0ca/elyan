@@ -21,9 +21,11 @@ import {
   executeCalendarCreateEvent,
   executeCalendarListEvents,
   executeDriveSearch,
+  executeGithubSearch,
   executeGmailRead,
   executeGmailSearch,
   executeGmailSend,
+  executeNotionSearch,
 } from "./connector-tools.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
@@ -170,6 +172,14 @@ const calendarListArgsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(10),
 });
 const driveSearchArgsSchema = z.object({
+  query: z.string().trim().max(240).default(""),
+  limit: z.coerce.number().int().min(1).max(20).default(10),
+});
+const notionSearchArgsSchema = z.object({
+  query: z.string().trim().max(240).default(""),
+  limit: z.coerce.number().int().min(1).max(20).default(10),
+});
+const githubSearchArgsSchema = z.object({
   query: z.string().trim().max(240).default(""),
   limit: z.coerce.number().int().min(1).max(20).default(10),
 });
@@ -609,6 +619,38 @@ const toolDefinitions = [
     argsSchema: driveSearchArgsSchema,
     async execute(app, context, args) {
       return executeDriveSearch(app, context.userId, args);
+    },
+  },
+  {
+    name: "notion.search",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 12_000,
+    outputSchema: connectorListOutputSchema,
+    argAliases: {
+      query: ["q", "search", "text", "title", "keywords"],
+      limit: ["max", "max_results", "maxResults", "count", "n", "page_size"],
+    },
+    allowEmptyArgsFallback: true,
+    argsSchema: notionSearchArgsSchema,
+    async execute(app, context, args) {
+      return executeNotionSearch(app, context.userId, args);
+    },
+  },
+  {
+    name: "github.search",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 12_000,
+    outputSchema: connectorListOutputSchema,
+    argAliases: {
+      query: ["q", "search", "text", "keywords"],
+      limit: ["max", "max_results", "maxResults", "count", "n", "per_page"],
+    },
+    allowEmptyArgsFallback: true,
+    argsSchema: githubSearchArgsSchema,
+    async execute(app, context, args) {
+      return executeGithubSearch(app, context.userId, args);
     },
   },
   {

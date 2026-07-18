@@ -390,3 +390,17 @@ test("executeAgentTool: bozuk gmail.search args'ı invalid_tool_args üretmez", 
   // kritik olan sözleşme hatasının kullanıcıya sızmaması.
   assert.notEqual(result.error?.code, "invalid_tool_args");
 });
+
+test("notion.search ve github.search boş args ve alias'larla çözülür", () => {
+  assert.deepEqual(readCanonicalAgentToolArgs("notion.search", {}), {
+    query: "",
+    limit: 10,
+  });
+  assert.deepEqual(
+    readCanonicalAgentToolArgs("github.search", {
+      q: "is:open author:@me",
+      per_page: 5,
+    }),
+    { query: "is:open author:@me", limit: 5 },
+  );
+});

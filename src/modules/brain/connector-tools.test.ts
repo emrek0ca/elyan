@@ -322,3 +322,30 @@ test("connector writes stage a durable task-bound approval without process state
 // ── Notion + GitHub kataloğa bağlandı ────────────────────────────────
 // integration_connections'ta connected duran notion/github hesapları katalogda
 // araç taşımıyordu — bağlı hesap beyne bağlanmamıştı.
+
+test("notion.search ve github.search read sözleşmesi olarak kataloğa girer", () => {
+  const names = CONNECTOR_TOOL_CONTRACTS.map((entry) => entry.name);
+  assert.ok(names.includes("notion.search"));
+  assert.ok(names.includes("github.search"));
+  assert.equal(isConnectorTool("notion.search"), true);
+  assert.equal(isConnectorTool("github.search"), true);
+});
+
+test("scope'suz notion/github grant'ları read araçlarını reklam eder", () => {
+  const advertised = connectorToolsForCapabilityGrants(
+    [
+      { provider: "notion", capabilities: ["notion"], scopes: [] },
+      {
+        provider: "github",
+        capabilities: ["github"],
+        scopes: ["read:user", "repo", "user:email"],
+      },
+    ],
+    (_provider, granted, required) =>
+      required.every((scope) => granted.includes(scope)),
+  ).map((entry) => entry.name);
+  assert.ok(advertised.includes("notion.search"));
+  assert.ok(advertised.includes("github.search"));
+  // Google araçları scope yoksa reklam edilmez — grant sınırı korunuyor.
+  assert.equal(advertised.includes("gmail.search"), false);
+});

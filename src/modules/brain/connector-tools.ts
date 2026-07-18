@@ -125,6 +125,34 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
     ],
   },
   {
+    name: "notion.search",
+    capability: "notion",
+    permission: "read",
+    requiredScopes: [],
+    contract:
+      "notion.search {query?:string, limit?:1..20} — search the user's connected Notion workspace pages and databases by title/text (empty query lists recently edited); returns page title, type, last edited time, link.",
+    semanticDescriptions: [
+      "Notion'da ara; Notion notlarıma bak; Notion sayfalarımda şunu bul; Notion'daki dokümanlarımı listele; not defterime bak.",
+      "Notion çalışma alanımda geçen hafta düzenlediğim sayfalar hangileri; şu konuyla ilgili Notion sayfam var mı?",
+      "Search my connected Notion workspace pages and databases; find that note in Notion; list my recently edited Notion pages.",
+      "Check my Notion; what pages do I have about this topic?",
+    ],
+  },
+  {
+    name: "github.search",
+    capability: "github",
+    permission: "read",
+    requiredScopes: [],
+    contract:
+      'github.search {query?:string, limit?:1..20} — search GitHub issues/PRs involving the user (GitHub search syntax; empty query means "involves:@me is:open" sorted by update); returns title, repo, state, updated time, link.',
+    semanticDescriptions: [
+      "GitHub'da işlerime bak; açık PR'larımı listele; issue'larımı göster; bana atanan GitHub işleri neler; pull request durumum ne?",
+      "GitHub'da şu konuyla ilgili issue ara; repomdaki açık işleri getir.",
+      "List my open GitHub pull requests and issues; what GitHub work involves me; check my assigned issues.",
+      "Search GitHub issues and pull requests connected to my account.",
+    ],
+  },
+  {
     name: "gmail.send",
     capability: "gmail",
     permission: "side_effect",
@@ -167,9 +195,14 @@ export function connectorToolsForCapabilities(
 export function connectorRequiredScopeSets(
   contract: ConnectorToolContract,
 ): string[][] {
-  return [contract.requiredScopes, ...(contract.alternativeScopeSets ?? [])].filter(
-    (scopeSet) => scopeSet.length > 0,
-  );
+  const scopeSets = [
+    contract.requiredScopes,
+    ...(contract.alternativeScopeSets ?? []),
+  ].filter((scopeSet) => scopeSet.length > 0);
+  // Scope kavramı olmayan sağlayıcılar (Notion; GitHub token'ı bağlantıda
+  // verilen kapsamla gelir): boş küme "ek scope şartı yok" demektir. Boş
+  // listeye indirgemek bu araçları "asla yetkili değil"e çeviriyordu.
+  return scopeSets.length > 0 ? scopeSets : [[]];
 }
 
 function connectorToolsForCapabilityGrantsByPermission(
@@ -874,4 +907,157 @@ export function describeConnectorWriteDraft(
     };
   }
   return null;
+}
+
+// ── Notion + GitHub read executors ───────────────────────────────────
+// Aynı resolveToken/capability-grant kapılarından geçer; salt-okunur.
+// integration_connections'ta notion/github "connected" olduğu hâlde katalog
+// yalnız Google araçlarını taşıyordu — bağlı hesaplar beyne bağlanmamıştı.
+
+function textOf(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+async function notionRequest(
+  accessToken: string,
+  url: string,
+  body: Record<string, unknown>,
+  timeoutMs = 10_000,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(url, {
+    method: "POST",
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "Notion-Version": "2022-06-28",
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  if (!response.ok) {
+    const message =
+      typeof payload.message === "string"
+        ? payload.message
+        : `Notion API request failed (${response.status})`;
+    throw Object.assign(new Error(message), {
+      code:
+        response.status === 401 || response.status === 403
+          ? "connector_auth_required"
+          : "connector_request_failed",
+    });
+  }
+  return payload;
+}
+
+function notionEntryTitle(entry: Record<string, unknown>): string {
+  if (entry.object === "database" && Array.isArray(entry.title)) {
+    const joined = (entry.title as Array<Record<string, unknown>>)
+      .map((part) => textOf(part.plain_text))
+      .join("");
+    if (joined.trim()) return joined.trim();
+  }
+  const properties =
+    entry.properties && typeof entry.properties === "object" && !Array.isArray(entry.properties)
+      ? (entry.properties as Record<string, unknown>)
+      : {};
+  for (const property of Object.values(properties)) {
+    const record =
+      property && typeof property === "object" && !Array.isArray(property)
+        ? (property as Record<string, unknown>)
+        : null;
+    if (record?.type === "title" && Array.isArray(record.title)) {
+      const joined = (record.title as Array<Record<string, unknown>>)
+        .map((part) => textOf(part.plain_text))
+        .join("");
+      if (joined.trim()) return joined.trim();
+    }
+  }
+  return "(başlıksız)";
+}
+
+export async function executeNotionSearch(
+  app: FastifyInstance,
+  userId: string,
+  args: { query: string; limit: number },
+): Promise<Record<string, unknown>> {
+  const token = await resolveToken(
+    app,
+    userId,
+    CONNECTOR_TOOL_BY_NAME.get("notion.search")!,
+  );
+  const payload = await notionRequest(token, "https://api.notion.com/v1/search", {
+    ...(args.query.trim() ? { query: args.query.trim() } : {}),
+    page_size: args.limit,
+    sort: { direction: "descending", timestamp: "last_edited_time" },
+  });
+  const entries = Array.isArray(payload.results)
+    ? (payload.results as Record<string, unknown>[]).slice(0, args.limit)
+    : [];
+  const results = entries.map((entry) => ({
+    title: clip(notionEntryTitle(entry), 240),
+    kind: entry.object === "database" ? "database" : "page",
+    updatedAt: textOf(entry.last_edited_time),
+    url: textOf(entry.url),
+  }));
+  return { query: args.query, resultCount: results.length, results };
+}
+
+export async function executeGithubSearch(
+  app: FastifyInstance,
+  userId: string,
+  args: { query: string; limit: number },
+): Promise<Record<string, unknown>> {
+  const token = await resolveToken(
+    app,
+    userId,
+    CONNECTOR_TOOL_BY_NAME.get("github.search")!,
+  );
+  const query = args.query.trim() || "involves:@me is:open";
+  const url = new URL("https://api.github.com/search/issues");
+  url.searchParams.set("q", query);
+  url.searchParams.set("per_page", String(args.limit));
+  url.searchParams.set("sort", "updated");
+  const response = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(10_000),
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      // GitHub API, User-Agent başlıksız istekleri 403 ile reddeder.
+      "User-Agent": "elyan-backend",
+    },
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  if (!response.ok) {
+    const message =
+      typeof payload.message === "string"
+        ? payload.message
+        : `GitHub API request failed (${response.status})`;
+    throw Object.assign(new Error(message), {
+      code:
+        response.status === 401 || response.status === 403
+          ? "connector_auth_required"
+          : "connector_request_failed",
+    });
+  }
+  const items = Array.isArray(payload.items)
+    ? (payload.items as Record<string, unknown>[]).slice(0, args.limit)
+    : [];
+  const results = items.map((item) => ({
+    title: clip(item.title, 240),
+    repo: textOf(item.repository_url).split("/repos/").pop() ?? "",
+    state: textOf(item.state),
+    kind: item.pull_request ? "pull_request" : "issue",
+    updatedAt: textOf(item.updated_at),
+    url: textOf(item.html_url),
+  }));
+  return { query, resultCount: results.length, results };
 }
