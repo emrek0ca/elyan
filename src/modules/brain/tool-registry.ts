@@ -28,6 +28,14 @@ import {
   executeNotionSearch,
 } from "./connector-tools.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import {
+  DEFAULT_USER_APPROVAL_MODE,
+  decideUserToolApproval,
+  type ApprovalToolIdempotency,
+  type ApprovalToolScope,
+  type UserApprovalMode,
+  type UserToolApprovalDecision,
+} from "../approval-policy/policy.js";
 
 export type AgentToolPermission = "read" | "write" | "side_effect";
 
@@ -43,6 +51,8 @@ export type AgentToolContext = {
   workload: SharedBrainWorkload;
   allowStateWrites?: boolean;
   allowSideEffects?: boolean;
+  approvalMode?: UserApprovalMode;
+  approvalGranted?: boolean;
 };
 
 export type AgentToolResult = {
@@ -59,7 +69,8 @@ type AgentToolDefinition<TArgs extends z.ZodTypeAny> = {
   permission: AgentToolPermission;
   outputSchema?: z.ZodType<Record<string, unknown>>;
   timeoutMs?: number;
-  idempotency?: "read_only" | "idempotent_write" | "non_idempotent";
+  idempotency?: ApprovalToolIdempotency;
+  approvalScope?: ApprovalToolScope;
   /**
    * Model kaynaklı yaygın anahtar varyantları (q→query, max_results→limit).
    * Kanonik anahtar yoksa alias'ın değeri kopyalanır; şema gevşemez, parse
@@ -458,7 +469,8 @@ const toolDefinitions = [
   {
     name: "memory.write",
     permission: "write",
-    idempotency: "non_idempotent",
+    idempotency: "internal_state_write",
+    approvalScope: "internal_state",
     timeoutMs: 5_000,
     outputSchema: memoryWriteOutputSchema,
     argsSchema: memoryWriteArgsSchema,
@@ -514,7 +526,8 @@ const toolDefinitions = [
   {
     name: "goals.update",
     permission: "write",
-    idempotency: "non_idempotent",
+    idempotency: "internal_state_write",
+    approvalScope: "internal_state",
     timeoutMs: 5_000,
     outputSchema: goalOutputSchema,
     argsSchema: goalsUpdateArgsSchema,
@@ -695,7 +708,8 @@ export type AgentToolMetadata = {
   name: string;
   permission: AgentToolPermission;
   timeoutMs: number;
-  idempotency: "read_only" | "idempotent_write" | "non_idempotent";
+  idempotency: ApprovalToolIdempotency;
+  approvalScope: ApprovalToolScope;
   parallelSafe: boolean;
 };
 
@@ -708,8 +722,24 @@ export function getAgentToolMetadata(name: string): AgentToolMetadata | null {
     permission: tool.permission,
     timeoutMs: Math.max(100, Math.min(tool.timeoutMs ?? 8_000, 30_000)),
     idempotency,
+    approvalScope: tool.approvalScope ?? "user_action",
     parallelSafe: tool.permission === "read" && idempotency === "read_only",
   };
+}
+
+export function decideAgentToolApproval(input: {
+  tool: string;
+  mode?: UserApprovalMode;
+  explicitApproval?: boolean;
+}): UserToolApprovalDecision {
+  const metadata = getAgentToolMetadata(input.tool);
+  return decideUserToolApproval({
+    mode: input.mode ?? DEFAULT_USER_APPROVAL_MODE,
+    permission: metadata?.permission,
+    idempotency: metadata?.idempotency,
+    scope: metadata?.approvalScope,
+    explicitApproval: input.explicitApproval,
+  });
 }
 
 /**
@@ -812,6 +842,16 @@ export async function executeAgentTool(
   }
   if (tool.permission === "write" && context.allowStateWrites !== true) {
     return stateWriteBlocked(tool);
+  }
+  const approvalDecision = decideAgentToolApproval({
+    tool: tool.name,
+    mode: context.approvalMode,
+    explicitApproval:
+      context.approvalGranted === true ||
+      (tool.permission === "side_effect" && context.allowSideEffects === true),
+  });
+  if (approvalDecision.requiresApproval) {
+    return sideEffectBlocked(tool);
   }
   try {
     const normalizedArgs = applyArgAliases(

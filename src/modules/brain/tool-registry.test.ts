@@ -145,6 +145,7 @@ test("tool registry exposes timeout, idempotency and parallel safety", () => {
     permission: "read",
     timeoutMs: 7_000,
     idempotency: "read_only",
+    approvalScope: "user_action",
     parallelSafe: true,
   });
   assert.deepEqual(getAgentToolMetadata("web.fetch_url"), {
@@ -152,10 +153,12 @@ test("tool registry exposes timeout, idempotency and parallel safety", () => {
     permission: "read",
     timeoutMs: 8_000,
     idempotency: "read_only",
+    approvalScope: "user_action",
     parallelSafe: true,
   });
   assert.equal(getAgentToolMetadata("memory.write")?.parallelSafe, false);
-  assert.equal(getAgentToolMetadata("memory.write")?.idempotency, "non_idempotent");
+  assert.equal(getAgentToolMetadata("memory.write")?.idempotency, "internal_state_write");
+  assert.equal(getAgentToolMetadata("memory.write")?.approvalScope, "internal_state");
 });
 
 test("executeAgentTool can fetch URL context as a read-only tool", async () => {

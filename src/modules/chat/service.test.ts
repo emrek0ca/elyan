@@ -925,6 +925,12 @@ test("listChatSessionMessages returns the latest page first and keeps chronologi
           userId: "user-1",
           role: "assistant",
           content: "Merhaba",
+          metadata: {
+            revision: {
+              revised: true,
+              previousContent: "İlk cevap.",
+            },
+          },
           createdAt: new Date("2030-01-01T12:01:00.000Z"),
           updatedAt: new Date("2030-01-01T12:01:00.000Z"),
         },
@@ -956,6 +962,12 @@ test("listChatSessionMessages returns the latest page first and keeps chronologi
   assert.equal(firstBlock?.visibility, "user_visible");
   assert.ok(firstBlock?.stableBlockId);
   assert.ok(firstBlock?.cacheDigest);
+  assert.deepEqual(page.messages[0]?.metadata, {
+    revision: {
+      revised: true,
+      previousContent: "İlk cevap.",
+    },
+  });
   assert.equal(page.hasMore, true);
   assert.ok(page.nextCursor);
 });

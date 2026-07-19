@@ -409,6 +409,8 @@ test("composeAssistantMessageBlocks preserves task trace blocks before the text 
         taskId: "task-1",
         status: "running",
         title: "Görev yürütülüyor",
+        routeReason:
+          "Elyan bunu sohbet olarak işledi çünkü istek masaüstü erişimi gerektirmiyor.",
         steps: [
           {
             id: "intent",
@@ -422,8 +424,40 @@ test("composeAssistantMessageBlocks preserves task trace blocks before the text 
 
   assert.equal(blocks.length, 2);
   assert.equal(blocks[0]?.type, "task_trace");
+  assert.equal(
+    blocks[0]?.type === "task_trace" ? blocks[0].routeReason : undefined,
+    "Elyan bunu sohbet olarak işledi çünkü istek masaüstü erişimi gerektirmiyor.",
+  );
   assert.equal(blocks[1]?.type, "text");
   assert.equal(blocks[1]?.markdown, "Belge hazır.");
+});
+
+test("composeAssistantMessageBlocks drops protected task route rationale", () => {
+  const blocks = composeAssistantMessageBlocks({
+    blocks: [
+      {
+        type: "task_trace",
+        taskId: "task-protected-route",
+        status: "completed",
+        title: "Görev tamamlandı",
+        routeReason: "OpenAI internal routing selected GPT.",
+        steps: [
+          {
+            id: "response",
+            label: "Yanıt",
+            status: "completed",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(blocks[0]?.type, "task_trace");
+  assert.equal(
+    blocks[0]?.type === "task_trace" ? blocks[0].routeReason : undefined,
+    undefined,
+  );
+  assert.doesNotMatch(JSON.stringify(blocks), /openai|gpt|internal routing/i);
 });
 
 test("shapeAssistantMessagePayload removes internal task and security blocks from public payloads", () => {

@@ -107,6 +107,8 @@ test("elyanAssistantBlockSchema accepts smart task trace presentation fields", (
     phase: "verify",
     summary: "Bağlam işlendi ve yanıt kontrol edildi.",
     progressLabel: "Son kontrol tamamlandı",
+    routeReason:
+      "Elyan bunu sohbet olarak işledi çünkü istek özel yerel veri veya bilgisayar erişimi gerektirmiyor.",
     activeStepId: "verify",
     steps: [
       {

@@ -1,5 +1,11 @@
 import type { TaskStatus } from "../../contracts/domain.js";
 import { tasks } from "../../db/schema.js";
+import {
+  shouldAutomaticallyApproveUserTool,
+  type ApprovalToolIdempotency,
+  type ApprovalToolPermission,
+  type UserApprovalMode,
+} from "../approval-policy/policy.js";
 
 export function buildTaskRuntimeOwnershipUpdate(input: { runtimeConnectionId: string; now?: Date }) {
   return {
@@ -16,9 +22,73 @@ function readRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+const trustedDesktopIdempotentWriteCapabilities = new Set([
+  "clipboard_write",
+  "document_write",
+  "spreadsheet_write",
+  "presentation_write",
+  "canvas_write",
+]);
+
+const trustedDesktopReadOnlyCapabilities = new Set([
+  "clipboard_read",
+  "data_analyze",
+  "desktop_os.permissions",
+  "desktop_os.status",
+  "directory_tree",
+  "document_read",
+  "email_draft",
+  "file_read",
+  "file_search",
+  "get_calendar_events",
+  "get_reminders",
+  "get_weather",
+  "get_youtube_channel_report",
+  "git_diff",
+  "git_status",
+  "image_read",
+  "latex_parse",
+  "math_solve",
+  "ocr_read",
+  "quantum_compare_classical",
+  "quantum_generate_report",
+  "quantum_model_problem",
+  "quantum_run_experiment",
+  "retrieve_context",
+  "speech_to_text",
+  "sys_info",
+  "web_research",
+]);
+
+function hasOnlyTrustedDesktopApprovalSteps(approvalRequest: Record<string, unknown>) {
+  if (!Array.isArray(approvalRequest.steps) || approvalRequest.steps.length === 0) {
+    return false;
+  }
+  let hasIdempotentWrite = false;
+  for (const value of approvalRequest.steps) {
+    const step = readRecord(value);
+    const capability = typeof step?.capability === "string"
+      ? step.capability.trim()
+      : "";
+    if (step?.overwrite === true) {
+      return false;
+    }
+    if (trustedDesktopIdempotentWriteCapabilities.has(capability)) {
+      hasIdempotentWrite = true;
+      continue;
+    }
+    if (!trustedDesktopReadOnlyCapabilities.has(capability)) {
+      return false;
+    }
+  }
+  return hasIdempotentWrite;
+}
+
 export function shouldAutoApproveDesktopTask(input: {
   status: TaskStatus;
   payload: unknown;
+  approvalMode: UserApprovalMode;
+  approvalRequest: unknown;
 }) {
   if (input.status !== "waiting_approval") return false;
 
@@ -26,9 +96,35 @@ export function shouldAutoApproveDesktopTask(input: {
   const metadata = readRecord(payload?.metadata);
   const routeDecision = readRecord(metadata?.routeDecision);
   const taskRoute = readRecord(routeDecision?.taskRoute);
+  const approvalRequest = readRecord(input.approvalRequest);
+  const permission = approvalRequest?.permission;
+  const idempotency = approvalRequest?.idempotency;
+  const capability = typeof approvalRequest?.capability === "string"
+    ? approvalRequest.capability.trim()
+    : "";
+  const safelyClassified = shouldAutomaticallyApproveUserTool({
+    mode: input.approvalMode,
+    permission:
+      permission === "read" || permission === "write" || permission === "side_effect"
+        ? (permission as ApprovalToolPermission)
+        : undefined,
+    idempotency:
+      idempotency === "read_only" ||
+      idempotency === "idempotent_write" ||
+      idempotency === "non_idempotent"
+        ? (idempotency as ApprovalToolIdempotency)
+        : undefined,
+  });
 
   return metadata?.desktopDispatch === true
-    && metadata.desktopFullAuthorityEnabled === true
+    && approvalRequest?.source === "desktop_runtime"
+    && input.approvalMode === "trusted_idempotent_writes"
+    && permission === "write"
+    && idempotency === "idempotent_write"
+    && trustedDesktopIdempotentWriteCapabilities.has(capability)
+    && approvalRequest.manualApprovalRequired !== true
+    && hasOnlyTrustedDesktopApprovalSteps(approvalRequest)
+    && safelyClassified
     && (routeDecision?.route === "desktop_runtime"
       || taskRoute?.operationalRoute === "desktop_runtime");
 }

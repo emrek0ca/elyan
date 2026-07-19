@@ -10,6 +10,7 @@ import {
   extractTaskRouteDecision,
   getPayloadMetadata,
 } from "../tasks/service-helpers.js";
+import { buildRouteTransparencyReason } from "./route-transparency.js";
 
 type TaskTraceSource = {
   id: string;
@@ -162,11 +163,7 @@ function describeRoute(
     return "Masaüstü bağlantısı gerekiyor.";
   }
 
-  return compactDetail(
-    routeDecision.reason ??
-      routeDecision.failClosedReason ??
-      "Uygun yol seçildi.",
-  );
+  return "Uygun yol seçildi.";
 }
 
 function describePlan(
@@ -263,7 +260,7 @@ function describeContext(task: TaskTraceSource): {
 
 type ToolFlowTraceSummary = {
   okCount: number;
-  tools: Array<{ name: string; resultCount: number | null }>;
+  tools: Array<{ name: string; ok: boolean; resultCount: number | null; errorCode: string | null; durationMs: number | null }>;
 };
 
 const TOOL_APP_LABELS: Record<string, string> = {
@@ -310,7 +307,7 @@ function readToolFlow(
       continue;
     }
     const rawTools = Array.isArray(record.tools) ? record.tools : [];
-    const tools: Array<{ name: string; resultCount: number | null }> = [];
+    const tools: ToolFlowTraceSummary["tools"] = [];
     let derivedOkCount = 0;
     for (const item of rawTools) {
       const toolRecord = readRecord(item);
@@ -322,7 +319,13 @@ function readToolFlow(
       if (readBoolean(toolRecord, "ok") === true) {
         derivedOkCount += 1;
       }
-      tools.push({ name, resultCount: readNumber(toolRecord, "resultCount") });
+      tools.push({
+        name,
+        ok: readBoolean(toolRecord, "ok") === true,
+        resultCount: readNumber(toolRecord, "resultCount"),
+        errorCode: readString(toolRecord, "errorCode"),
+        durationMs: readNumber(toolRecord, "durationMs"),
+      });
       if (tools.length >= 8) {
         break;
       }
@@ -361,6 +364,31 @@ function describeToolFlow(toolFlow: ToolFlowTraceSummary): string {
     return `${label} · ${totalResults} sonuç`;
   }
   return `${label} kullanıldı`;
+}
+
+function publicToolLabel(name: string): string {
+  const tool = name.trim().toLowerCase();
+  if (tool === "web.search" || tool.startsWith("web.")) return "Web'de araştırıyorum…";
+  if (tool === "gmail.search" || tool === "gmail.read") return "Gelen kutunu tarıyorum…";
+  if (tool.startsWith("drive.") || tool.startsWith("google-drive.")) return "Dosyalarını tarıyorum…";
+  if (tool.startsWith("calendar.") || tool.startsWith("gcal.")) return "Takvimini kontrol ediyorum…";
+  if (tool.startsWith("memory.")) return "Hatırladıklarımı kontrol ediyorum…";
+  if (tool.startsWith("goals.")) return "Hedef durumunu kontrol ediyorum…";
+  return "İlgili bilgileri kontrol ediyorum…";
+}
+
+function publicToolResult(tool: ToolFlowTraceSummary["tools"][number]): string {
+  if (!tool.ok) {
+    const code = String(tool.errorCode ?? "").toLowerCase();
+    if (/auth|oauth|credential|token|connect/.test(code)) return "Bağlantı izni gerektiği için bu adım tamamlanamadı.";
+    if (/permission|forbidden|scope|denied/.test(code)) return "Bu işlem için gerekli izin bulunamadı.";
+    if (/timeout|timed_out|unavailable|network|rate_limit/.test(code)) return "Hizmete şu anda ulaşılamadığı için bu adım tamamlanamadı.";
+    return "Bu adım tamamlanamadı.";
+  }
+  if (tool.resultCount == null) return "Adım tamamlandı.";
+  if (tool.name === "gmail.search" || tool.name === "gmail.read") return `${tool.resultCount} e-posta bulundu.`;
+  if (tool.name === "web.search" || tool.name.startsWith("web.")) return `${tool.resultCount} kaynak bulundu.`;
+  return `${tool.resultCount} sonuç bulundu.`;
 }
 
 function describeTool(task: TaskTraceSource) {
@@ -500,6 +528,8 @@ function stepLabelForPhase(stepId: ElyanTaskTraceStepId | undefined): string {
       return "Yanıtı yazıyor";
     case undefined:
       return "Akışı hazırlıyor";
+    default:
+      return "Adım yürütülüyor";
   }
 }
 
@@ -521,6 +551,8 @@ function activeStepSummary(stepId: ElyanTaskTraceStepId | undefined): string {
       return "Cevap yazılıyor.";
     case undefined:
       return "Yanıt adım adım hazırlanıyor.";
+    default:
+      return "Adım yürütülüyor.";
   }
 }
 
@@ -585,6 +617,7 @@ export function buildTaskTraceBlock(input: {
   assistantContent?: string | null;
 }): ElyanTaskTraceBlock {
   const routeDecision = extractTaskRouteDecision(input.task.payload);
+  const routeReason = buildRouteTransparencyReason(routeDecision);
   const payloadMetadata = getPayloadMetadata(
     readRecord(input.task.payload) ?? {},
   );
@@ -798,6 +831,7 @@ export function buildTaskTraceBlock(input: {
 
   return {
     type: "task_trace",
+    stableBlockId: `task_trace_${input.task.id}`,
     taskId: input.task.id,
     status: traceStatus,
     title:
@@ -811,7 +845,106 @@ export function buildTaskTraceBlock(input: {
     phase,
     summary,
     progressLabel,
+    ...(routeReason ? { routeReason } : {}),
     ...(activeStep ? { activeStepId: activeStep.id } : {}),
     steps,
   };
+}
+
+export function enrichTaskTraceWithAgentPlan(input: {
+  trace: ElyanTaskTraceBlock;
+  agentPlan: unknown;
+  toolFlow: unknown;
+  approval: unknown;
+}): ElyanTaskTraceBlock {
+  const plan = readRecord(input.agentPlan);
+  const rawSteps = Array.isArray(plan?.steps) ? plan.steps : [];
+  const flow = readRecord(input.toolFlow);
+  const toolResults = Array.isArray(flow?.tools) ? flow.tools : [];
+  const approval = readRecord(input.approval);
+  const planSteps = rawSteps.flatMap((value, index) => {
+    const step = readRecord(value);
+    const request = readRecord(step?.tool_request);
+    const id = readString(step, "id") ?? `step_${index + 1}`;
+    const fallbackLabel = readString(step, "title");
+    const tool = readString(request, "tool");
+    if (!fallbackLabel || !tool || !/^[a-zA-Z0-9_-]{1,80}$/.test(id)) return [];
+    const result = toolResults.map(readRecord).find((item) => readString(item, "name") === tool);
+    const stepApproval = approval && readString(approval, "tool") === tool ? approval : null;
+    const status: ElyanTaskTraceStepStatus = stepApproval
+      ? "waiting_approval"
+      : result ? (result.ok === true ? "completed" : "failed") : "pending";
+    const publicResult = result ? publicToolResult({
+      name: tool,
+      ok: result.ok === true,
+      resultCount: readNumber(result, "resultCount"),
+      errorCode: readString(result, "errorCode"),
+      durationMs: readNumber(result, "durationMs"),
+    }) : undefined;
+    const durationMs = readNumber(result ?? null, "durationMs");
+    const lines = Array.isArray(stepApproval?.lines) ? stepApproval.lines.flatMap((line) => {
+      const record = readRecord(line);
+      const label = readString(record, "label");
+      const value = readString(record, "value");
+      return label && value != null ? [{ label, value }] : [];
+    }) : [];
+    return [{
+      id,
+      label: publicToolLabel(tool),
+      status,
+      tool,
+      ...(publicResult ? { detail: publicResult, resultSummary: publicResult } : {}),
+      ...(durationMs != null && durationMs >= 0 ? { durationMs } : {}),
+      ...(stepApproval ? { approval: {
+        token: readString(stepApproval, "token")!,
+        tool,
+        title: readString(stepApproval, "title") ?? fallbackLabel,
+        appLabel: readString(stepApproval, "appLabel") ?? "",
+        expiresAt: readNumber(stepApproval, "expiresAt"),
+        lines,
+      } } : {}),
+    } satisfies ElyanTaskTraceStep];
+  });
+  if (planSteps.length === 0) return input.trace;
+  const waiting = planSteps.some((step) => step.status === "waiting_approval");
+  const failed = planSteps.some((step) => step.status === "failed");
+  return {
+    ...input.trace,
+    status: waiting ? "waiting_approval" : failed ? "failed" : input.trace.status,
+    activeStepId: planSteps.find((step) => step.status === "waiting_approval" || step.status === "pending")?.id ?? planSteps.at(-1)?.id,
+    steps: planSteps,
+  };
+}
+
+export function advanceTaskTraceApproval(input: {
+  blocks: unknown;
+  completedTool: string;
+  nextApproval?: Record<string, unknown> | null;
+}): unknown[] {
+  if (!Array.isArray(input.blocks)) return [];
+  const nextTool = readString(input.nextApproval ?? null, "tool");
+  return input.blocks.map((value) => {
+    const block = readRecord(value);
+    if (block?.type !== "task_trace" || !Array.isArray(block.steps)) return value;
+    const steps = block.steps.map((value) => {
+      const step = readRecord(value);
+      const approval = readRecord(step?.approval);
+      const approvalTool = readString(approval, "tool");
+      const stepTool = readString(step, "tool") ?? approvalTool;
+      if (approvalTool === input.completedTool) {
+        const { approval: _approval, ...rest } = step!;
+        return { ...rest, status: "completed", detail: "Adım tamamlandı.", resultSummary: "Adım tamamlandı." };
+      }
+      if (input.nextApproval && (stepTool === nextTool || approvalTool === nextTool)) {
+        return { ...step, status: "waiting_approval", approval: input.nextApproval };
+      }
+      return value;
+    });
+    return {
+      ...block,
+      status: input.nextApproval ? "waiting_approval" : "completed",
+      activeStepId: input.nextApproval ? steps.find((step) => readRecord(step)?.status === "waiting_approval")?.id : steps.at(-1)?.id,
+      steps,
+    };
+  });
 }

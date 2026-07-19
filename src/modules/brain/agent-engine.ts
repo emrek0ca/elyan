@@ -6,7 +6,8 @@ import { shapeTaskFeedItem } from "../tasks/service-helpers.js";
 import { agentEngineRepository } from "./agent-engine-repository.js";
 import { agentPlanEnvelopeSchema, agentVerificationSchema, hardenAgentPlanVerification, type AgentPlanEnvelope } from "./agent-plan.js";
 import { canCompleteAgentRun, verifyAgentStep, type AgentEvidenceInput } from "./agent-verifier.js";
-import { executeAgentTool, getAgentToolMetadata, type AgentToolContext, type AgentToolResult } from "./tool-registry.js";
+import { decideAgentToolApproval, executeAgentTool, getAgentToolMetadata, type AgentToolContext, type AgentToolResult } from "./tool-registry.js";
+import { getUserApprovalMode } from "../approval-policy/service.js";
 import { updateGoal } from "../goals/service.js";
 
 const TERMINAL_RUN_STATES = new Set(["completed", "blocked", "failed", "canceled"]);
@@ -235,7 +236,14 @@ async function executeStep(input: {
     await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "failed", toolResult: result });
     return { verification: null, waitingApproval: false };
   }
-  if (metadata.permission === "side_effect" && input.context.allowSideEffects !== true) {
+  const approvalDecision = decideAgentToolApproval({
+    tool: input.planStep.tool_request.tool,
+    mode: input.context.approvalMode,
+    explicitApproval:
+      input.context.approvalGranted === true ||
+      input.context.allowSideEffects === true,
+  });
+  if (approvalDecision.requiresApproval) {
     await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "executing", incrementAttempt: false });
     await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "waiting_approval" });
     return { verification: null, waitingApproval: true };
@@ -323,23 +331,33 @@ export async function executeAgentRun(input: {
     const selected = runnable.slice(0, availableCalls);
     const readSteps = selected.filter((step) => getAgentToolMetadata(asRecord(step.toolRequest).tool as string)?.parallelSafe);
     const serialSteps = selected.filter((step) => !readSteps.includes(step));
+    const approvalMode = await getUserApprovalMode(input.app, input.userId);
     const baseContext: AgentToolContext = {
       userId: input.userId,
       sessionId: snapshot.run.sessionId,
       workload: input.workload,
       allowStateWrites: input.allowStateWrites ?? true,
       allowSideEffects: false,
+      approvalMode,
     };
     const results = await Promise.all(readSteps.map((step) => executeStep({
       app: input.app, userId: input.userId, runId: input.runId, step,
       planStep: snapshot.plan.steps.find((item) => item.id === step.stepKey)!,
-      context: { ...baseContext, allowSideEffects: isSideEffectApprovedForStep({ ...input, stepId: step.id }) },
+      context: {
+        ...baseContext,
+        allowSideEffects: isSideEffectApprovedForStep({ ...input, stepId: step.id }),
+        approvalGranted: isSideEffectApprovedForStep({ ...input, stepId: step.id }),
+      },
     })));
     for (const step of serialSteps) {
       results.push(await executeStep({
         app: input.app, userId: input.userId, runId: input.runId, step,
         planStep: snapshot.plan.steps.find((item) => item.id === step.stepKey)!,
-        context: { ...baseContext, allowSideEffects: isSideEffectApprovedForStep({ ...input, stepId: step.id }) },
+        context: {
+          ...baseContext,
+          allowSideEffects: isSideEffectApprovedForStep({ ...input, stepId: step.id }),
+          approvalGranted: isSideEffectApprovedForStep({ ...input, stepId: step.id }),
+        },
       }));
       if (results.at(-1)?.waitingApproval) break;
     }

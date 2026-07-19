@@ -476,6 +476,14 @@ export function isGroundedRewrite(source: string, rewritten: string): boolean {
   return false;
 }
 
+export function sanitizeHumanizedTerminalTaskContent(
+  value: string | null | undefined,
+  fallback: string | null | undefined = "",
+): string {
+  const safeFallback = sanitizeAssistantVisibleText(fallback);
+  return sanitizeAssistantVisibleText(value, { fallback: safeFallback });
+}
+
 async function humanizeTerminalTaskContent(
   app: FastifyInstance,
   input: {
@@ -484,12 +492,13 @@ async function humanizeTerminalTaskContent(
   },
 ): Promise<string> {
   const status = input.task.status;
-  const content = input.content.trim();
-  if (!content) return input.content;
-  if (status !== "completed" && status !== "failed") return input.content;
-  if (content.length > HUMANIZE_MAX_SOURCE_CHARS) return input.content;
+  const safeInputContent = sanitizeHumanizedTerminalTaskContent(input.content);
+  const content = safeInputContent.trim();
+  if (!content) return safeInputContent;
+  if (status !== "completed" && status !== "failed") return safeInputContent;
+  if (content.length > HUMANIZE_MAX_SOURCE_CHARS) return safeInputContent;
   // Markdown/çok satırlı zengin içerik zaten insan elinden çıkmış gibidir.
-  if (content.includes("\n") || /[#*`|]/.test(content)) return input.content;
+  if (content.includes("\n") || /[#*`|]/.test(content)) return safeInputContent;
 
   try {
     const { generateGovernedSharedBrainReply } = await import(
@@ -549,11 +558,11 @@ async function humanizeTerminalTaskContent(
       // Kaynağa dayanmayan çıktı = uydurma. Ham içerik her zaman daha dürüst.
       !isGroundedRewrite(content, rewritten)
     ) {
-      return input.content;
+      return safeInputContent;
     }
-    return rewritten;
+    return sanitizeHumanizedTerminalTaskContent(rewritten, safeInputContent);
   } catch {
-    return input.content;
+    return safeInputContent;
   }
 }
 

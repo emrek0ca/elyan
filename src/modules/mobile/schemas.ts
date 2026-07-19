@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
+import { userApprovalModeValues } from "../approval-policy/policy.js";
+
+export const updateApprovalModeBodySchema = z.object({
+  mode: z.enum(userApprovalModeValues),
+});
 
 export const worldSignalKindSchema = z.enum([
   "health",

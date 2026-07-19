@@ -17,8 +17,9 @@ export async function createAuditLog(
     requestId?: string;
     payload?: Record<string, unknown>;
   },
+  db: Pick<FastifyInstance["db"], "insert"> = app.db,
 ): Promise<void> {
-  await app.db.insert(auditLogs).values({
+  await db.insert(auditLogs).values({
     userId: input.userId ?? null,
     actorType: input.actorType,
     actorId: input.actorId ?? null,

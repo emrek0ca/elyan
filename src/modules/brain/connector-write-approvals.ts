@@ -15,6 +15,7 @@ import type { SharedBrainWorkload } from "./workloads.js";
 const STAGE_TTL_MS = 10 * 60 * 1_000;
 
 export type DurableConnectorWriteApproval = {
+  remainingApprovals?: DurableConnectorWriteApproval[];
   kind: "connector_write";
   token: string;
   userId: string;

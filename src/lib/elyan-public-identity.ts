@@ -1,3 +1,5 @@
+import { unicodeWordPattern } from "./tr-word-boundary.js";
+
 export const ELYAN_PUBLIC_IDENTITY_TEXT =
   "Ben Elyan — Osman Emre Koca tarafından geliştirilen yerli yapay zeka sistemiyim. Seni anlayan, görevlerini akıllıca planlayıp yürüten bir asistanım. Bellek, öğrenme, doküman üretimi, grafik çizimi, web araştırması ve masaüstü otomasyon gibi yeteneklerim var. Seninle konuştukça seni daha iyi tanıyorum.";
 
@@ -5,16 +7,34 @@ export const ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT =
   "Ben Elyan olarak çalışırım. Amacım görevleri doğru ve anlaşılır şekilde planlayıp yürütmek. Teknik altyapı detaylarımı paylaşmam mümkün değil.";
 
 const PROTECTED_DISCLOSURE_PATTERNS = [
-  /\b(groq|openai|anthropic|ollama|openrouter|vertex ai|vertexai)\b/i,
-  /\b(gpt|llama|claude|mixtral|qwen|deepseek|gemini|imagen|nano banana)\b/i,
-  /\b(system prompt|developer message|hidden instruction|internal routing|backend policy|model id|model identifier)\b/i,
-  /\b(model provider|underlying model|underlying provider|provider metadata|gateway product|fallback implementation)\b/i,
-  /\b(sistem promptu|geliştirici mesajı|gizli talimat|iç model|alttaki model|arkadaki model|model adı|model kimliği)\b/i,
-  /\b(sağlayıcı ayrıntıları|sağlayıcı detayı|altyapı sağlayıcı|dahili yönlendirme|backend politikası)\b/i,
-  /\b(güvenlik ve ürün bütünlüğü gereği paylaşılmaz|iç model ve sağlayıcı ayrıntıları)\b/i,
+  unicodeWordPattern(
+    String.raw`\b(?:codex|groq|openai|anthropic|ollama|openrouter|vertex\s*ai|gpt|llama|claude|mixtral|qwen|deepseek|gemini|imagen|nano\s*banana|dall[\s.·-]?e)(?:['’]?\p{L}{0,12})?\b`,
+    "i",
+  ),
+  unicodeWordPattern(
+    String.raw`\b(?:system prompt|developer message|hidden instruction|internal routing|backend policy|model id|model identifier)\b`,
+    "i",
+  ),
+  unicodeWordPattern(
+    String.raw`\b(?:model provider|underlying model|underlying provider|provider metadata|gateway product|fallback implementation)\b`,
+    "i",
+  ),
+  unicodeWordPattern(
+    String.raw`\b(?:sistem promptu|geliştirici mesajı|gizli talimat|iç model|alttaki model|arkadaki model|model adı|model kimliği)\b`,
+    "i",
+  ),
+  unicodeWordPattern(
+    String.raw`\b(?:sağlayıcı ayrıntıları|sağlayıcı detayı|altyapı sağlayıcı|dahili yönlendirme|backend politikası)\b`,
+    "i",
+  ),
+  unicodeWordPattern(
+    String.raw`\b(?:güvenlik ve ürün bütünlüğü gereği paylaşılmaz|iç model ve sağlayıcı ayrıntıları)\b`,
+    "i",
+  ),
 ] as const;
 
 const PROTECTED_COMPACT_TOKENS = [
+  "codex",
   "groq",
   "openai",
   "anthropic",
@@ -30,6 +50,7 @@ const PROTECTED_COMPACT_TOKENS = [
   "imagen",
   "vertexai",
   "nanobanana",
+  "dalle",
 ] as const;
 
 const PROTECTED_COMPACT_PHRASES = [

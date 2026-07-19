@@ -514,8 +514,8 @@ function buildSteps(input: {
       id: `step_${capability}`,
       capability,
       description: capability === "image_edit"
-        ? "Kullanıcının yüksek kaliteli kaynak görseli Gemini ile istenen şekilde düzenlenecek."
-        : "Kullanıcının istemi Gemini ile yüksek kaliteli görsele dönüştürülecek.",
+        ? "Kullanıcının kaynak görseli yüksek kalite korunarak istenen şekilde düzenlenecek."
+        : "Kullanıcının istemi yüksek kaliteli bir görsele dönüştürülecek.",
       args: {
         prompt: topic || semanticBrief,
         imageSize: /\b4k\b/iu.test(topic) ? "4K" : "2K",

@@ -238,6 +238,7 @@ export const elyanAssistantActionableKindValues = [
 export const elyanTaskTraceStepStatusValues = [
   "pending",
   "running",
+  "waiting_approval",
   "completed",
   "failed",
   "skipped",
@@ -302,7 +303,7 @@ export const elyanAssistantActionableKindSchema = z.enum(
 export const elyanTaskTraceStepStatusSchema = z.enum(
   elyanTaskTraceStepStatusValues,
 );
-export const elyanTaskTraceStepIdSchema = z.enum(elyanTaskTraceStepIdValues);
+export const elyanTaskTraceStepIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
 
 export const artifactInputSchema = z
   .object({
@@ -415,8 +416,22 @@ export const elyanTaskTraceStepSchema = z.object({
   label: z.string().min(1).max(120),
   status: elyanTaskTraceStepStatusSchema,
   detail: z.string().max(240).optional(),
+  resultSummary: z.string().max(240).optional(),
+  tool: z.string().min(1).max(120).optional(),
+  approval: z.object({
+    token: z.string().min(1).max(512),
+    tool: z.string().min(1).max(120),
+    title: z.string().min(1).max(180),
+    appLabel: z.string().max(120),
+    expiresAt: z.number().finite().nullable().optional(),
+    lines: z.array(z.object({
+      label: z.string().min(1).max(120),
+      value: z.string().max(500),
+    })).max(8).default([]),
+  }).optional(),
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
 });
 export const elyanTaskTraceBlockSchema = z.object({
   type: z.literal("task_trace"),
@@ -432,6 +447,7 @@ export const elyanTaskTraceBlockSchema = z.object({
   phase: z.string().min(1).max(80).optional(),
   summary: z.string().min(1).max(180).optional(),
   progressLabel: z.string().min(1).max(80).optional(),
+  routeReason: z.string().min(1).max(240).optional(),
   activeStepId: elyanTaskTraceStepIdSchema.optional(),
   steps: z.array(elyanTaskTraceStepSchema).min(1),
 });

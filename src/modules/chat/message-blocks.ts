@@ -1857,6 +1857,12 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
   const taskId = String(value.taskId ?? "").trim();
   const status = String(value.status ?? "").trim().toLowerCase();
   const title = String(value.title ?? "").trim();
+  const routeReasonCandidate = normalizeTextValue(value.routeReason, 240);
+  const routeReason =
+    routeReasonCandidate &&
+    !shouldRedactProtectedElyanDisclosure(routeReasonCandidate)
+      ? redactVisibleInternalConfigurationTerms(routeReasonCandidate)
+      : null;
   const rawSteps = Array.isArray(value.steps) ? value.steps : [];
   const steps = rawSteps
     .map((step) => {
@@ -1873,7 +1879,7 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
         !id ||
         !label ||
         !["running", "completed", "failed", "waiting_approval"].includes(status) ||
-        !["pending", "running", "completed", "failed", "skipped"].includes(stepStatus)
+        !["pending", "running", "waiting_approval", "completed", "failed", "skipped"].includes(stepStatus)
       ) {
         return null;
       }
@@ -1885,11 +1891,21 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
         ...(typeof record.detail === "string" && record.detail.trim()
           ? { detail: record.detail.trim() }
           : {}),
+        ...(typeof record.tool === "string" && record.tool.trim() ? { tool: record.tool.trim() } : {}),
+        ...(typeof record.resultSummary === "string" && record.resultSummary.trim()
+          ? { resultSummary: record.resultSummary.trim() }
+          : {}),
+        ...(record.approval && typeof record.approval === "object" && !Array.isArray(record.approval)
+          ? { approval: record.approval as ElyanTaskTraceBlock["steps"][number]["approval"] }
+          : {}),
         ...(typeof record.startedAt === "string" && record.startedAt.trim()
           ? { startedAt: record.startedAt.trim() }
           : {}),
         ...(typeof record.completedAt === "string" && record.completedAt.trim()
           ? { completedAt: record.completedAt.trim() }
+          : {}),
+        ...(typeof record.durationMs === "number" && Number.isFinite(record.durationMs) && record.durationMs >= 0
+          ? { durationMs: record.durationMs }
           : {}),
       };
     })
@@ -1908,6 +1924,7 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
     taskId,
     status: status as ElyanTaskTraceBlock["status"],
     title,
+    ...(routeReason ? { routeReason } : {}),
     steps,
     ...withAssistantBlockDefaults("task_trace", {}, {
       stableBlockId: normalizeBlockStableId(value.stableBlockId),

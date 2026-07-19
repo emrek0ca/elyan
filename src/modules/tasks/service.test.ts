@@ -5,6 +5,7 @@ import {
   appendTaskArtifacts,
   buildRuntimeTaskDispatchEnvelope,
   buildRouteDecisionLogEntry,
+  buildAssistantRevisionMetadata,
   createTask,
   isRemoteMcpRouteDecisionStale,
   normalizeRevisionComparableText,
@@ -25,6 +26,31 @@ test("revision comparison ignores whitespace-only polish differences", () => {
   assert.notEqual(
     normalizeRevisionComparableText("Kurucusu Bill Gates."),
     normalizeRevisionComparableText("Kurucusu Osman Emre Koca."),
+  );
+});
+
+test("assistant revision metadata preserves the safe streamed version only for real changes", () => {
+  assert.deepEqual(
+    buildAssistantRevisionMetadata({
+      finalContent: "Son ve doğrulanmış cevap.",
+      streamedContent: "İlk cevap.",
+    }),
+    { revised: true, previousContent: "İlk cevap." },
+  );
+  assert.deepEqual(
+    buildAssistantRevisionMetadata({
+      finalContent: "Aynı cevap.",
+      streamedContent: "Aynı   cevap.  ",
+    }),
+    { revised: false },
+  );
+  assert.deepEqual(
+    buildAssistantRevisionMetadata({
+      finalContent: "Rapor hazır.",
+      streamedContent: "Rapor hazırlanıyor, birkaç saniye...",
+      transientContent: "Rapor hazırlanıyor, birkaç saniye...",
+    }),
+    { revised: false },
   );
 });
 
@@ -106,6 +132,7 @@ test("tool flow trace exposes only the safe connector error code", () => {
         ok: false,
         resultCount: null,
         errorCode: "connector_auth_required",
+        durationMs: 42,
       },
     ],
   });

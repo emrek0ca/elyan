@@ -40,6 +40,7 @@ import {
   shouldPromoteMarkdownTableToWidget,
 } from "../../core/understanding/structured-output-policy.js";
 import { createAuditLog } from "../audit/service.js";
+import { getUserApprovalMode } from "../approval-policy/service.js";
 import { deriveTaskFailureSignature } from "./task-failure-analytics.js";
 import {
   extractAttachmentMetadataCarrier,
@@ -115,7 +116,7 @@ import {
   syncChatTaskLifecycle,
   compactMessagePreview,
 } from "../chat/task-sync.js";
-import { buildTaskTraceBlock } from "../chat/task-trace.js";
+import { buildTaskTraceBlock, advanceTaskTraceApproval, enrichTaskTraceWithAgentPlan } from "../chat/task-trace.js";
 import {
   persistRollingSummaryToSession,
   listChatSessionMessages,
@@ -257,6 +258,26 @@ export function normalizeRevisionComparableText(
   return String(value ?? "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function buildAssistantRevisionMetadata(input: {
+  finalContent: string;
+  streamedContent: string;
+  transientContent?: string;
+}) {
+  const previousContent = input.streamedContent.trim().slice(0, 12_000);
+  const onlyTransientContent =
+    previousContent.length > 0 &&
+    normalizeRevisionComparableText(previousContent) ===
+      normalizeRevisionComparableText(input.transientContent ?? "");
+  const revised =
+    previousContent.length > 0 &&
+    !onlyTransientContent &&
+    normalizeRevisionComparableText(input.finalContent) !==
+      normalizeRevisionComparableText(previousContent);
+  return revised
+    ? { revised: true, previousContent }
+    : { revised: false };
 }
 
 export function stripPromptEchoFromAssistantText(input: {
@@ -632,6 +653,7 @@ export type ToolFlowTraceSummary = {
     ok: boolean;
     resultCount: number | null;
     errorCode: string | null;
+    durationMs: number | null;
   }>;
 };
 
@@ -672,7 +694,9 @@ export function summarizeToolFlowForTrace(
     const errorCode =
       readInferenceString(record, "errorCode") ??
       readInferenceString(error ?? {}, "code");
-    tools.push({ name, ok, resultCount, errorCode });
+    const rawDurationMs = readInferenceNumber(record, "durationMs");
+    const durationMs = rawDurationMs != null && rawDurationMs >= 0 ? rawDurationMs : null;
+    tools.push({ name, ok, resultCount, errorCode, durationMs });
     if (tools.length >= 8) {
       break;
     }
@@ -4834,6 +4858,18 @@ async function processSharedBrainChatTask(
         selectedWorkload,
       });
       const inferenceBlocks = inferenceResolved.blocks;
+      const goalProgressBlocks = inferenceBlocks.filter(
+        (block) => readRecord(block)?.type === "goal_progress",
+      );
+      const visibleInferenceBlocks = inferenceBlocks.filter(
+        (block) => readRecord(block)?.type !== "goal_progress",
+      );
+      const unifiedTaskTrace = enrichTaskTraceWithAgentPlan({
+        trace: taskTrace,
+        agentPlan: inference.metadata.agentPlan,
+        toolFlow: completionMetadata.toolFlow,
+        approval: completionMetadata.connectorWriteApproval,
+      });
       // Use the cleaned text everywhere so the inline prose doesn't repeat a
       // table/code/document that a widget block is already rendering.
       const visibleText = inferenceResolved.text || completedResultText;
@@ -4855,11 +4891,16 @@ async function processSharedBrainChatTask(
           : [];
       const finalBlocks = composeAssistantMessageBlocks({
         content: visibleText,
-        blocks: [...ackBlock, taskTrace, ...goalBlock, ...inferenceBlocks],
+        blocks: [...ackBlock, unifiedTaskTrace, ...visibleInferenceBlocks],
+      });
+      const revision = buildAssistantRevisionMetadata({
+        finalContent: visibleText,
+        streamedContent: lastVisibleStreamingContent,
+        transientContent: ackText,
       });
       void applyGoalProgressBlocks(app, {
         userId: input.userId,
-        blocks: finalBlocks,
+        blocks: [...goalBlock, ...goalProgressBlocks],
       });
       // Persist final blocks + cleaned content to the chat_messages row so a
       // later GET /messages (user leaves and reopens) returns the same
@@ -4872,7 +4913,7 @@ async function processSharedBrainChatTask(
           preview: compactMessagePreview(visibleText),
           metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
             withAssistantBlocksMetadata(
-              {},
+              { revision },
               {
                 content: visibleText,
                 blocks: finalBlocks,
@@ -4908,8 +4949,10 @@ async function processSharedBrainChatTask(
           // istemci "cevap düzeltildi" göstergesi sunabilsin. Fark kaçınılmaz
           // olabilir (düzeltici, yarım yanıt tamamlama, blok çıkarımı ancak
           // metin bitince bilinir) ama sessiz olmamalı.
-          revised: normalizeRevisionComparableText(visibleText) !==
-            normalizeRevisionComparableText(lastVisibleStreamingContent),
+          revised: revision.revised,
+          ...(revision.revised
+            ? { previousContent: revision.previousContent }
+            : {}),
           assistantMessage: shapeAssistantMessagePayload({
             id: chatStreaming.assistantMessageId,
             role: "assistant",
@@ -6661,7 +6704,16 @@ export async function resolveConnectorWriteApproval(
   );
   const finishedAt = new Date();
   const previousResult = readRecord(task.result) ?? {};
-  const finalStatus: TaskStatus = result.ok ? "completed" : "failed";
+  const remainingApprovals = Array.isArray(approval.remainingApprovals)
+    ? approval.remainingApprovals.map(readRecord).filter((item): item is Record<string, unknown> => item != null)
+    : [];
+  const nextApprovalCandidate = result.ok ? (remainingApprovals[0] ?? null) : null;
+  const nextCall = readCanonicalConnectorWriteApprovalCall(nextApprovalCandidate);
+  const nextApproval: Record<string, unknown> | null = nextApprovalCandidate && nextCall &&
+    nextApprovalCandidate.userId === input.userId && nextApprovalCandidate.taskId === task.id
+    ? { ...nextApprovalCandidate, ...(remainingApprovals.length > 1 ? { remainingApprovals: remainingApprovals.slice(1) } : {}) }
+    : null;
+  const finalStatus: TaskStatus = result.ok ? (nextApproval ? "waiting_approval" : "completed") : "failed";
   const safeError = result.ok
     ? null
     : (result.error?.message ?? "Connector işlemi tamamlanamadı.");
@@ -6674,14 +6726,29 @@ export async function resolveConnectorWriteApproval(
       errorCode: result.error?.code ?? null,
     },
   };
+  const nextDraft = readRecord(nextApproval?.draft);
+  const nextPublicApproval = nextApproval && nextCall && nextDraft ? {
+    token: nextApproval.token,
+    tool: nextCall.tool,
+    title: nextDraft.title,
+    appLabel: nextDraft.appLabel,
+    expiresAt: nextApproval.expiresAt,
+    lines: nextDraft.lines,
+  } : null;
+  const updatedAssistantBlocks = advanceTaskTraceApproval({
+    blocks: previousResult.assistantBlocks,
+    completedTool: tool,
+    nextApproval: nextPublicApproval,
+  });
   const finalRows = await app.db
     .update(tasks)
     .set({
       status: finalStatus,
-      approvalRequest: finalApproval,
+      approvalRequest: nextApproval ?? finalApproval,
       approvalRequestBlobId: null,
       result: {
         ...previousResult,
+        assistantBlocks: updatedAssistantBlocks,
         connectorWriteExecution: {
           tool,
           ok: result.ok,
@@ -6690,7 +6757,7 @@ export async function resolveConnectorWriteApproval(
         },
       },
       error: safeError,
-      completedAt: result.ok ? finishedAt : null,
+      completedAt: finalStatus === "completed" ? finishedAt : null,
       updatedAt: finishedAt,
       queuePosition: 0,
     })
@@ -6858,27 +6925,32 @@ export async function updateTaskFromRuntime(
     ),
   );
 
-  // Full-authority is an explicit, user-controlled mobile preference carried
-  // in the authenticated task envelope. When the desktop pauses for a local
-  // capability approval, resolve that pause server-side so the runtime can
-  // resume even if the mobile app is backgrounded or misses the realtime edge.
-  const existingApprovalRequest = readRecord(ownedTask.approvalRequest);
+  // Backend-owned user policy is read at the approval boundary, so a mode
+  // change takes effect mid-session. Client metadata is never authority.
+  const existingApprovalRequest = readRecord(
+    input.approvalRequest ?? updatedTask.approvalRequest,
+  );
   const existingApprovalResolution = readRecord(
     existingApprovalRequest?.resolution,
   );
-  const fullAuthorityDesktopTask =
+  const approvalMode = input.status === "waiting_approval"
+    ? await getUserApprovalMode(app, ownedTask.userId)
+    : null;
+  const trustedIdempotentDesktopTask = approvalMode != null &&
     shouldAutoApproveDesktopTask({
       status: input.status,
       payload: ownedTask.payload,
+      approvalMode,
+      approvalRequest: existingApprovalRequest,
     }) && existingApprovalResolution?.approved !== true;
 
-  if (fullAuthorityDesktopTask) {
+  if (trustedIdempotentDesktopTask) {
     const approvalRows = await app.db
       .update(tasks)
       .set(
         buildTaskApprovalResumeUpdate(updatedTask, {
           notes:
-            "Tam yetki modu: mobil kullanıcı tercihiyle otomatik onaylandı.",
+            "Güvenli yazma modu: idempotent işlem otomatik onaylandı.",
         }),
       )
       .where(eq(tasks.id, updatedTask.id))
@@ -6902,28 +6974,28 @@ export async function updateTaskFromRuntime(
     },
   });
 
-  if (fullAuthorityDesktopTask) {
+  if (trustedIdempotentDesktopTask) {
     await insertTaskEvent(app, {
       taskId: ownedTask.id,
       userId: ownedTask.userId,
       status: "waiting_approval",
-      message: "Tam yetki modu etkin; görev otomatik onaylandı.",
+      message: "Güvenli yazma modu etkin; idempotent işlem otomatik onaylandı.",
       payload: {
         approved: true,
-        source: "desktop_full_authority",
+        source: "trusted_idempotent_write",
       },
     });
     await publishTaskEvent(app, updatedTask, "task.approval_granted", {
       task: shapeTaskFeedItem(updatedTask),
       taskId: updatedTask.id,
       approved: true,
-      source: "desktop_full_authority",
+      source: "trusted_idempotent_write",
     });
     app.services.realtimeHub.sendToRuntime(updatedTask.targetDeviceId, {
       type: "task.approval",
       taskId: updatedTask.id,
       approved: true,
-      notes: "Tam yetki modu: mobil kullanıcı tercihiyle otomatik onaylandı.",
+      notes: "Güvenli yazma modu: idempotent işlem otomatik onaylandı.",
     });
     await resumeAgentRunAfterApproval({
       app,

@@ -106,6 +106,9 @@ export const users = pgTable(
     passwordHash: text("password_hash").notNull(),
     displayName: varchar("display_name", { length: 120 }),
     role: userRoleEnum("role").notNull().default("user"),
+    approvalMode: varchar("approval_mode", { length: 32 })
+      .notNull()
+      .default("read_only_auto"),
     twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
     twoFactorSecretEncrypted: text("two_factor_secret_encrypted"),
     twoFactorConfirmedAt: timestamp("two_factor_confirmed_at", { withTimezone: true }),

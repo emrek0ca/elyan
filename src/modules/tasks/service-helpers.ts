@@ -898,6 +898,7 @@ export function extractTaskRouteDecision(payload: unknown) {
     failClosedReason: readString(routeDecision, "failClosedReason"),
     selectedWorkload: readString(routeDecision, "selectedWorkload"),
     reason: readString(routeDecision, "reason"),
+    userFacingMessage: readString(routeDecision, "userFacingMessage"),
     capabilities: readStringList(routeDecision, "capabilities"),
   };
 }

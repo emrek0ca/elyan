@@ -10,13 +10,20 @@ import {
   shouldAutoApproveDesktopTask,
 } from "./service-lifecycle.js";
 
-test("shouldAutoApproveDesktopTask requires dispatch, full authority, and desktop routing", () => {
+test("shouldAutoApproveDesktopTask trusts only backend mode plus explicit idempotent classification", () => {
   assert.equal(shouldAutoApproveDesktopTask({
     status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "write",
+      idempotency: "idempotent_write",
+      capability: "document_write",
+      steps: [{ capability: "document_write" }],
+    },
     payload: {
       metadata: {
         desktopDispatch: true,
-        desktopFullAuthorityEnabled: true,
         routeDecision: {
           route: "desktop_runtime",
           taskRoute: { operationalRoute: "desktop_runtime" },
@@ -27,10 +34,16 @@ test("shouldAutoApproveDesktopTask requires dispatch, full authority, and deskto
 
   assert.equal(shouldAutoApproveDesktopTask({
     status: "waiting_approval",
+    approvalMode: "read_only_auto",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "write",
+      idempotency: "idempotent_write",
+    },
     payload: {
       metadata: {
         desktopDispatch: true,
-        desktopFullAuthorityEnabled: false,
+        desktopFullAuthorityEnabled: true,
         routeDecision: { route: "desktop_runtime" },
       },
     },
@@ -38,11 +51,139 @@ test("shouldAutoApproveDesktopTask requires dispatch, full authority, and deskto
 
   assert.equal(shouldAutoApproveDesktopTask({
     status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "write",
+      idempotency: "idempotent_write",
+      manualApprovalRequired: true,
+    },
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        routeDecision: { route: "desktop_runtime" },
+      },
+    },
+  }), false);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "side_effect",
+      idempotency: "non_idempotent",
+    },
     payload: {
       metadata: {
         desktopDispatch: true,
         desktopFullAuthorityEnabled: true,
+        routeDecision: { route: "desktop_runtime" },
+      },
+    },
+  }), false);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "write",
+      idempotency: "idempotent_write",
+    },
+    payload: {
+      metadata: {
+        desktopDispatch: true,
         routeDecision: { route: "server_brain" },
+      },
+    },
+  }), false);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+    },
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        routeDecision: { route: "desktop_runtime" },
+      },
+    },
+  }), false);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "write",
+      idempotency: "idempotent_write",
+      capability: "unknown.write",
+      steps: [{ capability: "unknown.write" }],
+    },
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        routeDecision: { route: "desktop_runtime" },
+      },
+    },
+  }), false);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "write",
+      idempotency: "idempotent_write",
+      capability: "image_generate",
+      steps: [{ capability: "image_generate" }],
+    },
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        routeDecision: { route: "desktop_runtime" },
+      },
+    },
+  }), false);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "write",
+      idempotency: "idempotent_write",
+      capability: "document_write",
+      steps: [
+        { capability: "web_research" },
+        { capability: "document_write" },
+      ],
+    },
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        routeDecision: { route: "desktop_runtime" },
+      },
+    },
+  }), true);
+
+  assert.equal(shouldAutoApproveDesktopTask({
+    status: "waiting_approval",
+    approvalMode: "trusted_idempotent_writes",
+    approvalRequest: {
+      source: "desktop_runtime",
+      permission: "write",
+      idempotency: "idempotent_write",
+      capability: "document_write",
+      steps: [{ capability: "document_write", overwrite: true }],
+    },
+    payload: {
+      metadata: {
+        desktopDispatch: true,
+        routeDecision: { route: "desktop_runtime" },
       },
     },
   }), false);

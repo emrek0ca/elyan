@@ -70,7 +70,10 @@ import {
   summarizeToolResultsForMetadata,
 } from "./agent-loop.js";
 import type { AgentToolRequest, AgentToolResult } from "./tool-registry.js";
-import { getAgentToolMetadata } from "./tool-registry.js";
+import {
+  decideAgentToolApproval,
+  getAgentToolMetadata,
+} from "./tool-registry.js";
 import {
   connectorContractsForSemanticReadHint,
   connectorToolsForCapabilityGrants,
@@ -80,6 +83,7 @@ import {
   type ConnectorReadToolHint,
 } from "./connector-tools.js";
 import { stageConnectorWriteApproval } from "./connector-write-approvals.js";
+import { getUserApprovalMode } from "../approval-policy/service.js";
 import {
   listConnectedCapabilityGrants,
   missingOauthScopes,
@@ -1575,7 +1579,7 @@ function advertisedConnectorReadToolHint(
   return advertised.has(hint.tool) ? hint : null;
 }
 
-function connectorFailureReply(errorCode: string | null | undefined): string {
+export function connectorFailureReply(errorCode: string | null | undefined): string {
   const normalized = connectorFailureKind(errorCode);
   if (normalized === "auth_required") {
     return "Bağlı hesabın için erişim izni geçersiz veya süresi dolmuş. Uygulamalar bölümünden bağlantıyı yenileyip tekrar deneyebilirsin.";
@@ -6991,6 +6995,7 @@ export async function generateSharedBrainReply(
           followUpsCount: turnEnvelope?.follow_ups.length ?? 0,
           proactiveOpsCount: turnEnvelope?.proactive_ops?.length ?? 0,
           toolRequestCount: turnEnvelope?.tool_requests.length ?? 0,
+          ...(turnEnvelope?.agent_plan ? { agentPlan: turnEnvelope.agent_plan } : {}),
           connectorSemanticHintTool:
             advertisedConnectorReadToolHint(input)?.tool ?? null,
           connectorSemanticHintScore:
@@ -7162,34 +7167,39 @@ export async function generateSharedBrainReply(
           scopedToolRequests,
           webGrounding,
         );
-        // Side_effect araçları (gmail.send/calendar.create_event) inline
-        // ÇALIŞTIRILMAZ: taslak staged edilir ve kullanıcı onayına bırakılır.
-        // Yalnız read/write araçları loop'ta koşar. Böylece onaysız hiçbir
-        // yazma Google'a ulaşamaz (tool-registry side_effect kapısına ek kat).
-        const sideEffectRequests = safeToolRequests.filter(
-          (request) =>
-            getAgentToolMetadata(request.tool)?.permission === "side_effect",
+        const approvalMode = await getUserApprovalMode(app, input.userId);
+        // Both agent engines use the same per-user approval decision. Immutable
+        // side effects/non-idempotent actions are staged; mode (c) can only
+        // release explicitly-classified idempotent writes.
+        const approvalRequiredRequests = safeToolRequests.filter(
+          (request) => decideAgentToolApproval({
+            tool: request.tool,
+            mode: approvalMode,
+          }).requiresApproval,
         );
         const inlineToolRequests = safeToolRequests.filter(
-          (request) =>
-            getAgentToolMetadata(request.tool)?.permission !== "side_effect",
+          (request) => !decideAgentToolApproval({
+            tool: request.tool,
+            mode: approvalMode,
+          }).requiresApproval,
         );
         if (
-          sideEffectRequests.length > 0 &&
+          approvalRequiredRequests.length > 0 &&
           !input.internalEvaluation?.refinementPass &&
           !input.internalEvaluation?.skipReviewLogging
         ) {
-          for (const request of sideEffectRequests) {
-            const stagedWrite = stageConnectorWriteApproval({
+          const stagedWrites = approvalRequiredRequests.flatMap((request) => {
+            const staged = stageConnectorWriteApproval({
               userId: input.userId,
               taskId: input.taskId,
               sessionId: resolveDialogueStateSessionId(input.requestMetadata),
               workload,
               request,
             });
-            if (stagedWrite) {
-              // İlk taslak onay çipini besler; aynı turda birden çok yazma
-              // istenirse ilki onaylanır, gerisi bir sonraki turda ele alınır.
+            return staged ? [staged] : [];
+          });
+          const stagedWrite = stagedWrites[0];
+          if (stagedWrite) {
               result.metadata.connectorWriteApproval = {
                 token: stagedWrite.token,
                 expiresAt: stagedWrite.expiresAt,
@@ -7200,9 +7210,10 @@ export async function generateSharedBrainReply(
               };
               // Persisted through the task approvalRequest contract. This key
               // is internal-only and stripped from public brain/task metadata.
-              result.metadata.connectorWriteApprovalRequest = stagedWrite;
-              break;
-            }
+              result.metadata.connectorWriteApprovalRequest = {
+                ...stagedWrite,
+                ...(stagedWrites.length > 1 ? { remainingApprovals: stagedWrites.slice(1) } : {}),
+              };
           }
         }
         const toolPlan =
@@ -7223,6 +7234,7 @@ export async function generateSharedBrainReply(
                   workload,
                   allowStateWrites: !connectorOnlyMode,
                   allowSideEffects: false,
+                  approvalMode,
                 },
                 requests: inlineToolRequests,
                 plan: toolPlan,

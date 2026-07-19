@@ -1,11 +1,19 @@
 import type { FastifyPluginAsync } from "fastify";
 import { AppError } from "../../lib/errors.js";
-import { sendConditionalJson } from "../../lib/http.js";
+import { getRequestContext, sendConditionalJson } from "../../lib/http.js";
 import { assertRequestBudget } from "../../lib/reliability/request-budget.js";
 import { getUserAuth } from "../../lib/request-auth.js";
-import { uploadWorldSignalsBodySchema } from "./schemas.js";
+import {
+  updateApprovalModeBodySchema,
+  uploadWorldSignalsBodySchema,
+} from "./schemas.js";
 import { getMobileBootstrap, ingestWorldSignals } from "./service.js";
 import { warmupSharedBrainForUser } from "../brain/inference.js";
+import {
+  getUserApprovalMode,
+  shapeUserApprovalMode,
+  updateUserApprovalMode,
+} from "../approval-policy/service.js";
 
 // Per-user warmup dedupe. A user that opens the app, sees the splash, and
 // starts typing does that within a few seconds — we don't want every screen
@@ -42,6 +50,32 @@ export const mobileRoutes: FastifyPluginAsync = async (app) => {
     const auth = getUserAuth(request);
     const payload = await getMobileBootstrap(app, auth.sub);
     return sendConditionalJson(request, reply, payload);
+  });
+
+  app.get("/approval-mode", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+
+    const auth = getUserAuth(request);
+    const mode = await getUserApprovalMode(app, auth.sub);
+    return shapeUserApprovalMode(mode);
+  });
+
+  app.patch("/approval-mode", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+
+    const auth = getUserAuth(request);
+    const body = updateApprovalModeBodySchema.parse(request.body);
+    const context = getRequestContext(request);
+    const mode = await updateUserApprovalMode(app, {
+      userId: auth.sub,
+      mode: body.mode,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      requestId: context.requestId,
+    });
+    return shapeUserApprovalMode(mode);
   });
 
   // Nudge the shared brain so the user's first real turn doesn't pay the
