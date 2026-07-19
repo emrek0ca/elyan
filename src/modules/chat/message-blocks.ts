@@ -3011,7 +3011,7 @@ export function buildAssistantMessageBlocks(
             sectionRole: "detail",
           },
         }),
-      }) as AssistantTextMessageBlock,
+      }) as unknown as AssistantTextMessageBlock,
     ];
   }
 
@@ -3027,7 +3027,7 @@ export function buildAssistantMessageBlocks(
           sectionRole: "detail",
         },
       }),
-    }) as AssistantTextMessageBlock,
+    }) as unknown as AssistantTextMessageBlock,
   ];
 }
 

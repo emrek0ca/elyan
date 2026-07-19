@@ -723,7 +723,7 @@ function buildEnvelopeSchema(type: ElyanAssistantBlockTypeValue) {
 
 export const elyanAssistantBlockEnvelopeSchemaByType = Object.fromEntries(
   elyanAssistantBlockTypeValues.map((type) => [type, buildEnvelopeSchema(type)]),
-) as Record<ElyanAssistantBlockTypeValue, z.ZodType>;
+) as unknown as Record<ElyanAssistantBlockTypeValue, z.ZodType>;
 
 const canonicalEnvelopeSchemas = Object.values(
   elyanAssistantBlockEnvelopeSchemaByType,

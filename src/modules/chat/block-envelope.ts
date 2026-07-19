@@ -208,7 +208,7 @@ export function withCanonicalAssistantBlockEnvelope(
   value: Record<string, unknown>,
 ): CanonicalAssistantBlockEnvelope {
   const type = String(value.type ?? "").trim().toLowerCase() || "unknown";
-  const renderHints = isRecord(value.renderHints)
+  const renderHints: Record<string, unknown> = isRecord(value.renderHints)
     ? { ...value.renderHints }
     : { sectionRole: type };
   const source = inferSource(type, value, renderHints);
@@ -245,7 +245,7 @@ export function withCanonicalAssistantBlockEnvelope(
     renderHints,
     data,
     cacheDigest,
-  };
+  } as CanonicalAssistantBlockEnvelope;
 }
 
 /**

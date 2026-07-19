@@ -83,7 +83,7 @@ function mergeSkillModelExecutionSignals(input: {
   allowedTools: readonly SkillAllowedTool[];
   documentSourceCount: number;
 }) {
-  const allowedTools = new Set(input.allowedTools);
+  const allowedTools = new Set<string>(input.allowedTools);
   let metadataDocumentSourceCount = 0;
   let webSourceCount = 0;
   let retrievalResultCount = 0;
@@ -530,7 +530,7 @@ function buildSkillInputPayload(input: SkillInput, selectedChunks: SelectedSkill
 }
 
 function detectUnauthorizedToolCalls(output: Record<string, unknown>, skill: SkillDefinition): string[] {
-  const allowed = new Set(skill.allowedTools);
+  const allowed = new Set<string>(skill.allowedTools);
   const rawToolCalls = output.toolCalls ?? output.tool_calls ?? output.tools;
   const toolCalls = Array.isArray(rawToolCalls)
     ? rawToolCalls
@@ -1130,7 +1130,7 @@ export async function executeSkill(input: {
       errorCode: outputPolicy.error,
       manualHintUsed: input.routeDecision.source === "manual_hint",
     });
-    return buildFailedExecutionResult(outputPolicy.error);
+    return buildFailedExecutionResult(outputPolicy.error ?? "skill_output_rejected");
   }
 
   const executionSignals = mergeSkillModelExecutionSignals({

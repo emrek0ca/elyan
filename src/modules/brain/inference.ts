@@ -1105,8 +1105,8 @@ const sharedBrainResponseCache = new WeakMap<
   Map<string, SharedBrainResponseCacheEntry>
 >();
 
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+function compactText(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
 type ResponseCompletenessAnalysis = {
@@ -8780,15 +8780,18 @@ function buildSkillModelRequestMetadata(input: {
   skillExecution: unknown;
   includeAttachmentMetadata: boolean;
 }): Record<string, unknown> {
-  const safeKeys = input.includeAttachmentMetadata
+  const safeKeys: readonly string[] = input.includeAttachmentMetadata
     ? [
         ...SAFE_NON_ATTACHMENT_SKILL_METADATA_KEYS,
         ...SAFE_ATTACHMENT_SKILL_METADATA_KEYS,
       ]
     : [...SAFE_NON_ATTACHMENT_SKILL_METADATA_KEYS];
+  const requestMetadataRecord = input.requestMetadata as
+    | Record<string, unknown>
+    | undefined;
   const metadata = Object.fromEntries(
-    safeKeys.flatMap((key) => {
-      const value = input.requestMetadata?.[key];
+    safeKeys.flatMap((key): Array<readonly [string, string | boolean]> => {
+      const value = requestMetadataRecord?.[key];
       if (typeof value === "boolean") return [[key, value] as const];
       return typeof value === "string" && value.trim()
         ? [[key, value.trim().slice(0, 512)] as const]
