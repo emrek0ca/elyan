@@ -92,9 +92,9 @@ function estimateMessageTokens(value: string) {
 // bu görevi masaüstüne yönlendirdi.") task.summary'ye sızabiliyor; bunlar
 // asistan cevabı DEĞİLDİR ve kullanıcıya asla gösterilmez.
 const INTERNAL_ROUTING_SUMMARY_PATTERN =
-  /dispatch butonu|masaüstüne yönlendirdi|masaustune yonlendirdi|açıkça istedi|acikca istedi/i;
+  /dispatch butonu|masaüstüne yönlendir|masaustune yonlendir|desktopa yönlendir|desktopa yonlendir|yönlendirildi|yonlendirildi|açıkça istedi|acikca istedi/i;
 
-function isInternalRoutingSummary(value: string): boolean {
+export function isInternalRoutingSummary(value: string): boolean {
   return INTERNAL_ROUTING_SUMMARY_PATTERN.test(value);
 }
 
@@ -152,7 +152,9 @@ function deriveAssistantContent(input: {
                 ? resultRecord.assistantMessage
                 : typeof resultRecord.message === "string"
                   ? resultRecord.message
-                  : null;
+                  : typeof resultRecord.safeSummary === "string"
+                    ? resultRecord.safeSummary
+                    : null;
     if (text?.trim()) {
       return finalize(text);
     }

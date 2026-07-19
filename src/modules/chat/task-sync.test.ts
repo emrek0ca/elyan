@@ -1,6 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { syncChatTaskLifecycle } from "./task-sync.js";
+import { isInternalRoutingSummary, syncChatTaskLifecycle } from "./task-sync.js";
+
+test("isInternalRoutingSummary catches dispatch routing-phrase variants", () => {
+  // Kullanıcının #1 şikâyeti: "…desktopa yönlendirildi" gibi iç yönlendirme
+  // cümleleri asistan cevabı gibi sızıyordu. Tüm varyantlar elenmeli.
+  for (const phrase of [
+    "Görev desktopa yönlendirildi.",
+    "Görev masaüstüne yönlendirildi.",
+    "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+    "gorev desktopa yonlendirildi",
+  ]) {
+    assert.equal(isInternalRoutingSummary(phrase), true, phrase);
+  }
+});
+
+test("isInternalRoutingSummary keeps genuine assistant answers", () => {
+  for (const phrase of [
+    "Fatura indirildi ve masaüstüne kaydedildi.",
+    "3 adım tamamlandı: Chrome açıldı, PDF kaydedildi.",
+    "Son dört e-postanın özeti hazır.",
+  ]) {
+    assert.equal(isInternalRoutingSummary(phrase), false, phrase);
+  }
+});
 
 test("syncChatTaskLifecycle ignores non-chat tasks", async () => {
   const updates: Array<Record<string, unknown>> = [];
