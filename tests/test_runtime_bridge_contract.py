@@ -557,6 +557,48 @@ def test_execute_assigned_runtime_task_reports_local_result(
     assert completed["artifacts"][0]["kind"] == "summary"
 
 
+def test_mobile_assigned_task_reuses_backend_chat_session_in_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    routed_session_ids: list[str] = []
+
+    monkeypatch.setattr(
+        runtime,
+        "_execute_deterministic_remote_task",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_send_conversation(*_args: object, **_kwargs: object) -> dict:
+        import importlib
+
+        active_bridge = importlib.import_module("runtime.bridge")
+        routed_session_ids.append(active_bridge._ACTIVE_DISPATCH_SESSION_ID.get())
+        return {"ok": True, "assistantMessage": "Devam edildi."}
+
+    monkeypatch.setattr(runtime, "send_conversation", fake_send_conversation)
+
+    result = runtime.remote_task_runner._execute_local_with_timeout(
+        {
+            "payload": {
+                "metadata": {"chat": {"sessionId": VALID_CHAT_SESSION_ID}},
+            },
+        },
+        "önceki konuşmaya devam et",
+        "Devam",
+        task_id="task-mobile-session",
+    )
+
+    assert result["ok"] is True
+    assert routed_session_ids == [VALID_CHAT_SESSION_ID]
+    import importlib
+
+    active_bridge = importlib.import_module("runtime.bridge")
+    assert active_bridge._ACTIVE_DISPATCH_SESSION_ID.get() == ""
+
+
 def test_quantum_capabilities_are_registered() -> None:
     capabilities = bridge.capability_names()
 
@@ -859,6 +901,7 @@ def test_execute_assigned_runtime_task_waits_for_approval_without_terminal_repor
     assert statuses[0] == "running"
     assert statuses[-1] == "waiting_approval"
     assert runtime.backend.status_updates[-1][1]["approvalRequest"]["summary"]  # type: ignore[attr-defined]
+    assert runtime.backend.status_updates[-1][1]["approvalRequest"]["manualApprovalRequired"] is True  # type: ignore[attr-defined]
     link = state_store.get_remote_task_link("task-waiting")
     assert link is not None
     assert link["pendingPlanId"] == "plan_waiting"
@@ -898,8 +941,92 @@ def test_approval_request_payload_includes_email_context() -> None:
     assert payload["subject"] == "Atatürk hakkında notlar"
     assert payload["bodyPreview"].startswith("Merhaba,")
     assert payload["provider"] == "google"
+    assert payload["capability"] == "email_send"
+    assert payload["permission"] == "side_effect"
+    assert payload["idempotency"] == "non_idempotent"
     assert payload["confirmLabel"] == "Onayla"
     assert payload["rejectLabel"] == "Reddet"
+
+
+def test_approval_request_payload_classifies_only_registered_safe_writes_as_idempotent() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    safe = runtime._approval_request_payload(
+        {
+            "assistantMessage": "Belge hazır.",
+            "planPreview": {
+                "summary": "Yeni görev belgesi oluşturulacak.",
+                "steps": [
+                    {"capability": "web_research", "description": "Kaynakları oku."},
+                    {"capability": "document_write", "description": "Belgeyi görev çıktısı olarak oluştur."},
+                ],
+            },
+        }
+    )
+    unknown = runtime._approval_request_payload(
+        {
+            "assistantMessage": "İşlem hazır.",
+            "planPreview": {
+                "summary": "Sınıflandırılmamış işlem.",
+                "steps": [{"capability": "unknown.write", "description": "Bilinmeyen işlem."}],
+            },
+        }
+    )
+    generated_image = runtime._approval_request_payload(
+        {
+            "assistantMessage": "Görsel üretilecek.",
+            "planPreview": {
+                "summary": "Yeni görsel üretilecek.",
+                "steps": [{"capability": "image_generate", "description": "Görsel üret."}],
+            },
+        }
+    )
+    generated_chart = runtime._approval_request_payload(
+        {
+            "assistantMessage": "Grafik üretilecek.",
+            "planPreview": {
+                "summary": "Yeni grafik üretilecek.",
+                "steps": [{"capability": "chart_generate", "description": "Grafik üret."}],
+            },
+        }
+    )
+    browser_control = runtime._approval_request_payload(
+        {
+            "assistantMessage": "Tarayıcı kontrol edilecek.",
+            "planPreview": {
+                "summary": "Tarayıcı kontrol edilecek.",
+                "steps": [{"capability": "browser_control", "description": "Tarayıcıyı kontrol et."}],
+            },
+        }
+    )
+    destructive_overwrite = runtime._approval_request_payload(
+        {
+            "assistantMessage": "Belge güncellenecek.",
+            "planPreview": {
+                "summary": "Mevcut belgenin üzerine yazılacak.",
+                "steps": [{
+                    "capability": "document_write",
+                    "description": "Mevcut belgeyi değiştir.",
+                    "args": {"outputPath": "notes.docx", "overwrite": True},
+                }],
+            },
+        }
+    )
+
+    assert safe["permission"] == "write"
+    assert safe["idempotency"] == "idempotent_write"
+    assert safe["capability"] == "document_write"
+    assert unknown["permission"] == "side_effect"
+    assert unknown["idempotency"] == "non_idempotent"
+    assert generated_image["permission"] == "side_effect"
+    assert generated_image["idempotency"] == "non_idempotent"
+    assert generated_chart["permission"] == "side_effect"
+    assert generated_chart["idempotency"] == "non_idempotent"
+    assert browser_control["permission"] == "side_effect"
+    assert browser_control["idempotency"] == "non_idempotent"
+    assert destructive_overwrite["permission"] == "side_effect"
+    assert destructive_overwrite["idempotency"] == "non_idempotent"
+    assert destructive_overwrite["steps"][0]["overwrite"] is True
 
 
 def test_remote_research_email_send_uses_backend_route_decision_without_replanning(
@@ -1853,6 +1980,24 @@ def test_explicit_route_side_effect_waits_for_approval_before_execution(
 def test_canonical_capability_preserves_dotted_desktop_operator_names() -> None:
     assert bridge._canonical_capability_name("desktop_operator.run") == "desktop_operator.run"
     assert bridge._canonical_capability_name("desktop.operator.execute_action") == "desktop_operator.execute_action"
+
+
+def test_remote_task_trace_keeps_stable_card_and_inline_approval_step() -> None:
+    runtime = bridge.RuntimeBridge()
+    trace = runtime._remote_task_trace_payload(
+        {
+            "summary": "Toplantı ve e-posta",
+            "steps": [
+                {"id": "step_1", "capability": "calendar_create", "description": "Toplantıyı oluştur"},
+                {"id": "step_2", "capability": "email_send", "description": "E-postayı gönder"},
+            ],
+        },
+        status="waiting_approval",
+        task_id="task-card-1",
+    )
+
+    assert trace["stableBlockId"] == "task_trace_task-card-1"
+    assert any(step["status"] == "waiting_approval" for step in trace["steps"])
 
 
 def test_execute_assigned_runtime_task_skips_duplicate_inflight_delivery(
@@ -9243,6 +9388,178 @@ def test_runtime_task_terminal_payload_marks_private_artifacts_share_required(
     assert artifacts[0]["requiresUserShare"] is True
 
 
+def test_synthesize_success_summary_from_execution_trace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    summary = runtime._synthesize_success_summary(
+        {
+            "chatOk": True,
+            "assistantMessage": "",
+            "executionTrace": {
+                "steps": [
+                    {"label": "Chrome açıldı", "status": "completed"},
+                    {"label": "Fatura indirildi", "status": "completed"},
+                    {"label": "Sonraki adım", "status": "pending"},
+                ]
+            },
+        }
+    )
+    assert summary
+    assert "Chrome açıldı" in summary
+    assert "Fatura indirildi" in summary
+    # Tamamlanmamış adım özetе girmez.
+    assert "Sonraki adım" not in summary
+
+
+def test_synthesize_success_summary_prefers_tool_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    summary = runtime._synthesize_success_summary(
+        {
+            "toolEvents": [
+                {"tool": "open_app", "ok": True, "output": "Safari açıldı."},
+                {"tool": "broken", "ok": False, "output": "hata mesajı"},
+            ]
+        }
+    )
+    assert "Safari açıldı." in summary
+    # Başarısız araç çıktısı özete girmez.
+    assert "hata mesajı" not in summary
+
+
+def test_terminal_payload_synthesizes_summary_when_assistant_message_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    payload, _artifacts, ok = runtime._runtime_task_terminal_payload(
+        {
+            "chatOk": True,
+            "assistantMessage": "",
+            "provider": "local",
+            "executionTrace": {"steps": [{"label": "Klasör oluşturuldu", "status": "completed"}]},
+        }
+    )
+    assert ok is True
+    # Boş asistan metni yerine kanıttan sentezlenen içerik gitmeli (statik
+    # tek satır değil) — kullanıcının #1 şikâyetinin masaüstü tarafı.
+    assert payload["summary"]
+    assert "Klasör oluşturuldu" in payload["summary"]
+    assert payload["safeSummary"]
+    assert payload["result"]["assistantMessage"]
+
+
+def test_user_facing_plan_summary_filters_routing_variants(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for phrase in (
+        "Görev desktopa yönlendirildi.",
+        "Görev masaüstüne yönlendirildi.",
+        "gorev desktopa yonlendirildi",
+        "Kullanıcı dispatch butonu ile masaüstüne yönlendirdi.",
+    ):
+        assert bridge._user_facing_plan_summary(phrase) == ""
+    # Gerçek asistan cevabı korunur.
+    assert bridge._user_facing_plan_summary("Fatura hazır.") == "Fatura hazır."
+
+
+def test_execution_timeout_extended_for_multi_step_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    from runtime import remote_task_runner as rtr
+
+    long_task = {
+        "payload": {
+            "planPreview": {
+                "steps": [
+                    {"capability": "document_write"},
+                    {"capability": "document_write"},
+                    {"capability": "document_write"},
+                    {"capability": "document_write"},
+                ]
+            }
+        }
+    }
+    assert (
+        runtime.remote_task_runner._execution_timeout_for(long_task)
+        == rtr.REMOTE_TASK_LONG_EXECUTION_TIMEOUT_SECONDS
+    )
+    short_task = {
+        "payload": {
+            "planPreview": {
+                "steps": [
+                    {"capability": "open_app"},
+                    {"capability": "sys_info"},
+                ]
+            }
+        }
+    }
+    assert (
+        runtime.remote_task_runner._execution_timeout_for(short_task)
+        == rtr.REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS
+    )
+
+
+def test_pending_terminal_stashed_when_delivery_fails_and_drained_on_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(runtime, "_send_runtime_socket_message", lambda payload: False)
+    monkeypatch.setattr(runtime, "_resync_terminal_remote_task", lambda task_id: None)
+    fail = bridge.BackendResult(ok=False, request_id="r", status_code=503, data={})
+    monkeypatch.setattr(runtime.backend, "runtime_task_status", lambda task_id, payload: fail)
+
+    runtime._report_runtime_task_status("task-9", {"status": "completed", "summary": "Hazır."})
+    # WS+HTTP ikisi de düştü → terminal kaybolmasın diye kuyruğa alınır.
+    assert "task-9" in runtime._pending_terminal_reports
+
+    ok = bridge.BackendResult(ok=True, request_id="r", status_code=200, data={"ok": True})
+    monkeypatch.setattr(runtime.backend, "runtime_task_status", lambda task_id, payload: ok)
+    runtime._drain_pending_terminal_reports()
+    # Transport geri gelince yeniden gönderilir ve kuyruktan düşer.
+    assert "task-9" not in runtime._pending_terminal_reports
+
+
+def test_reassert_pending_task_status_resends_running_until_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    sent: list[dict] = []
+    monkeypatch.setattr(runtime, "_resync_terminal_remote_task", lambda task_id: None)
+    monkeypatch.setattr(
+        runtime,
+        "_send_runtime_socket_message",
+        lambda payload: (sent.append(payload) or True),
+    )
+
+    runtime._report_runtime_task_status("task-5", {"status": "running", "taskRunId": "run-5"})
+    assert "task-5" in runtime._last_status_reports
+    sent.clear()
+
+    # Reconnect re-assertion → aktif görevin running durumu yeniden bildirilir.
+    runtime._reassert_pending_task_status()
+    assert any(p.get("taskId") == "task-5" for p in sent)
+
+    # Terminal gelince cache düşer; bir daha running re-assert edilmez.
+    runtime._report_runtime_task_status("task-5", {"status": "completed", "summary": "Bitti."})
+    assert "task-5" not in runtime._last_status_reports
+
+
 def test_backend_truth_sync_preserves_local_only_conversations(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -9683,12 +10000,13 @@ def _dispatch_auto_approve_backend(task_capabilities: list[str]):
     return FakeBackend()
 
 
-def test_dispatched_plan_within_work_order_capabilities_auto_approves(
+def test_dispatched_plan_within_work_order_capabilities_waits_for_backend_policy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Mobil dispatch açık kullanıcı iradesidir: plan, iş emrinin bildirdiği
-    yeteneklerin içinde kaldığı sürece ikinci onay istenmez ve görev biter."""
+    """Mobil dispatch yalnız görev rotasını yetkilendirir. Kullanıcı eylemi
+    masaüstünde otomatik onaylanmaz; güncel kullanıcı modu backend geçidinde
+    değerlendirilir."""
     _isolate_state(monkeypatch, tmp_path)
     _arm_device_identity()
     runtime = bridge.RuntimeBridge()
@@ -9732,10 +10050,13 @@ def test_dispatched_plan_within_work_order_capabilities_auto_approves(
     result = runtime.execute_assigned_runtime_tasks()
 
     assert result["ok"] is True
-    assert confirmed == [("conv_dispatch", "plan_dispatch", True)]
+    assert result["executions"][0]["status"] == "waiting_approval"
+    assert confirmed == []
     statuses = [payload["status"] for _, payload in runtime.backend.status_updates]  # type: ignore[attr-defined]
-    assert "waiting_approval" not in statuses
-    assert statuses[-1] in {"completed", "failed"}
+    assert statuses[-1] == "waiting_approval"
+    approval_request = runtime.backend.status_updates[-1][1]["approvalRequest"]  # type: ignore[attr-defined]
+    assert approval_request["permission"] == "side_effect"
+    assert approval_request["idempotency"] == "non_idempotent"
 
 
 def test_dispatched_plan_with_blocklisted_capability_still_waits_for_approval(
@@ -10412,6 +10733,27 @@ def test_plan_touches_blocklist_flags_irreversible_only() -> None:
     ) is False
     assert R._plan_touches_blocklist({"planPreview": {"steps": []}}) is False
     assert R._plan_touches_blocklist({}) is False
+
+
+def test_plan_requires_backend_approval_for_writes_and_unknown_capabilities() -> None:
+    from runtime import remote_task_runner as rtr
+    R = rtr.RemoteTaskRunner
+
+    assert R._plan_requires_backend_approval(
+        {"planPreview": {"steps": [{"capability": "web_research"}]}}
+    ) is False
+    assert R._plan_requires_backend_approval(
+        {"planPreview": {"steps": [{"capability": "document_write"}]}}
+    ) is True
+    assert R._plan_requires_backend_approval(
+        {"planPreview": {"steps": [{"capability": "browser_control"}]}}
+    ) is True
+    assert R._plan_requires_backend_approval(
+        {"planPreview": {"steps": [{"capability": "unknown.write"}]}}
+    ) is True
+    assert R._plan_requires_backend_approval(
+        {"planPreview": {"steps": []}}
+    ) is True
 
 
 def test_recoverable_replan_web_research_falls_back_to_local(

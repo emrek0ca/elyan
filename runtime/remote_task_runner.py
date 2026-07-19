@@ -12,6 +12,7 @@ from runtime.agent_planning import build_agent_plan
 from runtime.backend_client import BackendResult
 from runtime.capability_registry import (
     capability_display_name,
+    capability_metadata,
     capability_readiness,
 )
 from runtime.desktop_work_order import validate_payload, verify_result
@@ -29,6 +30,10 @@ REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS = 300.0
 # Tarayıcı ajanı / operatör gibi uzun soluklu görevler (gözlem-karar turları +
 # sayfa beklemeleri) 5 dk'ya sığmaz; bu görevlere geniş bütçe tanınır.
 REMOTE_TASK_LONG_EXECUTION_TIMEOUT_SECONDS = 1200.0
+# Çok-adımlı deterministik planlar (ör. 8-12 dosya/ofis adımı) tek 300sn
+# bütçesinde adım ortasında kesiliyordu; bildirilen adım sayısı bu eşiğe
+# ulaşınca da geniş bütçe verilir.
+REMOTE_TASK_LONG_PLAN_STEP_THRESHOLD = 4
 _LONG_RUNNING_CAPABILITY_PREFIXES = ("browser_agent.", "browser_session.", "desktop_operator.")
 _EXECUTION_TIMEOUT = object()
 _EXECUTION_CANCELLED = object()
@@ -575,10 +580,11 @@ class RemoteTaskRunner:
                     work_order=work_order,
                 )
             if local_result.get("needsConfirmation") is True and str(local_result.get("pendingPlanId", "") or "").strip():
-                # Plan modu VEYA geri-alınamaz (blocklist) adım → plan önizlemesi
-                # + kullanıcı onayı. Aksi halde (doğrudan mod, zararsız plan)
-                # work-order şeklinden bağımsız hemen adım adım yürüt.
-                if plan_mode or self._plan_touches_blocklist(local_result):
+                # User-action writes always cross the backend approval seam.
+                # The backend can immediately release only an explicitly
+                # classified idempotent write in trusted mode; the desktop
+                # never decides from stale/mobile client state.
+                if plan_mode or self._plan_requires_backend_approval(local_result):
                     return self._pause_for_approval(
                         task_id,
                         task_run_id,
@@ -586,6 +592,7 @@ class RemoteTaskRunner:
                         local_result,
                         dispatched_via_websocket,
                         work_order=work_order,
+                        force_manual=plan_mode,
                     )
                 auto_result = self._auto_approve_dispatched_plan(
                     task_id, task_run_id, local_result, work_order=work_order
@@ -768,7 +775,9 @@ class RemoteTaskRunner:
         }
 
     def _execution_timeout_for(self, task: dict[str, Any]) -> float:
-        """Görev tarayıcı ajanı/operatör içeriyorsa uzun bütçe, aksi halde standart."""
+        """Görev tarayıcı ajanı/operatör içeriyorsa VEYA çok-adımlı bir plan
+        taşıyorsa uzun bütçe, aksi halde standart. Çok-adımlı deterministik
+        planlar tek 300sn bütçesinde adım ortasında kesiliyordu."""
         try:
             payload = task.get("payload", {}) if isinstance(task, dict) else {}
             payload = payload if isinstance(payload, dict) else {}
@@ -779,6 +788,17 @@ class RemoteTaskRunner:
             name = str(capability or "")
             if name.startswith(_LONG_RUNNING_CAPABILITY_PREFIXES):
                 return REMOTE_TASK_LONG_EXECUTION_TIMEOUT_SECONDS
+        try:
+            route_decision = self.host._remote_task_route_decision(payload)
+            step_sources = self.host._remote_task_step_sources(task, route_decision)
+            declared_steps = max(
+                (len(src) for src in step_sources if isinstance(src, list)),
+                default=0,
+            )
+        except Exception:
+            declared_steps = 0
+        if declared_steps >= REMOTE_TASK_LONG_PLAN_STEP_THRESHOLD:
+            return REMOTE_TASK_LONG_EXECUTION_TIMEOUT_SECONDS
         return REMOTE_TASK_EXECUTION_TIMEOUT_SECONDS
 
     def resume_after_approval(self, task_id: str, approved: bool, answer: str = "") -> dict[str, Any]:
@@ -1213,7 +1233,29 @@ class RemoteTaskRunner:
         }
         if not plan_capabilities:
             return False
-        return not (plan_capabilities & DISPATCH_AUTO_APPROVE_BLOCKLIST)
+        return all(
+            capability_metadata(capability).get("approvalPermission") == "read"
+            and capability_metadata(capability).get("idempotency") == "read_only"
+            for capability in plan_capabilities
+        )
+
+    @staticmethod
+    def _plan_requires_backend_approval(local_result: dict[str, Any]) -> bool:
+        """Fail closed unless every planned capability is registered read-only."""
+        plan_preview = local_result.get("planPreview")
+        steps = plan_preview.get("steps", []) if isinstance(plan_preview, dict) else []
+        capabilities = {
+            str(step.get("capability", "") or "").strip()
+            for step in steps
+            if isinstance(step, dict) and str(step.get("capability", "") or "").strip()
+        }
+        if not capabilities:
+            return True
+        return any(
+            capability_metadata(capability).get("approvalPermission") != "read"
+            or capability_metadata(capability).get("idempotency") != "read_only"
+            for capability in capabilities
+        )
 
     @staticmethod
     def _plan_touches_blocklist(local_result: dict[str, Any]) -> bool:
@@ -1270,9 +1312,8 @@ class RemoteTaskRunner:
             "running",
             "Mobil dispatch onayı planı kapsıyor — adımlar otomatik yürütülüyor.",
         )
-        # Dispatch, kullanıcının bu göreve açık iradesidir; blocklist adımları
-        # buraya hiç düşmez (_plan_touches_blocklist onaya yönlendirir). P0
-        # güven kapısı bu yüzden bu koşuyu "approval" yetkisiyle görür.
+        # Only registered read-only plans reach this path. User-action writes
+        # pause and let the backend's current per-user mode decide.
         approval_token = self.host._begin_trusted_work_order(work_order, "approval")
         try:
             approved = self.host._run_with_approved_task_access(
@@ -1294,6 +1335,7 @@ class RemoteTaskRunner:
         dispatched_via_websocket: bool,
         *,
         work_order: dict[str, Any] | None = None,
+        force_manual: bool = False,
     ) -> dict[str, Any]:
         if self._task_cancellation_reason(task_id) == "task_cancelled":
             return self._cancelled_execution_result(task_id)
@@ -1312,6 +1354,8 @@ class RemoteTaskRunner:
             )
 
         approval_request = self.host._approval_request_payload(local_result)
+        if force_manual:
+            approval_request["manualApprovalRequired"] = True
         waiting_result = {
             "assistantMessage": str(local_result.get("assistantMessage", "") or "").strip(),
             "provider": str(local_result.get("provider", "") or ""),
@@ -1322,6 +1366,25 @@ class RemoteTaskRunner:
         }
         plan_preview = local_result.get("planPreview") if isinstance(local_result.get("planPreview"), dict) else {}
         execution_trace = local_result.get("executionTrace") if isinstance(local_result.get("executionTrace"), dict) else {}
+        if execution_trace and approval_request:
+            trace_steps = execution_trace.get("steps")
+            if isinstance(trace_steps, list):
+                approval_capability = str(approval_request.get("capability", "") or "").strip()
+                target = next(
+                    (
+                        step
+                        for step in trace_steps
+                        if isinstance(step, dict)
+                        and (
+                            not approval_capability
+                            or str(step.get("capability", "") or "").strip() == approval_capability
+                        )
+                    ),
+                    None,
+                )
+                if isinstance(target, dict):
+                    target["status"] = "waiting_approval"
+                    target["approval"] = dict(approval_request)
         if plan_preview:
             waiting_result["planPreview"] = dict(plan_preview)
         if execution_trace:

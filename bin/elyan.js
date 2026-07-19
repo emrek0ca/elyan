@@ -27,6 +27,7 @@ const REQUIRED_CORE_MODULES = [
   'websocket',
   'psutil',
   'PIL',
+  'customtkinter',
   'openpyxl',
   'litellm',
   'langgraph',

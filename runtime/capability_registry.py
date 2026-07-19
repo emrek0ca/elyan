@@ -50,6 +50,8 @@ class CapabilityMetadata:
     verification_mode: str
     preferred_model_class: str
     retryable: bool
+    approval_permission: str
+    idempotency: str
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +66,8 @@ class CapabilityMetadata:
             "verificationMode": self.verification_mode,
             "preferredModelClass": self.preferred_model_class,
             "retryable": self.retryable,
+            "approvalPermission": self.approval_permission,
+            "idempotency": self.idempotency,
         }
 
 
@@ -1193,6 +1197,42 @@ _NON_RETRYABLE_SIDE_EFFECTS = {
     "git_commit",
     "git_branch",
 }
+_TRUSTED_IDEMPOTENT_WRITE_CAPABILITIES = {
+    "clipboard_write",
+    "document_write",
+    "spreadsheet_write",
+    "presentation_write",
+    "canvas_write",
+}
+_APPROVAL_READ_ONLY_CAPABILITIES = {
+    "clipboard_read",
+    "data_analyze",
+    "desktop_os.permissions",
+    "desktop_os.status",
+    "directory_tree",
+    "document_read",
+    "email_draft",
+    "file_read",
+    "file_search",
+    "get_calendar_events",
+    "get_reminders",
+    "get_weather",
+    "get_youtube_channel_report",
+    "git_diff",
+    "git_status",
+    "image_read",
+    "latex_parse",
+    "math_solve",
+    "ocr_read",
+    "quantum_compare_classical",
+    "quantum_generate_report",
+    "quantum_model_problem",
+    "quantum_run_experiment",
+    "retrieve_context",
+    "speech_to_text",
+    "sys_info",
+    "web_research",
+}
 _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
     "web_research": ("httpx",),
     "ocr_read": (),
@@ -1489,6 +1529,8 @@ def capability_metadata(name: str) -> dict[str, Any]:
             verification_mode="tool_result",
             preferred_model_class="reasoning",
             retryable=False,
+            approval_permission="side_effect",
+            idempotency="non_idempotent",
         ).to_dict()
 
     migrated = capability_spec.spec_for(normalized)
@@ -1589,6 +1631,21 @@ def capability_metadata(name: str) -> dict[str, Any]:
         timeout_seconds = 180
 
     retryable = normalized not in _NON_RETRYABLE_SIDE_EFFECTS
+    if normalized in _TRUSTED_IDEMPOTENT_WRITE_CAPABILITIES:
+        approval_permission = "write"
+        idempotency = "idempotent_write"
+    elif normalized in _SIDE_EFFECT_CAPABILITIES:
+        approval_permission = "side_effect"
+        idempotency = "non_idempotent"
+    elif normalized in _APPROVAL_READ_ONLY_CAPABILITIES:
+        approval_permission = "read"
+        idempotency = "read_only"
+    else:
+        # Registered-but-unclassified and unknown capabilities never gain
+        # authority through a user mode. New capabilities must be explicitly
+        # admitted to one of the approval allowlists above.
+        approval_permission = "side_effect"
+        idempotency = "non_idempotent"
     return CapabilityMetadata(
         name=normalized,
         category=category,
@@ -1601,6 +1658,8 @@ def capability_metadata(name: str) -> dict[str, Any]:
         verification_mode=verification_mode,
         preferred_model_class=preferred_model_class,
         retryable=retryable,
+        approval_permission=approval_permission,
+        idempotency=idempotency,
     ).to_dict()
 
 

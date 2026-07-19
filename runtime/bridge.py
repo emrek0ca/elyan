@@ -2712,7 +2712,12 @@ def _plan_preview_with_retrieval(plan_preview: dict[str, Any] | None, retrieval:
 # gibi görünmemeli. Plan özeti bu kalıplardan biriyse boş sayılır.
 _INTERNAL_ROUTING_PHRASES = (
     "dispatch butonu",
-    "masaüstüne yönlendirdi",
+    "masaüstüne yönlendir",  # "…yönlendirdi" ve "…yönlendirildi" varyantlarını kapsar
+    "masaustune yonlendir",
+    "desktopa yönlendir",
+    "desktopa yonlendir",
+    "yönlendirildi",
+    "yonlendirildi",
     "açıkça istedi",
     "acikca istedi",
 )
@@ -5583,6 +5588,19 @@ class RuntimeBridge:
         self._remote_task_fence_lock = threading.RLock()
         self._remote_task_cancellations: dict[str, tuple[str, float]] = {}
         self._remote_task_terminal_claims: dict[str, float] = {}
+        # Terminal statü WS+HTTP ikisiyle de teslim edilemezse (görev bitişinde
+        # cihaz çevrimdışı) payload burada tutulur; reconnect/relay tick'inde
+        # yeniden gönderilir → sonuç kaybolmaz. In-memory (lean): daemon restart
+        # kapsam dışı, STATE inbox terminal gerçeği hayalet-çalıştırmayı zaten
+        # engeller.
+        self._pending_terminal_lock = threading.Lock()
+        self._pending_terminal_reports: dict[str, dict[str, Any]] = {}
+        # Aktif görevin en son non-terminal durumu (running/waiting_approval).
+        # WS kopup yeniden bağlanınca bu yeniden bildirilir → backend görevi
+        # queue'ya atmaz (requeue'yu önler) ve kaybolan onay kartı geri gelir.
+        # contextvar thread'e özel olduğundan reconnect thread'inden erişilecek
+        # thread-paylaşımlı kayıt gerekir.
+        self._last_status_reports: dict[str, dict[str, Any]] = {}
         # Başsız daemon için de canlı ilerleme: emitter'ı burada bağla. IPC
         # main() bunu stdout+backend bileşiğiyle değiştirir (yerel Swift sohbeti
         # için). Her iki modda mobil görevler backend'e canlı adım akıtır.
@@ -6691,19 +6709,64 @@ class RuntimeBridge:
         )
         raw_steps = plan_preview.get("steps", [])
         safe_steps: list[dict[str, Any]] = []
+        approval_capabilities: list[str] = []
+        approval_metadata: list[dict[str, Any]] = []
         if isinstance(raw_steps, list):
-            for step in raw_steps[:6]:
+            for step_index, step in enumerate(raw_steps):
                 if not isinstance(step, dict):
                     continue
                 description = str(step.get("description", "") or step.get("capability", "") or "").strip()[:180]
                 capability = str(step.get("capability", "") or "").strip()[:80]
+                args = step.get("args", {})
+                args = args if isinstance(args, dict) else {}
+                overwrites_existing_file = args.get("overwrite") is True
                 entry: dict[str, Any] = {}
                 if capability:
                     entry["capability"] = capability
                 if description:
                     entry["description"] = description
-                if entry:
+                if overwrites_existing_file:
+                    entry["overwrite"] = True
+                if entry and step_index < 6:
                     safe_steps.append(entry)
+                if capability:
+                    metadata = capability_metadata(capability)
+                    if (
+                        overwrites_existing_file
+                        and metadata.get("approvalPermission") == "write"
+                    ):
+                        metadata = {
+                            **metadata,
+                            "approvalPermission": "side_effect",
+                            "idempotency": "non_idempotent",
+                        }
+                    approval_capabilities.append(capability)
+                    approval_metadata.append(metadata)
+        if structured_kind:
+            approval_capabilities.append(structured_kind)
+            approval_metadata.append(capability_metadata(structured_kind))
+        approval_capability = next(
+            (
+                name
+                for name, metadata in zip(approval_capabilities, approval_metadata)
+                if metadata.get("approvalPermission") != "read"
+                or metadata.get("idempotency") != "read_only"
+            ),
+            approval_capabilities[0] if approval_capabilities else "",
+        )
+        if not approval_metadata or any(
+            item.get("approvalPermission") == "side_effect"
+            or item.get("idempotency") == "non_idempotent"
+            for item in approval_metadata
+        ):
+            approval_permission = "side_effect"
+            approval_idempotency = "non_idempotent"
+        elif any(item.get("approvalPermission") == "write" for item in approval_metadata):
+            approval_permission = "write"
+            approval_idempotency = "idempotent_write"
+        else:
+            approval_permission = "read"
+            approval_idempotency = "read_only"
         summary = str(
             plan_preview.get("summary", "")
             or local_result.get("assistantMessage", "")
@@ -6729,7 +6792,11 @@ class RuntimeBridge:
             "reason": "Desktop üzerinde yan etkili yerel işlem için onay gerekiyor.",
             "steps": safe_steps,
             "source": "desktop_runtime",
+            "permission": approval_permission,
+            "idempotency": approval_idempotency,
         }
+        if approval_capability:
+            payload["capability"] = approval_capability
         if structured_kind:
             payload["kind"] = structured_kind
         if structured_to:
@@ -6873,12 +6940,88 @@ class RuntimeBridge:
             result_payload["operator"] = dict(structured_result["operator"])
         return result_payload
 
+    def _synthesize_success_summary(self, local_result: dict[str, Any]) -> str:
+        """assistantMessage boş kalan BAŞARILI görevler için kullanıcıya
+        gösterilebilir kısa bir TR özet üretir. Yan-etki-only deterministik
+        planlar (uygulama aç, dosya yaz…) sohbet metni üretmez; bu durumda
+        statik "Görev tamamlandı." yerine ne yapıldığını söyleriz. Sıra:
+        araç çıktıları → tamamlanan adım etiketleri → çıktı adları →
+        plan özeti. Hiçbiri yoksa "" döner (çağıran statik mesajı korur)."""
+        # 1) toolEvents.output — gerçekleşen işin en anlamlı sinyali.
+        tool_events = local_result.get("toolEvents")
+        if isinstance(tool_events, list):
+            outputs: list[str] = []
+            for event in tool_events:
+                if not isinstance(event, dict) or event.get("ok") is False:
+                    continue
+                output = str(event.get("output", "") or "").strip()
+                if output and output not in outputs:
+                    outputs.append(self._truncate_text(output, 200))
+                if len(outputs) >= 3:
+                    break
+            if outputs:
+                return self._truncate_text(" • ".join(outputs), 500)
+        # 2) executionTrace tamamlanan adım etiketleri.
+        execution_trace = local_result.get("executionTrace")
+        if isinstance(execution_trace, dict):
+            steps = execution_trace.get("steps")
+            if isinstance(steps, list):
+                labels: list[str] = []
+                total = 0
+                for step in steps:
+                    if not isinstance(step, dict):
+                        continue
+                    total += 1
+                    if str(step.get("status", "") or "").strip().lower() != "completed":
+                        continue
+                    label = str(step.get("label", "") or "").strip()
+                    if label and label not in labels:
+                        labels.append(self._truncate_text(label, 120))
+                if labels:
+                    shown = labels[:4]
+                    body = ", ".join(shown)
+                    if len(labels) > len(shown):
+                        body += "…"
+                    prefix = f"{len(labels)} adım tamamlandı: " if len(labels) > 1 else ""
+                    return self._truncate_text(f"{prefix}{body}", 500)
+        # 3) Üretilen çıktı adları.
+        artifacts = local_result.get("artifacts")
+        if isinstance(artifacts, list):
+            names: list[str] = []
+            for artifact in artifacts:
+                if not isinstance(artifact, dict):
+                    continue
+                name = str(artifact.get("name", "") or artifact.get("title", "") or "").strip()
+                if name and name not in names:
+                    names.append(self._truncate_text(name, 120))
+                if len(names) >= 3:
+                    break
+            if names:
+                return self._truncate_text("Oluşturulan çıktı: " + ", ".join(names), 500)
+        # 4) Plan özeti (iç yönlendirme cümlelerinden arındırılmış).
+        plan_preview = local_result.get("planPreview")
+        if isinstance(plan_preview, dict):
+            summary = _user_facing_plan_summary(plan_preview.get("summary", ""))
+            if summary:
+                return self._truncate_text(summary, 500)
+        return ""
+
     def _runtime_task_terminal_payload(
         self,
         local_result: dict[str, Any],
     ) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
         chat_ok = local_result.get("chatOk", True) is not False
         assistant_message = str(local_result.get("assistantMessage", "") or "").strip()
+        # Yan-etki-only başarılı görevler asistan metni üretmeyebilir; backend
+        # bu durumda task.summary/konserve tek satıra düşüyordu. Boşsa yürütme
+        # kanıtından içerik taşıyan bir özet sentezle ve tüm sonuç alanlarına
+        # (summary/safeSummary/result/blocks) tutarlı akması için yerel kopyaya
+        # yaz. Gerçek asistan metni varsa dokunulmaz.
+        if not assistant_message and chat_ok:
+            synthesized = self._synthesize_success_summary(local_result)
+            if synthesized:
+                assistant_message = synthesized
+                local_result = {**local_result, "assistantMessage": synthesized}
         provider = str(local_result.get("provider", "") or "")
         local_artifacts = [
             dict(item)
@@ -7145,6 +7288,10 @@ class RuntimeBridge:
                     error_code="",
                     x_request_id=heartbeat.x_request_id or heartbeat.request_id,
                 )
+            # (Yeniden) bağlanma sonrası: kopmada teslim edilememiş terminalleri
+            # ve aktif görevlerin son durumunu yeniden bildir → sonuç kaybolmaz,
+            # requeue önlenir, kaybolan onay kartı geri gelir.
+            self._reassert_pending_task_status()
             self._request_assigned_task_fetch()
             self.execute_assigned_runtime_tasks(limit=2)
         except Exception as exc:
@@ -7722,6 +7869,11 @@ class RuntimeBridge:
                         self._send_socket_runtime_heartbeat("online")
                     else:
                         self._send_backend_runtime_heartbeat("online")
+                    # Teslim edilememiş terminalleri her tick'te yeniden dene:
+                    # transport (WS ya da HTTP) geri gelince sonuç kaybolmadan
+                    # ulaşır (reconnect'i beklemeye gerek yok).
+                    if self._pending_terminal_reports:
+                        self._drain_pending_terminal_reports()
                     if self._should_poll_assigned_tasks():
                         self.execute_assigned_runtime_tasks(limit=self._relay_task_fetch_limit())
                 elif self._paired_runtime_ready():
@@ -11806,19 +11958,110 @@ class RuntimeBridge:
                 data={"error": {"code": "TASK_CANCELLED", "message": "Görev iptal edildi."}},
                 error="TASK_CANCELLED",
             )
+        is_terminal = terminal_status in {"completed", "failed", "canceled"}
+        # Reconnect re-assertion için son non-terminal durumu önbelleğe al;
+        # terminal olunca önbellekten düş (bir daha running yeniden bildirilmez).
+        if is_terminal:
+            self._forget_last_status_report(task_id)
+        else:
+            self._remember_last_status_report(task_id, payload)
         if self._send_runtime_socket_message({"type": "task.update", "taskId": task_id, "body": payload}):
             self._sync_task_inbox_status(task_id, payload)
-            if terminal_status in {"completed", "failed", "canceled"}:
+            if is_terminal:
+                self._clear_pending_terminal(task_id)
                 self._remember_terminal_assigned_task(task_id)
                 self._resync_terminal_remote_task(task_id)
             return BackendResult(ok=True, request_id=_request_id(), status_code=200, data={"ok": True, "transport": "websocket"})
         result = self.backend.runtime_task_status(task_id, payload)
         if result.ok:
             self._sync_task_inbox_status(task_id, payload)
-            if terminal_status in {"completed", "failed", "canceled"}:
+            if is_terminal:
+                self._clear_pending_terminal(task_id)
                 self._remember_terminal_assigned_task(task_id)
                 self._resync_terminal_remote_task(task_id)
+        elif is_terminal:
+            # WS ve HTTP ikisi de düştü: terminal sonuç kaybolmasın — payload'ı
+            # kuyruğa al, reconnect/relay tick'inde yeniden gönderilecek.
+            self._stash_pending_terminal(task_id, payload)
         return result
+
+    def _remember_last_status_report(self, task_id: str, payload: dict[str, Any]) -> None:
+        normalized = str(task_id or "").strip()
+        if not normalized or not isinstance(payload, dict):
+            return
+        with self._pending_terminal_lock:
+            if (
+                normalized not in self._last_status_reports
+                and len(self._last_status_reports) >= 64
+            ):
+                oldest = next(iter(self._last_status_reports))
+                self._last_status_reports.pop(oldest, None)
+            self._last_status_reports[normalized] = dict(payload)
+
+    def _forget_last_status_report(self, task_id: str) -> None:
+        normalized = str(task_id or "").strip()
+        if not normalized:
+            return
+        with self._pending_terminal_lock:
+            self._last_status_reports.pop(normalized, None)
+
+    def _reassert_pending_task_status(self) -> None:
+        """Reconnect/prime'da: (1) teslim edilememiş terminalleri yeniden gönder
+        (terminal, running'i ezmeli — önce), (2) aktif görevlerin son non-terminal
+        durumunu yeniden bildir. Requeue'yu önler ve kaybolan onay kartını geri
+        getirir. Yürütmeyi asla bozmaz."""
+        self._drain_pending_terminal_reports()
+        with self._pending_terminal_lock:
+            pending_terminal_ids = set(self._pending_terminal_reports.keys())
+            active = [
+                (task_id, dict(payload))
+                for task_id, payload in self._last_status_reports.items()
+                if task_id not in pending_terminal_ids
+            ]
+        for task_id, payload in active:
+            if self._active_remote_task_cancellation_reason(task_id) == "task_cancelled":
+                continue
+            try:
+                self._report_runtime_task_status(task_id, payload)
+            except Exception:
+                pass
+
+    def _stash_pending_terminal(self, task_id: str, payload: dict[str, Any]) -> None:
+        normalized = str(task_id or "").strip()
+        if not normalized or not isinstance(payload, dict):
+            return
+        with self._pending_terminal_lock:
+            # Sınırlı tut: en fazla 64 bekleyen terminal (bellek koruması).
+            if (
+                normalized not in self._pending_terminal_reports
+                and len(self._pending_terminal_reports) >= 64
+            ):
+                oldest = next(iter(self._pending_terminal_reports))
+                self._pending_terminal_reports.pop(oldest, None)
+            self._pending_terminal_reports[normalized] = dict(payload)
+
+    def _clear_pending_terminal(self, task_id: str) -> None:
+        normalized = str(task_id or "").strip()
+        if not normalized:
+            return
+        with self._pending_terminal_lock:
+            self._pending_terminal_reports.pop(normalized, None)
+
+    def _drain_pending_terminal_reports(self) -> None:
+        """Bekleyen (teslim edilememiş) terminal raporlarını yeniden gönder.
+        Reconnect (_on_open/_prime) ve relay tick'inden çağrılır. Başarılı
+        teslim _report_runtime_task_status içinde kuyruğu temizler."""
+        with self._pending_terminal_lock:
+            pending = list(self._pending_terminal_reports.items())
+        for task_id, payload in pending:
+            # İptal edilmiş görevi yeniden raporlama.
+            if self._active_remote_task_cancellation_reason(task_id) == "task_cancelled":
+                self._clear_pending_terminal(task_id)
+                continue
+            try:
+                self._report_runtime_task_status(task_id, payload)
+            except Exception:
+                pass  # kalıcı hata akışı bozmamalı; sonraki tick tekrar dener
 
     def _report_runtime_task_artifacts(self, task_id: str, artifacts: list[dict[str, Any]]) -> BackendResult | None:
         if self._active_remote_task_cancellation_reason(task_id) == "task_cancelled":
@@ -12394,7 +12637,7 @@ class RuntimeBridge:
                     if index < approval_idx:
                         step_status = "completed"
                     elif index == approval_idx:
-                        step_status = "running"
+                        step_status = "waiting_approval"
                     else:
                         step_status = "pending"
                 else:  # running
@@ -12417,6 +12660,7 @@ class RuntimeBridge:
                 active_step_id = safe_steps[-1]["id"]
         result: dict[str, Any] = {
             "type": "task_trace",
+            "stableBlockId": f"task_trace_{str(task_id or '').strip()}",
             "taskId": str(task_id or "").strip(),
             "status": normalized_status,
             "title": self._truncate_text(plan_preview.get("summary", "") or "Görev yürütülüyor.", 220),
