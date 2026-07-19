@@ -54,16 +54,12 @@ import {
   countDistinctEphemeralImages,
   type EphemeralVisionCarrier,
 } from "../brain/ephemeral-vision.js";
-import {
-  buildDocumentContextBlock,
-  buildAttachmentAckText,
-} from "../brain/document-context.js";
+import { buildDocumentContextBlock } from "../brain/document-context.js";
 import {
   parseVisionEvidence,
   type VisionEvidenceV3,
 } from "../brain/vision-evidence-v3.js";
 import {
-  buildAssistantAttachmentAckBlock,
   buildAssistantCodeBlock,
   buildAssistantDocumentBlock,
   buildAssistantTableBlock,
@@ -3398,12 +3394,22 @@ async function completeServerBrainTask(
   const artifactPipeline = await buildArtifactPipeline({
     userRequest: prompt,
     responseText: visibleResponseText,
+    assistantBlocks: resolvedAssistantBlocks,
     metadata: payloadMetadata,
     understandingEnvelope:
       extractUnderstandingEnvelopeFromMetadata(payloadMetadata),
     userId: input.userId,
     taskId: input.taskId,
     model: input.model,
+    provenance: {
+      webGroundingUsed: input.webGroundingUsed ?? false,
+      webSourceCount: input.webSourceCount ?? 0,
+      documentSourceCount: input.documentSourceCount ?? 0,
+      retrievalResultCount: input.retrievalResultCount ?? 0,
+      skillUsed: input.skillUsed ?? false,
+      skillId: input.skillId ?? null,
+      toolCallCount: input.toolFlow?.count ?? 0,
+    },
   });
   if (artifactPipeline.kind === "rendered") {
     const suppressBlockTypes = new Set<string>(
@@ -3440,6 +3446,21 @@ async function completeServerBrainTask(
     });
     resolvedAssistantBlocks = mergedValidation.blocks;
     blockQuality = mergedValidation.blockQuality;
+  } else if (artifactPipeline.kind === "evidence_required") {
+    visibleResponseText =
+      "Araştırma için yeterli doğrulanabilir kaynak veya içerik oluşmadı; bu yüzden belge hazırlanmadı. Lütfen tekrar dene.";
+    const evidenceValidation = validateAssistantBlockContract({
+      // A failed evidence gate is authoritative terminal truth. Do not retain
+      // provisional prose, cards, code, media, or stale artifacts from the
+      // model response that preceded it.
+      blocks: [],
+      content: visibleResponseText,
+      mode: "normalize",
+      tablePolicy,
+      qualityBlocks: input.assistantBlocks,
+    });
+    resolvedAssistantBlocks = evidenceValidation.blocks;
+    blockQuality = evidenceValidation.blockQuality;
   }
   // Model zaten bir veri/matematik görseli (chart/math/table/svg) ürettiyse,
   // hosted image üretimi ÇALIŞMAZ ve bu blokları ASLA ezmez. "Grafiğini çiz"
@@ -3459,7 +3480,8 @@ async function completeServerBrainTask(
   const effectiveSourceImages = referencedSourceImages.length > 0
     ? referencedSourceImages
     : input.sourceImages;
-  const generatedImageArtifact = hasVisualDataBlock
+  const generatedImageArtifact =
+    artifactPipeline.kind === "evidence_required" || hasVisualDataBlock
     ? null
     : await maybeGenerateHostedImageArtifact(app, {
         prompt,
@@ -3469,6 +3491,7 @@ async function completeServerBrainTask(
         sourceImages: effectiveSourceImages,
       });
   const imageGenerationRequested =
+    artifactPipeline.kind !== "evidence_required" &&
     !hasVisualDataBlock && (
       isHostedImageGenerationRequest(prompt) ||
       isHostedImageEditRequest(prompt, effectiveSourceImages?.length ?? 0)
@@ -3501,7 +3524,10 @@ async function completeServerBrainTask(
           },
         }
       : payloadMetadata;
-  const renderRecipe = generatedImageArtifact
+  const renderRecipe =
+    artifactPipeline.kind === "evidence_required"
+      ? null
+      : generatedImageArtifact
     ? null
     : visibleResponseText
       ? buildLocalRenderRecipe({
@@ -3620,7 +3646,15 @@ async function completeServerBrainTask(
               reason: artifactPipeline.intent.privateDataReason,
             },
           }
-        : {}),
+        : artifactPipeline.kind === "evidence_required"
+          ? {
+              artifact: {
+                type: artifactPipeline.intent.type,
+                generated: false,
+                reason: artifactPipeline.reason,
+              },
+            }
+          : {}),
     imageArtifactGenerated: Boolean(generatedImageArtifact),
     ...(input.toolFlow ? { toolFlow: input.toolFlow } : {}),
     ...(input.connectorWriteApproval
@@ -4350,15 +4384,6 @@ async function processSharedBrainChatTask(
       envelope: input.understanding.envelope,
     });
     /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
-    const attachmentAckBlock = clientDocCtx?.hasContent
-      ? buildAssistantAttachmentAckBlock({
-          summary: buildAttachmentAckText(clientDocCtx),
-          attachmentCount: clientAttachments.length,
-          chunkCount: clientDocCtx.chunkCount,
-          hasTable: clientDocCtx.tableCount > 0,
-          hasImage: clientDocCtx.imageCount > 0,
-        })
-      : null;
     // Prettier-ignore -- a source-level regression contract verifies this fast-path seam.
     const sourceImages = hostedImageSources(input.ephemeralVision);
     const imageEditIntent = isHostedImageEditIntent(input.prompt);
@@ -4497,10 +4522,7 @@ async function processSharedBrainChatTask(
 
       if (chatStreaming) {
         const imageResultBlocks = normalizeAssistantMessageBlocks({
-          blocks: [
-            ...(attachmentAckBlock ? [attachmentAckBlock] : []),
-            ...completedResultBlocks,
-          ],
+          blocks: completedResultBlocks,
         });
         // Prettier-ignore -- source-level regression contract verifies this render seam.
         const visibleText = imageResultBlocks.length > 0 ? "" : completedResultText;
@@ -4603,10 +4625,7 @@ async function processSharedBrainChatTask(
       });
       const ackBlocks = composeAssistantMessageBlocks({
         content: visibleAckText,
-        blocks: [
-          ackTaskTrace,
-          ...(attachmentAckBlock ? [attachmentAckBlock] : []),
-        ],
+        blocks: [ackTaskTrace],
         streaming: true,
       });
       if (visibleAckText) {
@@ -4832,10 +4851,7 @@ async function processSharedBrainChatTask(
             const now = new Date().toISOString();
             const streamingBlocks = composeAssistantMessageBlocks({
               content: visibleContent,
-              blocks: [
-                ackTaskTrace,
-                ...(attachmentAckBlock ? [attachmentAckBlock] : []),
-              ],
+              blocks: [ackTaskTrace],
               streaming: true,
             });
             await publishVolatileChatStreamEvent(app, {
@@ -4993,8 +5009,6 @@ async function processSharedBrainChatTask(
       // Use the cleaned text everywhere so the inline prose doesn't repeat a
       // table/code/document that a widget block is already rendering.
       const visibleText = inferenceResolved.text || completedResultText;
-      // attachmentAck varsa tüm blokların önüne ekle (belge alındı kartı)
-      const ackBlock = attachmentAckBlock ? [attachmentAckBlock] : [];
       // Deterministik hedef bloğu: model kendi goal_progress bloğunu ürettiyse
       // duplike etme — aynı goalId için tek kart.
       const goalBlock =
@@ -5011,7 +5025,7 @@ async function processSharedBrainChatTask(
           : [];
       const finalBlocks = composeAssistantMessageBlocks({
         content: visibleText,
-        blocks: [...ackBlock, unifiedTaskTrace, ...visibleInferenceBlocks],
+        blocks: [unifiedTaskTrace, ...visibleInferenceBlocks],
       });
       const revision = buildAssistantRevisionMetadata({
         finalContent: visibleText,

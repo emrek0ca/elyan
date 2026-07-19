@@ -222,11 +222,10 @@ export function isMateriallyAmbiguousUserPrompt(prompt: string): boolean {
 }
 
 export function buildSharedBrainAckText(workload: SharedBrainWorkload): string {
-  // Legacy ack strings are tracked separately in TRANSIENT_ASSISTANT_ACKS
-  // in inference.ts so existing sessions in DB are still filtered correctly.
-  if (workload === "document_generate") {
-    return "Rapor hazırlanıyor, birkaç saniye...";
-  }
+  // Pending state is presentation truth: mobile renders its loading animation.
+  // Never stream workload-specific prose that can be persisted or mistaken for
+  // the beginning of the final answer.
+  void workload;
   return "";
 }
 

@@ -13,6 +13,15 @@ export const skillModelProfileValues = [
 
 export type SkillModelProfile = (typeof skillModelProfileValues)[number];
 
+export const skillAllowedToolValues = [
+  "retrieval.search",
+  "memory.query",
+  "web.search",
+  "web.fetch_url",
+] as const;
+
+export type SkillAllowedTool = (typeof skillAllowedToolValues)[number];
+
 export type SkillDefinition = {
   id: string;
   version: string;
@@ -35,7 +44,7 @@ export type SkillDefinition = {
   };
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
-  allowedTools: string[];
+  allowedTools: SkillAllowedTool[];
   modelProfile: SkillModelProfile;
   maxInputTokens: number;
   maxOutputTokens: number;
@@ -81,7 +90,7 @@ export type SkillRouteDecision = {
 
 export type SkillInput = {
   prompt: string;
-  attachmentContext: ResolvedAttachmentContext;
+  attachmentContext?: ResolvedAttachmentContext | null;
   requestMetadata?: Record<string, unknown>;
 };
 
@@ -110,6 +119,12 @@ export type SelectedSkillChunk = ResolvedAttachmentContextChunk & {
 
 export type SkillModelCallInput = {
   prompt: string;
+  /** Original user intent used by authorized knowledge adapters. */
+  knowledgeQuery: string;
+  /** Capability allowlist enforced before any adapter is invoked. */
+  toolAllowlist: SkillAllowedTool[];
+  /** Skill contract requires public-web evidence unless user/privacy policy denies it. */
+  webGroundingRequired: boolean;
   workload: SharedBrainWorkload;
   outputSchema: Record<string, unknown>;
   maxOutputTokens: number;
@@ -126,6 +141,21 @@ export type SkillModelCallResult = {
   completionTokens: number;
   totalTokens: number;
   metadata: Record<string, unknown>;
+};
+
+export type SkillToolResultSummary = {
+  tool: string;
+  ok: boolean;
+  durationMs: number | null;
+  resultCount: number | null;
+  errorCode: string | null;
+};
+
+export type SkillWebSourceSummary = {
+  title: string;
+  url: string;
+  sourceHost: string | null;
+  publishedAt: string | null;
 };
 
 export type SkillExecutionResult = {
@@ -147,13 +177,23 @@ export type SkillExecutionResult = {
     modelProfile: SkillModelProfile;
     workload: SharedBrainWorkload;
     validationStatus: "valid" | "repaired" | "failed";
+    /** Set only when a provider was called but its skill output was rejected. */
+    failureCode: string | null;
     cacheHit: boolean;
     toolCalls: string[];
+    toolResults: SkillToolResultSummary[];
+    groundingUsed: boolean;
+    documentSourceCount: number;
+    webGroundingUsed: boolean;
+    webEvidenceSufficient: boolean;
+    webSourceCount: number;
+    webSources: SkillWebSourceSummary[];
+    retrievalResultCount: number;
     manualHintUsed: boolean;
     skillDisplay: {
       label: string;
       source: SkillRouteDecision["source"];
-      status: "used";
+      status: "used" | "failed";
     };
   };
 };

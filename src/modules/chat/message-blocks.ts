@@ -7,6 +7,11 @@ import {
   elyanAssistantPassthroughBlockSchema,
 } from "../../contracts/domain.js";
 import {
+  hydrateLegacyAssistantBlockInput,
+  isSourceWidgetBlockType,
+  withCanonicalAssistantBlockEnvelope,
+} from "./block-envelope.js";
+import {
   containsProtectedElyanDisclosure,
   ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT,
 } from "../../lib/elyan-public-identity.js";
@@ -341,8 +346,16 @@ function withAssistantBlockDefaults<T extends Record<string, unknown>>(
     visibility,
   };
   const cacheDigest = normalizeBlockCacheDigest(options.cacheDigest) ?? buildCacheDigest({ type, ...withMeta });
+  const sectionRole = normalizeBlockStableId(renderHints.sectionRole);
+  const singletonSlot =
+    sectionRole &&
+    !["artifact", "block_group", "chart", "file", "table"].includes(type)
+      ? `elyan:${type}:${sectionRole}`
+      : null;
   const stableBlockId =
-    normalizeBlockStableId(options.stableBlockId) ?? `${type}_${cacheDigest}`;
+    normalizeBlockStableId(options.stableBlockId) ??
+    singletonSlot ??
+    `${type}_${cacheDigest}`;
   return {
     ...withMeta,
     stableBlockId,
@@ -1927,7 +1940,9 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
     ...(routeReason ? { routeReason } : {}),
     steps,
     ...withAssistantBlockDefaults("task_trace", {}, {
-      stableBlockId: normalizeBlockStableId(value.stableBlockId),
+      stableBlockId:
+        normalizeBlockStableId(value.blockId) ??
+        normalizeBlockStableId(value.stableBlockId),
       visibility: normalizeVisibility(value.visibility),
       confidence: normalizeConfidence(value.confidence),
       priority: normalizePriority(value.priority),
@@ -1940,6 +1955,7 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
 function parseCommonMetadata(value: Record<string, unknown>): AssistantBlockCommon {
   return {
     stableBlockId:
+      normalizeBlockStableId(value.blockId) ??
       normalizeBlockStableId(value.stableBlockId),
     visibility: normalizeVisibility(value.visibility),
     confidence: normalizeConfidence(value.confidence),
@@ -1977,14 +1993,18 @@ function parseInfoItems(value: unknown): ElyanAssistantInfoCardBlock["items"] {
 }
 
 function stableBlockDedupeKey(block: AssistantMessageBlock): string {
-  const contentKey = assistantBlockContentDedupeKey(block);
-  if (contentKey) {
-    return contentKey;
-  }
   const record = block as Record<string, unknown>;
+  const blockId = normalizeBlockStableId(record.blockId) ?? "";
+  if (blockId) {
+    return `${block.type}:id:${blockId}`;
+  }
   const stableBlockId = normalizeBlockStableId(record.stableBlockId) ?? "";
   if (stableBlockId) {
     return `${block.type}:id:${stableBlockId}`;
+  }
+  const contentKey = assistantBlockContentDedupeKey(block);
+  if (contentKey) {
+    return contentKey;
   }
   const cacheDigest = normalizeBlockCacheDigest(record.cacheDigest) ?? "";
   if (cacheDigest) {
@@ -2138,8 +2158,19 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
     return null;
   }
 
-  const record = value as Record<string, unknown>;
-  const type = String(record.type ?? "").trim().toLowerCase();
+  const rawRecord = value as Record<string, unknown>;
+  const type = String(rawRecord.type ?? "").trim().toLowerCase();
+  if (isSourceWidgetBlockType(type)) {
+    // Source widgets have no legacy top-level representation. Do not repair a
+    // partially streamed/model-authored object into a canonical envelope: all
+    // required envelope fields must already be present and schema-valid.
+    if (!elyanAssistantBlockSchema.safeParse(rawRecord).success) {
+      return null;
+    }
+    const enveloped = withCanonicalAssistantBlockEnvelope(rawRecord);
+    return enveloped as AssistantMessageBlock;
+  }
+  const record = hydrateLegacyAssistantBlockInput(rawRecord);
   if (type === "task_trace") {
     return parseTaskTraceBlock(record);
   }
@@ -2232,7 +2263,9 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
         visibility: normalizeVisibility(record.visibility) ?? "assistant_internal_by_default",
         confidence: normalizeConfidence(record.confidence),
         priority: normalizePriority(record.priority),
-        stableBlockId: normalizeBlockStableId(record.stableBlockId),
+        stableBlockId:
+          normalizeBlockStableId(record.blockId) ??
+          normalizeBlockStableId(record.stableBlockId),
         cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
         renderHints: normalizeRenderHints(record.renderHints) ?? {},
       }),
@@ -2558,7 +2591,9 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
         visibility: normalizeVisibility(record.visibility),
         confidence: normalizeConfidence(record.confidence),
         priority: normalizePriority(record.priority),
-        stableBlockId: normalizeBlockStableId(record.stableBlockId),
+        stableBlockId:
+          normalizeBlockStableId(record.blockId) ??
+          normalizeBlockStableId(record.stableBlockId),
         cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
         renderHints: normalizeRenderHints(record.renderHints) ?? {
           sectionRole: "connector_result",
@@ -2576,7 +2611,9 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
         visibility: normalizeVisibility(record.visibility),
         confidence: normalizeConfidence(record.confidence),
         priority: normalizePriority(record.priority),
-        stableBlockId: normalizeBlockStableId(record.stableBlockId),
+        stableBlockId:
+          normalizeBlockStableId(record.blockId) ??
+          normalizeBlockStableId(record.stableBlockId),
         cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
         renderHints: normalizeRenderHints(record.renderHints) ?? {
           sectionRole: "goal_progress",
@@ -2593,7 +2630,9 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
           visibility: normalizeVisibility(record.visibility),
           confidence: normalizeConfidence(record.confidence),
           priority: normalizePriority(record.priority),
-          stableBlockId: normalizeBlockStableId(record.stableBlockId),
+          stableBlockId:
+            normalizeBlockStableId(record.blockId) ??
+            normalizeBlockStableId(record.stableBlockId),
           cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
           renderHints: normalizeRenderHints(record.renderHints) ?? {
             sectionRole: type,
@@ -2624,7 +2663,9 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
       visibility: normalizeVisibility(record.visibility),
       confidence: normalizeConfidence(record.confidence),
       priority: normalizePriority(record.priority),
-      stableBlockId: normalizeBlockStableId(record.stableBlockId),
+      stableBlockId:
+        normalizeBlockStableId(record.blockId) ??
+        normalizeBlockStableId(record.stableBlockId),
       cacheDigest: normalizeBlockCacheDigest(record.cacheDigest),
       renderHints: {
         sectionRole: "detail",
@@ -2882,12 +2923,20 @@ function parseAssistantBlocksWithSalvage(blocks: unknown): AssistantMessageBlock
   for (const raw of blocks) {
     const parsed = parseAssistantBlock(raw);
     if (parsed) {
-      output.push(parsed);
+      output.push(
+        withCanonicalAssistantBlockEnvelope(
+          parsed as Record<string, unknown>,
+        ) as AssistantMessageBlock,
+      );
       continue;
     }
     const salvaged = salvageInvalidBlockToText(raw);
     if (salvaged) {
-      output.push(salvaged);
+      output.push(
+        withCanonicalAssistantBlockEnvelope(
+          salvaged as Record<string, unknown>,
+        ) as AssistantMessageBlock,
+      );
     }
   }
   return output;
@@ -2951,7 +3000,7 @@ export function buildAssistantMessageBlocks(
 
   if (options.streaming) {
     return [
-      {
+      withCanonicalAssistantBlockEnvelope({
         type: "text" as const,
         markdown: visibleText,
         ...withAssistantBlockDefaults("text", {}, {
@@ -2962,12 +3011,12 @@ export function buildAssistantMessageBlocks(
             sectionRole: "detail",
           },
         }),
-      },
+      }) as AssistantTextMessageBlock,
     ];
   }
 
   return [
-    {
+    withCanonicalAssistantBlockEnvelope({
       type: "text",
       markdown: visibleText,
       ...withAssistantBlockDefaults("text", {}, {
@@ -2978,8 +3027,19 @@ export function buildAssistantMessageBlocks(
           sectionRole: "detail",
         },
       }),
-    },
+    }) as AssistantTextMessageBlock,
   ];
+}
+
+function canonicalizeAssistantBlocks(
+  blocks: AssistantMessageBlock[],
+): AssistantMessageBlock[] {
+  return blocks.map(
+    (block) =>
+      withCanonicalAssistantBlockEnvelope(
+        block as Record<string, unknown>,
+      ) as AssistantMessageBlock,
+  );
 }
 
 export function composeAssistantMessageBlocks(input: {
@@ -2998,10 +3058,14 @@ export function composeAssistantMessageBlocks(input: {
   const existingTextBlocks = normalizedBlocks.filter(
     (block): block is AssistantTextMessageBlock => block.type === "text",
   );
-  return dedupeAssistantBlocks(mergeAssistantBlocks([
-    ...existingTypedBlocks,
-    ...(textBlocks.length > 0 ? textBlocks : existingTextBlocks),
-  ]));
+  return canonicalizeAssistantBlocks(
+    dedupeAssistantBlocks(
+      mergeAssistantBlocks([
+        ...existingTypedBlocks,
+        ...(textBlocks.length > 0 ? textBlocks : existingTextBlocks),
+      ]),
+    ),
+  );
 }
 
 export function normalizeAssistantMessageBlocks(input: {
@@ -3012,9 +3076,11 @@ export function normalizeAssistantMessageBlocks(input: {
   const normalizedBlocks = parseAssistantBlocksWithSalvage(input.blocks);
   if (normalizedBlocks.length > 0) {
     if (normalizedBlocks.length === 1 && normalizedBlocks[0]?.type === "text") {
-      return normalizedBlocks;
+      return canonicalizeAssistantBlocks(normalizedBlocks);
     }
-    return dedupeAssistantBlocks(mergeAssistantBlocks(normalizedBlocks));
+    return canonicalizeAssistantBlocks(
+      dedupeAssistantBlocks(mergeAssistantBlocks(normalizedBlocks)),
+    );
   }
   return buildAssistantMessageBlocks(input.content, {
     streaming: input.streaming,

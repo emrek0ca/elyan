@@ -73,7 +73,7 @@ test("executor injects only selected skill instructions into model prompt", asyn
   const result = await executeSkill({
     app: { db } as never,
     userId: "user-1",
-    skill,
+    skill: { ...skill, allowedTools: ["web.search"] },
     skillInput: {
       prompt: "Bu belgeyi özetle",
       attachmentContext,
@@ -99,7 +99,23 @@ test("executor injects only selected skill instructions into model prompt", asyn
         promptTokens: 100,
         completionTokens: 20,
         totalTokens: 120,
-        metadata: {},
+        metadata: {
+          groundingUsed: true,
+          documentSourceCount: 1,
+          webGroundingUsed: true,
+          webSourceCount: 3,
+          retrievalResultCount: 2,
+          toolResults: [
+            {
+              tool: "web.search",
+              ok: true,
+              durationMs: 20,
+              output: { resultCount: 3, raw: "must not propagate" },
+              args: { query: "private prompt" },
+            },
+            { tool: "filesystem.read", ok: true },
+          ],
+        },
       };
     },
   });
@@ -111,6 +127,22 @@ test("executor injects only selected skill instructions into model prompt", asyn
   assert.doesNotMatch(prompts[0], /test-model|groq|provider/i);
   assert.equal(result.metadata.skillDisplay.label, "Özetle");
   assert.equal(result.metadata.skillDisplay.status, "used");
+  assert.equal(result.metadata.groundingUsed, true);
+  assert.equal(result.metadata.documentSourceCount, 1);
+  assert.equal(result.metadata.webGroundingUsed, true);
+  assert.equal(result.metadata.webSourceCount, 3);
+  assert.equal(result.metadata.retrievalResultCount, 2);
+  assert.deepEqual(result.metadata.toolCalls, ["web.search"]);
+  assert.deepEqual(result.metadata.toolResults, [
+    {
+      tool: "web.search",
+      ok: true,
+      durationMs: 20,
+      resultCount: 3,
+      errorCode: null,
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result.metadata), /private prompt|raw/);
   assert.equal(db.inserted.length, 1);
   assert.equal((db.inserted[0] as { values: Record<string, unknown> }).values.type, "skill_execution");
   assert.equal((db.inserted[0] as { values: Record<string, unknown> }).values.source, "brain_skill");

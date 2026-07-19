@@ -159,7 +159,20 @@ export async function probeMcpServer(input: {
   url: string;
   accessToken: string;
   timeoutMs?: number;
+  /**
+   * When true, delegate the handshake to the official SDK transport
+   * (`ELYAN_MCP_SDK_ENABLED`). The result shape is identical either way.
+   */
+  useSdk?: boolean;
 }): Promise<McpProbeResult> {
+  if (input.useSdk) {
+    const { probeMcpServerViaSdk } = await import("./mcp-sdk-client.js");
+    return probeMcpServerViaSdk({
+      url: input.url,
+      accessToken: input.accessToken,
+      timeoutMs: input.timeoutMs,
+    });
+  }
   const timeoutMs = input.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   const startedAt = Date.now();
   const probedAt = new Date().toISOString();
@@ -376,6 +389,7 @@ export async function probeConnectionMcpApps(
         url: entry.serverUrl,
         accessToken,
         timeoutMs: input.timeoutMs,
+        useSdk: app.config.ELYAN_MCP_SDK_ENABLED === true,
       });
     } catch {
       result = {

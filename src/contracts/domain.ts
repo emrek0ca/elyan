@@ -1,5 +1,24 @@
 import { z } from "zod";
 import { hasRawBinaryUploadHint } from "../lib/derived-data.js";
+import {
+  elyanAssistantBlockEnvelopeSchema,
+  elyanAssistantBlockTypeValues,
+  elyanAssistantBlockVisibilityValues,
+} from "./assistant-block-schemas.js";
+
+export {
+  ELYAN_ASSISTANT_BLOCK_ENVELOPE_VERSION,
+  elyanAssistantBlockDataSchemaByType,
+  elyanAssistantBlockEnvelopeSchema,
+  elyanAssistantBlockEnvelopeSchemaByType,
+  elyanLegacyAssistantBlockTypeValues,
+  elyanAssistantBlockSourceSchema,
+  elyanAssistantBlockSourceValues,
+  elyanAssistantBlockTransportV4Schema,
+  elyanAssistantBlockTypeValues,
+  elyanAssistantBlockVisibilityValues,
+  elyanSourceWidgetBlockTypeValues,
+} from "./assistant-block-schemas.js";
 
 export const deviceTypeValues = ["mobile", "desktop"] as const;
 export const pairSessionStatusValues = [
@@ -185,48 +204,6 @@ export const elyanTaskTraceStatusValues = [
   "completed",
   "failed",
   "waiting_approval",
-] as const;
-export const elyanAssistantBlockTypeValues = [
-  "text",
-  "summary",
-  "next_steps",
-  "status",
-  "security_decision",
-  "task_trace",
-  "attachment_context",
-  "context_signal",
-  "web_search",
-  "code",
-  "table",
-  "chart",
-  "math_surface_3d",
-  "math",
-  "svg",
-  "file",
-  "artifact",
-  "actionable",
-  "block_group",
-  "memory_echo",
-  "proactive_touch",
-  "document_block",
-  "attachment_ack",
-  "image_analysis",
-  "vision",
-  "goal_progress",
-  "desktop_suggestion",
-  "document_block_skeleton",
-  "pdf_generate",
-  "pdf_viewer",
-  "terminal",
-  "automation",
-  "reasoning_trace",
-  "capability_unavailable",
-  "clarification",
-  "connector_result",
-] as const;
-export const elyanAssistantBlockVisibilityValues = [
-  "user_visible",
-  "assistant_internal_by_default",
 ] as const;
 export const elyanAssistantActionableKindValues = [
   "approval_needed",
@@ -850,7 +827,12 @@ export const elyanAssistantPassthroughBlockSchema = elyanAssistantBlockBaseSchem
   })
   .passthrough();
 
+const elyanAssistantCanonicalEnvelopeCompatSchema = z.custom<
+  Record<string, unknown>
+>((value) => elyanAssistantBlockEnvelopeSchema.safeParse(value).success);
+
 export const elyanAssistantBlockSchema: z.ZodType<any> = z.union([
+  elyanAssistantCanonicalEnvelopeCompatSchema,
   elyanAssistantTextBlockSchema,
   elyanAssistantSummaryBlockSchema,
   elyanAssistantNextStepsBlockSchema,

@@ -26,6 +26,7 @@ import {
   executeGmailSearch,
   executeGmailSend,
   executeNotionSearch,
+  executeSlackSearch,
 } from "./connector-tools.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 import {
@@ -191,6 +192,10 @@ const notionSearchArgsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(10),
 });
 const githubSearchArgsSchema = z.object({
+  query: z.string().trim().max(240).default(""),
+  limit: z.coerce.number().int().min(1).max(20).default(10),
+});
+const slackSearchArgsSchema = z.object({
   query: z.string().trim().max(240).default(""),
   limit: z.coerce.number().int().min(1).max(20).default(10),
 });
@@ -664,6 +669,22 @@ const toolDefinitions = [
     argsSchema: githubSearchArgsSchema,
     async execute(app, context, args) {
       return executeGithubSearch(app, context.userId, args);
+    },
+  },
+  {
+    name: "slack.search",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 12_000,
+    outputSchema: connectorListOutputSchema,
+    argAliases: {
+      query: ["q", "search", "text", "keywords"],
+      limit: ["max", "max_results", "maxResults", "count", "n"],
+    },
+    allowEmptyArgsFallback: true,
+    argsSchema: slackSearchArgsSchema,
+    async execute(app, context, args) {
+      return executeSlackSearch(app, context.userId, args);
     },
   },
   {

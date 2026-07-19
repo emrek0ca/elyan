@@ -70,6 +70,29 @@ test("buildTaskTraceBlock exposes a safe route rationale", () => {
   );
 });
 
+test("buildTaskTraceBlock reads web and RAG evidence from a durable flat task result", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-research-pdf",
+      status: "completed",
+      payload: {},
+      result: {
+        webGroundingUsed: true,
+        webSourceCount: 4,
+        retrievalResultCount: 3,
+      },
+      createdAt: new Date("2026-07-19T09:00:00.000Z"),
+      updatedAt: new Date("2026-07-19T09:00:04.000Z"),
+      completedAt: new Date("2026-07-19T09:00:04.000Z"),
+    },
+    assistantContent: "Araştırma raporu hazır.",
+  });
+
+  const contextStep = block.steps.find((step) => step.id === "context");
+  assert.equal(contextStep?.status, "completed");
+  assert.equal(contextStep?.detail, "Belge bağlamı hazır.");
+});
+
 test("buildTaskTraceBlock explains an explicitly selected desktop mode", () => {
   const block = buildTaskTraceBlock({
     task: {
@@ -284,6 +307,29 @@ test("buildTaskTraceBlock reads tool flow from feed-shaped brain metadata", () =
   });
 
   assert.equal(toolStepOf(block)?.detail, "Gmail, Takvim kullanıldı");
+});
+
+test("buildTaskTraceBlock reports web grounding in the tool transcript without raw queries", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-web-grounding",
+      status: "completed",
+      payload: {},
+      result: {
+        webGroundingUsed: true,
+        webSourceCount: 4,
+      },
+      createdAt: new Date("2026-07-19T09:00:00.000Z"),
+      updatedAt: new Date("2026-07-19T09:00:04.000Z"),
+      completedAt: new Date("2026-07-19T09:00:04.000Z"),
+    },
+    assistantContent: "Araştırma hazır.",
+  });
+
+  const toolStep = toolStepOf(block);
+  assert.equal(toolStep?.status, "completed");
+  assert.equal(toolStep?.detail, "Web · 4 kaynak");
+  assert.doesNotMatch(JSON.stringify(toolStep), /kedi|query|duckduckgo/i);
 });
 
 test("buildTaskTraceBlock reports a tool flow that returned nothing", () => {

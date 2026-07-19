@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { ElyanAssistantDocumentBlock } from "../../contracts/domain.js";
 import { buildArtifactPipeline } from "./service.js";
 
 test("artifact pipeline builds a validated PDF receipt with footer", async () => {
@@ -117,4 +118,115 @@ test("artifact pipeline requires desktop runtime for private local PDF requests"
   assert.equal(result.kind, "desktop_required");
   assert.equal(result.intent.requiresDesktopRuntime, true);
   assert.equal(result.intent.type, "pdf");
+});
+
+test("research PDF uses the current typed document instead of the previous assistant text", async () => {
+  const result = await buildArtifactPipeline({
+    userRequest: "Kedilerin tarihini araştırıp PDF olarak ver",
+    responseText: "Merhaba Osman Emre Koca, ben buradayım.",
+    taskId: "task-cat-history",
+    assistantBlocks: [
+      {
+        type: "document_block",
+        title: "Kedilerin Tarihi",
+        format: "report",
+        exportFormats: ["pdf", "docx"],
+        sections: [
+          {
+            heading: "Evcilleşmenin Başlangıcı",
+            level: 1,
+            content:
+              "Arkeolojik ve genetik bulgular, evcil kedinin Yakın Doğu yaban kedisi soyundan geldiğini gösterir. Tarım topluluklarındaki tahıl depolarının kemirgenleri çekmesi, insanlarla kediler arasında karşılıklı faydaya dayalı uzun bir yakınlaşma başlatmıştır.",
+          },
+          {
+            heading: "Antik Dünyadan Günümüze",
+            level: 1,
+            content:
+              "Kediler Mısır'da güçlü bir kültürel konum kazanmış, ticaret ve deniz yollarıyla Akdeniz'e yayılmıştır. Sonraki yüzyıllarda limanlarda ve kentlerde kemirgen kontrolüne katkı sağlarken zamanla ev arkadaşı kimliği de güçlenmiştir.",
+          },
+        ],
+      },
+    ],
+    provenance: {
+      webGroundingUsed: true,
+      webSourceCount: 4,
+      retrievalResultCount: 3,
+      skillUsed: true,
+      skillId: "document_summary",
+      toolCallCount: 1,
+    },
+  });
+
+  assert.equal(result.kind, "rendered");
+  if (result.kind !== "rendered") return;
+  assert.equal(result.spec.type, "pdf");
+  if (result.spec.type !== "pdf") return;
+  assert.equal(result.spec.title, "Kedilerin Tarihi");
+  assert.equal(result.spec.metadata?.contentSource, "assistant_typed_block");
+  assert.equal(result.spec.metadata?.webSourceCount, 4);
+  assert.equal(result.spec.metadata?.retrievalResultCount, 3);
+  assert.equal(result.spec.metadata?.skillId, "document_summary");
+  assert.equal(result.spec.metadata?.toolCallCount, 1);
+  const document = result.assistantBlocks.find(
+    (block) => block.type === "document_block",
+  ) as ElyanAssistantDocumentBlock | undefined;
+  assert.equal(document?.type, "document_block");
+  if (document?.type !== "document_block") return;
+  assert.equal(document.title, "Kedilerin Tarihi");
+  assert.match(document.sections[0]?.content ?? "", /Yakın Doğu yaban kedisi/i);
+  assert.doesNotMatch(
+    document.sections.map((section) => section.content).join(" "),
+    /Merhaba Osman Emre Koca/i,
+  );
+});
+
+test("research PDF fails closed when grounding evidence is unavailable", async () => {
+  const result = await buildArtifactPipeline({
+    userRequest: "Kedilerin tarihini araştırıp PDF olarak ver",
+    responseText: "Merhaba Osman Emre Koca, ben buradayım.",
+  });
+
+  assert.equal(result.kind, "evidence_required");
+  if (result.kind !== "evidence_required") return;
+  assert.equal(result.reason, "grounding_evidence_unavailable");
+});
+
+test("research PDF fails closed when grounded content is too short to render", async () => {
+  const result = await buildArtifactPipeline({
+    userRequest: "Kedilerin tarihini araştırıp PDF olarak ver",
+    responseText: "Kısa ve eksik araştırma notu.",
+    provenance: {
+      webGroundingUsed: true,
+      webSourceCount: 1,
+    },
+  });
+
+  assert.equal(result.kind, "evidence_required");
+  if (result.kind !== "evidence_required") return;
+  assert.equal(result.reason, "artifact_content_insufficient");
+});
+
+test("long model prose cannot become a research PDF without web or RAG evidence", async () => {
+  const result = await buildArtifactPipeline({
+    userRequest: "Kedilerin tarihini araştırıp PDF olarak ver",
+    responseText:
+      "Kedilerin evcilleşmesi tarım toplumlarıyla başlayan uzun bir süreçtir. İnsan yerleşimlerindeki tahıl depoları kemirgenleri çekmiş, kediler de bu ortamda insanlarla karşılıklı faydaya dayalı bir yakınlık geliştirmiştir. Antik dönemlerden modern kent yaşamına kadar kedilerin kültürel rolü giderek çeşitlenmiştir.",
+    assistantBlocks: [
+      {
+        type: "document_block",
+        title: "Kedilerin Tarihi",
+        sections: [
+          {
+            heading: "Tarihçe",
+            content:
+              "Kedilerin evcilleşmesi tarım toplumlarıyla başlayan uzun bir süreçtir. İnsan yerleşimlerindeki tahıl depoları kemirgenleri çekmiş, kediler de bu ortamda insanlarla karşılıklı faydaya dayalı bir yakınlık geliştirmiştir. Antik dönemlerden modern kent yaşamına kadar kedilerin kültürel rolü giderek çeşitlenmiştir.",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(result.kind, "evidence_required");
+  if (result.kind !== "evidence_required") return;
+  assert.equal(result.reason, "grounding_evidence_unavailable");
 });

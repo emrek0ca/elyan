@@ -433,6 +433,9 @@ function extractTaskBrainMetadata(value: unknown) {
     attachmentContextUsed: readBoolean(result, "attachmentContextUsed"),
     attachmentContextSource: readString(result, "attachmentContextSource"),
     attachmentDocumentIds: readStringList(result, "attachmentDocumentIds"),
+    skillUsed: readBoolean(result, "skillUsed"),
+    skillId: readPublicSkillId(result),
+    retrievalResultCount: readNumber(result, "retrievalResultCount"),
     qualityPolicyApplied: readBoolean(result, "qualityPolicyApplied"),
     dataGroundingLevel: readString(result, "dataGroundingLevel"),
     personalizationScope: readString(result, "personalizationScope"),
@@ -729,6 +732,13 @@ function readString(
 ): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readPublicSkillId(record: Record<string, unknown> | null): string | null {
+  const value = readString(record, "skillId");
+  return value && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(value)
+    ? value
+    : null;
 }
 
 function readBoolean(

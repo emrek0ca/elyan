@@ -55,7 +55,15 @@
     },
     "inputSchema": { "type": "object" },
     "outputSchema": { "type": "object" },
-    "allowedTools": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+    "allowedTools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["retrieval.search", "memory.query", "web.search", "web.fetch_url"]
+      },
+      "uniqueItems": true,
+      "maxItems": 4
+    },
     "modelProfile": {
       "type": "string",
       "enum": ["cheap_classification", "fast_reasoning", "vision_reasoning", "document_reasoning", "long_context", "code_reasoning", "local_only"]

@@ -1,12 +1,12 @@
 import type { FastifyInstance } from "fastify";
+import { parseHTML } from "linkedom";
 import { rankSemanticTextCandidates } from "../../core/understanding/intent-semantic.js";
 import { getConnectorAccessToken } from "../integrations/service.js";
 
 /**
  * Server-side connector tools. They let the shared brain read (and, with
- * explicit approval, write) a mobile-only user's connected Google integrations
- * (Gmail/Calendar/Drive) directly through Google REST, using the already-stored
- * OAuth token, without a paired desktop.
+ * explicit approval, write) a mobile-only user's connected integrations using
+ * the already-stored, user-scoped OAuth token, without a paired desktop.
  *
  * Read tools run inline. Write tools (send mail, create event) are marked
  * `side_effect`: the tool-registry blocks them unless the caller passes
@@ -23,7 +23,7 @@ export type ConnectorToolContract = {
   capability: string;
   /** Read runs inline; side_effect requires explicit user approval. */
   permission: ConnectorToolPermission;
-  /** Google OAuth scopes required for the underlying REST call. */
+  /** Provider OAuth scopes required for the underlying read/write call. */
   requiredScopes: string[];
   /** Alternative complete scope sets that also authorize the same REST call. */
   alternativeScopeSets?: string[][];
@@ -84,7 +84,7 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
     permission: "read",
     requiredScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
     contract:
-      "gmail.read {messageId:string} — read one Gmail message by id; returns from, to, subject, date and a plain-text body excerpt.",
+      "gmail.read {messageId:string} — read one Gmail message by id; returns sender, recipients, subject, date, sanitized full body and attachment metadata.",
     semanticRoutable: false,
     semanticDescriptions: [
       "Kimliği önceki bir araç sonucunda bulunan tek bir e-postayı aç ve tam içeriğini oku; gelen kutusunu listeleme veya arama.",
@@ -150,6 +150,20 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
       "GitHub'da şu konuyla ilgili issue ara; repomdaki açık işleri getir.",
       "List my open GitHub pull requests and issues; what GitHub work involves me; check my assigned issues.",
       "Search GitHub issues and pull requests connected to my account.",
+    ],
+  },
+  {
+    name: "slack.search",
+    capability: "slack",
+    permission: "read",
+    requiredScopes: ["search:read"],
+    contract:
+      "slack.search {query?:string, limit?:1..20} — search the user's connected Slack messages (empty query means recent messages); returns channel, author, message timestamp and permalink.",
+    semanticDescriptions: [
+      "Slack mesajlarımda ara; bağlı Slack çalışma alanımdaki son mesajları, konuşmaları veya bir konuyla ilgili mesajları listele.",
+      "Slack'te bana gelen son mesajlar neler; kanallarımdaki şu konuyu ara; Slack konuşmalarımı göster.",
+      "Search my connected Slack workspace messages; list recent messages or find conversations about a topic.",
+      "Show my recent Slack messages; search Slack channels I can access.",
     ],
   },
   {
@@ -430,6 +444,19 @@ function clip(value: unknown, max = 500): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
+function clipMultiline(value: unknown, max = 100_000): string {
+  const text = String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+  return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+function boundedScalar(value: unknown, max: number): string {
+  return String(value ?? "").trim().slice(0, max);
+}
+
 async function googleGet(
   accessToken: string,
   url: string,
@@ -516,23 +543,144 @@ function decodeBase64Url(value: string): string {
   }
 }
 
-function extractPlainTextBody(payload: Record<string, unknown>): string {
+type EmailBodyParts = {
+  plainText: string;
+  html: string;
+};
+
+function extractEmailBodyParts(payload: Record<string, unknown>): EmailBodyParts {
   const parts = Array.isArray(payload.parts)
     ? (payload.parts as Record<string, unknown>[])
     : [];
-  const mimeType = String(payload.mimeType ?? "");
+  const mimeType = String(payload.mimeType ?? "").toLowerCase();
   const body = payload.body as { data?: unknown } | undefined;
-  if (mimeType === "text/plain" && typeof body?.data === "string") {
-    return decodeBase64Url(body.data);
+  if (clip(payload.filename, 240)) {
+    return { plainText: "", html: "" };
   }
-  for (const part of parts) {
-    const nested = extractPlainTextBody(part);
-    if (nested) return nested;
+  if (mimeType === "text/plain" && typeof body?.data === "string") {
+    return { plainText: decodeBase64Url(body.data), html: "" };
   }
   if (mimeType === "text/html" && typeof body?.data === "string") {
-    return decodeBase64Url(body.data).replace(/<[^>]+>/g, " ");
+    return { plainText: "", html: decodeBase64Url(body.data) };
   }
-  return "";
+  let plainText = "";
+  let html = "";
+  for (const part of parts) {
+    const nested = extractEmailBodyParts(part);
+    plainText ||= nested.plainText;
+    html ||= nested.html;
+    if (plainText && html) break;
+  }
+  return { plainText, html };
+}
+
+function safeEmailLink(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:", "mailto:"].includes(url.protocol)
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+type HtmlTreeNode = {
+  nodeType?: number;
+  nodeName?: string;
+  textContent?: string | null;
+  childNodes?: ArrayLike<unknown>;
+  getAttribute?: (name: string) => string | null;
+};
+
+function escapeMarkdownText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/([\\`*_[\]{}|~])/g, "\\$1")
+    .replace(/^(\s*)(#{1,6}|[-+]|\d+[.)])\s/gmu, "$1\\$2 ");
+}
+
+function emailHtmlNodeToMarkdown(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const node = value as HtmlTreeNode;
+  if (node.nodeType === 3) {
+    return escapeMarkdownText(node.textContent ?? "");
+  }
+  const tag = String(node.nodeName ?? "").toLowerCase();
+  if (["script", "style", "iframe", "object", "embed", "form", "svg", "math"].includes(tag)) {
+    return "";
+  }
+  const content = Array.from(node.childNodes ?? [])
+    .map(emailHtmlNodeToMarkdown)
+    .join("");
+  if (!content && tag !== "br") return "";
+  if (tag === "br") return "\n";
+  if (tag === "strong" || tag === "b") return `**${content}**`;
+  if (tag === "em" || tag === "i") return `_${content}_`;
+  if (tag === "code") return `\`${content.replace(/`/g, "\\`")}\``;
+  if (tag === "a") {
+    const href = safeEmailLink(node.getAttribute?.("href") ?? "");
+    return href ? `[${content}](${href.replace(/\)/g, "%29")})` : content;
+  }
+  if (tag === "li") return `- ${content.trim()}\n`;
+  if (tag === "blockquote") {
+    return `${content.trim().split("\n").map((line) => `> ${line}`).join("\n")}\n\n`;
+  }
+  if (/^h[1-6]$/.test(tag)) return `### ${content.trim()}\n\n`;
+  if (["p", "div", "section", "article", "header", "footer", "pre", "tr"].includes(tag)) {
+    return `${content.trim()}\n\n`;
+  }
+  return content;
+}
+
+export function sanitizeEmailHtmlToMarkdown(html: string): string {
+  if (!html.trim()) return "";
+  try {
+    const { document } = parseHTML(`<html><body>${html}</body></html>`);
+    return clipMultiline(emailHtmlNodeToMarkdown(document.body), 100_000);
+  } catch {
+    return "";
+  }
+}
+
+function extractEmailAttachments(
+  payload: Record<string, unknown>,
+  output: Array<{
+    attachmentId: string;
+    name: string;
+    mimeType?: string;
+    sizeBytes?: number;
+  }> = [],
+): Array<{
+  attachmentId: string;
+  name: string;
+  mimeType?: string;
+  sizeBytes?: number;
+}> {
+  const body = payload.body as { attachmentId?: unknown; size?: unknown } | undefined;
+  const attachmentId = clip(body?.attachmentId, 240);
+  const name = clip(payload.filename, 240);
+  if (attachmentId && name && output.length < 40) {
+    const numericSize = Number(body?.size);
+    output.push({
+      attachmentId,
+      name,
+      ...(clip(payload.mimeType, 160) ? { mimeType: clip(payload.mimeType, 160) } : {}),
+      ...(Number.isFinite(numericSize) && numericSize >= 0
+        ? { sizeBytes: Math.floor(numericSize) }
+        : {}),
+    });
+  }
+  const parts = Array.isArray(payload.parts)
+    ? (payload.parts as Record<string, unknown>[])
+    : [];
+  for (const part of parts) {
+    if (output.length >= 40) break;
+    extractEmailAttachments(part, output);
+  }
+  return output;
 }
 
 async function resolveToken(
@@ -597,17 +745,32 @@ export async function executeGmailSearch(
         : [];
       return {
         messageId: id,
+        threadId: String(meta.threadId ?? message.threadId ?? id),
         from: headerValue(headers, "From"),
         subject: headerValue(headers, "Subject"),
         date: headerValue(headers, "Date"),
+        receivedAt: headerValue(headers, "Date"),
         snippet: clip(meta.snippet, 280),
+        labelIds: Array.isArray(meta.labelIds)
+          ? meta.labelIds.map((label) => clip(label, 80)).filter(Boolean).slice(0, 40)
+          : [],
+        isUnread:
+          Array.isArray(meta.labelIds) &&
+          meta.labelIds.some((label) => String(label).toUpperCase() === "UNREAD"),
       };
     }),
   );
   const filtered = results.filter(
     (item): item is NonNullable<typeof item> => item != null,
   );
-  return { query: args.query, resultCount: filtered.length, results: filtered };
+  return {
+    query: args.query,
+    resultCount: filtered.length,
+    results: filtered,
+    ...(clip(listPayload.nextPageToken, 500)
+      ? { nextPageToken: clip(listPayload.nextPageToken, 500) }
+      : {}),
+  };
 }
 
 export async function executeGmailRead(
@@ -625,14 +788,23 @@ export async function executeGmailRead(
   const headers = Array.isArray(messagePayload.headers)
     ? (messagePayload.headers as Array<{ name?: unknown; value?: unknown }>)
     : [];
+  const bodyParts = extractEmailBodyParts(messagePayload);
+  const markdownBody = sanitizeEmailHtmlToMarkdown(bodyParts.html);
+  const bodyRichText = markdownBody || clipMultiline(bodyParts.plainText, 100_000);
   return {
     messageId: args.messageId,
+    threadId: String(payload.threadId ?? args.messageId),
     from: headerValue(headers, "From"),
     to: headerValue(headers, "To"),
+    cc: headerValue(headers, "Cc"),
     subject: headerValue(headers, "Subject"),
     date: headerValue(headers, "Date"),
+    receivedAt: headerValue(headers, "Date"),
     snippet: clip(payload.snippet, 280),
-    body: clip(extractPlainTextBody(messagePayload), 4_000),
+    body: bodyRichText,
+    bodyRichText,
+    bodyFormat: markdownBody ? "markdown" : "plain_text",
+    attachments: extractEmailAttachments(messagePayload),
   };
 }
 
@@ -666,14 +838,46 @@ export async function executeCalendarListEvents(
   const events = items.map((item) => {
     const start = item.start as { dateTime?: unknown; date?: unknown } | undefined;
     const end = item.end as { dateTime?: unknown; date?: unknown } | undefined;
+    const organizer = item.organizer as { displayName?: unknown } | undefined;
     return {
+      eventId: String(item.id ?? ""),
       title: clip(item.summary ?? "(başlıksız)", 200),
       start: clip(start?.dateTime ?? start?.date ?? "", 40),
       end: clip(end?.dateTime ?? end?.date ?? "", 40),
+      allDay: Boolean(start?.date && !start?.dateTime),
       location: clip(item.location ?? "", 200),
+      calendarName: clip(organizer?.displayName ?? "", 160),
+      status: clip(item.status ?? "", 40),
+      link: clip(item.htmlLink ?? "", 400),
     };
   });
-  return { days: args.days, resultCount: events.length, results: events };
+  const ranges = events.map((event) => ({
+    start: Date.parse(event.start),
+    end: Date.parse(event.end),
+  }));
+  const withConflicts = events.map((event, index) => ({
+    ...event,
+    hasConflict: ranges.some(
+      (candidate, candidateIndex) =>
+        candidateIndex !== index &&
+        Number.isFinite(candidate.start) &&
+        Number.isFinite(candidate.end) &&
+        Number.isFinite(ranges[index]?.start) &&
+        Number.isFinite(ranges[index]?.end) &&
+        candidate.start < (ranges[index]?.end ?? 0) &&
+        candidate.end > (ranges[index]?.start ?? 0),
+    ),
+  }));
+  return {
+    query: args.query?.trim() ?? "",
+    days: args.days,
+    date: now.toISOString().slice(0, 10),
+    rangeStart: now.toISOString(),
+    rangeEnd: timeMax.toISOString(),
+    timeZone: clip(payload.timeZone ?? "UTC", 80) || "UTC",
+    resultCount: withConflicts.length,
+    results: withConflicts,
+  };
 }
 
 export async function executeDriveSearch(
@@ -690,7 +894,7 @@ export async function executeDriveSearch(
   url.searchParams.set("pageSize", String(args.limit));
   url.searchParams.set(
     "fields",
-    "files(id,name,mimeType,modifiedTime,webViewLink)",
+    "files(id,name,mimeType,size,modifiedTime,owners(displayName,emailAddress),webViewLink)",
   );
   url.searchParams.set("orderBy", "modifiedTime desc");
   const payload = await googleGet(token, url.toString());
@@ -701,7 +905,16 @@ export async function executeDriveSearch(
     fileId: String(file.id ?? ""),
     name: clip(file.name ?? "", 240),
     mimeType: String(file.mimeType ?? ""),
+    ...(Number.isFinite(Number(file.size)) && Number(file.size) >= 0
+      ? { sizeBytes: Math.floor(Number(file.size)) }
+      : {}),
     modifiedTime: clip(file.modifiedTime ?? "", 40),
+    ownerName: (() => {
+      const owners = Array.isArray(file.owners)
+        ? (file.owners as Array<Record<string, unknown>>)
+        : [];
+      return clip(owners[0]?.displayName ?? owners[0]?.emailAddress ?? "", 160);
+    })(),
     link: clip(file.webViewLink ?? "", 400),
   }));
   return { query: args.query, resultCount: results.length, results };
@@ -1011,6 +1224,7 @@ export async function executeNotionSearch(
     ? (payload.results as Record<string, unknown>[]).slice(0, args.limit)
     : [];
   const results = entries.map((entry) => ({
+    pageId: textOf(entry.id),
     title: clip(notionEntryTitle(entry), 240),
     kind: entry.object === "database" ? "database" : "page",
     updatedAt: textOf(entry.last_edited_time),
@@ -1064,12 +1278,126 @@ export async function executeGithubSearch(
     ? (payload.items as Record<string, unknown>[]).slice(0, args.limit)
     : [];
   const results = items.map((item) => ({
+    activityId: textOf(item.node_id ?? item.id),
+    number: Number.isFinite(Number(item.number)) ? Math.floor(Number(item.number)) : 0,
     title: clip(item.title, 240),
+    repository: textOf(item.repository_url).split("/repos/").pop() ?? "",
     repo: textOf(item.repository_url).split("/repos/").pop() ?? "",
+    status:
+      textOf(
+        item.pull_request &&
+          typeof item.pull_request === "object" &&
+          !Array.isArray(item.pull_request)
+          ? (item.pull_request as Record<string, unknown>).merged_at
+          : "",
+      )
+        ? "merged"
+        : item.draft === true
+          ? "draft"
+          : textOf(item.state).toLowerCase() === "closed"
+            ? "closed"
+            : "open",
     state: textOf(item.state),
     kind: item.pull_request ? "pull_request" : "issue",
+    author: textOf(
+      item.user && typeof item.user === "object" && !Array.isArray(item.user)
+        ? (item.user as Record<string, unknown>).login
+        : "",
+    ),
     updatedAt: textOf(item.updated_at),
     url: textOf(item.html_url),
   }));
   return { query, resultCount: results.length, results };
+}
+
+export async function executeSlackSearch(
+  app: FastifyInstance,
+  userId: string,
+  args: { query: string; limit: number },
+): Promise<Record<string, unknown>> {
+  const token = await resolveToken(
+    app,
+    userId,
+    CONNECTOR_TOOL_BY_NAME.get("slack.search")!,
+  );
+  const recentBoundary = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000)
+    .toISOString()
+    .slice(0, 10);
+  const query = args.query.trim() || `after:${recentBoundary}`;
+  const url = new URL("https://slack.com/api/search.messages");
+  url.searchParams.set("query", query);
+  url.searchParams.set("count", String(args.limit));
+  url.searchParams.set("page", "1");
+  url.searchParams.set("sort", "timestamp");
+  url.searchParams.set("sort_dir", "desc");
+  const response = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(10_000),
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  if (!response.ok || payload.ok !== true) {
+    const errorCode = clip(payload.error, 80);
+    throw Object.assign(new Error("Slack connector request failed."), {
+      code:
+        response.status === 401 ||
+        response.status === 403 ||
+        ["invalid_auth", "not_authed", "token_revoked", "account_inactive", "missing_scope"].includes(
+          errorCode,
+        )
+          ? "connector_auth_required"
+          : "connector_request_failed",
+    });
+  }
+  const messages =
+    payload.messages &&
+    typeof payload.messages === "object" &&
+    !Array.isArray(payload.messages)
+      ? (payload.messages as Record<string, unknown>)
+      : {};
+  const matches = Array.isArray(messages.matches)
+    ? (messages.matches as Record<string, unknown>[]).slice(0, args.limit)
+    : [];
+  const results = matches.flatMap((match) => {
+    const channel =
+      match.channel &&
+      typeof match.channel === "object" &&
+      !Array.isArray(match.channel)
+        ? (match.channel as Record<string, unknown>)
+        : {};
+    const timestamp = boundedScalar(match.ts ?? match.timestamp, 80);
+    const channelId = boundedScalar(match.channel_id ?? channel.id, 240);
+    const messageId = boundedScalar(
+      match.iid ?? match.id ?? `${channelId}:${timestamp}`,
+      240,
+    );
+    const text = clipMultiline(match.text, 20_000);
+    const permalink = boundedScalar(match.permalink, 2_000);
+    if (!messageId || !channelId || !timestamp || !text || !permalink) return [];
+    return [
+      {
+        messageId,
+        channelId,
+        channelName: boundedScalar(
+          match.channel_name ?? channel.name ?? channelId,
+          160,
+        ),
+        authorName: clip(
+          match.username ?? match.user_name ?? match.display_name ?? "Bilinmeyen",
+          160,
+        ),
+        text,
+        timestamp,
+        threadTs: boundedScalar(match.thread_ts, 80),
+        avatarUrl: boundedScalar(match.avatar_url, 2_000),
+        permalink,
+      },
+    ];
+  });
+  return { query: args.query, resultCount: results.length, results };
 }

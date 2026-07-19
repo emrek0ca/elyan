@@ -391,6 +391,9 @@ test("shapeTaskFeedItem exposes public-safe quality metadata from server brain r
     },
     result: {
       text: "Merhaba, ben geldim. Nasılsın?",
+      skillUsed: true,
+      skillId: "research-report",
+      retrievalResultCount: 6,
       qualityPolicyApplied: true,
       dataGroundingLevel: "request_only",
       personalizationScope: "none",
@@ -413,6 +416,9 @@ test("shapeTaskFeedItem exposes public-safe quality metadata from server brain r
   });
 
   assert.equal(item.brain?.qualityPolicyApplied, true);
+  assert.equal(item.brain?.skillUsed, true);
+  assert.equal(item.brain?.skillId, "research-report");
+  assert.equal(item.brain?.retrievalResultCount, 6);
   assert.equal(item.brain?.dataGroundingLevel, "request_only");
   assert.equal(item.brain?.personalizationScope, "none");
   assert.equal(item.brain?.responseLanguage, "tr");

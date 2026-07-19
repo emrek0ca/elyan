@@ -17,7 +17,12 @@ test("isMobileLocalExportMode accepts boolean flags and normalized modes", () =>
 
 test("isLikelyPureDocumentExportPrompt detects document export intents", () => {
   assert.equal(isLikelyPureDocumentExportPrompt("Bunu PDF olarak hazırla"), true);
-  assert.equal(isLikelyPureDocumentExportPrompt("Word raporu oluştur"), true);
+  assert.equal(isLikelyPureDocumentExportPrompt("PDF yap"), true);
+  assert.equal(isLikelyPureDocumentExportPrompt("Word raporu oluştur"), false);
+  assert.equal(
+    isLikelyPureDocumentExportPrompt("Kedilerin tarihini araştırıp PDF olarak ver"),
+    false,
+  );
   assert.equal(isLikelyPureDocumentExportPrompt("Bunu Excel tablo olarak oluştur"), true);
   assert.equal(isLikelyPureDocumentExportPrompt("Bu konuyu kısaca açıkla"), false);
 });
@@ -57,5 +62,54 @@ test("buildMobileLocalExportShortcutReply avoids desktop handoff messages", () =
       ],
     }),
     null,
+  );
+});
+
+test("buildMobileLocalExportShortcutReply never reuses a prior answer for a new research PDF", () => {
+  assert.equal(
+    buildMobileLocalExportShortcutReply({
+      prompt: "Kedilerin tarihini araştırıp PDF olarak ver",
+      requestMetadata: {
+        documentExportMode: "mobile_local",
+        documentExportIntent: "generate_and_export",
+        artifactContentSource: "current_turn",
+      },
+      conversation: [
+        { role: "user", content: "Selam" },
+        {
+          role: "assistant",
+          content: "Merhaba Osman Emre Koca, ben buradayım.",
+        },
+      ],
+    }),
+    null,
+  );
+});
+
+test("buildMobileLocalExportShortcutReply never bypasses attachment skill execution", () => {
+  assert.equal(
+    buildMobileLocalExportShortcutReply({
+      prompt: "Bu dosyayı PDF yap",
+      attachmentContextUsed: true,
+      requestMetadata: {
+        documentExportMode: "mobile_local",
+        documentExportIntent: "existing_content_export",
+      },
+      conversation: [
+        { role: "assistant", content: "Önceki ve ilgisiz yanıt." },
+      ],
+    }),
+    null,
+  );
+});
+
+test("getMostRecentAssistantMessage ignores current queue and retry placeholders", () => {
+  assert.equal(
+    getMostRecentAssistantMessage([
+      { role: "assistant", content: "Gerçek önceki yanıt." },
+      { role: "assistant", content: "Yanıt sıraya alındı." },
+      { role: "assistant", content: "Yanıt yeniden deneniyor…" },
+    ]),
+    "Gerçek önceki yanıt.",
   );
 });

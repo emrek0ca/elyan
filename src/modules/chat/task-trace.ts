@@ -202,6 +202,14 @@ function contextSignals(task: TaskTraceSource) {
   const result = readRecord(task.result);
   const brain = readRecord(result?.brain);
 
+  // Task sync sees the durable DB result (flat metadata), while feed clients
+  // receive the public `brain` projection. Read both shapes so research/RAG is
+  // never lost from the execution transcript during either path.
+  const readBrainOrResultNumber = (key: string) =>
+    readNumber(brain, key) ?? readNumber(result, key) ?? 0;
+  const readBrainOrResultBoolean = (key: string) =>
+    readBoolean(brain, key) ?? readBoolean(result, key) ?? false;
+
   const hintCount =
     readStringList(context, "personalizationHints").length +
     readStringList(context, "projectHints").length +
@@ -211,12 +219,13 @@ function contextSignals(task: TaskTraceSource) {
 
   return {
     hintCount,
-    attachmentContextUsed: readBoolean(brain, "attachmentContextUsed") === true,
-    documentSourceCount: readNumber(brain, "documentSourceCount") ?? 0,
-    webSourceCount: readNumber(brain, "webSourceCount") ?? 0,
+    attachmentContextUsed: readBrainOrResultBoolean("attachmentContextUsed"),
+    documentSourceCount: readBrainOrResultNumber("documentSourceCount"),
+    retrievalResultCount: readBrainOrResultNumber("retrievalResultCount"),
+    webSourceCount: readBrainOrResultNumber("webSourceCount"),
     groundingUsed:
-      readBoolean(brain, "groundingUsed") === true ||
-      readBoolean(brain, "webGroundingUsed") === true,
+      readBrainOrResultBoolean("groundingUsed") ||
+      readBrainOrResultBoolean("webGroundingUsed"),
   };
 }
 
@@ -226,8 +235,15 @@ function describeContext(task: TaskTraceSource): {
   detail?: string;
 } {
   const signals = contextSignals(task);
-  const totalSources = signals.documentSourceCount + signals.webSourceCount;
-  if (signals.attachmentContextUsed || signals.documentSourceCount > 0) {
+  const totalSources =
+    signals.documentSourceCount +
+    signals.retrievalResultCount +
+    signals.webSourceCount;
+  if (
+    signals.attachmentContextUsed ||
+    signals.documentSourceCount > 0 ||
+    signals.retrievalResultCount > 0
+  ) {
     return {
       needed: true,
       completed: true,
@@ -396,6 +412,7 @@ function describeTool(task: TaskTraceSource) {
   const result = readRecord(task.result);
   const operator = readRecord(result?.operator);
   const toolFlow = readToolFlow(result);
+  const signals = contextSignals(task);
   const usedDesktop =
     routeDecision?.taskRoute?.operationalRoute === "desktop_runtime" ||
     routeDecision?.route === "desktop_runtime";
@@ -405,9 +422,23 @@ function describeTool(task: TaskTraceSource) {
   // operator olmadığı için "Araç gerekmedi" görünüyordu. Artık gerçek çağrı
   // görünür.
   if (toolFlow) {
+    const toolDetail = describeToolFlow(toolFlow);
+    const webAlreadyReported = toolFlow.tools.some((tool) =>
+      tool.name.trim().toLowerCase().startsWith("web."),
+    );
     return {
       needed: true,
-      detail: describeToolFlow(toolFlow),
+      detail:
+        signals.webSourceCount > 0 && !webAlreadyReported
+          ? `${toolDetail}; Web · ${signals.webSourceCount} kaynak`
+          : toolDetail,
+    };
+  }
+
+  if (signals.webSourceCount > 0) {
+    return {
+      needed: true,
+      detail: `Web · ${signals.webSourceCount} kaynak`,
     };
   }
 

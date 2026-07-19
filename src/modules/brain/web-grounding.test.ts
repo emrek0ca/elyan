@@ -70,7 +70,7 @@ test("shouldUseWebGrounding enables public web grounding only for required promp
       prompt: "Oğuz, Kıpçak ve Karluk dillerini araştır",
       workload: "mobile_chat_fast",
     }),
-    false,
+    true,
   );
   assert.equal(
     shouldUseWebGrounding({
@@ -216,7 +216,7 @@ test("classifyWebGroundingDecision separates no-web, optional and required cases
       prompt: "Oğuz, Kıpçak ve Karluk dillerini araştır",
       workload: "mobile_chat_fast",
     }).mode,
-    "web_optional",
+    "web_required",
   );
   assert.equal(
     classifyWebGroundingDecision({
@@ -232,6 +232,59 @@ test("classifyWebGroundingDecision separates no-web, optional and required cases
     }),
     false,
   );
+});
+
+test("explicit research requested for a PDF requires web grounding", () => {
+  const decision = classifyWebGroundingDecision({
+    prompt: "Kedilerin tarihini araştırıp PDF olarak ver",
+    workload: "document_generate",
+  });
+
+  assert.equal(decision.mode, "web_required");
+  assert.equal(decision.reasons.includes("explicit_research_action"), true);
+});
+
+test("private attachment research stays on local RAG unless web access is explicit", () => {
+  assert.equal(
+    classifyWebGroundingDecision({
+      prompt: "Dosyalarımı araştırıp PDF yap",
+      workload: "document_generate",
+    }).mode,
+    "no_web_needed",
+  );
+  assert.equal(
+    classifyWebGroundingDecision({
+      prompt: "Bu PDF'yi araştırıp özetle",
+      workload: "document_generate",
+    }).mode,
+    "no_web_needed",
+  );
+  assert.equal(
+    classifyWebGroundingDecision({
+      prompt: "Bana kedilerin tarihini araştır",
+      workload: "mobile_chat_fast",
+    }).mode,
+    "web_required",
+  );
+});
+
+test("negated research and research-noun summaries never trigger public web", () => {
+  for (const prompt of [
+    "Kedilerin tarihini araştırma yapma, bildiğinle cevapla",
+    "Kedileri araştırma.",
+    "Webde araştırma yapma; yalnızca verdiğim metni kullan",
+    "Bu araştırmayı özetle",
+    "Summarize this research paper",
+  ]) {
+    assert.equal(
+      classifyWebGroundingDecision({
+        prompt,
+        workload: "mobile_chat_fast",
+      }).mode,
+      "no_web_needed",
+      prompt,
+    );
+  }
 });
 
 test("classifyWebGroundingDecision keeps short referential rewrites offline", () => {

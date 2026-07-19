@@ -12,7 +12,7 @@ const contractCases = [
   ["12 * 14 kaç?", "math", "answer", "none", "brief"],
   ["Bana kedi resmi çiz", "image_generation", "execute", "route_only", "balanced"],
   ["Bugünkü dolar kaç TL?", "web_research", "research", "required", "balanced"],
-  ["Oğuz, Kıpçak ve Karluk dillerini araştır", "web_research", "research", "none", "balanced"],
+  ["Oğuz, Kıpçak ve Karluk dillerini araştır", "web_research", "research", "required", "balanced"],
   ["Oğuz dillerini kaynaklı şekilde araştır", "web_research", "research", "required", "balanced"],
   ["Elon Musk kimdir?", "unknown", "answer", "required", "brief"],
   ["Bu URL'yi incele: https://example.com", "url_review", "research", "required", "balanced"],

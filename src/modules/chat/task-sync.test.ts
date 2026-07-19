@@ -442,6 +442,8 @@ test("syncChatTaskLifecycle publishes completed assistant blocks with the task s
       summary: "Kısa özet",
       result: {
         text: "Merhaba, nasıl yardımcı olabilirim?",
+        skillUsed: true,
+        skillId: "research-report",
         renderRecipe: {
           output_type: "document_render_recipe",
           format: "pdf",
@@ -475,6 +477,7 @@ test("syncChatTaskLifecycle publishes completed assistant blocks with the task s
         assistantMessage?: {
           content?: string;
           blocks?: unknown;
+          metadata?: Record<string, unknown>;
         };
       }
     | undefined;
@@ -488,6 +491,11 @@ test("syncChatTaskLifecycle publishes completed assistant blocks with the task s
   assert.equal(completedBlocks?.length, 1);
   assert.equal(completedBlocks?.[0]?.type, "text");
   assert.equal(completedBlocks?.[0]?.markdown, "Merhaba, nasıl yardımcı olabilirim?");
+  assert.equal(completedPayload?.assistantMessage?.metadata?.skillUsed, true);
+  assert.equal(
+    completedPayload?.assistantMessage?.metadata?.skillId,
+    "research-report",
+  );
 });
 
 test("syncChatTaskLifecycle strips internal analysis from completed assistant snapshots", async () => {
@@ -592,6 +600,7 @@ Final answer: Görselde okunan metin kabaca "10:03 cku.itiraf.paylasim •II = 3
         assistantMessage?: {
           content?: string;
           blocks?: Array<{ type?: string; markdown?: string }>;
+          metadata?: Record<string, unknown>;
         };
       }
     | undefined;
@@ -604,6 +613,8 @@ Final answer: Görselde okunan metin kabaca "10:03 cku.itiraf.paylasim •II = 3
     completedPayload?.assistantMessage?.blocks?.[0]?.markdown,
     'Görselde okunan metin kabaca "10:03 cku.itiraf.paylasim •II = 37" diye başlıyor.',
   );
+  assert.equal(completedPayload?.assistantMessage?.metadata?.skillUsed, false);
+  assert.equal(completedPayload?.assistantMessage?.metadata?.skillId, null);
 });
 
 test("syncChatTaskLifecycle emits phased v1.1 summary blocks when enabled", async () => {

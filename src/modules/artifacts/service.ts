@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
+import type { ElyanAssistantDocumentBlock } from "../../contracts/domain.js";
 import {
   buildAssistantChartBlock,
   buildAssistantCodeBlock,
@@ -10,11 +11,35 @@ import {
 } from "../chat/message-blocks.js";
 import { parseArtifactIntent } from "./parser.js";
 import { buildArtifactSpec, artifactSpecSummary } from "./spec-builder.js";
-import type { ArtifactIntent, ArtifactOutput, ArtifactSpec } from "./types.js";
+import type {
+  ArtifactIntent,
+  ArtifactOutput,
+  ArtifactProvenance,
+  ArtifactSpec,
+} from "./types.js";
 import { normalizeArtifactSpec } from "./normalizer.js";
 import { rendererForSpec } from "./renderers/index.js";
 import { compactText, formatMoney, safeFileSlug } from "./utils.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
+
+const RESEARCH_ARTIFACT_ACTION_PATTERN =
+  /(?<!\p{L})((?:araştır|arastir)\p{L}*|research\p{L}*|investigate\p{L}*)(?!\p{L})/iu;
+const SOURCE_BACKED_ARTIFACT_PATTERN =
+  /(?<!\p{L})(?:kaynaklı|kaynakli|source(?:[-\s]+)backed)\s+(?:(?:araştırma|arastirma|inceleme|research)\s+)?(?:rapor\p{L}*|belge\p{L}*|doküman\p{L}*|dokuman\p{L}*|paper\p{L}*|report\p{L}*|document\p{L}*)(?!\p{L})/iu;
+const RESEARCH_NEGATION_PATTERN =
+  /(?<!\p{L})(araştırmadan|arastirmadan|araştırma yapma|arastirma yapma|(?:internet(?:i)?|web(?:i)?)\s+kullanmadan|do not research|don't research|without researching|without using (?:the )?(?:web|internet))(?!\p{L})/iu;
+const EXPLICIT_PUBLIC_WEB_ARTIFACT_PATTERN =
+  /(?<!\p{L})(internetten|internetteki|internette ara|internet kaynak\p{L}*|webden|web'den|webdeki|web'deki|web üzerinde|web uzerinde|online araştır|online arastir|search the web|browse the web|browse online)(?!\p{L})/iu;
+const INLINE_OR_PRIVATE_ARTIFACT_PATTERN =
+  /(?<!\p{L})(aşağıdaki|asagidaki|şu metni|su metni|bu metni|verdiğim metni|verdigim metni|sözleşmeyi|sozlesmeyi|sözleşme metnini|sozlesme metnini|içeriği incele|icerigi incele)(?!\p{L})/iu;
+
+function readMetadataString(
+  metadata: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  const value = metadata?.[key];
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 export type ArtifactPipelineResult =
   | {
@@ -25,6 +50,14 @@ export type ArtifactPipelineResult =
   | {
       kind: "desktop_required";
       intent: ArtifactIntent;
+      latencyMs: number;
+    }
+  | {
+      kind: "evidence_required";
+      intent: ArtifactIntent;
+      reason:
+        | "grounding_evidence_unavailable"
+        | "artifact_content_insufficient";
       latencyMs: number;
     }
   | {
@@ -47,6 +80,8 @@ export async function buildArtifactPipeline(input: {
   sessionId?: string;
   taskId?: string;
   model?: string | null;
+  assistantBlocks?: AssistantMessageBlock[];
+  provenance?: ArtifactProvenance;
 }): Promise<ArtifactPipelineResult> {
   const startedAt = Date.now();
   const intent = parseArtifactIntent({
@@ -60,6 +95,55 @@ export async function buildArtifactPipeline(input: {
   if (intent.requiresDesktopRuntime) {
     return { kind: "desktop_required", intent, latencyMs: Date.now() - startedAt };
   }
+  const researchPolicyRequired =
+    input.metadata?.researchRequired === true ||
+    readMetadataString(input.metadata, "evidencePolicy") ===
+      "ground_before_render" ||
+    readMetadataString(input.metadata, "documentExportIntent") ===
+      "research_then_export" ||
+    input.understandingEnvelope?.intent.name === "research";
+  const explicitPublicWebRequested =
+    EXPLICIT_PUBLIC_WEB_ARTIFACT_PATTERN.test(input.userRequest);
+  const targetsInlineOrPrivateContent =
+    INLINE_OR_PRIVATE_ARTIFACT_PATTERN.test(input.userRequest);
+  const researchIntentAllowed =
+    !targetsInlineOrPrivateContent || explicitPublicWebRequested;
+  const researchArtifactRequested =
+    (intent.type === "pdf" || intent.type === "document") &&
+    researchIntentAllowed &&
+    (researchPolicyRequired ||
+      ((RESEARCH_ARTIFACT_ACTION_PATTERN.test(input.userRequest) ||
+        SOURCE_BACKED_ARTIFACT_PATTERN.test(input.userRequest)) &&
+        !RESEARCH_NEGATION_PATTERN.test(input.userRequest)));
+  if (researchArtifactRequested) {
+    const webEvidenceCount =
+      input.provenance?.webGroundingUsed === true
+        ? (input.provenance.webSourceCount ?? 0)
+        : 0;
+    const evidenceCount =
+      webEvidenceCount +
+      (input.provenance?.documentSourceCount ?? 0) +
+      (input.provenance?.retrievalResultCount ?? 0);
+    if (
+      (explicitPublicWebRequested && webEvidenceCount <= 0) ||
+      (!explicitPublicWebRequested && evidenceCount <= 0)
+    ) {
+      return {
+        kind: "evidence_required",
+        intent,
+        reason: "grounding_evidence_unavailable",
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+    if (artifactSourceText(input).length < 120) {
+      return {
+        kind: "evidence_required",
+        intent,
+        reason: "artifact_content_insufficient",
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+  }
   const rawSpec = buildArtifactSpec({ ...input, intent });
   if (!rawSpec) {
     return { kind: "none", intent, latencyMs: Date.now() - startedAt };
@@ -67,7 +151,10 @@ export async function buildArtifactPipeline(input: {
   const spec = normalizeArtifactSpec(rawSpec);
   const renderer = rendererForSpec(spec);
   const output = await renderer.render(spec);
-  const assistantBlocks = artifactOutputToAssistantBlocks(output);
+  const assistantBlocks = artifactOutputToAssistantBlocks(
+    output,
+    input.assistantBlocks,
+  );
   return {
     kind: "rendered",
     intent,
@@ -78,6 +165,34 @@ export async function buildArtifactPipeline(input: {
     rendererUsed: renderer.constructor.name,
     latencyMs: Date.now() - startedAt,
   };
+}
+
+function sourceDocumentBlock(
+  blocks: AssistantMessageBlock[] | undefined,
+): ElyanAssistantDocumentBlock | null {
+  if (!Array.isArray(blocks)) {
+    return null;
+  }
+  return (
+    blocks.find(
+      (block): block is ElyanAssistantDocumentBlock =>
+        block.type === "document_block" &&
+        Array.isArray((block as ElyanAssistantDocumentBlock).sections) &&
+        (block as ElyanAssistantDocumentBlock).sections.length > 0,
+    ) ?? null
+  );
+}
+
+function artifactSourceText(input: {
+  assistantBlocks?: AssistantMessageBlock[];
+  responseText?: string | null;
+}): string {
+  const document = sourceDocumentBlock(input.assistantBlocks);
+  return compactText(
+    document
+      ? document.sections.map((section) => section.content).join(" ")
+      : input.responseText,
+  );
 }
 
 function pdfDocumentSections(spec: Extract<ArtifactSpec, { type: "pdf" }>): Array<{ heading?: string; content: string; level?: number }> {
@@ -115,20 +230,33 @@ function pdfDocumentSections(spec: Extract<ArtifactSpec, { type: "pdf" }>): Arra
   return sections;
 }
 
-function artifactOutputToAssistantBlocks(output: ArtifactOutput): AssistantMessageBlock[] {
+function artifactOutputToAssistantBlocks(
+  output: ArtifactOutput,
+  sourceBlocks?: AssistantMessageBlock[],
+): AssistantMessageBlock[] {
   const spec = output.spec;
   if (spec.type === "pdf") {
+    const sourceDocument = sourceDocumentBlock(sourceBlocks);
     const block = buildAssistantDocumentBlock({
-      title: spec.title ?? (spec.documentType === "receipt" ? "Makbuz" : "PDF Belgesi"),
-      sections: pdfDocumentSections(spec),
-      format: spec.documentType === "letter" ? "letter" : "report",
-      exportFormats: ["pdf", "docx"],
-      design: {
-        theme: "report",
-        density: "comfortable",
-        pageSize: "A4",
-        footerText: spec.footer?.text ?? null,
-      },
+      title:
+        sourceDocument?.title ??
+        spec.title ??
+        (spec.documentType === "receipt" ? "Makbuz" : "PDF Belgesi"),
+      sections: sourceDocument?.sections ?? pdfDocumentSections(spec),
+      format:
+        sourceDocument?.format ??
+        (spec.documentType === "letter" ? "letter" : "report"),
+      wordCount: sourceDocument?.wordCount,
+      summary: sourceDocument?.summary,
+      exportFormats: sourceDocument?.exportFormats ?? ["pdf", "docx"],
+      design:
+        sourceDocument?.design ??
+        {
+          theme: "report",
+          density: "comfortable",
+          pageSize: "A4",
+          footerText: spec.footer?.text ?? null,
+        },
     }, {
       renderHints: {
         artifactId: output.artifactId,
@@ -136,6 +264,11 @@ function artifactOutputToAssistantBlocks(output: ArtifactOutput): AssistantMessa
         validationOk: output.validation.ok,
         fileName: `${safeFileSlug(spec.title ?? spec.documentType)}.pdf`,
         footer: spec.footer ?? null,
+        contentSource: spec.metadata?.contentSource ?? "current_response_text",
+        webSourceCount: spec.metadata?.webSourceCount ?? 0,
+        documentSourceCount: spec.metadata?.documentSourceCount ?? 0,
+        retrievalResultCount: spec.metadata?.retrievalResultCount ?? 0,
+        skillUsed: spec.metadata?.skillUsed ?? false,
       },
     });
     return block ? [block] : [];
@@ -274,6 +407,13 @@ export function safeArtifactTelemetry(output: ArtifactOutput, extra?: { renderer
     latency_ms: extra?.latencyMs ?? null,
     model_used: output.spec.metadata?.model ?? null,
     repair_attempted: extra?.repairAttempted ?? false,
+    content_source: output.spec.metadata?.contentSource ?? null,
+    web_source_count: output.spec.metadata?.webSourceCount ?? 0,
+    document_source_count: output.spec.metadata?.documentSourceCount ?? 0,
+    retrieval_result_count: output.spec.metadata?.retrievalResultCount ?? 0,
+    skill_used: output.spec.metadata?.skillUsed ?? false,
+    skill_id: output.spec.metadata?.skillId ?? null,
+    tool_call_count: output.spec.metadata?.toolCallCount ?? 0,
     user_corrected_after_output: false,
   };
 }

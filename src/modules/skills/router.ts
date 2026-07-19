@@ -27,6 +27,16 @@ function hasPayloadType(context: ResolvedAttachmentContext, skill: SkillSummary)
   });
 }
 
+function canRouteSkillWithAttachment(
+  context: ResolvedAttachmentContext | null | undefined,
+  skill: SkillSummary,
+): boolean {
+  if (!context?.used || context.documents.length === 0) {
+    return !skill.requiresAttachment;
+  }
+  return hasPayloadType(context, skill);
+}
+
 function isQuestionPrompt(prompt: string): boolean {
   const normalized = normalize(prompt);
   return (
@@ -93,6 +103,38 @@ function deterministicSkillId(prompt: string): { skillId: string; confidence: nu
   return null;
 }
 
+function isResearchDocumentPrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  if (!normalized) return false;
+
+  const asksForArtifact =
+    /\b(pdf|rapor|report|belge|doküman|dokuman|document|docx)\b/u.test(
+      normalized,
+    );
+  const explicitlyRequestsPublicResearch =
+    /(?<!\p{L})(araştır\p{L}*|arastir\p{L}*|research\p{L}*|kaynaklı|kaynakli|source backed|internetten|internet|webden|web|online)(?!\p{L})/u.test(
+      normalized,
+    );
+  const explicitlyRequestsWeb =
+    /\b(internetten|internet|webden|web|online|public web|açık web|acik web)\b/u.test(
+      normalized,
+    );
+  const targetsInlineOrPrivateText =
+    /\b(aşağıdaki|asagidaki|şu metni|su metni|bu metni|verdiğim metni|verdigim metni|sözleşmeyi|sozlesmeyi|sözleşme metnini|sozlesme metnini|içeriği incele|icerigi incele)\b/u.test(
+      normalized,
+    );
+  const rejectsResearch =
+    /\b(araştırmadan|arastirmadan|araştırma yapma|arastirma yapma|do not research|without researching)\b/u.test(
+      normalized,
+    );
+  return (
+    asksForArtifact &&
+    explicitlyRequestsPublicResearch &&
+    !rejectsResearch &&
+    (!targetsInlineOrPrivateText || explicitlyRequestsWeb)
+  );
+}
+
 export async function routeSkill(input: {
   prompt: string;
   attachmentContext?: ResolvedAttachmentContext | null;
@@ -105,6 +147,40 @@ export async function routeSkill(input: {
   }) => Promise<SkillRouteDecision | null>;
 }): Promise<SkillRouteDecision> {
   const context = input.attachmentContext;
+  const activeSkillIds = new Set(input.skills.map((skill) => skill.id));
+  const hintedSkillId = typeof input.skillHint === "string" ? input.skillHint.trim() : "";
+  const hintedSkill = hintedSkillId
+    ? input.skills.find((skill) => skill.id === hintedSkillId && skill.manualSelectable)
+    : null;
+  if (
+    hintedSkill &&
+    activeSkillIds.has(hintedSkill.id) &&
+    canRouteSkillWithAttachment(context, hintedSkill)
+  ) {
+    return {
+      needsSkill: true,
+      skillId: hintedSkill.id,
+      confidence: 0.95,
+      reason: `User selected ${hintedSkill.id} via composer skill hint.`,
+      source: "manual_hint",
+    };
+  }
+
+  if (
+    (!context?.used || context.chunks.length === 0) &&
+    activeSkillIds.has("research_document") &&
+    isResearchDocumentPrompt(input.prompt)
+  ) {
+    return {
+      needsSkill: true,
+      skillId: "research_document",
+      confidence: 0.94,
+      reason:
+        "User requested a source-grounded research artifact that does not require an attachment.",
+      source: "deterministic",
+    };
+  }
+
   if (!context?.used || context.chunks.length === 0) {
     return {
       needsSkill: false,
@@ -115,26 +191,18 @@ export async function routeSkill(input: {
     };
   }
 
-  const activeSkillIds = new Set(input.skills.map((skill) => skill.id));
-  const hintedSkillId = typeof input.skillHint === "string" ? input.skillHint.trim() : "";
-  const hintedSkill = hintedSkillId
-    ? input.skills.find((skill) => skill.id === hintedSkillId && skill.manualSelectable)
-    : null;
-  if (hintedSkill && activeSkillIds.has(hintedSkill.id) && (!hintedSkill.requiresAttachment || context.used)) {
-    return {
-      needsSkill: true,
-      skillId: hintedSkill.id,
-      confidence: 0.95,
-      reason: `User selected ${hintedSkill.id} via composer skill hint.`,
-      source: "manual_hint",
-    };
-  }
+  const attachmentCompatibleSkills = input.skills.filter((skill) =>
+    canRouteSkillWithAttachment(context, skill),
+  );
+  const attachmentCompatibleSkillIds = new Set(
+    attachmentCompatibleSkills.map((skill) => skill.id),
+  );
 
   const imageDoc = context.documents.find((d) => /^image\//i.test(d.mimeType ?? ""));
   const deterministic = deterministicSkillId(input.prompt);
   if (
     deterministic &&
-    activeSkillIds.has(deterministic.skillId) &&
+    attachmentCompatibleSkillIds.has(deterministic.skillId) &&
     (!imageDoc || deterministic.skillId !== "document_qa" || isImageTextQuestion(input.prompt))
   ) {
     return {
@@ -163,7 +231,7 @@ export async function routeSkill(input: {
     }
   }
 
-  for (const skill of input.skills) {
+  for (const skill of attachmentCompatibleSkills) {
     if (hasAnyPhrase(input.prompt, skill.triggers.phrases)) {
       return {
         needsSkill: true,
@@ -179,12 +247,17 @@ export async function routeSkill(input: {
     ? await input.classify({
         prompt: input.prompt,
         attachmentContext: context,
-        skills: input.skills,
+        skills: attachmentCompatibleSkills,
       })
     : null;
   // Lower threshold when attachment is present — less risk of wrong skill, high risk of missing.
   const threshold = context.documents.length > 0 ? 0.62 : ROUTE_CONFIDENCE_THRESHOLD;
-  if (classified?.needsSkill && classified.skillId && classified.confidence >= threshold) {
+  if (
+    classified?.needsSkill &&
+    classified.skillId &&
+    attachmentCompatibleSkillIds.has(classified.skillId) &&
+    classified.confidence >= threshold
+  ) {
     return classified;
   }
   if (classified) {

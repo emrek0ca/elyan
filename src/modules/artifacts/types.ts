@@ -39,7 +39,32 @@ const artifactMetadataSchema = z.object({
   createdAt: z.string().datetime(),
   model: z.string().min(1).max(160).optional(),
   confidence: z.number().min(0).max(1).optional(),
+  contentSource: z
+    .enum(["assistant_typed_block", "current_response_text", "user_request"])
+    .optional(),
+  webGroundingUsed: z.boolean().optional(),
+  webSourceCount: z.number().int().nonnegative().optional(),
+  documentSourceCount: z.number().int().nonnegative().optional(),
+  retrievalResultCount: z.number().int().nonnegative().optional(),
+  skillUsed: z.boolean().optional(),
+  skillId: z.string().min(1).max(160).optional(),
+  toolCallCount: z.number().int().nonnegative().optional(),
 });
+
+export type ArtifactProvenance = {
+  webGroundingUsed?: boolean;
+  webSourceCount?: number;
+  documentSourceCount?: number;
+  retrievalResultCount?: number;
+  skillUsed?: boolean;
+  skillId?: string | null;
+  toolCallCount?: number;
+};
+
+export type ArtifactContentSource =
+  | "assistant_typed_block"
+  | "current_response_text"
+  | "user_request";
 
 export const artifactBlockSchema = z.object({
   type: z.string().min(1).max(80),

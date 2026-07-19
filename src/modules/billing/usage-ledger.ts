@@ -17,6 +17,20 @@ export const BILLING_USAGE_METRICS = {
   subscriptionImageGeneration: "subscription_image_generation",
 } as const;
 
+export function buildScopedAiCreditUsageMetric(
+  phase?: string | null,
+): string {
+  const normalizedPhase = String(phase ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  return normalizedPhase
+    ? `${BILLING_USAGE_METRICS.subscriptionAiCredit}:${normalizedPhase}`
+    : BILLING_USAGE_METRICS.subscriptionAiCredit;
+}
+
 type SubscriptionRow = typeof subscriptions.$inferSelect;
 
 type UsageWindow = {
@@ -118,12 +132,22 @@ async function countUsageMetricInWindow(
     startAt: Date;
   },
 ): Promise<number> {
+  const metricCondition =
+    input.metric === BILLING_USAGE_METRICS.subscriptionAiCredit
+      ? sql<boolean>`(${usageRecords.metric} = ${input.metric} or ${usageRecords.metric} like ${`${input.metric}:%`})`
+      : eq(usageRecords.metric, input.metric);
   const rows = await db
     .select({
       used: sql<number>`coalesce(sum(${usageRecords.quantity}), 0)`,
     })
     .from(usageRecords)
-    .where(and(eq(usageRecords.userId, input.userId), eq(usageRecords.metric, input.metric), gte(usageRecords.createdAt, input.startAt)));
+    .where(
+      and(
+        eq(usageRecords.userId, input.userId),
+        metricCondition,
+        gte(usageRecords.createdAt, input.startAt),
+      ),
+    );
 
   return Number(rows[0]?.used ?? 0);
 }

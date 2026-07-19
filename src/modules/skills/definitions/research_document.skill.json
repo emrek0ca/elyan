@@ -1,0 +1,60 @@
+{
+  "id": "research_document",
+  "version": "1.0.0",
+  "active": true,
+  "name": "Research Document",
+  "displayName": "Araştırma Raporu",
+  "displayDescription": "Güncel ve doğrulanabilir web kaynaklarıyla PDF veya belgeye dönüştürülebilen araştırma raporu hazırlar.",
+  "slashCommand": "/araştırma-raporu",
+  "uiCategory": "document",
+  "requiresAttachment": false,
+  "supportedMimeTypes": [],
+  "manualSelectable": true,
+  "purpose": "Research the user's topic with authorized public-web evidence and produce a current, export-ready report.",
+  "summary": "Creates a structured research report grounded in verified public-web sources.",
+  "instructions": "Use the authorized web evidence supplied by Elyan. Write in the user's language. The summary and every section must contain numbered citations such as [1] that correspond to the source order in the evidence. Every factual claim must be supported by the supplied sources. Never invent facts, quotations, dates, statistics, titles, URLs, or sources. If evidence is insufficient, keep claims narrow and explicitly state the limitation inside the relevant section. Produce the requested research content itself, never a status message, greeting, prior assistant answer, generic template, or instructions about exporting. Return strict JSON only.",
+  "triggers": {
+    "phrases": ["araştırıp pdf", "araştırma raporu", "kaynaklı rapor", "kaynaklı belge", "research report", "source-backed report"],
+    "intents": ["research_document", "research_report", "source_backed_export"],
+    "payloadTypes": []
+  },
+  "inputSchema": {
+    "type": "object",
+    "required": ["prompt"],
+    "properties": {
+      "prompt": { "type": "string", "minLength": 1 },
+      "documents": { "type": "array" },
+      "chunks": { "type": "array" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["title", "summary", "sections", "confidence"],
+    "properties": {
+      "title": { "type": "string", "minLength": 1 },
+      "summary": { "type": "string", "minLength": 80, "pattern": "\\[[1-9][0-9]*\\]" },
+      "sections": {
+        "type": "array",
+        "minItems": 2,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["heading", "content"],
+          "properties": {
+            "heading": { "type": "string", "minLength": 1 },
+            "content": { "type": "string", "minLength": 160, "pattern": "\\[[1-9][0-9]*\\]" }
+          }
+        }
+      },
+      "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+    }
+  },
+  "allowedTools": ["web.search"],
+  "modelProfile": "document_reasoning",
+  "maxInputTokens": 4200,
+  "maxOutputTokens": 1600,
+  "timeoutMs": 15000,
+  "cachePolicy": { "enabled": false, "ttlMs": 0 },
+  "validation": { "requireJson": true, "repairAttempts": 1, "rejectEmptyOutput": true, "minConfidence": 0.35 }
+}

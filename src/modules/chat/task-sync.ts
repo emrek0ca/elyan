@@ -225,6 +225,17 @@ function buildAssistantMetadataFromTask(task: typeof tasks.$inferSelect): Record
     metadata.visionBlock = result.visionBlock;
   }
 
+  // Skill selection is backend truth. Carry only the public, bounded identity
+  // into the chat message so mobile can render the existing skill indicator;
+  // prompts, tool arguments and raw retrieval content remain task-internal.
+  const skillId =
+    typeof result.skillId === "string" ? result.skillId.trim() : "";
+  const safeSkillId = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(skillId)
+    ? skillId
+    : null;
+  metadata.skillUsed = result.skillUsed === true && safeSkillId != null;
+  metadata.skillId = metadata.skillUsed ? safeSkillId : null;
+
   return metadata;
 }
 

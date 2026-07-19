@@ -1,5 +1,9 @@
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
+import type { ElyanAssistantDocumentBlock } from "../../contracts/domain.js";
+import type { AssistantMessageBlock } from "../chat/message-blocks.js";
 import type {
+  ArtifactContentSource,
+  ArtifactProvenance,
   ArtifactIntent,
   ArtifactSpec,
   ChartSpec,
@@ -35,9 +39,48 @@ type BuildSpecInput = {
   sessionId?: string;
   taskId?: string;
   model?: string | null;
+  assistantBlocks?: AssistantMessageBlock[];
+  provenance?: ArtifactProvenance;
 };
 
+function canonicalDocumentBlock(
+  blocks: AssistantMessageBlock[] | undefined,
+): ElyanAssistantDocumentBlock | null {
+  if (!Array.isArray(blocks)) {
+    return null;
+  }
+  return (
+    blocks.find(
+      (block): block is ElyanAssistantDocumentBlock =>
+        block.type === "document_block" &&
+        Array.isArray((block as ElyanAssistantDocumentBlock).sections) &&
+        (block as ElyanAssistantDocumentBlock).sections.length > 0,
+    ) ?? null
+  );
+}
+
+function boundedCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.min(10_000, Math.floor(value))
+    : undefined;
+}
+
+function safeSkillId(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim() ?? "";
+  return /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(normalized)
+    ? normalized
+    : undefined;
+}
+
 function metadataFor(input: BuildSpecInput) {
+  const sourceDocument = canonicalDocumentBlock(input.assistantBlocks);
+  const responseText = compactText(input.responseText);
+  const contentSource: ArtifactContentSource = sourceDocument
+    ? "assistant_typed_block"
+    : responseText
+      ? "current_response_text"
+      : "user_request";
+  const provenance = input.provenance;
   return {
     ...(input.userId ? { userId: input.userId } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
@@ -45,6 +88,28 @@ function metadataFor(input: BuildSpecInput) {
     createdAt: new Date().toISOString(),
     ...(input.model ? { model: input.model } : {}),
     confidence: input.intent.confidence,
+    contentSource,
+    ...(provenance?.webGroundingUsed !== undefined
+      ? { webGroundingUsed: provenance.webGroundingUsed }
+      : {}),
+    ...(boundedCount(provenance?.webSourceCount) !== undefined
+      ? { webSourceCount: boundedCount(provenance?.webSourceCount) }
+      : {}),
+    ...(boundedCount(provenance?.documentSourceCount) !== undefined
+      ? { documentSourceCount: boundedCount(provenance?.documentSourceCount) }
+      : {}),
+    ...(boundedCount(provenance?.retrievalResultCount) !== undefined
+      ? { retrievalResultCount: boundedCount(provenance?.retrievalResultCount) }
+      : {}),
+    ...(provenance?.skillUsed !== undefined
+      ? { skillUsed: provenance.skillUsed }
+      : {}),
+    ...(safeSkillId(provenance?.skillId)
+      ? { skillId: safeSkillId(provenance?.skillId) }
+      : {}),
+    ...(boundedCount(provenance?.toolCallCount) !== undefined
+      ? { toolCallCount: boundedCount(provenance?.toolCallCount) }
+      : {}),
   };
 }
 
@@ -76,6 +141,7 @@ function detectPdfDocumentType(text: string): PdfSpec["documentType"] {
 
 function buildPdfSpec(input: BuildSpecInput): PdfSpec {
   const base = baseFor(input, "pdf");
+  const sourceDocument = canonicalDocumentBlock(input.assistantBlocks);
   const moneyItems = extractMoneyItems(input.userRequest);
   const lineItems = moneyItems.filter((item) => !item.isTotal);
   const userTotal = moneyItems.find((item) => item.isTotal);
@@ -89,9 +155,35 @@ function buildPdfSpec(input: BuildSpecInput): PdfSpec {
   const blocks: PdfBlock[] = [];
 
   if (lineItems.length === 0) {
-    const text = compactText(input.responseText || input.userRequest);
-    if (text) {
-      blocks.push({ type: "paragraph", text, placement: "body", source: "user" });
+    if (sourceDocument) {
+      for (const section of sourceDocument.sections) {
+        const sectionText = [
+          section.heading ? `## ${compactText(section.heading)}` : "",
+          String(section.content ?? "").trim(),
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+          .slice(0, 8_000)
+          .trim();
+        if (sectionText) {
+          blocks.push({
+            type: "paragraph",
+            text: sectionText,
+            placement: "body",
+            source: "normalized",
+          });
+        }
+      }
+    } else {
+      const text = compactText(input.responseText || input.userRequest);
+      if (text) {
+        blocks.push({
+          type: "paragraph",
+          text,
+          placement: "body",
+          source: input.responseText ? "normalized" : "user",
+        });
+      }
     }
   } else {
     for (const item of lineItems) {
@@ -128,6 +220,7 @@ function buildPdfSpec(input: BuildSpecInput): PdfSpec {
   return {
     ...base,
     documentType: detectPdfDocumentType(input.userRequest),
+    ...(sourceDocument?.title ? { title: sourceDocument.title } : {}),
     blocks,
     page: {
       size: "A4",
@@ -281,6 +374,7 @@ function buildTextSpec(input: BuildSpecInput): TextSpec {
 
 function buildDocumentSpec(input: BuildSpecInput): DocumentSpec {
   const base = baseFor(input, "document");
+  const sourceDocument = canonicalDocumentBlock(input.assistantBlocks);
   const source = extractTextPayload(input.userRequest) || input.responseText || input.userRequest;
   const normalized = compactText(input.userRequest).toLocaleLowerCase("tr-TR");
   const documentType = /\b(teklif)\b/i.test(normalized)
@@ -297,10 +391,22 @@ function buildDocumentSpec(input: BuildSpecInput): DocumentSpec {
   return {
     ...base,
     documentType,
-    title: documentType === "quote" ? "Teklif" : documentType === "report" ? "Rapor" : undefined,
+    title:
+      sourceDocument?.title ??
+      (documentType === "quote"
+        ? "Teklif"
+        : documentType === "report"
+          ? "Rapor"
+          : undefined),
     language: detectLanguage(source),
-    sections: [{ heading: undefined, content: compactText(source), level: 1 }],
-    exportFormats: ["pdf", "docx"],
+    sections: sourceDocument
+      ? sourceDocument.sections.map((section) => ({
+          ...(section.heading ? { heading: section.heading } : {}),
+          content: section.content,
+          ...(section.level ? { level: section.level } : {}),
+        }))
+      : [{ heading: undefined, content: compactText(source), level: 1 }],
+    exportFormats: sourceDocument?.exportFormats ?? ["pdf", "docx"],
   };
 }
 
@@ -360,6 +466,12 @@ export function artifactSpecSummary(spec: ArtifactSpec): Record<string, unknown>
     type: spec.type,
     intent: spec.intent,
     blockCount: spec.blocks.length,
+    contentSource: spec.metadata?.contentSource ?? null,
+    webSourceCount: spec.metadata?.webSourceCount ?? 0,
+    documentSourceCount: spec.metadata?.documentSourceCount ?? 0,
+    retrievalResultCount: spec.metadata?.retrievalResultCount ?? 0,
+    skillUsed: spec.metadata?.skillUsed ?? false,
+    toolCallCount: spec.metadata?.toolCallCount ?? 0,
     ...(spec.type === "pdf" ? { documentType: spec.documentType, pdfBlockCount: spec.blocks.length } : {}),
     ...(spec.type === "table" ? { rowCount: spec.rows.length, columnCount: spec.columns.length } : {}),
     ...(spec.type === "chart" ? { chartType: spec.chartType, dataCount: spec.data.length } : {}),

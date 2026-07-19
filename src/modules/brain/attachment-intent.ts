@@ -29,6 +29,14 @@ function readMetadataBoolean(
   return typeof value === "boolean" ? value : null;
 }
 
+function readMetadataString(
+  record: Record<string, unknown> | null,
+  key: string,
+): string {
+  const value = record?.[key];
+  return typeof value === "string" ? compactText(value).toLowerCase() : "";
+}
+
 export type AttachmentIntentMode =
   | "answer"
   | "analyze"
@@ -62,6 +70,15 @@ export function buildResolvedAttachmentIntentPromptBlock(
   }
 
   const spec = resolveAttachmentIntentSpec(input);
+  const metadata = readMetadataRecord(input.requestMetadata);
+  const contentSource = readMetadataString(metadata, "artifactContentSource");
+  const exportIntent = readMetadataString(metadata, "documentExportIntent");
+  const sourceDirective = input.attachmentContext?.used
+    ? "- content_authority: use the current attachment context as the only primary document source; never substitute a previous assistant reply, greeting, loading message, rolling summary, or memory for attachment content"
+    : contentSource === "previous_assistant" ||
+        exportIntent === "existing_content_export"
+      ? "- content_authority: export the most recent completed assistant answer only; ignore pending/loading acknowledgements"
+      : "- content_authority: generate the requested content in this turn before exporting; never reuse an unrelated previous assistant answer";
   return [
     "Resolved attachment/document intent:",
     `- mode: ${spec.mode}`,
@@ -69,6 +86,8 @@ export function buildResolvedAttachmentIntentPromptBlock(
     `- preserve_numbers: ${spec.preserveNumbers}`,
     `- preserve_user_phrases: ${spec.preserveUserPhrases}`,
     `- requires_structured_document: ${spec.requiresStructuredDocument}`,
+    sourceDirective,
+    "- completion_contract: emit the complete requested typed document content; never emit preparation/status prose as document content",
     "Follow this resolved intent unless the user clearly changes the goal.",
   ].join("\n");
 }

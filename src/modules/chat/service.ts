@@ -2062,6 +2062,14 @@ export async function createChatMessage(
         targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
         metadata: routingMetadata,
       });
+  // Skill/tool outcomes are server-owned completion truth. Never let request
+  // metadata pre-seed an assistant badge before a verified execution occurs.
+  const assistantRequestMetadata = {
+    ...requestChatMetadata,
+    skillUsed: false,
+    skillId: null,
+    executedSkillId: null,
+  };
   const admissionLockKey = buildChatTurnAdmissionLockKey({
     userId: input.userId,
     sessionId: session.id,
@@ -2215,7 +2223,7 @@ export async function createChatMessage(
       contentBlobId: assistantAckBlob?.blobId ?? null,
       preview: compactMessagePreview(assistantAckText),
       tokenCount: estimateMessageTokens(assistantAckText),
-      metadata: withAssistantBlocksMetadata(requestChatMetadata, {
+      metadata: withAssistantBlocksMetadata(assistantRequestMetadata, {
         content: assistantAckText,
         streaming: true,
       }),

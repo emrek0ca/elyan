@@ -87,10 +87,39 @@ const PERSONAL_ONLY_PATTERNS = [
   /\b(my account|my profile|my messages|my files|my health|about me)\b/i,
 ];
 
+// Strong references to user-owned or attached data must stay on the local/RAG
+// path unless the user separately and explicitly asks for public web access.
+// The broad PERSONAL_ONLY_PATTERNS also contains "bana", which cannot be used
+// here because "Bana kedileri araştır" is a valid public research request.
+const PRIVATE_OR_ATTACHED_TARGET_PATTERN =
+  /(?<!\p{L})(hesabım\p{L}*|hesabim\p{L}*|profilim\p{L}*|geçmişim\p{L}*|gecmisim\p{L}*|mesajlarım\p{L}*|mesajlarim\p{L}*|dosyam\p{L}*|dosyalarım\p{L}*|dosyalarim\p{L}*|sağlığım\p{L}*|sagligim\p{L}*|bu dosya\p{L}*|bu pdf\p{L}*|bu belge\p{L}*|ekli dosya\p{L}*|my account|my profile|my messages|my files|my health|this file|this pdf|this document|attached file|attached document)(?!\p{L})/iu;
+
 const EXPLICIT_WEB_PATTERNS = [
   /(?<!\p{L})(internetten|webden|online|web araştır|web arastir|internet araştır|internet arastir|search the web|look up|browse)(?!\p{L})/iu,
   /(?<!\p{L})(kaynak\p{L}*|resmi kaynak\p{L}*|source-backed|with sources|official sources|cite sources)(?!\p{L})/iu,
 ];
+
+const EXPLICIT_RESEARCH_ACTION_PATTERN =
+  /(?<!\p{L})((?:araştır|arastir)(?:ıp|ip|arak|erek|ın|in|ınız|iniz|ır|ir|abilir|sana|sin)?|(?:araştırma|arastirma)\s+(?:yap|yapın|yapin|gerçekleştir|gerceklestir)|research|researching|investigate|look into)(?!\p{L})/iu;
+
+const EXPLICIT_NO_WEB_RESEARCH_PATTERN =
+  /(?<!\p{L})(araştırmadan|arastirmadan|araştırma yapma|arastirma yapma|(?:araştırma|arastirma)(?:\s+(?:lütfen|lutfen))?(?=\s*(?:[.!?,;:]|$))|web(?:de|den)? araştırma yapma|web(?:de|den)? arastirma yapma|internetten araştırma yapma|internetten arastirma yapma|web araması yapma|web aramasi yapma|(?:internet(?:i)?|web(?:i)?)\s+kullanmadan(?:\s+(?:araştır|arastir))?|(?:internet(?:i)?|web(?:i)?)\s+kullanma|internetsiz|websiz|do not research|don't research|without researching|do not browse|don't browse|no web search|without using (?:the )?(?:web|internet))(?!\p{L})/iu;
+
+const ENGLISH_RESEARCH_NOUN_PATTERN =
+  /(?<!\p{L})research\s+(paper|article|report|study|summary|findings)(?!\p{L})/iu;
+
+const REFERENTIAL_RESEARCH_DOCUMENT_ACTION_PATTERN =
+  /(?<!\p{L})(summarize|translate|rewrite|edit|proofread|review)\s+(?:this|the|that|attached)\s+research\s+(paper|article|report|study|summary|findings)(?!\p{L})/iu;
+
+function hasExplicitResearchAction(lower: string): boolean {
+  if (EXPLICIT_NO_WEB_RESEARCH_PATTERN.test(lower)) {
+    return false;
+  }
+  if (ENGLISH_RESEARCH_NOUN_PATTERN.test(lower)) {
+    return false;
+  }
+  return EXPLICIT_RESEARCH_ACTION_PATTERN.test(lower);
+}
 
 const STRONG_FRESHNESS_OR_EVIDENCE_PATTERN =
   /(?<!\p{L})(bug[üu]nk[üu]|g[üu]ncel\p{L}*|latest|recent|today|son durum|son s[üu]r[üu]m|haber\p{L}*|news|kaynak\p{L}*|resmi kaynak\p{L}*|official sources?|source-backed|with sources|cite sources?|do[ğg]rula)(?!\p{L})/iu;
@@ -2031,6 +2060,7 @@ function isSelfContainedNoWebPrompt(input: { normalized: string; explicitWebInte
 export function shouldUseWebGrounding(input: {
   prompt: string;
   workload: SharedBrainWorkload;
+  attachmentContextUsed?: boolean;
 }): boolean {
   return classifyWebGroundingDecision(input).mode === "web_required";
 }
@@ -2038,21 +2068,49 @@ export function shouldUseWebGrounding(input: {
 export function classifyWebGroundingDecision(input: {
   prompt: string;
   workload: SharedBrainWorkload;
+  attachmentContextUsed?: boolean;
 }): WebGroundingDecision {
   const normalized = compactText(input.prompt);
   if (!normalized) {
     return { mode: "no_web_needed", reasons: [] };
   }
   const lower = normalized.toLocaleLowerCase("tr-TR");
-  const explicitWebIntent = EXPLICIT_WEB_PATTERNS.some((pattern) => pattern.test(lower));
+  const explicitNoWebResearch = EXPLICIT_NO_WEB_RESEARCH_PATTERN.test(lower);
+  const explicitWebIntent =
+    !explicitNoWebResearch &&
+    EXPLICIT_WEB_PATTERNS.some((pattern) => pattern.test(lower));
+  const explicitResearchAction = hasExplicitResearchAction(lower);
   const researchIntent = WEB_RESEARCH_PATTERNS.some((pattern) => pattern.test(lower));
   const strongFreshnessOrEvidence = STRONG_FRESHNESS_OR_EVIDENCE_PATTERN.test(lower);
   const personalOnlyIntent = PERSONAL_ONLY_PATTERNS.some((pattern) => pattern.test(lower)) && !explicitWebIntent;
+  const privateOrAttachedTarget =
+    PRIVATE_OR_ATTACHED_TARGET_PATTERN.test(lower) && !explicitWebIntent;
   const factuality = detectFactualityGrounding(normalized);
   const responsePolicy = responsePolicyForPrompt(normalized);
   const reasons: string[] = [];
+  if (explicitNoWebResearch) {
+    return {
+      mode: "no_web_needed",
+      reasons: ["explicit_no_web"],
+    };
+  }
+  if (REFERENTIAL_RESEARCH_DOCUMENT_ACTION_PATTERN.test(lower)) {
+    return {
+      mode: "no_web_needed",
+      reasons: ["referential_document_only"],
+    };
+  }
+  if (input.attachmentContextUsed === true && !explicitWebIntent) {
+    return {
+      mode: "no_web_needed",
+      reasons: ["attachment_local_only"],
+    };
+  }
   if (explicitWebIntent) {
     reasons.push("explicit_web_request");
+  }
+  if (explicitResearchAction) {
+    reasons.push("explicit_research_action");
   }
   if (researchIntent) {
     reasons.push("external_or_fresh_fact_request");
@@ -2067,7 +2125,10 @@ export function classifyWebGroundingDecision(input: {
     !responsePolicy.webRequired &&
     !factuality.triggered &&
     (
-      isSelfContainedNoWebPrompt({ normalized, explicitWebIntent }) ||
+      isSelfContainedNoWebPrompt({
+        normalized,
+        explicitWebIntent: explicitWebIntent || explicitResearchAction,
+      }) ||
       [
         "casual_chat",
         "creative_answer",
@@ -2077,18 +2138,20 @@ export function classifyWebGroundingDecision(input: {
         "image_generation",
       ].includes(responsePolicy.intent)
     ) &&
-    !strongFreshnessOrEvidence
+    !strongFreshnessOrEvidence &&
+    !explicitResearchAction
   ) {
     return {
       mode: "no_web_needed",
       reasons: uniqueStrings(["self_contained_no_web", `intent:${responsePolicy.intent}`]),
     };
   }
-  if (personalOnlyIntent && !researchIntent) {
+  if (privateOrAttachedTarget || (personalOnlyIntent && !researchIntent)) {
     return { mode: "no_web_needed", reasons: uniqueStrings([...reasons, "personal_local_only"]) };
   }
   if (
     explicitWebIntent ||
+    explicitResearchAction ||
     responsePolicy.webRequired ||
     (researchIntent && strongFreshnessOrEvidence) ||
     factuality.triggered ||
@@ -2105,6 +2168,7 @@ export function classifyWebGroundingDecision(input: {
 function webGroundingDecisionReasons(input: {
   prompt: string;
   workload: SharedBrainWorkload;
+  attachmentContextUsed?: boolean;
 }): string[] {
   const decision = classifyWebGroundingDecision(input);
   return uniqueStrings([`web_decision:${decision.mode}`, ...decision.reasons]);
@@ -2285,19 +2349,37 @@ export async function searchPublicWebGrounding(
     prompt: string;
     workload: SharedBrainWorkload;
     bypassCache?: boolean;
+    attachmentContextUsed?: boolean;
+    /** Internal skill contract: require search unless an explicit safety/locality rule denies it. */
+    forceSearch?: boolean;
   },
 ): Promise<WebGroundingResult> {
   const requestedAt = new Date();
   const query = compactText(input.prompt).slice(0, 320);
   const freshDataPolicy = resolveFreshDataPolicy(query);
   const decisionReasons = webGroundingDecisionReasons(input);
+  const decision = classifyWebGroundingDecision(input);
+  const forceSearchBlocked = decision.reasons.some((reason) =>
+    [
+      "explicit_no_web",
+      "attachment_local_only",
+      "referential_document_only",
+      "personal_local_only",
+    ].includes(reason),
+  );
+  const shouldSearch =
+    shouldUseWebGrounding(input) ||
+    (input.forceSearch === true && !forceSearchBlocked);
+  if (input.forceSearch === true && shouldSearch) {
+    decisionReasons.push("skill_contract:web_required");
+  }
   const searchSource =
     app.config.ELYAN_SEARCH_PROVIDER === "searxng" && app.config.SEARXNG_BASE_URL
       ? "searxng" as const
       : app.config.ELYAN_SEARCH_PROVIDER === "brave" && app.config.BRAVE_SEARCH_API_KEY
         ? "brave" as const
         : "duckduckgo_html" as const;
-  if (!app.config.ELYAN_WEB_GROUNDING_ENABLED || !query || !shouldUseWebGrounding(input)) {
+  if (!app.config.ELYAN_WEB_GROUNDING_ENABLED || !query || !shouldSearch) {
     const retrievedAt = requestedAt.toISOString();
     return {
       enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,

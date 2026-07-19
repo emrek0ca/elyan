@@ -16,7 +16,7 @@ import {
 import { isCurrentUserIdentityQuery } from "../../core/understanding/intent-classifier.js";
 import { recordCreditLedgerEntry } from "../billing/credit-ledger.js";
 import {
-  BILLING_USAGE_METRICS,
+  buildScopedAiCreditUsageMetric,
   recordUsageLedgerEntry,
 } from "../billing/usage-ledger.js";
 import {
@@ -158,7 +158,6 @@ import {
 import { buildUrlContextBlock, promptContainsUrl } from "./url-context.js";
 import {
   buildDocumentContextBlock,
-  buildAttachmentAckText,
 } from "./document-context.js";
 import {
   extractClientAttachments,
@@ -365,6 +364,7 @@ import {
   isExplicitTableRequest,
 } from "../../core/understanding/structured-output-policy.js";
 import {
+  buildAssistantDocumentBlock,
   buildAssistantInfoCardBlock,
   buildAssistantMessageBlocks,
   buildAssistantWebSearchBlock,
@@ -372,8 +372,10 @@ import {
   sanitizeAssistantVisibleText,
   validateAssistantBlockContract,
 } from "../chat/message-blocks.js";
+import { isSourceWidgetBlockType } from "../chat/block-envelope.js";
 import {
-  buildConnectorResultBlocks,
+  buildSourceTypedConnectorBlocks,
+  buildToolCallBlock,
   connectorResultFallbackText,
   mergeAuthoritativeConnectorResultBlocks,
 } from "./connector-result-blocks.js";
@@ -434,6 +436,8 @@ type SharedBrainInferenceInput = {
   routeDecision?: CommandRouteDecision | null;
   workload?: SharedBrainWorkload;
   meteringSurface?: TokenMeteringSurface;
+  /** Stable per-task phase used to meter nested model calls idempotently. */
+  usageLedgerPhase?: string;
   planCode?: string | null;
   brainProfile?: unknown;
   /** Internal worker boundary: constrain one durable queue to one hosted provider. */
@@ -448,6 +452,11 @@ type SharedBrainInferenceInput = {
   responseSchemaOverride?: Record<string, unknown>;
   /** Original user wording when an internal skill prompt replaces `prompt`. */
   mediaIntentPrompt?: string;
+  /** Original user query used by skill-authorized knowledge adapters. */
+  knowledgeQueryOverride?: string;
+  /** Present only for skill execution; deny-by-default when empty. */
+  skillToolAllowlist?: readonly string[];
+  skillWebGroundingRequired?: boolean;
   skillExecutionMetadata?: Record<string, unknown>;
   onDelta?: (delta: SharedBrainInferenceDelta) => void | Promise<void>;
   internalEvaluation?: {
@@ -1119,6 +1128,34 @@ function readMetadataRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+type MailOpenBlockAction = {
+  messageId: string;
+  threadId?: string;
+};
+
+/**
+ * Reads the typed mobile row action without copying its identifiers into any
+ * prompt or telemetry payload. Execution still passes through the advertised
+ * connector contract, user-scoped OAuth token lookup, and read-only tool gate.
+ */
+function readMailOpenBlockAction(metadata: unknown): MailOpenBlockAction | null {
+  const action = readMetadataRecord(readMetadataRecord(metadata)?.blockAction);
+  if (!action) return null;
+  const actionType = normalizeMetadataValue(action.type ?? action.kind);
+  const source = normalizeMetadataValue(action.source);
+  if (actionType !== "mail_open" || source !== "gmail") return null;
+  const payload = readMetadataRecord(action.payload);
+  const rawMessageId = payload?.messageId ?? action.messageId;
+  const messageId = typeof rawMessageId === "string" ? rawMessageId.trim() : "";
+  if (!/^[a-zA-Z0-9_-]{1,120}$/u.test(messageId)) return null;
+  const rawThreadId = payload?.threadId ?? action.threadId;
+  const threadId = typeof rawThreadId === "string" ? rawThreadId.trim() : "";
+  return {
+    messageId,
+    ...(/^[a-zA-Z0-9_-]{1,120}$/u.test(threadId) ? { threadId } : {}),
+  };
+}
+
 /**
  * Read the persistent affective stance that dialogue-state surfaced into the
  * carried metadata (compactContext.affectiveStance) so generation can modulate
@@ -1325,7 +1362,10 @@ async function finalizeIncompleteResponse(
   input: SharedBrainInferenceInput,
   responseText: string,
   workload: SharedBrainWorkload,
-  options: { allowPublicProviderReferences?: boolean } = {},
+  options: {
+    allowPublicProviderReferences?: boolean;
+    usageLedgerPhase?: string;
+  } = {},
 ): Promise<{
   text: string;
   repairApplied: boolean;
@@ -1409,10 +1449,12 @@ async function finalizeIncompleteResponse(
     const repaired = await generateSharedBrainReply(app, {
       ...inheritedProviderExecutionPolicy(input),
       userId: input.userId,
+      taskId: input.taskId,
       prompt: repairPrompt,
       route: input.route,
       workload: repairWorkload,
       meteringSurface: "chat",
+      usageLedgerPhase: options.usageLedgerPhase ?? "quality_repair",
       planCode: input.planCode,
       brainProfile: input.brainProfile,
       understandingContext: input.understandingContext,
@@ -2233,7 +2275,11 @@ export function buildShortFollowUpSystemPrompt(
 ): string {
   const userIdentity = buildUserIdentityPromptBlock(input.understandingContext);
   const languageHint = getTurkicLanguagePromptHint(input.prompt);
-  const compactContextBlock = buildCompactContextPromptBlock(input);
+  const compactContextBlock =
+    input.skillToolAllowlist === undefined ||
+    input.skillToolAllowlist.includes("memory.query")
+      ? buildCompactContextPromptBlock(input)
+      : null;
 
   return [
     basePrompt,
@@ -2310,7 +2356,14 @@ export function buildStructuredSystemPrompt(
   // Kısa takip mesajları için lean profil. Full path'in ~35 policy satırı
   // "devam et" gibi 8 karakterlik bir mesaj için gereksiz — model overload
   // olur ve önceki turu doğru referans alamaz.
-  if (isShortFollowUpPrompt(input.prompt)) {
+  if (
+    isShortFollowUpPrompt(input.prompt) &&
+    input.attachmentContext?.used !== true &&
+    input.workload !== "document_generate" &&
+    input.workload !== "table_generate" &&
+    input.workload !== "image_analyze" &&
+    input.workload !== "vision_reasoning"
+  ) {
     return buildShortFollowUpSystemPrompt(basePrompt, input);
   }
 
@@ -2331,7 +2384,11 @@ export function buildStructuredSystemPrompt(
   const temporalAwarenessBlock = buildTemporalAwarenessPromptBlock(
     input.understandingContext,
   );
-  const compactContextBlock = buildCompactContextPromptBlock(input);
+  const compactContextBlock =
+    input.skillToolAllowlist === undefined ||
+    input.skillToolAllowlist.includes("memory.query")
+      ? buildCompactContextPromptBlock(input)
+      : null;
   const languageHint = getTurkicLanguagePromptHint(input.prompt);
   const currentUserIdentityDirective = isCurrentUserIdentityQuery(input.prompt)
     ? "This question is about the user, not Elyan. Answer only from the current-user identity, preference, project, understanding-envelope, and memory-profile evidence above. Do not introduce or describe Elyan. If no verified user facts are available, say that you do not know the user yet and offer to learn."
@@ -2990,7 +3047,8 @@ function buildWebGroundingMetadata(webGrounding: WebGroundingResult) {
       !webGrounding.freshData.evidence.sufficient
         ? "buffer_until_validated"
         : "stream",
-    webSources: webGrounding.results.slice(0, 5).map((result) => ({
+    // Keep citation numbering aligned with the prompt (configured max is 8).
+    webSources: webGrounding.results.slice(0, 8).map((result) => ({
       title: result.title,
       url: result.url,
       sourceHost: result.sourceHost,
@@ -3654,6 +3712,7 @@ function shouldAugmentKnowledge(input: {
   workload: SharedBrainWorkload;
   prompt: string;
   brainProfile: ReturnType<typeof normalizePlanBrainProfile>;
+  attachmentContextUsed?: boolean;
 }): boolean {
   const normalized = String(input.prompt ?? "").trim();
   if (!normalized || isSocialChatPrompt(normalized)) {
@@ -3664,6 +3723,7 @@ function shouldAugmentKnowledge(input: {
     shouldUseWebGrounding({
       prompt: normalized,
       workload: input.workload,
+      attachmentContextUsed: input.attachmentContextUsed,
     })
   ) {
     return true;
@@ -4126,6 +4186,7 @@ export function buildContextualWebGroundingPrompt(
         input.workload ??
         input.routeDecision?.selectedWorkload ??
         DEFAULT_WORKLOAD,
+      attachmentContextUsed: input.attachmentContext?.used === true,
     }) ||
     (!FRESH_DATA_FOLLOWUP_PATTERN.test(prompt) &&
       !isShortFollowUpPrompt(prompt))
@@ -4655,7 +4716,13 @@ export async function generateSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
 ): Promise<SharedBrainInferenceResult> {
-  if (app.config?.ELYAN_DIALOGUE_STATE_ENABLED === true) {
+  const skillMemoryAuthorized =
+    input.skillToolAllowlist === undefined ||
+    input.skillToolAllowlist.includes("memory.query");
+  if (
+    app.config?.ELYAN_DIALOGUE_STATE_ENABLED === true &&
+    skillMemoryAuthorized
+  ) {
     const sessionId = resolveDialogueStateSessionId(input.requestMetadata);
     if (sessionId) {
       const snapshot = await readDialogueState(app, {
@@ -4750,6 +4817,7 @@ export async function generateSharedBrainReply(
     );
     return deterministicMathSurfaceResult;
   }
+  const mailOpenBlockAction = readMailOpenBlockAction(input.requestMetadata);
   // Connector tools (gmail/calendar/drive read) are advertised only on
   // chat/planning-shaped turns where the agent loop can actually run them, and
   // only when the user has a matching integration connected. Resolved once and
@@ -4802,6 +4870,7 @@ export async function generateSharedBrainReply(
   }
   if (
     input.connectorReadToolHint === undefined &&
+    mailOpenBlockAction == null &&
     !input.internalEvaluation?.refinementPass &&
     app.config?.ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED === true &&
     (input.connectorToolContracts?.length ?? 0) > 0
@@ -4831,14 +4900,20 @@ export async function generateSharedBrainReply(
       input.connectorReadToolHint = null;
     }
   }
+  if (mailOpenBlockAction) {
+    // A row tap is already a typed read intent. Do not let semantic routing
+    // replace it with gmail.search; the exact message ID remains metadata-only.
+    input.connectorReadToolHint = null;
+  }
   if (connectorContractsWereAutoResolved) {
     input.connectorToolContracts = connectorContractsForSemanticReadHint(
       input.connectorToolContracts ?? [],
-      input.connectorReadToolHint?.tool,
+      mailOpenBlockAction ? undefined : input.connectorReadToolHint?.tool,
     );
   }
   const planBrainProfile = normalizePlanBrainProfile(input.brainProfile);
-  const cacheable = shouldUseResponseCache(input, workload);
+  const cacheable =
+    mailOpenBlockAction == null && shouldUseResponseCache(input, workload);
   const responseCache = getResponseCache(app);
   const responseCacheKey = cacheable
     ? createResponseCacheKey(input, workload, planBrainProfile)
@@ -4984,44 +5059,84 @@ export async function generateSharedBrainReply(
         (runtime.ready
           ? runtime.provider
           : app.config.ELYAN_SHARED_BRAIN_PROVIDER);
-      const webGroundingPrompt = buildContextualWebGroundingPrompt(input);
-      const shouldAugment = shouldAugmentKnowledge({
-        workload,
-        prompt: webGroundingPrompt,
-        brainProfile: planBrainProfile,
+      const knowledgeQuery = compactText(
+        input.knowledgeQueryOverride ?? input.prompt,
+      );
+      const webGroundingPrompt = buildContextualWebGroundingPrompt({
+        ...input,
+        prompt: knowledgeQuery,
       });
-      const brainCorpusDomains = detectBrainCorpusDomains(input.prompt);
-      const retrievalQuery = buildBrainCorpusRetrievalQuery(input.prompt);
+      const skillToolPolicyActive = input.skillToolAllowlist !== undefined;
+      const skillTools = new Set(input.skillToolAllowlist ?? []);
+      const retrievalAuthorized =
+        !skillToolPolicyActive || skillTools.has("retrieval.search");
+      const memoryAuthorized =
+        !skillToolPolicyActive || skillTools.has("memory.query");
+      const webAuthorized =
+        !skillToolPolicyActive || skillTools.has("web.search");
+      const shouldAugment =
+        (retrievalAuthorized || memoryAuthorized || webAuthorized) &&
+        ((webAuthorized && input.skillWebGroundingRequired === true) ||
+          shouldAugmentKnowledge({
+            workload,
+            prompt: webGroundingPrompt,
+            brainProfile: planBrainProfile,
+            attachmentContextUsed: input.attachmentContext?.used === true,
+          }));
+      const brainCorpusDomains = detectBrainCorpusDomains(knowledgeQuery);
+      const retrievalQuery = buildBrainCorpusRetrievalQuery(knowledgeQuery);
       const [retrieval, memory, webGrounding] = shouldAugment
         ? await Promise.all([
-            searchKnowledge(app, {
-              userId: input.userId,
-              query: retrievalQuery,
-              limit: planBrainProfile.retrievalFanout,
-            }).catch(() => ({
-              retrievalMode: "lexical_fallback" as const,
-              results: [],
-              degradedReason: "retrieval_unavailable",
-            })),
-            searchBrainMemory(app, {
-              userId: input.userId,
-              query: input.prompt,
-              limit: planBrainProfile.memoryFanout,
-            }).catch(() => ({
-              retrievalMode: "lexical_fallback" as const,
-              results: [],
-              degradedReason: "memory_unavailable",
-            })),
-            searchPublicWebGrounding(app, {
-              prompt: webGroundingPrompt,
-              workload,
-            }).catch(() =>
-              buildUnavailableWebGroundingResult({
-                enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
-                prompt: webGroundingPrompt,
-                degradedReason: "web_search_unavailable",
-              }),
-            ),
+            retrievalAuthorized
+              ? searchKnowledge(app, {
+                  userId: input.userId,
+                  query: retrievalQuery,
+                  limit: planBrainProfile.retrievalFanout,
+                }).catch(() => ({
+                  retrievalMode: "lexical_fallback" as const,
+                  results: [],
+                  degradedReason: "retrieval_unavailable",
+                }))
+              : Promise.resolve({
+                  retrievalMode: "lexical_fallback" as const,
+                  results: [],
+                  degradedReason: null,
+                }),
+            memoryAuthorized
+              ? searchBrainMemory(app, {
+                  userId: input.userId,
+                  query: knowledgeQuery,
+                  limit: planBrainProfile.memoryFanout,
+                }).catch(() => ({
+                  retrievalMode: "lexical_fallback" as const,
+                  results: [],
+                  degradedReason: "memory_unavailable",
+                }))
+              : Promise.resolve({
+                  retrievalMode: "lexical_fallback" as const,
+                  results: [],
+                  degradedReason: null,
+                }),
+            webAuthorized
+              ? searchPublicWebGrounding(app, {
+                  prompt: webGroundingPrompt,
+                  workload,
+                  attachmentContextUsed: input.attachmentContext?.used === true,
+                  forceSearch: input.skillWebGroundingRequired === true,
+                }).catch(() =>
+                  buildUnavailableWebGroundingResult({
+                    enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
+                    prompt: webGroundingPrompt,
+                    degradedReason: "web_search_unavailable",
+                  }),
+                )
+              : Promise.resolve(
+                  buildUnavailableWebGroundingResult({
+                    enabled: false,
+                    prompt: webGroundingPrompt,
+                    degradedReason: null,
+                  }),
+                ),
           ])
         : [
             {
@@ -5069,8 +5184,8 @@ export async function generateSharedBrainReply(
                 userId: input.userId,
                 stableId:
                   input.taskId ??
-                  String(input.requestMetadata?.requestId ?? input.prompt),
-                question: input.prompt,
+                  String(input.requestMetadata?.requestId ?? knowledgeQuery),
+                question: knowledgeQuery,
                 sources: webGrounding.results.slice(0, 6).map((result) => ({
                   title: result.title,
                   host: result.sourceHost || "",
@@ -5078,7 +5193,10 @@ export async function generateSharedBrainReply(
                   publishedAt: result.publishedAt ?? null,
                   pageContent: result.pageContent ?? null,
                 })),
-                dataLineage: buildGeminiFreeInferenceDataLineage(input),
+                dataLineage: buildGeminiFreeInferenceDataLineage({
+                  ...input,
+                  prompt: knowledgeQuery,
+                }),
               }).catch(() => null),
             )
           : null;
@@ -5091,8 +5209,11 @@ export async function generateSharedBrainReply(
         .join("\n\n") || null;
 
       /* URL context: fetch content from user-provided URLs (fire parallel, max 2) */
-      const urlContextBlock = promptContainsUrl(input.prompt)
-        ? await buildUrlContextBlock(app, input.prompt).catch(() => null)
+      const urlContextAuthorized =
+        !skillToolPolicyActive || skillTools.has("web.fetch_url");
+      const urlContextBlock =
+        urlContextAuthorized && promptContainsUrl(knowledgeQuery)
+        ? await buildUrlContextBlock(app, knowledgeQuery).catch(() => null)
         : null;
 
       /* Client attachments: pre-processed document/image/table data from mobile/desktop */
@@ -5413,21 +5534,27 @@ export async function generateSharedBrainReply(
       // reliably for "rapor/tablo/pdf yap" style requests.
       const [corpusGuidanceBlock, continuityBlock, behaviorLearningBlock] =
         await Promise.all([
-          buildBrainCorpusGuidanceBlock(input.prompt, brainCorpusDomains).catch(
-            () => null,
-          ),
+          retrievalAuthorized
+            ? buildBrainCorpusGuidanceBlock(
+                knowledgeQuery,
+                brainCorpusDomains,
+              ).catch(() => null)
+            : Promise.resolve(null),
           // Fresh-session continuity hint ("kaldığımız yer"). Only on the very
           // first turn of a new chat; if the user opens a new session within ~7
           // days of a meaningful episode, Elyan can naturally reference it.
-          buildSessionContinuityBlock(app, {
-            userId: input.userId,
-            conversationLength: boundedConversation.length,
-            cognitiveContext: input.understandingContext?.cognitiveContext,
-          }).catch(() => null),
+          memoryAuthorized
+            ? buildSessionContinuityBlock(app, {
+                userId: input.userId,
+                conversationLength: boundedConversation.length,
+                cognitiveContext: input.understandingContext?.cognitiveContext,
+              }).catch(() => null)
+            : Promise.resolve(null),
+          memoryAuthorized &&
           app.config.ELYAN_BEHAVIOR_LEARNING_ENABLED === true
             ? buildBehaviorLearningPromptBlock(app, {
                 userId: input.userId,
-                prompt: input.prompt,
+                prompt: knowledgeQuery,
               }).catch(() => null)
             : Promise.resolve(null),
         ]);
@@ -6933,7 +7060,9 @@ export async function generateSharedBrainReply(
               userId: input.userId,
               identityId: usageIdentity.identityId,
               taskId: input.taskId,
-              metric: BILLING_USAGE_METRICS.subscriptionAiCredit,
+              metric: buildScopedAiCreditUsageMetric(
+                input.usageLedgerPhase,
+              ),
               quantity: billableAiCredits,
               budgetUnits: billableAiCredits,
               qualityProfile: usageIdentity.qualityProfile,
@@ -7133,7 +7262,13 @@ export async function generateSharedBrainReply(
         ...webGroundingBlocks,
         ...attachmentInsightBlocks,
         ...finalTextBlocks,
-        ...extractedTypedBlocks,
+        ...extractedTypedBlocks.filter((block) => {
+          const type = String((block as { type?: unknown }).type ?? "");
+          // Connector widgets are authoritative adapter output only. Keep the
+          // legacy type readable from history, but never accept it (or a
+          // source-widget imitation) from model-generated JSON.
+          return type !== "connector_result" && !isSourceWidgetBlockType(type);
+        }),
         ...lowConfidenceBlocks,
       ];
       const result: SharedBrainInferenceResult = {
@@ -7302,12 +7437,31 @@ export async function generateSharedBrainReply(
       const connectorOnlyMode =
         !fullAgentLoopEnabled &&
         app.config.ELYAN_CONNECTOR_TOOLS_ENABLED === true;
-      const envelopeToolRequests: AgentToolRequest[] = turnEnvelope
+      const advertisedConnectorNames = new Set(
+        (input.connectorToolContracts ?? [])
+          .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
+          .filter((name): name is string => Boolean(name)),
+      );
+      const modelEnvelopeToolRequests: AgentToolRequest[] = turnEnvelope
         ? turnEnvelope.tool_requests.length > 0
           ? turnEnvelope.tool_requests
           : (turnEnvelope.agent_plan?.steps.map((step) => step.tool_request) ??
             [])
         : [];
+      const deterministicMailReadRequest: AgentToolRequest | null =
+        mailOpenBlockAction && advertisedConnectorNames.has("gmail.read")
+          ? {
+              tool: "gmail.read",
+              args: { messageId: mailOpenBlockAction.messageId },
+            }
+          : null;
+      // A typed row action is narrower and more trustworthy than a model plan;
+      // execute only that read for this action turn so a guessed search/write
+      // request cannot replace or accompany the requested mail detail.
+      const envelopeToolRequests: AgentToolRequest[] = deterministicMailReadRequest
+        ? [deterministicMailReadRequest]
+        : modelEnvelopeToolRequests;
+      result.metadata.toolRequestCount = envelopeToolRequests.length;
 
       if (
         (fullAgentLoopEnabled || connectorOnlyMode) &&
@@ -7318,11 +7472,6 @@ export async function generateSharedBrainReply(
         visualToolActionAuthorized
       ) {
         const requestedTools: AgentToolRequest[] = envelopeToolRequests;
-        const advertisedConnectorNames = new Set(
-          (input.connectorToolContracts ?? [])
-            .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
-            .filter((name): name is string => Boolean(name)),
-        );
         const scopedToolRequests = connectorOnlyMode
           ? requestedTools.filter((request) => {
               if (!isConnectorTool(request.tool)) return false;
@@ -7394,6 +7543,7 @@ export async function generateSharedBrainReply(
           }
         }
         const toolPlan =
+          mailOpenBlockAction == null &&
           !connectorOnlyMode &&
           inlineToolRequests.length === requestedTools.length
             ? (turnEnvelope?.agent_plan ?? null)
@@ -7460,6 +7610,19 @@ export async function generateSharedBrainReply(
             result.metadata.agentRunId = toolLoop.runId ?? null;
             result.metadata.agentRunState = toolLoop.runState ?? null;
           }
+          // `connector_result` is read-only legacy history, and source widgets
+          // are trusted tool data only. Model output must carry neither forward,
+          // whether source widgets are enabled or kill-switched.
+          const connectorGeneratedFreeBlocks = assistantMetadataBlocks.filter(
+            (block) => {
+              const type = String((block as { type?: unknown }).type ?? "");
+              return type !== "connector_result" && !isSourceWidgetBlockType(type);
+            },
+          );
+          if (connectorGeneratedFreeBlocks.length !== assistantMetadataBlocks.length) {
+            assistantMetadataBlocks = connectorGeneratedFreeBlocks;
+            result.metadata.blocks = connectorGeneratedFreeBlocks;
+          }
           const hasUsableToolResult = toolLoop.results.some(
             (toolResult) => toolResult.ok,
           );
@@ -7469,9 +7632,10 @@ export async function generateSharedBrainReply(
             // zaten yapılandırılmış kart olarak render edileceği için nesir
             // aynı listeyi bir de numaralı metin olarak tekrarlamamalı
             // (canlıda aynı 5 mail üç formatta üst üste basılıyordu).
-            const connectorResultBlocks = buildConnectorResultBlocks(
-              toolLoop.results,
-            );
+            const connectorResultBlocks =
+              app.config.ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED !== false
+                ? buildSourceTypedConnectorBlocks(toolLoop.results)
+                : [];
             if (connectorResultBlocks.length > 0) {
               const authoritativeBlocks = mergeAuthoritativeConnectorResultBlocks(
                 assistantMetadataBlocks,
@@ -7497,11 +7661,11 @@ export async function generateSharedBrainReply(
               // envelope'u zorlar ve JSON overhead'i cevabı yer. Refinement
               // araç istemez — kontrat duyurusu kapalı.
               connectorToolContracts: [],
+              usageLedgerPhase: "tool_refinement",
               internalEvaluation: {
                 ...input.internalEvaluation,
                 refinementPass: true,
                 skipUsageValidation: true,
-                skipInvocationLogging: true,
                 skipReviewLogging: true,
               },
             }).catch((error) => {
@@ -7584,21 +7748,28 @@ export async function generateSharedBrainReply(
                 result.metadata.toolRefinementMode = appendMode
                   ? "streaming_append"
                   : "streaming_replace";
-                const mergedBlocks = [
-                  ...assistantMetadataBlocks.filter(
-                    (block) => (block as { type?: string }).type !== "text",
-                  ),
-                  ...buildAssistantMessageBlocks(combined),
-                  ...connectorResultBlocks,
-                  ...(refinedBlocks ?? []).filter(
-                    (block) =>
-                      (block as { type?: string }).type !== "text" &&
-                      // Structured connector tables are authoritative; drop any
-                      // table the refinement prose also produced to avoid a
-                      // duplicate rendering of the same data.
-                      (block as { type?: string }).type !== "table",
-                  ),
-                ] as typeof assistantMetadataBlocks;
+                const mergedBlocks = mergeAuthoritativeConnectorResultBlocks(
+                  [
+                    ...assistantMetadataBlocks.filter(
+                      (block) => (block as { type?: string }).type !== "text",
+                    ),
+                    ...buildAssistantMessageBlocks(combined),
+                    ...(refinedBlocks ?? []).filter((block) => {
+                      const type = String(
+                        (block as { type?: unknown }).type ?? "",
+                      );
+                      return (
+                        type !== "text" &&
+                        // Tool data owns every connector widget. Refinement may
+                        // summarize it, but cannot fabricate a second source card.
+                        type !== "table" &&
+                        type !== "connector_result" &&
+                        !isSourceWidgetBlockType(type)
+                      );
+                    }),
+                  ],
+                  connectorResultBlocks,
+                ) as typeof assistantMetadataBlocks;
                 result.metadata.blocks = mergedBlocks;
                 assistantMetadataBlocks = mergedBlocks;
               } else {
@@ -7607,12 +7778,19 @@ export async function generateSharedBrainReply(
                 if (refinedBlocks || connectorResultBlocks.length > 0) {
                   const proseBlocks =
                     refinedBlocks ?? buildAssistantMessageBlocks(refined.text);
-                  const replaceBlocks = [
-                    ...proseBlocks.filter(
-                      (block) => (block as { type?: string }).type !== "table",
-                    ),
-                    ...connectorResultBlocks,
-                  ] as NonNullable<typeof refinedBlocks>;
+                  const replaceBlocks = mergeAuthoritativeConnectorResultBlocks(
+                    proseBlocks.filter((block) => {
+                      const type = String(
+                        (block as { type?: unknown }).type ?? "",
+                      );
+                      return (
+                        type !== "table" &&
+                        type !== "connector_result" &&
+                        !isSourceWidgetBlockType(type)
+                      );
+                    }),
+                    connectorResultBlocks,
+                  ) as NonNullable<typeof refinedBlocks>;
                   result.metadata.blocks = replaceBlocks;
                   assistantMetadataBlocks = replaceBlocks;
                 }
@@ -7688,6 +7866,25 @@ export async function generateSharedBrainReply(
               result.metadata.connectorFailureKind = failedToolKind;
               removeWebGroundingFromConnectorFailureMetadata(result.metadata);
             }
+          }
+          // Tool telemetry becomes a first-class, user-visible block so the
+          // answer chain (request → tool → result) is traceable — success or
+          // failure. Merged once here, after every refinement branch has
+          // settled `metadata.blocks`; the merge dedupes by blockId so a path
+          // that already carried it forward does not duplicate it.
+          const toolCallBlock =
+            app.config.ELYAN_TOOL_CALL_BLOCK_ENABLED !== false
+              ? buildToolCallBlock(toolLoop.results)
+              : null;
+          if (toolCallBlock) {
+            const blocksWithToolCall = mergeAuthoritativeConnectorResultBlocks(
+              Array.isArray(result.metadata.blocks)
+                ? result.metadata.blocks
+                : assistantMetadataBlocks,
+              [toolCallBlock],
+            ) as typeof assistantMetadataBlocks;
+            result.metadata.blocks = blocksWithToolCall;
+            assistantMetadataBlocks = blocksWithToolCall;
           }
         }
       }
@@ -8071,10 +8268,11 @@ async function classifySkillRouteWithModel(
   app: FastifyInstance,
   input: SharedBrainInferenceInput & {
     attachmentContext: ResolvedAttachmentContext;
+    skills: Awaited<ReturnType<typeof listActiveSkillSummaries>>;
   },
 ) {
   try {
-    const skills = await listActiveSkillSummaries();
+    const skills = input.skills;
     const reply = await generateSharedBrainReply(app, {
       ...inheritedProviderExecutionPolicy(input),
       userId: input.userId,
@@ -8104,6 +8302,7 @@ async function classifySkillRouteWithModel(
       routeDecision: input.routeDecision,
       workload: "intent",
       meteringSurface: input.meteringSurface,
+      usageLedgerPhase: "skill_route_classifier",
       planCode: input.planCode,
       brainProfile: input.brainProfile,
       maxCompletionTokensOverride: 96,
@@ -8556,16 +8755,129 @@ function readSkillHint(metadata: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+const SAFE_NON_ATTACHMENT_SKILL_METADATA_KEYS = [
+  "requestId",
+  "channel",
+  "locale",
+  "skillHint",
+  "documentExportIntent",
+  "artifactType",
+  "artifact_type",
+  "mobileDocumentExport",
+  "mobileLocalExport",
+] as const;
+
+const SAFE_ATTACHMENT_SKILL_METADATA_KEYS = [
+  "cloudVisionOptIn",
+  "attachmentContextUsed",
+  "attachmentContextSource",
+  "outputFormatHint",
+  "preferredRenderFormat",
+] as const;
+
+function buildSkillModelRequestMetadata(input: {
+  requestMetadata?: Record<string, unknown>;
+  skillExecution: unknown;
+  includeAttachmentMetadata: boolean;
+}): Record<string, unknown> {
+  const safeKeys = input.includeAttachmentMetadata
+    ? [
+        ...SAFE_NON_ATTACHMENT_SKILL_METADATA_KEYS,
+        ...SAFE_ATTACHMENT_SKILL_METADATA_KEYS,
+      ]
+    : [...SAFE_NON_ATTACHMENT_SKILL_METADATA_KEYS];
+  const metadata = Object.fromEntries(
+    safeKeys.flatMap((key) => {
+      const value = input.requestMetadata?.[key];
+      if (typeof value === "boolean") return [[key, value] as const];
+      return typeof value === "string" && value.trim()
+        ? [[key, value.trim().slice(0, 512)] as const]
+        : [];
+    }),
+  );
+  return {
+    ...metadata,
+    skillExecution: input.skillExecution,
+  };
+}
+
+function buildResearchSkillDocumentBlock(
+  skillResult: Awaited<ReturnType<typeof executeSkill>>,
+) {
+  if (
+    !skillResult ||
+    skillResult.metadata.skillId !== "research_document" ||
+    skillResult.metadata.webGroundingUsed !== true ||
+    skillResult.metadata.webEvidenceSufficient !== true ||
+    skillResult.metadata.webSources.length === 0 ||
+    !skillResult.structuredOutput
+  ) {
+    return null;
+  }
+
+  const output = skillResult.structuredOutput;
+  const sections = Array.isArray(output.sections)
+    ? output.sections
+        .map((value) =>
+          value && typeof value === "object" && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : null,
+        )
+        .filter((value): value is Record<string, unknown> => Boolean(value))
+        .map((section) => ({
+          heading: compactText(section.heading).slice(0, 200),
+          content: String(section.content ?? "").trim().slice(0, 8_000),
+          level: 1,
+        }))
+        .filter((section) => section.heading && section.content)
+        .slice(0, 32)
+    : [];
+  if (sections.length === 0) return null;
+
+  const bodyWordCount = sections.reduce(
+    (count, section) =>
+      count + section.content.split(/\s+/u).filter(Boolean).length,
+    0,
+  );
+  sections.push({
+    heading: "Kaynaklar",
+    content: skillResult.metadata.webSources
+      .map(
+        (source, index) =>
+          `${index + 1}. ${source.title.replace(
+            /[\\`*_[\]{}()#+.!>|-]/g,
+            "\\$&",
+          )}\n   ${source.url.replace(/[<>\s]/g, (value) =>
+            encodeURIComponent(value),
+          )}${
+            source.publishedAt ? ` — ${source.publishedAt}` : ""
+          }`,
+      )
+      .join("\n"),
+    level: 1,
+  });
+
+  return buildAssistantDocumentBlock({
+    title: compactText(output.title).slice(0, 200) || "Araştırma Raporu",
+    summary: compactText(output.summary).slice(0, 300) || null,
+    format: "report",
+    sections,
+    wordCount: bodyWordCount,
+    exportFormats: ["pdf", "docx"],
+    design: {
+      theme: "report",
+      density: "comfortable",
+      pageSize: "A4",
+    },
+  });
+}
+
 async function tryGenerateSkillReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
   routeDecision: CommandRouteDecision | null,
   attachmentContext: ResolvedAttachmentContext | null,
 ): Promise<GovernedSharedBrainReplyResult | null> {
-  if (!attachmentContext?.used) {
-    return null;
-  }
-
   const skills = await listActiveSkillSummaries();
   if (skills.length === 0) {
     return null;
@@ -8580,6 +8892,7 @@ async function tryGenerateSkillReply(
       classifySkillRouteWithModel(app, {
         ...input,
         attachmentContext: classifierInput.attachmentContext,
+        skills: classifierInput.skills,
       }),
   });
   if (!skillRouteDecision.needsSkill || !skillRouteDecision.skillId) {
@@ -8598,7 +8911,7 @@ async function tryGenerateSkillReply(
     skill,
     skillInput: {
       prompt: input.prompt,
-      attachmentContext,
+      attachmentContext: skill.requiresAttachment ? attachmentContext : null,
       requestMetadata: input.requestMetadata,
     },
     routeDecision: skillRouteDecision,
@@ -8610,22 +8923,42 @@ async function tryGenerateSkillReply(
         prompt: modelInput.prompt,
         title: input.title,
         conversation: [],
-        requestMetadata: {
-          ...(input.requestMetadata ?? {}),
+        requestMetadata: buildSkillModelRequestMetadata({
+          requestMetadata: input.requestMetadata,
           skillExecution: modelInput.metadata.skillExecution,
-        },
+          includeAttachmentMetadata: skill.requiresAttachment,
+        }),
+        connectorToolContracts: [],
+        connectorReadToolHint: null,
         route: input.route ?? "shared_brain",
         routeDecision,
         workload: modelInput.workload,
         meteringSurface: input.meteringSurface,
+        usageLedgerPhase:
+          modelInput.metadata.skillExecution &&
+          typeof modelInput.metadata.skillExecution === "object" &&
+          !Array.isArray(modelInput.metadata.skillExecution) &&
+          (modelInput.metadata.skillExecution as Record<string, unknown>)
+            .repairAttempt === true
+            ? `skill_${skill.id}_repair`
+            : `skill_${skill.id}_generate`,
         planCode: input.planCode,
         brainProfile: input.brainProfile,
-        understandingContext: input.understandingContext,
-        attachmentContext,
-        clientAttachments: input.clientAttachments,
-        ephemeralVision: input.ephemeralVision,
+        understandingContext: modelInput.toolAllowlist.includes("memory.query")
+          ? input.understandingContext
+          : undefined,
+        attachmentContext: skill.requiresAttachment ? attachmentContext : null,
+        clientAttachments: skill.requiresAttachment
+          ? input.clientAttachments
+          : [],
+        ephemeralVision: skill.requiresAttachment
+          ? input.ephemeralVision
+          : undefined,
         responseSchemaOverride: modelInput.outputSchema,
         mediaIntentPrompt: input.prompt,
+        knowledgeQueryOverride: modelInput.knowledgeQuery,
+        skillToolAllowlist: modelInput.toolAllowlist,
+        skillWebGroundingRequired: modelInput.webGroundingRequired,
         maxCompletionTokensOverride: modelInput.maxOutputTokens,
         timeoutMsOverride: modelInput.timeoutMs,
         skillExecutionMetadata:
@@ -8647,6 +8980,90 @@ async function tryGenerateSkillReply(
     return null;
   }
 
+  if (skillResult.metadata.failureCode) {
+    const failureCode = skillResult.metadata.failureCode;
+    const failureText = skillResult.text;
+    const evaluation = evaluateBrainAnswer({
+      prompt: input.prompt,
+      modelAnswer: failureText,
+      answerSource: "backend_gate",
+      routeDecision,
+      boundaryOutcome: "skill_output_rejected",
+      toolUseRequired: false,
+      retrievalUsed: false,
+      retrievalSufficiency: "insufficient",
+    });
+    return {
+      text: failureText,
+      provider: skillResult.provider,
+      model: skillResult.model,
+      latencyMs: skillResult.latencyMs,
+      promptTokens: skillResult.promptTokens,
+      completionTokens: skillResult.completionTokens,
+      totalTokens: skillResult.totalTokens,
+      metadata: {
+        route: input.route ?? routeDecision?.route ?? "shared_brain",
+        workload: skillResult.metadata.workload,
+        provider: skillResult.provider,
+        model: skillResult.model,
+        answerSource: "backend_gate",
+        responseCode: failureCode,
+        modelAnswerSkipped: false,
+        gateRuleIds: ["skill_output_validation"],
+        boundaryOutcome: "skill_output_rejected",
+        constitutionVersion: ELYAN_CONSTITUTION_VERSION,
+        promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
+        completionLatencyMs: skillResult.latencyMs,
+        responseBytes: estimateResponseBytes(failureText),
+        skillExecutionFailed: true,
+        skillExecution: {
+          skillUsed: true,
+          skillId: skillResult.metadata.skillId,
+          skillVersion: skillResult.metadata.skillVersion,
+          skillConfidence: skillResult.metadata.skillConfidence,
+          skillRouteSource: skillResult.metadata.skillRouteSource,
+          selectedChunkHashes: skillResult.metadata.selectedChunkHashes,
+          modelProfile: skillResult.metadata.modelProfile,
+          validationStatus: "failed",
+          failureCode,
+          cacheHit: false,
+          toolCalls: skillResult.metadata.toolCalls,
+          manualHintUsed: skillResult.metadata.manualHintUsed,
+          skillDisplay: skillResult.metadata.skillDisplay,
+        },
+        skillUsed: true,
+        skillId: skillResult.metadata.skillId,
+        skillVersion: skillResult.metadata.skillVersion,
+        skillConfidence: skillResult.metadata.skillConfidence,
+        validationStatus: "failed",
+        failureCode,
+        cacheHit: false,
+        skillDisplay: skillResult.metadata.skillDisplay,
+        groundingUsed: false,
+        documentSourceCount: 0,
+        webGroundingUsed: false,
+        freshDataEvidenceSufficient: false,
+        webSourceCount: 0,
+        webSources: [],
+        retrievalResultCount: 0,
+        toolResults: skillResult.metadata.toolResults.map((result) => ({
+          tool: result.tool,
+          ok: result.ok,
+          durationMs: result.durationMs,
+          errorCode: result.errorCode,
+          ...(result.resultCount != null
+            ? { output: { resultCount: result.resultCount } }
+            : {}),
+        })),
+      },
+      answerSource: "backend_gate",
+      gateRuleIds: ["skill_output_validation"],
+      boundaryOutcome: "skill_output_rejected",
+      failureType: failureCode,
+      evaluation,
+    };
+  }
+
   const evaluation = evaluateBrainAnswer({
     prompt: input.prompt,
     modelAnswer: skillResult.text,
@@ -8657,17 +9074,26 @@ async function tryGenerateSkillReply(
     retrievalUsed: true,
     retrievalSufficiency: "strong",
   });
-  const displayText = resolveCleanVisibleAnswer({
+  const cleanDisplayText = resolveCleanVisibleAnswer({
     candidates: [
       evaluation.correctedAnswer ?? skillResult.text,
       skillResult.text,
     ],
     raw: skillResult.text,
   });
-  const displayCompletionTokens = estimateTokens(displayText);
-  const responseBytes = estimateResponseBytes(displayText);
   const attachmentInsightBlocks =
     buildAttachmentInsightBlocks(attachmentContext);
+  const researchDocumentBlock = buildResearchSkillDocumentBlock(skillResult);
+  const skillBlocks = [
+    ...attachmentInsightBlocks,
+    ...(researchDocumentBlock ? [researchDocumentBlock] : []),
+  ];
+  // A research report has one canonical visible surface: document_block.
+  // Keeping the same report in legacy text would render it twice on mobile.
+  const displayText = researchDocumentBlock ? "" : cleanDisplayText;
+  const responseBytes = estimateResponseBytes(
+    displayText || JSON.stringify(skillBlocks),
+  );
 
   if (!input.internalEvaluation?.skipReviewLogging) {
     await recordBrainInteractionReview(app, {
@@ -8692,8 +9118,8 @@ async function tryGenerateSkillReply(
     model: skillResult.model,
     latencyMs: skillResult.latencyMs,
     promptTokens: skillResult.promptTokens,
-    completionTokens: displayCompletionTokens,
-    totalTokens: skillResult.promptTokens + displayCompletionTokens,
+    completionTokens: skillResult.completionTokens,
+    totalTokens: skillResult.totalTokens,
     metadata: {
       route: input.route ?? routeDecision?.route ?? "shared_brain",
       workload: skillResult.metadata.workload,
@@ -8704,8 +9130,8 @@ async function tryGenerateSkillReply(
       constitutionVersion: ELYAN_CONSTITUTION_VERSION,
       promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
       ...buildAttachmentContextMetadata(attachmentContext),
-      ...(attachmentInsightBlocks.length > 0
-        ? { blocks: attachmentInsightBlocks }
+      ...(skillBlocks.length > 0
+        ? { blocks: skillBlocks }
         : {}),
       completionLatencyMs: skillResult.latencyMs,
       responseBytes,
@@ -8734,11 +9160,28 @@ async function tryGenerateSkillReply(
       attachmentCacheHit: skillResult.metadata.cacheHit,
       skillDisplay: skillResult.metadata.skillDisplay,
       skillOutput: skillResult.structuredOutput,
+      groundingUsed: skillResult.metadata.groundingUsed,
+      documentSourceCount: skillResult.metadata.documentSourceCount,
+      webGroundingUsed: skillResult.metadata.webGroundingUsed,
+      freshDataEvidenceSufficient:
+        skillResult.metadata.webEvidenceSufficient,
+      webSourceCount: skillResult.metadata.webSourceCount,
+      webSources: skillResult.metadata.webSources,
+      retrievalResultCount: skillResult.metadata.retrievalResultCount,
+      toolResults: skillResult.metadata.toolResults.map((result) => ({
+        tool: result.tool,
+        ok: result.ok,
+        durationMs: result.durationMs,
+        errorCode: result.errorCode,
+        ...(result.resultCount != null
+          ? { output: { resultCount: result.resultCount } }
+          : {}),
+      })),
       ...buildDataQualityMetadata({
         attachmentContext,
         memoryCount: input.understandingContext?.retrievedMemory?.length ?? 0,
-        retrievalCount: 0,
-        webSourceCount: 0,
+        retrievalCount: skillResult.metadata.retrievalResultCount,
+        webSourceCount: skillResult.metadata.webSourceCount,
         prompt: input.prompt,
         memoryEnabled:
           input.understandingContext?.memoryEnabled ??
@@ -8924,7 +9367,10 @@ export async function generateGovernedSharedBrainReply(
     };
   }
 
-  const mobileLocalExportReply = buildMobileLocalExportShortcutReply(input);
+  const mobileLocalExportReply = buildMobileLocalExportShortcutReply({
+    ...input,
+    attachmentContextUsed: attachmentContext?.used === true,
+  });
   if (mobileLocalExportReply) {
     const evaluation = evaluateBrainAnswer({
       prompt: input.prompt,
@@ -9062,9 +9508,13 @@ export async function generateGovernedSharedBrainReply(
       toolResults: [
         {
           tool: String(skillReply.metadata.skillId ?? "skill"),
-          ok: true,
+          ok: skillReply.metadata.skillExecutionFailed !== true,
           permission: "read",
           durationMs: skillReply.latencyMs,
+          errorCode:
+            typeof skillReply.metadata.failureCode === "string"
+              ? skillReply.metadata.failureCode
+              : null,
         },
       ],
     });
@@ -9234,7 +9684,10 @@ export async function generateGovernedSharedBrainReply(
     (input.workload ??
       routeDecision?.selectedWorkload ??
       DEFAULT_WORKLOAD) as SharedBrainWorkload,
-    visibleTextSanitizerOptions,
+    {
+      ...visibleTextSanitizerOptions,
+      usageLedgerPhase: "quality_repair_initial",
+    },
   );
   const visibleAnswer = resolveCleanVisibleAnswer({
     candidates: [finalized.text, inference.text],
@@ -9319,6 +9772,7 @@ export async function generateGovernedSharedBrainReply(
       ...input,
       prompt: refinementPrompt,
       workload: "mobile_chat_deep_refine",
+      usageLedgerPhase: "deep_refinement",
       maxCompletionTokensOverride: Math.max(
         320,
         inference.completionTokens + 120,
@@ -9428,6 +9882,7 @@ export async function generateGovernedSharedBrainReply(
         ...input,
         prompt: critiquePrompt,
         workload: "mobile_chat_deep_refine",
+        usageLedgerPhase: "self_critique",
         maxCompletionTokensOverride: Math.max(
           480,
           Math.min(2_000, Math.ceil(activeVisibleAnswer.length / 2.5) + 240),
@@ -9551,6 +10006,7 @@ export async function generateGovernedSharedBrainReply(
           ...input,
           prompt: factualityCritiquePrompt,
           workload: "mobile_chat_deep_refine",
+          usageLedgerPhase: "factuality_critique",
           maxCompletionTokensOverride: Math.max(
             420,
             Math.min(1_600, Math.ceil(activeVisibleAnswer.length / 2.8) + 220),
@@ -9700,7 +10156,10 @@ export async function generateGovernedSharedBrainReply(
           input,
           activeInference.text,
           "mobile_chat_deep_refine",
-          visibleTextSanitizerOptions,
+          {
+            ...visibleTextSanitizerOptions,
+            usageLedgerPhase: "quality_repair_final",
+          },
         );
   const displayTextCandidate =
     polishAssistantVisibleText(

@@ -149,7 +149,12 @@ export const integrationProviderCatalog: ProviderCatalogEntry[] = [
       clientSecretEnvKey: "SLACK_CLIENT_SECRET",
       authUrl: "https://slack.com/oauth/v2/authorize",
       tokenUrl: "https://slack.com/api/oauth.v2.access",
-      defaultScopes: ["channels:read", "chat:write", "users:read"],
+      defaultScopes: [
+        "channels:read",
+        "chat:write",
+        "users:read",
+        "search:read",
+      ],
       scopeSeparator: ",",
       usePkce: false,
     },
