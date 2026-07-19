@@ -42,7 +42,7 @@ function createBypassPermit(namespace: string): LoadSheddingPermit {
 }
 
 function createLoadSheddingError(namespace: string, retryAfterSeconds: number): AppError {
-  return new AppError(503, "server_brain_unavailable", "Elyan beyni şu anda yoğun. Lütfen birkaç saniye sonra tekrar dene.", {
+  return new AppError(503, "server_brain_unavailable", "Yanıt şu anda başlatılamadı. Lütfen biraz sonra yeniden dene.", {
     loadShedding: true,
     namespace,
     retryAfterSeconds,

@@ -10,6 +10,10 @@ import { getSharedBrainProviderCircuitState, warmSharedBrainRuntime } from "../b
 import { ELYAN_CONSTITUTION_GATE_READY, ELYAN_CONSTITUTION_VERSION, constitutionRuleCount } from "../brain/constitution.js";
 import { getApprovedCorrectionDatasetState, getLatestBrainBenchmarkSummary } from "../brain/review.js";
 import { getSharedBrainWorkloadProfile } from "../brain/workloads.js";
+import {
+  getChatGenerationQueueCounts,
+  isChatGenerationWorkerReady,
+} from "../brain/chat-generation-queue.js";
 import { RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { activeTaskStatuses } from "../tasks/queue.js";
 
@@ -102,6 +106,10 @@ type AgentReadiness = {
   redisReady: boolean;
   providerCircuitState: "closed" | "open" | "half_open";
   queueHealthy: boolean;
+  chatGenerationWorkerReady: boolean;
+  chatGenerationQueueWaiting: number;
+  chatGenerationQueueActive: number;
+  chatGenerationQueueDelayed: number;
   activeRuntimeConnections: number;
   staleRuntimeConnections: number;
   desktopReadyCount: number;
@@ -313,6 +321,13 @@ async function getAgentReadiness(
   const reliability = app.services?.reliability;
   const redisReady = reliability ? await reliability.store.ping() : true;
   const requestBudgetReady = reliability ? reliability.requestBudgetReady() : true;
+  const [chatGenerationWorkerReady, chatGenerationQueueCounts] =
+    app.config.ELYAN_CHAT_QUEUE_ENABLED === true
+      ? await Promise.all([
+          isChatGenerationWorkerReady(app),
+          getChatGenerationQueueCounts(app).catch(() => null),
+        ])
+      : [true, null];
   const providerCircuitState = await getSharedBrainProviderCircuitState(app);
   const counts = input.databaseReady
       ? await getOperationalCounts(app).catch(() => ({
@@ -376,7 +391,10 @@ async function getAgentReadiness(
         sessionPageBytesP95: null,
         recentBrainTimeoutCount: 0,
       };
-  const queueHealthy = input.databaseReady && counts.staleBlockingTaskCount === 0;
+  const queueHealthy =
+    input.databaseReady &&
+    counts.staleBlockingTaskCount === 0 &&
+    chatGenerationWorkerReady;
   const neural = input.databaseReady
       ? await getNeuralBrainReadiness(app).catch(() => ({
         neuralReady: false,
@@ -440,6 +458,9 @@ async function getAgentReadiness(
   if (!requestBudgetReady) {
     blockingReasons.push("request_budget_unavailable");
   }
+  if (!chatGenerationWorkerReady) {
+    blockingReasons.push("chat_generation_worker_unavailable");
+  }
 
   const runtimeDispatchReady =
     input.databaseReady &&
@@ -454,7 +475,8 @@ async function getAgentReadiness(
       input.realtimeReady &&
       serverBrainReady &&
       (!app.config.RELIABILITY_REDIS_REQUIRED || redisReady) &&
-      requestBudgetReady,
+      requestBudgetReady &&
+      chatGenerationWorkerReady,
     serverBrainReady,
     runtimeDispatchReady,
     realtimeReady: input.realtimeReady,
@@ -462,6 +484,10 @@ async function getAgentReadiness(
     redisReady,
     providerCircuitState,
     queueHealthy,
+    chatGenerationWorkerReady,
+    chatGenerationQueueWaiting: chatGenerationQueueCounts?.waiting ?? 0,
+    chatGenerationQueueActive: chatGenerationQueueCounts?.active ?? 0,
+    chatGenerationQueueDelayed: chatGenerationQueueCounts?.delayed ?? 0,
     activeRuntimeConnections: counts.activeRuntimeConnections,
     staleRuntimeConnections: counts.staleRuntimeConnections,
     desktopReadyCount: counts.desktopReadyCount,

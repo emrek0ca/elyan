@@ -133,6 +133,60 @@ test("buildInferenceProviderCandidates keeps Groq first for normal chat when Gem
   assert.deepEqual(candidates[1]?.preferredModels, ["gemini-text", "gemini-fast"]);
 });
 
+test("buildInferenceProviderCandidates can isolate primary and fallback workers", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_REASONING_MODEL: "groq-reasoning",
+    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GEMINI_API_KEY: "gemini-key",
+    GEMINI_TEXT_MODEL: "gemini-text",
+    GEMINI_FAST_MODEL: "gemini-fast",
+  });
+  const base = {
+    app,
+    workload: "mobile_chat_fast" as const,
+    runtime: runtimeSnapshot(),
+    localModels: ["local-fast"],
+  };
+
+  assert.deepEqual(
+    buildInferenceProviderCandidates({ ...base, allowedProviders: ["groq"] }).map(
+      (candidate) => candidate.provider,
+    ),
+    ["groq"],
+  );
+  assert.deepEqual(
+    buildInferenceProviderCandidates({ ...base, allowedProviders: ["gemini"] }).map(
+      (candidate) => candidate.provider,
+    ),
+    ["gemini"],
+  );
+});
+
+test("paid Gemini fallback is not constrained by the free-tier model allowlist", () => {
+  const app = appWithConfig({
+    GEMINI_FREE_ONLY: false,
+    GEMINI_FREE_MODEL_ALLOWLIST: "gemini-free-model",
+    GEMINI_API_KEY: "gemini-key",
+    GEMINI_TEXT_MODEL: "gemini-paid-model",
+    GEMINI_FAST_MODEL: "gemini-paid-model",
+  });
+
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "mobile_chat_fast",
+    runtime: runtimeSnapshot(),
+    localModels: [],
+    allowedProviders: ["gemini"],
+  });
+
+  assert.deepEqual(candidates.map((candidate) => candidate.provider), [
+    "gemini",
+  ]);
+  assert.equal(candidates[0]?.preferredModels[0], "gemini-paid-model");
+});
+
 test("buildInferenceProviderCandidates prefers Gemini for vision workloads", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",

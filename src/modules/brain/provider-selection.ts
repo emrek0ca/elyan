@@ -135,7 +135,8 @@ function buildHostedProviderCandidates(
       (model, index, values): model is string =>
         Boolean(model) &&
         values.indexOf(model) === index &&
-        isGeminiFreeModelAllowed(app, model),
+        (app.config.GEMINI_FREE_ONLY !== true ||
+          isGeminiFreeModelAllowed(app, model)),
     );
     if (preferredModels.length > 0) {
       hostedCandidates.push({
@@ -203,6 +204,17 @@ function buildCandidateOrder(
   return [...unique.values()];
 }
 
+function filterAllowedProviders(
+  candidates: SharedBrainProviderCandidate[],
+  allowedProviders?: readonly SharedBrainProvider[],
+): SharedBrainProviderCandidate[] {
+  if (!allowedProviders?.length) {
+    return candidates;
+  }
+  const allowed = new Set(allowedProviders);
+  return candidates.filter((candidate) => allowed.has(candidate.provider));
+}
+
 export function buildInferenceProviderCandidates(input: {
   app: FastifyInstance;
   workload: SharedBrainWorkload;
@@ -210,6 +222,7 @@ export function buildInferenceProviderCandidates(input: {
   localModels: string[];
   visionProfile?: VisionMediaProfile;
   visionSensitivity?: VisionMediaDecision["sensitivity"];
+  allowedProviders?: readonly SharedBrainProvider[];
 }) {
   const localCandidates = listSharedBrainProviderCandidates(input.app).map(
     (candidate) => ({
@@ -244,12 +257,18 @@ export function buildInferenceProviderCandidates(input: {
     : null;
 
   if (!hostedCandidates.length) {
-    return buildCandidateOrder(privacySafeLocalCandidates, privacySafePreferredLocalCandidate);
+    return filterAllowedProviders(
+      buildCandidateOrder(privacySafeLocalCandidates, privacySafePreferredLocalCandidate),
+      input.allowedProviders,
+    );
   }
 
-  return buildCandidateOrder(
-    [...hostedCandidates, ...privacySafeLocalCandidates],
-    hostedCandidates[0],
+  return filterAllowedProviders(
+    buildCandidateOrder(
+      [...hostedCandidates, ...privacySafeLocalCandidates],
+      hostedCandidates[0],
+    ),
+    input.allowedProviders,
   );
 }
 

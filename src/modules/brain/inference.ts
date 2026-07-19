@@ -253,9 +253,7 @@ import {
 } from "./provider-request.js";
 import { buildInferenceProviderCandidates } from "./provider-selection.js";
 import {
-  acquireGeminiFreePermit,
   buildGeminiFreePublicOperationFrame,
-  estimateGeminiTokens,
   isGeminiFreeResourceExhausted,
   readGeminiRetryAfterMs,
   recordGeminiFreeCooldown,
@@ -263,12 +261,20 @@ import {
   type GeminiFreeDataLineage,
   type GeminiFreeFeature,
 } from "./gemini-free-tier-guard.js";
+import { acquireGeminiInferencePermit } from "./gemini-inference-policy.js";
 import { judgeResponseWithGeminiFree } from "./gemini-quality-judge.js";
 import {
   joinProviderUrl,
   postJson,
   postStreamingJson,
 } from "./provider-http.js";
+import {
+  buildProviderAttemptFailure,
+  providerHttpStatusClass,
+  providerRetryDelayMs,
+  readProviderRetryAfterMs,
+  type ProviderAttemptFailure,
+} from "./provider-failure.js";
 import {
   extractResponseDelta,
   extractResponseFinishReason,
@@ -430,6 +436,11 @@ type SharedBrainInferenceInput = {
   meteringSurface?: TokenMeteringSurface;
   planCode?: string | null;
   brainProfile?: unknown;
+  /** Internal worker boundary: constrain one durable queue to one hosted provider. */
+  providerAllowlist?: readonly SharedBrainProvider[];
+  providerDataSharingAuthorized?: boolean;
+  loadSheddingConcurrencyOverride?: number;
+  shouldAbort?: () => boolean | Promise<boolean>;
   understandingContext?: UserUnderstandingContext;
   responseBudget?: AdaptiveInferenceBudget;
   maxCompletionTokensOverride?: number;
@@ -447,6 +458,24 @@ type SharedBrainInferenceInput = {
     refinementPass?: boolean;
   };
 };
+
+function inheritedProviderExecutionPolicy(
+  input: SharedBrainInferenceInput,
+): Pick<
+  SharedBrainInferenceInput,
+  | "providerAllowlist"
+  | "providerDataSharingAuthorized"
+  | "loadSheddingConcurrencyOverride"
+  | "shouldAbort"
+> {
+  return {
+    providerAllowlist: input.providerAllowlist,
+    providerDataSharingAuthorized: input.providerDataSharingAuthorized,
+    loadSheddingConcurrencyOverride:
+      input.loadSheddingConcurrencyOverride,
+    shouldAbort: input.shouldAbort,
+  };
+}
 
 function hasNonEmptyRecord(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -536,6 +565,23 @@ function buildGeminiFreeInferenceDataLineage(
       (input.clientAttachments?.length ?? 0) > 0 ||
       Boolean(input.ephemeralVision),
     conversationHistory: (input.conversation?.length ?? 0) > 0,
+  };
+}
+
+function buildGeminiPaidInferenceDataLineage(
+  input: SharedBrainInferenceInput,
+): GeminiFreeDataLineage {
+  const lineage = buildGeminiFreeInferenceDataLineage(input);
+  // The free-tier public-text heuristic intentionally treats ordinary
+  // first-person language as private. Paid fallback may use consented profile,
+  // memory and conversation context; only actual account/tool lineage remains
+  // blocked by the paid policy.
+  return {
+    ...lineage,
+    accountData:
+      lineage.connector === true ||
+      lineage.mcp === true ||
+      lineage.toolResult === true,
   };
 }
 
@@ -1009,7 +1055,6 @@ const BRAIN_INFERENCE_PROBE_UNHEALTHY_TTL_MS = 15_000;
 const SHARED_BRAIN_LIVE_PROBE_TIMEOUT_MS = 25_000;
 const MOBILE_CHAT_MAX_MESSAGES = 12;
 const MOBILE_CHAT_MAX_TOKENS = 2_800;
-const SHARED_BRAIN_PROVIDER_RETRY_DELAY_MS = 120;
 const SHARED_BRAIN_PROVIDER_MAX_RETRIES = 1;
 const CHEAP_SOCIAL_TURN_MAX_CHARS = 48;
 const RESPONSE_CACHE_TTL_MS_BY_WORKLOAD: Partial<
@@ -1362,6 +1407,7 @@ async function finalizeIncompleteResponse(
 
   try {
     const repaired = await generateSharedBrainReply(app, {
+      ...inheritedProviderExecutionPolicy(input),
       userId: input.userId,
       prompt: repairPrompt,
       route: input.route,
@@ -4027,6 +4073,21 @@ function isRetryableProviderFailure(error: unknown): boolean {
     return true;
   }
 
+  if (error instanceof AppError) {
+    const details = readMetadataRecord(error.details);
+    if (
+      details?.retrySuggested === false ||
+      details?.transient === false
+    ) {
+      return false;
+    }
+    return (
+      error.statusCode === 429 ||
+      error.statusCode >= 500 ||
+      details?.transient === true
+    );
+  }
+
   if (error instanceof TypeError) {
     return true;
   }
@@ -4103,6 +4164,17 @@ function isCreativeOrSubjectiveNoEvidencePrompt(prompt: string): boolean {
 }
 
 function isProviderOutageFailure(error: unknown): boolean {
+  if (error instanceof AppError) {
+    const details = readMetadataRecord(error.details);
+    if (
+      details?.failureClass === "rate_limited" ||
+      details?.retrySuggested === false ||
+      details?.transient === false
+    ) {
+      return false;
+    }
+    return isProviderOutageStatus(error.statusCode);
+  }
   return isRetryableProviderFailure(error);
 }
 
@@ -4803,9 +4875,28 @@ export async function generateSharedBrainReply(
     }
   }
 
+  const loadSheddingOptions = getLoadSheddingOptions(
+    workload,
+    planBrainProfile,
+    input.planCode,
+  );
+  if (input.providerAllowlist?.length) {
+    loadSheddingOptions.namespace = `${loadSheddingOptions.namespace}:chat_${
+      input.providerAllowlist.includes("gemini") ? "fallback" : "primary"
+    }`;
+  }
+  if (
+    typeof input.loadSheddingConcurrencyOverride === "number" &&
+    input.loadSheddingConcurrencyOverride > 0
+  ) {
+    loadSheddingOptions.maxConcurrent = Math.floor(
+      input.loadSheddingConcurrencyOverride,
+    );
+  }
+
   return await withLoadSheddingPermit(
     app,
-    getLoadSheddingOptions(workload, planBrainProfile),
+    loadSheddingOptions,
     async () => {
       const brain = await resolveSharedBrainSelection(app, input.userId);
       const runtime = await selectSharedBrainRuntime(app);
@@ -4885,6 +4976,7 @@ export async function generateSharedBrainReply(
         visionSensitivity: cloudVisionActive
           ? initialVisionMediaDecision.sensitivity
           : undefined,
+        allowedProviders: input.providerAllowlist,
       });
       const primaryCandidate = providerCandidates[0] ?? null;
       const servingProvider =
@@ -5498,6 +5590,7 @@ export async function generateSharedBrainReply(
       const requiredConnectorReadHint = advertisedConnectorReadToolHint(input);
 
       let lastError: unknown = null;
+      const attemptFailures: ProviderAttemptFailure[] = [];
       let successfulProvider: SharedBrainProvider | null = null;
       let successfulModel = baseModel;
       let payload: unknown = null;
@@ -5591,7 +5684,10 @@ export async function generateSharedBrainReply(
             ];
       };
 
-      const geminiFreeDataLineage = buildGeminiFreeInferenceDataLineage(input);
+      const geminiFreeDataLineage =
+        app.config.GEMINI_FREE_ONLY === true
+          ? buildGeminiFreeInferenceDataLineage(input)
+          : buildGeminiPaidInferenceDataLineage(input);
       const geminiFreeFeature = resolveGeminiFreeFeatureForInference({
         prompt: input.prompt,
         workload,
@@ -5687,11 +5783,19 @@ export async function generateSharedBrainReply(
               (isVisionProviderTurn ? 0 : SHARED_BRAIN_PROVIDER_MAX_RETRIES);
               retryIndex += 1
             ) {
+              if (input.shouldAbort && (await input.shouldAbort())) {
+                throw new AppError(
+                  409,
+                  "task_canceled",
+                  "Görev iptal edildi.",
+                  { transient: false, retrySuggested: false },
+                );
+              }
               if (candidate.provider === "gemini") {
                 // Acquire per actual HTTP attempt. Candidate-shape fallbacks
                 // and retries are separate provider requests and must never
                 // hide behind one free-tier permit.
-                const permit = await acquireGeminiFreePermit(app, {
+                const permit = await acquireGeminiInferencePermit(app, {
                   feature: geminiFreeFeature,
                   userId: input.userId,
                   model: attemptedModel,
@@ -5710,6 +5814,8 @@ export async function generateSharedBrainReply(
                     input.ephemeralVision?.privacy.userAuthorizedCloud === true ||
                     cloudVisionFollowUp,
                   dataLineage: geminiFreeDataLineage,
+                  dataSharingConsentValidated:
+                    input.providerDataSharingAuthorized === true,
                 });
                 if (!permit.allowed) {
                   app.log.debug?.(
@@ -5718,9 +5824,21 @@ export async function generateSharedBrainReply(
                       model: attemptedModel,
                       reason: permit.reason,
                     },
-                    "Gemini free-tier candidate skipped",
+                    "Gemini candidate skipped by data policy",
                   );
-                  lastError = `gemini_free_guard_${permit.reason}`;
+                  if (permit.mode === "paid") {
+                    throw new AppError(
+                      503,
+                      "server_brain_unavailable",
+                      "Bu yanıt mevcut veri paylaşımı izinleriyle yeniden denenemiyor.",
+                      {
+                        transient: false,
+                        retrySuggested: false,
+                        failureClass: "data_policy_blocked",
+                      },
+                    );
+                  }
+                  lastError = `gemini_${permit.mode}_policy_${permit.reason}`;
                   continue providerLoop;
                 }
               }
@@ -5808,7 +5926,9 @@ export async function generateSharedBrainReply(
                       status: streamResponse.status,
                       provider: candidate.provider,
                       path: attempt.path,
-                      body: streamErrorBody.slice(0, 300) || undefined,
+                      retryAfterMs: readProviderRetryAfterMs(
+                        streamResponse.headers,
+                      ),
                     };
                     attemptRetryable = isRetryableProviderStatus(
                       streamResponse.status,
@@ -5827,10 +5947,12 @@ export async function generateSharedBrainReply(
                       candidate.provider === "gemini" &&
                       isGeminiFreeResourceExhausted(streamResponse.status)
                     ) {
-                      await recordGeminiFreeCooldown(
-                        app,
-                        readGeminiRetryAfterMs(streamResponse.headers),
-                      ).catch(() => undefined);
+                      if (app.config.GEMINI_FREE_ONLY === true) {
+                        await recordGeminiFreeCooldown(
+                          app,
+                          readGeminiRetryAfterMs(streamResponse.headers),
+                        ).catch(() => undefined);
+                      }
                       geminiCooldownTriggered = true;
                       attemptRetryable = false;
                     }
@@ -5940,11 +6062,13 @@ export async function generateSharedBrainReply(
                         : streamedText)
                     ).trim();
                     if (candidate.provider === "gemini") {
-                      await recordGeminiFreeOutput(
-                        app,
-                        streamedText,
-                        geminiFreeFeature,
-                      ).catch(() => undefined);
+                      if (app.config.GEMINI_FREE_ONLY === true) {
+                        await recordGeminiFreeOutput(
+                          app,
+                          streamedText,
+                          geminiFreeFeature,
+                        ).catch(() => undefined);
+                      }
                     }
                     // Retry SADECE gerçekten boş metin veya "yardımcı olamam"
                     // türü kısa placeholder cevaplarda. Reasoning dump'ı olduğu
@@ -6112,7 +6236,9 @@ export async function generateSharedBrainReply(
                       status: candidateResponse.status,
                       provider: candidate.provider,
                       path: attempt.path,
-                      body: rawText.slice(0, 300) || undefined,
+                      retryAfterMs: readProviderRetryAfterMs(
+                        candidateResponse.headers,
+                      ),
                     };
                     attemptRetryable = isRetryableProviderStatus(
                       candidateResponse.status,
@@ -6134,10 +6260,12 @@ export async function generateSharedBrainReply(
                         payload,
                       )
                     ) {
-                      await recordGeminiFreeCooldown(
-                        app,
-                        readGeminiRetryAfterMs(candidateResponse.headers),
-                      ).catch(() => undefined);
+                      if (app.config.GEMINI_FREE_ONLY === true) {
+                        await recordGeminiFreeCooldown(
+                          app,
+                          readGeminiRetryAfterMs(candidateResponse.headers),
+                        ).catch(() => undefined);
+                      }
                       geminiCooldownTriggered = true;
                       attemptRetryable = false;
                     }
@@ -6150,11 +6278,13 @@ export async function generateSharedBrainReply(
                       payload,
                     );
                     if (candidate.provider === "gemini") {
-                      await recordGeminiFreeOutput(
-                        app,
-                        text,
-                        geminiFreeFeature,
-                      ).catch(() => undefined);
+                      if (app.config.GEMINI_FREE_ONLY === true) {
+                        await recordGeminiFreeOutput(
+                          app,
+                          text,
+                          geminiFreeFeature,
+                        ).catch(() => undefined);
+                      }
                     }
                     const parsedEnvelope = attempt.turnEnvelopeMode
                       ? parseTurnEnvelopeText(text)
@@ -6278,7 +6408,45 @@ export async function generateSharedBrainReply(
               }
 
               if (attemptSucceeded) {
+                app.log.info?.(
+                  {
+                    taskId: input.taskId ?? null,
+                    provider: candidate.provider,
+                    model: attemptedModel,
+                    httpClass: "2xx",
+                    retry: retryIndex,
+                    retryAfterMs: null,
+                    outcome: "success",
+                  },
+                  "shared brain provider attempt completed",
+                );
                 break;
+              }
+
+              const attemptFailure = buildProviderAttemptFailure({
+                provider: candidate.provider,
+                model: attemptedModel,
+                error: lastError,
+                attempt: retryIndex + 1,
+              });
+              attemptFailures.push(attemptFailure);
+              app.log.warn?.(
+                {
+                  taskId: input.taskId ?? null,
+                  provider: attemptFailure.provider,
+                  model: attemptFailure.model,
+                  httpClass: providerHttpStatusClass(attemptFailure.status),
+                  retry: retryIndex,
+                  retryAfterMs: attemptFailure.retryAfterMs,
+                  outcome: attemptFailure.failureClass,
+                },
+                "shared brain provider attempt failed",
+              );
+              // Queue workers own provider cooldown. Direct requests may still
+              // continue with the next configured provider, but must not hit a
+              // rate-limited provider again immediately.
+              if (attemptFailure.failureClass === "rate_limited") {
+                continue providerLoop;
               }
 
               if (
@@ -6290,7 +6458,7 @@ export async function generateSharedBrainReply(
                 break;
               }
 
-              await sleep(SHARED_BRAIN_PROVIDER_RETRY_DELAY_MS);
+              await sleep(providerRetryDelayMs());
             }
 
             if (attemptSucceeded) {
@@ -6354,6 +6522,7 @@ export async function generateSharedBrainReply(
               runtimeProvider: runtime.provider,
               reason: "provider_request_failed",
               lastError: describeProviderFailure(lastError),
+              attemptFailures,
               brainMode,
               selfCheck,
               usedMemory: selfCheck.usedMemory,
@@ -6413,13 +6582,10 @@ export async function generateSharedBrainReply(
               (candidate) => candidate.preferredModels,
             ),
             lastErrorCode: describeProviderFailure(lastError),
-            // Yapılandırılmış lastError (status/reason/path) jenerik koda
-            // ezilince kök neden loglardan okunamıyordu; kısaltılmış ham hali
-            // teşhis için her zaman taşınır.
-            lastErrorDetail:
-              lastError instanceof Error
-                ? `${lastError.name}: ${lastError.message}`.slice(0, 400)
-                : JSON.stringify(lastError)?.slice(0, 400) ?? null,
+            attemptFailures,
+            // Provider bodies can echo request data. Only normalized failure
+            // metadata is safe for logs and execution transcripts.
+            lastErrorDetail: attemptFailures.at(-1) ?? null,
           },
           "shared brain inference unavailable",
         );
@@ -6427,7 +6593,7 @@ export async function generateSharedBrainReply(
         throw new AppError(
           503,
           "server_brain_unavailable",
-          "Yanıt üretimi şu anda yoğun. Birkaç saniye sonra tekrar deneyebilirsin.",
+          "Yanıt servisine şu anda ulaşılamıyor. Lütfen biraz sonra yeniden dene.",
           {
             route: input.route ?? "shared_brain",
             workload,
@@ -6443,6 +6609,12 @@ export async function generateSharedBrainReply(
             attemptedModels: providerCandidates.flatMap(
               (candidate) => candidate.preferredModels,
             ),
+            attemptFailures,
+            providerStatus: attemptFailures.at(-1)?.status ?? null,
+            failureClass:
+              attemptFailures.at(-1)?.failureClass ?? "unavailable",
+            retryAfterMs:
+              attemptFailures.at(-1)?.retryAfterMs ?? null,
             webGroundingUsed,
             webSourceCount,
             webGroundingDegradedReason: webGrounding.degradedReason,
@@ -6694,6 +6866,7 @@ export async function generateSharedBrainReply(
                 ...buildContextPacketMetadata(input.understandingContext),
                 fallbackUsed,
                 fallbackState,
+                attemptFailures,
                 brainMode,
                 selfCheck,
                 usedMemory: selfCheck.usedMemory,
@@ -6756,7 +6929,7 @@ export async function generateSharedBrainReply(
             const usageIdentity = await resolveUsageIdentityContext(tx, {
               userId: input.userId,
             });
-            await recordUsageLedgerEntry(tx, {
+            const usageRecord = await recordUsageLedgerEntry(tx, {
               userId: input.userId,
               identityId: usageIdentity.identityId,
               taskId: input.taskId,
@@ -6773,7 +6946,11 @@ export async function generateSharedBrainReply(
               },
             });
 
-            if (invocationRows[0]?.id && usageAccess.mode !== "trial") {
+            if (
+              usageRecord &&
+              invocationRows[0]?.id &&
+              usageAccess.mode !== "trial"
+            ) {
               await recordCreditLedgerEntry(tx, {
                 userId: input.userId,
                 taskId: input.taskId,
@@ -7614,6 +7791,14 @@ export async function generateSharedBrainReply(
         input.routeDecision?.privacyClass === "public_text" &&
         !hasToolActivity
       ) {
+        if (input.shouldAbort && (await input.shouldAbort())) {
+          throw new AppError(
+            409,
+            "task_canceled",
+            "Görev iptal edildi.",
+            { transient: false, retrySuggested: false },
+          );
+        }
         result.metadata.geminiQualityJudge =
           await judgeResponseWithGeminiFree(app, {
             userId: input.userId,
@@ -7891,6 +8076,7 @@ async function classifySkillRouteWithModel(
   try {
     const skills = await listActiveSkillSummaries();
     const reply = await generateSharedBrainReply(app, {
+      ...inheritedProviderExecutionPolicy(input),
       userId: input.userId,
       taskId: input.taskId,
       prompt: [
@@ -8418,6 +8604,7 @@ async function tryGenerateSkillReply(
     routeDecision: skillRouteDecision,
     modelCall: (modelInput) =>
       generateSharedBrainReply(app, {
+        ...inheritedProviderExecutionPolicy(input),
         userId: input.userId,
         taskId: input.taskId,
         prompt: modelInput.prompt,
@@ -8852,6 +9039,11 @@ export async function generateGovernedSharedBrainReply(
     }
   }
 
+  if (!input.internalEvaluation?.skipConsentValidation) {
+    await assertAiDataSharingConsent(app, input.userId);
+    input.providerDataSharingAuthorized = true;
+  }
+
   const skillReply = await tryGenerateSkillReply(
     app,
     input,
@@ -8877,10 +9069,6 @@ export async function generateGovernedSharedBrainReply(
       ],
     });
     return skillReply;
-  }
-
-  if (!input.internalEvaluation?.skipConsentValidation) {
-    await assertAiDataSharingConsent(app, input.userId);
   }
 
   const inference = await generateSharedBrainReply(app, input);

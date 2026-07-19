@@ -143,9 +143,8 @@ export function shouldPromoteMarkdownTableToWidget(input: {
   prompt?: string | null;
   selectedWorkload?: string | null;
 }): boolean {
-  if (String(input.selectedWorkload ?? "").trim().toLowerCase() === "table_generate") {
-    return true;
-  }
+  // Workload metadata can be stale or model-derived. The user's current
+  // wording is the final authority for turning prose into a table widget.
   return isExplicitTableRequest(input.prompt ?? "");
 }
 

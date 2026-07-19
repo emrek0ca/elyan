@@ -43,6 +43,17 @@ test("loadEnv derives iyzico public base url from app base url", () => {
   assert.equal(env.GEMINI_IMAGE_PRO_ENABLED, false);
   assert.equal(env.GROQ_VISION_SENSITIVE_DATA_ATTESTED, false);
   assert.equal(env.GEMINI_VISION_SENSITIVE_DATA_ATTESTED, false);
+  assert.equal(env.ELYAN_CHAT_QUEUE_ENABLED, false);
+  assert.equal(env.ELYAN_CHAT_WORKER_CONCURRENCY, 4);
+  assert.equal(env.ELYAN_CHAT_PRIMARY_GLOBAL_CONCURRENCY, 6);
+  assert.equal(env.ELYAN_CHAT_FALLBACK_GLOBAL_CONCURRENCY, 4);
+  assert.equal(env.ELYAN_CHAT_GLOBAL_BACKLOG_MAX, 1_000);
+  assert.equal(env.ELYAN_CHAT_USER_BACKLOG_MAX, 3);
+  assert.equal(env.ELYAN_GROQ_RPM_LIMIT, 30);
+  assert.equal(env.ELYAN_GROQ_TPM_LIMIT, 8_000);
+  assert.equal(env.ELYAN_GEMINI_RPM_LIMIT, 10);
+  assert.equal(env.GEMINI_PAID_FALLBACK_ENABLED, false);
+  assert.equal(env.GEMINI_PAID_DATA_PROCESSING_ATTESTED, false);
   assert.equal(env.ELYAN_SHARED_BRAIN_FAST_MODEL, "qwen2.5-coder:3b");
   assert.equal(env.ELYAN_SHARED_BRAIN_BALANCED_MODEL, "qwen2.5:7b-instruct-q5_K_M");
   assert.equal(env.ELYAN_SHARED_BRAIN_PLANNING_MODEL, "qwen2.5:7b-instruct-q5_K_M");

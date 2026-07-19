@@ -20,7 +20,7 @@ test("tableBlockToPlainFallback renders a compact readable list", () => {
   );
 });
 
-test("shouldAcceptExtractedTypedBlock requires explicit table intent outside table workload", () => {
+test("shouldAcceptExtractedTypedBlock requires explicit table intent even for a stale table workload", () => {
   assert.equal(
     shouldAcceptExtractedTypedBlock({
       block: { type: "table" },
@@ -43,7 +43,16 @@ test("shouldAcceptExtractedTypedBlock requires explicit table intent outside tab
       prompt: "Bana kısa bir liste ver",
       selectedWorkload: "table_generate",
     }),
-    true,
+    false,
+  );
+  assert.equal(
+    shouldAcceptExtractedTypedBlock({
+      block: { type: "table" },
+      prompt:
+        "Exponential backoff’u iki maddede açıkla. Süreler 1, 2 ve 4 saniye olsun, jitter ekle. Tablo kullanma.",
+      selectedWorkload: "table_generate",
+    }),
+    false,
   );
 });
 

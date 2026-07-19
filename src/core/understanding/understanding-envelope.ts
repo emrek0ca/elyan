@@ -13,6 +13,7 @@ import type {
   UnderstandingSuccessCriterion,
 } from "./types.js";
 import { understandingEnvelopeSchema } from "./types.js";
+import { isExplicitTableRequest } from "./structured-output-policy.js";
 
 type BuildEnvelopeInput = TaskUnderstandingInput & {
   intent: IntentClassification;
@@ -484,7 +485,10 @@ function buildDesiredOutputs(input: {
     addDesiredOutput(outputs, { kind: "image", format: input.format, target: "artifact", confidence: 0.9, constraints: ["output_format"] });
   }
 
-  if (/\b(tablo|table)\b/i.test(normalized) && !outputs.some((output) => output.kind === "table")) {
+  if (
+    isExplicitTableRequest(input.text) &&
+    !outputs.some((output) => output.kind === "table")
+  ) {
     addDesiredOutput(outputs, { kind: "table", format: input.format === "xlsx" ? "xlsx" : "table", target: input.format === "xlsx" ? "artifact" : "widget", confidence: explicitExport ? 0.88 : 0.78, constraints: ["table_required"] });
   }
 
@@ -885,6 +889,7 @@ export function preferredFormatFromUnderstandingEnvelope(
 
 export function preferredWorkloadFromUnderstandingEnvelope(
   envelope: UnderstandingEnvelope | null | undefined,
+  prompt?: string | null,
 ): SharedBrainWorkload | null {
   if (!envelope || envelope.confidence < 0.52) {
     return null;
@@ -897,7 +902,13 @@ export function preferredWorkloadFromUnderstandingEnvelope(
   ) {
     return "desktop_handoff";
   }
-  if (envelope.desired_outputs.some((output) => output.kind === "xlsx" || output.kind === "table")) {
+  if (envelope.desired_outputs.some((output) => output.kind === "xlsx")) {
+    return "table_generate";
+  }
+  if (
+    envelope.desired_outputs.some((output) => output.kind === "table") &&
+    (prompt == null || isExplicitTableRequest(prompt))
+  ) {
     return "table_generate";
   }
   if (

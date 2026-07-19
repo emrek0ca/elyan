@@ -37,6 +37,84 @@ test("ReliabilityStore reports unavailable when Redis is required and absent", a
   });
 });
 
+test("ReliabilityStore consumes weighted provider budgets without overshooting", async () => {
+  const store = createMemoryStore();
+
+  assert.deepEqual(await store.tryConsumeBudget("tokens:test", 6, 10, 1_000), {
+    allowed: true,
+    used: 6,
+  });
+  assert.deepEqual(await store.tryConsumeBudget("tokens:test", 5, 10, 1_000), {
+    allowed: false,
+    used: 6,
+  });
+  assert.deepEqual(await store.tryConsumeBudget("tokens:test", 4, 10, 1_000), {
+    allowed: true,
+    used: 10,
+  });
+});
+
+test("ReliabilityStore fail-closed mode never substitutes process-local queue locks", async () => {
+  const store = createMemoryStore(true);
+
+  assert.equal(
+    await store.acquireLock("queue:task", "worker-1", 1_000, true),
+    false,
+  );
+  assert.deepEqual(
+    await store.tryConsumeBudget("queue:tokens", 1, 10, 1_000, true),
+    { allowed: false, used: 10 },
+  );
+  assert.equal(
+    await store.tryAcquireExpiringSlot(
+      "queue:admission",
+      "task-1",
+      10,
+      1_000,
+      true,
+    ),
+    null,
+  );
+});
+
+test("ReliabilityStore admission slots are bounded, idempotent and releasable", async () => {
+  const store = createMemoryStore();
+
+  assert.deepEqual(
+    await store.tryAcquireExpiringSlot("queue:admission", "task-1", 2, 1_000),
+    { allowed: true, used: 1 },
+  );
+  assert.deepEqual(
+    await store.tryAcquireExpiringSlot("queue:admission", "task-1", 2, 1_000),
+    { allowed: true, used: 1 },
+  );
+  assert.deepEqual(
+    await store.tryAcquireExpiringSlot("queue:admission", "task-2", 2, 1_000),
+    { allowed: true, used: 2 },
+  );
+  assert.deepEqual(
+    await store.tryAcquireExpiringSlot("queue:admission", "task-3", 2, 1_000),
+    { allowed: false, used: 2 },
+  );
+  assert.equal(
+    await store.releaseExpiringSlot("queue:admission", "task-1"),
+    true,
+  );
+  assert.deepEqual(
+    await store.tryAcquireExpiringSlot("queue:admission", "task-3", 2, 1_000),
+    { allowed: true, used: 2 },
+  );
+});
+
+test("ReliabilityStore renews only the owning lock", async () => {
+  const store = createMemoryStore();
+
+  assert.equal(await store.acquireLock("queue:lease", "worker-1", 1_000), true);
+  assert.equal(await store.renewLock("queue:lease", "worker-2", 2_000), false);
+  assert.equal(await store.renewLock("queue:lease", "worker-1", 2_000), true);
+  assert.equal(await store.releaseLock("queue:lease", "worker-1"), true);
+});
+
 test("circuit breaker opens, half-opens after TTL, and closes on success", async () => {
   const store = createMemoryStore();
   const key = "circuit:test";

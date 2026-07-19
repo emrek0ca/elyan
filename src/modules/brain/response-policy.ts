@@ -26,7 +26,7 @@ const WRITING_PATTERN =
 const TECHNICAL_PATTERN =
   /(?<!\p{L})(kod|code|debug|hata|error|stack trace|typescript|javascript|python|swift|flutter|dart|sql|api|backend|frontend|regex|bug)(?!\p{L})/iu;
 const MATH_PATTERN =
-  /(?<!\p{L})(matematik|denklem|integral|türev|turev|limit|olasılık|olasilik|formül|formula|hesapla|çöz|coz)(?!\p{L})|[∫∑∏√≈≠≤≥π∞]|\d+\s*[+\-*/^]\s*\d+/iu;
+  /(?<!\p{L})(matematik\p{L}*|denklem\p{L}*|integral|türev\p{L}*|turev\p{L}*|limit|olasılık\p{L}*|olasilik\p{L}*|formül\p{L}*|formula|hesapla\p{L}*|çöz\p{L}*|coz\p{L}*)(?!\p{L})|[∫∑∏√≈≠≤≥π∞]|\d+\s*[+\-−×xX*÷/^]\s*\d+/iu;
 const DOCUMENT_PATTERN =
   /(?<!\p{L})(pdf|docx|xlsx|pptx|belge|doküman|dokuman|dosya|ocr|scan|tarama|özetini çıkar|ozetini cikar)(?!\p{L})/iu;
 const VISION_PATTERN =

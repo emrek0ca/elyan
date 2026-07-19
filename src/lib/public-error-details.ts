@@ -1,4 +1,4 @@
-const INTERNAL_ERROR_KEY_PATTERN = /(?:provider|model|engine|apikey|credential|secret|systemprompt|developer|reasoning|tooltrace|visionblock|fallbackstate|attemptedproviders|attemptedmodels|rawresponse|debug)$/u;
+const INTERNAL_ERROR_KEY_PATTERN = /(?:provider|model|engine|apikey|credential|secret|systemprompt|developer|reasoning|tooltrace|visionblock|fallbackstate|attemptedproviders|attemptedmodels|attemptfailures|providerstatus|failureclass|lasterror|rawresponse|debug)$/u;
 
 function normalizeKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");

@@ -8,6 +8,16 @@ test("public error details preserve actionable fields and remove compound intern
     requiredPlanCodes: ["pro"],
     secondaryVisionProvider: "gemini",
     servingModel: "private-model",
+    providerStatus: 429,
+    failureClass: "rate_limited",
+    attemptFailures: [
+      {
+        provider: "gemini",
+        model: "private-model",
+        status: 429,
+        retryAfterMs: 4_000,
+      },
+    ],
     debug: { rawResponse: "secret" },
   }), {
     retryAfterMs: 1_000,

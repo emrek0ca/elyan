@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
-import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { ArtifactInput, TaskStatus } from "../../contracts/domain.js";
 import {
@@ -100,8 +100,21 @@ import {
 import { maybeQueueAutomaticSharedBrainRefresh } from "../brain/service.js";
 import {
   resolveAttachmentAwareSharedBrainWorkload,
+  sharedBrainWorkloadValues,
   type SharedBrainWorkload,
 } from "../brain/workloads.js";
+import {
+  chatGenerationProviderForStage,
+  decideChatQueueAdmission,
+  getChatGenerationQueueLimits,
+  type ChatGenerationProviderStage,
+} from "../brain/chat-generation-policy.js";
+import {
+  enqueueSharedBrainChatTask,
+  isChatGenerationQueueEnabled,
+  releaseChatGenerationAdmission,
+  reserveChatGenerationAdmission,
+} from "../brain/chat-generation-queue.js";
 import {
   type AssistantMessageBlock,
   composeAssistantMessageBlocks,
@@ -2969,6 +2982,16 @@ function isSharedBrainChatTask(
   );
 }
 
+function isDurableChatGenerationTask(
+  task: Pick<typeof tasks.$inferSelect, "payload">,
+): boolean {
+  const payload = readRecord(task.payload) ?? {};
+  const chatGeneration = readRecord(
+    getPayloadMetadata(payload).chatGeneration,
+  );
+  return chatGeneration?.queued === true;
+}
+
 function readAgentRunState(metadata: Record<string, unknown>): string | null {
   return typeof metadata.agentRunState === "string"
     ? metadata.agentRunState
@@ -3034,6 +3057,14 @@ export async function reconcileStaleRuntimeTasks(
     const resequenceTargets = new Set<string>();
 
     for (const task of candidates) {
+      if (
+        isChatGenerationQueueEnabled(app) &&
+        isDurableChatGenerationTask(task)
+      ) {
+        // Durable chat workers own their workload-aware 60/120/240 second
+        // deadlines. The legacy runtime stale cutoff must not preempt them.
+        continue;
+      }
       const target = await getUserDevice(app, task.userId, task.targetDeviceId);
       const targetStatus = target?.targetStatus ?? "missing";
       const lease = getTaskDispatchLeaseSnapshot(task);
@@ -3113,6 +3144,7 @@ export async function reconcileStaleRuntimeTasks(
           message,
         });
         await reliability?.clearTaskDispatchLock(failedTask.id);
+        await releaseChatGenerationAdmission(app, failedTask.id);
         reconciled.push(shapeTaskFeedItem(failedTask));
         continue;
       }
@@ -3209,6 +3241,10 @@ export async function reconcileStaleRuntimeTasks(
   }
 }
 
+function isChatGenerationSettled(status: TaskStatus): boolean {
+  return isTerminalTaskStatus(status) || status === "waiting_approval";
+}
+
 async function completeServerBrainTask(
   app: FastifyInstance,
   input: {
@@ -3290,8 +3326,9 @@ async function completeServerBrainTask(
   if (!task || task.userId !== input.userId) {
     throw notFound("Task not found");
   }
-  if (task.status === "completed") {
-    return task;
+  if (isChatGenerationSettled(task.status)) {
+    await releaseChatGenerationAdmission(app, task.id);
+    return Object.assign(task, { completionTransitionOwned: false as const });
   }
 
   const payload =
@@ -3626,7 +3663,13 @@ async function completeServerBrainTask(
       updatedAt: now,
       queuePosition: 0,
     })
-    .where(and(eq(tasks.id, task.id), sql`${tasks.status} <> 'completed'`))
+    .where(
+      and(
+        eq(tasks.id, task.id),
+        eq(tasks.userId, input.userId),
+        eq(tasks.status, "running"),
+      ),
+    )
     .returning();
 
   // Two completion workers can finish at nearly the same time. The first
@@ -3634,7 +3677,9 @@ async function completeServerBrainTask(
   // the already-persisted result without emitting another completion event.
   if (rows.length === 0) {
     const currentTask = await getTaskById(app, task.id);
-    return currentTask ?? task;
+    return Object.assign(currentTask ?? task, {
+      completionTransitionOwned: false as const,
+    });
   }
 
   let updatedTask = rows[0] ?? {
@@ -3974,6 +4019,7 @@ async function completeServerBrainTask(
     message: input.responseText,
   });
 
+  await releaseChatGenerationAdmission(app, updatedTask.id);
   if (finalTaskStatus === "completed") {
     await releaseMediaInputsFromMetadata(
       app,
@@ -3983,6 +4029,7 @@ async function completeServerBrainTask(
   }
 
   return Object.assign(updatedTask, {
+    completionTransitionOwned: true as const,
     renderRecipe: renderRecipe ?? null,
     structuredOutputArtifacts,
   });
@@ -4003,6 +4050,9 @@ async function markServerBrainTaskRunning(
   if (task.status === "running") {
     return task;
   }
+  if (isTerminalTaskStatus(task.status) || task.status === "waiting_approval") {
+    throw new AppError(409, "task_not_processable", "Görev artık çalıştırılamıyor.");
+  }
 
   const now = new Date();
   const rows = await app.db
@@ -4014,17 +4064,24 @@ async function markServerBrainTaskRunning(
       updatedAt: now,
       queuePosition: 0,
     })
-    .where(eq(tasks.id, task.id))
+    .where(
+      and(
+        eq(tasks.id, task.id),
+        eq(tasks.userId, input.userId),
+        inArray(tasks.status, ["queued", "planning"]),
+      ),
+    )
     .returning();
 
-  const updatedTask = rows[0] ?? {
-    ...task,
-    status: "running" as const,
-    error: null,
-    startedAt: task.startedAt ?? now,
-    updatedAt: now,
-    queuePosition: 0,
-  };
+  if (rows.length === 0) {
+    const latestTask = await getTaskById(app, input.taskId);
+    if (latestTask?.status === "running") {
+      return latestTask;
+    }
+    throw new AppError(409, "task_not_processable", "Görev artık çalıştırılamıyor.");
+  }
+
+  const updatedTask = rows[0];
 
   await insertTaskEvent(app, {
     taskId: updatedTask.id,
@@ -4125,12 +4182,14 @@ function summarizeUnderstandingForSafeTelemetry(
 
 function resolveSharedBrainWorkloadForUnderstanding(input: {
   routeDecision: CommandRouteDecision | null | undefined;
+  prompt: string;
   attachmentContextUsed?: boolean;
   hasVisionImage?: boolean;
   envelope?: UnderstandingEnvelope | null;
 }) {
   const envelopeWorkload = preferredWorkloadFromUnderstandingEnvelope(
     input.envelope,
+    input.prompt,
   );
   const selectedWorkload =
     envelopeWorkload &&
@@ -4149,24 +4208,30 @@ function resolveSharedBrainWorkloadForUnderstanding(input: {
   });
 }
 
+type SharedBrainChatTaskInput = {
+  currentTask: typeof tasks.$inferSelect;
+  userId: string;
+  requestId: string;
+  prompt: string;
+  canonicalTitle: string;
+  understanding: Awaited<ReturnType<typeof buildTaskUnderstanding>>;
+  planCode?: string | null;
+  brainProfile?: unknown;
+  ephemeralVision?: EphemeralVisionCarrier;
+  providerStage?: ChatGenerationProviderStage;
+  deferTransientFailure?: boolean;
+};
+
 async function processSharedBrainChatTask(
   app: FastifyInstance,
-  input: {
-    currentTask: typeof tasks.$inferSelect;
-    userId: string;
-    requestId: string;
-    prompt: string;
-    canonicalTitle: string;
-    understanding: Awaited<ReturnType<typeof buildTaskUnderstanding>>;
-    planCode?: string | null;
-    brainProfile?: unknown;
-    ephemeralVision?: EphemeralVisionCarrier;
-  },
+  input: SharedBrainChatTaskInput,
 ) {
+  const resumedQueueAttempt =
+    input.providerStage != null && input.currentTask.startedAt != null;
   try {
     /* Per-plan in-process rate check — C daemon token bucket, zero DB.
      * On limit: fail fast with rate_limited before expensive processing. */
-    if (nlpDaemon.isAvailable()) {
+    if (!resumedQueueAttempt && nlpDaemon.isAvailable()) {
       const rateResult = await nlpDaemon
         .rateCheck(input.userId, String(input.planCode ?? "free"))
         .catch(() => ({ allowed: true, retryAfterMs: 0 }));
@@ -4182,48 +4247,50 @@ async function processSharedBrainChatTask(
       }
     }
 
-    await recordTaskLearningFromCreation(app, {
-      userId: input.userId,
-      accountId: input.userId,
-      taskId: input.currentTask.id,
-      title: input.canonicalTitle,
-      message: input.prompt,
-      routeContext: "tasks.create",
-      source:
-        input.currentTask.payload &&
-        typeof input.currentTask.payload === "object" &&
-        !Array.isArray(input.currentTask.payload) &&
-        typeof (input.currentTask.payload as Record<string, unknown>).source ===
-          "string"
-          ? ((input.currentTask.payload as Record<string, unknown>)
-              .source as string)
-          : undefined,
-      deviceId: input.currentTask.targetDeviceId,
-      metadata:
-        input.currentTask.payload &&
-        typeof input.currentTask.payload === "object" &&
-        !Array.isArray(input.currentTask.payload)
-          ? getPayloadMetadata(
-              input.currentTask.payload as Record<string, unknown>,
-            )
-          : {},
-      intent: input.understanding.intent,
-      requestId: input.requestId,
-    });
-    await recordBridgeLearningSignals(app, {
-      userId: input.userId,
-      accountId: input.userId,
-      taskId: input.currentTask.id,
-      target: "server_brain",
-      outcome: "created",
-      readiness: "ready",
-      routingMode: "server_brain_first",
-      requestId: input.requestId,
-    });
     const runningTask = await markServerBrainTaskRunning(app, {
       taskId: input.currentTask.id,
       userId: input.userId,
     });
+    if (!resumedQueueAttempt) {
+      await recordTaskLearningFromCreation(app, {
+        userId: input.userId,
+        accountId: input.userId,
+        taskId: input.currentTask.id,
+        title: input.canonicalTitle,
+        message: input.prompt,
+        routeContext: "tasks.create",
+        source:
+          input.currentTask.payload &&
+          typeof input.currentTask.payload === "object" &&
+          !Array.isArray(input.currentTask.payload) &&
+          typeof (input.currentTask.payload as Record<string, unknown>)
+            .source === "string"
+            ? ((input.currentTask.payload as Record<string, unknown>)
+                .source as string)
+            : undefined,
+        deviceId: input.currentTask.targetDeviceId,
+        metadata:
+          input.currentTask.payload &&
+          typeof input.currentTask.payload === "object" &&
+          !Array.isArray(input.currentTask.payload)
+            ? getPayloadMetadata(
+                input.currentTask.payload as Record<string, unknown>,
+              )
+            : {},
+        intent: input.understanding.intent,
+        requestId: input.requestId,
+      });
+      await recordBridgeLearningSignals(app, {
+        userId: input.userId,
+        accountId: input.userId,
+        taskId: input.currentTask.id,
+        target: "server_brain",
+        outcome: "created",
+        readiness: "ready",
+        routingMode: "server_brain_first",
+        requestId: input.requestId,
+      });
+    }
     const chatStreaming = extractChatStreamingMetadata(runningTask);
     const routeDecision = extractRouteDecision(
       runningTask.payload &&
@@ -4274,6 +4341,7 @@ async function processSharedBrainChatTask(
 
     const selectedWorkload = resolveSharedBrainWorkloadForUnderstanding({
       routeDecision: effectiveRouteDecision,
+      prompt: input.prompt,
       attachmentContextUsed:
         attachmentContext?.used === true || clientDocCtx?.hasContent === true,
       hasVisionImage:
@@ -4377,6 +4445,9 @@ async function processSharedBrainChatTask(
         });
       } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);
+      }
+      if (!completedTask.completionTransitionOwned) {
+        return;
       }
 
       await recordBridgeLearningSignals(app, {
@@ -4525,7 +4596,7 @@ async function processSharedBrainChatTask(
     });
     let streamSeq = 0;
 
-    if (chatStreaming) {
+    if (chatStreaming && !resumedQueueAttempt) {
       const now = new Date().toISOString();
       const visibleAckText = sanitizeAssistantVisibleText(ackText, {
         fallback: ackText,
@@ -4576,11 +4647,13 @@ async function processSharedBrainChatTask(
     const visibleTextPolicy: AssistantVisibleTextPolicy = {
       allowPublicProviderReferences: false,
     };
-    let lastVisibleStreamingContent = sanitizeAssistantVisibleText(ackText, {
-      fallback: ackText,
-      allowPublicProviderReferences:
-        visibleTextPolicy.allowPublicProviderReferences,
-    });
+    let lastVisibleStreamingContent = resumedQueueAttempt
+      ? ""
+      : sanitizeAssistantVisibleText(ackText, {
+          fallback: ackText,
+          allowPublicProviderReferences:
+            visibleTextPolicy.allowPublicProviderReferences,
+        });
 
     // Session varsa önceki mesajları DB'den yükle — inference'ı bloke etmemek için 1.5s timeout
     const payloadConversation = extractSharedBrainConversation(runningPayload);
@@ -4652,6 +4725,26 @@ async function processSharedBrainChatTask(
       input.userId,
       input.ephemeralVision,
     ).catch(() => undefined);
+    let queuedTaskAbortCached = false;
+    let queuedTaskAbortCheckedAt = 0;
+    const shouldAbortQueuedTask = input.providerStage
+      ? async () => {
+          if (queuedTaskAbortCached) {
+            return true;
+          }
+          const now = Date.now();
+          if (now - queuedTaskAbortCheckedAt < 250) {
+            return false;
+          }
+          queuedTaskAbortCheckedAt = now;
+          const latestTask = await getTaskById(app, runningTask.id);
+          queuedTaskAbortCached =
+            !latestTask ||
+            latestTask.userId !== input.userId ||
+            isTerminalTaskStatus(latestTask.status);
+          return queuedTaskAbortCached;
+        }
+      : undefined;
     const inference = await generateGovernedSharedBrainReply(app, {
       userId: input.userId,
       taskId: runningTask.id,
@@ -4669,9 +4762,31 @@ async function processSharedBrainChatTask(
       planCode: input.planCode,
       understandingContext: input.understanding.context,
       brainProfile: input.brainProfile,
+      ...(input.providerStage
+        ? {
+            providerAllowlist: [
+              chatGenerationProviderForStage(input.providerStage),
+            ],
+            loadSheddingConcurrencyOverride:
+              input.providerStage === "primary"
+                ? getChatGenerationQueueLimits(app)
+                    .primaryGlobalConcurrency
+                : getChatGenerationQueueLimits(app)
+                    .fallbackGlobalConcurrency,
+          }
+        : {}),
+      shouldAbort: shouldAbortQueuedTask,
       ephemeralVision: inferenceVision,
       onDelta: chatStreaming
         ? async (delta) => {
+            if (shouldAbortQueuedTask && (await shouldAbortQueuedTask())) {
+              throw new AppError(
+                409,
+                "task_canceled",
+                "Görev iptal edildi.",
+                { transient: false, retrySuggested: false },
+              );
+            }
             // Provider reasoning is internal-only; only content can stream to chat.
             const incomingVisibleContent = sanitizeAssistantVisibleText(
               delta.content,
@@ -4704,11 +4819,13 @@ async function processSharedBrainChatTask(
             // "…User- LanguageHere's a thinking process:…" duplication. On
             // divergence we send delta:"" and let assistantMessage.content
             // carry the authoritative snapshot instead.
-            const visibleDelta = contentChanged
-              ? visibleContent.startsWith(lastVisibleStreamingContent)
-                ? visibleContent.slice(lastVisibleStreamingContent.length)
-                : ""
-              : "";
+            const visibleDelta = resumedQueueAttempt
+              ? ""
+              : contentChanged
+                ? visibleContent.startsWith(lastVisibleStreamingContent)
+                  ? visibleContent.slice(lastVisibleStreamingContent.length)
+                  : ""
+                : "";
             if (contentChanged) {
               lastVisibleStreamingContent = visibleContent;
             }
@@ -4754,6 +4871,7 @@ async function processSharedBrainChatTask(
           }
         : undefined,
     }).finally(() => {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (inferenceVision !== input.ephemeralVision) {
         clearEphemeralVisionCarrier(inferenceVision);
       }
@@ -4764,7 +4882,6 @@ async function processSharedBrainChatTask(
     visibleTextPolicy.allowPublicProviderReferences =
       inference.metadata.webGroundingUsed === true ||
       Number(inference.metadata.webSourceCount ?? 0) > 0;
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
     const agentRunState = readAgentRunState(inference.metadata);
     if (agentRunState && agentRunState !== "completed") {
       app.log.info?.(
@@ -4791,6 +4908,9 @@ async function processSharedBrainChatTask(
       totalTokens: inference.totalTokens,
       ...readServerBrainCompletionMetadata(inference.metadata),
     });
+    if (!completedTask.completionTransitionOwned) {
+      return;
+    }
     await recordBridgeLearningSignals(app, {
       userId: input.userId,
       accountId: input.userId,
@@ -4976,116 +5096,430 @@ async function processSharedBrainChatTask(
       });
     }
   } catch (error) {
-    const fallbackMessage = getSharedBrainFallbackMessage(error);
-    const rows = await app.db
-      .update(tasks)
-      .set({
-        status: "failed",
-        error: fallbackMessage,
-        summary: fallbackMessage,
-        completedAt: new Date(),
-        updatedAt: new Date(),
-        queuePosition: 0,
-      })
-      .where(
-        and(
-          eq(tasks.id, input.currentTask.id),
-          sql`${tasks.status} <> 'completed'`,
-        ),
-      )
-      .returning();
-    if (rows.length === 0) {
-      const currentTask = await getTaskById(app, input.currentTask.id);
-      if (currentTask?.status === "completed") {
-        return;
-      }
+    const latestTask = await getTaskById(app, input.currentTask.id);
+    if (!latestTask || isChatGenerationSettled(latestTask.status)) {
+      return;
     }
-    const failedTask = rows[0] ?? input.currentTask;
-    await insertTaskEvent(app, {
-      taskId: failedTask.id,
-      userId: failedTask.userId,
-      status: "failed",
-      message: fallbackMessage,
-      payload: {
-        route: "shared_brain",
-      },
-    });
-    await publishTaskEvent(app, failedTask, "task.updated", {
-      task: shapeTaskFeedItem(failedTask),
-    });
-    await syncChatTaskLifecycle(app, {
-      originalTask: input.currentTask,
-      updatedTask: failedTask,
-      message: fallbackMessage,
-    });
-    await releaseMediaInputsFromMetadata(
-      app,
-      input.userId,
-      getPayloadMetadata(
-        readRecord(input.currentTask.payload) ?? {},
-      ),
-    ).catch(() => undefined);
-    const chatStreaming = extractChatStreamingMetadata(input.currentTask);
-    if (chatStreaming) {
-      await publishPersistedChatStreamEvent(app, {
-        userId: input.userId,
-        deviceId: failedTask.targetDeviceId,
-        taskId: failedTask.id,
-        sessionId: chatStreaming.sessionId,
-        messageId: chatStreaming.assistantMessageId,
-        event: "message.error",
-        seq: 1,
-        payload: {
-          error: fallbackMessage,
-          code: error instanceof AppError ? error.code : "shared_brain_failed",
-          retryable:
-            error instanceof AppError &&
-            error.details &&
-            typeof error.details === "object" &&
-            !Array.isArray(error.details)
-              ? Boolean(
-                  (error.details as Record<string, unknown>).retrySuggested,
-                )
-              : true,
-          assistantMessage: shapeAssistantMessagePayload({
-            id: chatStreaming.assistantMessageId,
-            role: "assistant",
-            status: "failed",
-            content: fallbackMessage,
-            taskId: failedTask.id,
-            error: fallbackMessage,
-            createdAt: failedTask.createdAt.toISOString(),
-            updatedAt: failedTask.updatedAt.toISOString(),
-          }),
-          task: shapeTaskFeedItem(failedTask),
-        },
-      });
+    if (input.deferTransientFailure && isTransientSharedBrainFailure(error)) {
+      throw error;
     }
-    await recordBridgeLearningSignals(app, {
-      userId: input.userId,
-      accountId: input.userId,
-      taskId: failedTask.id,
-      target: "server_brain",
-      outcome:
-        error instanceof AppError && error.code === "server_brain_unavailable"
-          ? "unavailable"
-          : "failed",
-      readiness: "unavailable",
-      routingMode: "server_brain_first",
-      requestId: input.requestId,
-    });
-
-    app.log.warn(
-      {
-        taskId: failedTask.id,
-        requestId: input.requestId,
-        reason: error instanceof Error ? error.message : "unknown",
-      },
-      "shared brain chat dispatch failed asynchronously",
-    );
+    await finalizeSharedBrainChatFailure(app, input, error);
   } finally {
     clearEphemeralVisionCarrier(input.ephemeralVision);
   }
+}
+
+function isTransientSharedBrainFailure(error: unknown): boolean {
+  if (error instanceof AppError) {
+    const details = readRecord(error.details);
+    if (
+      details?.retrySuggested === false ||
+      details?.transient === false
+    ) {
+      return false;
+    }
+    return (
+      error.code === "server_brain_unavailable" ||
+      error.code === "rate_limited" ||
+      error.statusCode === 429 ||
+      error.statusCode >= 500 ||
+      details?.transient === true
+    );
+  }
+  return (
+    error instanceof TypeError ||
+    (error instanceof DOMException && error.name === "AbortError")
+  );
+}
+
+async function finalizeSharedBrainChatFailure(
+  app: FastifyInstance,
+  input: Pick<
+    SharedBrainChatTaskInput,
+    "currentTask" | "userId" | "requestId"
+  >,
+  error: unknown,
+) {
+  const fallbackMessage = getSharedBrainFallbackMessage(error);
+  const rows = await app.db
+    .update(tasks)
+    .set({
+      status: "failed",
+      error: fallbackMessage,
+      summary: fallbackMessage,
+      completedAt: new Date(),
+      updatedAt: new Date(),
+      queuePosition: 0,
+    })
+    .where(
+      and(
+        eq(tasks.id, input.currentTask.id),
+        eq(tasks.userId, input.userId),
+        inArray(tasks.status, ["queued", "planning", "running"]),
+      ),
+    )
+    .returning();
+  if (rows.length === 0) {
+    const currentTask = await getTaskById(app, input.currentTask.id);
+    await releaseChatGenerationAdmission(
+      app,
+      currentTask?.id ?? input.currentTask.id,
+    );
+    return;
+  }
+  const failedTask = rows[0];
+  await releaseChatGenerationAdmission(app, failedTask.id);
+  await insertTaskEvent(app, {
+    taskId: failedTask.id,
+    userId: failedTask.userId,
+    status: "failed",
+    message: fallbackMessage,
+    payload: {
+      route: "shared_brain",
+      failureClass:
+        readRecord(error instanceof AppError ? error.details : null)
+          ?.failureClass ?? "unavailable",
+    },
+  });
+  await publishTaskEvent(app, failedTask, "task.updated", {
+    task: shapeTaskFeedItem(failedTask),
+  });
+  await syncChatTaskLifecycle(app, {
+    originalTask: input.currentTask,
+    updatedTask: failedTask,
+    message: fallbackMessage,
+  });
+  await releaseMediaInputsFromMetadata(
+    app,
+    input.userId,
+    getPayloadMetadata(readRecord(input.currentTask.payload) ?? {}),
+  ).catch(() => undefined);
+  const chatStreaming = extractChatStreamingMetadata(input.currentTask);
+  if (chatStreaming) {
+    await publishPersistedChatStreamEvent(app, {
+      userId: input.userId,
+      deviceId: failedTask.targetDeviceId,
+      taskId: failedTask.id,
+      sessionId: chatStreaming.sessionId,
+      messageId: chatStreaming.assistantMessageId,
+      event: "message.error",
+      seq: 1,
+      payload: {
+        error: fallbackMessage,
+        code: error instanceof AppError ? error.code : "shared_brain_failed",
+        retryable:
+          error instanceof AppError
+            ? readRecord(error.details)?.retrySuggested !== false
+            : true,
+        assistantMessage: shapeAssistantMessagePayload({
+          id: chatStreaming.assistantMessageId,
+          role: "assistant",
+          status: "failed",
+          content: fallbackMessage,
+          taskId: failedTask.id,
+          error: fallbackMessage,
+          createdAt: failedTask.createdAt.toISOString(),
+          updatedAt: failedTask.updatedAt.toISOString(),
+        }),
+        task: shapeTaskFeedItem(failedTask),
+      },
+    });
+  }
+  await recordBridgeLearningSignals(app, {
+    userId: input.userId,
+    accountId: input.userId,
+    taskId: failedTask.id,
+    target: "server_brain",
+    outcome:
+      error instanceof AppError && error.code === "server_brain_unavailable"
+        ? "unavailable"
+        : "failed",
+    readiness: "unavailable",
+    routingMode: "server_brain_first",
+    requestId: input.requestId,
+  });
+
+  app.log.warn(
+    {
+      taskId: failedTask.id,
+      requestId: input.requestId,
+      errorCode:
+        error instanceof AppError
+          ? error.code
+          : error instanceof Error
+            ? error.name
+            : "unknown",
+    },
+    "shared brain chat dispatch failed asynchronously",
+  );
+}
+
+export type QueuedSharedBrainChatTaskSnapshot = {
+  task: typeof tasks.$inferSelect;
+  prompt: string;
+  workload: SharedBrainWorkload;
+  requestId: string;
+  understanding: UserUnderstandingResult;
+  terminal: boolean;
+};
+
+export async function listRecoverableSharedBrainChatTasks(
+  app: FastifyInstance,
+  input: { limit: number },
+): Promise<
+  Array<{
+    taskId: string;
+    userId: string;
+    createdAt: Date;
+    workload: SharedBrainWorkload;
+  }>
+> {
+  const limit = Math.max(1, Math.min(10_000, Math.trunc(input.limit)));
+  const rows = await app.db
+    .select({
+      id: tasks.id,
+      userId: tasks.userId,
+      createdAt: tasks.createdAt,
+      payload: tasks.payload,
+    })
+    .from(tasks)
+    .where(
+      and(
+        inArray(tasks.status, ["queued", "planning", "running"]),
+        sql`${tasks.payload}->'metadata'->'chatGeneration'->>'queued' = 'true'`,
+      ),
+    )
+    .orderBy(asc(tasks.createdAt))
+    .limit(limit);
+  return rows.map((row) => {
+    const metadata = getPayloadMetadata(readRecord(row.payload) ?? {});
+    const selectedWorkload =
+      typeof metadata.selectedWorkload === "string" &&
+      sharedBrainWorkloadValues.includes(
+        metadata.selectedWorkload as SharedBrainWorkload,
+      )
+        ? (metadata.selectedWorkload as SharedBrainWorkload)
+        : "mobile_chat_fast";
+    return {
+      taskId: row.id,
+      userId: row.userId,
+      createdAt: row.createdAt,
+      workload: selectedWorkload,
+    };
+  });
+}
+
+function readPersistedTaskUnderstanding(
+  payload: Record<string, unknown>,
+): UserUnderstandingResult | null {
+  const metadata = getPayloadMetadata(payload);
+  const understanding = readRecord(metadata.understanding);
+  const intent = readRecord(understanding?.intent);
+  const context = readRecord(understanding?.context);
+  const routingHints = readRecord(understanding?.routingHints);
+  if (!intent || !context || !routingHints) {
+    return null;
+  }
+  const envelopeResult = understandingEnvelopeSchema.safeParse(
+    understanding?.envelope,
+  );
+  const envelope = envelopeResult.success ? envelopeResult.data : undefined;
+  return {
+    intent: intent as UserUnderstandingResult["intent"],
+    context: context as UserUnderstandingResult["context"],
+    routingHints: routingHints as UserUnderstandingResult["routingHints"],
+    ...(envelope
+      ? {
+          envelope,
+          envelopeSource:
+            typeof understanding?.envelopeSource === "string"
+              ? (understanding.envelopeSource as UserUnderstandingResult["envelopeSource"])
+              : envelope.source,
+          envelopeConfidence:
+            typeof understanding?.envelopeConfidence === "number"
+              ? understanding.envelopeConfidence
+              : envelope.confidence,
+        }
+      : {}),
+  };
+}
+
+export async function getQueuedSharedBrainChatTask(
+  app: FastifyInstance,
+  input: { taskId: string; userId: string },
+): Promise<QueuedSharedBrainChatTaskSnapshot | null> {
+  const row = await getTaskById(app, input.taskId);
+  if (!row || row.userId !== input.userId) {
+    return null;
+  }
+  const hydratedPayload = await hydrateTaskJsonValue(
+    app,
+    row.payload,
+    row.payloadBlobId,
+    {
+      userId: row.userId,
+      ownerType: "task",
+      ownerId: row.id,
+    },
+  );
+  const payload = readRecord(hydratedPayload) ?? {};
+  const task = { ...row, payload };
+  const prompt = getTaskPrompt(payload);
+  const metadata = getPayloadMetadata(payload);
+  const routeDecision = extractRouteDecision(payload);
+  const persistedUnderstanding = readPersistedTaskUnderstanding(payload);
+  const understanding =
+    persistedUnderstanding ??
+    (await buildTaskUnderstanding(app, {
+      userId: row.userId,
+      accountId: row.userId,
+      taskId: row.id,
+      title: row.title,
+      message: prompt,
+      routeContext: "tasks.chat_queue",
+      source:
+        typeof payload.source === "string" ? payload.source : undefined,
+      deviceId: row.targetDeviceId,
+      metadata,
+    }).catch(() =>
+      emptyUnderstanding({
+        userId: row.userId,
+        accountId: row.userId,
+        taskId: row.id,
+        title: row.title,
+        message: prompt,
+        routeContext: "tasks.chat_queue",
+        source:
+          typeof payload.source === "string" ? payload.source : undefined,
+        deviceId: row.targetDeviceId,
+        metadata,
+      }),
+    ));
+  const workload = resolveSharedBrainWorkloadForUnderstanding({
+    routeDecision,
+    prompt,
+    envelope: understanding.envelope,
+  });
+  const chatGeneration = readRecord(metadata.chatGeneration);
+  const requestId =
+    typeof chatGeneration?.requestId === "string" &&
+    chatGeneration.requestId.trim()
+      ? chatGeneration.requestId.trim()
+      : row.id;
+
+  return {
+    task,
+    prompt,
+    workload,
+    requestId,
+    understanding,
+    terminal: isChatGenerationSettled(row.status),
+  };
+}
+
+export async function processQueuedSharedBrainChatTask(
+  app: FastifyInstance,
+  input: {
+    taskId: string;
+    userId: string;
+    providerStage: ChatGenerationProviderStage;
+  },
+) {
+  const snapshot = await getQueuedSharedBrainChatTask(app, input);
+  if (!snapshot || snapshot.terminal) {
+    return { processed: false, reason: "terminal_or_missing" as const };
+  }
+  const usageAccess = await getUserUsageAccessTruth(app.db, input.userId);
+  await processSharedBrainChatTask(app, {
+    currentTask: snapshot.task,
+    userId: input.userId,
+    requestId: snapshot.requestId,
+    prompt: snapshot.prompt,
+    canonicalTitle: snapshot.task.title,
+    understanding: snapshot.understanding,
+    planCode: usageAccess.planCode,
+    brainProfile: usageAccess.brainProfile,
+    providerStage: input.providerStage,
+    deferTransientFailure: true,
+  });
+  return { processed: true, reason: "completed" as const };
+}
+
+export async function markQueuedSharedBrainChatPhase(
+  app: FastifyInstance,
+  input: {
+    taskId: string;
+    userId: string;
+    phase: "queued" | "retrying" | "provider_failover";
+    message: string;
+  },
+) {
+  const originalTask = await getTaskById(app, input.taskId);
+  if (
+    !originalTask ||
+    originalTask.userId !== input.userId ||
+    isChatGenerationSettled(originalTask.status)
+  ) {
+    return originalTask;
+  }
+  const rows = await app.db
+    .update(tasks)
+    .set({
+      status: "queued",
+      summary: input.message,
+      error: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(tasks.id, input.taskId),
+        eq(tasks.userId, input.userId),
+        inArray(tasks.status, ["queued", "planning", "running"]),
+      ),
+    )
+    .returning();
+  const updatedTask = rows[0];
+  if (!updatedTask) {
+    return originalTask;
+  }
+  await insertTaskEvent(app, {
+    taskId: updatedTask.id,
+    userId: updatedTask.userId,
+    status: "queued",
+    message: input.message,
+    payload: {
+      route: "shared_brain",
+      generationPhase: input.phase,
+    },
+  });
+  await publishTaskEvent(app, updatedTask, "task.updated", {
+    task: shapeTaskFeedItem(updatedTask),
+  });
+  await syncChatTaskLifecycle(app, {
+    originalTask,
+    updatedTask,
+    message: input.message,
+  });
+  return updatedTask;
+}
+
+export async function failQueuedSharedBrainChatTask(
+  app: FastifyInstance,
+  input: { taskId: string; userId: string; error: unknown },
+) {
+  const snapshot = await getQueuedSharedBrainChatTask(app, input);
+  if (!snapshot || snapshot.terminal) {
+    return;
+  }
+  await finalizeSharedBrainChatFailure(
+    app,
+    {
+      currentTask: snapshot.task,
+      userId: input.userId,
+      requestId: snapshot.requestId,
+    },
+    input.error,
+  );
 }
 
 export async function createTask(
@@ -5205,6 +5639,11 @@ export async function createTask(
   const selectedDesktopOnline = isSharedBrain
     ? true
     : Boolean(targetDevice.device.isOnline);
+  const useDurableChatQueue =
+    isSharedBrain &&
+    useFastSharedBrainFlow &&
+    isChatGenerationQueueEnabled(app) &&
+    countDistinctEphemeralImages(input.ephemeralVision) === 0;
   const idempotencyFingerprint = input.idempotencyKey
     ? createTaskFingerprint({
         targetDeviceId,
@@ -5220,6 +5659,19 @@ export async function createTask(
   });
 
   if (existingTask) {
+    const requeued =
+      isSharedBrain &&
+      useFastSharedBrainFlow &&
+      (["queued", "planning", "running"] as TaskStatus[]).includes(
+        existingTask.status,
+      ) &&
+      isDurableChatGenerationTask(existingTask)
+        ? await enqueueSharedBrainChatTask(app, {
+            taskId: existingTask.id,
+            userId: input.userId,
+          })
+        : false;
+    clearEphemeralVisionCarrier(input.ephemeralVision);
     await notifyTaskReady(input.onTaskReady, {
       rawTask: existingTask,
       reused: true,
@@ -5234,7 +5686,7 @@ export async function createTask(
     });
     return {
       task: shapeTaskFeedItem(existingTask, { selectedDesktopOnline }),
-      dispatched: false,
+      dispatched: requeued,
       reused: true,
       selectedDesktopOnline,
       renderRecipe: null,
@@ -5362,6 +5814,14 @@ export async function createTask(
       understanding: {
         ...buildUnderstandingMetadataForTask(understanding),
       },
+      ...(useFastSharedBrainFlow
+        ? {
+            chatGeneration: {
+              requestId: input.requestId,
+              queued: useDurableChatQueue,
+            },
+          }
+        : {}),
       ...(geminiExecutionValidation ? { geminiExecutionValidation } : {}),
     },
   };
@@ -5544,6 +6004,7 @@ export async function createTask(
     getPayloadMetadata(enrichedPayload),
   );
 
+  let reservedChatTaskId: string | null = null;
   const taskResult = await app.db
     .transaction(async (tx) => {
       await tx.execute(
@@ -5583,6 +6044,10 @@ export async function createTask(
       const taskQuota = await getTrialQuotaUsage(tx, input.userId);
       assertTrialTaskQuotaAllowedFromUsage(taskQuota);
 
+      const chatQueueAdmissionRequired =
+        sharedBrainRoute &&
+        useDurableChatQueue;
+
       const activeCounts = await tx
         .select({
           count: sql<number>`count(*)`,
@@ -5594,9 +6059,67 @@ export async function createTask(
             inArray(tasks.status, activeTaskStatuses),
           ),
         );
+      const createdTaskId = randomUUID();
+
+      if (chatQueueAdmissionRequired) {
+        const userActiveCounts = await tx
+          .select({ count: sql<number>`count(*)` })
+          .from(tasks)
+          .where(
+            and(
+              eq(tasks.userId, input.userId),
+              eq(tasks.targetDeviceId, targetDeviceId),
+              inArray(tasks.status, ["queued", "planning", "running"]),
+            ),
+          );
+        const admission = decideChatQueueAdmission(
+          {
+            // The global limit is reserved atomically in Redis below. The
+            // existing per-user DB lock makes this count exact for one user.
+            globalActive: 0,
+            userActive: Number(userActiveCounts[0]?.count ?? 0),
+          },
+          getChatGenerationQueueLimits(app),
+        );
+        if (!admission.accepted) {
+          throw new AppError(
+            429,
+            "chat_queue_full",
+            "Bu hesapta çok sayıda yanıt bekliyor. Mevcut yanıt tamamlandıktan sonra tekrar dene.",
+            {
+              retryAfterMs: 5_000,
+              retrySuggested: true,
+              queueReason: "user_backpressure",
+            },
+          );
+        }
+        const globalAdmission = await reserveChatGenerationAdmission(
+          app,
+          createdTaskId,
+        );
+        if (globalAdmission !== "accepted") {
+          throw new AppError(
+            globalAdmission === "full" ? 429 : 503,
+            globalAdmission === "full"
+              ? "chat_queue_full"
+              : "chat_queue_unavailable",
+            globalAdmission === "full"
+              ? "Yanıt sırası dolu. Lütfen biraz sonra yeniden dene."
+              : "Yanıt sıraya alınamadı. Lütfen biraz sonra yeniden dene.",
+            {
+              retryAfterMs: 5_000,
+              retrySuggested: true,
+              queueReason:
+                globalAdmission === "full"
+                  ? "global_backpressure"
+                  : "queue_unavailable",
+            },
+          );
+        }
+        reservedChatTaskId = createdTaskId;
+      }
 
       const queuePosition = Number(activeCounts[0]?.count ?? 0) + 1;
-      const createdTaskId = randomUUID();
       const payloadBlob = await storeTaskJsonBlob(app, {
         taskId: createdTaskId,
         userId: input.userId,
@@ -5657,12 +6180,28 @@ export async function createTask(
         payloadBlobHash: payloadBlob?.contentHash ?? null,
       } as const;
     })
-    .catch((error) => {
+    .catch(async (error) => {
+      if (reservedChatTaskId) {
+        await releaseChatGenerationAdmission(app, reservedChatTaskId);
+        reservedChatTaskId = null;
+      }
       clearEphemeralVisionCarrier(input.ephemeralVision);
       throw error;
     });
 
   if (taskResult.reused) {
+    const requeued =
+      isSharedBrain &&
+      useFastSharedBrainFlow &&
+      (["queued", "planning", "running"] as TaskStatus[]).includes(
+        taskResult.task.status,
+      ) &&
+      isDurableChatGenerationTask(taskResult.task)
+        ? await enqueueSharedBrainChatTask(app, {
+            taskId: taskResult.task.id,
+            userId: input.userId,
+          })
+        : false;
     clearEphemeralVisionCarrier(input.ephemeralVision);
     await notifyTaskReady(input.onTaskReady, {
       rawTask: taskResult.task,
@@ -5678,7 +6217,7 @@ export async function createTask(
     });
     return {
       task: shapeTaskFeedItem(taskResult.task, { selectedDesktopOnline }),
-      dispatched: false,
+      dispatched: requeued,
       reused: true,
       selectedDesktopOnline,
       renderRecipe: null,
@@ -5688,7 +6227,9 @@ export async function createTask(
   const task = taskResult.task;
   let currentTask: typeof task;
   try {
-    await resequenceDeviceQueue(app, targetDeviceId);
+    if (!useDurableChatQueue) {
+      await resequenceDeviceQueue(app, targetDeviceId);
+    }
     currentTask = (await getTaskById(app, task.id)) ?? task;
     await notifyTaskReady(input.onTaskReady, {
       rawTask: currentTask,
@@ -5701,26 +6242,70 @@ export async function createTask(
     throw error;
   }
   if (isSharedBrain && useFastSharedBrainFlow) {
-    void processSharedBrainChatTask(app, {
-      currentTask,
-      userId: input.userId,
-      requestId: input.requestId,
-      prompt,
-      canonicalTitle,
-      understanding,
-      planCode: usageAccess.planCode,
-      brainProfile: usageAccess.brainProfile,
-      ephemeralVision: input.ephemeralVision,
-    });
+    let dispatchedTask = currentTask;
+    const queueEligible = useDurableChatQueue;
+    if (queueEligible) {
+      try {
+        const enqueued = await enqueueSharedBrainChatTask(app, {
+          taskId: currentTask.id,
+          userId: input.userId,
+        });
+        if (!enqueued) {
+          throw new Error("chat_queue_unavailable");
+        }
+        dispatchedTask =
+          (await markQueuedSharedBrainChatPhase(app, {
+            taskId: currentTask.id,
+            userId: input.userId,
+            phase: "queued",
+            message: "Yanıt sıraya alındı.",
+          })) ?? currentTask;
+        clearEphemeralVisionCarrier(input.ephemeralVision);
+      } catch {
+        const queueError = new AppError(
+          503,
+          "chat_queue_unavailable",
+          "Yanıt sıraya alınamadı. Lütfen biraz sonra yeniden dene.",
+          {
+            transient: true,
+            retrySuggested: true,
+            failureClass: "queue_unavailable",
+          },
+        );
+        await finalizeSharedBrainChatFailure(
+          app,
+          {
+            currentTask,
+            userId: input.userId,
+            requestId: input.requestId,
+          },
+          queueError,
+        );
+        clearEphemeralVisionCarrier(input.ephemeralVision);
+        throw queueError;
+      }
+    } else {
+      void processSharedBrainChatTask(app, {
+        currentTask,
+        userId: input.userId,
+        requestId: input.requestId,
+        prompt,
+        canonicalTitle,
+        understanding,
+        planCode: usageAccess.planCode,
+        brainProfile: usageAccess.brainProfile,
+        ephemeralVision: input.ephemeralVision,
+      });
+    }
     await logRouteDecision(app, {
-      taskId: currentTask.id,
+      taskId: dispatchedTask.id,
       routeDecision,
       requestedTargetDeviceId: routeSelectedTargetDeviceId,
       origin: routeOrigin,
     });
 
     return {
-      task: shapeTaskFeedItem(currentTask, { selectedDesktopOnline }),
+      task: shapeTaskFeedItem(dispatchedTask, { selectedDesktopOnline }),
       dispatched: true,
       reused: false,
       selectedDesktopOnline,
@@ -5820,6 +6405,7 @@ export async function createTask(
       );
       const selectedWorkload = resolveSharedBrainWorkloadForUnderstanding({
         routeDecision,
+        prompt,
         attachmentContextUsed: attachmentContext?.used === true,
         envelope: understanding.envelope,
       });
@@ -5853,6 +6439,17 @@ export async function createTask(
           attachmentContextSource: attachmentContext?.source ?? null,
           sourceImages,
         });
+        if (!completedTask.completionTransitionOwned) {
+          return {
+            task: shapeTaskFeedItem(completedTask, {
+              selectedDesktopOnline,
+            }),
+            dispatched: true,
+            reused: false,
+            selectedDesktopOnline,
+            renderRecipe: readRenderRecipeFromTask(completedTask),
+          };
+        }
         await recordBridgeLearningSignals(app, {
           userId: input.userId,
           accountId: input.userId,
@@ -5924,6 +6521,15 @@ export async function createTask(
         totalTokens: inference.totalTokens,
         ...readServerBrainCompletionMetadata(inference.metadata),
       });
+      if (!completedTask.completionTransitionOwned) {
+        return {
+          task: shapeTaskFeedItem(completedTask, { selectedDesktopOnline }),
+          dispatched: true,
+          reused: false,
+          selectedDesktopOnline,
+          renderRecipe: readRenderRecipeFromTask(completedTask),
+        };
+      }
       await recordBridgeLearningSignals(app, {
         userId: input.userId,
         accountId: input.userId,
@@ -5957,13 +6563,14 @@ export async function createTask(
         .where(
           and(
             eq(tasks.id, currentTask.id),
-            sql`${tasks.status} <> 'completed'`,
+            eq(tasks.userId, input.userId),
+            inArray(tasks.status, ["queued", "planning", "running"]),
           ),
         )
         .returning();
       if (rows.length === 0) {
         const latestTask = await getTaskById(app, currentTask.id);
-        if (latestTask?.status === "completed") {
+        if (latestTask && isChatGenerationSettled(latestTask.status)) {
           return {
             task: shapeTaskFeedItem(latestTask, { selectedDesktopOnline }),
             dispatched: true,
@@ -6445,6 +7052,7 @@ export async function cancelTask(
     message: "Task canceled by user",
   });
   await app.services.reliability.clearTaskDispatchLock(updatedTask.id);
+  await releaseChatGenerationAdmission(app, updatedTask.id);
   await cancelAgentRunForTask({ app, userId, taskId: updatedTask.id }).catch(
     () => false,
   );
@@ -6633,6 +7241,7 @@ export async function resolveConnectorWriteApproval(
           sql`${tasks.approvalRequest}->>'token' = ${input.token}`,
         ),
       );
+    await releaseChatGenerationAdmission(app, task.id);
     return { status: "not_found" };
   }
 
@@ -6668,6 +7277,7 @@ export async function resolveConnectorWriteApproval(
   if (!claimed) return { status: "not_found" };
 
   if (!input.approved) {
+    await releaseChatGenerationAdmission(app, claimed.id);
     await insertTaskEvent(app, {
       taskId: task.id,
       userId: task.userId,
@@ -6792,6 +7402,9 @@ export async function resolveConnectorWriteApproval(
       },
     });
     return { status: "executed", tool, result };
+  }
+  if (finalStatus === "completed" || finalStatus === "failed") {
+    await releaseChatGenerationAdmission(app, updated.id);
   }
   await insertTaskEvent(app, {
     taskId: task.id,

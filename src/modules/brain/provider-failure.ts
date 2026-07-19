@@ -1,0 +1,138 @@
+import { AppError } from "../../lib/errors.js";
+
+export type ProviderFailureClass =
+  | "rate_limited"
+  | "timeout"
+  | "unavailable"
+  | "invalid_output"
+  | "rejected"
+  | "unknown";
+
+export type ProviderAttemptFailure = {
+  provider: string;
+  model: string;
+  status: number | null;
+  failureClass: ProviderFailureClass;
+  reason: string;
+  retryAfterMs: number | null;
+  attempt: number;
+};
+
+export function providerHttpStatusClass(
+  status: number | null,
+): "1xx" | "2xx" | "3xx" | "4xx" | "5xx" | "network" {
+  if (status == null || !Number.isFinite(status)) return "network";
+  const family = Math.trunc(status / 100);
+  return family >= 1 && family <= 5
+    ? (`${family}xx` as "1xx" | "2xx" | "3xx" | "4xx" | "5xx")
+    : "network";
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function readProviderRetryAfterMs(headers: Headers): number | null {
+  const raw = headers.get("retry-after")?.trim();
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1_000);
+  }
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
+}
+
+function failureClass(input: {
+  status: number | null;
+  reason: string;
+  error: unknown;
+}): ProviderFailureClass {
+  if (input.status === 429) return "rate_limited";
+  if (input.error instanceof DOMException && input.error.name === "AbortError") {
+    return "timeout";
+  }
+  const lowered = input.reason.toLowerCase();
+  if (lowered.includes("timeout") || lowered.includes("timed out")) {
+    return "timeout";
+  }
+  if (
+    lowered.includes("empty_response") ||
+    lowered.includes("empty_stream_response") ||
+    lowered.includes("invalid_") ||
+    lowered.includes("required_") ||
+    lowered.includes("placeholder_") ||
+    lowered.includes("reasoning_dump")
+  ) {
+    return "invalid_output";
+  }
+  if ([408, 425, 500, 502, 503, 504].includes(input.status ?? 0)) {
+    return "unavailable";
+  }
+  if (input.status != null && input.status >= 400) return "rejected";
+  if (
+    lowered.includes("fetch") ||
+    lowered.includes("network") ||
+    lowered.includes("socket") ||
+    lowered.includes("econn") ||
+    lowered.includes("circuit") ||
+    lowered.includes("unavailable")
+  ) {
+    return "unavailable";
+  }
+  return "unknown";
+}
+
+export function buildProviderAttemptFailure(input: {
+  provider: string;
+  model: string;
+  error: unknown;
+  attempt: number;
+}): ProviderAttemptFailure {
+  const record = readRecord(input.error);
+  const details = readRecord(
+    input.error instanceof AppError ? input.error.details : null,
+  );
+  const status =
+    typeof record?.status === "number" && Number.isFinite(record.status)
+      ? Math.trunc(record.status)
+      : input.error instanceof AppError
+        ? input.error.statusCode
+        : null;
+  const retryAfterMs =
+    typeof (record?.retryAfterMs ?? details?.retryAfterMs) === "number" &&
+    Number.isFinite(record?.retryAfterMs ?? details?.retryAfterMs) &&
+    Number(record?.retryAfterMs ?? details?.retryAfterMs) >= 0
+      ? Math.trunc(Number(record?.retryAfterMs ?? details?.retryAfterMs))
+      : null;
+  const reason =
+    typeof record?.reason === "string" && record.reason.trim()
+      ? record.reason.trim().slice(0, 120)
+      : typeof details?.failureClass === "string" &&
+          details.failureClass.trim()
+        ? details.failureClass.trim().slice(0, 120)
+        : input.error instanceof DOMException && input.error.name === "AbortError"
+          ? "timeout"
+          : input.error instanceof Error
+            ? input.error.name.slice(0, 120)
+            : typeof input.error === "string"
+              ? input.error.slice(0, 120)
+              : "provider_request_failed";
+
+  return {
+    provider: input.provider,
+    model: input.model,
+    status,
+    failureClass: failureClass({ status, reason, error: input.error }),
+    reason,
+    retryAfterMs,
+    attempt: Math.max(1, Math.trunc(input.attempt)),
+  };
+}
+
+export function providerRetryDelayMs(randomValue = Math.random()): number {
+  const bounded = Math.max(0, Math.min(1, randomValue));
+  return 120 + Math.floor(bounded * 180);
+}

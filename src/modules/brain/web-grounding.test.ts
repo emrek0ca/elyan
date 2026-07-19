@@ -1027,3 +1027,19 @@ test("pure math word problems do not trigger factuality grounding", () => {
   // Gerçek özel isimli soru hâlâ grounding almalı
   assert.equal(detectFactualityGrounding("Elon Musk kimdir").triggered, true);
 });
+
+test("sentence-initial result instructions do not turn arithmetic into a web lookup", () => {
+  const prompt = "Yalnızca sonucu yaz: 12 × 14 kaçtır?";
+
+  assert.equal(detectFactualityGrounding(prompt).triggered, false);
+  assert.deepEqual(
+    classifyWebGroundingDecision({
+      prompt,
+      workload: "mobile_chat_fast",
+    }),
+    {
+      mode: "no_web_needed",
+      reasons: ["self_contained_no_web", "intent:math"],
+    },
+  );
+});

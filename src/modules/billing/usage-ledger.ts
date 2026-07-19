@@ -289,7 +289,7 @@ export async function recordUsageLedgerEntry(
     planSnapshot?: Record<string, unknown> | null;
   },
 ) {
-  await db
+  const rows = await db
     .insert(usageRecords)
     .values({
       userId: input.userId,
@@ -309,5 +309,7 @@ export async function recordUsageLedgerEntry(
     })
     .onConflictDoNothing({
       target: [usageRecords.taskId, usageRecords.metric],
-    });
+    })
+    .returning({ id: usageRecords.id });
+  return rows[0] ?? null;
 }

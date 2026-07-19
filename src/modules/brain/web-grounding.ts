@@ -14,6 +14,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { LRUCache } from "lru-cache";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
+import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import {
@@ -141,6 +142,11 @@ const SELF_CONTAINED_NO_WEB_PATTERNS = [
   /\b(görsel oluştur|gorsel olustur|görsel üret|gorsel uret|resim çiz|resim ciz|resmi çiz|resmi ciz|resim üret|resim uret|image generate|draw|illustration)\b/i,
 ];
 
+const SELF_CONTAINED_ARITHMETIC_PATTERN = unicodeWordPattern(
+  String.raw`\b\d+(?:[.,]\d+)?\s*(?:[+\-−×xX*÷/])\s*\d+(?:[.,]\d+)?\b`,
+  "u",
+);
+
 // Turkish/English factual interrogatives. Combined with a proper-noun entity
 // these flag "who/what/when is <NamedEntity>" questions where parametric
 // knowledge is most likely outdated or hallucinated.
@@ -154,6 +160,7 @@ const SENTENCE_INITIAL_STOPWORDS = new Set([
   "kim", "kimdir", "nedir", "ne", "nerede", "neresi", "nereli", "kaç", "kac",
   "lütfen", "lutfen", "bana", "benim", "ben", "sen", "siz", "biz", "bu", "şu", "su",
   "evet", "hayır", "hayir", "selam", "merhaba", "peki", "acaba", "en", "bir",
+  "yalnızca", "yalnizca", "sadece", "sonucu", "cevabı", "cevabi",
   // Sayı kelimeleri: "İki sayının toplamı 10..." gibi saf matematik sorularında
   // cümle başı büyük harf özel-isim sinyali sayılıp gereksiz web grounding
   // tetikliyordu (benchmark math-003: required_web_but_should_not).
@@ -218,6 +225,9 @@ export function detectFactualityGrounding(prompt: string): {
   }
   if (VOLATILE_EVENT_PATTERN.test(lower)) {
     return { triggered: true, reason: "live_event_fact" };
+  }
+  if (SELF_CONTAINED_ARITHMETIC_PATTERN.test(lower)) {
+    return { triggered: false, reason: null };
   }
   if (VOLATILE_TECH_PATTERN.test(lower) && (isQuestion || hasProperNounEntity(normalized))) {
     return { triggered: true, reason: "technology_freshness_fact" };

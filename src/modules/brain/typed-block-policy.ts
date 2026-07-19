@@ -61,7 +61,7 @@ export function shouldAcceptExtractedTypedBlock(input: {
     .trim()
     .toLowerCase();
   if (type === "table") {
-    return input.selectedWorkload === "table_generate" || isExplicitTableRequest(input.prompt);
+    return isExplicitTableRequest(input.prompt);
   }
   if (type === "chart") {
     return isExplicitChartRequest(input.prompt);

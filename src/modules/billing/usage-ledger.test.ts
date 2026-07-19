@@ -55,7 +55,10 @@ class FakeDb {
         return builder;
       },
       onConflictDoNothing() {
-        return Promise.resolve();
+        return builder;
+      },
+      returning() {
+        return Promise.resolve([{ id: "usage-record-1" }]);
       },
       then<TResult1 = unknown, TResult2 = never>(
         resolve?: ((value: unknown) => TResult1 | PromiseLike<TResult1>) | null,

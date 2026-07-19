@@ -85,6 +85,22 @@ test("buildTypedUnderstandingEnvelope extracts Excel columns and totals from des
   assert.equal(preferredWorkloadFromUnderstandingEnvelope(envelope), "table_generate");
 });
 
+test("buildTypedUnderstandingEnvelope keeps negated table requests in chat", () => {
+  const prompt =
+    "Exponential backoff’u iki maddede açıkla. Süreler 1, 2 ve 4 saniye olsun, jitter ekle. Tablo kullanma.";
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: prompt,
+    intent: intent("chat"),
+  });
+
+  assert.deepEqual(
+    envelope.desired_outputs.map((output) => output.kind),
+    ["chat_reply"],
+  );
+  assert.equal(preferredWorkloadFromUnderstandingEnvelope(envelope), null);
+});
+
 test("buildTypedUnderstandingEnvelope marks local private file requests for desktop execution", () => {
   const envelope = buildTypedUnderstandingEnvelope({
     userId: "user_1",
