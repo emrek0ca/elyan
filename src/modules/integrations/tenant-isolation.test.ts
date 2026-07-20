@@ -6,6 +6,7 @@ import {
   getConnectorAccessToken,
   listConnectedCapabilityGrants,
   markConnectionAuthExpired,
+  missingOauthScopes,
 } from "./service.js";
 import { listMcpServers, updateMcpServer } from "../mcp/service.js";
 
@@ -173,4 +174,30 @@ test("markConnectionAuthExpired flips only the owner's connected row to error", 
   assert.ok(params.includes("connected"));
   // returning [] (satır zaten connected değil) → audit yazılmaz.
   assert.equal(db.inserted.length, 0);
+});
+
+test("broad calendar.readonly satisfies the granular calendar read scopes", () => {
+  // Regression: users who connected via the broad Google login hold
+  // `calendar.readonly`; the calendar tool requires the granular reads. The
+  // broad scope must canonically cover them so the tool is advertised.
+  const granted = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly",
+  ];
+  const requiredCalendarReads = [
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.events.freebusy",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+  ];
+  assert.deepEqual(
+    missingOauthScopes("google", granted, requiredCalendarReads),
+    [],
+  );
+  // Write access is NOT covered by the read-only scope.
+  assert.deepEqual(
+    missingOauthScopes("google", granted, [
+      "https://www.googleapis.com/auth/calendar.events",
+    ]),
+    ["https://www.googleapis.com/auth/calendar.events"],
+  );
 });

@@ -121,6 +121,18 @@ const GOOGLE_OAUTH_SCOPE_ALIASES = new Map<string, string>([
   ["https://www.googleapis.com/auth/userinfo.email", "email"],
   ["profile", "profile"],
   ["https://www.googleapis.com/auth/userinfo.profile", "profile"],
+  // The broad `calendar.readonly` scope (what the top-level Google login
+  // requests and Google grants) genuinely covers the granular calendar READ
+  // scopes the calendar tool requires. Without these aliases a user who
+  // connected via the broad login held `calendar.readonly` but the granular
+  // required scopes never matched, so the calendar tool was never advertised
+  // and calendar queries fell through to web grounding ("no reliable data").
+  // Write access (`calendar.events`) is intentionally NOT aliased — real writes
+  // still need the write scope.
+  ["https://www.googleapis.com/auth/calendar.readonly", "google.calendar.read"],
+  ["https://www.googleapis.com/auth/calendar.events.readonly", "google.calendar.read"],
+  ["https://www.googleapis.com/auth/calendar.calendarlist.readonly", "google.calendar.read"],
+  ["https://www.googleapis.com/auth/calendar.events.freebusy", "google.calendar.read"],
 ]);
 
 function canonicalOauthScope(

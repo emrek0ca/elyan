@@ -36,7 +36,10 @@ const QUEUE_RECOVERY_INTERVAL_MS = 30_000;
 const QUEUE_DEADLINE_SWEEP_INTERVAL_MS = 5_000;
 const QUEUE_OPERATION_TIMEOUT_MS = 3_000;
 const CHAT_ADMISSION_SLOT_KEY = "chat-generation:admission:active-v1";
-const CHAT_ADMISSION_SLOT_TTL_MS = 60 * 60_000;
+// Backstop for a slot whose task crashed without releasing. Kept well above any
+// single chat generation but far below the previous 60 min, so a stuck task
+// frees its slot in minutes instead of locking capacity for an hour.
+const CHAT_ADMISSION_SLOT_TTL_MS = 10 * 60_000;
 
 type QueueResources = {
   primary: Queue<ChatGenerationJobData>;
@@ -192,18 +195,30 @@ export async function reserveChatGenerationAdmission(
   app: FastifyInstance,
   taskId: string,
 ): Promise<"accepted" | "full" | "unavailable"> {
+  // Admission is soft backpressure, not a correctness gate: the BullMQ queue and
+  // worker concurrency are the real limits. A transient Redis blip must never
+  // deny a chat. So we degrade gracefully — when Redis is momentarily
+  // unusable we fall back to the store's per-process in-memory slot pool
+  // (requireRedis=false) instead of failing closed, and any hard error or
+  // missing store admits the request rather than returning "unavailable".
   const store = app.services?.reliability?.store;
-  if (!store) return "unavailable";
+  if (!store) return "accepted";
   const reservation = await store
     .tryAcquireExpiringSlot(
       CHAT_ADMISSION_SLOT_KEY,
       taskId,
       getChatGenerationQueueLimits(app).globalBacklogMax,
       CHAT_ADMISSION_SLOT_TTL_MS,
-      true,
+      false,
     )
-    .catch(() => null);
-  if (!reservation) return "unavailable";
+    .catch((error) => {
+      app.log.warn(
+        { error: error instanceof Error ? error.message : "admission_error", taskId },
+        "chat admission slot check failed; admitting request (fail-open)",
+      );
+      return null;
+    });
+  if (!reservation) return "accepted";
   return reservation.allowed ? "accepted" : "full";
 }
 

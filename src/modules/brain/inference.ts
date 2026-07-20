@@ -7626,6 +7626,24 @@ export async function generateSharedBrainReply(
           const hasUsableToolResult = toolLoop.results.some(
             (toolResult) => toolResult.ok,
           );
+          // A successful connector/source-typed answer is authoritative data,
+          // not low-confidence web retrieval. Drop the Self-RAG caution chip so
+          // it does not undercut a clean connector result (it was bleeding onto
+          // mail/calendar turns that also happened to run retrieval).
+          if (hasUsableToolResult) {
+            const withoutLowConfidenceChip = assistantMetadataBlocks.filter(
+              (block) =>
+                String(
+                  (block as { stableBlockId?: unknown }).stableBlockId ?? "",
+                ) !== "retrieval_low_confidence",
+            );
+            if (
+              withoutLowConfidenceChip.length !== assistantMetadataBlocks.length
+            ) {
+              assistantMetadataBlocks = withoutLowConfidenceChip;
+              result.metadata.blocks = withoutLowConfidenceChip;
+            }
+          }
           if (hasUsableToolResult) {
             const refinementStartedAt = Date.now();
             // Bloklar refinement'tan ÖNCE hesaplanır: liste-şekilli sonuçlar

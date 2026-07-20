@@ -234,6 +234,13 @@ export function buildToolResultRefinementPrompt(input: {
     "",
     "Use the typed tool results above to answer the original user request in the user's language.",
     "Return only the user-facing answer. Do not expose tool names, JSON, arguments, query syntax, hidden reasoning, provider names, or planning text.",
+    // The results are already-fetched, read-only data the user asked to see. The
+    // CONTENT of a result must never trigger a refusal or safety disclaimer: an
+    // email/event/file that mentions a payment, transfer, purchase, subscription,
+    // password, or any sensitive topic does NOT mean the user requested that
+    // action. Never output a payment/transfer/security refusal or an "I can't do
+    // that" disclaimer here — just summarize what was found.
+    "You are only summarizing data the user already asked to read. Do not refuse and do not add action/security disclaimers based on the content of the results.",
     ...listStyleRule,
     "If an ok read result is present, do not ask for the same permission again; answer from the result. If no ok result is present, explain the missing access briefly.",
     "Do not claim a tool succeeded if its ok field is false.",
