@@ -166,8 +166,10 @@ test("evaluateAssistantBlockQuality reports duplicate, malformed, and fallback s
       rows: [["2024", "360.000 TL"]],
     },
     {
+      // Same stableBlockId as table-a → a genuine duplicate the quality metric
+      // must flag (the id-first dedup treats distinct ids as distinct blocks).
       type: "table",
-      stableBlockId: "table-b",
+      stableBlockId: "table-a",
       columns: ["Yıl", "Gelir"],
       rows: [["2024", "360.000 TL"]],
     },
@@ -195,7 +197,7 @@ test("evaluateAssistantBlockQuality reports duplicate, malformed, and fallback s
   });
 
   assert.equal(report.version, "elyan_block_quality.v1");
-  assert.equal(report.metrics.duplicateBlockCount, 1);
+  assert.equal(report.metrics.duplicateBlockCount, 2);
   assert.equal(report.metrics.unrequestedTableBlockCount, 1);
   assert.equal(report.metrics.contentBlockOverlapCount, 1);
   assert.ok(report.metrics.schemaInvalidBlockCount >= 2);

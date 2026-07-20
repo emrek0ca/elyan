@@ -166,9 +166,10 @@ test("semantic connector contract gate narrows on hint, keeps all on miss", () =
   );
   assert.equal(selected.length, 1);
   assert.match(selected[0] ?? "", /^gmail\.search\b/u);
-  // Reklamda olmayan bir ipucu aracı da listeyi boşaltmaz.
+  // Reklamda olmayan bir ipucu aracı da listeyi boşaltmaz (slack artık gerçek
+  // bir read aracı olduğu için daralma örneği olarak kullanılamaz).
   assert.deepEqual(
-    connectorContractsForSemanticReadHint(contracts, "slack.search"),
+    connectorContractsForSemanticReadHint(contracts, "linear.search"),
     contracts,
   );
 });

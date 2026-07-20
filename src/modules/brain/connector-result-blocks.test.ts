@@ -146,9 +146,12 @@ test("non-list and empty connector successes have deterministic fallbacks", () =
   assert.equal(
     connectorResultFallbackText([], [
       ok("gmail.read", {
+        messageId: "msg-1",
+        threadId: "thread-1",
         from: "Ali <ali@example.com>",
         subject: "Toplantı",
         body: "Yarın saat 10:00 için uygunum.",
+        receivedAt: "2026-07-19T10:00:00Z",
       }),
     ]),
     "Toplantı — Ali\n\nYarın saat 10:00 için uygunum.",

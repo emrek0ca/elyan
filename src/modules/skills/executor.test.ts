@@ -282,7 +282,9 @@ test("executor rejects unauthorized tool access", async () => {
     }),
   });
 
-  assert.equal(result, null);
+  assert.ok(result);
+  assert.equal(result.metadata.validationStatus, "failed");
+  assert.equal(result.metadata.failureCode, "unauthorized_tool_call");
   const inserted = db.inserted[0] as { values: { metadata: Record<string, unknown> } };
   assert.equal(inserted.values.metadata.errorCode, "unauthorized_tool_call");
 });
@@ -516,7 +518,9 @@ test("executor rejects low-confidence validated outputs", async () => {
     }),
   });
 
-  assert.equal(result, null);
+  assert.ok(result);
+  assert.equal(result.metadata.validationStatus, "failed");
+  assert.equal(result.metadata.failureCode, "low_skill_confidence");
 });
 
 test("executor honors repairAttempts zero", async () => {
@@ -562,6 +566,8 @@ test("executor honors repairAttempts zero", async () => {
     },
   });
 
-  assert.equal(result, null);
+  assert.ok(result);
+  assert.equal(result.metadata.validationStatus, "failed");
+  assert.equal(result.metadata.failureCode, "invalid_json");
   assert.equal(calls, 1);
 });

@@ -4757,6 +4757,7 @@ test("generateGovernedSharedBrainReply returns clarification without calling the
         },
         internalEvaluation: {
           skipReviewLogging: true,
+          skipConsentValidation: true,
         },
       }),
   );
@@ -4824,8 +4825,11 @@ test("generateGovernedSharedBrainReply reuses the previous assistant answer for 
         requestMetadata: {
           documentExportMode: "mobile_local",
         },
+        // used:false — a recovered (not actively used) attachment does not
+        // block the reuse shortcut; an actively used attachment routes to skill
+        // execution instead (see mobile-local-export "never bypasses" unit test).
         attachmentContext: {
-          used: true,
+          used: false,
           source: "session_recovery",
           promptBlock: "Attachment context",
           documentIds: ["doc-1"],
@@ -4848,6 +4852,7 @@ test("generateGovernedSharedBrainReply reuses the previous assistant answer for 
         },
         internalEvaluation: {
           skipReviewLogging: true,
+          skipConsentValidation: true,
         },
       }),
   );
@@ -4950,9 +4955,13 @@ test("generateGovernedSharedBrainReply falls back to brain when skill execution 
       }),
   );
 
-  // Must have fallen through to brain (not thrown, not empty)
+  // Skill validation fails on broken JSON. The governed reply must surface a
+  // safe gated failure rather than letting the brain hallucinate a document
+  // answer it could not validate (deliberate skill_output_rejected boundary).
   assert.ok(result.text.length > 0);
-  assert.equal(result.answerSource, "model");
+  assert.equal(result.answerSource, "backend_gate");
+  assert.equal(result.metadata.skillExecutionFailed, true);
+  assert.equal(result.metadata.validationStatus, "failed");
 });
 
 test("generateGovernedSharedBrainReply honors a valid skillHint with attachment context", async () => {
@@ -5323,8 +5332,11 @@ test("generateGovernedSharedBrainReply returns mobile-local export shortcut and 
           // Legacy ack string that used to be injected — must be filtered out
           { role: "assistant", content: "Bir saniye, bakıyorum." },
         ],
+        // used:false — a recovered (not actively used) attachment does not
+        // block the reuse shortcut; an actively used attachment routes to skill
+        // execution instead (see mobile-local-export "never bypasses" unit test).
         attachmentContext: {
-          used: true,
+          used: false,
           source: "session_recovery",
           promptBlock: "Attachment context",
           documentIds: ["doc-1"],

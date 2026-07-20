@@ -65,6 +65,8 @@ test("buildResolvedAttachmentIntentPromptBlock only emits when attachment/export
       "- preserve_numbers: false",
       "- preserve_user_phrases: false",
       "- requires_structured_document: false",
+      "- content_authority: use the current attachment context as the only primary document source; never substitute a previous assistant reply, greeting, loading message, rolling summary, or memory for attachment content",
+      "- completion_contract: emit the complete requested typed document content; never emit preparation/status prose as document content",
       "Follow this resolved intent unless the user clearly changes the goal.",
     ].join("\n"),
   );
