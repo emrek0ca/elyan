@@ -255,6 +255,10 @@ const envSchema = z.object({
   // Emits a user-visible `tool_call` telemetry block (which tool ran, how long,
   // what it found) alongside connector data blocks. Set false to hide it.
   ELYAN_TOOL_CALL_BLOCK_ENABLED: booleanFlag(true),
+  // Hard-blocks every reply until the user grants AI-data-sharing consent.
+  // OFF by default: the in-app consent flow is not wired yet, so enforcing it
+  // walls off all answers. Re-enable once the consent UX ships.
+  ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED: booleanFlag(false),
   ELYAN_PROACTIVE_ENGINE_ENABLED: booleanFlag(false),
   ELYAN_CLOUD_VISION_ENABLED: booleanFlag(true),
   ELYAN_COST_GUARD_ENABLED: booleanFlag(false),
@@ -410,6 +414,7 @@ export type AppEnv = ParsedEnv & {
   ELYAN_MCP_SDK_ENABLED: boolean;
   ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED: boolean;
   ELYAN_TOOL_CALL_BLOCK_ENABLED: boolean;
+  ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED: boolean;
   ELYAN_PROACTIVE_ENGINE_ENABLED: boolean;
   ELYAN_CLOUD_VISION_ENABLED: boolean;
   ELYAN_COST_GUARD_ENABLED: boolean;
@@ -600,6 +605,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED:
       parsed.ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED,
     ELYAN_TOOL_CALL_BLOCK_ENABLED: parsed.ELYAN_TOOL_CALL_BLOCK_ENABLED,
+    ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED:
+      parsed.ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED,
     ELYAN_PROACTIVE_ENGINE_ENABLED: parsed.ELYAN_PROACTIVE_ENGINE_ENABLED,
     ELYAN_CLOUD_VISION_ENABLED: parsed.ELYAN_CLOUD_VISION_ENABLED,
     ELYAN_COST_GUARD_ENABLED: parsed.ELYAN_COST_GUARD_ENABLED,

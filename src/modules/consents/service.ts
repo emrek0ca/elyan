@@ -186,6 +186,13 @@ export async function assertAiDataSharingConsent(
   app: FastifyInstance,
   userId: string,
 ) {
+  // Flag-gated and OFF by default. The in-app consent flow is not wired yet, so
+  // enforcing this hard 403 blocked EVERY reply ("Veri paylaşım izinleri
+  // nedeniyle bu yanıt tekrar denenemiyor"). Re-enable with
+  // ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED=true once the consent UX ships.
+  if (app.config.ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED !== true) {
+    return;
+  }
   const status = await getConsentStatus(app, userId);
   if (!status.aiDataSharing.granted) {
     throw createAiDataSharingConsentRequiredError();
