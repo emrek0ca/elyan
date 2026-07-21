@@ -52,8 +52,11 @@ test("buildElyanVoiceProfilePromptBlock makes warmth language-agnostic", () => {
   });
 
   assert.match(block, /every other language/u);
-  assert.match(block, /very warm, close, sincere/u);
-  assert.match(block, /teaching-oriented/u);
+  // Canlı persona: sıcak + hafif geveze + espirili; ciddiyette oyunculuk biter.
+  assert.match(block, /slightly chatty close friend/u);
+  assert.match(block, /feel ALIVE/u);
+  assert.match(block, /drop ALL playfulness instantly on serious/u);
+  assert.match(block, /never in made-up facts/u);
 });
 
 test("sanitizeFinalAssistantResponse removes unsupported current numeric claims", () => {
