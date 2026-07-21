@@ -25,6 +25,14 @@ test("extractResponseText reads Claude content arrays and chat choices", () => {
     }),
     "Chat answer",
   );
+  assert.equal(
+    extractResponseText("groq", {
+      choices: [
+        { message: { content: [{ type: "text", text: "  Array answer  " }] } },
+      ],
+    }),
+    "Array answer",
+  );
 });
 
 test("extractResponseText reads Ollama response and message content", () => {
@@ -32,6 +40,50 @@ test("extractResponseText reads Ollama response and message content", () => {
   assert.equal(
     extractResponseText("ollama", { message: { content: "  chat  " } }),
     "chat",
+  );
+});
+
+test("extractResponseText reads Gemini native candidates", () => {
+  assert.equal(
+    extractResponseText("gemini", {
+      candidates: [
+        {
+          content: {
+            parts: [{ text: "  Merhaba." }],
+          },
+        },
+      ],
+    }),
+    "Merhaba.",
+  );
+});
+
+test("extractResponseText never exposes thought or reasoning parts", () => {
+  assert.equal(
+    extractResponseText("gemini", {
+      candidates: [{
+        content: {
+          parts: [
+            { thought: true, text: "private chain of thought" },
+            { text: "Visible answer" },
+          ],
+        },
+      }],
+    }),
+    "Visible answer",
+  );
+  assert.equal(
+    extractResponseText("groq", {
+      choices: [{
+        message: {
+          content: [
+            { type: "reasoning", text: "private reasoning" },
+            { type: "output_text", text: "Public answer" },
+          ],
+        },
+      }],
+    }),
+    "Public answer",
   );
 });
 

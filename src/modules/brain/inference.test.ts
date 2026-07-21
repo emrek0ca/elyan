@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import sharp from "sharp";
 import { AppError } from "../../lib/errors.js";
+import { encryptJson } from "../../lib/crypto-seal.js";
 import { brainMemoryEpisodes, proactiveTriggers } from "../../db/schema.js";
 import { getCircuitState } from "../../lib/reliability/circuit-breaker.js";
 import { ReliabilityStore } from "../../lib/reliability/redis.js";
@@ -3720,6 +3721,188 @@ test("generateGovernedSharedBrainReply serves cheap social turns without a provi
   );
 });
 
+test("generateGovernedSharedBrainReply serves Turkish how-are-you slang without a provider call", async () => {
+  const app = {
+    db: createQuotaReadyDb([]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      GROQ_API_KEY: "must-not-be-used",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_COST_GUARD_ENABLED: false,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      throw new Error(`Unexpected provider request: ${url}`);
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "11111111-1111-4111-8111-111111111111",
+        prompt: "Naber yavrum",
+        route: "shared_brain",
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "safe chat",
+          intent: "normal_chat",
+          confidence: 0.98,
+          requiredRuntime: "server",
+          privacyLevel: "low",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
+        internalEvaluation: {
+          skipReviewLogging: true,
+          skipUsageValidation: true,
+          skipConsentValidation: true,
+        },
+      }),
+  );
+
+  assert.equal(result.answerSource, "backend_gate");
+  assert.equal(result.model, "elyan.cheap_social_turn");
+  assert.equal(result.text, "İyiyim, buradayım. Sen nasılsın?");
+  assert.equal(result.metadata.modelCallCount, 0);
+});
+
+test("generateGovernedSharedBrainReply executes an advertised recent Drive read without a provider", async () => {
+  const tokenEnv = {
+    TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64url"),
+  };
+  const connection = {
+    id: "connection-drive",
+    appId: "google-drive",
+    provider: "google",
+    status: "connected",
+    scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+    capabilities: ["drive"],
+    updatedAt: new Date("2026-07-21T00:00:00.000Z"),
+  };
+  const credential = {
+    id: "credential-drive",
+    encryptedPayload: encryptJson(tokenEnv as never, {
+      accessToken: "drive-test-token",
+      refreshToken: null,
+    }),
+    expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+  };
+  const app = {
+    db: new FakeDb([[connection], [credential]]),
+    config: {
+      ...tokenEnv,
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_CONNECTOR_TOOLS_ENABLED: true,
+      ELYAN_TOOL_CALL_BLOCK_ENABLED: false,
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      GROQ_API_KEY: "must-not-be-used",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (url.startsWith("https://www.googleapis.com/drive/v3/files")) {
+        const parsed = new URL(url);
+        assert.equal(parsed.searchParams.get("orderBy"), "modifiedTime desc");
+        assert.equal(parsed.searchParams.get("pageSize"), "1");
+        return new Response(
+          JSON.stringify({
+            files: [
+              {
+                id: "file-1",
+                name: "En güncel rapor.docx",
+                mimeType:
+                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                modifiedTime: "2026-07-20T20:30:00.000Z",
+                webViewLink: "https://drive.google.com/file/d/file-1/view",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`Unexpected provider request: ${url}`);
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "11111111-1111-4111-8111-111111111111",
+        taskId: "task-drive-recent",
+        prompt: "Drive da son değişen dosya",
+        route: "shared_brain",
+        connectorToolContracts: [
+          "drive.search {query:string, limit?:1..20} — search Drive files",
+        ],
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: ["drive"],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "authorized read-only connector",
+          intent: "normal_chat",
+          confidence: 0.99,
+          requiredRuntime: "server",
+          privacyLevel: "medium",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
+        internalEvaluation: {
+          skipReviewLogging: true,
+          skipUsageValidation: true,
+          skipConsentValidation: true,
+        },
+      }),
+  );
+
+  assert.equal(result.answerSource, "backend_gate");
+  assert.equal(result.model, "elyan.deterministic_connector_read");
+  assert.equal(result.metadata.modelCallCount, 0);
+  assert.equal(result.metadata.connectorTool, "drive.search");
+  assert.equal(result.metadata.connectorToolSuccessCount, 1);
+  const blocks = result.metadata.blocks as Array<Record<string, unknown>>;
+  const driveBlock = blocks.find((block) => block.type === "drive_files");
+  assert.ok(driveBlock);
+  const files = (driveBlock.data as { files?: unknown[] }).files ?? [];
+  assert.equal(files.length, 1);
+});
+
 test("generateGovernedSharedBrainReply records claim confidence metadata in shadow mode", async () => {
   const inserted: unknown[] = [];
   const app = {
@@ -4469,6 +4652,174 @@ test("generateSharedBrainReply marks provider failures as transient", async () =
       return true;
     },
   );
+});
+
+test("generateSharedBrainReply keeps policy-only provider exhaustion non-retryable", async () => {
+  const app = {
+    db: createQuotaReadyDb([]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "gemini",
+      ELYAN_SHARED_BRAIN_BASE_URL:
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+      ELYAN_SHARED_BRAIN_MODEL: "gemini-3.1-flash-lite",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "gemini-3.1-flash-lite",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      GEMINI_API_KEY: "must-not-be-used",
+      GEMINI_BASE_URL:
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+      GEMINI_FAST_MODEL: "gemini-3.1-flash-lite",
+      GEMINI_FREE_ONLY: false,
+      GEMINI_PAID_FALLBACK_ENABLED: true,
+      GEMINI_PAID_DATA_PROCESSING_ATTESTED: true,
+    },
+    services: {
+      reliability: undefined,
+    },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      withMockedFetch(
+        async (input: RequestInfo | URL) => {
+          const url =
+            typeof input === "string"
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+          throw new Error(`Policy-blocked provider must not be called: ${url}`);
+        },
+        async () =>
+          generateSharedBrainReply(app as never, {
+            userId: "user-1",
+            prompt: "Bu metni kısaca özetle",
+            route: "shared_brain",
+            workload: "mobile_chat_fast",
+            providerDataSharingAuthorized: false,
+            internalEvaluation: {
+              skipUsageValidation: true,
+              skipConsentValidation: true,
+              skipInvocationLogging: true,
+              skipReviewLogging: true,
+            },
+          }),
+      ),
+    (error: unknown) => {
+      assert.equal(error instanceof AppError, true);
+      const details = ((error as AppError).details ?? {}) as Record<
+        string,
+        unknown
+      >;
+      assert.equal(details.failureClass, "policy_blocked");
+      assert.equal(details.transient, false);
+      assert.equal(details.retrySuggested, false);
+      return true;
+    },
+  );
+});
+
+test("fallback provider stage succeeds with configured free-only Gemini and no paid flags", async () => {
+  const store = new ReliabilityStore({
+    REDIS_URL: "",
+    RELIABILITY_REDIS_REQUIRED: false,
+  });
+  const app = {
+    db: new FakeDb([], []),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      GEMINI_API_KEY: "free-key",
+      GEMINI_BASE_URL:
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+      GEMINI_FAST_MODEL: "gemini-3.1-flash-lite",
+      GEMINI_TEXT_MODEL: "gemini-3.1-flash-lite",
+      GEMINI_FREE_ONLY: true,
+      ELYAN_GEMINI_FREE_FEATURES_ENABLED: true,
+      GEMINI_FREE_DATA_USAGE_ATTESTED: true,
+      GEMINI_FREE_MODEL_ALLOWLIST: "gemini-3.1-flash-lite",
+      GEMINI_FREE_DAILY_REQUEST_LIMIT: 1_000,
+      GEMINI_FREE_USER_DAILY_REQUEST_LIMIT: 100,
+      GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT: 1_000_000,
+      GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT: 100_000,
+      GEMINI_PAID_FALLBACK_ENABLED: false,
+      GEMINI_PAID_DATA_PROCESSING_ATTESTED: false,
+    },
+    services: { reliability: { store } },
+    log: {
+      info() {},
+      warn() {},
+      debug() {},
+    },
+  };
+
+  try {
+    const result = await withMockedFetch(
+      async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        assert.equal(url.endsWith("/chat/completions"), true);
+        assert.match(url, /generativelanguage\.googleapis\.com/u);
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: "Gemini ücretsiz fallback çalıştı.",
+                },
+                finish_reason: "stop",
+              },
+            ],
+            usage: {
+              prompt_tokens: 20,
+              completion_tokens: 8,
+              total_tokens: 28,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+      async () =>
+        generateSharedBrainReply(app as never, {
+          userId: "user-1",
+          prompt: "Kısa bir selamlama yaz",
+          route: "shared_brain",
+          workload: "mobile_chat_fast",
+          providerAllowlist: ["gemini"],
+          providerDataSharingAuthorized: false,
+          internalEvaluation: {
+            skipUsageValidation: true,
+            skipConsentValidation: true,
+            skipInvocationLogging: true,
+            skipReviewLogging: true,
+          },
+        }),
+    );
+
+    assert.equal(result.provider, "gemini");
+    assert.equal(result.model, "gemini-3.1-flash-lite");
+    assert.equal(result.text, "Gemini ücretsiz fallback çalıştı.");
+  } finally {
+    await store.close();
+  }
 });
 
 test("Groq provider circuit opens after three distinct model outage failures", async () => {

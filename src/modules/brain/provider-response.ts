@@ -9,6 +9,31 @@ export const STREAM_CONTINUATION_DIRECTIVE =
 export const STREAM_CONTINUATION_MAX_HOPS = 2;
 const STREAM_CONTINUATION_MIN_TOKENS = 200;
 
+function readTextPart(value: unknown): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+  const record = value as Record<string, unknown>;
+  if (record.thought === true || record.reasoning === true) return "";
+  const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+  if (type && !["text", "output_text"].includes(type)) return "";
+  const text = record.text;
+  return typeof text === "string" && text.trim() ? text.trim() : "";
+}
+
+function readTextParts(value: unknown): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value.map(readTextPart).filter(Boolean).join("\n").trim();
+}
+
 export function extractResponseText(
   provider: SharedBrainProvider | string,
   payload: unknown,
@@ -19,17 +44,9 @@ export function extractResponseText(
 
   const record = payload as Record<string, unknown>;
   if (provider === "claude") {
-    const content = record.content;
-    if (Array.isArray(content)) {
-      for (const item of content) {
-        if (!item || typeof item !== "object" || Array.isArray(item)) {
-          continue;
-        }
-        const text = (item as Record<string, unknown>).text;
-        if (typeof text === "string" && text.trim()) {
-          return text.trim();
-        }
-      }
+    const text = readTextParts(record.content);
+    if (text) {
+      return text;
     }
   }
 
@@ -42,8 +59,9 @@ export function extractResponseText(
       const message = (choice as Record<string, unknown>).message;
       if (message && typeof message === "object" && !Array.isArray(message)) {
         const content = (message as Record<string, unknown>).content;
-        if (typeof content === "string" && content.trim()) {
-          return content.trim();
+        const text = readTextParts(content);
+        if (text) {
+          return text;
         }
       }
     }
@@ -57,8 +75,26 @@ export function extractResponseText(
   const message = record.message;
   if (message && typeof message === "object" && !Array.isArray(message)) {
     const content = (message as Record<string, unknown>).content;
-    if (typeof content === "string" && content.trim()) {
-      return content.trim();
+    const text = readTextParts(content);
+    if (text) {
+      return text;
+    }
+  }
+
+  const candidates = record.candidates;
+  if (Array.isArray(candidates)) {
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+        continue;
+      }
+      const content = (candidate as Record<string, unknown>).content;
+      if (!content || typeof content !== "object" || Array.isArray(content)) {
+        continue;
+      }
+      const text = readTextParts((content as Record<string, unknown>).parts);
+      if (text) {
+        return text;
+      }
     }
   }
 

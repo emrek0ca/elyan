@@ -6,15 +6,160 @@ import {
   buildRuntimeTaskDispatchEnvelope,
   buildRouteDecisionLogEntry,
   buildAssistantRevisionMetadata,
+  createChatQueueUnavailableError,
+  createDurableChatMediaInputRequiredError,
   createTask,
   isRemoteMcpRouteDecisionStale,
   normalizeRevisionComparableText,
   readServerBrainCompletionMetadata,
+  resolveSharedBrainChatDispatchPolicy,
+  restoreQueuedEphemeralVisionCarrier,
   stripPromptEchoFromAssistantText,
   reconcileStaleRuntimeTasks,
   summarizeToolFlowForTrace,
   updateTaskFromRuntime,
 } from "./service.js";
+
+test("shared-brain chat uses the durable queue whenever it is configured", () => {
+  const queueApp = {
+    config: {
+      ELYAN_CHAT_QUEUE_ENABLED: true,
+      REDIS_URL: "redis://127.0.0.1:6379",
+    },
+  } as never;
+  assert.equal(
+    resolveSharedBrainChatDispatchPolicy(queueApp, {
+      isSharedBrain: true,
+      useFastSharedBrainFlow: true,
+    }),
+    "durable_queue",
+  );
+  assert.equal(
+    resolveSharedBrainChatDispatchPolicy(queueApp, {
+      isSharedBrain: true,
+      useFastSharedBrainFlow: true,
+      ephemeralVision: {
+        version: 2,
+        retention: "request_ephemeral",
+        privacy: {
+          metadataStripped: true,
+          userAuthorizedCloud: true,
+          localSensitivity: "personal",
+        },
+        inputRefs: [
+          {
+            inputRef: "x".repeat(32),
+            name: "image.png",
+            contentType: "image/png",
+            byteLength: 42,
+            expiresAt: "2030-01-01T00:00:00.000Z",
+          },
+        ],
+        images: [],
+      },
+    }),
+    "durable_queue",
+  );
+});
+
+test("shared-brain chat uses direct execution only when the queue flag is disabled", () => {
+  assert.equal(
+    resolveSharedBrainChatDispatchPolicy(
+      {
+        config: {
+          ELYAN_CHAT_QUEUE_ENABLED: false,
+          REDIS_URL: "redis://127.0.0.1:6379",
+        },
+      } as never,
+      { isSharedBrain: true, useFastSharedBrainFlow: true },
+    ),
+    "direct",
+  );
+  assert.equal(
+    resolveSharedBrainChatDispatchPolicy(
+      {
+        config: {
+          ELYAN_CHAT_QUEUE_ENABLED: true,
+          REDIS_URL: undefined,
+        },
+      } as never,
+      { isSharedBrain: true, useFastSharedBrainFlow: true },
+    ),
+    "reject_queue_unavailable",
+  );
+  const error = createChatQueueUnavailableError();
+  assert.equal(error.statusCode, 503);
+  assert.equal(error.code, "chat_queue_unavailable");
+  assert.deepEqual(error.details, {
+    transient: true,
+    retrySuggested: true,
+    failureClass: "queue_unavailable",
+  });
+});
+
+test("legacy V1 inline vision fails closed instead of bypassing the durable queue", () => {
+  assert.equal(
+    resolveSharedBrainChatDispatchPolicy(
+      {
+        config: {
+          ELYAN_CHAT_QUEUE_ENABLED: true,
+          REDIS_URL: "redis://127.0.0.1:6379",
+        },
+      } as never,
+      {
+        isSharedBrain: true,
+        useFastSharedBrainFlow: true,
+        ephemeralVision: {
+          version: 1,
+          retention: "request_ephemeral",
+          privacy: {
+            metadataStripped: true,
+            userAuthorizedCloud: true,
+            localSensitivity: "personal",
+          },
+          images: [
+            {
+              imageId: "image-1",
+              kind: "full_frame",
+              mimeType: "image/png",
+              base64Data: "AAAA",
+              width: 1,
+              height: 1,
+            },
+          ],
+        },
+      },
+    ),
+    "reject_legacy_inline_vision",
+  );
+  const error = createDurableChatMediaInputRequiredError();
+  assert.equal(error.statusCode, 422);
+  assert.equal(error.code, "durable_chat_media_input_required");
+  assert.deepEqual(error.details, {
+    acceptedMediaInputVersion: 2,
+    transient: false,
+    retrySuggested: false,
+  });
+});
+
+test("queued V2 vision is reconstructed from persisted safe media references", () => {
+  const carrier = restoreQueuedEphemeralVisionCarrier({
+    mediaInputRefs: [
+      {
+        inputRef: "r".repeat(32),
+        name: "image.webp",
+        contentType: "image/webp",
+        byteLength: 64,
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      },
+    ],
+    mediaInputPrivacy: { localSensitivity: "sensitive" },
+  });
+  assert.equal(carrier?.version, 2);
+  assert.equal(carrier?.inputRefs.length, 1);
+  assert.equal(carrier?.privacy.localSensitivity, "sensitive");
+  assert.deepEqual(carrier?.images, []);
+});
 
 test("revision comparison ignores whitespace-only polish differences", () => {
   // Nihai hattaki cilalama her mesajı "düzeltilmiş" göstermemeli.

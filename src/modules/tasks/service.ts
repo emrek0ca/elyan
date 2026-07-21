@@ -52,6 +52,7 @@ import { extractClientAttachments } from "../brain/document-types.js";
 import {
   clearEphemeralVisionCarrier,
   countDistinctEphemeralImages,
+  ephemeralVisionCarrierSchema,
   type EphemeralVisionCarrier,
 } from "../brain/ephemeral-vision.js";
 import { buildDocumentContextBlock } from "../brain/document-context.js";
@@ -82,6 +83,7 @@ import {
   readCanonicalConnectorWriteApprovalCall,
 } from "../brain/connector-write-approvals.js";
 import {
+  materializeLegacyVisionForDurableQueue,
   releaseMediaInputsFromMetadata,
   resolveMediaInput,
   resolveMediaInputSources,
@@ -422,9 +424,93 @@ function bindAuthorizedMediaInputRefs(
       byteLength: ref.byteLength,
       expiresAt: ref.expiresAt,
     }));
+    metadata.mediaInputPrivacy = {
+      localSensitivity: carrier.privacy.localSensitivity,
+    };
     return;
   }
   delete metadata.mediaInputRefs;
+  delete metadata.mediaInputPrivacy;
+}
+
+export type SharedBrainChatDispatchPolicy =
+  | "not_applicable"
+  | "direct"
+  | "durable_queue"
+  | "reject_queue_unavailable"
+  | "reject_legacy_inline_vision";
+
+export function createChatQueueUnavailableError(): AppError {
+  return new AppError(
+    503,
+    "chat_queue_unavailable",
+    "Yanıt sıraya alınamadı. Lütfen biraz sonra yeniden dene.",
+    {
+      transient: true,
+      retrySuggested: true,
+      failureClass: "queue_unavailable",
+    },
+  );
+}
+
+export function createDurableChatMediaInputRequiredError(): AppError {
+  return new AppError(
+    422,
+    "durable_chat_media_input_required",
+    "Görseli güvenli medya yükleme akışıyla yeniden ekleyip tekrar dene.",
+    {
+      acceptedMediaInputVersion: 2,
+      transient: false,
+      retrySuggested: false,
+    },
+  );
+}
+
+export function resolveSharedBrainChatDispatchPolicy(
+  app: FastifyInstance,
+  input: {
+    isSharedBrain: boolean;
+    useFastSharedBrainFlow: boolean;
+    ephemeralVision?: EphemeralVisionCarrier;
+  },
+): SharedBrainChatDispatchPolicy {
+  if (!input.isSharedBrain || !input.useFastSharedBrainFlow) {
+    return "not_applicable";
+  }
+  if (app.config.ELYAN_CHAT_QUEUE_ENABLED !== true) {
+    return "direct";
+  }
+  if (!isChatGenerationQueueEnabled(app)) return "reject_queue_unavailable";
+  if (input.ephemeralVision?.version === 1) {
+    return "reject_legacy_inline_vision";
+  }
+  return "durable_queue";
+}
+
+export function restoreQueuedEphemeralVisionCarrier(
+  metadata: Record<string, unknown>,
+): EphemeralVisionCarrier | undefined {
+  if (!Array.isArray(metadata.mediaInputRefs) || metadata.mediaInputRefs.length === 0) {
+    return undefined;
+  }
+  const privacy = readRecord(metadata.mediaInputPrivacy);
+  const sensitivity = String(privacy?.localSensitivity ?? "personal");
+  const localSensitivity = (
+    ["none", "personal", "sensitive", "restricted"] as const
+  ).includes(sensitivity as "none" | "personal" | "sensitive" | "restricted")
+    ? (sensitivity as "none" | "personal" | "sensitive" | "restricted")
+    : "personal";
+  const parsed = ephemeralVisionCarrierSchema.safeParse({
+    version: 2,
+    retention: "request_ephemeral",
+    privacy: {
+      metadataStripped: true,
+      userAuthorizedCloud: true,
+      localSensitivity,
+    },
+    inputRefs: metadata.mediaInputRefs,
+  });
+  return parsed.success ? parsed.data : undefined;
 }
 
 type TaskReadyCallback = (input: {
@@ -4047,11 +4133,17 @@ async function completeServerBrainTask(
     task: shapeTaskFeedItem(updatedTask),
   });
 
-  await syncChatTaskLifecycle(app, {
-    originalTask: task,
-    updatedTask,
-    message: input.responseText,
-  });
+  const chatStreamOwnsAssistantFinal =
+    finalTaskStatus === "completed" &&
+    input.route === "shared_brain" &&
+    extractChatStreamingMetadata(task) !== null;
+  if (!chatStreamOwnsAssistantFinal) {
+    await syncChatTaskLifecycle(app, {
+      originalTask: task,
+      updatedTask,
+      message: input.responseText,
+    });
+  }
 
   await releaseChatGenerationAdmission(app, updatedTask.id);
   if (finalTaskStatus === "completed") {
@@ -4254,7 +4346,25 @@ type SharedBrainChatTaskInput = {
   ephemeralVision?: EphemeralVisionCarrier;
   providerStage?: ChatGenerationProviderStage;
   deferTransientFailure?: boolean;
+  shouldAbort?: () => boolean | Promise<boolean>;
 };
+
+async function assertSharedBrainExecutionActive(
+  input: SharedBrainChatTaskInput,
+): Promise<void> {
+  if (input.shouldAbort && (await input.shouldAbort())) {
+    throw new AppError(
+      503,
+      "chat_generation_lease_lost",
+      "Yanıt güvenli şekilde yeniden deneniyor.",
+      {
+        transient: true,
+        retrySuggested: true,
+        failureClass: "queue_lease_lost",
+      },
+    );
+  }
+}
 
 async function processSharedBrainChatTask(
   app: FastifyInstance,
@@ -4262,6 +4372,7 @@ async function processSharedBrainChatTask(
 ) {
   const resumedQueueAttempt =
     input.providerStage != null && input.currentTask.startedAt != null;
+  let hydratedEphemeralVision: EphemeralVisionCarrier | undefined;
   try {
     /* Per-plan in-process rate check — C daemon token bucket, zero DB.
      * On limit: fail fast with rate_limited before expensive processing. */
@@ -4285,6 +4396,7 @@ async function processSharedBrainChatTask(
       taskId: input.currentTask.id,
       userId: input.userId,
     });
+    await assertSharedBrainExecutionActive(input);
     if (!resumedQueueAttempt) {
       await recordTaskLearningFromCreation(app, {
         userId: input.userId,
@@ -4339,11 +4451,30 @@ async function processSharedBrainChatTask(
       !Array.isArray(runningTask.payload)
         ? (runningTask.payload as Record<string, unknown>)
         : {};
+    try {
+      hydratedEphemeralVision = await resolveMediaInputVisionCarrier(
+        app,
+        input.userId,
+        input.ephemeralVision,
+      );
+    } catch (error) {
+      if (error instanceof AppError && error.statusCode >= 500) throw error;
+      throw new AppError(
+        410,
+        "media_input_unavailable",
+        "Görselin süresi dolmuş veya artık kullanılamıyor. Lütfen yeniden ekle.",
+        {
+          transient: false,
+          retrySuggested: false,
+          failureClass: "invalid_input",
+        },
+      );
+    }
     const attachmentContext = await resolveTaskAttachmentContext(
       app,
       runningPayload,
       input.prompt,
-      input.ephemeralVision,
+      hydratedEphemeralVision,
     );
 
     /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
@@ -4379,21 +4510,22 @@ async function processSharedBrainChatTask(
       attachmentContextUsed:
         attachmentContext?.used === true || clientDocCtx?.hasContent === true,
       hasVisionImage:
-        countDistinctEphemeralImages(input.ephemeralVision) > 0 ||
+        countDistinctEphemeralImages(hydratedEphemeralVision) > 0 ||
         Boolean(attachmentContext?.visionBlocks?.length),
       envelope: input.understanding.envelope,
     });
     /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
     // Prettier-ignore -- a source-level regression contract verifies this fast-path seam.
-    const sourceImages = hostedImageSources(input.ephemeralVision);
+    const sourceImages = hostedImageSources(hydratedEphemeralVision);
     const imageEditIntent = isHostedImageEditIntent(input.prompt);
     const imageEditNeedsSource =
-      imageEditIntent && countDistinctEphemeralImages(input.ephemeralVision) === 0;
+      imageEditIntent && countDistinctEphemeralImages(hydratedEphemeralVision) === 0;
     const imageGenerationRequested =
       isHostedImageGenerationRequest(input.prompt) ||
       imageEditIntent;
 
     if (imageGenerationRequested) {
+      await assertSharedBrainExecutionActive(input);
       const startedAtMs = Date.now();
       let imageStreamSeq = 0;
       let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -4739,15 +4871,14 @@ async function processSharedBrainChatTask(
     }
 
     const endInferenceStage = startStage("inference_total");
-    const inferenceVision = await resolveMediaInputVisionCarrier(
-      app,
-      input.userId,
-      input.ephemeralVision,
-    ).catch(() => undefined);
+    const inferenceVision = hydratedEphemeralVision;
     let queuedTaskAbortCached = false;
     let queuedTaskAbortCheckedAt = 0;
     const shouldAbortQueuedTask = input.providerStage
       ? async () => {
+          if (input.shouldAbort && (await input.shouldAbort())) {
+            return true;
+          }
           if (queuedTaskAbortCached) {
             return true;
           }
@@ -4892,6 +5023,7 @@ async function processSharedBrainChatTask(
         clearEphemeralVisionCarrier(inferenceVision);
       }
     });
+    await assertSharedBrainExecutionActive(input);
     endInferenceStage();
     // Grounding sonucu ancak burada kesinleşir. Politikayı güncelle ki nihai
     // metin ile akış metni aynı kurallardan geçsin.
@@ -5119,6 +5251,9 @@ async function processSharedBrainChatTask(
     }
     await finalizeSharedBrainChatFailure(app, input, error);
   } finally {
+    if (hydratedEphemeralVision !== input.ephemeralVision) {
+      clearEphemeralVisionCarrier(hydratedEphemeralVision);
+    }
     clearEphemeralVisionCarrier(input.ephemeralVision);
   }
 }
@@ -5437,13 +5572,32 @@ export async function processQueuedSharedBrainChatTask(
     taskId: string;
     userId: string;
     providerStage: ChatGenerationProviderStage;
+    shouldAbort?: () => boolean | Promise<boolean>;
   },
 ) {
   const snapshot = await getQueuedSharedBrainChatTask(app, input);
-  if (!snapshot || snapshot.terminal) {
+  if (!snapshot) {
+    return { processed: false, reason: "terminal_or_missing" as const };
+  }
+  if (snapshot.terminal) {
+    // A worker can crash after the task's terminal CAS but before the chat row
+    // is finalized. A BullMQ redelivery repairs that durable handoff without
+    // rerunning inference or producing a second assistant answer.
+    if (snapshot.task.status === "completed") {
+      const result = readRecord(snapshot.task.result);
+      await syncChatTaskLifecycle(app, {
+        originalTask: snapshot.task,
+        updatedTask: snapshot.task,
+        message: typeof result?.text === "string" ? result.text : undefined,
+      });
+    }
     return { processed: false, reason: "terminal_or_missing" as const };
   }
   const usageAccess = await getUserUsageAccessTruth(app.db, input.userId);
+  const queuedPayload = readRecord(snapshot.task.payload) ?? {};
+  const queuedVision = restoreQueuedEphemeralVisionCarrier(
+    getPayloadMetadata(queuedPayload),
+  );
   await processSharedBrainChatTask(app, {
     currentTask: snapshot.task,
     userId: input.userId,
@@ -5453,8 +5607,10 @@ export async function processQueuedSharedBrainChatTask(
     understanding: snapshot.understanding,
     planCode: usageAccess.planCode,
     brainProfile: usageAccess.brainProfile,
+    ephemeralVision: queuedVision,
     providerStage: input.providerStage,
     deferTransientFailure: true,
+    shouldAbort: input.shouldAbort,
   });
   return { processed: true, reason: "completed" as const };
 }
@@ -5653,11 +5809,29 @@ export async function createTask(
   const selectedDesktopOnline = isSharedBrain
     ? true
     : Boolean(targetDevice.device.isOnline);
-  const useDurableChatQueue =
-    isSharedBrain &&
-    useFastSharedBrainFlow &&
-    isChatGenerationQueueEnabled(app) &&
-    countDistinctEphemeralImages(input.ephemeralVision) === 0;
+  let chatDispatchPolicy = resolveSharedBrainChatDispatchPolicy(app, {
+    isSharedBrain,
+    useFastSharedBrainFlow,
+    ephemeralVision: input.ephemeralVision,
+  });
+  if (chatDispatchPolicy === "reject_legacy_inline_vision") {
+    input.ephemeralVision = await materializeLegacyVisionForDurableQueue(
+      app,
+      input.userId,
+      input.ephemeralVision,
+    );
+    bindAuthorizedMediaInputRefs(payloadMetadata, input.ephemeralVision);
+    chatDispatchPolicy = resolveSharedBrainChatDispatchPolicy(app, {
+      isSharedBrain,
+      useFastSharedBrainFlow,
+      ephemeralVision: input.ephemeralVision,
+    });
+  }
+  if (chatDispatchPolicy === "reject_queue_unavailable") {
+    clearEphemeralVisionCarrier(input.ephemeralVision);
+    throw createChatQueueUnavailableError();
+  }
+  const useDurableChatQueue = chatDispatchPolicy === "durable_queue";
   const idempotencyFingerprint = input.idempotencyKey
     ? createTaskFingerprint({
         targetDeviceId,
@@ -6059,8 +6233,7 @@ export async function createTask(
       assertTrialTaskQuotaAllowedFromUsage(taskQuota);
 
       const chatQueueAdmissionRequired =
-        sharedBrainRoute &&
-        useDurableChatQueue;
+        sharedBrainRoute && useDurableChatQueue;
 
       const activeCounts = await tx
         .select({
@@ -6088,8 +6261,8 @@ export async function createTask(
           );
         const admission = decideChatQueueAdmission(
           {
-            // The global limit is reserved atomically in Redis below. The
-            // existing per-user DB lock makes this count exact for one user.
+            // The global limit is reserved atomically in the reliability store;
+            // this transaction lock makes the per-user count authoritative.
             globalActive: 0,
             userActive: Number(userActiveCounts[0]?.count ?? 0),
           },
@@ -6257,8 +6430,7 @@ export async function createTask(
   }
   if (isSharedBrain && useFastSharedBrainFlow) {
     let dispatchedTask = currentTask;
-    const queueEligible = useDurableChatQueue;
-    if (queueEligible) {
+    if (useDurableChatQueue) {
       try {
         const enqueued = await enqueueSharedBrainChatTask(app, {
           taskId: currentTask.id,
@@ -6272,7 +6444,7 @@ export async function createTask(
             taskId: currentTask.id,
             userId: input.userId,
             phase: "queued",
-            message: "Yanıt sıraya alındı.",
+            message: "Yanıt hazırlanıyor.",
           })) ?? currentTask;
         clearEphemeralVisionCarrier(input.ephemeralVision);
       } catch {

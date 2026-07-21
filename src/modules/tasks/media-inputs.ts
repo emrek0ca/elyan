@@ -304,6 +304,44 @@ export async function storeMediaInput(
   };
 }
 
+/** Convert an authorized legacy inline carrier into the durable V2 media store. */
+export async function materializeLegacyVisionForDurableQueue(
+  app: FastifyInstance,
+  userId: string,
+  carrier: EphemeralVisionCarrier | undefined,
+): Promise<EphemeralVisionCarrier | undefined> {
+  if (!carrier || carrier.version === 2) return carrier;
+
+  try {
+    const inputRefs = await Promise.all(
+      carrier.images.map((image, index) =>
+        storeMediaInput(app, {
+          userId,
+          body: Buffer.from(image.base64Data, "base64"),
+          contentType: image.mimeType,
+          name: `${image.imageId || `legacy-image-${index + 1}`}.${
+            image.mimeType === "image/png"
+              ? "png"
+              : image.mimeType === "image/webp"
+                ? "webp"
+                : "jpg"
+          }`,
+        }),
+      ),
+    );
+    return {
+      version: 2,
+      retention: "request_ephemeral",
+      privacy: carrier.privacy,
+      inputRefs,
+      images: [] as never[],
+    };
+  } finally {
+    for (const image of carrier.images) image.base64Data = "";
+    carrier.images.length = 0;
+  }
+}
+
 export async function resolveMediaInput(app: FastifyInstance, inputRef: string, userId: string) {
   const payload = decodeToken(app, inputRef, userId);
   if (!payload) throw notFound("Media input not found");

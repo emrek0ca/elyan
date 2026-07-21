@@ -185,16 +185,16 @@ export async function seedRegistrationConsents(
 export async function assertAiDataSharingConsent(
   app: FastifyInstance,
   userId: string,
-) {
-  // Flag-gated and OFF by default. The in-app consent flow is not wired yet, so
-  // enforcing this hard 403 blocked EVERY reply ("Veri paylaşım izinleri
-  // nedeniyle bu yanıt tekrar denenemiyor"). Re-enable with
-  // ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED=true once the consent UX ships.
+): Promise<boolean> {
+  // The mobile consent flow is not a prerequisite until explicitly enabled.
+  // Keeping the gate flag-controlled preserves the security control without
+  // making a missing rollout flag block every normal chat request.
   if (app.config.ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED !== true) {
-    return;
+    return false;
   }
   const status = await getConsentStatus(app, userId);
   if (!status.aiDataSharing.granted) {
     throw createAiDataSharingConsentRequiredError();
   }
+  return true;
 }

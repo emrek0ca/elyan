@@ -43,7 +43,12 @@ import {
 } from "../quota/service.js";
 import { routeChatTurn } from "../routing-policy/service.js";
 import { resolveCommandTarget } from "../routing-policy/service.js";
-import { createTask, shapeTaskFeedItem } from "../tasks/service.js";
+import {
+  createChatQueueUnavailableError,
+  createTask,
+  resolveSharedBrainChatDispatchPolicy,
+  shapeTaskFeedItem,
+} from "../tasks/service.js";
 import {
   countDistinctEphemeralImages,
   type EphemeralVisionCarrier,
@@ -61,6 +66,7 @@ import {
   withAssistantBlocksMetadata,
 } from "./message-blocks.js";
 import { buildTaskTraceBlock } from "./task-trace.js";
+import { materializeLegacyVisionForDurableQueue } from "../tasks/media-inputs.js";
 
 const SHARED_BRAIN_CONVERSATION_MAX_MESSAGES = 14;
 const SHARED_BRAIN_CONVERSATION_MAX_TOKENS = 3200;
@@ -2022,6 +2028,23 @@ export async function createChatMessage(
       assertTrialTaskQuotaAllowedFromUsage(trialQuota);
     }
   }
+  if (routeDecision.route === "server_brain") {
+    const dispatchPolicy = resolveSharedBrainChatDispatchPolicy(app, {
+      isSharedBrain: true,
+      useFastSharedBrainFlow: true,
+      ephemeralVision: input.ephemeralVision,
+    });
+    if (dispatchPolicy === "reject_queue_unavailable") {
+      throw createChatQueueUnavailableError();
+    }
+    if (dispatchPolicy === "reject_legacy_inline_vision") {
+      input.ephemeralVision = await materializeLegacyVisionForDurableQueue(
+        app,
+        input.userId,
+        input.ephemeralVision,
+      );
+    }
+  }
   const sessionTargetDeviceId = resolveChatSessionTargetDeviceId(
     routeDecision,
     input.targetDeviceId,
@@ -2171,7 +2194,10 @@ export async function createChatMessage(
     routeDecision.route === "server_brain"
       ? buildSharedBrainAckText(effectiveWorkload)
       : "";
-  const assistantAckStatus = assistantAckText ? "running" : "queued";
+  const assistantAckStatus =
+    routeDecision.route === "server_brain" || assistantAckText
+      ? "running"
+      : "queued";
   const userMessageId = randomUUID();
   const assistantMessageId = randomUUID();
   const userMessageBlob = await app.services?.blobs?.storeText({
@@ -2237,7 +2263,6 @@ export async function createChatMessage(
     ...shapeChatMessageForResponse(assistantMessage),
     taskId: assistantMessage.taskId,
     status: assistantAckStatus,
-    content: assistantAckText,
   };
   let responseSession = session;
   let responseLastMessageAt = new Date();

@@ -272,6 +272,7 @@ import {
   providerHttpStatusClass,
   providerRetryDelayMs,
   readProviderRetryAfterMs,
+  summarizeProviderAttemptFailures,
   type ProviderAttemptFailure,
 } from "./provider-failure.js";
 import {
@@ -930,7 +931,241 @@ function buildCheapSocialTurnReply(
   if (/^(hey|selam|merhaba|mrb|slm|hi|hello)\b/i.test(lower)) {
     return name ? `Merhaba ${name}, buradayım.` : "Merhaba, buradayım.";
   }
+  if (
+    /^(?:naber|ne haber|nasılsın|nasilsin|nasıl gidiyor|nasil gidiyor|how are you|how(?:'|’)s it going)\b/iu.test(
+      lower,
+    )
+  ) {
+    return name
+      ? `İyiyim ${name}, buradayım. Sen nasılsın?`
+      : "İyiyim, buradayım. Sen nasılsın?";
+  }
   return null;
+}
+
+function deterministicDriveRecentRequest(
+  input: SharedBrainInferenceInput,
+): AgentToolRequest | null {
+  const prompt = input.prompt.replace(/\s+/g, " ").trim();
+  if (!prompt || prompt.length > 160) return null;
+  const sideEffectDetected =
+    input.routeDecision?.requiresApproval === true ||
+    input.routeDecision?.privacyClass === "side_effect" ||
+    input.understandingContext?.understandingEnvelope?.risk.side_effect === true;
+  if (sideEffectDetected) return null;
+  if (
+    /(?<!\p{L})(?:(?:sil|kaldır|tas[iı]|taşı|paylaş|gönder|yükle)\p{L}*|(?:delete|remove|move|share|send|upload)(?:s|ed|ing)?)(?!\p{L})/iu.test(
+      prompt,
+    )
+  ) {
+    return null;
+  }
+  const mentionsDrive =
+    /(?<!\p{L})drive(?:['’]?(?:da|de|daki|deki)|\s+(?:da|de))?(?!\p{L})/iu.test(
+      prompt,
+    );
+  const asksForRecent =
+    /(?<!\p{L})(?:en\s+son|son|en\s+yeni|yakın\s+zamanda|recent|latest|most\s+recently)(?:\s+\p{L}+){0,4}(?:değişen|degisen|düzenlenen|duzenlenen|güncellenen|guncellenen|yüklenen|yuklenen)?/iu.test(
+      prompt,
+    );
+  const mentionsFile =
+    /(?<!\p{L})(?:dosya(?:lar[iı]?)?|belge(?:ler[iı]?)?|doküman(?:lar[iı]?)?|dokuman(?:lar[iı]?)?|file(?:s)?|document(?:s)?)(?!\p{L})/iu.test(
+      prompt,
+    );
+  if (!mentionsDrive || !asksForRecent || !mentionsFile) return null;
+  const plural =
+    /(?<!\p{L})(?:dosyalar|belgeler|dokümanlar|dokumanlar|files|documents)(?!\p{L})/iu.test(
+      prompt,
+    );
+  return {
+    tool: "drive.search",
+    args: { query: "", limit: plural ? 10 : 1 },
+  };
+}
+
+async function resolveDeterministicConnectorContracts(
+  app: FastifyInstance,
+  input: SharedBrainInferenceInput,
+): Promise<string[]> {
+  if (input.connectorToolContracts !== undefined) {
+    return input.connectorToolContracts;
+  }
+  const workload =
+    input.workload ??
+    input.routeDecision?.selectedWorkload ??
+    DEFAULT_WORKLOAD;
+  if (
+    app.config?.ELYAN_CONNECTOR_TOOLS_ENABLED !== true ||
+    !CONNECTOR_TOOL_WORKLOADS.has(workload)
+  ) {
+    return [];
+  }
+  try {
+    const grants = await listConnectedCapabilityGrants(app, input.userId);
+    return connectorToolsForCapabilityGrants(
+      grants,
+      (provider, grantedScopes, requiredScopes) =>
+        missingOauthScopes(provider, grantedScopes, requiredScopes).length === 0,
+    ).map((entry) => entry.contract);
+  } catch (error) {
+    app.log.debug?.(
+      {
+        errorClass: error instanceof Error ? error.name : "unknown",
+      },
+      "deterministic connector contract resolution skipped",
+    );
+    return [];
+  }
+}
+
+async function tryGenerateDeterministicConnectorReadReply(
+  app: FastifyInstance,
+  input: SharedBrainInferenceInput,
+  routeDecision: CommandRouteDecision | null,
+  routeToolUseRequired: boolean,
+): Promise<GovernedSharedBrainReplyResult | null> {
+  const request = deterministicDriveRecentRequest(input);
+  if (!request) return null;
+  const contracts = await resolveDeterministicConnectorContracts(app, input);
+  const advertised = new Set(
+    contracts
+      .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
+      .filter((name): name is string => Boolean(name)),
+  );
+  const toolMetadata = getAgentToolMetadata(request.tool);
+  if (
+    !advertised.has(request.tool) ||
+    toolMetadata?.permission !== "read"
+  ) {
+    return null;
+  }
+
+  const workload =
+    input.workload ??
+    routeDecision?.selectedWorkload ??
+    DEFAULT_WORKLOAD;
+  let toolLoop;
+  try {
+    toolLoop = await runAgentToolLoop(app, {
+      context: {
+        userId: input.userId,
+        taskId: input.taskId ?? null,
+        sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+        workload,
+        allowStateWrites: false,
+        allowSideEffects: false,
+        shouldAbort: input.shouldAbort,
+      },
+      requests: [request],
+      maxRequests: 1,
+      budgetMs: 12_000,
+      plan: null,
+    });
+  } catch (error) {
+    app.log.debug?.(
+      {
+        errorClass: error instanceof Error ? error.name : "unknown",
+        tool: request.tool,
+      },
+      "deterministic connector read failed safely",
+    );
+    toolLoop = {
+      iterations: 1,
+      durationMs: 0,
+      timedOut: false,
+      results: [
+        {
+          tool: request.tool,
+          ok: false,
+          permission: "read" as const,
+          durationMs: 0,
+          output: null,
+          error: {
+            code: "tool_failed",
+            message: "Bağlı uygulama isteği tamamlanamadı.",
+          },
+        },
+      ],
+    };
+  }
+
+  const successful = toolLoop.results.some((result) => result.ok);
+  const connectorBlocks = successful
+    ? buildSourceTypedConnectorBlocks(toolLoop.results)
+    : [];
+  const failedTool = toolLoop.results.find((result) => !result.ok);
+  const text = successful
+    ? connectorResultFallbackText(connectorBlocks, toolLoop.results)
+    : connectorFailureReply(failedTool?.error?.code);
+  const toolCallBlock =
+    app.config.ELYAN_TOOL_CALL_BLOCK_ENABLED !== false
+      ? buildToolCallBlock(toolLoop.results)
+      : null;
+  const blocks = mergeAuthoritativeConnectorResultBlocks(
+    buildAssistantMessageBlocks(text),
+    [
+      ...connectorBlocks,
+      ...(toolCallBlock ? [toolCallBlock] : []),
+    ],
+  );
+  const result = buildBackendGateResult({
+    text,
+    providerModel: "elyan.deterministic_connector_read",
+    request: input,
+    routeDecision,
+    routeToolUseRequired,
+    gateRuleId: "deterministic_connector_read",
+    responseCode: successful
+      ? "deterministic_connector_read"
+      : "deterministic_connector_read_failed",
+    metadata: {
+      blocks,
+      cheapSocialTurn: false,
+      deterministicConnectorRead: true,
+      connectorRequested: true,
+      connectorTool: request.tool,
+      connectorToolResultCount: toolLoop.results.length,
+      connectorToolSuccessCount: toolLoop.results.filter((item) => item.ok)
+        .length,
+      connectorResultUsed: successful,
+      connectorErrorCode: failedTool?.error?.code ?? null,
+      connectorFailureKind: failedTool
+        ? connectorFailureKind(failedTool.error?.code)
+        : null,
+      toolRequestCount: 1,
+      toolLoopIterations: toolLoop.iterations,
+      toolMs: toolLoop.durationMs,
+      toolLoopTimedOut: toolLoop.timedOut,
+      ...(toolLoop.engineVersion
+        ? {
+            agentEngineVersion: toolLoop.engineVersion,
+            agentRunId: toolLoop.runId ?? null,
+            agentRunState: toolLoop.runState ?? null,
+          }
+        : {}),
+      toolResults: summarizeToolResultsForMetadata(toolLoop.results),
+      toolRefinementApplied: false,
+      toolRefinementSkippedReason: "deterministic_connector_read",
+    },
+  });
+  if (!input.internalEvaluation?.skipReviewLogging) {
+    await recordBrainInteractionReview(app, {
+      userId: input.userId,
+      taskId: input.taskId,
+      prompt: input.prompt,
+      routeDecision,
+      modelResponse: result.text,
+      evaluation: result.evaluation,
+      answerSource: "backend_gate",
+      gateRuleIds: result.gateRuleIds,
+      boundaryOutcome: result.boundaryOutcome,
+      selectedProfile: String(result.metadata.workload ?? DEFAULT_WORKLOAD),
+      latencyMs: toolLoop.durationMs,
+      toolCalls: [request.tool],
+      responseMetadata: result.metadata,
+    });
+  }
+  return result;
 }
 
 function buildBackendGateResult(input: {
@@ -4426,7 +4661,10 @@ export async function warmupSharedBrainForUser(
       },
     });
   } catch (error) {
-    app.log.debug({ error, userId }, "shared brain warmup skipped");
+    app.log.debug(
+      { errorClass: error instanceof Error ? error.name : "unknown" },
+      "shared brain warmup skipped",
+    );
   }
 }
 
@@ -5945,26 +6183,25 @@ export async function generateSharedBrainReply(
                     input.providerDataSharingAuthorized === true,
                 });
                 if (!permit.allowed) {
+                  const attemptFailure = buildProviderAttemptFailure({
+                    provider: candidate.provider,
+                    model: attemptedModel,
+                    error: {
+                      reason: `policy_blocked:${permit.mode}:${permit.reason}`,
+                      retryAfterMs: null,
+                    },
+                    attempt: retryIndex + 1,
+                  });
+                  attemptFailures.push(attemptFailure);
                   app.log.debug?.(
                     {
                       feature: geminiFreeFeature,
                       model: attemptedModel,
                       reason: permit.reason,
+                      failureClass: attemptFailure.failureClass,
                     },
                     "Gemini candidate skipped by data policy",
                   );
-                  if (permit.mode === "paid") {
-                    throw new AppError(
-                      503,
-                      "server_brain_unavailable",
-                      "Bu yanıt mevcut veri paylaşımı izinleriyle yeniden denenemiyor.",
-                      {
-                        transient: false,
-                        retrySuggested: false,
-                        failureClass: "data_policy_blocked",
-                      },
-                    );
-                  }
                   lastError = `gemini_${permit.mode}_policy_${permit.reason}`;
                   continue providerLoop;
                 }
@@ -6697,6 +6934,9 @@ export async function generateSharedBrainReply(
           });
         }
 
+        const failureSummary = summarizeProviderAttemptFailures(
+          attemptFailures,
+        );
         app.log.warn(
           {
             route: input.route ?? "shared_brain",
@@ -6726,8 +6966,8 @@ export async function generateSharedBrainReply(
             workload,
             provider: servingProvider,
             model: baseModel,
-            transient: true,
-            retrySuggested: true,
+            transient: failureSummary.transient,
+            retrySuggested: failureSummary.retrySuggested,
             fallbackUsed,
             fallbackState,
             attemptedProviders: providerCandidates.map(
@@ -6737,11 +6977,9 @@ export async function generateSharedBrainReply(
               (candidate) => candidate.preferredModels,
             ),
             attemptFailures,
-            providerStatus: attemptFailures.at(-1)?.status ?? null,
-            failureClass:
-              attemptFailures.at(-1)?.failureClass ?? "unavailable",
-            retryAfterMs:
-              attemptFailures.at(-1)?.retryAfterMs ?? null,
+            providerStatus: failureSummary.providerStatus,
+            failureClass: failureSummary.failureClass,
+            retryAfterMs: failureSummary.retryAfterMs,
             webGroundingUsed,
             webSourceCount,
             webGroundingDegradedReason: webGrounding.degradedReason,
@@ -7562,6 +7800,7 @@ export async function generateSharedBrainReply(
                   allowStateWrites: !connectorOnlyMode,
                   allowSideEffects: false,
                   approvalMode,
+                  shouldAbort: input.shouldAbort,
                 },
                 requests: inlineToolRequests,
                 plan: toolPlan,
@@ -9506,9 +9745,22 @@ export async function generateGovernedSharedBrainReply(
     }
   }
 
+  const deterministicConnectorReply =
+    await tryGenerateDeterministicConnectorReadReply(
+      app,
+      input,
+      routeDecision,
+      routeToolUseRequired,
+    );
+  if (deterministicConnectorReply) {
+    return deterministicConnectorReply;
+  }
+
   if (!input.internalEvaluation?.skipConsentValidation) {
-    await assertAiDataSharingConsent(app, input.userId);
-    input.providerDataSharingAuthorized = true;
+    input.providerDataSharingAuthorized = await assertAiDataSharingConsent(
+      app,
+      input.userId,
+    );
   }
 
   const skillReply = await tryGenerateSkillReply(

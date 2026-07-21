@@ -4,7 +4,9 @@ import { AppError } from "../../lib/errors.js";
 import {
   CHAT_GENERATION_QUEUE_NAMES,
   chatGenerationJobId,
+  createChatGenerationLeaseFence,
   createLocalConcurrencyGate,
+  isGeminiFallbackQueueConfigured,
   isChatGenerationQueueEnabled,
   readChatGenerationQueueFailure,
 } from "./chat-generation-queue.js";
@@ -48,6 +50,82 @@ test("chat queue reads rate-limit evidence from safe attempt metadata", () => {
   });
 });
 
+test("chat queue sends configured free-only Gemini to the fallback lane", () => {
+  assert.equal(
+    isGeminiFallbackQueueConfigured({
+      config: {
+        GEMINI_API_KEY: "free-key",
+        GEMINI_FREE_ONLY: true,
+        GEMINI_PAID_FALLBACK_ENABLED: false,
+        GEMINI_PAID_DATA_PROCESSING_ATTESTED: false,
+      },
+    } as never),
+    true,
+  );
+  assert.equal(
+    isGeminiFallbackQueueConfigured({
+      config: {
+        GEMINI_API_KEY: "   ",
+        GEMINI_FREE_ONLY: true,
+      },
+    } as never),
+    false,
+  );
+});
+
+test("chat queue does not retry policy denials or permanent 4xx errors", () => {
+  for (const error of [
+    new AppError(503, "server_brain_unavailable", "safe", {
+      transient: true,
+      retrySuggested: true,
+      attemptFailures: [
+        {
+          failureClass: "policy_blocked",
+          retryAfterMs: null,
+        },
+      ],
+    }),
+    new AppError(403, "provider_rejected", "safe", {
+      transient: true,
+      retrySuggested: true,
+      failureClass: "rejected",
+    }),
+  ]) {
+    assert.equal(readChatGenerationQueueFailure(error).retryable, false);
+  }
+});
+
+test("chat queue retries transient failures and preserves Retry-After", () => {
+  for (const failureClass of ["rate_limited", "timeout", "unavailable"]) {
+    const failure = readChatGenerationQueueFailure(
+      new AppError(
+        failureClass === "rate_limited" ? 429 : 503,
+        "server_brain_unavailable",
+        "safe",
+        {
+          transient: true,
+          retrySuggested: true,
+          failureClass,
+          retryAfterMs: 4_250,
+        },
+      ),
+    );
+    assert.equal(failure.retryable, true);
+    assert.equal(failure.retryAfterMs, 4_250);
+  }
+  assert.equal(
+    readChatGenerationQueueFailure(new TypeError("network request failed"))
+      .retryable,
+    true,
+  );
+  assert.equal(
+    readChatGenerationQueueFailure(
+      new DOMException("request timed out", "AbortError"),
+    ).retryable,
+    true,
+  );
+});
+
 test("primary and fallback lanes share one per-replica concurrency gate", async () => {
   const withLocalConcurrency = createLocalConcurrencyGate(4);
   let active = 0;
@@ -63,4 +141,13 @@ test("primary and fallback lanes share one per-replica concurrency gate", async 
     ),
   );
   assert.equal(maxActive, 4);
+});
+
+test("chat generation lease fence permanently cancels work after renewal loss", () => {
+  const fence = createChatGenerationLeaseFence();
+  assert.equal(fence.shouldAbort(), false);
+  fence.markLost();
+  assert.equal(fence.shouldAbort(), true);
+  fence.markLost();
+  assert.equal(fence.shouldAbort(), true);
 });

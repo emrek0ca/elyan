@@ -108,6 +108,7 @@ test("getMostRecentAssistantMessage ignores current queue and retry placeholders
     getMostRecentAssistantMessage([
       { role: "assistant", content: "Gerçek önceki yanıt." },
       { role: "assistant", content: "Yanıt sıraya alındı." },
+      { role: "assistant", content: "Yanıt hazırlanıyor." },
       { role: "assistant", content: "Yanıt yeniden deneniyor…" },
     ]),
     "Gerçek önceki yanıt.",

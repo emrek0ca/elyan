@@ -57,6 +57,18 @@ type WorkerResources = {
 const queues = new WeakMap<FastifyInstance, QueueResources>();
 const workers = new WeakMap<FastifyInstance, WorkerResources>();
 
+export function createChatGenerationLeaseFence() {
+  let lost = false;
+  return {
+    markLost(): void {
+      lost = true;
+    },
+    shouldAbort(): boolean {
+      return lost;
+    },
+  };
+}
+
 export function createLocalConcurrencyGate(limit: number) {
   const maxActive = Math.max(1, Math.trunc(limit));
   let active = 0;
@@ -127,6 +139,12 @@ export function isChatGenerationQueueEnabled(app: FastifyInstance): boolean {
     app.config.ELYAN_CHAT_QUEUE_ENABLED === true &&
     Boolean(app.config.REDIS_URL)
   );
+}
+
+export function isGeminiFallbackQueueConfigured(
+  app: FastifyInstance,
+): boolean {
+  return Boolean(String(app.config.GEMINI_API_KEY || "").trim());
 }
 
 async function queueResourcesFor(
@@ -260,12 +278,32 @@ export function readChatGenerationQueueFailure(
     retryAfterValue >= 0
       ? Math.trunc(retryAfterValue)
       : null;
+  const explicitlyNonRetryable = new Set([
+    "policy_blocked",
+    "invalid_output",
+    "rejected",
+  ]).has(failureClass);
+  const transientFailureClass = new Set([
+    "rate_limited",
+    "timeout",
+    "unavailable",
+    "queue_unavailable",
+    "queue_deadline",
+    "fallback_unavailable",
+  ]).has(failureClass);
   const retryable =
     error instanceof AppError
-      ? details?.retrySuggested !== false &&
-        (error.statusCode === 429 ||
-          error.statusCode >= 500 ||
-          details?.transient === true)
+      ? details?.retrySuggested === false
+        ? false
+        : error.statusCode === 429
+          ? true
+          : explicitlyNonRetryable
+            ? false
+            : error.statusCode >= 400 && error.statusCode < 500
+              ? false
+              : transientFailureClass ||
+                error.statusCode >= 500 ||
+                details?.transient === true
       : error instanceof TypeError ||
         (error instanceof DOMException && error.name === "AbortError");
   return {
@@ -313,12 +351,7 @@ async function enqueueFallback(
   input: ChatGenerationJobData,
 ) {
   const service = await import("../tasks/service.js");
-  if (
-    app.config.GEMINI_FREE_ONLY === true ||
-    app.config.GEMINI_PAID_FALLBACK_ENABLED !== true ||
-    app.config.GEMINI_PAID_DATA_PROCESSING_ATTESTED !== true ||
-    !String(app.config.GEMINI_API_KEY || "").trim()
-  ) {
+  if (!isGeminiFallbackQueueConfigured(app)) {
     await service.failQueuedSharedBrainChatTask(app, {
       ...input,
       error: new AppError(
@@ -326,9 +359,9 @@ async function enqueueFallback(
         "server_brain_unavailable",
         "Yanıt servisine şu anda ulaşılamıyor. Lütfen biraz sonra yeniden dene.",
         {
-          transient: true,
-          retrySuggested: true,
-          failureClass: "fallback_unavailable",
+          transient: false,
+          retrySuggested: false,
+          failureClass: "fallback_unconfigured",
         },
       ),
     });
@@ -351,7 +384,14 @@ async function processGenerationJob(
 ) {
   const service = await import("../tasks/service.js");
   const snapshot = await service.getQueuedSharedBrainChatTask(app, job.data);
-  if (!snapshot || snapshot.terminal) return;
+  if (!snapshot) return;
+  if (snapshot.terminal) {
+    await service.processQueuedSharedBrainChatTask(app, {
+      ...job.data,
+      providerStage: stage,
+    });
+    return;
+  }
   const timing = getChatGenerationTiming(snapshot.workload);
   const ageMs = taskAgeMs(snapshot.task.createdAt);
   const agePhase = chatGenerationAgePhase(snapshot.workload, ageMs);
@@ -388,7 +428,7 @@ async function processGenerationJob(
     await service.markQueuedSharedBrainChatPhase(app, {
       ...job.data,
       phase: "queued",
-      message: "Yanıt sıraya alındı.",
+      message: "Yanıt hazırlanıyor.",
     });
     return delayJob(job, token, 750 + Math.floor(Math.random() * 500));
   }
@@ -406,11 +446,12 @@ async function processGenerationJob(
     await service.markQueuedSharedBrainChatPhase(app, {
       ...job.data,
       phase: "queued",
-      message: "Yanıt sıraya alındı.",
+      message: "Yanıt hazırlanıyor.",
     });
     return delayJob(job, token, 750 + Math.floor(Math.random() * 500));
   }
 
+  const leaseFence = createChatGenerationLeaseFence();
   let lockRenewalPending: Promise<void> | null = null;
   const lockRenewal = setInterval(() => {
     if (lockRenewalPending) return;
@@ -428,13 +469,16 @@ async function processGenerationJob(
     ])
       .then(([taskLeaseRenewed, userLockRenewed]) => {
         if (!taskLeaseRenewed || !userLockRenewed) {
+          leaseFence.markLost();
           app.log.warn(
             { taskId: job.data.taskId },
             "chat generation lease renewal was not confirmed",
           );
         }
       })
-      .catch(() => undefined)
+      .catch(() => {
+        leaseFence.markLost();
+      })
       .finally(() => {
         lockRenewalPending = null;
       });
@@ -477,6 +521,7 @@ async function processGenerationJob(
       await service.processQueuedSharedBrainChatTask(app, {
         ...job.data,
         providerStage: stage,
+        shouldAbort: leaseFence.shouldAbort,
       });
       return;
     } catch (error) {

@@ -54,6 +54,7 @@ export type AgentToolContext = {
   allowSideEffects?: boolean;
   approvalMode?: UserApprovalMode;
   approvalGranted?: boolean;
+  shouldAbort?: () => boolean | Promise<boolean>;
 };
 
 export type AgentToolResult = {
@@ -844,6 +845,16 @@ export async function executeAgentTool(
       },
     };
   }
+  if (context.shouldAbort && (await context.shouldAbort())) {
+    return {
+      tool: tool.name,
+      ok: false,
+      permission: tool.permission,
+      durationMs: 0,
+      output: null,
+      error: { code: "task_canceled", message: "Tool execution was canceled." },
+    };
+  }
   const rateCheck = checkToolRateLimit(context.userId, tool.permission);
   if (!rateCheck.allowed) {
     return {
@@ -907,6 +918,11 @@ export async function executeAgentTool(
       const timer = setTimeout(() => reject(Object.assign(new Error("Tool timed out."), { code: "tool_timeout" })), timeoutMs);
       timer.unref?.();
     });
+    if (context.shouldAbort && (await context.shouldAbort())) {
+      throw Object.assign(new Error("Tool execution was canceled."), {
+        code: "task_canceled",
+      });
+    }
     const rawOutput = await Promise.race([tool.execute(app, context, args), timeout]);
     const parsedOutput = (tool.outputSchema ?? z.record(z.string(), z.unknown())).safeParse(rawOutput);
     if (!parsedOutput.success) {

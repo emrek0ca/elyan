@@ -50,7 +50,7 @@ function retargetPairingRequiredPayload(payload: unknown): Record<string, unknow
         ...routeDecision,
         route: "desktop_runtime",
         reason: "Desktop pairing completed; queued task is now assigned to the paired runtime.",
-        userFacingMessage: "Görev masaüstüne bağlandı ve çalıştırılmak üzere sıraya alındı.",
+        userFacingMessage: "Görev masaüstüne bağlandı ve çalıştırılmaya hazır.",
         failClosedReason: null,
       },
     },

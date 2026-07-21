@@ -5,6 +5,7 @@ export type ProviderFailureClass =
   | "timeout"
   | "unavailable"
   | "invalid_output"
+  | "policy_blocked"
   | "rejected"
   | "unknown";
 
@@ -17,6 +18,53 @@ export type ProviderAttemptFailure = {
   retryAfterMs: number | null;
   attempt: number;
 };
+
+export type ProviderFailureSummary = {
+  failureClass: ProviderFailureClass;
+  providerStatus: number | null;
+  retryAfterMs: number | null;
+  transient: boolean;
+  retrySuggested: boolean;
+};
+
+const RETRYABLE_PROVIDER_FAILURES: ReadonlySet<ProviderFailureClass> = new Set([
+  "rate_limited",
+  "timeout",
+  "unavailable",
+]);
+
+export function summarizeProviderAttemptFailures(
+  attempts: ProviderAttemptFailure[],
+): ProviderFailureSummary {
+  if (attempts.length === 0) {
+    return {
+      failureClass: "unavailable",
+      providerStatus: null,
+      retryAfterMs: null,
+      transient: true,
+      retrySuggested: true,
+    };
+  }
+  const retryableAttempts = attempts.filter((attempt) =>
+    RETRYABLE_PROVIDER_FAILURES.has(attempt.failureClass),
+  );
+  const representative = retryableAttempts.at(-1) ?? attempts.at(-1)!;
+  const retryAfterMs = retryableAttempts.reduce<number | null>(
+    (current, attempt) =>
+      attempt.retryAfterMs == null
+        ? current
+        : Math.max(current ?? 0, attempt.retryAfterMs),
+    null,
+  );
+  const retrySuggested = retryableAttempts.length > 0;
+  return {
+    failureClass: representative.failureClass,
+    providerStatus: representative.status,
+    retryAfterMs,
+    transient: retrySuggested,
+    retrySuggested,
+  };
+}
 
 export function providerHttpStatusClass(
   status: number | null,
@@ -51,6 +99,7 @@ function failureClass(input: {
   error: unknown;
 }): ProviderFailureClass {
   if (input.status === 429) return "rate_limited";
+  if (input.error instanceof TypeError) return "unavailable";
   if (input.error instanceof DOMException && input.error.name === "AbortError") {
     return "timeout";
   }
@@ -67,6 +116,17 @@ function failureClass(input: {
     lowered.includes("reasoning_dump")
   ) {
     return "invalid_output";
+  }
+  if (
+    lowered.includes("policy_blocked") ||
+    lowered.includes("policy_") ||
+    lowered.includes("private_data_blocked") ||
+    lowered.includes("data_usage_not_attested") ||
+    lowered.includes("paid_fallback_disabled") ||
+    lowered.includes("paid_data_processing_not_attested") ||
+    lowered.includes("data_sharing_consent_required")
+  ) {
+    return "policy_blocked";
   }
   if ([408, 425, 500, 502, 503, 504].includes(input.status ?? 0)) {
     return "unavailable";
