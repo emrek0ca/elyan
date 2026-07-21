@@ -277,7 +277,7 @@ test("extractSharedBrainConversation keeps only valid conversation items", () =>
 });
 
 test("getSharedBrainFallbackMessage preserves explicit error text and default fallback", () => {
-  const fallback = "Buradayım. Bunu birlikte ilerletelim; beklediğin sonucu bir cümleyle netleştirir misin?";
+  const fallback = "Cevabı tam toparlarken elimden kaçırdım — benlik bir takılma oldu. Aynı mesajı bir daha atar mısın? Bu sefer tamamlıyorum.";
   assert.equal(
     getSharedBrainFallbackMessage(new Error("  Shared brain failed  ")),
     "Shared brain failed",
@@ -318,7 +318,7 @@ test("resolveSafeChatContinuityReply keeps public chat alive after provider exha
     failureClass: "invalid_output",
   });
 
-  assert.match(reply ?? "", /^Buradayım\./u);
+  assert.match(reply ?? "", /toparlayamadım|toparlıyorum|tamamlıyorum/u);
   assert.doesNotMatch(reply ?? "", /yanıt servisi|yeniden dene/iu);
 });
 

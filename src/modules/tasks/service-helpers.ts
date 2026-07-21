@@ -999,7 +999,7 @@ export function extractSharedBrainConversation(
 
 export function getSharedBrainFallbackMessage(
   error: unknown,
-  fallback = "Buradayım. Bunu birlikte ilerletelim; beklediğin sonucu bir cümleyle netleştirir misin?",
+  fallback = "Cevabı tam toparlarken elimden kaçırdım — benlik bir takılma oldu. Aynı mesajı bir daha atar mısın? Bu sefer tamamlıyorum.",
 ) {
   if (error instanceof Error && error.message.trim()) {
     const message = error.message.trim();
@@ -1135,8 +1135,8 @@ export function resolveSafeChatContinuityReply(input: {
       prompt,
     );
   return asksQuestion
-    ? "Buradayım. Sorunu doğru yanıtlayabilmem için bir ayrıntıyı netleştirelim: özellikle hangi kısmı merak ediyorsun?"
-    : "Buradayım. Bunu birlikte ilerletelim—beklediğin sonucu tek cümleyle netleştirir misin?";
+    ? "Sorunu aldım ama cevabı bu seferlik toparlayamadım — benim tarafımda takıldı. Bir daha sorar mısın, hemen düzgününü yazayım."
+    : "Cevabı toparlarken bir an takıldım, kusura bakma. Mesajını aynen bir daha gönderir misin? Bu sefer tamamlıyorum.";
 }
 
 function looksLikeUnsafeBackendError(message: string) {

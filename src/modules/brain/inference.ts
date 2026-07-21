@@ -2029,7 +2029,10 @@ export function turnEnvelopeSatisfiesConnectorReadHint(
   hint: ConnectorReadToolHint | null,
 ): boolean {
   if (!hint) return true;
-  if (!envelope) return false;
+  // Zarf parse edilemediyse yalnız "require" ipucu reddeder: prefer ipucunda
+  // model araçsız düz cevabı seçmiş olabilir; kurtarılan metin ayrıca
+  // looksLikeConnectorReadClaim ile uydurma-okumaya karşı taranır.
+  if (!envelope) return hint.enforcement === "prefer";
   const requests =
     envelope.tool_requests.length > 0
       ? envelope.tool_requests
@@ -6018,6 +6021,29 @@ export async function generateSharedBrainReply(
           isAgentEngineV2Enabled(app, input.userId) ||
           isAgentEngineShadowEnabled(app));
       const requiredConnectorReadHint = advertisedConnectorReadToolHint(input);
+      // Zarf-kurtarma güvenliği: zarf parse edilemeyip düz metin kurtarılırken
+      // o metin bir araç planı olamaz — reklamı yapılan araç adını veya plan
+      // işaretlerini ("Tool:", "Args:", tool_requests) içeren metin kullanıcıya
+      // sızmaz; yapılandırılmış retry devam eder.
+      const advertisedConnectorToolNames = (input.connectorToolContracts ?? [])
+        .map(
+          (contract) =>
+            contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1]?.toLowerCase(),
+        )
+        .filter((name): name is string => Boolean(name));
+      const looksLikeConnectorToolPlanText = (value: string): boolean => {
+        if (!value.trim()) return false;
+        if (
+          /\btool_requests\b/i.test(value) ||
+          /(^|\n)\s*-?\s*(tool|args?)\s*:/i.test(value)
+        ) {
+          return true;
+        }
+        const lowered = value.toLowerCase();
+        return advertisedConnectorToolNames.some((name) =>
+          lowered.includes(name),
+        );
+      };
 
       let lastError: unknown = null;
       const attemptFailures: ProviderAttemptFailure[] = [];
@@ -6505,10 +6531,25 @@ export async function generateSharedBrainReply(
                     // stub'a düşürüyordu — modelin ürettiği ham metni sanitize
                     // edip kullanıcıya vermek daha güvenli.
                     const placeholderHallucination = isPlaceholderRefusal(text);
+                    // Zarf parse edilemedi ama model gerçek, kurtarılabilir bir
+                    // cevap üretti (küçük modeller LaTeX/kaçış karakterli math
+                    // turlarında JSON'u sık bozar). Araç gerçekten zorunlu
+                    // değilse (require-hint yok), metin zarf JSON'una benzemiyorsa
+                    // ve connector-okuma iddiası taşımıyorsa cevabı ÇÖPE ATMA —
+                    // aksi tüm provider zincirini tüketip continuity fallback'e
+                    // ("Buradayım…") düşürüyordu.
+                    const envelopeSalvageAcceptable =
+                      !streamEnvelope &&
+                      Boolean(text) &&
+                      requiredConnectorReadHint?.enforcement !== "require" &&
+                      !looksLikeTurnEnvelopeJson(text) &&
+                      !looksLikeConnectorReadClaim(text) &&
+                      !looksLikeConnectorToolPlanText(text);
                     const missingRequiredEnvelope =
                       attempt.turnEnvelopeMode &&
                       structuredToolProtocolRequired &&
-                      !streamEnvelope;
+                      !streamEnvelope &&
+                      !envelopeSalvageAcceptable;
                     const missingRequiredConnectorTool =
                       attempt.turnEnvelopeMode &&
                       (!turnEnvelopeSatisfiesConnectorReadHint(
@@ -6728,10 +6769,21 @@ export async function generateSharedBrainReply(
                     // ile teslim etmek stub'a düşürmekten iyidir.
                     const placeholderHallucination =
                       isPlaceholderRefusal(visibleText);
+                    // Stream yolundaki kurtarma kuralının aynısı: zarf yok ama
+                    // gerçek metin var, araç zorunlu değil, metin zarf JSON'u
+                    // değil ve connector-okuma iddiası yok → cevabı kabul et.
+                    const envelopeSalvageAcceptable =
+                      !envelope &&
+                      Boolean(visibleText) &&
+                      requiredConnectorReadHint?.enforcement !== "require" &&
+                      !looksLikeTurnEnvelopeJson(text) &&
+                      !looksLikeConnectorReadClaim(visibleText) &&
+                      !looksLikeConnectorToolPlanText(visibleText);
                     const missingRequiredEnvelope =
                       attempt.turnEnvelopeMode &&
                       structuredToolProtocolRequired &&
-                      !envelope;
+                      !envelope &&
+                      !envelopeSalvageAcceptable;
                     const fabricatedConnectorRead =
                       attempt.turnEnvelopeMode &&
                       connectorToolsAdvertised &&
@@ -7025,7 +7077,7 @@ export async function generateSharedBrainReply(
         throw new AppError(
           503,
           "server_brain_unavailable",
-          "Buradayım. Bunu birlikte ilerletelim; beklediğin sonucu bir cümleyle netleştirir misin?",
+          "Cevabı tam toparlarken elimden kaçırdım — benlik bir takılma oldu. Aynı mesajı bir daha atar mısın? Bu sefer tamamlıyorum.",
           {
             route: input.route ?? "shared_brain",
             workload,
