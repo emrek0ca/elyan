@@ -56,6 +56,28 @@ type WorkerResources = {
 
 const queues = new WeakMap<FastifyInstance, QueueResources>();
 const workers = new WeakMap<FastifyInstance, WorkerResources>();
+const queueLifecycleRegistered = new WeakSet<FastifyInstance>();
+
+async function closeChatGenerationQueues(app: FastifyInstance): Promise<void> {
+  const resources = queues.get(app);
+  if (!resources) return;
+  queues.delete(app);
+  await Promise.all([
+    resources.primary.close().catch(() => undefined),
+    resources.fallback.close().catch(() => undefined),
+  ]);
+}
+
+export function registerChatGenerationQueueLifecycle(
+  app: FastifyInstance,
+): void {
+  if (queueLifecycleRegistered.has(app)) return;
+  queueLifecycleRegistered.add(app);
+  app.addHook("onClose", async () => {
+    queueLifecycleRegistered.delete(app);
+    await closeChatGenerationQueues(app);
+  });
+}
 
 export function createChatGenerationLeaseFence() {
   let lost = false;
@@ -182,14 +204,6 @@ async function queueResourcesFor(
     throw error;
   }
   queues.set(app, resources);
-  app.addHook("onClose", async () => {
-    if (queues.get(app) !== resources) return;
-    queues.delete(app);
-    await Promise.all([
-      resources.primary.close().catch(() => undefined),
-      resources.fallback.close().catch(() => undefined),
-    ]);
-  });
   return resources;
 }
 
@@ -201,12 +215,38 @@ export async function enqueueSharedBrainChatTask(
   const resources = await queueResourcesFor(app);
   if (!resources) return false;
   const queue = stage === "primary" ? resources.primary : resources.fallback;
-  await withQueueTimeout(
-    queue.add("generate", input, {
-      jobId: chatGenerationJobId(stage, input.taskId),
-    }),
-  );
-  return true;
+  const jobId = chatGenerationJobId(stage, input.taskId);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      await withQueueTimeout(
+        queue.add("generate", input, {
+          jobId,
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (attempt >= 2) throw error;
+      const errorRecord = readRecord(error);
+      app.log.warn(
+        {
+          taskId: input.taskId,
+          stage,
+          attempt,
+          errorClass: error instanceof Error ? error.name : "queue_error",
+          errorCode:
+            typeof errorRecord?.code === "string"
+              ? errorRecord.code.slice(0, 80)
+              : null,
+        },
+        "chat generation enqueue retry",
+      );
+      await new Promise((resolve) =>
+        setTimeout(resolve, 50 + Math.floor(Math.random() * 100)),
+      );
+      await withQueueTimeout(queue.waitUntilReady());
+    }
+  }
+  return false;
 }
 
 export async function reserveChatGenerationAdmission(

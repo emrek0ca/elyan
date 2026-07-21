@@ -9,7 +9,27 @@ import {
   isGeminiFallbackQueueConfigured,
   isChatGenerationQueueEnabled,
   readChatGenerationQueueFailure,
+  registerChatGenerationQueueLifecycle,
 } from "./chat-generation-queue.js";
+
+test("chat queue lifecycle is registered once before lazy queue use", async () => {
+  let registrations = 0;
+  let closeHook: unknown = null;
+  const app = {
+    addHook(name: string, hook: () => Promise<void>) {
+      assert.equal(name, "onClose");
+      registrations += 1;
+      closeHook = hook;
+    },
+  };
+
+  registerChatGenerationQueueLifecycle(app as never);
+  registerChatGenerationQueueLifecycle(app as never);
+
+  assert.equal(registrations, 1);
+  assert.equal(typeof closeHook, "function");
+  await (closeHook as () => Promise<void>)();
+});
 
 test("chat queue job data stays task-identity only", () => {
   assert.equal(CHAT_GENERATION_QUEUE_NAMES.primary, "elyan-chat-primary-v1");

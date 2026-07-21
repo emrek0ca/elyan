@@ -43,6 +43,7 @@ import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
 import { startTaskLeaseSweeper } from "../modules/tasks/lease-sweeper.js";
 import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
 import { startInProcessMemoryWorker } from "../modules/brain/worker.js";
+import { registerChatGenerationQueueLifecycle } from "../modules/brain/chat-generation-queue.js";
 import { nlpDaemon } from "../lib/nlp-daemon.js";
 import { getPerfSnapshot, startPerfTelemetry } from "../lib/perf-telemetry.js";
 
@@ -162,6 +163,8 @@ export async function buildApp(envInput?: AppEnv) {
     disableRequestLogging: true,
     trustProxy: env.NODE_ENV === "production",
   });
+
+  registerChatGenerationQueueLifecycle(app);
 
   const reliability = createReliabilityServices(env);
 
