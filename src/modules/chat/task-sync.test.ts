@@ -1012,7 +1012,7 @@ test("syncChatTaskLifecycle never persists transient progress text as completed 
   assert.match(persistedContent, /tamamlandı/i);
 });
 
-test("syncChatTaskLifecycle keeps transient progress text while the task is queued", async () => {
+test("syncChatTaskLifecycle never writes transient progress text into row content", async () => {
   const updates: Array<Record<string, unknown>> = [];
   const app = {
     config: {
@@ -1071,8 +1071,14 @@ test("syncChatTaskLifecycle keeps transient progress text while the task is queu
     message: "Yanıt hazırlanıyor.",
   });
 
+  // Cevap tek kaynaktan gelir: kuyruk fazı yalnız status ilerletir; content,
+  // preview ve metadata satırda olduğu gibi kalır. Böylece REST history/poll
+  // hiçbir an "Yanıt hazırlanıyor."ı cevap olarak taşıyamaz.
   assert.equal(updates.length, 1);
-  assert.equal(updates[0]?.content, "Yanıt hazırlanıyor.");
+  assert.equal(updates[0]?.status, "queued");
+  assert.equal("content" in (updates[0] ?? {}), false);
+  assert.equal("metadata" in (updates[0] ?? {}), false);
+  assert.equal("preview" in (updates[0] ?? {}), false);
 });
 
 test("syncChatTaskLifecycle publishes statusRank and terminal authority fields", async () => {

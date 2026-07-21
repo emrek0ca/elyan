@@ -465,11 +465,9 @@ async function processGenerationJob(
     true,
   );
   if (!taskLeaseAcquired) {
-    await service.markQueuedSharedBrainChatPhase(app, {
-      ...job.data,
-      phase: "queued",
-      message: "Yanıt hazırlanıyor.",
-    });
+    // Lease başka bir worker'da: görev zaten işleniyor. Chat satırına/faz
+    // durumuna DOKUNMA — buradaki "Yanıt hazırlanıyor." yeniden-yayını, akan
+    // cevabın üstüne yazan eski ACK snapshot'larının kaynağıydı. Sadece bekle.
     return delayJob(job, token, 750 + Math.floor(Math.random() * 500));
   }
 
@@ -483,11 +481,8 @@ async function processGenerationJob(
     await app.services.reliability.store
       .releaseLock(taskLeaseKey(job.data.taskId), lockOwner)
       .catch(() => undefined);
-    await service.markQueuedSharedBrainChatPhase(app, {
-      ...job.data,
-      phase: "queued",
-      message: "Yanıt hazırlanıyor.",
-    });
+    // Kullanıcının başka bir turu işleniyor: faz/chat satırı yeniden yazılmaz
+    // (yukarıdaki lease yorumuyla aynı gerekçe). Sadece bekle.
     return delayJob(job, token, 750 + Math.floor(Math.random() * 500));
   }
 

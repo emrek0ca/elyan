@@ -514,32 +514,47 @@ export async function syncChatTaskLifecycle(
       blocks: assistantBlocks,
     });
   }
-  const contentBlob = await app.services?.blobs?.storeText({
-    ownerType: "chat_message",
-    ownerId: assistantMessageId,
-    userId: input.updatedTask.userId,
-    slot: "content",
-    scope: "chat_message_content",
-    value: assistantContent,
-    contentType: "text/plain",
-  });
+  // Cevap TEK kaynaktan gelir: inference'ın kalıcı finali. "Yanıt
+  // hazırlanıyor." / "Yanıt yeniden deneniyor." gibi kuyruk/faz metinleri
+  // non-terminal güncellemelerde chat satırının content'ine ASLA yazılmaz —
+  // aksi hâlde REST history/dispatch cevabı bu metni "cevap" olarak taşır ve
+  // eski istemciler akan cevabın üstüne yazar. Satırda yalnız status/error
+  // ilerletilir; content, blocks ve preview olduğu gibi kalır.
+  const preserveExistingContent =
+    !isTerminalChatMessageStatus(assistantStatus) &&
+    isTransientChatProgressMessage(assistantContent);
+  const contentBlob = preserveExistingContent
+    ? null
+    : await app.services?.blobs?.storeText({
+        ownerType: "chat_message",
+        ownerId: assistantMessageId,
+        userId: input.updatedTask.userId,
+        slot: "content",
+        scope: "chat_message_content",
+        value: assistantContent,
+        contentType: "text/plain",
+      });
 
   const rows = await app.db
     .update(chatMessages)
     .set({
       status: assistantStatus,
-      content: assistantContent,
-      contentBlobId: contentBlob?.blobId ?? null,
-      preview: compactMessagePreview(assistantContent),
-      tokenCount: estimateMessageTokens(assistantContent),
       error: input.updatedTask.error,
-      metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
-        withAssistantBlocksMetadata(assistantMetadata, {
-          content: assistantContent,
-          blocks: assistantBlocks,
-        }),
-      )}::jsonb`,
       updatedAt: new Date(),
+      ...(preserveExistingContent
+        ? {}
+        : {
+            content: assistantContent,
+            contentBlobId: contentBlob?.blobId ?? null,
+            preview: compactMessagePreview(assistantContent),
+            tokenCount: estimateMessageTokens(assistantContent),
+            metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
+              withAssistantBlocksMetadata(assistantMetadata, {
+                content: assistantContent,
+                blocks: assistantBlocks,
+              }),
+            )}::jsonb`,
+          }),
     })
     .where(
       and(
@@ -633,13 +648,17 @@ export async function syncChatTaskLifecycle(
       statusRank: chatMessageStatusRank(assistantStatus),
       terminal: isTerminalChatMessageStatus(assistantStatus),
       presentation: extractTaskPresentation(input.updatedTask.payload),
-      assistantMessage: shapeAssistantMessagePayload({
-        ...assistantMessage,
-        metadata: withAssistantBlocksMetadata(assistantMetadata, {
-          content: assistantContent,
-          blocks: assistantBlocks,
-        }),
-      }),
+      assistantMessage: shapeAssistantMessagePayload(
+        preserveExistingContent
+          ? assistantMessage
+          : {
+              ...assistantMessage,
+              metadata: withAssistantBlocksMetadata(assistantMetadata, {
+                content: assistantContent,
+                blocks: assistantBlocks,
+              }),
+            },
+      ),
       taskStatus: input.updatedTask.status,
       task: shapeTaskFeedItem(input.updatedTask),
     },
