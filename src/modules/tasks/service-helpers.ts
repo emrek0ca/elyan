@@ -999,7 +999,7 @@ export function extractSharedBrainConversation(
 
 export function getSharedBrainFallbackMessage(
   error: unknown,
-  fallback = "Yanıt servisine şu anda ulaşılamıyor. Lütfen biraz sonra yeniden dene.",
+  fallback = "Buradayım. Bunu birlikte ilerletelim; beklediğin sonucu bir cümleyle netleştirir misin?",
 ) {
   if (error instanceof Error && error.message.trim()) {
     const message = error.message.trim();

@@ -277,7 +277,7 @@ test("extractSharedBrainConversation keeps only valid conversation items", () =>
 });
 
 test("getSharedBrainFallbackMessage preserves explicit error text and default fallback", () => {
-  const fallback = "Yanıt servisine şu anda ulaşılamıyor. Lütfen biraz sonra yeniden dene.";
+  const fallback = "Buradayım. Bunu birlikte ilerletelim; beklediğin sonucu bir cümleyle netleştirir misin?";
   assert.equal(
     getSharedBrainFallbackMessage(new Error("  Shared brain failed  ")),
     "Shared brain failed",

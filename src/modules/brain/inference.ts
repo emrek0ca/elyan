@@ -7014,7 +7014,7 @@ export async function generateSharedBrainReply(
         throw new AppError(
           503,
           "server_brain_unavailable",
-          "Yanıt servisine şu anda ulaşılamıyor. Lütfen biraz sonra yeniden dene.",
+          "Buradayım. Bunu birlikte ilerletelim; beklediğin sonucu bir cümleyle netleştirir misin?",
           {
             route: input.route ?? "shared_brain",
             workload,

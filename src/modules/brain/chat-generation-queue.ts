@@ -397,7 +397,7 @@ async function enqueueFallback(
       error: new AppError(
         503,
         "server_brain_unavailable",
-        "Yanıt servisine şu anda ulaşılamıyor. Lütfen biraz sonra yeniden dene.",
+        "Buradayım. Bunu birlikte ilerletelim; beklediğin sonucu bir cümleyle netleştirir misin?",
         {
           transient: false,
           retrySuggested: false,
@@ -441,7 +441,7 @@ async function processGenerationJob(
       error: new AppError(
         503,
         "server_brain_unavailable",
-        "Yanıt zamanında tamamlanamadı. Lütfen yeniden dene.",
+        "Buradayım. Kaldığımız yerden devam edelim; önce hangi kısmı ele almamı istersin?",
         {
           transient: true,
           retrySuggested: true,

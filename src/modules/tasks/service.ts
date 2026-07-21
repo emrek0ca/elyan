@@ -445,7 +445,7 @@ export function createChatQueueUnavailableError(): AppError {
   return new AppError(
     503,
     "chat_queue_unavailable",
-    "Yanıt sıraya alınamadı. Lütfen biraz sonra yeniden dene.",
+    "Buradayım. Bu isteği güvenli biçimde işleyebilmem için birkaç saniye sonra aynı yerden devam edelim.",
     {
       transient: true,
       retrySuggested: true,
