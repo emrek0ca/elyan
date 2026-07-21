@@ -2,6 +2,7 @@ import type { ResolvedAttachmentContext } from "../brain/attachment-context.js";
 import type { SkillRouteDecision, SkillSummary } from "./types.js";
 
 const ROUTE_CONFIDENCE_THRESHOLD = 0.72;
+const NON_SKILL_OUTPUT_KINDS = new Set(["chat_reply", "task_result", "action"]);
 
 function normalize(value: unknown): string {
   return String(value ?? "")
@@ -35,6 +36,18 @@ function canRouteSkillWithAttachment(
     return !skill.requiresAttachment;
   }
   return hasPayloadType(context, skill);
+}
+
+function canProduceRequestedOutput(
+  skill: SkillSummary,
+  desiredOutputKinds: readonly string[] | undefined,
+): boolean {
+  const richOutputs = (desiredOutputKinds ?? []).filter(
+    (kind) => !NON_SKILL_OUTPUT_KINDS.has(kind),
+  );
+  if (richOutputs.length === 0) return true;
+  const produced = new Set<string>(skill.produces.desiredOutputKinds);
+  return richOutputs.every((kind) => produced.has(kind));
 }
 
 function isQuestionPrompt(prompt: string): boolean {
@@ -140,6 +153,7 @@ export async function routeSkill(input: {
   attachmentContext?: ResolvedAttachmentContext | null;
   skills: SkillSummary[];
   skillHint?: string | null;
+  desiredOutputKinds?: readonly string[];
   classify?: (input: {
     prompt: string;
     attachmentContext: ResolvedAttachmentContext;
@@ -155,7 +169,8 @@ export async function routeSkill(input: {
   if (
     hintedSkill &&
     activeSkillIds.has(hintedSkill.id) &&
-    canRouteSkillWithAttachment(context, hintedSkill)
+    canRouteSkillWithAttachment(context, hintedSkill) &&
+    canProduceRequestedOutput(hintedSkill, input.desiredOutputKinds)
   ) {
     return {
       needsSkill: true,
@@ -169,6 +184,11 @@ export async function routeSkill(input: {
   if (
     (!context?.used || context.chunks.length === 0) &&
     activeSkillIds.has("research_document") &&
+    input.skills.some(
+      (skill) =>
+        skill.id === "research_document" &&
+        canProduceRequestedOutput(skill, input.desiredOutputKinds),
+    ) &&
     isResearchDocumentPrompt(input.prompt)
   ) {
     return {
@@ -192,8 +212,18 @@ export async function routeSkill(input: {
   }
 
   const attachmentCompatibleSkills = input.skills.filter((skill) =>
-    canRouteSkillWithAttachment(context, skill),
+    canRouteSkillWithAttachment(context, skill) &&
+    canProduceRequestedOutput(skill, input.desiredOutputKinds),
   );
+  if (attachmentCompatibleSkills.length === 0) {
+    return {
+      needsSkill: false,
+      skillId: null,
+      confidence: 0.9,
+      reason: "No active skill produces every explicitly requested output.",
+      source: "fallback",
+    };
+  }
   const attachmentCompatibleSkillIds = new Set(
     attachmentCompatibleSkills.map((skill) => skill.id),
   );
@@ -270,7 +300,9 @@ export async function routeSkill(input: {
     };
   }
 
-  const payloadMatch = input.skills.find((skill) => hasPayloadType(context, skill));
+  const payloadMatch = attachmentCompatibleSkills.find((skill) =>
+    hasPayloadType(context, skill),
+  );
   if (payloadMatch && isQuestionPrompt(input.prompt)) {
     return {
       needsSkill: true,

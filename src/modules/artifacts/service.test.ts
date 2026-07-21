@@ -1,7 +1,39 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ElyanAssistantDocumentBlock } from "../../contracts/domain.js";
+import {
+  buildTypedUnderstandingEnvelope,
+} from "../../core/understanding/understanding-envelope.js";
+import type { IntentClassification } from "../../core/understanding/types.js";
 import { buildArtifactPipeline } from "./service.js";
+
+function documentIntent(): IntentClassification {
+  return {
+    primaryIntent: "document",
+    secondaryIntents: [],
+    requiresLocalRuntime: false,
+    requiresRetrieval: false,
+    requiresToolUse: false,
+    requiresCitation: false,
+    requiresLongRunningTask: false,
+    privacyRisk: "low",
+    confidence: 0.92,
+    reason: "artifact_test",
+    taskFrame: {
+      goal: "create artifact",
+      likelyAnswerShape: "typed artifact",
+      reasoningMode: "balanced",
+      shouldClarify: false,
+    },
+    ecosystemHints: [],
+    routingHints: {
+      mode: "task",
+      preferredCapabilities: [],
+      avoidCloud: false,
+      requiresLocalRuntime: false,
+    },
+  };
+}
 
 test("artifact pipeline builds a validated PDF receipt with footer", async () => {
   const result = await buildArtifactPipeline({
@@ -33,6 +65,76 @@ test("artifact pipeline builds typed table rows and numeric values", async () =>
   assert.deepEqual(result.spec.columns.map((column) => column.key), ["label", "value"]);
   assert.equal(result.spec.rows.length, 3);
   assert.equal(result.spec.rows[1]?.value, 18_000);
+});
+
+test("artifact pipeline maps explicit Word output to the existing document artifact", async () => {
+  const userRequest =
+    "Bu içeriği Word dosyası olarak oluştur: Proje durumu planlandığı gibi ilerliyor.";
+  const understandingEnvelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: userRequest,
+    intent: documentIntent(),
+  });
+  const result = await buildArtifactPipeline({
+    userRequest,
+    understandingEnvelope,
+  });
+
+  assert.equal(result.kind, "rendered");
+  if (result.kind !== "rendered") return;
+  assert.equal(result.spec.type, "document");
+  if (result.spec.type !== "document") return;
+  assert.deepEqual(result.intent.requestedFormats, ["docx"]);
+  assert.deepEqual(result.spec.exportFormats, ["docx"]);
+  const document = result.assistantBlocks.find(
+    (block) => block.type === "document_block",
+  ) as ElyanAssistantDocumentBlock | undefined;
+  assert.deepEqual(document?.exportFormats, ["docx"]);
+});
+
+test("artifact pipeline preserves multiple requested document export formats", async () => {
+  const userRequest =
+    "Bu raporu önce Word sonra PDF olarak oluştur: Gelirler istikrarlı biçimde artıyor.";
+  const understandingEnvelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: userRequest,
+    intent: documentIntent(),
+  });
+  const result = await buildArtifactPipeline({
+    userRequest,
+    understandingEnvelope,
+  });
+
+  assert.equal(result.kind, "rendered");
+  if (result.kind !== "rendered") return;
+  assert.equal(result.spec.type, "document");
+  if (result.spec.type !== "document") return;
+  assert.deepEqual(result.intent.requestedOutputKinds, ["docx", "pdf"]);
+  assert.deepEqual(result.spec.exportFormats, ["docx", "pdf"]);
+});
+
+test("artifact pipeline carries Excel export intent into the existing table block", async () => {
+  const userRequest =
+    "Ocak 12000, Şubat 18000, Mart 15000 verileriyle Excel tablo oluştur.";
+  const understandingEnvelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: userRequest,
+    intent: documentIntent(),
+  });
+  const result = await buildArtifactPipeline({
+    userRequest,
+    understandingEnvelope,
+  });
+
+  assert.equal(result.kind, "rendered");
+  if (result.kind !== "rendered") return;
+  assert.equal(result.spec.type, "table");
+  const table = result.assistantBlocks.find(
+    (block) => block.type === "table",
+  ) as Record<string, unknown> | undefined;
+  const renderHints = table?.renderHints as Record<string, unknown> | undefined;
+  assert.deepEqual(renderHints?.exportFormats, ["xlsx"]);
+  assert.match(String(renderHints?.fileName ?? ""), /\.xlsx$/);
 });
 
 test("artifact pipeline builds chart data without fake rows", async () => {
@@ -173,6 +275,7 @@ test("research PDF uses the current typed document instead of the previous assis
   assert.equal(document?.type, "document_block");
   if (document?.type !== "document_block") return;
   assert.equal(document.title, "Kedilerin Tarihi");
+  assert.deepEqual(document.exportFormats, ["pdf"]);
   assert.match(document.sections[0]?.content ?? "", /Yakın Doğu yaban kedisi/i);
   assert.doesNotMatch(
     document.sections.map((section) => section.content).join(" "),

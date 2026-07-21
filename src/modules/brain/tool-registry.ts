@@ -40,6 +40,33 @@ import {
 
 export type AgentToolPermission = "read" | "write" | "side_effect";
 
+export const AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD = 0.72;
+
+export type AgentToolSelectionHints = {
+  purpose: string;
+  intents: string[];
+  capabilities: string[];
+  desiredOutputKinds: string[];
+  resultBlockTypes: string[];
+  modelContract: string;
+  connectorCapability?: string;
+};
+
+export type AgentToolSelectionContext = {
+  prompt: string;
+  intent?: string | null;
+  action?: string | null;
+  desiredOutputKinds?: readonly string[];
+  requiredCapabilities?: readonly string[];
+  advertisedConnectorTools?: readonly string[];
+  connectorReadHint?: { tool: string; score: number } | null;
+  deterministicToolNames?: readonly string[];
+  memoryCandidateCount?: number;
+  sideEffectRequested?: boolean;
+  localPrivate?: boolean;
+  includeCoreTools?: boolean;
+};
+
 export type AgentToolRequest = {
   tool: string;
   args: Record<string, unknown>;
@@ -91,6 +118,146 @@ type AgentToolDefinition<TArgs extends z.ZodTypeAny> = {
     context: AgentToolContext,
     args: z.output<TArgs>,
   ) => Promise<Record<string, unknown>>;
+};
+
+const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
+  "web.search": {
+    purpose: "Search current public-web evidence for research or time-sensitive questions.",
+    intents: ["research", "document"],
+    capabilities: ["browser.read"],
+    desiredOutputKinds: ["chat_reply", "pdf", "docx", "artifact"],
+    resultBlockTypes: ["web_search", "tool_call"],
+    modelContract: "web.search {query:string}",
+  },
+  "web.fetch_url": {
+    purpose: "Read one explicit public URL after the user supplies it or research identifies it.",
+    intents: ["research", "document"],
+    capabilities: ["browser.read", "document.read"],
+    desiredOutputKinds: ["chat_reply", "pdf", "docx", "artifact"],
+    resultBlockTypes: ["web_search", "tool_call"],
+    modelContract: "web.fetch_url {url:string}",
+  },
+  "web.numeric_facts": {
+    purpose: "Extract verified numeric series suitable for tables and charts from public-web evidence.",
+    intents: ["research", "math", "document"],
+    capabilities: ["browser.read", "table.generate", "chart.generate"],
+    desiredOutputKinds: ["table", "chart", "xlsx"],
+    resultBlockTypes: ["table", "chart", "web_search", "tool_call"],
+    modelContract: "web.numeric_facts {query:string}",
+  },
+  "memory.query": {
+    purpose: "Read durable user memory only when the user explicitly refers to prior preferences or conversations.",
+    intents: ["chat", "planning"],
+    capabilities: ["memory.query"],
+    desiredOutputKinds: ["chat_reply"],
+    resultBlockTypes: ["memory_echo", "tool_call"],
+    modelContract: "memory.query {query:string, limit?:1..10}",
+  },
+  "memory.write": {
+    purpose: "Persist an explicit user fact, correction, preference, or forget request.",
+    intents: ["chat"],
+    capabilities: ["memory.write"],
+    desiredOutputKinds: ["chat_reply", "action"],
+    resultBlockTypes: ["memory_echo", "tool_call"],
+    modelContract: "memory.write {op, kind, key, value, confidence?, ttl_days?}",
+  },
+  "goals.get": {
+    purpose: "Read the active goal and its recent execution events before continuing goal work.",
+    intents: ["planning", "automation"],
+    capabilities: ["goal.read"],
+    desiredOutputKinds: ["chat_reply", "task_result"],
+    resultBlockTypes: ["goal_progress", "tool_call"],
+    modelContract: "goals.get {goalId?:uuid, eventLimit?:1..50}",
+  },
+  "goals.update": {
+    purpose: "Open, advance, complete, or block an explicit durable user goal.",
+    intents: ["planning", "automation"],
+    capabilities: ["goal.update"],
+    desiredOutputKinds: ["action", "task_result"],
+    resultBlockTypes: ["goal_progress", "tool_call"],
+    modelContract: "goals.update {action, goalId?, title?, description?, step?, ofSteps?, advancedTo?, next?, note?, blocker?}",
+  },
+  "gmail.search": {
+    purpose: "Search or list messages in the user's connected Gmail account.",
+    intents: ["research", "chat", "planning"],
+    capabilities: ["gmail.read"],
+    desiredOutputKinds: ["chat_reply", "task_result"],
+    resultBlockTypes: ["mail_list", "tool_call"],
+    modelContract: "gmail.search {query:string, limit?:1..10}",
+    connectorCapability: "gmail",
+  },
+  "gmail.read": {
+    purpose: "Read one exact Gmail message selected by a trusted message identifier.",
+    intents: ["research", "chat", "planning"],
+    capabilities: ["gmail.read"],
+    desiredOutputKinds: ["chat_reply", "task_result"],
+    resultBlockTypes: ["mail_detail", "tool_call"],
+    modelContract: "gmail.read {messageId:string}",
+    connectorCapability: "gmail",
+  },
+  "calendar.list_events": {
+    purpose: "List events from the user's connected calendar.",
+    intents: ["chat", "planning", "automation"],
+    capabilities: ["calendar.read"],
+    desiredOutputKinds: ["chat_reply", "task_result"],
+    resultBlockTypes: ["calendar_agenda", "tool_call"],
+    modelContract: "calendar.list_events {query?:string, days?:1..60, limit?:1..20}",
+    connectorCapability: "calendar",
+  },
+  "drive.search": {
+    purpose: "Search files in the user's connected Google Drive.",
+    intents: ["research", "document", "chat"],
+    capabilities: ["drive.read"],
+    desiredOutputKinds: ["chat_reply", "task_result"],
+    resultBlockTypes: ["drive_files", "tool_call"],
+    modelContract: "drive.search {query:string, limit?:1..20}",
+    connectorCapability: "drive",
+  },
+  "notion.search": {
+    purpose: "Search pages and databases in the user's connected Notion workspace.",
+    intents: ["research", "document", "chat"],
+    capabilities: ["notion.read"],
+    desiredOutputKinds: ["chat_reply", "task_result"],
+    resultBlockTypes: ["notion_page", "tool_call"],
+    modelContract: "notion.search {query?:string, limit?:1..20}",
+    connectorCapability: "notion",
+  },
+  "github.search": {
+    purpose: "Search issues and pull requests connected to the user's GitHub account.",
+    intents: ["research", "coding", "planning"],
+    capabilities: ["github.read"],
+    desiredOutputKinds: ["chat_reply", "task_result"],
+    resultBlockTypes: ["github_activity", "tool_call"],
+    modelContract: "github.search {query?:string, limit?:1..20}",
+    connectorCapability: "github",
+  },
+  "slack.search": {
+    purpose: "Search messages in the user's connected Slack workspace.",
+    intents: ["research", "chat", "planning"],
+    capabilities: ["slack.read"],
+    desiredOutputKinds: ["chat_reply", "task_result"],
+    resultBlockTypes: ["slack_messages", "tool_call"],
+    modelContract: "slack.search {query?:string, limit?:1..20}",
+    connectorCapability: "slack",
+  },
+  "gmail.send": {
+    purpose: "Stage an explicit Gmail send request for user approval; never send inline.",
+    intents: ["chat", "automation"],
+    capabilities: ["gmail.send"],
+    desiredOutputKinds: ["action", "task_result"],
+    resultBlockTypes: ["actionable", "tool_call"],
+    modelContract: "gmail.send {to:string, subject:string, body:string, cc?:string, bcc?:string}",
+    connectorCapability: "gmail",
+  },
+  "calendar.create_event": {
+    purpose: "Stage an explicit calendar event creation request for user approval; never create inline.",
+    intents: ["planning", "automation", "chat"],
+    capabilities: ["calendar.write"],
+    desiredOutputKinds: ["action", "task_result"],
+    resultBlockTypes: ["actionable", "tool_call"],
+    modelContract: "calendar.create_event {title:string, start:ISO8601, end:ISO8601, description?:string, location?:string, attendees?:string[]}",
+    connectorCapability: "calendar",
+  },
 };
 
 const webSearchArgsSchema = z.object({
@@ -733,11 +900,19 @@ export type AgentToolMetadata = {
   idempotency: ApprovalToolIdempotency;
   approvalScope: ApprovalToolScope;
   parallelSafe: boolean;
+  selectionHints: AgentToolSelectionHints;
+};
+
+export type AgentToolCatalogEntry = AgentToolMetadata & {
+  selectionConfidence: number;
+  selectionReasons: string[];
 };
 
 export function getAgentToolMetadata(name: string): AgentToolMetadata | null {
   const tool = registry.get(name);
   if (!tool) return null;
+  const selectionHints = AGENT_TOOL_SELECTION_HINTS[name];
+  if (!selectionHints) return null;
   const idempotency = tool.idempotency ?? (tool.permission === "read" ? "read_only" : "non_idempotent");
   return {
     name: tool.name,
@@ -746,7 +921,237 @@ export function getAgentToolMetadata(name: string): AgentToolMetadata | null {
     idempotency,
     approvalScope: tool.approvalScope ?? "user_action",
     parallelSafe: tool.permission === "read" && idempotency === "read_only",
+    selectionHints,
   };
+}
+
+function normalizeSelectionText(value: string): string {
+  return value.toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
+}
+
+function hasAnySelectionValue(
+  left: readonly string[] | undefined,
+  right: readonly string[],
+): boolean {
+  if (!left || left.length === 0) return false;
+  const normalized = new Set(left.map((value) => normalizeSelectionText(value)));
+  return right.some((value) => normalized.has(normalizeSelectionText(value)));
+}
+
+function scoreCoreToolForTurn(
+  tool: AgentToolMetadata,
+  input: AgentToolSelectionContext,
+): { confidence: number; reasons: string[] } | null {
+  const prompt = normalizeSelectionText(input.prompt);
+  const intent = normalizeSelectionText(input.intent ?? "");
+  const desiredOutputKinds = input.desiredOutputKinds ?? [];
+  const requiredCapabilities = input.requiredCapabilities ?? [];
+  const hint = tool.selectionHints;
+  const reasons: string[] = [];
+
+  const intentMatch = Boolean(intent && hint.intents.includes(intent));
+  const capabilityMatch = hasAnySelectionValue(
+    requiredCapabilities,
+    hint.capabilities,
+  );
+  const outputMatch = hasAnySelectionValue(
+    desiredOutputKinds,
+    hint.desiredOutputKinds,
+  );
+
+  if (tool.name === "web.search") {
+    const explicitResearch =
+      intent === "research" ||
+      /(?<!\p{L})(araştır\p{L}*|arastir\p{L}*|research\p{L}*|güncel|guncel|latest|bugün|bugun|kaynak\p{L}*|source\p{L}*|internetten|webden)(?!\p{L})/iu.test(
+        prompt,
+      );
+    if (!explicitResearch && !capabilityMatch) return null;
+    reasons.push(explicitResearch ? "explicit_research" : "capability_match");
+    return { confidence: explicitResearch ? 0.92 : 0.82, reasons };
+  }
+
+  if (tool.name === "web.fetch_url") {
+    const explicitUrl = /https?:\/\/[^\s]+/iu.test(input.prompt);
+    if (!explicitUrl && intent !== "research") return null;
+    reasons.push(explicitUrl ? "explicit_url" : "research_followup");
+    return { confidence: explicitUrl ? 0.96 : 0.76, reasons };
+  }
+
+  if (tool.name === "web.numeric_facts") {
+    const numericOutput = desiredOutputKinds.some((kind) =>
+      ["table", "chart", "xlsx"].includes(kind),
+    );
+    const numericPrompt =
+      /(?<!\p{L})(veri|istatistik|oran|fiyat|kur|trend|seri|grafik|chart|tablo|table)(?!\p{L})/iu.test(
+        prompt,
+      );
+    if (!numericOutput || (!numericPrompt && intent !== "research")) return null;
+    reasons.push("numeric_output", numericPrompt ? "numeric_prompt" : "research_intent");
+    return { confidence: 0.88, reasons };
+  }
+
+  if (tool.name === "memory.query") {
+    const explicitMemoryRead =
+      /(?<!\p{L})(hatırl\p{L}*|hatirla\p{L}*|daha önce|daha once|geçen sefer|gecen sefer|önceden|onceden|tercihim|beni tanıyor|beni taniyor|remember|previously|last time)(?!\p{L})/iu.test(
+        prompt,
+      );
+    if (!explicitMemoryRead) return null;
+    return { confidence: 0.9, reasons: ["explicit_memory_read"] };
+  }
+
+  if (tool.name === "memory.write") {
+    if ((input.memoryCandidateCount ?? 0) <= 0) return null;
+    return { confidence: 0.96, reasons: ["typed_memory_candidate"] };
+  }
+
+  if (tool.name === "goals.get" || tool.name === "goals.update") {
+    const explicitGoal =
+      /(?<!\p{L})(hedef\p{L}*|goal\p{L}*|ilerle\p{L}*|tamamla\p{L}*|planımı|planimi|görev planı|gorev plani)(?!\p{L})/iu.test(
+        prompt,
+      );
+    if (!explicitGoal) return null;
+    if (
+      tool.name === "goals.update" &&
+      !/(?<!\p{L})(oluştur\p{L}*|olustur\p{L}*|aç\p{L}*|ac\p{L}*|başlat\p{L}*|baslat\p{L}*|güncelle\p{L}*|guncelle\p{L}*|ilerlet\p{L}*|tamamla\p{L}*|engelle\p{L}*|block\p{L}*|create\p{L}*|start\p{L}*|update\p{L}*|advance\p{L}*|complete\p{L}*)(?!\p{L})/iu.test(
+        prompt,
+      )
+    ) {
+      return null;
+    }
+    reasons.push(intentMatch ? "planning_intent" : "explicit_goal");
+    return {
+      confidence: tool.name === "goals.get" ? 0.88 : 0.82,
+      reasons,
+    };
+  }
+
+  if (!intentMatch && !capabilityMatch && !outputMatch) return null;
+  if (intentMatch) reasons.push("intent_match");
+  if (capabilityMatch) reasons.push("capability_match");
+  if (outputMatch) reasons.push("output_match");
+  return { confidence: 0.72, reasons };
+}
+
+function scoreConnectorToolForTurn(
+  tool: AgentToolMetadata,
+  input: AgentToolSelectionContext,
+): { confidence: number; reasons: string[] } | null {
+  if (!input.advertisedConnectorTools?.includes(tool.name)) return null;
+  if (input.deterministicToolNames?.includes(tool.name)) {
+    return { confidence: 1, reasons: ["typed_deterministic_action"] };
+  }
+
+  if (tool.permission === "read") {
+    if (input.connectorReadHint?.tool === tool.name) {
+      const score = Number.isFinite(input.connectorReadHint.score)
+        ? Math.max(0, Math.min(1, input.connectorReadHint.score))
+        : 0;
+      return {
+        confidence: score,
+        reasons: ["connected_capability", "semantic_connector_hint"],
+      };
+    }
+    const prompt = normalizeSelectionText(input.prompt);
+    const deterministicRead =
+      tool.name === "gmail.search"
+        ? /(?=.*(?<!\p{L})(e-?posta\p{L}*|email\p{L}*|mail\p{L}*|gelen kutu\p{L}*|inbox)(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|kontrol\p{L}*|son|yeni|bugün|bugun|search\p{L}*|find\p{L}*|list\p{L}*|recent|latest)(?!\p{L}))/iu.test(
+            prompt,
+          )
+        : tool.name === "calendar.list_events"
+          ? /(?=.*(?<!\p{L})(takvim\p{L}*|etkinlik\p{L}*|toplantı\p{L}*|toplanti\p{L}*|calendar|event\p{L}*|meeting\p{L}*)(?!\p{L}))(?=.*(?<!\p{L})(listele\p{L}*|göster\p{L}*|goster\p{L}*|bak\p{L}*|bugün|bugun|yarın|yarin|yaklaşan|yaklasan|list\p{L}*|show\p{L}*|today|tomorrow|upcoming)(?!\p{L}))/iu.test(
+              prompt,
+            )
+            : tool.name === "drive.search"
+              ? /(?=.*(?<!\p{L})drive\p{L}*(?!\p{L}))(?=.*(?<!\p{L})(dosya\p{L}*|belge\p{L}*|doküman\p{L}*|dokuman\p{L}*|file\p{L}*|document\p{L}*)(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|son|yeni|benim|search\p{L}*|find\p{L}*|list\p{L}*|show\p{L}*|recent|latest|my)(?!\p{L}))/iu.test(
+                  prompt,
+                )
+              : tool.name === "notion.search"
+                ? /(?=.*(?<!\p{L})notion(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|benim|notlarım|notlarim|çalışma alan\p{L}*|calisma alan\p{L}*|search\p{L}*|find\p{L}*|list\p{L}*|show\p{L}*|my|workspace)(?!\p{L}))/iu.test(
+                    prompt,
+                  )
+                : tool.name === "github.search"
+                  ? /(?=.*(?<!\p{L})github(?!\p{L}))(?=.*(?<!\p{L})(issue\p{L}*|pull request\p{L}*|pr\p{L}*|repo\p{L}*|activity)(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|benim|search\p{L}*|find\p{L}*|list\p{L}*|show\p{L}*|my)(?!\p{L}))/iu.test(
+                      prompt,
+                    )
+                  : tool.name === "slack.search"
+                    ? /(?=.*(?<!\p{L})slack(?!\p{L}))(?=.*(?<!\p{L})(mesaj\p{L}*|kanal\p{L}*|message\p{L}*|channel\p{L}*)(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|benim|search\p{L}*|find\p{L}*|list\p{L}*|show\p{L}*|my)(?!\p{L}))/iu.test(
+                        prompt,
+                      )
+                    : false;
+    return deterministicRead
+      ? {
+          confidence: 0.88,
+          reasons: ["connected_capability", "deterministic_connector_intent"],
+        }
+      : null;
+  }
+
+  if (input.sideEffectRequested !== true) return null;
+  const prompt = normalizeSelectionText(input.prompt);
+  if (
+    /(?<!\p{L})(gönderme\p{L}*|gonderme\p{L}*|gönderilme\p{L}*|gonderilme\p{L}*|ekleme\p{L}*|oluşturma\p{L}*|olusturma\p{L}*|do not send|don't send|do not create|don't create|without sending|without creating)(?!\p{L})/iu.test(
+      prompt,
+    )
+  ) {
+    return null;
+  }
+  const explicitWrite =
+    tool.name === "gmail.send"
+      ? /(?=.*(?<!\p{L})(e-?posta\p{L}*|email\p{L}*|mail\p{L}*)(?!\p{L}))(?=.*(?<!\p{L})(gönder\p{L}*|gonder\p{L}*|send\p{L}*)(?!\p{L}))/iu.test(
+          prompt,
+        )
+      : tool.name === "calendar.create_event"
+        ? /(?=.*(?<!\p{L})(takvim\p{L}*|etkinlik\p{L}*|toplantı\p{L}*|toplanti\p{L}*|calendar|event|meeting)(?!\p{L}))(?=.*(?<!\p{L})(ekle\p{L}*|oluştur\p{L}*|olustur\p{L}*|planla\p{L}*|ayarla\p{L}*|create\p{L}*|add\p{L}*|schedule\p{L}*)(?!\p{L}))/iu.test(
+            prompt,
+          )
+        : false;
+  if (!explicitWrite) return null;
+  return {
+    confidence: 0.96,
+    reasons: ["connected_capability", "explicit_side_effect"],
+  };
+}
+
+export function buildAgentToolCatalogForTurn(
+  input: AgentToolSelectionContext,
+): AgentToolCatalogEntry[] {
+  if (input.localPrivate) return [];
+
+  const advertisedConnectorTools = new Set(
+    (input.advertisedConnectorTools ?? []).map((name) => name.trim()),
+  );
+  const catalog: AgentToolCatalogEntry[] = [];
+
+  for (const tool of toolDefinitions) {
+    const metadata = getAgentToolMetadata(tool.name);
+    if (!metadata) continue;
+
+    let selection: { confidence: number; reasons: string[] } | null = null;
+    if (metadata.selectionHints.connectorCapability) {
+      if (!advertisedConnectorTools.has(metadata.name)) continue;
+      selection = scoreConnectorToolForTurn(metadata, input);
+    } else if (input.includeCoreTools !== false) {
+      selection = scoreCoreToolForTurn(metadata, input);
+    }
+
+    if (
+      !selection ||
+      selection.confidence < AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD
+    ) {
+      continue;
+    }
+    catalog.push({
+      ...metadata,
+      selectionConfidence: selection.confidence,
+      selectionReasons: selection.reasons,
+    });
+  }
+
+  return catalog.sort(
+    (left, right) =>
+      right.selectionConfidence - left.selectionConfidence ||
+      left.name.localeCompare(right.name),
+  );
 }
 
 export function decideAgentToolApproval(input: {

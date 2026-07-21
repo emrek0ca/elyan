@@ -166,6 +166,34 @@ function detectFormat(text: string, metadata?: Record<string, unknown>): string 
   return null;
 }
 
+function detectRequestedFormatsInOrder(
+  text: string,
+  preferredFormat: string | null,
+): string[] {
+  const normalized = compactText(text).toLocaleLowerCase("tr-TR");
+  const candidates = [
+    { format: "pdf", pattern: /\bpdf\b/i },
+    { format: "docx", pattern: /\b(word|docx|doc)\b/i },
+    { format: "xlsx", pattern: /\b(xlsx|excel|spreadsheet|csv)\b/i },
+    { format: "svg", pattern: /\bsvg\b/i },
+    { format: "webp", pattern: /\bwebp\b/i },
+    { format: "jpg", pattern: /\b(jpe?g|jpg)\b/i },
+    { format: "png", pattern: /\bpng\b/i },
+  ]
+    .map((candidate) => ({
+      ...candidate,
+      index: candidate.pattern.exec(normalized)?.index ?? -1,
+    }))
+    .filter((candidate) => candidate.index >= 0)
+    .sort((left, right) => left.index - right.index);
+
+  const formats = candidates.map((candidate) => candidate.format);
+  if (preferredFormat && !formats.includes(preferredFormat)) {
+    formats.unshift(preferredFormat);
+  }
+  return [...new Set(formats)];
+}
+
 function detectDocumentStyle(text: string, metadata?: Record<string, unknown>): string {
   const metadataRecord = readRecord(metadata);
   const explicit = normalizeToken(
@@ -469,20 +497,35 @@ function buildDesiredOutputs(input: {
 }): UnderstandingDesiredOutput[] {
   const outputs: UnderstandingDesiredOutput[] = [];
   const normalized = compactText(input.text).toLocaleLowerCase("tr-TR");
-  const explicitExport = Boolean(input.format) ||
-    /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|yap|üret|uret)\b/i.test(normalized);
+  const metadataRecord = readRecord(input.metadata);
+  const metadataFormatRequested = Boolean(
+    readString(metadataRecord, "exportFormat") ??
+      readString(metadataRecord, "outputFormat") ??
+      readString(metadataRecord, "renderFormat") ??
+      readString(metadataRecord, "format"),
+  );
+  const explicitExport =
+    metadataFormatRequested ||
+    /\b(ver|hazırla|hazirla|oluştur|olustur|dönüştür|donustur|çevir|cevir|kaydet|yap|üret|uret|çıkar|cikar|export)\b/i.test(
+      normalized,
+    );
+  const requestedFormats = explicitExport
+    ? detectRequestedFormatsInOrder(input.text, input.format)
+    : [];
 
-  if (input.format === "pdf") {
-    addDesiredOutput(outputs, { kind: "pdf", format: "pdf", target: "artifact", confidence: 0.94, constraints: ["output_format"] });
-  } else if (input.format === "docx") {
-    addDesiredOutput(outputs, { kind: "docx", format: "docx", target: "artifact", confidence: 0.92, constraints: ["output_format"] });
-  } else if (input.format === "xlsx") {
-    addDesiredOutput(outputs, { kind: "xlsx", format: "xlsx", target: "artifact", confidence: 0.94, constraints: ["output_format", "table_required"] });
-    addDesiredOutput(outputs, { kind: "table", format: "table", target: "widget", confidence: 0.88, constraints: ["columns", "include_totals"] });
-  } else if (input.format === "svg") {
-    addDesiredOutput(outputs, { kind: "svg", format: "svg", target: "artifact", confidence: 0.92, constraints: ["output_format"] });
-  } else if (input.format && IMAGE_FORMATS.has(input.format)) {
-    addDesiredOutput(outputs, { kind: "image", format: input.format, target: "artifact", confidence: 0.9, constraints: ["output_format"] });
+  for (const requestedFormat of requestedFormats) {
+    if (requestedFormat === "pdf") {
+      addDesiredOutput(outputs, { kind: "pdf", format: "pdf", target: "artifact", confidence: 0.94, constraints: ["output_format"] });
+    } else if (requestedFormat === "docx") {
+      addDesiredOutput(outputs, { kind: "docx", format: "docx", target: "artifact", confidence: 0.92, constraints: ["output_format"] });
+    } else if (requestedFormat === "xlsx") {
+      addDesiredOutput(outputs, { kind: "xlsx", format: "xlsx", target: "artifact", confidence: 0.94, constraints: ["output_format", "table_required"] });
+      addDesiredOutput(outputs, { kind: "table", format: "table", target: "widget", confidence: 0.88, constraints: ["columns", "include_totals"] });
+    } else if (requestedFormat === "svg") {
+      addDesiredOutput(outputs, { kind: "svg", format: "svg", target: "artifact", confidence: 0.92, constraints: ["output_format"] });
+    } else if (IMAGE_FORMATS.has(requestedFormat)) {
+      addDesiredOutput(outputs, { kind: "image", format: requestedFormat, target: "artifact", confidence: 0.9, constraints: ["output_format"] });
+    }
   }
 
   if (
@@ -663,7 +706,10 @@ function buildAmbiguities(input: {
       .filter((format): format is string => typeof format === "string" && format.length > 0),
   );
   const ambiguities: UnderstandingAmbiguity[] = [];
-  if (outputFormats.size > 1) {
+  const compatibleDocumentExports = [...outputFormats].every((format) =>
+    format === "pdf" || format === "docx",
+  );
+  if (outputFormats.size > 1 && !compatibleDocumentExports) {
     ambiguities.push({
       kind: "conflicting_outputs",
       description: "Multiple output formats were requested in the same turn.",

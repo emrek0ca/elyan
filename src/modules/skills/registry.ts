@@ -31,6 +31,7 @@ export async function listActiveSkillSummaries(): Promise<SkillSummary[]> {
         purpose: skill.purpose,
         summary: skill.summary,
         triggers: skill.triggers,
+        produces: skill.produces,
         modelProfile: skill.modelProfile,
     }));
 }

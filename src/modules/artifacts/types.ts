@@ -287,6 +287,8 @@ export type ArtifactIntent = {
   confidence: number;
   intent: string;
   source: "typed_extractor" | "metadata" | "understanding_envelope";
+  requestedOutputKinds: string[];
+  requestedFormats: string[];
   requiresDesktopRuntime: boolean;
   privateDataReason?: string;
 };

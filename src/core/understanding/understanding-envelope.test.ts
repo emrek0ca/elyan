@@ -85,6 +85,40 @@ test("buildTypedUnderstandingEnvelope extracts Excel columns and totals from des
   assert.equal(preferredWorkloadFromUnderstandingEnvelope(envelope), "table_generate");
 });
 
+test("buildTypedUnderstandingEnvelope preserves explicitly requested export format order", () => {
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: "Bu raporu önce Word sonra PDF olarak oluştur",
+    intent: intent("document"),
+  });
+
+  assert.deepEqual(
+    envelope.desired_outputs
+      .filter((output) => output.target === "artifact")
+      .map((output) => output.kind),
+    ["docx", "pdf"],
+  );
+  assert.equal(
+    envelope.ambiguities.some(
+      (ambiguity) => ambiguity.kind === "conflicting_outputs",
+    ),
+    false,
+  );
+});
+
+test("buildTypedUnderstandingEnvelope does not treat a format concept question as artifact creation", () => {
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: "Word ile PDF arasındaki fark nedir?",
+    intent: intent("chat"),
+  });
+
+  assert.deepEqual(
+    envelope.desired_outputs.map((output) => output.kind),
+    ["chat_reply"],
+  );
+});
+
 test("buildTypedUnderstandingEnvelope keeps negated table requests in chat", () => {
   const prompt =
     "Exponential backoff’u iki maddede açıkla. Süreler 1, 2 ve 4 saniye olsun, jitter ekle. Tablo kullanma.";

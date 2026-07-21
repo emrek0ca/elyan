@@ -5,11 +5,17 @@ import {
   type AgentToolRequest,
   type AgentToolResult,
 } from "./tool-registry.js";
-import { createAgentRun } from "./agent-engine.js";
+import { createAgentRun, deriveAgentEvidence } from "./agent-engine.js";
 import { enqueueAgentRun } from "./agent-engine-queue.js";
 import { agentEngineRepository } from "./agent-engine-repository.js";
 import { isAgentEngineShadowEnabled, isAgentEngineV2Enabled } from "./agent-engine-policy.js";
-import { agentPlanEnvelopeSchema, buildAgentPlanFromToolRequests, type AgentPlanEnvelope } from "./agent-plan.js";
+import {
+  agentPlanEnvelopeSchema,
+  buildAgentPlanFromToolRequests,
+  hardenAgentPlanVerification,
+  type AgentPlanEnvelope,
+} from "./agent-plan.js";
+import { canCompleteAgentRun, verifyAgentStep } from "./agent-verifier.js";
 
 const DEFAULT_MAX_TOOL_REQUESTS = 4;
 const DEFAULT_TOOL_BUDGET_MS = 8_000;
@@ -22,10 +28,128 @@ export type AgentToolLoopResult = {
   engineVersion?: "agent_engine.v2";
   runId?: string;
   runState?: string;
+  planVersion?: "agent_plan.v2";
+  verificationPassed?: boolean;
+  stepVerifications?: Array<{
+    stepId: string;
+    passed: boolean;
+    confidence: number;
+    missingEvidence: string[];
+    failedRules: string[];
+  }>;
 };
 
 function elapsed(startedAt: number): number {
   return Math.max(0, Date.now() - startedAt);
+}
+
+function requestKey(request: AgentToolRequest): string {
+  return JSON.stringify([request.tool, request.args]);
+}
+
+function verificationFailureResult(result: AgentToolResult): AgentToolResult {
+  return {
+    ...result,
+    ok: false,
+    output: null,
+    error: {
+      code: "tool_verification_failed",
+      message: "The tool result could not be verified against the planned outcome.",
+    },
+  };
+}
+
+async function runVerifiedLegacyPlan(
+  app: FastifyInstance,
+  input: {
+    context: AgentToolContext;
+    requests: AgentToolRequest[];
+    plan: AgentPlanEnvelope;
+    maxRequests: number;
+    budgetMs: number;
+    startedAt: number;
+  },
+): Promise<AgentToolLoopResult> {
+  const plan = hardenAgentPlanVerification(
+    agentPlanEnvelopeSchema.parse(input.plan),
+  );
+  const allowedRequestCounts = new Map<string, number>();
+  for (const request of input.requests) {
+    const key = requestKey(request);
+    allowedRequestCounts.set(key, (allowedRequestCounts.get(key) ?? 0) + 1);
+  }
+  const selectedSteps = plan.steps
+    .filter((step) => {
+      const key = requestKey(step.tool_request);
+      const remaining = allowedRequestCounts.get(key) ?? 0;
+      if (remaining <= 0) return false;
+      allowedRequestCounts.set(key, remaining - 1);
+      return true;
+    })
+    .slice(0, input.maxRequests);
+  const selectedStepIds = new Set(selectedSteps.map((step) => step.id));
+  const verifiedStepIds = new Set<string>();
+  const results: AgentToolResult[] = [];
+  const verifications: NonNullable<AgentToolLoopResult["stepVerifications"]> = [];
+  const rawVerifications: ReturnType<typeof verifyAgentStep>[] = [];
+  let timedOut = false;
+
+  for (const step of selectedSteps) {
+    if (
+      !step.depends_on.every(
+        (dependency) =>
+          selectedStepIds.has(dependency) && verifiedStepIds.has(dependency),
+      )
+    ) {
+      break;
+    }
+    const remainingMs = input.startedAt + input.budgetMs - Date.now();
+    if (remainingMs <= 0) {
+      timedOut = true;
+      break;
+    }
+    const timeout = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), remainingMs).unref?.();
+    });
+    const executed = await Promise.race([
+      executeAgentTool(app, input.context, step.tool_request),
+      timeout,
+    ]);
+    if (executed === "timeout") {
+      timedOut = true;
+      break;
+    }
+    const verification = verifyAgentStep({
+      step,
+      evidence: deriveAgentEvidence(executed),
+    });
+    rawVerifications.push(verification);
+    verifications.push({
+      stepId: step.id,
+      passed: verification.passed,
+      confidence: verification.confidence,
+      missingEvidence: verification.missing_evidence,
+      failedRules: verification.failed_rules,
+    });
+    results.push(
+      verification.passed ? executed : verificationFailureResult(executed),
+    );
+    if (!verification.passed) break;
+    verifiedStepIds.add(step.id);
+  }
+
+  return {
+    iterations: results.length,
+    durationMs: elapsed(input.startedAt),
+    timedOut,
+    results,
+    planVersion: "agent_plan.v2",
+    verificationPassed:
+      selectedSteps.length > 0 &&
+      verifications.length === selectedSteps.length &&
+      canCompleteAgentRun(rawVerifications),
+    stepVerifications: verifications,
+  };
 }
 
 export async function runAgentToolLoop(
@@ -114,6 +238,17 @@ export async function runAgentToolLoop(
         runState: latest.run.state,
       };
     }
+  }
+
+  if (input.plan) {
+    return runVerifiedLegacyPlan(app, {
+      context: input.context,
+      requests,
+      plan: input.plan,
+      maxRequests,
+      budgetMs,
+      startedAt,
+    });
   }
 
   const wrapped = Promise.all(

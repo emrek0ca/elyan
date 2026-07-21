@@ -122,7 +122,11 @@ function baseFor<TType extends ArtifactSpec["type"]>(input: BuildSpecInput, type
     sourceText,
     locale: normalizeLocale(readString(readRecord(input.metadata), "locale") ?? detectLanguage(sourceText)),
     blocks: [],
-    renderOptions: {},
+    renderOptions: {
+      requestedOutputKinds: input.intent.requestedOutputKinds,
+      requestedExportFormats: input.intent.requestedFormats,
+      primaryArtifactType: input.intent.type,
+    },
     validationRules: [],
     metadata: metadataFor(input),
   };
@@ -388,6 +392,10 @@ function buildDocumentSpec(input: BuildSpecInput): DocumentSpec {
           : /\b(rapor)\b/i.test(normalized)
             ? "report"
             : "custom";
+  const requestedExportFormats = input.intent.requestedFormats.filter(
+    (format): format is "pdf" | "docx" | "xlsx" =>
+      format === "pdf" || format === "docx" || format === "xlsx",
+  );
   return {
     ...base,
     documentType,
@@ -406,7 +414,10 @@ function buildDocumentSpec(input: BuildSpecInput): DocumentSpec {
           ...(section.level ? { level: section.level } : {}),
         }))
       : [{ heading: undefined, content: compactText(source), level: 1 }],
-    exportFormats: sourceDocument?.exportFormats ?? ["pdf", "docx"],
+    exportFormats:
+      requestedExportFormats.length > 0
+        ? requestedExportFormats
+        : (sourceDocument?.exportFormats ?? ["pdf", "docx"]),
   };
 }
 

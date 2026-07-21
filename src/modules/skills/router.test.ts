@@ -251,3 +251,27 @@ test("router uses classifier when deterministic routing does not match", async (
   assert.equal(decision.needsSkill, true);
   assert.equal(decision.skillId, "document_qa");
 });
+
+test("router leaves unsupported Excel generation to the artifact pipeline", async () => {
+  const decision = await routeSkill({
+    prompt: "Bu belgedeki satırları Excel dosyasına çevir",
+    attachmentContext,
+    skills: await listActiveSkillSummaries(),
+    desiredOutputKinds: ["xlsx", "table"],
+  });
+
+  assert.equal(decision.needsSkill, false);
+  assert.match(decision.reason, /produces every explicitly requested output/i);
+});
+
+test("router allows document summary skill when PDF export is explicitly requested", async () => {
+  const decision = await routeSkill({
+    prompt: "Bu belgeyi özetle ve PDF olarak hazırla",
+    attachmentContext,
+    skills: await listActiveSkillSummaries(),
+    desiredOutputKinds: ["pdf"],
+  });
+
+  assert.equal(decision.needsSkill, true);
+  assert.equal(decision.skillId, "document_summary");
+});

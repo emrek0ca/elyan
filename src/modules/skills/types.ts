@@ -22,6 +22,26 @@ export const skillAllowedToolValues = [
 
 export type SkillAllowedTool = (typeof skillAllowedToolValues)[number];
 
+export type SkillProduces = {
+  desiredOutputKinds: Array<
+    | "chat_reply"
+    | "pdf"
+    | "docx"
+    | "xlsx"
+    | "table"
+    | "chart"
+    | "image"
+    | "svg"
+    | "task_result"
+    | "artifact"
+    | "action"
+  >;
+  artifactTypes: Array<
+    "text" | "table" | "chart" | "svg" | "pdf" | "document" | "image_prompt"
+  >;
+  blockTypes: string[];
+};
+
 export type SkillDefinition = {
   id: string;
   version: string;
@@ -44,6 +64,7 @@ export type SkillDefinition = {
   };
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
+  produces: SkillProduces;
   allowedTools: SkillAllowedTool[];
   modelProfile: SkillModelProfile;
   maxInputTokens: number;
@@ -77,6 +98,7 @@ export type SkillSummary = Pick<
   | "purpose"
   | "summary"
   | "triggers"
+  | "produces"
   | "modelProfile"
 >;
 

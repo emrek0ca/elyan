@@ -36,6 +36,7 @@ import {
   unsafeResponseRepairFallback,
 } from "./inference.js";
 import { looksLikeLeakedToolCallText } from "./turn-envelope.js";
+import { buildAgentToolCatalogForTurn } from "./tool-registry.js";
 import { emptyUnderstanding } from "../../core/understanding/user-understanding-service.js";
 import {
   resetSemanticComputeWorkerForTests,
@@ -75,6 +76,7 @@ test("structured prompt consumes the existing UnderstandingEnvelope", () => {
     understandingContext: understanding.context,
     connectorToolContracts: [
       'gmail.search {query:string, limit?:1..10} — search the user\'s Gmail',
+      "drive.search {query:string, limit?:1..20} — search Drive files",
     ],
     connectorReadToolHint: {
       tool: "gmail.search",
@@ -82,6 +84,14 @@ test("structured prompt consumes the existing UnderstandingEnvelope", () => {
       margin: 0.18,
       source: "transformer",
     },
+    agentToolCatalog: buildAgentToolCatalogForTurn({
+      prompt: "Gelen kutumu kontrol et",
+      intent: "chat",
+      desiredOutputKinds: ["chat_reply"],
+      advertisedConnectorTools: ["gmail.search", "drive.search"],
+      connectorReadHint: { tool: "gmail.search", score: 0.91 },
+      includeCoreTools: false,
+    }),
   } as never);
 
   assert.match(prompt, /"typedUnderstanding"/);
@@ -94,6 +104,37 @@ test("structured prompt consumes the existing UnderstandingEnvelope", () => {
   );
   assert.match(prompt, /High-confidence semantic connector selection/);
   assert.match(prompt, /exactly one hidden tool_requests item for gmail\.search/);
+  assert.doesNotMatch(prompt, /drive\.search/);
+});
+
+test("structured prompt does not advertise a connector below the selection threshold", () => {
+  const toolCatalog = buildAgentToolCatalogForTurn({
+    prompt: "Gelen kutumu kontrol et",
+    intent: "chat",
+    desiredOutputKinds: ["chat_reply"],
+    advertisedConnectorTools: ["gmail.search"],
+    connectorReadHint: { tool: "gmail.search", score: 0.71 },
+    includeCoreTools: false,
+  });
+  const prompt = buildStructuredSystemPrompt("System prompt", {
+    userId: "user-1",
+    prompt: "Gelen kutumu kontrol et",
+    workload: "mobile_chat_fast",
+    connectorToolContracts: [
+      'gmail.search {query:string, limit?:1..10} — search the user\'s Gmail',
+    ],
+    connectorReadToolHint: {
+      tool: "gmail.search",
+      score: 0.71,
+      margin: 0.02,
+      source: "transformer",
+    },
+    agentToolCatalog: toolCatalog,
+  } as never);
+
+  assert.doesNotMatch(prompt, /gmail\.search/);
+  assert.doesNotMatch(prompt, /connectorReadSelection/);
+  assert.doesNotMatch(prompt, /Connected integration tools/);
 });
 
 test("response cache never stores current-data answers", () => {
@@ -1051,6 +1092,92 @@ test("generateSharedBrainReply runs tool requests through the agent loop flag", 
   const toolResults = result.metadata.toolResults as Array<Record<string, unknown>>;
   assert.equal(toolResults[0]?.tool, "goals.update");
   assert.equal(toolResults[0]?.ok, false);
+});
+
+test("generateSharedBrainReply rejects a model-requested connector that was not advertised", async () => {
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      GROQ_API_KEY: "groq-test-key",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      ELYAN_SHARED_BRAIN_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_BALANCED_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_PLANNING_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+      ELYAN_TURN_ENVELOPE_ENABLED: true,
+      ELYAN_AGENT_LOOP_ENABLED: true,
+      ELYAN_CONNECTOR_TOOLS_ENABLED: true,
+    },
+    log: { info() {}, warn() {}, debug() {} },
+  };
+
+  const result = await withMockedFetch(
+    async (request: RequestInfo | URL) => {
+      const url =
+        typeof request === "string"
+          ? request
+          : request instanceof URL
+            ? request.toString()
+            : request.url;
+      assert.equal(url.endsWith("/chat/completions"), true);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  reply: {
+                    text: "Drive API genel olarak dosya aramayı destekler.",
+                    lang: "tr",
+                    tone: "neutral",
+                  },
+                  blocks: [],
+                  memory_ops: [],
+                  goal_ops: [],
+                  follow_ups: [],
+                  tool_requests: [
+                    { tool: "drive.search", args: { query: "rapor", limit: 3 } },
+                  ],
+                  affect: {
+                    user_mood_guess: "focused",
+                    energy: "mid",
+                    register: "technical",
+                  },
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () =>
+      generateSharedBrainReply(app as never, {
+        userId: "user-1",
+        prompt: "Drive API nasıl çalışır, genel olarak açıkla",
+        route: "shared_brain",
+        workload: "mobile_chat_fast",
+        connectorToolContracts: [],
+        internalEvaluation: {
+          skipUsageValidation: true,
+          skipConsentValidation: true,
+          skipInvocationLogging: true,
+        },
+      }),
+  );
+
+  assert.equal(result.metadata.toolRequestCount, 1);
+  assert.equal(result.metadata.toolRequestRejectedCount, 1);
+  assert.equal(result.metadata.toolLoopIterations, 0);
+  assert.equal(result.metadata.toolResults, undefined);
 });
 
 test("generateSharedBrainReply feeds successful tool results into a bounded second model pass", async () => {
@@ -5659,7 +5786,19 @@ test("vision skill sends ephemeral image to Gemini Flash-Lite with JSON schema",
       "vision_analysis",
       JSON.stringify({ text: result.text, metadata: result.metadata }),
     );
-    assert.match(result.text, /iki kişi/u);
+    assert.equal(result.text, "");
+    const blocks = result.metadata.blocks as Array<Record<string, unknown>>;
+    const imageAnalysis = blocks.find(
+      (block) => block.type === "image_analysis",
+    );
+    assert.match(String(imageAnalysis?.description ?? ""), /iki kişi/u);
+    assert.deepEqual(imageAnalysis?.tags, ["iki kişi", "mağaza rafları"]);
+    const skillExecution = result.metadata.skillExecution as Record<
+      string,
+      unknown
+    >;
+    assert.equal(skillExecution.structuredOutputUsed, true);
+    assert.deepEqual(skillExecution.producedBlockTypes, ["image_analysis"]);
     assert.ok(requests.length >= 1);
     assert.equal(requests[0]?.model, "gemini-fast");
     assert.ok(requests[0]?.response_format);

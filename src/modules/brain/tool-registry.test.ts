@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { brainMemoryEpisodes } from "../../db/schema.js";
 import {
+  AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD,
+  buildAgentToolCatalogForTurn,
   executeAgentTool,
   getAgentToolMetadata,
   listAgentTools,
@@ -137,10 +139,23 @@ test("listAgentTools exposes the first server brain tools with permissions", () 
   assert.equal(tools.some((tool) => tool.name === "memory.query" && tool.permission === "read"), true);
   assert.equal(tools.some((tool) => tool.name === "memory.write" && tool.permission === "write"), true);
   assert.equal(tools.some((tool) => tool.name === "goals.update" && tool.permission === "write"), true);
+  assert.equal(
+    tools.every((tool) => getAgentToolMetadata(tool.name) != null),
+    true,
+  );
 });
 
 test("tool registry exposes timeout, idempotency and parallel safety", () => {
-  assert.deepEqual(getAgentToolMetadata("web.search"), {
+  const webSearch = getAgentToolMetadata("web.search");
+  assert.ok(webSearch);
+  assert.deepEqual({
+    name: webSearch?.name,
+    permission: webSearch?.permission,
+    timeoutMs: webSearch?.timeoutMs,
+    idempotency: webSearch?.idempotency,
+    approvalScope: webSearch?.approvalScope,
+    parallelSafe: webSearch?.parallelSafe,
+  }, {
     name: "web.search",
     permission: "read",
     timeoutMs: 7_000,
@@ -148,7 +163,16 @@ test("tool registry exposes timeout, idempotency and parallel safety", () => {
     approvalScope: "user_action",
     parallelSafe: true,
   });
-  assert.deepEqual(getAgentToolMetadata("web.fetch_url"), {
+  const webFetchUrl = getAgentToolMetadata("web.fetch_url");
+  assert.ok(webFetchUrl);
+  assert.deepEqual({
+    name: webFetchUrl?.name,
+    permission: webFetchUrl?.permission,
+    timeoutMs: webFetchUrl?.timeoutMs,
+    idempotency: webFetchUrl?.idempotency,
+    approvalScope: webFetchUrl?.approvalScope,
+    parallelSafe: webFetchUrl?.parallelSafe,
+  }, {
     name: "web.fetch_url",
     permission: "read",
     timeoutMs: 8_000,
@@ -156,9 +180,222 @@ test("tool registry exposes timeout, idempotency and parallel safety", () => {
     approvalScope: "user_action",
     parallelSafe: true,
   });
+  assert.equal(webSearch.selectionHints.purpose.length > 0, true);
+  assert.deepEqual(webSearch.selectionHints.resultBlockTypes, [
+    "web_search",
+    "tool_call",
+  ]);
   assert.equal(getAgentToolMetadata("memory.write")?.parallelSafe, false);
   assert.equal(getAgentToolMetadata("memory.write")?.idempotency, "internal_state_write");
   assert.equal(getAgentToolMetadata("memory.write")?.approvalScope, "internal_state");
+});
+
+test("tool selection catalog excludes irrelevant and disconnected tools", () => {
+  const ordinaryChat = buildAgentToolCatalogForTurn({
+    prompt: "Selam, nasılsın?",
+    intent: "chat",
+    desiredOutputKinds: ["chat_reply"],
+    advertisedConnectorTools: [],
+    includeCoreTools: true,
+  });
+  assert.deepEqual(ordinaryChat, []);
+
+  const research = buildAgentToolCatalogForTurn({
+    prompt: "2026 yapay zeka pazarını güncel kaynaklarla araştır",
+    intent: "research",
+    desiredOutputKinds: ["chat_reply"],
+    advertisedConnectorTools: [],
+    includeCoreTools: true,
+  });
+  assert.equal(research.some((tool) => tool.name === "web.search"), true);
+  assert.equal(research.some((tool) => tool.name === "memory.write"), false);
+  assert.equal(
+    research.every(
+      (tool) =>
+        tool.selectionConfidence >=
+        AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD,
+    ),
+    true,
+  );
+
+  const connected = buildAgentToolCatalogForTurn({
+    prompt: "Gelen kutuma bak",
+    intent: "chat",
+    desiredOutputKinds: ["chat_reply"],
+    advertisedConnectorTools: ["gmail.search", "drive.search"],
+    connectorReadHint: { tool: "gmail.search", score: 0.88 },
+    includeCoreTools: true,
+  });
+  assert.equal(connected.some((tool) => tool.name === "gmail.search"), true);
+  assert.equal(connected.some((tool) => tool.name === "drive.search"), false);
+  assert.equal(connected.some((tool) => tool.name === "gmail.send"), false);
+
+  const ambiguousConnector = buildAgentToolCatalogForTurn({
+    prompt: "Bunu daha kısa anlat",
+    intent: "chat",
+    advertisedConnectorTools: ["gmail.search", "drive.search"],
+    includeCoreTools: true,
+  });
+  assert.deepEqual(ambiguousConnector, []);
+
+  const belowThreshold = buildAgentToolCatalogForTurn({
+    prompt: "Gelen kutuma bak",
+    intent: "chat",
+    advertisedConnectorTools: ["gmail.search"],
+    connectorReadHint: { tool: "gmail.search", score: 0.71 },
+    includeCoreTools: true,
+  });
+  assert.deepEqual(belowThreshold, []);
+
+  const invalidScore = buildAgentToolCatalogForTurn({
+    prompt: "Gelen kutuma bak",
+    intent: "chat",
+    advertisedConnectorTools: ["gmail.search"],
+    connectorReadHint: { tool: "gmail.search", score: Number.NaN },
+    includeCoreTools: true,
+  });
+  assert.deepEqual(invalidScore, []);
+
+  const connectorExplanations = [
+    {
+      prompt: "GitHub issue nedir?",
+      advertisedConnectorTools: ["github.search"],
+    },
+    {
+      prompt: "Drive dosya sistemi nedir?",
+      advertisedConnectorTools: ["drive.search"],
+    },
+    {
+      prompt: "Notion sayfası nedir?",
+      advertisedConnectorTools: ["notion.search"],
+    },
+    {
+      prompt: "Slack kanalı nedir?",
+      advertisedConnectorTools: ["slack.search"],
+    },
+  ];
+  for (const fixture of connectorExplanations) {
+    assert.deepEqual(
+      buildAgentToolCatalogForTurn({
+        ...fixture,
+        intent: "chat",
+        includeCoreTools: true,
+      }),
+      [],
+    );
+  }
+});
+
+test("tool selection catalog requires explicit side-effect intent and fails closed for local private work", () => {
+  const noWriteIntent = buildAgentToolCatalogForTurn({
+    prompt: "Bir e-posta taslağı hakkında konuşalım",
+    intent: "chat",
+    advertisedConnectorTools: ["gmail.send"],
+    includeCoreTools: true,
+  });
+  assert.equal(noWriteIntent.some((tool) => tool.name === "gmail.send"), false);
+
+  const negatedWrite = buildAgentToolCatalogForTurn({
+    prompt: "Bu e-postanın gönderilmesini istemiyorum",
+    intent: "chat",
+    sideEffectRequested: true,
+    advertisedConnectorTools: ["gmail.send"],
+    includeCoreTools: true,
+  });
+  assert.deepEqual(negatedWrite, []);
+
+  const explicitWrite = buildAgentToolCatalogForTurn({
+    prompt: "Bu e-postayı gönder",
+    intent: "chat",
+    sideEffectRequested: true,
+    advertisedConnectorTools: ["gmail.send"],
+    includeCoreTools: true,
+  });
+  assert.equal(explicitWrite.some((tool) => tool.name === "gmail.send"), true);
+
+  const mixedWrites = buildAgentToolCatalogForTurn({
+    prompt: "Bu e-postayı gönder",
+    intent: "chat",
+    sideEffectRequested: true,
+    advertisedConnectorTools: ["gmail.send", "calendar.create_event"],
+    includeCoreTools: true,
+  });
+  assert.deepEqual(mixedWrites.map((tool) => tool.name), ["gmail.send"]);
+
+  const typedMailAction = buildAgentToolCatalogForTurn({
+    prompt: "Mesajı aç",
+    intent: "chat",
+    advertisedConnectorTools: ["gmail.read", "gmail.search"],
+    deterministicToolNames: ["gmail.read"],
+    includeCoreTools: true,
+  });
+  assert.deepEqual(typedMailAction.map((tool) => tool.name), ["gmail.read"]);
+
+  const generalPlanning = buildAgentToolCatalogForTurn({
+    prompt: "Bu proje için bana kısa bir plan yap",
+    intent: "planning",
+    includeCoreTools: true,
+  });
+  assert.equal(generalPlanning.some((tool) => tool.name === "goals.update"), false);
+
+  const localPrivate = buildAgentToolCatalogForTurn({
+    prompt: "Bilgisayarımdaki dosyayı oku",
+    intent: "document",
+    localPrivate: true,
+    advertisedConnectorTools: ["drive.search"],
+    includeCoreTools: true,
+  });
+  assert.deepEqual(localPrivate, []);
+});
+
+test("tool selection deterministically matches every existing read connector widget", () => {
+  const fixtures = [
+    {
+      prompt: "Gelen kutumdaki son mailleri göster",
+      tool: "gmail.search",
+    },
+    {
+      prompt: "Takvimimde yarınki etkinlikleri göster",
+      tool: "calendar.list_events",
+    },
+    {
+      prompt: "Drive'daki son dosyaları göster",
+      tool: "drive.search",
+    },
+    {
+      prompt: "Notion çalışma alanımda notlarımı ara",
+      tool: "notion.search",
+    },
+    {
+      prompt: "GitHub repo issue'larımı göster",
+      tool: "github.search",
+    },
+    {
+      prompt: "Slack mesajlarımda bu konuyu ara",
+      tool: "slack.search",
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    const catalog = buildAgentToolCatalogForTurn({
+      prompt: fixture.prompt,
+      intent: "chat",
+      desiredOutputKinds: ["chat_reply"],
+      advertisedConnectorTools: [fixture.tool],
+      includeCoreTools: false,
+    });
+    assert.deepEqual(
+      catalog.map((tool) => tool.name),
+      [fixture.tool],
+      fixture.prompt,
+    );
+    assert.equal(
+      catalog[0]?.selectionHints.resultBlockTypes.some(
+        (blockType) => blockType !== "tool_call",
+      ),
+      true,
+    );
+  }
 });
 
 test("executeAgentTool can fetch URL context as a read-only tool", async () => {

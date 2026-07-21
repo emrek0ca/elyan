@@ -84,8 +84,14 @@ import {
   runAgentToolLoop,
   summarizeToolResultsForMetadata,
 } from "./agent-loop.js";
-import type { AgentToolRequest, AgentToolResult } from "./tool-registry.js";
+import type {
+  AgentToolCatalogEntry,
+  AgentToolRequest,
+  AgentToolResult,
+} from "./tool-registry.js";
 import {
+  AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD,
+  buildAgentToolCatalogForTurn,
   decideAgentToolApproval,
   getAgentToolMetadata,
 } from "./tool-registry.js";
@@ -381,7 +387,9 @@ import {
   isExplicitTableRequest,
 } from "../../core/understanding/structured-output-policy.js";
 import {
+  type AssistantMessageBlock,
   buildAssistantDocumentBlock,
+  buildAssistantImageAnalysisBlock,
   buildAssistantInfoCardBlock,
   buildAssistantMessageBlocks,
   buildAssistantWebSearchBlock,
@@ -442,6 +450,8 @@ type SharedBrainInferenceInput = {
    * tool_requests. Empty/undefined means advertise nothing.
    */
   connectorToolContracts?: string[];
+  /** Request-scoped registry view. Only these tools may be requested or run. */
+  agentToolCatalog?: AgentToolCatalogEntry[];
   /**
    * High-confidence semantic routing hint derived only from the connector
    * contracts advertised for this request. It guides TurnEnvelope emission;
@@ -1959,7 +1969,10 @@ function advertisedConnectorReadToolHint(
       .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
       .filter((name): name is string => Boolean(name)),
   );
-  return advertised.has(hint.tool) ? hint : null;
+  const eligible = new Set(
+    (input.agentToolCatalog ?? []).map((tool) => tool.name),
+  );
+  return advertised.has(hint.tool) && eligible.has(hint.tool) ? hint : null;
 }
 
 export function connectorFailureReply(errorCode: string | null | undefined): string {
@@ -2132,6 +2145,17 @@ function buildStructuredDataPromptBlock(
           permission: "read_only",
         }
       : undefined,
+    eligibleAgentTools:
+      input.agentToolCatalog && input.agentToolCatalog.length > 0
+        ? input.agentToolCatalog.map((tool) => ({
+            name: tool.name,
+            permission: tool.permission,
+            purpose: tool.selectionHints.purpose,
+            contract: tool.selectionHints.modelContract,
+            resultBlockTypes: tool.selectionHints.resultBlockTypes,
+            confidence: Number(tool.selectionConfidence.toFixed(3)),
+          }))
+        : undefined,
     responsePresentation: {
       primaryShape: responseDecision.primaryShape,
       primaryBlockType: responseDecision.primaryBlockType,
@@ -2701,6 +2725,9 @@ export function buildStructuredSystemPrompt(
     ? "This question is about the user, not Elyan. Answer only from the current-user identity, preference, project, understanding-envelope, and memory-profile evidence above. Do not introduce or describe Elyan. If no verified user facts are available, say that you do not know the user yet and offer to learn."
     : null;
   const connectorReadHint = advertisedConnectorReadToolHint(input);
+  const eligibleConnectorToolContracts = (input.agentToolCatalog ?? [])
+    .filter((tool) => Boolean(tool.selectionHints.connectorCapability))
+    .map((tool) => tool.selectionHints.modelContract);
   // Desktop execution is decided ONLY by the user's laptop toggle (surfaced as
   // the route decision), never by the wording of the message. When the toggle
   // is off the brain must do the work on the server instead of punting with a
@@ -2843,13 +2870,21 @@ export function buildStructuredSystemPrompt(
       ? "C/C++ expertise: answer as a senior systems programmer. State which language standard your code assumes (default to C17 / C++20 unless the user targets another). Write complete, compilable examples with the required #include lines — never pseudo-code fragments that won't build. In C++, follow RAII and the rule of zero/five; prefer smart pointers, std::string_view, std::span, and standard algorithms over raw pointers and manual loops when appropriate. In C, show explicit ownership, error handling on every allocation and I/O call, and bounds-checked buffer use. Proactively flag undefined behavior, lifetime bugs, data races, and memory-safety pitfalls in the user's code or in your own examples. When relevant, recommend concrete tooling: compiler flags (-Wall -Wextra -Werror, -fsanitize=address,undefined), CMake for builds, gdb/lldb for debugging, valgrind or sanitizers for memory issues. Explain performance and safety trade-offs briefly — the why, not just the how."
       : null,
     // ── CONNECTOR TOOLS (only when the user has connected integrations) ──
-    (input.connectorToolContracts?.length ?? 0) > 0
-      ? `Connected integration tools (server-side): ${input.connectorToolContracts!.join(" | ")}. These integrations are ALREADY connected and authorized by the user — never ask for permission, confirmation, or consent before a read; when the request concerns the user's own email, calendar, or Drive, emit the matching hidden tool_requests item in THIS turn and let the tool result drive the answer. Never print tool names, JSON, arguments, query syntax, or planning text in the visible reply. Use exact flat args matching each contract. Never claim to have read a mailbox/calendar/file without an ok tool result. When tool results exist, answer with the actual user-facing data in the user's language, grouped and deduplicated. Be proactively helpful with these connections: when the conversation naturally touches something a connected tool could answer better (an email they mention, a date that smells like a calendar conflict), either use the tool in this turn or briefly offer to — one short natural offer, never a feature tour. WRITE tools marked "REQUIRES the user to approve" (e.g. gmail.send, calendar.create_event): when the user clearly asks to send an email or create an event, emit the matching hidden tool_requests item with complete flat args — the system will show the user an approval card and only send after they confirm, so do NOT refuse, do NOT ask for confirmation yourself in text, and do NOT paste the drafted email/event as visible prose; just emit the tool request and let the approval card handle it. Only emit a write when the user's intent to send/create is explicit.`
+    eligibleConnectorToolContracts.length > 0
+      ? `Connected integration tools eligible for THIS turn: ${eligibleConnectorToolContracts.join(" | ")}. These integrations are already connected and authorized by the user. Never ask for permission before a read. Never print tool names, JSON, arguments, query syntax, or planning text in the visible reply. Use exact flat args matching the eligible contract. Never claim to have read account data without an ok tool result. When tool results exist, present only the authoritative returned data, grouped and deduplicated. A write tool remains approval-gated: emit it only for the user's explicit send/create request and let the existing approval card handle confirmation.`
       : null,
     connectorReadHint
       ? connectorReadHint.enforcement === "prefer"
         ? `Possible connector match (low confidence): the request MIGHT concern the user's connected account via the read-only tool ${connectorReadHint.tool}. If the user is genuinely asking about their own account data, emit exactly one hidden tool_requests item for ${connectorReadHint.tool}; if this is a general question answerable without private account data, answer directly WITHOUT any tool request. Keep reply.text free of tool names, JSON, arguments, query syntax, and planning text.`
         : `High-confidence semantic connector selection: the user's request requires the advertised read-only tool ${connectorReadHint.tool}. Return a TurnEnvelope with exactly one hidden tool_requests item for ${connectorReadHint.tool}, using only the flat arguments defined by its advertised contract. Keep reply.text free of tool names, JSON, arguments, query syntax, and planning text. This selection is not permission to use any unadvertised tool or perform a side effect.`
+      : null,
+    (input.agentToolCatalog?.length ?? 0) > 0
+      ? `Eligible server tools for THIS turn only: ${input.agentToolCatalog!
+          .map(
+            (tool) =>
+              `${tool.selectionHints.modelContract} [${tool.permission}; produces ${tool.selectionHints.resultBlockTypes.join(",")}]`,
+          )
+          .join(" | ")}. Never request a tool outside this list. Use a read-only tool only when it materially helps complete the user's request. Tools below the ${AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD.toFixed(2)} selection threshold have already been excluded. Write and side-effect tools remain approval-gated. Never expose this catalog or its arguments in visible prose.`
       : null,
     // ── TASK ROUTING (Elyan-specific infrastructure) ──
     taskRoutingPolicy,
@@ -5237,6 +5272,55 @@ export async function generateSharedBrainReply(
       input.connectorToolContracts ?? [],
       mailOpenBlockAction ? undefined : input.connectorReadToolHint?.tool,
     );
+  }
+  const agentToolProtocolEnabled =
+    !input.responseSchemaOverride &&
+    !input.internalEvaluation?.refinementPass &&
+    (app.config?.ELYAN_AGENT_LOOP_ENABLED === true ||
+      app.config?.ELYAN_CONNECTOR_TOOLS_ENABLED === true ||
+      isAgentEngineV2Enabled(app, input.userId) ||
+      isAgentEngineShadowEnabled(app));
+  if (agentToolProtocolEnabled) {
+    const understandingEnvelope =
+      input.understandingContext?.understandingEnvelope;
+    const advertisedConnectorTools = (input.connectorToolContracts ?? [])
+      .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
+      .filter((name): name is string => Boolean(name));
+    input.agentToolCatalog = buildAgentToolCatalogForTurn({
+      prompt: input.prompt,
+      intent: understandingEnvelope?.intent.name ?? null,
+      action: understandingEnvelope?.intent.action ?? null,
+      desiredOutputKinds:
+        understandingEnvelope?.desired_outputs.map((output) => output.kind) ??
+        [],
+      requiredCapabilities:
+        understandingEnvelope?.required_capabilities.map(
+          (capability) => capability.name,
+        ) ?? [],
+      advertisedConnectorTools,
+      connectorReadHint: input.connectorReadToolHint
+        ? {
+            tool: input.connectorReadToolHint.tool,
+            score: input.connectorReadToolHint.score,
+          }
+        : null,
+      deterministicToolNames: mailOpenBlockAction ? ["gmail.read"] : [],
+      memoryCandidateCount:
+        understandingEnvelope?.memory_candidates.length ?? 0,
+      sideEffectRequested:
+        input.routeDecision?.privacyClass === "side_effect" ||
+        input.routeDecision?.requiresApproval === true ||
+        understandingEnvelope?.risk.side_effect === true,
+      localPrivate:
+        input.routeDecision?.privacyClass === "local_private" ||
+        understandingEnvelope?.risk.local_private === true,
+      includeCoreTools:
+        app.config?.ELYAN_AGENT_LOOP_ENABLED === true ||
+        isAgentEngineV2Enabled(app, input.userId) ||
+        isAgentEngineShadowEnabled(app),
+    });
+  } else {
+    input.agentToolCatalog = [];
   }
   const planBrainProfile = normalizePlanBrainProfile(input.brainProfile);
   const cacheable =
@@ -7819,6 +7903,9 @@ export async function generateSharedBrainReply(
           .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
           .filter((name): name is string => Boolean(name)),
       );
+      const eligibleAgentToolNames = new Set(
+        (input.agentToolCatalog ?? []).map((tool) => tool.name),
+      );
       const modelEnvelopeToolRequests: AgentToolRequest[] = turnEnvelope
         ? turnEnvelope.tool_requests.length > 0
           ? turnEnvelope.tool_requests
@@ -7849,23 +7936,22 @@ export async function generateSharedBrainReply(
         visualToolActionAuthorized
       ) {
         const requestedTools: AgentToolRequest[] = envelopeToolRequests;
-        const scopedToolRequests = connectorOnlyMode
-          ? requestedTools.filter((request) => {
-              if (!isConnectorTool(request.tool)) return false;
-              const permission = getAgentToolMetadata(request.tool)?.permission;
-              return (
-                permission === "side_effect" ||
-                advertisedConnectorNames.has(request.tool)
-              );
-            })
-          : requestedTools.filter((request) => {
-              if (!isConnectorTool(request.tool)) return true;
-              const permission = getAgentToolMetadata(request.tool)?.permission;
-              return (
-                permission === "side_effect" ||
-                advertisedConnectorNames.has(request.tool)
-              );
-            });
+        const scopedToolRequests = requestedTools.filter((request) => {
+          if (!eligibleAgentToolNames.has(request.tool)) return false;
+          if (connectorOnlyMode && !isConnectorTool(request.tool)) return false;
+          if (
+            isConnectorTool(request.tool) &&
+            !advertisedConnectorNames.has(request.tool)
+          ) {
+            return false;
+          }
+          return true;
+        });
+        result.metadata.eligibleToolCount = eligibleAgentToolNames.size;
+        result.metadata.toolSelectionThreshold =
+          AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD;
+        result.metadata.toolRequestRejectedCount =
+          requestedTools.length - scopedToolRequests.length;
         const safeToolRequests = filterVolatileExternalToolRequests(
           scopedToolRequests,
           webGrounding,
@@ -7922,6 +8008,7 @@ export async function generateSharedBrainReply(
         const toolPlan =
           mailOpenBlockAction == null &&
           !connectorOnlyMode &&
+          (turnEnvelope?.tool_requests.length ?? 0) === 0 &&
           inlineToolRequests.length === requestedTools.length
             ? (turnEnvelope?.agent_plan ?? null)
             : null;
@@ -7983,6 +8070,13 @@ export async function generateSharedBrainReply(
           result.metadata.toolResults = summarizeToolResultsForMetadata(
             toolLoop.results,
           );
+          if (toolLoop.planVersion) {
+            result.metadata.agentPlanVersion = toolLoop.planVersion;
+            result.metadata.agentPlanVerificationPassed =
+              toolLoop.verificationPassed === true;
+            result.metadata.agentStepVerifications =
+              toolLoop.stepVerifications ?? [];
+          }
           if (toolLoop.engineVersion) {
             result.metadata.agentEngineVersion = toolLoop.engineVersion;
             result.metadata.agentRunId = toolLoop.runId ?? null;
@@ -9202,6 +9296,7 @@ function buildSkillModelRequestMetadata(input: {
 
 function buildResearchSkillDocumentBlock(
   skillResult: Awaited<ReturnType<typeof executeSkill>>,
+  request: SharedBrainInferenceInput,
 ) {
   if (
     !skillResult ||
@@ -9262,13 +9357,155 @@ function buildResearchSkillDocumentBlock(
     format: "report",
     sections,
     wordCount: bodyWordCount,
-    exportFormats: ["pdf", "docx"],
+    exportFormats: requestedSkillExportFormats(request) ?? ["pdf", "docx"],
     design: {
       theme: "report",
       density: "comfortable",
       pageSize: "A4",
     },
   });
+}
+
+function readSkillStringList(value: unknown, max = 12): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => compactText(item))
+    .filter(Boolean)
+    .slice(0, max);
+}
+
+function requestedSkillExportFormats(
+  input: SharedBrainInferenceInput,
+): Array<"pdf" | "docx"> | undefined {
+  const requested = new Set(
+    input.understandingContext?.understandingEnvelope?.desired_outputs.map(
+      (output) => output.kind,
+    ) ?? [],
+  );
+  const formats: Array<"pdf" | "docx"> = [];
+  if (requested.has("pdf")) formats.push("pdf");
+  if (requested.has("docx")) formats.push("docx");
+  return formats.length > 0 ? formats : undefined;
+}
+
+function buildStructuredSkillBlocks(input: {
+  skillId: string;
+  structuredOutput: Record<string, unknown> | null;
+  attachmentContext: ResolvedAttachmentContext | null;
+  request: SharedBrainInferenceInput;
+}): AssistantMessageBlock[] {
+  const output = input.structuredOutput;
+  if (!output) return [];
+  const exportFormats = requestedSkillExportFormats(input.request);
+  const attachmentTitle = compactText(
+    input.attachmentContext?.documents[0]?.title,
+  );
+
+  if (input.skillId === "document_summary") {
+    const summary = compactText(output.summary);
+    const keyPoints = readSkillStringList(output.keyPoints);
+    const content = keyPoints.map((item) => `• ${item}`).join("\n");
+    const block = buildAssistantDocumentBlock(
+      {
+        title: attachmentTitle
+          ? `${attachmentTitle} — Özet`
+          : "Belge Özeti",
+        summary: summary || null,
+        format: "notes",
+        sections: [
+          {
+            heading: keyPoints.length > 0 ? "Önemli Noktalar" : "Özet",
+            content: content || summary,
+            level: 1,
+          },
+        ],
+        wordCount: (summary + " " + keyPoints.join(" "))
+          .trim()
+          .split(/\s+/u)
+          .filter(Boolean).length,
+        ...(exportFormats ? { exportFormats } : {}),
+      },
+      {
+        renderHints: {
+          sectionRole: "primary",
+          contentOwner: "skill",
+          skillId: input.skillId,
+          structuredOutput: true,
+        },
+      },
+    );
+    return block ? [block] : [];
+  }
+
+  if (input.skillId === "document_key_points") {
+    const title = compactText(output.title) || "Belge Analizi";
+    const keyPoints = readSkillStringList(output.keyPoints);
+    const actionItems = readSkillStringList(output.actionItems);
+    const sections = [
+      ...(keyPoints.length > 0
+        ? [
+            {
+              heading: "Önemli Noktalar",
+              content: keyPoints.map((item) => `• ${item}`).join("\n"),
+              level: 1,
+            },
+          ]
+        : []),
+      ...(actionItems.length > 0
+        ? [
+            {
+              heading: "Aksiyonlar",
+              content: actionItems.map((item) => `• ${item}`).join("\n"),
+              level: 1,
+            },
+          ]
+        : []),
+    ];
+    const block = buildAssistantDocumentBlock(
+      {
+        title,
+        format: "outline",
+        sections,
+        wordCount: [...keyPoints, ...actionItems]
+          .join(" ")
+          .split(/\s+/u)
+          .filter(Boolean).length,
+        ...(exportFormats ? { exportFormats } : {}),
+      },
+      {
+        renderHints: {
+          sectionRole: "primary",
+          contentOwner: "skill",
+          skillId: input.skillId,
+          structuredOutput: true,
+        },
+      },
+    );
+    return block ? [block] : [];
+  }
+
+  if (input.skillId === "vision_analysis") {
+    const block = buildAssistantImageAnalysisBlock(
+      {
+        description: compactText(output.visualDescription),
+        detectedText: compactText(output.detectedText) || null,
+        tags: readSkillStringList(output.keyElements),
+        confidence:
+          typeof output.confidence === "number" ? output.confidence : null,
+      },
+      {
+        renderHints: {
+          sectionRole: "primary",
+          contentOwner: "skill",
+          skillId: input.skillId,
+          structuredOutput: true,
+        },
+      },
+    );
+    return block ? [block] : [];
+  }
+
+  return [];
 }
 
 async function tryGenerateSkillReply(
@@ -9287,6 +9524,10 @@ async function tryGenerateSkillReply(
     attachmentContext,
     skills,
     skillHint: readSkillHint(input.requestMetadata),
+    desiredOutputKinds:
+      input.understandingContext?.understandingEnvelope?.desired_outputs.map(
+        (output) => output.kind,
+      ) ?? [],
     classify: (classifierInput) =>
       classifySkillRouteWithModel(app, {
         ...input,
@@ -9482,14 +9723,27 @@ async function tryGenerateSkillReply(
   });
   const attachmentInsightBlocks =
     buildAttachmentInsightBlocks(attachmentContext);
-  const researchDocumentBlock = buildResearchSkillDocumentBlock(skillResult);
-  const skillBlocks = [
-    ...attachmentInsightBlocks,
+  const researchDocumentBlock = buildResearchSkillDocumentBlock(
+    skillResult,
+    input,
+  );
+  const structuredSkillBlocks = buildStructuredSkillBlocks({
+    skillId: skill.id,
+    structuredOutput: skillResult.structuredOutput,
+    attachmentContext,
+    request: input,
+  });
+  const primarySkillBlocks = [
     ...(researchDocumentBlock ? [researchDocumentBlock] : []),
+    ...structuredSkillBlocks,
   ];
-  // A research report has one canonical visible surface: document_block.
-  // Keeping the same report in legacy text would render it twice on mobile.
-  const displayText = researchDocumentBlock ? "" : cleanDisplayText;
+  const skillBlocks = [
+    ...primarySkillBlocks,
+    ...attachmentInsightBlocks,
+  ];
+  // A typed skill result has one canonical visible surface. Keeping the same
+  // structured data in legacy text would render it twice on mobile.
+  const displayText = primarySkillBlocks.length > 0 ? "" : cleanDisplayText;
   const responseBytes = estimateResponseBytes(
     displayText || JSON.stringify(skillBlocks),
   );
@@ -9548,6 +9802,8 @@ async function tryGenerateSkillReply(
         toolCalls: skillResult.metadata.toolCalls,
         manualHintUsed: skillResult.metadata.manualHintUsed,
         skillDisplay: skillResult.metadata.skillDisplay,
+        structuredOutputUsed: primarySkillBlocks.length > 0,
+        producedBlockTypes: primarySkillBlocks.map((block) => block.type),
       },
       skillUsed: true,
       skillId: skillResult.metadata.skillId,

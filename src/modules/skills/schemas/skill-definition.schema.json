@@ -20,6 +20,7 @@
     "triggers",
     "inputSchema",
     "outputSchema",
+    "produces",
     "allowedTools",
     "modelProfile",
     "maxInputTokens",
@@ -55,6 +56,39 @@
     },
     "inputSchema": { "type": "object" },
     "outputSchema": { "type": "object" },
+    "produces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["desiredOutputKinds", "artifactTypes", "blockTypes"],
+      "properties": {
+        "desiredOutputKinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["chat_reply", "pdf", "docx", "xlsx", "table", "chart", "image", "svg", "task_result", "artifact", "action"]
+          },
+          "uniqueItems": true,
+          "minItems": 1,
+          "maxItems": 11
+        },
+        "artifactTypes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["text", "table", "chart", "svg", "pdf", "document", "image_prompt"]
+          },
+          "uniqueItems": true,
+          "maxItems": 7
+        },
+        "blockTypes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "uniqueItems": true,
+          "minItems": 1,
+          "maxItems": 12
+        }
+      }
+    },
     "allowedTools": {
       "type": "array",
       "items": {

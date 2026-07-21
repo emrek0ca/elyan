@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getPublicSkillCatalog, loadSkillRegistry, resetSkillRegistryForTests } from "./registry.js";
 import { configureSkillDefinitionSchema, validateSkillDefinition } from "./validator.js";
+import { elyanAssistantBlockTypeValues } from "../../contracts/assistant-block-schemas.js";
 
 const minimalDefinitionSchema = {
   type: "object",
@@ -39,6 +40,16 @@ test("skill registry loads active document skills", async () => {
     assert.equal(skill.displayName.length > 0, true);
     assert.equal(skill.slashCommand.startsWith("/"), true);
     assert.equal(skill.manualSelectable, true);
+    assert.equal(skill.produces.desiredOutputKinds.length > 0, true);
+    assert.equal(skill.produces.blockTypes.length > 0, true);
+    assert.equal(
+      skill.produces.blockTypes.every((blockType) =>
+        (elyanAssistantBlockTypeValues as readonly string[]).includes(
+          blockType,
+        ),
+      ),
+      true,
+    );
   }
 });
 
@@ -50,7 +61,10 @@ test("public skill catalog exposes only UI-safe skill fields", async () => {
   assert.equal(catalog.catalogVersion, "2026-06-skill-catalog-v1");
   assert.equal(catalog.items.some((item) => item.id === "document_summary"), true);
   const serialized = JSON.stringify(catalog);
-  assert.doesNotMatch(serialized, /instructions|modelProfile|allowedTools|outputSchema|inputSchema/);
+  assert.doesNotMatch(
+    serialized,
+    /instructions|modelProfile|allowedTools|outputSchema|inputSchema|produces/,
+  );
 });
 
 test("invalid skill definition is rejected", () => {

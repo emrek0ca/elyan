@@ -128,7 +128,9 @@ function toolEvidence(result: AgentToolResult): AgentEvidenceInput {
   };
 }
 
-function deriveEvidence(result: AgentToolResult): AgentEvidenceInput[] {
+export function deriveAgentEvidence(
+  result: AgentToolResult,
+): AgentEvidenceInput[] {
   const evidence: AgentEvidenceInput[] = [toolEvidence(result)];
   if (!result.ok || !result.output) return evidence;
   if (result.permission === "write" || result.permission === "side_effect") {
@@ -254,7 +256,7 @@ async function executeStep(input: {
   await repository.incrementToolCalls(input.userId, input.runId, 1);
   await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "observed", toolResult: result });
   const storedEvidence = await repository.recordEvidence({
-    userId: input.userId, runId: input.runId, stepId: input.step.id, evidence: deriveEvidence(result),
+    userId: input.userId, runId: input.runId, stepId: input.step.id, evidence: deriveAgentEvidence(result),
   });
   const verification = verifyAgentStep({
     step: input.planStep,

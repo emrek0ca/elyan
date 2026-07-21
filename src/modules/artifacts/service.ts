@@ -235,6 +235,16 @@ function artifactOutputToAssistantBlocks(
   sourceBlocks?: AssistantMessageBlock[],
 ): AssistantMessageBlock[] {
   const spec = output.spec;
+  const requestedExportFormats = Array.isArray(
+    spec.renderOptions?.requestedExportFormats,
+  )
+    ? spec.renderOptions.requestedExportFormats
+        .filter(
+          (format): format is "pdf" | "docx" | "xlsx" =>
+            format === "pdf" || format === "docx" || format === "xlsx",
+        )
+        .slice(0, 3)
+    : [];
   if (spec.type === "pdf") {
     const sourceDocument = sourceDocumentBlock(sourceBlocks);
     const block = buildAssistantDocumentBlock({
@@ -248,7 +258,10 @@ function artifactOutputToAssistantBlocks(
         (spec.documentType === "letter" ? "letter" : "report"),
       wordCount: sourceDocument?.wordCount,
       summary: sourceDocument?.summary,
-      exportFormats: sourceDocument?.exportFormats ?? ["pdf", "docx"],
+      exportFormats:
+        requestedExportFormats.length > 0
+          ? requestedExportFormats
+          : (sourceDocument?.exportFormats ?? ["pdf"]),
       design:
         sourceDocument?.design ??
         {
@@ -287,6 +300,12 @@ function artifactOutputToAssistantBlocks(
         artifactType: "table",
         validationOk: output.validation.ok,
         typedColumns: spec.columns,
+        exportFormats: requestedExportFormats.filter(
+          (format) => format === "xlsx",
+        ),
+        ...(requestedExportFormats.includes("xlsx")
+          ? { fileName: `${safeFileSlug(spec.title ?? "elyan-tablosu")}.xlsx` }
+          : {}),
       },
     });
     return block ? [block] : [];

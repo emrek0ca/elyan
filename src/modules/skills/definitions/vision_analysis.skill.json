@@ -1,6 +1,6 @@
 {
   "id": "vision_analysis",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "active": true,
   "name": "Vision Analysis",
   "displayName": "Görsel Analiz",
@@ -36,6 +36,11 @@
       "keyElements": { "type": "array", "items": { "type": "string" } },
       "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
     }
+  },
+  "produces": {
+    "desiredOutputKinds": ["chat_reply"],
+    "artifactTypes": [],
+    "blockTypes": ["image_analysis"]
   },
   "allowedTools": [],
   "modelProfile": "vision_reasoning",

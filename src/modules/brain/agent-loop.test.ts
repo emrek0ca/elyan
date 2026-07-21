@@ -31,6 +31,179 @@ test("runAgentToolLoop executes bounded tool requests and summarizes safe metada
   );
 });
 
+test("legacy agent_plan.v2 executes dependent steps in order and verifies each result", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return new Response(
+      `<html><head><title>Test</title></head><body><article>${"verified ".repeat(40)}</article></body></html>`,
+      { status: 200, headers: { "content-type": "text/html" } },
+    );
+  }) as typeof fetch;
+  try {
+    const requests = [
+      { tool: "web.fetch_url", args: { url: "https://example.com/first" } },
+      { tool: "web.fetch_url", args: { url: "https://example.com/second" } },
+    ];
+    const result = await runAgentToolLoop(
+      {
+        config: { JINA_READER_ENABLED: false },
+        log: { info() {} },
+      } as never,
+      {
+        context: { userId: "user-1", workload: "mobile_chat_fast" },
+        requests,
+        plan: {
+          version: "agent_plan.v2",
+          goal: {
+            title: "Read two pages",
+            success_criteria: ["Both reads are verified."],
+          },
+          steps: [
+            {
+              id: "first",
+              title: "Read first page",
+              depends_on: [],
+              tool_request: requests[0],
+              expected_outcome: {
+                description: "First read succeeds",
+                rules: [
+                  {
+                    source: "tool_result",
+                    path: "ok",
+                    operator: "equals",
+                    value: true,
+                  },
+                ],
+              },
+              max_attempts: 1,
+            },
+            {
+              id: "second",
+              title: "Read second page",
+              depends_on: ["first"],
+              tool_request: requests[1],
+              expected_outcome: {
+                description: "Second read succeeds",
+                rules: [
+                  {
+                    source: "tool_result",
+                    path: "ok",
+                    operator: "equals",
+                    value: true,
+                  },
+                ],
+              },
+              max_attempts: 1,
+            },
+          ],
+        },
+      },
+    );
+
+    assert.deepEqual(calls, [
+      "https://example.com/first",
+      "https://example.com/second",
+    ]);
+    assert.equal(result.planVersion, "agent_plan.v2");
+    assert.equal(result.verificationPassed, true);
+    assert.equal(result.results.length, 2);
+    assert.equal(result.results.every((item) => item.ok), true);
+    assert.equal(
+      result.stepVerifications?.every((item) => item.passed),
+      true,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("legacy agent_plan.v2 stops dependent work after failed verification", async () => {
+  const originalFetch = globalThis.fetch;
+  let callCount = 0;
+  globalThis.fetch = (async () => {
+    callCount += 1;
+    return new Response(
+      "<html><head><title>Test</title></head><body><article>short but valid content for the test page</article></body></html>",
+      { status: 200, headers: { "content-type": "text/html" } },
+    );
+  }) as typeof fetch;
+  try {
+    const requests = [
+      { tool: "web.fetch_url", args: { url: "https://example.net/first" } },
+      { tool: "web.fetch_url", args: { url: "https://example.net/second" } },
+    ];
+    const result = await runAgentToolLoop(
+      {
+        config: { JINA_READER_ENABLED: false },
+        log: { info() {} },
+      } as never,
+      {
+        context: { userId: "user-1", workload: "mobile_chat_fast" },
+        requests,
+        plan: {
+          version: "agent_plan.v2",
+          goal: {
+            title: "Fail closed",
+            success_criteria: ["Do not continue after unverifiable data."],
+          },
+          steps: [
+            {
+              id: "first",
+              title: "Require impossible length",
+              depends_on: [],
+              tool_request: requests[0],
+              expected_outcome: {
+                description: "The page is unexpectedly large",
+                rules: [
+                  {
+                    source: "tool_result",
+                    path: "output.contentLength",
+                    operator: "gte",
+                    value: 9_999,
+                  },
+                ],
+              },
+              max_attempts: 1,
+            },
+            {
+              id: "second",
+              title: "Must not run",
+              depends_on: ["first"],
+              tool_request: requests[1],
+              expected_outcome: {
+                description: "Second read succeeds",
+                rules: [
+                  {
+                    source: "tool_result",
+                    path: "ok",
+                    operator: "equals",
+                    value: true,
+                  },
+                ],
+              },
+              max_attempts: 1,
+            },
+          ],
+        },
+      },
+    );
+
+    assert.equal(callCount, 1);
+    assert.equal(result.verificationPassed, false);
+    assert.equal(result.results.length, 1);
+    assert.equal(result.results[0]?.ok, false);
+    assert.equal(
+      result.results[0]?.error?.code,
+      "tool_verification_failed",
+    );
+    assert.equal(result.stepVerifications?.[0]?.passed, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("buildToolResultRefinementPrompt carries typed tool results without long raw dumps", () => {
   const prompt = buildToolResultRefinementPrompt({
     originalPrompt: "Altın fiyatını araştır",
