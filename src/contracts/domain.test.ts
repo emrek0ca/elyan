@@ -2,9 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   brainResultSchema,
+  chatSessionSourceSchema,
   documentEnvelopeSchema,
   elyanAssistantBlockSchema,
 } from "./domain.js";
+
+test("chatSessionSourceSchema accepts web as an additive source", () => {
+  assert.equal(chatSessionSourceSchema.parse("web"), "web");
+  assert.equal(chatSessionSourceSchema.parse("mobile"), "mobile");
+  assert.equal(chatSessionSourceSchema.parse("desktop"), "desktop");
+});
 
 test("documentEnvelopeSchema accepts normalized mobile document envelopes", () => {
   const envelope = {

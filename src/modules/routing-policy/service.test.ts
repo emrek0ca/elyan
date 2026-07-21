@@ -123,6 +123,19 @@ test("decideCommandRoute keeps public chat on the shared brain", async () => {
   assert.equal(decision.requiredRuntime, "server");
 });
 
+test("decideCommandRoute accepts the additive web source without changing routing truth", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Merhaba",
+    source: "web",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.mode, "chat");
+  assert.equal(decision.requiredRuntime, "server");
+});
+
 test("decideCommandRoute sends an explicit remote MCP request to a capable desktop", async () => {
   const app = createDesktopReadyApp(["mcp_call_tool"]);
   const decision = await decideCommandRoute(app as never, {

@@ -176,7 +176,7 @@ export const knowledgeSourceTypeValues = [
   "dataset",
   "feedback",
 ] as const;
-export const chatSessionSourceValues = ["mobile", "desktop"] as const;
+export const chatSessionSourceValues = ["mobile", "desktop", "web"] as const;
 export const chatSessionStatusValues = ["active", "archived"] as const;
 export const chatMessageRoleValues = ["user", "assistant", "system"] as const;
 export const chatMessageStatusValues = [

@@ -38,6 +38,7 @@ import { integrationAppRoutes } from "../modules/integrations/routes.js";
 import { mcpRoutes } from "../modules/mcp/routes.js";
 import { adminRoutes } from "../modules/admin/routes.js";
 import { trainPanelRoutes } from "../modules/admin/train-panel.js";
+import { webRoutes } from "../modules/web/routes.js";
 import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
 import { startTaskLeaseSweeper } from "../modules/tasks/lease-sweeper.js";
 import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
@@ -449,6 +450,7 @@ export async function buildApp(envInput?: AppEnv) {
   await app.register(integrationAppRoutes, { prefix: "/v1/integrations" });
   await app.register(mcpRoutes, { prefix: "/v1/mcp" });
   await app.register(adminRoutes, { prefix: "/v1/admin" });
+  await app.register(webRoutes, { prefix: "/v1/web" });
   await app.register(trainPanelRoutes);
   return app;
 }

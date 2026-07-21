@@ -5243,7 +5243,33 @@ async function processSharedBrainChatTask(
     }
   } catch (error) {
     const latestTask = await getTaskById(app, input.currentTask.id);
-    if (!latestTask || isChatGenerationSettled(latestTask.status)) {
+    if (!latestTask) {
+      return;
+    }
+    if (isChatGenerationSettled(latestTask.status)) {
+      if (latestTask.status === "completed" && input.deferTransientFailure) {
+        const result = readRecord(latestTask.result);
+        try {
+          await syncChatTaskLifecycle(app, {
+            originalTask: latestTask,
+            updatedTask: latestTask,
+            message: typeof result?.text === "string" ? result.text : undefined,
+          });
+        } catch {
+          // Keep the BullMQ job retryable until the durable assistant row has
+          // caught up with the already-owned terminal task claim.
+          throw new AppError(
+            503,
+            "chat_terminal_sync_pending",
+            "Yanıt güvenli şekilde tamamlanıyor.",
+            {
+              transient: true,
+              retrySuggested: true,
+              failureClass: "queue_unavailable",
+            },
+          );
+        }
+      }
       return;
     }
     if (input.deferTransientFailure && isTransientSharedBrainFailure(error)) {
