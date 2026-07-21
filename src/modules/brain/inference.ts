@@ -2024,7 +2024,7 @@ function dropWebSearchBlocks<T extends unknown[]>(blocks: T): T {
   }) as T;
 }
 
-function turnEnvelopeSatisfiesConnectorReadHint(
+export function turnEnvelopeSatisfiesConnectorReadHint(
   envelope: TurnEnvelope | null,
   hint: ConnectorReadToolHint | null,
 ): boolean {
@@ -2034,6 +2034,15 @@ function turnEnvelopeSatisfiesConnectorReadHint(
     envelope.tool_requests.length > 0
       ? envelope.tool_requests
       : (envelope.agent_plan?.steps.map((step) => step.tool_request) ?? []);
+  if (requests.length === 0) {
+    // "prefer" ipucu sert şart değildir: model araçsız cevap vermeyi seçtiyse
+    // kabul et — genel bilgi soruları ("su kaç derecede kaynar") 0.78-0.82
+    // bandında yanlışlıkla eşleşip tüm cevabı düşürüyordu. Uydurma okuma
+    // ("mailini okudum" ama araç yok) ayrı bacakta
+    // claimsConnectorReadWithoutToolRequest ile yakalanmaya devam eder.
+    // enforcement alanı olmayan eski ipuçları "require" sayılır.
+    return hint.enforcement === "prefer";
+  }
   return requests.length === 1 && requests[0]?.tool === hint.tool;
 }
 
@@ -2829,7 +2838,9 @@ export function buildStructuredSystemPrompt(
       ? `Connected integration tools (server-side): ${input.connectorToolContracts!.join(" | ")}. These integrations are ALREADY connected and authorized by the user — never ask for permission, confirmation, or consent before a read; when the request concerns the user's own email, calendar, or Drive, emit the matching hidden tool_requests item in THIS turn and let the tool result drive the answer. Never print tool names, JSON, arguments, query syntax, or planning text in the visible reply. Use exact flat args matching each contract. Never claim to have read a mailbox/calendar/file without an ok tool result. When tool results exist, answer with the actual user-facing data in the user's language, grouped and deduplicated. WRITE tools marked "REQUIRES the user to approve" (e.g. gmail.send, calendar.create_event): when the user clearly asks to send an email or create an event, emit the matching hidden tool_requests item with complete flat args — the system will show the user an approval card and only send after they confirm, so do NOT refuse, do NOT ask for confirmation yourself in text, and do NOT paste the drafted email/event as visible prose; just emit the tool request and let the approval card handle it. Only emit a write when the user's intent to send/create is explicit.`
       : null,
     connectorReadHint
-      ? `High-confidence semantic connector selection: the user's request requires the advertised read-only tool ${connectorReadHint.tool}. Return a TurnEnvelope with exactly one hidden tool_requests item for ${connectorReadHint.tool}, using only the flat arguments defined by its advertised contract. Keep reply.text free of tool names, JSON, arguments, query syntax, and planning text. This selection is not permission to use any unadvertised tool or perform a side effect.`
+      ? connectorReadHint.enforcement === "prefer"
+        ? `Possible connector match (low confidence): the request MIGHT concern the user's connected account via the read-only tool ${connectorReadHint.tool}. If the user is genuinely asking about their own account data, emit exactly one hidden tool_requests item for ${connectorReadHint.tool}; if this is a general question answerable without private account data, answer directly WITHOUT any tool request. Keep reply.text free of tool names, JSON, arguments, query syntax, and planning text.`
+        : `High-confidence semantic connector selection: the user's request requires the advertised read-only tool ${connectorReadHint.tool}. Return a TurnEnvelope with exactly one hidden tool_requests item for ${connectorReadHint.tool}, using only the flat arguments defined by its advertised contract. Keep reply.text free of tool names, JSON, arguments, query syntax, and planning text. This selection is not permission to use any unadvertised tool or perform a side effect.`
       : null,
     // ── TASK ROUTING (Elyan-specific infrastructure) ──
     taskRoutingPolicy,

@@ -28,6 +28,7 @@ import {
   recordGroqProviderModelFailure,
   resolveCleanVisibleAnswer,
   resolveEffectiveWorkload,
+  turnEnvelopeSatisfiesConnectorReadHint,
   resolveGenerationTemperature,
   resolveReasoningEffort,
   shouldUseLegacyMemoryPrompt,
@@ -6852,4 +6853,56 @@ test("cloud vision structured prompt announces the attached image and block extr
     workload: "vision_reasoning",
   } as never);
   assert.match(withoutImage, /raw image is NOT available/);
+});
+
+test("prefer hint accepts a tool-free envelope; require hint does not", () => {
+  const emptyEnvelope = { tool_requests: [], agent_plan: null } as never;
+  const toolEnvelope = {
+    tool_requests: [{ tool: "gmail.search", args: {} }],
+    agent_plan: null,
+  } as never;
+  const preferHint = {
+    tool: "gmail.search",
+    score: 0.8,
+    margin: 0.02,
+    source: "transformer",
+    enforcement: "prefer",
+  } as never;
+  const requireHint = {
+    tool: "gmail.search",
+    score: 0.9,
+    margin: 0.1,
+    source: "transformer",
+    enforcement: "require",
+  } as never;
+  // Genel bilgi sorusu: model araçsız cevap verdi — prefer kabul eder.
+  assert.equal(
+    turnEnvelopeSatisfiesConnectorReadHint(emptyEnvelope, preferHint),
+    true,
+  );
+  // Net connector isteği: araçsız zarf hâlâ reddedilir (uydurma-okuma koruması).
+  assert.equal(
+    turnEnvelopeSatisfiesConnectorReadHint(emptyEnvelope, requireHint),
+    false,
+  );
+  // enforcement alanı olmayan eski ipucu require gibi davranır.
+  const legacyHint = {
+    tool: "gmail.search",
+    score: 0.9,
+    margin: 0.1,
+    source: "transformer",
+  } as never;
+  assert.equal(
+    turnEnvelopeSatisfiesConnectorReadHint(emptyEnvelope, legacyHint),
+    false,
+  );
+  // İpucu aracı gerçekten çağrıldıysa iki modda da geçer.
+  assert.equal(
+    turnEnvelopeSatisfiesConnectorReadHint(toolEnvelope, preferHint),
+    true,
+  );
+  assert.equal(
+    turnEnvelopeSatisfiesConnectorReadHint(toolEnvelope, requireHint),
+    true,
+  );
 });

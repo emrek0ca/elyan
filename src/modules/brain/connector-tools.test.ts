@@ -69,6 +69,36 @@ test("semantic connector selector maps an unseen Gmail paraphrase to the adverti
     assert.equal(hint?.source, "transformer");
     assert.ok((hint?.score ?? 0) >= 0.72);
     assert.ok((hint?.margin ?? 0) >= 0.04);
+    // Tam eşleşme (kosinüs 1.0) require bandındadır: net connector isteği.
+    assert.equal(hint?.enforcement, "require");
+  } finally {
+    resetSemanticComputeWorkerForTests();
+  }
+});
+
+test("borderline semantic scores produce a soft prefer hint, not a hard requirement", async () => {
+  // Canlı bug: "Su kaç deredece kaynar" gmail.search'e 0.7997 ile eşleşti ve
+  // sert şart tüm provider zincirini required_connector_tool_missing'e düşürdü.
+  // 0.78-0.82 bandı yalnız önceliklendirme ipucu olmalı.
+  resetSemanticComputeWorkerForTests();
+  const borderlineQueryVector = new Array<number>(384).fill(0);
+  borderlineQueryVector[0] = 0.8; // gmail.search çapasına kosinüs 0.8
+  borderlineQueryVector[10] = 0.6; // birim norm tamamlayıcısı (kullanılmayan eksen)
+  setSemanticComputeDispatcherForTests(async ({ texts }) =>
+    texts.map((text) =>
+      text.toLowerCase().startsWith("query:")
+        ? borderlineQueryVector
+        : connectorSemanticPassageVector(text),
+    ),
+  );
+  try {
+    const hint = await selectSemanticConnectorReadToolHint(
+      "Su kaç deredece kaynar",
+      gmailReadContracts(),
+    );
+    assert.equal(hint?.tool, "gmail.search");
+    assert.ok((hint?.score ?? 0) < 0.82);
+    assert.equal(hint?.enforcement, "prefer");
   } finally {
     resetSemanticComputeWorkerForTests();
   }

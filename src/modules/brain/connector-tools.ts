@@ -46,7 +46,20 @@ export type ConnectorReadToolHint = {
   score: number;
   margin: number;
   source: "transformer";
+  /**
+   * "require": bu turda ipucu aracının çağrılması zorunlu (net connector
+   * isteği). "prefer": yalnız önceliklendirme sinyali — model araçsız cevap
+   * vermeyi seçebilir; zarf doğrulaması bunu hata saymaz.
+   */
+  enforcement: "require" | "prefer";
 };
+
+// 0.78-0.82 bandı canlıda genel bilgi sorularını da yakalayabiliyor
+// ("Su kaç deredece kaynar" → gmail.search 0.7997 ile eşleşti ve tüm provider
+// zincirini required_connector_tool_missing'e düşürdü). Ölçülen gerçek
+// connector istekleri 0.82-0.87 bandında. Sert zorunluluk yalnız ≥0.82'de;
+// altındaki skorlar araçları söktürmeyen, cevabı düşürmeyen yumuşak ipucudur.
+const CONNECTOR_READ_REQUIRE_MIN_SCORE = 0.82;
 
 export type ConnectorReadSelectionPolicy = {
   /** Typed understanding/routing already identified an external side effect. */
@@ -436,6 +449,8 @@ export async function selectSemanticConnectorReadToolHint(
     score: match.score,
     margin: match.margin,
     source: "transformer",
+    enforcement:
+      match.score >= CONNECTOR_READ_REQUIRE_MIN_SCORE ? "require" : "prefer",
   };
 }
 
