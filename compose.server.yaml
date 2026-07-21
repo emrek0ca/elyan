@@ -58,6 +58,7 @@ services:
       - .env
     volumes:
       - ./secrets/apple-iap-private-key.p8:/run/secrets/apple-iap-private-key.p8:ro
+      - ./secrets/apns-private-key.p8:/run/secrets/apns-private-key.p8:ro
       - blob_data:/app/.blob-store
     environment:
       NODE_ENV: production

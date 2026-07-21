@@ -8,8 +8,10 @@ PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://api.elyan.dev}"
 DIRECT_HEALTHCHECK_URL="${DIRECT_HEALTHCHECK_URL:-http://84.247.172.213:4000/healthz}"
 STAMP="${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BACKUP_DIR="${REMOTE_DIR}/.codex-backups/${STAMP}-v1-release"
-APPLE_PRIVATE_KEY_SOURCE="${APPLE_PRIVATE_KEY_SOURCE:-}"
+APPLE_IAP_PRIVATE_KEY_SOURCE="${APPLE_IAP_PRIVATE_KEY_SOURCE:-${APPLE_PRIVATE_KEY_SOURCE:-}}"
+APNS_PRIVATE_KEY_SOURCE="${APNS_PRIVATE_KEY_SOURCE:-}"
 REMOTE_APPLE_PRIVATE_KEY="${REMOTE_DIR}/secrets/apple-iap-private-key.p8"
+REMOTE_APNS_PRIVATE_KEY="${REMOTE_DIR}/secrets/apns-private-key.p8"
 TEMP_ENV_CREATED="false"
 
 need() {
@@ -24,6 +26,7 @@ need ssh
 need rsync
 need scp
 need curl
+need openssl
 
 cleanup() {
   if [[ "${TEMP_ENV_CREATED}" == "true" ]]; then
@@ -51,6 +54,33 @@ probe_with_retry() {
     sleep "${delay_seconds}"
     attempt=$((attempt + 1))
   done
+}
+
+provision_private_key() {
+  local label="$1"
+  local source="$2"
+  local remote_path="$3"
+  local remote_tmp="${remote_path}.${STAMP}.tmp"
+
+  if [[ -n "${source}" ]]; then
+    if [[ ! -f "${source}" || ! -s "${source}" || ! -r "${source}" ]]; then
+      echo "${label} private key must be a readable, non-empty regular file: ${source}" >&2
+      exit 1
+    fi
+    if ! openssl pkey -in "${source}" -check -noout >/dev/null 2>&1; then
+      echo "${label} private key is not a valid private key: ${source}" >&2
+      exit 1
+    fi
+    ssh "${REMOTE_HOST}" "install -d -m 700 '${REMOTE_DIR}/secrets' && rm -f -- '${remote_tmp}'"
+    scp -q "${source}" "${REMOTE_HOST}:${remote_tmp}"
+    ssh "${REMOTE_HOST}" "if test -d '${remote_path}'; then rmdir -- '${remote_path}'; fi && install -m 600 '${remote_tmp}' '${remote_path}' && rm -f -- '${remote_tmp}' && test -f '${remote_path}' && test -s '${remote_path}'"
+    return
+  fi
+
+  ssh "${REMOTE_HOST}" "test -f '${remote_path}' && test -s '${remote_path}'" || {
+    echo "${label} private key is missing on the server. Provide its deploy source." >&2
+    exit 1
+  }
 }
 
 echo "==> Local gate"
@@ -87,21 +117,9 @@ rsync -az --delete \
 echo "==> Remove stale generated and deployment-only files"
 ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && rm -rf -- dist docs/release/evidence .claude ml-worker/__pycache__ && rm -f -- .DS_Store"
 
-echo "==> Provision Apple IAP signing key"
-if [[ -n "${APPLE_PRIVATE_KEY_SOURCE}" ]]; then
-  if [[ ! -r "${APPLE_PRIVATE_KEY_SOURCE}" ]]; then
-    echo "Apple IAP private key is not readable: ${APPLE_PRIVATE_KEY_SOURCE}" >&2
-    exit 1
-  fi
-  ssh "${REMOTE_HOST}" "install -d -m 700 '${REMOTE_DIR}/secrets'"
-  scp -q "${APPLE_PRIVATE_KEY_SOURCE}" "${REMOTE_HOST}:${REMOTE_APPLE_PRIVATE_KEY}.tmp"
-  ssh "${REMOTE_HOST}" "install -m 600 '${REMOTE_APPLE_PRIVATE_KEY}.tmp' '${REMOTE_APPLE_PRIVATE_KEY}' && rm -f '${REMOTE_APPLE_PRIVATE_KEY}.tmp'"
-else
-  ssh "${REMOTE_HOST}" "test -r '${REMOTE_APPLE_PRIVATE_KEY}'" || {
-    echo "Apple IAP private key is missing on the server. Set APPLE_PRIVATE_KEY_SOURCE for the deploy." >&2
-    exit 1
-  }
-fi
+echo "==> Provision Apple signing keys"
+provision_private_key "Apple IAP" "${APPLE_IAP_PRIVATE_KEY_SOURCE}" "${REMOTE_APPLE_PRIVATE_KEY}"
+provision_private_key "APNs" "${APNS_PRIVATE_KEY_SOURCE}" "${REMOTE_APNS_PRIVATE_KEY}"
 
 echo "==> Remote install and test"
 ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && ONNXRUNTIME_NODE_INSTALL=skip npm ci && npm run compile:nlp && npm run build && npm test"
