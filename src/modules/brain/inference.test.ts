@@ -2194,8 +2194,9 @@ test("resolveReasoningEffort escalates hard analytical work to high and keeps ch
   // Moderate thinking workloads → medium.
   assert.equal(resolveReasoningEffort("mobile_chat_balanced", undefined), "medium");
   assert.equal(resolveReasoningEffort("vision_reasoning", undefined), "medium");
-  // Chit-chat / fast routes stay low for latency.
-  assert.equal(resolveReasoningEffort("mobile_chat_fast", undefined), "low");
+  // Ana sohbet yolu artık 120b'de + medium effort: kalite hızdan öncelikli.
+  assert.equal(resolveReasoningEffort("mobile_chat_fast", undefined), "medium");
+  // Saf hız-kritik routing yolları düşük kalır.
   assert.equal(resolveReasoningEffort("fast_route", "fast"), "low");
   assert.equal(resolveReasoningEffort(undefined, undefined), "low");
 });
@@ -6710,9 +6711,9 @@ test("resolveGenerationTemperature keeps analytical workloads cold and warms con
     resolveGenerationTemperature({ workload: "mobile_chat_balanced", prompt: "f(x)=x^2 grafiğini çiz" }),
     0.25,
   );
-  // Selamlaşma → en sıcak
-  assert.equal(resolveGenerationTemperature({ workload: "mobile_chat_fast", prompt: "selam" }), 0.6);
-  assert.equal(resolveGenerationTemperature({ workload: "fast_route", prompt: "nasılsın" }), 0.6);
+  // Selamlaşma → en sıcak (canlı sohbet için 0.65'e yükseltildi)
+  assert.equal(resolveGenerationTemperature({ workload: "mobile_chat_fast", prompt: "selam" }), 0.65);
+  assert.equal(resolveGenerationTemperature({ workload: "fast_route", prompt: "nasılsın" }), 0.65);
   // Genel sohbet → dengeli
   assert.equal(
     resolveGenerationTemperature({ workload: "mobile_chat_balanced", prompt: "yapay zeka nedir kısaca anlat" }),

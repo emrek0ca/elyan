@@ -18,7 +18,7 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
   assert.deepEqual(catalog.defaultModelByWorkload, {
     intent: "openai/gpt-oss-20b",
     fast_route: "openai/gpt-oss-20b",
-    mobile_chat_fast: "openai/gpt-oss-20b",
+    mobile_chat_fast: "openai/gpt-oss-120b",
     mobile_chat_balanced: "openai/gpt-oss-120b",
     mobile_chat_deep_refine: "openai/gpt-oss-120b",
     document_analysis: "qwen/qwen3.6-27b",
@@ -48,6 +48,22 @@ test("resolveGroqFallbackModel returns a distinct backup model when primary fail
   );
 
   assert.equal(fallback, "qwen/qwen3.6-27b");
+});
+
+test("resolveGroqFallbackModel drops chat failover to the fast reliable model, not flaky qwen", () => {
+  // mobile_chat_fast artık 120b primary; düşerse hızlı+güvenilir 20b'ye insin
+  // (qwen json_validate_failed 400'leriyle kırılgan, ikinci sıraya alındı).
+  const fallback = resolveGroqFallbackModel(
+    {
+      GROQ_REASONING_MODEL: "openai/gpt-oss-120b",
+      GROQ_FAST_MODEL: "openai/gpt-oss-20b",
+      GROQ_FALLBACK_MODEL: "qwen/qwen3.6-27b",
+    },
+    "openai/gpt-oss-120b",
+    "mobile_chat_fast",
+  );
+
+  assert.equal(fallback, "openai/gpt-oss-20b");
 });
 
 test("resolveGroqFallbackModel prefers the fast Groq model for document analysis failover", () => {

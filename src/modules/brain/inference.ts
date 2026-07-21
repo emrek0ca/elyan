@@ -253,6 +253,7 @@ import {
 export { calculateBillableAiCredits } from "./credits.js";
 import {
   type GenerationAffect,
+  isReasoningChannelModel,
   resolveGenerationTemperature,
   resolveReasoningEffort,
 } from "./generation-policy.js";
@@ -1353,6 +1354,11 @@ const BRAIN_INFERENCE_PROBE_UNHEALTHY_TTL_MS = 15_000;
 const SHARED_BRAIN_LIVE_PROBE_TIMEOUT_MS = 25_000;
 const MOBILE_CHAT_MAX_MESSAGES = 12;
 const MOBILE_CHAT_MAX_TOKENS = 2_800;
+// Reasoning-channel modelleri (gpt-oss) yanıttan önce gizli düşünme turu yapar;
+// bu turun token'ları max_tokens'a sayıldığından sohbet completion bütçesinin
+// altına düşürülmez. ~1400: tipik gizli düşünme + kısa/orta cevap için yeterli,
+// 2800 sert tavanın altında.
+const REASONING_CHAT_COMPLETION_FLOOR = 1_400;
 const SHARED_BRAIN_PROVIDER_MAX_RETRIES = 1;
 const CHEAP_SOCIAL_TURN_MAX_CHARS = 48;
 const RESPONSE_CACHE_TTL_MS_BY_WORKLOAD: Partial<
@@ -4134,6 +4140,13 @@ function resolveCostGuardedMaxTokens(input: {
   hasAttachmentContext: boolean;
   hasDocumentContext: boolean;
   override?: number;
+  // Reasoning-channel modelleri (gpt-oss) yanıttan ÖNCE gizli bir düşünme turu
+  // yapar ve bu turun token'ları max_tokens'a sayılır. Kısa-prompt cap'i
+  // (192/384) o düşünme turunu ortasında keser → model görünür JSON'u hiç
+  // üretemez, Groq json_validate_failed(boş) döndürür. max_tokens bir TAVANdır
+  // (gerçek kullanım faturalanır, kısa cevap erken durur), o yüzden reasoning
+  // modeline yüksek taban vermek maliyeti artırmaz, yalnız kesilmeyi önler.
+  isReasoningModel: boolean;
 }): number {
   if (!input.enabled || input.override !== undefined) {
     return input.baseMaxTokens;
@@ -4151,6 +4164,14 @@ function resolveCostGuardedMaxTokens(input: {
   const normalizedPrompt = compactText(input.prompt);
   if (!normalizedPrompt || normalizedPrompt.length > 120) {
     return input.baseMaxTokens;
+  }
+  // Reasoning modeli (gpt-oss): gizli düşünme turu max_tokens'a sayılır ve
+  // sohbet bütçesi (260-720) bu tur için yetersiz — model düşünmede tükenip
+  // JSON'u boş bırakıyor (Groq json_validate_failed). Düşünme + kısa cevap için
+  // taban bırak. max_tokens TAVANdır: kısa cevap stop token'da erken biter,
+  // fatura gerçek kullanımadır — taban maliyeti artırmaz, yalnız kesilmeyi önler.
+  if (input.isReasoningModel) {
+    return Math.max(input.baseMaxTokens, REASONING_CHAT_COMPLETION_FLOOR);
   }
   if (
     input.workload === "mobile_chat_fast" ||
@@ -5976,6 +5997,7 @@ export async function generateSharedBrainReply(
           input.maxCompletionTokensOverride > 0
             ? input.maxCompletionTokensOverride
             : undefined,
+        isReasoningModel: isReasoningChannelModel(baseModel),
       });
       const estimatedBillableTokenUsage = calculateBillablePlanTokens({
         surface: meteringSurface,

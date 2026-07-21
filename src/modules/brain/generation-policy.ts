@@ -30,9 +30,13 @@ export function resolveReasoningEffort(
   }
   if (
     workload === "mobile_chat_balanced" ||
+    workload === "mobile_chat_fast" ||
     workload === "vision_reasoning" ||
     workload === "image_analyze"
   ) {
+    // mobile_chat_fast de "medium": ana sohbet yolu artık 120b'de koşuyor ve
+    // kullanıcı beklentisi hız değil düşünce kalitesi; Groq'ta medium effort
+    // saniyeler mertebesinde kalıyor.
     return "medium";
   }
   return "low";
@@ -45,7 +49,9 @@ export function isReasoningChannelModel(model: string): boolean {
 
 export const ANALYTICAL_GENERATION_TEMPERATURE = 0.25;
 export const BALANCED_GENERATION_TEMPERATURE = 0.4;
-export const CONVERSATIONAL_GENERATION_TEMPERATURE = 0.6;
+// 0.6 → 0.65: sohbet sesi daha canlı/çeşitli; affect dial'in üst sınırı (0.72)
+// hâlâ tavan, analitik taban (0.25) etkilenmez.
+export const CONVERSATIONAL_GENERATION_TEMPERATURE = 0.65;
 
 /**
  * Persistent affective read (from dialogue-state's deriveAffectiveStance) used

@@ -54,13 +54,16 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
     fallbackModel,
     visionModel,
     defaultModelByWorkload: {
+      // intent/routing sınıflandırması hız-kritik ve kaliteye duyarsız: küçük
+      // model yeterli, düşük gecikme önemli.
       intent: fastModel,
       fast_route: fastModel,
-      // Fast chat must feel instant. The reasoning model spends seconds on a
-      // hidden reasoning pass before emitting any content (the "wait then
-      // dump" feel), so fast chat uses the lighter model for low
-      // time-to-first-token and smooth token-by-token streaming.
-      mobile_chat_fast: fastModel,
+      // Ana sohbet yolu artık büyük reasoning modelinde (gpt-oss-120b): cevap
+      // kalitesi ve "yaşıyor" hissi, ilk-token gecikmesinden önceliklidir.
+      // Reasoning effort "medium"da tutulduğu için gizli düşünme turu saniyeler
+      // mertebesinde kalır; token akışı yine kesintisizdir. Hız-kritik yollar
+      // (intent/fast_route/desktop_handoff) hâlâ küçük modelde.
+      mobile_chat_fast: reasoningModel,
       mobile_chat_balanced: reasoningModel,
       mobile_chat_deep_refine: reasoningModel,
       document_analysis: fallbackModel,
@@ -88,10 +91,21 @@ export function resolveGroqFallbackModel(
   workload?: SharedBrainWorkload,
 ): string | null {
   const catalog = buildGroqModelCatalog(config);
+  // Sohbet yolları için fallback sırası: primary 120b düşerse HIZLI ve
+  // GÜVENİLİR 20b'ye in (qwen json_validate_failed 400'leriyle kırılgan;
+  // ikinci sıraya alındı). Böylece ana modelin nadir düşüşünde bile cevap
+  // üretilir, continuity cümlesine düşülmez.
+  const chatWorkload =
+    workload === "mobile_chat_fast" ||
+    workload === "fast_route" ||
+    workload === "mobile_chat_balanced" ||
+    workload === "mobile_chat_deep_refine";
   const preferredOrder =
     workload === "document_analysis"
       ? [catalog.fastModel, catalog.reasoningModel, catalog.fallbackModel]
-      : [catalog.fallbackModel, catalog.reasoningModel, catalog.fastModel];
+      : chatWorkload
+        ? [catalog.fastModel, catalog.reasoningModel, catalog.fallbackModel]
+        : [catalog.fallbackModel, catalog.reasoningModel, catalog.fastModel];
   const primary = compactText(primaryModel).toLowerCase();
 
   for (const model of preferredOrder) {

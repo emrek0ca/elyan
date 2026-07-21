@@ -125,9 +125,11 @@ test("buildInferenceProviderCandidates keeps Groq first for normal chat when Gem
   });
 
   assert.equal(candidates[0]?.provider, "groq");
+  // Sohbet workload'ları primary 120b düşerse hızlı+güvenilir 20b'ye iner
+  // (kırılgan qwen ikinci sıraya alındı).
   assert.deepEqual(candidates[0]?.preferredModels, [
     "groq-reasoning",
-    "groq-fallback",
+    "groq-fast",
   ]);
   assert.equal(candidates[1]?.provider, "gemini");
   assert.deepEqual(candidates[1]?.preferredModels, ["gemini-text", "gemini-fast"]);
