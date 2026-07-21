@@ -1,6 +1,14 @@
 node_modules
 dist
 .git
-.env
+.env*
 .DS_Store
+.claude
+.codex-backups
+.codex-worktrees
+.blob-store
+secrets
+docs/release/evidence
+**/__pycache__
+**/*.py[co]
 coverage
