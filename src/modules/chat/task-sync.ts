@@ -20,6 +20,10 @@ import {
   withAssistantBlocksMetadata,
 } from "./message-blocks.js";
 import { buildTaskTraceBlock } from "./task-trace.js";
+import {
+  chatMessageStatusRank,
+  isTerminalChatMessageStatus,
+} from "./stream-authority.js";
 
 type ChatMetadata = {
   sessionId?: string;
@@ -98,6 +102,18 @@ export function isInternalRoutingSummary(value: string): boolean {
   return INTERNAL_ROUTING_SUMMARY_PATTERN.test(value);
 }
 
+// Kuyruk/faz katmanının geçici ilerleme metinleri ("Yanıt hazırlanıyor.")
+// task.summary'ye yazılır; görev terminal duruma geldiğinde bunlar asistan
+// cevabı DEĞİLDİR ve kalıcı içerik/history'ye canonical metin olarak
+// dönmemelidir. ("Yanıt sıraya alınamadı…" gibi gerçek hata metinleri bu
+// kalıba girmez — onlar failed durumda kullanıcıya gösterilir.)
+const TRANSIENT_PROGRESS_MESSAGE_PATTERN =
+  /^yan[ıi]t (haz[ıi]rlan[ıi]yor|yeniden deneniyor|g[üu]venli (?:ş|s)ekilde tamamlan[ıi]yor)\.?$/i;
+
+export function isTransientChatProgressMessage(value: string): boolean {
+  return TRANSIENT_PROGRESS_MESSAGE_PATTERN.test(value.trim());
+}
+
 function deriveAssistantContent(input: {
   updatedTask: typeof tasks.$inferSelect;
   fallbackMessage?: string;
@@ -164,12 +180,22 @@ function deriveAssistantContent(input: {
     }
   }
 
+  const terminalTask = ["completed", "failed", "canceled"].includes(
+    input.updatedTask.status,
+  );
   const summary = typeof input.updatedTask.summary === "string" ? input.updatedTask.summary : "";
-  if (summary.trim() && !isInternalRoutingSummary(summary)) {
+  if (
+    summary.trim() &&
+    !isInternalRoutingSummary(summary) &&
+    !(terminalTask && isTransientChatProgressMessage(summary))
+  ) {
     return finalize(summary);
   }
 
-  if (input.fallbackMessage?.trim()) {
+  if (
+    input.fallbackMessage?.trim() &&
+    !(terminalTask && isTransientChatProgressMessage(input.fallbackMessage))
+  ) {
     return finalize(input.fallbackMessage);
   }
 
@@ -601,6 +627,11 @@ export async function syncChatTaskLifecycle(
     taskId: input.updatedTask.id,
     payload: {
       sessionId,
+      assistantMessageId,
+      // Stream envelope'larıyla aynı otorite sözleşmesi: consumer, mesaj başına
+      // gördüğü en yüksek statusRank'in altındaki güncellemeleri yok sayar.
+      statusRank: chatMessageStatusRank(assistantStatus),
+      terminal: isTerminalChatMessageStatus(assistantStatus),
       presentation: extractTaskPresentation(input.updatedTask.payload),
       assistantMessage: shapeAssistantMessagePayload({
         ...assistantMessage,

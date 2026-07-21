@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isInternalRoutingSummary, syncChatTaskLifecycle } from "./task-sync.js";
+import {
+  isInternalRoutingSummary,
+  isTransientChatProgressMessage,
+  syncChatTaskLifecycle,
+} from "./task-sync.js";
 
 test("isInternalRoutingSummary catches dispatch routing-phrase variants", () => {
   // Kullanıcının #1 şikâyeti: "…desktopa yönlendirildi" gibi iç yönlendirme
@@ -919,4 +923,240 @@ test("syncChatTaskLifecycle carries generated image artifact blocks to chat surf
   assert.equal(blocks[0]?.url, "https://api.elyan.dev/v1/artifacts/artifact-1/content?token=signed");
   assert.equal(blocks.length, 2);
   assert.equal(blocks[1]?.type, "text");
+});
+
+test("isTransientChatProgressMessage catches queue progress texts only", () => {
+  for (const phrase of [
+    "Yanıt hazırlanıyor.",
+    "Yanıt yeniden deneniyor.",
+    "Yanıt güvenli şekilde tamamlanıyor.",
+    "  yanıt hazırlanıyor  ",
+  ]) {
+    assert.equal(isTransientChatProgressMessage(phrase), true, phrase);
+  }
+  for (const phrase of [
+    "Yanıt sıraya alınamadı. Lütfen biraz sonra yeniden dene.",
+    "Sıcak havada serin kalmanın birkaç yolu var...",
+    "Görev tamamlandı, rapor hazır.",
+    "",
+  ]) {
+    assert.equal(isTransientChatProgressMessage(phrase), false, phrase);
+  }
+});
+
+test("syncChatTaskLifecycle never persists transient progress text as completed content", async () => {
+  // Canlı bug'ın kalıcı-veri ayağı: markQueuedSharedBrainChatPhase task.summary'ye
+  // "Yanıt hazırlanıyor." yazar; görev sonuç metni olmadan complete olursa bu
+  // metin canonical asistan cevabı gibi history'ye düşmemeli.
+  const updates: Array<Record<string, unknown>> = [];
+  const app = {
+    config: {
+      ELYAN_BLOCKS_V11_ENABLED: false,
+    },
+    db: {
+      update() {
+        return {
+          set(values: Record<string, unknown>) {
+            updates.push(values);
+            return {
+              where() {
+                return {
+                  returning: async () => [],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+    services: {
+      eventBus: {
+        publish() {
+          throw new Error("should not publish without a persisted row");
+        },
+      },
+    },
+  };
+
+  const chatTask = {
+    id: "task-1",
+    userId: "user-1",
+    targetDeviceId: "device-1",
+    title: "hava durumu",
+    summary: "Yanıt hazırlanıyor.",
+    status: "completed",
+    error: null,
+    result: null,
+    createdAt: new Date("2026-01-01T12:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T12:00:02.000Z"),
+    payload: {
+      metadata: {
+        presentation: "chat",
+        chat: {
+          sessionId: "session-1",
+          assistantMessageId: "assistant-1",
+        },
+      },
+    },
+  };
+
+  await syncChatTaskLifecycle(app as never, {
+    originalTask: chatTask as never,
+    updatedTask: chatTask as never,
+    message: "Yanıt hazırlanıyor.",
+  });
+
+  assert.equal(updates.length, 1);
+  const persistedContent = String(updates[0]?.content ?? "");
+  assert.notEqual(persistedContent, "Yanıt hazırlanıyor.");
+  assert.match(persistedContent, /tamamlandı/i);
+});
+
+test("syncChatTaskLifecycle keeps transient progress text while the task is queued", async () => {
+  const updates: Array<Record<string, unknown>> = [];
+  const app = {
+    config: {
+      ELYAN_BLOCKS_V11_ENABLED: false,
+    },
+    db: {
+      update() {
+        return {
+          set(values: Record<string, unknown>) {
+            updates.push(values);
+            return {
+              where() {
+                return {
+                  returning: async () => [],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+    services: {
+      eventBus: {
+        publish() {
+          throw new Error("should not publish without a persisted row");
+        },
+      },
+    },
+  };
+
+  const chatTask = {
+    id: "task-1",
+    userId: "user-1",
+    targetDeviceId: "device-1",
+    title: "hava durumu",
+    summary: "Yanıt hazırlanıyor.",
+    status: "queued",
+    error: null,
+    result: null,
+    createdAt: new Date("2026-01-01T12:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T12:00:01.000Z"),
+    payload: {
+      metadata: {
+        presentation: "chat",
+        chat: {
+          sessionId: "session-1",
+          assistantMessageId: "assistant-1",
+        },
+      },
+    },
+  };
+
+  await syncChatTaskLifecycle(app as never, {
+    originalTask: chatTask as never,
+    updatedTask: chatTask as never,
+    message: "Yanıt hazırlanıyor.",
+  });
+
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0]?.content, "Yanıt hazırlanıyor.");
+});
+
+test("syncChatTaskLifecycle publishes statusRank and terminal authority fields", async () => {
+  const published: Array<{ payload?: Record<string, unknown> }> = [];
+  const app = {
+    config: {
+      ELYAN_BLOCKS_V11_ENABLED: false,
+    },
+    db: {
+      update() {
+        return {
+          set() {
+            return {
+              where() {
+                return {
+                  returning: async () => [
+                    {
+                      id: "assistant-1",
+                      sessionId: "session-1",
+                      userId: "user-1",
+                      taskId: "task-1",
+                      role: "assistant",
+                      status: "completed",
+                      content: "Cevap hazır.",
+                      error: null,
+                    },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+    services: {
+      eventBus: {
+        publish(event: Record<string, unknown>) {
+          published.push({
+            payload:
+              event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+                ? (event.payload as Record<string, unknown>)
+                : undefined,
+          });
+        },
+      },
+    },
+  };
+
+  const chatTask = {
+    id: "task-1",
+    userId: "user-1",
+    targetDeviceId: "device-1",
+    title: "hava durumu",
+    summary: null,
+    status: "completed",
+    error: null,
+    result: { text: "Cevap hazır." },
+    createdAt: new Date("2026-01-01T12:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T12:00:02.000Z"),
+    payload: {
+      metadata: {
+        presentation: "chat",
+        chat: {
+          sessionId: "session-1",
+          assistantMessageId: "assistant-1",
+        },
+      },
+    },
+  };
+
+  await syncChatTaskLifecycle(app as never, {
+    originalTask: chatTask as never,
+    updatedTask: chatTask as never,
+  });
+
+  assert.equal(published.length, 1);
+  const payload = published[0]?.payload as
+    | {
+        assistantMessageId?: string;
+        statusRank?: number;
+        terminal?: boolean;
+      }
+    | undefined;
+  assert.equal(payload?.assistantMessageId, "assistant-1");
+  assert.equal(payload?.statusRank, 90);
+  assert.equal(payload?.terminal, true);
 });

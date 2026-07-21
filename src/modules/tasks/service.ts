@@ -129,6 +129,12 @@ import {
 } from "../chat/task-sync.js";
 import { buildTaskTraceBlock, advanceTaskTraceApproval, enrichTaskTraceWithAgentPlan } from "../chat/task-trace.js";
 import {
+  chatStreamEventStatusRank,
+  isAssistantMessageTerminallyFenced,
+  isTerminalChatStreamEvent,
+  markAssistantMessageTerminal,
+} from "../chat/stream-authority.js";
+import {
   persistRollingSummaryToSession,
   listChatSessionMessages,
 } from "../chat/service.js";
@@ -651,15 +657,25 @@ function buildChatStreamEnvelope(input: {
   payload?: Record<string, unknown>;
 }) {
   const timestamp = input.timestamp ?? new Date().toISOString();
+  // statusRank: consumer tarafındaki terminal fence'in anahtarı. Aynı
+  // assistantMessageId için completed (rank 90) görüldükten sonra daha düşük
+  // rank'li her event (delta/heartbeat/ACK snapshot) yok sayılmalıdır; seq ve
+  // timestamp kaynaklar arası karşılaştırılamaz, rank karşılaştırılır.
+  const statusRank = chatStreamEventStatusRank(input.event);
+  const terminal = isTerminalChatStreamEvent(input.event);
   return {
     event: input.event,
     taskId: input.taskId,
     sessionId: input.sessionId,
     messageId: input.messageId,
     seq: input.seq,
+    statusRank,
+    terminal,
     timestamp,
     ...(input.payload ?? {}),
     payload: {
+      statusRank,
+      terminal,
       ...(input.payload ?? {}),
     },
   };
@@ -685,6 +701,16 @@ async function publishVolatileChatStreamEvent(
     payload?: Record<string, unknown>;
   },
 ) {
+  // Terminal fence: kalıcı final (completed/error) yazıldıktan sonra uçuşta
+  // kalan heartbeat/delta timer'ları aynı mesaj için volatile event basamaz.
+  // Aksi hâlde mobil, final cevabı aldıktan sonra eski "running" snapshot'ıyla
+  // geri "Yanıt hazırlanıyor."a döner.
+  if (
+    !isTerminalChatStreamEvent(input.event) &&
+    isAssistantMessageTerminallyFenced(input.messageId)
+  ) {
+    return;
+  }
   await app.services.eventBus.publishVolatile({
     topic: input.event,
     userId: input.userId,
@@ -720,6 +746,9 @@ async function publishPersistedChatStreamEvent(
     payload?: Record<string, unknown>;
   },
 ) {
+  if (isTerminalChatStreamEvent(input.event)) {
+    markAssistantMessageTerminal(input.messageId);
+  }
   await app.services.eventBus.publishVolatile({
     topic: input.event,
     userId: input.userId,
@@ -4714,6 +4743,9 @@ async function processSharedBrainChatTask(
         if (finalizedRows.length === 0) {
           return;
         }
+        // Fence'i publish'ten önce kur: DB'de final yazıldı; bu andan itibaren
+        // uçuştaki hiçbir volatile event bu mesajı temsil edemez.
+        markAssistantMessageTerminal(chatStreaming.assistantMessageId);
         await publishPersistedChatStreamEvent(app, {
           userId: input.userId,
           deviceId: completedTask.targetDeviceId,
@@ -5223,6 +5255,9 @@ async function processSharedBrainChatTask(
       if (finalizedRows.length === 0) {
         return;
       }
+      // Fence'i publish'ten önce kur: DB'de final yazıldı; bu andan itibaren
+      // uçuştaki hiçbir volatile event bu mesajı temsil edemez.
+      markAssistantMessageTerminal(chatStreaming.assistantMessageId);
       await publishPersistedChatStreamEvent(app, {
         userId: input.userId,
         deviceId: completedTask.targetDeviceId,
@@ -5783,6 +5818,15 @@ export async function markQueuedSharedBrainChatPhase(
   ) {
     return originalTask;
   }
+  // "queued" fazı lease alamayan (yani BAŞKA bir worker'ın aktif işlediği)
+  // job'dan gelir; running bir görevi geri "queued" + "Yanıt hazırlanıyor."a
+  // çevirmesi, stream'i süren worker'ın final cevabıyla yarışan eski ACK
+  // snapshot'ının kaynağıdır. Running görevi yalnız görevi sahiplenen
+  // retry/failover fazları resetleyebilir.
+  const allowedStatuses: Array<typeof originalTask.status> =
+    input.phase === "queued"
+      ? ["queued", "planning"]
+      : ["queued", "planning", "running"];
   const rows = await app.db
     .update(tasks)
     .set({
@@ -5795,7 +5839,7 @@ export async function markQueuedSharedBrainChatPhase(
       and(
         eq(tasks.id, input.taskId),
         eq(tasks.userId, input.userId),
-        inArray(tasks.status, ["queued", "planning", "running"]),
+        inArray(tasks.status, allowedStatuses),
       ),
     )
     .returning();
