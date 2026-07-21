@@ -46,6 +46,21 @@ import {
 import { evaluateBrainAnswer } from "./evaluator.js";
 import { resolveSharedBrainModel } from "./model-resolution.js";
 import { recordBrainInteractionReview } from "./review.js";
+
+function recordBrainInteractionReviewBestEffort(
+  app: FastifyInstance,
+  input: Parameters<typeof recordBrainInteractionReview>[1],
+): void {
+  void recordBrainInteractionReview(app, input).catch(() => {
+    app.log.warn?.(
+      {
+        taskId: input.taskId ?? null,
+        errorClass: "review_store_unavailable",
+      },
+      "brain review persistence skipped",
+    );
+  });
+}
 import {
   buildTurnMetricInputFromInference,
   recordTurnMetric,
@@ -931,6 +946,16 @@ function buildCheapSocialTurnReply(
   if (/^(hey|selam|merhaba|mrb|slm|hi|hello)\b/i.test(lower)) {
     return name ? `Merhaba ${name}, buradayım.` : "Merhaba, buradayım.";
   }
+  if (/^(?:günaydın|gunaydin|iyi sabahlar|good morning)\b/iu.test(lower)) {
+    return name
+      ? `Günaydın ${name}! Bugün neye el atalım?`
+      : "Günaydın! Bugün neye el atalım?";
+  }
+  if (/^(?:iyi geceler|good night)\b/iu.test(lower)) {
+    return name
+      ? `İyi geceler ${name}. Dinlen; sonra kaldığımız yerden devam ederiz.`
+      : "İyi geceler. Dinlen; sonra kaldığımız yerden devam ederiz.";
+  }
   if (
     /^(?:naber|ne haber|nasılsın|nasilsin|nasıl gidiyor|nasil gidiyor|how are you|how(?:'|’)s it going)\b/iu.test(
       lower,
@@ -939,6 +964,26 @@ function buildCheapSocialTurnReply(
     return name
       ? `İyiyim ${name}, buradayım. Sen nasılsın?`
       : "İyiyim, buradayım. Sen nasılsın?";
+  }
+  if (/(?<!\p{L})(?:ne yapıyorsun|ne yapiyorsun|napıyorsun|napiyorsun)(?!\p{L})/iu.test(lower)) {
+    return name
+      ? `Buradayım ${name}, seninle ilgileniyorum. Ne yapalım?`
+      : "Buradayım, seninle ilgileniyorum. Ne yapalım?";
+  }
+  if (/(?<!\p{L})(?:teşekkür|tesekkur|sağ ol|sag ol|thanks|thank you)\p{L}*/iu.test(lower)) {
+    return name ? `Rica ederim ${name}. Her zaman.` : "Rica ederim. Her zaman.";
+  }
+  if (/(?<!\p{L})(?:sıkıldım|sikildim|canım sıkılıyor|canim sikiliyor|i(?:'|’)m bored)(?!\p{L})/iu.test(lower)) {
+    return "O zaman küçük bir şey seçelim: sohbet, kısa bir fikir oyunu ya da birlikte çözeceğimiz bir iş?";
+  }
+  if (/(?<!\p{L})(?:seni seviyorum|iyi ki varsın|iyi ki varsin|love you)(?!\p{L})/iu.test(lower)) {
+    return "Bu sıcaklık güzel geldi. Ben de buradayım. 💚";
+  }
+  if (/(?<!\p{L})(?:görüşürüz|gorusuruz|hoşça kal|hosca kal|bye)(?!\p{L})/iu.test(lower)) {
+    return name ? `Görüşürüz ${name}.` : "Görüşürüz. Ne zaman istersen buradayım.";
+  }
+  if (/^(?:tamam|peki|olur|okey|okay)[!?.\s]*$/iu.test(lower)) {
+    return "Tamam. Devam edelim.";
   }
   return null;
 }
@@ -1149,7 +1194,7 @@ async function tryGenerateDeterministicConnectorReadReply(
     },
   });
   if (!input.internalEvaluation?.skipReviewLogging) {
-    await recordBrainInteractionReview(app, {
+    recordBrainInteractionReviewBestEffort(app, {
       userId: input.userId,
       taskId: input.taskId,
       prompt: input.prompt,
@@ -1178,8 +1223,17 @@ function buildBackendGateResult(input: {
   responseCode: string;
   metadata?: Record<string, unknown>;
 }): GovernedSharedBrainReplyResult {
-  const promptTokens = estimateTokens(input.request.prompt);
-  const completionTokens = estimateTokens(input.text);
+  // A deterministic social reply never enters a tokenizer/model boundary.
+  // Keep its metering truth at zero instead of charging estimated text tokens.
+  // Other backend gates still report estimates because they can represent
+  // substantive policy-generated work in usage and evaluation surfaces.
+  const isZeroModelCallSocialTurn = input.gateRuleId === "cheap_social_turn";
+  const promptTokens = isZeroModelCallSocialTurn
+    ? 0
+    : estimateTokens(input.request.prompt);
+  const completionTokens = isZeroModelCallSocialTurn
+    ? 0
+    : estimateTokens(input.text);
   const blocks = buildAssistantMessageBlocks(input.text);
   const evaluation = evaluateBrainAnswer({
     prompt: input.request.prompt,
@@ -9356,7 +9410,7 @@ async function tryGenerateSkillReply(
   );
 
   if (!input.internalEvaluation?.skipReviewLogging) {
-    await recordBrainInteractionReview(app, {
+    recordBrainInteractionReviewBestEffort(app, {
       userId: input.userId,
       taskId: input.taskId,
       prompt: input.prompt,
@@ -9509,7 +9563,7 @@ export async function generateGovernedSharedBrainReply(
       retrievalUsed: false,
     });
     if (!input.internalEvaluation?.skipReviewLogging) {
-      await recordBrainInteractionReview(app, {
+      recordBrainInteractionReviewBestEffort(app, {
         userId: input.userId,
         taskId: input.taskId,
         prompt: input.prompt,
@@ -9578,7 +9632,7 @@ export async function generateGovernedSharedBrainReply(
       retrievalSufficiency: "weak",
     });
     if (!input.internalEvaluation?.skipReviewLogging) {
-      await recordBrainInteractionReview(app, {
+      recordBrainInteractionReviewBestEffort(app, {
         userId: input.userId,
         taskId: input.taskId,
         prompt: input.prompt,
@@ -9643,7 +9697,7 @@ export async function generateGovernedSharedBrainReply(
       retrievalSufficiency: "strong",
     });
     if (!input.internalEvaluation?.skipReviewLogging) {
-      await recordBrainInteractionReview(app, {
+      recordBrainInteractionReviewBestEffort(app, {
         userId: input.userId,
         taskId: input.taskId,
         prompt: input.prompt,
@@ -9715,7 +9769,7 @@ export async function generateGovernedSharedBrainReply(
         metadata: result.metadata,
       });
       if (!input.internalEvaluation?.skipReviewLogging) {
-        await recordBrainInteractionReview(app, {
+        recordBrainInteractionReviewBestEffort(app, {
           userId: input.userId,
           taskId: input.taskId,
           prompt: input.prompt,
@@ -9919,7 +9973,7 @@ export async function generateGovernedSharedBrainReply(
       evaluation: structuredEvaluation,
     };
     if (!input.internalEvaluation?.skipReviewLogging) {
-      await recordBrainInteractionReview(app, {
+      recordBrainInteractionReviewBestEffort(app, {
         userId: input.userId,
         taskId: input.taskId,
         prompt: input.prompt,
@@ -10508,7 +10562,7 @@ export async function generateGovernedSharedBrainReply(
   });
 
   if (!input.internalEvaluation?.skipReviewLogging) {
-    await recordBrainInteractionReview(app, {
+    recordBrainInteractionReviewBestEffort(app, {
       userId: input.userId,
       taskId: input.taskId,
       prompt: input.prompt,

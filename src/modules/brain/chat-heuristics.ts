@@ -22,10 +22,14 @@ const GREETING_PREFIX_PATTERNS = [
 
 const SOCIAL_CHAT_PATTERNS = [
   /^(lan|la|olm|oğlum|oglum|kanka|dostum|bro)[!?.\s]*$/i,
-  /\b(nasılsın|nasilsin|naber|napıyorsun|napiyorsun)\b/i,
+  /\b(nasılsın|nasilsin|naber|napıyorsun|napiyorsun|ne yapıyorsun|ne yapiyorsun)\b/i,
   /\b(how are you|what'?s up|whats up)\b/i,
   /\b(keyifler nasıl|keyifler nasil)\b/i,
   /\b(teşekkürler|tesekkurler|teşekkür ederim|tesekkur ederim|sağ ol|sag ol|sağol|sagol|sağ olun|sag olun|kolay gelsin|iyi akşamlar|iyi aksamlar|iyi sabahlar|günaydın|gunaydin|iyi geceler)\b/i,
+  /\b(görüşürüz|gorusuruz|hoşça kal|hosca kal|bye|good night)\b/i,
+  /\b(sıkıldım|sikildim|canım sıkılıyor|canim sikiliyor|i(?:'|’)m bored)\b/i,
+  /\b(seni seviyorum|iyi ki varsın|iyi ki varsin|love you)\b/i,
+  /^(tamam|peki|olur|okey|okay)[!?.\s]*$/i,
 ];
 
 const AMBIGUOUS_REFERENCE_PATTERNS = [

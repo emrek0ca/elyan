@@ -3707,6 +3707,9 @@ test("generateGovernedSharedBrainReply serves cheap social turns without a provi
   assert.equal(result.provider, "backend_gate");
   assert.equal(result.model, "elyan.cheap_social_turn");
   assert.equal(result.text, "Merhaba Zeynep, buradayım.");
+  assert.equal(result.promptTokens, 0);
+  assert.equal(result.completionTokens, 0);
+  assert.equal(result.totalTokens, 0);
   assert.equal(result.metadata.modelCallCount, 0);
   assert.equal(result.metadata.cheapSocialTurn, true);
   assert.equal(result.metadata.estimatedCostBucket, "zero_model_call");
@@ -3783,7 +3786,77 @@ test("generateGovernedSharedBrainReply serves Turkish how-are-you slang without 
   assert.equal(result.answerSource, "backend_gate");
   assert.equal(result.model, "elyan.cheap_social_turn");
   assert.equal(result.text, "İyiyim, buradayım. Sen nasılsın?");
+  assert.equal(result.promptTokens, 0);
+  assert.equal(result.completionTokens, 0);
+  assert.equal(result.totalTokens, 0);
   assert.equal(result.metadata.modelCallCount, 0);
+});
+
+test("cheap social reply survives an unavailable learning store without leaking the error", async () => {
+  const db = createQuotaReadyDb([]);
+  Object.defineProperty(db, "insert", {
+    value() {
+      throw new Error("private-database-detail-must-not-leak");
+    },
+  });
+  const warnings: unknown[] = [];
+  const app = {
+    db,
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "groq",
+      GROQ_API_KEY: "must-not-be-used",
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      ELYAN_SHARED_BRAIN_MODEL: "openai/gpt-oss-120b",
+      ELYAN_SHARED_BRAIN_FAST_MODEL: "openai/gpt-oss-20b",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "System prompt",
+      ELYAN_COST_GUARD_ENABLED: false,
+    },
+    log: {
+      info() {},
+      warn(value: unknown) { warnings.push(value); },
+      debug() {},
+    },
+  };
+
+  const result = await withMockedFetch(
+    async () => {
+      throw new Error("provider_must_not_be_called");
+    },
+    async () =>
+      generateGovernedSharedBrainReply(app as never, {
+        userId: "11111111-1111-4111-8111-111111111111",
+        prompt: "Ne yapıyorsun?",
+        route: "shared_brain",
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "public_text",
+          requiresApproval: false,
+          reason: "safe chat",
+          intent: "normal_chat",
+          confidence: 0.98,
+          requiredRuntime: "server",
+          privacyLevel: "low",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
+        internalEvaluation: {
+          skipUsageValidation: true,
+          skipConsentValidation: true,
+        },
+      }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.text, "Buradayım, seninle ilgileniyorum. Ne yapalım?");
+  assert.equal(result.totalTokens, 0);
+  assert.ok(warnings.length >= 1);
+  assert.match(JSON.stringify(warnings), /review_store_unavailable/u);
+  assert.doesNotMatch(JSON.stringify(warnings), /private-database-detail/u);
 });
 
 test("generateGovernedSharedBrainReply executes an advertised recent Drive read without a provider", async () => {

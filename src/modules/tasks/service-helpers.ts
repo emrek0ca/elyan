@@ -1009,6 +1009,136 @@ export function getSharedBrainFallbackMessage(
   return fallback;
 }
 
+const CONTINUITY_CHAT_WORKLOADS = new Set([
+  "fast_route",
+  "mobile_chat_balanced",
+  "mobile_chat_fast",
+]);
+
+/**
+ * Produces a zero-model-call continuation only for ordinary public chat.
+ * Tool calls, private/attachment context, approvals and policy denials stay
+ * fail-closed so availability never weakens Elyan's safety boundary.
+ */
+export function resolveSafeChatContinuityReply(input: {
+  prompt: string;
+  channel: unknown;
+  route: unknown;
+  mode: unknown;
+  privacyClass: unknown;
+  requiresApproval: unknown;
+  intent: unknown;
+  requiredRuntime: unknown;
+  shouldAskClarification: unknown;
+  failClosedReason: unknown;
+  workload: unknown;
+  taskRoute: unknown;
+  routeCapabilities: unknown;
+  requestedCapabilities: unknown;
+  metadata: Record<string, unknown>;
+  understandingEnvelope: unknown;
+  errorCode: string;
+  failureClass: unknown;
+}): string | null {
+  if (
+    input.channel !== "chat" ||
+    input.route !== "server_brain" ||
+    input.mode !== "chat" ||
+    input.privacyClass !== "public_text" ||
+    input.requiresApproval === true ||
+    input.intent !== "normal_chat" ||
+    input.requiredRuntime !== "server" ||
+    input.shouldAskClarification !== false ||
+    input.failClosedReason != null ||
+    !CONTINUITY_CHAT_WORKLOADS.has(String(input.workload ?? "")) ||
+    !["server_brain_unavailable", "chat_queue_unavailable"].includes(
+      input.errorCode,
+    ) ||
+    input.failureClass === "policy_blocked"
+  ) {
+    return null;
+  }
+
+  const routeCapabilities = Array.isArray(input.routeCapabilities)
+    ? input.routeCapabilities.filter(Boolean)
+    : [];
+  const requestedCapabilities = Array.isArray(input.requestedCapabilities)
+    ? input.requestedCapabilities.filter(Boolean)
+    : [];
+  if (routeCapabilities.length > 0 || requestedCapabilities.length > 0) {
+    return null;
+  }
+
+  const taskRoute =
+    input.taskRoute &&
+    typeof input.taskRoute === "object" &&
+    !Array.isArray(input.taskRoute)
+      ? (input.taskRoute as Record<string, unknown>)
+      : null;
+  if (
+    taskRoute?.needsPrivateDesktopData === true ||
+    taskRoute?.needsUserApproval === true ||
+    (Array.isArray(taskRoute?.requiredCapabilities) &&
+      taskRoute.requiredCapabilities.length > 0)
+  ) {
+    return null;
+  }
+
+  const envelope =
+    input.understandingEnvelope &&
+    typeof input.understandingEnvelope === "object" &&
+    !Array.isArray(input.understandingEnvelope)
+      ? (input.understandingEnvelope as Record<string, unknown>)
+      : null;
+  const risk =
+    envelope?.risk &&
+    typeof envelope.risk === "object" &&
+    !Array.isArray(envelope.risk)
+      ? (envelope.risk as Record<string, unknown>)
+      : null;
+  if (
+    risk?.local_private === true ||
+    risk?.side_effect === true ||
+    (Array.isArray(envelope?.required_capabilities) &&
+      envelope.required_capabilities.some((capability) => {
+        if (!capability || typeof capability !== "object" || Array.isArray(capability)) {
+          return true;
+        }
+        return (capability as Record<string, unknown>).name !== "chat.reply";
+      }))
+  ) {
+    return null;
+  }
+
+  if (
+    (Array.isArray(input.metadata.attachments) &&
+      input.metadata.attachments.length > 0) ||
+    (Array.isArray(input.metadata.clientAttachments) &&
+      input.metadata.clientAttachments.length > 0) ||
+    (Array.isArray(input.metadata.client_attachments) &&
+      input.metadata.client_attachments.length > 0) ||
+    (Array.isArray(input.metadata.mediaInputRefs) &&
+      input.metadata.mediaInputRefs.length > 0) ||
+    input.metadata.remoteMcpSelection != null ||
+    input.metadata.connectorWriteApproval != null ||
+    input.metadata.freshData != null ||
+    input.metadata.webGrounding != null
+  ) {
+    return null;
+  }
+
+  const prompt = input.prompt.replace(/\s+/g, " ").trim();
+  if (!prompt) return null;
+  const asksQuestion =
+    /[?？]\s*$/u.test(prompt) ||
+    /^(?:kim|ne|neden|niçin|nicin|nasıl|nasil|nerede|nereye|hangi|kaç|kac|what|why|how|where|which|who)\b/iu.test(
+      prompt,
+    );
+  return asksQuestion
+    ? "Buradayım. Sorunu doğru yanıtlayabilmem için bir ayrıntıyı netleştirelim: özellikle hangi kısmı merak ediyorsun?"
+    : "Buradayım. Bunu birlikte ilerletelim—beklediğin sonucu tek cümleyle netleştirir misin?";
+}
+
 function looksLikeUnsafeBackendError(message: string) {
   const lowered = message.toLowerCase();
   const rawTransportFailure =

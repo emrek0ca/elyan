@@ -10,6 +10,7 @@ import {
   extractSharedBrainConversation,
   extractTaskRouteDecision,
   getSharedBrainFallbackMessage,
+  resolveSafeChatContinuityReply,
   resolveIdempotentTaskMatch,
   shapeTaskArtifact,
   shapeTaskFeedItem,
@@ -292,6 +293,109 @@ test("getSharedBrainFallbackMessage preserves explicit error text and default fa
   assert.equal(
     getSharedBrainFallbackMessage({}),
     fallback,
+  );
+});
+
+test("resolveSafeChatContinuityReply keeps public chat alive after provider exhaustion", () => {
+  const reply = resolveSafeChatContinuityReply({
+    prompt: "Bunu nasıl düzenleyebilirim?",
+    channel: "chat",
+    route: "server_brain",
+    mode: "chat",
+    privacyClass: "public_text",
+    requiresApproval: false,
+    intent: "normal_chat",
+    requiredRuntime: "server",
+    shouldAskClarification: false,
+    failClosedReason: null,
+    workload: "mobile_chat_fast",
+    taskRoute: null,
+    routeCapabilities: [],
+    requestedCapabilities: [],
+    metadata: { channel: "chat" },
+    understandingEnvelope: null,
+    errorCode: "server_brain_unavailable",
+    failureClass: "invalid_output",
+  });
+
+  assert.match(reply ?? "", /^Buradayım\./u);
+  assert.doesNotMatch(reply ?? "", /yanıt servisi|yeniden dene/iu);
+});
+
+test("resolveSafeChatContinuityReply never bypasses tools, private context, approvals, or policy", () => {
+  const base = {
+    prompt: "Devam et",
+    channel: "chat",
+    route: "server_brain",
+    mode: "chat",
+    privacyClass: "public_text",
+    requiresApproval: false,
+    intent: "normal_chat",
+    requiredRuntime: "server",
+    shouldAskClarification: false,
+    failClosedReason: null,
+    workload: "mobile_chat_fast",
+    taskRoute: null,
+    routeCapabilities: [] as unknown[],
+    requestedCapabilities: [] as unknown[],
+    metadata: { channel: "chat" } as Record<string, unknown>,
+    understandingEnvelope: null,
+    errorCode: "server_brain_unavailable",
+    failureClass: "unavailable",
+  };
+
+  assert.equal(
+    resolveSafeChatContinuityReply({ ...base, routeCapabilities: ["drive.search"] }),
+    null,
+  );
+  assert.equal(
+    resolveSafeChatContinuityReply({ ...base, privacyClass: "private_context" }),
+    null,
+  );
+  assert.equal(
+    resolveSafeChatContinuityReply({ ...base, requiresApproval: true }),
+    null,
+  );
+  assert.equal(
+    resolveSafeChatContinuityReply({ ...base, failureClass: "policy_blocked" }),
+    null,
+  );
+  assert.equal(
+    resolveSafeChatContinuityReply({
+      ...base,
+      metadata: { channel: "chat", mediaInputRefs: [{ inputRef: "private" }] },
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSafeChatContinuityReply({
+      ...base,
+      taskRoute: {
+        needsPrivateDesktopData: true,
+        requiredCapabilities: [],
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSafeChatContinuityReply({
+      ...base,
+      understandingEnvelope: {
+        risk: { local_private: false, side_effect: true },
+        required_capabilities: [],
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    resolveSafeChatContinuityReply({
+      ...base,
+      metadata: {
+        channel: "chat",
+        clientAttachments: [{ documentId: "private" }],
+      },
+    }),
+    null,
   );
 });
 

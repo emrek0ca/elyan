@@ -174,6 +174,7 @@ import {
   getPayloadMetadata,
   getSharedBrainFallbackMessage,
   getTaskPrompt,
+  resolveSafeChatContinuityReply,
   resolveIdempotentTaskMatch,
   sanitizePublicTaskEventPayload,
   sanitizePublicInferenceValue,
@@ -4091,8 +4092,11 @@ async function completeServerBrainTask(
     });
   }
 
-  if (finalTaskStatus === "completed") {
-    await recordTaskLearningFromCompletion(app, {
+  if (
+    finalTaskStatus === "completed" &&
+    input.fallbackState !== "continuity_response"
+  ) {
+    void recordTaskLearningFromCompletion(app, {
       userId: updatedTask.userId,
       accountId: updatedTask.userId,
       taskId: updatedTask.id,
@@ -4105,13 +4109,29 @@ async function completeServerBrainTask(
           : {},
       ),
       status: "completed",
+    }).catch(() => {
+      app.log.warn(
+        {
+          taskId: updatedTask.id,
+          errorClass: "task_learning_store_unavailable",
+        },
+        "task completion learning persistence skipped",
+      );
     });
   }
-  await recordBlockQualityLearning(app, {
+  void recordBlockQualityLearning(app, {
     userId: updatedTask.userId,
     accountId: updatedTask.userId,
     taskId: updatedTask.id,
     quality: blockQuality,
+  }).catch(() => {
+    app.log.warn(
+      {
+        taskId: updatedTask.id,
+        errorClass: "block_quality_store_unavailable",
+      },
+      "block quality learning persistence skipped",
+    );
   });
   if (artifactPipeline.kind === "rendered") {
     void recordArtifactLearningEvent(app, {
@@ -4122,7 +4142,10 @@ async function completeServerBrainTask(
       latencyMs: artifactPipeline.latencyMs,
     }).catch(() => undefined);
   }
-  if (finalTaskStatus === "completed") {
+  if (
+    finalTaskStatus === "completed" &&
+    input.fallbackState !== "continuity_response"
+  ) {
     void maybeQueueAutomaticSharedBrainRefresh(app, {
       userId: updatedTask.userId,
       source: "task_completed",
@@ -5315,6 +5338,9 @@ async function finalizeSharedBrainChatFailure(
   >,
   error: unknown,
 ) {
+  if (await completeSafeChatContinuityFallback(app, input, error)) {
+    return;
+  }
   const fallbackMessage = getSharedBrainFallbackMessage(error);
   const rows = await app.db
     .update(tasks)
@@ -5427,6 +5453,105 @@ async function finalizeSharedBrainChatFailure(
     },
     "shared brain chat dispatch failed asynchronously",
   );
+}
+
+async function completeSafeChatContinuityFallback(
+  app: FastifyInstance,
+  input: Pick<
+    SharedBrainChatTaskInput,
+    "currentTask" | "userId" | "requestId"
+  >,
+  error: unknown,
+): Promise<boolean> {
+  const task = (await getTaskById(app, input.currentTask.id)) ?? input.currentTask;
+  if (task.userId !== input.userId || isChatGenerationSettled(task.status)) {
+    return false;
+  }
+  const payload = readRecord(task.payload) ?? {};
+  const metadata = getPayloadMetadata(payload);
+  const routeDecision = extractRouteDecision(payload);
+  const understanding = readRecord(metadata.understanding);
+  const details = readRecord(error instanceof AppError ? error.details : null);
+  const errorCode =
+    error instanceof AppError ? error.code : "server_brain_unavailable";
+  const workload = String(
+    routeDecision?.selectedWorkload ?? metadata.selectedWorkload ?? "mobile_chat_fast",
+  );
+  const responseText = resolveSafeChatContinuityReply({
+    prompt: getTaskPrompt(payload),
+    channel: metadata.channel,
+    route: routeDecision?.route,
+    mode: routeDecision?.mode,
+    privacyClass: routeDecision?.privacyClass,
+    requiresApproval: routeDecision?.requiresApproval,
+    intent: routeDecision?.intent,
+    requiredRuntime: routeDecision?.requiredRuntime,
+    shouldAskClarification: routeDecision?.shouldAskClarification,
+    failClosedReason: routeDecision?.failClosedReason,
+    workload,
+    taskRoute: routeDecision?.taskRoute,
+    routeCapabilities: routeDecision?.capabilities,
+    requestedCapabilities: task.requestedCapabilities,
+    metadata,
+    understandingEnvelope: understanding?.envelope,
+    errorCode,
+    failureClass: details?.failureClass,
+  });
+  if (!responseText || extractChatStreamingMetadata(task) == null) {
+    return false;
+  }
+
+  const runningTask = await markServerBrainTaskRunning(app, {
+    taskId: task.id,
+    userId: input.userId,
+  });
+  const completedTask = await completeServerBrainTask(app, {
+    taskId: runningTask.id,
+    userId: input.userId,
+    responseText,
+    provider: "backend_gate",
+    model: "elyan.continuity_fallback",
+    route: "shared_brain",
+    workload,
+    latencyMs: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    fallbackUsed: true,
+    fallbackState: "continuity_response",
+    responseBytes: Buffer.byteLength(responseText, "utf8"),
+    validationStatus: "degraded_continuity",
+    qualityPolicyApplied: true,
+    evidenceSufficiency: "insufficient",
+    clarificationRequested: true,
+    dataQualityWarnings: ["provider_continuity_fallback"],
+  });
+  if (completedTask.status === "completed") {
+    await syncChatTaskLifecycle(app, {
+      originalTask: runningTask,
+      updatedTask: completedTask,
+      message: responseText,
+    });
+  }
+  void recordTaskFailureLearning(app, {
+    userId: task.userId,
+    accountId: task.userId,
+    taskId: task.id,
+    errorCode: "provider_continuity_fallback",
+    capabilities: [],
+    requestId: input.requestId,
+  }).catch(() => undefined);
+  app.log.warn(
+    {
+      taskId: task.id,
+      requestId: input.requestId,
+      errorCode,
+      failureClass: String(details?.failureClass ?? "unavailable"),
+      outcome: "continuity_completed",
+    },
+    "shared brain provider exhaustion completed with safe continuity",
+  );
+  return true;
 }
 
 export type QueuedSharedBrainChatTaskSnapshot = {

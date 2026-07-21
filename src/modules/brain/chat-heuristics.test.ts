@@ -34,6 +34,10 @@ test("selectHybridMobileChatWorkload keeps only greetings on fast and upgrades e
 test("isSocialChatPrompt treats short slang call-outs as social turns", () => {
   assert.equal(isSocialChatPrompt("Lan"), true);
   assert.equal(isSocialChatPrompt("Kanka!"), true);
+  assert.equal(isSocialChatPrompt("Ne yapıyorsun?"), true);
+  assert.equal(isSocialChatPrompt("Canım sıkılıyor"), true);
+  assert.equal(isSocialChatPrompt("Seni seviyorum"), true);
+  assert.equal(isSocialChatPrompt("Görüşürüz"), true);
   assert.equal(isSocialChatPrompt("kanka JWT nasıl çalışır"), false);
 });
 
