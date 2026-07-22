@@ -379,7 +379,13 @@ class ExecutionLedger:
         binding = _work_order_binding(order)
         _assert_not_expired(binding["expiresAt"], "WORK_ORDER_EXPIRED")
         normalized_capability = canonical_capability(capability)
-        if normalized_capability not in set(binding["capabilityScope"]):
+        # Zararsız taban kapsam kontrol ANINDA da birleşir: baseline'a sonradan
+        # eklenen bir yetenek, daha eski persisted binding'lerde de geçerli olur
+        # (liste sürüklenmesi bir daha canlı arıza üretmesin).
+        allowed = set(binding["capabilityScope"]) | {
+            canonical_capability(item) for item in SAFE_BASELINE_CAPABILITIES
+        }
+        if normalized_capability not in allowed:
             raise TrustError("CAPABILITY_SCOPE_MISMATCH", "Capability iş emri kapsamı dışında.")
         normalized_step_id = str(step_id or "").strip()
         if not normalized_step_id:
@@ -542,13 +548,26 @@ def _assert_not_expired(expires_at: Any, code: str) -> None:
 # isteğinde make_directory yok); yüksek-güvenli yerel rota jenerik planı
 # değiştirdiğinde CAPABILITY_SCOPE_MISMATCH ile ölmesin. Riskli yetenekler
 # (shell, mail, silme...) bilinçli olarak LİSTEDE YOK — fail-closed korunur.
-_SAFE_BASELINE_SCOPE = (
+#
+# TEK KAYNAK: bridge._SAFE_LOCAL_OVERRIDE bu sabiti kullanır. İki listenin
+# ayrı yaşaması canlı arıza üretti: yerel rota "ekranda ne var"ı
+# analyze_screen'e çevirdi, güven katmanı kendi (eski) listesinde bulamayıp
+# "Capability iş emri kapsamı dışında." ile kesti. Yeni zararsız yetenek
+# eklerken YALNIZ burayı güncelle.
+SAFE_BASELINE_CAPABILITIES = (
     "make_directory",
     "directory_tree",
     "file_read",
     "file_search",
     "sys_info",
+    # Basit masaüstü bakışları + zararsız tarayıcı eylemi (yeni sekme/URL):
+    # salt-okunur ekran analizi, süreç listesi, sekme açma.
+    "analyze_screen",
+    "desktop_os.processes",
+    "browser_control",
 )
+# Geriye dönük ad (modül içi kullanım).
+_SAFE_BASELINE_SCOPE = SAFE_BASELINE_CAPABILITIES
 
 
 def _capability_scope(work_order: dict[str, Any]) -> list[str]:
@@ -597,7 +616,15 @@ def prepare_work_order_v2(
     if not scope:
         raise TrustError("WORK_ORDER_SCOPE_MISSING", "İş emri capability kapsamı boş.")
     expected_prompt_hash = prompt_hash(prompt)
-    expected_plan_hash = sha256_value(work_order.get("planPreview", {}))
+    # P0 tek plan otoritesi: iş emrinin planHash'i, yürütülecek kanonik adım
+    # şekline (compiled_plan.plan_signature) bağlanır — imzalanan, onaylanan ve
+    # yürütülen plan aynı hash'i paylaşır; adım/args/dependsOn oynanırsa
+    # WORK_ORDER_BINDING_MISMATCH ile fail-closed reddedilir.
+    preview = work_order.get("planPreview")
+    preview_steps = preview.get("steps", []) if isinstance(preview, dict) else []
+    from runtime.compiled_plan import plan_signature
+
+    expected_plan_hash = plan_signature(preview_steps if isinstance(preview_steps, list) else [])
     store = ledger or ExecutionLedger()
     persisted = store.get_work_order_binding(user_id, task_id, revision)
     if persisted is not None:

@@ -61,7 +61,7 @@ from runtime.executor_core import ExecutorCore, TemplateResolutionError, _resolv
 from runtime.remote_task_runner import RemoteTaskRunner
 from runtime.desktop_work_order import MAX_STEPS as WORK_ORDER_MAX_STEPS
 from runtime.desktop_work_order import canonical_capability, validate_payload, verify_result
-from runtime.execution_trust import ExecutionLedger, TrustError
+from runtime.execution_trust import ExecutionLedger, SAFE_BASELINE_CAPABILITIES, TrustError
 from runtime import native_file_indexer
 from runtime import mcp_runtime
 from runtime import skill_runtime
@@ -12837,16 +12837,12 @@ class RuntimeBridge:
                 # Zararsız, salt-yerel yetenekler bu listeye bakılmaksızın
                 # yerel rotada kullanılabilir — aksi halde jenerik plan kazanıp
                 # onay çıkmazına giriyor.
-                _SAFE_LOCAL_OVERRIDE = {
-                    "make_directory", "directory_tree", "file_read",
-                    "file_search", "sys_info",
-                    # Basit masaüstü bakışları: salt-okunur ekran analizi ve
-                    # süreç listesi + zararsız yeni-sekme. Operatör jokerine
-                    # düşüp doğrulama çıkmazı üretmesinler (canlı arıza:
-                    # "ekranda ne var" / "hangi uygulamalar açık" cevapsızdı,
-                    # "yeni sekme" Google aramasına dönüşüyordu).
-                    "analyze_screen", "desktop_os.processes", "browser_control",
-                }
+                # TEK KAYNAK: execution_trust.SAFE_BASELINE_CAPABILITIES.
+                # Yerel override ile güven katmanı kapsamı AYNI listeyi kullanır
+                # — iki ikiz listenin sürüklenmesi canlı arıza üretmişti
+                # ("ekranda ne var" → analyze_screen'e çevrildi ama güven
+                # katmanı 'Capability iş emri kapsamı dışında.' ile kesti).
+                _SAFE_LOCAL_OVERRIDE = set(SAFE_BASELINE_CAPABILITIES)
                 _local_caps = {
                     canonical_capability(step.get("capability"))
                     for step in local_steps
