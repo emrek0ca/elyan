@@ -294,21 +294,23 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
     ),
     _tool_decl(
         "browser_control",
-        "Tarayıcıda bir URL açar, web araması yapar veya YouTube'da video açar.",
+        "Tarayıcıda bir URL açar, web araması yapar, YouTube'da video açar veya yeni sekme açar.",
         {
             "action": {
                 "type": "STRING",
-                "description": "İşlem türü: 'open_url' (belirli adres), 'search' (web araması), 'play_youtube' (YouTube video).",
+                "description": "İşlem türü: 'open_url' (belirli adres), 'search' (web araması), 'play_youtube' (YouTube video), 'new_tab' (yeni boş sekme — ARAMA DEĞİLDİR).",
             },
             "url": {"type": "STRING", "description": "action='open_url' için açılacak tam adres (https://…)."},
             "query": {"type": "STRING", "description": "action='search'/'play_youtube' için arama metni."},
+            "browser": {"type": "STRING", "description": "action='new_tab' için tarayıcı adı (chrome/safari/brave/edge; boşsa Chrome)."},
         },
         ["action"],
-        usage="Web adresi açma/arama/YouTube için. Uygulamanın kendisini açmak için open_app kullan.",
+        usage="Web adresi açma/arama/YouTube/yeni sekme için. 'Yeni sekme aç' isteği action='new_tab'tır — 'yeni sekme' metnini ASLA aramaya çevirme. Uygulamanın kendisini açmak için open_app kullan.",
         examples=[
             {"args": {"action": "open_url", "url": "https://github.com"}},
             {"args": {"action": "search", "query": "hava durumu istanbul"}},
             {"args": {"action": "play_youtube", "query": "lo-fi çalışma müziği"}},
+            {"args": {"action": "new_tab", "browser": "chrome"}},
         ],
     ),
     _tool_decl(

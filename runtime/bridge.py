@@ -12526,14 +12526,18 @@ class RuntimeBridge:
         normalized_prompt = " ".join(str(prompt or "").split()).casefold()
 
         def _is_generic_operator(step: dict[str, Any]) -> bool:
-            if _canonical_capability_name(step.get("capability")) != "desktop_operator.run":
+            capability = _canonical_capability_name(step.get("capability"))
+            # observe_screen jokeri de kapsanır: "ekranda ne var" gibi basit
+            # bakışlar backend şablonundan operatör gözlemi olarak gelir; yerel
+            # yüksek-güvenli rota (analyze_screen) varken o kazanmalıdır.
+            if capability not in {"desktop_operator.run", "desktop_operator.observe_screen"}:
                 return False
             args = step.get("args")
             args = dict(args) if isinstance(args, dict) else {}
             # Normalizer, boş backend fallback'ine yalnız goal=<prompt>,
             # action=run (ve work-order etiketi) ekler. Başka her anahtar ya da
             # prompt'tan farklı bir hedef gerçek/spesifik GUI planıdır.
-            generic_keys = {"goal", "prompt", "query", "action", "workOrderKind", "work_order_kind"}
+            generic_keys = {"goal", "prompt", "query", "action", "target", "workOrderKind", "work_order_kind"}
             if set(args).difference(generic_keys):
                 return False
             action = str(args.get("action", "") or "").strip().casefold()
@@ -12561,9 +12565,27 @@ class RuntimeBridge:
             }
             return not meaningful
 
+        def _is_blind_browser_search(step: dict[str, Any]) -> bool:
+            """Backend'in anlam çözmeden ürettiği 'kör arama' adımı: sorgu,
+            promptun kendisi ya da parçası. Canlı arıza: "Chrome dan yeni
+            sekme aç" → Google'da 'yeni sekme' ARAMASI. Yüksek-güvenli yerel
+            rota (ör. action=new_tab) varken bu adım aynen yürütülmemeli."""
+            if _canonical_capability_name(step.get("capability")) != "browser_control":
+                return False
+            args = step.get("args")
+            args = dict(args) if isinstance(args, dict) else {}
+            action = str(args.get("action", "") or "").strip().casefold()
+            if action not in {"", "search"}:
+                return False
+            query = " ".join(str(args.get("query", "") or "").split()).casefold()
+            return not query or query in normalized_prompt
+
         candidates = [step for step in steps if isinstance(step, dict)]
         if not candidates or len(candidates) != len(steps):
             return False
+        # Tek adımlık kör tarayıcı araması da jokerdir.
+        if len(candidates) == 1 and _is_blind_browser_search(candidates[0]):
+            return True
         operator_steps = [step for step in candidates if _is_generic_operator(step)]
         if len(operator_steps) != 1:
             return False
@@ -12818,6 +12840,12 @@ class RuntimeBridge:
                 _SAFE_LOCAL_OVERRIDE = {
                     "make_directory", "directory_tree", "file_read",
                     "file_search", "sys_info",
+                    # Basit masaüstü bakışları: salt-okunur ekran analizi ve
+                    # süreç listesi + zararsız yeni-sekme. Operatör jokerine
+                    # düşüp doğrulama çıkmazı üretmesinler (canlı arıza:
+                    # "ekranda ne var" / "hangi uygulamalar açık" cevapsızdı,
+                    # "yeni sekme" Google aramasına dönüşüyordu).
+                    "analyze_screen", "desktop_os.processes", "browser_control",
                 }
                 _local_caps = {
                     canonical_capability(step.get("capability"))

@@ -368,3 +368,37 @@ def test_youtube_report_does_not_capture_site_navigation() -> None:
     # Gerçek istatistik sorusu rapora gitmeye devam eder.
     stats = route_text_to_tool("youtube kanal istatistiklerimi göster")
     assert stats is not None and stats.intent == "youtube_report"
+
+
+def test_screen_glance_routes_to_analyze_screen_not_operator() -> None:
+    # Canlı arıza: "Ekranda ne var" ağır operatöre gidip "Operator
+    # doğrulaması başarısız oldu." üretiyordu — basit bakış analyze_screen'dir.
+    for prompt in ("Ekranda ne var", "ekranımda ne var", "ekrana bak", "ekranı oku"):
+        routed = route_text_to_tool(prompt)
+        assert routed is not None and routed.tool_name == "analyze_screen", prompt
+        assert routed.confidence >= 0.9
+        assert routed.requires_confirmation is False
+        assert routed.args["target"] == "active_window"
+
+
+def test_open_apps_routes_to_processes_not_operator() -> None:
+    for prompt in ("Hangi uygulamalar açık", "açık uygulamalar", "çalışan uygulamalar neler"):
+        routed = route_text_to_tool(prompt)
+        assert routed is not None and routed.tool_name == "desktop_os.processes", prompt
+        assert routed.confidence >= 0.9
+        assert routed.requires_confirmation is False
+
+
+def test_new_tab_routes_to_browser_new_tab_not_search() -> None:
+    # Canlı arıza: "Chrome dan yeni sekme aç" Google'da 'yeni sekme'
+    # ARAMASINA dönüşüyordu — yeni sekme bir arama değildir.
+    routed = route_text_to_tool("Chrome dan yeni sekme aç")
+    assert routed is not None and routed.tool_name == "browser_control"
+    assert routed.args["action"] == "new_tab"
+    assert routed.args["browser"] == "chrome"
+
+    default = route_text_to_tool("yeni sekme aç")
+    assert default is not None and default.args["action"] == "new_tab"
+
+    safari = route_text_to_tool("safari'de yeni sekme aç")
+    assert safari is not None and safari.args["browser"] == "safari"

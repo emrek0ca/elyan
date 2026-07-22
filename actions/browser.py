@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.parse
 import webbrowser
 
@@ -12,7 +13,68 @@ import requests
 from runtime.capability_registry import SafeCapabilityError
 
 _VIDEO_ID_RE = re.compile(r'"videoId":"([A-Za-z0-9_-]{11})"')
-_ALLOWED_ACTIONS = {"open_url", "search", "play_youtube"}
+_ALLOWED_ACTIONS = {"open_url", "search", "play_youtube", "new_tab"}
+
+# "yeni sekme" isteğinde kullanıcının kastettiği tarayıcı adı → macOS uygulama
+# adı. Bilinmeyen ad olduğu gibi denenir; boş istek varsayılan Chrome'dur
+# (canlı arıza: 'Chrome dan yeni sekme aç' Google'da 'yeni sekme' ARAMASINA
+# dönüşüyordu — sekme açmak arama değildir).
+_BROWSER_APP_NAMES = {
+    "": "Google Chrome",
+    "chrome": "Google Chrome",
+    "google chrome": "Google Chrome",
+    "chromium": "Chromium",
+    "brave": "Brave Browser",
+    "edge": "Microsoft Edge",
+    "microsoft edge": "Microsoft Edge",
+    "safari": "Safari",
+    "arc": "Arc",
+}
+
+
+def _open_new_tab(browser: str) -> str:
+    """Belirtilen (ya da varsayılan) tarayıcıda YENİ SEKME açar; uygulama adını
+    döndürür. macOS'ta AppleScript ile gerçek sekme açılır (pencere yoksa yeni
+    pencere); diğer platformlarda varsayılan tarayıcıda boş sekmeye düşülür."""
+    requested = str(browser or "").strip().lower()
+    app_name = _BROWSER_APP_NAMES.get(requested, requested.title() or "Google Chrome")
+    if sys.platform == "darwin":
+        if app_name == "Safari":
+            script = (
+                'tell application "Safari"\n'
+                "activate\n"
+                "if (count of windows) = 0 then\n"
+                "make new document\n"
+                "else\n"
+                "tell front window to set current tab to (make new tab)\n"
+                "end if\n"
+                "end tell"
+            )
+        else:
+            script = (
+                f'tell application "{app_name}"\n'
+                "activate\n"
+                "if (count of windows) = 0 then\n"
+                "make new window\n"
+                "else\n"
+                "tell front window to make new tab at end of tabs\n"
+                "end if\n"
+                "end tell"
+            )
+        completed = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if completed.returncode != 0:
+            raise SafeCapabilityError(
+                "BROWSER_NEW_TAB_FAILED",
+                f"{app_name} içinde yeni sekme açılamadı: {completed.stderr.strip()[:160] or 'osascript hatası'}",
+            )
+        return app_name
+    webbrowser.open_new_tab("about:blank")
+    return app_name
 
 
 def _normalize_url(raw: str) -> str:
@@ -88,10 +150,23 @@ def _browser_result(
     }
 
 
-def browser_control(action: str, url: str = "", query: str = "") -> dict[str, object]:
+def browser_control(action: str, url: str = "", query: str = "", browser: str = "") -> dict[str, object]:
     normalized_action = str(action or "").strip().lower()
     if normalized_action not in _ALLOWED_ACTIONS:
         raise SafeCapabilityError("INVALID_ARGUMENT", "Geçersiz tarayıcı eylemi.")
+
+    if normalized_action == "new_tab":
+        app_name = _open_new_tab(browser)
+        result = _browser_result(
+            f"{app_name} içinde yeni sekme açıldı.",
+            action="new_tab",
+        )
+        # new_tab'ın URL/sorgusu yoktur; kanıt AppleScript'in başarısı.
+        inner = result.get("result")
+        if isinstance(inner, dict):
+            inner["handoffVerified"] = True
+            inner["browserApp"] = app_name
+        return result
 
     if normalized_action == "open_url":
         target_url = _normalize_url(url)

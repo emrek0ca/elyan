@@ -1579,10 +1579,16 @@ def test_dispatch_keeps_specific_explicit_operator_step(
     assert steps[0]["args"]["targetApp"] == "Finder"
 
 
-def test_dispatch_does_not_replace_backend_scope_with_local_capability(
+def test_generic_operator_joker_yields_to_safe_local_route(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Backend'in jenerik operator jokerini yüksek-güvenli yerel rota ezer.
+
+    Eski sözleşme jokerin aynen yürümesini bekliyordu; canlı arıza bunun tam
+    tersini kanıtladı: "masaüstündeki dosyaları listele" operator'a kör hedef
+    olarak gidip doğrulama+onay çıkmazı üretiyordu. Salt-okunur/zararsız yerel
+    eşleşme (directory_tree) artık kazanır (_SAFE_LOCAL_OVERRIDE)."""
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
     prompt = "Masaüstündeki dosyaları listele"
@@ -1613,7 +1619,63 @@ def test_dispatch_does_not_replace_backend_scope_with_local_capability(
         decision,
     )
 
-    assert [step["capability"] for step in steps] == ["desktop_operator.run"]
+    assert [step["capability"] for step in steps] == ["directory_tree"]
+
+
+def test_screen_glance_dispatch_overrides_operator_joker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Canlı arıza: "Ekranda ne var" operator jokerine gidip 'Operator
+    doğrulaması başarısız oldu.' üretiyordu — analyze_screen kazanmalı."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "Ekranda ne var"
+    decision = {
+        "route": "desktop_runtime",
+        "capabilities": ["desktop_operator.run"],
+        "planPreview": {
+            "summary": prompt,
+            "steps": [
+                {"id": "step_1", "capability": "desktop_operator.run", "args": {"goal": prompt}, "description": prompt}
+            ],
+        },
+    }
+    task = {"id": "glance", "payload": {"prompt": prompt, "metadata": {"routeDecision": decision}}}
+
+    steps, _preview = runtime._remote_task_steps_from_route(
+        task, prompt, {"desktop_operator.run"}, decision
+    )
+    assert [step["capability"] for step in steps] == ["analyze_screen"]
+
+
+def test_new_tab_dispatch_overrides_blind_browser_search(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Canlı arıza: "Chrome dan yeni sekme aç" backend'in kör 'search' adımıyla
+    Google'da 'yeni sekme' aratıyordu — action=new_tab kazanmalı."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "Chrome dan yeni sekme aç"
+    decision = {
+        "route": "desktop_runtime",
+        "capabilities": ["browser_control"],
+        "planPreview": {
+            "summary": prompt,
+            "steps": [
+                {"id": "step_1", "capability": "browser_control", "args": {"action": "search", "query": "yeni sekme"}, "description": prompt}
+            ],
+        },
+    }
+    task = {"id": "newtab", "payload": {"prompt": prompt, "metadata": {"routeDecision": decision}}}
+
+    steps, _preview = runtime._remote_task_steps_from_route(
+        task, prompt, {"browser_control"}, decision
+    )
+    assert len(steps) == 1
+    assert steps[0]["capability"] == "browser_control"
+    assert steps[0]["args"]["action"] == "new_tab"
 
 
 def test_remote_browser_agent_route_requires_approval(

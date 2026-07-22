@@ -3491,6 +3491,101 @@ def _agentic_browser_goal_route(original: str) -> "RoutedTask | None":
     )
 
 
+def _screen_glance_route(text: str) -> RoutedTask | None:
+    """'Ekranda ne var' tarzı bakışlar analyze_screen'e gider — ağır operatör
+    ajanına DEĞİL (canlı arıza: operatör doğrulaması düşüyor, kullanıcı basit
+    soruya cevap alamıyordu)."""
+    q = _normalise(text)
+    triggers = (
+        "ekranda ne var", "ekranimda ne var", "ekranda neler var",
+        "ekranda ne yaziyor", "ekrani oku", "ekrana bak",
+        "ekrani anlat", "ekran goruntusunu anlat", "ekrani gor",
+        "whats on my screen", "what is on my screen", "read my screen",
+    )
+    if not any(tok in q for tok in triggers):
+        return None
+    question = str(text or "").strip() or "Ekranda ne var?"
+    args = {"query": question, "target": "active_window"}
+    summary = "Ekrana bakıp ne olduğunu anlatacağım."
+    steps = [{
+        "capability": "analyze_screen",
+        "args": dict(args),
+        "description": "Aktif pencerenin ekran görüntüsü alınıp anlatılacak.",
+    }]
+    return RoutedTask(
+        "analyze_screen",
+        args,
+        "screen_glance",
+        intent="screen_glance",
+        confidence=0.95,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _open_apps_route(text: str) -> RoutedTask | None:
+    """'Hangi uygulamalar açık' desktop_os.processes'e gider — operatöre değil
+    (basit salt-okunur liste; operatör doğrulama çıkmazı üretmesin)."""
+    q = _normalise(text)
+    triggers = (
+        "hangi uygulamalar acik", "acik uygulamalar", "calisan uygulamalar",
+        "hangi programlar acik", "acik programlar", "hangi uygulama acik",
+        "hangi uygulamalar calisiyor", "calisan programlar",
+        "which apps are open", "running apps", "open apps",
+    )
+    if not any(tok in q for tok in triggers):
+        return None
+    summary = "Açık uygulamaları listeleyeceğim."
+    steps = [{
+        "capability": "desktop_os.processes",
+        "args": {},
+        "description": "Çalışan uygulamalar listelenecek.",
+    }]
+    return RoutedTask(
+        "desktop_os.processes",
+        {},
+        "open_apps",
+        intent="open_apps_list",
+        confidence=0.95,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
+def _browser_new_tab_route(text: str) -> RoutedTask | None:
+    """'(Chrome'dan) yeni sekme aç' browser_control action=new_tab'tır — ASLA
+    'yeni sekme' metnini web araması yapmaz (canlı arıza: Google'da 'yeni
+    sekme' aranıyordu)."""
+    q = _normalise(text)
+    if not any(tok in q for tok in ("yeni sekme", "yeni tab", "new tab", "bos sekme")):
+        return None
+    browser = ""
+    for name in ("chromium", "chrome", "brave", "edge", "safari", "arc"):
+        if name in q:
+            browser = name
+            break
+    args = {"action": "new_tab", "browser": browser}
+    label = (browser or "chrome").capitalize()
+    summary = f"{label} içinde yeni bir sekme açacağım."
+    steps = [{
+        "capability": "browser_control",
+        "args": dict(args),
+        "description": f"{label} içinde yeni sekme açılacak.",
+    }]
+    return RoutedTask(
+        "browser_control",
+        args,
+        "browser_new_tab",
+        intent="browser_new_tab",
+        confidence=0.95,
+        privacy_class="public_text",
+        plan_preview=_build_plan_summary(summary, steps, "public_text"),
+        steps=tuple(steps),
+    )
+
+
 def route_text_to_tool(
     text: str,
     *,
@@ -3540,6 +3635,21 @@ def route_text_to_tool(
     clipboard_task = _clipboard_route(original)
     if clipboard_task is not None:
         return clipboard_task
+
+    # ── Basit masaüstü bakışları (operatöre/aramaya düşmemeli) ────────────────
+    # "ekranda ne var" list_dir'in genel "ne var" tetikleyicisinden ÖNCE
+    # yakalanır; "yeni sekme" ise tarayıcı ARAMASINA asla dönüşmez.
+    screen_glance = _screen_glance_route(original)
+    if screen_glance is not None:
+        return screen_glance
+
+    open_apps = _open_apps_route(original)
+    if open_apps is not None:
+        return open_apps
+
+    browser_new_tab = _browser_new_tab_route(original)
+    if browser_new_tab is not None:
+        return browser_new_tab
 
     # ── File system operations (highest priority — very specific intents) ──────
     mkdir = _mkdir_route(original)

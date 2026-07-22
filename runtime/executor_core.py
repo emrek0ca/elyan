@@ -1737,7 +1737,14 @@ class ExecutorCore:
                 bool(result_payload.get("launched", False))
                 and verified
                 and handoff
-                and ((action == "open_url" and target_url) or (action == "search" and query) or (action == "play_youtube" and (target_url or query)))
+                and (
+                    (action == "open_url" and target_url)
+                    or (action == "search" and query)
+                    or (action == "play_youtube" and (target_url or query))
+                    # new_tab'ın URL/sorgusu yoktur; kanıt osascript başarısı
+                    # (handoffVerified) + hangi tarayıcıda açıldığı bilgisidir.
+                    or (action == "new_tab" and str(result_payload.get("browserApp", "") or "").strip())
+                )
             ):
                 return StepVerificationResult(True)
             return StepVerificationResult(False, "Tarayıcı handoff doğrulanamadı.")
