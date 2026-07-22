@@ -5252,7 +5252,8 @@ def test_browser_route_requires_explicit_permission(
     assert response["ok"] is True
     assert response["result"]["permissionNeeded"] is True
     assert response["result"]["assistantMessage"] == "Tam yetki kapalı. Tarayıcı ve medya işlemleri için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç."
-    assert response["result"]["permissionKey"] == "allow_browser_control"
+    assert response["result"]["permissionKey"] == "full_computer_access"
+    assert response["result"]["permissionSurface"] == "full_computer_access"
     assert response["result"]["canGrantPersistently"] is True
     assert response["result"]["systemPermissionKey"] == "accessibility"
 
@@ -5303,8 +5304,7 @@ def test_browser_route_surfaces_os_permission_requirement_when_runtime_permissio
     monkeypatch.setenv("ELYAN_DESKTOP_NATIVE_STATE_PATH", str(snapshot_path))
     state_store.update_state(
         {
-            "account": {"dangerousAreaEnabled": True},
-            "permissions": {"allow_browser_control": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
         }
     )
     runtime = bridge.RuntimeBridge()
@@ -5369,8 +5369,7 @@ def test_personal_action_direct_capability_requires_confirmation(
     runtime = bridge.RuntimeBridge()
     state_store.update_state(
         {
-            "account": {"dangerousAreaEnabled": True},
-            "permissions": {"allow_personal_actions": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
         }
     )
 
@@ -5394,8 +5393,7 @@ def test_semantic_whatsapp_route_returns_pending_plan_with_permission(
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
         {
-            "account": {"dangerousAreaEnabled": True},
-            "permissions": {"allow_personal_actions": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
         }
     )
     monkeypatch.setattr(
@@ -6240,8 +6238,7 @@ def test_conversation_send_returns_pending_plan_for_side_effecting_schedule(
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
         {
-            "account": {"dangerousAreaEnabled": True},
-            "permissions": {"allow_personal_actions": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
         }
     )
     runtime = bridge.RuntimeBridge()
@@ -6483,8 +6480,7 @@ def test_confirm_plan_executes_local_steps(
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
         {
-            "account": {"dangerousAreaEnabled": True},
-            "permissions": {"allow_personal_actions": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
         }
     )
     runtime = bridge.RuntimeBridge()
@@ -6824,8 +6820,7 @@ def test_pending_plan_revision_updates_schedule(
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
         {
-            "account": {"dangerousAreaEnabled": True},
-            "permissions": {"allow_personal_actions": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
         }
     )
     runtime = bridge.RuntimeBridge()
@@ -6867,8 +6862,7 @@ def test_pending_plan_cancel_via_follow_up(
     _isolate_state(monkeypatch, tmp_path)
     state_store.update_state(
         {
-            "account": {"dangerousAreaEnabled": True},
-            "permissions": {"allow_personal_actions": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
         }
     )
     runtime = bridge.RuntimeBridge()

@@ -18,7 +18,7 @@ def _isolate_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def _dangerous_state(**permissions: bool) -> dict[str, object]:
     return state_store._ensure_defaults(
         {
-            "account": {"dangerousAreaEnabled": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
             "permissions": permissions,
         }
     )

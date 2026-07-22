@@ -1555,24 +1555,28 @@ def capability_metadata(name: str) -> dict[str, Any]:
         category = "local_execution"
 
     permissions: tuple[str, ...] = ()
-    if normalized in {"browser_control", "play_media"}:
-        permissions = ("allow_browser_control",)
-    elif normalized == "analyze_screen":
-        permissions = ("allow_screen_analysis",)
-    elif normalized in {"desktop_operator.observe_screen", "desktop_operator.locate"}:
-        permissions = ("allow_screen_analysis",)
-    elif normalized in {"desktop_operator.focus_window", "desktop_operator.execute_action", "desktop_operator.run"}:
-        permissions = ("allow_computer_control",)
-    elif normalized == "desktop_operator.cancel":
-        permissions = ()
-    elif normalized == "shell_run":
-        permissions = ("allow_shell",)
-    elif normalized in {"desktop_os.processes", "desktop_os.active_window"}:
-        permissions = ("allow_system_inspection",)
-    elif normalized in {"add_calendar_event", "delete_calendar_event", "add_reminder", "send_whatsapp_message", "save_whatsapp_contact"}:
-        permissions = ("allow_personal_actions",)
-    elif normalized in _WRITE_CAPABILITIES or normalized in {"email_send", "mcp_call_tool", "run_skill"}:
-        permissions = ("allow_destructive_tools",)
+    if normalized in {
+        "browser_control",
+        "play_media",
+        "analyze_screen",
+        "desktop_operator.observe_screen",
+        "desktop_operator.locate",
+        "desktop_operator.focus_window",
+        "desktop_operator.execute_action",
+        "desktop_operator.run",
+        "shell_run",
+        "desktop_os.processes",
+        "desktop_os.active_window",
+        "add_calendar_event",
+        "delete_calendar_event",
+        "add_reminder",
+        "send_whatsapp_message",
+        "save_whatsapp_contact",
+        "email_send",
+        "mcp_call_tool",
+        "run_skill",
+    } or normalized in _WRITE_CAPABILITIES:
+        permissions = ("full_computer_access",)
 
     permission_class = "blocked"
     if normalized in _SIDE_EFFECT_CAPABILITIES:

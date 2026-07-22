@@ -32,3 +32,18 @@ def test_read_side_dev_tools_are_known_safe() -> None:
     for cap in ("file_read", "file_search", "directory_tree", "git_status", "git_diff"):
         assert cap in safety_policy.KNOWN_SAFE_TOOLS
         assert safety_policy.evaluate_tool(cap, {}, {}).allowed is True
+
+
+def test_permission_tools_use_single_full_access_surface() -> None:
+    legacy_split_permission = {
+        "account": {"dangerousAreaEnabled": True},
+        "permissions": {"allow_browser_control": True},
+    }
+    full_access = {"runtime": {"access": {"fullAccessSession": {"enabled": True}}}}
+
+    denied = safety_policy.evaluate_tool("browser_control", {}, legacy_split_permission)
+    allowed = safety_policy.evaluate_tool("browser_control", {}, full_access)
+
+    assert denied.allowed is False
+    assert denied.code == "PERMISSION_REQUIRED"
+    assert allowed.allowed is True

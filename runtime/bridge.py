@@ -72,12 +72,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 PROMPT_PATH = BASE_DIR / "core" / "prompt.txt"
 STATE = state_store
 KNOWN_PROVIDER_IDS = {"local", "ollama", "lmstudio", "llamacpp", "openai", "gemini", "anthropic", "groq", "custom"}
+FULL_ACCESS_RUNTIME_PERMISSION_KEY = "full_computer_access"
 FULL_ACCESS_PERMISSION_KEYS = {
     "allow_shell",
     "allow_computer_control",
     "allow_screen_analysis",
     "allow_system_inspection",
     "allow_browser_control",
+    "allow_personal_actions",
+    "allow_destructive_tools",
+    "allow_sensitive_operator_actions",
 }
 
 
@@ -2268,8 +2272,9 @@ def _permission_needed_response(reason: str, *, intent: str = "permission", priv
         "clarificationNeeded": False,
         "permissionNeeded": True,
         "permissionReason": reason,
-        "permissionKey": "",
-        "canGrantPersistently": False,
+        "permissionKey": FULL_ACCESS_RUNTIME_PERMISSION_KEY,
+        "permissionSurface": "full_computer_access",
+        "canGrantPersistently": True,
         "systemPermissionKey": "",
         "systemPermissionRequired": False,
         "needsConfirmation": False,
@@ -2280,71 +2285,54 @@ def _permission_needed_response(reason: str, *, intent: str = "permission", priv
 
 _CAPABILITY_PERMISSION_CONTEXT: dict[str, dict[str, str]] = {
     "browser_control": {
-        "permissionKey": "allow_browser_control",
         "systemPermissionKey": "accessibility",
     },
     "play_media": {
-        "permissionKey": "allow_browser_control",
         "systemPermissionKey": "accessibility",
     },
     "analyze_screen": {
-        "permissionKey": "allow_screen_analysis",
         "systemPermissionKey": "screenRecording",
     },
     "desktop_operator.observe_screen": {
-        "permissionKey": "allow_screen_analysis",
         "systemPermissionKey": "screenRecording",
     },
     "desktop_operator.locate": {
-        "permissionKey": "allow_screen_analysis",
         "systemPermissionKey": "screenRecording",
     },
     "desktop_operator.focus_window": {
-        "permissionKey": "allow_computer_control",
         "systemPermissionKey": "accessibility",
     },
     "desktop_operator.execute_action": {
-        "permissionKey": "allow_computer_control",
         "systemPermissionKey": "accessibility",
     },
     "desktop_operator.run": {
-        "permissionKey": "allow_computer_control",
         "systemPermissionKey": "accessibility",
     },
     "desktop_os.processes": {
-        "permissionKey": "allow_system_inspection",
         "systemPermissionKey": "",
     },
     "desktop_os.active_window": {
-        "permissionKey": "allow_system_inspection",
         "systemPermissionKey": "accessibility",
     },
     "shell_run": {
-        "permissionKey": "allow_shell",
         "systemPermissionKey": "",
     },
     "add_calendar_event": {
-        "permissionKey": "allow_personal_actions",
         "systemPermissionKey": "",
     },
     "add_reminder": {
-        "permissionKey": "allow_personal_actions",
         "systemPermissionKey": "",
     },
     "send_whatsapp_message": {
-        "permissionKey": "allow_personal_actions",
         "systemPermissionKey": "",
     },
     "save_whatsapp_contact": {
-        "permissionKey": "allow_personal_actions",
         "systemPermissionKey": "",
     },
     "email_send": {
-        "permissionKey": "allow_destructive_tools",
         "systemPermissionKey": "",
     },
     "mcp_call_tool": {
-        "permissionKey": "allow_destructive_tools",
         "systemPermissionKey": "",
     },
 }
@@ -2363,11 +2351,13 @@ def _desktop_os_permission_snapshot() -> dict[str, Any]:
 def _runtime_permission_enabled(state: dict[str, Any], permission_key: str) -> bool:
     if not permission_key:
         return False
-    account = state.get("account", {})
-    permissions = state.get("permissions", {})
-    if not isinstance(account, dict) or not isinstance(permissions, dict):
-        return False
-    return _is_truthy(account.get("dangerousAreaEnabled", False)) and _is_truthy(permissions.get(permission_key, False))
+    runtime = state.get("runtime", {})
+    runtime = runtime if isinstance(runtime, dict) else {}
+    access = runtime.get("access", {})
+    access = access if isinstance(access, dict) else {}
+    session = access.get("fullAccessSession", {})
+    session = session if isinstance(session, dict) else {}
+    return _is_truthy(session.get("enabled", False))
 
 
 def _system_permission_message(system_permission_key: str) -> str:
@@ -2394,10 +2384,10 @@ def _capability_permission_response(
 ) -> dict[str, Any]:
     payload = _permission_needed_response(reason, intent=intent, privacy_class=privacy_class)
     context = _CAPABILITY_PERMISSION_CONTEXT.get(str(capability or "").strip(), {})
-    permission_key = str(context.get("permissionKey", "") or "").strip()
     system_permission_key = str(context.get("systemPermissionKey", "") or "").strip()
-    payload["permissionKey"] = permission_key
-    payload["canGrantPersistently"] = bool(permission_key)
+    payload["permissionKey"] = FULL_ACCESS_RUNTIME_PERMISSION_KEY
+    payload["permissionSurface"] = "full_computer_access"
+    payload["canGrantPersistently"] = True
     payload["systemPermissionKey"] = system_permission_key
     payload["systemPermissionRequired"] = False
     payload["permissionErrorCode"] = str(error_code or "PERMISSION_REQUIRED")
@@ -2413,7 +2403,7 @@ def _capability_permission_response(
         if (
             payload["systemPermissionRequired"]
             and state is not None
-            and _runtime_permission_enabled(state, permission_key)
+            and _runtime_permission_enabled(state, FULL_ACCESS_RUNTIME_PERMISSION_KEY)
         ):
             payload["content"] = _system_permission_message(system_permission_key)
             payload["permissionReason"] = payload["content"]
@@ -4427,20 +4417,17 @@ def _tool_requires_confirmation(tool_name: str) -> bool:
 
 
 def _tool_permission_allowed(state: dict[str, Any], tool_name: str, args: dict[str, Any] | None = None) -> bool:
-    permissions = state.get("permissions", {})
-    if not isinstance(permissions, dict):
+    runtime = state.get("runtime", {})
+    runtime = runtime if isinstance(runtime, dict) else {}
+    access = runtime.get("access", {})
+    access = access if isinstance(access, dict) else {}
+    session = access.get("fullAccessSession", {})
+    session = session if isinstance(session, dict) else {}
+    if not _is_truthy(session.get("enabled", False)):
         return False
     payload = dict(args) if isinstance(args, dict) else {}
-    if tool_name == "shell_run":
-        return _is_truthy(permissions.get("allow_shell", False))
     if tool_name in PERSONAL_ACTION_CAPABILITIES:
-        if not _is_truthy(permissions.get("allow_personal_actions", False)):
-            return False
-        if tool_name == "send_whatsapp_message" and _is_truthy(payload.get("send_now", False)):
-            return _is_truthy(permissions.get("allow_destructive_tools", False))
         return True
-    if _tool_requires_confirmation(tool_name):
-        return _is_truthy(permissions.get("allow_destructive_tools", False))
     return True
 
 
@@ -9710,6 +9697,7 @@ class RuntimeBridge:
                     "permissionNeeded": bool(result.get("permissionNeeded", False)),
                     "permissionReason": str(result.get("permissionReason", "") or ""),
                     "permissionKey": str(result.get("permissionKey", "") or ""),
+                    "permissionSurface": str(result.get("permissionSurface", "") or ""),
                     "canGrantPersistently": bool(result.get("canGrantPersistently", False)),
                     "systemPermissionKey": str(result.get("systemPermissionKey", "") or ""),
                     "systemPermissionRequired": bool(result.get("systemPermissionRequired", False)),
@@ -9743,6 +9731,7 @@ class RuntimeBridge:
                 "permissionNeeded": bool(result.get("permissionNeeded", False)),
                 "permissionReason": str(result.get("permissionReason", "") or ""),
                 "permissionKey": str(result.get("permissionKey", "") or ""),
+                "permissionSurface": str(result.get("permissionSurface", "") or ""),
                 "canGrantPersistently": bool(result.get("canGrantPersistently", False)),
                 "systemPermissionKey": str(result.get("systemPermissionKey", "") or ""),
                 "systemPermissionRequired": bool(result.get("systemPermissionRequired", False)),
@@ -9787,6 +9776,7 @@ class RuntimeBridge:
                 "permissionNeeded": bool(result.get("permissionNeeded", False)),
                 "permissionReason": str(result.get("permissionReason", "") or ""),
                 "permissionKey": str(result.get("permissionKey", "") or ""),
+                "permissionSurface": str(result.get("permissionSurface", "") or ""),
                 "canGrantPersistently": bool(result.get("canGrantPersistently", False)),
                 "systemPermissionKey": str(result.get("systemPermissionKey", "") or ""),
                 "systemPermissionRequired": bool(result.get("systemPermissionRequired", False)),
@@ -9845,6 +9835,7 @@ class RuntimeBridge:
             "permissionNeeded": bool(result.get("permissionNeeded", False)),
             "permissionReason": str(result.get("permissionReason", "") or ""),
             "permissionKey": str(result.get("permissionKey", "") or ""),
+            "permissionSurface": str(result.get("permissionSurface", "") or ""),
             "canGrantPersistently": bool(result.get("canGrantPersistently", False)),
             "systemPermissionKey": str(result.get("systemPermissionKey", "") or ""),
             "systemPermissionRequired": bool(result.get("systemPermissionRequired", False)),

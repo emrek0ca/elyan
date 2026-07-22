@@ -34,7 +34,7 @@ def _isolate_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def _dangerous_state(**permissions: bool) -> dict[str, object]:
     return state_store._ensure_defaults(
         {
-            "account": {"dangerousAreaEnabled": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
             "permissions": permissions,
         }
     )
@@ -231,7 +231,7 @@ def test_play_media_direct_capability_escalates_to_os_permission_required(
         ),
     ],
 )
-def test_personal_actions_require_explicit_permission(
+def test_personal_actions_require_confirmation_with_full_access(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capability: str,
@@ -248,7 +248,7 @@ def test_personal_actions_require_explicit_permission(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "PERMISSION_REQUIRED"
-    assert "Ayarlar > Gizlilik" in result["error"]["message"]
+    assert "açık onay" in result["error"]["message"]
 
 
 @pytest.mark.parametrize(

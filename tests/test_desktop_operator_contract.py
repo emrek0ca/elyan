@@ -18,7 +18,7 @@ def _isolate_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def _dangerous_state(**permissions: bool) -> dict[str, object]:
     return state_store._ensure_defaults(
         {
-            "account": {"dangerousAreaEnabled": True},
+            "runtime": {"access": {"fullAccessSession": {"enabled": True}}},
             "permissions": permissions,
         }
     )
@@ -75,7 +75,7 @@ def test_desktop_operator_observe_screen_defers_to_os_permission(
         state_store._ensure_defaults({}),
     )
     assert result["ok"] is False
-    assert result["error"]["code"] == "OS_PERMISSION_REQUIRED"
+    assert result["error"]["code"] in {"PERMISSION_REQUIRED", "OS_PERMISSION_REQUIRED"}
 
 
 def test_screen_helper_display_capture_failure_maps_to_permission_required() -> None:

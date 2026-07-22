@@ -68,10 +68,9 @@ FULL_ACCESS_GRANTED_PERMISSIONS = {
     "allow_screen_analysis",
     "allow_system_inspection",
     "allow_browser_control",
-}
-
-CRITICAL_ACTION_PERMISSIONS = {
+    "allow_personal_actions",
     "allow_destructive_tools",
+    "allow_sensitive_operator_actions",
 }
 
 WRITE_CAPABILITIES = {
@@ -205,29 +204,20 @@ def _full_access_enabled(state: dict[str, Any]) -> bool:
 
 
 def _dangerous_area_enabled(state: dict[str, Any]) -> bool:
-    account = state.get("account", {})
-    if not isinstance(account, dict):
-        return False
-    return _truthy(account.get("dangerousAreaEnabled", False))
+    return _full_access_enabled(state)
 
 
 def _permission_enabled(state: dict[str, Any], key: str) -> bool:
     permissions = _permissions(state)
     if key in FULL_ACCESS_GRANTED_PERMISSIONS and _full_access_enabled(state):
         return True
-    if key in CRITICAL_ACTION_PERMISSIONS and _full_access_enabled(state):
-        return _truthy(permissions.get(key, False))
-    return _dangerous_area_enabled(state) and _truthy(permissions.get(key, False))
+    return False
 
 
 def _permission_block(state: dict[str, Any], key: str, disabled_message: str, master_message: str) -> PolicyDecision:
     if key in FULL_ACCESS_GRANTED_PERMISSIONS and _full_access_enabled(state):
         return PolicyDecision(True)
-    if not _dangerous_area_enabled(state):
-        return PolicyDecision(False, "PERMISSION_REQUIRED", master_message)
-    if not _permission_enabled(state, key):
-        return PolicyDecision(False, "PERMISSION_REQUIRED", disabled_message)
-    return PolicyDecision(True)
+    return PolicyDecision(False, "PERMISSION_REQUIRED", master_message or disabled_message)
 
 
 def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -> PolicyDecision:
@@ -295,9 +285,15 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
             "Silme ve geri alınamaz işlem izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
             "Tam yetki kapalı. Silme ve geri alınamaz işlemler için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
         )
-        if destructive_gate.allowed:
+        if not destructive_gate.allowed:
+            return destructive_gate
+        if _truthy(args.get("_confirmed", False)):
             return PolicyDecision(True)
-        return destructive_gate
+        return PolicyDecision(
+            False,
+            "PERMISSION_REQUIRED",
+            "Bu geri alınamaz işlem için açık onay gerekiyor.",
+        )
 
     if name == "send_whatsapp_message" and _truthy(args.get("send_now", False)):
         if not _permission_enabled(state, "allow_destructive_tools"):
