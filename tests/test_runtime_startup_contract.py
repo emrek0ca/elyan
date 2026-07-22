@@ -405,38 +405,52 @@ def test_save_whatsapp_contact_persists_only_when_explicitly_confirmed(
     assert "whatsapp_contacts" in writes[0]
 
 
-def test_analyze_screen_permission_gate_blocks_helper(
+def test_analyze_screen_defers_to_os_permission_not_internal_flag(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Apple-kalite: ekran analizi Elyan-içi 'tam yetki' flag'ine DEĞİL, gerçek
+    macOS iznine tabidir. İç flag kapalı olsa da (kullanıcı OS iznini verdiyse)
+    yardımcı ÇALIŞIR; asıl izni OS/yardımcı yürütmede uygular. Eski çift-kapı
+    ('Tam yetki kapalı') kaldırıldı — canlı arıza: kullanıcı gerçek izni verse
+    de bloklanıyordu."""
     _isolate_state(monkeypatch, tmp_path)
     import actions.screen_vision as screen_vision
     import runtime.capability_registry as registry
 
+    image_path = tmp_path / "screen.png"
+    image_path.write_bytes(_ONE_PIXEL_PNG)
+    helper_payload = json.dumps(
+        {
+            "ok": True,
+            "image_path": str(image_path),
+            "owner_name": "Finder",
+            "window_title": "Desktop",
+        }
+    )
     invoked = False
 
     def fake_run_helper(*args: object, **kwargs: object) -> tuple[bool, str]:
         nonlocal invoked
         invoked = True
-        raise AssertionError("screen helper should not run without permission")
+        return True, helper_payload
 
     monkeypatch.setattr(screen_vision, "_run_helper", fake_run_helper)
+    monkeypatch.setattr(screen_vision, "_image_looks_blank", lambda _path: False)
 
-    denied = registry.run_capability(
+    # İç flag KAPALI, tehlikeli alan KAPALI — yine de yardımcı çalışmalı.
+    result = registry.run_capability(
         "analyze_screen",
         {"query": "ekranda ne var"},
         state_store._ensure_defaults(
             {
                 "account": {"dangerousAreaEnabled": False},
-                "permissions": {"allow_screen_analysis": True},
+                "permissions": {},
             }
         ),
     )
-
-    assert denied["ok"] is False
-    assert denied["error"]["code"] == "PERMISSION_REQUIRED"
-    assert "Tam yetki kapalı" in denied["error"]["message"]
-    assert invoked is False
+    assert invoked is True
+    assert result["ok"] is True
 
 
 def test_analyze_screen_missing_api_key_returns_safe_message(
@@ -580,8 +594,13 @@ def test_analyze_screen_permission_rejection_maps_to_safe_error(
         _dangerous_state(allow_screen_analysis=True),
     )
 
+    # Gerçek OS izni yoksa yardımcı reddeder → güvenli izin hatası (okunaklı,
+    # replan-EDİLMEZ; kullanıcı ham zarf değil net izin mesajı görür). Kodu
+    # hangi katman yakalarsa (readiness ön-kontrolü / yürütme) ona göre
+    # PERMISSION_REQUIRED ya da OS_PERMISSION_REQUIRED olur — ikisi de _NON_
+    # REPLANNABLE_ERROR_CODES içinde, ikisi de doğru.
     assert result["ok"] is False
-    assert result["error"]["code"] == "PERMISSION_REQUIRED"
+    assert result["error"]["code"] in {"PERMISSION_REQUIRED", "OS_PERMISSION_REQUIRED"}
 
 
 def test_play_media_auto_non_darwin_falls_back_to_youtube(

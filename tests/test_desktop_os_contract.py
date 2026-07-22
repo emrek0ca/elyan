@@ -189,18 +189,32 @@ def test_desktop_os_permissions_preserve_additive_metadata(
     assert permissions["automation"]["settingsDeepLinkAvailable"] is True
 
 
-def test_desktop_os_processes_requires_permission(
+def test_desktop_os_processes_defers_to_os_permission(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Apple-kalite: çalışan uygulama listesi Elyan-içi 'tam yetki' flag'iyle
+    ARTIK bloklanmaz — psutil ile çalışır, gerçek izni OS uygular. Politika iç
+    flag olmadan da geçer (canlı arıza: kullanıcı gerçek izni verse de
+    'Tam yetki kapalı' bloklu yordu)."""
     _isolate_state(monkeypatch, tmp_path)
     snapshot_path = _write_snapshot(tmp_path)
     monkeypatch.setenv("ELYAN_DESKTOP_NATIVE_STATE_PATH", str(snapshot_path))
+    from runtime import safety_policy
 
-    result = capability_registry.run_capability("desktop_os.processes", {}, state_store._ensure_defaults({}))
+    decision = safety_policy.evaluate_tool(
+        "desktop_os.processes", {}, state_store._ensure_defaults({})
+    )
+    assert decision.allowed is True
 
-    assert result["ok"] is False
-    assert result["error"]["code"] == "PERMISSION_REQUIRED"
+    result = capability_registry.run_capability(
+        "desktop_os.processes", {}, state_store._ensure_defaults({})
+    )
+    # İç 'tam yetki' PERMISSION_REQUIRED bloğu ARTIK yok.
+    assert not (
+        result.get("ok") is False
+        and (result.get("error") or {}).get("code") == "PERMISSION_REQUIRED"
+    )
 
 
 def test_desktop_os_processes_filters_when_permission_enabled(

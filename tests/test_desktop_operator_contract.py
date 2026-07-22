@@ -49,20 +49,33 @@ def test_desktop_operator_readiness_ignores_stale_native_unavailable_state(
     assert readiness["errorCode"] == ""
 
 
-def test_desktop_operator_observe_screen_requires_permission(
+def test_desktop_operator_observe_screen_defers_to_os_permission(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Apple-kalite: ekran gözlemi Elyan-içi 'tam yetki' flag'iyle ARTIK
+    bloklanmaz; gerçek izni OS/yardımcı uygular. Yardımcı reddedince okunaklı
+    OS_PERMISSION_REQUIRED döner (iç 'tam yetki' PERMISSION_REQUIRED değil)."""
     _isolate_state(monkeypatch, tmp_path)
+    from runtime import safety_policy
 
+    # Politika artık iç flag olmadan da GEÇER (deterministik sözleşme).
+    decision = safety_policy.evaluate_tool(
+        "desktop_operator.observe_screen", {}, state_store._ensure_defaults({})
+    )
+    assert decision.allowed is True
+
+    # Yürütmede yardımcı izin reddederse okunaklı OS mesajı (iç kapı değil).
+    import actions.screen_vision as screen_vision
+
+    monkeypatch.setattr(screen_vision, "_run_helper", lambda *_a, **_k: (False, "permission_denied"))
     result = capability_registry.run_capability(
         "desktop_operator.observe_screen",
         {"query": "ekranda ne var"},
         state_store._ensure_defaults({}),
     )
-
     assert result["ok"] is False
-    assert result["error"]["code"] == "PERMISSION_REQUIRED"
+    assert result["error"]["code"] == "OS_PERMISSION_REQUIRED"
 
 
 def test_screen_helper_display_capture_failure_maps_to_permission_required() -> None:

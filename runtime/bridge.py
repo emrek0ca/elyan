@@ -2739,6 +2739,7 @@ def _user_facing_plan_summary(value: Any) -> str:
 _NON_REPLANNABLE_ERROR_CODES = frozenset(
     {
         "PERMISSION_REQUIRED",
+        "OS_PERMISSION_REQUIRED",
         "PERMISSION_DENIED",
         "ACCESSIBILITY_PERMISSION_REQUIRED",
         "SCREEN_RECORDING_PERMISSION_REQUIRED",

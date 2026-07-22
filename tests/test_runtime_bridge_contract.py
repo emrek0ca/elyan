@@ -5197,11 +5197,23 @@ def test_browser_route_requires_explicit_permission(
     assert response["result"]["systemPermissionKey"] == "accessibility"
 
 
-def test_screen_route_requires_explicit_permission(
+def test_screen_route_defers_to_os_permission_no_internal_pregate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Apple-kalite: ekran rotası Elyan-içi 'tam yetki' ön-kapısıyla artık
+    BLOKLANMAZ (permissionNeeded=False). Gerçek izni OS/yardımcı yürütmede
+    uygular — verilmişse çalışır, verilmemişse capability KENDİ okunaklı OS
+    mesajını döndürür. Canlı arıza: kullanıcı gerçek macOS iznini verse de
+    'Tam yetki kapalı' ile bloklanıyordu."""
     _isolate_state(monkeypatch, tmp_path)
+    # Yardımcıyı deterministik izin-reddine sabitle (CI'da gerçek TCC yok):
+    # rota ön-bloklamaz, yürütür; yürütmede OS mesajı çıkar.
+    import actions.screen_vision as screen_vision
+
+    monkeypatch.setattr(
+        screen_vision, "_run_helper", lambda *_a, **_k: (False, "permission_denied")
+    )
     runtime = bridge.RuntimeBridge()
 
     response = runtime.handle(
@@ -5214,9 +5226,12 @@ def test_screen_route_requires_explicit_permission(
     )
 
     assert response["ok"] is True
-    assert response["result"]["permissionNeeded"] is True
-    assert response["result"]["assistantMessage"] == "Tam yetki kapalı. Ekran analizi için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç."
-    assert response["result"]["permissionKey"] == "allow_screen_analysis"
+    # Kullanıcıya giden metin artık GERÇEK OS iznine yönlendirir; eski yanıltıcı
+    # 'Tam yetki kapalı … Ayarlar > Gizlilik' mesajı YOK, ham zarf da YOK.
+    message = str(response["result"].get("assistantMessage", ""))
+    assert "Tam yetki kapalı" not in message
+    assert "elyan.plan" not in message
+    assert "ekran kaydı" in message.lower() or "screen" in message.lower()
 
 
 def test_browser_route_surfaces_os_permission_requirement_when_runtime_permission_is_enabled(

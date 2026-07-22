@@ -110,6 +110,90 @@ def _permissions(state: dict[str, Any]) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+# ── Gerçek OS izni tek doğruluk kaynağıdır ────────────────────────────────────
+# Apple-kalite: kullanıcı macOS Ekran Kaydı / Erişilebilirlik iznini verince
+# yetenek ÇALIŞMALI — ikinci bir Elyan-içi "tam yetki" toggle'ı istenmez. Eski
+# davranış yalnız Elyan flag'lerine bakıyordu; kullanıcı gerçek izni verse de
+# "Tam yetki kapalı" ile bloklanıyordu (canlı arıza). Salt-okunur OS-destekli
+# yetenekler için gerçek TCC iznini canlı prob'la kontrol edip otomatik geçeriz.
+
+# Yetenek → gereken macOS OS izni.
+_OS_BACKED_READ_CAPABILITIES = {
+    "analyze_screen": "screenRecording",
+    "desktop_operator.observe_screen": "screenRecording",
+    "desktop_operator.locate": "screenRecording",
+    "desktop_os.active_window": "accessibility",
+    "desktop_os.processes": "accessibility",
+}
+
+_OS_PERMISSION_MESSAGES = {
+    "screenRecording": (
+        "Ekranı görebilmem için macOS Ekran Kaydı iznini açman yeterli: "
+        "Sistem Ayarları > Gizlilik ve Güvenlik > Ekran ve Sistem Sesi Kaydı > "
+        "'elyan Screen Helper'ı aç. Zaten açıksa Elyan'ı yeniden başlat."
+    ),
+    "accessibility": (
+        "Bunun için macOS Erişilebilirlik iznini açman yeterli: "
+        "Sistem Ayarları > Gizlilik ve Güvenlik > Erişilebilirlik > "
+        "'elyan Screen Helper' (veya Elyan'ı çalıştıran uygulama) izinli olmalı."
+    ),
+}
+
+import time as _time  # noqa: E402
+
+_os_perm_cache: dict[str, tuple[bool | None, float]] = {}
+_OS_PERM_TTL_SECONDS = 15.0
+
+
+def _probe_os_permission(requirement: str) -> bool | None:
+    """Gerçek macOS TCC iznini canlı prob'lar (kısa TTL cache). darwin dışı ya da
+    prob edilemezse None (bilinmiyor)."""
+    import sys as _sys
+
+    if _sys.platform != "darwin":
+        return None
+    now = _time.monotonic()
+    cached = _os_perm_cache.get(requirement)
+    if cached is not None and (now - cached[1]) < _OS_PERM_TTL_SECONDS:
+        return cached[0]
+    value: bool | None = None
+    try:
+        from actions.desktop_os import _macos_permission_value
+
+        if requirement == "screenRecording":
+            value = _macos_permission_value(
+                "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+                "CGPreflightScreenCaptureAccess",
+            )
+        elif requirement == "accessibility":
+            value = _macos_permission_value(
+                "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
+                "AXIsProcessTrusted",
+            )
+    except Exception:
+        value = None
+    _os_perm_cache[requirement] = (value, now)
+    return value
+
+
+def _os_permission_allows(name: str) -> bool:
+    """Salt-okunur OS-destekli gözlem yetenekleri policy'de GEÇER; gerçek izni
+    OS/yardımcı YÜRÜTMEDE uygular.
+
+    Neden probe'a güvenmiyoruz: ekran yakalama ayrı 'elyan Screen Helper'
+    binary'sine delege edilir; daemon python'unun kendi CGPreflightScreenCapture
+    Access'i (helper izinli olsa bile) False dönebilir (yanıltıcı negatif). İç
+    'tam yetki' kapısı bu yüzden kullanıcı gerçek izni verse de bloklu yordu.
+    Politika izin verir; helper izinliyse çalışır, değilse capability KENDİ
+    doğru mesajını döndürür (PERMISSION_REQUIRED → replan YOK → okunaklı)."""
+    return name in _OS_BACKED_READ_CAPABILITIES
+
+
+def _os_requirement_message(name: str) -> str:
+    requirement = _OS_BACKED_READ_CAPABILITIES.get(name, "")
+    return _OS_PERMISSION_MESSAGES.get(requirement, "")
+
+
 def _full_access_enabled(state: dict[str, Any]) -> bool:
     runtime = state.get("runtime", {})
     runtime = runtime if isinstance(runtime, dict) else {}
@@ -313,33 +397,40 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
         return browser_gate
 
     if name in {"desktop_os.processes", "desktop_os.active_window"}:
+        # Apple-kalite: gerçek OS izni verildiyse çalış (ikinci toggle isteme).
+        if _os_permission_allows(name):
+            return PolicyDecision(True)
         system_gate = _permission_block(
             state,
             "allow_system_inspection",
             "Sistem görünürlüğü izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
-            "Tam yetki kapalı. Sistem görünürlüğü için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+            _os_requirement_message(name),
         )
         if system_gate.allowed:
             return PolicyDecision(True)
         return system_gate
 
     if name == "analyze_screen":
+        if _os_permission_allows(name):
+            return PolicyDecision(True)
         screen_gate = _permission_block(
             state,
             "allow_screen_analysis",
-            "Ekran okuma izni kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
-            "Tam yetki kapalı. Ekran analizi için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+            _os_requirement_message(name),
+            _os_requirement_message(name),
         )
         if screen_gate.allowed:
             return PolicyDecision(True)
         return screen_gate
 
     if name in {"desktop_operator.observe_screen", "desktop_operator.locate"}:
+        if _os_permission_allows(name):
+            return PolicyDecision(True)
         screen_gate = _permission_block(
             state,
             "allow_screen_analysis",
-            "Visual operator ekran gözlemi kapalı. Ayarlar > Gizlilik bölümünden açabilirsin.",
-            "Tam yetki kapalı. Visual operator ekran gözlemi için önce Ayarlar > Gizlilik bölümünden tam yetkiyi aç.",
+            _os_requirement_message(name),
+            _os_requirement_message(name),
         )
         if screen_gate.allowed:
             return PolicyDecision(True)
