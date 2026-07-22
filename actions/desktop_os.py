@@ -121,6 +121,98 @@ def _fallback_permissions() -> tuple[str, dict[str, Any], bool, bool]:
     return "macos_privacy_tcc", permissions, True, bool(screen_recording)
 
 
+# Gerçek "açık uygulamalar" = kullanıcının GÖRDÜĞÜ GUI uygulamaları; kernel/
+# sistem daemon'ları (kernel_task, launchd, logd…) DEĞİL. OS-farkında liste.
+_SYSTEM_PROCESS_HINTS = (
+    "kernel", "launchd", "logd", "daemon", "coreaudio", "watchdog", "mds",
+    "distnoted", "cfprefsd", "usereventagent", "fseventsd", "mediaremoted",
+    "systemstats", "configd", "powerd", "iomfb", "remoted", "corespeechd",
+    "kernelmanagerd", "syslog", "securityd", "trustd", "nsurlsessiond",
+    "bluetoothd", "wifid", "locationd", "spotlight", "mdworker", "backupd",
+    "systemd", "dbus", "udevd", "cron", "rsyslog", "polkit", "gvfs",
+    "svchost", "services.exe", "csrss", "wininit", "lsass", "smss", "dwm.exe",
+    "registry", "system idle", "runtimebroker",
+)
+
+
+def _looks_like_gui_app(name: str, exe: str) -> bool:
+    low_name = str(name or "").strip().lower()
+    low_exe = str(exe or "").strip().lower()
+    if not low_name:
+        return False
+    if any(hint in low_name for hint in _SYSTEM_PROCESS_HINTS):
+        return False
+    # macOS: gerçek uygulamalar .app paketinden çalışır.
+    if ".app/contents/macos/" in low_exe:
+        return True
+    # Windows: Program Files / kullanıcı altındaki .exe'ler.
+    if low_exe.endswith(".exe") and ("program files" in low_exe or "\\users\\" in low_exe or "/users/" in low_exe):
+        return True
+    # Linux: /usr/bin veya /opt altındaki, sistem-ipucu taşımayan süreçler.
+    if low_exe.startswith(("/usr/bin/", "/usr/local/", "/opt/", "/snap/", "/var/lib/flatpak")):
+        return True
+    return False
+
+
+def _running_gui_apps(*, limit: int = 40) -> list[str]:
+    """Kullanıcının açık GUI uygulamalarının adları (OS-farkında). darwin'de
+    System Events 'background only is false' listesi en doğrusudur; diğer
+    platformlarda psutil GUI-benzeri süreçlerle sınırlanır. Boş dönerse çağıran
+    ham proses listesine düşer."""
+    if sys.platform == "darwin":
+        try:
+            completed = subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'tell application "System Events" to get name of every process whose background only is false',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=6,
+            )
+            if completed.returncode == 0:
+                raw = completed.stdout.strip()
+                apps = [part.strip() for part in raw.split(",") if part.strip()]
+                seen: set[str] = set()
+                ordered: list[str] = []
+                for app in apps:
+                    key = app.lower()
+                    if key not in seen:
+                        seen.add(key)
+                        ordered.append(app)
+                return ordered[: max(1, limit)]
+        except Exception:
+            pass
+    # Diğer platformlar / darwin yedeği: psutil'i GUI-benzeri süreçlerle sınırla.
+    try:
+        import psutil  # type: ignore[reportMissingImports]
+    except Exception:
+        return []
+    seen2: set[str] = set()
+    apps2: list[str] = []
+    for process in psutil.process_iter(["name", "exe"]):
+        try:
+            info = process.info
+            name = str(info.get("name") or "")
+            exe = str(info.get("exe") or "")
+        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+            continue
+        if not _looks_like_gui_app(name, exe):
+            continue
+        display = name.rsplit("/", 1)[-1]
+        for suffix in (".app", ".exe"):
+            if display.lower().endswith(suffix):
+                display = display[: -len(suffix)]
+        key = display.lower()
+        if display and key not in seen2:
+            seen2.add(key)
+            apps2.append(display)
+        if len(apps2) >= max(1, limit):
+            break
+    return apps2
+
+
 def _fallback_processes(*, limit: int = 128) -> dict[str, Any]:
     try:
         import psutil  # type: ignore[reportMissingImports]
@@ -570,22 +662,25 @@ def desktop_os_processes(query: str = "", limit: int = 20) -> dict[str, Any]:
         items = filtered
     safe_limit = max(1, min(int(limit or 20), 50))
     selected = items[:safe_limit]
-    # Kullanıcıya OKUNAKLI liste: yalnız "N proses bulundu" işe yaramaz —
-    # uygulama/proses ADLARINI göster (tekilleştirilmiş, sıralı).
-    seen: set[str] = set()
-    names: list[str] = []
-    for item in selected:
-        raw_name = str(item.get("name", "") or item.get("bundleId", "") or "").strip()
-        # Yol/uzantı gürültüsünü temizle (…/Foo.app → Foo).
-        display = raw_name.rsplit("/", 1)[-1]
-        for suffix in (".app", ".exe"):
-            if display.lower().endswith(suffix):
-                display = display[: -len(suffix)]
-        display = display.strip()
-        key = display.lower()
-        if display and key not in seen:
-            seen.add(key)
-            names.append(display)
+    # Kullanıcıya OKUNAKLI liste: "açık uygulamalar" = GERÇEK GUI uygulamaları
+    # (kernel/sistem daemon'ları değil). Önce OS-farkında GUI listesi denenir;
+    # boşsa (izin yok/desteklenmiyor) ham proses adlarına düşülür.
+    names: list[str] = _running_gui_apps(limit=safe_limit)
+    if normalized_query:
+        names = [n for n in names if normalized_query in n.lower()]
+    if not names:
+        seen: set[str] = set()
+        for item in selected:
+            raw_name = str(item.get("name", "") or item.get("bundleId", "") or "").strip()
+            display = raw_name.rsplit("/", 1)[-1]
+            for suffix in (".app", ".exe"):
+                if display.lower().endswith(suffix):
+                    display = display[: -len(suffix)]
+            display = display.strip()
+            key = display.lower()
+            if display and key not in seen:
+                seen.add(key)
+                names.append(display)
     if names:
         preview = ", ".join(names[:15])
         more = len(names) - 15
