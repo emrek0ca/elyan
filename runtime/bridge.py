@@ -2809,6 +2809,32 @@ def _strip_internal_envelope(value: Any) -> str:
     return "" if _looks_like_internal_envelope(text) else text
 
 
+# Yanlış-tetiklenen kimlik/redd savuşturmaları — bir GÖREV sonucunda kullanıcıya
+# gösterilmemeli (canlı arıza: "Ekranda ne var" → model "Ben Elyan olarak
+# çalışırım…" uyduruyordu). Görev sonucu olguya dayanmalı; savuşturma olguyu
+# ezmemeli. (Gerçek "sen kimsin" sohbet cevabı bu yoldan geçmez — o backend
+# sohbet pipeline'ında üretilir, task terminal payload'ında değil.)
+_DEFLECTION_MARKERS = (
+    "ben elyan olarak çalış",
+    "ben elyan olarak calis",
+    "teknik altyapı",
+    "teknik altyapi",
+    "paylaşmam mümkün değil",
+    "paylasmam mumkun degil",
+    "mobil görev desktop runtime",
+    "mobil gorev desktop runtime",
+    "desktop runtime üzerinde adım adım",
+    "desktop runtime uzerinde adim adim",
+)
+
+
+def _looks_like_deflection(value: Any) -> bool:
+    folded = str(value or "").strip().casefold().replace("ı", "i")
+    if not folded:
+        return False
+    return any(marker.replace("ı", "i") in folded for marker in _DEFLECTION_MARKERS)
+
+
 def _retrieval_result_metadata(retrieval: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(retrieval, dict):
         return {
@@ -7129,11 +7155,14 @@ class RuntimeBridge:
     ) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
         chat_ok = local_result.get("chatOk", True) is not False
         assistant_message = str(local_result.get("assistantMessage", "") or "").strip()
-        # KALKAN: iç planlama/replan/iş-emri JSON'u asistan mesajına sızarsa
-        # (canlı arıza — kullanıcı ham zarf görüyordu) burada temizlenir; boş
-        # kalır ve aşağıdaki sentez/statik yedeğe düşer. Kullanıcı ASLA ham
-        # zarf görmez.
-        if _looks_like_internal_envelope(assistant_message):
+        # KALKAN: iç planlama/replan/iş-emri JSON'u VEYA yanlış-tetiklenen kimlik
+        # savuşturması asistan mesajına sızarsa (canlı arıza) burada temizlenir;
+        # boş kalır ve aşağıdaki sentez (GERÇEK araç çıktısı) / statik yedeğe
+        # düşer. Kullanıcı ASLA ham zarf ya da "Ben Elyan olarak çalışırım…"
+        # savuşturmasını görmez — cevap olgudan gelir.
+        if _looks_like_internal_envelope(assistant_message) or _looks_like_deflection(
+            assistant_message
+        ):
             assistant_message = ""
             local_result = {**local_result, "assistantMessage": ""}
         # Yan-etki-only başarılı görevler asistan metni üretmeyebilir; backend
@@ -12773,7 +12802,7 @@ class RuntimeBridge:
         # metni üretmeden biterse bu cümle chat'e asistan cevabı gibi sızıyordu.
         summary = str(
             _user_facing_plan_summary(plan_preview.get("summary", ""))
-            or "Mobil görev desktop runtime üzerinde adım adım yürütülecek."
+            or "Görev yürütülüyor."
         ).strip()
         privacy_class = str(
             plan_preview.get("privacyClass", "")
@@ -13434,7 +13463,7 @@ class RuntimeBridge:
         if not steps and mobile_intent_category:
             return None
         if plan_preview and not str(plan_preview.get("summary", "") or "").strip() and mobile_intent_category:
-            plan_preview = {**plan_preview, "summary": f"Mobil görev ({mobile_intent_category}) desktop runtime üzerinde yürütülüyor."}
+            plan_preview = {**plan_preview, "summary": "Görev yürütülüyor."}
         if not steps:
             return None
         if not isinstance(plan_preview.get("agentPlan"), dict):
