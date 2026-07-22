@@ -129,6 +129,26 @@ function renderCapabilityCatalog(allowed: Set<string>): string {
     .join("\n");
 }
 
+function renderPlanningFewShots(): string {
+  return [
+    "EXAMPLES:",
+    "",
+    "Accounting calculation + spreadsheet:",
+    "Goal: 12000 TL ve 8500 TL tutarindaki iki faturanin toplam KDV dahil ozetini Excel'e yaz.",
+    '{"steps":[',
+    '{"id":"s1","capability":"math_solve","args":{"expression":"(12000+8500)*1.20"},"dependsOn":[],"description":"KDV dahil toplam tutari hesapla"},',
+    '{"id":"s2","capability":"spreadsheet_write","args":{"title":"Fatura ozeti","sheets":[{"name":"Ozet","rows":[["Kalem","Tutar"],["Fatura 1",12000],["Fatura 2",8500],["KDV dahil toplam","{{steps.s1.output}}"]]}]},"dependsOn":["s1"],"description":"Hesap sonucunu Excel dosyasina yaz"}',
+    "]}",
+    "",
+    "Research + report:",
+    "Goal: 2026 elektrikli arac batarya trendlerini arastir ve kisa Word raporu hazirla.",
+    '{"steps":[',
+    '{"id":"s1","capability":"web_research","args":{"query":"2026 electric vehicle battery trends solid state LFP sodium ion market"},"dependsOn":[],"description":"Guncel kaynaklardan batarya trendlerini arastir"},',
+    '{"id":"s2","capability":"document_write","args":{"title":"2026 Elektrikli Arac Batarya Trendleri","content":"{{steps.s1.output}}","format":"docx"},"dependsOn":["s1"],"description":"Arastirma sonucunu Word raporuna donustur"}',
+    "]}",
+  ].join("\n");
+}
+
 function buildPlanningPrompt(
   workOrder: DesktopWorkOrder,
   allowed: string[],
@@ -161,9 +181,16 @@ function buildPlanningPrompt(
       ").",
     "- Order steps so each runs after its dependencies; set dependsOn to the ids whose output it consumes.",
     "- Always provide every listed required arg for a capability; put concrete values, use {{steps.<id>.output}} to consume a previous step's result.",
+    "- Args must contain executable data, not vague descriptions. Do not write placeholders such as \"the invoice total\", \"the research result\", or \"the user's file\" when a concrete value or dependency reference is available.",
+    "- math_solve.args.expression MUST be a numeric/symbolic expression such as \"12000+8500\" or \"(12000+8500)*1.20\". Never pass an explanation like \"faturaların toplamı\" as expression.",
+    "- For spreadsheet_write/document_write/presentation_write, put the produced content in args directly and reference prior outputs with {{steps.<id>.output}}. Do not rely on hidden context.",
+    "- For web_research, query must be a concrete search query with the key terms from the goal, not a generic instruction.",
+    "- For image_generate, prompt must be the full visual prompt the image model should receive, not a short label.",
     "- Steps marked [needs approval] are allowed; the desktop asks the user before running them — plan them normally.",
     "- Only use capabilities from the CATALOG above.",
     '- If the goal cannot be split into >=2 steps from these capabilities, return {"steps":[]}.',
+    "",
+    renderPlanningFewShots(),
   ].join("\n");
 }
 
