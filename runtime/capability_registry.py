@@ -2376,7 +2376,16 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             list(args.get("_selectedPaths", []) or []),
         ),
         "math_solve": lambda args: _load_adapter("math_solve")(
-            str(args.get("expression", "") or ""),
+            str(
+                args.get("expression")
+                or args.get("query")
+                or args.get("problem")
+                or args.get("input")
+                or args.get("expr")
+                or args.get("equation")
+                or args.get("formula")
+                or ""
+            ),
             str(args.get("mode", "solve") or "solve"),
         ),
         "latex_parse": lambda args: _load_adapter("latex_parse")(
