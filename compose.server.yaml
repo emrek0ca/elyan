@@ -96,7 +96,7 @@ services:
       GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.1-flash-lite}
       GEMINI_REASONING_MODEL: ${GEMINI_REASONING_MODEL:-gemini-3.5-flash}
       GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3.5-flash}
-      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
+      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image-preview}
       GEMINI_IMAGE_PRO_MODEL: ${GEMINI_IMAGE_PRO_MODEL:-gemini-3-pro-image-preview}
       GEMINI_IMAGE_SIZE: ${GEMINI_IMAGE_SIZE:-2K}
       GEMINI_IMAGE_PRO_ENABLED: ${GEMINI_IMAGE_PRO_ENABLED:-true}
@@ -175,7 +175,7 @@ services:
       GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.1-flash-lite}
       GEMINI_REASONING_MODEL: ${GEMINI_REASONING_MODEL:-gemini-3.5-flash}
       GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3.5-flash}
-      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
+      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image-preview}
       GEMINI_IMAGE_PRO_MODEL: ${GEMINI_IMAGE_PRO_MODEL:-gemini-3-pro-image-preview}
       GEMINI_IMAGE_SIZE: ${GEMINI_IMAGE_SIZE:-2K}
       GEMINI_IMAGE_PRO_ENABLED: ${GEMINI_IMAGE_PRO_ENABLED:-true}

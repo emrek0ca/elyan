@@ -78,8 +78,8 @@ function appWithConfig(
       GEMINI_API_KEY: "",
       GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai",
       GEMINI_INTERACTIONS_BASE_URL: "https://generativelanguage.googleapis.com/v1beta",
-      GEMINI_IMAGE_MODEL: "gemini-3.1-flash-image",
-      GEMINI_IMAGE_PRO_MODEL: "gemini-3-pro-image",
+      GEMINI_IMAGE_MODEL: "gemini-3.1-flash-image-preview",
+      GEMINI_IMAGE_PRO_MODEL: "gemini-3-pro-image-preview",
       GEMINI_IMAGE_SIZE: "1K",
       GEMINI_IMAGE_PRO_ENABLED: false,
       GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: 50,
@@ -193,7 +193,7 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     assert.equal(requests[0]?.geminiKey, "gemini-test-key");
     // Maliyet politikası: "poster" tek başına artık premium değil (Pro flag
     // default kapalı) ve açık çözünürlük istenmedikçe 1K üretilir.
-    assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image");
+    assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image-preview");
     assert.equal("response_format" in requests[0]!.body, false);
     assert.deepEqual(requests[0]?.body.input, [
       {
@@ -292,7 +292,7 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     requests.push(body);
-    if (body.model === "gemini-3-pro-image") {
+    if (body.model === "gemini-3-pro-image-preview") {
       return new Response("busy", { status: 429 });
     }
     return Response.json({
@@ -340,7 +340,7 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
     assert.ok(result);
     assert.deepEqual(
       requests.map((request) => request.model),
-      ["gemini-3-pro-image", "gemini-3.1-flash-image"],
+      ["gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"],
     );
     assert.equal(result.mimeType, "image/jpeg");
     assert.notDeepEqual([...result.binaryBody], [...jpegBody]);
@@ -383,7 +383,7 @@ test("maybeGenerateHostedImageArtifact treats Turkish draw prompts as image gene
     assert.ok(result);
     assert.deepEqual(
       requests.map((request) => request.model),
-      ["gemini-3.1-flash-image"],
+      ["gemini-3.1-flash-image-preview"],
     );
     assert.equal(result.previewText, "Görsel hazır.");
     assert.equal(result.artifact.textContent, "Görsel hazır.");
@@ -711,7 +711,7 @@ test("premium prompts stay on Flash while GEMINI_IMAGE_PRO_ENABLED is off (cost 
     assert.ok(result);
     assert.deepEqual(
       requests.map((request) => request.model),
-      ["gemini-3.1-flash-image"],
+      ["gemini-3.1-flash-image-preview"],
     );
   } finally {
     globalThis.fetch = originalFetch;

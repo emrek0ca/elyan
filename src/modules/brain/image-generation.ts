@@ -856,7 +856,7 @@ export async function maybeGenerateHostedImageArtifact(
     const result = await generateHostedImageArtifactWithPermit(app, input, providers);
     if (result) {
       const premiumModel = String(
-        app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
+        app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image-preview",
       ).trim();
       const cacheMatchesRequestedTier =
         !premiumRequested ||
@@ -947,10 +947,10 @@ function buildHostedImageProviderConfigs(
         "https://generativelanguage.googleapis.com/v1beta",
     ).trim();
     const fastImageModel = String(
-      app.config.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-image",
+      app.config.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-image-preview",
     ).trim();
     const premiumImageModel = String(
-      app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
+      app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image-preview",
     ).trim();
     const imageSize = resolveGeminiImageSize(
       prompt,

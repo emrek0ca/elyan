@@ -36,7 +36,7 @@ export function buildGeminiModelCatalog(
   const textModel = compactText(config.GEMINI_TEXT_MODEL) || reasoningModel;
   const visionModel = compactText(config.GEMINI_VISION_MODEL) || "gemini-3.5-flash";
   const imageModel =
-    compactText(config.GEMINI_IMAGE_MODEL) || "gemini-3.1-flash-image";
+    compactText(config.GEMINI_IMAGE_MODEL) || "gemini-3.1-flash-image-preview";
 
   return {
     textModel,

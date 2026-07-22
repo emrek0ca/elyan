@@ -1943,6 +1943,18 @@ function readRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function resolveImageGenerationFallbackText(
+  metadata: Record<string, unknown>,
+): string {
+  const reason = typeof metadata.imageGenerationBlockedReason === "string"
+    ? metadata.imageGenerationBlockedReason
+    : "";
+  if (reason === "image_generation_limit_reached") {
+    return "Bu ayki görsel üretim hakkın doldu. Plan limitin yenilendiğinde tekrar görsel üretebilirsin.";
+  }
+  return "Görsel üretim şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene.";
+}
+
 function readRenderRecipeFromTask(
   value: unknown,
 ): Record<string, unknown> | null {
@@ -3616,14 +3628,7 @@ async function completeServerBrainTask(
     visibleResponseText = generatedImageArtifact.previewText;
     resolvedAssistantBlocks = [];
   } else if (imageGenerationRequested) {
-    visibleResponseText =
-      payloadMetadata.imageGenerationBlockedReason ===
-      "image_generation_limit_reached"
-        ? "Bu ayki görsel üretim hakkın doldu. Plan limitin yenilendiğinde tekrar görsel üretebilirsin."
-        : payloadMetadata.imageGenerationBlockedReason ===
-          "image_generation_provider_quota"
-          ? "Görsel üretim kapasitesi şu anda dolu. Birkaç dakika sonra tekrar dene."
-        : "Görsel şu anda üretilemedi. Lütfen biraz sonra tekrar dene.";
+    visibleResponseText = resolveImageGenerationFallbackText(payloadMetadata);
     resolvedAssistantBlocks = [];
   }
   const renderRecipeMetadata =
