@@ -11082,3 +11082,51 @@ def test_recoverable_replan_hands_browser_goal_from_failed_operator(
         "remainingSteps": [],
     })
     assert revised_native == []
+
+
+def test_terminal_payload_strips_leaked_internal_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Canlı arıza: iç planlama/replan zarfı asistan mesajına sızıp kullanıcıya
+    ham JSON gösteriliyordu. Kalkan: zarf temizlenir, temiz yedeğe düşülür."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    envelope = (
+        '{"type": "elyan.plan.replan", "contract": "elyan.plan.v2", '
+        '"workOrder": {"capabilityScope": ["analyze_screen", "desktop_os.processes"]}}'
+    )
+    payload, _artifacts, ok = runtime._runtime_task_terminal_payload(
+        {
+            "chatOk": True,
+            "assistantMessage": "analyze_screen\n" + envelope,
+            "provider": "local",
+            "executionTrace": {"steps": [{"label": "Ekran okundu", "status": "completed"}]},
+        }
+    )
+    assert ok is True
+    # Ham zarf ASLA kullanıcıya gitmez.
+    assert "elyan.plan" not in payload["summary"]
+    assert "capabilityScope" not in payload["summary"]
+    assert "elyan.plan" not in payload["safeSummary"]
+    # Temiz yedek (yürütme kanıtından sentez) gösterilir.
+    assert payload["summary"].strip() != ""
+
+
+def test_permission_required_is_not_replanned(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """İzin hatası LLM replan ile çözülemez; replan atlanır (zarf sızıntısı da
+    olmaz), adımın okunaklı mesajı yüzeye çıkar."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    revised = runtime._recoverable_replan(
+        {
+            "failedCapability": "analyze_screen",
+            "errorCode": "PERMISSION_REQUIRED",
+            "message": "Ekran kaydı izni gerekiyor.",
+            "remainingSteps": [],
+        }
+    )
+    assert revised == []

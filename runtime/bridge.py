@@ -2734,6 +2734,57 @@ def _user_facing_plan_summary(value: Any) -> str:
     return summary
 
 
+# İzin/yetki hataları LLM replan ile çözülemez → replan yapılmaz, adımın kendi
+# okunaklı mesajı yüzeye çıkar (zarf sızıntısı da önlenir).
+_NON_REPLANNABLE_ERROR_CODES = frozenset(
+    {
+        "PERMISSION_REQUIRED",
+        "PERMISSION_DENIED",
+        "ACCESSIBILITY_PERMISSION_REQUIRED",
+        "SCREEN_RECORDING_PERMISSION_REQUIRED",
+        "AUTOMATION_PERMISSION_REQUIRED",
+    }
+)
+
+# İÇ zarf/telemetri işaretleri — bu metinler kullanıcıya ASLA gösterilmez
+# (planlama/replan/iş-emri JSON'u vb. sohbete ham sızarsa temizlenir).
+_INTERNAL_ENVELOPE_MARKERS = (
+    "elyan.plan.v",
+    "elyan.plan.replan",
+    "elyan.cowork.v",
+    "elyan.execution_goal",
+    "elyan.goal_contract",
+    "elyan.desktop_work_order",
+    "elyan.replan.v",
+    "elyan.compiled_plan",
+    '"capabilityscope"',
+    '"workorder"',
+    '"planpreview"',
+    '"deterministicplanhint"',
+)
+
+
+def _looks_like_internal_envelope(value: Any) -> bool:
+    """Metin, kullanıcıya gösterilmemesi gereken bir iç JSON zarfı mı? Ham
+    planlama/replan/iş-emri JSON'u sohbete sızarsa (canlı arıza) yakalar."""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    # Bariz JSON zarfı + iç sözleşme işareti, ya da işaretin kendisi.
+    has_marker = any(marker in folded for marker in _INTERNAL_ENVELOPE_MARKERS)
+    if not has_marker:
+        return False
+    looks_json = text.lstrip().startswith(("{", "[")) or '"contract"' in folded or '"type"' in folded
+    return looks_json
+
+
+def _strip_internal_envelope(value: Any) -> str:
+    """İç zarf ise boş döndür (çağıran temiz yedeğe düşer); değilse metni korur."""
+    text = str(value or "").strip()
+    return "" if _looks_like_internal_envelope(text) else text
+
+
 def _retrieval_result_metadata(retrieval: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(retrieval, dict):
         return {
@@ -7013,6 +7064,13 @@ class RuntimeBridge:
     ) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
         chat_ok = local_result.get("chatOk", True) is not False
         assistant_message = str(local_result.get("assistantMessage", "") or "").strip()
+        # KALKAN: iç planlama/replan/iş-emri JSON'u asistan mesajına sızarsa
+        # (canlı arıza — kullanıcı ham zarf görüyordu) burada temizlenir; boş
+        # kalır ve aşağıdaki sentez/statik yedeğe düşer. Kullanıcı ASLA ham
+        # zarf görmez.
+        if _looks_like_internal_envelope(assistant_message):
+            assistant_message = ""
+            local_result = {**local_result, "assistantMessage": ""}
         # Yan-etki-only başarılı görevler asistan metni üretmeyebilir; backend
         # bu durumda task.summary/konserve tek satıra düşüyordu. Boşsa yürütme
         # kanıtından içerik taşıyan bir özet sentezle ve tüm sonuç alanlarına
@@ -8541,6 +8599,13 @@ class RuntimeBridge:
         pre_error_code = str(context.get("errorCode", "") or "").upper()
         pre_args = context.get("failedArgs")
         pre_args = pre_args if isinstance(pre_args, dict) else {}
+        # Replan ETME: bir izin/yetki hatası LLM planlamasıyla ÇÖZÜLEMEZ. Eskiden
+        # replan tetiklenip planlama zarfını server_brain'e gönderiyor, o da
+        # kullanıcının sohbetine ham JSON olarak sızıyordu. Bu hatalarda executor
+        # adımın KEND İ okunaklı mesajını (ör. "Ekran kaydı izni gerekiyor…")
+        # doğrudan yüzeye çıkarsın.
+        if pre_error_code in _NON_REPLANNABLE_ERROR_CODES:
+            return []
         if pre_error_code == "APP_NOT_FOUND" and pre_capability in {"open_app", "close_app"}:
             # Gözleme kurulu-uygulama önerileri ekle: planlayıcı "yetenek bozuk"
             # değil "ad yanlış" diye okusun ve düzeltebilsin.
@@ -8729,13 +8794,27 @@ class RuntimeBridge:
             )
             prompt = structured_planner.planning_prompt(request)
             try:
-                result = _invoke_provider_chat_with_context(
-                    state,
-                    provider,
-                    [],
-                    prompt,
-                    backend=self.backend,
-                )
+                # server_brain replan planlaması İZOLE /v1/brain/desktop/plan
+                # endpoint'ine gider — görünür sohbete mesaj OLUŞTURMAZ. Eski
+                # yol (chat_messages, scope=user_chat_session) planlama zarfını
+                # kullanıcının sohbetine ham JSON olarak sızdırıyordu (canlı
+                # arıza). Ana planlayıcıyla aynı desen; endpoint yoksa chat
+                # yoluna düşer (geriye dönük uyum).
+                result: dict[str, Any] | None = None
+                if (
+                    provider == "server_brain"
+                    and self.backend is not None
+                    and hasattr(self.backend, "desktop_plan")
+                ):
+                    result = _server_brain_structured_plan(self.backend, prompt, repair=True)
+                if result is None:
+                    result = _invoke_provider_chat_with_context(
+                        state,
+                        provider,
+                        [],
+                        prompt,
+                        backend=self.backend,
+                    )
             except Exception:
                 continue
             if not result.get("ok"):
