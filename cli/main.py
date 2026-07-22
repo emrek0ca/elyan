@@ -161,61 +161,74 @@ def _platform_name() -> str:
     return "linux"
 
 
-# Bağımlılıksız 5 satırlık blok font — eşleştirme kodunu terminalde iri gösterir.
-# QR kaldırıldı: telefon kodu KAMERAYLA değil, ELLE okunur; bu yüzden kod
-# okunması kolay, büyük ve tek satırda net görünmelidir.
-_BIG_FONT: dict[str, tuple[str, str, str, str, str]] = {
-    "0": (" ███ ", "█   █", "█   █", "█   █", " ███ "),
-    "1": ("  █  ", " ██  ", "  █  ", "  █  ", " ███ "),
-    "2": (" ███ ", "█   █", "   █ ", "  █  ", "█████"),
-    "3": ("████ ", "    █", " ███ ", "    █", "████ "),
-    "4": ("█  █ ", "█  █ ", "█████", "   █ ", "   █ "),
-    "5": ("█████", "█    ", "████ ", "    █", "████ "),
-    "6": (" ███ ", "█    ", "████ ", "█   █", " ███ "),
-    "7": ("█████", "    █", "   █ ", "  █  ", "  █  "),
-    "8": (" ███ ", "█   █", " ███ ", "█   █", " ███ "),
-    "9": (" ███ ", "█   █", " ████", "    █", " ███ "),
-    "A": (" ███ ", "█   █", "█████", "█   █", "█   █"),
-    "B": ("████ ", "█   █", "████ ", "█   █", "████ "),
-    "C": (" ████", "█    ", "█    ", "█    ", " ████"),
-    "D": ("████ ", "█   █", "█   █", "█   █", "████ "),
-    "E": ("█████", "█    ", "███  ", "█    ", "█████"),
-    "F": ("█████", "█    ", "███  ", "█    ", "█    "),
-    "G": (" ████", "█    ", "█  ██", "█   █", " ███ "),
-    "H": ("█   █", "█   █", "█████", "█   █", "█   █"),
-    "I": ("█████", "  █  ", "  █  ", "  █  ", "█████"),
-    "J": ("█████", "   █ ", "   █ ", "█  █ ", " ██  "),
-    "K": ("█   █", "█  █ ", "███  ", "█  █ ", "█   █"),
-    "L": ("█    ", "█    ", "█    ", "█    ", "█████"),
-    "M": ("█   █", "██ ██", "█ █ █", "█   █", "█   █"),
-    "N": ("█   █", "██  █", "█ █ █", "█  ██", "█   █"),
-    "O": (" ███ ", "█   █", "█   █", "█   █", " ███ "),
-    "P": ("████ ", "█   █", "████ ", "█    ", "█    "),
-    "Q": (" ███ ", "█   █", "█ █ █", "█  █ ", " ██ █"),
-    "R": ("████ ", "█   █", "████ ", "█  █ ", "█   █"),
-    "S": (" ████", "█    ", " ███ ", "    █", "████ "),
-    "T": ("█████", "  █  ", "  █  ", "  █  ", "  █  "),
-    "U": ("█   █", "█   █", "█   █", "█   █", " ███ "),
-    "V": ("█   █", "█   █", "█   █", " █ █ ", "  █  "),
-    "W": ("█   █", "█   █", "█ █ █", "██ ██", "█   █"),
-    "X": ("█   █", " █ █ ", "  █  ", " █ █ ", "█   █"),
-    "Y": ("█   █", " █ █ ", "  █  ", "  █  ", "  █  "),
-    "Z": ("█████", "   █ ", "  █  ", " █   ", "█████"),
-    "-": ("     ", "     ", "█████", "     ", "     "),
-    " ": ("     ", "     ", "     ", "     ", "     "),
+# Bağımlılıksız 5×7 nokta-matris blok font — eşleştirme kodunu terminalde iri
+# gösterir. QR kaldırıldı: telefon kodu KAMERAYLA değil, ELLE okunur; bu yüzden
+# kod okunması kolay, büyük ve net görünmelidir. Eski 5×5 font çok kaba kalıyor
+# ve harfler birbirine karışıyordu (B/8, G/6…); 7 satırlık klasik dot-matrix
+# çözünürlüğü her glifi ayrıştırır. 8 karakterlik kod 4+4 gruplanır.
+_BIG_FONT: dict[str, tuple[str, ...]] = {
+    "0": (" ███ ", "█   █", "█  ██", "█ █ █", "██  █", "█   █", " ███ "),
+    "1": ("  █  ", " ██  ", "  █  ", "  █  ", "  █  ", "  █  ", " ███ "),
+    "2": (" ███ ", "█   █", "    █", "   █ ", "  █  ", " █   ", "█████"),
+    "3": ("████ ", "    █", "    █", " ███ ", "    █", "    █", "████ "),
+    "4": ("   █ ", "  ██ ", " █ █ ", "█  █ ", "█████", "   █ ", "   █ "),
+    "5": ("█████", "█    ", "████ ", "    █", "    █", "█   █", " ███ "),
+    "6": (" ███ ", "█    ", "█    ", "████ ", "█   █", "█   █", " ███ "),
+    "7": ("█████", "    █", "   █ ", "  █  ", " █   ", " █   ", " █   "),
+    "8": (" ███ ", "█   █", "█   █", " ███ ", "█   █", "█   █", " ███ "),
+    "9": (" ███ ", "█   █", "█   █", " ████", "    █", "    █", " ███ "),
+    "A": (" ███ ", "█   █", "█   █", "█████", "█   █", "█   █", "█   █"),
+    "B": ("████ ", "█   █", "█   █", "████ ", "█   █", "█   █", "████ "),
+    "C": (" ███ ", "█   █", "█    ", "█    ", "█    ", "█   █", " ███ "),
+    "D": ("████ ", "█   █", "█   █", "█   █", "█   █", "█   █", "████ "),
+    "E": ("█████", "█    ", "█    ", "████ ", "█    ", "█    ", "█████"),
+    "F": ("█████", "█    ", "█    ", "████ ", "█    ", "█    ", "█    "),
+    "G": (" ███ ", "█   █", "█    ", "█ ███", "█   █", "█   █", " ████"),
+    "H": ("█   █", "█   █", "█   █", "█████", "█   █", "█   █", "█   █"),
+    "I": ("█████", "  █  ", "  █  ", "  █  ", "  █  ", "  █  ", "█████"),
+    "J": ("  ███", "   █ ", "   █ ", "   █ ", "   █ ", "█  █ ", " ██  "),
+    "K": ("█   █", "█  █ ", "█ █  ", "██   ", "█ █  ", "█  █ ", "█   █"),
+    "L": ("█    ", "█    ", "█    ", "█    ", "█    ", "█    ", "█████"),
+    "M": ("█   █", "██ ██", "█ █ █", "█ █ █", "█   █", "█   █", "█   █"),
+    "N": ("█   █", "██  █", "██  █", "█ █ █", "█  ██", "█  ██", "█   █"),
+    "O": (" ███ ", "█   █", "█   █", "█   █", "█   █", "█   █", " ███ "),
+    "P": ("████ ", "█   █", "█   █", "████ ", "█    ", "█    ", "█    "),
+    "Q": (" ███ ", "█   █", "█   █", "█   █", "█ █ █", "█  █ ", " ██ █"),
+    "R": ("████ ", "█   █", "█   █", "████ ", "█ █  ", "█  █ ", "█   █"),
+    "S": (" ████", "█    ", "█    ", " ███ ", "    █", "    █", "████ "),
+    "T": ("█████", "  █  ", "  █  ", "  █  ", "  █  ", "  █  ", "  █  "),
+    "U": ("█   █", "█   █", "█   █", "█   █", "█   █", "█   █", " ███ "),
+    "V": ("█   █", "█   █", "█   █", "█   █", " █ █ ", " █ █ ", "  █  "),
+    "W": ("█   █", "█   █", "█   █", "█ █ █", "█ █ █", "██ ██", "█   █"),
+    "X": ("█   █", "█   █", " █ █ ", "  █  ", " █ █ ", "█   █", "█   █"),
+    "Y": ("█   █", "█   █", " █ █ ", "  █  ", "  █  ", "  █  ", "  █  "),
+    "Z": ("█████", "    █", "   █ ", "  █  ", " █   ", "█    ", "█████"),
+    "-": ("     ", "     ", "     ", "█████", "     ", "     ", "     "),
+    " ": ("     ", "     ", "     ", "     ", "     ", "     ", "     "),
 }
+_BIG_FONT_ROWS = 7
+
+
+def _group_pairing_code(code: str) -> str:
+    """Kodu okunabilirlik için 4'lü gruplara ayırır: 9PCWQGHB → 9PCW-QGHB."""
+    code = str(code or "").strip().upper()
+    if len(code) <= 4:
+        return code
+    return "-".join(code[i : i + 4] for i in range(0, len(code), 4))
 
 
 def _render_big_code(code: str) -> str:
-    """Eşleştirme kodunu 5 satırlık iri blok fontla döndürür (bağımlılıksız)."""
+    """Eşleştirme kodunu 7 satırlık iri dot-matrix fontla döndürür
+    (bağımlılıksız). 4 karakterde bir geniş grup boşluğu bırakılır."""
     code = str(code or "").strip().upper()
     if not code:
         return ""
-    rows = ["", "", "", "", ""]
-    for ch in code:
+    rows = [""] * _BIG_FONT_ROWS
+    for index, ch in enumerate(code):
         glyph = _BIG_FONT.get(ch, _BIG_FONT["-"])
-        for i in range(5):
-            rows[i] += glyph[i] + "  "
+        gap = "    " if index and index % 4 == 0 else ("  " if index else "")
+        for i in range(_BIG_FONT_ROWS):
+            rows[i] += gap + glyph[i]
     return "\n".join(row.rstrip() for row in rows)
 
 
@@ -371,14 +384,16 @@ def cmd_pair(args: argparse.Namespace) -> int:
     print()
     print(_render_big_code(display_code))
     print()
-    print(f"  Eşleştirme kodu:  {display_code}")
+    print(f"  Eşleştirme kodu:  {_group_pairing_code(display_code)}   (tireyi girmene gerek yok)")
     print("  Elyan telefon uygulamasında 'Bilgisayar Eşleştir' → bu kodu gir.")
-    print("  Kod 5 dakika geçerli. Bekleniyor…")
+    print("  Kod 10 dakika geçerli. Bekleniyor…")
     print()
 
     # Aktif yoklama: arka plan thread'ine güvenme — her turda backend'den
     # oturum durumunu çek (claimed görülünce bridge kaydı da tetikler).
-    deadline = time.monotonic() + 300
+    # Bekleme, backend PAIRING_TTL_MINUTES=10 ile hizalı (eski 300sn bekleme
+    # kod hâlâ geçerliyken 'zaman aşımı' basıyordu).
+    deadline = time.monotonic() + 570
     paired = False
     poll_error_count = 0
     try:
@@ -421,7 +436,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
     print()
 
     if not paired:
-        print("Eşleştirme zaman aşımına uğradı (5 dk). Tekrar dene: elyan pair")
+        print("Eşleştirme zaman aşımına uğradı (10 dk). Tekrar dene: elyan pair")
         _restore_daemon(was_running)
         return 1
 

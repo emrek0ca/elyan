@@ -292,17 +292,23 @@ def test_service_definitions_run_daemon_module() -> None:
     assert "Restart=on-failure" in unit
 
 
-def test_render_big_code_produces_five_line_banner() -> None:
-    from cli.main import _render_big_code
+def test_render_big_code_produces_seven_line_banner() -> None:
+    from cli.main import _group_pairing_code, _render_big_code
 
     rendered = _render_big_code("PWGSFB5B")
     lines = rendered.splitlines()
-    # QR yok: kod 5 satırlık iri blok fontla basılır, telefonla ELLE okunur.
-    assert len(lines) == 5
+    # QR yok: kod 7 satırlık iri dot-matrix fontla basılır, telefonla ELLE
+    # okunur (eski 5 satır kaba kalıyor, B/8 G/6 karışıyordu).
+    assert len(lines) == 7
     assert "█" in rendered
+    # 4'lü grup boşluğu: 5. karakterden önce geniş aralık bulunmalı.
+    assert "    " in lines[0]
     # Kısa/uzun her kod tek satıra sığmalı ve boş dönmemeli.
-    assert _render_big_code("ABC123").count("\n") == 4
+    assert _render_big_code("ABC123").count("\n") == 6
     assert _render_big_code("") == ""
+    # Gruplama yalnız görsel: 4'lü bloklar tire ile ayrılır.
+    assert _group_pairing_code("9PCWQGHB") == "9PCW-QGHB"
+    assert _group_pairing_code("ABC") == "ABC"
 
 
 class _FakeResult:
