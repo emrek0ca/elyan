@@ -167,8 +167,32 @@ def document_write(
     source_context: str = "",
     overwrite: bool = False,
     _selectedPaths: list[str] | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     from docx import Document  # type: ignore[reportMissingImports]
+
+    if not str(prompt or "").strip():
+        for key in ("content", "body", "text", "markdown", "instructions", "instruction", "description"):
+            candidate = kwargs.get(key)
+            if str(candidate or "").strip():
+                prompt = str(candidate)
+                break
+    document_payload = kwargs.get("document") if isinstance(kwargs.get("document"), dict) else kwargs.get("doc")
+    if isinstance(document_payload, dict):
+        if not str(prompt or "").strip():
+            for key in ("prompt", "content", "body", "text", "markdown", "summary"):
+                candidate = document_payload.get(key)
+                if str(candidate or "").strip():
+                    prompt = str(candidate)
+                    break
+        if not sections and isinstance(document_payload.get("sections"), list):
+            sections = document_payload.get("sections")
+        if not blocks and isinstance(document_payload.get("blocks"), list):
+            blocks = document_payload.get("blocks")
+    if not str(output_path or "").strip():
+        output_path = str(kwargs.get("outputPath", "") or kwargs.get("output_path", "") or "")
+    if not str(source_context or "").strip():
+        source_context = str(kwargs.get("sourceContext", "") or kwargs.get("source_context", "") or "")
 
     resolved_output = ensure_allowed_output_path(
         output_path,

@@ -23,7 +23,7 @@ def image_generate_status() -> dict[str, Any]:
 
 
 def image_generate(
-    prompt: str,
+    prompt: str = "",
     outputPath: str = "",
     title: str = "",
     aspectRatio: str = "",
@@ -32,7 +32,20 @@ def image_generate(
     size: str = "",
     quality: str = "",
     background: str = "auto",
+    **kwargs: Any,
 ) -> dict[str, Any]:
+    if not str(prompt or "").strip():
+        for key in ("imagePrompt", "image_prompt", "description", "visualDescription", "visual_description", "subject", "query", "text"):
+            candidate = kwargs.get(key)
+            if str(candidate or "").strip():
+                prompt = str(candidate)
+                break
+    if not str(outputPath or "").strip():
+        outputPath = str(kwargs.get("output_path", "") or kwargs.get("outputPath", "") or "")
+    if not str(aspectRatio or "").strip():
+        aspectRatio = str(kwargs.get("aspect_ratio", "") or kwargs.get("aspectRatio", "") or "")
+    if not str(imageSize or "").strip():
+        imageSize = str(kwargs.get("image_size", "") or kwargs.get("imageSize", "") or "")
     return run_image_operation(
         prompt=prompt,
         output_path=outputPath,

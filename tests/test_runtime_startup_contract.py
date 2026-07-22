@@ -1107,6 +1107,49 @@ def test_image_generate_missing_api_key_fails_safely(
     assert result["error"]["code"] == "PROVIDER_NOT_CONFIGURED"
 
 
+def test_forgiving_image_generate_accepts_description_arg(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.image_generate as image_generate
+    import runtime.capability_registry as registry
+
+    monkeypatch.setattr(image_generate, "_workspace_root", lambda: tmp_path)
+    prompts: list[str] = []
+
+    def fake_generate(**kwargs: object) -> tuple[bytes, dict[str, object]]:
+        prompts.append(str(kwargs.get("prompt", "")))
+        return _ONE_PIXEL_PNG, {"mimeType": "image/png", "width": 1, "height": 1}
+
+    monkeypatch.setattr(image_generate, "_generate_image_bytes", fake_generate)
+    import actions._gemini_image as gemini_image
+
+    monkeypatch.setattr(
+        gemini_image,
+        "provider_settings",
+        lambda **_kwargs: {
+            "provider": "gemini",
+            "api_key": "test-key",
+            "model": "gemini-3.1-flash-image",
+        },
+    )
+
+    result = registry.run_capability(
+        "image_generate",
+        {
+            "description": "Turuncu ve mavi vurgulu profesyonel dashboard hero gorseli",
+            "outputPath": "outputs/hero.png",
+            "_confirmed": True,
+        },
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is True
+    assert prompts == ["Turuncu ve mavi vurgulu profesyonel dashboard hero gorseli"]
+    assert (tmp_path / "outputs" / "hero.png").exists()
+
+
 def test_data_analyze_csv_summary_and_preview(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1409,6 +1452,36 @@ def test_document_write_creates_docx_in_workspace(
     assert result["result"]["outputPath"] == str(output_path.resolve())
 
 
+def test_forgiving_document_write_accepts_content_and_nested_sections(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.document_write as document_write
+    import runtime.capability_registry as registry
+
+    monkeypatch.setattr(document_write, "_workspace_root", lambda: tmp_path)
+
+    result = registry.run_capability(
+        "document_write",
+        {
+            "document": {
+                "content": "Yonetici ozeti: gelirler ve riskler dengeli.",
+                "sections": [{"title": "Bulgular", "body": "Gelir artti. Risk azaldi."}],
+            },
+            "outputPath": "reports/ozet.docx",
+            "_confirmed": True,
+        },
+        state_store.snapshot(),
+    )
+
+    output_path = tmp_path / "reports" / "ozet.docx"
+    assert result["ok"] is True
+    assert output_path.exists()
+    assert result["result"]["kind"] == "document_write"
+    assert "Yonetici ozeti" in result["result"]["summary"]
+
+
 def test_spreadsheet_write_creates_xlsx_in_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1435,6 +1508,75 @@ def test_spreadsheet_write_creates_xlsx_in_workspace(
     assert output_path.exists()
     assert result["result"]["kind"] == "spreadsheet_write"
     assert result["result"]["outputPath"] == str(output_path.resolve())
+
+
+def test_forgiving_spreadsheet_write_accepts_sheet_rows_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.spreadsheet_write as spreadsheet_write
+    import runtime.capability_registry as registry
+    from openpyxl import load_workbook
+
+    monkeypatch.setattr(spreadsheet_write, "_workspace_root", lambda: tmp_path)
+
+    result = registry.run_capability(
+        "spreadsheet_write",
+        {
+            "sheets": [
+                {
+                    "name": "Ozet",
+                    "rows": [
+                        ["Kalem", "Tutar"],
+                        ["Fatura 1", 12000],
+                        ["Fatura 2", 8500],
+                        ["Toplam", "{{steps.s1.output}}"],
+                    ],
+                }
+            ],
+            "outputPath": "tables/faturalar.xlsx",
+            "_confirmed": True,
+        },
+        state_store.snapshot(),
+    )
+
+    output_path = tmp_path / "tables" / "faturalar.xlsx"
+    values = list(load_workbook(output_path, read_only=True).active.iter_rows(values_only=True))
+    assert result["ok"] is True
+    assert result["result"]["columns"] == ["Kalem", "Tutar"]
+    assert result["result"]["rowCount"] == 3
+    assert values[0] == ("Kalem", "Tutar")
+    assert values[1] == ("Fatura 1", 12000)
+
+
+def test_forgiving_web_research_accepts_topic_arg(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.web_research as web_research
+    import runtime.capability_registry as registry
+
+    queries: list[str] = []
+
+    def fake_search(query: str, limit: int = 5) -> list[tuple[str, str]]:
+        queries.append(query)
+        return [("Kaynak", "https://example.com/report")]
+
+    monkeypatch.setattr(web_research, "_duckduckgo_search", fake_search)
+    monkeypatch.setattr(web_research, "_fetch_text", lambda _url: "Kaynak icerigi " * 80)
+
+    result = registry.run_capability(
+        "web_research",
+        {"topic": "2026 batarya trendleri", "maxResults": 1},
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is True
+    assert queries == ["2026 batarya trendleri"]
+    assert result["result"]["query"] == "2026 batarya trendleri"
+    assert len(result["result"]["sources"]) == 1
 
 
 def test_presentation_write_missing_dependency_fails_safely(

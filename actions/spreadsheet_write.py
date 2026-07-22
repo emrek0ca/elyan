@@ -139,6 +139,58 @@ def _normalize_rows(rows: Any, columns: list[str] | None = None) -> list[list[An
     return normalized
 
 
+def _first_text(mapping: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = mapping.get(key)
+        if value not in (None, "", [], {}):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _first_list(mapping: dict[str, Any], *keys: str) -> list[Any] | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, list):
+            return value
+    return None
+
+
+def _coerce_spreadsheet_inputs(
+    *,
+    prompt: str,
+    title: str,
+    columns: list[str] | None,
+    rows: list[Any] | None,
+    kwargs: dict[str, Any],
+) -> tuple[str, str, list[str] | None, list[Any] | None]:
+    prompt = str(prompt or "").strip() or _first_text(kwargs, "content", "summary", "description", "text")
+    title = str(title or "").strip() or _first_text(kwargs, "name", "sheetTitle", "sheet_title")
+    columns = columns if isinstance(columns, list) else _first_list(kwargs, "headers", "fields")
+    rows = rows if isinstance(rows, list) else _first_list(kwargs, "data", "items", "records", "values")
+    table = None
+    for key in ("table", "worksheet", "sheet", "spreadsheet"):
+        value = kwargs.get(key)
+        if isinstance(value, dict):
+            table = value
+            break
+    sheets = kwargs.get("sheets") if isinstance(kwargs.get("sheets"), list) else kwargs.get("worksheets")
+    if table is None and isinstance(sheets, list) and sheets and isinstance(sheets[0], dict):
+        table = sheets[0]
+    if isinstance(table, dict):
+        prompt = prompt or _first_text(table, "prompt", "content", "summary", "description", "text")
+        title = title or _first_text(table, "title", "name", "sheetTitle", "sheet_title")
+        columns = columns or _first_list(table, "columns", "headers", "fields")
+        rows = rows or _first_list(table, "rows", "data", "items", "records", "values")
+    if columns is None and isinstance(rows, list) and rows:
+        first = rows[0]
+        if isinstance(first, list) and len(first) > 1 and all(not isinstance(item, (list, dict)) for item in first):
+            columns = [str(item) for item in first]
+            rows = rows[1:]
+    return prompt, title, columns, rows
+
+
 def spreadsheet_write(
     prompt: str = "",
     output_path: str = "",
@@ -147,11 +199,24 @@ def spreadsheet_write(
     rows: list[Any] | None = None,
     source_context: str = "",
     overwrite: bool = False,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     from openpyxl import Workbook  # type: ignore[reportMissingImports]
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.table import Table, TableStyleInfo
+
+    prompt, title, columns, rows = _coerce_spreadsheet_inputs(
+        prompt=prompt,
+        title=title,
+        columns=columns,
+        rows=rows,
+        kwargs=kwargs,
+    )
+    if not str(output_path or "").strip():
+        output_path = str(kwargs.get("outputPath", "") or kwargs.get("output_path", "") or "")
+    if not str(source_context or "").strip():
+        source_context = str(kwargs.get("sourceContext", "") or kwargs.get("source_context", "") or "")
 
     resolved_output = ensure_allowed_output_path(
         output_path,
@@ -182,7 +247,7 @@ def spreadsheet_write(
         header = normalized_columns or ["Content"]
         if not normalized_columns:
             sheet.append(header)
-        written_rows = [[bullet] for bullet in bulletize_text(seed_text, limit=24)]
+        written_rows = [] if not normalized_columns else [[bullet] for bullet in bulletize_text(seed_text, limit=24)]
         for row in written_rows:
             sheet.append(row)
 

@@ -2097,6 +2097,151 @@ def _writer_source_context(args: dict[str, Any]) -> str:
     return explicit[:60000] or previous_output[:60000]
 
 
+def _first_non_empty_text(args: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = args.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+        elif value not in (None, "", [], {}):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _first_list(args: dict[str, Any], *keys: str) -> list[Any] | None:
+    for key in keys:
+        value = args.get(key)
+        if isinstance(value, list):
+            return value
+    return None
+
+
+def _first_dict(args: dict[str, Any], *keys: str) -> dict[str, Any] | None:
+    for key in keys:
+        value = args.get(key)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _web_research_query(args: dict[str, Any]) -> str:
+    query = _first_non_empty_text(
+        args,
+        "query",
+        "q",
+        "topic",
+        "subject",
+        "searchQuery",
+        "search_query",
+        "prompt",
+        "question",
+        "text",
+    )
+    if query:
+        return query
+    filters = _first_dict(args, "filters", "criteria")
+    if filters:
+        return " ".join(
+            str(value).strip()
+            for value in filters.values()
+            if str(value or "").strip()
+        )
+    return ""
+
+
+def _image_prompt(args: dict[str, Any]) -> str:
+    prompt = _first_non_empty_text(
+        args,
+        "prompt",
+        "imagePrompt",
+        "image_prompt",
+        "description",
+        "visualDescription",
+        "visual_description",
+        "subject",
+        "query",
+        "text",
+    )
+    if prompt:
+        return prompt
+    spec = _first_dict(args, "image", "visual", "spec")
+    if not spec:
+        return ""
+    pieces: list[str] = []
+    for key in ("prompt", "description", "subject", "style", "mood", "background", "text"):
+        value = str(spec.get(key, "") or "").strip()
+        if value:
+            pieces.append(value)
+    return ", ".join(pieces)
+
+
+def _document_prompt(args: dict[str, Any]) -> str:
+    prompt = _first_non_empty_text(
+        args,
+        "prompt",
+        "content",
+        "body",
+        "text",
+        "markdown",
+        "instructions",
+        "instruction",
+        "description",
+    )
+    if prompt:
+        return prompt
+    document = _first_dict(args, "document", "doc")
+    if document:
+        return _first_non_empty_text(document, "prompt", "content", "body", "text", "markdown", "summary")
+    return ""
+
+
+def _document_sections(args: dict[str, Any]) -> list[Any] | None:
+    sections = _first_list(args, "sections", "chapters")
+    if sections is not None:
+        return sections
+    document = _first_dict(args, "document", "doc")
+    if document:
+        return _first_list(document, "sections", "chapters")
+    return None
+
+
+def _document_blocks(args: dict[str, Any]) -> list[Any] | None:
+    blocks = _first_list(args, "blocks", "contentBlocks", "content_blocks")
+    if blocks is not None:
+        return blocks
+    document = _first_dict(args, "document", "doc")
+    if document:
+        return _first_list(document, "blocks", "contentBlocks", "content_blocks")
+    return None
+
+
+def _spreadsheet_payload(args: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "prompt": _first_non_empty_text(args, "prompt", "content", "summary", "description", "text"),
+        "title": _first_non_empty_text(args, "title", "name", "sheetTitle", "sheet_title"),
+        "columns": _first_list(args, "columns", "headers", "fields"),
+        "rows": _first_list(args, "rows", "data", "items", "records", "values"),
+    }
+    table = _first_dict(args, "table", "worksheet", "sheet", "spreadsheet")
+    sheets = _first_list(args, "sheets", "worksheets")
+    if table is None and sheets and isinstance(sheets[0], dict):
+        table = sheets[0]
+    if table:
+        payload["prompt"] = payload["prompt"] or _first_non_empty_text(table, "prompt", "content", "summary", "description", "text")
+        payload["title"] = payload["title"] or _first_non_empty_text(table, "title", "name", "sheetTitle", "sheet_title")
+        payload["columns"] = payload["columns"] or _first_list(table, "columns", "headers", "fields")
+        payload["rows"] = payload["rows"] or _first_list(table, "rows", "data", "items", "records", "values")
+    if payload["columns"] is None and isinstance(payload["rows"], list) and payload["rows"]:
+        first = payload["rows"][0]
+        if isinstance(first, list) and len(first) > 1 and all(not isinstance(item, (list, dict)) for item in first):
+            payload["columns"] = first
+            payload["rows"] = payload["rows"][1:]
+    return payload
+
+
 def _string_from_exception(exc: Exception) -> str:
     return " ".join(str(exc or "").split()).strip()[:160]
 
@@ -2190,7 +2335,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             query=str(args.get("query", "") or ""),
         ),
         "web_research": lambda args: _load_adapter("web_research")(
-            str(args.get("query", "") or ""),
+            _web_research_query(args),
             _as_int(args.get("max_results"), 4),
             str(args.get("languageHint", "") or args.get("language_hint", "") or ""),
         ),
@@ -2281,7 +2426,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             list(args.get("_selectedPaths", []) or []),
         ),
         "image_generate": lambda args: _load_adapter("image_generate")(
-            prompt=str(args.get("prompt", "") or ""),
+            prompt=_image_prompt(args),
             outputPath=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
             title=str(args.get("title", "") or ""),
             aspectRatio=str(args.get("aspectRatio", "") or args.get("aspect_ratio", "") or ""),
@@ -2412,11 +2557,11 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             _previousResult=dict(args.get("_previousResult", {}) or {}) if isinstance(args.get("_previousResult", {}), dict) else None,
         ),
         "document_write": lambda args: _load_adapter("document_write")(
-            prompt=str(args.get("prompt", "") or ""),
+            prompt=_document_prompt(args),
             output_path=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
             title=str(args.get("title", "") or ""),
-            sections=args.get("sections") if isinstance(args.get("sections"), list) else None,
-            blocks=args.get("blocks") if isinstance(args.get("blocks"), list) else None,
+            sections=_document_sections(args),
+            blocks=_document_blocks(args),
             source_path=str(args.get("sourcePath", "") or args.get("source_path", "") or ""),
             source_context=_writer_source_context(args),
             overwrite=bool(args.get("overwrite", False)),
@@ -2438,11 +2583,11 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             _selectedPaths=list(args.get("_selectedPaths", []) or []),
         ),
         "spreadsheet_write": lambda args: _load_adapter("spreadsheet_write")(
-            prompt=str(args.get("prompt", "") or ""),
+            prompt=str(_spreadsheet_payload(args).get("prompt", "") or ""),
             output_path=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
-            title=str(args.get("title", "") or ""),
-            columns=args.get("columns") if isinstance(args.get("columns"), list) else None,
-            rows=args.get("rows") if isinstance(args.get("rows"), list) else None,
+            title=str(_spreadsheet_payload(args).get("title", "") or ""),
+            columns=_spreadsheet_payload(args).get("columns"),
+            rows=_spreadsheet_payload(args).get("rows"),
             source_context=_writer_source_context(args),
             overwrite=bool(args.get("overwrite", False)),
         ),

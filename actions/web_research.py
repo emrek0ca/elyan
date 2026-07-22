@@ -155,10 +155,23 @@ def _summarize(text: str, max_chars: int = 800) -> str:
     return compact[: max_chars - 1].rstrip() + "…"
 
 
-def web_research(query: str, max_results: int = 4, language_hint: str = "") -> dict[str, Any]:
+def web_research(query: str = "", max_results: int = 4, language_hint: str = "", **kwargs: Any) -> dict[str, Any]:
+    if not str(query or "").strip():
+        for key in ("q", "topic", "subject", "searchQuery", "search_query", "prompt", "question", "text"):
+            candidate = kwargs.get(key)
+            if str(candidate or "").strip():
+                query = str(candidate)
+                break
+    if not str(language_hint or "").strip():
+        language_hint = str(kwargs.get("languageHint", "") or kwargs.get("language_hint", "") or "")
+    if max_results == 4:
+        max_results = kwargs.get("maxResults", kwargs.get("max_results", max_results))
     topic = str(query or "").strip()
     if not topic:
-        raise SafeCapabilityError("INVALID_ARGUMENT", "Araştırma için konu belirtilmedi.")
+        raise SafeCapabilityError(
+            "INVALID_ARGUMENT",
+            "Araştırma için somut konu veya query gerekli.",
+        )
 
     try:
         desired_results = max(1, min(int(max_results or 4), 6))
