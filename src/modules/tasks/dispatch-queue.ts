@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Queue, Worker, type Job } from "bullmq";
 import type { FastifyInstance } from "fastify";
 import { activeTaskStatuses } from "./queue.js";
+import { maybeMaterializeDesktopPlan } from "./materialize-plan.js";
 import { issueTaskDispatchLease, getTaskById } from "./service.js";
 
 export type TaskDispatchJobData = {
@@ -36,6 +37,12 @@ async function processTaskDispatchJob(app: FastifyInstance, job: Job<TaskDispatc
   if (!acquired) {
     return;
   }
+
+  // Hibrit sunucu-materyalizasyonu: karmaşık desktop görevlerinde work-order
+  // planını dispatch'ten HEMEN önce (create yolundan uzak) tam bağımlılık-graflı
+  // veriye derleyip task satırına persist eder → issueTaskDispatchLease güncel
+  // planı DB'den okur ve dispatch envelope'u taşır. Fail-safe: hata → heuristik.
+  await maybeMaterializeDesktopPlan(app, task);
 
   const leaseResult = await issueTaskDispatchLease(app, {
     taskId: task.id,

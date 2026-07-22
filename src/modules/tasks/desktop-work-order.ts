@@ -15,6 +15,17 @@ export type DesktopWorkOrderStep = {
   capability: string;
   description: string;
   args: Record<string, unknown>;
+  /**
+   * Bağımlılık grafı — bu adım hangi adım id'lerinin çıktısına dayanır.
+   * Sunucu-materyalize planlarda dolu gelir; heuristik planlarda boş/atlanmış
+   * (yalnız dizi sırası). Desktop runtime/compiled_plan.py'nin hash'lenen
+   * şekliyle hizalıdır (id/capability/args/dependsOn/forEach/resourceScope).
+   */
+  dependsOn?: string[];
+  /** Bu adımın dokunduğu kaynak kapsamı (çakışma/paralellik kararları için). */
+  resourceScope?: string[];
+  /** {{steps.<id>.items}} gibi bir koleksiyon üzerinde tekrar için (fan-out). */
+  forEach?: string;
 };
 
 export type DesktopWorkOrder = {
@@ -52,6 +63,17 @@ export type DesktopWorkOrder = {
     summary: string;
     privacyClass: "public_text" | "local_private" | "side_effect";
     steps: DesktopWorkOrderStep[];
+    /**
+     * Planın kaynağı ve güven sınıfı. "heuristic" (varsayılan) = regex/keyword
+     * work-order sentezi; desktop bu plana güvenmeyip kendi katalog+doğrulamalı
+     * planlayıcısına delege eder. "server_materialized" = sunucu beyni (120b
+     * planning workload) tam bağımlılık-graflı plan derledi; desktop bu güvenilir
+     * plana GÜVENİR ve ekstra beyin round-trip'i olmadan yürütür. Alan yoksa
+     * desktop tarafı mevcut (heuristik) davranışı korur → geriye dönük uyumlu.
+     */
+    planSource?: "heuristic" | "server_materialized";
+    /** Sunucu-materyalize planlarda kanonik yürütme sözleşmesi. */
+    contract?: "elyan.compiled_plan.v1";
   };
   /** Safe target/evidence only; credentials and raw MCP config never enter a work order. */
   remoteMcp?: RemoteMcpSelectionMetadata;
@@ -713,6 +735,9 @@ export function buildDesktopWorkOrder(input: {
           ? "local_private"
           : "public_text",
       steps,
+      // Varsayılan: heuristik sentez. Dispatch worker karmaşık görevlerde bunu
+      // "server_materialized" ile üzerine yazar (materialize-plan.ts).
+      planSource: "heuristic",
     },
     ...(kind === "remote_mcp" && input.remoteMcpSelection
       ? { remoteMcp: input.remoteMcpSelection }
