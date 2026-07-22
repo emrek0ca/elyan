@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { tasks } from "../../db/schema.js";
 import { extractFirstJsonObject } from "../brain/desktop-plan.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
+import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 import {
   MAX_WORK_ORDER_STEPS,
   type DesktopWorkOrder,
@@ -24,40 +25,21 @@ import {
  *
  * Güvenlik: fail-SAFE. Basit görevler dokunulmaz (heuristik). Karmaşık görevde
  * herhangi bir hata/timeout/zayıf çıktı → work-order heuristik haliyle dispatch
- * edilir (görev asla bloklanmaz). Sunucu vokabüleri desktop'un tam kataloğundan
- * (66 yetenek) dardır; bu yüzden desktop planı KEND İ kataloğuna karşı doğrular,
- * geçmezse mevcut delegasyon davranışına düşer (regresyon yok).
+ * edilir (görev asla bloklanmaz). Vokabüler = desktop'un TAM kataloğu
+ * (DESKTOP_CAPABILITY_MANIFEST, 77 yetenek — runtime TOOL_DECLARATIONS'tan
+ * üretilir); desktop planı yine KENDİ kataloğuna karşı doğrular, geçmezse mevcut
+ * delegasyon davranışına düşer (regresyon yok).
  */
 
-// Sunucunun güvenle önerebileceği yetenek adları (desktop kataloğunun bilinen
-// alt kümesi). Desktop tam 66-yetenek kataloğuna karşı doğrular; bu liste yalnız
-// modele makul bir kelime dağarcığı verir.
-const MATERIALIZABLE_CAPABILITIES = [
-  "web_research",
-  "retrieve_context",
-  "document_read",
-  "document_write",
-  "spreadsheet_write",
-  "presentation_write",
-  "canvas_write",
-  "image_generate",
-  "image_fetch",
-  "image_read",
-  "image_edit",
-  "browser_control",
-  "open_app",
-  "close_app",
-  "make_directory",
-  "play_media",
-  "sys_info",
-  // Desktop SAFE_BASELINE_CAPABILITIES paritesi (runtime/execution_trust.py):
-  // basit masaüstü bakışları sunucu planlarında da kullanılabilir.
-  "analyze_screen",
-  "desktop_os.processes",
-  "directory_tree",
-  "file_read",
-  "file_search",
-] as const;
+// Sunucunun önerebileceği yetenekler = desktop'un TAM kataloğu (manifest).
+// Onay gerektirenler (mail/shell/dosya-sil/takvim…) modele "risk: onay ister"
+// notuyla sunulur ama planlanabilir — güvenlik sınırı DESKTOP'tadır (grant +
+// REMOTE_APPROVAL_CAPABILITIES onay kapısı). Böylece sunucu planı desktop'un
+// geniş yetenek/araç setinin TAMAMINI kullanabilir; kısa görev + planlama
+// aşamaları iki uçta bire bir uyumlu kalır.
+const MATERIALIZABLE_CAPABILITIES = DESKTOP_CAPABILITY_MANIFEST.map(
+  (entry) => entry.name,
+);
 
 const CAPABILITY_NAME_RE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/;
 const SEQUENTIAL_INTENT_RE =
@@ -99,6 +81,24 @@ function buildAllowedCapabilities(workOrder: DesktopWorkOrder): string[] {
   return [...union];
 }
 
+function renderCapabilityCatalog(allowed: Set<string>): string {
+  // Manifest'ten yalnız izinli olanları, her yeteneğin ne zaman kullanılacağı
+  // (usage) + gerekli argümanları + onay bayrağı ile listele. Bu, modelin
+  // doğru yeteneği doğru argümanla seçmesinin kaldıracıdır (skill-benzeri
+  // kendini-belgeleyen katalog, desktop tool_catalog ile aynı bilgi).
+  return DESKTOP_CAPABILITY_MANIFEST.filter((entry) => allowed.has(entry.name))
+    .map((entry) => {
+      const req =
+        entry.requiredArgs.length > 0
+          ? ` [required args: ${entry.requiredArgs.join(", ")}]`
+          : "";
+      const approval = entry.requiresApproval ? " [needs user approval]" : "";
+      const usage = entry.usage ? ` — ${entry.usage}` : "";
+      return `- ${entry.name}: ${entry.description}${usage}${req}${approval}`;
+    })
+    .join("\n");
+}
+
 function buildPlanningPrompt(
   workOrder: DesktopWorkOrder,
   allowed: string[],
@@ -120,18 +120,19 @@ function buildPlanningPrompt(
     `- language: ${language}`,
     entities ? `- entities:\n${entities}` : "- entities: (none)",
     "",
-    "ALLOWED CAPABILITIES (use ONLY these exact names):",
-    allowed.map((c) => `- ${c}`).join("\n"),
+    "CAPABILITY CATALOG (use ONLY these exact names; each line: name: what it does — when to use [required args][needs approval]):",
+    renderCapabilityCatalog(new Set(allowed)),
     "",
     "RULES:",
     '- Output EXACTLY ONE JSON object, no prose, no markdown fences: {"steps":[...]}',
-    '- Each step: {"id":"s1","capability":"<allowed name>","args":{...},"dependsOn":["<earlier id>"],"description":"<short>"}',
+    '- Each step: {"id":"s1","capability":"<catalog name>","args":{...},"dependsOn":["<earlier id>"],"description":"<short>"}',
     "- Use the smallest correct number of steps (between 2 and " +
       String(MAX_WORK_ORDER_STEPS) +
       ").",
     "- Order steps so each runs after its dependencies; set dependsOn to the ids whose output it consumes.",
-    "- args: concrete arguments for the capability (e.g. web_research -> {\"query\":\"...\"}, document_write -> {\"path\":\"...\",\"content\":\"...\"}). Use {} if unknown.",
-    "- Only use capabilities from the ALLOWED list.",
+    "- Always provide every listed required arg for a capability; put concrete values, use {{steps.<id>.output}} to consume a previous step's result.",
+    "- Steps marked [needs approval] are allowed; the desktop asks the user before running them — plan them normally.",
+    "- Only use capabilities from the CATALOG above.",
     '- If the goal cannot be split into >=2 steps from these capabilities, return {"steps":[]}.',
   ].join("\n");
 }
