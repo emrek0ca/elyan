@@ -1047,7 +1047,7 @@ def test_image_generate_uses_gemini_and_writes_png(
         lambda **_kwargs: {
             "provider": "gemini",
             "api_key": "test-key",
-            "model": "gemini-3.1-flash-image",
+            "model": "gemini-3.1-flash-image-preview",
         },
     )
 
@@ -1063,13 +1063,28 @@ def test_image_generate_uses_gemini_and_writes_png(
 
     artifact_path = Path(result["result"]["outputPath"])
     assert result["ok"] is True
-    assert calls == ["gemini-3.1-flash-image"]
+    assert calls == ["gemini-3.1-flash-image-preview"]
     assert result["result"]["kind"] == "image_generate"
     assert result["result"]["provider"] == "gemini"
-    assert result["result"]["model"] == "gemini-3.1-flash-image"
+    assert result["result"]["model"] == "gemini-3.1-flash-image-preview"
     assert artifact_path.exists()
     assert artifact_path.read_bytes() == _ONE_PIXEL_PNG
     assert result["artifacts"][0]["contentType"] == "image/png"
+
+
+def test_image_generate_defaults_to_current_gemini_preview_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions._gemini_image as gemini_image
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("ELYAN_GEMINI_IMAGE_MODEL", raising=False)
+    monkeypatch.setattr(gemini_image, "get_app_config_value", lambda _key, default="": default)
+    monkeypatch.setattr(gemini_image.state_store, "volatile_provider_secrets", lambda: {})
+
+    assert gemini_image.provider_settings(editing=False)["model"] == "gemini-3.1-flash-image-preview"
 
 
 def test_image_generate_missing_api_key_fails_safely(
@@ -1089,7 +1104,7 @@ def test_image_generate_missing_api_key_fails_safely(
         lambda **_kwargs: {
             "provider": "gemini",
             "api_key": "",
-            "model": "gemini-3.1-flash-image",
+            "model": "gemini-3.1-flash-image-preview",
         },
     )
 
@@ -1105,6 +1120,49 @@ def test_image_generate_missing_api_key_fails_safely(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "PROVIDER_NOT_CONFIGURED"
+
+
+def test_image_generate_invalid_api_key_returns_actionable_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.image_generate as image_generate
+    import runtime.capability_registry as registry
+    from actions._gemini_image import GeminiImageError
+
+    monkeypatch.setattr(image_generate, "_workspace_root", lambda: tmp_path)
+    import actions._gemini_image as gemini_image
+
+    monkeypatch.setattr(
+        gemini_image,
+        "provider_settings",
+        lambda **_kwargs: {
+            "provider": "gemini",
+            "api_key": "invalid-key",
+            "model": "gemini-3.1-flash-image-preview",
+        },
+    )
+
+    def fail_auth(**_kwargs: object) -> tuple[bytes, dict[str, object]]:
+        raise GeminiImageError("PROVIDER_AUTH_FAILED", "Gemini API anahtarı geçersiz.", 400)
+
+    monkeypatch.setattr(image_generate, "_generate_image_bytes", fail_auth)
+
+    result = registry.run_capability(
+        "image_generate",
+        {
+            "prompt": "Kompakt bir görev paneli",
+            "outputPath": "outputs/panel.png",
+            "_confirmed": True,
+        },
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "PROVIDER_AUTH_FAILED"
+    assert "API anahtarı" in result["error"]["message"]
+    assert "biraz sonra" not in result["error"]["message"]
 
 
 def test_forgiving_image_generate_accepts_description_arg(
@@ -1131,7 +1189,7 @@ def test_forgiving_image_generate_accepts_description_arg(
         lambda **_kwargs: {
             "provider": "gemini",
             "api_key": "test-key",
-            "model": "gemini-3.1-flash-image",
+            "model": "gemini-3.1-flash-image-preview",
         },
     )
 

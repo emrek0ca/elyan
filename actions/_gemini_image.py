@@ -15,7 +15,7 @@ from app_config import get_app_config_value
 from runtime import state_store
 from runtime.capability_registry import SafeCapabilityError
 
-DEFAULT_GENERATE_MODEL = "gemini-3.1-flash-image"
+DEFAULT_GENERATE_MODEL = "gemini-3.1-flash-image-preview"
 DEFAULT_EDIT_MODEL = "gemini-3-pro-image-preview"
 DEFAULT_IMAGE_SIZE = "2K"
 ALLOWED_ASPECT_RATIOS = {
@@ -213,6 +213,8 @@ def _provider_error(exc: Exception) -> GeminiImageError:
     status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     message = str(exc or "Gemini image request failed.")
     lowered = message.lower()
+    if "api_key_invalid" in lowered or "api key not valid" in lowered:
+        return GeminiImageError("PROVIDER_AUTH_FAILED", "Gemini API anahtarı geçersiz.", 400)
     if status_code == 429 or "quota" in lowered or "resource exhausted" in lowered:
         return GeminiImageError("PROVIDER_RATE_LIMITED", message, 429)
     if status_code in {401, 403} or "api key" in lowered or "permission denied" in lowered:
@@ -348,7 +350,13 @@ def run_image_operation(
             }, ensure_ascii=True),
             file=sys.stderr,
         )
-        raise SafeCapabilityError(exc.code, "Gemini görsel işlemi şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene.") from exc
+        if exc.code == "PROVIDER_AUTH_FAILED":
+            message = "Gemini API anahtarı geçersiz veya bu görsel modeli için yetkili değil."
+        elif exc.code == "PROVIDER_RATE_LIMITED":
+            message = "Gemini görsel kotası veya hız limiti doldu. Biraz bekleyip tekrar dene."
+        else:
+            message = "Gemini görsel işlemi şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene."
+        raise SafeCapabilityError(exc.code, message) from exc
 
     _set_last_error("", "")
     kind = "image_edit" if editing else "image_generate"
