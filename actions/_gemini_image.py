@@ -35,7 +35,7 @@ class GeminiImageError(RuntimeError):
     def __init__(self, code: str, message: str, status_code: int | None = None):
         super().__init__(message)
         self.code = str(code or "IMAGE_PROVIDER_ERROR").strip() or "IMAGE_PROVIDER_ERROR"
-        self.message = str(message or "Gemini image request failed.").strip()
+        self.message = str(message or "Görsel üretim isteği tamamlanamadı.").strip()
         self.status_code = status_code
 
 
@@ -62,7 +62,29 @@ def sdk_version() -> str:
 def _set_last_error(code: str, message: str) -> None:
     global _LAST_ERROR_CODE, _LAST_ERROR_MESSAGE
     _LAST_ERROR_CODE = str(code or "").strip()
-    _LAST_ERROR_MESSAGE = str(message or "").strip()
+    _LAST_ERROR_MESSAGE = _public_image_error_message(code, message)
+
+
+def _public_image_error_message(code: str, message: str = "") -> str:
+    normalized = str(code or "").strip()
+    if not normalized and not str(message or "").strip():
+        return ""
+    if normalized == "PROVIDER_NOT_CONFIGURED":
+        return "Görsel üretim ayarı eksik."
+    if normalized == "DEPENDENCY_UNAVAILABLE":
+        return "Görsel üretim altyapısı bu kurulumda hazır değil."
+    if normalized == "PROVIDER_AUTH_FAILED":
+        return "Görsel üretim ayarı geçersiz veya yetkisiz."
+    if normalized == "PROVIDER_RATE_LIMITED":
+        return "Görsel üretim kotası veya hız limiti doldu. Biraz bekleyip tekrar dene."
+    if normalized == "PROVIDER_TIMEOUT":
+        return "Görsel üretim isteği zaman aşımına uğradı. Biraz sonra tekrar dene."
+    if normalized in {"INVALID_RESPONSE", "IMAGE_PROVIDER_ERROR"}:
+        return "Görsel üretim işlemi şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene."
+    text = str(message or "").strip()
+    if any(token in text.casefold() for token in ("gemini", "google", "genai", "model", "provider")):
+        return "Görsel üretim işlemi şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene."
+    return text or "Görsel üretim işlemi şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene."
 
 
 def provider_settings(*, editing: bool) -> dict[str, str]:
@@ -85,10 +107,10 @@ def image_status(*, editing: bool) -> dict[str, Any]:
     available = bool(settings["api_key"] and _google_sdk() is not None)
     if not settings["api_key"]:
         code = "PROVIDER_NOT_CONFIGURED"
-        message = "Gemini görsel işlemleri için API anahtarı gerekli."
+        message = "Görsel üretim ayarı eksik."
     elif _google_sdk() is None:
         code = "DEPENDENCY_UNAVAILABLE"
-        message = "google-genai paketi bu kurulumda hazır değil."
+        message = "Görsel üretim altyapısı bu kurulumda hazır değil."
     else:
         code = _LAST_ERROR_CODE
         message = _LAST_ERROR_MESSAGE
@@ -96,9 +118,6 @@ def image_status(*, editing: bool) -> dict[str, Any]:
         "available": available,
         "lastErrorCode": code,
         "lastErrorMessage": message,
-        "provider": settings["provider"],
-        "model": settings["model"],
-        "sdkVersion": sdk_version(),
     }
 
 
@@ -164,7 +183,7 @@ def _source_mime_type(path: Path) -> str:
     if mime_type == "image/jpg":
         return "image/jpeg"
     if mime_type not in {"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"}:
-        raise SafeCapabilityError("UNSUPPORTED_IMAGE_FORMAT", "Bu görsel formatı Gemini düzenleme tarafından desteklenmiyor.")
+        raise SafeCapabilityError("UNSUPPORTED_IMAGE_FORMAT", "Bu görsel formatı düzenleme için desteklenmiyor.")
     return mime_type
 
 
@@ -173,7 +192,7 @@ def _response_image(response: Any) -> tuple[bytes, str]:
     if output_image is None and isinstance(response, dict):
         output_image = response.get("output_image")
     if output_image is None:
-        raise GeminiImageError("INVALID_RESPONSE", "Gemini görsel çıktısı döndürmedi.")
+        raise GeminiImageError("INVALID_RESPONSE", "Görsel üretim çıktısı alınamadı.")
     data = output_image.get("data") if isinstance(output_image, dict) else getattr(output_image, "data", None)
     mime_type = (
         output_image.get("mime_type") if isinstance(output_image, dict) else getattr(output_image, "mime_type", None)
@@ -184,11 +203,11 @@ def _response_image(response: Any) -> tuple[bytes, str]:
         try:
             image_bytes = base64.b64decode(data, validate=True)
         except Exception as exc:
-            raise GeminiImageError("INVALID_RESPONSE", "Gemini görsel verisi çözümlenemedi.") from exc
+            raise GeminiImageError("INVALID_RESPONSE", "Görsel üretim verisi çözümlenemedi.") from exc
     else:
-        raise GeminiImageError("INVALID_RESPONSE", "Gemini görsel verisi boş döndü.")
+        raise GeminiImageError("INVALID_RESPONSE", "Görsel üretim verisi boş döndü.")
     if not image_bytes:
-        raise GeminiImageError("INVALID_RESPONSE", "Gemini boş görsel döndürdü.")
+        raise GeminiImageError("INVALID_RESPONSE", "Görsel üretim boş çıktı döndürdü.")
     return image_bytes, str(mime_type or "image/png").strip().lower()
 
 
@@ -203,18 +222,18 @@ def _validate_output_image(image_bytes: bytes) -> tuple[int, int]:
         with Image.open(io.BytesIO(image_bytes)) as image:
             width, height = image.size
     except Exception as exc:
-        raise GeminiImageError("INVALID_RESPONSE", "Gemini geçerli bir görsel dosyası döndürmedi.") from exc
+        raise GeminiImageError("INVALID_RESPONSE", "Geçerli bir görsel dosyası alınamadı.") from exc
     if width <= 0 or height <= 0:
-        raise GeminiImageError("INVALID_RESPONSE", "Gemini geçersiz görsel boyutu döndürdü.")
+        raise GeminiImageError("INVALID_RESPONSE", "Geçersiz görsel boyutu alındı.")
     return int(width), int(height)
 
 
 def _provider_error(exc: Exception) -> GeminiImageError:
     status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-    message = str(exc or "Gemini image request failed.")
+    message = str(exc or "Image generation request failed.")
     lowered = message.lower()
     if "api_key_invalid" in lowered or "api key not valid" in lowered:
-        return GeminiImageError("PROVIDER_AUTH_FAILED", "Gemini API anahtarı geçersiz.", 400)
+        return GeminiImageError("PROVIDER_AUTH_FAILED", "Görsel üretim ayarı geçersiz.", 400)
     if status_code == 429 or "quota" in lowered or "resource exhausted" in lowered:
         return GeminiImageError("PROVIDER_RATE_LIMITED", message, 429)
     if status_code in {401, 403} or "api key" in lowered or "permission denied" in lowered:
@@ -230,6 +249,51 @@ def _is_transient(error: GeminiImageError) -> bool:
     )
 
 
+def _brand_logo_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "logo.png"
+
+
+def _apply_elyan_logo(path: Path) -> bool:
+    try:
+        from PIL import Image, ImageDraw  # type: ignore[reportMissingImports]
+    except (ImportError, ModuleNotFoundError):
+        return False
+    logo_path = _brand_logo_path()
+    if not logo_path.exists():
+        return False
+    try:
+        with Image.open(path).convert("RGBA") as base_image:
+            with Image.open(logo_path).convert("RGBA") as raw_logo:
+                width, height = base_image.size
+                if width <= 0 or height <= 0:
+                    return False
+                logo_size = max(36, min(width, height) // 9)
+                logo = raw_logo.copy()
+                logo.thumbnail((logo_size, logo_size), Image.Resampling.LANCZOS)
+                margin = max(16, min(width, height) // 32)
+                pad = max(8, logo_size // 6)
+                badge_w = logo.width + pad * 2
+                badge_h = logo.height + pad * 2
+                x = width - badge_w - margin
+                y = height - badge_h - margin
+                badge = Image.new("RGBA", (badge_w, badge_h), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(badge)
+                radius = max(10, badge_h // 4)
+                draw.rounded_rectangle(
+                    (0, 0, badge_w - 1, badge_h - 1),
+                    radius=radius,
+                    fill=(255, 255, 255, 210),
+                    outline=(20, 28, 32, 46),
+                    width=1,
+                )
+                badge.alpha_composite(logo, (pad, pad))
+                base_image.alpha_composite(badge, (max(0, x), max(0, y)))
+                base_image.save(path, format="PNG")
+        return True
+    except Exception:
+        return False
+
+
 def request_image(
     *,
     prompt: str,
@@ -242,7 +306,7 @@ def request_image(
 ) -> tuple[bytes, dict[str, Any]]:
     genai = _google_sdk()
     if genai is None:
-        raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "google-genai paketi bu kurulumda hazır değil.")
+        raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "Görsel üretim altyapısı bu kurulumda hazır değil.")
 
     editing = bool(source_paths)
     inputs: str | list[dict[str, str]]
@@ -320,8 +384,8 @@ def run_image_operation(
     editing = bool(source_paths)
     settings = provider_settings(editing=editing)
     if not settings["api_key"]:
-        _set_last_error("PROVIDER_NOT_CONFIGURED", "Gemini API anahtarı eksik.")
-        raise SafeCapabilityError("PROVIDER_NOT_CONFIGURED", "Gemini görsel işlemleri için API anahtarı gerekli.")
+        _set_last_error("PROVIDER_NOT_CONFIGURED", "Görsel üretim ayarı eksik.")
+        raise SafeCapabilityError("PROVIDER_NOT_CONFIGURED", "Görsel üretim ayarı eksik.")
 
     resolved_output = ensure_allowed_output_path(
         output_path,
@@ -341,21 +405,17 @@ def run_image_operation(
             background=background,
         )
         resolved_output.write_bytes(image_bytes)
+        branded = _apply_elyan_logo(resolved_output)
     except GeminiImageError as exc:
         _set_last_error(exc.code, exc.message)
         print(
-            "gemini_image " + json.dumps({
-                "event": "error", "provider": "gemini", "model": settings["model"],
+            "image_generation " + json.dumps({
+                "event": "error",
                 "rawErrorCode": exc.code, "statusCode": exc.status_code,
             }, ensure_ascii=True),
             file=sys.stderr,
         )
-        if exc.code == "PROVIDER_AUTH_FAILED":
-            message = "Gemini API anahtarı geçersiz veya bu görsel modeli için yetkili değil."
-        elif exc.code == "PROVIDER_RATE_LIMITED":
-            message = "Gemini görsel kotası veya hız limiti doldu. Biraz bekleyip tekrar dene."
-        else:
-            message = "Gemini görsel işlemi şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene."
+        message = _public_image_error_message(exc.code, exc.message)
         raise SafeCapabilityError(exc.code, message) from exc
 
     _set_last_error("", "")
@@ -366,9 +426,6 @@ def run_image_operation(
         "text": f"Görsel {'düzenlendi' if editing else 'üretildi'}.\n{resolved_output.name}",
         "result": {
             "kind": kind,
-            "provider": "gemini",
-            "model": settings["model"],
-            "sdkVersion": sdk_version(),
             "outputPath": str(resolved_output),
             "sourcePaths": [str(path) for path in source_paths or []],
             "aspectRatio": aspect_ratio,
@@ -376,6 +433,7 @@ def run_image_operation(
             "contentType": metadata.get("mimeType", "image/png"),
             "width": metadata.get("width", 0),
             "height": metadata.get("height", 0),
+            "branded": branded,
             "promptPreview": normalize_source_context(prompt_text, max_chars=220),
             "title": str(title or "").strip(),
         },

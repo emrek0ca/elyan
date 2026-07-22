@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import io
 import json
 import sys
 from pathlib import Path
@@ -14,6 +15,14 @@ from runtime import state_store
 _ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z6K8AAAAASUVORK5CYII="
 )
+
+
+def _solid_png_bytes(width: int = 256, height: int = 256) -> bytes:
+    from PIL import Image  # type: ignore[reportMissingImports]
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (width, height), (32, 48, 56, 255)).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _isolate_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1031,11 +1040,11 @@ def test_image_generate_uses_gemini_and_writes_png(
     def fake_generate(**kwargs: object) -> tuple[bytes, dict[str, object]]:
         model = str(kwargs.get("model", "") or "")
         calls.append(model)
-        return _ONE_PIXEL_PNG, {
+        return _solid_png_bytes(), {
             "source": "interaction.output_image",
             "mimeType": "image/png",
-            "width": 1,
-            "height": 1,
+            "width": 256,
+            "height": 256,
         }
 
     monkeypatch.setattr(image_generate, "_generate_image_bytes", fake_generate)
@@ -1065,10 +1074,10 @@ def test_image_generate_uses_gemini_and_writes_png(
     assert result["ok"] is True
     assert calls == ["gemini-3.1-flash-image-preview"]
     assert result["result"]["kind"] == "image_generate"
-    assert result["result"]["provider"] == "gemini"
-    assert result["result"]["model"] == "gemini-3.1-flash-image-preview"
+    assert "provider" not in result["result"]
+    assert "model" not in result["result"]
+    assert result["result"]["branded"] is True
     assert artifact_path.exists()
-    assert artifact_path.read_bytes() == _ONE_PIXEL_PNG
     assert result["artifacts"][0]["contentType"] == "image/png"
 
 
@@ -1085,6 +1094,33 @@ def test_image_generate_defaults_to_current_gemini_preview_model(
     monkeypatch.setattr(gemini_image.state_store, "volatile_provider_secrets", lambda: {})
 
     assert gemini_image.provider_settings(editing=False)["model"] == "gemini-3.1-flash-image-preview"
+
+
+def test_image_generate_status_is_provider_neutral(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions._gemini_image as gemini_image
+
+    monkeypatch.setattr(
+        gemini_image,
+        "provider_settings",
+        lambda **_kwargs: {
+            "provider": "gemini",
+            "api_key": "",
+            "model": "gemini-3.1-flash-image-preview",
+        },
+    )
+
+    status = gemini_image.image_status(editing=False)
+
+    assert status["available"] is False
+    assert status["lastErrorCode"] == "PROVIDER_NOT_CONFIGURED"
+    assert "provider" not in status
+    assert "model" not in status
+    assert "sdkVersion" not in status
+    assert "Gemini" not in status["lastErrorMessage"]
 
 
 def test_image_generate_missing_api_key_fails_safely(
@@ -1120,6 +1156,7 @@ def test_image_generate_missing_api_key_fails_safely(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "PROVIDER_NOT_CONFIGURED"
+    assert "Gemini" not in result["error"]["message"]
 
 
 def test_image_generate_invalid_api_key_returns_actionable_message(
@@ -1161,7 +1198,8 @@ def test_image_generate_invalid_api_key_returns_actionable_message(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "PROVIDER_AUTH_FAILED"
-    assert "API anahtarı" in result["error"]["message"]
+    assert "Görsel üretim ayarı" in result["error"]["message"]
+    assert "Gemini" not in result["error"]["message"]
     assert "biraz sonra" not in result["error"]["message"]
 
 
@@ -1178,7 +1216,7 @@ def test_forgiving_image_generate_accepts_description_arg(
 
     def fake_generate(**kwargs: object) -> tuple[bytes, dict[str, object]]:
         prompts.append(str(kwargs.get("prompt", "")))
-        return _ONE_PIXEL_PNG, {"mimeType": "image/png", "width": 1, "height": 1}
+        return _solid_png_bytes(), {"mimeType": "image/png", "width": 256, "height": 256}
 
     monkeypatch.setattr(image_generate, "_generate_image_bytes", fake_generate)
     import actions._gemini_image as gemini_image
@@ -1205,6 +1243,7 @@ def test_forgiving_image_generate_accepts_description_arg(
 
     assert result["ok"] is True
     assert prompts == ["Turuncu ve mavi vurgulu profesyonel dashboard hero gorseli"]
+    assert result["result"]["branded"] is True
     assert (tmp_path / "outputs" / "hero.png").exists()
 
 
