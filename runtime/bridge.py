@@ -197,7 +197,24 @@ REMOTE_APPROVAL_CAPABILITIES = {
 }
 # Hız için regex yolunda kalan basit doğrudan komutlar: LLM planlama gecikmesi
 # gereksiz olduğundan uygulama aç/kapat, medya ve sistem bilgisi burada tutulur.
-REMOTE_FAST_DIRECT_CAPABILITIES = {"open_app", "close_app", "play_media", "sys_info"}
+REMOTE_FAST_DIRECT_CAPABILITIES = {
+    "open_app",
+    "close_app",
+    "play_media",
+    "sys_info",
+    # Basit, tek-yetenekli SALT-OKUNUR gözlemler: LLM'e delege EDİLMEZ, doğrudan
+    # deterministik çalışır ve GERÇEK sonucu döndürür. Canlı arıza: "Ekranda ne
+    # var" server_brain'e delege ediliyor, LLM ekrandaki "Claude"yi görünce
+    # kimlik cevabı ("Ben Elyan olarak çalışırım…") uyduruyordu. Bu gözlemlerin
+    # cevabı olgudur; LLM kompozisyonu gerekmez ve zararlıdır.
+    "analyze_screen",
+    "desktop_os.processes",
+    "desktop_os.active_window",
+    "directory_tree",
+    "file_read",
+    "file_search",
+    "clipboard_read",
+}
 
 # Tarayıcı-şekilli hedef işaretleri: görsel operatör yerine tarayıcı ajanının
 # doğru araç olduğu görevleri yakalar (web sitesi/gezinme/indirme dili).
@@ -2721,6 +2738,12 @@ _INTERNAL_ROUTING_PHRASES = (
     "yonlendirildi",
     "açıkça istedi",
     "acikca istedi",
+    # Jenerik plan-önizleme yer tutucusu — kullanıcıya asistan cevabı DEĞİLDİR
+    # (canlı arıza: "İsimleri ne" bunu + capability adını sohbete sızdırıyordu).
+    "mobil görev desktop runtime",
+    "mobil gorev desktop runtime",
+    "desktop runtime üzerinde adım adım",
+    "desktop runtime uzerinde adim adim",
 )
 
 

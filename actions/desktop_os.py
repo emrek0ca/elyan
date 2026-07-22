@@ -570,12 +570,37 @@ def desktop_os_processes(query: str = "", limit: int = 20) -> dict[str, Any]:
         items = filtered
     safe_limit = max(1, min(int(limit or 20), 50))
     selected = items[:safe_limit]
+    # Kullanıcıya OKUNAKLI liste: yalnız "N proses bulundu" işe yaramaz —
+    # uygulama/proses ADLARINI göster (tekilleştirilmiş, sıralı).
+    seen: set[str] = set()
+    names: list[str] = []
+    for item in selected:
+        raw_name = str(item.get("name", "") or item.get("bundleId", "") or "").strip()
+        # Yol/uzantı gürültüsünü temizle (…/Foo.app → Foo).
+        display = raw_name.rsplit("/", 1)[-1]
+        for suffix in (".app", ".exe"):
+            if display.lower().endswith(suffix):
+                display = display[: -len(suffix)]
+        display = display.strip()
+        key = display.lower()
+        if display and key not in seen:
+            seen.add(key)
+            names.append(display)
+    if names:
+        preview = ", ".join(names[:15])
+        more = len(names) - 15
+        if more > 0:
+            preview += f" ve {more} tane daha"
+        text = f"Açık uygulamalar ({len(names)}): {preview}."
+    else:
+        text = f"{len(selected)} proses bulundu."
     return {
-        "text": f"{len(selected)} proses bulundu.",
+        "text": text,
         "result": {
             "available": True,
             "total": int(processes.get("total", len(items)) or len(items)),
             "items": selected,
+            "names": names,
             "query": normalized_query,
         },
     }
