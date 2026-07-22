@@ -50,6 +50,13 @@ const MATERIALIZABLE_CAPABILITIES = [
   "make_directory",
   "play_media",
   "sys_info",
+  // Desktop SAFE_BASELINE_CAPABILITIES paritesi (runtime/execution_trust.py):
+  // basit masaüstü bakışları sunucu planlarında da kullanılabilir.
+  "analyze_screen",
+  "desktop_os.processes",
+  "directory_tree",
+  "file_read",
+  "file_search",
 ] as const;
 
 const CAPABILITY_NAME_RE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/;
