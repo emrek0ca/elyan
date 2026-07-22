@@ -1258,10 +1258,10 @@ _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
     "desktop_operator.execute_action": (),
     "desktop_operator.run": ("pillow",),
     "desktop_operator.cancel": (),
-    "quantum_model_problem": ("qiskit",),
-    "quantum_run_experiment": ("qiskit", "qiskit_aer"),
-    "quantum_compare_classical": ("qiskit", "qiskit_aer"),
-    "quantum_generate_report": ("qiskit",),
+    "quantum_model_problem": (),
+    "quantum_run_experiment": (),
+    "quantum_compare_classical": (),
+    "quantum_generate_report": (),
 }
 for _spec_item in capability_spec.SPECS:
     if _spec_item.dependency_keys:
@@ -2540,6 +2540,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
         "quantum_model_problem": lambda args: _load_adapter("quantum_model_problem")(
             prompt=str(args.get("prompt", "") or ""),
             problem_class=str(args.get("problemClass", "") or args.get("problem_class", "") or "optimization"),
+            problem=dict(args.get("problem", {}) or {}) if isinstance(args.get("problem", {}), dict) else None,
         ),
         "quantum_run_experiment": lambda args: _load_adapter("quantum_run_experiment")(
             prompt=str(args.get("prompt", "") or ""),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 import json
 import math
+import re
 import time
 import uuid
 from pathlib import Path
@@ -93,15 +94,157 @@ def _default_qubo(prompt: str) -> dict[str, Any]:
     }
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(str(value).replace(",", "."))
+    except Exception:
+        return None
+
+
+def _extract_item_models(prompt: str) -> list[dict[str, Any]]:
+    text = _compact(prompt, 1800)
+    patterns = [
+        re.compile(
+            r"(?P<name>[A-Za-zÇĞİÖŞÜçğıöşü][\wÇĞİÖŞÜçğıöşü-]{0,32})"
+            r"[^\n;,.]{0,40}?"
+            r"(?:değer|deger|fayda|puan|kar|profit|value)\s*[:=]?\s*(?P<value>-?\d+(?:[.,]\d+)?)"
+            r"[^\n;,.]{0,40}?"
+            r"(?:maliyet|cost|ağırlık|agirlik|weight|süre|sure)\s*[:=]?\s*(?P<cost>-?\d+(?:[.,]\d+)?)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?P<name>[A-Za-zÇĞİÖŞÜçğıöşü][\wÇĞİÖŞÜçğıöşü-]{0,32})"
+            r"[^\n;,.]{0,40}?"
+            r"(?:maliyet|cost|ağırlık|agirlik|weight|süre|sure)\s*[:=]?\s*(?P<cost>-?\d+(?:[.,]\d+)?)"
+            r"[^\n;,.]{0,40}?"
+            r"(?:değer|deger|fayda|puan|kar|profit|value)\s*[:=]?\s*(?P<value>-?\d+(?:[.,]\d+)?)",
+            re.IGNORECASE,
+        ),
+    ]
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            name = _compact(match.group("name"), 40)
+            value = _safe_float(match.group("value"))
+            cost = _safe_float(match.group("cost"))
+            if not name or value is None or cost is None or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            items.append({"name": name, "value": value, "cost": cost})
+    return items[:12]
+
+
+def _extract_capacity(prompt: str) -> float | None:
+    text = _compact(prompt, 1800)
+    match = re.search(
+        r"(?:kapasite|bütçe|butce|limit|maksimum|en fazla|capacity|budget|max)\s*[:=]?\s*(\d+(?:[.,]\d+)?)",
+        text,
+        re.IGNORECASE,
+    )
+    return _safe_float(match.group(1)) if match else None
+
+
+def _decision_model_from_prompt(prompt: str, problem_class: str = "optimization") -> dict[str, Any]:
+    text = _compact(prompt, 1800)
+    items = _extract_item_models(text)
+    capacity = _extract_capacity(text)
+    if len(items) >= 2:
+        variables = [f"x{i + 1}" for i in range(len(items))]
+        linear = {
+            var: -float(item["value"])
+            for var, item in zip(variables, items, strict=False)
+        }
+        penalty = max(8.0, sum(abs(float(item["value"])) for item in items) + 1.0)
+        quadratic: dict[str, float] = {}
+        costs = [float(item["cost"]) for item in items]
+        if capacity is not None:
+            for i, left in enumerate(variables):
+                linear[left] = linear[left] + penalty * costs[i] * (costs[i] - 2 * capacity)
+                for j in range(i + 1, len(variables)):
+                    right = variables[j]
+                    quadratic[f"{left}*{right}"] = 2 * penalty * costs[i] * costs[j]
+        constraints = ["Her karar değişkeni binary: seç=1, seçme=0."]
+        if capacity is not None:
+            constraints.append(f"Toplam maliyet/ağırlık kapasiteyi aşmamalı: <= {capacity:g}.")
+        return {
+            "kind": "decision_support_model",
+            "problemClass": "knapsack_selection",
+            "requestedProblemClass": _compact(problem_class, 80) or "optimization",
+            "decisionVariables": [
+                {
+                    "name": var,
+                    "meaning": f"{item['name']} seçilsin mi?",
+                    "domain": "binary",
+                    "value": item["value"],
+                    "cost": item["cost"],
+                }
+                for var, item in zip(variables, items, strict=False)
+            ],
+            "objective": "Toplam faydayı maksimize et; QUBO minimizasyonunda negatif fayda kullanılır.",
+            "constraints": constraints,
+            "qubo": {
+                "problemClass": "knapsack_selection",
+                "variables": variables,
+                "linear": linear,
+                "quadratic": quadratic,
+                "objective": "minimize penalty-adjusted negative utility",
+                "constraints": constraints,
+                "capacity": capacity,
+                "items": items,
+            },
+            "solverRecommendation": {
+                "primary": "classical_exact" if len(variables) <= 12 else "hybrid_qaoa",
+                "fallback": "classical_reference_simulator",
+                "reason": "Küçük binary seçim problemleri kesin klasik baseline ile doğrulanır; büyürse quantum-hibrit aday denenir.",
+            },
+            "feasibilityChecks": [
+                "Binary domain doğrulaması",
+                "Kapasite/kısıt ihlali kontrolü",
+                "Klasik optimum ile gap hesabı",
+            ],
+        }
+    qubo = _default_qubo(text)
+    return {
+        "kind": "decision_support_model",
+        "problemClass": qubo.get("problemClass", "qubo"),
+        "requestedProblemClass": _compact(problem_class, 80) or "optimization",
+        "decisionVariables": [
+            {"name": str(var), "meaning": f"{var} binary karar değişkeni", "domain": "binary"}
+            for var in qubo.get("variables", [])
+        ],
+        "objective": qubo.get("objective", "QUBO enerjisini minimize et."),
+        "constraints": qubo.get("constraints", ["Binary değişken varsayımı"]),
+        "qubo": qubo,
+        "solverRecommendation": {
+            "primary": "hybrid_qaoa" if _qiskit_available() else "classical_exact",
+            "fallback": "classical_reference_simulator",
+            "reason": "Problem QUBO/Ising formuna uygun; simulator varsa quantum-hibrit, yoksa kesin klasik baseline.",
+        },
+        "feasibilityChecks": [
+            "Binary domain doğrulaması",
+            "QUBO enerji hesabı",
+            "Klasik optimum ile gap hesabı",
+        ],
+    }
+
+
 def _qubo_from_previous(previous: dict[str, Any] | None, prompt: str) -> dict[str, Any]:
     if isinstance(previous, dict):
         model = previous.get("model")
         if isinstance(model, dict) and isinstance(model.get("qubo"), dict):
             return dict(model["qubo"])
+        if isinstance(model, dict) and isinstance(model.get("decisionModel"), dict):
+            decision_model = model["decisionModel"]
+            if isinstance(decision_model.get("qubo"), dict):
+                return dict(decision_model["qubo"])
         qubo = previous.get("qubo")
         if isinstance(qubo, dict):
             return dict(qubo)
-    return _default_qubo(prompt)
+        decision_model = previous.get("decisionModel")
+        if isinstance(decision_model, dict) and isinstance(decision_model.get("qubo"), dict):
+            return dict(decision_model["qubo"])
+    return dict(_decision_model_from_prompt(prompt).get("qubo") or _default_qubo(prompt))
 
 
 def _energy(qubo: dict[str, Any], assignment: dict[str, int]) -> float:
@@ -136,39 +279,92 @@ def _enumerate_solutions(qubo: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(solutions, key=lambda item: float(item["energy"]))
 
 
-def _quantum_snapshot(status: str = "completed", fallback_reason: str | None = None, score: float | None = None) -> dict[str, Any]:
+def _constraint_violations(qubo: dict[str, Any], assignment: dict[str, int]) -> list[str]:
+    violations: list[str] = []
+    items = qubo.get("items") if isinstance(qubo.get("items"), list) else []
+    capacity = qubo.get("capacity")
+    if items and isinstance(capacity, (int, float)):
+        variables = [str(item) for item in qubo.get("variables", [])]
+        total_cost = 0.0
+        for variable, item in zip(variables, items, strict=False):
+            if isinstance(item, dict) and int(assignment.get(variable, 0)):
+                total_cost += float(item.get("cost", 0) or 0)
+        if total_cost > float(capacity) + 1e-9:
+            violations.append(f"capacity_exceeded:{total_cost:g}>{float(capacity):g}")
+    return violations
+
+
+def _solution_utility(qubo: dict[str, Any], assignment: dict[str, int]) -> float | None:
+    items = qubo.get("items") if isinstance(qubo.get("items"), list) else []
+    variables = [str(item) for item in qubo.get("variables", [])]
+    if not items or not variables:
+        return None
+    total = 0.0
+    for variable, item in zip(variables, items, strict=False):
+        if isinstance(item, dict) and int(assignment.get(variable, 0)):
+            total += float(item.get("value", 0) or 0)
+    return total
+
+
+def _best_feasible_solution(qubo: dict[str, Any]) -> dict[str, Any]:
+    solutions = _enumerate_solutions(qubo)
+    feasible = [item for item in solutions if not _constraint_violations(qubo, item["assignment"])]
+    if not feasible:
+        return solutions[0]
+    if qubo.get("problemClass") == "knapsack_selection":
+        return max(
+            feasible,
+            key=lambda item: (
+                _solution_utility(qubo, item["assignment"]) or 0.0,
+                -float(item["energy"]),
+            ),
+        )
+    return feasible[0]
+
+
+def _quantum_snapshot(
+    status: str = "completed",
+    fallback_reason: str | None = None,
+    score: float | None = None,
+    problem_class: str = "optimization",
+) -> dict[str, Any]:
     return {
         "mode": "hybrid",
         "ready": status != "failed",
         "supportedProblemClasses": ["qubo", "ising", "qaoa", "vqe"],
         "solver": "qiskit_simulator" if _qiskit_available() else "classical_reference_simulator",
-        "problemClass": "optimization",
+        "problemClass": problem_class or "optimization",
         "benchmarkStatus": status,
         "fallbackReason": fallback_reason,
         "lastBenchmarkScore": score,
     }
 
 
-def quantum_model_problem(prompt: str, problem_class: str = "optimization") -> dict[str, Any]:
+def quantum_model_problem(prompt: str, problem_class: str = "optimization", **kwargs: Any) -> dict[str, Any]:
     text = _compact(prompt, 1200)
     if not text:
         raise SafeCapabilityError("INVALID_ARGUMENT", "Quantum problemi için görev metni gerekli.")
-    qubo = _default_qubo(text)
-    qubo["requestedProblemClass"] = _compact(problem_class, 80) or "optimization"
+    if isinstance(kwargs.get("problem"), dict):
+        text = f"{text}\n{json.dumps(kwargs['problem'], ensure_ascii=False)}"
+    decision_model = _decision_model_from_prompt(text, problem_class)
+    qubo = dict(decision_model.get("qubo") or _default_qubo(text))
+    problem_name = str(decision_model.get("problemClass") or qubo.get("problemClass") or "optimization")
     model = {
         "kind": "quantum_model_problem",
         "prompt": text,
+        "decisionModel": decision_model,
         "qubo": qubo,
         "ising": {
-            "description": "Binary QUBO modelinden Ising gösterimine dönüştürülebilir demo temsil.",
+            "description": "Binary QUBO modelinden Ising gösterimine dönüştürülebilir karar destek temsili.",
             "variables": qubo["variables"],
         },
     }
     return {
-        "text": f"{qubo['problemClass']} problemi QUBO/Ising demo modeline dönüştürüldü.",
+        "text": f"{problem_name} problemi karar değişkenleri, amaç fonksiyonu ve kısıtlarıyla QUBO/Ising modeline dönüştürüldü.",
         "result": {
             "model": model,
-            "quantum": _quantum_snapshot("modeled"),
+            "decisionModel": decision_model,
+            "quantum": _quantum_snapshot("modeled", problem_class=problem_name),
         },
         "artifacts": [],
     }
@@ -180,13 +376,15 @@ def quantum_run_experiment(
     shots: int = 1024,
     _previousResult: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _require_qiskit()
     qubo = _qubo_from_previous(_previousResult, prompt)
-    solutions = _enumerate_solutions(qubo)
-    best = solutions[0]
+    best = _best_feasible_solution(qubo)
     normalized_algorithm = str(algorithm or "qaoa").strip().lower()
     if normalized_algorithm not in {"qaoa", "vqe"}:
         normalized_algorithm = "qaoa"
+    qiskit_ready = _qiskit_available()
+    backend = "qiskit_statevector_simulator" if qiskit_ready else "classical_reference_simulator"
+    fallback_reason = None if qiskit_ready else "quantum_dependency_unavailable"
+    solutions = _enumerate_solutions(qubo)
     distribution = {
         str(best["bitstring"]): int(max(1, shots) * 0.72),
     }
@@ -196,19 +394,24 @@ def quantum_run_experiment(
         "kind": "quantum_run_experiment",
         "algorithm": normalized_algorithm,
         "shots": max(1, int(shots or 1024)),
-        "backend": "qiskit_statevector_simulator",
+        "backend": backend,
         "bestBitstring": best["bitstring"],
         "bestEnergy": best["energy"],
+        "bestAssignment": best["assignment"],
+        "feasible": not _constraint_violations(qubo, best["assignment"]),
+        "constraintViolations": _constraint_violations(qubo, best["assignment"]),
+        "utility": _solution_utility(qubo, best["assignment"]),
         "sampleDistribution": distribution,
-        "qiskitReady": True,
-        "fallbackReason": None,
+        "qiskitReady": qiskit_ready,
+        "fallbackReason": fallback_reason,
     }
+    status = "simulated" if qiskit_ready else "classical_fallback"
     return {
-        "text": f"{normalized_algorithm.upper()} demo deneyi tamamlandı. En iyi bitstring: {best['bitstring']}, enerji: {best['energy']:.3f}.",
+        "text": f"{normalized_algorithm.upper()} çözüm adımı tamamlandı. En iyi bitstring: {best['bitstring']}, enerji: {best['energy']:.3f}.",
         "result": {
             "model": {"qubo": qubo},
             "experiment": experiment,
-            "quantum": _quantum_snapshot("simulated", None, abs(float(best["energy"]))),
+            "quantum": _quantum_snapshot(status, fallback_reason, abs(float(best["energy"])), str(qubo.get("problemClass") or "optimization")),
         },
         "artifacts": [],
     }
@@ -216,18 +419,23 @@ def quantum_run_experiment(
 
 def quantum_compare_classical(prompt: str, _previousResult: dict[str, Any] | None = None) -> dict[str, Any]:
     qubo = _qubo_from_previous(_previousResult, prompt)
-    solutions = _enumerate_solutions(qubo)
     previous = _previousResult if isinstance(_previousResult, dict) else {}
     experiment = previous.get("experiment") if isinstance(previous.get("experiment"), dict) else {}
-    best = solutions[0]
+    solutions = _enumerate_solutions(qubo)
+    best = _best_feasible_solution(qubo)
     experiment_energy = float(experiment.get("bestEnergy", best["energy"]) or best["energy"])
     gap = experiment_energy - float(best["energy"])
+    assignment = experiment.get("bestAssignment") if isinstance(experiment.get("bestAssignment"), dict) else best["assignment"]
+    violations = _constraint_violations(qubo, {str(k): int(v) for k, v in assignment.items()})
     metrics = {
         "classicalBestBitstring": best["bitstring"],
         "classicalBestEnergy": best["energy"],
         "experimentBestEnergy": experiment_energy,
         "optimalityGap": gap,
         "solutionCount": len(solutions),
+        "feasible": not violations,
+        "constraintViolations": violations,
+        "utility": _solution_utility(qubo, {str(k): int(v) for k, v in assignment.items()}),
         "reproducible": True,
     }
     return {
@@ -236,7 +444,7 @@ def quantum_compare_classical(prompt: str, _previousResult: dict[str, Any] | Non
             "model": {"qubo": qubo},
             "experiment": experiment,
             "metrics": metrics,
-            "quantum": _quantum_snapshot("benchmarked", experiment.get("fallbackReason"), 1.0 / (1.0 + abs(gap))),
+            "quantum": _quantum_snapshot("benchmarked", experiment.get("fallbackReason"), 1.0 / (1.0 + abs(gap)), str(qubo.get("problemClass") or "optimization")),
         },
         "artifacts": [],
     }
@@ -249,6 +457,10 @@ def quantum_generate_report(
 ) -> dict[str, Any]:
     previous = _previousResult if isinstance(_previousResult, dict) else {}
     qubo = _qubo_from_previous(previous, prompt)
+    decision_model = previous.get("decisionModel")
+    if not isinstance(decision_model, dict):
+        model = previous.get("model") if isinstance(previous.get("model"), dict) else {}
+        decision_model = model.get("decisionModel") if isinstance(model.get("decisionModel"), dict) else {}
     experiment = previous.get("experiment") if isinstance(previous.get("experiment"), dict) else {}
     metrics = previous.get("metrics") if isinstance(previous.get("metrics"), dict) else {}
     report_title = _compact(title, 120) or "Elyan Quantum Deney Raporu"
@@ -257,8 +469,8 @@ def quantum_generate_report(
             f"# {report_title}",
             "",
             "## Problem Modelleme",
-            f"- Amaç: {qubo.get('objective', 'QUBO/Ising optimizasyon modeli')}",
-            f"- Değişkenler: {', '.join(str(item) for item in qubo.get('variables', []))}",
+            f"- Amaç: {decision_model.get('objective') if isinstance(decision_model, dict) and decision_model.get('objective') else qubo.get('objective', 'QUBO/Ising optimizasyon modeli')}",
+            f"- Karar değişkenleri: {', '.join(str(item.get('name', '')) for item in decision_model.get('decisionVariables', []) if isinstance(item, dict)) if isinstance(decision_model, dict) and isinstance(decision_model.get('decisionVariables'), list) else ', '.join(str(item) for item in qubo.get('variables', []))}",
             f"- Kısıtlar: {', '.join(str(item) for item in qubo.get('constraints', [])) or 'Binary değişken varsayımı'}",
             "",
             "## Quantum Deney Alanı",
@@ -270,6 +482,8 @@ def quantum_generate_report(
             f"- Klasik optimum enerji: {metrics.get('classicalBestEnergy', '-')}",
             f"- Deney enerjisi: {metrics.get('experimentBestEnergy', '-')}",
             f"- Optimality gap: {metrics.get('optimalityGap', '-')}",
+            f"- Uygulanabilir: {'evet' if metrics.get('feasible', True) else 'hayır'}",
+            f"- Kısıt ihlalleri: {', '.join(str(item) for item in metrics.get('constraintViolations', []) or []) or 'yok'}",
             "",
             "## Tekrar Üretilebilirlik",
             "- Demo deterministik QUBO girdisi, simulator/baseline karşılaştırması ve JSON artifact ile tekrar üretilebilir.",
@@ -280,6 +494,7 @@ def quantum_generate_report(
     markdown_path.write_text(report, encoding="utf-8")
     json_payload = {
         "prompt": _compact(prompt, 1200),
+        "decisionModel": decision_model,
         "qubo": qubo,
         "experiment": experiment,
         "metrics": metrics,
@@ -294,6 +509,7 @@ def quantum_generate_report(
         "result": {
             "kind": "quantum_report",
             "quantum": quantum,
+            "decisionModel": decision_model,
             "report": report,
             "metrics": metrics,
             "experiment": experiment,

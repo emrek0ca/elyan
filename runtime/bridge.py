@@ -735,8 +735,6 @@ def _runtime_advertised_capabilities() -> list[str]:
     _desktop_op_caps = {"desktop_operator.run", "desktop_operator.execute_action", "desktop_operator.observe_screen"}
     if _desktop_op_caps.intersection(capabilities):
         capabilities.add("computer.control")
-    if not _quantum_simulator_ready():
-        capabilities.difference_update(QUANTUM_EXECUTION_CAPABILITIES)
     if native_file_indexer.sidecar_available():
         capabilities.add(native_file_indexer.CAPABILITY_NAME)
     return sorted(capabilities)
@@ -12981,6 +12979,196 @@ class RuntimeBridge:
             previous_id = step_id
         return steps
 
+    def _professional_workflow_plan(
+        self,
+        prompt: str,
+        capabilities: set[str],
+        *,
+        title: str = "",
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+        normalized = _normalise_text(prompt)
+        canonical_caps = {_canonical_capability_name(item) for item in capabilities}
+        optimization_requested = any(
+            token in normalized
+            for token in (
+                "optimiz",
+                "karar degisken",
+                "karar değişken",
+                "amac fonksiyon",
+                "amaç fonksiyon",
+                "kisit",
+                "kısıt",
+                "qubo",
+                "ising",
+                "qaoa",
+                "knapsack",
+                "kapasite",
+            )
+        )
+        if optimization_requested and REMOTE_QUANTUM_CAPABILITIES.issubset(canonical_caps):
+            return self._quantum_decision_workflow_preview(
+                prompt,
+                title=title or "Karar Destek Optimizasyon Raporu",
+                summary="Optimizasyon görevi karar değişkenleri, amaç fonksiyonu ve kısıtlarla modellenip çözülecek.",
+            )
+        if "document_write" not in canonical_caps:
+            return None
+        legal = any(
+            token in normalized
+            for token in ("avukat", "dava", "savunma", "dilekce", "dilekçe", "itiraz", "mahkeme")
+        )
+        medical = any(
+            token in normalized
+            for token in ("doktor", "tahlil", "kan sonucu", "laboratuvar", "rapor cikar", "rapor çıkar", "sonuc yorumla")
+        )
+        engineering = any(
+            token in normalized
+            for token in ("muhendis", "mühendis", "tasarim", "tasarım", "analiz et", "hesapla", "optimiz", "cozum", "çözüm")
+        )
+        student = any(
+            token in normalized
+            for token in ("ogrenci", "öğrenci", "odev", "ödev", "proje", "sunum", "adim adim", "adım adım")
+        )
+        if not (legal or medical or engineering or student):
+            return None
+
+        topic = self._truncate_text(_research_topic_from_text(prompt), 140)
+        report_title = self._truncate_text(
+            title
+            or (
+                "Savunma Dilekçesi Taslağı"
+                if legal
+                else "Tahlil Yorum Raporu"
+                if medical
+                else "Teknik Çözüm Raporu"
+                if engineering
+                else "Adım Adım Çalışma Raporu"
+            ),
+            120,
+        )
+        steps: list[dict[str, Any]] = []
+
+        if medical and "document_read" in canonical_caps:
+            steps.append(
+                {
+                    "id": "read_input",
+                    "capability": "document_read",
+                    "args": {"text": prompt, "mode": "read"},
+                    "description": "Paylaşılan tahlil/veri metni okunacak.",
+                }
+            )
+        elif not legal and "document_read" in canonical_caps and any(
+            token in normalized for token in ("bu belge", "bu dosya", "pdf", "docx", "metin")
+        ):
+            steps.append(
+                {
+                    "id": "read_input",
+                    "capability": "document_read",
+                    "args": {"text": prompt, "mode": "read"},
+                    "description": "Paylaşılan belge/veri bağlamı okunacak.",
+                }
+            )
+
+        if legal and "web_research" in canonical_caps:
+            steps.append(
+                {
+                    "id": "research",
+                    "capability": "web_research",
+                    "args": {
+                        "query": f"{topic} mevzuat emsal savunma dilekçesi",
+                    },
+                    "description": "İlgili mevzuat ve emsal bağlamı araştırılacak.",
+                }
+            )
+        elif (engineering or student) and "web_research" in canonical_caps and any(
+            token in normalized for token in ("araştır", "arastir", "kaynak", "literatur", "literatür", "guncel", "güncel")
+        ):
+            steps.append(
+                {
+                    "id": "research",
+                    "capability": "web_research",
+                    "args": {"query": topic},
+                    "description": f"{topic} için kaynak araştırması yapılacak.",
+                }
+            )
+
+        section_prompt = (
+            "Savunma dilekçesi taslağı hazırla. Bölümler: olay özeti, hukuki değerlendirme, deliller, savunma gerekçeleri, sonuç ve talep. "
+            "Kesin hukuki temsil iddiası kurma; doğrulanması gereken noktaları açık işaretle."
+            if legal
+            else "Tahlil yorum raporu hazırla. Bölümler: okunan bulgular, referans dışı değerler, olası anlam, hekime sorulacak noktalar, takip önerileri. "
+            "Tanı koyma; sonuçların doktor tarafından değerlendirilmesi gerektiğini açık belirt."
+            if medical
+            else "Teknik çözüm raporu hazırla. Bölümler: problem tanımı, varsayımlar, hesap/analiz, seçenekler, önerilen çözüm, doğrulama adımları."
+            if engineering
+            else "Öğrenci çalışması hazırla. Bölümler: amaç, adım adım çözüm, önemli kavramlar, kontrol listesi, teslim çıktısı."
+        )
+        depends_on = [str(steps[-1].get("id"))] if steps else []
+        steps.append(
+            {
+                "id": "write_report",
+                "capability": "document_write",
+                "args": {
+                    "prompt": f"{section_prompt}\n\nKullanıcı isteği: {prompt}",
+                    "title": report_title,
+                    "sourceContext": "{{steps.research.output}}" if any(step.get("id") == "research" for step in steps) else "",
+                },
+                "dependsOn": depends_on,
+                "description": f"{report_title} yazılıp dosya olarak kaydedilecek.",
+            }
+        )
+        steps = self._chain_derived_steps(steps)
+        return steps, {
+            "summary": f"{report_title}: okuma/araştırma, analiz ve belge üretimi adım adım yürütülecek.",
+            "steps": steps,
+            "privacyClass": "local_private" if medical else "public_text",
+            "planSource": "runtime_professional_template",
+            "agentPlan": build_agent_plan(steps, summary=f"{report_title} hazırlanacak."),
+        }
+
+    def _quantum_decision_workflow_steps(self, prompt: str, title: str) -> list[dict[str, Any]]:
+        steps = [
+            {
+                "capability": "quantum_model_problem",
+                "args": {"prompt": prompt, "problemClass": "optimization"},
+                "description": "Problem karar değişkenleri, amaç fonksiyonu, kısıtlar ve QUBO/Ising formuna dönüştürülecek.",
+            },
+            {
+                "capability": "quantum_run_experiment",
+                "args": {"prompt": prompt, "algorithm": "qaoa", "shots": 1024},
+                "description": "Uygun çözücüyle aday çözüm üretilecek.",
+            },
+            {
+                "capability": "quantum_compare_classical",
+                "args": {"prompt": prompt},
+                "description": "Klasik baseline ile uygulanabilirlik ve optimalite karşılaştırması yapılacak.",
+            },
+            {
+                "capability": "quantum_generate_report",
+                "args": {"prompt": prompt, "title": title},
+                "description": "Karar destek raporu hazırlanıp kaydedilecek.",
+            },
+        ]
+        return self._chain_derived_steps(steps)
+
+    def _quantum_decision_workflow_preview(
+        self,
+        prompt: str,
+        *,
+        title: str,
+        summary: str,
+        privacy_class: str = "public_text",
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        report_title = self._truncate_text(title or "Karar Destek Optimizasyon Raporu", 120)
+        steps = self._quantum_decision_workflow_steps(prompt, report_title)
+        return steps, {
+            "summary": summary,
+            "steps": steps,
+            "privacyClass": privacy_class or "public_text",
+            "planSource": "runtime_decision_support_template",
+            "agentPlan": build_agent_plan(steps, summary=f"{report_title} hazırlanacak."),
+        }
+
     def _remote_task_steps_from_route(
         self,
         task: dict[str, Any],
@@ -13048,35 +13236,13 @@ class RuntimeBridge:
                     task.get("title", "") or decision_reason or "Elyan Quantum Deney Raporu",
                     120,
                 )
-                steps = [
-                    {
-                        "capability": "quantum_model_problem",
-                        "args": {"prompt": prompt, "problemClass": "optimization"},
-                        "description": "Problem QUBO/Ising formuna dönüştürülecek.",
-                    },
-                    {
-                        "capability": "quantum_run_experiment",
-                        "args": {"prompt": prompt, "algorithm": "qaoa", "shots": 1024},
-                        "description": "QAOA/VQE simulator demo deneyi yürütülecek.",
-                    },
-                    {
-                        "capability": "quantum_compare_classical",
-                        "args": {"prompt": prompt},
-                        "description": "Klasik baseline ile karşılaştırmalı metrik üretilecek.",
-                    },
-                    {
-                        "capability": "quantum_generate_report",
-                        "args": {"prompt": prompt, "title": title},
-                        "description": "Teknik quantum deney raporu hazırlanacak.",
-                    },
-                ]
-                steps = self._chain_derived_steps(steps)
-                return steps, {
-                    "summary": decision_reason
-                    or "Backend routeDecision kararına göre quantum deney pipeline'ı desktop runtime üzerinde yürütülecek.",
-                    "steps": steps,
-                    "privacyClass": decision_privacy or "public_text",
-                }
+                return self._quantum_decision_workflow_preview(
+                    prompt,
+                    title=title,
+                    summary=decision_reason
+                    or "Backend routeDecision kararına göre karar destek optimizasyon pipeline'ı desktop runtime üzerinde yürütülecek.",
+                    privacy_class=decision_privacy or "public_text",
+                )
 
             payload_top = task.get("payload", {})
             payload_top = payload_top if isinstance(payload_top, dict) else {}
@@ -13087,6 +13253,13 @@ class RuntimeBridge:
             topic = self._truncate_text(_research_topic_from_text(natural_goal), 120)
             recipients = self._remote_task_email_recipients(task, payload_top, natural_goal, decision)
             subject = f"{topic[:80]} hakkında notlar"
+            professional_plan = self._professional_workflow_plan(
+                natural_goal,
+                capabilities,
+                title=str(task.get("title", "") or ""),
+            )
+            if professional_plan is not None:
+                return professional_plan
             # Deterministik yerel rota kaba capability-şablonlarından ÖNCE denenir:
             # "YouTube'dan kedi videosu aç" play_youtube'a, "hava durumuna bak"
             # get_weather'a gitsin. Şablon yol URL yoksa çöp topic ile "search"
@@ -13224,34 +13397,19 @@ class RuntimeBridge:
         email_requested = bool(capabilities.intersection({"email_draft", "email_send"}))
         quantum_requested = bool(capabilities.intersection(REMOTE_QUANTUM_CAPABILITIES))
         if quantum_requested:
-            fallback_steps = [
-                {
-                    "capability": "quantum_model_problem",
-                    "args": {"prompt": prompt, "problemClass": "optimization"},
-                    "description": "Problem QUBO/Ising formuna dönüştürülecek.",
-                },
-                {
-                    "capability": "quantum_run_experiment",
-                    "args": {"prompt": prompt, "algorithm": "qaoa", "shots": 1024},
-                    "description": "QAOA/VQE simulator demo deneyi yürütülecek.",
-                },
-                {
-                    "capability": "quantum_compare_classical",
-                    "args": {"prompt": prompt},
-                    "description": "Klasik baseline ile karşılaştırmalı metrik üretilecek.",
-                },
-                {
-                    "capability": "quantum_generate_report",
-                    "args": {"prompt": prompt, "title": title if (title := str(task.get("title", "") or "").strip()) else "Elyan Quantum Deney Raporu"},
-                    "description": "Teknik quantum deney raporu hazırlanacak.",
-                },
-            ]
-            fallback_steps = self._chain_derived_steps(fallback_steps)
-            return fallback_steps, {
-                "summary": "Backend routing kararına göre quantum deney pipeline'ı desktop runtime üzerinde yürütülecek.",
-                "steps": fallback_steps,
-                "privacyClass": "public_text",
-            }
+            title = str(task.get("title", "") or "").strip() or "Elyan Quantum Deney Raporu"
+            return self._quantum_decision_workflow_preview(
+                prompt,
+                title=title,
+                summary="Backend routing kararına göre karar destek optimizasyon pipeline'ı desktop runtime üzerinde yürütülecek.",
+            )
+        professional_plan = self._professional_workflow_plan(
+            prompt,
+            capabilities,
+            title=str(task.get("title", "") or ""),
+        )
+        if professional_plan is not None:
+            return professional_plan
         if steps and (not email_requested or bool(routed_capabilities.intersection({"email_draft", "email_send"}))):
             return steps, dict(routed.plan_preview) if routed is not None and isinstance(routed.plan_preview, dict) else {}
 

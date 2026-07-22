@@ -700,7 +700,7 @@ def test_execute_assigned_quantum_task_uses_deterministic_pipeline(
     assert any(artifact["contentType"] == "text/markdown" for artifact in completed["artifacts"])
 
 
-def test_execute_assigned_quantum_task_fails_safely_without_qiskit(
+def test_execute_assigned_quantum_task_falls_back_without_qiskit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -783,11 +783,12 @@ def test_execute_assigned_quantum_task_fails_safely_without_qiskit(
     result = runtime.execute_assigned_runtime_tasks()
 
     assert result["ok"] is True
-    assert result["executions"][0]["status"] == "failed"
-    failed = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
-    assert failed["status"] == "failed"
-    assert failed["error"] == "QUANTUM_DEPENDENCY_UNAVAILABLE"
-    assert "Qiskit" in failed["result"]["assistantMessage"]
+    assert result["executions"][0]["status"] == "completed"
+    completed = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
+    assert completed["status"] == "completed"
+    assert completed["result"]["quantum"]["solver"] == "classical_reference_simulator"
+    assert completed["result"]["quantum"]["fallbackReason"] == "quantum_dependency_unavailable"
+    assert completed["result"]["structuredResult"]["kind"] == "quantum_report"
 
 
 def test_runtime_quantum_execution_capability_requires_qiskit_aer(
@@ -809,11 +810,70 @@ def test_runtime_quantum_execution_capability_requires_qiskit_aer(
     status = runtime.status()
 
     assert "quantum_model_problem" in capabilities
-    assert "quantum_run_experiment" not in capabilities
+    assert "quantum_run_experiment" in capabilities
     assert "quantum_compare_classical" in capabilities
     assert "quantum_generate_report" in capabilities
     assert status["dependencyStatus"]["qiskit"]["available"] is False
     assert status["dependencyStatus"]["qiskit_aer"]["available"] is False
+
+
+def test_professional_legal_workflow_uses_research_then_document() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        'Avukat: "bu davayı analiz et ve savunma dilekçesi hazırla"',
+        {"web_research", "document_write"},
+        title="Dava analizi",
+    )
+
+    assert plan is not None
+    steps, preview = plan
+    assert [step["capability"] for step in steps] == ["web_research", "document_write"]
+    assert steps[1]["dependsOn"] == ["research"]
+    assert steps[1]["args"]["sourceContext"] == "{{steps.research.output}}"
+    assert preview["planSource"] == "runtime_professional_template"
+
+
+def test_professional_medical_workflow_reads_then_reports() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        'Doktor: "tahlilleri yorumla ve rapor çıkar"',
+        {"document_read", "document_write"},
+    )
+
+    assert plan is not None
+    steps, preview = plan
+    assert [step["capability"] for step in steps] == ["document_read", "document_write"]
+    assert steps[0]["args"]["mode"] == "read"
+    assert steps[1]["dependsOn"] == ["read_input"]
+    assert preview["privacyClass"] == "local_private"
+
+
+def test_professional_optimization_workflow_uses_decision_support_pipeline() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        "Mühendis/öğrenci: A değer 10 maliyet 4, B değer 7 maliyet 3, kapasite 5; optimizasyon problemini adım adım çöz ve raporla",
+        {
+            "document_write",
+            "quantum_model_problem",
+            "quantum_run_experiment",
+            "quantum_compare_classical",
+            "quantum_generate_report",
+        },
+    )
+
+    assert plan is not None
+    steps, preview = plan
+    assert [step["capability"] for step in steps] == [
+        "quantum_model_problem",
+        "quantum_run_experiment",
+        "quantum_compare_classical",
+        "quantum_generate_report",
+    ]
+    assert steps[-1]["dependsOn"] == ["step_3"]
+    assert preview["planSource"] == "runtime_decision_support_template"
 
 
 def test_execute_assigned_runtime_task_waits_for_approval_without_terminal_report(
