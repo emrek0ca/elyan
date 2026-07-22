@@ -60,15 +60,25 @@ function asRecord(value: unknown): Record<string, unknown> | null {
  * Görev, sunucu-materyalizasyonuna değecek kadar karmaşık mı?
  * Sinyal: work-order'ın çok-yetenekli olması (≥2) VEYA hedefte sıralı-niyet.
  */
+// İŞ BÖLÜMÜ (kullanıcı kararı): BASİT işler otonom/deterministik kalır (bizim
+// "eğitim setimiz" = regex router; hızlı, LLM'siz). KARMAŞIK + adım-adım
+// planlama gereken işleri Elyan (server_brain) plana derler: araç/skill seçimini
+// ve sıralamayı MODEL muhakeme eder. Plan zayıf/başarısızsa heuristik work-
+// order'a fail-safe düşülür (regresyon yok).
+//
+// Karmaşık = çok-yetenekli (≥2) VEYA açıkça sıralı çok-adımlı istek. Tek-adımlı
+// basit görev (tek araç) deterministik yolda kalır.
 function isComplexEnough(workOrder: DesktopWorkOrder): boolean {
-  const required = Array.isArray(workOrder.requiredCapabilities)
-    ? workOrder.requiredCapabilities
-    : [];
+  const required = (
+    Array.isArray(workOrder.requiredCapabilities)
+      ? workOrder.requiredCapabilities
+      : []
+  ).filter((c): c is string => typeof c === "string" && c.trim().length > 0);
   if (required.length >= 2) {
     return true;
   }
   const summary = String(workOrder.goal?.summary ?? "");
-  return required.length >= 1 && SEQUENTIAL_INTENT_RE.test(summary);
+  return SEQUENTIAL_INTENT_RE.test(summary);
 }
 
 function buildAllowedCapabilities(workOrder: DesktopWorkOrder): string[] {
