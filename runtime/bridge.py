@@ -43,7 +43,7 @@ from runtime.capability_registry import (
 )
 from runtime.safety_policy import PERSONAL_ACTION_CAPABILITIES, evaluate_tool
 from runtime.agent_planning import build_agent_plan
-from runtime import structured_planner
+from runtime import compiled_plan, structured_planner
 from runtime import reasoning_policy
 from runtime import browser_agent
 from runtime import operator_planner
@@ -59,6 +59,7 @@ from runtime.execution_journal import ExecutionJournal
 from runtime.execution_journal import plan_hash as journal_plan_hash
 from runtime.executor_core import ExecutorCore, TemplateResolutionError, _resolve_templates
 from runtime.remote_task_runner import RemoteTaskRunner
+from runtime.desktop_work_order import MAX_STEPS as WORK_ORDER_MAX_STEPS
 from runtime.desktop_work_order import canonical_capability, validate_payload, verify_result
 from runtime.execution_trust import ExecutionLedger, TrustError
 from runtime import native_file_indexer
@@ -8523,12 +8524,19 @@ class RuntimeBridge:
         "chart_generate",
     }
 
-    def _recoverable_replan(self, context: dict[str, Any]) -> list[dict[str, Any]]:
+    def _recoverable_replan(
+        self,
+        context: dict[str, Any],
+        *,
+        allow_semantic: bool = True,
+    ) -> list[dict[str, Any]]:
         """ReAct replan: bir adım başarısız/doğrulanamaz olduğunda yapılandırılmış
         gözlemi (elyan.replan.v1) değerlendirip deterministik, güvenli alternatife
         revize eder. Yerel kalıplar çözemezse gizlilik sınıfına uygun planlayıcıya
         aynı gözlem zarfıyla danışır; geçerli ve kapsam içi bir plan yoksa executor
-        normal güvenli iptale düşer."""
+        normal güvenli iptale düşer. allow_semantic=False (sunucu-materyalize
+        güvenilir plan modu) yalnız yerel/deterministik kurtarmayı dener — LLM
+        round-trip'i olmaz."""
         pre_capability = str(context.get("failedCapability", "") or "")
         pre_error_code = str(context.get("errorCode", "") or "").upper()
         pre_args = context.get("failedArgs")
@@ -8635,6 +8643,10 @@ class RuntimeBridge:
                     *remaining_steps,
                 ]
 
+        if not allow_semantic:
+            # Güvenilir sunucu planı: sıfır ekstra LLM sözü korunur — semantik
+            # (server_brain) replan yerine executor'ın güvenli iptaline düş.
+            return []
         return self._semantic_replan(observation, context)
 
     def _semantic_replan(
@@ -8971,8 +8983,16 @@ class RuntimeBridge:
         execution_id: str | None = None,
         verify_goal: bool = True,
         confirmed: bool = True,
+        local_replan_only: bool = False,
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
         normalized_steps = self._expand_skill_plan_steps(steps)
+        # Güvenilir sunucu-materyalize plan modunda kurtarma yalnız yerel/
+        # deterministik kalır (sıfır ekstra LLM); aksi halde tam ReAct replan.
+        replan_fn = (
+            (lambda context: self._recoverable_replan(context, allow_semantic=False))
+            if local_replan_only
+            else self._recoverable_replan
+        )
         return self.executor_core.execute_plan_steps(
             steps=normalized_steps,
             state_factory=self._state_with_access,
@@ -8980,7 +9000,7 @@ class RuntimeBridge:
             source=source,
             task_id=task_id,
             conversation_id=conversation_id,
-            replan_fn=self._recoverable_replan,
+            replan_fn=replan_fn,
             goal_context=goal_context or self._goal_context(),
             verify_goal=self._verify_execution_goal if verify_goal else None,
             confirmed=confirmed,
@@ -12572,7 +12592,9 @@ class RuntimeBridge:
                 )
                 if normalized is not None:
                     steps.append(normalized)
-                if len(steps) >= 8:
+                # WorkOrder 16 adıma kadar destekler (MAX_STEPS) — eski sessiz
+                # 8 adım kırpması çok-adımlı görevleri yarım yürütüyordu.
+                if len(steps) >= WORK_ORDER_MAX_STEPS:
                     break
             if steps:
                 break
@@ -12613,7 +12635,7 @@ class RuntimeBridge:
         step_count = 0
         if isinstance(steps, list):
             step_count = sum(1 for s in steps if isinstance(s, dict))
-            for index, step in enumerate(steps[:8], start=1):
+            for index, step in enumerate(steps[:WORK_ORDER_MAX_STEPS], start=1):
                 if not isinstance(step, dict):
                     continue
                 capability = str(step.get("capability", "") or "").strip()
@@ -12631,7 +12653,7 @@ class RuntimeBridge:
                 elif normalized_status == "waiting_approval":
                     # Pre-approval steps completed, rest pending
                     approval_idx = next(
-                        (i + 1 for i, s in enumerate(steps[:8]) if isinstance(s, dict) and _canonical_capability_name(s.get("capability")) in REMOTE_APPROVAL_CAPABILITIES),
+                        (i + 1 for i, s in enumerate(steps[:WORK_ORDER_MAX_STEPS]) if isinstance(s, dict) and _canonical_capability_name(s.get("capability")) in REMOTE_APPROVAL_CAPABILITIES),
                         step_count + 1,
                     )
                     if index < approval_idx:
@@ -13189,13 +13211,27 @@ class RuntimeBridge:
 
         capabilities = self._remote_task_capabilities(task, payload)
 
+        # Sunucu-materyalize güvenilir plan: dispatch worker karmaşık görevi
+        # 120b planlayıcıyla tam bağımlılık-graflı VERİ olarak derleyip
+        # planSource=server_materialized ile işaretledi. Bu plan heuristik regex
+        # planı DEĞİLDİR — desktop güvenir, ikinci planlama round-trip'i yapmaz.
+        # Adımlar yine desktop'un tam kataloğuna karşı normalize/valide edilir
+        # (_normalize_remote_task_step); geçmezse steps boş kalır ve mevcut
+        # delegasyon davranışına düşülür.
+        work_order_preview = self._remote_task_work_order_plan_preview(payload)
+        trusted_server_plan = (
+            str(work_order_preview.get("planSource", "") or "").strip().lower() == "server_materialized"
+            or str(work_order_preview.get("contract", "") or "").strip() == "elyan.compiled_plan.v1"
+        )
+
         # LLM-ÖNCE: serbest-metin cowork görevlerinde backend'in regex planına
         # körlemesine güvenme. Runtime'ın kataloglu + doğrulamalı LLM planlayıcısı
         # (send_conversation → _semantic_route) gerçek yetenek kataloğuyla plan
         # üretsin. None döndürmek çağıranı (execute_runtime_task) LLM yoluna
         # düşürür. Basit doğrudan komutlar hız için regex yolunda kalır; LLM
         # erişilemezse yine regex planı çalışır (çevrimdışı çalışabilirlik).
-        if self._remote_task_should_delegate_to_llm(capabilities, prompt):
+        # Güvenilir sunucu planında bu kapı ATLANIR (plan zaten LLM ürünü).
+        if not trusted_server_plan and self._remote_task_should_delegate_to_llm(capabilities, prompt):
             # Yüksek-güvenli yerel rota varsa LLM'e HİÇ gitme: "masaüstündeki
             # dosyaları listele" gibi bariz tek-adım işlerde LLM planlayıcı
             # daha yavaş VE yanlış seçebiliyor (operator'a kör hedef → doğrulama
@@ -13239,6 +13275,39 @@ class RuntimeBridge:
                 "agentPlan": build_agent_plan(steps, summary=str(plan_preview.get("summary", "") or "")),
             }
 
+        if trusted_server_plan:
+            # Güvenilir sunucu planını tek otorite hash'e bağla (tamper-kanıtı;
+            # journal/trust aynı plan_signature'ı kullanır). Sıralama: dependsOn
+            # topolojik sırası kararlı biçimde uygulanır. Hata fail-safe'tir —
+            # hash bağlanamazsa plan yine normal (heuristik-eşdeğeri) yolda yürür.
+            try:
+                steps = structured_planner._order_steps_by_dependencies(steps)
+                compiled = compiled_plan.compile_plan(
+                    steps,
+                    task_id=task_id,
+                    objective=prompt,
+                )
+                plan_preview = {
+                    **plan_preview,
+                    "steps": steps,
+                    "planSource": "server_materialized",
+                    "contract": compiled_plan.PLAN_CONTRACT,
+                    "planHash": compiled.planHash,
+                }
+                self._runtime_diag(
+                    "trusted_server_plan",
+                    task_id=task_id,
+                    steps=len(steps),
+                    planHash=compiled.planHash,
+                )
+            except Exception as exc:
+                trusted_server_plan = False
+                self._runtime_diag(
+                    "trusted_server_plan_bind_failed",
+                    task_id=task_id,
+                    error=type(exc).__name__,
+                )
+
         approval_steps = [
             step
             for step in steps
@@ -13261,6 +13330,7 @@ class RuntimeBridge:
                 goal_context=self._goal_context(prompt),
                 verify_goal=not approval_requested,
                 confirmed=False,
+                local_replan_only=trusted_server_plan,
             )
         else:
             ok = True
