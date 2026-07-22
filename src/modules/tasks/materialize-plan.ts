@@ -77,8 +77,28 @@ function isComplexEnough(workOrder: DesktopWorkOrder): boolean {
   if (required.length >= 2) {
     return true;
   }
-  const summary = String(workOrder.goal?.summary ?? "");
-  return SEQUENTIAL_INTENT_RE.test(summary);
+  const summary = String(workOrder.goal?.summary ?? "").trim();
+  if (SEQUENTIAL_INTENT_RE.test(summary)) {
+    return true;
+  }
+  // Profesyonel/çok-parçalı istekler (avukat/doktor/mühendis/öğrenci işleri) çoğu
+  // zaman regex'e tek yetenek gibi görünür ama gerçekte çok-adımlıdır ("bu davayı
+  // analiz et ve dilekçe hazırla", "hastanın tahlillerini yorumla ve rapor yaz").
+  // Zengin/uzun istek → server_brain plana derlesin (adım adım karar versin).
+  // Kısa doğrudan komut ("Safari aç") deterministik/otonom kalır.
+  const understanding = workOrder.understanding;
+  const desiredOutputs = Array.isArray(understanding?.desiredOutputs)
+    ? understanding!.desiredOutputs
+    : [];
+  if (desiredOutputs.length >= 2) {
+    return true;
+  }
+  const wordCount = summary.split(/\s+/).filter(Boolean).length;
+  const clauseSignals = /[,;]| ve | ile | ayrıca | hem .* hem | and | then /i.test(
+    ` ${summary} `,
+  );
+  // ≥8 kelime VEYA birden çok fıkra/bağlaç → çok-adımlı profesyonel iş.
+  return wordCount >= 8 || (wordCount >= 5 && clauseSignals);
 }
 
 function buildAllowedCapabilities(workOrder: DesktopWorkOrder): string[] {
