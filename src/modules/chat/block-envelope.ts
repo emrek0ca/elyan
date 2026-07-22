@@ -243,7 +243,12 @@ export function withCanonicalAssistantBlockEnvelope(
     source,
     visibility,
     renderHints,
-    data,
+    // Additive contract: legacy chart blocks carry their point ARRAY at the
+    // top-level `data` key. Overwriting it with the canonical payload record
+    // buried the sampled points under `data.data` and broke every flat reader
+    // (mobile chart preview showed no data). Digest/blockId are still computed
+    // from the canonical payload; the flat array stays readable in place.
+    data: Array.isArray(value.data) ? value.data : data,
     cacheDigest,
   } as CanonicalAssistantBlockEnvelope;
 }
