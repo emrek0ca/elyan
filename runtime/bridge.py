@@ -7016,6 +7016,47 @@ class RuntimeBridge:
             result_payload["operator"] = dict(structured_result["operator"])
         return result_payload
 
+    def _naturalize_task_answer(self, prompt: str, content: str) -> str:
+        """Sunucudaki model (server_brain) GERÇEK araç çıktısını doğal, canlı bir
+        cevaba çevirir — kalite/canlılık modelin işi, ama OLGU deterministik
+        yürütmeden gelir (uydurma/savuşturma yok). Model savuşturur/uydurursa
+        ya da erişilemezse ham olgu metni korunur (asla bozulmaz)."""
+        factual = str(content or "").strip()
+        if not factual or len(factual) > 1200:
+            return factual
+        state = self._state_with_access()
+        if not _server_brain_ready(state, backend=self.backend):
+            return factual
+        try:
+            instruction = (
+                "Kullanıcının sorusuna, aşağıdaki GERÇEK araç sonucunu kullanarak "
+                "kısa (1-2 cümle), doğal ve samimi Türkçe bir cevap yaz. SADECE bu "
+                "veriyi kullan; yeni bilgi, kimlik ifadesi, altyapı yorumu ya da "
+                "reddetme EKLEME. Yalnız cevabı yaz.\n\n"
+                f"Soru: {str(prompt or '').strip()[:400]}\n"
+                f"Araç sonucu: {factual}"
+            )
+            result = _invoke_provider_chat_with_context(
+                state, "server_brain", [], instruction, backend=self.backend
+            )
+        except Exception:
+            return factual
+        if not isinstance(result, dict) or not result.get("ok"):
+            return factual
+        answer = str(result.get("content", "") or "").strip()
+        # Güven kapısı: model savuşturursa/uydurursa/zarf sızdırırsa ham olguya dön.
+        folded = answer.casefold()
+        deflected = (
+            not answer
+            or len(answer) > 900
+            or _looks_like_internal_envelope(answer)
+            or "ben elyan olarak" in folded
+            or "teknik altyapı" in folded
+            or "paylaşmam mümkün" in folded
+            or "yardımcı olamam" in folded
+        )
+        return factual if deflected else answer
+
     def _synthesize_success_summary(self, local_result: dict[str, Any]) -> str:
         """assistantMessage boş kalan BAŞARILI görevler için kullanıcıya
         gösterilebilir kısa bir TR özet üretir. Yan-etki-only deterministik
@@ -13613,10 +13654,14 @@ class RuntimeBridge:
                 "executionTrace": self._remote_task_trace_payload(approval_preview, status="waiting_approval", task_id=task_id),
             }
 
+        # Sunucudaki model olgusal sonucu doğal/canlı cevaba çevirir (kalite);
+        # savuşturur/uydurursa ham olgu korunur. Onay istemeyen, gerçek çıktı
+        # üreten görevlerde uygulanır.
+        final_message = self._naturalize_task_answer(prompt, content)
         return {
             "ok": True,
             "chatOk": True,
-            "assistantMessage": content,
+            "assistantMessage": final_message,
             "provider": "remote_task_adapter",
             "toolEvents": tool_events,
             "conversationId": conversation_id,
