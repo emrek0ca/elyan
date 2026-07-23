@@ -61,12 +61,14 @@ def test_accounting_calculation_research_report_chain() -> None:
     assert [str(step.get("capability", "")) for step in routed.steps] == [
         "math_solve",
         "web_research",
+        "text_analyze",
         "document_write",
     ]
     assert routed.steps[0]["args"]["expression"] == "(12000+8500)*0.2"
     assert routed.steps[1]["args"]["query"] == "KDV kurallarını"
     assert routed.steps[1]["dependsOn"] == ["calculate"]
     assert routed.steps[2]["dependsOn"] == ["calculate", "research"]
+    assert routed.steps[3]["dependsOn"] == ["analyze"]
 
 
 def test_percentage_calculation_ignores_non_currency_numbers() -> None:

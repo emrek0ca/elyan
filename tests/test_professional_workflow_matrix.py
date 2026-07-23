@@ -24,7 +24,7 @@ PROFESSIONAL_WORKFLOW_CASES = [
     pytest.param(
         "accounting_research_report",
         "Muhasebeci gibi çalış. 12000 TL ve 8500 TL hizmet faturası için yüzde 20 KDV hesapla, KDV kurallarını araştır ve rapor belgesi hazırla.",
-        ["math_solve", "web_research", "document_write"],
+        ["math_solve", "web_research", "text_analyze", "document_write"],
         id="accounting-calc-research-report",
     ),
     pytest.param(
@@ -48,7 +48,7 @@ PROFESSIONAL_WORKFLOW_CASES = [
     pytest.param(
         "medical_inline_report",
         "Doktor gibi çalış. Tahlil sonuçlarını yorumla ve rapor çıkar: Hb 10.5, ferritin 8, B12 220.",
-        ["document_read", "document_write"],
+        ["document_read", "text_analyze", "document_write"],
         id="medical-inline-report",
     ),
     pytest.param(
@@ -131,6 +131,14 @@ def test_professional_executor_passes_prior_outputs_into_writer(tmp_path: Path) 
                 "output": "KDV genel oranı yüzde 20 olarak uygulanır.",
                 "result": {"kind": "web_research", "summary": "KDV oranı yüzde 20."},
             }, []
+        if capability == "text_analyze":
+            assert "KDV tutarı: 4100" in str(args)
+            assert "KDV genel oranı yüzde 20" in str(args)
+            return {
+                "ok": True,
+                "output": "Analiz: KDV tutarı 4100 TL, genel oran araştırmayla uyumlu.",
+                "result": {"kind": "text_analyze", "summary": "KDV tutarı ve oran uyumlu."},
+            }, []
         if capability == "document_write":
             observed_writer_args.update(args)
             output_path.write_bytes(b"fake-docx-proof" * 80)
@@ -154,8 +162,9 @@ def test_professional_executor_passes_prior_outputs_into_writer(tmp_path: Path) 
     assert error_code == ""
     assert result and result["kind"] == "document_write"
     assert artifacts and artifacts[-1]["path"] == str(output_path)
-    assert observed_writer_args["_previousOutput"] == "KDV genel oranı yüzde 20 olarak uygulanır."
-    assert observed_writer_args["_previousResult"]["kind"] == "web_research"
+    assert observed_writer_args["_previousOutput"] == "Analiz: KDV tutarı 4100 TL, genel oran araştırmayla uyumlu."
+    assert observed_writer_args["_previousResult"]["kind"] == "text_analyze"
+    assert observed_writer_args["_dependencyResults"]["analyze"]["summary"] == "KDV tutarı ve oran uyumlu."
     assert "_previousArtifacts" not in observed_writer_args
 
 
@@ -164,7 +173,7 @@ def test_inline_analysis_executor_passes_read_output_into_report_writer(tmp_path
         "Doktor gibi çalış. Tahlil sonuçlarını yorumla ve rapor çıkar: Hb 10.5, ferritin 8, B12 220."
     )
     assert routed is not None
-    assert [step["capability"] for step in routed.steps] == ["document_read", "document_write"]
+    assert [step["capability"] for step in routed.steps] == ["document_read", "text_analyze", "document_write"]
 
     observed_writer_args: dict[str, object] = {}
     calls: list[str] = []
@@ -179,6 +188,13 @@ def test_inline_analysis_executor_passes_read_output_into_report_writer(tmp_path
                 "ok": True,
                 "output": read_output,
                 "result": {"kind": "document_read", "text": read_output},
+            }, []
+        if capability == "text_analyze":
+            assert read_output in str(args)
+            return {
+                "ok": True,
+                "output": "Analiz: Hb ve ferritin düşük, raporda doktor değerlendirmesi uyarısı olmalı.",
+                "result": {"kind": "text_analyze", "summary": "Hb ve ferritin düşük."},
             }, []
         if capability == "document_write":
             observed_writer_args.update(args)
@@ -203,10 +219,10 @@ def test_inline_analysis_executor_passes_read_output_into_report_writer(tmp_path
     assert error_code == ""
     assert result and result["kind"] == "document_write"
     assert artifacts and artifacts[-1]["path"] == str(output_path)
-    assert calls == ["document_read", "document_write"]
-    assert observed_writer_args["sourceContext"] == read_output
-    assert observed_writer_args["_previousOutput"] == read_output
-    assert observed_writer_args["_previousResult"]["kind"] == "document_read"
+    assert calls == ["document_read", "text_analyze", "document_write"]
+    assert observed_writer_args["_previousOutput"].startswith("Analiz:")
+    assert observed_writer_args["_previousResult"]["kind"] == "text_analyze"
+    assert observed_writer_args["_dependencyResults"]["analyze"]["summary"] == "Hb ve ferritin düşük."
 
 
 def test_professional_executor_passes_analysis_output_into_writer(tmp_path: Path) -> None:

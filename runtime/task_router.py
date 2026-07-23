@@ -2683,6 +2683,28 @@ def _research_then_writer_route(text: str) -> RoutedTask | None:
     if steps:
         research_step["dependsOn"] = [str(steps[-1].get("id", "calculate"))]
     steps.append(research_step)
+    analysis_needed = _professional_text_analysis_requested(q) and (
+        calculation_step is not None or "analiz" in q or "yorumla" in q or "degerlendir" in q or "incele" in q
+    )
+    if analysis_needed:
+        source_context = ["Araştırma bağlamı: {{steps.research.output}}"]
+        depends_on = ["research"]
+        if calculation_step is not None:
+            source_context.insert(0, "Hesap sonucu: {{steps.calculate.output}}")
+            depends_on = ["calculate", "research"]
+        steps.append(
+            {
+                "id": "analyze",
+                "capability": "text_analyze",
+                "args": {
+                    "prompt": original,
+                    "mode": _professional_analysis_mode(q),
+                    "sourceContext": "\n\n".join(source_context),
+                },
+                "dependsOn": depends_on,
+                "description": "Araştırma ve varsa hesap sonucu teslim çıktısı için analiz edilecek.",
+            }
+        )
     for writer_step in writer_steps:
         if not writer_step.get("id"):
             writer_step["id"] = "write_output"
@@ -2697,6 +2719,11 @@ def _research_then_writer_route(text: str) -> RoutedTask | None:
             args.setdefault("calculationContext", "{{steps.calculate.output}}")
             writer_step["args"] = args
             depends_on = ["calculate", "research"]
+        if analysis_needed:
+            args = dict(writer_step.get("args") or {})
+            args["sourceContext"] = "Analiz bağlamı: {{steps.analyze.output}}"
+            writer_step["args"] = args
+            depends_on = ["analyze"]
         writer_step["dependsOn"] = writer_step.get("dependsOn") or depends_on
         steps.append(writer_step)
     summary = f"{len(steps)} adımlı görev planlandı: " + " → ".join(str(step.get("capability", "")) for step in steps)
@@ -3461,6 +3488,50 @@ def _continuation_task(segment: str, topic_hint: str) -> RoutedTask | None:
     return None
 
 
+def _professional_analysis_mode(q: str) -> str:
+    if any(token in q for token in ("avukat", "dava", "savunma", "dilekce", "dilekçe", "mahkeme")):
+        return "legal"
+    if any(token in q for token in ("doktor", "tahlil", "kan sonucu", "laboratuvar", "hasta")):
+        return "medical"
+    if any(token in q for token in ("muhasebe", "muhasebeci", "kdv", "vergi", "fatura")):
+        return "accounting"
+    if any(token in q for token in ("muhendis", "mühendis", "teknik", "proje", "tasarim", "tasarım")):
+        return "technical"
+    if any(token in q for token in ("ogrenci", "öğrenci", "odev", "ödev", "sunum", "slayt")):
+        return "student"
+    return "professional"
+
+
+def _professional_text_analysis_requested(q: str) -> bool:
+    explicit_analysis = any(
+        token in q
+        for token in ("analiz", "yorumla", "degerlendir", "değerlendir", "incele", "karsilastir", "karşılaştır")
+    )
+    professional_context = any(
+        token in q
+        for token in (
+            "avukat",
+            "dava",
+            "savunma",
+            "dilekce",
+            "dilekçe",
+            "muhasebe",
+            "muhasebeci",
+            "kdv",
+            "vergi",
+            "fatura",
+            "doktor",
+            "tahlil",
+            "muhendis",
+            "mühendis",
+            "ogrenci",
+            "öğrenci",
+        )
+    )
+    professional_output = any(token in q for token in ("rapor", "belge", "dilekce", "dilekçe", "savunma", "sunum", "slayt"))
+    return explicit_analysis or (professional_context and professional_output)
+
+
 def _calculation_then_writer_route(text: str) -> RoutedTask | None:
     original = str(text or "").strip()
     q = _normalise(original)
@@ -3494,6 +3565,21 @@ def _calculation_then_writer_route(text: str) -> RoutedTask | None:
     if not writer_steps:
         return None
     steps: list[dict[str, Any]] = [calculation_step]
+    analysis_needed = _professional_text_analysis_requested(q)
+    if analysis_needed:
+        steps.append(
+            {
+                "id": "analyze",
+                "capability": "text_analyze",
+                "args": {
+                    "prompt": original,
+                    "mode": _professional_analysis_mode(q),
+                    "sourceContext": "Hesap sonucu: {{steps.calculate.output}}",
+                },
+                "dependsOn": ["calculate"],
+                "description": "Hesap sonucu teslim çıktısı için analiz edilecek.",
+            }
+        )
     for writer_step in writer_steps:
         if not writer_step.get("id"):
             writer_step["id"] = "write_output"
@@ -3503,8 +3589,10 @@ def _calculation_then_writer_route(text: str) -> RoutedTask | None:
             prompt = f"Hesap sonucunu kullanarak {prompt}".strip()
         args["prompt"] = prompt
         args.setdefault("calculationContext", "{{steps.calculate.output}}")
+        if analysis_needed:
+            args["sourceContext"] = "Analiz bağlamı: {{steps.analyze.output}}"
         writer_step["args"] = args
-        writer_step["dependsOn"] = writer_step.get("dependsOn") or ["calculate"]
+        writer_step["dependsOn"] = writer_step.get("dependsOn") or (["analyze"] if analysis_needed else ["calculate"])
         steps.append(writer_step)
     privacy_class = "local_private" if writer.privacy_class == "local_private" else "public_text"
     summary = f"{len(steps)} adımlı görev planlandı: " + " → ".join(str(step.get("capability", "")) for step in steps)
@@ -3542,21 +3630,32 @@ def _inline_analysis_writer_route(text: str) -> RoutedTask | None:
         "args": {"text": original, "mode": "read"},
         "description": "Paylaşılan metin/veri bağlamı okunacak.",
     }
+    analyze_step = {
+        "id": "analyze",
+        "capability": "text_analyze",
+        "args": {
+            "prompt": original,
+            "mode": _professional_analysis_mode(q),
+            "sourceContext": "Okunan özel/veri bağlamı: {{steps.read_input.output}}",
+        },
+        "dependsOn": ["read_input"],
+        "description": "Okunan veri teslim çıktısı için analiz edilecek.",
+    }
     write_args = {
         "prompt": f"Okunan veri ve kullanıcı isteğine göre analiz raporu hazırla. İstek: {original}",
         "outputPath": output_path,
         "overwrite": False,
-        "sourceContext": "{{steps.read_input.output}}",
+        "sourceContext": "Analiz bağlamı: {{steps.analyze.output}}",
     }
     write_step = {
         "id": "write_output",
         "capability": "document_write",
         "args": write_args,
-        "dependsOn": ["read_input"],
+        "dependsOn": ["analyze"],
         "description": f"Analiz raporu {Path(output_path).name} olarak yazılacak.",
     }
-    steps = [read_step, write_step]
-    summary = "2 adımlı görev planlandı: document_read → document_write"
+    steps = [read_step, analyze_step, write_step]
+    summary = "3 adımlı görev planlandı: document_read → text_analyze → document_write"
     return RoutedTask(
         "document_read",
         dict(read_step["args"]),
