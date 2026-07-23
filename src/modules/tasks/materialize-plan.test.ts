@@ -78,6 +78,10 @@ test("desktop materialization prompt keeps research queries public and writer ar
   assert.match(fewShots, /"content":"Okunan veri uzerinden analiz raporu hazirla\.\\n\\nVeri: \{\{steps\.s1\.output\}\}\\n\\nAnaliz: \{\{steps\.s2\.output\}\}"/);
   assert.match(fewShots, /Student research \+ presentation/);
   assert.match(fewShots, /quantum annealing vs classical optimization explanation examples/);
+  assert.match(fewShots, /"capability":"text_analyze"/);
+  assert.match(fewShots, /"mode":"student"/);
+  assert.match(fewShots, /"sourceContext":"Arastirma: \{\{steps\.s1\.output\}\}"/);
+  assert.match(fewShots, /Analiz: \{\{steps\.s2\.output\}\}\\n\\nArastirma: \{\{steps\.s1\.output\}\}/);
   assert.match(fewShots, /Research \+ spreadsheet/);
   assert.match(fewShots, /"capability":"spreadsheet_write"/);
   assert.match(fewShots, /"KDV tutari","\{\{steps\.s1\.output\}\}"/);
@@ -110,6 +114,7 @@ test("desktop materialization prompt teaches output artifact target selection", 
   assert.match(prompt, /Word\/report\/petition\/document\/docx -> document_write/);
   assert.match(prompt, /Do not use document_write for a requested presentation or spreadsheet/);
   assert.match(prompt, /For presentation_write, provide a concrete title and prompt\/content that consumes research\/read outputs/);
+  assert.match(prompt, /analyze\/interpret\/evaluate\/summarize\/explain\/compare or produce a professional\/student artifact/);
   assert.match(prompt, /For spreadsheet_write, provide concrete rows\/sheets/);
 });
 
