@@ -6,7 +6,7 @@ httpx
 websocket-client
 psutil
 Pillow
-pystray>=0.19
+pystray>=0.19.5
 customtkinter>=5.2
 qrcode>=7.4
 litellm

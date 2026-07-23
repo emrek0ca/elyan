@@ -28,5 +28,5 @@ faster-whisper
 sounddevice
 soundfile
 mcp
-pystray>=0.19
+pystray>=0.19.5
 qrcode>=7.4
