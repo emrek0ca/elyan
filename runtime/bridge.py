@@ -13319,10 +13319,11 @@ class RuntimeBridge:
             }
         )
         steps = self._chain_derived_steps(steps)
+        privacy_class = "local_private" if any(step.get("id") == "read_input" for step in steps) else "public_text"
         return steps, {
             "summary": f"{report_title}: okuma/araştırma/hesaplama, analiz ve çıktı üretimi adım adım yürütülecek.",
             "steps": steps,
-            "privacyClass": "local_private" if medical else "public_text",
+            "privacyClass": privacy_class,
             "planSource": "runtime_professional_template",
             "agentPlan": build_agent_plan(steps, summary=f"{report_title} hazırlanacak."),
         }

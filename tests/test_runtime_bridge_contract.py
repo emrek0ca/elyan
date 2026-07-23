@@ -935,6 +935,7 @@ def test_professional_legal_file_workflow_reads_case_context_before_research_and
         "Araştırma bağlamı: {{steps.research.output}}"
     )
     assert preview["planSource"] == "runtime_professional_template"
+    assert preview["privacyClass"] == "local_private"
 
 
 def test_professional_student_workflow_can_target_presentation_without_document_writer() -> None:
@@ -951,6 +952,22 @@ def test_professional_student_workflow_can_target_presentation_without_document_
     assert steps[1]["dependsOn"] == ["research"]
     assert steps[1]["args"]["sourceContext"] == "Araştırma bağlamı: {{steps.research.output}}"
     assert preview["planSource"] == "runtime_professional_template"
+
+
+def test_professional_student_file_workflow_reads_pdf_before_presentation() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        "Öğrenci gibi çalış. Bu PDF metnini analiz et ve 5 sayfalık sunum hazırla.",
+        {"document_read", "presentation_write"},
+    )
+
+    assert plan is not None
+    steps, preview = plan
+    assert [step["capability"] for step in steps] == ["document_read", "presentation_write"]
+    assert steps[1]["dependsOn"] == ["read_input"]
+    assert steps[1]["args"]["sourceContext"] == "Okunan özel/veri bağlamı: {{steps.read_input.output}}"
+    assert preview["privacyClass"] == "local_private"
 
 
 def test_professional_accounting_workflow_can_calculate_then_write_spreadsheet() -> None:
