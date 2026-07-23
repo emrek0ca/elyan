@@ -8,7 +8,7 @@ import type { DesktopWorkOrder } from "./desktop-work-order.js";
 
 function workOrder(
   summary: string,
-  requiredCapabilities = ["math_solve", "web_research", "document_write", "spreadsheet_write", "presentation_write"],
+  requiredCapabilities = ["math_solve", "web_research", "text_analyze", "document_write", "spreadsheet_write", "presentation_write"],
 ): DesktopWorkOrder {
   return {
     schema: "elyan.desktop_work_order.v1",
@@ -43,13 +43,15 @@ test("desktop materialization prompt teaches concrete calculation research write
     workOrder(
       "Muhasebeci gibi çalış. 12000 TL ve 8500 TL hizmet faturası için yüzde 20 KDV hesapla, KDV kurallarını araştır ve rapor hazırla.",
     ),
-    ["math_solve", "web_research", "document_write", "spreadsheet_write", "presentation_write"],
+    ["math_solve", "web_research", "text_analyze", "document_write", "spreadsheet_write", "presentation_write"],
   );
 
   assert.match(prompt, /Accounting calculation \+ research \+ report/);
   assert.match(prompt, /"expression":"\(12000\+8500\)\*0\.20"/);
   assert.match(prompt, /"query":"hizmet faturasi KDV yuzde 20 kurallari Turkiye"/);
-  assert.match(prompt, /"content":"KDV hesabi: \{\{steps\.s1\.output\}\}\\n\\nArastirma: \{\{steps\.s2\.output\}\}"/);
+  assert.match(prompt, /"capability":"text_analyze"/);
+  assert.match(prompt, /"sourceContext":"KDV hesabi: \{\{steps\.s1\.output\}\}\\n\\nArastirma: \{\{steps\.s2\.output\}\}"/);
+  assert.match(prompt, /"content":"KDV hesabi: \{\{steps\.s1\.output\}\}\\n\\nArastirma: \{\{steps\.s2\.output\}\}\\n\\nAnaliz: \{\{steps\.s3\.output\}\}"/);
   assert.match(prompt, /tax amount.*\(12000\+8500\)\*0\.20/i);
   assert.match(prompt, /tax-included total.*\(12000\+8500\)\*1\.20/i);
 });
@@ -62,11 +64,14 @@ test("desktop materialization prompt keeps research queries public and writer ar
   assert.match(fewShots, /Legal private file \+ public research \+ defense draft/);
   assert.match(fewShots, /"capability":"document_read"/);
   assert.match(fewShots, /"query":"kira uyusmazligi tahliye itirazi savunma dilekcesi mevzuat emsal"/);
+  assert.match(fewShots, /"capability":"text_analyze"/);
   assert.match(fewShots, /Dosya baglami: \{\{steps\.s1\.output\}\}\\n\\nPublic arastirma: \{\{steps\.s2\.output\}\}/);
+  assert.match(fewShots, /Analiz: \{\{steps\.s3\.output\}\}/);
   assert.match(fewShots, /Private inline data \+ analysis report/);
   assert.match(fewShots, /"capability":"document_read"/);
   assert.match(fewShots, /Hb 10\.5, ferritin 8, B12 220/);
-  assert.match(fewShots, /"content":"Okunan veri uzerinden analiz raporu hazirla\.\\n\\nVeri: \{\{steps\.s1\.output\}\}"/);
+  assert.match(fewShots, /"sourceContext":"Veri: \{\{steps\.s1\.output\}\}"/);
+  assert.match(fewShots, /"content":"Okunan veri uzerinden analiz raporu hazirla\.\\n\\nVeri: \{\{steps\.s1\.output\}\}\\n\\nAnaliz: \{\{steps\.s2\.output\}\}"/);
   assert.match(fewShots, /Student research \+ presentation/);
   assert.match(fewShots, /quantum annealing vs classical optimization explanation examples/);
   assert.match(fewShots, /Research \+ spreadsheet/);
@@ -115,6 +120,7 @@ test("desktop materialization prompt teaches private read then writer handoff", 
 
   assert.match(prompt, /Private inline data \+ analysis report/);
   assert.match(prompt, /start with document_read or file_read when available/);
+  assert.match(prompt, /insert text_analyze between gathering\/calculation\/research and the writer/);
   assert.match(prompt, /feed \{\{steps\.<id>\.output\}\} into document_write/);
   assert.match(prompt, /Do not send private inline facts, file contents, medical\/test values, legal case facts, or local document summaries to web_research/);
   assert.match(prompt, /"text":"Tahlil sonuclari: Hb 10\.5, ferritin 8, B12 220\."/);

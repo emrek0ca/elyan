@@ -647,6 +647,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "requiresApproval": false
   },
   {
+    "name": "text_analyze",
+    "description": "Okuma, araştırma veya hesap çıktılarından yerel profesyonel analiz özeti üretir.",
+    "usage": "Dosya okuma/araştırma/hesaplama sonrası, belge/sunum/tablo yazmadan önce muhakeme özeti çıkarmak için.",
+    "requiredArgs": [
+      "prompt"
+    ],
+    "requiresApproval": false
+  },
+  {
     "name": "text_to_speech",
     "description": "Metni yerel olarak sesli okur.",
     "usage": "Bir metni/cevabı sesli okutmak için.",
