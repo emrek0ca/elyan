@@ -35,11 +35,16 @@ jobs:
       - name: Run runtime contracts
         run: >-
           python -m pytest
-          tests/test_runtime_startup_contract.py
-          tests/test_runtime_bridge_contract.py
+          tests/test_daemon_cli_contract.py
+          tests/test_cross_platform_desktop.py
+          tests/test_backend_client_contract.py
+          tests/test_desktop_work_order_contract.py
           tests/test_executor_core_contract.py
           tests/test_desktop_os_contract.py
           tests/test_desktop_operator_contract.py
+          tests/test_safety_policy_write_gate.py
+          tests/test_capability_spec_contract.py
+          tests/test_execution_scheduler_contract.py
 
   installer-contracts:
     name: installer-contracts
