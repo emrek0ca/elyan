@@ -65,6 +65,9 @@ test("desktop materialization prompt keeps research queries public and writer ar
   assert.match(fewShots, /"content":"Okunan veri uzerinden analiz raporu hazirla\.\\n\\nVeri: \{\{steps\.s1\.output\}\}"/);
   assert.match(fewShots, /Student research \+ presentation/);
   assert.match(fewShots, /quantum annealing vs classical optimization explanation examples/);
+  assert.match(fewShots, /Research \+ spreadsheet/);
+  assert.match(fewShots, /"capability":"spreadsheet_write"/);
+  assert.match(fewShots, /"KDV tutari","\{\{steps\.s1\.output\}\}"/);
   assert.match(fewShots, /Optimization decision support/);
   assert.match(fewShots, /quantum_model_problem/);
   assert.match(fewShots, /quantum_run_experiment/);
@@ -78,6 +81,23 @@ test("desktop materialization prompt keeps research queries public and writer ar
 
   assert.match(prompt, /Do not pass the full user goal, private case facts, file summaries, or writing instructions as the query/);
   assert.match(prompt, /preserve private case\/test\/project facts in writer args/);
+});
+
+test("desktop materialization prompt teaches output artifact target selection", () => {
+  const prompt = buildPlanningPrompt(
+    workOrder(
+      "Öğrenci gibi çalış. Kuantum annealing konusunu araştır ve 5 sayfalık sunum hazırla.",
+      ["web_research", "presentation_write", "document_write", "spreadsheet_write"],
+    ),
+    ["web_research", "presentation_write", "document_write", "spreadsheet_write"],
+  );
+
+  assert.match(prompt, /Excel\/table\/spreadsheet\/xlsx -> spreadsheet_write/);
+  assert.match(prompt, /presentation\/slides\/pptx -> presentation_write/);
+  assert.match(prompt, /Word\/report\/petition\/document\/docx -> document_write/);
+  assert.match(prompt, /Do not use document_write for a requested presentation or spreadsheet/);
+  assert.match(prompt, /For presentation_write, provide a concrete title and prompt\/content that consumes research\/read outputs/);
+  assert.match(prompt, /For spreadsheet_write, provide concrete rows\/sheets/);
 });
 
 test("desktop materialization prompt teaches private read then writer handoff", () => {
