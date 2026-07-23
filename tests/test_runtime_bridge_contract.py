@@ -10580,6 +10580,12 @@ def test_live_progress_reports_cancelled_terminal_status(
     assert payload["executionTrace"]["stopReason"] == "execution_cancelled"
     assert payload["result"]["blocks"][0]["status"] == "canceled"
     assert payload["result"]["blocks"][0]["stopReason"] == "execution_cancelled"
+    assert payload["notification"] == {
+        "type": "task_terminal",
+        "status": "canceled",
+        "title": "Görev iptal edildi",
+        "body": "Görev iptal edildi.",
+    }
 
 
 def test_ws_cancel_reaches_copied_task_scope_and_discards_late_worker_success(
@@ -10657,6 +10663,8 @@ def test_ws_cancel_before_scope_prevents_remote_task_execution(
 
     assert result["status"] == "canceled"
     assert result["error"]["code"] == "TASK_CANCELLED"
+    assert result["notification"]["status"] == "canceled"
+    assert result["notification"]["title"] == "Görev iptal edildi"
     assert executed == []
     inbox_item = state_store.get_task_inbox_item("task-cancel-before-scope")
     assert inbox_item is not None

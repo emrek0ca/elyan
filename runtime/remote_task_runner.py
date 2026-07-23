@@ -768,6 +768,12 @@ class RemoteTaskRunner:
             "taskId": task_id,
             "ok": False,
             "status": "canceled",
+            "notification": {
+                "type": "task_terminal",
+                "status": "canceled",
+                "title": "Görev iptal edildi",
+                "body": "Görev iptal edildi.",
+            },
             "error": {
                 "code": "TASK_CANCELLED",
                 "message": "Görev iptal edildi.",

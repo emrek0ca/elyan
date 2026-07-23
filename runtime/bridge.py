@@ -12193,6 +12193,23 @@ class RuntimeBridge:
                 "live": True,
             },
         }
+        if payload_status in {"completed", "failed", "canceled"}:
+            notification_title = {
+                "completed": "Görev tamamlandı",
+                "failed": "Görev tamamlanamadı",
+                "canceled": "Görev iptal edildi",
+            }.get(payload_status, "Görev durumu güncellendi")
+            notification_body = (
+                "Görev iptal edildi."
+                if payload_status == "canceled"
+                else payload["summary"]
+            )
+            payload["notification"] = {
+                "type": "task_terminal",
+                "status": payload_status,
+                "title": notification_title,
+                "body": str(notification_body or notification_title)[:240],
+            }
         try:
             self._report_runtime_task_status(task_id, payload)
         except Exception:
