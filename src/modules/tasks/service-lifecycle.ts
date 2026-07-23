@@ -57,6 +57,7 @@ const trustedDesktopReadOnlyCapabilities = new Set([
   "retrieve_context",
   "speech_to_text",
   "sys_info",
+  "text_analyze",
   "web_research",
 ]);
 

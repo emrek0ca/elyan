@@ -159,6 +159,8 @@ test("shouldAutoApproveDesktopTask trusts only backend mode plus explicit idempo
       capability: "document_write",
       steps: [
         { capability: "web_research" },
+        { capability: "math_solve" },
+        { capability: "text_analyze" },
         { capability: "document_write" },
       ],
     },
