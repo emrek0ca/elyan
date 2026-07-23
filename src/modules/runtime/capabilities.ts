@@ -76,7 +76,14 @@ function categorizeCapability(capability: string): RuntimeCapabilityCategory {
     return "file";
   }
 
-  if (capability.startsWith("document.")) {
+  if (
+    capability.startsWith("document.") ||
+    capability.startsWith("spreadsheet.") ||
+    capability.startsWith("presentation.") ||
+    capability === "text.analyze" ||
+    capability === "data.analyze" ||
+    capability === "web.research"
+  ) {
     return "document";
   }
 
@@ -84,7 +91,7 @@ function categorizeCapability(capability: string): RuntimeCapabilityCategory {
     return "model";
   }
 
-  if (capability.startsWith("quantum.")) {
+  if (capability === "math.solve" || capability.startsWith("quantum.")) {
     return "quantum";
   }
 
