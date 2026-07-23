@@ -22,8 +22,14 @@ from typing import Any
 
 from runtime.agent_planning import build_agent_plan
 from runtime.capability_registry import TOOL_DECLARATIONS, capability_metadata, capability_names
+from runtime.capability_shortlist import MIN_SHORTLIST, shortlist_capabilities
 
 PLAN_CONTRACT = "elyan.plan.v2"
+
+# Backend planlama endpoint'inin kabul ettiği azami istek gövdesi. Normal ve
+# repair payload'ları bu sınırın ALTINDA kalmak zorundadır; planning_prompt()
+# bunu deterministik budamayla garanti eder (bkz. _fit_envelope).
+MAX_PLANNER_PAYLOAD_CHARS = 48_000
 GOAL_CONTRACT = "elyan.goal_contract.v1"
 # Cowork bağlam zarfı sözleşmesi: server_brain'e sohbet/cowork turunda giden
 # yapılandırılmış (düz metin değil) bağlam. Sorgu labeled alanda, bağlam metadata
@@ -119,14 +125,19 @@ def _declaration_index() -> dict[str, dict[str, Any]]:
     return {str(decl.get("name", "")): decl for decl in TOOL_DECLARATIONS if isinstance(decl, dict)}
 
 
-def tool_catalog(*, platform: str = "") -> list[dict[str, Any]]:
+def tool_catalog(*, platform: str = "", allowed: list[str] | set[str] | tuple[str, ...] | None = None) -> list[dict[str, Any]]:
     """Sunucu beynine gönderilen araç kataloğu: her araç JSON Schema
     parametreleri + yürütme meta verisiyle (yan etki, onay, platform).
 
     Katalog statik TOOL_DECLARATIONS'tan üretilir → platform başına önbelleğe
-    alınır (her planlama çağrısında yeniden kurulmaz; salt-okunur tüketilir)."""
+    alınır (her planlama çağrısında yeniden kurulmaz; salt-okunur tüketilir).
+    `allowed` verilirse yalnız o adlar döner (deterministik shortlist)."""
     platform = platform or ("darwin" if sys.platform == "darwin" else sys.platform)
-    return _tool_catalog_cached(platform)
+    catalog = _tool_catalog_cached(platform)
+    if allowed is None:
+        return catalog
+    allowed_names = {str(item or "").strip() for item in allowed if str(item or "").strip()}
+    return [entry for entry in catalog if entry.get("name") in allowed_names]
 
 
 @lru_cache(maxsize=8)
@@ -467,6 +478,16 @@ def build_planning_request(
     if goal_context:
         context["executionGoal"] = goal_context
 
+    # P0: 77 aracın tamamı yerine deterministik shortlist (8–15 araç şeması).
+    # İş emri/hint'in açıkça istediği yetenekler her zaman bütçeye dahildir.
+    known_names = {str(entry.get("name", "") or "") for entry in tool_catalog(platform=platform)}
+    hinted = _referenced_capabilities({"hint": planner_hint, "goal": goal_context})
+    shortlist = shortlist_capabilities(
+        str(text or ""),
+        known_capabilities=known_names,
+        extra_capabilities=sorted(hinted & known_names),
+    )
+
     return {
         "type": "elyan.plan.request",
         "contract": PLAN_CONTRACT,
@@ -477,7 +498,7 @@ def build_planning_request(
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
         },
         "context": context,
-        "toolCatalog": tool_catalog(platform=platform),
+        "toolCatalog": tool_catalog(platform=platform, allowed=shortlist),
         "rules": {
             "role": "planner_only",
             "execution": "desktop_runtime",
@@ -546,9 +567,111 @@ def build_planning_request(
     }
 
 
+def _referenced_capabilities(value: Any, *, depth: int = 0) -> set[str]:
+    """Hint/goal ağacındaki `capability`/`requiredCapabilities` alanlarından
+    yetenek adlarını çıkarır (shortlist'e zorunlu dahil edilirler)."""
+    names: set[str] = set()
+    if depth >= 6:
+        return names
+    if isinstance(value, dict):
+        raw = value.get("capability")
+        if isinstance(raw, str) and raw.strip():
+            names.add(raw.strip())
+        raw_list = value.get("requiredCapabilities")
+        if isinstance(raw_list, list):
+            names.update(str(item).strip() for item in raw_list if str(item or "").strip())
+        raw_scope = value.get("capabilityScope")
+        if isinstance(raw_scope, list):
+            names.update(str(item).strip() for item in raw_scope if str(item or "").strip())
+        for item in value.values():
+            names |= _referenced_capabilities(item, depth=depth + 1)
+    elif isinstance(value, list):
+        for item in value[:32]:
+            names |= _referenced_capabilities(item, depth=depth + 1)
+    return names
+
+
+def _compact_catalog_entry(entry: dict[str, Any], *, drop_examples: bool, drop_usage: bool, description_limit: int) -> dict[str, Any]:
+    compact = dict(entry)
+    if drop_examples:
+        compact.pop("examples", None)
+    if drop_usage:
+        compact.pop("usage", None)
+    description = str(compact.get("description", "") or "")
+    if len(description) > description_limit:
+        compact["description"] = description[:description_limit]
+    return compact
+
+
+def _fit_envelope(request_envelope: dict[str, Any], *, budget: int = MAX_PLANNER_PAYLOAD_CHARS) -> dict[str, Any]:
+    """Zarfı 48k karakter bütçesine DETERMİNİSTİK budamayla sığdırır.
+
+    Sıra: bağlam kısaltma → araç örnekleri/rehberi → geçersiz yanıt kırpma →
+    katalog açıklamalarını kısaltma → bağlamı tamamen düşürme. JSON yapısı hep
+    geçerli kalır; asla ham metin kesilmez."""
+
+    def _encoded_length(envelope: dict[str, Any]) -> int:
+        return len(json.dumps(envelope, ensure_ascii=False))
+
+    envelope = dict(request_envelope)
+    if _encoded_length(envelope) <= budget:
+        return envelope
+
+    context = envelope.get("context")
+    if isinstance(context, dict):
+        trimmed_context = dict(context)
+        turns = trimmed_context.get("conversationTurns")
+        if isinstance(turns, list) and len(turns) > 6:
+            trimmed_context["conversationTurns"] = turns[-6:]
+        retrieval = trimmed_context.get("retrieval")
+        if isinstance(retrieval, list) and len(retrieval) > 3:
+            trimmed_context["retrieval"] = retrieval[:3]
+        trimmed_context = _bounded_json(trimmed_context)
+        envelope["context"] = trimmed_context
+        if _encoded_length(envelope) <= budget:
+            return envelope
+
+    catalog = envelope.get("toolCatalog")
+    if isinstance(catalog, list):
+        for drop_examples, drop_usage, description_limit in (
+            (True, False, 400),
+            (True, True, 200),
+            (True, True, 96),
+        ):
+            envelope["toolCatalog"] = [
+                _compact_catalog_entry(entry, drop_examples=drop_examples, drop_usage=drop_usage, description_limit=description_limit)
+                for entry in catalog
+                if isinstance(entry, dict)
+            ]
+            if _encoded_length(envelope) <= budget:
+                return envelope
+
+    invalid = envelope.get("invalidResponse")
+    if invalid is not None:
+        envelope["invalidResponse"] = _bounded_json(
+            invalid if isinstance(invalid, (dict, list)) else str(invalid)[:1200],
+            depth=2,
+        )
+        if _encoded_length(envelope) <= budget:
+            return envelope
+
+    envelope["context"] = {}
+    if _encoded_length(envelope) <= budget:
+        return envelope
+
+    # Son çare: katalog boyutunu deterministik olarak MIN_SHORTLIST'e indir.
+    catalog = envelope.get("toolCatalog")
+    if isinstance(catalog, list) and len(catalog) > MIN_SHORTLIST:
+        envelope["toolCatalog"] = catalog[:MIN_SHORTLIST]
+    return envelope
+
+
 def planning_prompt(request_envelope: dict[str, Any]) -> str:
-    """Model API'lerine gönderilen ham içerik — çıplak JSON, süsleme yok."""
-    return json.dumps(request_envelope, ensure_ascii=False)
+    """Model API'lerine gönderilen ham içerik — çıplak JSON, süsleme yok.
+
+    Payload backend'in 48.000 karakter sınırını asla aşmaz (deterministik
+    budama; bkz. _fit_envelope)."""
+    return json.dumps(_fit_envelope(request_envelope), ensure_ascii=False)
 
 
 def intelligence_context(state: dict[str, Any]) -> list[dict[str, Any]]:

@@ -387,6 +387,42 @@ def test_planning_envelope_includes_native_desktop_truth_and_intelligence(
     assert envelope["responseSchema"]["properties"]["contract"]["const"] == "elyan.plan.v2"
 
 
+@pytest.mark.parametrize(
+    ("prompt", "required_tools"),
+    [
+        (
+            "Avukat gibi çalış. Bu davayı analiz et, mevzuatı araştır ve savunma dilekçesi hazırla.",
+            {"web_research", "text_analyze", "document_write"},
+        ),
+        (
+            "Doktor gibi çalış. Bu tahlilleri yorumla ve hasta için rapor çıkar.",
+            {"document_read", "ocr_read", "text_analyze", "document_write"},
+        ),
+        (
+            "Muhasebeci gibi çalış. 12000 TL ve 8500 TL faturanın yüzde 20 KDV tutarını hesapla, araştır ve rapor belgesi hazırla.",
+            {"math_solve", "web_research", "document_write", "spreadsheet_write"},
+        ),
+        (
+            "Mühendis/öğrenci: kapasite kısıtlı optimizasyon problemini karar değişkenleri ve amaç fonksiyonuyla çöz ve raporla.",
+            {"quantum_model_problem", "quantum_run_experiment", "quantum_compare_classical", "quantum_generate_report"},
+        ),
+    ],
+)
+def test_structured_planning_shortlist_covers_professional_tool_families(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    prompt: str,
+    required_tools: set[str],
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+
+    envelope = bridge._build_structured_planning_request(state_store.snapshot(), prompt)
+    catalog_names = {str(item.get("name", "") or "") for item in envelope["toolCatalog"]}
+
+    assert required_tools <= catalog_names
+    assert len(envelope["toolCatalog"]) <= 15
+
+
 def test_runtime_status_includes_operator_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -876,11 +912,15 @@ def test_force_structured_planning_builds_calculation_research_writer_chain(
     assert [step["capability"] for step in steps] == [
         "math_solve",
         "web_research",
+        "text_analyze",
         "document_write",
     ]
     assert steps[0]["args"]["expression"] == "(12000+8500)*0.2"
     assert steps[1]["args"]["query"] == "KDV kurallarını"
     assert steps[2]["dependsOn"] == ["calculate", "research"]
+    assert steps[2]["args"]["mode"] == "accounting"
+    assert steps[3]["dependsOn"] == ["analyze"]
+    assert steps[3]["args"]["sourceContext"] == "Analiz bağlamı: {{steps.analyze.output}}"
 
 
 def test_professional_medical_workflow_reads_then_reports() -> None:
