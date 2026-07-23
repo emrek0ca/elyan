@@ -2267,6 +2267,22 @@ def _spreadsheet_payload(args: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _presentation_payload(args: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "prompt": _first_non_empty_text(args, "prompt", "content", "summary", "description", "text", "outline"),
+        "title": _first_non_empty_text(args, "title", "name", "deckTitle", "deck_title"),
+        "slides": _first_list(args, "slides", "pages"),
+        "blocks": _first_list(args, "blocks", "contentBlocks", "content_blocks"),
+    }
+    deck = _first_dict(args, "deck", "presentation", "slideshow")
+    if deck:
+        payload["prompt"] = payload["prompt"] or _first_non_empty_text(deck, "prompt", "content", "summary", "description", "text", "outline")
+        payload["title"] = payload["title"] or _first_non_empty_text(deck, "title", "name", "deckTitle", "deck_title")
+        payload["slides"] = payload["slides"] or _first_list(deck, "slides", "pages")
+        payload["blocks"] = payload["blocks"] or _first_list(deck, "blocks", "contentBlocks", "content_blocks")
+    return payload
+
+
 def _string_from_exception(exc: Exception) -> str:
     return " ".join(str(exc or "").split()).strip()[:160]
 
@@ -2313,6 +2329,20 @@ def _delete_memory(args: dict[str, Any]) -> str:
         str(args.get("category", "") or ""),
         str(args.get("key", "") or ""),
         str(args.get("match_text", "") or ""),
+    )
+
+
+def _run_presentation_write(args: dict[str, Any]) -> Any:
+    payload = _presentation_payload(args)
+    return _load_adapter("presentation_write")(
+        prompt=str(payload.get("prompt", "") or ""),
+        output_path=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
+        title=str(payload.get("title", "") or ""),
+        slides=payload.get("slides"),
+        blocks=payload.get("blocks"),
+        source_context=_writer_source_context(args),
+        overwrite=bool(args.get("overwrite", False)),
+        _selectedPaths=list(args.get("_selectedPaths", []) or []),
     )
 
 
@@ -2625,16 +2655,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             source_context=_writer_source_context(args),
             overwrite=bool(args.get("overwrite", False)),
         ),
-        "presentation_write": lambda args: _load_adapter("presentation_write")(
-            prompt=str(args.get("prompt", "") or ""),
-            output_path=str(args.get("outputPath", "") or args.get("output_path", "") or ""),
-            title=str(args.get("title", "") or ""),
-            slides=args.get("slides") if isinstance(args.get("slides"), list) else None,
-            blocks=args.get("blocks") if isinstance(args.get("blocks"), list) else None,
-            source_context=_writer_source_context(args),
-            overwrite=bool(args.get("overwrite", False)),
-            _selectedPaths=list(args.get("_selectedPaths", []) or []),
-        ),
+        "presentation_write": _run_presentation_write,
         "retrieve_context": lambda args: _load_adapter("retrieve_context")(
             str(args.get("query", "") or ""),
             args.get("sources"),

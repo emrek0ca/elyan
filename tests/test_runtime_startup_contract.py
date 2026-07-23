@@ -1792,6 +1792,42 @@ def test_presentation_write_missing_dependency_fails_safely(
     assert result["error"]["code"] == "DEPENDENCY_UNAVAILABLE"
 
 
+def test_forgiving_presentation_write_accepts_nested_deck_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.presentation_write as presentation_write
+    import runtime.capability_registry as registry
+    from pptx import Presentation
+
+    monkeypatch.setattr(presentation_write, "_workspace_root", lambda: tmp_path)
+
+    result = registry.run_capability(
+        "presentation_write",
+        {
+            "deck": {
+                "title": "Kuantum Annealing Sunumu",
+                "slides": [
+                    {"title": "Problem", "bullets": ["Karar değişkenleri", "Kısıtlar"]},
+                    {"title": "Çözüm", "body": "Klasik ve kuantum-hibrit çözüm karşılaştırıldı."},
+                ],
+            },
+            "outputPath": "decks/annealing.pptx",
+            "_confirmed": True,
+        },
+        state_store.snapshot(),
+    )
+
+    output_path = tmp_path / "decks" / "annealing.pptx"
+    assert result["ok"] is True
+    assert output_path.exists()
+    assert result["result"]["kind"] == "presentation_write"
+    assert result["result"]["title"] == "Kuantum Annealing Sunumu"
+    assert result["result"]["slideCount"] >= 3
+    assert len(Presentation(str(output_path)).slides) >= 3
+
+
 def test_retrieve_context_uses_lexical_fallback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
