@@ -56,6 +56,9 @@ test("buildDesktopWorkOrder turns a mobile dispatch prompt into typed execution 
   assert.equal(workOrder.requiredCapabilities.includes("browser_control"), true);
   assert.equal(workOrder.planPreview.steps.some((step) => step.capability === "browser_control"), true);
   assert.equal(workOrder.expectedOutputs.some((output) => output.kind === "chat_result"), true);
+  assert.equal(workOrder.workType, "screen_action");
+  assert.equal(workOrder.execution.approvalPolicy, "single_full_access_surface");
+  assert.equal(Array.isArray(workOrder.planPreview.liveNarrationPlan), true);
 });
 
 test("buildDesktopWorkOrder keeps private file requests local and evidence-gated", () => {

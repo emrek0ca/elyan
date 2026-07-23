@@ -7,6 +7,9 @@ import {
   buildTaskDispatchLeaseAckUpdate,
   buildTaskRuntimeOwnershipUpdate,
   buildTaskRuntimeUpdate,
+  isApprovalAlreadyResolved,
+  isApprovalRequestExpired,
+  normalizeTaskApprovalRequest,
   shouldAutoApproveDesktopTask,
 } from "./service-lifecycle.js";
 
@@ -224,8 +227,36 @@ test("buildTaskApprovalResolution merges the existing request and appends the re
       approved: true,
       notes: "Approved for execution",
       resolvedAt: now.toISOString(),
+      revision: 1,
+      approvalKey: null,
     },
   });
+});
+
+test("normalizeTaskApprovalRequest creates a single expiring full-access surface", () => {
+  const now = new Date("2030-01-01T00:00:00.000Z");
+  const normalized = normalizeTaskApprovalRequest(
+    {
+      permission: "write",
+      idempotency: "idempotent_write",
+      capability: "document_write",
+    },
+    { taskId: "task-1", now },
+  );
+
+  assert.equal(normalized.approvalKey, "task-1:1");
+  assert.equal(normalized.revision, 1);
+  assert.equal(normalized.permissionSurface, "full_computer_access");
+  assert.equal(normalized.surface, "full_computer_access");
+  assert.equal(normalized.expiresAt, "2030-01-01T00:10:00.000Z");
+  assert.equal(isApprovalRequestExpired(normalized, now), false);
+  assert.equal(isApprovalRequestExpired(normalized, new Date("2030-01-01T00:10:00.001Z")), true);
+});
+
+test("isApprovalAlreadyResolved detects approved and rejected resolutions", () => {
+  assert.equal(isApprovalAlreadyResolved({ resolution: { approved: true } }), true);
+  assert.equal(isApprovalAlreadyResolved({ resolution: { approved: false } }), true);
+  assert.equal(isApprovalAlreadyResolved({ resolution: { state: "pending" } }), false);
 });
 
 test("buildTaskApprovalResumeUpdate keeps approved tasks waiting for runtime resume", () => {
@@ -254,10 +285,19 @@ test("buildTaskApprovalResumeUpdate keeps approved tasks waiting for runtime res
     title: "Mail gönderilsin mi?",
     message: "Alıcı: ali@example.com",
     summary: "Mail gönderimi onay bekliyor.",
+    source: "desktop_runtime",
+    approvalKey: "task:1",
+    revision: 1,
+    expiresAt: "2030-01-01T00:10:00.000Z",
+    surface: "full_computer_access",
+    permissionSurface: "full_computer_access",
+    permissionSummary: "Elyan bu görevi tamamlamak için bilgisayar erişimini tek onay altında kullanacak.",
     resolution: {
       approved: true,
       notes: "Approved for execution",
       resolvedAt: now.toISOString(),
+      revision: 1,
+      approvalKey: "task:1",
     },
   });
 });

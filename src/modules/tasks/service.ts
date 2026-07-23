@@ -192,13 +192,20 @@ import {
 } from "./service-helpers.js";
 import {
   TASK_DISPATCH_LEASE_MS,
+  TASK_APPROVAL_TTL_MS,
+  MAX_ACTIVE_USER_APPROVALS,
+  MAX_TASK_DISPATCH_ATTEMPTS,
   buildTaskApprovalResumeUpdate,
   buildTaskCancellationUpdate,
+  buildTaskDispatchExhaustedUpdate,
   buildTaskDispatchLeaseAckUpdate,
   buildTaskDispatchLeaseReleaseUpdate,
   buildTaskDispatchLeaseUpdate,
   buildTaskRuntimeOwnershipUpdate,
   buildTaskRuntimeUpdate,
+  isApprovalAlreadyResolved,
+  isApprovalRequestExpired,
+  normalizeTaskApprovalRequest,
   shouldAutoApproveDesktopTask,
 } from "./service-lifecycle.js";
 import {
@@ -3280,6 +3287,10 @@ export async function reconcileStaleRuntimeTasks(
           eq(tasks.status, "running" as TaskStatus),
           lt(tasks.updatedAt, cutoff),
         ),
+        and(
+          eq(tasks.status, "waiting_approval" as TaskStatus),
+          lt(tasks.updatedAt, new Date(now.getTime() - TASK_APPROVAL_TTL_MS)),
+        ),
       ),
     ];
 
@@ -3312,7 +3323,98 @@ export async function reconcileStaleRuntimeTasks(
       const reason =
         task.status === "running"
           ? "runtime_execution_stale"
-          : "dispatch_lease_expired";
+          : task.status === "waiting_approval"
+            ? "approval_expired"
+            : "dispatch_lease_expired";
+
+      if (task.status === "waiting_approval") {
+        const message = "Onay süresi dolduğu için görev kapatıldı.";
+        const rows = await app.db
+          .update(tasks)
+          .set(buildTaskCancellationUpdate(now))
+          .where(eq(tasks.id, task.id))
+          .returning();
+        const canceledTask = rows[0] ?? {
+          ...task,
+          status: "canceled" as TaskStatus,
+          summary: message,
+          error: message,
+          canceledAt: now,
+          updatedAt: now,
+          queuePosition: 0,
+        };
+        await insertTaskEvent(app, {
+          taskId: canceledTask.id,
+          userId: canceledTask.userId,
+          status: "canceled",
+          message,
+          payload: {
+            reconciled: true,
+            reason,
+            targetStatus,
+            lease,
+          },
+        });
+        await publishTaskEvent(app, canceledTask, "task.canceled", {
+          task: shapeTaskFeedItem(canceledTask),
+          reconciled: true,
+          reason,
+          targetStatus,
+          lease,
+        });
+        await syncChatTaskLifecycle(app, {
+          originalTask: task,
+          updatedTask: canceledTask,
+          message,
+        });
+        await reliability?.clearTaskDispatchLock(canceledTask.id);
+        await releaseChatGenerationAdmission(app, canceledTask.id);
+        reconciled.push(shapeTaskFeedItem(canceledTask));
+        continue;
+      }
+
+      if ((task.dispatchAttemptCount ?? 0) >= MAX_TASK_DISPATCH_ATTEMPTS) {
+        const message = "Desktop görevi birkaç denemeden sonra teslim edilemedi. Lütfen desktop bağlantısını kontrol edip tekrar deneyin.";
+        const rows = await app.db
+          .update(tasks)
+          .set(buildTaskDispatchExhaustedUpdate({ now, message }))
+          .where(eq(tasks.id, task.id))
+          .returning();
+        const failedTask = rows[0] ?? {
+          ...task,
+          ...buildTaskDispatchExhaustedUpdate({ now, message }),
+        };
+        await insertTaskEvent(app, {
+          taskId: failedTask.id,
+          userId: failedTask.userId,
+          status: "failed",
+          message,
+          payload: {
+            reconciled: true,
+            reason: "dispatch_attempt_budget_exhausted",
+            previousReason: reason,
+            targetStatus,
+            lease,
+            attemptCount: task.dispatchAttemptCount ?? 0,
+          },
+        });
+        await publishTaskEvent(app, failedTask, "task.updated", {
+          task: shapeTaskFeedItem(failedTask),
+          reconciled: true,
+          reason: "dispatch_attempt_budget_exhausted",
+          targetStatus,
+          lease,
+        });
+        await syncChatTaskLifecycle(app, {
+          originalTask: task,
+          updatedTask: failedTask,
+          message,
+        });
+        await reliability?.clearTaskDispatchLock(failedTask.id);
+        await releaseChatGenerationAdmission(app, failedTask.id);
+        reconciled.push(shapeTaskFeedItem(failedTask));
+        continue;
+      }
 
       if (task.status === "running" && isSharedBrainChatTask(task)) {
         const message =
@@ -7386,7 +7488,17 @@ export async function listTasks(
     .orderBy(desc(tasks.createdAt))
     .limit(input.limit);
 
-  return rows.map((task) => shapeTaskFeedItem(task));
+  const now = new Date();
+  let visibleApprovals = 0;
+  return rows
+    .filter((task) => {
+      if (task.status !== "waiting_approval") return true;
+      if (isApprovalAlreadyResolved(task.approvalRequest)) return false;
+      if (isApprovalRequestExpired(task.approvalRequest, now)) return false;
+      visibleApprovals += 1;
+      return visibleApprovals <= MAX_ACTIVE_USER_APPROVALS;
+    })
+    .map((task) => shapeTaskFeedItem(task));
 }
 
 export async function getTaskDetail(
@@ -7691,6 +7803,23 @@ export async function resolveTaskApproval(
   if (task.status !== "waiting_approval") {
     throw conflict("Task is not waiting for approval");
   }
+  if (isApprovalAlreadyResolved(task.approvalRequest)) {
+    const resolution = readRecord(readRecord(task.approvalRequest)?.resolution);
+    return {
+      taskId: task.id,
+      status: task.status,
+      approved: resolution?.approved === true,
+      duplicate: true,
+      task: shapeTaskFeedItem(task),
+    };
+  }
+  if (isApprovalRequestExpired(task.approvalRequest)) {
+    return cancelTask(app, task.id, task.userId, {
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      requestId: input.requestId,
+    });
+  }
 
   if (!input.approved) {
     return cancelTask(app, task.id, task.userId, {
@@ -7703,10 +7832,29 @@ export async function resolveTaskApproval(
   const approvalRows = await app.db
     .update(tasks)
     .set(buildTaskApprovalResumeUpdate(task, { notes: input.notes }))
-    .where(eq(tasks.id, task.id))
+    .where(
+      and(
+        eq(tasks.id, task.id),
+        eq(tasks.status, "waiting_approval" as TaskStatus),
+      ),
+    )
     .returning();
 
-  const updatedTask = approvalRows[0] ?? task;
+  const updatedTask = approvalRows[0];
+  if (!updatedTask) {
+    const latest = await getTaskForUser(app, input.taskId, input.userId);
+    if (isApprovalAlreadyResolved(latest.approvalRequest)) {
+      const resolution = readRecord(readRecord(latest.approvalRequest)?.resolution);
+      return {
+        taskId: latest.id,
+        status: latest.status,
+        approved: resolution?.approved === true,
+        duplicate: true,
+        task: shapeTaskFeedItem(latest),
+      };
+    }
+    throw conflict("Task approval changed before resolution");
+  }
 
   await insertTaskEvent(app, {
     taskId: task.id,
@@ -8077,6 +8225,11 @@ export async function updateTaskFromRuntime(
   }
   const ownedTask = await ensureTaskRuntimeOwnership(app, task, auth);
   assertTaskTransition(ownedTask.status, input.status);
+  const normalizedApprovalRequest = input.status === "waiting_approval" && input.approvalRequest
+    ? normalizeTaskApprovalRequest(input.approvalRequest, {
+        taskId: ownedTask.id,
+      })
+    : input.approvalRequest;
   const runtimeResult = input.operator
     ? {
         ...(input.result ?? {}),
@@ -8084,14 +8237,14 @@ export async function updateTaskFromRuntime(
       }
     : input.result;
   const approvalRequestBlob =
-    input.approvalRequest === undefined
+    normalizedApprovalRequest === undefined
       ? null
       : await storeTaskJsonBlob(app, {
           taskId: ownedTask.id,
           userId: ownedTask.userId,
           slot: "approval_request",
           scope: "task_approval_request",
-          value: input.approvalRequest,
+          value: normalizedApprovalRequest,
         });
   const runtimeResultBlob =
     runtimeResult === undefined
@@ -8110,10 +8263,10 @@ export async function updateTaskFromRuntime(
       runtimeConnectionId: auth.connectionId,
       summary: input.summary,
       error: input.error,
-      approvalRequest: input.approvalRequest,
+      approvalRequest: normalizedApprovalRequest,
       result: runtimeResult,
     }),
-    ...(input.approvalRequest !== undefined
+    ...(normalizedApprovalRequest !== undefined
       ? { approvalRequestBlobId: approvalRequestBlob?.blobId ?? null }
       : {}),
     ...(runtimeResult !== undefined
@@ -8142,7 +8295,7 @@ export async function updateTaskFromRuntime(
   // Backend-owned user policy is read at the approval boundary, so a mode
   // change takes effect mid-session. Client metadata is never authority.
   const existingApprovalRequest = readRecord(
-    input.approvalRequest ?? updatedTask.approvalRequest,
+    normalizedApprovalRequest ?? updatedTask.approvalRequest,
   );
   const existingApprovalResolution = readRecord(
     existingApprovalRequest?.resolution,
@@ -8182,6 +8335,7 @@ export async function updateTaskFromRuntime(
       summary: input.summary,
       error: input.error,
       approvalRequest: input.approvalRequest,
+      normalizedApprovalRequest,
       operator: input.operator,
       artifactCount: shapedArtifacts.length,
       artifacts: shapedArtifacts,

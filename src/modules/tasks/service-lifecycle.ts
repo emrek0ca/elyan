@@ -15,11 +15,88 @@ export function buildTaskRuntimeOwnershipUpdate(input: { runtimeConnectionId: st
 }
 
 export const TASK_DISPATCH_LEASE_MS = 45_000;
+export const TASK_APPROVAL_TTL_MS = 10 * 60_000;
+export const MAX_ACTIVE_USER_APPROVALS = 8;
+export const MAX_TASK_DISPATCH_ATTEMPTS = 5;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+export function approvalRequestRevision(approvalRequest: unknown): number {
+  const request = readRecord(approvalRequest);
+  return Math.max(1, Math.floor(readNumber(request?.revision) ?? 1));
+}
+
+export function approvalRequestKey(approvalRequest: unknown): string {
+  const request = readRecord(approvalRequest);
+  return readString(request?.approvalKey) || readString(request?.token);
+}
+
+export function approvalRequestExpiresAt(
+  approvalRequest: unknown,
+  now: Date = new Date(),
+): string {
+  const request = readRecord(approvalRequest);
+  const existing = readString(request?.expiresAt);
+  if (existing) return existing;
+  return new Date(now.getTime() + TASK_APPROVAL_TTL_MS).toISOString();
+}
+
+export function isApprovalRequestExpired(
+  approvalRequest: unknown,
+  now: Date = new Date(),
+): boolean {
+  const expiresAt = readString(readRecord(approvalRequest)?.expiresAt);
+  if (!expiresAt) return false;
+  const parsed = Date.parse(expiresAt);
+  return Number.isFinite(parsed) && parsed <= now.getTime();
+}
+
+export function isApprovalAlreadyResolved(approvalRequest: unknown): boolean {
+  const resolution = readRecord(readRecord(approvalRequest)?.resolution);
+  return resolution?.approved === true || resolution?.approved === false;
+}
+
+export function normalizeTaskApprovalRequest(
+  approvalRequest: unknown,
+  input: {
+    taskId: string;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const request = readRecord(approvalRequest) ?? {};
+  const revision = approvalRequestRevision(request);
+  const existingKey = approvalRequestKey(request);
+  const taskKey = readString(input.taskId) || "task";
+  return {
+    ...request,
+    source: readString(request.source) || "desktop_runtime",
+    approvalKey: existingKey || `${taskKey}:${revision}`,
+    revision,
+    expiresAt: approvalRequestExpiresAt(request, now),
+    surface: "full_computer_access",
+    permissionSurface: "full_computer_access",
+    permissionSummary:
+      readString(request.permissionSummary) ||
+      "Elyan bu görevi tamamlamak için bilgisayar erişimini tek onay altında kullanacak.",
+  };
 }
 
 const trustedDesktopIdempotentWriteCapabilities = new Set([
@@ -194,6 +271,29 @@ export function buildTaskDispatchLeaseReleaseUpdate(
   } satisfies Partial<typeof tasks.$inferInsert>;
 }
 
+export function buildTaskDispatchExhaustedUpdate(
+  input: {
+    now?: Date;
+    message?: string;
+  } = {},
+) {
+  const now = input.now ?? new Date();
+  const message = input.message ?? "Desktop görevi birkaç denemeden sonra teslim edilemedi.";
+  return {
+    status: "failed" as TaskStatus,
+    summary: message,
+    error: message,
+    completedAt: now,
+    updatedAt: now,
+    queuePosition: 0,
+    dispatchLeaseId: null,
+    dispatchLeaseIssuedAt: null,
+    dispatchLeaseExpiresAt: null,
+    dispatchAckAt: null,
+    runtimeConnectionId: null,
+  } satisfies Partial<typeof tasks.$inferInsert>;
+}
+
 export function buildTaskCancellationUpdate(now = new Date()) {
   return {
     status: "canceled" as TaskStatus,
@@ -206,14 +306,17 @@ export function buildTaskCancellationUpdate(now = new Date()) {
 export function buildTaskApprovalResolution(
   approvalRequest: unknown,
   input: {
+    approved?: boolean;
     notes?: string;
     now?: Date;
   } = {},
 ) {
   const resolution = {
-    approved: true,
+    approved: input.approved ?? true,
     notes: input.notes ?? null,
     resolvedAt: (input.now ?? new Date()).toISOString(),
+    revision: approvalRequestRevision(approvalRequest),
+    approvalKey: approvalRequestKey(approvalRequest) || null,
   };
 
   if (approvalRequest && typeof approvalRequest === "object" && !Array.isArray(approvalRequest)) {
@@ -230,6 +333,7 @@ export function buildTaskApprovalResolution(
 
 export function buildTaskApprovalResumeUpdate(
   task: {
+    id?: string;
     startedAt?: Date | null;
     approvalRequest?: unknown;
   },
@@ -239,9 +343,13 @@ export function buildTaskApprovalResumeUpdate(
   } = {},
 ) {
   const now = input.now ?? new Date();
+  const approvalRequest = normalizeTaskApprovalRequest(task.approvalRequest, {
+    taskId: readString(task.id),
+    now,
+  });
   const update: Partial<typeof tasks.$inferInsert> = {
     status: "waiting_approval" as TaskStatus,
-    approvalRequest: buildTaskApprovalResolution(task.approvalRequest, {
+    approvalRequest: buildTaskApprovalResolution(approvalRequest, {
       notes: input.notes,
       now,
     }),

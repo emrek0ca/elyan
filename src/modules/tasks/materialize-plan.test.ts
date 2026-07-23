@@ -55,6 +55,9 @@ test("desktop materialization prompt teaches concrete calculation research write
   assert.match(prompt, /"content":"KDV hesabi: \{\{steps\.s1\.output\}\}\\n\\nArastirma: \{\{steps\.s2\.output\}\}\\n\\nAnaliz: \{\{steps\.s3\.output\}\}"/);
   assert.match(prompt, /tax amount.*\(12000\+8500\)\*0\.20/i);
   assert.match(prompt, /tax-included total.*\(12000\+8500\)\*1\.20/i);
+  assert.match(prompt, /professional chain/);
+  assert.match(prompt, /Full Computer Access/);
+  assert.match(prompt, /verified/i);
 });
 
 test("desktop materialization prompt keeps research queries public and writer args contextual", () => {

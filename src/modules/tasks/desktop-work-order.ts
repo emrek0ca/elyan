@@ -42,6 +42,7 @@ export type DesktopWorkOrder = {
     value: string;
   }>;
   constraints: string[];
+  workType?: "data_workflow" | "screen_action" | "mixed" | "decision_support";
   requiredCapabilities: string[];
   localContextNeeded: string[];
   expectedOutputs: Array<{
@@ -56,7 +57,7 @@ export type DesktopWorkOrder = {
   }>;
   execution: {
     mode: "cowork_dispatch";
-    approvalPolicy: "capability_policy";
+    approvalPolicy: "capability_policy" | "single_full_access_surface";
     maxSteps: number;
   };
   planPreview: {
@@ -74,6 +75,10 @@ export type DesktopWorkOrder = {
     planSource?: "heuristic" | "server_materialized";
     /** Sunucu-materyalize planlarda kanonik yürütme sözleşmesi. */
     contract?: "elyan.compiled_plan.v1";
+    liveNarrationPlan?: Array<{
+      phase: "planning" | "observing" | "executing" | "verifying" | "replanning" | "completed";
+      message: string;
+    }>;
   };
   /** Safe target/evidence only; credentials and raw MCP config never enter a work order. */
   remoteMcp?: RemoteMcpSelectionMetadata;
@@ -789,6 +794,13 @@ export function buildDesktopWorkOrder(input: {
   const entities = extractEntities(message);
   const localContextNeeded = inferLocalContext(message, capabilities);
   const expectedOutputs = inferExpectedOutputs(message, input.understandingEnvelope);
+  const workType: DesktopWorkOrder["workType"] = capabilities.some((capability) => capability.startsWith("quantum_"))
+    ? "decision_support"
+    : capabilities.some((capability) => capability.startsWith("desktop_operator") || capability === "observe_screen" || capability === "browser_control")
+      ? capabilities.some((capability) => ["document_write", "spreadsheet_write", "presentation_write", "text_analyze", "web_research"].includes(capability))
+        ? "mixed"
+        : "screen_action"
+      : "data_workflow";
   const remoteMcpOperation = kind === "remote_mcp"
     ? input.remoteMcpSelection?.operation ?? "unknown"
     : "unknown";
@@ -844,13 +856,14 @@ export function buildDesktopWorkOrder(input: {
     },
     entities,
     constraints,
+    workType,
     requiredCapabilities: capabilities,
     localContextNeeded,
     expectedOutputs,
     verificationRules,
     execution: {
       mode: "cowork_dispatch",
-      approvalPolicy: "capability_policy",
+      approvalPolicy: "single_full_access_surface",
       maxSteps: MAX_WORK_ORDER_STEPS,
     },
     planPreview: {
@@ -870,6 +883,12 @@ export function buildDesktopWorkOrder(input: {
       // Varsayılan: heuristik sentez. Dispatch worker karmaşık görevlerde bunu
       // "server_materialized" ile üzerine yazar (materialize-plan.ts).
       planSource: "heuristic",
+      liveNarrationPlan: [
+        { phase: "planning", message: "Görevi parçalara ayırıyorum." },
+        { phase: "executing", message: "Masaüstünde gerekli adımları yürütüyorum." },
+        { phase: "verifying", message: "Çıktıyı ve kanıtı doğruluyorum." },
+        { phase: "completed", message: "Sonucu kullanıcıya teslim ediyorum." },
+      ],
     },
     ...(kind === "remote_mcp" && input.remoteMcpSelection
       ? { remoteMcp: input.remoteMcpSelection }
