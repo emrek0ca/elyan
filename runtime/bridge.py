@@ -13201,7 +13201,16 @@ class RuntimeBridge:
             if engineering
             else "Öğrenci çalışması hazırla. Bölümler: amaç, adım adım çözüm, önemli kavramlar, kontrol listesi, teslim çıktısı."
         )
-        depends_on = [str(steps[-1].get("id"))] if steps else []
+        depends_on = [
+            str(step.get("id", "") or "").strip()
+            for step in steps
+            if str(step.get("id", "") or "").strip()
+        ]
+        source_context_parts: list[str] = []
+        if any(step.get("id") == "read_input" for step in steps):
+            source_context_parts.append("Okunan özel/veri bağlamı: {{steps.read_input.output}}")
+        if any(step.get("id") == "research" for step in steps):
+            source_context_parts.append("Araştırma bağlamı: {{steps.research.output}}")
         steps.append(
             {
                 "id": "write_report",
@@ -13209,7 +13218,7 @@ class RuntimeBridge:
                 "args": {
                     "prompt": f"{section_prompt}\n\nKullanıcı isteği: {prompt}",
                     "title": report_title,
-                    "sourceContext": "{{steps.research.output}}" if any(step.get("id") == "research" for step in steps) else "",
+                    "sourceContext": "\n\n".join(source_context_parts),
                 },
                 "dependsOn": depends_on,
                 "description": f"{report_title} yazılıp dosya olarak kaydedilecek.",

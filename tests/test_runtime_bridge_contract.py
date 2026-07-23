@@ -830,7 +830,7 @@ def test_professional_legal_workflow_uses_research_then_document() -> None:
     steps, preview = plan
     assert [step["capability"] for step in steps] == ["web_research", "document_write"]
     assert steps[1]["dependsOn"] == ["research"]
-    assert steps[1]["args"]["sourceContext"] == "{{steps.research.output}}"
+    assert steps[1]["args"]["sourceContext"] == "Araştırma bağlamı: {{steps.research.output}}"
     assert preview["planSource"] == "runtime_professional_template"
 
 
@@ -896,7 +896,26 @@ def test_professional_medical_workflow_reads_then_reports() -> None:
     assert [step["capability"] for step in steps] == ["document_read", "document_write"]
     assert steps[0]["args"]["mode"] == "read"
     assert steps[1]["dependsOn"] == ["read_input"]
+    assert steps[1]["args"]["sourceContext"] == "Okunan özel/veri bağlamı: {{steps.read_input.output}}"
     assert preview["privacyClass"] == "local_private"
+
+
+def test_professional_read_research_workflow_feeds_all_context_to_writer() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        "Mühendis gibi çalış. Bu belge metnini analiz et: panel verimi düşük. Güncel kaynak araştır ve teknik rapor hazırla.",
+        {"document_read", "web_research", "document_write"},
+    )
+
+    assert plan is not None
+    steps, _preview = plan
+    assert [step["capability"] for step in steps] == ["document_read", "web_research", "document_write"]
+    assert steps[2]["dependsOn"] == ["read_input", "research"]
+    assert steps[2]["args"]["sourceContext"] == (
+        "Okunan özel/veri bağlamı: {{steps.read_input.output}}\n\n"
+        "Araştırma bağlamı: {{steps.research.output}}"
+    )
 
 
 def test_professional_optimization_workflow_uses_decision_support_pipeline() -> None:
