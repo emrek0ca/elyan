@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
+from actions._write_common import sanitize_xml_text
 from runtime.capability_registry import SafeCapabilityError
 
 
@@ -15,6 +16,60 @@ class ResearchSource:
     title: str
     url: str
     summary: str
+
+
+def _normalise(value: str) -> str:
+    return " ".join(
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("ı", "i")
+        .replace("ğ", "g")
+        .replace("ü", "u")
+        .replace("ş", "s")
+        .replace("ö", "o")
+        .replace("ç", "c")
+        .split()
+    )
+
+
+def _sanitize_search_query(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    searchable = raw
+    for marker in ("Dosya özeti:", "Kullanıcı isteği:", "İstek:", "Context:", "Input:"):
+        marker_index = searchable.lower().find(marker.lower())
+        if marker_index > 0:
+            searchable = searchable[:marker_index].strip()
+            break
+    searchable = re.sub(
+        r"^\s*[^.!?]{2,80}?\s+gibi\s+çal[ıi]ş[.!?]\s*",
+        "",
+        searchable,
+        flags=re.IGNORECASE,
+    ).strip() or searchable
+    patterns = [
+        r"(.+?)\s+(?:hakk[ıi]nda|about)\s+(?:araştırma yap|arastirma yap|araştır|araştir|arastir|research|incele)",
+        r".*?(?:hesapla|evaluate|çöz|coz)\s*[,;]?\s+(.+?)\s+(?:araştır|araştir|arastir|research|incele).*$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s*[,;:]\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s+(?:ve|and)\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s+.+\s+(?:ve|and)\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)(?:\s+(?:analiz et|raporla|rapor et|belgele|haz[ıi]rla|kaydet|özetle|ozetle))?$",
+        r"(?:araştırma yap|arastirma yap|araştır|araştir|arastir|research|incele)\s+(.+?)(?:\s+(?:ve|and)\s+|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, searchable, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = " ".join(match.group(1).split()).strip(" ,.;:")
+        if candidate:
+            searchable = candidate
+            break
+    tokens = searchable.split()
+    if len(tokens) > 18:
+        searchable = " ".join(tokens[:18])
+    return searchable.strip(" ,.;:") or raw
 
 
 def _is_public_http_url(value: str) -> bool:
@@ -149,7 +204,7 @@ def _duckduckgo_search(query: str, limit: int = 5) -> list[tuple[str, str]]:
 
 
 def _summarize(text: str, max_chars: int = 800) -> str:
-    compact = " ".join(str(text or "").split())
+    compact = " ".join(sanitize_xml_text(str(text or "")).split())
     if len(compact) <= max_chars:
         return compact
     return compact[: max_chars - 1].rstrip() + "…"
@@ -166,7 +221,7 @@ def web_research(query: str = "", max_results: int = 4, language_hint: str = "",
         language_hint = str(kwargs.get("languageHint", "") or kwargs.get("language_hint", "") or "")
     if max_results == 4:
         max_results = kwargs.get("maxResults", kwargs.get("max_results", max_results))
-    topic = str(query or "").strip()
+    topic = _sanitize_search_query(str(query or ""))
     if not topic:
         raise SafeCapabilityError(
             "INVALID_ARGUMENT",
@@ -200,6 +255,18 @@ def web_research(query: str = "", max_results: int = 4, language_hint: str = "",
         )
         if len(sources) >= desired_results:
             break
+
+    if not sources and search_results:
+        for title, url in search_results[:desired_results]:
+            if not title or not _is_public_http_url(url):
+                continue
+            sources.append(
+                ResearchSource(
+                    title=title,
+                    url=url,
+                    summary=f"Kaynak bulundu; sayfa içeriği otomatik çıkarılamadı. Başlık: {title}",
+                )
+            )
 
     if not sources:
         raise SafeCapabilityError("WEB_RESEARCH_FAILED", "Araştırma için güvenilir kaynak alınamadı.")

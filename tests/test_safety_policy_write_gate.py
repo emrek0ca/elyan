@@ -47,3 +47,15 @@ def test_permission_tools_use_single_full_access_surface() -> None:
     assert denied.allowed is False
     assert denied.code == "PERMISSION_REQUIRED"
     assert allowed.allowed is True
+
+
+def test_default_output_paths_are_unique(tmp_path) -> None:
+    from actions import _write_common
+
+    root_resolver = lambda: tmp_path
+    first = _write_common.ensure_allowed_output_path("", extension=".docx", hint="rapor", root_resolver=root_resolver)
+    first.write_text("x", encoding="utf-8")
+    second = _write_common.ensure_allowed_output_path("", extension=".docx", hint="rapor", root_resolver=root_resolver)
+
+    assert first.name == "rapor.docx"
+    assert second.name == "rapor-2.docx"

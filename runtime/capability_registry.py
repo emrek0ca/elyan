@@ -1972,11 +1972,9 @@ def _writer_structured_context(payload: dict[str, Any]) -> dict[str, Any]:
             for source in value[:8]:
                 if not isinstance(source, dict):
                     continue
-                title = " ".join(str(source.get("title", "") or "").split())[:220]
-                url = str(source.get("url", "") or "").strip()[:1000]
-                summary = " ".join(
-                    str(source.get("summary", "") or source.get("snippet", "") or "").split()
-                )[:1200]
+                title = _safe_writer_text(source.get("title", ""), 220)
+                url = _safe_writer_text(source.get("url", ""), 1000)
+                summary = _safe_writer_text(source.get("summary", "") or source.get("snippet", ""), 1200)
                 if title or url or summary:
                     cleaned_sources.append({"title": title, "url": url, "summary": summary})
             if cleaned_sources:
@@ -1989,12 +1987,23 @@ def _writer_structured_context(payload: dict[str, Any]) -> dict[str, Any]:
     return structured
 
 
+def _safe_writer_text(value: Any, limit: int = 12000) -> str:
+    cleaned = "".join(
+        char
+        if char in {"\n", "\r", "\t"} or ord(char) >= 32
+        else " "
+        for char in str(value or "")
+    )
+    cleaned = " ".join(cleaned.replace("\ufffd", " ").split())
+    return cleaned[:limit]
+
+
 def _writer_source_context(args: dict[str, Any]) -> str:
     """Yazıcı araçlar (document/spreadsheet/presentation/canvas) için içerik
     bağlamı: açık sourceContext yoksa zincirdeki önceki adımın çıktısına düşer.
     Böylece "araştır ve belgele" gibi çok adımlı planlarda rapor, araştırma
     içeriğiyle dolu üretilir — boş şablon değil."""
-    explicit = str(args.get("sourceContext", "") or args.get("source_context", "") or "").strip()
+    explicit = _safe_writer_text(args.get("sourceContext", "") or args.get("source_context", ""), 12000)
     dependency_results = args.get("_dependencyResults")
     if isinstance(dependency_results, dict) and dependency_results:
         parts: list[str] = []
@@ -2005,29 +2014,29 @@ def _writer_source_context(args: dict[str, Any]) -> str:
             if kind == "document_read":
                 mode = str(payload.get("mode", "read") or "read").strip()
                 if mode == "summary":
-                    readable = str(payload.get("summary", "") or "").strip()
+                    readable = _safe_writer_text(payload.get("summary", ""), 12000)
                 elif mode == "bullets":
                     readable = "\n".join(
-                        f"- {str(item).strip()}"
+                        f"- {_safe_writer_text(item, 1200)}"
                         for item in payload.get("bullets", []) or []
-                        if str(item).strip()
+                        if _safe_writer_text(item, 1200)
                     )
                 else:
-                    readable = str(payload.get("text", "") or payload.get("summary", "") or "").strip()
+                    readable = _safe_writer_text(payload.get("text", "") or payload.get("summary", ""), 12000)
                 if readable:
                     parts.append(readable[:12000])
                     continue
 
             readable_parts: list[str] = []
             for key in ("summary", "text", "body"):
-                value = str(payload.get(key, "") or "").strip()
+                value = _safe_writer_text(payload.get(key, ""), 24000)
                 if value:
                     readable_parts.append(value)
                     break
             bullets = payload.get("bullets")
             if isinstance(bullets, list) and not readable_parts:
                 readable_parts.extend(
-                    f"- {str(item).strip()}" for item in bullets if str(item).strip()
+                    f"- {_safe_writer_text(item, 1200)}" for item in bullets if _safe_writer_text(item, 1200)
                 )
             sources = payload.get("sources")
             if isinstance(sources, list):
@@ -2035,11 +2044,9 @@ def _writer_source_context(args: dict[str, Any]) -> str:
                 for source in sources[:8]:
                     if not isinstance(source, dict):
                         continue
-                    title = str(source.get("title", "") or "").strip()
-                    url = str(source.get("url", "") or "").strip()
-                    summary = " ".join(
-                        str(source.get("summary", "") or source.get("snippet", "") or "").split()
-                    )[:700]
+                    title = _safe_writer_text(source.get("title", ""), 220)
+                    url = _safe_writer_text(source.get("url", ""), 1000)
+                    summary = _safe_writer_text(source.get("summary", "") or source.get("snippet", ""), 700)
                     label = f"{title} - {url}" if title and url else title or url
                     if label:
                         source_lines.append(f"- {label}: {summary}".rstrip(": "))
@@ -2063,13 +2070,13 @@ def _writer_source_context(args: dict[str, Any]) -> str:
     if isinstance(previous, dict):
         parts: list[str] = []
         for key in ("summary", "text", "body", "output"):
-            value = str(previous.get(key, "") or "").strip()
+            value = _safe_writer_text(previous.get(key, ""), 24000)
             if value:
                 parts.append(value)
                 break
         bullets = previous.get("bullets")
         if isinstance(bullets, list):
-            cleaned = [str(item).strip() for item in bullets if str(item).strip()]
+            cleaned = [_safe_writer_text(item, 1200) for item in bullets if _safe_writer_text(item, 1200)]
             if cleaned:
                 parts.append("\n".join(f"- {item}" for item in cleaned))
         sources = previous.get("sources")
@@ -2077,8 +2084,8 @@ def _writer_source_context(args: dict[str, Any]) -> str:
             lines = []
             for source in sources:
                 if isinstance(source, dict):
-                    label = str(source.get("title", "") or source.get("url", "") or "").strip()
-                    snippet = str(source.get("snippet", "") or source.get("summary", "") or "").strip()
+                    label = _safe_writer_text(source.get("title", "") or source.get("url", ""), 1000)
+                    snippet = _safe_writer_text(source.get("snippet", "") or source.get("summary", ""), 700)
                     if label or snippet:
                         lines.append(f"- {label}: {snippet}".rstrip(": "))
             if lines:
@@ -2095,7 +2102,7 @@ def _writer_source_context(args: dict[str, Any]) -> str:
             if explicit:
                 context += "\n\n[Yazım talimatı]\n" + explicit[:12000]
             return context[:60000]
-    previous_output = str(args.get("_previousOutput", "") or "").strip()
+    previous_output = _safe_writer_text(args.get("_previousOutput", ""), 48000)
     if previous_output and explicit:
         return (previous_output[:48000] + "\n\n[Yazım talimatı]\n" + explicit[:12000])[:60000]
     return explicit[:60000] or previous_output[:60000]

@@ -14,7 +14,7 @@ from actions._visual_block_common import (
     table_ensure_width,
     validate_visual_block_paths,
 )
-from actions._write_common import artifact_payload, ensure_allowed_output_path, normalize_source_context
+from actions._write_common import artifact_payload, ensure_allowed_output_path, normalize_source_context, sanitize_xml_text
 from actions.document_read import _ALLOWED_SUFFIXES as _READ_ALLOWED_SUFFIXES
 from actions.document_read import _extract_document_text
 from runtime.capability_registry import SafeCapabilityError
@@ -43,7 +43,7 @@ def _resolve_source_text(
     selected_paths: list[str] | None = None,
 ) -> tuple[str, str]:
     if str(source_context or "").strip():
-        text = str(source_context or "").strip()
+        text = sanitize_xml_text(str(source_context or "").strip(), max_chars=60000)
         return text, normalize_source_context(text)
     if str(source_path or "").strip():
         resolved = ensure_allowed_path(
@@ -53,11 +53,11 @@ def _resolve_source_text(
             root_resolver=_workspace_root,
         )
         extracted, _ = _extract_document_text(resolved)
-        text = str(extracted or "").strip()
+        text = sanitize_xml_text(str(extracted or "").strip(), max_chars=60000)
         if not text:
             raise SafeCapabilityError("EMPTY_DOCUMENT", "Kaynak belgede yazılabilir içerik bulunamadı.")
         return text, resolved.name
-    text = str(prompt or "").strip()
+    text = sanitize_xml_text(str(prompt or "").strip(), max_chars=60000)
     if not text:
         if allow_empty:
             return "", normalize_source_context(source_context or prompt or "structured document")
@@ -124,7 +124,7 @@ def _add_blocks(document: Any, blocks: list[dict[str, Any]], temp_paths: list[Pa
     for block in blocks:
         kind = str(block.get("kind", "") or "").strip().lower()
         if kind == "text":
-            text = str(block.get("text", "") or "").strip()
+            text = sanitize_xml_text(str(block.get("text", "") or "").strip(), max_chars=60000)
             if not text:
                 continue
             level = int(block.get("level", 0) or 0)

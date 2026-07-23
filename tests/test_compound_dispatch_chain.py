@@ -24,6 +24,77 @@ def test_research_then_document_chain() -> None:
     ) == ["web_research", "document_write"]
 
 
+def test_research_writer_with_and_inside_topic_stays_compound() -> None:
+    routed = route_text_to_tool(
+        "Kira uyuşmazlığını ve tahliye davasını araştır ve savunma dilekçesi taslağı hazırla"
+    )
+
+    assert routed is not None
+    assert routed.intent == "compound_task"
+    assert [str(step.get("capability", "")) for step in routed.steps] == [
+        "web_research",
+        "document_write",
+    ]
+    assert routed.steps[0]["args"]["query"] == "Kira uyuşmazlığını ve tahliye davasını"
+
+
+def test_research_analysis_then_report_stays_compound() -> None:
+    routed = route_text_to_tool("Mühendislik projesini araştır analiz et ve rapor hazırla")
+
+    assert routed is not None
+    assert routed.intent == "compound_task"
+    assert [str(step.get("capability", "")) for step in routed.steps] == [
+        "web_research",
+        "document_write",
+    ]
+    assert routed.steps[0]["args"]["query"] == "Mühendislik projesini"
+
+
+def test_accounting_calculation_research_report_chain() -> None:
+    routed = route_text_to_tool(
+        "Muhasebeci gibi çalış. 12000 TL ve 8500 TL hizmet faturası için yüzde 20 KDV hesapla, "
+        "KDV kurallarını araştır ve sonuçları bir rapor belgesi olarak hazırla."
+    )
+
+    assert routed is not None
+    assert routed.intent == "compound_task"
+    assert [str(step.get("capability", "")) for step in routed.steps] == [
+        "math_solve",
+        "web_research",
+        "document_write",
+    ]
+    assert routed.steps[0]["args"]["expression"] == "(12000+8500)*0.2"
+    assert routed.steps[1]["args"]["query"] == "KDV kurallarını"
+    assert routed.steps[1]["dependsOn"] == ["calculate"]
+    assert routed.steps[2]["dependsOn"] == ["calculate", "research"]
+
+
+def test_percentage_calculation_ignores_non_currency_numbers() -> None:
+    routed = route_text_to_tool(
+        "Muhasebeci gibi çalış. 12000 TL ve 8500 TL hizmet faturası için yüzde 20 KDV hesapla, "
+        "KDV kurallarını araştır ve rapor hazırla. Test no 1784785091."
+    )
+
+    assert routed is not None
+    assert routed.steps[0]["args"]["expression"] == "(12000+8500)*0.2"
+
+
+def test_student_research_then_presentation_query_is_clean() -> None:
+    routed = route_text_to_tool(
+        "Öğrenci gibi çalış. Kuantum annealing ile klasik optimizasyon farkını araştır, "
+        "adım adım açıkla ve 5 sayfalık sunum hazırla."
+    )
+
+    assert routed is not None
+    assert routed.intent == "compound_task"
+    assert [str(step.get("capability", "")) for step in routed.steps] == [
+        "web_research",
+        "presentation_write",
+    ]
+    assert routed.steps[0]["args"]["query"] == "Kuantum annealing ile klasik optimizasyon farkını"
+    assert routed.steps[1]["dependsOn"] == ["step_1"]
+
+
 def test_research_sonra_document_chain() -> None:
     assert _step_capabilities(
         "bitcoin fiyatını araştır sonra bir word belgesi hazırla"

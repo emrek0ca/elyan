@@ -709,7 +709,14 @@ def _slugify_output_hint(value: str, fallback: str) -> str:
 
 def _default_output_path(extension: str, hint: str) -> str:
     filename = f"{_slugify_output_hint(hint, 'elyan-output')}{extension}"
-    return str((_workspace_root() / "elyan_output" / filename).resolve())
+    path = (_workspace_root() / "elyan_output" / filename).resolve()
+    if not path.exists():
+        return str(path)
+    for index in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return str(candidate)
+    return str(path.with_name(f"{path.stem}-{int(path.stat().st_mtime)}{path.suffix}"))
 
 
 def _resolve_output_path(text: str, extension: str, *, hint: str) -> str:
@@ -1830,6 +1837,47 @@ def _math_route(text: str) -> RoutedTask | None:
     )
 
 
+def _calculation_expression_from_text(text: str) -> str:
+    q = _normalise(text)
+    if not any(token in q for token in ("hesapla", "kdv", "vergi", "yuzde", "yüzde", "%", "oran")):
+        return ""
+    percent_match = re.search(r"(?:%|y[üu]zde\s*)\s*(\d+(?:[.,]\d+)?)", str(text or ""), flags=re.IGNORECASE)
+    if not percent_match:
+        return ""
+    try:
+        percent = float(percent_match.group(1).replace(",", "."))
+    except ValueError:
+        return ""
+    numbers: list[float] = []
+    for match in re.finditer(r"(?<![%\w])(\d+(?:[.,]\d+)?)\s*(?:tl|try|₺|usd|eur)\b", str(text or ""), flags=re.IGNORECASE):
+        raw = match.group(1)
+        try:
+            value = float(raw.replace(",", "."))
+        except ValueError:
+            continue
+        if value not in numbers:
+            numbers.append(value)
+    amounts = [number for number in numbers if number > 0]
+    if not amounts:
+        return ""
+    amount_expr = "+".join(str(int(amount)) if float(amount).is_integer() else str(amount) for amount in amounts[:12])
+    rate = percent / 100.0
+    rate_expr = str(int(rate)) if rate.is_integer() else str(rate)
+    return f"({amount_expr})*{rate_expr}"
+
+
+def _calculation_step_from_text(text: str) -> dict[str, Any] | None:
+    expression = _calculation_expression_from_text(text)
+    if not expression:
+        return None
+    return {
+        "id": "calculate",
+        "capability": "math_solve",
+        "args": {"expression": expression, "mode": "evaluate"},
+        "description": f"{expression} ifadesi hesaplanacak.",
+    }
+
+
 def _latex_parse_route(text: str) -> RoutedTask | None:
     q = _normalise(text)
     if not any(token in q for token in ("latex", "parse", "normalize", "normallestir", "normalleştir")):
@@ -1849,9 +1897,45 @@ def _latex_parse_route(text: str) -> RoutedTask | None:
 
 def _document_write_route(text: str) -> RoutedTask | None:
     q = _normalise(text)
-    if not any(token in q for token in ("docx", "word", "belge", "dokuman", "rapor")):
+    if not any(
+        token in q
+        for token in (
+            "docx",
+            "word",
+            "belge",
+            "dokuman",
+            "rapor",
+            "dilekce",
+            "dilekçe",
+            "savunma",
+            "basvuru",
+            "başvuru",
+            "taslak",
+        )
+    ):
         return None
-    if not any(token in q for token in ("yap", "cevir", "çevir", "olustur", "oluştur", "hazirla", "hazırla", "belgele", "dokumante", "donustur", "dönüştür")):
+    if not any(
+        token in q
+        for token in (
+            "yap",
+            "cevir",
+            "çevir",
+            "olustur",
+            "oluştur",
+            "hazirla",
+            "hazırla",
+            "belgele",
+            "dokumante",
+            "donustur",
+            "dönüştür",
+            "cikar",
+            "çıkar",
+            "yaz",
+            "hazirlayip",
+            "hazırlayıp",
+            "kaydet",
+        )
+    ):
         return None
     # Excel/sunum raporları kendi rotalarına gitmeli; buraya sızmasın.
     if any(token in q for token in ("xlsx", "excel", "tablo", "cizelge", "sheet", "sunum", "pptx", "powerpoint", "slayt", "canvas", "kanvas")):
@@ -2398,17 +2482,43 @@ def _extract_page_count(text: str) -> int:
 
 def _research_topic(text: str) -> str:
     original = str(text or "").strip()
+    searchable = original
+    for marker in ("Dosya özeti:", "Kullanıcı isteği:", "İstek:", "Context:", "Input:"):
+        marker_index = searchable.lower().find(marker.lower())
+        if marker_index > 0:
+            searchable = searchable[:marker_index].strip()
+            break
+    searchable = re.sub(
+        r"^\s*[^.!?]{2,80}?\s+gibi\s+çal[ıi]ş[.!?]\s*",
+        "",
+        searchable,
+        flags=re.IGNORECASE,
+    ).strip() or searchable
+    sentence_candidates = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", searchable)
+        if sentence.strip()
+    ]
+    for sentence in sentence_candidates:
+        if re.search(r"\b(?:araştır|araştir|arastir|research|incele)\b", sentence, flags=re.IGNORECASE):
+            searchable = sentence
+            break
     patterns = [
         r"(.+?)\s+(?:hakk[ıi]nda|about|ile ilgili)\s+(?:detayl[ıi]\s+)?(?:araştırma yap|arastirma yap|araştır|araştir|research|incele|bilgi topla|bilgi edin)$",
+        r".*?(?:hesapla|evaluate|çöz|coz)\s*[,;]?\s+(.+?)\s+(?:araştır|araştir|arastir|research|incele).*$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s*[,;:]\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s+ve\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s+.+\s+ve\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)(?:\s+(?:analiz et|raporla|rapor et|belgele|haz[ıi]rla|kaydet|özetle|ozetle))?$",
         r"(?:araştırma yap|arastirma yap|araştır|araştir|research|incele)\s+(.+)$",
     ]
     for pattern in patterns:
-        match = re.search(pattern, original, flags=re.IGNORECASE)
+        match = re.search(pattern, searchable, flags=re.IGNORECASE)
         if match:
             candidate = _strip_research_verbs(_strip_leading_fillers(match.group(1)))
             if candidate:
                 return candidate
-    return _strip_research_verbs(_strip_leading_fillers(original))
+    return _strip_research_verbs(_strip_leading_fillers(searchable))
 
 
 _RESEARCH_STRONG_TRIGGERS = {"araştır", "arastir", "araştırma", "research", "incele", "bilgi topla", "bilgi edin"}
@@ -2508,6 +2618,100 @@ def _build_web_research_route(text: str) -> RoutedTask | None:
         confidence=0.94,
         privacy_class="public_text",
         plan_preview=_build_plan_summary(summary, steps, "public_text"),
+        steps=tuple(steps),
+    )
+
+
+def _research_then_writer_route(text: str) -> RoutedTask | None:
+    original = str(text or "").strip()
+    q = _normalise(original)
+    if not re.search(r"\b(?:aras?tir|research|incele)(?:\b|[ıi]p\b)", q):
+        return None
+    topic, specific = _research_request_profile(original)
+    if not specific or not topic:
+        return None
+    if not any(token in q for token in _CONTINUATION_WRITE_VERBS):
+        return None
+    if not any(
+        token in q
+        for token in (
+            "rapor",
+            "belge",
+            "belgele",
+            "word",
+            "docx",
+            "dokuman",
+            "dokumante",
+            "dilekce",
+            "dilekçe",
+            "savunma",
+            "basvuru",
+            "başvuru",
+            "taslak",
+            "xlsx",
+            "excel",
+            "tablo",
+            "cizelge",
+            "sheet",
+            "pptx",
+            "powerpoint",
+            "sunum",
+            "slayt",
+            "slide",
+            "canvas",
+            "kanvas",
+        )
+    ):
+        return None
+    writer = _continuation_task(original, topic)
+    if writer is None or writer.tool_name == "email_send":
+        return None
+    writer_steps = [dict(step) for step in (writer.steps or ()) if isinstance(step, dict)]
+    if not writer_steps:
+        return None
+    privacy_class = "local_private" if writer.privacy_class == "local_private" else "public_text"
+    steps: list[dict[str, Any]] = []
+    calculation_step = _calculation_step_from_text(original)
+    if calculation_step is not None:
+        steps.append(calculation_step)
+    research_step = {
+        "id": "research",
+        "capability": "web_research",
+        "args": {"query": topic},
+        "description": f"{topic} hakkında web araştırması yapılacak.",
+    }
+    if steps:
+        research_step["dependsOn"] = [str(steps[-1].get("id", "calculate"))]
+    steps.append(research_step)
+    for writer_step in writer_steps:
+        if not writer_step.get("id"):
+            writer_step["id"] = "write_output"
+        depends_on = [str(steps[-1].get("id", "research"))]
+        if calculation_step is not None:
+            args = dict(writer_step.get("args") or {})
+            prompt = str(args.get("prompt", "") or "").strip()
+            if "hesap" not in _normalise(prompt):
+                prompt = f"Hesap sonucunu ve araştırma bulgularını kullanarak {prompt}".strip()
+            args["prompt"] = prompt
+            args.setdefault("sourceContext", "{{steps.research.output}}")
+            args.setdefault("calculationContext", "{{steps.calculate.output}}")
+            writer_step["args"] = args
+            depends_on = ["calculate", "research"]
+        writer_step["dependsOn"] = writer_step.get("dependsOn") or depends_on
+        steps.append(writer_step)
+    summary = f"{len(steps)} adımlı görev planlandı: " + " → ".join(str(step.get("capability", "")) for step in steps)
+    return RoutedTask(
+        "web_research",
+        {
+            "query": topic,
+        },
+        "research_then_writer",
+        intent="compound_task",
+        confidence=min(0.88, writer.confidence),
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class=privacy_class,
+        plan_preview=_build_plan_summary(summary, steps, privacy_class),
         steps=tuple(steps),
     )
 
@@ -3234,7 +3438,25 @@ def _continuation_task(segment: str, topic_hint: str) -> RoutedTask | None:
         return _writer_task("spreadsheet_write", ".xlsx", "bir tablo")
     if any(token in q for token in ("pptx", "powerpoint", "sunum", "slayt", "slide")):
         return _writer_task("presentation_write", ".pptx", "bir sunum")
-    if any(token in q for token in ("rapor", "belge", "belgele", "raporla", "word", "docx", "dokuman", "dokumante")):
+    if any(
+        token in q
+        for token in (
+            "rapor",
+            "belge",
+            "belgele",
+            "raporla",
+            "word",
+            "docx",
+            "dokuman",
+            "dokumante",
+            "dilekce",
+            "dilekçe",
+            "savunma",
+            "basvuru",
+            "başvuru",
+            "taslak",
+        )
+    ):
         return _writer_task("document_write", ".docx", "bir rapor")
     return None
 
@@ -3403,6 +3625,14 @@ def _compound_route(
                             research_topic, suffix, hint=research_topic
                         )
                 step["args"] = args
+
+    previous_id = ""
+    for index, step in enumerate(steps):
+        step_id = str(step.get("id", "") or f"step_{index + 1}")
+        step["id"] = step_id
+        if previous_id and not step.get("dependsOn"):
+            step["dependsOn"] = [previous_id]
+        previous_id = step_id
 
     if any(routed.privacy_class == "side_effect" for _, routed in parts):
         privacy_class = "side_effect"
@@ -3629,6 +3859,9 @@ def route_text_to_tool(
         compound = _compound_route(original, selected_artifacts)
         if compound is not None:
             return compound
+        research_writer = _research_then_writer_route(original)
+        if research_writer is not None:
+            return research_writer
 
     # Pano komutları dosya-kopyalama ("kopyala") rotasından ÖNCE ele alınır;
     # aksi halde "panoya kopyala X" yanlışlıkla cp olarak yorumlanır.

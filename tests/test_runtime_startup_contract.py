@@ -1579,6 +1579,34 @@ def test_forgiving_document_write_accepts_content_and_nested_sections(
     assert "Yonetici ozeti" in result["result"]["summary"]
 
 
+def test_document_write_sanitizes_control_chars_from_research_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.document_write as document_write
+    import runtime.capability_registry as registry
+
+    monkeypatch.setattr(document_write, "_workspace_root", lambda: tmp_path)
+
+    result = registry.run_capability(
+        "document_write",
+        {
+            "prompt": "Araştırma bulgularından rapor hazırla.",
+            "sourceContext": "KDV bilgisi\x00\x01\x08 güvenli metin",
+            "outputPath": "reports/kdv.docx",
+            "_confirmed": True,
+        },
+        state_store.snapshot(),
+    )
+
+    output_path = tmp_path / "reports" / "kdv.docx"
+    assert result["ok"] is True
+    assert output_path.exists()
+    assert "\x00" not in result["result"]["summary"]
+    assert "\x01" not in result["result"]["sourceContext"]
+
+
 def test_spreadsheet_write_creates_xlsx_in_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1674,6 +1702,69 @@ def test_forgiving_web_research_accepts_topic_arg(
     assert queries == ["2026 batarya trendleri"]
     assert result["result"]["query"] == "2026 batarya trendleri"
     assert len(result["result"]["sources"]) == 1
+
+
+def test_web_research_keeps_search_sources_when_fetch_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.web_research as web_research
+    import runtime.capability_registry as registry
+
+    monkeypatch.setattr(
+        web_research,
+        "_duckduckgo_search",
+        lambda _query, _limit=5: [("Kaynak başlığı", "https://example.com/kaynak")],
+    )
+    monkeypatch.setattr(
+        web_research,
+        "_fetch_text",
+        lambda _url: (_ for _ in ()).throw(RuntimeError("fetch failed")),
+    )
+
+    result = registry.run_capability(
+        "web_research",
+        {"query": "kira uyuşmazlığı"},
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["sources"][0]["url"] == "https://example.com/kaynak"
+    assert "otomatik çıkarılamadı" in result["result"]["sources"][0]["summary"]
+
+
+def test_web_research_sanitizes_workflow_prompt_before_search(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.web_research as web_research
+    import runtime.capability_registry as registry
+
+    queries: list[str] = []
+
+    def fake_search(query: str, limit: int = 5) -> list[tuple[str, str]]:
+        queries.append(query)
+        return [("KDV kaynağı", "https://example.com/kdv")]
+
+    monkeypatch.setattr(web_research, "_duckduckgo_search", fake_search)
+    monkeypatch.setattr(web_research, "_fetch_text", lambda _url: "KDV mevzuat bilgisi " * 80)
+
+    result = registry.run_capability(
+        "web_research",
+        {
+            "query": (
+                "Muhasebeci gibi çalış. 12000 TL ve 8500 TL hizmet faturası için yüzde 20 KDV hesapla, "
+                "KDV kurallarını araştır ve sonuçları bir rapor belgesi olarak hazırla. Dosya özeti: özel bağlam"
+            )
+        },
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is True
+    assert queries == ["KDV kurallarını"]
+    assert result["result"]["query"] == "KDV kurallarını"
 
 
 def test_presentation_write_missing_dependency_fails_safely(

@@ -372,18 +372,42 @@ def _sanitize_contradictory_plan_steps(steps: list[dict[str, Any]]) -> list[dict
 
 def _research_topic_from_text(text: str) -> str:
     original = str(text or "").strip()
+    context_markers = (
+        "Dosya özeti:",
+        "Kullanıcı isteği:",
+        "İstek:",
+        "Context:",
+        "Input:",
+    )
+    searchable = original
+    for marker in context_markers:
+        marker_index = searchable.lower().find(marker.lower())
+        if marker_index > 0:
+            searchable = searchable[:marker_index].strip()
+            break
+    searchable = re.sub(
+        r"^\s*[^.!?]{2,80}?\s+gibi\s+çal[ıi]ş[.!?]\s*",
+        "",
+        searchable,
+        flags=re.IGNORECASE,
+    ).strip() or searchable
     patterns = [
-        r"(.+?)\s+(?:hakk[ıi]nda|about)\s+(?:araştırma yap|arastirma yap|araştır|araştir|research|incele)",
-        r"(?:araştırma yap|arastirma yap|araştır|araştir|research|incele)\s+(.+?)(?:\s+(?:ve|and)\s+|$)",
+        r"(.+?)\s+(?:hakk[ıi]nda|about)\s+(?:araştırma yap|arastirma yap|araştır|araştir|arastir|research|incele)",
+        r".*?(?:hesapla|evaluate|çöz|coz)\s*[,;]?\s+(.+?)\s+(?:araştır|araştir|arastir|research|incele).*$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s*[,;:]\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s+(?:ve|and)\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)\s+.+\s+(?:ve|and)\s+.+$",
+        r"(.+?)\s+(?:araştır|araştir|arastir|research|incele)(?:\s+(?:analiz et|raporla|rapor et|belgele|haz[ıi]rla|kaydet|özetle|ozetle))?$",
+        r"(?:araştırma yap|arastirma yap|araştır|araştir|arastir|research|incele)\s+(.+?)(?:\s+(?:ve|and)\s+|$)",
     ]
     for pattern in patterns:
-        match = re.search(pattern, original, flags=re.IGNORECASE)
+        match = re.search(pattern, searchable, flags=re.IGNORECASE)
         if match:
             candidate = re.sub(r"\b(?:mail|email|e-?posta).*$", "", match.group(1), flags=re.IGNORECASE)
             candidate = " ".join(candidate.split()).strip(" ,.;:")
             if candidate:
                 return candidate
-    return " ".join(re.sub(EMAIL_ADDRESS_RE, "", original).split()).strip(" ,.;:") or original
+    return " ".join(re.sub(EMAIL_ADDRESS_RE, "", searchable).split()).strip(" ,.;:") or original
 
 
 def _utc_now_iso() -> str:
@@ -5007,7 +5031,13 @@ def _route_chat(
             question=app_clarification,
         )
         return _clarification_response(app_clarification, intent="clarification", privacy_class="local_private")
-    if force_structured_planning and routed is not None and not _deterministic_only_enabled():
+    if (
+        force_structured_planning
+        and routed is not None
+        and not routed.is_multi_step
+        and not routed.requires_confirmation
+        and not _deterministic_only_enabled()
+    ):
         deterministic_fallback = routed
         routed = None
     if routed is not None:

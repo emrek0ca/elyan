@@ -834,6 +834,55 @@ def test_professional_legal_workflow_uses_research_then_document() -> None:
     assert preview["planSource"] == "runtime_professional_template"
 
 
+def test_force_structured_planning_preserves_compound_router_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    result = runtime.send_conversation(
+        "",
+        "Kira uyuşmazlığını ve tahliye davasını araştır ve savunma dilekçesi taslağı hazırla",
+        "Router plan",
+        force_structured_planning=True,
+    )
+
+    assert result["executionMode"] == "plan_preview"
+    assert result["needsConfirmation"] is True
+    assert [step["capability"] for step in result["planPreview"]["steps"]] == [
+        "web_research",
+        "document_write",
+    ]
+
+
+def test_force_structured_planning_builds_calculation_research_writer_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    result = runtime.send_conversation(
+        "",
+        "Muhasebeci gibi çalış. 12000 TL ve 8500 TL hizmet faturası için yüzde 20 KDV hesapla, "
+        "KDV kurallarını araştır ve sonuçları bir rapor belgesi olarak hazırla.",
+        "Accounting plan",
+        force_structured_planning=True,
+    )
+
+    steps = result["planPreview"]["steps"]
+    assert result["executionMode"] == "plan_preview"
+    assert [step["capability"] for step in steps] == [
+        "math_solve",
+        "web_research",
+        "document_write",
+    ]
+    assert steps[0]["args"]["expression"] == "(12000+8500)*0.2"
+    assert steps[1]["args"]["query"] == "KDV kurallarını"
+    assert steps[2]["dependsOn"] == ["calculate", "research"]
+
+
 def test_professional_medical_workflow_reads_then_reports() -> None:
     runtime = bridge.RuntimeBridge()
 

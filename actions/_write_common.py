@@ -28,6 +28,35 @@ def slugify_filename(value: str, *, fallback: str = "untitled") -> str:
     return cleaned[:64] or fallback
 
 
+def unique_output_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    for index in range(2, 1000):
+        candidate = parent / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    return parent / f"{stem}-{int(path.stat().st_mtime)}{suffix}"
+
+
+def sanitize_xml_text(value: str, *, max_chars: int | None = None) -> str:
+    text = str(value or "")
+    cleaned = "".join(
+        char
+        if char in {"\n", "\r", "\t"} or ord(char) >= 32
+        else " "
+        for char in text
+    )
+    cleaned = re.sub(r"[\ufffd]+", " ", cleaned)
+    cleaned = "\n".join(" ".join(line.split()) for line in cleaned.splitlines())
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if max_chars is not None and max_chars > 0:
+        return cleaned[:max_chars]
+    return cleaned
+
+
 def ensure_allowed_output_path(
     raw_path: str,
     *,
@@ -57,7 +86,7 @@ def ensure_allowed_output_path(
                 ) from exc
     else:
         filename = f"{slugify_filename(hint or 'elyan-output')}{suffix}"
-        resolved = (output_root(root_resolver) / filename).resolve()
+        resolved = unique_output_path((output_root(root_resolver) / filename).resolve())
 
     if resolved.suffix.lower() != suffix:
         resolved = resolved.with_suffix(suffix)
@@ -72,7 +101,7 @@ def ensure_allowed_output_path(
 
 
 def normalize_source_context(value: str, *, max_chars: int = 320) -> str:
-    return preview_text(" ".join(str(value or "").split()), limit=max_chars)
+    return preview_text(" ".join(sanitize_xml_text(value).split()), limit=max_chars)
 
 
 def artifact_payload(path: Path) -> dict[str, str]:
