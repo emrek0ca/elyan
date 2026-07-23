@@ -3571,6 +3571,106 @@ def _inline_analysis_writer_route(text: str) -> RoutedTask | None:
     )
 
 
+_OPTIMIZATION_MODEL_TOKENS = (
+    "karar degisken",
+    "karar değişken",
+    "amac fonksiyon",
+    "amaç fonksiyon",
+    "kisit",
+    "kısıt",
+    "qubo",
+    "ising",
+    "qaoa",
+    "vqe",
+    "knapsack",
+    "kapasite",
+    "cozucu",
+    "çözücü",
+    "modelle",
+    "formule et",
+    "formüle et",
+)
+
+
+def _optimization_decision_route(text: str) -> RoutedTask | None:
+    original = str(text or "").strip()
+    q = _normalise(original)
+    if not any(token in q for token in ("optimiz", "karar destek", "qubo", "ising", "qaoa", "knapsack")):
+        return None
+    modeling_requested = any(token in q for token in _OPTIMIZATION_MODEL_TOKENS)
+    numeric_decision_problem = bool(re.search(r"\b\d+(?:[.,]\d+)?\b", original)) and any(
+        token in q
+        for token in (
+            "sec",
+            "seç",
+            "hangi",
+            "maksimum",
+            "minimum",
+            "en iyi",
+            "en fazla",
+            "butce",
+            "bütçe",
+            "maliyet",
+            "deger",
+            "değer",
+            "fayda",
+            "kar",
+        )
+    )
+    if not (modeling_requested or numeric_decision_problem):
+        return None
+    # Salt araştırma/sunum istekleri profesyonel araştırma zincirinde kalmalı.
+    if any(token in q for token in ("arastir", "araştır", "kaynak", "literatur", "literatür")) and not modeling_requested:
+        return None
+
+    report_title = "Karar Destek Optimizasyon Raporu"
+    steps = [
+        {
+            "id": "model_problem",
+            "capability": "quantum_model_problem",
+            "args": {"prompt": original, "problemClass": "optimization"},
+            "description": "Problem karar değişkenleri, amaç fonksiyonu, kısıtlar ve QUBO/Ising forma dönüştürülecek.",
+        },
+        {
+            "id": "solve_problem",
+            "capability": "quantum_run_experiment",
+            "args": {"prompt": original, "algorithm": "qaoa", "shots": 1024},
+            "dependsOn": ["model_problem"],
+            "description": "Uygun klasik/kuantum-hibrit çözücüyle aday çözüm üretilecek.",
+        },
+        {
+            "id": "verify_solution",
+            "capability": "quantum_compare_classical",
+            "args": {"prompt": original},
+            "dependsOn": ["solve_problem"],
+            "description": "Çözüm klasik baseline ve uygulanabilirlik kısıtlarıyla doğrulanacak.",
+        },
+        {
+            "id": "write_report",
+            "capability": "quantum_generate_report",
+            "args": {"prompt": original, "title": report_title},
+            "dependsOn": ["verify_solution"],
+            "description": "Karar destek raporu ve doğrulama özeti üretilecek.",
+        },
+    ]
+    summary = (
+        "Optimizasyon görevi karar değişkenleri, amaç fonksiyonu ve kısıtlarla "
+        "modellenip çözülecek; sonuç klasik baseline ile doğrulanacak."
+    )
+    return RoutedTask(
+        "quantum_model_problem",
+        dict(steps[0]["args"]),
+        "optimization_decision_support",
+        intent="compound_task",
+        confidence=0.9,
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class="public_text",
+        plan_preview=_build_plan_summary(summary, steps, "public_text"),
+        steps=tuple(steps),
+    )
+
+
 def _compound_route(
     text: str,
     selected_artifacts: list[dict[str, Any]] | None,
@@ -3978,6 +4078,9 @@ def route_text_to_tool(
         inline_analysis_writer = _inline_analysis_writer_route(original)
         if inline_analysis_writer is not None:
             return inline_analysis_writer
+        optimization_decision = _optimization_decision_route(original)
+        if optimization_decision is not None:
+            return optimization_decision
 
     # Pano komutları dosya-kopyalama ("kopyala") rotasından ÖNCE ele alınır;
     # aksi halde "panoya kopyala X" yanlışlıkla cp olarak yorumlanır.

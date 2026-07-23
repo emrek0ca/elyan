@@ -50,6 +50,12 @@ PROFESSIONAL_WORKFLOW_CASES = [
         ["document_read", "document_write"],
         id="medical-inline-report",
     ),
+    pytest.param(
+        "optimization_decision_support",
+        "Karar destek ajanı gibi çalış. A değer 10 maliyet 4, B değer 7 maliyet 3, C değer 12 maliyet 8; kapasite 10. Problemi karar değişkenleri, amaç fonksiyonu ve kısıtlarla modelle, çöz ve uygulanabilirliği doğrula.",
+        ["quantum_model_problem", "quantum_run_experiment", "quantum_compare_classical", "quantum_generate_report"],
+        id="optimization-decision-support",
+    ),
 ]
 
 
@@ -94,3 +100,12 @@ def test_professional_workflows_preserve_router_plan_under_force_structured_plan
     assert result["needsConfirmation"] is True, name
     steps = result["planPreview"]["steps"]
     assert [step["capability"] for step in steps] == expected
+
+
+def test_optimization_research_report_stays_research_writer() -> None:
+    routed = route_text_to_tool(
+        "Mühendis gibi çalış. Güneş paneli verim optimizasyonunu araştır, seçenekleri karşılaştır ve teknik çözüm raporu hazırla."
+    )
+
+    assert routed is not None
+    assert [step["capability"] for step in routed.steps] == ["web_research", "document_write"]
