@@ -220,6 +220,8 @@ def _parse_capture_payload(raw: str) -> tuple[bool, str, dict | None]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
+        if str(raw or "").strip().lower() == "permission_denied":
+            return False, _screen_permission_message(), None
         return False, "Gecersiz ekran helper yaniti alindi.", None
 
     if not isinstance(payload, dict):

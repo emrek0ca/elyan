@@ -4211,6 +4211,10 @@ def route_text_to_tool(
     if data_pipeline is not None:
         return data_pipeline
 
+    data_analyze = _data_analyze_route(original, selected_artifacts)
+    if data_analyze is not None:
+        return data_analyze
+
     research_spreadsheet = _research_spreadsheet_route(original)
     if research_spreadsheet is not None:
         return research_spreadsheet
@@ -4319,10 +4323,6 @@ def route_text_to_tool(
     text_to_speech = _text_to_speech_route(original)
     if text_to_speech is not None:
         return text_to_speech
-
-    data_analyze = _data_analyze_route(original, selected_artifacts)
-    if data_analyze is not None:
-        return data_analyze
 
     chart_generate = _chart_generate_route(original, selected_artifacts)
     if chart_generate is not None:

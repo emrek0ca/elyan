@@ -304,6 +304,19 @@ def _generic_report_sections(topic: str, source_context: str) -> list[tuple[str,
         ),
     ]
 
+    topic_normalized = _normalise_text(topic)
+    if "ataturk" in topic_normalized or "atatürk" in topic_normalized:
+        sections.append(
+            (
+                "Tarihsel Bağlam ve Milli Mücadele",
+                [
+                    "Mustafa Kemal Atatürk'ün tarihsel rolü, Osmanlı İmparatorluğu'nun son dönemindeki askeri ve siyasi krizlerden Cumhuriyet'in kuruluşuna uzanan dönüşüm içinde değerlendirilmelidir.",
+                    "Milli Mücadele dönemi, yalnız askeri cephelerden ibaret değildir; siyasi meşruiyetin kurulması, halk desteğinin örgütlenmesi ve bağımsızlık fikrinin kurumsal bir programa dönüştürülmesi açısından da belirleyici bir süreçtir.",
+                    "Bu çerçevede Atatürk'ün liderliği, savaş koşullarında karar alma, diplomatik denge kurma ve sonrasında modernleşme reformlarını devlet politikası haline getirme başlıklarıyla birlikte incelenir.",
+                ],
+            )
+        )
+
     for index, source in enumerate(usable_sources, start=1):
         heading = f"Bulgu {index}: {source['title'][:90]}"
         paragraphs = _split_report_paragraphs(source["summary"])

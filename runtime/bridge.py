@@ -2030,6 +2030,8 @@ def _sanitize_transport_payload(value: Any) -> Any:
 
 def _safe_chat_error_message(raw: Any) -> str:
     value = str(raw or "").strip()
+    if value in {"permission_denied", "PERMISSION_DENIED"}:
+        return "Ekran kaydı veya ilgili işletim sistemi izni gerekiyor."
     if value == "PERMISSION_REQUIRED":
         return "Bu işlem için güvenlik izni gerekiyor."
     if value == "OS_PERMISSION_REQUIRED":
@@ -6927,6 +6929,25 @@ class RuntimeBridge:
             or local_result.get("assistantMessage", "")
             or "Yerel işlem onayı gerekiyor."
         ).strip()[:500]
+        work_order = self._current_work_order() or {}
+        task_id = str(work_order.get("taskId", "") or local_result.get("taskId", "") or "").strip()
+        revision = 1
+        try:
+            revision = max(1, int(work_order.get("revision", 1) or 1))
+        except (TypeError, ValueError):
+            revision = 1
+        approval_key = str(local_result.get("approvalKey", "") or "").strip()
+        if not approval_key:
+            source_key = task_id or str(plan_preview.get("id", "") or structured_kind or approval_capability or "local")
+            approval_key = f"{source_key}:{revision}:{approval_capability or structured_kind or approval_permission}"
+        try:
+            import datetime as _dt
+            expires_at = (
+                _dt.datetime.utcnow().replace(microsecond=0)
+                + _dt.timedelta(minutes=10)
+            ).isoformat() + "Z"
+        except Exception:
+            expires_at = ""
         title = "Onay gerekli"
         if structured_kind == "email_send":
             title = "Mail gönderilsin mi?"
@@ -6949,6 +6970,14 @@ class RuntimeBridge:
             "source": "desktop_runtime",
             "permission": approval_permission,
             "idempotency": approval_idempotency,
+            "surface": "full_computer_access",
+            "permissionSurface": "full_computer_access",
+            "permissionSummary": (
+                "Elyan bu görevi tamamlamak için bilgisayar erişimini tek onay altında kullanacak."
+            ),
+            "approvalKey": approval_key,
+            "revision": revision,
+            "expiresAt": expires_at,
         }
         if approval_capability:
             payload["capability"] = approval_capability
@@ -9791,7 +9820,12 @@ class RuntimeBridge:
         agent_status = _agent_status_from_result(result)
         if not result.get("ok"):
             error = result.get("error", "chat_failed")
-            safe_message = str(result.get("message", "") or "").strip() or _safe_chat_error_message(error)
+            raw_message = str(result.get("message", "") or "").strip()
+            safe_message = (
+                _safe_chat_error_message(raw_message)
+                if raw_message.lower() in {"permission_denied", "permission required", "permission_required"}
+                else raw_message
+            ) or _safe_chat_error_message(error)
             STATE.append_message(
                 conversation_id,
                 "assistant",
@@ -9861,6 +9895,12 @@ class RuntimeBridge:
             }
 
         content = str(result.get("content", "") or "").strip()
+        if bool(result.get("permissionNeeded", False)) and content.lower() in {
+            "permission_denied",
+            "permission required",
+            "permission_required",
+        }:
+            content = _safe_chat_error_message(content)
         if not content:
             content = "Mesaj işlendi ama içerik döndürülmedi."
         backend_session = result.get("session") if isinstance(result.get("session"), dict) else {}
@@ -14299,6 +14339,7 @@ class RuntimeBridge:
                 conversation_id,
                 title=title,
                 status="waiting_approval",
+                expires_at=str(approval_request.get("expiresAt", "") or ""),
             )
             waiting_payload = {
                 "status": "waiting_approval",

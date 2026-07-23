@@ -384,6 +384,7 @@ _CORRECTION_LIMIT = 16
 _PENDING_PLAN_LIMIT = 12
 _TASK_INBOX_LIMIT = 24
 _TASK_LINK_LIMIT = 24
+_TASK_APPROVAL_LINK_TTL_SECONDS = 10 * 60
 _ACTIVE_TASK_STATUSES = {"queued", "planning", "running", "waiting_approval"}
 _MCP_SERVER_LIMIT = 12
 _ARTIFACT_SELECTION_LIMIT = 3
@@ -503,6 +504,48 @@ def _recount_task_inbox(items: list[dict[str, Any]]) -> tuple[int, int]:
         if status in _ACTIVE_TASK_STATUSES:
             active_count += 1
     return pending_count, active_count
+
+
+def _parse_task_timestamp(value: Any) -> dt.datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed
+    except ValueError:
+        return None
+
+
+def _task_link_expired(link: dict[str, Any], *, now: dt.datetime | None = None) -> bool:
+    status = str(link.get("status", "") or "").strip()
+    if status != "waiting_approval":
+        return False
+    expires_at = _parse_task_timestamp(link.get("expiresAt"))
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if expires_at is not None:
+        return expires_at <= current
+    updated_at = _parse_task_timestamp(link.get("updatedAt"))
+    if updated_at is None:
+        return False
+    return (current - updated_at).total_seconds() > _TASK_APPROVAL_LINK_TTL_SECONDS
+
+
+def _prune_task_links(links: list[Any]) -> list[dict[str, Any]]:
+    now = dt.datetime.now(dt.timezone.utc)
+    pruned: list[dict[str, Any]] = []
+    for item in links:
+        if not isinstance(item, dict):
+            continue
+        copied = copy.deepcopy(item)
+        if _task_link_expired(copied, now=now):
+            continue
+        pruned.append(copied)
+        if len(pruned) >= _TASK_LINK_LIMIT:
+            break
+    return pruned
 
 
 def _normalize_route_query(value: str) -> str:
@@ -1783,6 +1826,8 @@ def reconcile_task_inbox(
         links = inbox.get("links", [])
         link_by_task_id: dict[str, dict[str, Any]] = {}
         if isinstance(links, list):
+            links = _prune_task_links(links)
+            inbox["links"] = links
             for item in links:
                 if not isinstance(item, dict):
                     continue
@@ -1887,6 +1932,7 @@ def save_remote_task_link(
     remote_task_id: str = "",
     last_backend_status: str = "",
     resume_token: str = "",
+    expires_at: str = "",
     terminal_duplicate_guard: bool = False,
 ) -> dict[str, Any]:
     normalized_task_id = str(task_id or "").strip()
@@ -1904,6 +1950,7 @@ def save_remote_task_link(
         "status": str(status or "waiting_approval").strip()[:64] or "waiting_approval",
         "lastBackendStatus": str(last_backend_status or status or "waiting_approval").strip()[:64] or "waiting_approval",
         "resumeToken": str(resume_token or normalized_plan_id).strip()[:160],
+        "expiresAt": str(expires_at or "").strip()[:80],
         "terminalDuplicateGuard": bool(terminal_duplicate_guard),
         "updatedAt": _task_inbox_timestamp(),
     }
@@ -1913,6 +1960,7 @@ def save_remote_task_link(
         links = inbox.get("links", [])
         if not isinstance(links, list):
             links = []
+        links = _prune_task_links(links)
         next_links: list[dict[str, Any]] = [stored]
         for item in links:
             if not isinstance(item, dict):
@@ -1960,6 +2008,7 @@ def save_runtime_dispatch_link(
         links = inbox.get("links", [])
         if not isinstance(links, list):
             links = []
+        links = _prune_task_links(links)
         next_links: list[dict[str, Any]] = [stored]
         for item in links:
             if not isinstance(item, dict):
@@ -1982,6 +2031,7 @@ def get_remote_task_link(task_id: str) -> dict[str, Any] | None:
     links = state.get("taskInbox", {}).get("links", [])
     if not isinstance(links, list):
         return None
+    links = _prune_task_links(links)
     for item in links:
         if isinstance(item, dict) and str(item.get("taskId", "") or "") == normalized_task_id:
             return copy.deepcopy(item)
@@ -2007,6 +2057,7 @@ def update_remote_task_link(task_id: str, updates: dict[str, Any]) -> dict[str, 
         links = inbox.get("links", [])
         if not isinstance(links, list):
             return None
+        links = _prune_task_links(links)
         updated: dict[str, Any] | None = None
         next_links: list[dict[str, Any]] = []
         for item in links:

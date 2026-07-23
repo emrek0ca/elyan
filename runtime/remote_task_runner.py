@@ -1418,6 +1418,7 @@ class RemoteTaskRunner:
             remote_task_id=task_id,
             last_backend_status="waiting_approval",
             resume_token=str(local_result.get("resumeToken", "") or pending_plan_id),
+            expires_at=str(approval_request.get("expiresAt", "") or ""),
         )
         if work_order is not None:
             state_store.update_remote_task_link(task_id, {"desktopWorkOrder": dict(work_order)})
@@ -1509,6 +1510,14 @@ class RemoteTaskRunner:
             "confirmLabel": "Yanıtla",
             "rejectLabel": "İptal",
         }
+        try:
+            import datetime as _dt
+            approval_request["expiresAt"] = (
+                _dt.datetime.utcnow().replace(microsecond=0)
+                + _dt.timedelta(minutes=10)
+            ).isoformat() + "Z"
+        except Exception:
+            pass
         # Orijinal prompt yalnız İLK turda saklanır; sonraki turlarda korunur.
         original_prompt = str(link.get("clarificationPrompt", "") or "").strip() or prompt
         state_store.save_remote_task_link(
@@ -1520,6 +1529,7 @@ class RemoteTaskRunner:
             task_run_id=task_run_id,
             remote_task_id=task_id,
             last_backend_status="waiting_approval",
+            expires_at=str(approval_request.get("expiresAt", "") or ""),
         )
         link_patch: dict[str, Any] = {
             "clarificationPending": True,
