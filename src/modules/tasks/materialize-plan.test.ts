@@ -6,7 +6,10 @@ import {
 } from "./materialize-plan.js";
 import type { DesktopWorkOrder } from "./desktop-work-order.js";
 
-function workOrder(summary: string): DesktopWorkOrder {
+function workOrder(
+  summary: string,
+  requiredCapabilities = ["math_solve", "web_research", "document_write", "spreadsheet_write", "presentation_write"],
+): DesktopWorkOrder {
   return {
     schema: "elyan.desktop_work_order.v1",
     source: "mobile_chat_dispatch",
@@ -18,7 +21,7 @@ function workOrder(summary: string): DesktopWorkOrder {
     },
     entities: [],
     constraints: [],
-    requiredCapabilities: ["math_solve", "web_research", "document_write", "spreadsheet_write", "presentation_write"],
+    requiredCapabilities,
     localContextNeeded: [],
     expectedOutputs: [{ kind: "artifact", format: "docx", required: true }],
     verificationRules: [{ id: "artifact", description: "Çıktı üretildi.", evidence: "artifact" }],
@@ -56,6 +59,10 @@ test("desktop materialization prompt keeps research queries public and writer ar
 
   assert.match(fewShots, /Legal research \+ defense draft/);
   assert.match(fewShots, /kira uyusmazligi tahliye davasi savunma dilekcesi mevzuat emsal/);
+  assert.match(fewShots, /Private inline data \+ analysis report/);
+  assert.match(fewShots, /"capability":"document_read"/);
+  assert.match(fewShots, /Hb 10\.5, ferritin 8, B12 220/);
+  assert.match(fewShots, /"content":"Okunan veri uzerinden analiz raporu hazirla\.\\n\\nVeri: \{\{steps\.s1\.output\}\}"/);
   assert.match(fewShots, /Student research \+ presentation/);
   assert.match(fewShots, /quantum annealing vs classical optimization explanation examples/);
   assert.match(fewShots, /Optimization decision support/);
@@ -71,6 +78,22 @@ test("desktop materialization prompt keeps research queries public and writer ar
 
   assert.match(prompt, /Do not pass the full user goal, private case facts, file summaries, or writing instructions as the query/);
   assert.match(prompt, /preserve private case\/test\/project facts in writer args/);
+});
+
+test("desktop materialization prompt teaches private read then writer handoff", () => {
+  const prompt = buildPlanningPrompt(
+    workOrder(
+      "Doktor gibi çalış. Tahlil sonuçlarını yorumla ve rapor çıkar: Hb 10.5, ferritin 8, B12 220.",
+      ["document_read", "document_write", "web_research"],
+    ),
+    ["document_read", "document_write", "web_research"],
+  );
+
+  assert.match(prompt, /Private inline data \+ analysis report/);
+  assert.match(prompt, /start with document_read or file_read when available/);
+  assert.match(prompt, /feed \{\{steps\.<id>\.output\}\} into document_write/);
+  assert.match(prompt, /Do not send private inline facts, file contents, medical\/test values, legal case facts, or local document summaries to web_research/);
+  assert.match(prompt, /"text":"Tahlil sonuclari: Hb 10\.5, ferritin 8, B12 220\."/);
 });
 
 test("desktop materialization prompt teaches decision support optimization chain", () => {
