@@ -2152,6 +2152,61 @@ def _first_dict(args: dict[str, Any], *keys: str) -> dict[str, Any] | None:
     return None
 
 
+def _operator_action_type(args: dict[str, Any]) -> str:
+    action = _first_non_empty_text(
+        args,
+        "actionType",
+        "action_type",
+        "action",
+        "operation",
+        "command",
+        "type",
+    ).strip()
+    aliases = {
+        "press": "hotkey",
+        "key": "hotkey",
+        "enter": "hotkey",
+        "write": "type",
+        "input": "type",
+        "tap": "click",
+    }
+    return aliases.get(action.lower(), action)
+
+
+def _operator_target_text(args: dict[str, Any]) -> str:
+    target = _first_non_empty_text(
+        args,
+        "targetText",
+        "target_text",
+        "target",
+        "selector",
+        "label",
+        "element",
+    )
+    if target:
+        return target
+    target_payload = _first_dict(args, "targetElement", "target_element", "elementSpec")
+    if target_payload:
+        return _first_non_empty_text(target_payload, "text", "label", "name", "target", "description")
+    return ""
+
+
+def _operator_keys(args: dict[str, Any]) -> list[str] | None:
+    raw_keys = args.get("keys")
+    if isinstance(raw_keys, list):
+        return [str(item) for item in raw_keys if str(item or "").strip()]
+    key = _first_non_empty_text(args, "key", "hotkey", "shortcut", "keyboard")
+    if not key:
+        return None
+    if "+" in key:
+        return [part.strip() for part in key.split("+") if part.strip()]
+    return [key]
+
+
+def _operator_max_actions(args: dict[str, Any], default: int = 8) -> int:
+    return max(1, min(20, _as_int(args.get("maxActions") or args.get("max_actions"), default)))
+
+
 def _web_research_query(args: dict[str, Any]) -> str:
     query = _first_non_empty_text(
         args,
@@ -2660,12 +2715,12 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             str(args.get("bundleId", "") or args.get("bundle_id", "") or ""),
         ),
         "desktop_operator.execute_action": lambda args: _load_adapter("desktop_operator.execute_action")(
-            str(args.get("actionType", "") or args.get("action_type", "") or ""),
-            target_text=str(args.get("targetText", "") or args.get("target_text", "") or ""),
+            _operator_action_type(args),
+            target_text=_operator_target_text(args),
             element_type=str(args.get("elementType", "") or args.get("element_type", "") or ""),
             bbox=dict(args.get("bbox", {}) or {}) if isinstance(args.get("bbox", {}), dict) else None,
             text=str(args.get("text", "") or ""),
-            keys=list(args.get("keys", []) or []) if isinstance(args.get("keys"), list) else None,
+            keys=_operator_keys(args),
             delta=args.get("delta"),
             duration=args.get("duration"),
             app_name=str(args.get("appName", "") or args.get("app_name", "") or ""),
@@ -2673,12 +2728,13 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
         ),
         "desktop_operator.run": lambda args: _load_adapter("desktop_operator.run")(
             goal=str(args.get("goal", "") or ""),
-            action=str(args.get("action", "") or ""),
-            target_text=str(args.get("targetText", "") or args.get("target_text", "") or ""),
+            action=_operator_action_type(args),
+            target_text=_operator_target_text(args),
             text=str(args.get("text", "") or ""),
             element_type=str(args.get("elementType", "") or args.get("element_type", "") or ""),
             app_name=str(args.get("appName", "") or args.get("app_name", "") or ""),
             steps=list(args.get("steps", []) or []) if isinstance(args.get("steps"), list) else None,
+            max_actions=_operator_max_actions(args),
             _confirmed=bool(args.get("_confirmed", False)),
         ),
         "desktop_operator.cancel": lambda args: _load_adapter("desktop_operator.cancel")(

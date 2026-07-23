@@ -296,6 +296,68 @@ def test_execute_action_uses_browser_first_adapter_when_target_is_browser_dom(
     assert result["result"]["verification"]["ok"] is True
 
 
+def test_execute_action_accepts_planner_action_target_and_key_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_execute(action_type: str, **kwargs: object) -> dict[str, object]:
+        captured["action_type"] = action_type
+        captured.update(kwargs)
+        return {"text": "ok", "result": {"kind": "operator_execution_result", "status": "completed"}}
+
+    monkeypatch.setattr(
+        capability_registry,
+        "_load_adapter",
+        lambda name: fake_execute if name == "desktop_operator.execute_action" else (_ for _ in ()).throw(AssertionError(name)),
+    )
+
+    result = capability_registry.run_capability(
+        "desktop_operator.execute_action",
+        {
+            "action": "press",
+            "key": "ENTER",
+            "target": "Chrome adres veya arama kutusu",
+            "reason": "Aramayı başlat",
+        },
+        _dangerous_state(accessibility=True),
+    )
+
+    assert result["ok"] is True
+    assert captured["action_type"] == "hotkey"
+    assert captured["target_text"] == "Chrome adres veya arama kutusu"
+    assert captured["keys"] == ["ENTER"]
+
+
+def test_operator_run_accepts_max_actions_from_planner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"text": "ok", "result": {"kind": "operator_run_result", "status": "completed"}}
+
+    monkeypatch.setattr(
+        capability_registry,
+        "_load_adapter",
+        lambda name: fake_run if name == "desktop_operator.run" else (_ for _ in ()).throw(AssertionError(name)),
+    )
+
+    result = capability_registry.run_capability(
+        "desktop_operator.run",
+        {"goal": "Ayarlar penceresinde Wi-Fi bölümünü aç", "maxActions": 3},
+        _dangerous_state(accessibility=True),
+    )
+
+    assert result["ok"] is True
+    assert captured["max_actions"] == 3
+
+
 def test_match_target_rejects_ambiguous_near_tie() -> None:
     observation = {
         "elements": [

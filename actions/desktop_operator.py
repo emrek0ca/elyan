@@ -1608,6 +1608,7 @@ def run(
     element_type: str = "",
     app_name: str = "",
     steps: list[dict[str, Any]] | None = None,
+    max_actions: int = 8,
     _confirmed: bool = False,
 ) -> dict[str, Any]:
     require_macos("Visual Desktop Operator")
@@ -1635,6 +1636,10 @@ def run(
         )
     _cleanup_stale_screenshots()
     _clear_abort_flag()
+    try:
+        action_budget = max(1, min(20, int(max_actions or 8)))
+    except (TypeError, ValueError):
+        action_budget = 8
     run_id = f"oprun_{int(time.time() * 1000)}_{_operator_hash(goal or action or target_text)[:8]}"
     current_run = {
         "id": run_id,
@@ -1708,6 +1713,7 @@ def run(
             }
 
     if steps and isinstance(steps, list):
+        steps = [dict(item) for item in steps[:action_budget] if isinstance(item, dict)]
         final_payload: dict[str, Any] | None = None
         retry_counts: dict[int, int] = {}
         for index, step in enumerate(steps, start=1):

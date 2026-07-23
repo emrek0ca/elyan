@@ -8771,7 +8771,44 @@ class RuntimeBridge:
                 }
             except Exception:
                 pass
+        if pre_capability.startswith("desktop_operator.") and pre_error_code not in _NON_REPLANNABLE_ERROR_CODES:
+            try:
+                from actions.desktop_operator import observe_screen
+
+                screen_payload = observe_screen(
+                    "Başarısız operatör adımından sonra mevcut ekran durumunu özetle.",
+                    "active_window",
+                    preserve_screenshot=True,
+                )
+                screen_result = screen_payload.get("result", {}) if isinstance(screen_payload, dict) else {}
+                screen_observation = screen_result.get("observation", {}) if isinstance(screen_result, dict) else {}
+                if isinstance(screen_observation, dict) and screen_observation:
+                    context = {
+                        **context,
+                        "screenObservation": {
+                            "activeApp": screen_observation.get("activeApp", ""),
+                            "activeWindow": screen_observation.get("activeWindow", ""),
+                            "summary": screen_observation.get("summary", ""),
+                            "visibleText": screen_observation.get("visibleText", ""),
+                            "suggestedTargets": screen_observation.get("suggestedTargets", [])[:8]
+                            if isinstance(screen_observation.get("suggestedTargets"), list)
+                            else [],
+                            "resolutionMode": screen_observation.get("resolutionMode", ""),
+                        },
+                    }
+            except Exception:
+                pass
         observation = structured_planner.build_replan_observation(context)
+        if isinstance(context.get("screenObservation"), dict):
+            observation["screenObservation"] = context["screenObservation"]
+        if isinstance(context.get("stepOutputs"), dict):
+            observation["completedOutputIds"] = list(context["stepOutputs"].keys())[:12]
+        if isinstance(context.get("remainingSteps"), list):
+            observation["remainingCapabilities"] = [
+                str(step.get("capability", "") or "")
+                for step in context["remainingSteps"][:12]
+                if isinstance(step, dict)
+            ]
         self._runtime_diag(
             "replan_observation",
             reason=str(observation.get("reason", "") or ""),
