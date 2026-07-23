@@ -9610,6 +9610,9 @@ def test_runtime_task_terminal_payload_marks_private_artifacts_share_required(
     assert payload["privacyClass"] == "local_private"
     assert payload["verification"]["status"] == "passed"
     assert payload["safeSummary"] == "Yerel rapor hazır."
+    assert payload["notification"]["status"] == "completed"
+    assert payload["notification"]["title"] == "Görev tamamlandı"
+    assert payload["notification"]["body"] == "Yerel rapor hazır."
     assert artifacts[0]["shareable"] is False
     assert artifacts[0]["requiresUserShare"] is True
 
@@ -10465,7 +10468,16 @@ def test_live_progress_routes_to_active_task_and_throttles(
             **block,
             "activeStepId": "s2",
             "steps": [
-                {"id": "s1", "status": "completed", "label": "Kapatıldı", "capability": "close_app"},
+                {
+                    "id": "s1",
+                    "status": "completed",
+                    "label": "Kapatıldı",
+                    "capability": "close_app",
+                    "artifactCount": 1,
+                    "resultKind": "close_app",
+                    "verificationStatus": "passed",
+                    "evidence": {"path": "/tmp/close-app-proof.txt"},
+                },
                 {"id": "s2", "status": "running", "label": "Doğrula", "capability": "sys_info"},
             ],
         }
@@ -10478,6 +10490,56 @@ def test_live_progress_routes_to_active_task_and_throttles(
     assert pushed[1][2] == [("s1", "completed"), ("s2", "running")]
     # Görev bittiğinde throttle durumu temizlenir.
     assert "task-1" not in runtime._remote_progress_last_signature
+
+
+def test_live_progress_preserves_evidence_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    pushed: list[dict] = []
+    monkeypatch.setattr(
+        runtime,
+        "_report_runtime_task_status",
+        lambda _task_id, payload: pushed.append(payload),
+    )
+
+    token = runtime._begin_active_remote_task("task-evidence-live", "run-evidence-live")
+    try:
+        runtime._emit_remote_task_progress(
+            "conv",
+            {
+                "status": "running",
+                "title": "Görev",
+                "activeStepId": "",
+                "verification": {"status": "passed", "checkedSteps": 1},
+                "steps": [
+                    {
+                        "id": "s1",
+                        "status": "completed",
+                        "label": "Belge yazıldı",
+                        "capability": "document_write",
+                        "artifactCount": 1,
+                        "resultKind": "document_write",
+                        "verificationStatus": "passed",
+                        "evidence": {"path": "/tmp/report.docx"},
+                    },
+                ],
+            },
+        )
+    finally:
+        runtime._end_active_remote_task(token, "task-evidence-live")
+
+    assert pushed
+    step = pushed[-1]["executionTrace"]["steps"][0]
+    assert step["artifactCount"] == 1
+    assert step["resultKind"] == "document_write"
+    assert step["verificationStatus"] == "passed"
+    assert step["evidence"] == {"path": "/tmp/report.docx"}
+    assert pushed[-1]["result"]["blocks"][0]["verification"]["checkedSteps"] == 1
+    # Görev bittiğinde throttle durumu temizlenir.
+    assert "task-evidence-live" not in runtime._remote_progress_last_signature
 
 
 def test_live_progress_reports_cancelled_terminal_status(

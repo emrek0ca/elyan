@@ -7227,6 +7227,12 @@ class RuntimeBridge:
             "status": "completed" if chat_ok else "failed",
             "message": "Görev tamamlandı." if chat_ok else "Görev güvenli şekilde tamamlanamadı.",
             "summary": assistant_message[:1000],
+            "notification": {
+                "type": "task_terminal",
+                "status": "completed" if chat_ok else "failed",
+                "title": "Görev tamamlandı" if chat_ok else "Görev tamamlanamadı",
+                "body": (assistant_message or ("Görev tamamlandı." if chat_ok else "Görev güvenli şekilde tamamlanamadı."))[:240],
+            },
             "approvalRequest": {},
             "result": result_payload,
             "blocks": self._runtime_task_result_blocks(local_result),
@@ -12119,6 +12125,24 @@ class RuntimeBridge:
                 return
             self._remote_progress_last_signature[task_id] = signature
             self._remote_progress_last_emit[task_id] = now
+        live_steps: list[dict[str, Any]] = []
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            live_step = {
+                "id": str(step.get("id", "") or f"step_{index + 1}"),
+                "label": str(step.get("label", "") or ""),
+                "status": str(step.get("status", "") or "pending"),
+                "capability": str(step.get("capability", "") or ""),
+                "detail": str(step.get("detail", "") or ""),
+            }
+            for key in ("artifactCount", "resultKind", "verificationStatus", "attemptCount", "startedAt", "completedAt"):
+                if key in step:
+                    live_step[key] = step[key]
+            evidence = step.get("evidence")
+            if isinstance(evidence, dict) and evidence:
+                live_step["evidence"] = dict(evidence)
+            live_steps.append(live_step)
         live_trace = {
             "type": "task_trace",
             "taskId": task_id,
@@ -12126,17 +12150,7 @@ class RuntimeBridge:
             "status": str(block.get("status", "") or "running"),
             "title": str(block.get("title", "") or ""),
             "activeStepId": str(block.get("activeStepId", "") or ""),
-            "steps": [
-                {
-                    "id": str(step.get("id", "") or f"step_{index + 1}"),
-                    "label": str(step.get("label", "") or ""),
-                    "status": str(step.get("status", "") or "pending"),
-                    "capability": str(step.get("capability", "") or ""),
-                    "detail": str(step.get("detail", "") or ""),
-                }
-                for index, step in enumerate(steps)
-                if isinstance(step, dict)
-            ],
+            "steps": live_steps,
         }
         stop_reason = str(block.get("stopReason", "") or "")
         if stop_reason:
@@ -12159,6 +12173,10 @@ class RuntimeBridge:
         }
         if stop_reason:
             trace_block["stopReason"] = stop_reason
+        verification = block.get("verification")
+        if isinstance(verification, dict) and verification:
+            live_trace["verification"] = dict(verification)
+            trace_block["verification"] = dict(verification)
         live_status = str(live_trace["status"] or "running").strip().lower()
         payload_status = live_status if live_status in {"completed", "failed", "canceled"} else "running"
         payload = {
