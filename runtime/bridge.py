@@ -11627,11 +11627,30 @@ class RuntimeBridge:
         arguments = payload.get("arguments", {})
         arguments = dict(arguments) if isinstance(arguments, dict) else {}
         metadata = mcp_runtime.mcp_tool_metadata(server_id, tool_name, state)
+        if not isinstance(metadata, dict):
+            error = {
+                "code": "MCP_TOOL_NOT_FOUND",
+                "message": "Bağlı araç bulunamadı veya artık kullanılabilir değil.",
+            }
+            return {
+                "ok": False,
+                "error": error,
+                "toolEvents": [
+                    {
+                        "tool": "mcp_call_tool",
+                        "ok": False,
+                        "error": error,
+                        "source": "mcp_runtime",
+                    }
+                ],
+                "state": STATE.snapshot(),
+                "conversations": _conversation_entries(),
+            }
         tool_payload = {
             "serverId": server_id,
             "toolName": tool_name,
             "arguments": arguments,
-            "_readOnlyHint": bool(metadata.get("readOnly", False)) if isinstance(metadata, dict) else False,
+            "_readOnlyHint": bool(metadata.get("readOnly", False)),
             "_confirmed": bool(payload.get("_confirmed", False)),
         }
         tool_result = run_capability("mcp_call_tool", tool_payload, state)

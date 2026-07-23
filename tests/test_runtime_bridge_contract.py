@@ -8654,6 +8654,29 @@ def test_planner_mcp_tools_data_carries_compact_input_schema(
     ]
 
 
+def test_mcp_tool_call_requires_discovered_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(bridge.mcp_runtime, "mcp_tool_metadata", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bridge,
+        "run_capability",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("undiscovered MCP tool must not run")),
+    )
+
+    result = runtime.mcp_tool_call(
+        {"serverId": "missing_server", "toolName": "missing_tool", "arguments": {"q": "x"}}
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "MCP_TOOL_NOT_FOUND"
+    assert "Bağlı araç bulunamadı" in result["error"]["message"]
+    assert result["toolEvents"][0]["ok"] is False
+
+
 def test_mcp_server_upsert_refresh_and_remove_roundtrip(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
