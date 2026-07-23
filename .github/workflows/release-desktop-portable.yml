@@ -1,0 +1,206 @@
+name: Desktop Portable Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "GitHub release tag to create or update"
+        required: true
+        default: "v1.6.8"
+      source_ref:
+        description: "Source ref to build from"
+        required: true
+        default: "main"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-portable-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }} portable
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install uv==0.10.12
+          brew install portaudio
+
+      - name: Build macOS portable package
+        run: python scripts/build_desktop_installers.py --platform macos --arch "${{ matrix.arch }}" --output "release/macos-${{ matrix.arch }}"
+
+      - name: Verify checksums
+        shell: bash
+        run: |
+          cd "release/macos-${{ matrix.arch }}"
+          for checksum in *.sha256; do shasum -a 256 -c "$checksum"; done
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            release/macos-${{ matrix.arch }}/*.dmg
+            release/macos-${{ matrix.arch }}/*.app.zip
+            release/macos-${{ matrix.arch }}/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows x64 portable
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        shell: pwsh
+        run: |
+          python -m pip install uv==0.10.12
+          choco install innosetup --no-progress -y
+
+      - name: Build Windows portable package
+        run: python scripts/build_desktop_installers.py --platform windows --arch x64 --output release/windows-x64
+
+      - name: Verify checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem release/windows-x64/*.sha256 | ForEach-Object {
+            $parts = (Get-Content $_.FullName).Trim() -split '\s+', 2
+            $artifact = Join-Path $_.DirectoryName $parts[1]
+            if ((Get-FileHash $artifact -Algorithm SHA256).Hash.ToLowerInvariant() -ne $parts[0]) {
+              throw "Checksum mismatch: $artifact"
+            }
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: windows-x64
+          path: |
+            release/windows-x64/*-Setup.exe
+            release/windows-x64/*-portable.zip
+            release/windows-x64/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux x64 portable
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev libsndfile1-dev libgl1 libglib2.0-0 libx11-6 libxext6 libxrender1 libxcb1
+          python -m pip install uv==0.10.12
+
+      - name: Build Linux portable package
+        run: python scripts/build_desktop_installers.py --platform linux --arch x64 --output release/linux-x64
+
+      - name: Verify checksums
+        shell: bash
+        run: |
+          cd release/linux-x64
+          for checksum in *.sha256; do sha256sum -c "$checksum"; done
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: linux-x64
+          path: |
+            release/linux-x64/*.deb
+            release/linux-x64/*.tar.gz
+            release/linux-x64/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish portable GitHub Release
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      SOURCE_REF: ${{ inputs.source_ref }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Recheck checksums and generate release metadata
+        shell: bash
+        run: |
+          cd dist
+          for checksum in *.sha256; do sha256sum -c "$checksum"; done
+          cd ..
+          python scripts/generate_release_sbom.py --output "dist/Elyan-${RELEASE_TAG#v}-SBOM.cdx.json"
+          cd dist
+          find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Create or update GitHub Release
+        shell: bash
+        run: |
+          NOTES="Portable unsigned Elyan desktop packages. macOS/Windows packages are for fast testing; production distribution still needs platform signing and notarization."
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_REF" \
+              --title "Elyan ${RELEASE_TAG#v}" \
+              --notes "$NOTES"
+          fi

@@ -192,7 +192,14 @@ def sign_macos_app(app_bundle: Path) -> None:
     for path in app_bundle.rglob("*"):
         if not path.is_file() or path.is_symlink():
             continue
-        probe = subprocess.run(["file", "-b", str(path)], capture_output=True, text=True, check=False)
+        probe = subprocess.run(
+            ["file", "-b", str(path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
         if "Mach-O" in probe.stdout:
             executable_candidates.append(path)
     for path in sorted(executable_candidates, key=lambda item: len(item.parts), reverse=True):
