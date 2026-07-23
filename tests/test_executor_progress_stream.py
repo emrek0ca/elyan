@@ -150,6 +150,36 @@ def test_progress_uses_human_labels_for_professional_and_decision_steps() -> Non
         {"id": "read", "capability": "document_read", "args": {"text": "Hb 10.5"}},
         {"id": "calc", "capability": "math_solve", "args": {"expression": "12000+8500"}, "dependsOn": ["read"]},
         {
+            "id": "legal",
+            "capability": "text_analyze",
+            "args": {"prompt": "dava", "sourceContext": "{{steps.read.output}}", "mode": "legal"},
+            "dependsOn": ["read"],
+        },
+        {
+            "id": "medical",
+            "capability": "text_analyze",
+            "args": {"prompt": "tahlil", "sourceContext": "{{steps.read.output}}", "mode": "medical"},
+            "dependsOn": ["read"],
+        },
+        {
+            "id": "accounting",
+            "capability": "text_analyze",
+            "args": {"prompt": "kdv", "sourceContext": "{{steps.calc.output}}", "mode": "accounting"},
+            "dependsOn": ["calc"],
+        },
+        {
+            "id": "student",
+            "capability": "text_analyze",
+            "args": {"prompt": "ödev", "sourceContext": "{{steps.read.output}}", "mode": "student"},
+            "dependsOn": ["read"],
+        },
+        {
+            "id": "technical",
+            "capability": "text_analyze",
+            "args": {"prompt": "optimizasyon", "sourceContext": "{{steps.calc.output}}", "mode": "technical"},
+            "dependsOn": ["calc"],
+        },
+        {
             "id": "model",
             "capability": "quantum_model_problem",
             "args": {"prompt": "capacity 10", "problemClass": "optimization"},
@@ -176,6 +206,11 @@ def test_progress_uses_human_labels_for_professional_and_decision_steps() -> Non
     assert [step["label"] for step in final["steps"]] == [
         "Belge okunuyor",
         "Hesaplanıyor",
+        "Hukuki analiz yapılıyor",
+        "Tıbbi bağlam yorumlanıyor",
+        "Muhasebe analizi yapılıyor",
+        "Öğrenci içeriği analiz ediliyor",
+        "Teknik analiz yapılıyor",
         "Problem modelleniyor",
         "Karar raporu hazırlanıyor",
         "Uygulama aracı çalışıyor",

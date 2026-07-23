@@ -455,6 +455,7 @@ class ExecutorCore:
                     "id": step_id,
                     "capability": str(step.get("capability", "") or ""),
                     "label": str(step.get("description", "") or ""),
+                    "mode": str((step.get("args") if isinstance(step.get("args"), dict) else {}).get("mode", "") or ""),
                     "status": "pending",
                     "phase": str(step.get("phase", "") or "act"),
                     "role": str(step.get("role", "") or "operator"),
@@ -500,18 +501,30 @@ class ExecutorCore:
         "mcp_call_tool": "Uygulama aracı",
         "mcp_tool_call": "Uygulama aracı çalışıyor",
         "math_solve": "Hesaplanıyor",
+        "text_analyze": "Analiz ediliyor",
         "symbolic_math": "Sembolik çözüm yapılıyor",
         "quantum_model_problem": "Problem modelleniyor",
         "quantum_run_experiment": "Çözüm deneniyor",
         "quantum_compare_classical": "Çözüm doğrulanıyor",
         "quantum_generate_report": "Karar raporu hazırlanıyor",
     }
+    _TEXT_ANALYSIS_MODE_LABELS: dict[str, str] = {
+        "legal": "Hukuki analiz yapılıyor",
+        "medical": "Tıbbi bağlam yorumlanıyor",
+        "accounting": "Muhasebe analizi yapılıyor",
+        "technical": "Teknik analiz yapılıyor",
+        "student": "Öğrenci içeriği analiz ediliyor",
+        "professional": "Profesyonel analiz yapılıyor",
+    }
 
     @classmethod
-    def _step_label(cls, capability: str, description: str = "") -> str:
+    def _step_label(cls, capability: str, description: str = "", mode: str = "") -> str:
         desc = _safe_text(description, limit=48)
         if desc:
             return desc
+        if capability == "text_analyze":
+            normalized_mode = str(mode or "").strip().lower()
+            return cls._TEXT_ANALYSIS_MODE_LABELS.get(normalized_mode, cls._CAPABILITY_LABELS[capability])
         return cls._CAPABILITY_LABELS.get(capability, capability or "Adım")
 
     def _build_task_trace_block(self, current: dict[str, Any], *, final: bool = False) -> dict[str, Any]:
@@ -538,7 +551,11 @@ class ExecutorCore:
                 active_step_id = step_id
             step_payload: dict[str, Any] = {
                 "id": step_id,
-                "label": self._step_label(str(state.get("capability", "") or ""), str(state.get("label", "") or "")),
+                "label": self._step_label(
+                    str(state.get("capability", "") or ""),
+                    str(state.get("label", "") or ""),
+                    str(state.get("mode", "") or ""),
+                ),
                 "status": mapped,
                 "capability": str(state.get("capability", "") or ""),
                 "detail": _safe_text(str(state.get("outputPreview", "") or state.get("stopReason", "") or ""), limit=120),
