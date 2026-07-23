@@ -37,3 +37,35 @@ jobs:
 
       - name: Analyze
         uses: github/codeql-action/analyze@adfda868f108ac4222129de456ea554034a27db7 # v4
+        with:
+          output: ../codeql-results
+          upload: never
+
+      - name: Fail on CodeQL findings
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          findings = []
+          for path in pathlib.Path("../codeql-results").glob("*.sarif"):
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              for run in payload.get("runs", []):
+                  for result in run.get("results", []):
+                      findings.append((result.get("ruleId", "unknown"), result.get("message", {}).get("text", "")))
+          for rule, message in findings[:20]:
+              print(f"{rule}: {message}")
+          if findings:
+              raise SystemExit(f"CodeQL reported {len(findings)} finding(s)")
+          print("CodeQL reported no findings")
+          PY
+
+      - name: Upload SARIF evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: codeql-${{ matrix.language }}
+          path: ../codeql-results/*.sarif
+          if-no-files-found: error
+          retention-days: 30
