@@ -6911,7 +6911,38 @@ class RuntimeBridge:
             ),
             approval_capabilities[0] if approval_capabilities else "",
         )
-        if not approval_metadata or any(
+        work_order = self._current_work_order() or {}
+        permission_envelope = work_order.get("permissionEnvelope")
+        permission_envelope = permission_envelope if isinstance(permission_envelope, dict) else {}
+        single_full_access_surface = str(permission_envelope.get("mode", "") or "").strip() == "single_full_access_surface"
+        irreversible_capabilities = {
+            "email_send",
+            "send_whatsapp_message",
+            "mcp_call_tool",
+            "shell_run",
+            "delete_file",
+            "file_delete",
+        }
+        has_irreversible_risk = any(
+            capability in irreversible_capabilities
+            for capability in approval_capabilities
+        ) or any(bool(step.get("overwrite")) for step in safe_steps)
+        has_unknown_side_effect = any(
+            item.get("approvalPermission") == "side_effect"
+            and item.get("idempotency") == "non_idempotent"
+            and capability not in {
+                "browser_control",
+                "browser_agent.run",
+                "desktop_operator.focus_window",
+                "desktop_operator.execute_action",
+                "desktop_operator.run",
+            }
+            for capability, item in zip(approval_capabilities, approval_metadata)
+        )
+        if single_full_access_surface and not has_irreversible_risk and not has_unknown_side_effect:
+            approval_permission = "full_computer_access"
+            approval_idempotency = "task_scoped_access"
+        elif not approval_metadata or any(
             item.get("approvalPermission") == "side_effect"
             or item.get("idempotency") == "non_idempotent"
             for item in approval_metadata
@@ -6929,7 +6960,6 @@ class RuntimeBridge:
             or local_result.get("assistantMessage", "")
             or "Yerel işlem onayı gerekiyor."
         ).strip()[:500]
-        work_order = self._current_work_order() or {}
         task_id = str(work_order.get("taskId", "") or local_result.get("taskId", "") or "").strip()
         revision = 1
         try:
@@ -6975,6 +7005,19 @@ class RuntimeBridge:
             "permissionSummary": (
                 "Elyan bu görevi tamamlamak için bilgisayar erişimini tek onay altında kullanacak."
             ),
+            "permissionEnvelope": {
+                "mode": str(permission_envelope.get("mode", "") or "single_full_access_surface"),
+                "coveredPermissions": [
+                    str(item)
+                    for item in permission_envelope.get("coveredPermissions", [])
+                    if str(item or "").strip()
+                ][:12] if isinstance(permission_envelope.get("coveredPermissions"), list) else [],
+                "separateApprovalFor": [
+                    str(item)
+                    for item in permission_envelope.get("separateApprovalFor", [])
+                    if str(item or "").strip()
+                ][:12] if isinstance(permission_envelope.get("separateApprovalFor"), list) else [],
+            },
             "approvalKey": approval_key,
             "revision": revision,
             "expiresAt": expires_at,

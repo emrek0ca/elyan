@@ -55,6 +55,34 @@ def test_work_order_validation_normalizes_capabilities() -> None:
     assert canonical_capability("screen_context") == "desktop_operator.observe_screen"
 
 
+def test_work_order_validation_preserves_additive_runtime_quality_metadata() -> None:
+    work_order = _work_order()
+    work_order["contextPack"] = {
+        "sourceReference": "latest_artifact",
+        "conversationState": {"turnKind": "correction", "carryForward": True},
+        "latestArtifactRef": {"id": "artifact_1", "kind": "image", "summary": "Beyaz kedi"},
+    }
+    work_order["executionPlan"] = {
+        "mode": "data_workflow",
+        "planner": "server_brain",
+        "allowReplan": True,
+    }
+    work_order["permissionEnvelope"] = {
+        "mode": "single_full_access_surface",
+        "coveredPermissions": ["browser_control", "computer_control"],
+        "separateApprovalFor": ["delete", "overwrite", "send_email"],
+        "ttlSeconds": 900,
+    }
+
+    validation = validate_payload({"desktopWorkOrder": work_order})
+
+    assert validation.ok is True
+    assert validation.work_order is not None
+    assert validation.work_order["contextPack"]["sourceReference"] == "latest_artifact"
+    assert validation.work_order["contextPack"]["conversationState"]["turnKind"] == "correction"
+    assert validation.work_order["permissionEnvelope"]["mode"] == "single_full_access_surface"
+
+
 def test_work_order_validation_rejects_unknown_schema() -> None:
     work_order = _work_order()
     work_order["schema"] = "elyan.desktop_work_order.v999"

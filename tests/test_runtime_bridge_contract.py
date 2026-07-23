@@ -1285,15 +1285,29 @@ def test_approval_request_payload_classifies_only_registered_safe_writes_as_idem
             },
         }
     )
-    browser_control = runtime._approval_request_payload(
-        {
-            "assistantMessage": "Tarayıcı kontrol edilecek.",
-            "planPreview": {
-                "summary": "Tarayıcı kontrol edilecek.",
-                "steps": [{"capability": "browser_control", "description": "Tarayıcıyı kontrol et."}],
+    token = runtime._execution_trust_context.set({
+        "workOrder": {
+            "taskId": "task-access",
+            "revision": 1,
+            "permissionEnvelope": {
+                "mode": "single_full_access_surface",
+                "coveredPermissions": ["browser_control", "computer_control"],
+                "separateApprovalFor": ["delete", "overwrite", "send_email"],
             },
-        }
-    )
+        },
+    })
+    try:
+        browser_control = runtime._approval_request_payload(
+            {
+                "assistantMessage": "Tarayıcı kontrol edilecek.",
+                "planPreview": {
+                    "summary": "Tarayıcı kontrol edilecek.",
+                    "steps": [{"capability": "browser_control", "description": "Tarayıcıyı kontrol et."}],
+                },
+            }
+        )
+    finally:
+        runtime._execution_trust_context.reset(token)
     destructive_overwrite = runtime._approval_request_payload(
         {
             "assistantMessage": "Belge güncellenecek.",
@@ -1317,8 +1331,10 @@ def test_approval_request_payload_classifies_only_registered_safe_writes_as_idem
     assert generated_image["idempotency"] == "non_idempotent"
     assert generated_chart["permission"] == "side_effect"
     assert generated_chart["idempotency"] == "non_idempotent"
-    assert browser_control["permission"] == "side_effect"
-    assert browser_control["idempotency"] == "non_idempotent"
+    assert browser_control["permission"] == "full_computer_access"
+    assert browser_control["idempotency"] == "task_scoped_access"
+    assert browser_control["permissionEnvelope"]["mode"] == "single_full_access_surface"
+    assert "overwrite" in browser_control["permissionEnvelope"]["separateApprovalFor"]
     assert destructive_overwrite["permission"] == "side_effect"
     assert destructive_overwrite["idempotency"] == "non_idempotent"
     assert destructive_overwrite["steps"][0]["overwrite"] is True
@@ -11938,6 +11954,39 @@ def test_terminal_payload_strips_leaked_internal_envelope(
     assert "elyan.plan" not in payload["safeSummary"]
     # Temiz yedek (yürütme kanıtından sentez) gösterilir.
     assert payload["summary"].strip() != ""
+
+
+def test_terminal_payload_strips_identity_deflection_from_task_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Task sonucu olgusal olmalı; model kaynaklı kimlik/redd cümlesi kullanıcıya
+    terminal task cevabı olarak çıkarsa yürütme kanıtından temiz özet kullanılır."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    payload, artifacts, ok = runtime._runtime_task_terminal_payload(
+        {
+            "chatOk": True,
+            "assistantMessage": "Ben Elyan olarak çalışırım, teknik altyapımı paylaşmam mümkün değil.",
+            "provider": "local",
+            "toolEvents": [
+                {
+                    "ok": True,
+                    "capability": "analyze_screen",
+                    "output": "Aktif pencere: Google Chrome / Elyan dashboard.",
+                }
+            ],
+            "executionTrace": {"steps": [{"label": "Ekran okundu", "status": "completed"}]},
+        }
+    )
+
+    assert ok is True
+    assert "Ben Elyan" not in payload["summary"]
+    assert "teknik altyap" not in payload["summary"]
+    assert payload["summary"] == "Aktif pencere: Google Chrome / Elyan dashboard."
+    assert artifacts[0]["kind"] == "summary"
+    assert artifacts[0]["name"] == "elyan-result.txt"
 
 
 def test_permission_required_is_not_replanned(
