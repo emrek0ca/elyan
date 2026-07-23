@@ -482,6 +482,59 @@ def test_executor_hides_intermediate_reader_output_when_writer_creates_artifact(
     assert content == "PPTX oluşturuldu: summary.pptx"
 
 
+def test_executor_passes_dependency_payloads_even_without_arg_templates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+    output_path = tmp_path / "report.docx"
+    writer_args: dict[str, object] = {}
+
+    def execute_step(capability: str, args: dict, _state: dict, _source: str):
+        if capability == "document_read":
+            return {
+                "ok": True,
+                "output": "Okunan özel veri özeti",
+                "result": {"kind": "document_read", "summary": "özel veri"},
+                "artifacts": [{"kind": "source", "path": "/safe/local/input.pdf"}],
+            }, []
+        if capability == "document_write":
+            writer_args.update(args)
+            output_path.write_bytes(b"fake-docx-proof" * 80)
+            return {
+                "ok": True,
+                "output": "DOCX oluşturuldu",
+                "result": {"kind": "document_write", "outputPath": str(output_path)},
+                "artifacts": [{"kind": "file", "path": str(output_path)}],
+            }, []
+        raise AssertionError(capability)
+
+    ok, _content, _events, error_code, result, artifacts = executor.execute_plan_steps(
+        steps=[
+            {"id": "read", "capability": "document_read", "args": {"text": "özel veri"}},
+            {
+                "id": "write",
+                "capability": "document_write",
+                "dependsOn": ["read"],
+                "args": {"title": "Rapor", "content": "Analiz raporu hazırla."},
+            },
+        ],
+        state_factory=state_store.snapshot,
+        execute_step=execute_step,
+        source="server_materialized",
+        confirmed=True,
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert result and result["kind"] == "document_write"
+    assert artifacts and artifacts[-1]["path"] == str(output_path)
+    assert writer_args["_previousOutput"] == "Okunan özel veri özeti"
+    assert writer_args["_dependencyResults"]["read"]["kind"] == "document_read"
+    assert writer_args["_dependencyArtifacts"]["read"][0]["path"] == "/safe/local/input.pdf"
+
+
 def test_goal_verification_can_add_collision_free_repair_step(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
