@@ -600,10 +600,11 @@ class ExecutorCore:
             status = str(state.get("status", "") or "pending")
             # executor status → task_trace status
             mapped = {"running": "running", "completed": "completed", "failed": "failed", "canceled": "canceled"}.get(status, "pending")
+            was_running = mapped == "running"
             if final_canceled and mapped == "running":
                 mapped = "canceled"
             step_id = str(state.get("id", "") or f"step_{len(steps) + 1}")
-            if mapped == "running":
+            if mapped == "running" or (final_canceled and was_running):
                 active_step_id = step_id
             step_payload: dict[str, Any] = {
                 "id": step_id,

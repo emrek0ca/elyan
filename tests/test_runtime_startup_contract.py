@@ -1703,6 +1703,41 @@ def test_executor_passes_rich_dependency_payload_to_dependent_steps(
     assert dependency_results["research"]["_artifacts"][0]["kind"] == "data"
 
 
+def test_executor_final_cancel_trace_keeps_interrupted_step_active() -> None:
+    from runtime.executor_core import ExecutorCore
+
+    core = ExecutorCore()
+    block = core._build_task_trace_block(
+        {
+            "id": "task-cancel-trace",
+            "summary": "Rapor hazırlanıyor",
+            "executionTrace": {
+                "stopReason": "execution_cancelled",
+                "stepStates": [
+                    {
+                        "id": "s1",
+                        "status": "completed",
+                        "capability": "math_solve",
+                        "label": "KDV hesaplandı",
+                    },
+                    {
+                        "id": "s2",
+                        "status": "running",
+                        "capability": "document_write",
+                        "label": "Rapor yazılıyor",
+                    },
+                ],
+            },
+        },
+        final=True,
+    )
+
+    assert block["status"] == "canceled"
+    assert block["activeStepId"] == "s2"
+    assert block["steps"][1]["status"] == "canceled"
+    assert block["stopReason"] == "execution_cancelled"
+
+
 def test_document_write_creates_docx_in_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

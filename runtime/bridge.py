@@ -12240,8 +12240,17 @@ class RuntimeBridge:
                 "failed": "Görev tamamlanamadı",
                 "canceled": "Görev iptal edildi",
             }.get(payload_status, "Görev durumu güncellendi")
+            canceled_step_label = ""
+            if payload_status == "canceled":
+                active_step_id = str(live_trace.get("activeStepId", "") or "").strip()
+                for step in live_trace["steps"]:
+                    if isinstance(step, dict) and active_step_id and str(step.get("id", "") or "") == active_step_id:
+                        canceled_step_label = str(step.get("label", "") or "").strip()
+                        break
             notification_body = (
-                "Görev iptal edildi."
+                f"Görev iptal edildi. Son adım: {canceled_step_label}"
+                if payload_status == "canceled" and canceled_step_label
+                else "Görev iptal edildi."
                 if payload_status == "canceled"
                 else payload["summary"]
             )

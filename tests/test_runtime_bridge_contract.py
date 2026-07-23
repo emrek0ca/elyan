@@ -10873,11 +10873,11 @@ def test_live_progress_reports_cancelled_terminal_status(
             {
                 "status": "canceled",
                 "title": "Görev",
-                "activeStepId": "",
+                "activeStepId": "s2",
                 "stopReason": "execution_cancelled",
                 "steps": [
                     {"id": "s1", "status": "completed", "label": "Hesaplandı", "capability": "math_solve"},
-                    {"id": "s2", "status": "pending", "label": "Belge yazılıyor", "capability": "document_write"},
+                    {"id": "s2", "status": "canceled", "label": "Belge yazılıyor", "capability": "document_write"},
                 ],
             },
         )
@@ -10888,6 +10888,7 @@ def test_live_progress_reports_cancelled_terminal_status(
     payload = pushed[-1]
     assert payload["status"] == "canceled"
     assert payload["executionTrace"]["status"] == "canceled"
+    assert payload["executionTrace"]["activeStepId"] == "s2"
     assert payload["executionTrace"]["stopReason"] == "execution_cancelled"
     assert payload["result"]["blocks"][0]["status"] == "canceled"
     assert payload["result"]["blocks"][0]["stopReason"] == "execution_cancelled"
@@ -10895,7 +10896,7 @@ def test_live_progress_reports_cancelled_terminal_status(
         "type": "task_terminal",
         "status": "canceled",
         "title": "Görev iptal edildi",
-        "body": "Görev iptal edildi.",
+        "body": "Görev iptal edildi. Son adım: Belge yazılıyor",
     }
 
 
