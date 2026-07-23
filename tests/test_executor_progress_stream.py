@@ -5,7 +5,13 @@ from runtime.executor_core import ExecutorCore
 
 def _ok_step(cap, args, state, source):
     # result_nonempty / tool_result doğrulamasını geçecek çıktı + artifact.
-    return {"ok": True, "output": f"{cap} tamam", "result": {"kind": cap}, "artifacts": [{"kind": "file", "name": "x"}]}, []
+    return {
+        "ok": True,
+        "output": f"{cap} tamam",
+        "result": {"kind": cap},
+        "artifacts": [{"kind": "file", "name": "x"}],
+        "stepEvidence": {"path": "/tmp/elyan-proof.txt"},
+    }, []
 
 
 def test_progress_emits_task_trace_blocks(tmp_path) -> None:
@@ -38,6 +44,10 @@ def test_progress_emits_task_trace_blocks(tmp_path) -> None:
     assert final["status"] == "completed"
     assert [s["status"] for s in final["steps"]] == ["completed", "completed"]
     assert [s["label"] for s in final["steps"]] == ["Araştırılıyor", "Dosya okunuyor"]
+    assert final["verification"]["checkedSteps"] == 2
+    assert final["steps"][0]["artifactCount"] == 1
+    assert final["steps"][0]["resultKind"] == "web_research"
+    assert final["steps"][0]["evidence"] == {"path": "/tmp/elyan-proof.txt"}
 
 
 def test_no_emitter_is_safe(tmp_path) -> None:

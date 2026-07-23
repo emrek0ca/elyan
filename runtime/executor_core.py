@@ -321,33 +321,45 @@ class ExecutorCore:
         output_preview: str = "",
         error_code: str = "",
         stop_reason: str = "",
+        artifact_count: int = 0,
+        result_kind: str = "",
+        evidence: dict[str, Any] | None = None,
+        count_verification: bool = True,
     ) -> None:
         with self._lock:
             current = self._current.get(execution_id)
             if not isinstance(current, dict):
                 return
+            evidence = evidence if isinstance(evidence, dict) else {}
             step_state = self._step_state(current, step_id)
-            step_state.update(
-                {
-                    "status": status,
-                    "verificationStatus": verification_status,
-                    "outputPreview": _safe_text(output_preview, limit=240) if output_preview else "",
-                    "errorCode": error_code,
-                    "stopReason": stop_reason,
-                    "finishedAt": _utc_now_iso(),
-                }
-            )
+            update_payload: dict[str, Any] = {
+                "status": status,
+                "verificationStatus": verification_status,
+                "outputPreview": _safe_text(output_preview, limit=240) if output_preview else "",
+                "errorCode": error_code,
+                "stopReason": stop_reason,
+                "finishedAt": _utc_now_iso(),
+            }
+            if artifact_count > 0:
+                update_payload["artifactCount"] = int(artifact_count)
+            if result_kind:
+                update_payload["resultKind"] = _safe_text(result_kind, limit=80)
+            evidence_path = str(evidence.get("path", "") or evidence.get("outputPath", "") or "").strip()
+            if evidence_path:
+                update_payload["evidencePath"] = _safe_text(evidence_path, limit=240)
+            step_state.update(update_payload)
             trace = current.get("executionTrace")
             trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
             verification = trace.get("verificationState")
             verification = dict(verification) if isinstance(verification, dict) else {}
-            verification["checkedSteps"] = int(verification.get("checkedSteps", 0) or 0) + 1
-            if verification_status in {"passed", "repaired"}:
-                verification["status"] = verification_status
-            elif verification_status == "failed":
-                verification["status"] = "failed"
-                verification["failedStepId"] = step_id
-                verification["lastReason"] = stop_reason or output_preview
+            if count_verification:
+                verification["checkedSteps"] = int(verification.get("checkedSteps", 0) or 0) + 1
+                if verification_status in {"passed", "repaired"}:
+                    verification["status"] = verification_status
+                elif verification_status == "failed":
+                    verification["status"] = "failed"
+                    verification["failedStepId"] = step_id
+                    verification["lastReason"] = stop_reason or output_preview
             trace["verificationState"] = verification
             current["executionTrace"] = trace
             self._persist()
@@ -534,6 +546,15 @@ class ExecutorCore:
             attempt_count = int(state.get("attemptCount", 0) or 0)
             if attempt_count > 1:
                 step_payload["attemptCount"] = attempt_count
+            artifact_count = int(state.get("artifactCount", 0) or 0)
+            if artifact_count > 0:
+                step_payload["artifactCount"] = artifact_count
+            result_kind = str(state.get("resultKind", "") or "")
+            if result_kind:
+                step_payload["resultKind"] = result_kind
+            evidence_path = str(state.get("evidencePath", "") or "")
+            if evidence_path:
+                step_payload["evidence"] = {"path": evidence_path}
             steps.append(step_payload)
         stop_reason = str(trace.get("stopReason", "") or "")
         overall = "running"
@@ -1715,6 +1736,17 @@ class ExecutorCore:
                     ]
                     if int(step.get("_forEachPosition", 0) or 0) >= int(step.get("_forEachCount", 0) or 0):
                         completed_step_ids.add(parent_id)
+                self._record_step_result(
+                    execution_id,
+                    step_id=step_id,
+                    status="completed",
+                    verification_status="repaired" if attempt > 1 else "passed",
+                    output_preview=output,
+                    artifact_count=len(cleaned_artifacts),
+                    result_kind=str((result_payload or {}).get("kind", "") or "") if isinstance(result_payload, dict) else "",
+                    evidence=evidence_payload,
+                    count_verification=False,
+                )
                 completed_step_ids.add(step_id)
                 self._record_checkpoint(execution_id, step_id)
                 # P4: kalıcı checkpoint — argümanlar yalnız hash, çıktı yalnız
