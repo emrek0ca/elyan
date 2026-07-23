@@ -49,6 +49,15 @@ def test_tool_catalog_describes_structured_results_for_data_flow() -> None:
 
     assert catalog["web_research"]["resultSchema"]["properties"]["sources"]["type"] == "array"
     assert catalog["browser_session.extract"]["resultSchema"]["properties"]["items"]["type"] == "array"
+    assert catalog["text_analyze"]["parameters"]["properties"]["mode"]["enum"] == [
+        "accounting",
+        "legal",
+        "medical",
+        "professional",
+        "student",
+        "technical",
+    ]
+    assert catalog["text_analyze"]["resultSchema"]["properties"]["findings"]["type"] == "array"
     assert catalog["spreadsheet_write"]["resultSchema"]["properties"]["rows"]["type"] == "array"
 
 
@@ -190,6 +199,40 @@ def test_plan_preserves_foreach_and_deferred_structured_writer_values() -> None:
     assert by_id["download"]["forEach"] == "{{steps.collect.result.items}}"
     assert by_id["download"]["args"]["url"] == "{{item.href}}"
     assert by_id["sheet"]["args"]["rows"] == "{{steps.collect.result.items}}"
+
+
+def test_professional_text_analyze_plan_preserves_mode_and_source_context_reference() -> None:
+    plan, errors = sp.validate_plan(
+        _plan(
+            [
+                {
+                    "id": "read_case",
+                    "capability": "document_read",
+                    "args": {"path": "/tmp/dava.pdf", "mode": "read"},
+                },
+                {
+                    "id": "analyze_case",
+                    "capability": "text_analyze",
+                    "dependsOn": ["read_case"],
+                    "args": {
+                        "prompt": "Savunma dilekçesi için hukuki riskleri ve delil durumunu analiz et.",
+                        "sourceContext": "{{steps.read_case.output}}",
+                        "mode": "LEGAL",
+                        "ignored": "budanmalı",
+                    },
+                },
+            ]
+        )
+    )
+
+    assert plan is not None, errors
+    analyze = plan["steps"][1]
+    assert errors == []
+    assert analyze["args"] == {
+        "prompt": "Savunma dilekçesi için hukuki riskleri ve delil durumunu analiz et.",
+        "sourceContext": "{{steps.read_case.output}}",
+        "mode": "legal",
+    }
 
 
 def test_missing_required_arg_flagged() -> None:

@@ -44,6 +44,7 @@ ENUM_CONSTRAINTS: dict[str, dict[str, set[str]]] = {
     "ocr_read": {"mode": {"read", "summary", "bullets"}},
     "image_read": {"mode": {"summary", "metadata", "palette"}},
     "data_analyze": {"mode": {"summary", "profile", "preview"}},
+    "text_analyze": {"mode": {"professional", "legal", "medical", "accounting", "technical", "student"}},
     "chart_generate": {"chartType": {"bar", "line", "scatter", "histogram"}},
     "math_solve": {"mode": {"solve", "simplify", "factor", "expand", "evaluate"}},
     "latex_parse": {"mode": {"parse", "normalize"}},
@@ -79,6 +80,12 @@ _RESULT_PROPERTIES: dict[str, dict[str, dict[str, Any]]] = {
         "previewRows": {"type": "array", "items": {"type": "object"}},
         "profile": {"type": "object"},
         "summary": {"type": "string"},
+    },
+    "text_analyze": {
+        "summary": {"type": "string"},
+        "findings": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "recommendations": {"type": "array", "items": {"type": "string"}},
     },
     "browser_session.extract": {
         "items": {"type": "array", "items": {"type": "object"}},
