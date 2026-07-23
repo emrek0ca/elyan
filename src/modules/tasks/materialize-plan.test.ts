@@ -59,6 +59,10 @@ test("desktop materialization prompt keeps research queries public and writer ar
 
   assert.match(fewShots, /Legal research \+ defense draft/);
   assert.match(fewShots, /kira uyusmazligi tahliye davasi savunma dilekcesi mevzuat emsal/);
+  assert.match(fewShots, /Legal private file \+ public research \+ defense draft/);
+  assert.match(fewShots, /"capability":"document_read"/);
+  assert.match(fewShots, /"query":"kira uyusmazligi tahliye itirazi savunma dilekcesi mevzuat emsal"/);
+  assert.match(fewShots, /Dosya baglami: \{\{steps\.s1\.output\}\}\\n\\nPublic arastirma: \{\{steps\.s2\.output\}\}/);
   assert.match(fewShots, /Private inline data \+ analysis report/);
   assert.match(fewShots, /"capability":"document_read"/);
   assert.match(fewShots, /Hb 10\.5, ferritin 8, B12 220/);
