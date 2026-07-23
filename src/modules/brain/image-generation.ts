@@ -234,6 +234,8 @@ const IMAGE_EDIT_REQUEST_PATTERNS = [
   /\b(arka plan|rengini|stilini|ışığı|isigi|kontrastı|kontrasti)\b/i,
   /\b(hayır|hayir|yok|olmadı|olmadi|değil|degil)\b.{0,80}\b(olsun|yap|çevir|cevir|değiştir|degistir)\b/iu,
   /\b(beyaz|siyah|kırmızı|kirmizi|mavi|yeşil|yesil|sarı|sari|mor|pembe|turuncu|gri|lacivert|kahverengi|altın|altin|gümüş|gumus)\b.{0,50}\b(olsun|yap|çevir|cevir|görünsün|gorunsun)\b/iu,
+  /\b(başka|baska|farklı|farkli|diğer|diger|alternatif)\s+(renk|renkte|renkli|ton|tonda)\b.{0,50}\b(çiz|ciz|yap|olsun|üret|uret)\b/iu,
+  /\b(renk|renkte|renkli|ton|tonda)\b.{0,50}\b(değiştir|degistir|çevir|cevir|başka|baska|farklı|farkli)\b/iu,
   /\b(daha)\s+(beyaz|siyah|aydınlık|aydinlik|karanlık|karanlik|parlak|mat|canlı|canli|sinematik|cinematic|gerçekçi|gercekci|minimal|detaylı|detayli|net)\b/iu,
   /\b(bunu|görseli|gorseli|resmi|fotoğrafı|fotografi)\b.{0,60}\b(yap|çevir|cevir)\b/i,
   /\b(beni|bizi|onu|şunu|sunu|bunu|saçımı|sacimi|kıyafetimi|kiyafetimi)\b.{0,80}\b(yap|göster|goster|çevir|cevir)\b/i,
