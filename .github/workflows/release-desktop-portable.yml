@@ -89,7 +89,7 @@ jobs:
           choco install innosetup --no-progress -y
 
       - name: Build Windows portable package
-        run: python scripts/build_desktop_installers.py --platform windows --arch x64 --output release/windows-x64
+        run: python scripts/build_desktop_installers.py --platform windows --arch x64 --core-only --output release/windows-x64
 
       - name: Verify checksums
         shell: pwsh
