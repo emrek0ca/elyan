@@ -70,3 +70,33 @@ def test_progress_marks_failure() -> None:
     )
     assert captured
     assert captured[-1]["steps"][0]["status"] == "failed"
+
+
+def test_progress_marks_cancellation_as_canceled() -> None:
+    ex = ExecutorCore()
+    captured: list[dict] = []
+    ex.set_progress_emitter(lambda cid, block: captured.append(block))
+    should_cancel = {"value": False}
+
+    def _first_step_then_cancel(cap, args, state, source):
+        should_cancel["value"] = True
+        return {"ok": True, "output": "ilk adım tamam", "result": {"kind": cap}, "artifacts": []}, []
+
+    ok, content, _events, error_code, _result, _artifacts = ex.execute_plan_steps(
+        steps=[
+            {"id": "s1", "capability": "math_solve", "args": {"expression": "1+1"}},
+            {"id": "s2", "capability": "document_write", "args": {"prompt": "sonuç"}, "dependsOn": ["s1"]},
+        ],
+        state_factory=lambda: {},
+        execute_step=_first_step_then_cancel,
+        source="confirmed_plan",
+        conversation_id="conv_cancel",
+        should_cancel=lambda: "task_cancelled" if should_cancel["value"] else "",
+    )
+
+    assert ok is False
+    assert content == "Görev iptal edildi."
+    assert error_code == "EXECUTION_CANCELLED"
+    assert captured[-1]["status"] == "canceled"
+    assert captured[-1]["stopReason"] == "execution_cancelled"
+    assert [step["status"] for step in captured[-1]["steps"]] == ["completed", "pending"]

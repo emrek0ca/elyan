@@ -10434,6 +10434,46 @@ def test_live_progress_routes_to_active_task_and_throttles(
     assert "task-1" not in runtime._remote_progress_last_signature
 
 
+def test_live_progress_reports_cancelled_terminal_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    pushed: list[dict] = []
+    monkeypatch.setattr(
+        runtime,
+        "_report_runtime_task_status",
+        lambda _task_id, payload: pushed.append(payload),
+    )
+
+    token = runtime._begin_active_remote_task("task-cancel-live", "run-cancel-live")
+    try:
+        runtime._emit_remote_task_progress(
+            "conv",
+            {
+                "status": "canceled",
+                "title": "Görev",
+                "activeStepId": "",
+                "stopReason": "execution_cancelled",
+                "steps": [
+                    {"id": "s1", "status": "completed", "label": "Hesaplandı", "capability": "math_solve"},
+                    {"id": "s2", "status": "pending", "label": "Belge yazılıyor", "capability": "document_write"},
+                ],
+            },
+        )
+    finally:
+        runtime._end_active_remote_task(token, "task-cancel-live")
+
+    assert pushed
+    payload = pushed[-1]
+    assert payload["status"] == "canceled"
+    assert payload["executionTrace"]["status"] == "canceled"
+    assert payload["executionTrace"]["stopReason"] == "execution_cancelled"
+    assert payload["result"]["blocks"][0]["status"] == "canceled"
+    assert payload["result"]["blocks"][0]["stopReason"] == "execution_cancelled"
+
+
 def test_ws_cancel_reaches_copied_task_scope_and_discards_late_worker_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

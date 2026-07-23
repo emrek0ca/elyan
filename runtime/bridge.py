@@ -12122,6 +12122,9 @@ class RuntimeBridge:
                 if isinstance(step, dict)
             ],
         }
+        stop_reason = str(block.get("stopReason", "") or "")
+        if stop_reason:
+            live_trace["stopReason"] = stop_reason
         active_label = next(
             (s["label"] for s in live_trace["steps"] if s["status"] == "running" and s["label"]),
             "",
@@ -12138,8 +12141,12 @@ class RuntimeBridge:
             "progressLabel": active_label,
             "steps": live_trace["steps"],
         }
+        if stop_reason:
+            trace_block["stopReason"] = stop_reason
+        live_status = str(live_trace["status"] or "running").strip().lower()
+        payload_status = live_status if live_status in {"completed", "failed", "canceled"} else "running"
         payload = {
-            "status": "running",
+            "status": payload_status,
             "summary": active_label or str(block.get("title", "") or "Görev yürütülüyor."),
             "executionTrace": live_trace,
             "taskRunId": task_run_id,

@@ -414,6 +414,7 @@ class ExecutorCore:
                 return
             trace = current.get("executionTrace")
             trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+            self._seed_pending_step_states(trace, steps)
             trace["scheduler"] = {
                 "policyVersion": "p2.v1",
                 "orderedStepIds": [str(step.get("id", "") or "") for step in steps],
@@ -421,6 +422,40 @@ class ExecutorCore:
             }
             current["executionTrace"] = trace
             self._persist()
+
+    @staticmethod
+    def _seed_pending_step_states(trace: dict[str, Any], steps: list[dict[str, Any]]) -> None:
+        step_states = trace.get("stepStates")
+        step_states = step_states if isinstance(step_states, list) else []
+        seen = {
+            str(state.get("id", "") or "")
+            for state in step_states
+            if isinstance(state, dict) and str(state.get("id", "") or "")
+        }
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            step_id = str(step.get("id", "") or f"step_{index + 1}")
+            if step_id in seen:
+                continue
+            step_states.append(
+                {
+                    "id": step_id,
+                    "capability": str(step.get("capability", "") or ""),
+                    "label": str(step.get("description", "") or ""),
+                    "status": "pending",
+                    "phase": str(step.get("phase", "") or "act"),
+                    "role": str(step.get("role", "") or "operator"),
+                    "verificationStatus": "pending",
+                    "attemptCount": 0,
+                    "startedAt": "",
+                    "finishedAt": "",
+                    "errorCode": "",
+                    "stopReason": "",
+                }
+            )
+            seen.add(step_id)
+        trace["stepStates"] = step_states
 
     def set_progress_emitter(self, emitter: Callable[[str, dict[str, Any]], None] | None) -> None:
         """Bridge, canlı checklist için burayı bağlar: her adım geçişinde
@@ -500,9 +535,13 @@ class ExecutorCore:
             if attempt_count > 1:
                 step_payload["attemptCount"] = attempt_count
             steps.append(step_payload)
+        stop_reason = str(trace.get("stopReason", "") or "")
         overall = "running"
         if final:
-            overall = "failed" if any(s["status"] == "failed" for s in steps) else "completed"
+            if stop_reason in {"execution_cancelled", "execution_timeout"}:
+                overall = "canceled"
+            else:
+                overall = "failed" if any(s["status"] == "failed" for s in steps) else "completed"
         block: dict[str, Any] = {
             "type": "task_trace",
             "stableBlockId": f"tasktrace_{exec_id}",
@@ -524,7 +563,6 @@ class ExecutorCore:
             repair_attempts = int(repair.get("repairAttempts", 0) or 0)
             if repair_attempts > 0:
                 block["repairAttempts"] = repair_attempts
-        stop_reason = str(trace.get("stopReason", "") or "")
         if stop_reason:
             block["stopReason"] = stop_reason
         return block
@@ -571,6 +609,11 @@ class ExecutorCore:
                 if isinstance(preview_steps, list):
                     normalized_steps = [dict(step) for step in preview_steps if isinstance(step, dict)]
             agent_plan = build_agent_plan(normalized_steps, summary=summary)
+            initial_trace = self._initial_execution_trace(
+                summary=summary,
+                execution_strategy=str(agent_plan.get("executionStrategy", "single_lane") or "single_lane"),
+            )
+            self._seed_pending_step_states(initial_trace, normalized_steps)
             self._current[active_id] = {
                 "id": active_id,
                 "source": str(source or "runtime"),
@@ -593,10 +636,7 @@ class ExecutorCore:
                 "executionStrategy": str(agent_plan.get("executionStrategy", "single_lane") or "single_lane"),
                 "nativeReadiness": {},
                 "degradationReasons": [],
-                "executionTrace": self._initial_execution_trace(
-                    summary=summary,
-                    execution_strategy=str(agent_plan.get("executionStrategy", "single_lane") or "single_lane"),
-                ),
+                "executionTrace": initial_trace,
             }
             if isinstance(plan_preview, dict):
                 self._current[active_id]["planPreview"] = dict(plan_preview)
@@ -1448,9 +1488,6 @@ class ExecutorCore:
                                 state_factory(),
                                 source,
                             )
-                    cancel_reason = cancellation_reason()
-                    if cancel_reason:
-                        return cancelled_result(cancel_reason)
                     events.extend(step_events)
                     if not tool_result.get("ok"):
                         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
