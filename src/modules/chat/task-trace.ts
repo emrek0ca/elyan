@@ -400,8 +400,14 @@ function publicToolLabel(name: string): string {
   if (tool === "web_research") return "Web'de araştırıyorum…";
   if (tool === "web.search" || tool.startsWith("web.")) return "Web'de araştırıyorum…";
   if (tool === "gmail.search" || tool === "gmail.read") return "Gelen kutunu tarıyorum…";
+  if (tool.startsWith("gmail.") && /(send|draft|create|update)/.test(tool)) return "E-posta işlemini hazırlıyorum…";
+  if ((tool.startsWith("drive.") || tool.startsWith("google-drive.")) && /(upload|create|update|write|move|delete)/.test(tool)) return "Drive işlemini hazırlıyorum…";
   if (tool.startsWith("drive.") || tool.startsWith("google-drive.")) return "Dosyalarını tarıyorum…";
+  if ((tool.startsWith("calendar.") || tool.startsWith("gcal.")) && /(create|add|update|delete|write)/.test(tool)) return "Takvim işlemini hazırlıyorum…";
   if (tool.startsWith("calendar.") || tool.startsWith("gcal.")) return "Takvimini kontrol ediyorum…";
+  if (tool.startsWith("slack.") && /(send|post|create|update)/.test(tool)) return "Slack işlemini hazırlıyorum…";
+  if (tool.startsWith("notion.") && /(create|update|write|append|delete)/.test(tool)) return "Notion işlemini hazırlıyorum…";
+  if (tool.startsWith("github.") && /(create|update|comment|merge|close)/.test(tool)) return "GitHub işlemini hazırlıyorum…";
   if (tool.startsWith("memory.")) return "Hatırladıklarımı kontrol ediyorum…";
   if (tool.startsWith("goals.")) return "Hedef durumunu kontrol ediyorum…";
   return "İlgili bilgileri kontrol ediyorum…";
@@ -421,6 +427,13 @@ function publicToolResult(tool: ToolFlowTraceSummary["tools"][number]): string {
   if (tool.name === "document_write") return "Belge hazırlandı.";
   if (tool.name === "spreadsheet_write") return "Tablo hazırlandı.";
   if (tool.name === "presentation_write") return "Sunum hazırlandı.";
+  const normalizedName = tool.name.trim().toLowerCase();
+  if (normalizedName.startsWith("gmail.") && /(send|draft|create|update)/.test(normalizedName)) return "E-posta işlemi hazır.";
+  if ((normalizedName.startsWith("drive.") || normalizedName.startsWith("google-drive.")) && /(upload|create|update|write|move|delete)/.test(normalizedName)) return "Drive işlemi tamamlandı.";
+  if ((normalizedName.startsWith("calendar.") || normalizedName.startsWith("gcal.")) && /(create|add|update|delete|write)/.test(normalizedName)) return "Takvim işlemi hazır.";
+  if (normalizedName.startsWith("slack.") && /(send|post|create|update)/.test(normalizedName)) return "Slack işlemi hazır.";
+  if (normalizedName.startsWith("notion.") && /(create|update|write|append|delete)/.test(normalizedName)) return "Notion işlemi tamamlandı.";
+  if (normalizedName.startsWith("github.") && /(create|update|comment|merge|close)/.test(normalizedName)) return "GitHub işlemi tamamlandı.";
   if (tool.resultCount == null) return "Adım tamamlandı.";
   if (tool.name === "gmail.search" || tool.name === "gmail.read") return `${tool.resultCount} e-posta bulundu.`;
   if (tool.name === "web.search" || tool.name === "web_research" || tool.name.startsWith("web.")) return `${tool.resultCount} kaynak bulundu.`;

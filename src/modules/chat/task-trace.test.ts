@@ -266,6 +266,42 @@ test("agent plan transcript describes professional desktop analysis steps", () =
   assert.doesNotMatch(unified.steps.map((step) => `${step.label} ${step.detail}`).join(" "), /math_solve|text_analyze|document_write|secret/i);
 });
 
+test("agent plan transcript describes connector write tools without leaking args", () => {
+  const trace = buildTaskTraceBlock({ task: {
+    id: "task-connector-write-transcript", status: "running", payload: {}, result: {},
+    createdAt: new Date("2026-07-23T09:00:00Z"), updatedAt: new Date("2026-07-23T09:00:01Z"),
+  }, assistantContent: "İşlem hazırlanıyor." });
+  const unified = enrichTaskTraceWithAgentPlan({
+    trace,
+    agentPlan: { steps: [
+      { id: "mail", title: "Send", tool_request: { tool: "gmail.send", args: { to: "secret@example.com", body: "secret" } } },
+      { id: "calendar", title: "Create", tool_request: { tool: "calendar.create_event", args: { title: "secret" } } },
+      { id: "slack", title: "Post", tool_request: { tool: "slack.post_message", args: { channel: "secret" } } },
+    ] },
+    toolFlow: { tools: [
+      { name: "gmail.send", ok: true, resultCount: null, durationMs: 80, errorCode: null },
+      { name: "calendar.create_event", ok: true, resultCount: null, durationMs: 90, errorCode: null },
+      { name: "slack.post_message", ok: true, resultCount: null, durationMs: 70, errorCode: null },
+    ] },
+    approval: null,
+  });
+
+  assert.deepEqual(unified.steps.map((step) => step.label), [
+    "E-posta işlemini hazırlıyorum…",
+    "Takvim işlemini hazırlıyorum…",
+    "Slack işlemini hazırlıyorum…",
+  ]);
+  assert.deepEqual(unified.steps.map((step) => step.resultSummary), [
+    "E-posta işlemi hazır.",
+    "Takvim işlemi hazır.",
+    "Slack işlemi hazır.",
+  ]);
+  assert.doesNotMatch(
+    unified.steps.map((step) => `${step.label} ${step.detail}`).join(" "),
+    /gmail\.send|calendar\.create_event|slack\.post_message|secret@example\.com|secret/i,
+  );
+});
+
 test("buildTaskTraceBlock describes the active running phase", () => {
   const block = buildTaskTraceBlock({
     task: {
