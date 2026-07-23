@@ -46,6 +46,7 @@ jobs:
       - name: Install build tooling
         run: |
           python -m pip install uv==0.10.12
+          brew untap aws/tap || true
           brew install portaudio
 
       - name: Build macOS portable package
