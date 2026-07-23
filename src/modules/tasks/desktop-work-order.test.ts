@@ -340,13 +340,59 @@ test("buildDesktopWorkOrder carries typed understanding without forwarding a raw
       confidence: 0.96,
       source: "typed_extractor",
     },
+    intent_graph: {
+      nodes: [{ id: "n1", kind: "write", label: "PDF üret", surface: "desktop", confidence: 0.9 }],
+      edges: [],
+    },
+    source_reference: "previous_answer",
+    latest_artifact_ref: { id: "artifact_1", kind: "document", summary: "Aylık gelir raporu" },
+    conversation_state: {
+      turnKind: "follow_up",
+      currentGoal: "PDF yap",
+      lastAssistantSummary: "Gelir raporu metni hazırlandı.",
+      lastArtifactSummary: "Gelir raporu",
+      lastImagePrompt: null,
+      userCorrection: null,
+      carryForward: true,
+    },
     entities: [{ type: "amount", value: "12000", normalized: "12000", confidence: 0.98, source: "typed_extractor" }],
     constraints: [{ kind: "footer_text", value: "Emre", confidence: 0.99, source: "typed_extractor", explicit: true }],
     desired_outputs: [{ kind: "pdf", format: "pdf", target: "artifact", confidence: 0.99, constraints: ["footer_text"] }],
     success_criteria: [{ kind: "footer_preserved", description: "Footer en altta olmalı.", evidenceRequired: "artifact", confidence: 0.95 }],
     ambiguities: [],
+    ambiguity_policy: {
+      action: "proceed_with_best_reference",
+      reason: "follow_up_reference_resolved",
+      assumedReference: "previous_answer",
+    },
     risk: { privacy: "low", safety: "low", cost: "low", latency: "low", local_private: false, side_effect: false, prompt_injection: false, reasons: [] },
+    privacy_routing: {
+      mode: "server",
+      mayUseHostedModels: true,
+      maySendPrivateContextToServer: false,
+      visibleProviderNamesAllowed: true,
+      internalProviderDisclosure: "forbidden",
+      reasons: ["server_safe_context"],
+    },
     required_capabilities: [{ name: "document.write", executionSurface: "desktop", permission: "write", confidence: 0.96 }],
+    tool_skill_decision: {
+      selected: "document.write",
+      surface: "document",
+      workload: "document_generate",
+      confidence: 0.92,
+      reasons: ["document_artifact_surface"],
+      candidates: [],
+    },
+    output_contract: {
+      operation: "export",
+      sourceReference: "previous_answer",
+      outputKind: "document",
+      outputFormat: "pdf",
+      pageCount: null,
+      requiresArtifact: true,
+      confidence: 0.9,
+      reasons: ["format:pdf"],
+    },
     memory_candidates: [],
     confidence: 0.96,
     source: "typed_extractor",
@@ -362,6 +408,11 @@ test("buildDesktopWorkOrder carries typed understanding without forwarding a raw
 
   assert.equal(workOrder.understanding?.schemaVersion, envelope.schema_version);
   assert.equal(workOrder.understanding?.constraints[0]?.kind, "footer_text");
+  assert.equal(workOrder.contextPack?.sourceReference, "previous_answer");
+  assert.equal(workOrder.contextPack?.latestArtifactRef?.id, "artifact_1");
+  assert.equal(workOrder.executionPlan?.planner, "server_brain");
+  assert.equal(workOrder.permissionEnvelope?.mode, "single_full_access_surface");
+  assert.equal(workOrder.understanding?.conversationState?.carryForward, true);
   assert.equal(workOrder.requiredCapabilities.includes("document_write"), true);
   assert.equal(workOrder.requiredCapabilities.includes("canvas_write"), true);
   assert.equal(workOrder.planPreview.steps.some((step) => step.capability === "canvas_write"), true);

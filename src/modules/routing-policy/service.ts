@@ -118,6 +118,12 @@ const LOCAL_FILE_BENIGN_SAVE_PATTERNS = [
   /\b(masaüstüne|masaustune|desktop(?:a|e)?|bilgisayara|downloads?a?|indirilenlere)\b.*\b(kaydet|save|gönder|gonder|indir|export|dışa aktar|disa aktar)\b/i,
   /\b(kaydet|save|gönder|gonder|indir|export|dışa aktar|disa aktar)\b.*\b(masaüstü|masaustu|desktop|bilgisayar|downloads?|indirilenler)\b/i,
 ];
+const DESKTOP_SCREEN_GLANCE_PATTERNS = [
+  /(?<!\p{L})(?:ekranda|ekranımda|ekranimda|screen(?:imde|de)?|masaüstünde|masaustunde)\s+(?:ne\s+(?:var|görünüyor|gorunuyor|açık|acik)|neler\s+(?:var|görünüyor|gorunuyor)|ne\s+yazıyor|ne\s+yaziyor)(?!\p{L})/iu,
+  /(?<!\p{L})(?:aktif\s+pencere|açık\s+uygulama|acik\s+uygulama|hangi\s+uygulama\s+açık|hangi\s+uygulama\s+acik)(?!\p{L})/iu,
+  /(?<!\p{L})(?:ekranı|ekrani|ekranımı|ekranimi|screen(?:imi)?)\s+(?:oku|gözlemle|gozlemle|anlat|açıkla|acikla|özetle|ozetle)(?!\p{L})/iu,
+  /\b(?:what(?:'s| is) on (?:my )?screen|read (?:my )?screen|active window|open apps?)\b/i,
+];
 const PACKAGED_WORLD_CONTEXT_SUBJECT_PATTERNS = [
   /\b(sağlık|saglik|health|uyku|sleep|stres|stress|enerji|energy)\b/i,
   /\b(takvim|calendar|ajanda|saat|zaman|time|timezone)\b/i,
@@ -488,6 +494,10 @@ function hasDesktopPrivateDataSignal(message: string): boolean {
   return matchesAny(message, LOCAL_PRIVATE_PATTERNS);
 }
 
+function hasDesktopScreenGlanceSignal(message: string, metadata: unknown): boolean {
+  return !hasAttachmentPayload(metadata) && matchesAny(message, DESKTOP_SCREEN_GLANCE_PATTERNS);
+}
+
 function hasPackagedWorldContextSignal(message: string): boolean {
   return (
     matchesAny(message, PACKAGED_WORLD_CONTEXT_SUBJECT_PATTERNS) &&
@@ -506,6 +516,17 @@ function hasDesktopWriteSideEffectSignal(message: string): boolean {
 
 function hasDesktopActionSignal(message: string): boolean {
   return hasDesktopPrivateDataSignal(message) || hasDesktopSaveExportSignal(message) || hasDesktopWriteSideEffectSignal(message);
+}
+
+function effectiveRequestedCapabilities(
+  requestedCapabilities: string[],
+  options: { screenGlanceRequested: boolean },
+): string[] {
+  const capabilities = normalizeRuntimeCapabilities(requestedCapabilities);
+  if (options.screenGlanceRequested) {
+    capabilities.push("analyze_screen");
+  }
+  return uniqueSemanticCapabilities(capabilities);
 }
 
 // Capabilities that can ONLY be satisfied on the user's desktop runtime.
@@ -1174,7 +1195,11 @@ export async function decideCommandRoute(
   const runtimeMcpRequested = normalizeRuntimeCapabilities(
     input.requestedCapabilities ?? [],
   ).includes("mcp.call.tool");
-  const userWantsDesktop = metadata.desktopDispatch === true || runtimeMcpRequested;
+  const screenGlanceRequested = hasDesktopScreenGlanceSignal(message, metadata);
+  const requestedCapabilities = effectiveRequestedCapabilities(input.requestedCapabilities ?? [], {
+    screenGlanceRequested,
+  });
+  const userWantsDesktop = metadata.desktopDispatch === true || runtimeMcpRequested || screenGlanceRequested;
 
   if (userWantsDesktop) {
     if (!desktopAllowed) {
@@ -1204,16 +1229,16 @@ export async function decideCommandRoute(
       });
     }
 
-    const candidates = await resolveDesktopCandidates(
-      app,
-      input.userId,
-      input.requestedCapabilities ?? [],
-      input.selectedDeviceId,
-    );
-    if (candidates.selectedDevice && candidates.canUseSelectedDevice) {
-      const dispatchPrivacyClass: CommandPrivacyClass = runtimeMcpRequested || hasDesktopActionSignal(message)
-        ? "local_private"
-        : "public_text";
+	    const candidates = await resolveDesktopCandidates(
+	      app,
+	      input.userId,
+	      requestedCapabilities,
+	      input.selectedDeviceId,
+	    );
+	    if (candidates.selectedDevice && candidates.canUseSelectedDevice) {
+	      const dispatchPrivacyClass: CommandPrivacyClass = runtimeMcpRequested || screenGlanceRequested || hasDesktopActionSignal(message)
+	        ? "local_private"
+	        : "public_text";
       const taskRoute = buildTaskRoute({
         target: "desktop_runtime",
         operationalRoute: "desktop_runtime",
@@ -1221,17 +1246,17 @@ export async function decideCommandRoute(
         reason: runtimeMcpRequested
           ? "Kullanıcı bağlı uzak MCP hesabındaki veriyi açıkça istedi."
           : "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
-        needsDesktop: true,
-        needsPrivateDesktopData: dispatchPrivacyClass === "local_private",
-        needsUserApproval: false,
-        requiredCapabilities: input.requestedCapabilities ?? [],
-      });
+	        needsDesktop: true,
+	        needsPrivateDesktopData: dispatchPrivacyClass === "local_private",
+	        needsUserApproval: false,
+	        requiredCapabilities: requestedCapabilities,
+	      });
       return buildDecision({
         route: "desktop_runtime",
-        targetDeviceId: candidates.selectedDevice.id,
-        taskRoute,
-        mode: "executable_task",
-        capabilities: input.requestedCapabilities ?? [],
+	        targetDeviceId: candidates.selectedDevice.id,
+	        taskRoute,
+	        mode: "executable_task",
+	        capabilities: requestedCapabilities,
         privacyClass: dispatchPrivacyClass,
         requiresApproval: false,
         reason: runtimeMcpRequested
@@ -1244,37 +1269,37 @@ export async function decideCommandRoute(
         message,
         failClosedReason: "desktop_runtime_selected_target",
       });
-    }
+	    }
 
-    // Toggle ON but no ready desktop: do not block chat. The server brain keeps
-    // answering, while metadata tells the clients why desktop execution did not
-    // attach for this turn.
-    if (runtimeMcpRequested) {
-      return buildDecision({
-        route: "pairing_required",
-        taskRoute: buildTaskRoute({
+	    // Toggle ON but no ready desktop: do not block chat. The server brain keeps
+	    // answering, while metadata tells the clients why desktop execution did not
+	    // attach for this turn.
+	    if (runtimeMcpRequested || screenGlanceRequested) {
+	      return buildDecision({
+	        route: "pairing_required",
+	        taskRoute: buildTaskRoute({
           target: "desktop_runtime",
           operationalRoute: "desktop_runtime",
           executionPlan: ["desktop_runtime"],
           reason: "Bağlı uzak MCP uygulaması masaüstü runtime üzerinden çalışır; hazır masaüstü bulunamadı.",
-          needsDesktop: true,
-          needsPrivateDesktopData: true,
-          needsUserApproval: false,
-          requiredCapabilities: input.requestedCapabilities ?? [],
-        }),
-        mode: "executable_task",
-        capabilities: input.requestedCapabilities ?? [],
+	          needsDesktop: true,
+	          needsPrivateDesktopData: true,
+	          needsUserApproval: false,
+	          requiredCapabilities: requestedCapabilities,
+	        }),
+	        mode: "executable_task",
+	        capabilities: requestedCapabilities,
         privacyClass: "local_private",
         requiresApproval: false,
         reason: "Bağlı uzak MCP uygulaması için hazır masaüstü runtime bulunamadı.",
         userFacingMessage: resolveDesktopUnavailableMessage(candidates),
-        primaryIntent: classification.primaryIntent,
-        confidence: classification.confidence,
-        requiresLocalRuntime: true,
-        message,
-        failClosedReason: "remote_mcp_runtime_unavailable",
-      });
-    }
+	        primaryIntent: classification.primaryIntent,
+	        confidence: classification.confidence,
+	        requiresLocalRuntime: true,
+	        message,
+	        failClosedReason: runtimeMcpRequested ? "remote_mcp_runtime_unavailable" : "desktop_screen_context_unavailable",
+	      });
+	    }
 
     return buildDecision({
       route: "server_brain",

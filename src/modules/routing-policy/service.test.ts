@@ -392,6 +392,37 @@ test("decideCommandRoute upgrades compact educational reasoning prompts to balan
   }
 });
 
+test("decideCommandRoute sends screen glance requests to desktop analyze_screen", async () => {
+  const app = createDesktopReadyApp(["runtime.status", "analyze_screen", "desktop_operator.observe_screen"]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Ekranda ne var?",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.requiredRuntime, "desktop");
+  assert.equal(decision.privacyClass, "local_private");
+  assert.equal(decision.taskRoute?.operationalRoute, "desktop_runtime");
+  assert.equal(decision.taskRoute?.requiredCapabilities.includes("analyze_screen"), true);
+  assert.equal(decision.capabilities.includes("analyze_screen"), true);
+});
+
+test("decideCommandRoute does not answer screen glance as normal chat when desktop is missing", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Aktif pencere ne?",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "pairing_required");
+  assert.equal(decision.requiredRuntime, "desktop");
+  assert.equal(decision.failClosedReason, "desktop_screen_context_unavailable");
+  assert.equal(decision.capabilities.includes("analyze_screen"), true);
+});
+
 test("decideCommandRoute still keeps greetings on the fast path even if short", async () => {
   // Kısa takip yükseltmesi selamlaşmaya sızmamalı.
   const app = createApp([]);

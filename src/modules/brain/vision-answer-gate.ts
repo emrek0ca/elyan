@@ -34,6 +34,12 @@ export function gateVisionAnswer(input: {
     flags.push("internal_vision_metadata_removed");
     text = text.replace(INTERNAL_VISION_PATTERN, "");
   }
+  if (text.search(VISION_PROVIDER_NAME_PATTERN) >= 0) {
+    if (!flags.includes("provider_name_removed")) {
+      flags.push("provider_name_removed");
+    }
+    text = stripVisionProviderAttribution(text);
+  }
   text = text.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 
   const prompt = String(input.prompt ?? "");

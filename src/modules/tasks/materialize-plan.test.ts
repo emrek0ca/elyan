@@ -60,6 +60,51 @@ test("desktop materialization prompt teaches concrete calculation research write
   assert.match(prompt, /verified/i);
 });
 
+test("desktop materialization prompt carries context pack for follow-up artifact transforms", () => {
+  const order = workOrder("Bunu PDF yap", ["document_write", "text_analyze"]);
+  order.contextPack = {
+    sourceReference: "latest_artifact",
+    conversationState: {
+      turnKind: "follow_up",
+      carryForward: true,
+      lastAssistantSummary: "Diferansiyel geometri kullanım alanları metni hazırlandı.",
+    },
+    latestArtifactRef: {
+      id: "artifact_geo_1",
+      kind: "text",
+      summary: "Diferansiyel geometri kullanım alanları",
+    },
+    outputContract: {
+      operation: "export",
+      sourceReference: "latest_artifact",
+      outputKind: "document",
+      outputFormat: "pdf",
+      requiresArtifact: true,
+      confidence: 0.92,
+    },
+    toolSkillDecision: {
+      selected: "document.write",
+      surface: "document",
+      confidence: 0.9,
+    },
+    privacyRouting: {
+      mode: "server",
+      internalProviderDisclosure: "forbidden",
+      visibleProviderNamesAllowed: true,
+    },
+  };
+
+  const prompt = buildPlanningPrompt(order, ["document_write", "text_analyze"]);
+
+  assert.match(prompt, /UNDERSTANDING CONTEXT/);
+  assert.match(prompt, /sourceReference: latest_artifact/);
+  assert.match(prompt, /artifact_geo_1/);
+  assert.match(prompt, /conversationState\.turnKind=correction|turnKind=correction|turnKind/);
+  assert.match(prompt, /Bunu PDF yap/);
+  assert.match(prompt, /Do not start an unrelated new topic/);
+  assert.match(prompt, /PDF\/DOCX\/XLSX\/image\/chart requests must produce a matching artifact step/);
+});
+
 test("desktop materialization prompt keeps research queries public and writer args contextual", () => {
   const fewShots = renderPlanningFewShots();
 

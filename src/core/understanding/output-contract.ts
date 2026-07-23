@@ -115,15 +115,28 @@ function metadataFormat(metadata: Record<string, unknown> | null): OutputFormat 
 function inferFormat(text: string, metadata: Record<string, unknown> | null): OutputFormat | null {
   const explicit = metadataFormat(metadata);
   if (explicit) return explicit;
-  if (/\bpdf(?:'e|e)?\b/iu.test(text)) return "pdf";
-  if (/\b(?:docx|word|doc)\b/iu.test(text)) return "docx";
-  if (/\b(?:xlsx|excel\p{L}{0,6}|spreadsheet|csv)\b/iu.test(text)) return "xlsx";
-  if (/\b(?:tablo|table)\b/iu.test(text)) return "table";
-  if (/\b(?:grafik|chart|plot|çizelge|cizelge)\b/iu.test(text)) return "chart";
-  if (/\bsvg\b/iu.test(text)) return "svg";
+  const explicitFormatMatches = [
+    { format: "pdf" as const, match: /\bpdf(?:'e|e)?\b/iu.exec(text) },
+    { format: "docx" as const, match: /\b(?:docx|word|doc)\b/iu.exec(text) },
+    { format: "xlsx" as const, match: /\b(?:xlsx|excel\p{L}{0,6}|spreadsheet|csv)\b/iu.exec(text) },
+    { format: "table" as const, match: /\b(?:tablo|table)\b/iu.exec(text) },
+    { format: "chart" as const, match: /\b(?:grafik|chart|plot|çizelge|cizelge)\b/iu.exec(text) },
+    { format: "svg" as const, match: /\bsvg\b/iu.exec(text) },
+  ]
+    .filter((item) => item.match)
+    .sort((left, right) => (left.match?.index ?? 0) - (right.match?.index ?? 0));
+  if (explicitFormatMatches[0]) return explicitFormatMatches[0].format;
   if (/\b(?:png|jpg|jpeg|webp)\b/iu.test(text)) {
     const match = text.match(/\b(png|jpg|jpeg|webp)\b/iu);
     return normalize(match?.[1]) as OutputFormat;
+  }
+  if (/(?<!\p{L})(?:görsel\p{L}*|gorsel\p{L}*|resm\p{L}*|foto\p{L}*|fotoğraf\p{L}*|fotograf\p{L}*|image|picture|poster|afiş\p{L}*|afis\p{L}*)(?!\p{L})/iu.test(text)) {
+    return "png";
+  }
+  const hasDocumentNoun = /(?<!\p{L})(?:rapor\p{L}*|makale\p{L}*|belge\p{L}*|döküman\p{L}*|dokuman\p{L}*|dilekçe\p{L}*|dilekce\p{L}*|savunma\p{L}*|sözleşme\p{L}*|sozlesme\p{L}*)(?!\p{L})/iu.test(text);
+  const asksDocumentCreation = /(?<!\p{L})(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yaz\p{L}{0,8}|tasarla\p{L}*|çıkar\p{L}*|cikar\p{L}*|raporlaştır\p{L}*|raporlastır\p{L}*|raporlastir\p{L}*|kaydet\p{L}*|dosya\p{L}*|olarak ver|formatında|formatinda)(?!\p{L})/iu.test(text);
+  if (hasDocumentNoun && asksDocumentCreation) {
+    return "docx";
   }
   return null;
 }
@@ -143,10 +156,19 @@ function inferPageCount(text: string, metadata: Record<string, unknown> | null):
 function inferReference(text: string, metadata: Record<string, unknown> | null): OutputReference {
   if (readBoolean(metadata, "hasAttachment") === true) return "attachment";
   if (readBoolean(metadata, "hasLatestArtifact") === true) return "latest_artifact";
+  if (/^(?:devam|devam et|sürdür|surdur|aynen|tamam|hani|continue|go on|keep going)\b/iu.test(text)) {
+    return "previous_answer";
+  }
+  if (/(?<!\p{L})(?:bu|şu|su)\s+(?:konuşma\p{L}*|konusma\p{L}*|sohbet\p{L}*|oturum\p{L}*)(?!\p{L})/iu.test(text)) {
+    return "previous_answer";
+  }
   if (/\b(?:ekli|attached|dosya|belge|pdf|görsel|gorsel|resim|image)\b.{0,40}\b(?:bunu|şunu|sunu|onu|bu)\b/iu.test(text)) {
     return "attachment";
   }
-  if (/(?<!\p{L})(?:bunu|şunu|sunu|onu|sonuncu|önceki|onceki|yukarıdaki|yukaridaki|son cevap|son görsel|son gorsel|son belge)\p{L}*/iu.test(text)) {
+  if (/(?<!\p{L})(?:bu|şu|su|o)\s+(?:rapor\p{L}*|belge\p{L}*|doküman\p{L}*|dokuman\p{L}*|metn\p{L}*|cevab\p{L}*|tablo\p{L}*|grafi\p{L}*|görsel\p{L}*|gorsel\p{L}*|resm\p{L}*)/iu.test(text)) {
+    return readBoolean(metadata, "hasLatestArtifact") === true ? "latest_artifact" : "previous_answer";
+  }
+  if (/(?<!\p{L})(?:bunu|şunu|sunu|onu|sonuncu|önceki|onceki|yukarıdaki|yukaridaki|son cevap|son görsel|son gorsel|son belge|son sonuç|son sonuc|son çözüm|son cozum)\p{L}*/iu.test(text)) {
     return "previous_answer";
   }
   return "current_prompt";
@@ -184,6 +206,7 @@ function outputKindFor(format: OutputFormat | null, text: string): OutputKind {
   if (format === "svg") return "svg";
   if (format && IMAGE_FORMATS.has(format)) return "image";
   if (/\b(?:rapor|makale|belge|döküman|dokuman|dilekçe|dilekce)\b/iu.test(text)) return "document";
+  if (/(?<!\p{L})(?:görsel\p{L}*|gorsel\p{L}*|resm\p{L}*|foto\p{L}*|fotoğraf\p{L}*|fotograf\p{L}*|image|picture|poster|afiş\p{L}*|afis\p{L}*)(?!\p{L})/iu.test(text)) return "image";
   if (/\b(?:tablo|spreadsheet|excel)\b/iu.test(text)) return "table";
   if (/\b(?:grafik|chart|plot)\b/iu.test(text)) return "chart";
   return "chat_reply";

@@ -121,6 +121,35 @@ test("buildTypedUnderstandingEnvelope compiles export intent without relying on 
   );
 });
 
+test("buildTypedUnderstandingEnvelope carries follow-up artifact context and tool decision", () => {
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: "Hayır bu görsel beyaz olsun ve daha sinematik yap",
+    metadata: {
+      hasLatestArtifact: true,
+      latestArtifact: {
+        id: "artifact_cat_1",
+        kind: "image",
+        prompt: "Sıcak bir odada tekir kedi portresi",
+        summary: "Tekir kedi görseli",
+      },
+      lastAssistantSummary: "Kullanıcı için tekir kedi görseli üretildi.",
+    },
+    intent: intent("image"),
+  });
+
+  assert.equal(envelope.source_reference, "latest_artifact");
+  assert.equal(envelope.latest_artifact_ref?.id, "artifact_cat_1");
+  assert.equal(envelope.conversation_state.turnKind, "correction");
+  assert.equal(envelope.conversation_state.carryForward, true);
+  assert.equal(envelope.conversation_state.lastImagePrompt, "Sıcak bir odada tekir kedi portresi");
+  assert.equal(envelope.output_contract?.sourceReference, "latest_artifact");
+  assert.equal(envelope.tool_skill_decision?.surface, "image");
+  assert.equal(envelope.privacy_routing.internalProviderDisclosure, "forbidden");
+  assert.equal(envelope.privacy_routing.visibleProviderNamesAllowed, true);
+  assert.equal(envelope.intent_graph.nodes.some((node) => node.kind === "write" || node.kind === "export"), true);
+});
+
 test("buildTypedUnderstandingEnvelope preserves explicitly requested export format order", () => {
   const envelope = buildTypedUnderstandingEnvelope({
     userId: "user_1",

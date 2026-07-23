@@ -234,16 +234,93 @@ export const understandingMemoryCandidateSchema = z.object({
   ttlDays: z.number().int().positive().max(3650).nullable().optional(),
 });
 
+export const understandingIntentGraphSchema = z.object({
+  nodes: z.array(z.object({
+    id: z.string().min(1).max(80),
+    kind: z.enum(["gather", "read", "analyze", "decide", "act", "write", "export", "verify", "respond"]),
+    label: z.string().min(1).max(180),
+    surface: z.enum(["server", "desktop", "mobile", "external", "unknown"]).default("unknown"),
+    confidence: z.number().min(0).max(1),
+  })).max(16).default([]),
+  edges: z.array(z.object({
+    from: z.string().min(1).max(80),
+    to: z.string().min(1).max(80),
+    reason: z.string().max(160).default(""),
+  })).max(24).default([]),
+}).default({ nodes: [], edges: [] });
+
+export const understandingConversationStateSchema = z.object({
+  turnKind: z.enum(["new_request", "follow_up", "correction", "continuation"]).default("new_request"),
+  currentGoal: z.string().max(500).nullable().default(null),
+  lastAssistantSummary: z.string().max(800).nullable().default(null),
+  lastArtifactSummary: z.string().max(500).nullable().default(null),
+  lastImagePrompt: z.string().max(800).nullable().default(null),
+  userCorrection: z.string().max(500).nullable().default(null),
+  carryForward: z.boolean().default(false),
+}).default({});
+
+export const understandingToolSkillDecisionSchema = z.object({
+  selected: z.string().min(1).max(120),
+  surface: z.enum(["chat", "document", "spreadsheet", "chart", "image", "desktop"]),
+  workload: z.string().max(80).nullable().default(null),
+  confidence: z.number().min(0).max(1),
+  reasons: z.array(z.string().max(160)).max(12).default([]),
+  candidates: z.array(z.object({
+    id: z.string().min(1).max(120),
+    surface: z.enum(["chat", "document", "spreadsheet", "chart", "image", "desktop"]),
+    score: z.number().min(0).max(1),
+    reasons: z.array(z.string().max(120)).max(8).default([]),
+  })).max(10).default([]),
+}).nullable().default(null);
+
+export const understandingOutputContractSchema = z.object({
+  operation: z.string().max(80),
+  sourceReference: z.enum(["none", "current_prompt", "previous_answer", "latest_artifact", "attachment"]),
+  outputKind: z.string().max(80),
+  outputFormat: z.string().max(40).nullable().default(null),
+  pageCount: z.number().int().positive().max(80).nullable().default(null),
+  requiresArtifact: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasons: z.array(z.string().max(160)).max(16).default([]),
+}).nullable().default(null);
+
+export const understandingPrivacyRoutingSchema = z.object({
+  mode: z.enum(["server", "desktop_private", "hybrid", "mobile_local"]).default("server"),
+  mayUseHostedModels: z.boolean().default(true),
+  maySendPrivateContextToServer: z.boolean().default(false),
+  visibleProviderNamesAllowed: z.boolean().default(true),
+  internalProviderDisclosure: z.literal("forbidden").default("forbidden"),
+  reasons: z.array(z.string().max(160)).max(12).default([]),
+}).default({});
+
+export const understandingAmbiguityPolicySchema = z.object({
+  action: z.enum(["proceed_with_best_reference", "ask_clarifying_question", "fail_safe"]).default("proceed_with_best_reference"),
+  reason: z.string().max(240).default(""),
+  assumedReference: z.enum(["current_prompt", "previous_answer", "latest_artifact", "attachment", "none"]).default("current_prompt"),
+}).default({});
+
 export const understandingEnvelopeSchema = z.object({
   schema_version: z.literal("2026-07-understanding-envelope-v2"),
   intent: understandingIntentSchema,
+  intent_graph: understandingIntentGraphSchema,
+  source_reference: z.enum(["none", "current_prompt", "previous_answer", "latest_artifact", "attachment"]).default("current_prompt"),
+  latest_artifact_ref: z.object({
+    id: z.string().max(160).nullable().default(null),
+    kind: z.string().max(80).nullable().default(null),
+    summary: z.string().max(500).nullable().default(null),
+  }).nullable().default(null),
+  conversation_state: understandingConversationStateSchema,
   entities: z.array(understandingEntitySchema).max(32),
   constraints: z.array(understandingConstraintSchema).max(48),
   desired_outputs: z.array(understandingDesiredOutputSchema).max(12),
   success_criteria: z.array(understandingSuccessCriterionSchema).max(16),
   ambiguities: z.array(understandingAmbiguitySchema).max(12),
+  ambiguity_policy: understandingAmbiguityPolicySchema,
   risk: understandingRiskSchema,
+  privacy_routing: understandingPrivacyRoutingSchema,
   required_capabilities: z.array(understandingRequiredCapabilitySchema).max(24),
+  tool_skill_decision: understandingToolSkillDecisionSchema,
+  output_contract: understandingOutputContractSchema,
   memory_candidates: z.array(understandingMemoryCandidateSchema).max(12),
   confidence: z.number().min(0).max(1),
   source: z.enum(understandingEnvelopeSourceValues),

@@ -18,7 +18,9 @@ import {
   compileOutputContract,
   workloadFromOutputContract,
   type OutputContract,
+  type OutputReference,
 } from "./output-contract.js";
+import { selectToolSkillForTurn } from "./tool-skill-selector.js";
 
 type BuildEnvelopeInput = TaskUnderstandingInput & {
   intent: IntentClassification;
@@ -123,6 +125,160 @@ function addDesiredOutput(
   if (!exists) {
     outputs.push(output);
   }
+}
+
+function detectFollowUpKind(text: string, sourceReference: OutputReference): "new_request" | "follow_up" | "correction" | "continuation" {
+  const normalized = compactText(text).toLocaleLowerCase("tr-TR");
+  if (/(?<!\p{L})(hayır|hayir|hani|öyle değil|oyle degil|yanlış|yanlis|düzelt|duzelt|revize|değiştir|degistir|beyaz olsun|başka renkte|baska renkte)(?!\p{L})/iu.test(normalized)) {
+    return "correction";
+  }
+  if (/^(?:devam|devam et|sürdür|surdur|aynen|tamam|bunu da|onu da|şunu da|sunu da)\b/iu.test(normalized)) {
+    return "continuation";
+  }
+  if (sourceReference !== "current_prompt" && sourceReference !== "none") {
+    return "follow_up";
+  }
+  return "new_request";
+}
+
+function buildConversationState(input: {
+  text: string;
+  metadata: Record<string, unknown>;
+  outputContract: OutputContract;
+}) {
+  const metadata = input.metadata;
+  const lastAssistantSummary =
+    readString(metadata, "lastAssistantSummary") ??
+    readString(metadata, "previousAssistantSummary") ??
+    readString(metadata, "latestAssistantText");
+  const lastArtifactSummary =
+    readString(metadata, "lastArtifactSummary") ??
+    readString(metadata, "latestArtifactSummary") ??
+    readString(readRecord(metadata.latestArtifact), "summary") ??
+    readString(readRecord(metadata.latestArtifact), "name");
+  const lastImagePrompt =
+    readString(metadata, "lastImagePrompt") ??
+    readString(metadata, "latestImagePrompt") ??
+    readString(readRecord(metadata.latestArtifact), "prompt");
+  const turnKind = detectFollowUpKind(input.text, input.outputContract.sourceReference);
+  return {
+    turnKind,
+    currentGoal: compactText(input.text).slice(0, 500) || null,
+    lastAssistantSummary: lastAssistantSummary?.slice(0, 800) ?? null,
+    lastArtifactSummary: lastArtifactSummary?.slice(0, 500) ?? null,
+    lastImagePrompt: lastImagePrompt?.slice(0, 800) ?? null,
+    userCorrection: turnKind === "correction" ? compactText(input.text).slice(0, 500) : null,
+    carryForward:
+      turnKind !== "new_request" ||
+      input.outputContract.sourceReference === "previous_answer" ||
+      input.outputContract.sourceReference === "latest_artifact",
+  };
+}
+
+function buildLatestArtifactRef(metadata: Record<string, unknown>) {
+  const artifact = readRecord(metadata.latestArtifact) ?? readRecord(metadata.lastArtifact);
+  const id =
+    readString(metadata, "latestArtifactId") ??
+    readString(metadata, "lastArtifactId") ??
+    readString(artifact, "id");
+  const kind =
+    readString(metadata, "latestArtifactKind") ??
+    readString(metadata, "lastArtifactKind") ??
+    readString(artifact, "kind") ??
+    readString(artifact, "contentType");
+  const summary =
+    readString(metadata, "latestArtifactSummary") ??
+    readString(metadata, "lastArtifactSummary") ??
+    readString(artifact, "summary") ??
+    readString(artifact, "previewText") ??
+    readString(artifact, "name");
+  if (!id && !kind && !summary) {
+    return null;
+  }
+  return {
+    id: id?.slice(0, 160) ?? null,
+    kind: kind?.slice(0, 80) ?? null,
+    summary: summary?.slice(0, 500) ?? null,
+  };
+}
+
+function buildIntentGraph(input: {
+  desiredOutputs: UnderstandingDesiredOutput[];
+  localPrivate: boolean;
+  sideEffect: boolean;
+  outputContract: OutputContract;
+}) {
+  const nodes: Array<{ id: string; kind: "gather" | "read" | "analyze" | "decide" | "act" | "write" | "export" | "verify" | "respond"; label: string; surface: "server" | "desktop" | "mobile" | "external" | "unknown"; confidence: number }> = [];
+  const edges: Array<{ from: string; to: string; reason: string }> = [];
+  const add = (kind: typeof nodes[number]["kind"], label: string, surface: typeof nodes[number]["surface"], confidence: number) => {
+    const id = `n${nodes.length + 1}`;
+    nodes.push({ id, kind, label, surface, confidence: clampConfidence(confidence) });
+    if (nodes.length > 1) {
+      edges.push({ from: nodes[nodes.length - 2]!.id, to: id, reason: "ordered_dependency" });
+    }
+  };
+  if (input.outputContract.sourceReference === "attachment" || input.outputContract.sourceReference === "latest_artifact" || input.localPrivate) {
+    add("read", "Kaynak bağlamı veya önceki çıktıyı oku", input.localPrivate ? "desktop" : "server", 0.78);
+  }
+  if (input.outputContract.operation !== "answer" || input.desiredOutputs.length > 1) {
+    add("analyze", "Kullanıcı niyetini, formatı ve kaynak referansını çöz", "server", 0.82);
+  }
+  if (input.desiredOutputs.some((output) => output.target === "desktop") || input.localPrivate || input.sideEffect) {
+    add("act", "Desktop runtime üzerinde görev adımlarını yürüt", "desktop", 0.8);
+  }
+  if (input.outputContract.requiresArtifact) {
+    add(input.outputContract.operation === "export" || input.outputContract.operation === "transform" ? "export" : "write", "İstenen formatta artefact üret", input.localPrivate ? "desktop" : "server", 0.84);
+  }
+  add("verify", "Sonucun istenen çıktı ve kanıt kriterlerini karşıladığını doğrula", input.localPrivate ? "desktop" : "server", 0.76);
+  if (!input.outputContract.requiresArtifact) {
+    add("respond", "Kullanıcıya bağlama uygun doğal cevap ver", "server", 0.72);
+  }
+  return { nodes, edges };
+}
+
+function buildPrivacyRouting(input: {
+  localPrivate: boolean;
+  sideEffect: boolean;
+  promptInjection: boolean;
+}) {
+  const mode: "server" | "desktop_private" | "hybrid" = input.localPrivate && input.sideEffect
+    ? "hybrid"
+    : input.localPrivate
+      ? "desktop_private"
+      : "server";
+  return {
+    mode,
+    mayUseHostedModels: !input.localPrivate || input.sideEffect === false,
+    maySendPrivateContextToServer: false,
+    visibleProviderNamesAllowed: true,
+    internalProviderDisclosure: "forbidden" as const,
+    reasons: [
+      ...(input.localPrivate ? ["local_private_context"] : ["server_safe_context"]),
+      ...(input.sideEffect ? ["side_effect_present"] : []),
+      ...(input.promptInjection ? ["prompt_injection_signal"] : []),
+    ],
+  };
+}
+
+function buildAmbiguityPolicy(input: {
+  outputContract: OutputContract;
+  ambiguities: UnderstandingAmbiguity[];
+}) {
+  const severe = input.ambiguities.some((item) => item.severity === "high");
+  if (severe && input.outputContract.sourceReference === "current_prompt") {
+    return {
+      action: "ask_clarifying_question" as const,
+      reason: "high_severity_missing_target",
+      assumedReference: input.outputContract.sourceReference,
+    };
+  }
+  return {
+    action: "proceed_with_best_reference" as const,
+    reason: input.outputContract.sourceReference === "current_prompt"
+      ? "current_prompt_is_best_reference"
+      : "follow_up_reference_resolved",
+    assumedReference: input.outputContract.sourceReference,
+  };
 }
 
 function detectPromptInjection(text: string): boolean {
@@ -879,6 +1035,21 @@ export function buildEmptyUnderstandingEnvelope(
       confidence: 0,
       source: "legacy_fallback",
     },
+    intent_graph: {
+      nodes: [{ id: "n1", kind: "respond", label: "Kullanıcıya doğrudan cevap ver", surface: "server", confidence: 0.5 }],
+      edges: [],
+    },
+    source_reference: "current_prompt",
+    latest_artifact_ref: null,
+    conversation_state: {
+      turnKind: "new_request",
+      currentGoal: compactText(input.message).slice(0, 500) || null,
+      lastAssistantSummary: null,
+      lastArtifactSummary: null,
+      lastImagePrompt: null,
+      userCorrection: null,
+      carryForward: false,
+    },
     entities: [],
     constraints: [],
     desired_outputs: [
@@ -893,6 +1064,11 @@ export function buildEmptyUnderstandingEnvelope(
       },
     ],
     ambiguities: [],
+    ambiguity_policy: {
+      action: "proceed_with_best_reference",
+      reason: "legacy_fallback_current_prompt",
+      assumedReference: "current_prompt",
+    },
     risk: {
       privacy: "low",
       safety: "low",
@@ -903,6 +1079,14 @@ export function buildEmptyUnderstandingEnvelope(
       prompt_injection: false,
       reasons: [],
     },
+    privacy_routing: {
+      mode: "server",
+      mayUseHostedModels: true,
+      maySendPrivateContextToServer: false,
+      visibleProviderNamesAllowed: true,
+      internalProviderDisclosure: "forbidden",
+      reasons: ["legacy_fallback"],
+    },
     required_capabilities: [
       {
         name: "chat.reply",
@@ -912,6 +1096,8 @@ export function buildEmptyUnderstandingEnvelope(
         confidence: 0.5,
       },
     ],
+    tool_skill_decision: null,
+    output_contract: null,
     memory_candidates: [],
     confidence: 0,
     source: "legacy_fallback",
@@ -925,6 +1111,11 @@ export function buildTypedUnderstandingEnvelope(input: BuildEnvelopeInput): Unde
   const promptInjection = detectPromptInjection(text);
   const format = detectFormat(text, metadata);
   const outputContract = compileOutputContract({
+    title: input.title,
+    message: input.message,
+    metadata,
+  });
+  const toolSkillSelection = selectToolSkillForTurn({
     title: input.title,
     message: input.message,
     metadata,
@@ -950,6 +1141,16 @@ export function buildTypedUnderstandingEnvelope(input: BuildEnvelopeInput): Unde
   const ambiguities = buildAmbiguities({ desiredOutputs, format, localPrivate, sideEffect });
   const risk = buildRisk({ text, localPrivate, sideEffect, promptInjection, desiredOutputs });
   const successCriteria = buildSuccessCriteria({ desiredOutputs, constraints });
+  const conversationState = buildConversationState({ text, metadata, outputContract });
+  const latestArtifactRef = buildLatestArtifactRef(metadata);
+  const intentGraph = buildIntentGraph({
+    desiredOutputs,
+    localPrivate,
+    sideEffect,
+    outputContract,
+  });
+  const privacyRouting = buildPrivacyRouting({ localPrivate, sideEffect, promptInjection });
+  const ambiguityPolicy = buildAmbiguityPolicy({ outputContract, ambiguities });
   const confidence = inferEnvelopeConfidence({
     intent: input.intent,
     constraints,
@@ -968,13 +1169,33 @@ export function buildTypedUnderstandingEnvelope(input: BuildEnvelopeInput): Unde
       confidence: clampConfidence(input.intent.confidence),
       source: "semantic_classifier",
     },
+    intent_graph: intentGraph,
+    source_reference: outputContract.sourceReference,
+    latest_artifact_ref: latestArtifactRef,
+    conversation_state: conversationState,
     entities,
     constraints,
     desired_outputs: desiredOutputs,
     success_criteria: successCriteria,
     ambiguities,
+    ambiguity_policy: ambiguityPolicy,
     risk,
+    privacy_routing: privacyRouting,
     required_capabilities: capabilities,
+    tool_skill_decision: {
+      selected: toolSkillSelection.selected.id,
+      surface: toolSkillSelection.selected.surface,
+      workload: toolSkillSelection.selected.workload,
+      confidence: toolSkillSelection.selected.score,
+      reasons: toolSkillSelection.selected.reasons,
+      candidates: toolSkillSelection.candidates.map((candidate) => ({
+        id: candidate.id,
+        surface: candidate.surface,
+        score: candidate.score,
+        reasons: candidate.reasons,
+      })),
+    },
+    output_contract: outputContract,
     memory_candidates: memoryCandidates,
     confidence,
     source: input.source ?? "typed_extractor",

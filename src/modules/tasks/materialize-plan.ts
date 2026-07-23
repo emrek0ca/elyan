@@ -284,6 +284,28 @@ export function renderPlanningFewShots(): string {
   ].join("\n");
 }
 
+function renderWorkOrderContextPack(workOrder: DesktopWorkOrder): string {
+  const pack = workOrder.contextPack;
+  const understanding = workOrder.understanding;
+  const compactJson = (value: unknown, max = 2_000) => {
+    try {
+      const json = JSON.stringify(value ?? null);
+      return json.length > max ? `${json.slice(0, max)}...` : json;
+    } catch {
+      return "null";
+    }
+  };
+  return [
+    `sourceReference: ${pack?.sourceReference ?? understanding?.sourceReference ?? "current_prompt"}`,
+    `conversationState: ${compactJson(pack?.conversationState ?? understanding?.conversationState ?? null, 1_200)}`,
+    `latestArtifactRef: ${compactJson(pack?.latestArtifactRef ?? understanding?.latestArtifactRef ?? null, 900)}`,
+    `outputContract: ${compactJson(pack?.outputContract ?? understanding?.outputContract ?? null, 1_000)}`,
+    `toolSkillDecision: ${compactJson(pack?.toolSkillDecision ?? understanding?.toolSkillDecision ?? null, 1_200)}`,
+    `privacyRouting: ${compactJson(pack?.privacyRouting ?? understanding?.privacyRouting ?? null, 900)}`,
+    `ambiguityPolicy: ${compactJson(understanding?.ambiguityPolicy ?? null, 700)}`,
+  ].join("\n");
+}
+
 export function buildPlanningPrompt(
   workOrder: DesktopWorkOrder,
   allowed: string[],
@@ -305,6 +327,9 @@ export function buildPlanningPrompt(
     `- language: ${language}`,
     entities ? `- entities:\n${entities}` : "- entities: (none)",
     "",
+    "UNDERSTANDING CONTEXT (machine-readable; use it to resolve follow-ups and choose the correct tool/skill):",
+    renderWorkOrderContextPack(workOrder),
+    "",
     "TOOL CAPABILITY CATALOG (use ONLY these exact capability names; each line: name: what it does — when to use [required args][needs approval]):",
     renderCapabilityCatalog(new Set(allowed)),
     "",
@@ -318,6 +343,11 @@ export function buildPlanningPrompt(
     "- For UI tasks with a known browser primitive (open URL, search, new tab), prefer browser_control for that primitive, then observe/act only for visible UI follow-up.",
     "- For multi-click or uncertain UI tasks, prefer desktop_operator.run after an initial observe_screen; give it a concrete goal, maxActions, and a stop condition. For a single precise UI action, use desktop_operator.execute_action after observe_screen.",
     "- Never mix private data workflow with screen-action unless the user actually asks to use an app UI. A legal/medical/student report is usually DATA WORKFLOW; clicking buttons, scrolling pages, filling fields, or closing popups is SCREEN-ACTION WORKFLOW.",
+    "- If sourceReference is previous_answer or latest_artifact, treat short requests like 'bunu pdf yap', 'daha sinematik yap', 'beyaz olsun', 'excele dönüştür' as modifications/transforms of that prior answer/artifact. Do not start an unrelated new topic.",
+    "- Use conversationState.turnKind=correction as a hard signal that the user is correcting the last result. Reuse latestArtifactRef, lastImagePrompt, and lastAssistantSummary where available.",
+    "- Use outputContract to decide the deliverable format. PDF/DOCX/XLSX/image/chart requests must produce a matching artifact step, not only explanatory prose.",
+    "- Use toolSkillDecision as a ranked hint, not a command. Override it only when the catalog, privacyRouting, or user goal clearly requires another surface.",
+    "- Respect privacyRouting: local_private/desktop_private context must be read or transformed on desktop; do not put private contents into web_research queries.",
     "",
     "RULES:",
     '- Output EXACTLY ONE JSON object, no prose, no markdown fences: {"steps":[...]}',

@@ -17,3 +17,14 @@ test("vision provider privacy leaves no generic engine replacement", () => {
   const result = stripVisionProviderAttribution("This was analyzed using Groq.");
   assert.doesNotMatch(result, /groq|provider|engine|görsel analiz sistemi/iu);
 });
+
+test("vision provider privacy preserves visible app or brand names", () => {
+  assert.equal(
+    stripVisionProviderAttribution("Ekranda Claude açık ve bir kod dosyası görünüyor."),
+    "Ekranda Claude açık ve bir kod dosyası görünüyor.",
+  );
+  assert.equal(
+    stripVisionProviderAttribution("Chrome sekmesinde OpenAI dokümantasyonu açık."),
+    "Chrome sekmesinde OpenAI dokümantasyonu açık.",
+  );
+});

@@ -60,6 +60,42 @@ export type DesktopWorkOrder = {
     approvalPolicy: "capability_policy" | "single_full_access_surface";
     maxSteps: number;
   };
+  contextPack?: {
+    sourceReference: "none" | "current_prompt" | "previous_answer" | "latest_artifact" | "attachment";
+    conversationState?: Record<string, unknown>;
+    latestArtifactRef?: Record<string, unknown> | null;
+    toolSkillDecision?: Record<string, unknown> | null;
+    outputContract?: Record<string, unknown> | null;
+    privacyRouting?: Record<string, unknown>;
+  };
+  executionPlan?: {
+    mode: "data_workflow" | "screen_action" | "mixed" | "decision_support";
+    intentGraph?: Record<string, unknown>;
+    planner: "server_brain";
+    allowReplan: boolean;
+  };
+  verificationPlan?: {
+    criteria: DesktopWorkOrder["verificationRules"];
+    requireEvidence: boolean;
+    noModelClaimCompletion: boolean;
+  };
+  failurePolicy?: {
+    maxReplans: number;
+    retryOnRecoverableToolError: boolean;
+    stopOnIrreversibleRisk: boolean;
+    safeUserMessage: string;
+  };
+  replanContext?: {
+    includeCompletedOutputs: boolean;
+    includeLastError: boolean;
+    includeScreenObservation: boolean;
+  };
+  permissionEnvelope?: {
+    mode: "single_full_access_surface";
+    coveredPermissions: string[];
+    separateApprovalFor: string[];
+    ttlSeconds: number;
+  };
   planPreview: {
     summary: string;
     privacyClass: "public_text" | "local_private" | "side_effect";
@@ -91,6 +127,14 @@ export type DesktopWorkOrder = {
     successCriteria: UnderstandingEnvelope["success_criteria"];
     ambiguities: UnderstandingEnvelope["ambiguities"];
     risk: UnderstandingEnvelope["risk"];
+    intentGraph?: UnderstandingEnvelope["intent_graph"];
+    sourceReference?: UnderstandingEnvelope["source_reference"];
+    latestArtifactRef?: UnderstandingEnvelope["latest_artifact_ref"];
+    conversationState?: UnderstandingEnvelope["conversation_state"];
+    toolSkillDecision?: UnderstandingEnvelope["tool_skill_decision"];
+    outputContract?: UnderstandingEnvelope["output_contract"];
+    privacyRouting?: UnderstandingEnvelope["privacy_routing"];
+    ambiguityPolicy?: UnderstandingEnvelope["ambiguity_policy"];
     confidence: number;
   };
 };
@@ -845,6 +889,15 @@ export function buildDesktopWorkOrder(input: {
   for (const step of steps) {
     if (!capabilities.includes(step.capability)) capabilities.push(step.capability);
   }
+  const sourceReference = input.understandingEnvelope?.source_reference ?? "current_prompt";
+  const privacyRouting = input.understandingEnvelope?.privacy_routing ?? {
+    mode: localContextNeeded.length > 0 ? "desktop_private" : "server",
+    mayUseHostedModels: localContextNeeded.length === 0,
+    maySendPrivateContextToServer: false,
+    visibleProviderNamesAllowed: true,
+    internalProviderDisclosure: "forbidden",
+    reasons: localContextNeeded.length > 0 ? ["local_private_context"] : ["server_safe_context"],
+  };
   return {
     schema: "elyan.desktop_work_order.v1",
     source: input.source ?? "mobile_chat_dispatch",
@@ -865,6 +918,42 @@ export function buildDesktopWorkOrder(input: {
       mode: "cowork_dispatch",
       approvalPolicy: "single_full_access_surface",
       maxSteps: MAX_WORK_ORDER_STEPS,
+    },
+    contextPack: {
+      sourceReference,
+      conversationState: input.understandingEnvelope?.conversation_state,
+      latestArtifactRef: input.understandingEnvelope?.latest_artifact_ref ?? null,
+      toolSkillDecision: input.understandingEnvelope?.tool_skill_decision ?? null,
+      outputContract: input.understandingEnvelope?.output_contract ?? null,
+      privacyRouting,
+    },
+    executionPlan: {
+      mode: workType,
+      intentGraph: input.understandingEnvelope?.intent_graph,
+      planner: "server_brain",
+      allowReplan: true,
+    },
+    verificationPlan: {
+      criteria: verificationRules,
+      requireEvidence: true,
+      noModelClaimCompletion: true,
+    },
+    failurePolicy: {
+      maxReplans: 2,
+      retryOnRecoverableToolError: true,
+      stopOnIrreversibleRisk: true,
+      safeUserMessage: "Görevi tamamlarken bir adım doğrulanamadı; güvenli şekilde yeniden deniyorum.",
+    },
+    replanContext: {
+      includeCompletedOutputs: true,
+      includeLastError: true,
+      includeScreenObservation: workType === "screen_action" || workType === "mixed",
+    },
+    permissionEnvelope: {
+      mode: "single_full_access_surface",
+      coveredPermissions: ["read", "idempotent_write", "browser_control", "computer_control"],
+      separateApprovalFor: ["delete", "overwrite", "send_message", "send_email", "payment", "external_side_effect"],
+      ttlSeconds: 900,
     },
     planPreview: {
       summary,
@@ -904,6 +993,14 @@ export function buildDesktopWorkOrder(input: {
             successCriteria: input.understandingEnvelope.success_criteria,
             ambiguities: input.understandingEnvelope.ambiguities,
             risk: input.understandingEnvelope.risk,
+            intentGraph: input.understandingEnvelope.intent_graph,
+            sourceReference: input.understandingEnvelope.source_reference,
+            latestArtifactRef: input.understandingEnvelope.latest_artifact_ref,
+            conversationState: input.understandingEnvelope.conversation_state,
+            toolSkillDecision: input.understandingEnvelope.tool_skill_decision,
+            outputContract: input.understandingEnvelope.output_contract,
+            privacyRouting: input.understandingEnvelope.privacy_routing,
+            ambiguityPolicy: input.understandingEnvelope.ambiguity_policy,
             confidence: input.understandingEnvelope.confidence,
           },
         }
