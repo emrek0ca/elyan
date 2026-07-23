@@ -33,6 +33,7 @@ def test_research_writer_with_and_inside_topic_stays_compound() -> None:
     assert routed.intent == "compound_task"
     assert [str(step.get("capability", "")) for step in routed.steps] == [
         "web_research",
+        "text_analyze",
         "document_write",
     ]
     assert routed.steps[0]["args"]["query"] == "Kira uyuşmazlığını ve tahliye davasını"
@@ -45,6 +46,7 @@ def test_research_analysis_then_report_stays_compound() -> None:
     assert routed.intent == "compound_task"
     assert [str(step.get("capability", "")) for step in routed.steps] == [
         "web_research",
+        "text_analyze",
         "document_write",
     ]
     assert routed.steps[0]["args"]["query"] == "Mühendislik projesini"
@@ -91,10 +93,12 @@ def test_student_research_then_presentation_query_is_clean() -> None:
     assert routed.intent == "compound_task"
     assert [str(step.get("capability", "")) for step in routed.steps] == [
         "web_research",
+        "text_analyze",
         "presentation_write",
     ]
     assert routed.steps[0]["args"]["query"] == "Kuantum annealing ile klasik optimizasyon farkını"
     assert routed.steps[1]["dependsOn"] == ["step_1"]
+    assert routed.steps[2]["dependsOn"] == ["analyze"]
 
 
 def test_research_sonra_document_chain() -> None:

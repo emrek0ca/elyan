@@ -1574,6 +1574,7 @@ def test_task_detail_and_approval_use_existing_user_routes(
     tmp_path: Path,
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
+    state_store.update_state({"account": {"accessToken": "user-token"}})
     client = BackendClient("http://backend.example")
     captured: list[tuple[str, str, dict[str, Any] | None, str, bool]] = []
 
@@ -1599,6 +1600,45 @@ def test_task_detail_and_approval_use_existing_user_routes(
         ("GET", "/v1/tasks/task-123", None, "user", True),
         ("POST", "/v1/tasks/task-123/approval", {"approved": True, "notes": "Tamam"}, "user", True),
     ]
+
+
+def test_task_approval_uses_runtime_token_without_user_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    client = BackendClient("http://backend.example")
+    captured: dict[str, Any] = {}
+
+    def fake_authorized_request(
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        *,
+        token_kind: str = "user",
+        refresh_on_401: bool = False,
+    ) -> BackendResult:
+        captured.update(
+            method=method,
+            path=path,
+            json=json_body,
+            token_kind=token_kind,
+            refresh_on_401=refresh_on_401,
+        )
+        return BackendResult(ok=True, request_id="req_task", status_code=200, data={"ok": True})
+
+    monkeypatch.setattr(client, "_authorized_request", fake_authorized_request)
+
+    result = client.task_approval("task-123", False)
+
+    assert result.ok is True
+    assert captured == {
+        "method": "POST",
+        "path": "/v1/tasks/task-123/approval",
+        "json": {"approved": False},
+        "token_kind": "runtime",
+        "refresh_on_401": True,
+    }
 
 
 def test_brain_profile_uses_user_auth_surface(

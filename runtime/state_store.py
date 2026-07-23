@@ -1618,6 +1618,8 @@ def delete_conversation(conversation_id: str) -> dict[str, Any] | None:
 
 
 def save_pending_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    from runtime import compiled_plan as _compiled_plan
+
     with _LOCK:
         state = load_state()
         intelligence = state.setdefault("taskIntelligence", {})
@@ -1628,18 +1630,29 @@ def save_pending_plan(plan: dict[str, Any]) -> dict[str, Any]:
         stored = copy.deepcopy(plan)
         if not str(stored.get("id", "") or "").strip():
             stored["id"] = _generate_id("plan")
+        # P0 tek plan otoritesi: kaydedilen plan, kanonik adım hash'ine
+        # (revision + planHash) bağlanır. Onay anında get_pending_plan bu bağı
+        # doğrular; adım/args/dependsOn oynanmışsa plan fail-closed yok sayılır.
+        stored["planBinding"] = _compiled_plan.binding_for_steps(
+            _compiled_plan.plan_steps_for_binding(stored)
+        )
         intelligence["pendingPlans"] = _bounded_prepend(plans, stored, _PENDING_PLAN_LIMIT)
         save_state(state)
         return stored
 
 
 def get_pending_plan(plan_id: str) -> dict[str, Any] | None:
+    from runtime import compiled_plan as _compiled_plan
+
     state = load_state()
     plans = state.get("taskIntelligence", {}).get("pendingPlans", [])
     if not isinstance(plans, list):
         return None
     for item in plans:
         if isinstance(item, dict) and str(item.get("id", "") or "") == str(plan_id or ""):
+            # P0: bağ doğrulanamayan (tamper edilmiş) plan asla dönmez.
+            if isinstance(item.get("planBinding"), dict) and not _compiled_plan.verify_pending_plan_binding(item):
+                return None
             return copy.deepcopy(item)
     return None
 
@@ -1677,6 +1690,8 @@ def remove_pending_plan(plan_id: str) -> None:
 
 
 def revise_pending_plan(plan_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    from runtime import compiled_plan as _compiled_plan
+
     if not isinstance(updates, dict):
         return None
     with _LOCK:
@@ -1693,6 +1708,15 @@ def revise_pending_plan(plan_id: str, updates: dict[str, Any]) -> dict[str, Any]
                 continue
             revised = copy.deepcopy(item)
             _deep_merge(revised, copy.deepcopy(updates))
+            # P0: plan adımları gerçekten değiştiyse (revizyon/replan/netleştirme)
+            # YENİ revision + YENİ planHash üretilir; eski bağa verilmiş onay ve
+            # grant'ler yeni adımlar için geçersizdir. Yalnız yürütme-durumu
+            # güncellemeleri (executionState vb.) bağı değiştirmez.
+            previous_binding = item.get("planBinding") if isinstance(item.get("planBinding"), dict) else None
+            revised_steps = _compiled_plan.plan_steps_for_binding(revised)
+            revised_hash = _compiled_plan.plan_signature(revised_steps)
+            if previous_binding is None or str(previous_binding.get("planHash", "") or "") != revised_hash:
+                revised["planBinding"] = _compiled_plan.next_binding(previous_binding, revised_steps)
             plans[index] = revised
             break
         if revised is None:

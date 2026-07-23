@@ -18,7 +18,7 @@ PROFESSIONAL_WORKFLOW_CASES = [
     pytest.param(
         "legal_defense",
         "Avukat gibi çalış. Kira uyuşmazlığını araştır, dosya özetini analiz et ve savunma dilekçesi taslağı hazırla.",
-        ["web_research", "document_write"],
+        ["web_research", "text_analyze", "document_write"],
         id="legal-defense-draft",
     ),
     pytest.param(
@@ -36,13 +36,13 @@ PROFESSIONAL_WORKFLOW_CASES = [
     pytest.param(
         "student_presentation",
         "Öğrenci gibi çalış. Kuantum annealing ile klasik optimizasyon farkını araştır, adım adım açıkla ve 5 sayfalık sunum hazırla.",
-        ["web_research", "presentation_write"],
+        ["web_research", "text_analyze", "presentation_write"],
         id="student-research-presentation",
     ),
     pytest.param(
         "engineering_report",
         "Mühendis gibi çalış. Güneş paneli verim optimizasyonunu araştır, seçenekleri karşılaştır ve teknik çözüm raporu hazırla.",
-        ["web_research", "document_write"],
+        ["web_research", "text_analyze", "document_write"],
         id="engineering-research-report",
     ),
     pytest.param(
@@ -109,7 +109,11 @@ def test_optimization_research_report_stays_research_writer() -> None:
     )
 
     assert routed is not None
-    assert [step["capability"] for step in routed.steps] == ["web_research", "document_write"]
+    assert [step["capability"] for step in routed.steps] == [
+        "web_research",
+        "text_analyze",
+        "document_write",
+    ]
 
 
 def test_professional_executor_passes_prior_outputs_into_writer(tmp_path: Path) -> None:
@@ -315,7 +319,7 @@ def test_accounting_spreadsheet_executor_resolves_calculation_into_cells(tmp_pat
     assert artifacts and artifacts[-1]["path"] == str(output_path)
     assert observed_sheet_args["_previousOutput"] == "4100"
     assert observed_sheet_args["_previousResult"]["kind"] == "math_solve"
-    assert observed_sheet_args["_dependencyResults"]["calculate"]["result"] == "4100"
+    assert observed_sheet_args["_dependencyResults"]["calculate"]["result"]["result"] == "4100"
     assert "4100" in str(observed_sheet_args)
 
 
@@ -324,11 +328,16 @@ def test_student_presentation_executor_resolves_research_into_prompt(tmp_path: P
         "Öğrenci gibi çalış. Kuantum annealing ile klasik optimizasyon farkını araştır, adım adım açıkla ve 5 sayfalık sunum hazırla."
     )
     assert routed is not None
-    assert [step["capability"] for step in routed.steps] == ["web_research", "presentation_write"]
+    assert [step["capability"] for step in routed.steps] == [
+        "web_research",
+        "text_analyze",
+        "presentation_write",
+    ]
 
     observed_presentation_args: dict[str, object] = {}
     output_path = tmp_path / "kuantum-sunum.pptx"
     research_output = "Kuantum annealing sezgisel optimizasyon için kullanılır; klasik yöntemler deterministik baseline sağlar."
+    analysis_output = "Analiz: iki yaklaşımın güçlü yanları, sınırlamaları ve uygun kullanım alanları karşılaştırıldı."
 
     def execute_step(capability: str, args: dict, _state: dict, _source: str):
         if capability == "web_research":
@@ -336,6 +345,13 @@ def test_student_presentation_executor_resolves_research_into_prompt(tmp_path: P
                 "ok": True,
                 "output": research_output,
                 "result": {"kind": "web_research", "summary": research_output},
+            }, []
+        if capability == "text_analyze":
+            assert research_output in str(args)
+            return {
+                "ok": True,
+                "output": analysis_output,
+                "result": {"kind": "text_analyze", "summary": analysis_output},
             }, []
         if capability == "presentation_write":
             observed_presentation_args.update(args)
@@ -360,8 +376,7 @@ def test_student_presentation_executor_resolves_research_into_prompt(tmp_path: P
     assert error_code == ""
     assert result and result["kind"] == "presentation_write"
     assert artifacts and artifacts[-1]["path"] == str(output_path)
-    assert observed_presentation_args["_previousOutput"] == research_output
-    assert observed_presentation_args["_previousResult"]["kind"] == "web_research"
-    research_id = str(routed.steps[0].get("id") or "")
-    assert observed_presentation_args["_dependencyResults"][research_id]["summary"] == research_output
-    assert research_output in str(observed_presentation_args)
+    assert observed_presentation_args["_previousOutput"] == analysis_output
+    assert observed_presentation_args["_previousResult"]["kind"] == "text_analyze"
+    assert observed_presentation_args["_dependencyResults"]["analyze"]["summary"] == analysis_output
+    assert analysis_output in str(observed_presentation_args)

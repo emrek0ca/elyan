@@ -78,24 +78,13 @@ def _fernet() -> "Fernet | None":
 
 
 def plan_hash(steps: list[dict[str, Any]]) -> str:
-    """Bind resume state to the complete executable plan shape."""
-    shape = [
-        {
-            "id": str(step.get("id", "") or ""),
-            "capability": str(step.get("capability", "") or ""),
-            "args": {
-                str(key): value
-                for key, value in (step.get("args", {}) if isinstance(step.get("args"), dict) else {}).items()
-                if not str(key).startswith("_")
-            },
-            "dependsOn": list(step.get("dependsOn", []) or []),
-            "forEach": step.get("forEach"),
-            "resourceScope": list(step.get("resourceScope", []) or []),
-        }
-        for step in steps
-        if isinstance(step, dict)
-    ]
-    return sha256_value(shape)
+    """Bind resume state to the complete executable plan shape.
+
+    P0: kanonik hash'in TEK otoritesi compiled_plan.plan_signature'tır — imza,
+    onay ve yürütme aynı fonksiyona bağlanır."""
+    from runtime.compiled_plan import plan_signature
+
+    return plan_signature(steps)
 
 
 class ExecutionJournal:
