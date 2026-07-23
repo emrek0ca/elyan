@@ -8,7 +8,7 @@ psutil
 Pillow
 pystray>=0.19
 customtkinter>=5.2
-qrcode>=7.4
+qrcode>=8.2
 litellm
 langgraph
 google-genai

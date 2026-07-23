@@ -29,4 +29,4 @@ sounddevice
 soundfile
 mcp
 pystray>=0.19
-qrcode>=7.4
+qrcode>=8.2
