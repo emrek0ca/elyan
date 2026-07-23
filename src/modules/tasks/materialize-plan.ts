@@ -44,6 +44,7 @@ const MATERIALIZABLE_CAPABILITIES = DESKTOP_CAPABILITY_MANIFEST.map(
 const CAPABILITY_NAME_RE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/;
 const SEQUENTIAL_INTENT_RE =
   /\b(sonra|ardından|ardindan|daha sonra|önce|once|then|after that|afterwards|finally|en son)\b/i;
+const STEP_TEMPLATE_RE = /\{\{\s*steps\.([A-Za-z0-9_-]+)/g;
 
 const MATERIALIZE_TIMEOUT_MS = 20_000;
 const MATERIALIZE_MAX_TOKENS = 2_400;
@@ -54,6 +55,29 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function templateStepReferences(value: unknown): Set<string> {
+  const refs = new Set<string>();
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      for (const ref of templateStepReferences(item)) refs.add(ref);
+    }
+    return refs;
+  }
+  const record = asRecord(value);
+  if (record) {
+    for (const item of Object.values(record)) {
+      for (const ref of templateStepReferences(item)) refs.add(ref);
+    }
+    return refs;
+  }
+  if (typeof value !== "string" || !value.includes("{{")) return refs;
+  for (const match of value.matchAll(STEP_TEMPLATE_RE)) {
+    const id = String(match[1] ?? "").trim();
+    if (id) refs.add(id);
+  }
+  return refs;
 }
 
 /**
@@ -267,11 +291,15 @@ export function buildPlanningPrompt(
  * sınırlar, MAX_WORK_ORDER_STEPS ile kırpar. <2 adım kalırsa null döner
  * (gerçek bir ayrıştırma yok → heuristik korunur).
  */
-function normalizeMaterializedSteps(
+export function normalizeMaterializedSteps(
   rawPlan: Record<string, unknown> | null,
+  allowedCapabilities: Iterable<string> = MATERIALIZABLE_CAPABILITIES,
 ): DesktopWorkOrderStep[] | null {
   if (!rawPlan) return null;
   const rawSteps = Array.isArray(rawPlan.steps) ? rawPlan.steps : [];
+  const allowed = new Set(
+    [...allowedCapabilities].map((capability) => String(capability ?? "").trim()),
+  );
   const seenIds = new Set<string>();
   const normalized: DesktopWorkOrderStep[] = [];
   for (let index = 0; index < rawSteps.length; index += 1) {
@@ -280,6 +308,7 @@ function normalizeMaterializedSteps(
     if (!step) continue;
     const capability = String(step.capability ?? "").trim();
     if (!capability || !CAPABILITY_NAME_RE.test(capability)) continue;
+    if (!allowed.has(capability)) continue;
     let id = String(step.id ?? "").trim();
     if (!id || seenIds.has(id)) id = `s${normalized.length + 1}`;
     seenIds.add(id);
@@ -298,9 +327,14 @@ function normalizeMaterializedSteps(
   // dependsOn yalnız plan içindeki geçerli id'lere işaret etsin (dangling temizle).
   const validIds = new Set(normalized.map((s) => s.id));
   for (const step of normalized) {
-    step.dependsOn = (step.dependsOn ?? []).filter(
+    const explicit = (step.dependsOn ?? []).filter(
       (d) => validIds.has(d) && d !== step.id,
     );
+    const inferred = [...templateStepReferences({
+      args: step.args,
+      forEach: (step as Record<string, unknown>).forEach,
+    })].filter((d) => validIds.has(d) && d !== step.id);
+    step.dependsOn = [...new Set([...explicit, ...inferred])];
   }
   return normalized.length >= 2 ? normalized : null;
 }
@@ -357,6 +391,7 @@ export async function maybeMaterializeDesktopPlan(
 
     const steps = normalizeMaterializedSteps(
       extractFirstJsonObject(inference.text),
+      allowed,
     );
     if (!steps) return; // gerçek ayrıştırma yok → heuristik korunur.
 

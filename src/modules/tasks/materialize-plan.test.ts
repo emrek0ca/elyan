@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildPlanningPrompt,
+  normalizeMaterializedSteps,
   renderPlanningFewShots,
 } from "./materialize-plan.js";
 import type { DesktopWorkOrder } from "./desktop-work-order.js";
@@ -148,4 +149,77 @@ test("desktop materialization prompt teaches decision support optimization chain
   assert.match(prompt, /"problemClass":"optimization"/);
   assert.match(prompt, /"prompt":"\{\{steps\.s1\.output\}\}"/);
   assert.match(prompt, /Model: \{\{steps\.s1\.output\}\}\\n\\nCozum: \{\{steps\.s2\.output\}\}\\n\\nDogrulama: \{\{steps\.s3\.output\}\}/);
+});
+
+test("desktop materialization normalizer rejects non-catalog capabilities", () => {
+  const steps = normalizeMaterializedSteps(
+    {
+      steps: [
+        {
+          id: "s1",
+          capability: "web_research",
+          args: { query: "public KDV kurallari" },
+          dependsOn: [],
+          description: "Araştır",
+        },
+        {
+          id: "s2",
+          capability: "private_file_upload",
+          args: { path: "/tmp/secret.pdf" },
+          dependsOn: ["s1"],
+          description: "Katalog dışı adım",
+        },
+        {
+          id: "s3",
+          capability: "document_write",
+          args: { content: "{{steps.s1.output}}" },
+          dependsOn: ["s1"],
+          description: "Rapor yaz",
+        },
+      ],
+    },
+    ["web_research", "document_write"],
+  );
+
+  assert.deepEqual(
+    steps?.map((step) => step.capability),
+    ["web_research", "document_write"],
+  );
+});
+
+test("desktop materialization normalizer infers dependencies from step templates", () => {
+  const steps = normalizeMaterializedSteps(
+    {
+      steps: [
+        {
+          id: "s1",
+          capability: "web_research",
+          args: { query: "public KDV kurallari" },
+          dependsOn: [],
+          description: "Araştır",
+        },
+        {
+          id: "s2",
+          capability: "text_analyze",
+          args: {
+            prompt: "Araştırmayı analiz et",
+            sourceContext: "Araştırma: {{steps.s1.output}}",
+          },
+          dependsOn: [],
+          description: "Analiz et",
+        },
+        {
+          id: "s3",
+          capability: "document_write",
+          args: { content: "Analiz: {{steps.s2.output}}" },
+          dependsOn: [],
+          description: "Rapor yaz",
+        },
+      ],
+    },
+    ["web_research", "text_analyze", "document_write"],
+  );
+
+  assert.deepEqual(steps?.[1]?.dependsOn, ["s1"]);
+  assert.deepEqual(steps?.[2]?.dependsOn, ["s2"]);
 });
