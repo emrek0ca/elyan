@@ -58,10 +58,15 @@ _APPROVAL_CAPABILITIES = {
 _ROLE_BY_CAPABILITY: dict[str, str] = {
     # Observation and truth gathering
     "sys_info": "observer",
+    "web_research": "observer",
     "retrieve_context": "observer",
     "document_read": "observer",
     "ocr_read": "observer",
     "image_read": "observer",
+    "image_fetch": "observer",
+    "file_read": "observer",
+    "file_search": "observer",
+    "directory_tree": "observer",
     "analyze_screen": "observer",
     "data_analyze": "observer",
     "text_analyze": "analyzer",
@@ -103,6 +108,10 @@ _ROLE_BY_CAPABILITY: dict[str, str] = {
     # Symbolic work
     "math_solve": "analyzer",
     "latex_parse": "analyzer",
+    "quantum_model_problem": "analyzer",
+    "quantum_run_experiment": "analyzer",
+    "quantum_compare_classical": "analyzer",
+    "quantum_generate_report": "writer",
 }
 
 
@@ -110,7 +119,7 @@ def _capability_phase(capability: str, role: str) -> str:
     normalized = str(capability or "").strip().lower()
     if normalized in {"retrieve_context", "web_research", "document_read", "ocr_read", "image_read", "data_analyze", "chart_generate", "sys_info"}:
         return "gather"
-    if normalized in {"math_solve", "latex_parse", "text_analyze", "quantum_model_problem", "quantum_compare_classical"}:
+    if normalized in {"math_solve", "latex_parse", "text_analyze", "quantum_model_problem", "quantum_run_experiment", "quantum_compare_classical"}:
         return "reason"
     if normalized in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write", "email_draft", "quantum_generate_report"}:
         return "compose"

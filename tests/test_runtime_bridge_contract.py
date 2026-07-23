@@ -2497,10 +2497,32 @@ def test_remote_task_trace_exposes_step_role_and_phase_from_agent_plan() -> None
         task_id="task-roles",
     )
 
-    assert trace["steps"][0]["role"] == "operator"
+    assert trace["steps"][0]["role"] == "observer"
     assert trace["steps"][0]["phase"] == "gather"
     assert trace["steps"][1]["role"] == "writer"
     assert trace["steps"][1]["phase"] == "compose"
+
+
+def test_agent_plan_roles_cover_professional_research_quantum_and_writers() -> None:
+    plan = bridge.build_agent_plan(
+        [
+            {"id": "research", "capability": "web_research"},
+            {"id": "analyze", "capability": "text_analyze"},
+            {"id": "model", "capability": "quantum_model_problem"},
+            {"id": "run", "capability": "quantum_run_experiment"},
+            {"id": "report", "capability": "quantum_generate_report"},
+            {"id": "write", "capability": "document_write"},
+        ],
+        summary="Profesyonel görev",
+    )
+
+    roles = {item["id"]: (item["role"], item["phase"]) for item in plan["stepRoles"]}
+    assert roles["research"] == ("observer", "gather")
+    assert roles["analyze"] == ("analyzer", "reason")
+    assert roles["model"] == ("analyzer", "reason")
+    assert roles["run"] == ("analyzer", "reason")
+    assert roles["report"] == ("writer", "compose")
+    assert roles["write"] == ("writer", "compose")
 
 
 def test_execute_assigned_runtime_task_skips_duplicate_inflight_delivery(
