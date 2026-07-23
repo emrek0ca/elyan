@@ -58,6 +58,11 @@ test("desktop materialization prompt keeps research queries public and writer ar
   assert.match(fewShots, /kira uyusmazligi tahliye davasi savunma dilekcesi mevzuat emsal/);
   assert.match(fewShots, /Student research \+ presentation/);
   assert.match(fewShots, /quantum annealing vs classical optimization explanation examples/);
+  assert.match(fewShots, /Optimization decision support/);
+  assert.match(fewShots, /quantum_model_problem/);
+  assert.match(fewShots, /quantum_run_experiment/);
+  assert.match(fewShots, /quantum_compare_classical/);
+  assert.match(fewShots, /quantum_generate_report/);
 
   const prompt = buildPlanningPrompt(
     workOrder("Avukat gibi çalış. Dosya özeti özel kalsın; kira uyuşmazlığını araştır ve savunma dilekçesi hazırla."),
@@ -66,4 +71,25 @@ test("desktop materialization prompt keeps research queries public and writer ar
 
   assert.match(prompt, /Do not pass the full user goal, private case facts, file summaries, or writing instructions as the query/);
   assert.match(prompt, /preserve private case\/test\/project facts in writer args/);
+});
+
+test("desktop materialization prompt teaches decision support optimization chain", () => {
+  const prompt = buildPlanningPrompt(
+    workOrder(
+      "Karar destek ajanı gibi çalış. A değer 10 maliyet 4, B değer 7 maliyet 3, C değer 12 maliyet 8; kapasite 10. Problemi karar değişkenleri, amaç fonksiyonu ve kısıtlarla modelle, çöz ve uygulanabilirliği doğrula.",
+    ),
+    [
+      "quantum_model_problem",
+      "quantum_run_experiment",
+      "quantum_compare_classical",
+      "quantum_generate_report",
+    ],
+  );
+
+  assert.match(prompt, /Optimization decision support/);
+  assert.match(prompt, /decision-support chain: quantum_model_problem -> quantum_run_experiment -> quantum_compare_classical -> quantum_generate_report/);
+  assert.match(prompt, /A deger 10 maliyet 4/);
+  assert.match(prompt, /"problemClass":"optimization"/);
+  assert.match(prompt, /"prompt":"\{\{steps\.s1\.output\}\}"/);
+  assert.match(prompt, /Model: \{\{steps\.s1\.output\}\}\\n\\nCozum: \{\{steps\.s2\.output\}\}\\n\\nDogrulama: \{\{steps\.s3\.output\}\}/);
 });
