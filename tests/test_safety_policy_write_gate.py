@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from runtime import capability_registry
 from runtime import safety_policy
 
 
@@ -47,6 +48,15 @@ def test_permission_tools_use_single_full_access_surface() -> None:
     assert denied.allowed is False
     assert denied.code == "PERMISSION_REQUIRED"
     assert allowed.allowed is True
+
+
+def test_capability_metadata_exposes_only_single_full_access_permission_surface() -> None:
+    for capability in capability_registry.capability_names():
+        metadata = capability_registry.capability_metadata(capability)
+        permissions = metadata.get("requiredPermissions", [])
+        if not permissions:
+            continue
+        assert permissions == ["full_computer_access"], capability
 
 
 def test_default_output_paths_are_unique(tmp_path) -> None:
