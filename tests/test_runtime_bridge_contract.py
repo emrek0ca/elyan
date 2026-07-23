@@ -918,6 +918,25 @@ def test_professional_read_research_workflow_feeds_all_context_to_writer() -> No
     )
 
 
+def test_professional_legal_file_workflow_reads_case_context_before_research_and_draft() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        "Avukat gibi çalış. Bu dosya metnini analiz et: kiracı tahliye itirazı. Kira uyuşmazlığı mevzuatını araştır ve savunma dilekçesi hazırla.",
+        {"document_read", "web_research", "document_write"},
+    )
+
+    assert plan is not None
+    steps, preview = plan
+    assert [step["capability"] for step in steps] == ["document_read", "web_research", "document_write"]
+    assert steps[2]["dependsOn"] == ["read_input", "research"]
+    assert steps[2]["args"]["sourceContext"] == (
+        "Okunan özel/veri bağlamı: {{steps.read_input.output}}\n\n"
+        "Araştırma bağlamı: {{steps.research.output}}"
+    )
+    assert preview["planSource"] == "runtime_professional_template"
+
+
 def test_professional_student_workflow_can_target_presentation_without_document_writer() -> None:
     runtime = bridge.RuntimeBridge()
 

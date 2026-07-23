@@ -13226,7 +13226,7 @@ class RuntimeBridge:
                     "description": "Paylaşılan tahlil/veri metni okunacak.",
                 }
             )
-        elif not legal and "document_read" in canonical_caps and any(
+        elif "document_read" in canonical_caps and any(
             token in normalized for token in ("bu belge", "bu dosya", "pdf", "docx", "metin")
         ):
             steps.append(
