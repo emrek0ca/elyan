@@ -9,6 +9,7 @@ import {
 } from "./desktop-work-order.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
+import type { RemoteMcpSelectionMetadata } from "../integrations/provider-registry.js";
 
 function routeDecision(overrides: Partial<CommandRouteDecision> = {}): CommandRouteDecision {
   return {
@@ -73,20 +74,67 @@ test("buildDesktopWorkOrder keeps private file requests local and evidence-gated
 });
 
 test("remote MCP work orders keep least-privilege scope and private routing", () => {
+  const selection: RemoteMcpSelectionMetadata = {
+    targetKind: "curated_app",
+    appId: "github",
+    connectionId: "conn_123",
+    serverId: "app_github",
+    operation: "read",
+    confidence: 0.93,
+    margin: 0.4,
+    source: "explicit_name",
+  };
   const workOrder = buildDesktopWorkOrder({
     message: "GitHub repolarımı göster",
     title: "GitHub repoları",
     routeDecision: routeDecision({ capabilities: ["mcp_call_tool"] }),
     requestedCapabilities: ["mcp_call_tool"],
+    remoteMcpSelection: selection,
   });
 
   assert.deepEqual(workOrder.requiredCapabilities, ["mcp_call_tool"]);
   assert.deepEqual(workOrder.planPreview.steps, []);
+  assert.deepEqual(workOrder.remoteMcp, selection);
   assert.equal(
     workOrder.requiredCapabilities.includes("desktop_operator.run"),
     false,
   );
   assert.equal(workOrder.planPreview.privacyClass, "local_private");
+  assert.equal(workOrder.verificationRules.some((rule) => rule.id === "remote_mcp_tool_result"), true);
+  assert.equal(workOrder.constraints.some((constraint) => constraint.includes("credentials never enter")), true);
+});
+
+test("remote MCP write work orders are side-effect scoped and require state readback", () => {
+  const selection: RemoteMcpSelectionMetadata = {
+    targetKind: "curated_app",
+    appId: "slack",
+    connectionId: "conn_write",
+    serverId: "app_slack",
+    operation: "write",
+    confidence: 0.91,
+    margin: 0.35,
+    source: "semantic_transformer",
+  };
+  const workOrder = buildDesktopWorkOrder({
+    message: "Slack çalışma alanımdaki proje kanalına durum mesajı gönder",
+    title: "Slack mesajı",
+    routeDecision: routeDecision({ capabilities: ["mcp_call_tool"] }),
+    requestedCapabilities: ["mcp_call_tool"],
+    remoteMcpSelection: selection,
+  });
+
+  assert.deepEqual(workOrder.requiredCapabilities, ["mcp_call_tool"]);
+  assert.equal(workOrder.planPreview.privacyClass, "side_effect");
+  assert.deepEqual(workOrder.planPreview.steps, []);
+  assert.deepEqual(workOrder.remoteMcp, selection);
+  assert.equal(
+    workOrder.expectedOutputs.some((output) =>
+      output.kind === "system_state" &&
+      output.format === "remote_mcp_state_readback" &&
+      output.required === true
+    ),
+    true,
+  );
 });
 
 test("buildDesktopWorkOrder emits a direct app capability with the parsed application name", () => {

@@ -789,15 +789,37 @@ export function buildDesktopWorkOrder(input: {
   const entities = extractEntities(message);
   const localContextNeeded = inferLocalContext(message, capabilities);
   const expectedOutputs = inferExpectedOutputs(message, input.understandingEnvelope);
+  const remoteMcpOperation = kind === "remote_mcp"
+    ? input.remoteMcpSelection?.operation ?? "unknown"
+    : "unknown";
+  if (
+    kind === "remote_mcp" &&
+    remoteMcpOperation === "write" &&
+    !expectedOutputs.some((output) => output.kind === "system_state" && output.format === "remote_mcp_state_readback")
+  ) {
+    expectedOutputs.push({ kind: "system_state", format: "remote_mcp_state_readback", required: true });
+  }
   const constraints = [
     "Private/local data stays on the desktop runtime.",
     "Do not claim completion without runtime/tool evidence.",
     "Return user-visible output through existing Elyan block/task result contracts.",
+    ...(kind === "remote_mcp"
+      ? ["Connected-app access must use the selected remote MCP target metadata; credentials never enter the work order."]
+      : []),
   ];
   const verificationRules: DesktopWorkOrder["verificationRules"] = [
     { id: "runtime_completed", description: "Runtime reports a terminal completed status.", evidence: "runtime_status" },
     { id: "tool_or_state_evidence", description: "Any local action is backed by tool result or state read-back.", evidence: "tool_result" },
     { id: "artifact_reference", description: "Generated files/artifacts are returned as artifact references, not local paths.", evidence: "artifact" },
+    ...(kind === "remote_mcp"
+      ? [
+          {
+            id: "remote_mcp_tool_result",
+            description: "Connected-app operation is backed by a remote MCP tool result.",
+            evidence: "tool_result" as const,
+          },
+        ]
+      : []),
   ];
   const steps = buildSteps({
     title: input.title,
@@ -834,6 +856,7 @@ export function buildDesktopWorkOrder(input: {
     planPreview: {
       summary,
       privacyClass:
+        remoteMcpOperation === "write" ||
         input.routeDecision.privacyClass === "side_effect" ||
         input.understandingEnvelope?.risk.side_effect
         ? "side_effect"
