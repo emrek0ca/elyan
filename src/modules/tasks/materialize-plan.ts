@@ -408,6 +408,85 @@ export function normalizeMaterializedSteps(
 }
 
 /**
+ * ÖZELEŞTİRİ (reflect-and-revise): server_brain kendi taslak planını eleştirel
+ * gözden geçirip düzeltir. Muhakeme kalitesini yükseltir: eksik adım, muğlak
+ * argüman (grounding), yanlış araç/mod, kopuk veri akışı bir tur içinde
+ * düzeltilir. Fail-safe: revizyon boş/kötü/gate'e takılırsa TASLAK korunur
+ * (asla regresyon yok). Reddedilen görevler zaten heuristik yola düşer.
+ */
+async function critiqueAndRevisePlan(
+  app: FastifyInstance,
+  userId: string,
+  taskId: string,
+  workOrder: DesktopWorkOrder,
+  draftSteps: DesktopWorkOrderStep[],
+  allowed: string[],
+): Promise<DesktopWorkOrderStep[]> {
+  try {
+    const summary = String(workOrder.goal?.summary ?? "").slice(0, 4_000);
+    const draftJson = JSON.stringify({
+      steps: draftSteps.map((s) => ({
+        id: s.id,
+        capability: s.capability,
+        args: s.args,
+        dependsOn: s.dependsOn ?? [],
+        description: s.description,
+      })),
+    });
+    const critiquePrompt = [
+      "You are Elyan's own plan reviewer. Critically re-examine YOUR OWN draft plan for the goal and output the best corrected plan. Reason step by step, then output only JSON.",
+      "",
+      "GOAL:",
+      summary,
+      "",
+      "DRAFT PLAN:",
+      draftJson,
+      "",
+      "SELF-CRITIQUE CHECKLIST — fix EVERY issue you find:",
+      "1) Grounding: every arg holds concrete executable data or a {{steps.<id>.output}} reference. Remove vague placeholders ('the total', 'the file', 'the research result').",
+      "2) Right method/mode: Excel->spreadsheet_write, slides->presentation_write, doc/report/petition->document_write, UI action->desktop_operator, analysis->text_analyze between gather and writer; run_skill when a catalog skill fits exactly.",
+      "3) Completeness: no missing prerequisite (read/research before analyze; analyze before write; observe before/after risky UI actions).",
+      "4) Data flow: dependsOn is correct and each consumer references its producer with {{steps.<id>.output}}.",
+      "5) math_solve.expression numeric only; web_research.query short & public (no private facts).",
+      "6) Smallest correct plan (2..16 steps).",
+      "",
+      "CAPABILITY CATALOG (allowed names only):",
+      renderCapabilityCatalog(new Set(allowed)),
+      "",
+      'Output EXACTLY ONE JSON object {"steps":[...]} with the corrected plan. If the draft is already optimal, return it unchanged. No prose, no markdown fences.',
+    ].join("\n");
+    const revision = await generateGovernedSharedBrainReply(app, {
+      userId,
+      taskId,
+      title: "Desktop plan (self-critique)",
+      prompt: critiquePrompt,
+      workload: "planning",
+      route: "desktop_plan_critique",
+      meteringSurface: "task",
+      maxCompletionTokensOverride: MATERIALIZE_MAX_TOKENS,
+      timeoutMsOverride: MATERIALIZE_TIMEOUT_MS,
+      requestMetadata: { desktopPlanCritique: true },
+      internalEvaluation: {
+        skipUsageValidation: true,
+        skipReviewLogging: true,
+        refinementPass: true,
+      },
+    });
+    if (revision.answerSource === "backend_gate" || !revision.text.trim()) {
+      return draftSteps;
+    }
+    const revised = normalizeMaterializedSteps(
+      extractFirstJsonObject(revision.text),
+      allowed,
+    );
+    // Güven: revize plan geçerli (≥2 adım) ise kullan; yoksa taslak korunur.
+    return revised && revised.length >= 2 ? revised : draftSteps;
+  } catch {
+    return draftSteps;
+  }
+}
+
+/**
  * Dispatch worker kancası: karmaşık desktop görevlerinde work-order planını
  * sunucuda materyalize edip task satırına persist eder. Basit görevlerde ve her
  * hata durumunda no-op (heuristik plan korunur). İdempotent: zaten materyalize
@@ -457,11 +536,22 @@ export async function maybeMaterializeDesktopPlan(
       return;
     }
 
-    const steps = normalizeMaterializedSteps(
+    const draftSteps = normalizeMaterializedSteps(
       extractFirstJsonObject(inference.text),
       allowed,
     );
-    if (!steps) return; // gerçek ayrıştırma yok → heuristik korunur.
+    if (!draftSteps) return; // gerçek ayrıştırma yok → heuristik korunur.
+
+    // ÖZELEŞTİRİ: model kendi planını eleştirel gözden geçirip düzeltir
+    // (muhakeme kalitesi). Fail-safe: revizyon zayıfsa taslak korunur.
+    const steps = await critiqueAndRevisePlan(
+      app,
+      task.userId,
+      task.id,
+      workOrder,
+      draftSteps,
+      allowed,
+    );
 
     const updatedPlanPreview = {
       ...planPreview,
