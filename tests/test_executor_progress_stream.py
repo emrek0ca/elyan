@@ -191,7 +191,16 @@ def test_progress_uses_human_labels_for_professional_and_decision_steps() -> Non
             "args": {"prompt": "rapor"},
             "dependsOn": ["model"],
         },
-        {"id": "mcp", "capability": "mcp_tool_call", "args": {"name": "safe.read"}, "dependsOn": ["report"]},
+        {
+            "id": "mcp",
+            "capability": "mcp_call_tool",
+            "args": {
+                "serverId": "app_github",
+                "toolName": "list_issues",
+                "arguments": {"repo": "private/repo"},
+            },
+            "dependsOn": ["report"],
+        },
     ]
     ex.execute_plan_steps(
         steps=steps,
@@ -213,5 +222,8 @@ def test_progress_uses_human_labels_for_professional_and_decision_steps() -> Non
         "Teknik analiz yapılıyor",
         "Problem modelleniyor",
         "Karar raporu hazırlanıyor",
-        "Uygulama aracı çalışıyor",
+        "GitHub aracı çalışıyor",
     ]
+    mcp_step = final["steps"][-1]
+    assert mcp_step["detail"] == "GitHub / list_issues"
+    assert "private/repo" not in str(mcp_step)

@@ -54,6 +54,12 @@ def _safe_text(value: Any, limit: int = 160) -> str:
     return text
 
 
+def _safe_identifier(value: Any, *, limit: int = 80) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^A-Za-z0-9_.:-]+", "_", text)
+    return text[:limit].strip("_")
+
+
 def _user_facing_execution_summary(
     outputs: list[str],
     step_outputs: dict[str, dict[str, Any]],
@@ -450,12 +456,15 @@ class ExecutorCore:
             step_id = str(step.get("id", "") or f"step_{index + 1}")
             if step_id in seen:
                 continue
+            args = step.get("args") if isinstance(step.get("args"), dict) else {}
             step_states.append(
                 {
                     "id": step_id,
                     "capability": str(step.get("capability", "") or ""),
                     "label": str(step.get("description", "") or ""),
-                    "mode": str((step.get("args") if isinstance(step.get("args"), dict) else {}).get("mode", "") or ""),
+                    "mode": str(args.get("mode", "") or ""),
+                    "serverId": _safe_identifier(args.get("serverId") or args.get("server_id")),
+                    "toolName": _safe_identifier(args.get("toolName") or args.get("tool_name") or args.get("name")),
                     "status": "pending",
                     "phase": str(step.get("phase", "") or "act"),
                     "role": str(step.get("role", "") or "operator"),
@@ -516,16 +525,50 @@ class ExecutorCore:
         "student": "Öğrenci içeriği analiz ediliyor",
         "professional": "Profesyonel analiz yapılıyor",
     }
+    _MCP_APP_LABELS: dict[str, str] = {
+        "github": "GitHub",
+        "slack": "Slack",
+        "notion": "Notion",
+        "linear": "Linear",
+        "gmail": "Gmail",
+        "google_drive": "Google Drive",
+        "google_calendar": "Google Calendar",
+    }
 
     @classmethod
-    def _step_label(cls, capability: str, description: str = "", mode: str = "") -> str:
+    def _mcp_app_label(cls, server_id: str) -> str:
+        normalized = str(server_id or "").strip().lower()
+        for prefix in ("app_", "mcp_", "remote_"):
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix):]
+        normalized = normalized.replace("-", "_")
+        return cls._MCP_APP_LABELS.get(normalized, "Bağlı uygulama")
+
+    @classmethod
+    def _step_label(cls, capability: str, description: str = "", mode: str = "", server_id: str = "") -> str:
         desc = _safe_text(description, limit=48)
         if desc:
             return desc
         if capability == "text_analyze":
             normalized_mode = str(mode or "").strip().lower()
             return cls._TEXT_ANALYSIS_MODE_LABELS.get(normalized_mode, cls._CAPABILITY_LABELS[capability])
+        if capability in {"mcp_call_tool", "mcp_tool_call"}:
+            return f"{cls._mcp_app_label(server_id)} aracı çalışıyor"
         return cls._CAPABILITY_LABELS.get(capability, capability or "Adım")
+
+    @classmethod
+    def _step_detail(cls, state: dict[str, Any]) -> str:
+        output_or_stop = _safe_text(str(state.get("outputPreview", "") or state.get("stopReason", "") or ""), limit=120)
+        capability = str(state.get("capability", "") or "")
+        if capability not in {"mcp_call_tool", "mcp_tool_call"}:
+            return output_or_stop
+        tool_name = _safe_identifier(state.get("toolName"), limit=80)
+        server_id = _safe_identifier(state.get("serverId"), limit=80)
+        if tool_name and server_id:
+            return f"{cls._mcp_app_label(server_id)} / {tool_name}"
+        if tool_name:
+            return tool_name
+        return output_or_stop
 
     def _build_task_trace_block(self, current: dict[str, Any], *, final: bool = False) -> dict[str, Any]:
         """execute_plan_steps ilerlemesini task_trace bloğuna çevirir (canlı checklist)."""
@@ -555,10 +598,11 @@ class ExecutorCore:
                     str(state.get("capability", "") or ""),
                     str(state.get("label", "") or ""),
                     str(state.get("mode", "") or ""),
+                    str(state.get("serverId", "") or ""),
                 ),
                 "status": mapped,
                 "capability": str(state.get("capability", "") or ""),
-                "detail": _safe_text(str(state.get("outputPreview", "") or state.get("stopReason", "") or ""), limit=120),
+                "detail": self._step_detail(state),
             }
             # Zengin telemetri (mobil canlı görev penceresi): adım süresi,
             # doğrulama durumu, deneme sayısı — veri zaten stepStates'te vardı,
