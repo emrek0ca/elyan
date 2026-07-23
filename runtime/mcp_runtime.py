@@ -55,6 +55,38 @@ _CONTROL_PLANE_MCP_ENDPOINTS: dict[tuple[str, str], str] = {
 }
 
 
+def _planner_schema_summary(schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return ""
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict) or not properties:
+        return ""
+    required = {
+        str(item)
+        for item in (schema.get("required", []) if isinstance(schema.get("required"), list) else [])
+        if str(item or "")
+    }
+    parts: list[str] = []
+    for key, value in list(properties.items())[:6]:
+        if not isinstance(value, dict):
+            continue
+        name = str(key or "").strip()
+        if not name:
+            continue
+        type_name = str(value.get("type", "any") or "any").lower()
+        suffix = "!" if name in required else ""
+        enum_values = value.get("enum")
+        enum_summary = ""
+        if isinstance(enum_values, list) and enum_values:
+            enum_summary = " enum=" + "|".join(str(item)[:30] for item in enum_values[:5] if str(item or ""))
+        nested = value.get("properties")
+        nested_summary = ""
+        if isinstance(nested, dict) and nested:
+            nested_summary = "{" + ",".join(str(item)[:30] for item in list(nested.keys())[:4] if str(item or "")) + "}"
+        parts.append(f"{name}{suffix}:{type_name}{nested_summary}{enum_summary}")
+    return ", ".join(parts)
+
+
 class _TaskCancellationScope:
     def __init__(self, task_id: str) -> None:
         self.task_id = task_id
@@ -935,15 +967,7 @@ class MCPRuntimeManager:
             if not isinstance(item, dict):
                 continue
             schema = item.get("inputSchema", {})
-            schema_summary = ""
-            if isinstance(schema, dict):
-                properties = schema.get("properties", {})
-                if isinstance(properties, dict) and properties:
-                    schema_summary = ", ".join(
-                        f"{key}:{str((value or {}).get('type', 'any')).lower()}"
-                        for key, value in list(properties.items())[:6]
-                        if isinstance(value, dict)
-                    )
+            schema_summary = _planner_schema_summary(schema)
             lines.append(
                 f"- serverId={item.get('serverId', '')} toolName={item.get('name', '')} "
                 f"readOnly={bool(item.get('readOnly', False))} "

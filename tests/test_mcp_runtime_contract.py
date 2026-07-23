@@ -39,6 +39,60 @@ def test_streamable_http_config_accepts_trusted_remote_endpoint() -> None:
     assert config["authType"] == "bearer"
 
 
+def test_planner_schema_summary_marks_required_enum_and_nested_args() -> None:
+    summary = mcp_runtime._planner_schema_summary(
+        {
+            "properties": {
+                "owner": {"type": "string", "description": "Repo sahibi"},
+                "state": {"type": "string", "enum": ["open", "closed", "all"]},
+                "filters": {
+                    "type": "object",
+                    "properties": {
+                        "labels": {"type": "array"},
+                        "assignee": {"type": "string"},
+                    },
+                },
+            },
+            "required": ["owner"],
+        }
+    )
+
+    assert "owner!:string" in summary
+    assert "state:string enum=open|closed|all" in summary
+    assert "filters:object{labels,assignee}" in summary
+
+
+def test_planner_prompt_context_uses_rich_mcp_schema_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = mcp_runtime.MCPRuntimeManager()
+    monkeypatch.setattr(
+        manager,
+        "list_tools",
+        lambda _state, refresh=False: {
+            "tools": [
+                {
+                    "serverId": "app_github",
+                    "name": "list_issues",
+                    "description": "Repository issue listesini döndürür.",
+                    "readOnly": True,
+                    "inputSchema": {
+                        "properties": {
+                            "owner": {"type": "string"},
+                            "state": {"type": "string", "enum": ["open", "closed", "all"]},
+                            "filters": {"type": "object", "properties": {"labels": {"type": "array"}}},
+                        },
+                        "required": ["owner"],
+                    },
+                }
+            ]
+        },
+    )
+
+    context = manager.planner_prompt_context({})
+
+    assert "serverId=app_github toolName=list_issues" in context
+    assert "schema=owner!:string, state:string enum=open|closed|all, filters:object{labels}" in context
+
+
 def test_user_local_streamable_http_config_remains_separate_from_control_plane_catalog() -> None:
     config = mcp_runtime.normalize_server_config(
         {

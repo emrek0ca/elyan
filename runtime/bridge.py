@@ -3474,6 +3474,29 @@ def _planner_skills_data(state: dict[str, Any], text: str) -> list[dict[str, Any
 
 def _planner_mcp_tools_data(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Planlama isteğine veri olarak giden MCP araç envanteri."""
+    def _compact_schema_property(spec: Any, *, depth: int = 0) -> dict[str, Any]:
+        if not isinstance(spec, dict):
+            return {"type": "any"}
+        compact: dict[str, Any] = {"type": str(spec.get("type", "any") or "any")[:40]}
+        description = str(spec.get("description", "") or "").strip()
+        if description:
+            compact["description"] = description[:120]
+        enum_values = spec.get("enum")
+        if isinstance(enum_values, list) and enum_values:
+            compact["enum"] = [str(item)[:60] for item in enum_values[:8] if str(item or "")]
+        if depth < 1:
+            nested = spec.get("properties")
+            if isinstance(nested, dict) and nested:
+                compact["properties"] = {
+                    str(name)[:80]: _compact_schema_property(nested_spec, depth=depth + 1)
+                    for name, nested_spec in list(nested.items())[:6]
+                    if isinstance(nested_spec, dict)
+                }
+            nested_required = spec.get("required")
+            if isinstance(nested_required, list) and nested_required:
+                compact["required"] = [str(item)[:80] for item in nested_required[:6] if str(item or "")]
+        return compact
+
     try:
         status = mcp_runtime.list_mcp_tools(state)
         tools = status.get("tools", []) if isinstance(status, dict) else []
@@ -3491,10 +3514,7 @@ def _planner_mcp_tools_data(state: dict[str, Any]) -> list[dict[str, Any]]:
             schema_summary: dict[str, Any] = {}
             if isinstance(properties, dict) and properties:
                 schema_summary["properties"] = {
-                    str(name): {
-                        "type": str((spec or {}).get("type", "any") or "any"),
-                        "description": str((spec or {}).get("description", "") or "")[:80],
-                    }
+                    str(name)[:80]: _compact_schema_property(spec)
                     for name, spec in list(properties.items())[:8]
                     if isinstance(spec, dict)
                 }

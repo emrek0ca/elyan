@@ -8644,7 +8644,16 @@ def test_planner_mcp_tools_data_carries_compact_input_schema(
                         "properties": {
                             "owner": {"type": "string", "description": "Repo sahibi"},
                             "repo": {"type": "string", "description": "Repo adı"},
-                            "state": {"type": "string", "description": "open/closed/all"},
+                            "state": {"type": "string", "description": "open/closed/all", "enum": ["open", "closed", "all"]},
+                            "filters": {
+                                "type": "object",
+                                "description": "Ek filtreler",
+                                "properties": {
+                                    "labels": {"type": "array", "description": "Etiket listesi"},
+                                    "assignee": {"type": "string", "description": "Atanan kişi"},
+                                },
+                                "required": ["labels"],
+                            },
                         },
                         "required": ["owner", "repo"],
                     },
@@ -8662,13 +8671,22 @@ def test_planner_mcp_tools_data_carries_compact_input_schema(
             "description": "Repository issue listesini döndürür.",
             "readOnly": True,
             "inputSchema": {
-                "properties": {
-                    "owner": {"type": "string", "description": "Repo sahibi"},
-                    "repo": {"type": "string", "description": "Repo adı"},
-                    "state": {"type": "string", "description": "open/closed/all"},
+                    "properties": {
+                        "owner": {"type": "string", "description": "Repo sahibi"},
+                        "repo": {"type": "string", "description": "Repo adı"},
+                        "state": {"type": "string", "description": "open/closed/all", "enum": ["open", "closed", "all"]},
+                        "filters": {
+                            "type": "object",
+                            "description": "Ek filtreler",
+                            "properties": {
+                                "labels": {"type": "array", "description": "Etiket listesi"},
+                                "assignee": {"type": "string", "description": "Atanan kişi"},
+                            },
+                            "required": ["labels"],
+                        },
+                    },
+                    "required": ["owner", "repo"],
                 },
-                "required": ["owner", "repo"],
-            },
         }
     ]
 
