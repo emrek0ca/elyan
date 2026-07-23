@@ -8608,6 +8608,52 @@ def test_mcp_server_upsert_invalid_config_returns_safe_error(
     assert response["error"]["code"] == "MCP_SERVER_INVALID"
 
 
+def test_planner_mcp_tools_data_carries_compact_input_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bridge.mcp_runtime,
+        "list_mcp_tools",
+        lambda _state: {
+            "tools": [
+                {
+                    "serverId": "app_github",
+                    "name": "list_issues",
+                    "description": "Repository issue listesini döndürür.",
+                    "readOnly": True,
+                    "inputSchema": {
+                        "properties": {
+                            "owner": {"type": "string", "description": "Repo sahibi"},
+                            "repo": {"type": "string", "description": "Repo adı"},
+                            "state": {"type": "string", "description": "open/closed/all"},
+                        },
+                        "required": ["owner", "repo"],
+                    },
+                }
+            ]
+        },
+    )
+
+    tools = bridge._planner_mcp_tools_data({})
+
+    assert tools == [
+        {
+            "serverId": "app_github",
+            "toolName": "list_issues",
+            "description": "Repository issue listesini döndürür.",
+            "readOnly": True,
+            "inputSchema": {
+                "properties": {
+                    "owner": {"type": "string", "description": "Repo sahibi"},
+                    "repo": {"type": "string", "description": "Repo adı"},
+                    "state": {"type": "string", "description": "open/closed/all"},
+                },
+                "required": ["owner", "repo"],
+            },
+        }
+    ]
+
+
 def test_mcp_server_upsert_refresh_and_remove_roundtrip(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

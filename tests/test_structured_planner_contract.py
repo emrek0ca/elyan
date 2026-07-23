@@ -490,6 +490,37 @@ def test_planning_request_includes_recent_intents() -> None:
     assert envelope["context"]["recentIntents"][0]["capability"] == "open_app"
 
 
+def test_planning_request_keeps_mcp_call_tool_and_schema_context() -> None:
+    envelope = sp.build_planning_request(
+        "github issue listesini getir ve raporla",
+        planner_hint={"capabilityScope": ["mcp_call_tool"]},
+        mcp_tools=[
+            {
+                "serverId": "app_github",
+                "toolName": "list_issues",
+                "description": "Repository issue listesini döndürür.",
+                "readOnly": True,
+                "inputSchema": {
+                    "properties": {
+                        "owner": {"type": "string", "description": "Repo sahibi"},
+                        "repo": {"type": "string", "description": "Repo adı"},
+                        "state": {"type": "string", "description": "open/closed/all"},
+                    },
+                    "required": ["owner", "repo"],
+                },
+            }
+        ],
+    )
+
+    names = [tool["name"] for tool in envelope["toolCatalog"]]
+    assert "mcp_call_tool" in names
+    mcp_tool = envelope["context"]["mcpTools"][0]
+    assert mcp_tool["serverId"] == "app_github"
+    assert mcp_tool["toolName"] == "list_issues"
+    assert mcp_tool["inputSchema"]["required"] == ["owner", "repo"]
+    assert mcp_tool["inputSchema"]["properties"]["owner"]["type"] == "string"
+
+
 def test_build_cowork_context_is_structured_labeled_json() -> None:
     context = sp.build_cowork_context(
         capabilities=["open_app", "close_app", "open_app"],

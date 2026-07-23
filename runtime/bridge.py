@@ -3485,11 +3485,27 @@ def _planner_mcp_tools_data(state: dict[str, Any]) -> list[dict[str, Any]]:
             tool_name = str(tool.get("name", "") or tool.get("toolName", "") or "").strip()
             if not server_id or not tool_name:
                 continue
+            schema = tool.get("inputSchema", {})
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            required = schema.get("required", []) if isinstance(schema, dict) else []
+            schema_summary: dict[str, Any] = {}
+            if isinstance(properties, dict) and properties:
+                schema_summary["properties"] = {
+                    str(name): {
+                        "type": str((spec or {}).get("type", "any") or "any"),
+                        "description": str((spec or {}).get("description", "") or "")[:80],
+                    }
+                    for name, spec in list(properties.items())[:8]
+                    if isinstance(spec, dict)
+                }
+            if isinstance(required, list) and required:
+                schema_summary["required"] = [str(item) for item in required[:8] if str(item or "")]
             payload.append({
                 "serverId": server_id,
                 "toolName": tool_name,
                 "description": str(tool.get("description", "") or "")[:160],
                 "readOnly": bool(tool.get("readOnly", False)),
+                **({"inputSchema": schema_summary} if schema_summary else {}),
             })
         return payload[:16]
     except Exception:
