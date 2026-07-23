@@ -137,6 +137,45 @@ test("desktop materialization prompt exposes skills through run_skill contract",
   assert.match(prompt, /Do not invent capability names from skill ids/);
 });
 
+test("desktop materialization prompt teaches data versus screen action plan modes", () => {
+  const prompt = buildPlanningPrompt(
+    workOrder(
+      "Chrome'u aç, yeni sekme aç, ekrandaki arama kutusuna kuantum optimizasyon yaz ve sonucu kontrol et.",
+      [
+        "open_app",
+        "browser_control",
+        "desktop_operator.observe_screen",
+        "desktop_operator.execute_action",
+        "desktop_operator.run",
+        "close_app",
+      ],
+    ),
+    [
+      "open_app",
+      "browser_control",
+      "desktop_operator.observe_screen",
+      "desktop_operator.execute_action",
+      "desktop_operator.run",
+      "close_app",
+    ],
+  );
+
+  assert.match(prompt, /PLAN MODE DECISION/);
+  assert.match(prompt, /DATA WORKFLOW/);
+  assert.match(prompt, /SCREEN-ACTION WORKFLOW/);
+  assert.match(prompt, /Screen-action workflow/);
+  assert.match(prompt, /"capability":"open_app"/);
+  assert.match(prompt, /"action":"new_tab"/);
+  assert.match(prompt, /"capability":"desktop_operator\.observe_screen"/);
+  assert.match(prompt, /"capability":"desktop_operator\.execute_action"/);
+  assert.match(prompt, /"action":"type","text":"kuantum optimizasyon"/);
+  assert.match(prompt, /"action":"press","key":"ENTER"/);
+  assert.match(prompt, /Screen-action delegated loop/);
+  assert.match(prompt, /"capability":"desktop_operator\.run"/);
+  assert.match(prompt, /observe -> decide -> act/);
+  assert.match(prompt, /Verify important UI state with desktop_operator\.observe_screen after actions/);
+});
+
 test("desktop materialization prompt hides skill execution when run_skill is not allowed", () => {
   const prompt = buildPlanningPrompt(
     workOrder("Kısa araştırma raporu hazırla.", ["web_research", "document_write"]),
