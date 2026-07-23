@@ -7195,7 +7195,7 @@ export async function generateSharedBrainReply(
         throw new AppError(
           503,
           "server_brain_unavailable",
-          "Cevabı tam toparlarken elimden kaçırdım — benlik bir takılma oldu. Aynı mesajı bir daha atar mısın? Bu sefer tamamlıyorum.",
+          "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.",
           {
             route: input.route ?? "shared_brain",
             workload,

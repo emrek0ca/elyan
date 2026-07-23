@@ -397,7 +397,7 @@ async function enqueueFallback(
       error: new AppError(
         503,
         "server_brain_unavailable",
-        "Cevabı tam toparlarken elimden kaçırdım — benlik bir takılma oldu. Aynı mesajı bir daha atar mısın? Bu sefer tamamlıyorum.",
+        "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.",
         {
           transient: false,
           retrySuggested: false,
@@ -441,7 +441,7 @@ async function processGenerationJob(
       error: new AppError(
         503,
         "server_brain_unavailable",
-        "Bu tur beklediğimden uzun sürdü ve araya sıkıştı — benim tarafımda. Mesajı bir daha gönderirsen kaldığımız yerden hızlıca toparlarım.",
+        "Bu tur beklediğimden uzun sürdü. İsteğini aldım; işlem güvenliyse kısa cevapla devam ediyorum.",
         {
           transient: true,
           retrySuggested: true,

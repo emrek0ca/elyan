@@ -49,9 +49,9 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
   },
   mobile_chat_fast: {
     workload: "mobile_chat_fast",
-    timeoutMs: 5_500,
-    firstDeltaBudgetMs: 1_800,
-    maxTokens: 224,
+    timeoutMs: 7_000,
+    firstDeltaBudgetMs: 2_200,
+    maxTokens: 384,
     streamingEnabled: true,
     cachePolicy: "safe_ephemeral",
     fallbackWorkload: "mobile_chat_balanced",

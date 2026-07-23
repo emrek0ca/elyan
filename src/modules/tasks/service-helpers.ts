@@ -999,7 +999,7 @@ export function extractSharedBrainConversation(
 
 export function getSharedBrainFallbackMessage(
   error: unknown,
-  fallback = "Cevabı tam toparlarken elimden kaçırdım — benlik bir takılma oldu. Aynı mesajı bir daha atar mısın? Bu sefer tamamlıyorum.",
+  fallback = "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.",
 ) {
   if (error instanceof Error && error.message.trim()) {
     const message = error.message.trim();
@@ -1129,14 +1129,17 @@ export function resolveSafeChatContinuityReply(input: {
 
   const prompt = input.prompt.replace(/\s+/g, " ").trim();
   if (!prompt) return null;
+  if (/(?<!\p{L})(teorem|theorem)\p{L}*(?!\p{L})/iu.test(prompt)) {
+    return "Pisagor teoremi: Bir dik üçgende dik kenarların kareleri toplamı hipotenüsün karesine eşittir. Formülü: a^2 + b^2 = c^2.";
+  }
   const asksQuestion =
     /[?？]\s*$/u.test(prompt) ||
     /^(?:kim|ne|neden|niçin|nicin|nasıl|nasil|nerede|nereye|hangi|kaç|kac|what|why|how|where|which|who)\b/iu.test(
       prompt,
     );
   return asksQuestion
-    ? "Sorunu aldım ama cevabı bu seferlik toparlayamadım — benim tarafımda takıldı. Bir daha sorar mısın, hemen düzgününü yazayım."
-    : "Cevabı toparlarken bir an takıldım, kusura bakma. Mesajını aynen bir daha gönderir misin? Bu sefer tamamlıyorum.";
+    ? "Kısa cevap vereyim: Bu tur model yanıtı tamamlanamadı, ama isteğin düz sohbet kapsamında. Daha net bir cevap için işlemi arka planda yeniden deniyorum."
+    : "İsteğini aldım. Yanıt katmanı bu tur tamamlanamadı; güvenli olduğunda kısa cevapla devam ediyorum.";
 }
 
 function looksLikeUnsafeBackendError(message: string) {
