@@ -10887,6 +10887,103 @@ def test_ws_cancel_reaches_copied_task_scope_and_discards_late_worker_success(
     assert runtime._active_remote_task_cancellation_reason("task-scoped-cancel") == "task_cancelled"
 
 
+def test_cancelled_server_materialized_writer_task_never_publishes_late_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    _arm_device_identity()
+    runtime = bridge.RuntimeBridge()
+    entered = threading.Event()
+    release = threading.Event()
+    status_payloads: list[dict] = []
+    terminal_calls: list[dict] = []
+    prompt = (
+        "Muhasebeci gibi çalış. 12000 TL ve 8500 TL faturanın yüzde 20 KDV tutarını "
+        "hesapla ve Excel tablosu hazırla."
+    )
+    steps = [
+        {
+            "id": "s1",
+            "capability": "math_solve",
+            "args": {"expression": "(12000+8500)*0.20"},
+            "dependsOn": [],
+            "description": "KDV tutarını hesapla",
+        },
+        {
+            "id": "s2",
+            "capability": "spreadsheet_write",
+            "args": {"title": "KDV", "rows": [["KDV tutarı", "{{steps.s1.output}}"]]},
+            "dependsOn": ["s1"],
+            "description": "Excel tablosu hazırla",
+        },
+    ]
+    work_order = _work_order_envelope(prompt, ["math_solve", "spreadsheet_write"], steps)
+    work_order["planPreview"]["planSource"] = "server_materialized"
+    work_order["expectedOutputs"] = [{"kind": "artifact", "format": "xlsx", "required": True}]
+    task = _trusted_task(
+        {
+            "id": "task-cancel-writer-race",
+            "title": "KDV Excel",
+            "status": "queued",
+            "requestedCapabilities": ["math_solve", "spreadsheet_write"],
+            "payload": {"prompt": prompt, "desktopWorkOrder": work_order},
+        },
+        capabilities=["math_solve", "spreadsheet_write"],
+        steps=steps,
+    )
+    task["payload"]["desktopWorkOrder"]["planPreview"]["planSource"] = "server_materialized"
+
+    def fake_status(task_id: str, payload: dict) -> BackendResult:
+        status_payloads.append({"taskId": task_id, **payload})
+        return BackendResult(ok=True, request_id="req_status", status_code=200, data={"ok": True})
+
+    def fake_terminal(task_id: str, local_result: dict, **_kwargs) -> dict:
+        terminal_calls.append({"taskId": task_id, **local_result})
+        return {"taskId": task_id, "ok": True, "status": "completed"}
+
+    def deterministic(*_args: object) -> dict[str, object]:
+        entered.set()
+        assert release.wait(2.0)
+        return {
+            "chatOk": True,
+            "assistantMessage": "KDV tablosu hazır.",
+            "planPreview": {"steps": steps, "planSource": "server_materialized"},
+            "artifacts": [{"kind": "file", "path": str(tmp_path / "late.xlsx")}],
+            "structuredResult": {"kind": "spreadsheet_write"},
+        }
+
+    monkeypatch.setattr(runtime, "_report_runtime_task_status", fake_status)
+    monkeypatch.setattr(runtime, "_report_runtime_task_terminal_result", fake_terminal)
+    monkeypatch.setattr(runtime, "_execute_deterministic_remote_task", deterministic)
+
+    def cancel_from_socket() -> None:
+        assert entered.wait(1.0)
+        runtime._handle_runtime_ws_message(
+            json.dumps({"type": "task.cancel", "taskId": "task-cancel-writer-race"})
+        )
+        release.set()
+
+    canceller = threading.Thread(target=cancel_from_socket, daemon=True)
+    try:
+        canceller.start()
+        result = runtime.remote_task_runner.execute_runtime_task(task)
+        canceller.join(2.0)
+    finally:
+        release.set()
+
+    assert result["status"] == "canceled"
+    assert result["error"]["code"] == "TASK_CANCELLED"
+    assert result["notification"] == {
+        "type": "task_terminal",
+        "status": "canceled",
+        "title": "Görev iptal edildi",
+        "body": "Görev iptal edildi.",
+    }
+    assert terminal_calls == []
+    assert not any(payload.get("status") == "completed" for payload in status_payloads)
+
+
 def test_ws_cancel_before_scope_prevents_remote_task_execution(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
