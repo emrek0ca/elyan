@@ -7,7 +7,7 @@ websocket-client
 psutil
 Pillow
 pystray>=0.19
-customtkinter>=5.2
+customtkinter>=6.0.0
 qrcode>=7.4
 litellm
 langgraph
