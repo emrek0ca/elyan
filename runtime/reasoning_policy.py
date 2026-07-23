@@ -12,6 +12,11 @@ _VALIDATED_DETERMINISTIC_PLANS = {
     "research_spreadsheet",
     "selected_document_transform",
 }
+_REASONING_INTENTS = {
+    "optimization_decision_support",
+    "professional_workflow",
+    "professional_analysis",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +66,14 @@ def decide_reasoning_path(
         return ReasoningDecision(False, "trusted_work_order_plan")
 
     routed_steps = _steps(routed)
-    if routed is not None and routed_steps:
+    if routed is not None:
         route_kinds = {
             str(getattr(routed, "intent", "") or "").strip(),
             str(getattr(routed, "reason", "") or "").strip(),
         }
+        if route_kinds.intersection(_REASONING_INTENTS):
+            return ReasoningDecision(True, "reasoning_intent")
+    if routed is not None and routed_steps:
         try:
             route_confidence = float(getattr(routed, "confidence", 0.0) or 0.0)
         except (TypeError, ValueError):

@@ -102,6 +102,25 @@ def test_high_confidence_known_transform_plan_uses_validated_fast_path() -> None
     assert decision.reason == "validated_deterministic_plan"
 
 
+def test_professional_and_optimization_intents_use_server_brain_even_when_single_step() -> None:
+    professional_route = _route(
+        steps=[{"id": "analyze", "capability": "text_analyze", "args": {}}],
+    )
+    professional_route.intent = "professional_analysis"
+    optimization_route = _route(
+        steps=[{"id": "model", "capability": "quantum_model_problem", "args": {}}],
+    )
+    optimization_route.intent = "optimization_decision_support"
+
+    professional = reasoning_policy.decide_reasoning_path(professional_route)
+    optimization = reasoning_policy.decide_reasoning_path(optimization_route)
+
+    assert professional.use_structured_planner is True
+    assert professional.reason == "reasoning_intent"
+    assert optimization.use_structured_planner is True
+    assert optimization.reason == "reasoning_intent"
+
+
 def test_work_order_with_multiple_capabilities_requires_reasoning() -> None:
     decision = reasoning_policy.decide_reasoning_path(
         None,
