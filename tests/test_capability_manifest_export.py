@@ -64,3 +64,46 @@ def test_manifest_covers_safe_baseline_and_flags_approval() -> None:
         assert stored[cap]["requiresApproval"] is False, cap
     # En az bir riskli yetenek onay bayrağı taşımalı (güvenlik sınırı görünür).
     assert any(e["requiresApproval"] for e in stored.values())
+
+
+def test_capability_manifest_exports_v2_quality_contracts() -> None:
+    live = {entry["name"]: entry for entry in build_manifest()}
+
+    for cap in {
+        "canvas_write",
+        "document_write",
+        "spreadsheet_write",
+        "presentation_write",
+        "document_read",
+        "file_read",
+        "file_write",
+        "file_search",
+        "directory_tree",
+        "web_research",
+        "text_analyze",
+        "image_generate",
+        "image_edit",
+        "image_read",
+        "analyze_screen",
+        "desktop_operator.observe_screen",
+        "desktop_operator.execute_action",
+        "desktop_operator.run",
+        "math_solve",
+        "chart_generate",
+        "run_skill",
+    }:
+        assert cap in live, cap
+        entry = live[cap]
+        assert entry["whenToUse"], cap
+        assert entry["inputContract"], cap
+        assert entry["outputContract"], cap
+        assert entry["verificationPlan"], cap
+        assert entry["liveNarration"], cap
+        assert entry["privacyClass"], cap
+
+    assert live["canvas_write"]["artifactContract"]["artifactTypes"] == ["pdf", "image"]
+    assert live["document_write"]["artifactContract"]["extension"] == ".docx"
+    assert live["spreadsheet_write"]["artifactContract"]["extension"] == ".xlsx"
+    assert live["presentation_write"]["artifactContract"]["extension"] == ".pptx"
+    assert live["analyze_screen"]["outputContract"]["kind"] == "screen_analysis"
+    assert live["run_skill"]["inputContract"]["skillIdMustExistInCatalog"] is True

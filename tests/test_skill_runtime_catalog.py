@@ -40,6 +40,11 @@ def test_builtin_skill_catalog_exposes_library_backed_skills() -> None:
     assert summary_and_save["stepCount"] == 2
     assert "path" in summary_and_save["expectedInputs"]
     assert "text" in summary_and_save["expectedInputs"]
+    for key in ("whenToUse", "whenNotToUse", "verificationPlan", "liveNarration", "failureModes"):
+        assert summary_and_save[key], key
+    assert summary_and_save["inputContract"]["requiredPayloadFields"] == ["outputPath"]
+    assert summary_and_save["outputContract"]["kind"] == "run_skill"
+    assert "docx" in summary_and_save["outputContract"]["outputFormats"]
 
 
 def test_builtin_skill_catalog_exposes_new_compound_skills() -> None:
@@ -70,3 +75,5 @@ def test_builtin_skill_catalog_exposes_new_compound_skills() -> None:
     screen = by_id["screen.explain"]
     assert screen["adapter"] == "desktop_operator.observe_screen"
     assert screen["requiresConfirmation"] is False  # gözlem yan etkisiz
+    assert "query" in screen["inputContract"]["acceptedPayloadFields"]
+    assert "desktop_operator.observe_screen" in screen["outputContract"]["stepCapabilities"]

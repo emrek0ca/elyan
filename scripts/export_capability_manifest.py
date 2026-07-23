@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from runtime.bridge import REMOTE_APPROVAL_CAPABILITIES  # noqa: E402
 from runtime.capability_registry import TOOL_DECLARATIONS  # noqa: E402
+from runtime.capability_spec import enriched_tool_declaration  # noqa: E402
 from runtime.skill_catalog import builtin_skill_manifests  # noqa: E402
 
 
@@ -35,10 +36,21 @@ def _clip(value: object, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _string_list(value: object, limit: int = 12, item_limit: int = 240) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [_clip(item, item_limit) for item in value if str(item or "").strip()][:limit]
+
+
+def _object_value(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def build_capability_manifest() -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     seen: set[str] = set()
-    for decl in TOOL_DECLARATIONS:
+    for raw_decl in TOOL_DECLARATIONS:
+        decl = enriched_tool_declaration(raw_decl)
         name = str(decl.get("name", "") or "").strip()
         if not name or name in seen:
             continue
@@ -54,10 +66,30 @@ def build_capability_manifest() -> list[dict[str, object]]:
                 "usage": _clip(decl.get("usage", ""), 200),
                 "requiredArgs": required,
                 "requiresApproval": name in REMOTE_APPROVAL_CAPABILITIES,
+                "whenToUse": _string_list(decl.get("whenToUse"), 8),
+                "whenNotToUse": _string_list(decl.get("whenNotToUse"), 6),
+                "inputContract": _object_value(decl.get("inputContract")),
+                "outputContract": _object_value(decl.get("outputContract")),
+                "artifactContract": _object_value(decl.get("artifactContract")),
+                "verificationPlan": _string_list(decl.get("verificationPlan"), 6),
+                "liveNarration": _string_list(decl.get("liveNarration"), 6),
+                "failureModes": _string_list(decl.get("failureModes"), 8, 80),
+                "fewShots": [
+                    dict(item)
+                    for item in (decl.get("fewShots", []) or [])
+                    if isinstance(item, dict)
+                ][:3],
+                "privacyClass": _clip(decl.get("privacyClass", ""), 80),
+                "skillAffinity": _string_list(decl.get("skillAffinity"), 8, 120),
             }
         )
     entries.sort(key=lambda item: str(item["name"]))
     return entries
+
+
+def build_manifest() -> list[dict[str, object]]:
+    """Eski test/import adını koruyan uyumluluk alias'ı."""
+    return build_capability_manifest()
 
 
 def build_skill_manifest() -> list[dict[str, object]]:
@@ -87,6 +119,16 @@ def build_skill_manifest() -> list[dict[str, object]]:
                 capability = str(step.get("capability", "") or "").strip()
                 if capability:
                     step_capabilities.append(capability)
+        output_formats = []
+        adapter = str(skill.get("adapter", "") or "")
+        if adapter == "document_write":
+            output_formats = ["docx"]
+        elif adapter == "canvas_write":
+            output_formats = ["pdf", "png"]
+        elif adapter == "spreadsheet_write":
+            output_formats = ["xlsx"]
+        elif adapter == "presentation_write":
+            output_formats = ["pptx"]
         entries.append(
             {
                 "id": skill_id,
@@ -111,6 +153,42 @@ def build_skill_manifest() -> list[dict[str, object]]:
                 "latencyClass": _clip(skill.get("latencyClass", ""), 40),
                 "selectionPriority": int(skill.get("selectionPriority", 0) or 0),
                 "requiresConfirmation": bool(skill.get("requiresConfirmation", False)),
+                "whenToUse": _string_list(skill.get("whenToUse"), 8) or [
+                    _clip(skill.get("description", ""), 220)
+                ],
+                "whenNotToUse": _string_list(skill.get("whenNotToUse"), 6) or [
+                    "Katalogdaki workflow kullanıcı hedefiyle bire bir uyuşmuyorsa primitive capability zinciri kur."
+                ],
+                "inputContract": _object_value(skill.get("inputContract")) or {
+                    "requiredPayloadFields": required,
+                    "acceptedPayloadFields": parameters,
+                },
+                "outputContract": _object_value(skill.get("outputContract")) or {
+                    "kind": "run_skill",
+                    "adapter": adapter,
+                    "stepCapabilities": list(dict.fromkeys(step_capabilities)),
+                    "outputFormats": output_formats,
+                },
+                "verificationPlan": _string_list(skill.get("verificationPlan"), 6) or [
+                    "Skill id katalogda bulunmalı.",
+                    "Payload her requiredParameter alanını içermeli.",
+                    "Son adım sonucu boş olmamalı.",
+                ],
+                "liveNarration": _string_list(skill.get("liveNarration"), 6) or [
+                    "Hazır beceri seçiliyor.",
+                    "Beceri adımları yürütülüyor.",
+                    "Sonuç doğrulanıyor.",
+                ],
+                "failureModes": _string_list(skill.get("failureModes"), 8, 80) or [
+                    "UNKNOWN_SKILL",
+                    "MISSING_PAYLOAD_FIELD",
+                    "STEP_FAILED",
+                ],
+                "fewShots": [
+                    dict(item)
+                    for item in (skill.get("fewShots", []) or [])
+                    if isinstance(item, dict)
+                ][:3],
             }
         )
     entries.sort(key=lambda item: (-int(item["selectionPriority"]), str(item["id"])))
@@ -132,6 +210,17 @@ def render_capability_typescript(entries: list[dict[str, object]]) -> str:
         "  usage: string;\n"
         "  requiredArgs: string[];\n"
         "  requiresApproval: boolean;\n"
+        "  whenToUse: string[];\n"
+        "  whenNotToUse: string[];\n"
+        "  inputContract: Record<string, unknown>;\n"
+        "  outputContract: Record<string, unknown>;\n"
+        "  artifactContract: Record<string, unknown>;\n"
+        "  verificationPlan: string[];\n"
+        "  liveNarration: string[];\n"
+        "  failureModes: string[];\n"
+        "  fewShots: Array<Record<string, unknown>>;\n"
+        "  privacyClass: string;\n"
+        "  skillAffinity: string[];\n"
         "};\n\n"
         f"export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = {payload};\n"
     )
@@ -161,6 +250,14 @@ def render_skill_typescript(entries: list[dict[str, object]]) -> str:
         "  latencyClass: string;\n"
         "  selectionPriority: number;\n"
         "  requiresConfirmation: boolean;\n"
+        "  whenToUse: string[];\n"
+        "  whenNotToUse: string[];\n"
+        "  inputContract: Record<string, unknown>;\n"
+        "  outputContract: Record<string, unknown>;\n"
+        "  verificationPlan: string[];\n"
+        "  liveNarration: string[];\n"
+        "  failureModes: string[];\n"
+        "  fewShots: Array<Record<string, unknown>>;\n"
         "};\n\n"
         f"export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = {payload};\n"
     )

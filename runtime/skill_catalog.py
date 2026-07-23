@@ -149,6 +149,21 @@ def _inferred_expected_inputs(defn: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys([*required, *parameters]))
 
 
+def _skill_output_formats(defn: dict[str, Any]) -> list[str]:
+    adapter = str(defn.get("adapter", "") or "").strip()
+    if adapter == "document_write":
+        return ["docx"]
+    if adapter == "canvas_write":
+        return ["pdf", "png"]
+    if adapter == "spreadsheet_write":
+        return ["xlsx"]
+    if adapter == "presentation_write":
+        return ["pptx"]
+    if adapter == "image_generate" or adapter == "image_edit":
+        return ["png", "jpg", "webp"]
+    return []
+
+
 def _inferred_intent_tags(defn: dict[str, Any]) -> list[str]:
     manual = defn.get("intentTags", [])
     tokens = _unique_tokens(
@@ -165,6 +180,13 @@ def _inferred_intent_tags(defn: dict[str, Any]) -> list[str]:
 
 def _skill(defn: dict[str, Any]) -> dict[str, Any]:
     steps = copy.deepcopy(defn.get("steps", []) or [])
+    parameters = list(defn.get("parameters", []) or [])
+    required = list(defn.get("requiredParameters", []) or [])
+    step_capabilities = [
+        str(step.get("capability", "") or "").strip()
+        for step in steps
+        if isinstance(step, dict) and str(step.get("capability", "") or "").strip()
+    ]
     return {
         "id": str(defn.get("id", "") or ""),
         "name": str(defn.get("name", "") or ""),
@@ -172,8 +194,8 @@ def _skill(defn: dict[str, Any]) -> dict[str, Any]:
         "enabled": True,
         "category": str(defn.get("category", "") or "custom"),
         "requiresConfirmation": bool(defn.get("requiresConfirmation", False)),
-        "parameters": list(defn.get("parameters", []) or []),
-        "requiredParameters": list(defn.get("requiredParameters", []) or []),
+        "parameters": parameters,
+        "requiredParameters": required,
         "intentTags": _inferred_intent_tags(defn),
         "latencyClass": _inferred_latency_class(defn),
         "selectionPriority": _inferred_selection_priority(defn),
@@ -182,6 +204,54 @@ def _skill(defn: dict[str, Any]) -> dict[str, Any]:
         "libraries": [str(item) for item in (defn.get("libraries", []) or []) if str(item).strip()],
         "steps": steps,
         "stepCount": len(steps),
+        "whenToUse": [
+            str(item).strip()
+            for item in (defn.get("whenToUse", []) or [defn.get("description", "")])
+            if str(item or "").strip()
+        ],
+        "whenNotToUse": [
+            str(item).strip()
+            for item in (
+                defn.get("whenNotToUse", [])
+                or ["Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."]
+            )
+            if str(item or "").strip()
+        ],
+        "inputContract": dict(defn.get("inputContract", {}) or {
+            "requiredPayloadFields": required,
+            "acceptedPayloadFields": parameters,
+        }),
+        "outputContract": dict(defn.get("outputContract", {}) or {
+            "kind": "run_skill",
+            "adapter": str(defn.get("adapter", "") or ""),
+            "stepCapabilities": list(dict.fromkeys(step_capabilities)),
+            "outputFormats": _skill_output_formats(defn),
+        }),
+        "verificationPlan": [
+            str(item).strip()
+            for item in (
+                defn.get("verificationPlan", [])
+                or ["Skill id katalogda bulunmalı.", "Payload requiredParameters alanlarını içermeli.", "Son adım sonucu doğrulanmalı."]
+            )
+            if str(item or "").strip()
+        ],
+        "liveNarration": [
+            str(item).strip()
+            for item in (
+                defn.get("liveNarration", [])
+                or ["Hazır beceri seçiliyor.", "Beceri adımları yürütülüyor.", "Sonuç doğrulanıyor."]
+            )
+            if str(item or "").strip()
+        ],
+        "failureModes": [
+            str(item).strip()
+            for item in (
+                defn.get("failureModes", [])
+                or ["UNKNOWN_SKILL", "MISSING_PAYLOAD_FIELD", "STEP_FAILED"]
+            )
+            if str(item or "").strip()
+        ],
+        "fewShots": copy.deepcopy(defn.get("fewShots", []) or []),
     }
 
 
