@@ -407,7 +407,7 @@ function inferCapabilities(
   if (unicodeWordPattern(String.raw`\b(masaüstü\p{L}*|masaustu\p{L}*|desktop|indirilenler\p{L}*|downloads|klasör\p{L}*|klasor\p{L}*|dosya\p{L}*|belge\p{L}*|pdf)\b`, "i").test(normalized)) {
     capabilities.add("document_read");
   }
-  if (unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
+  if (unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|çıkar\p{L}*|cikar\p{L}*|hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
     if (presentationRequested) capabilities.add("presentation_write");
     else if (unicodeWordPattern(String.raw`\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b`, "i").test(normalized)) capabilities.add("spreadsheet_write");
     else if (unicodeWordPattern(String.raw`\b(pdf|svg|canvas|görsel|gorsel)\b`, "i").test(normalized)) capabilities.add("canvas_write");
@@ -425,6 +425,9 @@ function inferCapabilities(
     )
   ) {
     capabilities.add("text_analyze");
+    if (!capabilities.has("web_research") && !capabilities.has("math_solve")) {
+      capabilities.add("document_read");
+    }
   }
   if (
     unicodeWordPattern(String.raw`\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b`, "i").test(normalized)
@@ -478,7 +481,7 @@ function inferExpectedOutputs(
   if (typedArtifactRequested || explicitArtifactCreation) {
     addOutput({ kind: "artifact", format: "artifact_reference", required: true });
   }
-  if (unicodeWordPattern(String.raw`\b(kaydet|save|düzenle|duzenle|yaz|oluştur|olustur|hazırla|hazirla|üret|uret)\b`, "i").test(normalized)) {
+  if (unicodeWordPattern(String.raw`\b(kaydet|save|düzenle|duzenle|yaz|çıkar|cikar|oluştur|olustur|hazırla|hazirla|üret|uret)\b`, "i").test(normalized)) {
     addOutput({ kind: "file_update", format: "state_readback", required: true });
   }
   if (unicodeWordPattern(String.raw`\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b`, "i").test(normalized)) {
@@ -504,6 +507,26 @@ function inferCalculationExpression(message: string): string {
   }
   const numericExpression = message.match(/(\d+(?:[.,]\d+)?(?:\s*[-+*/]\s*\d+(?:[.,]\d+)?)+)/u);
   return numericExpression ? String(numericExpression[1]).replaceAll(",", ".") : "";
+}
+
+function inferTextAnalysisMode(message: string): "professional" | "legal" | "medical" | "accounting" | "technical" | "student" {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  if (unicodeWordPattern(String.raw`\b(avukat\p{L}*|hukuk\p{L}*|dava\p{L}*|dilekçe\p{L}*|dilekce\p{L}*|savunma\p{L}*|tahliye\p{L}*|mevzuat\p{L}*|emsal\p{L}*)\b`, "i").test(normalized)) {
+    return "legal";
+  }
+  if (unicodeWordPattern(String.raw`\b(doktor\p{L}*|hekim\p{L}*|hasta\p{L}*|tahlil\p{L}*|laboratuvar\p{L}*|kan\s+sonucu|hb|ferritin|b12|glukoz|kolesterol)\b`, "i").test(normalized)) {
+    return "medical";
+  }
+  if (unicodeWordPattern(String.raw`\b(muhasebe\p{L}*|muhasebeci\p{L}*|fatura\p{L}*|kdv|vergi\p{L}*|tevkifat\p{L}*|bilanço\p{L}*|bilanco\p{L}*|gelir\s+tablosu)\b`, "i").test(normalized)) {
+    return "accounting";
+  }
+  if (unicodeWordPattern(String.raw`\b(öğrenci\p{L}*|ogrenci\p{L}*|ödev\p{L}*|odev\p{L}*|ders\p{L}*|tez\p{L}*|sunum\p{L}*|slayt\p{L}*|okul\p{L}*)\b`, "i").test(normalized)) {
+    return "student";
+  }
+  if (unicodeWordPattern(String.raw`\b(mühendis\p{L}*|muhendis\p{L}*|teknik\p{L}*|optimiz\p{L}*|karar\s+değişken\p{L}*|karar\s+degisken\p{L}*|kısıt\p{L}*|kisit\p{L}*|amaç\s+fonksiyon\p{L}*|amac\s+fonksiyon\p{L}*)\b`, "i").test(normalized)) {
+    return "technical";
+  }
+  return "professional";
 }
 
 function buildSteps(input: {
@@ -645,7 +668,7 @@ function buildSteps(input: {
       args: {
         prompt: semanticBrief,
         sourceContext,
-        mode: "professional",
+        mode: inferTextAnalysisMode(`${input.title}\n${input.summary}\n${semanticBrief}`),
       },
       dependsOn: upstreamStepIds,
     });

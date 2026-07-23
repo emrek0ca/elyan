@@ -206,6 +206,7 @@ test("accounting KDV report includes calculation, research, analysis, and writer
   assert.equal(math?.args.expression, "(12000+8500)*0.2");
   const analysis = workOrder.planPreview.steps.find((step) => step.capability === "text_analyze");
   assert.deepEqual(analysis?.dependsOn, ["step_web_research", "step_math_solve"]);
+  assert.equal(analysis?.args.mode, "accounting");
   const writer = workOrder.planPreview.steps.find((step) => step.capability === "document_write");
   assert.deepEqual(writer?.dependsOn, ["step_text_analyze"]);
   assert.equal(writer?.args.sourceContext, "Analiz bağlamı: {{steps.step_text_analyze.output}}");
@@ -230,8 +231,38 @@ test("legal file workflow includes private read, public research, analysis, and 
   );
   const analysis = workOrder.planPreview.steps.find((step) => step.capability === "text_analyze");
   assert.deepEqual(analysis?.dependsOn, ["step_web_research", "step_document_read"]);
+  assert.equal(analysis?.args.mode, "legal");
   assert.match(String(analysis?.args.sourceContext ?? ""), /Okunan bağlam/u);
   assert.match(String(analysis?.args.sourceContext ?? ""), /Araştırma bağlamı/u);
+});
+
+test("professional analysis mode follows medical student and technical domains", () => {
+  const medical = buildDesktopWorkOrder({
+    message: "Doktor gibi çalış. Tahlil sonuçlarını yorumla ve rapor çıkar: Hb 10.5, ferritin 8, B12 220.",
+    title: "Tahlil raporu",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+  const student = buildDesktopWorkOrder({
+    message: "Öğrenci gibi çalış. Kuantum annealing konusunu araştır, analiz et ve sunum hazırla.",
+    title: "Öğrenci sunumu",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+  const technical = buildDesktopWorkOrder({
+    message: "Mühendis gibi çalış. Kapasite kısıtı olan optimizasyon problemini analiz et ve rapor hazırla.",
+    title: "Optimizasyon raporu",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+
+  const medicalAnalysis = medical.planPreview.steps.find((step) => step.capability === "text_analyze");
+  const studentAnalysis = student.planPreview.steps.find((step) => step.capability === "text_analyze");
+  const technicalAnalysis = technical.planPreview.steps.find((step) => step.capability === "text_analyze");
+
+  assert.equal(medicalAnalysis?.args.mode, "medical");
+  assert.equal(studentAnalysis?.args.mode, "student");
+  assert.equal(technicalAnalysis?.args.mode, "technical");
 });
 
 test("presentation creation does not add a second generic document writer", () => {
