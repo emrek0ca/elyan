@@ -2683,9 +2683,7 @@ def _research_then_writer_route(text: str) -> RoutedTask | None:
     if steps:
         research_step["dependsOn"] = [str(steps[-1].get("id", "calculate"))]
     steps.append(research_step)
-    analysis_needed = _professional_text_analysis_requested(q) and (
-        calculation_step is not None or "analiz" in q or "yorumla" in q or "degerlendir" in q or "incele" in q
-    )
+    analysis_needed = _professional_text_analysis_requested(q)
     if analysis_needed:
         source_context = ["Araştırma bağlamı: {{steps.research.output}}"]
         depends_on = ["research"]
@@ -3621,6 +3619,22 @@ def _inline_analysis_writer_route(text: str) -> RoutedTask | None:
         bool(re.search(r"\b\d+(?:[.,]\d+)?\b", original))
         or any(token in q for token in ("tahlil", "sonuc", "sonuç", "bulgu", "veri", "olcu", "ölçü"))
     )
+    professional_inline_context = _professional_text_analysis_requested(q) and any(
+        token in q
+        for token in (
+            "tahlil",
+            "kan sonucu",
+            "laboratuvar",
+            "hasta",
+            "dava",
+            "dosya",
+            "belge",
+            "metin",
+            "bulgu",
+            "veri",
+        )
+    )
+    has_inline_data = has_inline_data or professional_inline_context
     if not has_inline_data:
         return None
     output_path = _resolve_output_path(original, ".docx", hint=original or "analiz-raporu")
@@ -3942,6 +3956,55 @@ def _compound_route(
         if previous_id and not step.get("dependsOn"):
             step["dependsOn"] = [previous_id]
         previous_id = step_id
+
+    if _professional_text_analysis_requested(_normalise(text)) and not any(
+        str(step.get("capability", "") or "") == "text_analyze" for step in steps
+    ):
+        writer_index = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if str(step.get("capability", "") or "") in {"document_write", "presentation_write", "spreadsheet_write", "canvas_write"}
+            ),
+            -1,
+        )
+        if writer_index > 0:
+            prior_steps = [
+                step
+                for step in steps[:writer_index]
+                if str(step.get("id", "") or "").strip()
+                and str(step.get("capability", "") or "") in {"web_research", "document_read", "ocr_read", "data_analyze", "math_solve"}
+            ]
+            if prior_steps:
+                source_context: list[str] = []
+                for prior in prior_steps:
+                    prior_id = str(prior.get("id", "") or "").strip()
+                    capability = str(prior.get("capability", "") or "")
+                    if capability == "web_research":
+                        source_context.append(f"Araştırma bağlamı: {{{{steps.{prior_id}.output}}}}")
+                    elif capability in {"document_read", "ocr_read"}:
+                        source_context.append(f"Okunan özel/veri bağlamı: {{{{steps.{prior_id}.output}}}}")
+                    elif capability == "data_analyze":
+                        source_context.append(f"Veri analizi bağlamı: {{{{steps.{prior_id}.output}}}}")
+                    elif capability == "math_solve":
+                        source_context.append(f"Hesap sonucu: {{{{steps.{prior_id}.output}}}}")
+                analysis_step = {
+                    "id": "analyze",
+                    "capability": "text_analyze",
+                    "args": {
+                        "prompt": text,
+                        "mode": _professional_analysis_mode(_normalise(text)),
+                        "sourceContext": "\n\n".join(source_context),
+                    },
+                    "dependsOn": [str(step.get("id", "") or "") for step in prior_steps],
+                    "description": "Toplanan bağlam profesyonel teslim çıktısı için analiz edilecek.",
+                }
+                writer_step = steps[writer_index]
+                writer_args = dict(writer_step.get("args") or {})
+                writer_args["sourceContext"] = "Analiz bağlamı: {{steps.analyze.output}}"
+                writer_step["args"] = writer_args
+                writer_step["dependsOn"] = ["analyze"]
+                steps.insert(writer_index, analysis_step)
 
     if any(routed.privacy_class == "side_effect" for _, routed in parts):
         privacy_class = "side_effect"

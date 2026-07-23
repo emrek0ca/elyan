@@ -888,8 +888,37 @@ def test_force_structured_planning_preserves_compound_router_plan(
     assert result["needsConfirmation"] is True
     assert [step["capability"] for step in result["planPreview"]["steps"]] == [
         "web_research",
+        "text_analyze",
         "document_write",
     ]
+    assert result["planPreview"]["steps"][1]["args"]["mode"] == "legal"
+    assert result["planPreview"]["steps"][2]["dependsOn"] == ["analyze"]
+
+
+def test_force_structured_planning_builds_medical_read_analyze_report_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+
+    result = runtime.send_conversation(
+        "",
+        "Doktor gibi çalış. Bu tahlilleri yorumla, riskleri analiz et ve hasta raporu çıkar.",
+        "Medical plan",
+        force_structured_planning=True,
+    )
+
+    steps = result["planPreview"]["steps"]
+    assert result["executionMode"] == "plan_preview"
+    assert [step["capability"] for step in steps] == [
+        "document_read",
+        "text_analyze",
+        "document_write",
+    ]
+    assert steps[1]["args"]["mode"] == "medical"
+    assert steps[1]["dependsOn"] == ["read_input"]
+    assert steps[2]["dependsOn"] == ["analyze"]
 
 
 def test_force_structured_planning_builds_calculation_research_writer_chain(
