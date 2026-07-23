@@ -13042,6 +13042,9 @@ class RuntimeBridge:
                 **plan_preview,
                 "agentPlan": build_agent_plan(steps, summary=str(plan_preview.get("summary", "") or "")),
             }
+        for key in ("planSource", "contract", "planHash"):
+            if key in work_order_preview and key not in plan_preview:
+                plan_preview[key] = work_order_preview[key]
         return plan_preview
 
     def _remote_task_email_recipients(

@@ -1495,6 +1495,159 @@ def test_typed_work_order_executes_without_redundant_route_decision(
     assert pending["steps"][0]["args"]["app_name"] == "Hesap Makinesi"
 
 
+def test_server_materialized_plan_preserves_output_writer_targets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = (
+        "Muhasebeci gibi çalış. 12000 TL ve 8500 TL faturanın yüzde 20 KDV tutarını "
+        "hesapla ve Excel tablosu hazırla."
+    )
+    server_steps = [
+        {
+            "id": "s1",
+            "capability": "math_solve",
+            "args": {"expression": "(12000+8500)*0.20", "mode": "evaluate"},
+            "dependsOn": [],
+            "description": "KDV tutarını hesapla",
+        },
+        {
+            "id": "s2",
+            "capability": "spreadsheet_write",
+            "args": {
+                "title": "KDV Hesap Tablosu",
+                "sheets": [
+                    {
+                        "name": "KDV",
+                        "rows": [
+                            ["Kalem", "Değer"],
+                            ["Fatura 1", 12000],
+                            ["Fatura 2", 8500],
+                            ["KDV tutarı", "{{steps.s1.output}}"],
+                        ],
+                    }
+                ],
+            },
+            "dependsOn": ["s1"],
+            "description": "Hesap sonucunu Excel tablosuna yaz",
+        },
+    ]
+    payload = {
+        "desktopWorkOrder": {
+            "schema": "elyan.desktop_work_order.v1",
+            "source": "mobile_chat_dispatch",
+            "goal": {
+                "kind": "desktop_cowork",
+                "summary": prompt,
+                "language": "tr",
+                "sourceTextHash": "1" * 24,
+            },
+            "entities": [],
+            "constraints": [],
+            "requiredCapabilities": ["math_solve", "spreadsheet_write"],
+            "localContextNeeded": [],
+            "expectedOutputs": [{"kind": "artifact", "format": "xlsx", "required": True}],
+            "verificationRules": [{"id": "artifact", "description": "Tablo üretildi.", "evidence": "artifact"}],
+            "execution": {"mode": "cowork_dispatch", "approvalPolicy": "capability_policy", "maxSteps": 16},
+            "planPreview": {
+                "summary": "KDV hesaplanıp Excel tablosuna yazılacak.",
+                "privacyClass": "local_private",
+                "planSource": "server_materialized",
+                "steps": server_steps,
+            },
+        },
+    }
+    task = {
+        "id": "task-server-materialized-xlsx",
+        "title": "KDV Excel",
+        "status": "queued",
+        "requestedCapabilities": ["math_solve", "spreadsheet_write"],
+        "payload": payload,
+    }
+
+    preview = runtime._remote_task_running_plan_preview(task, prompt, payload)
+    result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
+
+    assert preview["planSource"] == "server_materialized"
+    assert [step["capability"] for step in preview["steps"]] == ["math_solve", "spreadsheet_write"]
+    assert preview["steps"][1]["dependsOn"] == ["s1"]
+    assert preview["steps"][1]["args"]["sheets"][0]["rows"][-1] == ["KDV tutarı", "{{steps.s1.output}}"]
+    assert result is not None
+    result_preview = result.get("planPreview")
+    assert isinstance(result_preview, dict)
+    assert result_preview["planSource"] == "server_materialized"
+    assert [step["capability"] for step in result_preview["steps"]] == ["math_solve", "spreadsheet_write"]
+    assert result_preview["steps"][1]["args"]["sheets"][0]["rows"][-1] == ["KDV tutarı", "{{steps.s1.output}}"]
+
+
+def test_server_materialized_plan_preserves_presentation_writer_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "Öğrenci gibi çalış. Kuantum annealing konusunu araştır ve 5 sayfalık sunum hazırla."
+    payload = {
+        "desktopWorkOrder": {
+            "schema": "elyan.desktop_work_order.v1",
+            "source": "mobile_chat_dispatch",
+            "goal": {
+                "kind": "desktop_cowork",
+                "summary": prompt,
+                "language": "tr",
+                "sourceTextHash": "2" * 24,
+            },
+            "entities": [],
+            "constraints": [],
+            "requiredCapabilities": ["web_research", "presentation_write"],
+            "localContextNeeded": [],
+            "expectedOutputs": [{"kind": "artifact", "format": "pptx", "required": True}],
+            "verificationRules": [{"id": "artifact", "description": "Sunum üretildi.", "evidence": "artifact"}],
+            "execution": {"mode": "cowork_dispatch", "approvalPolicy": "capability_policy", "maxSteps": 16},
+            "planPreview": {
+                "summary": "Araştırma sonucundan sunum hazırlanacak.",
+                "privacyClass": "public_text",
+                "planSource": "server_materialized",
+                "steps": [
+                    {
+                        "id": "s1",
+                        "capability": "web_research",
+                        "args": {"query": "quantum annealing explanation examples"},
+                        "dependsOn": [],
+                        "description": "Konu araştırılacak",
+                    },
+                    {
+                        "id": "s2",
+                        "capability": "presentation_write",
+                        "args": {
+                            "title": "Kuantum Annealing",
+                            "prompt": "{{steps.s1.output}} kullanarak 5 sayfalık öğrenci sunumu hazırla",
+                        },
+                        "dependsOn": ["s1"],
+                        "description": "Araştırmadan sunum hazırlanacak",
+                    },
+                ],
+            },
+        },
+    }
+    task = {
+        "id": "task-server-materialized-pptx",
+        "title": "Öğrenci sunumu",
+        "status": "queued",
+        "requestedCapabilities": ["web_research", "presentation_write"],
+        "payload": payload,
+    }
+
+    preview = runtime._remote_task_running_plan_preview(task, prompt, payload)
+
+    assert preview["planSource"] == "server_materialized"
+    assert [step["capability"] for step in preview["steps"]] == ["web_research", "presentation_write"]
+    assert preview["steps"][1]["dependsOn"] == ["s1"]
+    assert "{{steps.s1.output}}" in preview["steps"][1]["args"]["prompt"]
+
+
 def test_dispatch_prefers_local_deterministic_route_over_llm_planner(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
