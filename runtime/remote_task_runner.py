@@ -1073,6 +1073,19 @@ class RemoteTaskRunner:
             "capabilityReadiness": capability_readiness_payload or [],
             "taskRunId": task_run_id,
         }
+        backend_status = str(payload["status"] or "").strip().lower()
+        if backend_status in {"completed", "failed", "canceled"}:
+            notification_title = {
+                "completed": "Görev tamamlandı",
+                "failed": "Görev tamamlanamadı",
+                "canceled": "Görev iptal edildi",
+            }.get(backend_status, "Görev durumu güncellendi")
+            payload["notification"] = {
+                "type": "task_terminal",
+                "status": backend_status,
+                "title": notification_title,
+                "body": safe_summary[:240] or notification_title,
+            }
         if preview:
             payload["planPreview"] = preview
         if error_code:

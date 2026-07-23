@@ -10875,6 +10875,35 @@ def test_execute_local_with_timeout_returns_sentinel_on_hang(
     assert result is rtr._EXECUTION_TIMEOUT
 
 
+def test_remote_task_timeout_failure_payload_includes_notification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    pushed: list[dict] = []
+    monkeypatch.setattr(
+        runtime,
+        "_report_runtime_task_status",
+        lambda _task_id, payload: pushed.append(payload) or BackendResult(ok=True, request_id="req", status_code=200, data={}),
+    )
+
+    result = runtime.remote_task_runner._fail_safe(
+        "task-timeout",
+        "run-timeout",
+        message="Görev zaman aşımına uğradı ve güvenle durduruldu.",
+        error_code="task_execution_timeout",
+        result_status="failed",
+    )
+
+    assert result["status"] == "failed"
+    assert pushed
+    assert pushed[-1]["status"] == "failed"
+    assert pushed[-1]["notification"]["status"] == "failed"
+    assert pushed[-1]["notification"]["title"] == "Görev tamamlanamadı"
+    assert "zaman aşımına" in pushed[-1]["notification"]["body"]
+
+
 def test_execute_local_timeout_cancels_active_mcp_before_returning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
