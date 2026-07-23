@@ -4,6 +4,7 @@ import pytest
 from pathlib import Path
 
 from runtime import bridge, state_store
+from runtime.executor_core import ExecutorCore
 from runtime.task_router import route_text_to_tool
 
 
@@ -109,3 +110,50 @@ def test_optimization_research_report_stays_research_writer() -> None:
 
     assert routed is not None
     assert [step["capability"] for step in routed.steps] == ["web_research", "document_write"]
+
+
+def test_professional_executor_passes_prior_outputs_into_writer(tmp_path: Path) -> None:
+    routed = route_text_to_tool(
+        "Muhasebeci gibi çalış. 12000 TL ve 8500 TL hizmet faturası için yüzde 20 KDV hesapla, "
+        "KDV kurallarını araştır ve rapor belgesi hazırla."
+    )
+    assert routed is not None
+    observed_writer_args: dict[str, object] = {}
+    output_path = tmp_path / "kdv-raporu.docx"
+
+    def execute_step(capability: str, args: dict, _state: dict, _source: str):
+        if capability == "math_solve":
+            return {"ok": True, "output": "KDV tutarı: 4100", "result": {"kind": "math_solve", "result": "4100"}}, []
+        if capability == "web_research":
+            assert args["_previousOutput"] == "KDV tutarı: 4100"
+            return {
+                "ok": True,
+                "output": "KDV genel oranı yüzde 20 olarak uygulanır.",
+                "result": {"kind": "web_research", "summary": "KDV oranı yüzde 20."},
+            }, []
+        if capability == "document_write":
+            observed_writer_args.update(args)
+            output_path.write_bytes(b"fake-docx-proof" * 80)
+            return {
+                "ok": True,
+                "output": f"DOCX oluşturuldu: {output_path.name}",
+                "result": {"kind": "document_write", "outputPath": str(output_path)},
+                "artifacts": [{"kind": "file", "path": str(output_path), "name": output_path.name}],
+            }, []
+        raise AssertionError(capability)
+
+    ok, _content, _events, error_code, result, artifacts = ExecutorCore().execute_plan_steps(
+        steps=[dict(step) for step in routed.steps],
+        state_factory=lambda: {},
+        execute_step=execute_step,
+        source="confirmed_plan",
+        confirmed=True,
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert result and result["kind"] == "document_write"
+    assert artifacts and artifacts[-1]["path"] == str(output_path)
+    assert observed_writer_args["_previousOutput"] == "KDV genel oranı yüzde 20 olarak uygulanır."
+    assert observed_writer_args["_previousResult"]["kind"] == "web_research"
+    assert "_previousArtifacts" not in observed_writer_args
