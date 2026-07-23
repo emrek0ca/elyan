@@ -918,6 +918,39 @@ def test_professional_read_research_workflow_feeds_all_context_to_writer() -> No
     )
 
 
+def test_professional_student_workflow_can_target_presentation_without_document_writer() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        "Öğrenci gibi çalış. Kuantum annealing konusunu araştır ve 5 sayfalık sunum hazırla.",
+        {"web_research", "presentation_write"},
+    )
+
+    assert plan is not None
+    steps, preview = plan
+    assert [step["capability"] for step in steps] == ["web_research", "presentation_write"]
+    assert steps[1]["dependsOn"] == ["research"]
+    assert steps[1]["args"]["sourceContext"] == "Araştırma bağlamı: {{steps.research.output}}"
+    assert preview["planSource"] == "runtime_professional_template"
+
+
+def test_professional_accounting_workflow_can_calculate_then_write_spreadsheet() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        "Muhasebeci gibi çalış. 12000 TL ve 8500 TL faturanın yüzde 20 KDV tutarını hesapla ve Excel tablosu hazırla.",
+        {"math_solve", "spreadsheet_write"},
+    )
+
+    assert plan is not None
+    steps, _preview = plan
+    assert [step["capability"] for step in steps] == ["math_solve", "spreadsheet_write"]
+    assert steps[0]["args"]["expression"] == "(12000+8500)*0.2"
+    assert steps[1]["dependsOn"] == ["calculate"]
+    assert steps[1]["args"]["sourceContext"] == "Hesap sonucu: {{steps.calculate.output}}"
+    assert steps[1]["args"]["rows"][1] == ["Hesap sonucu", "{{steps.calculate.output}}"]
+
+
 def test_professional_optimization_workflow_uses_decision_support_pipeline() -> None:
     runtime = bridge.RuntimeBridge()
 

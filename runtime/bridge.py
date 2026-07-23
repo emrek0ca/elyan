@@ -13129,11 +13129,47 @@ class RuntimeBridge:
                 title=title or "Karar Destek Optimizasyon Raporu",
                 summary="Optimizasyon görevi karar değişkenleri, amaç fonksiyonu ve kısıtlarla modellenip çözülecek.",
             )
-        if "document_write" not in canonical_caps:
+        wants_presentation = any(token in normalized for token in ("sunum", "slayt", "slide", "ppt", "pptx"))
+        wants_spreadsheet = any(token in normalized for token in ("excel", "tablo", "spreadsheet", "xlsx", "çizelge", "cizelge"))
+        writer_capability = "document_write"
+        if wants_spreadsheet and "spreadsheet_write" in canonical_caps:
+            writer_capability = "spreadsheet_write"
+        elif wants_presentation and "presentation_write" in canonical_caps:
+            writer_capability = "presentation_write"
+        elif "document_write" not in canonical_caps:
+            if "presentation_write" in canonical_caps:
+                writer_capability = "presentation_write"
+            elif "spreadsheet_write" in canonical_caps:
+                writer_capability = "spreadsheet_write"
+            else:
+                return None
+        if writer_capability not in canonical_caps:
             return None
+        percent_match = re.search(r"(?:%|y[üu]zde\s*)\s*(\d+(?:[.,]\d+)?)", prompt, flags=re.IGNORECASE)
+        amounts: list[float] = []
+        for match in re.finditer(r"(?<![%\w])(\d+(?:[.,]\d+)?)\s*(?:tl|try|₺|usd|eur)\b", prompt, flags=re.IGNORECASE):
+            try:
+                amount = float(str(match.group(1)).replace(",", "."))
+            except ValueError:
+                continue
+            if amount > 0 and amount not in amounts:
+                amounts.append(amount)
+        calculation_expression = ""
+        if percent_match and amounts and "math_solve" in canonical_caps:
+            try:
+                rate = float(str(percent_match.group(1)).replace(",", ".")) / 100.0
+                amount_expr = "+".join(str(int(item)) if item.is_integer() else str(item) for item in amounts[:12])
+                rate_expr = str(int(rate)) if rate.is_integer() else str(rate)
+                calculation_expression = f"({amount_expr})*{rate_expr}"
+            except ValueError:
+                calculation_expression = ""
         legal = any(
             token in normalized
             for token in ("avukat", "dava", "savunma", "dilekce", "dilekçe", "itiraz", "mahkeme")
+        )
+        accounting = any(
+            token in normalized
+            for token in ("muhasebe", "muhasebeci", "kdv", "vergi", "fatura", "beyanname", "tahsilat")
         )
         medical = any(
             token in normalized
@@ -13147,7 +13183,7 @@ class RuntimeBridge:
             token in normalized
             for token in ("ogrenci", "öğrenci", "odev", "ödev", "proje", "sunum", "adim adim", "adım adım")
         )
-        if not (legal or medical or engineering or student):
+        if not (legal or accounting or medical or engineering or student):
             return None
 
         topic = self._truncate_text(_research_topic_from_text(prompt), 140)
@@ -13158,6 +13194,8 @@ class RuntimeBridge:
                 if legal
                 else "Tahlil Yorum Raporu"
                 if medical
+                else "Muhasebe Çalışma Özeti"
+                if accounting
                 else "Teknik Çözüm Raporu"
                 if engineering
                 else "Adım Adım Çalışma Raporu"
@@ -13165,6 +13203,16 @@ class RuntimeBridge:
             120,
         )
         steps: list[dict[str, Any]] = []
+
+        if calculation_expression:
+            steps.append(
+                {
+                    "id": "calculate",
+                    "capability": "math_solve",
+                    "args": {"expression": calculation_expression, "mode": "evaluate"},
+                    "description": f"{calculation_expression} ifadesi hesaplanacak.",
+                }
+            )
 
         if medical and "document_read" in canonical_caps:
             steps.append(
@@ -13198,6 +13246,17 @@ class RuntimeBridge:
                     "description": "İlgili mevzuat ve emsal bağlamı araştırılacak.",
                 }
             )
+        elif accounting and "web_research" in canonical_caps and any(
+            token in normalized for token in ("araştır", "arastir", "kural", "mevzuat", "güncel", "guncel")
+        ):
+            steps.append(
+                {
+                    "id": "research",
+                    "capability": "web_research",
+                    "args": {"query": f"{topic} vergi KDV mevzuat uygulama"},
+                    "description": "KDV/vergi kuralları için public kaynak araştırması yapılacak.",
+                }
+            )
         elif (engineering or student) and "web_research" in canonical_caps and any(
             token in normalized for token in ("araştır", "arastir", "kaynak", "literatur", "literatür", "guncel", "güncel")
         ):
@@ -13217,6 +13276,8 @@ class RuntimeBridge:
             else "Tahlil yorum raporu hazırla. Bölümler: okunan bulgular, referans dışı değerler, olası anlam, hekime sorulacak noktalar, takip önerileri. "
             "Tanı koyma; sonuçların doktor tarafından değerlendirilmesi gerektiğini açık belirt."
             if medical
+            else "Muhasebe çalışma çıktısı hazırla. Bölümler: hesap girdileri, hesap sonucu, ilgili kural özeti, kontrol notları ve teslim çıktısı."
+            if accounting
             else "Teknik çözüm raporu hazırla. Bölümler: problem tanımı, varsayımlar, hesap/analiz, seçenekler, önerilen çözüm, doğrulama adımları."
             if engineering
             else "Öğrenci çalışması hazırla. Bölümler: amaç, adım adım çözüm, önemli kavramlar, kontrol listesi, teslim çıktısı."
@@ -13229,24 +13290,34 @@ class RuntimeBridge:
         source_context_parts: list[str] = []
         if any(step.get("id") == "read_input" for step in steps):
             source_context_parts.append("Okunan özel/veri bağlamı: {{steps.read_input.output}}")
+        if any(step.get("id") == "calculate" for step in steps):
+            source_context_parts.append("Hesap sonucu: {{steps.calculate.output}}")
         if any(step.get("id") == "research" for step in steps):
             source_context_parts.append("Araştırma bağlamı: {{steps.research.output}}")
+        writer_args: dict[str, Any] = {
+            "prompt": f"{section_prompt}\n\nKullanıcı isteği: {prompt}",
+            "title": report_title,
+            "sourceContext": "\n\n".join(source_context_parts),
+        }
+        if writer_capability == "spreadsheet_write":
+            writer_args["columns"] = ["Kalem", "Değer"]
+            writer_args["rows"] = [
+                ["Kullanıcı isteği", prompt],
+                ["Hesap sonucu", "{{steps.calculate.output}}" if any(step.get("id") == "calculate" for step in steps) else ""],
+                ["Araştırma özeti", "{{steps.research.output}}" if any(step.get("id") == "research" for step in steps) else ""],
+            ]
         steps.append(
             {
-                "id": "write_report",
-                "capability": "document_write",
-                "args": {
-                    "prompt": f"{section_prompt}\n\nKullanıcı isteği: {prompt}",
-                    "title": report_title,
-                    "sourceContext": "\n\n".join(source_context_parts),
-                },
+                "id": "write_output",
+                "capability": writer_capability,
+                "args": writer_args,
                 "dependsOn": depends_on,
                 "description": f"{report_title} yazılıp dosya olarak kaydedilecek.",
             }
         )
         steps = self._chain_derived_steps(steps)
         return steps, {
-            "summary": f"{report_title}: okuma/araştırma, analiz ve belge üretimi adım adım yürütülecek.",
+            "summary": f"{report_title}: okuma/araştırma/hesaplama, analiz ve çıktı üretimi adım adım yürütülecek.",
             "steps": steps,
             "privacyClass": "local_private" if medical else "public_text",
             "planSource": "runtime_professional_template",
