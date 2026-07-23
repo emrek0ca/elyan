@@ -233,6 +233,39 @@ test("agent plan tool transcript is Turkish, timed, and redacted", () => {
   assert.doesNotMatch(unified.steps.map((step) => `${step.label} ${step.detail}`).join(" "), /gmail\.search|web\.search|secret/i);
 });
 
+test("agent plan transcript describes professional desktop analysis steps", () => {
+  const trace = buildTaskTraceBlock({ task: {
+    id: "task-professional-transcript", status: "running", payload: {}, result: {},
+    createdAt: new Date("2026-07-23T09:00:00Z"), updatedAt: new Date("2026-07-23T09:00:01Z"),
+  }, assistantContent: "Rapor hazırlanıyor." });
+  const unified = enrichTaskTraceWithAgentPlan({
+    trace,
+    agentPlan: { steps: [
+      { id: "calc", title: "Calculate", tool_request: { tool: "math_solve", args: { expression: "(12000+8500)*0.2" } } },
+      { id: "research", title: "Research", tool_request: { tool: "web_research", args: { query: "KDV kuralları" } } },
+      { id: "analyze", title: "Analyze", tool_request: { tool: "text_analyze", args: { sourceContext: "secret" } } },
+      { id: "write", title: "Write", tool_request: { tool: "document_write", args: { prompt: "secret" } } },
+    ] },
+    toolFlow: { tools: [
+      { name: "math_solve", ok: true, resultCount: null, durationMs: 50, errorCode: null },
+      { name: "web_research", ok: true, resultCount: 2, durationMs: 250, errorCode: null },
+      { name: "text_analyze", ok: true, resultCount: null, durationMs: 40, errorCode: null },
+    ] },
+    approval: null,
+  });
+
+  assert.deepEqual(unified.steps.map((step) => step.label), [
+    "Hesabı çözüyorum…",
+    "Web'de araştırıyorum…",
+    "Bağlamı analiz ediyorum…",
+    "Belgeyi hazırlıyorum…",
+  ]);
+  assert.equal(unified.steps[0]?.resultSummary, "Hesap tamamlandı.");
+  assert.equal(unified.steps[1]?.resultSummary, "2 kaynak bulundu.");
+  assert.equal(unified.steps[2]?.resultSummary, "Analiz tamamlandı.");
+  assert.doesNotMatch(unified.steps.map((step) => `${step.label} ${step.detail}`).join(" "), /math_solve|text_analyze|document_write|secret/i);
+});
+
 test("buildTaskTraceBlock describes the active running phase", () => {
   const block = buildTaskTraceBlock({
     task: {

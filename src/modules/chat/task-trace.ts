@@ -280,6 +280,13 @@ type ToolFlowTraceSummary = {
 };
 
 const TOOL_APP_LABELS: Record<string, string> = {
+  document_read: "Belge",
+  document_write: "Belge",
+  math_solve: "Hesap",
+  presentation_write: "Sunum",
+  spreadsheet_write: "Tablo",
+  text_analyze: "Analiz",
+  web_research: "Web",
   gmail: "Gmail",
   calendar: "Takvim",
   "google-calendar": "Takvim",
@@ -384,6 +391,13 @@ function describeToolFlow(toolFlow: ToolFlowTraceSummary): string {
 
 function publicToolLabel(name: string): string {
   const tool = name.trim().toLowerCase();
+  if (tool === "document_read") return "Belgeyi okuyorum…";
+  if (tool === "math_solve") return "Hesabı çözüyorum…";
+  if (tool === "text_analyze") return "Bağlamı analiz ediyorum…";
+  if (tool === "document_write") return "Belgeyi hazırlıyorum…";
+  if (tool === "spreadsheet_write") return "Tabloyu hazırlıyorum…";
+  if (tool === "presentation_write") return "Sunumu hazırlıyorum…";
+  if (tool === "web_research") return "Web'de araştırıyorum…";
   if (tool === "web.search" || tool.startsWith("web.")) return "Web'de araştırıyorum…";
   if (tool === "gmail.search" || tool === "gmail.read") return "Gelen kutunu tarıyorum…";
   if (tool.startsWith("drive.") || tool.startsWith("google-drive.")) return "Dosyalarını tarıyorum…";
@@ -401,9 +415,15 @@ function publicToolResult(tool: ToolFlowTraceSummary["tools"][number]): string {
     if (/timeout|timed_out|unavailable|network|rate_limit/.test(code)) return "Hizmete şu anda ulaşılamadığı için bu adım tamamlanamadı.";
     return "Bu adım tamamlanamadı.";
   }
+  if (tool.name === "text_analyze") return "Analiz tamamlandı.";
+  if (tool.name === "math_solve") return "Hesap tamamlandı.";
+  if (tool.name === "document_read") return "Belge okundu.";
+  if (tool.name === "document_write") return "Belge hazırlandı.";
+  if (tool.name === "spreadsheet_write") return "Tablo hazırlandı.";
+  if (tool.name === "presentation_write") return "Sunum hazırlandı.";
   if (tool.resultCount == null) return "Adım tamamlandı.";
   if (tool.name === "gmail.search" || tool.name === "gmail.read") return `${tool.resultCount} e-posta bulundu.`;
-  if (tool.name === "web.search" || tool.name.startsWith("web.")) return `${tool.resultCount} kaynak bulundu.`;
+  if (tool.name === "web.search" || tool.name === "web_research" || tool.name.startsWith("web.")) return `${tool.resultCount} kaynak bulundu.`;
   return `${tool.resultCount} sonuç bulundu.`;
 }
 
