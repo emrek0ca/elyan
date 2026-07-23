@@ -99,6 +99,28 @@ test("buildTypedUnderstandingEnvelope recognizes natural Turkish column phrasing
   );
 });
 
+test("buildTypedUnderstandingEnvelope compiles export intent without relying on narrow verb patterns", () => {
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message:
+      "Merhaba dif geo kullanım alanlarıyla alakalı 4 sayfalık PDF yazar mısın",
+    intent: intent("document"),
+  });
+
+  assert.equal(envelope.desired_outputs.some((output) => output.kind === "pdf"), true);
+  assert.equal(preferredWorkloadFromUnderstandingEnvelope(envelope), "document_generate");
+  assert.deepEqual(
+    envelope.constraints.find(
+      (constraint) =>
+        constraint.kind === "layout_template" &&
+        typeof constraint.value === "object" &&
+        !Array.isArray(constraint.value) &&
+        (constraint.value as Record<string, unknown>).pageCount === 4,
+    )?.value,
+    { pageCount: 4 },
+  );
+});
+
 test("buildTypedUnderstandingEnvelope preserves explicitly requested export format order", () => {
   const envelope = buildTypedUnderstandingEnvelope({
     userId: "user_1",

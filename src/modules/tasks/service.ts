@@ -34,6 +34,7 @@ import {
   envelopeTelemetrySummary,
   preferredWorkloadFromUnderstandingEnvelope,
 } from "../../core/understanding/understanding-envelope.js";
+import { selectToolSkillForTurn } from "../../core/understanding/tool-skill-selector.js";
 import {
   isExplicitChartRequest,
   isExplicitMathOrLatexRequest,
@@ -4555,17 +4556,26 @@ function resolveSharedBrainWorkloadForUnderstanding(input: {
   hasVisionImage?: boolean;
   envelope?: UnderstandingEnvelope | null;
 }) {
+  const toolSkillSelection = selectToolSkillForTurn({
+    message: input.prompt,
+  });
+  const selectorWorkload =
+    toolSkillSelection.selected.workload &&
+    toolSkillSelection.outputContract.requiresArtifact &&
+    toolSkillSelection.outputContract.confidence >= 0.68
+      ? toolSkillSelection.selected.workload
+      : null;
   const envelopeWorkload = preferredWorkloadFromUnderstandingEnvelope(
     input.envelope,
     input.prompt,
   );
   const selectedWorkload =
-    envelopeWorkload &&
+    (selectorWorkload ?? envelopeWorkload) &&
     (!input.routeDecision?.selectedWorkload ||
       input.routeDecision.selectedWorkload === "mobile_chat_fast" ||
       input.routeDecision.selectedWorkload === "mobile_chat_balanced" ||
       input.routeDecision.selectedWorkload === "fast_route")
-      ? envelopeWorkload
+      ? (selectorWorkload ?? envelopeWorkload)
       : input.routeDecision?.selectedWorkload;
 
   return resolveAttachmentAwareSharedBrainWorkload({

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
 import { selectPolicyWorkload } from "../../core/understanding/policy-rules.js";
+import { selectToolSkillForTurn } from "../../core/understanding/tool-skill-selector.js";
 import type { UnderstandingIntent } from "../../core/understanding/types.js";
 import { isMateriallyAmbiguousUserPrompt, isShortFollowUpPrompt, isSocialChatPrompt, selectHybridMobileChatWorkload } from "../brain/chat-heuristics.js";
 import { normalizePlanBrainProfile, type PlanBrainProfile } from "../billing/catalog.js";
@@ -736,6 +737,16 @@ function deriveSelectedWorkload(input: {
     return "desktop_handoff";
   }
   const responsePolicy = responsePolicyForPrompt(input.message);
+  const toolSkillSelection = selectToolSkillForTurn({
+    message: input.message,
+  });
+  if (
+    toolSkillSelection.selected.workload &&
+    toolSkillSelection.outputContract.requiresArtifact &&
+    toolSkillSelection.outputContract.confidence >= 0.68
+  ) {
+    return toolSkillSelection.selected.workload;
+  }
   // Structured workload rules live in a data-backed policy table so examples
   // can become fixtures instead of hidden routing branches.
   const prePlanningPolicyWorkload = selectPolicyWorkload(input.message, { phase: "pre_planning" });

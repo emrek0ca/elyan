@@ -187,6 +187,7 @@ test("decideCommandRoute selects document_generate for report/document creation 
     "iklim değişikliği üzerine bir makale hazırla",
     "şirket için bülten hazırlar mısın",
     "yatırım planı için şık bir PDF hazırla",
+    "Merhaba dif geo kullanım alanlarıyla alakalı 4 sayfalık PDF yazar mısın",
     "bu konu için tasarımlı bir docx belge oluştur",
   ]) {
     const decision = await decideCommandRoute(app as never, {
@@ -349,7 +350,7 @@ test("decideCommandRoute keeps packaged mobile world context on the shared brain
   assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
-test("decideCommandRoute upgrades short Turkish document work to the balanced profile", async () => {
+test("decideCommandRoute routes short Turkish PDF export work to document generation", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
@@ -359,7 +360,7 @@ test("decideCommandRoute upgrades short Turkish document work to the balanced pr
 
   assert.equal(decision.route, "server_brain");
   assert.equal(decision.shouldAskClarification, false);
-  assert.equal(decision.selectedWorkload, "mobile_chat_balanced");
+  assert.equal(decision.selectedWorkload, "document_generate");
 });
 
 test("decideCommandRoute upgrades short follow-ups to balanced so prior turn is used", async () => {

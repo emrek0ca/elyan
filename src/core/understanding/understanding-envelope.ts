@@ -14,6 +14,11 @@ import type {
 } from "./types.js";
 import { understandingEnvelopeSchema } from "./types.js";
 import { isExplicitTableRequest } from "./structured-output-policy.js";
+import {
+  compileOutputContract,
+  workloadFromOutputContract,
+  type OutputContract,
+} from "./output-contract.js";
 
 type BuildEnvelopeInput = TaskUnderstandingInput & {
   intent: IntentClassification;
@@ -495,6 +500,7 @@ function buildDesiredOutputs(input: {
   text: string;
   format: string | null;
   metadata?: Record<string, unknown>;
+  outputContract?: OutputContract;
 }): UnderstandingDesiredOutput[] {
   const outputs: UnderstandingDesiredOutput[] = [];
   const normalized = compactText(input.text).toLocaleLowerCase("tr-TR");
@@ -540,6 +546,65 @@ function buildDesiredOutputs(input: {
     addDesiredOutput(outputs, { kind: "chart", format: null, target: "widget", confidence: 0.82, constraints: ["chart_data"] });
   }
 
+  if (
+    outputs.length === 0 &&
+    input.outputContract?.requiresArtifact === true &&
+    input.outputContract.confidence >= 0.58
+  ) {
+    const format = input.outputContract.outputFormat;
+    if (input.outputContract.outputKind === "document") {
+      addDesiredOutput(outputs, {
+        kind: format === "docx" ? "docx" : "pdf",
+        format: format === "docx" ? "docx" : "pdf",
+        target: "artifact",
+        confidence: input.outputContract.confidence,
+        constraints: [
+          "output_contract",
+          ...(input.outputContract.pageCount ? ["page_count"] : []),
+        ],
+      });
+    } else if (input.outputContract.outputKind === "table") {
+      addDesiredOutput(outputs, {
+        kind: format === "xlsx" ? "xlsx" : "table",
+        format: format === "xlsx" ? "xlsx" : "table",
+        target: format === "xlsx" ? "artifact" : "widget",
+        confidence: input.outputContract.confidence,
+        constraints: ["output_contract", "table_required"],
+      });
+      addDesiredOutput(outputs, {
+        kind: "table",
+        format: "table",
+        target: "widget",
+        confidence: Math.max(0.78, input.outputContract.confidence - 0.06),
+        constraints: ["output_contract", "table_required"],
+      });
+    } else if (input.outputContract.outputKind === "chart") {
+      addDesiredOutput(outputs, {
+        kind: "chart",
+        format: null,
+        target: "widget",
+        confidence: input.outputContract.confidence,
+        constraints: ["output_contract", "chart_data"],
+      });
+    } else if (input.outputContract.outputKind === "svg") {
+      addDesiredOutput(outputs, {
+        kind: "svg",
+        format: "svg",
+        target: "artifact",
+        confidence: input.outputContract.confidence,
+        constraints: ["output_contract"],
+      });
+    } else if (input.outputContract.outputKind === "image") {
+      addDesiredOutput(outputs, {
+        kind: "image",
+        format: format ?? "png",
+        target: "artifact",
+        confidence: input.outputContract.confidence,
+        constraints: ["output_contract"],
+      });
+    }
+  }
+
   if (!outputs.length) {
     addDesiredOutput(outputs, { kind: "chat_reply", format: null, target: "chat", confidence: 0.82, constraints: [] });
   }
@@ -551,6 +616,7 @@ function buildConstraints(input: {
   format: string | null;
   metadata?: Record<string, unknown>;
   desiredOutputs: UnderstandingDesiredOutput[];
+  outputContract?: OutputContract;
 }): UnderstandingConstraint[] {
   const constraints: UnderstandingConstraint[] = [];
   const metadataRecord = readRecord(input.metadata);
@@ -561,6 +627,7 @@ function buildConstraints(input: {
   const columns = detectRequestedColumns(input.text);
   const language = detectLanguageConstraint(input.text);
   const normalized = compactText(input.text).toLocaleLowerCase("tr-TR");
+  const pageCount = input.outputContract?.pageCount ?? null;
   const moneyAmounts = extractMoneyAmounts(input.text);
   const includeTotals =
     readBoolean(metadataRecord, "includeTotals") ??
@@ -597,6 +664,24 @@ function buildConstraints(input: {
   }
   if (language) {
     addConstraint(constraints, { kind: "language", value: language, confidence: 0.88, source: "typed_extractor", explicit: true });
+  }
+  if (pageCount != null) {
+    addConstraint(constraints, { kind: "layout_template", value: { pageCount }, confidence: 0.9, source: "typed_extractor", explicit: true });
+  }
+  if (input.outputContract?.requiresArtifact) {
+    addConstraint(constraints, {
+      kind: "execution_surface",
+      value: {
+        operation: input.outputContract.operation,
+        sourceReference: input.outputContract.sourceReference,
+        outputKind: input.outputContract.outputKind,
+        outputFormat: input.outputContract.outputFormat,
+        artifactRequired: true,
+      },
+      confidence: input.outputContract.confidence,
+      source: "typed_extractor",
+      explicit: input.outputContract.outputFormat != null,
+    });
   }
   return constraints;
 }
@@ -839,10 +924,26 @@ export function buildTypedUnderstandingEnvelope(input: BuildEnvelopeInput): Unde
   const metadata = readRecord(input.metadata) ?? {};
   const promptInjection = detectPromptInjection(text);
   const format = detectFormat(text, metadata);
+  const outputContract = compileOutputContract({
+    title: input.title,
+    message: input.message,
+    metadata,
+  });
   const localPrivate = detectLocalPrivateRequest(text, metadata);
   const sideEffect = detectSideEffectRequest(text);
-  const desiredOutputs = buildDesiredOutputs({ text, format, metadata });
-  const constraints = buildConstraints({ text, format, metadata, desiredOutputs });
+  const desiredOutputs = buildDesiredOutputs({
+    text,
+    format,
+    metadata,
+    outputContract,
+  });
+  const constraints = buildConstraints({
+    text,
+    format,
+    metadata,
+    desiredOutputs,
+    outputContract,
+  });
   const entities = extractEntities(text);
   const capabilities = buildCapabilities({ desiredOutputs, localPrivate, sideEffect });
   const memoryCandidates = extractMemoryCandidates(text, promptInjection);
@@ -948,6 +1049,18 @@ export function preferredWorkloadFromUnderstandingEnvelope(
     envelope.risk.local_private
   ) {
     return "desktop_handoff";
+  }
+  const contract = compileOutputContract({
+    message: prompt ?? envelope.intent.topic ?? "",
+    metadata: {
+      outputContractAuthoritative: envelope.desired_outputs.some(
+        (output) => output.constraints.includes("output_contract"),
+      ),
+    },
+  });
+  const contractWorkload = workloadFromOutputContract(contract);
+  if (contractWorkload) {
+    return contractWorkload;
   }
   if (envelope.desired_outputs.some((output) => output.kind === "xlsx")) {
     return "table_generate";
