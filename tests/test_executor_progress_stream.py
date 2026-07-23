@@ -112,6 +112,35 @@ def test_progress_marks_cancellation_as_canceled() -> None:
     assert [step["status"] for step in captured[-1]["steps"]] == ["completed", "pending"]
 
 
+def test_cancel_after_last_step_checkpoint_blocks_late_success() -> None:
+    ex = ExecutorCore()
+    captured: list[dict] = []
+    ex.set_progress_emitter(lambda cid, block: captured.append(block))
+    should_cancel = {"value": False}
+
+    def _single_step_then_cancel(cap, args, state, source):
+        should_cancel["value"] = True
+        return {"ok": True, "output": "rapor hazır", "result": {"kind": cap}, "artifacts": []}, []
+
+    ok, content, _events, error_code, _result, _artifacts = ex.execute_plan_steps(
+        steps=[
+            {"id": "write", "capability": "document_write", "args": {"prompt": "rapor"}},
+        ],
+        state_factory=lambda: {},
+        execute_step=_single_step_then_cancel,
+        source="confirmed_plan",
+        conversation_id="conv_cancel_final",
+        should_cancel=lambda: "task_cancelled" if should_cancel["value"] else "",
+    )
+
+    assert ok is False
+    assert content == "Görev iptal edildi."
+    assert error_code == "EXECUTION_CANCELLED"
+    assert captured[-1]["status"] == "canceled"
+    assert captured[-1]["stopReason"] == "execution_cancelled"
+    assert captured[-1]["steps"][0]["status"] == "canceled"
+
+
 def test_progress_uses_human_labels_for_professional_and_decision_steps() -> None:
     ex = ExecutorCore()
     captured: list[dict] = []

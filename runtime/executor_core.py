@@ -523,12 +523,16 @@ class ExecutorCore:
         step_states = step_states if isinstance(step_states, list) else []
         steps: list[dict[str, Any]] = []
         active_step_id = ""
+        stop_reason = str(trace.get("stopReason", "") or "")
+        final_canceled = final and stop_reason in {"execution_cancelled", "execution_timeout"}
         for state in step_states:
             if not isinstance(state, dict):
                 continue
             status = str(state.get("status", "") or "pending")
             # executor status → task_trace status
-            mapped = {"running": "running", "completed": "completed", "failed": "failed"}.get(status, "pending")
+            mapped = {"running": "running", "completed": "completed", "failed": "failed", "canceled": "canceled"}.get(status, "pending")
+            if final_canceled and mapped == "running":
+                mapped = "canceled"
             step_id = str(state.get("id", "") or f"step_{len(steps) + 1}")
             if mapped == "running":
                 active_step_id = step_id
@@ -564,7 +568,6 @@ class ExecutorCore:
             if evidence_path:
                 step_payload["evidence"] = {"path": evidence_path}
             steps.append(step_payload)
-        stop_reason = str(trace.get("stopReason", "") or "")
         overall = "running"
         if final:
             if stop_reason in {"execution_cancelled", "execution_timeout"}:
@@ -1773,6 +1776,10 @@ class ExecutorCore:
                     )
                 except Exception:  # pragma: no cover - journal asla yürütmeyi düşürmesin
                     pass
+
+                cancel_reason = cancellation_reason()
+                if cancel_reason:
+                    return cancelled_result(cancel_reason)
 
             summary = _user_facing_execution_summary(outputs, step_outputs)
             self.record_stage(execution_id, "finalize", detail=summary, status="completed")
