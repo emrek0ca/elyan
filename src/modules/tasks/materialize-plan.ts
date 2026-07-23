@@ -129,7 +129,7 @@ function renderCapabilityCatalog(allowed: Set<string>): string {
     .join("\n");
 }
 
-function renderPlanningFewShots(): string {
+export function renderPlanningFewShots(): string {
   return [
     "EXAMPLES:",
     "",
@@ -138,6 +138,28 @@ function renderPlanningFewShots(): string {
     '{"steps":[',
     '{"id":"s1","capability":"math_solve","args":{"expression":"(12000+8500)*1.20"},"dependsOn":[],"description":"KDV dahil toplam tutari hesapla"},',
     '{"id":"s2","capability":"spreadsheet_write","args":{"title":"Fatura ozeti","sheets":[{"name":"Ozet","rows":[["Kalem","Tutar"],["Fatura 1",12000],["Fatura 2",8500],["KDV dahil toplam","{{steps.s1.output}}"]]}]},"dependsOn":["s1"],"description":"Hesap sonucunu Excel dosyasina yaz"}',
+    "]}",
+    "",
+    "Accounting calculation + research + report:",
+    "Goal: 12000 TL ve 8500 TL hizmet faturasi icin yuzde 20 KDV hesapla, KDV kurallarini arastir ve Word raporu hazirla.",
+    '{"steps":[',
+    '{"id":"s1","capability":"math_solve","args":{"expression":"(12000+8500)*0.20"},"dependsOn":[],"description":"Iki faturanin yuzde 20 KDV tutarini hesapla"},',
+    '{"id":"s2","capability":"web_research","args":{"query":"hizmet faturasi KDV yuzde 20 kurallari Turkiye"},"dependsOn":[],"description":"KDV kurallari icin kaynak arastir"},',
+    '{"id":"s3","capability":"document_write","args":{"title":"KDV Hesaplama ve Kural Ozeti","content":"KDV hesabi: {{steps.s1.output}}\\n\\nArastirma: {{steps.s2.output}}","format":"docx"},"dependsOn":["s1","s2"],"description":"Hesap ve arastirma sonucunu Word raporuna yaz"}',
+    "]}",
+    "",
+    "Legal research + defense draft:",
+    "Goal: Kira uyusmazligini ve tahliye davasi savunmasini arastir, dosya ozetini analiz et ve savunma dilekcesi taslagi hazirla.",
+    '{"steps":[',
+    '{"id":"s1","capability":"web_research","args":{"query":"kira uyusmazligi tahliye davasi savunma dilekcesi mevzuat emsal"},"dependsOn":[],"description":"Mevzuat ve emsal savunma baglamini arastir"},',
+    '{"id":"s2","capability":"document_write","args":{"title":"Savunma Dilekcesi Taslagi","content":"Kullanici dosya ozeti ve arastirma sonucu birlikte kullanilarak savunma taslagi hazirla.\\n\\nArastirma: {{steps.s1.output}}","format":"docx"},"dependsOn":["s1"],"description":"Savunma dilekcesi taslagini yaz"}',
+    "]}",
+    "",
+    "Student research + presentation:",
+    "Goal: Kuantum annealing ile klasik optimizasyon farkini arastir, adim adim acikla ve 5 sayfalik sunum hazirla.",
+    '{"steps":[',
+    '{"id":"s1","capability":"web_research","args":{"query":"quantum annealing vs classical optimization explanation examples"},"dependsOn":[],"description":"Konu icin guncel ve anlasilir kaynak arastir"},',
+    '{"id":"s2","capability":"presentation_write","args":{"title":"Kuantum Annealing ve Klasik Optimizasyon","prompt":"{{steps.s1.output}} kullanarak 5 sayfalik, adim adim aciklayan ogrenci sunumu hazirla"},"dependsOn":["s1"],"description":"Arastirma sonucundan sunum hazirla"}',
     "]}",
     "",
     "Research + report:",
@@ -149,7 +171,7 @@ function renderPlanningFewShots(): string {
   ].join("\n");
 }
 
-function buildPlanningPrompt(
+export function buildPlanningPrompt(
   workOrder: DesktopWorkOrder,
   allowed: string[],
 ): string {
@@ -183,8 +205,10 @@ function buildPlanningPrompt(
     "- Always provide every listed required arg for a capability; put concrete values, use {{steps.<id>.output}} to consume a previous step's result.",
     "- Args must contain executable data, not vague descriptions. Do not write placeholders such as \"the invoice total\", \"the research result\", or \"the user's file\" when a concrete value or dependency reference is available.",
     "- math_solve.args.expression MUST be a numeric/symbolic expression such as \"12000+8500\" or \"(12000+8500)*1.20\". Never pass an explanation like \"faturaların toplamı\" as expression.",
+    "- For tax/VAT/KDV requests, decide whether the user asks for tax amount or tax-included total: KDV amount for 12000 and 8500 at 20% is \"(12000+8500)*0.20\"; tax-included total is \"(12000+8500)*1.20\".",
     "- For spreadsheet_write/document_write/presentation_write, put the produced content in args directly and reference prior outputs with {{steps.<id>.output}}. Do not rely on hidden context.",
-    "- For web_research, query must be a concrete search query with the key terms from the goal, not a generic instruction.",
+    "- For web_research, query must be a concrete search query with key terms only. Do not pass the full user goal, private case facts, file summaries, or writing instructions as the query.",
+    "- For professional workflows, preserve private case/test/project facts in writer args, but keep web_research queries public and generic enough for source lookup.",
     "- For image_generate, prompt must be the full visual prompt the image model should receive, not a short label.",
     "- Steps marked [needs approval] are allowed; the desktop asks the user before running them — plan them normally.",
     "- Only use capabilities from the CATALOG above.",
