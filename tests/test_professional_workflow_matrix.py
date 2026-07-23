@@ -157,3 +157,53 @@ def test_professional_executor_passes_prior_outputs_into_writer(tmp_path: Path) 
     assert observed_writer_args["_previousOutput"] == "KDV genel oranı yüzde 20 olarak uygulanır."
     assert observed_writer_args["_previousResult"]["kind"] == "web_research"
     assert "_previousArtifacts" not in observed_writer_args
+
+
+def test_inline_analysis_executor_passes_read_output_into_report_writer(tmp_path: Path) -> None:
+    routed = route_text_to_tool(
+        "Doktor gibi çalış. Tahlil sonuçlarını yorumla ve rapor çıkar: Hb 10.5, ferritin 8, B12 220."
+    )
+    assert routed is not None
+    assert [step["capability"] for step in routed.steps] == ["document_read", "document_write"]
+
+    observed_writer_args: dict[str, object] = {}
+    calls: list[str] = []
+    output_path = tmp_path / "tahlil-raporu.docx"
+    read_output = "Okunan tahlil verisi: Hb 10.5, ferritin 8, B12 220. Bulgular analiz raporu icin uygundur."
+
+    def execute_step(capability: str, args: dict, _state: dict, _source: str):
+        calls.append(capability)
+        if capability == "document_read":
+            assert "Hb 10.5" in str(args.get("text", ""))
+            return {
+                "ok": True,
+                "output": read_output,
+                "result": {"kind": "document_read", "text": read_output},
+            }, []
+        if capability == "document_write":
+            observed_writer_args.update(args)
+            output_path.write_bytes(b"fake-medical-docx-proof" * 80)
+            return {
+                "ok": True,
+                "output": f"DOCX oluşturuldu: {output_path.name}",
+                "result": {"kind": "document_write", "outputPath": str(output_path)},
+                "artifacts": [{"kind": "file", "path": str(output_path), "name": output_path.name}],
+            }, []
+        raise AssertionError(capability)
+
+    ok, _content, _events, error_code, result, artifacts = ExecutorCore().execute_plan_steps(
+        steps=[dict(step) for step in routed.steps],
+        state_factory=lambda: {},
+        execute_step=execute_step,
+        source="confirmed_plan",
+        confirmed=True,
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert result and result["kind"] == "document_write"
+    assert artifacts and artifacts[-1]["path"] == str(output_path)
+    assert calls == ["document_read", "document_write"]
+    assert observed_writer_args["sourceContext"] == read_output
+    assert observed_writer_args["_previousOutput"] == read_output
+    assert observed_writer_args["_previousResult"]["kind"] == "document_read"
