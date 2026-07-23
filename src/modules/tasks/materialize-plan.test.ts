@@ -61,6 +61,9 @@ test("desktop materialization prompt keeps research queries public and writer ar
 
   assert.match(fewShots, /Legal research \+ defense draft/);
   assert.match(fewShots, /kira uyusmazligi tahliye davasi savunma dilekcesi mevzuat emsal/);
+  assert.match(fewShots, /"prompt":"Arastirma sonucunu savunma dilekcesi icin hukuki arguman ve riskler acisindan analiz et"/);
+  assert.match(fewShots, /"sourceContext":"Arastirma: \{\{steps\.s1\.output\}\}"/);
+  assert.match(fewShots, /"content":"Arastirma: \{\{steps\.s1\.output\}\}\\n\\nAnaliz: \{\{steps\.s2\.output\}\}/);
   assert.match(fewShots, /Legal private file \+ public research \+ defense draft/);
   assert.match(fewShots, /"capability":"document_read"/);
   assert.match(fewShots, /"query":"kira uyusmazligi tahliye itirazi savunma dilekcesi mevzuat emsal"/);
