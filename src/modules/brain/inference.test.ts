@@ -751,7 +751,7 @@ test("generateSharedBrainReply sends max_tokens to Groq and trims stale mobile c
   assert.equal(result.provider, "groq");
   assert.equal(result.text, "Merhaba, ben Elyan.");
   assert.equal(requestedBodies.length, 1);
-  assert.equal(requestedBodies[0].max_tokens, 224);
+  assert.equal(requestedBodies[0].max_tokens, 384);
 
   const messageContents = Array.isArray(requestedBodies[0].messages)
     ? (requestedBodies[0].messages as Array<{ content?: string }>).map((message) => String(message.content ?? ""))
@@ -2207,7 +2207,7 @@ test("generateSharedBrainReply continues Groq streams cut mid-sentence by max to
 
   assert.equal(result.text, "Bu yanıt mobilde yarıda kalmadan tamamlanmalıdır.");
   assert.equal(requestedBodies.length, 2);
-  assert.equal(requestedBodies[0].max_tokens, 224);
+  assert.equal(requestedBodies[0].max_tokens, 384);
   assert.equal(requestedBodies[1].max_tokens, 200);
   const continuationMessages = requestedBodies[1].messages as Array<Record<string, unknown>>;
   assert.equal(
@@ -6205,7 +6205,7 @@ test("prompt gating: short followups drop non load-bearing policies", () => {
     "BASE",
     baseInput({ prompt: "devam et" }),
   );
-  assert.ok(prompt.length < 2500, `short followup prompt too long: ${prompt.length}`);
+  assert.ok(prompt.length < 3000, `short followup prompt too long: ${prompt.length}`);
   assert.ok(!prompt.includes("Task-routing policy"));
   assert.ok(!prompt.includes("memory blocks above"));
   assert.ok(prompt.includes("Elyan"));

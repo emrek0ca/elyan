@@ -648,6 +648,12 @@ test("readServerBrainCompletionMetadata preserves web grounding metadata for all
       extraInternalField: "drop-me",
     },
     blocks: [{ type: "context_signal", title: "Web kaynakları" }],
+    authoritativeArtifactData: {
+      type: "table",
+      columns: [],
+      rows: [],
+      source: { authority: "tool_connector" },
+    },
   });
 
   assert.equal(metadata.groundingUsed, true);
@@ -668,6 +674,12 @@ test("readServerBrainCompletionMetadata preserves web grounding metadata for all
   ]);
   assert.equal(metadata.healthContextUsed, true);
   assert.deepEqual(metadata.assistantBlocks, [{ type: "context_signal", title: "Web kaynakları" }]);
+  assert.deepEqual(metadata.authoritativeArtifactData, {
+    type: "table",
+    columns: [],
+    rows: [],
+    source: { authority: "tool_connector" },
+  });
 });
 
 test("readServerBrainCompletionMetadata rejects invalid fresh-data scalar metadata", () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { brainMemoryEpisodes } from "../../db/schema.js";
+import { elyanAssistantBlockTypeValues } from "../../contracts/assistant-block-schemas.js";
 import {
   AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD,
   buildAgentToolCatalogForTurn,
@@ -188,6 +189,21 @@ test("tool registry exposes timeout, idempotency and parallel safety", () => {
   assert.equal(getAgentToolMetadata("memory.write")?.parallelSafe, false);
   assert.equal(getAgentToolMetadata("memory.write")?.idempotency, "internal_state_write");
   assert.equal(getAgentToolMetadata("memory.write")?.approvalScope, "internal_state");
+});
+
+test("every advertised tool result block type exists in the canonical block schema", () => {
+  const canonicalTypes = new Set<string>(elyanAssistantBlockTypeValues);
+  for (const tool of listAgentTools()) {
+    const metadata = getAgentToolMetadata(tool.name);
+    assert.ok(metadata, `missing metadata for ${tool.name}`);
+    for (const blockType of metadata.selectionHints.resultBlockTypes) {
+      assert.equal(
+        canonicalTypes.has(blockType),
+        true,
+        `${tool.name} advertises unknown block type ${blockType}`,
+      );
+    }
+  }
 });
 
 test("tool selection catalog excludes irrelevant and disconnected tools", () => {

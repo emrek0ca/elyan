@@ -1,5 +1,10 @@
 import type { TableSpec, ValidationIssue, ValidationResult } from "../types.js";
-import { parseNumericValue } from "../utils.js";
+import {
+  extractExplicitNumericSequence,
+  extractRequestedTableColumns,
+  normalizeKey,
+  parseNumericValue,
+} from "../utils.js";
 
 function issue(code: string, message: string, path: string, severity: "error" | "warning" = "error"): ValidationIssue {
   return { code, message, path, severity };
@@ -56,6 +61,85 @@ export function validateTableSpec(spec: TableSpec): ValidationResult {
 
   if (spec.sort && !spec.columns.some((column) => column.key === spec.sort?.key)) {
     issues.push(issue("sort_key_missing", "Requested sort key is not present in columns.", "sort.key"));
+  }
+
+  const requestedColumns = Array.isArray(spec.renderOptions?.requestedColumns)
+    ? spec.renderOptions.requestedColumns.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : extractRequestedTableColumns(spec.sourceText ?? "");
+  if (requestedColumns.length > 0) {
+    const actualLabels = new Set(spec.columns.map((column) => normalizeKey(column.label)));
+    for (const requested of requestedColumns) {
+      if (!actualLabels.has(normalizeKey(requested))) {
+        issues.push(
+          issue(
+            "requested_column_missing",
+            `Requested table column is missing: ${requested}`,
+            "columns",
+          ),
+        );
+      }
+    }
+  }
+
+  const explicitSequence = extractExplicitNumericSequence(spec.sourceText ?? "");
+  if (explicitSequence.length > 0) {
+    const inputColumn =
+      spec.columns.find((column) => /^(?:sayi|number|input|girdi)$/u.test(normalizeKey(column.label))) ??
+      spec.columns.find((column) => column.dataType === "number");
+    if (!inputColumn || spec.rows.length !== explicitSequence.length) {
+      issues.push(
+        issue(
+          "explicit_sequence_not_covered",
+          "Table rows must cover every explicitly requested number exactly once.",
+          "rows",
+        ),
+      );
+    } else {
+      const actualInputs = spec.rows.map((row) => parseNumericValue(row[inputColumn.key]));
+      if (
+        actualInputs.some((value) => value == null) ||
+        actualInputs.some((value, index) => Math.abs((value ?? 0) - explicitSequence[index]!) > 1e-9)
+      ) {
+        issues.push(
+          issue(
+            "explicit_sequence_mismatch",
+            "Table input values do not match the explicitly requested number sequence.",
+            "rows",
+          ),
+        );
+      }
+    }
+
+    if (/\b(?:kare(?:si|leri|lerini)?|square(?:s|d)?)\b/iu.test(spec.sourceText ?? "")) {
+      const squareColumn = spec.columns.find((column) =>
+        /^(?:kare|square|squared|sonuc|result)$/u.test(normalizeKey(column.label)),
+      );
+      if (!inputColumn || !squareColumn) {
+        issues.push(
+          issue(
+            "square_columns_missing",
+            "Square tables require both input and square-result columns.",
+            "columns",
+          ),
+        );
+      } else {
+        spec.rows.forEach((row, rowIndex) => {
+          const input = parseNumericValue(row[inputColumn.key]);
+          const square = parseNumericValue(row[squareColumn.key]);
+          if (input == null || square == null || Math.abs(input * input - square) > 1e-9) {
+            issues.push(
+              issue(
+                "unsafe_math_mismatch",
+                "Computed square does not match its input value.",
+                `rows.${rowIndex}.${squareColumn.key}`,
+              ),
+            );
+          }
+        });
+      }
+    }
   }
 
   return {

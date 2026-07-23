@@ -53,14 +53,37 @@ function requestedOutputKinds(
 function requestedFormats(
   envelope: UnderstandingEnvelope | null | undefined,
 ): string[] {
+  const normalizeFormat = (value: string): string => {
+    const format = value.toLowerCase();
+    if (format === "word" || format === "doc") return "docx";
+    if (format === "excel" || format === "spreadsheet" || format === "csv") {
+      return "xlsx";
+    }
+    if (format === "table") return "table";
+    return format;
+  };
   return [
     ...new Set(
       (envelope?.desired_outputs ?? [])
         .filter((output) => artifactTypeForDesiredOutput(output) != null)
-        .map((output) => output.format ?? output.kind)
+        .map((output) => normalizeFormat(output.format ?? output.kind))
         .filter(Boolean),
     ),
   ];
+}
+
+function requestedDesiredOutputs(
+  envelope: UnderstandingEnvelope | null | undefined,
+): ArtifactIntent["desiredOutputs"] {
+  return (envelope?.desired_outputs ?? [])
+    .filter((output) => artifactTypeForDesiredOutput(output) != null)
+    .map((output) => ({
+      kind: output.kind,
+      format: output.format ?? null,
+      target: output.target,
+      confidence: output.confidence,
+      constraints: [...output.constraints],
+    }));
 }
 
 function detectArtifactType(text: string, metadata?: Record<string, unknown>, envelope?: UnderstandingEnvelope | null): ArtifactType | null {
@@ -154,6 +177,20 @@ export function parseArtifactIntent(input: {
         ? requestedFormats(input.understandingEnvelope)
         : type
           ? [type === "image_prompt" ? "image" : type]
+          : [],
+    desiredOutputs:
+      requestedDesiredOutputs(input.understandingEnvelope).length > 0
+        ? requestedDesiredOutputs(input.understandingEnvelope)
+        : type
+          ? [
+              {
+                kind: type === "image_prompt" ? "image" : type,
+                format: type === "image_prompt" ? "image" : type,
+                target: type === "table" || type === "chart" ? "widget" : "artifact",
+                confidence: source === "understanding_envelope" ? 0.9 : 0.82,
+                constraints: [],
+              },
+            ]
           : [],
     requiresDesktopRuntime,
     ...(requiresDesktopRuntime

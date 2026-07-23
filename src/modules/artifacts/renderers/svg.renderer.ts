@@ -55,7 +55,7 @@ export class SvgRenderer implements ArtifactRenderer<SvgSpec> {
   async render(spec: SvgSpec): Promise<ArtifactOutput> {
     const validation = await this.validate(spec);
     const body = spec.elements.map((element) => renderElement(element as Record<string, unknown>)).join("\n  ");
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${spec.canvas.width}" height="${spec.canvas.height}" viewBox="${escapeXml(spec.canvas.viewBox)}">\n  ${body}\n</svg>`;
+    const svg = spec.markup?.trim() || `<svg xmlns="http://www.w3.org/2000/svg" width="${spec.canvas.width}" height="${spec.canvas.height}" viewBox="${escapeXml(spec.canvas.viewBox)}">\n  ${body}\n</svg>`;
     return {
       artifactId: spec.id,
       type: "svg",

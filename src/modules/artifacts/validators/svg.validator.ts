@@ -8,8 +8,53 @@ function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+const SAFE_SVG_TAGS = new Set([
+  "svg",
+  "g",
+  "defs",
+  "lineargradient",
+  "radialgradient",
+  "stop",
+  "clippath",
+  "mask",
+  "pattern",
+  "rect",
+  "circle",
+  "ellipse",
+  "line",
+  "path",
+  "polygon",
+  "polyline",
+  "text",
+  "tspan",
+  "title",
+  "desc",
+]);
+
 export function validateSvgSpec(spec: SvgSpec): ValidationResult {
   const issues: ValidationIssue[] = [];
+  if (spec.elements.length === 0 && !spec.markup?.trim()) {
+    issues.push(issue("svg_content_missing", "SVG content is required.", "elements"));
+  }
+  if (spec.markup) {
+    if (!/^\s*<svg\b[\s\S]*<\/svg>\s*$/iu.test(spec.markup)) {
+      issues.push(issue("invalid_svg_markup", "SVG markup must contain one complete svg root.", "markup"));
+    }
+    const unsafeMarkup =
+      /<\s*(?:script|style|foreignObject|iframe|object|embed|audio|video|image|a|use|animate|animateTransform|set)\b|<\s*!(?:DOCTYPE|ENTITY)\b|<\?|\son[a-z]+\s*=|\sstyle\s*=|@import|url\s*\(/iu.test(
+        spec.markup,
+      );
+    const unsafeHref = [...spec.markup.matchAll(/(?:href|xlink:href)\s*=\s*["']([^"']*)["']/giu)]
+      .some((match) => !/^#[a-z_][\w:.-]*$/iu.test(match[1]?.trim() ?? ""));
+    const unsafeTag = [...spec.markup.matchAll(/<\s*\/?\s*([a-z][\w:.-]*)\b/giu)]
+      .some((match) => {
+        const tag = (match[1] ?? "").toLowerCase();
+        return tag.includes(":") || !SAFE_SVG_TAGS.has(tag);
+      });
+    if (unsafeMarkup || unsafeHref || unsafeTag) {
+      issues.push(issue("unsafe_svg_markup", "SVG markup contains executable or external content.", "markup"));
+    }
+  }
   if (!spec.canvas.viewBox.trim()) {
     issues.push(issue("missing_viewbox", "SVG viewBox is required.", "canvas.viewBox"));
   }

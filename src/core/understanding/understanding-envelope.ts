@@ -289,12 +289,13 @@ function detectRequestedColumns(text: string): string[] {
   const columnsText = extractTrailingText(text, [
     /(?:kolonları|kolonlari|kolonlar|sütunları|sutunlari|sütunlar|sutunlar|columns?)\s*(?:şunlar\s+olsun|sunlar\s+olsun|olsun|olarak)?\s*[:：]\s*([^\n.]+)/i,
     /(?:şu|su)\s+(?:kolonlarla|sütunlarla|sutunlarla)\s+(.+?)\s+(?:excel|tablo|xlsx|oluştur|olustur|hazırla|hazirla)/i,
+    /([\p{L}][\p{L}\p{N}_-]*(?:\s*(?:,|\bve\b|\band\b|&)\s*[\p{L}][\p{L}\p{N}_-]*)+)\s+(?:kolonlarıyla|kolonlariyla|sütunlarıyla|sutunlariyla|kolonlarla|sütunlarla|sutunlarla)/iu,
   ]);
   if (!columnsText) {
     return [];
   }
   return columnsText
-    .split(/[,;|]/)
+    .split(/\s*(?:,|;|\||\bve\b|\band\b|&)\s*/iu)
     .map((item) => cleanCapturedText(item))
     .filter((item) => item.length > 0)
     .slice(0, 16);

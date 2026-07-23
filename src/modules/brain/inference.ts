@@ -3227,7 +3227,7 @@ function buildCompactContextPromptBlock(
   // ── Compose sections ──
   const sections: string[] = [];
   if (turnRuntimeStateBlock) sections.push(turnRuntimeStateBlock);
-  if (stateLines.length) sections.push(`[STATE]\n${stateLines.join("\n")}`);
+  if (stateLines.length > 1) sections.push(`[STATE]\n${stateLines.join("\n")}`);
   if (goalLines.length) {
     sections.push(
       `[GOAL]\n${goalLines.join("\n")}\nAdvance [GOAL] by ONE step per turn. Emit a goal_progress block with your progress; do not retry or restart.`,
@@ -3265,8 +3265,15 @@ function buildCompactContextPromptBlock(
   // "anlamadım", "devam et", "onu düzelt" → önceki turu referans al. State
   // yoksa modele bunun bir takip mesajı olduğunu söyle.
   if (isShortFollowUpPrompt(input.prompt)) {
+    const hasPriorFollowupContext =
+      stateLines.length > 1 ||
+      goalLines.length > 0 ||
+      memoryLines.length > 0 ||
+      attachLines.length > 0 ||
+      sessionArtifacts.length > 0 ||
+      (input.conversation ?? []).some((item) => item.role === "assistant");
     sections.push(
-      sections.length > 0
+      hasPriorFollowupContext
         ? '[FOLLOWUP] short_followup: interpret against [STATE] above ("devam et"→continue previous answer, "anlamadım"→re-explain simpler, "onu düzelt"→revise last output). Do not answer as a new standalone question.'
         : "[FOLLOWUP] short_followup: no prior state in this request; ask briefly what to continue.",
     );

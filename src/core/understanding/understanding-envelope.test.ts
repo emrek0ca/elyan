@@ -85,6 +85,20 @@ test("buildTypedUnderstandingEnvelope extracts Excel columns and totals from des
   assert.equal(preferredWorkloadFromUnderstandingEnvelope(envelope), "table_generate");
 });
 
+test("buildTypedUnderstandingEnvelope recognizes natural Turkish column phrasing", () => {
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message:
+      "1,2 ve 3 sayılarının karelerini sayı ve kare sütunlarıyla tablo halinde göster. JSON yazma",
+    intent: intent("document"),
+  });
+
+  assert.deepEqual(
+    envelope.constraints.find((constraint) => constraint.kind === "columns")?.value,
+    ["sayı", "kare"],
+  );
+});
+
 test("buildTypedUnderstandingEnvelope preserves explicitly requested export format order", () => {
   const envelope = buildTypedUnderstandingEnvelope({
     userId: "user_1",

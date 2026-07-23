@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentToolResultDigest,
   buildToolResultRefinementPrompt,
   runAgentToolLoop,
   summarizeToolResultsForMetadata,
@@ -29,6 +30,24 @@ test("runAgentToolLoop executes bounded tool requests and summarizes safe metada
     summary.map((item) => item.errorCode),
     ["unknown_tool", "unknown_tool"],
   );
+});
+
+test("agentToolResultDigest is stable across object key order", () => {
+  const left = {
+    tool: "web.numeric_facts",
+    ok: true,
+    permission: "read" as const,
+    durationMs: 1,
+    output: { points: [{ value: 2, label: "b" }], query: "q" },
+    error: null,
+  };
+  const right = {
+    ...left,
+    durationMs: 999,
+    output: { query: "q", points: [{ label: "b", value: 2 }] },
+  };
+  assert.equal(agentToolResultDigest(left), agentToolResultDigest(right));
+  assert.match(agentToolResultDigest(left), /^[a-f0-9]{32}$/);
 });
 
 test("legacy agent_plan.v2 executes dependent steps in order and verifies each result", async () => {

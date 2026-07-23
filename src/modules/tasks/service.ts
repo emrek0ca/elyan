@@ -116,6 +116,7 @@ import {
 } from "../brain/chat-generation-queue.js";
 import {
   type AssistantMessageBlock,
+  applyAssistantBlockSemanticQuality,
   composeAssistantMessageBlocks,
   normalizeAssistantMessageBlocks,
   sanitizeAssistantVisibleText,
@@ -221,6 +222,7 @@ import {
   buildArtifactPipeline,
   recordArtifactLearningEvent,
 } from "../artifacts/service.js";
+import { artifactSpecToRenderRecipeBlocks } from "../artifacts/render-recipe-adapter.js";
 import type { ArtifactOutput } from "../artifacts/types.js";
 export { canonicalTaskTitle, shapeTaskFeedItem } from "./service-helpers.js";
 
@@ -990,6 +992,8 @@ export function readServerBrainCompletionMetadata(
         ? "buffer_until_validated"
         : readInferenceString(metadata, "freshDataStreamPolicy"),
     assistantBlocks: Array.isArray(metadata.blocks) ? metadata.blocks : [],
+    authoritativeArtifactData:
+      readRecord(metadata.authoritativeArtifactData) ?? null,
     visionBlock,
     toolFlow: summarizeToolFlowForTrace(metadata.toolResults),
     connectorWriteApproval: readConnectorWriteApproval(metadata),
@@ -3553,6 +3557,7 @@ async function completeServerBrainTask(
     healthContextUsed?: boolean;
     contextFreshness?: unknown;
     assistantBlocks?: unknown[];
+    authoritativeArtifactData?: unknown;
     visionBlock?: VisionEvidenceV3 | null;
     toolFlow?: ToolFlowTraceSummary | null;
     connectorWriteApproval?: ReturnType<typeof readConnectorWriteApproval>;
@@ -3656,6 +3661,7 @@ async function completeServerBrainTask(
       skillId: input.skillId ?? null,
       toolCallCount: input.toolFlow?.count ?? 0,
     },
+    authoritativeData: input.authoritativeArtifactData,
   });
   if (artifactPipeline.kind === "rendered") {
     const suppressBlockTypes = new Set<string>(
@@ -3679,7 +3685,9 @@ async function completeServerBrainTask(
       ),
       ...artifactPipeline.assistantBlocks,
     ];
-    visibleResponseText = artifactPipeline.visibleText || visibleResponseText;
+    visibleResponseText = artifactPipeline.ownsVisibleContent
+      ? ""
+      : artifactPipeline.visibleText || visibleResponseText;
     const mergedValidation = validateAssistantBlockContract({
       blocks: mergedBlocks,
       content: visibleResponseText,
@@ -3691,7 +3699,14 @@ async function completeServerBrainTask(
       ],
     });
     resolvedAssistantBlocks = mergedValidation.blocks;
-    blockQuality = mergedValidation.blockQuality;
+    blockQuality = applyAssistantBlockSemanticQuality(
+      mergedValidation.blockQuality,
+      {
+        sourceAuthority: artifactPipeline.spec.metadata?.sourceAuthority,
+        validationOk: true,
+        errorCodes: [],
+      },
+    );
   } else if (artifactPipeline.kind === "evidence_required") {
     visibleResponseText =
       "Araştırma için yeterli doğrulanabilir kaynak veya içerik oluşmadı; bu yüzden belge hazırlanmadı. Lütfen tekrar dene.";
@@ -3707,6 +3722,27 @@ async function completeServerBrainTask(
     });
     resolvedAssistantBlocks = evidenceValidation.blocks;
     blockQuality = evidenceValidation.blockQuality;
+  } else if (artifactPipeline.kind === "validation_failed") {
+    visibleResponseText =
+      artifactPipeline.reason === "authoritative_data_unavailable"
+        ? "İstenen çıktıyı güvenilir ve eksiksiz veriye dayandıramadım; bu yüzden hatalı bir widget üretmedim. Veriyi açık eşleşmelerle paylaşabilir veya yeniden deneyebilirsin."
+        : "İstenen çıktı doğrulama kontrollerini geçmedi; bu yüzden hatalı sonucu göstermedim. Verileri kontrol edip yeniden deneyebilirsin.";
+    const failedValidation = validateAssistantBlockContract({
+      blocks: [],
+      content: visibleResponseText,
+      mode: "normalize",
+      tablePolicy,
+      qualityBlocks: input.assistantBlocks,
+    });
+    resolvedAssistantBlocks = failedValidation.blocks;
+    blockQuality = applyAssistantBlockSemanticQuality(
+      failedValidation.blockQuality,
+      {
+        sourceAuthority: artifactPipeline.spec?.metadata?.sourceAuthority,
+        validationOk: false,
+        errorCodes: artifactPipeline.validation.errors.map((error) => error.code),
+      },
+    );
   }
   // Model zaten bir veri/matematik görseli (chart/math/table/svg) ürettiyse,
   // hosted image üretimi ÇALIŞMAZ ve bu blokları ASLA ezmez. "Grafiğini çiz"
@@ -3727,7 +3763,9 @@ async function completeServerBrainTask(
     ? referencedSourceImages
     : input.sourceImages;
   const generatedImageArtifact =
-    artifactPipeline.kind === "evidence_required" || hasVisualDataBlock
+    artifactPipeline.kind === "evidence_required" ||
+    artifactPipeline.kind === "validation_failed" ||
+    hasVisualDataBlock
     ? null
     : await maybeGenerateHostedImageArtifact(app, {
         prompt,
@@ -3738,6 +3776,7 @@ async function completeServerBrainTask(
       });
   const imageGenerationRequested =
     artifactPipeline.kind !== "evidence_required" &&
+    artifactPipeline.kind !== "validation_failed" &&
     !hasVisualDataBlock && (
       isHostedImageGenerationRequest(prompt) ||
       isHostedImageEditRequest(prompt, effectiveSourceImages?.length ?? 0)
@@ -3764,15 +3803,20 @@ async function completeServerBrainTask(
         }
       : payloadMetadata;
   const renderRecipe =
-    artifactPipeline.kind === "evidence_required"
+    artifactPipeline.kind === "evidence_required" ||
+    artifactPipeline.kind === "validation_failed"
       ? null
       : generatedImageArtifact
     ? null
-    : visibleResponseText
+    : visibleResponseText || artifactPipeline.kind === "rendered"
       ? buildLocalRenderRecipe({
           prompt,
           responseText: visibleResponseText,
           assistantBlocks: resolvedAssistantBlocks,
+          authoritativeTextBlocks:
+            artifactPipeline.kind === "rendered"
+              ? artifactSpecToRenderRecipeBlocks(artifactPipeline.spec)
+              : undefined,
           metadata: renderRecipeMetadata,
           renderOn:
             typeof payload.source === "string" &&
@@ -3893,6 +3937,17 @@ async function completeServerBrainTask(
                 reason: artifactPipeline.reason,
               },
             }
+          : artifactPipeline.kind === "validation_failed"
+            ? {
+                artifact: {
+                  type: artifactPipeline.intent.type,
+                  generated: false,
+                  reason: artifactPipeline.reason,
+                  errorCodes: artifactPipeline.validation.errors
+                    .map((error) => error.code)
+                    .slice(0, 16),
+                },
+              }
           : {}),
     imageArtifactGenerated: Boolean(generatedImageArtifact),
     ...(input.toolFlow ? { toolFlow: input.toolFlow } : {}),

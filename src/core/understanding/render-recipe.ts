@@ -1072,6 +1072,7 @@ export function buildLocalRenderRecipe(input: {
   taskId?: string;
   sessionId?: string;
   assistantBlocks?: unknown[];
+  authoritativeTextBlocks?: RenderRecipeBlock[];
   understandingEnvelope?: UnderstandingEnvelope | null;
 }): LocalRenderRecipe | null {
   const rawMetadata = readRecord(input.metadata) ?? {};
@@ -1096,10 +1097,15 @@ export function buildLocalRenderRecipe(input: {
     metadata,
     format,
   );
+  const artifactTextBlocks = Array.isArray(input.authoritativeTextBlocks)
+    ? input.authoritativeTextBlocks.slice(0, 80)
+    : [];
   const structuredTextBlocks =
-    Array.isArray(input.assistantBlocks) && input.assistantBlocks.length > 0
-      ? buildTextBlocksFromAssistantBlocks(input.assistantBlocks)
-      : [];
+    artifactTextBlocks.length > 0
+      ? artifactTextBlocks
+      : Array.isArray(input.assistantBlocks) && input.assistantBlocks.length > 0
+        ? buildTextBlocksFromAssistantBlocks(input.assistantBlocks)
+        : [];
   const textBlocks =
     structuredTextBlocks.length > 0
       ? structuredTextBlocks

@@ -76,7 +76,8 @@ export type AssistantBlockQualityIssue =
   | "fallback_to_text"
   | "unrequested_table_block"
   | "content_block_overlap"
-  | "document_preflight_enriched";
+  | "document_preflight_enriched"
+  | "semantic_validation_failed";
 
 export type AssistantBlockQualityReport = {
   version: "elyan_block_quality.v1";
@@ -84,6 +85,16 @@ export type AssistantBlockQualityReport = {
   issues: AssistantBlockQualityIssue[];
   feedbackSignals: string[];
   blockTypes: string[];
+  sourceAuthority?:
+    | "tool_connector"
+    | "skill_structured_output"
+    | "model_typed_block"
+    | "deterministic_prompt"
+    | "response_text";
+  semanticValidation?: {
+    ok: boolean;
+    errorCodes: string[];
+  };
   metrics: {
     inputBlockCount: number;
     normalizedBlockCount: number;
@@ -98,6 +109,35 @@ export type AssistantBlockQualityReport = {
     documentPreflightEnrichedCount: number;
   };
 };
+
+export function applyAssistantBlockSemanticQuality(
+  report: AssistantBlockQualityReport,
+  input: {
+    sourceAuthority?: AssistantBlockQualityReport["sourceAuthority"];
+    validationOk: boolean;
+    errorCodes?: string[];
+  },
+): AssistantBlockQualityReport {
+  const errorCodes = [...new Set(input.errorCodes ?? [])].slice(0, 16);
+  const failed = !input.validationOk;
+  return {
+    ...report,
+    score: failed ? Math.min(report.score, 25) : report.score,
+    issues: failed
+      ? [...new Set([...report.issues, "semantic_validation_failed" as const])]
+      : report.issues,
+    feedbackSignals: failed
+      ? [...new Set([...report.feedbackSignals, "semantic_validation_failed"])]
+      : report.feedbackSignals,
+    ...(input.sourceAuthority
+      ? { sourceAuthority: input.sourceAuthority }
+      : {}),
+    semanticValidation: {
+      ok: input.validationOk,
+      errorCodes,
+    },
+  };
+}
 
 type AssistantBlockCommon = {
   stableBlockId?: string;
@@ -1215,8 +1255,8 @@ export function buildAssistantTableBlock(
         density: (rows.length > 12 ? "compact" : "comfortable") as
           | "compact"
           | "comfortable",
-        interactions: ["sort", "copy", "share", "fullscreen"] as Array<
-          "sort" | "copy" | "share" | "fullscreen"
+        interactions: ["sort", "copy", "share"] as Array<
+          "sort" | "copy" | "share"
         >,
       },
       {

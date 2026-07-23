@@ -194,6 +194,35 @@ test("buildLocalRenderRecipe preserves explicit XLSX export format", () => {
   );
 });
 
+test("buildLocalRenderRecipe uses the full validated artifact table instead of the bounded mobile preview", () => {
+  const rows = Array.from({ length: 500 }, (_, index) => ({
+    sayi: index + 1,
+    kare: (index + 1) ** 2,
+  }));
+  const recipe = buildLocalRenderRecipe({
+    prompt: "Bu tabloyu XLSX olarak oluştur",
+    responseText: "",
+    assistantBlocks: [
+      {
+        type: "table",
+        columns: ["Sayı", "Kare"],
+        rows: rows.slice(0, 20).map((row) => [String(row.sayi), String(row.kare)]),
+      },
+    ],
+    authoritativeTextBlocks: [{
+      type: "table",
+      text: "Kareler",
+      tableHeaders: ["Sayı", "Kare"],
+      tableRows: rows.map((row) => [String(row.sayi), String(row.kare)]),
+    }],
+  });
+
+  assert.ok(recipe);
+  const table = recipe.text_blocks.find((block) => block.type === "table");
+  assert.equal(table?.tableRows?.length, 500);
+  assert.deepEqual(table?.tableRows?.at(-1), ["500", "250000"]);
+});
+
 test("buildLocalRenderRecipe prefers structured assistant blocks over preface prose for document exports", () => {
   const recipe = buildLocalRenderRecipe({
     prompt: "Bunu PDF olarak ver",

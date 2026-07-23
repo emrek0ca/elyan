@@ -75,6 +75,13 @@ export function formatMoney(amount: number, currency = "TRY", locale = "tr-TR"):
   return currency === "TRY" ? `${formatted} TL` : `${formatted} ${currency}`;
 }
 
+export function escapeMarkdownTableCell(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\r?\n/g, " ")
+    .replace(/\|/g, "\\|")
+    .trim();
+}
+
 export type ExtractedMoney = {
   label: string;
   amount: number;
@@ -135,17 +142,60 @@ export type ExtractedDataPoint = {
   currency: "TRY" | "USD" | "EUR" | "unknown";
 };
 
+export function extractRequestedTableColumns(text: string): string[] {
+  const normalized = compactText(text);
+  const captures = [
+    /(?:kolonları|kolonlari|kolonlar|sütunları|sutunlari|sütunlar|sutunlar|columns?)\s*(?:şunlar\s+olsun|sunlar\s+olsun|olsun|olarak)?\s*[:：]\s*([^\n.]+)/iu,
+    /(?:şu|su)\s+(?:kolonlarla|sütunlarla|sutunlarla)\s+(.+?)\s+(?:excel|tablo|xlsx|oluştur|olustur|hazırla|hazirla)/iu,
+    /([\p{L}][\p{L}\p{N}_-]*(?:\s*(?:,|\bve\b|\band\b|&)\s*[\p{L}][\p{L}\p{N}_-]*)+)\s+(?:kolonlarıyla|kolonlariyla|sütunlarıyla|sutunlariyla|kolonlarla|sütunlarla|sutunlarla)/iu,
+  ];
+  let captured = "";
+  for (const pattern of captures) {
+    const match = pattern.exec(normalized);
+    if (match?.[1]) {
+      captured = compactText(match[1]);
+      break;
+    }
+  }
+  if (!captured) return [];
+  return captured
+    .split(/\s*(?:,|;|\||\bve\b|\band\b|&)\s*/iu)
+    .map((item) => compactText(item).replace(/^["'“”‘’]+|["'“”‘’.,;:\s]+$/g, ""))
+    .filter((item) => item.length > 0)
+    .slice(0, 16);
+}
+
+export function extractExplicitNumericSequence(text: string): number[] {
+  const match = /(?<values>-?\d+(?:[.,]\d+)?(?:\s*(?:,|\bve\b|\band\b)\s*-?\d+(?:[.,]\d+)?){1,40})\s+(?:sayı(?:lar)?(?:ının|in|ları|lar)?|numbers?)/iu.exec(
+    compactText(text),
+  );
+  if (!match?.groups?.values) return [];
+  const rawValues = match.groups.values
+    .split(/\s*(?:,|\bve\b|\band\b)\s*/iu)
+    .filter(Boolean);
+  const values = rawValues
+    .map((value) => Number(value.replace(",", ".")))
+    .filter((value) => Number.isFinite(value));
+  return values.length === rawValues.length ? values.slice(0, 500) : [];
+}
+
 export function extractDataPoints(text: string): ExtractedDataPoint[] {
   const chunks = compactText(text)
     .split(/[,;\n]+/)
     .map((chunk) => chunk.trim())
     .filter(Boolean);
   const points: ExtractedDataPoint[] = [];
-  const chunkPattern =
-    /^(?<label>[\p{L}\p{N}\s%/()._-]{2,60}?)(?:=|:)?\s*(?<value>\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|\d+(?:[.,]\d+)?)\s*(?<currency>tl|try|₺|usd|\$|eur|€|%)?(?:\b.*)?$/iu;
+  const explicitChunkPattern =
+    /^(?<label>[\p{L}\p{N}][\p{L}\p{N}\s%/()._-]{0,59}?)\s*(?:=|:)\s*(?<value>\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|\d+(?:[.,]\d+)?)\s*(?<currency>tl|try|₺|usd|\$|eur|€|%)?\s*[.!]?$/iu;
+  const implicitChunkPattern =
+    /^(?<label>[\p{L}][\p{L}\p{N}\s%/()._-]{1,59}?)\s+(?<value>\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|\d+(?:[.,]\d+)?)\s*(?<currency>tl|try|₺|usd|\$|eur|€|%)?(?:\s+(?:veri(?:siyle)?|data|değer(?:i|leri)?(?:yle)?|ile|kullanarak)\b.*)?\s*[.!]?$/iu;
   for (const chunk of chunks) {
-    const candidate = chunk.includes(":") ? chunk.slice(chunk.lastIndexOf(":") + 1).trim() : chunk;
-    const match = chunkPattern.exec(candidate);
+    const prefixedCandidate = chunk.includes(":")
+      ? chunk.slice(chunk.lastIndexOf(":") + 1).trim()
+      : chunk;
+    const match =
+      explicitChunkPattern.exec(chunk) ??
+      implicitChunkPattern.exec(prefixedCandidate);
     if (!match) {
       continue;
     }

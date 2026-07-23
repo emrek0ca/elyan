@@ -900,8 +900,8 @@ test("getBrainProfile exposes the stable mobile and desktop contract surface", a
   assert.equal(profile.chat.activeMobileDefaultProfile.workload, "mobile_chat_fast");
   assert.equal(profile.chat.activeMobileDefaultProfile.mode, "fast_first_local_only");
   assert.equal(profile.chat.activeMobileDefaultProfile.model, "mixtral");
-  assert.equal(profile.chat.latencyBudgets.mobileChatFastTimeoutMs, 5500);
-  assert.equal(profile.chat.workloadProfiles.mobileChatFast.maxTokens, 224);
+  assert.equal(profile.chat.latencyBudgets.mobileChatFastTimeoutMs, 7000);
+  assert.equal(profile.chat.workloadProfiles.mobileChatFast.maxTokens, 384);
   assert.equal(profile.chat.responseProtocol.qualityRepairReady, true);
   assert.equal(profile.chat.responseProtocol.mobileChatQualityEvalReady, true);
   assert.equal(profile.chat.responseProtocol.trainingLoopReady, true);

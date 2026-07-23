@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
 import type { ElyanAssistantDocumentBlock } from "../../contracts/domain.js";
+import { withCanonicalAssistantBlockEnvelope } from "../chat/block-envelope.js";
 import {
   buildAssistantChartBlock,
   buildAssistantCodeBlock,
@@ -16,10 +17,17 @@ import type {
   ArtifactOutput,
   ArtifactProvenance,
   ArtifactSpec,
+  ValidationResult,
 } from "./types.js";
+import { authoritativeArtifactDataSchema } from "./types.js";
 import { normalizeArtifactSpec } from "./normalizer.js";
 import { rendererForSpec } from "./renderers/index.js";
-import { compactText, formatMoney, safeFileSlug } from "./utils.js";
+import {
+  compactText,
+  escapeMarkdownTableCell,
+  formatMoney,
+  safeFileSlug,
+} from "./utils.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 
 const RESEARCH_ARTIFACT_ACTION_PATTERN =
@@ -61,15 +69,70 @@ export type ArtifactPipelineResult =
       latencyMs: number;
     }
   | {
+      kind: "validation_failed";
+      intent: ArtifactIntent;
+      reason:
+        | "authoritative_data_unavailable"
+        | "semantic_validation_failed";
+      validation: ValidationResult;
+      spec?: ArtifactSpec;
+      latencyMs: number;
+    }
+  | {
       kind: "rendered";
       intent: ArtifactIntent;
       spec: ArtifactSpec;
       output: ArtifactOutput;
       assistantBlocks: AssistantMessageBlock[];
       visibleText: string;
+      ownsVisibleContent: boolean;
       rendererUsed: string;
       latencyMs: number;
     };
+
+const SOURCE_WIDGET_BLOCK_TYPES = new Set([
+  "mail_list",
+  "mail_detail",
+  "calendar_agenda",
+  "drive_files",
+  "notion_page",
+  "github_activity",
+  "slack_messages",
+]);
+
+function hasSourceWidget(blocks: AssistantMessageBlock[] | undefined): boolean {
+  return Array.isArray(blocks) && blocks.some((block) => SOURCE_WIDGET_BLOCK_TYPES.has(block.type));
+}
+
+function urlOnlySvgBlock(
+  blocks: AssistantMessageBlock[] | undefined,
+): Extract<AssistantMessageBlock, { type: "svg" }> | null {
+  if (!Array.isArray(blocks)) return null;
+  return (
+    blocks.find(
+      (block): block is Extract<AssistantMessageBlock, { type: "svg" }> =>
+        block.type === "svg" &&
+        !String(block.svg ?? block.markup ?? "").trim() &&
+        Boolean(String(block.url ?? "").trim()),
+    ) ?? null
+  );
+}
+
+function isSafeRemoteSvgUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function validationFailure(code: string, message: string): ValidationResult {
+  return {
+    ok: false,
+    errors: [{ code, message, path: "assistantBlocks", severity: "error" }],
+  };
+}
 
 export async function buildArtifactPipeline(input: {
   userRequest: string;
@@ -82,6 +145,7 @@ export async function buildArtifactPipeline(input: {
   model?: string | null;
   assistantBlocks?: AssistantMessageBlock[];
   provenance?: ArtifactProvenance;
+  authoritativeData?: unknown;
 }): Promise<ArtifactPipelineResult> {
   const startedAt = Date.now();
   const intent = parseArtifactIntent({
@@ -94,6 +158,70 @@ export async function buildArtifactPipeline(input: {
   }
   if (intent.requiresDesktopRuntime) {
     return { kind: "desktop_required", intent, latencyMs: Date.now() - startedAt };
+  }
+  const authoritativeDataResult =
+    input.authoritativeData == null
+      ? null
+      : authoritativeArtifactDataSchema.safeParse(input.authoritativeData);
+  if (authoritativeDataResult && !authoritativeDataResult.success) {
+    return {
+      kind: "validation_failed",
+      intent,
+      reason: "semantic_validation_failed",
+      validation: validationFailure(
+        "invalid_authoritative_artifact_data",
+        "The authoritative artifact dataset did not match its internal contract.",
+      ),
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+  const authoritativeData = authoritativeDataResult?.data;
+  if (
+    authoritativeData &&
+    intent.type !== authoritativeData.type &&
+    !(intent.type === "pdf" && authoritativeData.type === "table")
+  ) {
+    return {
+      kind: "validation_failed",
+      intent,
+      reason: "semantic_validation_failed",
+      validation: validationFailure(
+        "authoritative_artifact_type_mismatch",
+        "The authoritative dataset does not match the requested artifact type.",
+      ),
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+  const sourceWidgetPresent = hasSourceWidget(input.assistantBlocks);
+  const sourceDocumentPresent = sourceDocumentBlock(input.assistantBlocks) != null;
+  const independentArtifactPresent =
+    authoritativeData != null ||
+    ((intent.type === "pdf" || intent.type === "document") &&
+      sourceDocumentPresent) ||
+    (intent.type === "svg" && urlOnlySvgBlock(input.assistantBlocks) == null &&
+      input.assistantBlocks?.some((block) => block.type === "svg") === true);
+  if (
+    sourceWidgetPresent &&
+    !independentArtifactPresent
+  ) {
+    return { kind: "none", intent, latencyMs: Date.now() - startedAt };
+  }
+  if (intent.type === "svg") {
+    const remoteSvg = urlOnlySvgBlock(input.assistantBlocks);
+    if (remoteSvg) {
+      return isSafeRemoteSvgUrl(remoteSvg.url ?? "")
+        ? { kind: "none", intent, latencyMs: Date.now() - startedAt }
+        : {
+            kind: "validation_failed",
+            intent,
+            reason: "semantic_validation_failed",
+            validation: validationFailure(
+              "unsafe_svg_url",
+              "Remote SVG URLs must use a valid HTTPS origin.",
+            ),
+            latencyMs: Date.now() - startedAt,
+          };
+    }
   }
   const researchPolicyRequired =
     input.metadata?.researchRequired === true ||
@@ -144,13 +272,40 @@ export async function buildArtifactPipeline(input: {
       };
     }
   }
-  const rawSpec = buildArtifactSpec({ ...input, intent });
+  const rawSpec = buildArtifactSpec({
+    ...input,
+    intent,
+    authoritativeData,
+  });
   if (!rawSpec) {
-    return { kind: "none", intent, latencyMs: Date.now() - startedAt };
+    return {
+      kind: "validation_failed",
+      intent,
+      reason: "authoritative_data_unavailable",
+      validation: validationFailure(
+        intent.type === "table"
+          ? "authoritative_table_data_unavailable"
+          : intent.type === "chart"
+            ? "authoritative_chart_data_unavailable"
+            : "authoritative_artifact_data_unavailable",
+        "The requested artifact could not be built from complete authoritative data.",
+      ),
+      latencyMs: Date.now() - startedAt,
+    };
   }
   const spec = normalizeArtifactSpec(rawSpec);
   const renderer = rendererForSpec(spec);
   const output = await renderer.render(spec);
+  if (!output.validation.ok) {
+    return {
+      kind: "validation_failed",
+      intent,
+      reason: "semantic_validation_failed",
+      spec,
+      validation: output.validation,
+      latencyMs: Date.now() - startedAt,
+    };
+  }
   const assistantBlocks = artifactOutputToAssistantBlocks(
     output,
     input.assistantBlocks,
@@ -162,6 +317,7 @@ export async function buildArtifactPipeline(input: {
     output,
     assistantBlocks,
     visibleText: visibleTextForArtifact(output),
+    ownsVisibleContent: assistantBlocks.some((block) => block.type !== "text"),
     rendererUsed: renderer.constructor.name,
     latencyMs: Date.now() - startedAt,
   };
@@ -198,6 +354,7 @@ function artifactSourceText(input: {
 function pdfDocumentSections(spec: Extract<ArtifactSpec, { type: "pdf" }>): Array<{ heading?: string; content: string; level?: number }> {
   const lineItems = spec.blocks.filter((block) => block.type === "line_item");
   const totals = spec.blocks.filter((block) => block.type === "total");
+  const tables = spec.blocks.filter((block) => block.type === "table");
   const sections: Array<{ heading?: string; content: string; level?: number }> = [];
   if (lineItems.length > 0) {
     sections.push({
@@ -217,6 +374,23 @@ function pdfDocumentSections(spec: Extract<ArtifactSpec, { type: "pdf" }>): Arra
         .join("\n"),
     });
   }
+  for (const table of tables) {
+    const columns = table.columns ?? [];
+    const rows = table.rows ?? [];
+    if (columns.length === 0 || rows.length === 0) continue;
+    sections.push({
+      heading: spec.title ?? "Tablo",
+      level: 1,
+      content: [
+        `| ${columns.map((column) => escapeMarkdownTableCell(column.label)).join(" | ")} |`,
+        `| ${columns.map(() => "---").join(" | ")} |`,
+        ...rows.map(
+          (row) =>
+            `| ${columns.map((column) => escapeMarkdownTableCell(row[column.key])).join(" | ")} |`,
+        ),
+      ].join("\n"),
+    });
+  }
   if (spec.footer?.text) {
     sections.push({ heading: "Alt Bilgi", level: 1, content: spec.footer.text });
   }
@@ -225,9 +399,78 @@ function pdfDocumentSections(spec: Extract<ArtifactSpec, { type: "pdf" }>): Arra
       .map((block) => compactText(block.text ?? block.label ?? ""))
       .filter(Boolean)
       .join("\n\n");
-    sections.push({ content: body || "Belge içeriği hazır.", level: 1 });
+    if (body) sections.push({ content: body, level: 1 });
   }
   return sections;
+}
+
+function deterministicPreview<T>(values: T[], limit = 240): T[] {
+  if (values.length <= limit) return [...values];
+  const indexes = Array.from({ length: limit }, (_, index) =>
+    Math.round((index * (values.length - 1)) / (limit - 1)),
+  );
+  return indexes.map((index) => values[index]!);
+}
+
+function authoritativeSourceBlock(
+  type: ArtifactOutput["type"],
+  sourceBlocks: AssistantMessageBlock[] | undefined,
+  renderHints: Record<string, unknown>,
+): AssistantMessageBlock | null {
+  if (!Array.isArray(sourceBlocks)) return null;
+  const sourceType = type === "document" || type === "pdf" ? "document_block" : type;
+  const source = sourceBlocks.find((block) => block.type === sourceType);
+  if (!source) return null;
+  const base = {
+    ...source,
+    renderHints: {
+      ...((source as { renderHints?: Record<string, unknown> }).renderHints ?? {}),
+      ...renderHints,
+    },
+  } as AssistantMessageBlock & Record<string, unknown>;
+  const finalize = (
+    block: AssistantMessageBlock & Record<string, unknown>,
+  ): AssistantMessageBlock =>
+    withCanonicalAssistantBlockEnvelope(block) as AssistantMessageBlock;
+  if (source.type === "table") {
+    return finalize({
+      ...base,
+      interactions: (source.interactions ?? []).filter(
+        (interaction: string) => interaction !== "fullscreen",
+      ),
+    } as AssistantMessageBlock & Record<string, unknown>);
+  }
+  if (source.type === "chart") {
+    const labels = Array.isArray(source.labels) ? source.labels : [];
+    const values = Array.isArray(source.values) ? source.values : [];
+    const aligned = labels.length > 0 && labels.length === values.length;
+    const pairs: Array<{ label: string; value: number }> = aligned
+      ? labels.map((label: string, index: number) => ({
+          label,
+          value: values[index]!,
+        }))
+      : [];
+    const sampledPairs = deterministicPreview(pairs);
+    return finalize({
+      ...base,
+      ...(sampledPairs.length > 0
+        ? {
+            labels: sampledPairs.map((item) => item.label),
+            values: sampledPairs.map((item) => item.value),
+          }
+        : {}),
+      ...(Array.isArray(source.data)
+        ? { data: deterministicPreview(source.data) }
+        : {}),
+      ...(Array.isArray(source.points)
+        ? { points: deterministicPreview(source.points) }
+        : {}),
+      interactions: (source.interactions ?? []).filter(
+        (interaction: string) => interaction !== "fullscreen",
+      ),
+    } as AssistantMessageBlock & Record<string, unknown>);
+  }
+  return finalize(base);
 }
 
 function artifactOutputToAssistantBlocks(
@@ -247,6 +490,22 @@ function artifactOutputToAssistantBlocks(
     : [];
   if (spec.type === "pdf") {
     const sourceDocument = sourceDocumentBlock(sourceBlocks);
+    const sourceTable = !sourceDocument
+      ? authoritativeSourceBlock("table", sourceBlocks, {
+          artifactId: output.artifactId,
+          artifactType: "pdf",
+          validationOk: output.validation.ok,
+          exportFormats:
+            requestedExportFormats.length > 0
+              ? requestedExportFormats
+              : ["pdf"],
+          fileName: `${safeFileSlug(spec.title ?? spec.documentType)}.pdf`,
+        })
+      : null;
+    // A PDF generated from a typed table must keep that exact table as the
+    // visible source widget. The PDF recipe below owns export/layout only; it
+    // must not replace the table with guessed prose or a generic document.
+    if (sourceTable) return [sourceTable];
     const block = buildAssistantDocumentBlock({
       title:
         sourceDocument?.title ??
@@ -288,6 +547,23 @@ function artifactOutputToAssistantBlocks(
   }
 
   if (spec.type === "table") {
+    const authoritative =
+      spec.metadata?.sourceAuthority === "tool_connector"
+        ? null
+        : authoritativeSourceBlock(
+            "table",
+            sourceBlocks,
+            {
+              artifactId: output.artifactId,
+              artifactType: "table",
+              validationOk: true,
+              typedColumns: spec.columns,
+              exportFormats: requestedExportFormats.filter(
+                (format) => format === "xlsx",
+              ),
+            },
+          );
+    if (authoritative) return [authoritative];
     const rows = spec.rows.map((row) => spec.columns.map((column) => String(row[column.key] ?? "")));
     const block = buildAssistantTableBlock({
       title: spec.title,
@@ -300,6 +576,11 @@ function artifactOutputToAssistantBlocks(
         artifactType: "table",
         validationOk: output.validation.ok,
         typedColumns: spec.columns,
+        sourceRowCount: spec.rows.length,
+        visibleRowCount: Math.min(spec.rows.length, 80),
+        sourceAuthority: spec.metadata?.sourceAuthority ?? null,
+        sourceProducerId: spec.metadata?.sourceProducerId ?? null,
+        sourceResultDigest: spec.metadata?.sourceResultDigest ?? null,
         exportFormats: requestedExportFormats.filter(
           (format) => format === "xlsx",
         ),
@@ -308,19 +589,42 @@ function artifactOutputToAssistantBlocks(
           : {}),
       },
     });
-    return block ? [block] : [];
+    return block
+      ? [{
+          ...block,
+          previewRows: rows.slice(0, 20),
+          totalRowCount: spec.rows.length,
+        }]
+      : [];
   }
 
   if (spec.type === "chart") {
-    const labels = spec.data.map((row) => String(row[spec.xKey ?? "label"] ?? ""));
-    const values = spec.data
+    const authoritative =
+      spec.metadata?.sourceAuthority === "tool_connector"
+        ? null
+        : authoritativeSourceBlock(
+            "chart",
+            sourceBlocks,
+            {
+              artifactId: output.artifactId,
+              artifactType: "chart",
+              validationOk: true,
+              sampled: spec.data.length > 240,
+              sourcePointCount: spec.data.length,
+              previewPointCount: Math.min(spec.data.length, 240),
+            },
+          );
+    if (authoritative) return [authoritative];
+    const previewData = deterministicPreview(spec.data);
+    const labels = previewData.map((row) => String(row[spec.xKey ?? "label"] ?? ""));
+    const values = previewData
       .map((row) => row[spec.yKey ?? "value"])
       .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
     const block = buildAssistantChartBlock({
       chartType: spec.chartType,
       labels,
       values,
-      data: spec.data,
+      data: previewData,
       series: spec.series?.map((series) => ({
         name: series.label,
         labels,
@@ -335,12 +639,29 @@ function artifactOutputToAssistantBlocks(
         artifactId: output.artifactId,
         artifactType: "chart",
         validationOk: output.validation.ok,
+        sampled: spec.data.length > previewData.length,
+        sourcePointCount: spec.data.length,
+        previewPointCount: previewData.length,
+        sourceAuthority: spec.metadata?.sourceAuthority ?? null,
+        sourceProducerId: spec.metadata?.sourceProducerId ?? null,
+        sourceResultDigest: spec.metadata?.sourceResultDigest ?? null,
       },
     });
     return block ? [block] : [];
   }
 
   if (spec.type === "svg" && output.output.kind === "svg") {
+    const authoritative = authoritativeSourceBlock(
+      "svg",
+      sourceBlocks,
+      {
+        artifactId: output.artifactId,
+        artifactType: "svg",
+        validationOk: true,
+        canvas: spec.canvas,
+      },
+    );
+    if (authoritative) return [authoritative];
     const block = buildAssistantSvgBlock({
       svg: output.output.content,
       title: "SVG",
@@ -427,6 +748,8 @@ export function safeArtifactTelemetry(output: ArtifactOutput, extra?: { renderer
     model_used: output.spec.metadata?.model ?? null,
     repair_attempted: extra?.repairAttempted ?? false,
     content_source: output.spec.metadata?.contentSource ?? null,
+    source_authority: output.spec.metadata?.sourceAuthority ?? null,
+    semantic_validation_ok: output.validation.ok,
     web_source_count: output.spec.metadata?.webSourceCount ?? 0,
     document_source_count: output.spec.metadata?.documentSourceCount ?? 0,
     retrieval_result_count: output.spec.metadata?.retrievalResultCount ?? 0,

@@ -1,4 +1,5 @@
-import type { PdfSpec, ValidationIssue, ValidationResult } from "../types.js";
+import type { PdfSpec, TableSpec, ValidationIssue, ValidationResult } from "../types.js";
+import { validateTableSpec } from "./table.validator.js";
 
 function issue(code: string, message: string, path: string, severity: "error" | "warning" = "error"): ValidationIssue {
   return { code, message, path, severity };
@@ -22,6 +23,46 @@ export function validatePdfSpec(spec: PdfSpec): ValidationResult {
       (typeof block.amount !== "number" || !Number.isFinite(block.amount))
     ) {
       issues.push(issue("invalid_money_amount", "Money block amount must be numeric.", `blocks.${index}.amount`));
+    }
+    if (block.type === "table") {
+      const columns = block.columns ?? [];
+      const rows = block.rows ?? [];
+      if (columns.length === 0 || rows.length === 0) {
+        issues.push(issue("pdf_table_empty", "PDF table requires columns and rows.", `blocks.${index}`));
+      } else {
+        for (const [rowIndex, row] of rows.entries()) {
+          for (const column of columns) {
+            if (!(column.key in row)) {
+              issues.push(
+                issue(
+                  "pdf_table_cell_missing",
+                  "PDF table row is missing a declared column.",
+                  `blocks.${index}.rows.${rowIndex}.${column.key}`,
+                ),
+              );
+            }
+          }
+        }
+        const tableValidation = validateTableSpec({
+          id: `${spec.id}:table:${index}`,
+          type: "table",
+          intent: spec.intent,
+          sourceText: spec.sourceText,
+          locale: spec.locale,
+          blocks: [],
+          renderOptions: spec.renderOptions,
+          validationRules: spec.validationRules,
+          metadata: spec.metadata,
+          columns,
+          rows,
+        } satisfies TableSpec);
+        issues.push(
+          ...tableValidation.errors.map((entry) => ({
+            ...entry,
+            path: `blocks.${index}.${entry.path ?? "table"}`,
+          })),
+        );
+      }
     }
   });
 
@@ -54,6 +95,36 @@ export function validatePdfSpec(spec: PdfSpec): ValidationResult {
   }
   if (lineItems.length > 0 && lineItems.some((block) => !block.label?.trim())) {
     issues.push(issue("line_item_label_missing", "Every line item needs a label.", "blocks.line_item.label"));
+  }
+  const requiredExactTexts = Array.isArray(spec.renderOptions?.requiredExactTexts)
+    ? spec.renderOptions.requiredExactTexts.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : [];
+  const preservedText = [
+    ...spec.blocks.flatMap((block) => [block.text, block.label]),
+    spec.footer?.text,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase("tr-TR");
+  for (const required of requiredExactTexts) {
+    const normalized = required
+      .normalize("NFKC")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLocaleLowerCase("tr-TR");
+    if (normalized && !preservedText.includes(normalized)) {
+      issues.push(
+        issue(
+          "required_exact_text_missing",
+          "PDF does not preserve an explicitly required footer or signature.",
+          "blocks",
+        ),
+      );
+    }
   }
 
   return {

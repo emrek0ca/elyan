@@ -1,5 +1,9 @@
 import type { ArtifactOutput, ArtifactRenderer, PdfSpec, ValidationResult } from "../types.js";
-import { formatMoney, safeFileSlug } from "../utils.js";
+import {
+  escapeMarkdownTableCell,
+  formatMoney,
+  safeFileSlug,
+} from "../utils.js";
 import { validatePdfSpec } from "../validators/pdf.validator.js";
 
 function linesForPdf(spec: PdfSpec): string[] {
@@ -21,6 +25,20 @@ function linesForPdf(spec: PdfSpec): string[] {
       lines.push(`**${block.label ?? "Genel toplam"}: ${formatMoney(block.amount ?? 0, block.currency ?? "TRY")}**`);
     } else if (block.type === "paragraph" && block.text) {
       lines.push(block.text);
+    } else if (block.type === "table") {
+      const columns = block.columns ?? [];
+      const rows = block.rows ?? [];
+      if (columns.length > 0 && rows.length > 0) {
+        lines.push(
+          `| ${columns.map((column) => escapeMarkdownTableCell(column.label)).join(" | ")} |`,
+        );
+        lines.push(`| ${columns.map(() => "---").join(" | ")} |`);
+        for (const row of rows) {
+          lines.push(
+            `| ${columns.map((column) => escapeMarkdownTableCell(row[column.key])).join(" | ")} |`,
+          );
+        }
+      }
     }
   }
   if (spec.footer?.text) {

@@ -40,8 +40,24 @@ const artifactMetadataSchema = z.object({
   model: z.string().min(1).max(160).optional(),
   confidence: z.number().min(0).max(1).optional(),
   contentSource: z
-    .enum(["assistant_typed_block", "current_response_text", "user_request"])
+    .enum([
+      "authoritative_structured_data",
+      "assistant_typed_block",
+      "current_response_text",
+      "user_request",
+    ])
     .optional(),
+  sourceAuthority: z
+    .enum([
+      "tool_connector",
+      "skill_structured_output",
+      "model_typed_block",
+      "deterministic_prompt",
+      "response_text",
+    ])
+    .optional(),
+  sourceProducerId: z.string().min(1).max(160).optional(),
+  sourceResultDigest: z.string().regex(/^[a-f0-9]{16,64}$/).optional(),
   webGroundingUsed: z.boolean().optional(),
   webSourceCount: z.number().int().nonnegative().optional(),
   documentSourceCount: z.number().int().nonnegative().optional(),
@@ -62,9 +78,17 @@ export type ArtifactProvenance = {
 };
 
 export type ArtifactContentSource =
+  | "authoritative_structured_data"
   | "assistant_typed_block"
   | "current_response_text"
   | "user_request";
+
+export type ArtifactSourceAuthority =
+  | "tool_connector"
+  | "skill_structured_output"
+  | "model_typed_block"
+  | "deterministic_prompt"
+  | "response_text";
 
 export const artifactBlockSchema = z.object({
   type: z.string().min(1).max(80),
@@ -222,7 +246,8 @@ export const svgSpecSchema = artifactSpecBaseSchema.extend({
     height: z.number().int().positive().max(10_000),
     viewBox: z.string().min(1).max(120),
   }),
-  elements: z.array(svgElementSchema).min(1).max(300),
+  elements: z.array(svgElementSchema).max(300).default([]),
+  markup: z.string().min(1).max(80_000).optional(),
 });
 
 export const pdfBlockTypeSchema = z.enum([
@@ -347,6 +372,13 @@ export type ArtifactIntent = {
   source: "typed_extractor" | "metadata" | "understanding_envelope";
   requestedOutputKinds: string[];
   requestedFormats: string[];
+  desiredOutputs: Array<{
+    kind: string;
+    format: string | null;
+    target: "chat" | "artifact" | "widget" | "desktop";
+    confidence: number;
+    constraints: string[];
+  }>;
   requiresDesktopRuntime: boolean;
   privateDataReason?: string;
 };

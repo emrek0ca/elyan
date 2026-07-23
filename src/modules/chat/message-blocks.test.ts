@@ -6,6 +6,7 @@ import {
     buildAssistantMessageBlocks,
     normalizeAssistantMessageBlocks,
     composeAssistantMessageBlocks,
+  applyAssistantBlockSemanticQuality,
   evaluateAssistantBlockQuality,
   polishAssistantVisibleText,
   sanitizeAssistantVisibleText,
@@ -209,6 +210,34 @@ test("evaluateAssistantBlockQuality reports duplicate, malformed, and fallback s
   assert.ok(report.feedbackSignals.includes("duplicate_table_block"));
   assert.ok(report.feedbackSignals.includes("fallback_to_text"));
   assert.ok(report.score < 100);
+});
+
+test("semantic block quality cannot score structurally valid but incorrect data highly", () => {
+  const report = evaluateAssistantBlockQuality({
+    blocks: [
+      {
+        type: "table",
+        columns: ["Sayı", "Kare"],
+        rows: [["1", "1"], ["2", "3"], ["3", "9"]],
+      },
+    ],
+    content: "",
+    tablePolicy: "explicit_only",
+  });
+  const semantic = applyAssistantBlockSemanticQuality(report, {
+    sourceAuthority: "model_typed_block",
+    validationOk: false,
+    errorCodes: ["unsafe_math_mismatch"],
+  });
+
+  assert.ok(semantic.score <= 25);
+  assert.equal(semantic.sourceAuthority, "model_typed_block");
+  assert.deepEqual(semantic.semanticValidation, {
+    ok: false,
+    errorCodes: ["unsafe_math_mismatch"],
+  });
+  assert.ok(semantic.issues.includes("semantic_validation_failed"));
+  assert.ok(semantic.feedbackSignals.includes("semantic_validation_failed"));
 });
 
 test("elyan block schema accepts v2 math chart and table render metadata", () => {

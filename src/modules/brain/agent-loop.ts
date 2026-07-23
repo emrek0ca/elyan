@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import {
+  agentToolResultDigest,
   executeAgentTool,
   type AgentToolContext,
   type AgentToolRequest,
   type AgentToolResult,
 } from "./tool-registry.js";
+export { agentToolResultDigest } from "./tool-registry.js";
 import { createAgentRun, deriveAgentEvidence } from "./agent-engine.js";
 import { enqueueAgentRun } from "./agent-engine-queue.js";
 import { agentEngineRepository } from "./agent-engine-repository.js";
@@ -281,6 +283,7 @@ export function summarizeToolResultsForMetadata(results: AgentToolResult[]): Arr
     permission: result.permission,
     durationMs: result.durationMs,
     errorCode: result.error?.code ?? null,
+    resultDigest: result.ok ? agentToolResultDigest(result) : null,
     output:
       result.output == null
         ? null
