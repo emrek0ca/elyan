@@ -4,6 +4,7 @@ import { tasks } from "../../db/schema.js";
 import { extractFirstJsonObject } from "../brain/desktop-plan.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
+import { DESKTOP_SKILL_MANIFEST } from "./desktop-skill-manifest.js";
 import {
   MAX_WORK_ORDER_STEPS,
   type DesktopWorkOrder,
@@ -26,9 +27,10 @@ import {
  * Güvenlik: fail-SAFE. Basit görevler dokunulmaz (heuristik). Karmaşık görevde
  * herhangi bir hata/timeout/zayıf çıktı → work-order heuristik haliyle dispatch
  * edilir (görev asla bloklanmaz). Vokabüler = desktop'un TAM kataloğu
- * (DESKTOP_CAPABILITY_MANIFEST, 77 yetenek — runtime TOOL_DECLARATIONS'tan
- * üretilir); desktop planı yine KENDİ kataloğuna karşı doğrular, geçmezse mevcut
- * delegasyon davranışına düşer (regresyon yok).
+ * (DESKTOP_CAPABILITY_MANIFEST — runtime TOOL_DECLARATIONS'tan üretilir) ve
+ * skill kataloğu (DESKTOP_SKILL_MANIFEST — runtime skill_catalog'tan üretilir);
+ * desktop planı yine KENDİ kataloğuna karşı doğrular, geçmezse mevcut delegasyon
+ * davranışına düşer (regresyon yok).
  */
 
 // Sunucunun önerebileceği yetenekler = desktop'un TAM kataloğu (manifest).
@@ -153,6 +155,32 @@ function renderCapabilityCatalog(allowed: Set<string>): string {
     .join("\n");
 }
 
+function renderSkillCatalog(allowed: Set<string>): string {
+  if (!allowed.has("run_skill")) {
+    return "(run_skill is not allowed for this work order)";
+  }
+  return DESKTOP_SKILL_MANIFEST.map((entry) => {
+    const req =
+      entry.requiredParameters.length > 0
+        ? ` [payload required: ${entry.requiredParameters.join(", ")}]`
+        : "";
+    const params =
+      entry.parameters.length > 0
+        ? ` [payload fields: ${entry.parameters.join(", ")}]`
+        : "";
+    const steps =
+      entry.stepCapabilities.length > 0
+        ? ` [internal chain: ${entry.stepCapabilities.join(" -> ")}]`
+        : "";
+    const confirmation = entry.requiresConfirmation ? " [may need user approval]" : "";
+    const expected =
+      entry.expectedInputs.length > 0
+        ? ` [best inputs: ${entry.expectedInputs.join(", ")}]`
+        : "";
+    return `- ${entry.id} (${entry.name}, ${entry.category}): ${entry.description}${req}${params}${expected}${steps}${confirmation}`;
+  }).join("\n");
+}
+
 export function renderPlanningFewShots(): string {
   return [
     "EXAMPLES:",
@@ -228,6 +256,13 @@ export function renderPlanningFewShots(): string {
     '{"id":"s1","capability":"web_research","args":{"query":"2026 electric vehicle battery trends solid state LFP sodium ion market"},"dependsOn":[],"description":"Guncel kaynaklardan batarya trendlerini arastir"},',
     '{"id":"s2","capability":"document_write","args":{"title":"2026 Elektrikli Arac Batarya Trendleri","content":"{{steps.s1.output}}","format":"docx"},"dependsOn":["s1"],"description":"Arastirma sonucunu Word raporuna donustur"}',
     "]}",
+    "",
+    "Skill-backed prepared workflow:",
+    "Goal: Verilen analiz sonucundan profesyonel DOCX raporu hazirla ve kaydet.",
+    '{"steps":[',
+    '{"id":"s1","capability":"text_analyze","args":{"prompt":"Kullanici baglamini profesyonel rapor bolumlerine ayir","sourceContext":"Kullanici baglami ve onceki veriler","mode":"professional"},"dependsOn":[],"description":"Rapor icin baglami analiz et"},',
+    '{"id":"s2","capability":"run_skill","args":{"skillId":"document.docx_from_context","payload":{"title":"Profesyonel Rapor","text":"{{steps.s1.output}}","outputPath":"Profesyonel Rapor.docx"}},"dependsOn":["s1"],"description":"Hazir DOCX skill akisi ile raporu olustur ve kaydet"}',
+    "]}",
   ].join("\n");
 }
 
@@ -252,8 +287,11 @@ export function buildPlanningPrompt(
     `- language: ${language}`,
     entities ? `- entities:\n${entities}` : "- entities: (none)",
     "",
-    "CAPABILITY CATALOG (use ONLY these exact names; each line: name: what it does — when to use [required args][needs approval]):",
+    "TOOL CAPABILITY CATALOG (use ONLY these exact capability names; each line: name: what it does — when to use [required args][needs approval]):",
     renderCapabilityCatalog(new Set(allowed)),
+    "",
+    "SKILL CATALOG (prepared local workflows; execute them ONLY through capability run_skill with args.skillId and args.payload):",
+    renderSkillCatalog(new Set(allowed)),
     "",
     "RULES:",
     '- Output EXACTLY ONE JSON object, no prose, no markdown fences: {"steps":[...]}',
@@ -263,6 +301,8 @@ export function buildPlanningPrompt(
       ").",
     "- Order steps so each runs after its dependencies; set dependsOn to the ids whose output it consumes.",
     "- Always provide every listed required arg for a capability; put concrete values, use {{steps.<id>.output}} to consume a previous step's result.",
+    "- When a skill is a better fit than manually chaining primitive tools, create a step with capability \"run_skill\", args.skillId set to the exact skill id, and args.payload containing the skill's required payload fields. Do not invent capability names from skill ids.",
+    "- Choose between primitive tools and skills deliberately: use primitive tools when you need fine-grained research/read/analyze/write dependencies; use run_skill when the skill catalog describes the exact prepared workflow or artifact creation.",
     "- Args must contain executable data, not vague descriptions. Do not write placeholders such as \"the invoice total\", \"the research result\", or \"the user's file\" when a concrete value or dependency reference is available.",
     "- math_solve.args.expression MUST be a numeric/symbolic expression such as \"12000+8500\" or \"(12000+8500)*1.20\". Never pass an explanation like \"faturaların toplamı\" as expression.",
     "- For tax/VAT/KDV requests, decide whether the user asks for tax amount or tax-included total: KDV amount for 12000 and 8500 at 20% is \"(12000+8500)*0.20\"; tax-included total is \"(12000+8500)*1.20\".",

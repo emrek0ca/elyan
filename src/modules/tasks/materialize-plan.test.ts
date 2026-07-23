@@ -118,6 +118,35 @@ test("desktop materialization prompt teaches output artifact target selection", 
   assert.match(prompt, /For spreadsheet_write, provide concrete rows\/sheets/);
 });
 
+test("desktop materialization prompt exposes skills through run_skill contract", () => {
+  const prompt = buildPlanningPrompt(
+    workOrder(
+      "Verilen analiz sonucundan profesyonel DOCX raporu hazırla ve kaydet.",
+      ["text_analyze", "run_skill", "document_write"],
+    ),
+    ["text_analyze", "run_skill", "document_write"],
+  );
+
+  assert.match(prompt, /TOOL CAPABILITY CATALOG/);
+  assert.match(prompt, /SKILL CATALOG/);
+  assert.match(prompt, /document\.docx_from_context/);
+  assert.match(prompt, /execute them ONLY through capability run_skill with args\.skillId and args\.payload/);
+  assert.match(prompt, /capability":"run_skill"/);
+  assert.match(prompt, /"skillId":"document\.docx_from_context"/);
+  assert.match(prompt, /"payload":\{"title":"Profesyonel Rapor","text":"\{\{steps\.s1\.output\}\}","outputPath":"Profesyonel Rapor\.docx"\}/);
+  assert.match(prompt, /Do not invent capability names from skill ids/);
+});
+
+test("desktop materialization prompt hides skill execution when run_skill is not allowed", () => {
+  const prompt = buildPlanningPrompt(
+    workOrder("Kısa araştırma raporu hazırla.", ["web_research", "document_write"]),
+    ["web_research", "document_write"],
+  );
+
+  assert.match(prompt, /SKILL CATALOG/);
+  assert.match(prompt, /\(run_skill is not allowed for this work order\)/);
+});
+
 test("desktop materialization prompt teaches private read then writer handoff", () => {
   const prompt = buildPlanningPrompt(
     workOrder(
