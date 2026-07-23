@@ -46,6 +46,7 @@ import {
 import { evaluateBrainAnswer } from "./evaluator.js";
 import { resolveSharedBrainModel } from "./model-resolution.js";
 import { recordBrainInteractionReview } from "./review.js";
+import { buildTurnRuntimeStatePromptBlock } from "./turn-runtime-state.js";
 
 function recordBrainInteractionReviewBestEffort(
   app: FastifyInstance,
@@ -2994,6 +2995,15 @@ function buildCompactContextPromptBlock(
   input: SharedBrainInferenceInput,
 ): string | null {
   const metadata = readMetadataRecord(input.requestMetadata);
+  const turnRuntimeStateBlock = buildTurnRuntimeStatePromptBlock({
+    prompt: input.prompt,
+    conversation: input.conversation,
+    requestMetadata: metadata,
+    route: input.route ?? "shared_brain",
+    workload:
+      input.workload ?? input.routeDecision?.selectedWorkload ?? "unknown",
+    taskId: input.taskId ?? null,
+  });
   const trustedDialogueMetadata = isTrustedDialogueStateMetadata(metadata, {
     userId: input.userId,
     sessionId: resolveDialogueStateSessionId(input.requestMetadata),
@@ -3216,6 +3226,7 @@ function buildCompactContextPromptBlock(
 
   // ── Compose sections ──
   const sections: string[] = [];
+  if (turnRuntimeStateBlock) sections.push(turnRuntimeStateBlock);
   if (stateLines.length) sections.push(`[STATE]\n${stateLines.join("\n")}`);
   if (goalLines.length) {
     sections.push(
