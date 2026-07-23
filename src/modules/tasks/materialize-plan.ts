@@ -137,6 +137,18 @@ function buildAllowedCapabilities(workOrder: DesktopWorkOrder): string[] {
   return [...union];
 }
 
+function compactCatalogValue(value: unknown, max = 420): string {
+  if (value === null || value === undefined) return "";
+  const text =
+    typeof value === "string"
+      ? value
+      : Array.isArray(value)
+        ? value.map((item) => String(item ?? "").trim()).filter(Boolean).join("; ")
+        : JSON.stringify(value);
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > max ? `${normalized.slice(0, max - 1).trim()}…` : normalized;
+}
+
 function renderCapabilityCatalog(allowed: Set<string>): string {
   // Manifest'ten yalnız izinli olanları, her yeteneğin ne zaman kullanılacağı
   // (usage) + gerekli argümanları + onay bayrağı ile listele. Bu, modelin
@@ -150,7 +162,16 @@ function renderCapabilityCatalog(allowed: Set<string>): string {
           : "";
       const approval = entry.requiresApproval ? " [needs user approval]" : "";
       const usage = entry.usage ? ` — ${entry.usage}` : "";
-      return `- ${entry.name}: ${entry.description}${usage}${req}${approval}`;
+      const when = entry.whenToUse.length > 0 ? ` | use: ${compactCatalogValue(entry.whenToUse, 260)}` : "";
+      const avoid = entry.whenNotToUse.length > 0 ? ` | avoid: ${compactCatalogValue(entry.whenNotToUse, 220)}` : "";
+      const input = Object.keys(entry.inputContract).length > 0 ? ` | input: ${compactCatalogValue(entry.inputContract, 280)}` : "";
+      const output = Object.keys(entry.outputContract).length > 0 ? ` | output: ${compactCatalogValue(entry.outputContract, 220)}` : "";
+      const artifact = Object.keys(entry.artifactContract).length > 0 ? ` | artifact: ${compactCatalogValue(entry.artifactContract, 220)}` : "";
+      const verify = entry.verificationPlan.length > 0 ? ` | verify: ${compactCatalogValue(entry.verificationPlan, 260)}` : "";
+      const live = entry.liveNarration.length > 0 ? ` | live: ${compactCatalogValue(entry.liveNarration, 180)}` : "";
+      const privacy = entry.privacyClass ? ` | privacy: ${entry.privacyClass}` : "";
+      const skills = entry.skillAffinity.length > 0 ? ` | related skills: ${entry.skillAffinity.join(", ")}` : "";
+      return `- ${entry.name}: ${entry.description}${usage}${req}${approval}${when}${avoid}${input}${output}${artifact}${verify}${live}${privacy}${skills}`;
     })
     .join("\n");
 }
@@ -177,7 +198,13 @@ function renderSkillCatalog(allowed: Set<string>): string {
       entry.expectedInputs.length > 0
         ? ` [best inputs: ${entry.expectedInputs.join(", ")}]`
         : "";
-    return `- ${entry.id} (${entry.name}, ${entry.category}): ${entry.description}${req}${params}${expected}${steps}${confirmation}`;
+    const when = entry.whenToUse.length > 0 ? ` | use: ${compactCatalogValue(entry.whenToUse, 260)}` : "";
+    const avoid = entry.whenNotToUse.length > 0 ? ` | avoid: ${compactCatalogValue(entry.whenNotToUse, 220)}` : "";
+    const input = Object.keys(entry.inputContract).length > 0 ? ` | payload contract: ${compactCatalogValue(entry.inputContract, 260)}` : "";
+    const output = Object.keys(entry.outputContract).length > 0 ? ` | output: ${compactCatalogValue(entry.outputContract, 220)}` : "";
+    const verify = entry.verificationPlan.length > 0 ? ` | verify: ${compactCatalogValue(entry.verificationPlan, 220)}` : "";
+    const live = entry.liveNarration.length > 0 ? ` | live: ${compactCatalogValue(entry.liveNarration, 160)}` : "";
+    return `- ${entry.id} (${entry.name}, ${entry.category}): ${entry.description}${req}${params}${expected}${steps}${confirmation}${when}${avoid}${input}${output}${verify}${live}`;
   }).join("\n");
 }
 

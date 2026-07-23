@@ -185,6 +185,42 @@ test("desktop materialization prompt exposes skills through run_skill contract",
   assert.match(prompt, /Do not invent capability names from skill ids/);
 });
 
+test("desktop materialization prompt exposes v2 capability quality contracts", () => {
+  const prompt = buildPlanningPrompt(
+    workOrder(
+      "Ekranı oku, sonra bu konuşmayı PDF yap ve gerekirse Excel tablosuna dönüştür.",
+      [
+        "analyze_screen",
+        "desktop_operator.observe_screen",
+        "desktop_operator.run",
+        "canvas_write",
+        "spreadsheet_write",
+        "document_write",
+        "run_skill",
+      ],
+    ),
+    [
+      "analyze_screen",
+      "desktop_operator.observe_screen",
+      "desktop_operator.run",
+      "canvas_write",
+      "spreadsheet_write",
+      "document_write",
+      "run_skill",
+    ],
+  );
+
+  assert.match(prompt, /canvas_write: PDF\/PNG canvas çıktısı üretir/);
+  assert.match(prompt, /artifact: .*"artifactTypes":\["pdf","image"\]/);
+  assert.match(prompt, /spreadsheet_write: XLSX\/Excel çalışma kitabı üretir/);
+  assert.match(prompt, /output: .*"formats":\["xlsx"\]/);
+  assert.match(prompt, /analyze_screen: Aktif pencereyi kullanıcı sorusuna göre görsel olarak analiz eder/);
+  assert.match(prompt, /privacy: local_private_screen/);
+  assert.match(prompt, /desktop_operator\.run: Çok adımlı observe→decide→act→verify ekran otomasyonu hedefini yürütür/);
+  assert.match(prompt, /verify: .*Operator loop must stop on success/);
+  assert.match(prompt, /input: .*"skillIdMustExistInCatalog":true/);
+});
+
 test("desktop materialization prompt teaches data versus screen action plan modes", () => {
   const prompt = buildPlanningPrompt(
     workOrder(

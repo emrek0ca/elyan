@@ -20,6 +20,14 @@ export type DesktopSkillManifestEntry = {
   latencyClass: string;
   selectionPriority: number;
   requiresConfirmation: boolean;
+  whenToUse: string[];
+  whenNotToUse: string[];
+  inputContract: Record<string, unknown>;
+  outputContract: Record<string, unknown>;
+  verificationPlan: string[];
+  liveNarration: string[];
+  failureModes: string[];
+  fewShots: Array<Record<string, unknown>>;
 };
 
 export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
@@ -55,7 +63,46 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "quick",
     "selectionPriority": 99,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Denklem ve ifadeleri çözer, sadeleştirir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "expression"
+      ],
+      "acceptedPayloadFields": [
+        "expression",
+        "mode"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "math_solve",
+      "stepCapabilities": [
+        "math_solve"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "document.summary_and_save",
@@ -108,7 +155,53 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 2,
     "latencyClass": "slow",
     "selectionPriority": 96,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Belgeyi veya paylaşılan metni özetler ve masaüstüne DOCX olarak kaydeder."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "outputPath"
+      ],
+      "acceptedPayloadFields": [
+        "path",
+        "text",
+        "selectedPaths",
+        "outputPath",
+        "title",
+        "overwrite"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "document_write",
+      "stepCapabilities": [
+        "document_read",
+        "document_write"
+      ],
+      "outputFormats": [
+        "docx"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "latex.parse",
@@ -145,7 +238,46 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "quick",
     "selectionPriority": 95,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "LaTeX ifadesini sembolik forma dönüştürür."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "expression"
+      ],
+      "acceptedPayloadFields": [
+        "expression",
+        "mode"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "latex_parse",
+      "stepCapabilities": [
+        "latex_parse"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "research.present",
@@ -198,7 +330,54 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 2,
     "latencyClass": "slow",
     "selectionPriority": 94,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Konuyu web üzerinde araştırır ve bulguları bir sunuma (PPTX) dönüştürür."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "query",
+        "outputPath"
+      ],
+      "acceptedPayloadFields": [
+        "query",
+        "outputPath",
+        "title",
+        "maxResults",
+        "languageHint",
+        "overwrite"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "presentation_write",
+      "stepCapabilities": [
+        "web_research",
+        "presentation_write"
+      ],
+      "outputFormats": [
+        "pptx"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "research.report",
@@ -251,7 +430,54 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 2,
     "latencyClass": "slow",
     "selectionPriority": 94,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Konuyu web üzerinde araştırır ve kaynaklı bir DOCX rapor olarak belgeler."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "query",
+        "outputPath"
+      ],
+      "acceptedPayloadFields": [
+        "query",
+        "outputPath",
+        "title",
+        "maxResults",
+        "languageHint",
+        "overwrite"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "document_write",
+      "stepCapabilities": [
+        "web_research",
+        "document_write"
+      ],
+      "outputFormats": [
+        "docx"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "document.bullets",
@@ -287,7 +513,45 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "quick",
     "selectionPriority": 91,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Belgeyi maddeler halinde çıkarır."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "path"
+      ],
+      "acceptedPayloadFields": [
+        "path"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "document_read",
+      "stepCapabilities": [
+        "document_read"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "document.summary",
@@ -323,7 +587,45 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "quick",
     "selectionPriority": 91,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Belgeyi kısa özet olarak çıkarır."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "path"
+      ],
+      "acceptedPayloadFields": [
+        "path"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "document_read",
+      "stepCapabilities": [
+        "document_read"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "file.explain",
@@ -360,7 +662,45 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "quick",
     "selectionPriority": 91,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Belgeyi sade şekilde açıklar."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "path"
+      ],
+      "acceptedPayloadFields": [
+        "path"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "document_read",
+      "stepCapabilities": [
+        "document_read"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "data.analyze_and_chart",
@@ -412,7 +752,52 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 2,
     "latencyClass": "medium",
     "selectionPriority": 90,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Veri dosyasını analiz eder ve ardından grafiğini çizer."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "path"
+      ],
+      "acceptedPayloadFields": [
+        "path",
+        "mode",
+        "columns",
+        "chartType",
+        "xColumn",
+        "yColumn",
+        "title"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "chart_generate",
+      "stepCapabilities": [
+        "data_analyze",
+        "chart_generate"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "research.brief",
@@ -458,7 +843,48 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 88,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Yerel bağlam ve çalışma alanından kısa, kaynaklı araştırma özeti üretir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "query"
+      ],
+      "acceptedPayloadFields": [
+        "query",
+        "sources",
+        "limit",
+        "conversationId"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "retrieve_context",
+      "stepCapabilities": [
+        "retrieve_context"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "source.verify",
@@ -502,7 +928,48 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 88,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Soru için kısa kaynak kontrolü yapar."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "query"
+      ],
+      "acceptedPayloadFields": [
+        "query",
+        "sources",
+        "limit",
+        "conversationId"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "retrieve_context",
+      "stepCapabilities": [
+        "retrieve_context"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "workspace.answer",
@@ -545,7 +1012,47 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 88,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Çalışma alanından cevap hazırlamak için bağlam toplar."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "query"
+      ],
+      "acceptedPayloadFields": [
+        "query",
+        "limit",
+        "conversationId"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "retrieve_context",
+      "stepCapabilities": [
+        "retrieve_context"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "browser.open",
@@ -580,7 +1087,45 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "quick",
     "selectionPriority": 87,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Belirli bir URL'yi güvenli şekilde açar."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "url"
+      ],
+      "acceptedPayloadFields": [
+        "url"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "browser_control",
+      "stepCapabilities": [
+        "browser_control"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "browser.search",
@@ -614,7 +1159,45 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "quick",
     "selectionPriority": 87,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Tarayıcıda güvenli web araması açar."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "query"
+      ],
+      "acceptedPayloadFields": [
+        "query"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "browser_control",
+      "stepCapabilities": [
+        "browser_control"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "web.research",
@@ -656,7 +1239,47 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 86,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Public web üzerinde kaynak toplayıp kısa bir araştırma özeti üretir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "query"
+      ],
+      "acceptedPayloadFields": [
+        "query",
+        "maxResults",
+        "languageHint"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "web_research",
+      "stepCapabilities": [
+        "web_research"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "web.collect_download",
@@ -704,7 +1327,49 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 3,
     "latencyClass": "quick",
     "selectionPriority": 83,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Bir web sayfasından link listesi toplar ve her birini belirtilen klasöre indirir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "goal",
+        "outputDir"
+      ],
+      "acceptedPayloadFields": [
+        "goal",
+        "outputDir"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "browser_agent.run",
+      "stepCapabilities": [
+        "make_directory",
+        "browser_agent.run",
+        "browser_session.download"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "data.analyze",
@@ -745,7 +1410,47 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 82,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "CSV veya JSON veriyi profil/özet olarak analiz eder."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "path"
+      ],
+      "acceptedPayloadFields": [
+        "path",
+        "mode",
+        "columns"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "data_analyze",
+      "stepCapabilities": [
+        "data_analyze"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "ocr.read",
@@ -786,7 +1491,47 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 80,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Görsel veya PDF içinden metin okur."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "path"
+      ],
+      "acceptedPayloadFields": [
+        "path",
+        "mode",
+        "languageHint"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "ocr_read",
+      "stepCapabilities": [
+        "ocr_read"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "canvas.write",
@@ -844,7 +1589,56 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "slow",
     "selectionPriority": 78,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Metin, tablo, grafik ve görselleri tek bir PDF veya PNG canvas çıktısında birleştirir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [],
+      "acceptedPayloadFields": [
+        "prompt",
+        "outputPath",
+        "title",
+        "blocks",
+        "sections",
+        "outputFormat",
+        "width",
+        "height",
+        "sourceContext",
+        "sourcePath",
+        "overwrite"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "canvas_write",
+      "stepCapabilities": [
+        "canvas_write"
+      ],
+      "outputFormats": [
+        "pdf",
+        "png"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "document.docx_from_context",
@@ -887,7 +1681,50 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "slow",
     "selectionPriority": 78,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Bağlam veya kaynak belgeden DOCX üretir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [],
+      "acceptedPayloadFields": [
+        "prompt",
+        "outputPath",
+        "title",
+        "sourcePath",
+        "sourceContext",
+        "overwrite"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "document_write",
+      "stepCapabilities": [
+        "document_write"
+      ],
+      "outputFormats": [
+        "docx"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "document.presentation_from_context",
@@ -930,7 +1767,50 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "slow",
     "selectionPriority": 78,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Bağlamdan hızlı bir sunum üretir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [],
+      "acceptedPayloadFields": [
+        "prompt",
+        "outputPath",
+        "title",
+        "slides",
+        "sourceContext",
+        "overwrite"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "presentation_write",
+      "stepCapabilities": [
+        "presentation_write"
+      ],
+      "outputFormats": [
+        "pptx"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "document.report_from_context",
@@ -981,7 +1861,55 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 2,
     "latencyClass": "slow",
     "selectionPriority": 78,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Bağlamı toplayıp DOCX rapora dönüştürür."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "query",
+        "outputPath"
+      ],
+      "acceptedPayloadFields": [
+        "query",
+        "outputPath",
+        "title",
+        "sources",
+        "limit",
+        "conversationId",
+        "overwrite"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "document_write",
+      "stepCapabilities": [
+        "retrieve_context",
+        "document_write"
+      ],
+      "outputFormats": [
+        "docx"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "document.xlsx_from_rows",
@@ -1024,7 +1952,51 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "slow",
     "selectionPriority": 78,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Satırlardan XLSX üretir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [],
+      "acceptedPayloadFields": [
+        "prompt",
+        "outputPath",
+        "title",
+        "columns",
+        "rows",
+        "sourceContext",
+        "overwrite"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "spreadsheet_write",
+      "stepCapabilities": [
+        "spreadsheet_write"
+      ],
+      "outputFormats": [
+        "xlsx"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "image.describe",
@@ -1060,7 +2032,46 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 78,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Bir görseli açıklar veya özetler."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "path"
+      ],
+      "acceptedPayloadFields": [
+        "path",
+        "mode"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "image_read",
+      "stepCapabilities": [
+        "image_read"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "chart.generate",
@@ -1103,7 +2114,49 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 74,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Veri kümesinden hızlı bir grafik oluşturur."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "path"
+      ],
+      "acceptedPayloadFields": [
+        "path",
+        "chartType",
+        "xColumn",
+        "yColumn",
+        "title"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "chart_generate",
+      "stepCapabilities": [
+        "chart_generate"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "screen.explain",
@@ -1145,7 +2198,44 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "quick",
     "selectionPriority": 63,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Ekranda ne olduğunu gözlemler ve açıklar; öğe ve hedef önerileri çıkarır."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [],
+      "acceptedPayloadFields": [
+        "query",
+        "target"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "desktop_operator.observe_screen",
+      "stepCapabilities": [
+        "desktop_operator.observe_screen"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "image.edit",
@@ -1195,7 +2285,57 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "slow",
     "selectionPriority": 62,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Seçili görseli Gemini ile düzenler ve yeni dosya üretir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "prompt",
+        "sourcePath",
+        "outputPath"
+      ],
+      "acceptedPayloadFields": [
+        "prompt",
+        "sourcePath",
+        "sourcePaths",
+        "outputPath",
+        "title",
+        "aspectRatio",
+        "imageSize"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "image_edit",
+      "stepCapabilities": [
+        "image_edit"
+      ],
+      "outputFormats": [
+        "png",
+        "jpg",
+        "webp"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "image.generate",
@@ -1241,7 +2381,54 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "slow",
     "selectionPriority": 62,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Gemini Interactions API ile yüksek kaliteli görsel üretir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "prompt",
+        "outputPath"
+      ],
+      "acceptedPayloadFields": [
+        "prompt",
+        "outputPath",
+        "title",
+        "aspectRatio",
+        "imageSize"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "image_generate",
+      "stepCapabilities": [
+        "image_generate"
+      ],
+      "outputFormats": [
+        "png",
+        "jpg",
+        "webp"
+      ]
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "mcp.readonly_tool_proxy",
@@ -1281,7 +2468,48 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "medium",
     "selectionPriority": 60,
-    "requiresConfirmation": false
+    "requiresConfirmation": false,
+    "whenToUse": [
+      "Read-only MCP aracini preset olarak cagirir."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [
+        "serverId",
+        "toolName"
+      ],
+      "acceptedPayloadFields": [
+        "serverId",
+        "toolName",
+        "arguments"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "mcp_call_tool",
+      "stepCapabilities": [
+        "mcp_call_tool"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   },
   {
     "id": "desktop.operator.run",
@@ -1334,6 +2562,48 @@ export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = [
     "stepCount": 1,
     "latencyClass": "slow",
     "selectionPriority": 54,
-    "requiresConfirmation": true
+    "requiresConfirmation": true,
+    "whenToUse": [
+      "Observe -> locate -> execute -> verify döngüsüyle görev tabanlı masaüstü akışı çalıştırır."
+    ],
+    "whenNotToUse": [
+      "Katalogdaki workflow hedefe bire bir uymuyorsa primitive capability zinciri kur."
+    ],
+    "inputContract": {
+      "requiredPayloadFields": [],
+      "acceptedPayloadFields": [
+        "goal",
+        "action",
+        "targetText",
+        "elementType",
+        "text",
+        "appName",
+        "steps"
+      ]
+    },
+    "outputContract": {
+      "kind": "run_skill",
+      "adapter": "desktop_operator.run",
+      "stepCapabilities": [
+        "desktop_operator.run"
+      ],
+      "outputFormats": []
+    },
+    "verificationPlan": [
+      "Skill id katalogda bulunmalı.",
+      "Payload requiredParameters alanlarını içermeli.",
+      "Son adım sonucu doğrulanmalı."
+    ],
+    "liveNarration": [
+      "Hazır beceri seçiliyor.",
+      "Beceri adımları yürütülüyor.",
+      "Sonuç doğrulanıyor."
+    ],
+    "failureModes": [
+      "UNKNOWN_SKILL",
+      "MISSING_PAYLOAD_FIELD",
+      "STEP_FAILED"
+    ],
+    "fewShots": []
   }
 ];
