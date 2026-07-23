@@ -142,6 +142,19 @@ def _resolve_templates(value: Any, namespace: dict[str, Any]) -> Any:
     return _TEMPLATE_RE.sub(_substitute, value)
 
 
+def _dependency_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result")
+    structured: dict[str, Any] = dict(result) if isinstance(result, dict) else {}
+    output = str(payload.get("output", "") or "")
+    artifacts = payload.get("artifacts")
+    if output and not structured.get("output"):
+        structured["output"] = output
+    structured["_output"] = output
+    structured["result"] = result if result is not None else {}
+    structured["_artifacts"] = list(artifacts) if isinstance(artifacts, list) else []
+    return structured
+
+
 def _template_step_ids(value: Any) -> set[str]:
     if isinstance(value, dict):
         result: set[str] = set()
@@ -1526,9 +1539,9 @@ class ExecutorCore:
                         }
                         if dependency_payloads:
                             args["_dependencyResults"] = {
-                                dep_id: dict(payload.get("result", {}))
+                                dep_id: _dependency_payload(payload)
                                 for dep_id, payload in dependency_payloads.items()
-                                if isinstance(payload.get("result"), dict)
+                                if isinstance(payload, dict)
                             }
                             args["_dependencyArtifacts"] = {
                                 dep_id: list(payload.get("artifacts", []))

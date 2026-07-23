@@ -1621,6 +1621,88 @@ def test_quantum_model_problem_accepts_structured_optimization_payload(
     assert model["qubo"]["capacity"] == 5.0
 
 
+def test_executor_dependency_payload_preserves_output_and_structured_result() -> None:
+    from runtime.executor_core import _dependency_payload
+
+    payload = _dependency_payload(
+        {
+            "output": "2 kaynak bulundu.",
+            "result": {
+                "kind": "web_research",
+                "summary": "KDV oranı hakkında kaynak özeti.",
+                "sources": [{"title": "Kaynak", "url": "https://example.test"}],
+            },
+            "artifacts": [{"kind": "data", "path": "/tmp/result.json"}],
+        }
+    )
+
+    assert payload["kind"] == "web_research"
+    assert payload["summary"] == "KDV oranı hakkında kaynak özeti."
+    assert payload["output"] == "2 kaynak bulundu."
+    assert payload["_output"] == "2 kaynak bulundu."
+    assert payload["result"]["sources"][0]["title"] == "Kaynak"
+    assert payload["_artifacts"][0]["kind"] == "data"
+
+
+def test_executor_passes_rich_dependency_payload_to_dependent_steps(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    from runtime.executor_core import ExecutorCore
+
+    captured: dict[str, object] = {}
+
+    def fake_execute_step(capability: str, args: dict[str, object], _state: dict[str, object], _source: str):
+        if capability == "web_research":
+            return (
+                {
+                    "ok": True,
+                    "output": "2 kaynak bulundu.",
+                    "result": {
+                        "kind": "web_research",
+                        "summary": "KDV oranı kaynak özeti.",
+                        "sources": [{"title": "Kaynak", "url": "https://example.test"}],
+                    },
+                    "artifacts": [{"kind": "data", "path": "/tmp/sources.json"}],
+                },
+                [],
+            )
+        captured.update(args)
+        return (
+            {
+                "ok": True,
+                "output": "Analiz tamamlandı.",
+                "result": {"kind": "text_analyze", "summary": "Bağlam korundu."},
+                "artifacts": [],
+            },
+            [],
+        )
+
+    ok, *_rest = ExecutorCore().execute_plan_steps(
+        steps=[
+            {"id": "research", "capability": "web_research", "args": {"query": "KDV oranı"}},
+            {
+                "id": "analyze",
+                "capability": "text_analyze",
+                "args": {"prompt": "Araştırmayı analiz et"},
+                "dependsOn": ["research"],
+            },
+        ],
+        state_factory=state_store.snapshot,
+        execute_step=fake_execute_step,
+        source="test",
+    )
+
+    assert ok is True
+    dependency_results = captured["_dependencyResults"]
+    assert dependency_results["research"]["kind"] == "web_research"
+    assert dependency_results["research"]["output"] == "2 kaynak bulundu."
+    assert dependency_results["research"]["_output"] == "2 kaynak bulundu."
+    assert dependency_results["research"]["result"]["sources"][0]["title"] == "Kaynak"
+    assert dependency_results["research"]["_artifacts"][0]["kind"] == "data"
+
+
 def test_document_write_creates_docx_in_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
