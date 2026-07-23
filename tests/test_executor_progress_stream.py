@@ -110,3 +110,44 @@ def test_progress_marks_cancellation_as_canceled() -> None:
     assert captured[-1]["status"] == "canceled"
     assert captured[-1]["stopReason"] == "execution_cancelled"
     assert [step["status"] for step in captured[-1]["steps"]] == ["completed", "pending"]
+
+
+def test_progress_uses_human_labels_for_professional_and_decision_steps() -> None:
+    ex = ExecutorCore()
+    captured: list[dict] = []
+    ex.set_progress_emitter(lambda cid, block: captured.append(block))
+
+    steps = [
+        {"id": "read", "capability": "document_read", "args": {"text": "Hb 10.5"}},
+        {"id": "calc", "capability": "math_solve", "args": {"expression": "12000+8500"}, "dependsOn": ["read"]},
+        {
+            "id": "model",
+            "capability": "quantum_model_problem",
+            "args": {"prompt": "capacity 10", "problemClass": "optimization"},
+            "dependsOn": ["calc"],
+        },
+        {
+            "id": "report",
+            "capability": "quantum_generate_report",
+            "args": {"prompt": "rapor"},
+            "dependsOn": ["model"],
+        },
+        {"id": "mcp", "capability": "mcp_tool_call", "args": {"name": "safe.read"}, "dependsOn": ["report"]},
+    ]
+    ex.execute_plan_steps(
+        steps=steps,
+        state_factory=lambda: {},
+        execute_step=_ok_step,
+        source="confirmed_plan",
+        conversation_id="conv_labels",
+    )
+
+    assert captured
+    final = captured[-1]
+    assert [step["label"] for step in final["steps"]] == [
+        "Belge okunuyor",
+        "Hesaplanıyor",
+        "Problem modelleniyor",
+        "Karar raporu hazırlanıyor",
+        "Uygulama aracı çalışıyor",
+    ]

@@ -476,6 +476,7 @@ class ExecutorCore:
 
     _CAPABILITY_LABELS: dict[str, str] = {
         "web_research": "Araştırılıyor",
+        "document_read": "Belge okunuyor",
         "document_write": "Belge yazılıyor",
         "spreadsheet_write": "Tablo hazırlanıyor",
         "presentation_write": "Sunum hazırlanıyor",
@@ -497,6 +498,13 @@ class ExecutorCore:
         "browser_control": "Tarayıcı",
         "web_search": "Web araması",
         "mcp_call_tool": "Uygulama aracı",
+        "mcp_tool_call": "Uygulama aracı çalışıyor",
+        "math_solve": "Hesaplanıyor",
+        "symbolic_math": "Sembolik çözüm yapılıyor",
+        "quantum_model_problem": "Problem modelleniyor",
+        "quantum_run_experiment": "Çözüm deneniyor",
+        "quantum_compare_classical": "Çözüm doğrulanıyor",
+        "quantum_generate_report": "Karar raporu hazırlanıyor",
     }
 
     @classmethod
