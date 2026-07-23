@@ -1310,6 +1310,35 @@ def test_data_analyze_json_profile_and_selected_external_path(
     assert result["result"]["sourcePath"] == str(outside.resolve())
 
 
+def test_data_analyze_accepts_nested_dataset_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions._data_common as data_common
+    import runtime.capability_registry as registry
+
+    file_path = tmp_path / "kdv.csv"
+    file_path.write_text("kalem,tutar,kdv\nHizmet,1000,200\nUrun,500,100\n", encoding="utf-8")
+    monkeypatch.setattr(data_common, "_workspace_root", lambda: tmp_path)
+
+    result = registry.run_capability(
+        "data_analyze",
+        {
+            "dataset": {
+                "filePath": str(file_path),
+                "columns": ["kalem", "kdv"],
+            },
+            "analysisMode": "preview",
+        },
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["columns"] == ["kalem", "kdv"]
+    assert result["result"]["previewRows"][0]["kdv"] == 200
+
+
 def test_data_analyze_blocks_external_path_without_selection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1362,6 +1391,39 @@ def test_chart_generate_creates_png_artifact(
     assert artifact_path.exists()
     assert artifact_path.suffix.lower() == ".png"
     assert result["artifacts"][0]["contentType"] == "image/png"
+
+
+def test_chart_generate_accepts_nested_chart_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions._data_common as data_common
+    import runtime.capability_registry as registry
+
+    file_path = tmp_path / "kdv.csv"
+    file_path.write_text("kalem,tutar,kdv\nHizmet,1000,200\nUrun,500,100\n", encoding="utf-8")
+    monkeypatch.setattr(data_common, "_workspace_root", lambda: tmp_path)
+
+    result = registry.run_capability(
+        "chart_generate",
+        {
+            "dataset": {"filePath": str(file_path)},
+            "chart": {
+                "type": "bar",
+                "x": "kalem",
+                "y": "kdv",
+                "title": "KDV Ozeti",
+            },
+        },
+        state_store.snapshot(),
+    )
+
+    artifact_path = Path(result["result"]["artifactPath"])
+    assert result["ok"] is True
+    assert result["result"]["xColumn"] == "kalem"
+    assert result["result"]["yColumn"] == "kdv"
+    assert artifact_path.exists()
 
 
 def test_chart_generate_missing_dependency_fails_safely(

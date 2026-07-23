@@ -2283,6 +2283,76 @@ def _presentation_payload(args: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _path_arg(args: dict[str, Any], *containers: str) -> str:
+    path = _first_non_empty_text(
+        args,
+        "path",
+        "filePath",
+        "file_path",
+        "sourcePath",
+        "source_path",
+        "inputPath",
+        "input_path",
+        "datasetPath",
+        "dataset_path",
+    )
+    if path:
+        return path
+    for container_key in containers:
+        container = _first_dict(args, container_key)
+        if not container:
+            continue
+        path = _first_non_empty_text(
+            container,
+            "path",
+            "filePath",
+            "file_path",
+            "sourcePath",
+            "source_path",
+            "inputPath",
+            "input_path",
+            "datasetPath",
+            "dataset_path",
+        )
+        if path:
+            return path
+    return ""
+
+
+def _columns_arg(args: dict[str, Any], *containers: str) -> list[Any] | None:
+    columns = _first_list(args, "columns", "fields", "headers", "selectedColumns", "selected_columns")
+    if columns is not None:
+        return columns
+    for container_key in containers:
+        container = _first_dict(args, container_key)
+        if not container:
+            continue
+        columns = _first_list(container, "columns", "fields", "headers", "selectedColumns", "selected_columns")
+        if columns is not None:
+            return columns
+    return None
+
+
+def _chart_payload(args: dict[str, Any]) -> dict[str, Any]:
+    chart = _first_dict(args, "chart", "visualization", "visualisation", "graph", "plot")
+    payload: dict[str, Any] = {
+        "path": _path_arg(args, "chart", "visualization", "visualisation", "graph", "plot", "dataset", "data"),
+        "chartType": _first_non_empty_text(args, "chartType", "chart_type", "type", "kind"),
+        "xColumn": _first_non_empty_text(args, "xColumn", "x_column", "x", "xAxis", "x_axis", "categoryColumn", "category_column"),
+        "yColumn": _first_non_empty_text(args, "yColumn", "y_column", "y", "yAxis", "y_axis", "valueColumn", "value_column", "metricColumn", "metric_column"),
+        "title": _first_non_empty_text(args, "title", "name", "caption"),
+        "outputPath": _first_non_empty_text(args, "outputPath", "output_path", "destination", "dest"),
+    }
+    if chart:
+        payload["chartType"] = payload["chartType"] or _first_non_empty_text(chart, "chartType", "chart_type", "type", "kind")
+        payload["xColumn"] = payload["xColumn"] or _first_non_empty_text(chart, "xColumn", "x_column", "x", "xAxis", "x_axis", "categoryColumn", "category_column")
+        payload["yColumn"] = payload["yColumn"] or _first_non_empty_text(chart, "yColumn", "y_column", "y", "yAxis", "y_axis", "valueColumn", "value_column", "metricColumn", "metric_column")
+        payload["title"] = payload["title"] or _first_non_empty_text(chart, "title", "name", "caption")
+        payload["outputPath"] = payload["outputPath"] or _first_non_empty_text(chart, "outputPath", "output_path", "destination", "dest")
+    payload["chartType"] = payload["chartType"] or "bar"
+    return payload
+
+
 def _quantum_problem_payload(args: dict[str, Any]) -> dict[str, Any] | None:
     problem = _first_dict(
         args,
@@ -2451,6 +2521,19 @@ def _run_presentation_write(args: dict[str, Any]) -> Any:
     )
 
 
+def _run_chart_generate(args: dict[str, Any]) -> Any:
+    payload = _chart_payload(args)
+    return _load_adapter("chart_generate")(
+        payload["path"],
+        payload["chartType"],
+        payload["xColumn"],
+        payload["yColumn"],
+        payload["title"],
+        payload["outputPath"],
+        list(args.get("_selectedPaths", []) or []),
+    )
+
+
 def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
     handlers: dict[str, Callable[[dict[str, Any]], Any]] = {
         "open_app": lambda args: _load_adapter("open_app")(str(args.get("app_name", ""))),
@@ -2569,19 +2652,19 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             str(args.get("app_target", "auto") or "auto"),
         ),
         "document_read": lambda args: _load_adapter("document_read")(
-            str(args.get("path", "") or ""),
+            _path_arg(args, "document", "doc", "file", "source"),
             str(args.get("mode", "read") or "read"),
             str(args.get("text", "") or args.get("content", "") or ""),
             list(args.get("_selectedPaths", []) or []),
         ),
         "ocr_read": lambda args: _load_adapter("ocr_read")(
-            str(args.get("path", "") or ""),
+            _path_arg(args, "image", "document", "file", "source"),
             str(args.get("mode", "read") or "read"),
             str(args.get("languageHint", "") or args.get("language_hint", "") or ""),
             list(args.get("_selectedPaths", []) or []),
         ),
         "image_read": lambda args: _load_adapter("image_read")(
-            str(args.get("path", "") or ""),
+            _path_arg(args, "image", "visual", "file", "source"),
             str(args.get("mode", "summary") or "summary"),
             list(args.get("_selectedPaths", []) or []),
         ),
@@ -2614,7 +2697,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             overwrite=bool(args.get("overwrite", False)),
         ),
         "file_read": lambda args: _load_adapter("file_read")(
-            str(args.get("path", "") or ""),
+            _path_arg(args, "file", "source", "document"),
             _as_int(args.get("max_bytes") if args.get("max_bytes") is not None else args.get("maxBytes"), 400000),
             _as_int(args.get("start_line") if args.get("start_line") is not None else args.get("startLine"), 0),
             _as_int(args.get("end_line") if args.get("end_line") is not None else args.get("endLine"), 0),
@@ -2666,9 +2749,9 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             _confirmed=bool(args.get("_confirmed", False)),
         ),
         "data_analyze": lambda args: _load_adapter("data_analyze")(
-            str(args.get("path", "") or ""),
-            str(args.get("mode", "summary") or "summary"),
-            args.get("columns") if isinstance(args.get("columns"), list) else None,
+            _path_arg(args, "dataset", "data", "table", "spreadsheet", "file", "source"),
+            str(args.get("mode", "") or args.get("analysisMode", "") or args.get("analysis_mode", "") or "summary"),
+            _columns_arg(args, "dataset", "data", "table", "spreadsheet"),
             list(args.get("_selectedPaths", []) or []),
         ),
         "text_analyze": lambda args: _load_adapter("text_analyze")(
@@ -2679,15 +2762,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             _previousResult=dict(args.get("_previousResult", {}) or {}) if isinstance(args.get("_previousResult", {}), dict) else None,
             _dependencyResults=dict(args.get("_dependencyResults", {}) or {}) if isinstance(args.get("_dependencyResults", {}), dict) else None,
         ),
-        "chart_generate": lambda args: _load_adapter("chart_generate")(
-            str(args.get("path", "") or ""),
-            str(args.get("chartType", "") or args.get("chart_type", "") or "bar"),
-            str(args.get("xColumn", "") or args.get("x_column", "") or ""),
-            str(args.get("yColumn", "") or args.get("y_column", "") or ""),
-            str(args.get("title", "") or ""),
-            str(args.get("outputPath", "") or args.get("output_path", "") or ""),
-            list(args.get("_selectedPaths", []) or []),
-        ),
+        "chart_generate": _run_chart_generate,
         "math_solve": lambda args: _load_adapter("math_solve")(
             str(
                 args.get("expression")
