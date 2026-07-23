@@ -91,6 +91,7 @@ import type {
 } from "./tool-registry.js";
 import {
   AGENT_TOOL_SELECTION_CONFIDENCE_THRESHOLD,
+  buildAuthoritativeArtifactDataFromToolResults,
   buildAgentToolCatalogForTurn,
   decideAgentToolApproval,
   getAgentToolMetadata,
@@ -2316,9 +2317,9 @@ function buildDataUnderstandingQualityPromptBlock(
       ? "- attachment tables are available as bounded derived table packets; preserve row/column relationships, never use literal <br> tags, and avoid half-finished tables"
       : "- if tabular evidence is requested but not available as a clean table, summarize the visible rows instead of inventing cells",
     explicitTableRequest
-      ? '- the user explicitly asked for a table: emit ONE {"type":"table"} block only if the data genuinely fits stable rows/columns, otherwise answer in prose. Use columns:string[], rows:string[][], optional title, summary, caption, totalRowCount, density, highlightRules, interactions:["sort","copy","share","fullscreen"]. For long tables include the most useful rows in previewRows and set totalRowCount; do not duplicate the full table as markdown prose.'
+      ? '- the user explicitly asked for a table: emit ONE {"type":"table"} block only if the data genuinely fits stable rows/columns, otherwise answer in prose. Use columns:string[], rows:string[][], optional title, summary, caption, totalRowCount, density, highlightRules, interactions:["sort","copy","share"]. For long tables include the most useful rows in previewRows and set totalRowCount; do not duplicate the full table as markdown prose.'
       : proactiveVisuals
-        ? '- TABLE (proactive, conservative): you MAY emit ONE {"type":"table"} block when the answer is genuinely a multi-row dataset or a structured comparison of 3+ items across 2+ attributes. Do NOT table definitions, single facts, two-item comparisons, summaries, opinions, or step lists — those stay prose. Use columns:string[], rows:string[][], optional title/summary/caption, interactions:["sort","copy","share","fullscreen"]. One table max; never duplicate it as markdown prose.'
+        ? '- TABLE (proactive, conservative): you MAY emit ONE {"type":"table"} block when the answer is genuinely a multi-row dataset or a structured comparison of 3+ items across 2+ attributes. Do NOT table definitions, single facts, two-item comparisons, summaries, opinions, or step lists — those stay prose. Use columns:string[], rows:string[][], optional title/summary/caption, interactions:["sort","copy","share"]. One table max; never duplicate it as markdown prose.'
         : "- DEFAULT TO PROSE OR A SHORT BULLET LIST. Do NOT use a table for definitions, explanations, single facts, comparisons of two items, summaries, opinions, step-by-step instructions, or simple questions. Use a table ONLY when the user explicitly asks for one or the answer is inherently a multi-row dataset. Never emit more than one table in a reply, and never repeat a table you already produced.",
     explicitMathSurface3DRequest
       ? '- 3D/4D mathematical surface request: emit ONE {"type":"math_surface_3d","expression":"x^3 + y^2","variables":["x","y"],"range":{"x":[-2,2],"y":[-2,2]},"resolution":80,"zLabel":"z = x^3 + y^2","colorBy":"z","mode":"surface","interactive":true} block. For 4D requests set colorBy:"gradientMagnitude". Do not emit sampled points, markdown tables, SVG, image URLs, or prose-only explanations for this request.'
@@ -2326,9 +2327,9 @@ function buildDataUnderstandingQualityPromptBlock(
         ? '- 3D SURFACE (proactive): when the answer centers on a two-variable function z=f(x,y) or a surface/field that a 3D view explains far better than text, emit ONE {"type":"math_surface_3d","expression":"x^2 + y^2","variables":["x","y"],"range":{"x":[-3,3],"y":[-3,3]},"resolution":80,"zLabel":"z","colorBy":"z","mode":"surface","interactive":true} block. Otherwise prose. Do not force it for ordinary single-variable math.'
         : "- use math_surface_3d only for explicit z=f(x,y), 3D surface, mesh, or 4D color-channel graph requests.",
     explicitChartRequest && !explicitMathSurface3DRequest
-      ? '- chart/graph request: emit a typed {"type":"chart"} block as the primary visual output. For sampled data charts use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values, points, or series where every y/value is a real number, not a formula string. Include title, xLabel, yLabel, unit, caption, interactions:["tooltip","trackball","zoom","pan","type_switch","fullscreen","share"] when relevant, and theme:"minimal"|"report". For 2D function graphs use chartType "function", expression, variables ["x"], range {"x":[min,max]}, xLabel, yLabel, and optional caption. For 3D surface/mesh requests prefer chartType "surface3d" or "mesh" with expression "x^2 + y^2", variables ["x","y"], range {"x":[min,max],"y":[min,max]}; use bounded points [{x,y,z}] only when the data is already sampled. For current/live values, extract the numeric series from PUBLIC WEB GROUNDING evidence and plot it as a "line"/"bar" chart with dated labels, unit, and caption. If no grounding data is available, say the live data could not be retrieved instead of emitting a needs_desktop block.'
+      ? '- chart/graph request: emit a typed {"type":"chart"} block as the primary visual output. For sampled data charts use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values, points, or series where every y/value is a real number, not a formula string. Include title, xLabel, yLabel, unit, caption, interactions:["tooltip","trackball","zoom","pan","type_switch","share"] when relevant, and theme:"minimal"|"report". For 2D function graphs use chartType "function", expression, variables ["x"], range {"x":[min,max]}, xLabel, yLabel, and optional caption. For 3D surface/mesh requests prefer chartType "surface3d" or "mesh" with expression "x^2 + y^2", variables ["x","y"], range {"x":[min,max],"y":[min,max]}; use bounded points [{x,y,z}] only when the data is already sampled. For current/live values, extract the numeric series from PUBLIC WEB GROUNDING evidence and plot it as a "line"/"bar" chart with dated labels, unit, and caption. If no grounding data is available, say the live data could not be retrieved instead of emitting a needs_desktop block.'
       : proactiveVisuals
-        ? '- CHART (proactive, encouraged): when your answer contains numeric series, trends over time, distributions, breakdowns, comparisons of measured values, or a plottable function, emit ONE {"type":"chart"} block instead of listing the numbers in prose. For sampled data use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values or points where every y/value is a REAL number (never a formula string); include title, xLabel, yLabel, unit, caption, interactions:["tooltip","zoom","pan","fullscreen"]. For a 2D function use chartType "function", expression, variables ["x"], range {"x":[min,max]}. Pull live/current numbers only from PUBLIC WEB GROUNDING evidence; if none, say so in prose instead of charting invented data. Otherwise (no real numeric content) stay prose.'
+        ? '- CHART (proactive, encouraged): when your answer contains numeric series, trends over time, distributions, breakdowns, comparisons of measured values, or a plottable function, emit ONE {"type":"chart"} block instead of listing the numbers in prose. For sampled data use chartType "bar"|"line"|"pie"|"area"|"scatter" with labels/values or points where every y/value is a REAL number (never a formula string); include title, xLabel, yLabel, unit, caption, interactions:["tooltip","zoom","pan"]. For a 2D function use chartType "function", expression, variables ["x"], range {"x":[min,max]}. Pull live/current numbers only from PUBLIC WEB GROUNDING evidence; if none, say so in prose instead of charting invented data. Otherwise (no real numeric content) stay prose.'
         : "- do not generate a chart block unless the user asks for a graph/plot/visualization or the answer is clearly numeric-series data.",
     explicitMathOrLatexRequest
       ? '- math/LaTeX request: when a formula, derivation, equation, or final expression is important, emit a typed {"type":"math","title":"...","content":"...","format":"latex","displayMode":true,"result":"...","steps":[{"label":"...","content":"...","note":"..."}]} block. Keep LaTeX renderer-safe: use \\frac, ^, _, \\sqrt, \\begin{aligned} only when needed; do not wrap the same formula as markdown prose. Use steps only when they add value.'
@@ -2483,7 +2484,7 @@ function buildReasoningProtocolPromptBlock(input: {
   /* ── Table generation ────────────────────────────────────────────── */
   if (input.workload === "table_generate") {
     lines.push(
-      '- table generation mode: produce a structured table as primary response. Emit a {"type":"table"} block with "columns" (string[]) and "rows" (string[][]). Optional: "title", "summary", "caption", "totalRowCount", "previewRows", "highlightRules". Max 12 columns, 80 rows, cell text ≤120 chars. Keep headers short, keep every row aligned, and normalize markdown so raw **bold** markers do not leak into cells. For long tables, put the best mobile preview in previewRows and set totalRowCount. If editing an existing table, apply only requested changes and return the full updated table. Emit the table EXACTLY ONCE — never repeat the same table block, and do not also write the full table as markdown in prose. Optionally follow with one short explanatory text block.',
+      '- table generation mode: produce a structured table as primary response. Emit a {"type":"table"} block with "columns" (string[]) and "rows" (string[][]). Optional: "title", "summary", "caption", "totalRowCount", "previewRows", "highlightRules". Max 12 columns, 80 rows, cell text ≤120 chars. Use the exact column concepts and order requested by the user; include every explicit input item exactly once; for derived numeric columns compute and verify every value before emitting the block (for example, requested squares of 1,2,3 with columns Sayı/Kare must be rows 1/1, 2/4, 3/9). Keep every row width equal to the column count and normalize markdown so raw **bold** markers do not leak into cells. For long tables, put the best mobile preview in previewRows and set totalRowCount. If editing an existing table, apply only requested changes and return the full updated table. Emit the table EXACTLY ONCE — never repeat the same table block, and do not also write the full table as markdown in prose. Optionally follow with one short explanatory text block.',
     );
   }
 
@@ -2557,6 +2558,13 @@ function buildElyanEcosystemPromptBlock(input: {
     "- live/public data (market prices, exchange rates, gold/crypto, weather, sports scores, news, releases) is fetched by the SERVER via public web grounding — this is NOT a desktop action. Drawing a chart or table of such data is a backend capability you already have.",
     "- desktop dispatch is controlled ONLY by the user's laptop toggle (surfaced as the routing decision below), never inferred from the wording of the message.",
     "- when Elyan is asked about itself, answer from current project truth and memory; never invent people, roles, or architecture",
+    // MUHAKEME + VERİ OKUMA (özeleştiri): modelin veriyi daha temiz, profesyonel
+    // ve detaylı okuyup gerekçelendirmesini sağlar; her chat yolundan geçer.
+    "- REASONING: before answering, silently (1) understand exactly what is asked, (2) identify every relevant piece of provided data/context, (3) reason through it step by step, (4) then answer. Do not skim; a rushed shallow answer is worse than a careful one.",
+    "- DATA READING: read the provided context, retrieved sources, attachments, tables, and prior turns FULLY and precisely. Use exact figures, names, dates and units from the data — never approximate or paraphrase away specifics. If numbers or values are given, carry them through exactly.",
+    "- SELF-CRITIQUE: before finalizing, re-check your own answer: is every claim grounded in the given data (no invention)? is it complete (nothing important omitted)? is the method/interpretation correct? If a gap or error exists, fix it in the same answer.",
+    "- PROFESSIONAL DEPTH: for professional/analytical requests (legal, medical, financial, engineering, academic), be precise, structured and thorough — give the reasoning and the concrete result, not a vague summary. Prefer clear structure (short sections, tables) over long prose when it helps.",
+    "- GROUNDING BOUNDARY: if the data needed for a confident answer is genuinely missing, say so and offer to fetch/analyze it — do NOT fabricate facts, figures, or sources to fill the gap.",
   ];
 
   if (requiresDesktop) {
@@ -8070,6 +8078,21 @@ export async function generateSharedBrainReply(
           result.metadata.toolResults = summarizeToolResultsForMetadata(
             toolLoop.results,
           );
+          const chartRequested = isExplicitChartRequest(input.prompt);
+          const tableRequested = isExplicitTableRequest(input.prompt);
+          const authoritativeArtifactData =
+            buildAuthoritativeArtifactDataFromToolResults(
+              chartRequested && !tableRequested
+                ? "chart"
+                : tableRequested || chartRequested
+                  ? "table"
+                  : null,
+              toolLoop.results,
+            );
+          if (authoritativeArtifactData) {
+            result.metadata.authoritativeArtifactData =
+              authoritativeArtifactData;
+          }
           if (toolLoop.planVersion) {
             result.metadata.agentPlanVersion = toolLoop.planVersion;
             result.metadata.agentPlanVerificationPassed =
@@ -9351,19 +9374,29 @@ function buildResearchSkillDocumentBlock(
     level: 1,
   });
 
-  return buildAssistantDocumentBlock({
-    title: compactText(output.title).slice(0, 200) || "Araştırma Raporu",
-    summary: compactText(output.summary).slice(0, 300) || null,
-    format: "report",
-    sections,
-    wordCount: bodyWordCount,
-    exportFormats: requestedSkillExportFormats(request) ?? ["pdf", "docx"],
-    design: {
-      theme: "report",
-      density: "comfortable",
-      pageSize: "A4",
+  return buildAssistantDocumentBlock(
+    {
+      title: compactText(output.title).slice(0, 200) || "Araştırma Raporu",
+      summary: compactText(output.summary).slice(0, 300) || null,
+      format: "report",
+      sections,
+      wordCount: bodyWordCount,
+      exportFormats: requestedSkillExportFormats(request) ?? ["pdf", "docx"],
+      design: {
+        theme: "report",
+        density: "comfortable",
+        pageSize: "A4",
+      },
     },
-  });
+    {
+      renderHints: {
+        sectionRole: "primary",
+        contentOwner: "skill",
+        skillId: skillResult.metadata.skillId,
+        structuredOutput: true,
+      },
+    },
+  );
 }
 
 function readSkillStringList(value: unknown, max = 12): string[] {
