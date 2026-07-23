@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import {
@@ -29,6 +30,7 @@ import {
   executeSlackSearch,
 } from "./connector-tools.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import type { AuthoritativeArtifactData } from "../artifacts/types.js";
 import {
   DEFAULT_USER_APPROVAL_MODE,
   decideUserToolApproval,
@@ -50,6 +52,7 @@ export type AgentToolSelectionHints = {
   resultBlockTypes: string[];
   modelContract: string;
   connectorCapability?: string;
+  authoritativeArtifactAdapter?: "numeric_points.v1";
 };
 
 export type AgentToolSelectionContext = {
@@ -92,6 +95,116 @@ export type AgentToolResult = {
   output: Record<string, unknown> | null;
   error: { code: string; message: string } | null;
 };
+
+function canonicalToolResultValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalToolResultValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalToolResultValue(nested)]),
+    );
+  }
+  if (
+    value == null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  return String(value);
+}
+
+/** Stable server proof for binding derived artifact data to one tool result. */
+export function agentToolResultDigest(result: AgentToolResult): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        canonicalToolResultValue({
+          tool: result.tool,
+          ok: result.ok,
+          output: result.output,
+        }),
+      ),
+    )
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function boundedArtifactText(value: unknown, max: number): string {
+  return typeof value === "string"
+    ? value.replace(/\s+/g, " ").trim().slice(0, max)
+    : "";
+}
+
+/** Registry-owned adapter from verified tool output to artifact authority. */
+export function buildAuthoritativeArtifactDataFromToolResults(
+  requestedType: "table" | "chart" | null,
+  results: AgentToolResult[],
+): AuthoritativeArtifactData | null {
+  if (!requestedType) return null;
+  const result = results.find(
+    (candidate) =>
+      candidate.ok &&
+      getAgentToolMetadata(candidate.tool)?.selectionHints
+        .authoritativeArtifactAdapter === "numeric_points.v1" &&
+      Array.isArray(candidate.output?.points),
+  );
+  if (!result?.output) return null;
+  const points = (result.output.points as unknown[]).flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const point = value as Record<string, unknown>;
+    if (typeof point.value !== "number" || !Number.isFinite(point.value)) {
+      return [];
+    }
+    const date = boundedArtifactText(point.date, 80);
+    const context = boundedArtifactText(point.context, 320);
+    const unit = boundedArtifactText(point.unit, 40);
+    const sourceHost = boundedArtifactText(point.sourceHost, 160);
+    const label = date || context || sourceHost;
+    return label
+      ? [{ label, value: point.value, unit, source: sourceHost }]
+      : [];
+  });
+  if (points.length === 0) return null;
+  const source = {
+    authority: "tool_connector" as const,
+    producerId: result.tool,
+    resultDigest: agentToolResultDigest(result),
+  };
+  if (requestedType === "chart") {
+    const datedPointCount = (result.output.points as unknown[]).filter(
+      (value) => {
+        const point =
+          value && typeof value === "object" && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : null;
+        return Boolean(boundedArtifactText(point?.date, 80));
+      },
+    ).length;
+    return {
+      type: "chart",
+      chartType: datedPointCount >= 2 ? "line" : "bar",
+      xKey: "label",
+      yKey: "value",
+      series: [{ key: "value", label: "Değer", valueType: "number" }],
+      data: points.slice(0, 1_500),
+      source,
+    };
+  }
+  return {
+    type: "table",
+    columns: [
+      { key: "label", label: "Etiket", dataType: "string", required: true, align: "left" },
+      { key: "value", label: "Değer", dataType: "number", required: true, align: "right" },
+      { key: "unit", label: "Birim", dataType: "string", required: false, align: "left" },
+      { key: "source", label: "Kaynak", dataType: "string", required: false, align: "left" },
+    ],
+    rows: points.slice(0, 500),
+    source,
+  };
+}
 
 type AgentToolDefinition<TArgs extends z.ZodTypeAny> = {
   name: string;
@@ -144,6 +257,7 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
     desiredOutputKinds: ["table", "chart", "xlsx"],
     resultBlockTypes: ["table", "chart", "web_search", "tool_call"],
     modelContract: "web.numeric_facts {query:string}",
+    authoritativeArtifactAdapter: "numeric_points.v1",
   },
   "memory.query": {
     purpose: "Read durable user memory only when the user explicitly refers to prior preferences or conversations.",

@@ -133,6 +133,64 @@ export const tableSpecSchema = artifactSpecBaseSchema.extend({
   }).optional(),
 });
 
+const artifactAuthorityProofSchema = z.object({
+  authority: z.enum(["tool_connector", "skill_structured_output"]),
+  producerId: z.string().min(1).max(160),
+  resultDigest: z.string().regex(/^[a-f0-9]{16,64}$/),
+});
+
+const authoritativeArtifactCellSchema = z.union([
+  z.string().max(2_000),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
+
+const authoritativeArtifactRecordSchema = z
+  .record(z.string().min(1).max(80), authoritativeArtifactCellSchema)
+  .superRefine((record, context) => {
+    if (Object.keys(record).length > 32) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Artifact records may contain at most 32 fields.",
+      });
+    }
+  });
+
+/**
+ * Server-internal full dataset handoff. This never enters elyan_blocks.v2:
+ * artifact renderers consume the complete payload and derive the bounded
+ * mobile table/chart preview only after validation.
+ */
+export const authoritativeArtifactDataSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("table"),
+    title: z.string().min(1).max(160).optional(),
+    columns: z.array(tableColumnSchema).min(1).max(24),
+    rows: z.array(authoritativeArtifactRecordSchema).min(1).max(500),
+    source: artifactAuthorityProofSchema,
+  }),
+  z.object({
+    type: z.literal("chart"),
+    title: z.string().min(1).max(160).optional(),
+    description: z.string().min(1).max(400).optional(),
+    chartType: z.enum(["bar", "line", "pie", "scatter"]),
+    xKey: z.string().min(1).max(80),
+    yKey: z.string().min(1).max(80),
+    series: z.array(z.object({
+      key: z.string().min(1).max(80),
+      label: z.string().min(1).max(120),
+      valueType: z.enum(["number", "currency", "percentage"]).optional(),
+    })).min(1).max(8),
+    data: z.array(authoritativeArtifactRecordSchema).min(1).max(1_500),
+    source: artifactAuthorityProofSchema,
+  }),
+]);
+
+export type AuthoritativeArtifactData = z.infer<
+  typeof authoritativeArtifactDataSchema
+>;
+
 export const chartSpecSchema = artifactSpecBaseSchema.extend({
   type: z.literal("chart"),
   chartType: z.enum(["bar", "line", "pie", "scatter"]),

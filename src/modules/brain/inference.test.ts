@@ -36,12 +36,38 @@ import {
   unsafeResponseRepairFallback,
 } from "./inference.js";
 import { looksLikeLeakedToolCallText } from "./turn-envelope.js";
-import { buildAgentToolCatalogForTurn } from "./tool-registry.js";
+import {
+  buildAgentToolCatalogForTurn,
+  buildAuthoritativeArtifactDataFromToolResults,
+} from "./tool-registry.js";
 import { emptyUnderstanding } from "../../core/understanding/user-understanding-service.js";
 import {
   resetSemanticComputeWorkerForTests,
   setSemanticComputeDispatcherForTests,
 } from "./semantic-compute-client.js";
+
+test("verified numeric tool data becomes an authoritative table handoff", () => {
+  const data = buildAuthoritativeArtifactDataFromToolResults(
+    "table",
+    [{
+      tool: "web.numeric_facts",
+      ok: true,
+      permission: "read",
+      durationMs: 12,
+      output: {
+        points: [
+          { value: 12, unit: "%", date: "2026-01", context: "Ocak oranı", sourceHost: "example.com" },
+          { value: 18, unit: "%", date: "2026-02", context: "Şubat oranı", sourceHost: "example.com" },
+        ],
+      },
+      error: null,
+    }],
+  );
+  assert.equal(data?.type, "table");
+  if (data?.type !== "table") return;
+  assert.deepEqual(data.rows.map((row: Record<string, unknown>) => row.value), [12, 18]);
+  assert.equal(data.source.authority, "tool_connector");
+});
 
 test("contextual web grounding carries only volatile entity keys into short follow-ups", () => {
   const prompt = buildContextualWebGroundingPrompt({
