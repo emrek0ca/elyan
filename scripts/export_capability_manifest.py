@@ -1,4 +1,4 @@
-"""Desktop yetenek kataloğunu backend'e MANIFEST olarak üretir.
+"""Desktop yetenek/skill kataloğunu backend'e MANIFEST olarak üretir.
 
 TEK KAYNAK: runtime/capability_registry.TOOL_DECLARATIONS (77 kendini-belgeleyen
 yetenek). Backend'in sunucu-materyalize planlayıcısı (materialize-plan.ts) bu
@@ -9,9 +9,12 @@ Kullanım:
     venv/bin/python scripts/export_capability_manifest.py \
         /Users/emrekoca/elyan-backend/src/modules/tasks/desktop-capability-manifest.ts
 
-Backend değişmez; yalnız üretilen dosya commit'lenir. Katalog değişince bu
-script yeniden koşulur (test_capability_manifest_export guard'ı üretimin
-katalogla bire bir örtüştüğünü garanti eder).
+    venv/bin/python scripts/export_capability_manifest.py \
+        /Users/emrekoca/elyan-backend/src/modules/tasks/desktop-capability-manifest.ts \
+        /Users/emrekoca/elyan-backend/src/modules/tasks/desktop-skill-manifest.ts
+
+Backend değişmez; yalnız üretilen dosyalar commit'lenir. Katalog değişince bu
+script yeniden koşulur.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from runtime.bridge import REMOTE_APPROVAL_CAPABILITIES  # noqa: E402
 from runtime.capability_registry import TOOL_DECLARATIONS  # noqa: E402
+from runtime.skill_catalog import builtin_skill_manifests  # noqa: E402
 
 
 def _clip(value: object, limit: int) -> str:
@@ -31,7 +35,7 @@ def _clip(value: object, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def build_manifest() -> list[dict[str, object]]:
+def build_capability_manifest() -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     seen: set[str] = set()
     for decl in TOOL_DECLARATIONS:
@@ -56,7 +60,64 @@ def build_manifest() -> list[dict[str, object]]:
     return entries
 
 
-def render_typescript(entries: list[dict[str, object]]) -> str:
+def build_skill_manifest() -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for skill in builtin_skill_manifests():
+        skill_id = str(skill.get("id", "") or "").strip()
+        if not skill_id or skill_id in seen:
+            continue
+        seen.add(skill_id)
+        parameters = [
+            str(item)
+            for item in (skill.get("parameters", []) or [])
+            if str(item or "").strip()
+        ]
+        required = [
+            str(item)
+            for item in (skill.get("requiredParameters", []) or [])
+            if str(item or "").strip()
+        ]
+        steps = skill.get("steps")
+        step_capabilities: list[str] = []
+        if isinstance(steps, list):
+            for step in steps[:8]:
+                if not isinstance(step, dict):
+                    continue
+                capability = str(step.get("capability", "") or "").strip()
+                if capability:
+                    step_capabilities.append(capability)
+        entries.append(
+            {
+                "id": skill_id,
+                "name": _clip(skill.get("name", ""), 120),
+                "description": _clip(skill.get("description", ""), 260),
+                "category": _clip(skill.get("category", "custom"), 80),
+                "adapter": _clip(skill.get("adapter", ""), 120),
+                "parameters": parameters,
+                "requiredParameters": required,
+                "expectedInputs": [
+                    str(item)
+                    for item in (skill.get("expectedInputs", []) or [])
+                    if str(item or "").strip()
+                ][:12],
+                "intentTags": [
+                    str(item)
+                    for item in (skill.get("intentTags", []) or [])
+                    if str(item or "").strip()
+                ][:18],
+                "stepCapabilities": list(dict.fromkeys(step_capabilities)),
+                "stepCount": int(skill.get("stepCount", 0) or 0),
+                "latencyClass": _clip(skill.get("latencyClass", ""), 40),
+                "selectionPriority": int(skill.get("selectionPriority", 0) or 0),
+                "requiresConfirmation": bool(skill.get("requiresConfirmation", False)),
+            }
+        )
+    entries.sort(key=lambda item: (-int(item["selectionPriority"]), str(item["id"])))
+    return entries
+
+
+def render_capability_typescript(entries: list[dict[str, object]]) -> str:
     payload = json.dumps(entries, ensure_ascii=False, indent=2)
     return (
         "// ÜRETİLEN DOSYA — ELLE DÜZENLEME.\n"
@@ -76,14 +137,51 @@ def render_typescript(entries: list[dict[str, object]]) -> str:
     )
 
 
+def render_skill_typescript(entries: list[dict[str, object]]) -> str:
+    payload = json.dumps(entries, ensure_ascii=False, indent=2)
+    return (
+        "// ÜRETİLEN DOSYA — ELLE DÜZENLEME.\n"
+        "// Kaynak: elyan-desktop runtime/skill_catalog.builtin_skill_manifests().\n"
+        "// Yeniden üretim: venv/bin/python scripts/export_capability_manifest.py <capability.ts> <bu dosya>\n"
+        "// Sunucu-materyalize planlayıcı skill kataloğunu yalnız planlama kelime\n"
+        "// dağarcığı olarak kullanır. Skill yürütme desktop'ta run_skill capability'si\n"
+        "// üzerinden, desktop güvenlik/onay sınırları korunarak yapılır.\n\n"
+        "export type DesktopSkillManifestEntry = {\n"
+        "  id: string;\n"
+        "  name: string;\n"
+        "  description: string;\n"
+        "  category: string;\n"
+        "  adapter: string;\n"
+        "  parameters: string[];\n"
+        "  requiredParameters: string[];\n"
+        "  expectedInputs: string[];\n"
+        "  intentTags: string[];\n"
+        "  stepCapabilities: string[];\n"
+        "  stepCount: number;\n"
+        "  latencyClass: string;\n"
+        "  selectionPriority: number;\n"
+        "  requiresConfirmation: boolean;\n"
+        "};\n\n"
+        f"export const DESKTOP_SKILL_MANIFEST: DesktopSkillManifestEntry[] = {payload};\n"
+    )
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("kullanım: export_capability_manifest.py <çıktı .ts yolu>", file=sys.stderr)
+    if len(sys.argv) not in {2, 3}:
+        print(
+            "kullanım: export_capability_manifest.py <capability .ts yolu> [skill .ts yolu]",
+            file=sys.stderr,
+        )
         return 2
     output = Path(sys.argv[1]).expanduser()
-    entries = build_manifest()
-    output.write_text(render_typescript(entries), encoding="utf-8")
+    entries = build_capability_manifest()
+    output.write_text(render_capability_typescript(entries), encoding="utf-8")
     print(f"{len(entries)} yetenek yazıldı → {output}")
+    if len(sys.argv) == 3:
+        skill_output = Path(sys.argv[2]).expanduser()
+        skills = build_skill_manifest()
+        skill_output.write_text(render_skill_typescript(skills), encoding="utf-8")
+        print(f"{len(skills)} skill yazıldı → {skill_output}")
     return 0
 
 
