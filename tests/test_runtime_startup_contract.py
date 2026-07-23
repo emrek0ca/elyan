@@ -1521,6 +1521,44 @@ def test_math_solve_factor_and_evaluate(
     assert evaluate_result["result"]["result"].startswith("14")
 
 
+def test_quantum_model_problem_accepts_structured_optimization_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import runtime.capability_registry as registry
+
+    result = registry.run_capability(
+        "quantum_model_problem",
+        {
+            "optimizationProblem": {
+                "objective": "Toplam faydayı maksimize et.",
+                "items": [
+                    {"name": "A", "value": 10, "cost": 4},
+                    {"name": "B", "value": 7, "cost": 3},
+                    {"name": "C", "value": 5, "cost": 2},
+                ],
+                "constraints": [
+                    {"name": "capacity", "expression": "4*x_A + 3*x_B + 2*x_C <= 5"}
+                ],
+                "capacity": 5,
+            },
+            "problemClass": "optimization",
+        },
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is True
+    model = result["result"]["model"]
+    assert model["decisionModel"]["problemClass"] == "knapsack_selection"
+    assert [item["meaning"] for item in model["decisionModel"]["decisionVariables"]] == [
+        "A seçilsin mi?",
+        "B seçilsin mi?",
+        "C seçilsin mi?",
+    ]
+    assert model["qubo"]["capacity"] == 5.0
+
+
 def test_document_write_creates_docx_in_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -2283,6 +2283,111 @@ def _presentation_payload(args: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _quantum_problem_payload(args: dict[str, Any]) -> dict[str, Any] | None:
+    problem = _first_dict(
+        args,
+        "problem",
+        "optimizationProblem",
+        "optimization_problem",
+        "decisionProblem",
+        "decision_problem",
+        "decisionModel",
+        "decision_model",
+        "model",
+    )
+    if problem:
+        return dict(problem)
+    pieces: dict[str, Any] = {}
+    for key in (
+        "objective",
+        "goal",
+        "variables",
+        "decisionVariables",
+        "decision_variables",
+        "constraints",
+        "items",
+        "capacity",
+        "budget",
+        "qubo",
+        "ising",
+    ):
+        value = args.get(key)
+        if value not in (None, "", [], {}):
+            pieces[key] = value
+    return pieces or None
+
+
+def _quantum_problem_prompt(args: dict[str, Any]) -> str:
+    prompt = _first_non_empty_text(
+        args,
+        "prompt",
+        "query",
+        "question",
+        "task",
+        "instruction",
+        "description",
+        "problemStatement",
+        "problem_statement",
+        "text",
+    )
+    problem = _quantum_problem_payload(args)
+    if not problem:
+        return prompt
+    if prompt:
+        return prompt
+    pieces: list[str] = []
+    items = problem.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "") or item.get("id", "") or item.get("label", "") or "").strip()
+            value = item.get("value") if item.get("value") is not None else item.get("profit")
+            cost = item.get("cost") if item.get("cost") is not None else item.get("weight")
+            if name and value is not None and cost is not None:
+                pieces.append(f"{name} değer {value} maliyet {cost}")
+    for key, label in (
+        ("objective", "Amaç"),
+        ("goal", "Hedef"),
+        ("variables", "Karar değişkenleri"),
+        ("decisionVariables", "Karar değişkenleri"),
+        ("decision_variables", "Karar değişkenleri"),
+        ("constraints", "Kısıtlar"),
+        ("capacity", "Kapasite"),
+        ("budget", "Bütçe"),
+        ("qubo", "QUBO"),
+        ("ising", "Ising"),
+    ):
+        value = problem.get(key)
+        if value not in (None, "", [], {}):
+            rendered = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+            pieces.append(f"{label}: {rendered}")
+    if pieces:
+        return "\n".join(pieces)
+    return json.dumps(problem, ensure_ascii=False)
+
+
+def _quantum_problem_class(args: dict[str, Any]) -> str:
+    problem = _quantum_problem_payload(args) or {}
+    return _first_non_empty_text(
+        args,
+        "problemClass",
+        "problem_class",
+        "class",
+        "type",
+        "solverTarget",
+        "solver_target",
+    ) or _first_non_empty_text(
+        problem,
+        "problemClass",
+        "problem_class",
+        "class",
+        "type",
+        "solverTarget",
+        "solver_target",
+    ) or "optimization"
+
+
 def _string_from_exception(exc: Exception) -> str:
     return " ".join(str(exc or "").split()).strip()[:160]
 
@@ -2601,23 +2706,23 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             str(args.get("mode", "parse") or "parse"),
         ),
         "quantum_model_problem": lambda args: _load_adapter("quantum_model_problem")(
-            prompt=str(args.get("prompt", "") or ""),
-            problem_class=str(args.get("problemClass", "") or args.get("problem_class", "") or "optimization"),
-            problem=dict(args.get("problem", {}) or {}) if isinstance(args.get("problem", {}), dict) else None,
+            prompt=_quantum_problem_prompt(args),
+            problem_class=_quantum_problem_class(args),
+            problem=_quantum_problem_payload(args),
         ),
         "quantum_run_experiment": lambda args: _load_adapter("quantum_run_experiment")(
-            prompt=str(args.get("prompt", "") or ""),
-            algorithm=str(args.get("algorithm", "") or "qaoa"),
-            shots=_as_int(args.get("shots"), 1024),
+            prompt=_quantum_problem_prompt(args),
+            algorithm=str(args.get("algorithm", "") or args.get("solver", "") or args.get("method", "") or "qaoa"),
+            shots=_as_int(args.get("shots") if args.get("shots") is not None else args.get("samples"), 1024),
             _previousResult=dict(args.get("_previousResult", {}) or {}) if isinstance(args.get("_previousResult", {}), dict) else None,
         ),
         "quantum_compare_classical": lambda args: _load_adapter("quantum_compare_classical")(
-            prompt=str(args.get("prompt", "") or ""),
+            prompt=_quantum_problem_prompt(args),
             _previousResult=dict(args.get("_previousResult", {}) or {}) if isinstance(args.get("_previousResult", {}), dict) else None,
         ),
         "quantum_generate_report": lambda args: _load_adapter("quantum_generate_report")(
-            prompt=str(args.get("prompt", "") or ""),
-            title=str(args.get("title", "") or "Elyan Quantum Deney Raporu"),
+            prompt=_quantum_problem_prompt(args),
+            title=str(args.get("title", "") or args.get("reportTitle", "") or args.get("report_title", "") or "Elyan Quantum Deney Raporu"),
             _previousResult=dict(args.get("_previousResult", {}) or {}) if isinstance(args.get("_previousResult", {}), dict) else None,
         ),
         "document_write": lambda args: _load_adapter("document_write")(
