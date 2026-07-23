@@ -3461,6 +3461,116 @@ def _continuation_task(segment: str, topic_hint: str) -> RoutedTask | None:
     return None
 
 
+def _calculation_then_writer_route(text: str) -> RoutedTask | None:
+    original = str(text or "").strip()
+    q = _normalise(original)
+    calculation_step = _calculation_step_from_text(original)
+    if calculation_step is None:
+        return None
+    if not any(token in q for token in _CONTINUATION_WRITE_VERBS):
+        return None
+    if not any(
+        token in q
+        for token in (
+            "rapor",
+            "belge",
+            "word",
+            "docx",
+            "xlsx",
+            "excel",
+            "tablo",
+            "cizelge",
+            "sheet",
+            "sunum",
+            "pptx",
+            "powerpoint",
+        )
+    ):
+        return None
+    writer = _continuation_task(original, "hesap sonucu")
+    if writer is None or writer.tool_name == "email_send":
+        return None
+    writer_steps = [dict(step) for step in (writer.steps or ()) if isinstance(step, dict)]
+    if not writer_steps:
+        return None
+    steps: list[dict[str, Any]] = [calculation_step]
+    for writer_step in writer_steps:
+        if not writer_step.get("id"):
+            writer_step["id"] = "write_output"
+        args = dict(writer_step.get("args") or {})
+        prompt = str(args.get("prompt", "") or "").strip()
+        if "hesap" not in _normalise(prompt):
+            prompt = f"Hesap sonucunu kullanarak {prompt}".strip()
+        args["prompt"] = prompt
+        args.setdefault("calculationContext", "{{steps.calculate.output}}")
+        writer_step["args"] = args
+        writer_step["dependsOn"] = writer_step.get("dependsOn") or ["calculate"]
+        steps.append(writer_step)
+    privacy_class = "local_private" if writer.privacy_class == "local_private" else "public_text"
+    summary = f"{len(steps)} adımlı görev planlandı: " + " → ".join(str(step.get("capability", "")) for step in steps)
+    return RoutedTask(
+        "math_solve",
+        dict(calculation_step.get("args") or {}),
+        "calculation_then_writer",
+        intent="compound_task",
+        confidence=min(0.88, writer.confidence),
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class=privacy_class,
+        plan_preview=_build_plan_summary(summary, steps, privacy_class),
+        steps=tuple(steps),
+    )
+
+
+def _inline_analysis_writer_route(text: str) -> RoutedTask | None:
+    original = str(text or "").strip()
+    q = _normalise(original)
+    if not any(token in q for token in ("analiz", "yorumla", "incele", "degerlendir", "değerlendir")):
+        return None
+    if not any(token in q for token in ("rapor", "belge", "word", "docx", "cikar", "çıkar", "hazirla", "hazırla", "yaz")):
+        return None
+    has_inline_data = ":" in original and (
+        bool(re.search(r"\b\d+(?:[.,]\d+)?\b", original))
+        or any(token in q for token in ("tahlil", "sonuc", "sonuç", "bulgu", "veri", "olcu", "ölçü"))
+    )
+    if not has_inline_data:
+        return None
+    output_path = _resolve_output_path(original, ".docx", hint=original or "analiz-raporu")
+    read_step = {
+        "id": "read_input",
+        "capability": "document_read",
+        "args": {"text": original, "mode": "read"},
+        "description": "Paylaşılan metin/veri bağlamı okunacak.",
+    }
+    write_args = {
+        "prompt": f"Okunan veri ve kullanıcı isteğine göre analiz raporu hazırla. İstek: {original}",
+        "outputPath": output_path,
+        "overwrite": False,
+        "sourceContext": "{{steps.read_input.output}}",
+    }
+    write_step = {
+        "id": "write_output",
+        "capability": "document_write",
+        "args": write_args,
+        "dependsOn": ["read_input"],
+        "description": f"Analiz raporu {Path(output_path).name} olarak yazılacak.",
+    }
+    steps = [read_step, write_step]
+    summary = "2 adımlı görev planlandı: document_read → document_write"
+    return RoutedTask(
+        "document_read",
+        dict(read_step["args"]),
+        "inline_analysis_writer",
+        intent="compound_task",
+        confidence=0.87,
+        requires_confirmation=True,
+        is_multi_step=True,
+        privacy_class="local_private",
+        plan_preview=_build_plan_summary(summary, steps, "local_private"),
+        steps=tuple(steps),
+    )
+
+
 def _compound_route(
     text: str,
     selected_artifacts: list[dict[str, Any]] | None,
@@ -3862,6 +3972,12 @@ def route_text_to_tool(
         research_writer = _research_then_writer_route(original)
         if research_writer is not None:
             return research_writer
+        calculation_writer = _calculation_then_writer_route(original)
+        if calculation_writer is not None:
+            return calculation_writer
+        inline_analysis_writer = _inline_analysis_writer_route(original)
+        if inline_analysis_writer is not None:
+            return inline_analysis_writer
 
     # Pano komutları dosya-kopyalama ("kopyala") rotasından ÖNCE ele alınır;
     # aksi halde "panoya kopyala X" yanlışlıkla cp olarak yorumlanır.

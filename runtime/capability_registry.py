@@ -2103,8 +2103,6 @@ def _writer_source_context(args: dict[str, Any]) -> str:
                 context += "\n\n[Yazım talimatı]\n" + explicit[:12000]
             return context[:60000]
     previous_output = _safe_writer_text(args.get("_previousOutput", ""), 48000)
-    if previous_output and explicit:
-        return (previous_output[:48000] + "\n\n[Yazım talimatı]\n" + explicit[:12000])[:60000]
     return explicit[:60000] or previous_output[:60000]
 
 
