@@ -1098,6 +1098,11 @@ def cmd_auto(_args: argparse.Namespace) -> int:
         code = cmd_pair(argparse.Namespace(force=False, start=False))
         if code != 0:
             return code
+        # Native installers own the final service registration so upgrades can
+        # atomically repoint launchd/systemd/schtasks at the new portable
+        # runtime. The regular npm/source CLI keeps its existing behavior.
+        if os.environ.get("ELYAN_INSTALLER_MANAGES_SERVICE") == "1":
+            return 0
         # Açılışta otomatik başlasın; servis kurulumu daemon'u da başlatır.
         service_code = cmd_service(argparse.Namespace(action="install"))
         if service_code != 0:

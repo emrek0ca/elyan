@@ -1,0 +1,300 @@
+name: Desktop Signed Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }} signed
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      ELYAN_REQUIRE_SIGNING: "1"
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag and signing inputs
+        shell: bash
+        run: |
+          VERSION="$(python -c 'import json; print(json.load(open("package.json"))["version"])')"
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_TEAM_ID"
+          test -n "$APPLE_APP_SPECIFIC_PASSWORD"
+
+      - name: Import Developer ID certificate
+        shell: bash
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/elyan-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          python -c 'import base64,os,pathlib; pathlib.Path(os.environ["CERTIFICATE_PATH"]).write_bytes(base64.b64decode(os.environ["APPLE_CERTIFICATE"]))'
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -1)"
+          test -n "$IDENTITY"
+          xcrun notarytool store-credentials "elyan-release" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --keychain "$KEYCHAIN_PATH"
+          echo "MACOS_CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "MACOS_NOTARY_PROFILE=elyan-release" >> "$GITHUB_ENV"
+          echo "MACOS_NOTARY_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+        env:
+          CERTIFICATE_PATH: ${{ runner.temp }}/developer-id.p12
+
+      - name: Install locked build tooling
+        run: python -m pip install uv==0.10.12
+
+      - name: Install native build prerequisites
+        run: brew install portaudio
+
+      - name: Build, notarize, and staple
+        run: python scripts/build_desktop_installers.py --platform macos --arch "${{ matrix.arch }}" --output "release/macos-${{ matrix.arch }}"
+
+      - name: Verify Gatekeeper and checksums
+        shell: bash
+        run: |
+          codesign --verify --deep --strict --verbose=2 "release/macos-${{ matrix.arch }}/Elyan.app"
+          spctl --assess --type execute --verbose=4 "release/macos-${{ matrix.arch }}/Elyan.app"
+          xcrun stapler validate "release/macos-${{ matrix.arch }}/Elyan.app"
+          xcrun stapler validate release/macos-${{ matrix.arch }}/*.dmg
+          cd "release/macos-${{ matrix.arch }}"
+          for checksum in *.sha256; do shasum -a 256 -c "$checksum"; done
+
+      - name: Upload verified macOS artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            release/macos-${{ matrix.arch }}/*.dmg
+            release/macos-${{ matrix.arch }}/*.app.zip
+            release/macos-${{ matrix.arch }}/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows x64 signed
+    runs-on: windows-2025
+    env:
+      ELYAN_REQUIRE_SIGNING: "1"
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag and signing inputs
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") { throw "Tag/version mismatch" }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) { throw "WINDOWS_CERTIFICATE is missing" }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) { throw "WINDOWS_CERTIFICATE_PASSWORD is missing" }
+
+      - name: Prepare Authenticode certificate
+        shell: pwsh
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP "elyan-authenticode.pfx"
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          "WINDOWS_CERTIFICATE_PATH=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ISCC_PATH=C:\Program Files (x86)\Inno Setup 6\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install locked build tooling
+        run: python -m pip install uv==0.10.12
+
+      - name: Build and sign
+        run: python scripts/build_desktop_installers.py --platform windows --arch x64 --output release/windows-x64
+
+      - name: Verify Authenticode and checksums
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem release/windows-x64/*-Setup.exe | Select-Object -First 1
+          if ((Get-AuthenticodeSignature $setup.FullName).Status -ne "Valid") { throw "Setup signature is invalid" }
+          $portable = Get-ChildItem release/windows-x64/*-portable.zip | Select-Object -First 1
+          $expanded = Join-Path $env:RUNNER_TEMP "elyan-portable"
+          Expand-Archive $portable.FullName $expanded
+          $launcher = Get-ChildItem $expanded -Filter Elyan.exe -Recurse | Select-Object -First 1
+          if ((Get-AuthenticodeSignature $launcher.FullName).Status -ne "Valid") { throw "Launcher signature is invalid" }
+          Get-ChildItem release/windows-x64/*.sha256 | ForEach-Object {
+            $parts = (Get-Content $_.FullName).Trim() -split '\s+', 2
+            $artifact = Join-Path $_.DirectoryName $parts[1]
+            if ((Get-FileHash $artifact -Algorithm SHA256).Hash.ToLowerInvariant() -ne $parts[0]) { throw "Checksum mismatch: $artifact" }
+          }
+
+      - name: Scan release artifacts with Microsoft Defender
+        shell: pwsh
+        run: |
+          $scanner = Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"
+          if (-not (Test-Path $scanner)) { throw "Microsoft Defender scanner is unavailable" }
+          Get-ChildItem release/windows-x64 -Include *.exe,*.zip -File | ForEach-Object {
+            & $scanner -Scan -ScanType 3 -File $_.FullName -DisableRemediation
+            if ($LASTEXITCODE -ne 0) { throw "Defender rejected $($_.Name) with exit code $LASTEXITCODE" }
+          }
+
+      - name: Upload verified Windows artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x64
+          path: |
+            release/windows-x64/*-Setup.exe
+            release/windows-x64/*-portable.zip
+            release/windows-x64/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux x64 signed
+    runs-on: ubuntu-24.04
+    env:
+      ELYAN_REQUIRE_SIGNING: "1"
+      LINUX_GPG_PRIVATE_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
+      LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag and signing inputs
+        shell: bash
+        run: |
+          VERSION="$(python -c 'import json; print(json.load(open("package.json"))["version"])')"
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+          test -n "$LINUX_GPG_PRIVATE_KEY"
+          test -n "$LINUX_GPG_PASSPHRASE"
+
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev libsndfile1-dev libgl1 libglib2.0-0 libx11-6 libxext6 libxrender1 libxcb1
+          python -m pip install uv==0.10.12
+
+      - name: Install checksum-pinned AppImage tool
+        shell: bash
+        run: |
+          curl -L --fail --silent --show-error -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          echo "b90f4a8b18967545fda78a445b27680a1642f1ef9488ced28b65398f2be7add2  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+
+      - name: Build Linux packages
+        run: python scripts/build_desktop_installers.py --platform linux --arch x64 --output release/linux-x64
+
+      - name: Import release signing key
+        shell: bash
+        run: |
+          printf '%s' "$LINUX_GPG_PRIVATE_KEY" | gpg --batch --import
+          FINGERPRINT="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test -n "$FINGERPRINT"
+          echo "LINUX_GPG_FINGERPRINT=$FINGERPRINT" >> "$GITHUB_ENV"
+
+      - name: Sign and verify Linux artifacts
+        shell: bash
+        run: |
+          cd release/linux-x64
+          for checksum in *.sha256; do sha256sum -c "$checksum"; done
+          for artifact in *.AppImage *.deb *.tar.gz; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$LINUX_GPG_PASSPHRASE" --local-user "$LINUX_GPG_FINGERPRINT" --armor --detach-sign "$artifact"
+            gpg --verify "$artifact.asc" "$artifact"
+          done
+
+      - name: Upload verified Linux artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-x64
+          path: |
+            release/linux-x64/*.AppImage
+            release/linux-x64/*.deb
+            release/linux-x64/*.tar.gz
+            release/linux-x64/*.asc
+            release/linux-x64/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish verified GitHub Release
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Download verified platform artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Recheck platform checksums
+        shell: bash
+        run: |
+          cd dist
+          for checksum in *.sha256; do sha256sum -c "$checksum"; done
+
+      - name: Generate SBOM and aggregate checksums
+        shell: bash
+        run: |
+          python scripts/generate_release_sbom.py --output "dist/Elyan-${GITHUB_REF_NAME#v}-SBOM.cdx.json"
+          cd dist
+          find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Publish immutable release assets
+        shell: bash
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          dist/*
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --generate-notes
+          --title "Elyan ${GITHUB_REF_NAME#v}"
