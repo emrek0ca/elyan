@@ -4,6 +4,11 @@ Elyan installers bundle a uv-managed portable CPython runtime, Elyan sources,
 and the hash-locked release dependencies. End users do not need Node.js,
 Python, pip, or terminal knowledge.
 
+The release payload intentionally excludes multi-gigabyte model weights and
+platform-specific audio build drivers. Those remain optional, capability-level
+dependencies and must lazy-load or fail with a safe dependency status; they do
+not block startup or the core agent runtime.
+
 ## Artifacts
 
 - macOS arm64/x64: signed and notarized `.app.zip` plus `.dmg`

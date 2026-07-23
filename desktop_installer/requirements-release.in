@@ -1,0 +1,21 @@
+# Cross-platform release payload. Heavy model weights and platform-specific
+# audio drivers stay capability-optional and lazy-loaded.
+-r ../requirements-core.txt
+
+SpeechRecognition
+reportlab
+trafilatura
+playwright
+markitdown
+pymupdf
+sympy
+pandas
+matplotlib
+qiskit
+qiskit-aer
+latex2sympy2_extended
+python-docx
+python-pptx
+faster-whisper
+sounddevice
+soundfile
