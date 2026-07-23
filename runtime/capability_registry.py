@@ -2534,6 +2534,53 @@ def _run_chart_generate(args: dict[str, Any]) -> Any:
     )
 
 
+def _mcp_call_payload(args: dict[str, Any]) -> dict[str, Any]:
+    server_id = str(
+        args.get("serverId")
+        or args.get("server_id")
+        or args.get("server")
+        or args.get("connectorId")
+        or args.get("connector_id")
+        or args.get("appId")
+        or args.get("app_id")
+        or ""
+    ).strip()
+    tool_name = str(
+        args.get("toolName")
+        or args.get("tool_name")
+        or args.get("tool")
+        or args.get("name")
+        or args.get("operation")
+        or args.get("action")
+        or ""
+    ).strip()
+    raw_arguments = (
+        args.get("arguments")
+        if args.get("arguments") is not None
+        else args.get("args")
+        if args.get("args") is not None
+        else args.get("input")
+        if args.get("input") is not None
+        else args.get("parameters")
+        if args.get("parameters") is not None
+        else args.get("payload")
+    )
+    if isinstance(raw_arguments, dict):
+        arguments = dict(raw_arguments)
+    else:
+        arguments = {}
+    return {"serverId": server_id, "toolName": tool_name, "arguments": arguments}
+
+
+def _run_mcp_call_tool(args: dict[str, Any]) -> Any:
+    payload = _mcp_call_payload(args)
+    return _load_adapter("mcp_call_tool")(
+        payload["serverId"],
+        payload["toolName"],
+        payload["arguments"],
+    )
+
+
 def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
     handlers: dict[str, Callable[[dict[str, Any]], Any]] = {
         "open_app": lambda args: _load_adapter("open_app")(str(args.get("app_name", ""))),
@@ -2859,11 +2906,7 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             str(args.get("voice", "") or ""),
             bool(args.get("interrupt", False)),
         ),
-        "mcp_call_tool": lambda args: _load_adapter("mcp_call_tool")(
-            str(args.get("serverId", "") or args.get("server_id", "") or ""),
-            str(args.get("toolName", "") or args.get("tool_name", "") or ""),
-            dict(args.get("arguments", {}) or {}),
-        ),
+        "mcp_call_tool": _run_mcp_call_tool,
         "desktop_os.status": lambda args: _load_adapter("desktop_os_status")(),
         "desktop_os.permissions": lambda args: _load_adapter("desktop_os_permissions")(),
         "desktop_os.open_permission_settings": lambda args: _load_adapter("desktop_os_open_permission_settings")(

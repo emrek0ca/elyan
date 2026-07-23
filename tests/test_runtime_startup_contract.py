@@ -2512,3 +2512,44 @@ def test_visual_writers_allow_task_selected_external_images(
 
     assert output_path.exists()
     assert result["artifacts"][0]["path"] == str(output_path)
+
+
+def test_mcp_call_tool_accepts_server_planner_argument_variants(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import runtime.capability_registry as registry
+
+    captured: dict[str, object] = {}
+
+    def fake_adapter(server_id: str, tool_name: str, arguments: dict[str, object]) -> dict[str, object]:
+        captured["server_id"] = server_id
+        captured["tool_name"] = tool_name
+        captured["arguments"] = arguments
+        return {"called": True}
+
+    monkeypatch.setattr(
+        registry,
+        "capability_readiness",
+        lambda *_args, **_kwargs: {"available": True, "missing": [], "reason": ""},
+    )
+    monkeypatch.setattr(registry, "_load_adapter", lambda _name: fake_adapter)
+
+    result = registry.run_capability(
+        "mcp_call_tool",
+        {
+            "connectorId": "app_github",
+            "operation": "list_issues",
+            "parameters": {"owner": "elyan", "repo": "desktop", "state": "open"},
+            "_readOnlyHint": True,
+        },
+        _dangerous_state(),
+    )
+
+    assert result["ok"] is True
+    assert captured == {
+        "server_id": "app_github",
+        "tool_name": "list_issues",
+        "arguments": {"owner": "elyan", "repo": "desktop", "state": "open"},
+    }
