@@ -488,17 +488,16 @@ def build_linux(payload_root: Path, output_dir: Path, *, version: str, arch: str
     shutil.copytree(payload_root, app_payload, symlinks=True)
     write_executable(app_dir / "AppRun", _linux_terminal_launcher('"$APPDIR/usr/share/elyan/payload"'))
     shutil.copy2(ROOT / "resources" / "resources" / "icon.png", app_dir / "elyan.png")
-    desktop_entry = textwrap.dedent(
-        '''[Desktop Entry]
-        Type=Application
-        Name=Elyan
-        Comment=Local-first AI agent
-        Exec=elyan
-        Icon=elyan
-        Terminal=false
-        Categories=Utility;Office;
-        '''
-    ).lstrip()
+    desktop_entry = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Elyan\n"
+        "Comment=Local-first AI agent\n"
+        "Exec=elyan\n"
+        "Icon=elyan\n"
+        "Terminal=false\n"
+        "Categories=Utility;Office;\n"
+    )
     (app_dir / "elyan.desktop").write_text(desktop_entry, encoding="utf-8")
 
     artifacts: list[Path] = []
@@ -528,16 +527,15 @@ def build_linux(payload_root: Path, output_dir: Path, *, version: str, arch: str
     control.parent.mkdir(parents=True, exist_ok=True)
     deb_arch = "amd64" if arch == "x64" else "arm64"
     control.write_text(
-        textwrap.dedent(
-            f'''Package: elyan
-            Version: {version}
-            Section: utils
-            Priority: optional
-            Architecture: {deb_arch}
-            Maintainer: Elyan <support@elyan.dev>
-            Description: Elyan local-first AI desktop agent
-            '''
-        ).lstrip(),
+        (
+            "Package: elyan\n"
+            f"Version: {version}\n"
+            "Section: utils\n"
+            "Priority: optional\n"
+            f"Architecture: {deb_arch}\n"
+            "Maintainer: Elyan <support@elyan.dev>\n"
+            "Description: Elyan local-first AI desktop agent\n"
+        ),
         encoding="utf-8",
     )
     deb = output_dir / f"Elyan-{version}-Linux-{arch}.deb"
