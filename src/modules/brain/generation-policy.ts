@@ -9,8 +9,10 @@ import type { SharedBrainWorkload } from "./workloads.js";
 
 /**
  * Reasoning depth dial for gpt-oss models. HARD analytical work gets "high"
- * so answers are thorough instead of shallow. Moderate thinking workloads get
- * "medium". Everything else stays "low" to protect latency.
+ * so answers are thorough instead of shallow. Balanced mobile chat is also
+ * high: short educational/analytical prompts were otherwise too easy to route
+ * into shallow provider responses. Everything else stays low/medium to protect
+ * latency.
  */
 export function resolveReasoningEffort(
   workload: SharedBrainWorkload | undefined,
@@ -21,7 +23,8 @@ export function resolveReasoningEffort(
     workload === "planning" ||
     workload === "document_generate" ||
     workload === "document_analysis" ||
-    workload === "mobile_chat_deep_refine"
+    workload === "mobile_chat_deep_refine" ||
+    workload === "mobile_chat_balanced"
   ) {
     return "high";
   }
@@ -29,7 +32,6 @@ export function resolveReasoningEffort(
     return "medium";
   }
   if (
-    workload === "mobile_chat_balanced" ||
     workload === "mobile_chat_fast" ||
     workload === "vision_reasoning" ||
     workload === "image_analyze"

@@ -378,6 +378,19 @@ test("decideCommandRoute upgrades short follow-ups to balanced so prior turn is 
   }
 });
 
+test("decideCommandRoute upgrades compact educational reasoning prompts to balanced", async () => {
+  const app = createApp([]);
+  for (const message of ["Bana bir mat teoremi söyle", "Teorem söyle", "x^2 türevini al"]) {
+    const decision = await decideCommandRoute(app as never, {
+      userId: "user-1",
+      message,
+      source: "mobile",
+    });
+    assert.equal(decision.route, "server_brain", message);
+    assert.equal(decision.selectedWorkload, "mobile_chat_balanced", message);
+  }
+});
+
 test("decideCommandRoute still keeps greetings on the fast path even if short", async () => {
   // Kısa takip yükseltmesi selamlaşmaya sızmamalı.
   const app = createApp([]);

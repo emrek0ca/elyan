@@ -2318,8 +2318,10 @@ test("resolveReasoningEffort escalates hard analytical work to high and keeps ch
   // A fast workload still escalates when the understanding layer marked the
   // task frame as deep reasoning.
   assert.equal(resolveReasoningEffort("mobile_chat_fast", "deep"), "high");
+  // Balanced chat now uses high effort; short educational/analytical prompts
+  // need quality over raw latency.
+  assert.equal(resolveReasoningEffort("mobile_chat_balanced", undefined), "high");
   // Moderate thinking workloads → medium.
-  assert.equal(resolveReasoningEffort("mobile_chat_balanced", undefined), "medium");
   assert.equal(resolveReasoningEffort("vision_reasoning", undefined), "medium");
   // Ana sohbet yolu artık 120b'de + medium effort: kalite hızdan öncelikli.
   assert.equal(resolveReasoningEffort("mobile_chat_fast", undefined), "medium");

@@ -711,6 +711,13 @@ export function isSystemsProgrammingMessage(message: string): boolean {
   return SYSTEMS_PROGRAMMING_PATTERN.test(message);
 }
 
+const EDUCATIONAL_REASONING_PATTERN =
+  /(?<!\p{L})(teorem|kuram|ispat|kanıt|kanit|lemma|aksiyom|türev|turev|integral|limit|denklem|matematik|math|theorem|proof|derive|derivative|equation)\p{L}*(?!\p{L})/iu;
+
+function isEducationalReasoningMessage(message: string): boolean {
+  return EDUCATIONAL_REASONING_PATTERN.test(message);
+}
+
 function isReferentialRewritePrompt(message: string): boolean {
   return /(?<!\p{L})(onu|bunu|şunu|sunu|it|this|that)\p{L}*[\s\S]{0,80}(daha\s+(?:k[ıi]sa|uzun|net|sade)|ayn[ıi]\s+anlam|same meaning|yeniden yaz|tekrar yaz|rewrite|paraphrase)(?!\p{L})/iu.test(
     message,
@@ -749,6 +756,9 @@ function deriveSelectedWorkload(input: {
     return "mobile_chat_deep_refine";
   }
   if (input.primaryIntent === "math") {
+    return "mobile_chat_balanced";
+  }
+  if (isEducationalReasoningMessage(input.message)) {
     return "mobile_chat_balanced";
   }
   // C/C++ ve sistem programlama soruları fast profile düşerse yüzeysel,

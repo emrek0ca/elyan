@@ -6666,9 +6666,12 @@ export async function generateSharedBrainReply(
                       !envelopeSalvageAcceptable;
                     const missingRequiredConnectorTool =
                       attempt.turnEnvelopeMode &&
-                      (!turnEnvelopeSatisfiesConnectorReadHint(
-                        streamEnvelope,
-                        requiredConnectorReadHint,
+                      ((
+                        requiredConnectorReadHint?.enforcement === "require" &&
+                        !turnEnvelopeSatisfiesConnectorReadHint(
+                          streamEnvelope,
+                          requiredConnectorReadHint,
+                        )
                       ) ||
                         // Uydurma okuma: araç çağrısı yokken "mailinizi
                         // okudum" iddiası — canlıda sahte mail içeriği üretti.
@@ -6911,6 +6914,7 @@ export async function generateSharedBrainReply(
                     const missingRequiredConnectorTool =
                       fabricatedConnectorRead ||
                       (attempt.turnEnvelopeMode &&
+                        requiredConnectorReadHint?.enforcement === "require" &&
                         !turnEnvelopeSatisfiesConnectorReadHint(
                           envelope,
                           requiredConnectorReadHint,
