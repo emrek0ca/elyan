@@ -207,3 +207,93 @@ def test_inline_analysis_executor_passes_read_output_into_report_writer(tmp_path
     assert observed_writer_args["sourceContext"] == read_output
     assert observed_writer_args["_previousOutput"] == read_output
     assert observed_writer_args["_previousResult"]["kind"] == "document_read"
+
+
+def test_accounting_spreadsheet_executor_resolves_calculation_into_cells(tmp_path: Path) -> None:
+    routed = route_text_to_tool(
+        "Muhasebeci gibi çalış. 12000 TL ve 8500 TL faturanın yüzde 20 KDV tutarını hesapla ve Excel tablosu hazırla."
+    )
+    assert routed is not None
+    assert [step["capability"] for step in routed.steps] == ["math_solve", "spreadsheet_write"]
+
+    observed_sheet_args: dict[str, object] = {}
+    output_path = tmp_path / "kdv-tablosu.xlsx"
+
+    def execute_step(capability: str, args: dict, _state: dict, _source: str):
+        if capability == "math_solve":
+            return {"ok": True, "output": "4100", "result": {"kind": "math_solve", "result": "4100"}}, []
+        if capability == "spreadsheet_write":
+            observed_sheet_args.update(args)
+            output_path.write_bytes(b"fake-xlsx-proof" * 80)
+            return {
+                "ok": True,
+                "output": f"XLSX oluşturuldu: {output_path.name}",
+                "result": {"kind": "spreadsheet_write", "outputPath": str(output_path)},
+                "artifacts": [{"kind": "file", "path": str(output_path), "name": output_path.name}],
+            }, []
+        raise AssertionError(capability)
+
+    ok, _content, _events, error_code, result, artifacts = ExecutorCore().execute_plan_steps(
+        steps=[dict(step) for step in routed.steps],
+        state_factory=lambda: {},
+        execute_step=execute_step,
+        source="server_materialized",
+        confirmed=True,
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert result and result["kind"] == "spreadsheet_write"
+    assert artifacts and artifacts[-1]["path"] == str(output_path)
+    assert observed_sheet_args["_previousOutput"] == "4100"
+    assert observed_sheet_args["_previousResult"]["kind"] == "math_solve"
+    assert observed_sheet_args["_dependencyResults"]["calculate"]["result"] == "4100"
+    assert "4100" in str(observed_sheet_args)
+
+
+def test_student_presentation_executor_resolves_research_into_prompt(tmp_path: Path) -> None:
+    routed = route_text_to_tool(
+        "Öğrenci gibi çalış. Kuantum annealing ile klasik optimizasyon farkını araştır, adım adım açıkla ve 5 sayfalık sunum hazırla."
+    )
+    assert routed is not None
+    assert [step["capability"] for step in routed.steps] == ["web_research", "presentation_write"]
+
+    observed_presentation_args: dict[str, object] = {}
+    output_path = tmp_path / "kuantum-sunum.pptx"
+    research_output = "Kuantum annealing sezgisel optimizasyon için kullanılır; klasik yöntemler deterministik baseline sağlar."
+
+    def execute_step(capability: str, args: dict, _state: dict, _source: str):
+        if capability == "web_research":
+            return {
+                "ok": True,
+                "output": research_output,
+                "result": {"kind": "web_research", "summary": research_output},
+            }, []
+        if capability == "presentation_write":
+            observed_presentation_args.update(args)
+            output_path.write_bytes(b"fake-pptx-proof" * 80)
+            return {
+                "ok": True,
+                "output": f"PPTX oluşturuldu: {output_path.name}",
+                "result": {"kind": "presentation_write", "outputPath": str(output_path)},
+                "artifacts": [{"kind": "file", "path": str(output_path), "name": output_path.name}],
+            }, []
+        raise AssertionError(capability)
+
+    ok, _content, _events, error_code, result, artifacts = ExecutorCore().execute_plan_steps(
+        steps=[dict(step) for step in routed.steps],
+        state_factory=lambda: {},
+        execute_step=execute_step,
+        source="server_materialized",
+        confirmed=True,
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert result and result["kind"] == "presentation_write"
+    assert artifacts and artifacts[-1]["path"] == str(output_path)
+    assert observed_presentation_args["_previousOutput"] == research_output
+    assert observed_presentation_args["_previousResult"]["kind"] == "web_research"
+    research_id = str(routed.steps[0].get("id") or "")
+    assert observed_presentation_args["_dependencyResults"][research_id]["summary"] == research_output
+    assert research_output in str(observed_presentation_args)
