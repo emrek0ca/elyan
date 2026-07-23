@@ -64,6 +64,7 @@ _ROLE_BY_CAPABILITY: dict[str, str] = {
     "image_read": "observer",
     "analyze_screen": "observer",
     "data_analyze": "observer",
+    "text_analyze": "analyzer",
     "chart_generate": "observer",
     "desktop_os.status": "observer",
     "desktop_os.permissions": "observer",
@@ -109,7 +110,7 @@ def _capability_phase(capability: str, role: str) -> str:
     normalized = str(capability or "").strip().lower()
     if normalized in {"retrieve_context", "web_research", "document_read", "ocr_read", "image_read", "data_analyze", "chart_generate", "sys_info"}:
         return "gather"
-    if normalized in {"math_solve", "latex_parse", "quantum_model_problem", "quantum_compare_classical"}:
+    if normalized in {"math_solve", "latex_parse", "text_analyze", "quantum_model_problem", "quantum_compare_classical"}:
         return "reason"
     if normalized in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write", "email_draft", "quantum_generate_report"}:
         return "compose"

@@ -209,6 +209,58 @@ def test_inline_analysis_executor_passes_read_output_into_report_writer(tmp_path
     assert observed_writer_args["_previousResult"]["kind"] == "document_read"
 
 
+def test_professional_executor_passes_analysis_output_into_writer(tmp_path: Path) -> None:
+    runtime = bridge.RuntimeBridge()
+    plan = runtime._professional_workflow_plan(
+        "Avukat gibi çalış. Bu dosya metnini analiz et: tahliye davası. Mevzuatı araştır ve savunma dilekçesi hazırla.",
+        {"document_read", "web_research", "text_analyze", "document_write"},
+    )
+    assert plan is not None
+    steps, _preview = plan
+
+    observed_writer_args: dict[str, object] = {}
+    calls: list[str] = []
+    output_path = tmp_path / "savunma-dilekcesi.docx"
+
+    def execute_step(capability: str, args: dict, _state: dict, _source: str):
+        calls.append(capability)
+        if capability == "document_read":
+            return {"ok": True, "output": "Dosya bağlamı: tahliye itirazı", "result": {"kind": "document_read", "text": "Dosya bağlamı: tahliye itirazı"}}, []
+        if capability == "web_research":
+            return {"ok": True, "output": "Mevzuat bağlamı: TBK kira hükümleri", "result": {"kind": "web_research", "summary": "Mevzuat bağlamı: TBK kira hükümleri"}}, []
+        if capability == "text_analyze":
+            assert "Dosya bağlamı" in str(args)
+            assert "Mevzuat bağlamı" in str(args)
+            return {"ok": True, "output": "Analiz: savunma odağı süre ve delil kontrolü", "result": {"kind": "text_analyze", "summary": "savunma odağı"}}, []
+        if capability == "document_write":
+            observed_writer_args.update(args)
+            output_path.write_bytes(b"fake-legal-docx-proof" * 80)
+            return {
+                "ok": True,
+                "output": f"DOCX oluşturuldu: {output_path.name}",
+                "result": {"kind": "document_write", "outputPath": str(output_path)},
+                "artifacts": [{"kind": "file", "path": str(output_path), "name": output_path.name}],
+            }, []
+        raise AssertionError(capability)
+
+    ok, _content, _events, error_code, result, artifacts = ExecutorCore().execute_plan_steps(
+        steps=[dict(step) for step in steps],
+        state_factory=lambda: {},
+        execute_step=execute_step,
+        source="confirmed_plan",
+        confirmed=True,
+    )
+
+    assert ok is True
+    assert error_code == ""
+    assert result and result["kind"] == "document_write"
+    assert artifacts and artifacts[-1]["path"] == str(output_path)
+    assert calls == ["document_read", "web_research", "text_analyze", "document_write"]
+    assert observed_writer_args["_previousOutput"] == "Analiz: savunma odağı süre ve delil kontrolü"
+    assert observed_writer_args["_previousResult"]["kind"] == "text_analyze"
+    assert observed_writer_args["_dependencyResults"]["analyze"]["summary"] == "savunma odağı"
+
+
 def test_accounting_spreadsheet_executor_resolves_calculation_into_cells(tmp_path: Path) -> None:
     routed = route_text_to_tool(
         "Muhasebeci gibi çalış. 12000 TL ve 8500 TL faturanın yüzde 20 KDV tutarını hesapla ve Excel tablosu hazırla."

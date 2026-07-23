@@ -27,6 +27,7 @@ KNOWN_SAFE_TOOLS = {
     "ocr_read",
     "image_read",
     "data_analyze",
+    "text_analyze",
     "chart_generate",
     "web_research",
     "image_fetch",

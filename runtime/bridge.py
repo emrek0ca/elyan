@@ -143,6 +143,7 @@ LOCAL_PRIVATE_CAPABILITIES = {
     "canvas_write",
     "ocr_read",
     "image_read",
+    "text_analyze",
     "data_analyze",
     "chart_generate",
     "analyze_screen",
@@ -169,6 +170,7 @@ REMOTE_DETERMINISTIC_CAPABILITIES = {
     "document_read",
     "ocr_read",
     "image_read",
+    "text_analyze",
     "data_analyze",
     "chart_generate",
     "math_solve",
@@ -13272,6 +13274,57 @@ class RuntimeBridge:
                 }
             )
 
+        upstream_context_parts: list[str] = []
+        if any(step.get("id") == "read_input" for step in steps):
+            upstream_context_parts.append("Okunan özel/veri bağlamı: {{steps.read_input.output}}")
+        if any(step.get("id") == "calculate" for step in steps):
+            upstream_context_parts.append("Hesap sonucu: {{steps.calculate.output}}")
+        if any(step.get("id") == "research" for step in steps):
+            upstream_context_parts.append("Araştırma bağlamı: {{steps.research.output}}")
+        analysis_requested = any(
+            token in normalized
+            for token in (
+                "analiz",
+                "yorumla",
+                "degerlendir",
+                "değerlendir",
+                "incele",
+                "savunma",
+                "rapor",
+                "adim adim",
+                "adım adım",
+            )
+        )
+        if analysis_requested and upstream_context_parts and "text_analyze" in canonical_caps:
+            analysis_mode = (
+                "legal"
+                if legal
+                else "medical"
+                if medical
+                else "accounting"
+                if accounting
+                else "technical"
+                if engineering
+                else "student"
+            )
+            steps.append(
+                {
+                    "id": "analyze",
+                    "capability": "text_analyze",
+                    "args": {
+                        "prompt": prompt,
+                        "mode": analysis_mode,
+                        "sourceContext": "\n\n".join(upstream_context_parts),
+                    },
+                    "dependsOn": [
+                        str(step.get("id", "") or "").strip()
+                        for step in steps
+                        if str(step.get("id", "") or "").strip()
+                    ],
+                    "description": "Toplanan bağlam profesyonel teslim çıktısı için analiz edilecek.",
+                }
+            )
+
         section_prompt = (
             "Savunma dilekçesi taslağı hazırla. Bölümler: olay özeti, hukuki değerlendirme, deliller, savunma gerekçeleri, sonuç ve talep. "
             "Kesin hukuki temsil iddiası kurma; doğrulanması gereken noktaları açık işaretle."
@@ -13297,6 +13350,8 @@ class RuntimeBridge:
             source_context_parts.append("Hesap sonucu: {{steps.calculate.output}}")
         if any(step.get("id") == "research" for step in steps):
             source_context_parts.append("Araştırma bağlamı: {{steps.research.output}}")
+        if any(step.get("id") == "analyze" for step in steps):
+            source_context_parts.append("Analiz bağlamı: {{steps.analyze.output}}")
         writer_args: dict[str, Any] = {
             "prompt": f"{section_prompt}\n\nKullanıcı isteği: {prompt}",
             "title": report_title,

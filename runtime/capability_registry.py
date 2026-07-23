@@ -700,6 +700,17 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         usage="Bir veri dosyasını anlamak/özetlemek için. Grafik çizmek için chart_generate.",
     ),
     _tool_decl(
+        "text_analyze",
+        "Okuma, araştırma veya hesap çıktılarından yerel profesyonel analiz özeti üretir.",
+        {
+            "prompt": {"type": "STRING", "description": "Analiz hedefi ve kullanıcı talimatı."},
+            "sourceContext": {"type": "STRING", "description": "Analiz edilecek bağlam metni veya önceki adım referansları."},
+            "mode": {"type": "STRING", "description": "Analiz türü: 'professional', 'legal', 'medical', 'accounting', 'technical'."},
+        },
+        ["prompt"],
+        usage="Dosya okuma/araştırma/hesaplama sonrası, belge/sunum/tablo yazmadan önce muhakeme özeti çıkarmak için.",
+    ),
+    _tool_decl(
         "chart_generate",
         "CSV, JSON veya Excel verisinden yerel PNG grafik üretir.",
         {
@@ -1004,6 +1015,7 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "git_branch": _AdapterSpec("actions.git_ops", "git_branch"),
     "canvas_write": _AdapterSpec("actions.canvas_write", "canvas_write"),
     "data_analyze": _AdapterSpec("actions.data_analyze", "data_analyze"),
+    "text_analyze": _AdapterSpec("actions.text_analyze", "text_analyze"),
     "chart_generate": _AdapterSpec("actions.chart_generate", "chart_generate"),
     "math_solve": _AdapterSpec("actions.math_solve", "math_solve"),
     "latex_parse": _AdapterSpec("actions.latex_parse", "latex_parse"),
@@ -1069,6 +1081,7 @@ _CAPABILITY_DISPLAY_NAMES: dict[str, str] = {
     "image_fetch": "Görsel indirme",
     "image_generate": "Görsel üretme",
     "image_edit": "Görsel düzenleme",
+    "text_analyze": "Metin analizi",
     "document_write": "Belge oluşturma",
     "spreadsheet_write": "Tablo oluşturma",
     "presentation_write": "Sunum oluşturma",
@@ -1209,6 +1222,7 @@ _TRUSTED_IDEMPOTENT_WRITE_CAPABILITIES = {
 _APPROVAL_READ_ONLY_CAPABILITIES = {
     "clipboard_read",
     "data_analyze",
+    "text_analyze",
     "desktop_os.permissions",
     "desktop_os.status",
     "directory_tree",
@@ -1242,6 +1256,7 @@ _CAPABILITY_DEPENDENCY_KEYS: dict[str, tuple[str, ...]] = {
     "math_solve": ("sympy",),
     "latex_parse": ("latex2sympy2_extended",),
     "data_analyze": ("pandas",),
+    "text_analyze": (),
     "chart_generate": ("pandas", "matplotlib"),
     "document_write": ("python_docx",),
     "spreadsheet_write": ("openpyxl",),
@@ -1541,7 +1556,7 @@ def capability_metadata(name: str) -> dict[str, Any]:
         pass  # kategori spec'ten geldi; aşağıdaki legacy zincir atlanır
     elif normalized in {"file_read", "file_search", "directory_tree", "git_status", "git_diff", "file_write", "file_patch", "git_commit", "git_branch"}:
         category = "developer"
-    elif normalized in {"web_research", "retrieve_context", "document_read", "ocr_read", "image_read", "image_fetch"}:
+    elif normalized in {"web_research", "retrieve_context", "document_read", "ocr_read", "image_read", "image_fetch", "text_analyze"}:
         category = "research_docs"
     elif normalized in {"document_write", "spreadsheet_write", "presentation_write", "canvas_write", "image_generate", "image_edit", "chart_generate"}:
         category = "research_docs"
@@ -1614,7 +1629,7 @@ def capability_metadata(name: str) -> dict[str, Any]:
         pass  # doğrulama modu spec'ten geldi
     elif normalized in _WRITE_CAPABILITIES or normalized in {"image_fetch", "file_write", "file_patch"}:
         verification_mode = "artifact_exists"
-    elif normalized in {"document_read", "ocr_read", "image_read", "data_analyze", "math_solve", "latex_parse", "speech_to_text", "text_to_speech", "web_research", "retrieve_context", "email_draft", "quantum_model_problem", "quantum_compare_classical", "quantum_generate_report", "clipboard_read", "file_read", "file_search", "directory_tree", "git_status", "git_diff", "git_commit", "git_branch"}:
+    elif normalized in {"document_read", "ocr_read", "image_read", "data_analyze", "text_analyze", "math_solve", "latex_parse", "speech_to_text", "text_to_speech", "web_research", "retrieve_context", "email_draft", "quantum_model_problem", "quantum_compare_classical", "quantum_generate_report", "clipboard_read", "file_read", "file_search", "directory_tree", "git_status", "git_diff", "git_commit", "git_branch"}:
         verification_mode = "result_nonempty"
     elif normalized in {"speech_capture"}:
         verification_mode = "none"
@@ -1708,6 +1723,7 @@ _CAPABILITY_GROUP_DEFINITIONS: tuple[tuple[str, str, set[str]], ...] = (
             "image_edit",
             "image_fetch",
             "data_analyze",
+            "text_analyze",
             "chart_generate",
             "document_write",
             "spreadsheet_write",
@@ -2519,6 +2535,14 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             str(args.get("mode", "summary") or "summary"),
             args.get("columns") if isinstance(args.get("columns"), list) else None,
             list(args.get("_selectedPaths", []) or []),
+        ),
+        "text_analyze": lambda args: _load_adapter("text_analyze")(
+            prompt=str(args.get("prompt", "") or args.get("instruction", "") or ""),
+            source_context=str(args.get("sourceContext", "") or args.get("source_context", "") or ""),
+            mode=str(args.get("mode", "professional") or "professional"),
+            _previousOutput=str(args.get("_previousOutput", "") or ""),
+            _previousResult=dict(args.get("_previousResult", {}) or {}) if isinstance(args.get("_previousResult", {}), dict) else None,
+            _dependencyResults=dict(args.get("_dependencyResults", {}) or {}) if isinstance(args.get("_dependencyResults", {}), dict) else None,
         ),
         "chart_generate": lambda args: _load_adapter("chart_generate")(
             str(args.get("path", "") or ""),

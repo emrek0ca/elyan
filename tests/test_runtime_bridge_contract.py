@@ -938,6 +938,35 @@ def test_professional_legal_file_workflow_reads_case_context_before_research_and
     assert preview["privacyClass"] == "local_private"
 
 
+def test_professional_legal_workflow_can_insert_explicit_analysis_step() -> None:
+    runtime = bridge.RuntimeBridge()
+
+    plan = runtime._professional_workflow_plan(
+        "Avukat gibi çalış. Bu dosya metnini analiz et: tahliye davası. Mevzuatı araştır ve savunma dilekçesi hazırla.",
+        {"document_read", "web_research", "text_analyze", "document_write"},
+    )
+
+    assert plan is not None
+    steps, preview = plan
+    assert [step["capability"] for step in steps] == [
+        "document_read",
+        "web_research",
+        "text_analyze",
+        "document_write",
+    ]
+    assert steps[2]["dependsOn"] == ["read_input", "research"]
+    assert steps[2]["args"]["mode"] == "legal"
+    assert steps[2]["args"]["sourceContext"] == (
+        "Okunan özel/veri bağlamı: {{steps.read_input.output}}\n\n"
+        "Araştırma bağlamı: {{steps.research.output}}"
+    )
+    assert steps[3]["dependsOn"] == ["read_input", "research", "analyze"]
+    assert "Analiz bağlamı: {{steps.analyze.output}}" in steps[3]["args"]["sourceContext"]
+    roles = preview["agentPlan"]["stepRoles"]
+    assert roles[2]["role"] == "analyzer"
+    assert roles[2]["phase"] == "reason"
+
+
 def test_professional_student_workflow_can_target_presentation_without_document_writer() -> None:
     runtime = bridge.RuntimeBridge()
 
