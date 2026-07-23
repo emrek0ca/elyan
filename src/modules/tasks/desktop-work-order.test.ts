@@ -178,11 +178,60 @@ test("research presentation becomes a typed evidence-gated desktop chain", () =>
   assert.equal(workOrder.requiredCapabilities.includes("desktop_operator.run"), false);
 
   const presentation = workOrder.planPreview.steps[1];
-  assert.equal(presentation?.args.sourceContext, undefined);
+  assert.equal(presentation?.args.sourceContext, "Araştırma bağlamı: {{steps.step_web_research.output}}");
+  assert.deepEqual(presentation?.dependsOn, ["step_web_research"]);
   assert.match(String(presentation?.args.prompt ?? ""), /5 slaytlık sunum/iu);
   assert.match(String(presentation?.args.outputPath ?? ""), /^~\/Desktop\/.+\.pptx$/u);
   assert.equal(workOrder.expectedOutputs.filter((output) => output.kind === "artifact").length, 1);
   assert.equal(workOrder.expectedOutputs.filter((output) => output.kind === "file_update").length, 1);
+});
+
+test("accounting KDV report includes calculation, research, analysis, and writer scope", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Muhasebeci gibi çalış. 12000 TL ve 8500 TL faturanın yüzde 20 KDV tutarını hesapla, KDV kurallarını araştır ve rapor hazırla.",
+    title: "KDV raporu",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+
+  assert.equal(workOrder.requiredCapabilities.includes("math_solve"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("web_research"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("text_analyze"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("document_write"), true);
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["web_research", "math_solve", "text_analyze", "document_write"],
+  );
+  const math = workOrder.planPreview.steps.find((step) => step.capability === "math_solve");
+  assert.equal(math?.args.expression, "(12000+8500)*0.2");
+  const analysis = workOrder.planPreview.steps.find((step) => step.capability === "text_analyze");
+  assert.deepEqual(analysis?.dependsOn, ["step_web_research", "step_math_solve"]);
+  const writer = workOrder.planPreview.steps.find((step) => step.capability === "document_write");
+  assert.deepEqual(writer?.dependsOn, ["step_text_analyze"]);
+  assert.equal(writer?.args.sourceContext, "Analiz bağlamı: {{steps.step_text_analyze.output}}");
+});
+
+test("legal file workflow includes private read, public research, analysis, and defense writer", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Avukat gibi çalış. Bu dosya metnini analiz et: tahliye itirazı. Kira uyuşmazlığı mevzuatını araştır ve savunma dilekçesi hazırla.",
+    title: "Savunma dilekçesi",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+
+  assert.equal(workOrder.requiredCapabilities.includes("document_read"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("web_research"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("text_analyze"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("document_write"), true);
+  assert.equal(workOrder.planPreview.privacyClass, "local_private");
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["web_research", "document_read", "text_analyze", "document_write"],
+  );
+  const analysis = workOrder.planPreview.steps.find((step) => step.capability === "text_analyze");
+  assert.deepEqual(analysis?.dependsOn, ["step_web_research", "step_document_read"]);
+  assert.match(String(analysis?.args.sourceContext ?? ""), /Okunan bağlam/u);
+  assert.match(String(analysis?.args.sourceContext ?? ""), /Araştırma bağlamı/u);
 });
 
 test("presentation creation does not add a second generic document writer", () => {

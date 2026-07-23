@@ -367,6 +367,9 @@ function inferCapabilities(
   }
   const normalized = message.toLocaleLowerCase("tr-TR");
   const researchRequested = unicodeWordPattern(String.raw`\b(?:araştır\p{L}*|arastir\p{L}*|research|bilgi\s+topla\p{L}*|kaynak\s+topla\p{L}*)\b`, "i").test(normalized);
+  const analysisRequested = unicodeWordPattern(String.raw`\b(?:analiz\p{L}*|yorumla\p{L}*|değerlendir\p{L}*|degerlendir\p{L}*|incele\p{L}*|rapor\p{L}*|dilekçe\p{L}*|dilekce\p{L}*|savunma\p{L}*)\b`, "i").test(normalized);
+  const calculationRequested = unicodeWordPattern(String.raw`\b(?:hesapla\p{L}*|hesap\p{L}*|kdv|vergi|yüzde|yuzde|%)\b`, "i").test(normalized)
+    && /\d/u.test(normalized);
   const presentationRequested = /\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)
     && unicodeWordPattern(String.raw`\b(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yap\p{L}*|çevir\p{L}*|cevir\p{L}*|kaydet\p{L}*|save|create|prepare)\b`, "i").test(normalized);
   const directAppCommand = parseDirectDesktopAppCommand(message);
@@ -396,6 +399,7 @@ function inferCapabilities(
     capabilities.delete("desktop_operator.run");
   }
   if (researchRequested) capabilities.add("web_research");
+  if (calculationRequested) capabilities.add("math_solve");
   if (presentationRequested) {
     capabilities.add("presentation_write");
     capabilities.delete("desktop_operator.run");
@@ -403,11 +407,24 @@ function inferCapabilities(
   if (unicodeWordPattern(String.raw`\b(masaüstü\p{L}*|masaustu\p{L}*|desktop|indirilenler\p{L}*|downloads|klasör\p{L}*|klasor\p{L}*|dosya\p{L}*|belge\p{L}*|pdf)\b`, "i").test(normalized)) {
     capabilities.add("document_read");
   }
-  if (unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
+  if (unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
     if (presentationRequested) capabilities.add("presentation_write");
     else if (unicodeWordPattern(String.raw`\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b`, "i").test(normalized)) capabilities.add("spreadsheet_write");
     else if (unicodeWordPattern(String.raw`\b(pdf|svg|canvas|görsel|gorsel)\b`, "i").test(normalized)) capabilities.add("canvas_write");
     else capabilities.add("document_write");
+  }
+  if (
+    analysisRequested &&
+    (
+      capabilities.has("document_read") ||
+      capabilities.has("web_research") ||
+      capabilities.has("math_solve") ||
+      capabilities.has("document_write") ||
+      capabilities.has("spreadsheet_write") ||
+      capabilities.has("presentation_write")
+    )
+  ) {
+    capabilities.add("text_analyze");
   }
   if (
     unicodeWordPattern(String.raw`\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b`, "i").test(normalized)
@@ -470,6 +487,25 @@ function inferExpectedOutputs(
   return outputs;
 }
 
+function inferCalculationExpression(message: string): string {
+  const amounts: string[] = [];
+  for (const match of message.matchAll(/(?<![%\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s*(?:tl|try|₺|usd|eur)\b/giu)) {
+    const amount = String(match[1] ?? "").replace(",", ".");
+    if (amount && !amounts.includes(amount)) amounts.push(amount);
+  }
+  const percentMatch = message.match(/(?:%|yüzde|yuzde)\s*(\d+(?:[.,]\d+)?)/iu);
+  if (amounts.length > 0 && percentMatch) {
+    const percent = Number(String(percentMatch[1] ?? "").replace(",", "."));
+    if (Number.isFinite(percent)) {
+      const multiplier = percent / 100;
+      const normalizedMultiplier = Number.isInteger(multiplier) ? String(multiplier) : String(multiplier);
+      return `(${amounts.slice(0, 12).join("+")})*${normalizedMultiplier}`;
+    }
+  }
+  const numericExpression = message.match(/(\d+(?:[.,]\d+)?(?:\s*[-+*/]\s*\d+(?:[.,]\d+)?)+)/u);
+  return numericExpression ? String(numericExpression[1]).replaceAll(",", ".") : "";
+}
+
 function buildSteps(input: {
   title: string;
   summary: string;
@@ -499,6 +535,8 @@ function buildSteps(input: {
     return steps;
   }
   const researchRequested = input.capabilities.includes("web_research");
+  const calculationRequested = input.capabilities.includes("math_solve");
+  const analysisRequested = input.capabilities.includes("text_analyze");
   const semanticBrief = compactText([
     input.envelope?.intent.topic,
     ...(input.envelope?.entities ?? []).map((entity) => `${entity.type}: ${entity.normalized ?? entity.value}`),
@@ -555,6 +593,15 @@ function buildSteps(input: {
       args: { query: topic || semanticBrief },
     });
   }
+  if (calculationRequested) {
+    const expression = inferCalculationExpression(topic || input.summary);
+    steps.push({
+      id: "step_math_solve",
+      capability: "math_solve",
+      description: expression ? "Sayısal hesaplama yerel olarak çözülecek." : "Hesaplama gereksinimi yerel matematik aracıyla çözülecek.",
+      args: expression ? { expression, mode: "evaluate" } : { expression: topic || semanticBrief, mode: "evaluate" },
+    });
+  }
   if (input.capabilities.includes("browser_control")) {
     // "Chrome'u kapat/aç" gibi salt uygulama-yaşam-döngüsü görevlerinde URL yoksa
     // genel "search" adımı ekleme — kapatılan tarayıcıyı geri açıp görevi bozuyor.
@@ -570,12 +617,37 @@ function buildSteps(input: {
       });
     }
   }
-  if (input.capabilities.includes("document_read") && fileHint) {
+  if (input.capabilities.includes("document_read") && (fileHint || input.capabilities.includes("text_analyze"))) {
     steps.push({
       id: "step_document_read",
       capability: "document_read",
-      description: "Belge yerel ve izinli çalışma alanında okunacak.",
-      args: { path: fileHint, mode: "read" },
+      description: fileHint
+        ? "Belge yerel ve izinli çalışma alanında okunacak."
+        : "Kullanıcının paylaştığı özel metin/veri bağlamı yerelde okunacak.",
+      args: fileHint
+        ? { path: fileHint, mode: "read" }
+        : { text: semanticBrief, mode: "read" },
+    });
+  }
+  const upstreamStepIds = steps
+    .filter((step) => ["step_web_research", "step_math_solve", "step_document_read"].includes(step.id))
+    .map((step) => step.id);
+  if (analysisRequested && upstreamStepIds.length > 0) {
+    const sourceContext = [
+      upstreamStepIds.includes("step_document_read") ? "Okunan bağlam: {{steps.step_document_read.output}}" : "",
+      upstreamStepIds.includes("step_math_solve") ? "Hesap sonucu: {{steps.step_math_solve.output}}" : "",
+      upstreamStepIds.includes("step_web_research") ? "Araştırma bağlamı: {{steps.step_web_research.output}}" : "",
+    ].filter(Boolean).join("\n\n");
+    steps.push({
+      id: "step_text_analyze",
+      capability: "text_analyze",
+      description: "Toplanan bağlam teslim çıktısı için analiz edilecek.",
+      args: {
+        prompt: semanticBrief,
+        sourceContext,
+        mode: "professional",
+      },
+      dependsOn: upstreamStepIds,
     });
   }
   for (const capability of ["document_write", "spreadsheet_write", "presentation_write", "canvas_write"] as const) {
@@ -585,6 +657,13 @@ function buildSteps(input: {
       prompt: semanticBrief,
     };
     if (!researchRequested) args.sourceContext = semanticBrief;
+    if (analysisRequested && upstreamStepIds.length > 0) {
+      args.sourceContext = "Analiz bağlamı: {{steps.step_text_analyze.output}}";
+    } else if (researchRequested) {
+      args.sourceContext = "Araştırma bağlamı: {{steps.step_web_research.output}}";
+    } else if (calculationRequested) {
+      args.sourceContext = "Hesap sonucu: {{steps.step_math_solve.output}}";
+    }
     if (
       capability === "presentation_write"
       && unicodeWordPattern(String.raw`\b(?:masaüstü\p{L}*|masaustu\p{L}*|desktop)\b`, "i").test(topic)
@@ -612,6 +691,13 @@ function buildSteps(input: {
       capability,
       description: "Tipli kullanıcı gereksinimlerinden deterministik çıktı üretilecek.",
       args,
+      ...(analysisRequested && upstreamStepIds.length > 0
+        ? { dependsOn: ["step_text_analyze"] }
+        : researchRequested
+          ? { dependsOn: ["step_web_research"] }
+          : calculationRequested
+            ? { dependsOn: ["step_math_solve"] }
+            : {}),
     });
   }
   if (
