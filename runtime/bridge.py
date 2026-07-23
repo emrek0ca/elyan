@@ -12177,7 +12177,7 @@ class RuntimeBridge:
                 "capability": str(step.get("capability", "") or ""),
                 "detail": str(step.get("detail", "") or ""),
             }
-            for key in ("artifactCount", "resultKind", "verificationStatus", "attemptCount", "startedAt", "completedAt"):
+            for key in ("phase", "role", "artifactCount", "resultKind", "verificationStatus", "attemptCount", "startedAt", "completedAt"):
                 if key in step:
                     live_step[key] = step[key]
             evidence = step.get("evidence")
@@ -12955,6 +12955,15 @@ class RuntimeBridge:
         normalized_status = str(status or "running").strip().lower()
         safe_steps: list[dict[str, Any]] = []
         step_count = 0
+        agent_plan = plan_preview.get("agentPlan")
+        step_roles_by_id: dict[str, dict[str, Any]] = {}
+        if isinstance(agent_plan, dict):
+            for role_item in agent_plan.get("stepRoles", []) or []:
+                if not isinstance(role_item, dict):
+                    continue
+                role_step_id = str(role_item.get("id", "") or "").strip()
+                if role_step_id:
+                    step_roles_by_id[role_step_id] = role_item
         if isinstance(steps, list):
             step_count = sum(1 for s in steps if isinstance(s, dict))
             for index, step in enumerate(steps[:WORK_ORDER_MAX_STEPS], start=1):
@@ -12986,15 +12995,20 @@ class RuntimeBridge:
                         step_status = "pending"
                 else:  # running
                     step_status = "running" if index == 1 else "pending"
-                safe_steps.append(
-                    {
-                        "id": step_id,
-                        "label": label,
-                        "status": step_status,
-                        "capability": capability,
-                    }
-                )
-        agent_plan = plan_preview.get("agentPlan")
+                safe_step = {
+                    "id": step_id,
+                    "label": label,
+                    "status": step_status,
+                    "capability": capability,
+                }
+                role_item = step_roles_by_id.get(step_id, {})
+                phase = str(step.get("phase", "") or role_item.get("phase", "") or "")
+                role = str(step.get("role", "") or role_item.get("role", "") or "")
+                if phase:
+                    safe_step["phase"] = phase
+                if role:
+                    safe_step["role"] = role
+                safe_steps.append(safe_step)
         active_step_id = None
         if safe_steps:
             running_step = next((s for s in safe_steps if s["status"] == "running"), None)

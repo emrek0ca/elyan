@@ -618,6 +618,12 @@ class ExecutorCore:
                 "capability": str(state.get("capability", "") or ""),
                 "detail": self._step_detail(state),
             }
+            phase = str(state.get("phase", "") or "")
+            role = str(state.get("role", "") or "")
+            if phase:
+                step_payload["phase"] = phase
+            if role:
+                step_payload["role"] = role
             # Zengin telemetri (mobil canlı görev penceresi): adım süresi,
             # doğrulama durumu, deneme sayısı — veri zaten stepStates'te vardı,
             # bloğa çıkmıyordu.

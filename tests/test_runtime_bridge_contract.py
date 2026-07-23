@@ -2481,6 +2481,28 @@ def test_remote_task_trace_keeps_stable_card_and_inline_approval_step() -> None:
     assert any(step["status"] == "waiting_approval" for step in trace["steps"])
 
 
+def test_remote_task_trace_exposes_step_role_and_phase_from_agent_plan() -> None:
+    runtime = bridge.RuntimeBridge()
+    steps = [
+        {"id": "research", "capability": "web_research", "description": "Mevzuatı araştır"},
+        {"id": "draft", "capability": "document_write", "description": "Dilekçeyi yaz"},
+    ]
+    trace = runtime._remote_task_trace_payload(
+        {
+            "summary": "Dava analizi",
+            "steps": steps,
+            "agentPlan": bridge.build_agent_plan(steps, summary="Dava analizi"),
+        },
+        status="running",
+        task_id="task-roles",
+    )
+
+    assert trace["steps"][0]["role"] == "operator"
+    assert trace["steps"][0]["phase"] == "gather"
+    assert trace["steps"][1]["role"] == "writer"
+    assert trace["steps"][1]["phase"] == "compose"
+
+
 def test_execute_assigned_runtime_task_skips_duplicate_inflight_delivery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -10790,13 +10812,11 @@ def test_live_progress_routes_to_active_task_and_throttles(
     güncellemesi akıtır; aynı durumda kısa aralıkta tekrar akmaz (throttle)."""
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
-    pushed: list[tuple[str, str, list]] = []
+    pushed: list[dict] = []
     monkeypatch.setattr(
         runtime,
         "_report_runtime_task_status",
-        lambda task_id, payload: pushed.append(
-            (task_id, payload["status"], [(s["id"], s["status"]) for s in payload["executionTrace"]["steps"]])
-        ),
+        lambda task_id, payload: pushed.append({"taskId": task_id, **payload}),
     )
     # Aktif görev yokken hiçbir şey akmaz.
     runtime._emit_remote_task_progress("conv", {"steps": [{"id": "s1", "status": "running", "label": "x"}]})
@@ -10809,8 +10829,8 @@ def test_live_progress_routes_to_active_task_and_throttles(
             "title": "Görev",
             "activeStepId": "s1",
             "steps": [
-                {"id": "s1", "status": "running", "label": "Kapatılıyor", "capability": "close_app"},
-                {"id": "s2", "status": "pending", "label": "Doğrula", "capability": "sys_info"},
+                {"id": "s1", "status": "running", "label": "Kapatılıyor", "capability": "close_app", "role": "operator", "phase": "act"},
+                {"id": "s2", "status": "pending", "label": "Doğrula", "capability": "sys_info", "role": "observer", "phase": "gather"},
             ],
         }
         runtime._emit_remote_task_progress("conv", block)
@@ -10829,16 +10849,20 @@ def test_live_progress_routes_to_active_task_and_throttles(
                     "verificationStatus": "passed",
                     "evidence": {"path": "/tmp/close-app-proof.txt"},
                 },
-                {"id": "s2", "status": "running", "label": "Doğrula", "capability": "sys_info"},
+                {"id": "s2", "status": "running", "label": "Doğrula", "capability": "sys_info", "role": "observer", "phase": "gather"},
             ],
         }
         runtime._emit_remote_task_progress("conv", block2)  # durum değişti → akar
     finally:
         runtime._end_active_remote_task(token, "task-1")
 
-    assert [status for _, status, _ in pushed] == ["running", "running"]
-    assert pushed[0][2] == [("s1", "running"), ("s2", "pending")]
-    assert pushed[1][2] == [("s1", "completed"), ("s2", "running")]
+    assert [payload["status"] for payload in pushed] == ["running", "running"]
+    assert [(s["id"], s["status"]) for s in pushed[0]["executionTrace"]["steps"]] == [("s1", "running"), ("s2", "pending")]
+    assert [(s["id"], s["status"]) for s in pushed[1]["executionTrace"]["steps"]] == [("s1", "completed"), ("s2", "running")]
+    assert pushed[0]["executionTrace"]["steps"][0]["role"] == "operator"
+    assert pushed[0]["executionTrace"]["steps"][0]["phase"] == "act"
+    assert pushed[0]["result"]["blocks"][0]["steps"][1]["role"] == "observer"
+    assert pushed[0]["result"]["blocks"][0]["steps"][1]["phase"] == "gather"
     # Görev bittiğinde throttle durumu temizlenir.
     assert "task-1" not in runtime._remote_progress_last_signature
 
