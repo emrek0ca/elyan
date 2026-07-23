@@ -3065,9 +3065,17 @@ function buildCompactContextPromptBlock(
     .map((item) => readMetadataRecord(item))
     .filter((item): item is Record<string, unknown> => item != null)
     .slice(0, 6);
+  const referentialFollowup =
+    isShortFollowUpPrompt(input.prompt) ||
+    /\b(bunu|şunu|sunu|onu|son|önceki|onceki|aynı|ayni|hayır|hayir|daha|devam|hadi|hani|olsun|yap|çevir|cevir)\b/iu.test(
+      input.prompt,
+    );
 
   // ── STATE (goal / stage / open / digest / window / boundary / clarify) ──
   const stateLines: string[] = [];
+  stateLines.push(
+    `self: route=${input.route ?? "shared_brain"}; workload=${input.workload ?? "unknown"}; task=${input.taskId ?? "none"}; referential=${referentialFollowup ? "yes" : "no"}; active_artifacts=${sessionArtifacts.length}`,
+  );
   const goal =
     continuitySummary?.userGoal ||
     readMetadataString(rollingSummary, "userGoal");

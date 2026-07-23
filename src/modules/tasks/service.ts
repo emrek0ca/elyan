@@ -2403,14 +2403,18 @@ async function persistSessionArtifactMemory(
           (
             select jsonb_agg(value)
             from (
-              select distinct on (value->>'id') value
-              from jsonb_array_elements(
-                ${JSON.stringify(snapshots)}::jsonb ||
-                coalesce(${chatSessions.metadata}->'sessionArtifacts', '[]'::jsonb)
-              ) as value
-              order by value->>'id'
+              select value
+              from (
+                select distinct on (value->>'id') value, ord
+                from jsonb_array_elements(
+                  ${JSON.stringify(snapshots)}::jsonb ||
+                  coalesce(${chatSessions.metadata}->'sessionArtifacts', '[]'::jsonb)
+                ) with ordinality as items(value, ord)
+                order by value->>'id', ord
+              ) deduped
+              order by ord
               limit 8
-            ) deduped
+            ) ordered
           ),
           true
         )

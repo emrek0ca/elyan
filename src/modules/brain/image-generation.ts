@@ -232,6 +232,9 @@ export function isHostedImageGenerationRequest(prompt: string): boolean {
 const IMAGE_EDIT_REQUEST_PATTERNS = [
   /\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|netleştir|netlestir|bulanıklaştır|bulaniklastir|kırp|kirp|büyüt|buyut|küçült|kucult|retouch|edit|remove|replace|erase|add|enhance|upscale|crop|blur)\b/i,
   /\b(arka plan|rengini|stilini|ışığı|isigi|kontrastı|kontrasti)\b/i,
+  /\b(hayır|hayir|yok|olmadı|olmadi|değil|degil)\b.{0,80}\b(olsun|yap|çevir|cevir|değiştir|degistir)\b/iu,
+  /\b(beyaz|siyah|kırmızı|kirmizi|mavi|yeşil|yesil|sarı|sari|mor|pembe|turuncu|gri|lacivert|kahverengi|altın|altin|gümüş|gumus)\b.{0,50}\b(olsun|yap|çevir|cevir|görünsün|gorunsun)\b/iu,
+  /\b(daha)\s+(beyaz|siyah|aydınlık|aydinlik|karanlık|karanlik|parlak|mat|canlı|canli|sinematik|cinematic|gerçekçi|gercekci|minimal|detaylı|detayli|net)\b/iu,
   /\b(bunu|görseli|gorseli|resmi|fotoğrafı|fotografi)\b.{0,60}\b(yap|çevir|cevir)\b/i,
   /\b(beni|bizi|onu|şunu|sunu|bunu|saçımı|sacimi|kıyafetimi|kiyafetimi)\b.{0,80}\b(yap|göster|goster|çevir|cevir)\b/i,
   /\b(anime|çizgi film|cizgi film|sinematik|cinematic|vintage|retro|noir|fotogerçekçi|fotogercekci|photorealistic|3d|sulu boya|watercolor|yağlı boya|yagli boya)\b.{0,50}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/i,
@@ -445,7 +448,7 @@ function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 900);
-  if (!basePrompt || !isHostedImageEditRequest(prompt, 0)) return prompt;
+  if (!basePrompt || !isHostedImageEditIntent(prompt)) return prompt;
   return [
     "Previous image context:",
     basePrompt,
@@ -455,6 +458,21 @@ function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
     "",
     "Preserve the previous image's main subject, composition, and intent. Apply only the requested visual change. Do not switch to an unrelated subject.",
   ].join("\n");
+}
+
+function hasSessionImageArtifact(metadata: Record<string, unknown> | undefined): boolean {
+  const sessionArtifacts = Array.isArray(metadata?.sessionArtifacts)
+    ? metadata.sessionArtifacts
+    : [];
+  return sessionArtifacts.some((item) => {
+    const artifact =
+      item && typeof item === "object" && !Array.isArray(item)
+        ? (item as Record<string, unknown>)
+        : null;
+    const type = String(artifact?.artifactType ?? artifact?.type ?? "").toLowerCase();
+    const family = String(artifact?.contentFamily ?? "").toLowerCase();
+    return type === "image" || family === "image";
+  });
 }
 
 async function validateHostedImageOutput(base64: string): Promise<{
@@ -777,7 +795,13 @@ export async function maybeGenerateHostedImageArtifact(
 ): Promise<HostedImageArtifactResult | null> {
   const sourceImageCount = input.sourceImages?.length ?? 0;
   const hasSourceImages = sourceImageCount > 0;
-  const editing = isHostedImageEditRequest(input.prompt, sourceImageCount);
+  const metadata =
+    input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
+      ? input.metadata
+      : {};
+  const editing =
+    isHostedImageEditRequest(input.prompt, sourceImageCount) ||
+    (hasSessionImageArtifact(metadata) && isHostedImageEditIntent(input.prompt));
   if (!shouldGenerateHostedImage(input.prompt) && !editing) {
     return null;
   }
