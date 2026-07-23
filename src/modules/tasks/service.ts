@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import type { ArtifactInput, TaskStatus } from "../../contracts/domain.js";
 import {
   artifacts,
+  chatSessions,
   learningEvents,
   runtimeConnections,
   taskEvents,
@@ -2333,6 +2334,113 @@ function buildArtifactOutputArtifact(
   };
 }
 
+function compactSessionArtifactSnapshot(input: {
+  prompt: string;
+  artifact: ReturnType<typeof shapeTaskArtifact>;
+}): Record<string, unknown> | null {
+  const artifact = input.artifact;
+  const metadata = readRecord(artifact.metadata);
+  const payload = readRecord(artifact.payload);
+  const artifactType = String(
+    metadata?.artifact_type ??
+      payload?.type ??
+      artifact.viewerHint ??
+      artifact.contentFamily ??
+      artifact.kind ??
+      "",
+  )
+    .trim()
+    .toLowerCase();
+  const contentFamily = String(artifact.contentFamily ?? "").toLowerCase();
+  if (!artifactType && !contentFamily) return null;
+  return {
+    id: artifact.id,
+    taskId: artifact.taskId,
+    type: artifactType || contentFamily,
+    artifactType: artifactType || contentFamily,
+    contentFamily,
+    name: artifact.name,
+    contentType: artifact.contentType,
+    viewerHint: artifact.viewerHint,
+    prompt: compactTextPreview(input.prompt, 900),
+    previewText: compactTextPreview(artifact.previewText, 500),
+    revisedPrompt: compactTextPreview(
+      metadata?.revisedPrompt ?? payload?.revisedPrompt,
+      900,
+    ),
+    createdAt:
+      artifact.createdAt instanceof Date
+        ? artifact.createdAt.toISOString()
+        : new Date().toISOString(),
+  };
+}
+
+async function persistSessionArtifactMemory(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId: string | null | undefined;
+    prompt: string;
+    artifacts: Array<ReturnType<typeof shapeTaskArtifact>>;
+  },
+) {
+  const sessionId = String(input.sessionId ?? "").trim();
+  if (!sessionId || input.artifacts.length === 0) return;
+  const snapshots = input.artifacts
+    .map((artifact) =>
+      compactSessionArtifactSnapshot({ prompt: input.prompt, artifact }),
+    )
+    .filter((item): item is Record<string, unknown> => item != null)
+    .slice(0, 4);
+  if (snapshots.length === 0) return;
+  await app.db
+    .update(chatSessions)
+    .set({
+      metadata: sql`
+        jsonb_set(
+          coalesce(${chatSessions.metadata}, '{}'::jsonb),
+          '{sessionArtifacts}',
+          (
+            select jsonb_agg(value)
+            from (
+              select distinct on (value->>'id') value
+              from jsonb_array_elements(
+                ${JSON.stringify(snapshots)}::jsonb ||
+                coalesce(${chatSessions.metadata}->'sessionArtifacts', '[]'::jsonb)
+              ) as value
+              order by value->>'id'
+              limit 8
+            ) deduped
+          ),
+          true
+        )
+      `,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, input.userId)));
+}
+
+async function readSessionArtifactMemory(
+  app: FastifyInstance,
+  input: { userId: string; sessionId: string | null | undefined },
+): Promise<Record<string, unknown>[]> {
+  const sessionId = String(input.sessionId ?? "").trim();
+  if (!sessionId) return [];
+  const rows = await app.db
+    .select({ metadata: chatSessions.metadata })
+    .from(chatSessions)
+    .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, input.userId)))
+    .limit(1);
+  const metadata = readRecord(rows[0]?.metadata);
+  const sessionArtifacts = Array.isArray(metadata?.sessionArtifacts)
+    ? metadata.sessionArtifacts
+    : [];
+  return sessionArtifacts
+    .map((item) => readRecord(item))
+    .filter((item): item is Record<string, unknown> => item != null)
+    .slice(0, 8);
+}
+
 async function getTaskForUser(
   app: FastifyInstance,
   taskId: string,
@@ -3374,6 +3482,8 @@ async function completeServerBrainTask(
   input: {
     taskId: string;
     userId: string;
+    chatSessionId?: string | null;
+    sessionArtifacts?: Record<string, unknown>[];
     responseText: string;
     provider: string;
     model: string;
@@ -3461,7 +3571,11 @@ async function completeServerBrainTask(
     !Array.isArray(task.payload)
       ? (task.payload as Record<string, unknown>)
       : {};
-  const payloadMetadata = getPayloadMetadata(payload);
+  const basePayloadMetadata = getPayloadMetadata(payload);
+  const payloadMetadata =
+    input.sessionArtifacts && input.sessionArtifacts.length > 0
+      ? { ...basePayloadMetadata, sessionArtifacts: input.sessionArtifacts }
+      : basePayloadMetadata;
   const prompt = getTaskPrompt(payload);
   const resolved = resolveCompletionAssistantBlocks({
     responseText: input.responseText,
@@ -4109,6 +4223,18 @@ async function completeServerBrainTask(
   });
 
   if (structuredOutputArtifacts.length > 0) {
+    await persistSessionArtifactMemory(app, {
+      userId: input.userId,
+      sessionId: input.chatSessionId,
+      prompt,
+      artifacts: structuredOutputArtifacts,
+    }).catch((error) => {
+      app.log.warn(
+        { taskId: updatedTask.id, error },
+        "session artifact memory could not be persisted",
+      );
+    });
+
     await insertTaskEvent(app, {
       taskId: updatedTask.id,
       userId: updatedTask.userId,
@@ -4495,6 +4621,12 @@ async function processSharedBrainChatTask(
       });
     }
     const chatStreaming = extractChatStreamingMetadata(runningTask);
+    const sessionArtifacts = chatStreaming?.sessionId
+      ? await readSessionArtifactMemory(app, {
+          userId: input.userId,
+          sessionId: chatStreaming.sessionId,
+        }).catch(() => [])
+      : [];
     const routeDecision = extractRouteDecision(
       runningTask.payload &&
         typeof runningTask.payload === "object" &&
@@ -4575,8 +4707,15 @@ async function processSharedBrainChatTask(
     // Prettier-ignore -- a source-level regression contract verifies this fast-path seam.
     const sourceImages = hostedImageSources(hydratedEphemeralVision);
     const imageEditIntent = isHostedImageEditIntent(input.prompt);
+    const imageEditHasSessionImage = sessionArtifacts.some((artifact) => {
+      const type = String(artifact.artifactType ?? artifact.type ?? "").toLowerCase();
+      const family = String(artifact.contentFamily ?? "").toLowerCase();
+      return type === "image" || family === "image";
+    });
     const imageEditNeedsSource =
-      imageEditIntent && countDistinctEphemeralImages(hydratedEphemeralVision) === 0;
+      imageEditIntent &&
+      countDistinctEphemeralImages(hydratedEphemeralVision) === 0 &&
+      !imageEditHasSessionImage;
     const imageGenerationRequested =
       isHostedImageGenerationRequest(input.prompt) ||
       imageEditIntent;
@@ -4637,6 +4776,8 @@ async function processSharedBrainChatTask(
         completedTask = await completeServerBrainTask(app, {
           taskId: input.currentTask.id,
           userId: input.userId,
+          chatSessionId: chatStreaming?.sessionId ?? null,
+          sessionArtifacts,
           responseText: imageEditNeedsSource
             ? "Düzenlememi istediğin görseli yüklemen gerekiyor. Görseli ekleyip değiştirmemi istediğin kısmı tekrar yaz."
             : "",
@@ -4964,7 +5105,10 @@ async function processSharedBrainChatTask(
       attachmentContext,
       clientAttachments:
         clientAttachments.length > 0 ? clientAttachments : null,
-      requestMetadata: getPayloadMetadata(runningPayload),
+      requestMetadata:
+        sessionArtifacts.length > 0
+          ? { ...getPayloadMetadata(runningPayload), sessionArtifacts }
+          : getPayloadMetadata(runningPayload),
       route: "shared_brain",
       routeDecision,
       workload: selectedWorkload,
@@ -5101,6 +5245,8 @@ async function processSharedBrainChatTask(
     const completedTask = await completeServerBrainTask(app, {
       taskId: input.currentTask.id,
       userId: input.userId,
+      chatSessionId: chatStreaming?.sessionId ?? null,
+      sessionArtifacts,
       responseText: resolveNonEchoAssistantText({
         prompt: input.prompt,
         responseText: inference.text,

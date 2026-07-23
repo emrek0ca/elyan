@@ -3061,6 +3061,10 @@ function buildCompactContextPromptBlock(
     input.understandingContext?.reasoningDirectives ?? [];
   const speakingStyleDirectives =
     input.understandingContext?.speakingStyleDirectives ?? [];
+  const sessionArtifacts = readMetadataArray(metadata, "sessionArtifacts")
+    .map((item) => readMetadataRecord(item))
+    .filter((item): item is Record<string, unknown> => item != null)
+    .slice(0, 6);
 
   // ── STATE (goal / stage / open / digest / window / boundary / clarify) ──
   const stateLines: string[] = [];
@@ -3213,6 +3217,29 @@ function buildCompactContextPromptBlock(
   if (directiveLines.length)
     sections.push(`[DIRECTIVES]\n${directiveLines.join("\n")}`);
   if (attachLines.length) sections.push(`[ATTACH]\n${attachLines.join("\n")}`);
+
+  if (sessionArtifacts.length > 0) {
+    const artifactLines = sessionArtifacts
+      .map((artifact, index) => {
+        const type =
+          readMetadataString(artifact, "artifactType") ??
+          readMetadataString(artifact, "type") ??
+          readMetadataString(artifact, "contentFamily") ??
+          "artifact";
+        const id = readMetadataString(artifact, "id") ?? `recent_${index + 1}`;
+        const name = readMetadataString(artifact, "name") ?? "untitled";
+        const prompt = readMetadataString(artifact, "revisedPrompt") ??
+          readMetadataString(artifact, "prompt") ??
+          readMetadataString(artifact, "previewText");
+        return `${index === 0 ? "latest" : `recent_${index + 1}`}: id=${id}; type=${type}; name=${name}${prompt ? `; prompt=${prompt}` : ""}`;
+      })
+      .filter(Boolean);
+    if (artifactLines.length > 0) {
+      sections.push(
+        `[ARTIFACTS]\n${artifactLines.join("\n")}\nIf the user says "bunu", "şunu", "son görsel", "daha sinematik", "aynısını ama", or asks to modify/continue a prior output, bind the request to latest unless the user names another artifact. Preserve the prior artifact's subject, data, composition, and intent; apply only the requested change. Never create an unrelated new artifact for a referential follow-up.`,
+      );
+    }
+  }
 
   // ── Kısa takip mesajları için tek-cümlelik kural ──
   // "anlamadım", "devam et", "onu düzelt" → önceki turu referans al. State

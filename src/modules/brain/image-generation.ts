@@ -415,7 +415,46 @@ async function consumeGlobalImageDailyBudget(
 }
 
 function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
-  return String(input.prompt ?? "").trim();
+  const prompt = String(input.prompt ?? "").trim();
+  const metadata =
+    input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
+      ? input.metadata
+      : {};
+  const sessionArtifacts = Array.isArray(metadata.sessionArtifacts)
+    ? metadata.sessionArtifacts
+    : [];
+  const latestImage = sessionArtifacts
+    .map((item) =>
+      item && typeof item === "object" && !Array.isArray(item)
+        ? (item as Record<string, unknown>)
+        : null,
+    )
+    .find((item) => {
+      const type = String(item?.artifactType ?? item?.type ?? "").toLowerCase();
+      const family = String(item?.contentFamily ?? "").toLowerCase();
+      return type === "image" || family === "image";
+    });
+  if (!latestImage) return prompt;
+  const basePrompt = String(
+    latestImage.revisedPrompt ??
+      latestImage.prompt ??
+      latestImage.previewText ??
+      latestImage.name ??
+      "",
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 900);
+  if (!basePrompt || !isHostedImageEditRequest(prompt, 0)) return prompt;
+  return [
+    "Previous image context:",
+    basePrompt,
+    "",
+    "User requested a follow-up edit/variation:",
+    prompt,
+    "",
+    "Preserve the previous image's main subject, composition, and intent. Apply only the requested visual change. Do not switch to an unrelated subject.",
+  ].join("\n");
 }
 
 async function validateHostedImageOutput(base64: string): Promise<{
