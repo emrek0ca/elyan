@@ -41,8 +41,12 @@ from runtime.error_recovery import CORRECTIVE_MAX_ATTEMPTS, plan_corrective_retr
 AGENT_LOOP_CONTRACT = "elyan.agent_loop.v1"
 
 # Canlılık sınırları: novel işlerde bile sonlu kalması için sert tavanlar.
-DEFAULT_MAX_STEPS = 24
-DEFAULT_DEADLINE_SECONDS = 900.0
+# NOT: Bütçe, İSRAF KESİLDİKTEN SONRA artırıldı. Sırası önemliydi — israf
+# dururken bütçe artırmak kaliteyi değil yalnız maliyeti büyütür. Kesilen
+# israflar: (a) exit≠0'ın hata sayılması, (b) yapılandırılmış sonucun geri
+# beslenmemesi, (c) teslimat kayması, (d) tüm kataloğun her turda gönderilmesi.
+DEFAULT_MAX_STEPS = 32
+DEFAULT_DEADLINE_SECONDS = 1_200.0
 # Aynı (capability, args) çiftinin ardışık tekrar sayısı bu sınırı aşarsa
 # ilerleme yok kabul edilir ve döngü modele "değiştir" baskısıyla kapanır.
 STUCK_REPEAT_LIMIT = 3
@@ -200,13 +204,29 @@ def build_tool_catalog(
     allowed_capabilities: set[str] | None = None,
     *,
     limit: int = 80,
+    goal: str = "",
 ) -> list[dict[str, Any]]:
     """Modele sunulacak araç kataloğu. Tek kaynak capability_registry'dir —
-    burada elle liste tutulmaz (liste-sürüklenmesi hata sınıfı önlenir)."""
+    burada elle liste tutulmaz (liste-sürüklenmesi hata sınıfı önlenir).
+
+    ``goal`` verilirse katalog o göreve İLGİLİ araçlara kısaltılır. Tüm katalog
+    (~78 araç) her turda gönderilmek zorunda değildir: bu hem büyük bir token
+    israfıdır hem de modelin odağını dağıtır. Kısa liste deterministiktir ve
+    çekirdek araçları her zaman içerir."""
     names = sorted(capability_names())
     if allowed_capabilities:
         allowed = {str(item or "").strip() for item in allowed_capabilities}
         names = [name for name in names if name in allowed]
+    if goal.strip():
+        try:
+            from runtime.capability_shortlist import shortlist_capabilities
+
+            short = shortlist_capabilities(goal, known_capabilities=names)
+            if short:
+                names = [name for name in names if name in set(short)]
+        except Exception:
+            # Kısaltma başarısızsa tam katalogla devam et (davranış bozulmaz).
+            pass
     catalog: list[dict[str, Any]] = []
     for name in names[:limit]:
         metadata = capability_metadata(name)
@@ -357,7 +377,8 @@ def run_agent_loop(
     eylem çalıştırılır → gerçek sonuç gözlem olarak geri beslenir. Model ``finish``
     dediğinde ya da bütçe bittiğinde durur.
     """
-    tool_catalog = build_tool_catalog(allowed_capabilities)
+    # Katalog hedefe göre kısaltılır: daha az token, daha keskin odak.
+    tool_catalog = build_tool_catalog(allowed_capabilities, goal=goal)
     known_capabilities = capability_names()
     observations: list[AgentObservation] = []
     artifacts: list[dict[str, Any]] = []

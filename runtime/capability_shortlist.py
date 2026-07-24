@@ -60,6 +60,13 @@ _KEYWORD_GROUPS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("ogrenci", "odev", "ders", "proje", "sunum hazirla", "calisma notu"), ("web_research", "text_analyze", "document_write", "presentation_write")),
     (("muhendis", "teknik", "tasarim", "simulasyon", "analiz et", "raporla"), ("data_analyze", "text_analyze", "chart_generate", "document_write")),
     (("optimizasyon", "karar degisken", "amac fonksiyon", "kisıt", "kisit", "kapasite", "qubo", "knapsack", "rota optimizasyon"), ("quantum_model_problem", "quantum_run_experiment", "quantum_compare_classical", "quantum_generate_report", "math_solve")),
+    # Yazılım/terminal işleri: kalıcı oturum olmadan "çalıştır → oku → düzelt"
+    # döngüsü kurulamaz, bu yüzden shell_session_* burada birlikte önerilir.
+    (("test", "pytest", "npm", "build", "derle", "komut", "terminal", "kabuk", "shell",
+      "repo", "depo", "kod", "script", "hata ayikla", "debug", "lint", "git ",
+      "commit", "branch", "calistir"),
+     ("shell_session_open", "shell_session_run", "shell_session_close",
+      "file_read", "file_search", "directory_tree", "document_write")),
     (("mail", "eposta", "e posta", "email", "gmail"), ("email_draft", "email_send")),
     (("takvim", "calendar", "toplanti", "meeting", "etkinlik", "randevu"), ("get_calendar_events", "add_calendar_event", "delete_calendar_event")),
     (("hatirlat", "remind", "yapilacak"), ("get_reminders", "add_reminder")),
