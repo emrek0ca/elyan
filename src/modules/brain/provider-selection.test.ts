@@ -21,6 +21,9 @@ function appWithConfig(config: Record<string, unknown>): FastifyInstance {
       ELYAN_SHARED_BRAIN_PLANNING_MODEL: "local-planning",
       GROQ_API_KEY: "",
       GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      GROQ_COMPOUND_ENABLED: false,
+      GROQ_COMPOUND_MODEL: "groq/compound",
+      GROQ_COMPOUND_MINI_MODEL: "groq/compound-mini",
       GEMINI_API_KEY: "",
       GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai",
       ...config,
@@ -133,6 +136,53 @@ test("buildInferenceProviderCandidates keeps Groq first for normal chat when Gem
   ]);
   assert.equal(candidates[1]?.provider, "gemini");
   assert.deepEqual(candidates[1]?.preferredModels, ["gemini-text", "gemini-fast"]);
+});
+
+test("buildInferenceProviderCandidates uses Groq Compound for planning when enabled", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_COMPOUND_ENABLED: true,
+    GROQ_REASONING_MODEL: "groq-reasoning",
+    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FALLBACK_MODEL: "groq-fallback",
+  });
+
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "planning",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-planning"],
+  });
+
+  assert.equal(candidates[0]?.provider, "groq");
+  assert.deepEqual(candidates[0]?.preferredModels, [
+    "groq/compound",
+    "groq-reasoning",
+    "groq-fallback",
+  ]);
+});
+
+test("buildInferenceProviderCandidates does not use Groq Compound for document analysis", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_COMPOUND_ENABLED: true,
+    GROQ_REASONING_MODEL: "groq-reasoning",
+    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FALLBACK_MODEL: "groq-fallback",
+  });
+
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "document_analysis",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+  });
+
+  assert.equal(candidates[0]?.provider, "groq");
+  assert.deepEqual(candidates[0]?.preferredModels, [
+    "groq-fallback",
+    "groq-fast",
+  ]);
 });
 
 test("buildInferenceProviderCandidates can isolate primary and fallback workers", () => {

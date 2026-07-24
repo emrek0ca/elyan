@@ -159,10 +159,10 @@ const envSchema = z.object({
   GROQ_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
   // Groq Compound: yerleşik ajan sistemi (web arama + kod yürütme). OpenAI
   // uyumlu /chat/completions üzerinden `groq/compound` (derin) ve
-  // `groq/compound-mini` (hızlı) modelleriyle çalışır. Varsayılan KAPALI:
-  // açılınca yalnız web/güncellik ağırlıklı iş yüklerinde birincil model olur,
+  // `groq/compound-mini` (hızlı) modelleriyle çalışır. Varsayılan AÇIK:
+  // yalnız public planning/deep-refine iş yüklerinde birincil model olur,
   // hemen ardından mevcut gpt-oss zinciri fallback kalır (kalite gerilemez).
-  GROQ_COMPOUND_ENABLED: booleanFlag(false),
+  GROQ_COMPOUND_ENABLED: booleanFlag(true),
   GROQ_COMPOUND_MODEL: z.string().default("groq/compound"),
   GROQ_COMPOUND_MINI_MODEL: z.string().default("groq/compound-mini"),
   // Arama davranışı ince ayarı (opsiyonel). Virgülle ayrılmış alan adı listeleri

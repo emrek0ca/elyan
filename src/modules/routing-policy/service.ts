@@ -113,6 +113,7 @@ const LOCAL_PRIVATE_PATTERNS = [
   /\b(downloads?|indirilenler|desktop|klasör|klasor|folder|workspace|local file|yerel dosya|file system|dosya sistemi|path)\b/i,
   /\b(takvim|calendar|ajanda|hatırlatıcı|reminder|ekran görüntüsü|screenshot|ekran)\b/i,
   /\b(open_app|browser|computer|terminal|shell)\b/i,
+  /(?:masaüst|masaust|bilgisayar|ekran|pencere)[\p{L}'’]*/iu,
   /\b(bilgisayar(?:ım|im|ımda|imde|umda|unda)?|son çalıştığımız belge|son calistigimiz belge|masaüstündeki dosya|masaustundeki dosya|indirilenlerdeki dosya|indirilenlerdeki rapor)\b/i,
   /\b(masaüstü|masaustu|desktop)\b.*\b(dosya|belge|rapor|klasör|klasor)\b/i,
   /\b(dosya|belge|rapor|klasör|klasor)\b.*\b(masaüstü|masaustu|desktop|indirilenler|downloads?)\b/i,
@@ -125,6 +126,10 @@ const LOCAL_FILE_DESTRUCTIVE_PATTERNS = [
 const LOCAL_FILE_BENIGN_SAVE_PATTERNS = [
   /\b(masaüstüne|masaustune|desktop(?:a|e)?|bilgisayara|downloads?a?|indirilenlere)\b.*\b(kaydet|save|gönder|gonder|indir|export|dışa aktar|disa aktar)\b/i,
   /\b(kaydet|save|gönder|gonder|indir|export|dışa aktar|disa aktar)\b.*\b(masaüstü|masaustu|desktop|bilgisayar|downloads?|indirilenler)\b/i,
+];
+const DESKTOP_APP_ACTION_PATTERNS = [
+  /(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|uygulama|app|pencere|window|tab|sekme).*(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate)/iu,
+  /(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate).*(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|uygulama|app|pencere|window|tab|sekme)/iu,
 ];
 const DESKTOP_SCREEN_GLANCE_PATTERNS = [
   /(?<!\p{L})(?:ekranda|ekranımda|ekranimda|screen(?:imde|de)?|masaüstünde|masaustunde)\s+(?:ne\s+(?:var|görünüyor|gorunuyor|açık|acik)|neler\s+(?:var|görünüyor|gorunuyor)|ne\s+yazıyor|ne\s+yaziyor)(?!\p{L})/iu,
@@ -523,7 +528,12 @@ function hasDesktopWriteSideEffectSignal(message: string): boolean {
 }
 
 function hasDesktopActionSignal(message: string): boolean {
-  return hasDesktopPrivateDataSignal(message) || hasDesktopSaveExportSignal(message) || hasDesktopWriteSideEffectSignal(message);
+  return (
+    hasDesktopPrivateDataSignal(message) ||
+    hasDesktopSaveExportSignal(message) ||
+    hasDesktopWriteSideEffectSignal(message) ||
+    matchesAny(message, DESKTOP_APP_ACTION_PATTERNS)
+  );
 }
 
 function effectiveRequestedCapabilities(
@@ -1284,7 +1294,13 @@ export async function decideCommandRoute(
     screenGlanceRequested,
     quantumExecutionRequested,
   });
-  const userWantsDesktop = metadata.desktopDispatch === true || runtimeMcpRequested || screenGlanceRequested;
+  const desktopDispatchRequested = metadata.desktopDispatch === true;
+  const desktopActionRequested = hasDesktopActionSignal(message);
+  const userWantsDesktop =
+    runtimeMcpRequested ||
+    screenGlanceRequested ||
+    quantumExecutionRequested ||
+    (desktopDispatchRequested && desktopActionRequested);
 
   if (userWantsDesktop) {
     if (!desktopAllowed) {

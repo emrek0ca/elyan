@@ -1259,14 +1259,30 @@ test("resolveCommandTarget keeps chat routing on the shared brain by default", a
 // keyword/path heuristic any more. These tests lock that contract in place.
 // ---------------------------------------------------------------------------
 
-test("decideCommandRoute routes to the desktop when dispatch is on and a desktop is ready", async () => {
-  // The laptop toggle is explicit cowork dispatch. When a ready desktop exists,
-  // the backend hands the chat turn to the desktop instead of re-running local
-  // keyword heuristics.
+test("decideCommandRoute keeps public chat on the server when dispatch is on", async () => {
+  // The laptop toggle stays armed across turns, but a public memory/general-chat
+  // question must not become a desktop work order or leak a tool name.
   const app = createDesktopReadyApp();
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
-    message: "Fransa'nın başkenti neresidir?",
+    message: "adım ne benim",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.targetDeviceId, undefined);
+  assert.equal(decision.mode, "chat");
+  assert.equal(decision.requiredRuntime, "server");
+  assert.equal(decision.taskRoute?.target, "server_brain");
+  assert.equal(decision.taskRoute?.needsDesktop, false);
+});
+
+test("decideCommandRoute routes desktop action to the desktop when dispatch is on and ready", async () => {
+  const app = createDesktopReadyApp();
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Chrome'da yeni sekme aç",
     source: "mobile",
     metadata: { desktopDispatch: true },
   });
@@ -1277,7 +1293,6 @@ test("decideCommandRoute routes to the desktop when dispatch is on and a desktop
   assert.equal(decision.requiredRuntime, "desktop");
   assert.equal(decision.taskRoute?.target, "desktop_runtime");
   assert.equal(decision.taskRoute?.needsDesktop, true);
-  assert.equal(decision.intent, "desktop_cowork");
 });
 
 test("decideCommandRoute ignores legacy routePreference/desktopDispatchOnce signals", async () => {
