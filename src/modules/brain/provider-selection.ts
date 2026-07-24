@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { buildGeminiModelCatalog, resolveGeminiFallbackModel } from "./gemini-models.js";
 import { buildGroqModelCatalog, resolveGroqFallbackModel } from "./groq-models.js";
+import { resolveGroqCompoundModel, shouldUseGroqCompound } from "./groq-compound.js";
 import {
   listSharedBrainProviderCandidates,
   type SharedBrainProvider,
@@ -101,11 +102,25 @@ function buildHostedProviderCandidates(
   const groqFallbackModel =
     resolveGroqFallbackModel(app.config, groqPrimaryModel, workload) ??
     groqCatalog.fallbackModel;
+  // Groq Compound (opsiyonel): bayrak açık, iş yükü uygun ve içerik gizlilik-
+  // duyarlı DEĞİLse compound birincil olarak denenir. Ardından mevcut gpt-oss
+  // zinciri fallback kalır — compound boş/başarısız dönerse kalite gerilemez,
+  // başarılı olursa canlı web + kod yürütmeyle grounding artar.
+  const compoundEligible =
+    (!visionSensitivity || visionSensitivity === "none") &&
+    shouldUseGroqCompound({ config: app.config, workload });
+  const groqCompoundModel = compoundEligible
+    ? resolveGroqCompoundModel(app.config, workload)
+    : "";
   if (groqApiKey && groqBaseUrl && groqPrimaryModel) {
     hostedCandidates.push({
       provider: "groq",
       baseUrl: groqBaseUrl,
-      preferredModels: [groqPrimaryModel, groqFallbackModel].filter(
+      preferredModels: [
+        groqCompoundModel,
+        groqPrimaryModel,
+        groqFallbackModel,
+      ].filter(
         (model, index, values): model is string =>
           Boolean(model) && values.indexOf(model) === index,
       ),

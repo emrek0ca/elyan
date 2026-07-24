@@ -4,7 +4,7 @@ import { gateVisionAnswer } from "./vision-answer-gate.js";
 import { classifyVisionTask } from "./vision-task-policy.js";
 import { decideVisionMediaPolicy } from "./vision-media-policy.js";
 
-test("provider and internal routing names never survive the vision answer gate", () => {
+test("provider names survive the vision answer gate while internal metadata is removed", () => {
   const task = classifyVisionTask({ prompt: "Görselde ne var?", imageCount: 1 });
   const media = decideVisionMediaPolicy({ task, images: [], prompt: "Görselde ne var?", explicitCloudConsent: true });
   const result = gateVisionAnswer({
@@ -13,12 +13,13 @@ test("provider and internal routing names never survive the vision answer gate",
     media,
     imageCount: 1,
   });
-  assert.doesNotMatch(result.text, /gemini|vision_evidence/iu);
+  assert.match(result.text, /Gemini/iu);
+  assert.doesNotMatch(result.text, /vision_evidence/iu);
   assert.doesNotMatch(result.text, /görsel analiz sistemi/iu);
-  assert.ok(result.flags.includes("provider_name_removed"));
+  assert.ok(result.flags.includes("internal_vision_metadata_removed"));
 });
 
-test("provider attribution is removed without leaving a robotic replacement", () => {
+test("provider attribution is preserved without robotic replacement", () => {
   const task = classifyVisionTask({ prompt: "Explain this image", imageCount: 1 });
   const media = decideVisionMediaPolicy({ task, images: [], prompt: "Explain this image", explicitCloudConsent: true });
   const result = gateVisionAnswer({
@@ -28,8 +29,8 @@ test("provider attribution is removed without leaving a robotic replacement", ()
     media,
     imageCount: 1,
   });
-  assert.equal(result.text, "the visible warning says connection timeout.");
-  assert.doesNotMatch(result.text, /Gemini|system|provider/iu);
+  assert.equal(result.text, "According to Gemini, the visible warning says connection timeout.");
+  assert.doesNotMatch(result.text, /system/iu);
 });
 
 test("missing verified image cannot produce a visual hallucination", () => {

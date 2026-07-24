@@ -522,7 +522,34 @@ test("shapePublicBrainProfile removes backend-private model gateway fields", () 
         },
       ],
     },
-    quantum: null,
+    quantum: {
+      mode: "hybrid",
+      ready: true,
+      supportedProblemClasses: ["qubo", "ising", "qaoa", "vqe"],
+      solver: "qiskit_simulator",
+      problemClass: "optimization",
+      benchmarkStatus: "measured",
+      fallbackReason: null,
+      lastBenchmarkScore: 0.91,
+      classicalBaselineScore: 0.88,
+      benchmarkSource: "measured",
+      advantageScore: 0.03,
+      benchmarkQualified: true,
+      dispatchAdmissionWeight: 0.08,
+      dispatchFeedbackConfidence: 86,
+      dispatchPolicyOutcome: "backend_active_boosted",
+      dispatchBoostedStepCount: 2,
+      dispatchFeedbackQualified: true,
+      dispatchLivenessScore: 0.82,
+      responsivePolicyOutcome: "backend_active_responsive_boosted",
+      dispatchLivenessQualified: true,
+      livenessGuardActive: true,
+      livenessGuardTimeoutRisk: "medium",
+      livenessGuardEffectiveMaxReplans: 3,
+      livenessRepairAttemptCount: 2,
+      provider: "internal-provider",
+      model: "private-model",
+    },
     retrieval: {
       readyDocuments: 0,
       readyChunks: 0,
@@ -648,11 +675,29 @@ test("shapePublicBrainProfile removes backend-private model gateway fields", () 
   assert.deepEqual(publicProfile.integrations.connectedCapabilities, ["email"]);
   assert.deepEqual(publicProfile.integrations.brainReadTools, ["gmail.search", "gmail.read"]);
   assert.equal((publicProfile.integrations.apps[0] as any).provider, undefined);
+  assert.equal(publicProfile.quantum?.benchmarkStatus, "measured");
+  assert.equal(publicProfile.quantum?.lastBenchmarkScore, 0.91);
+  assert.equal(publicProfile.quantum?.classicalBaselineScore, 0.88);
+  assert.equal(publicProfile.quantum?.advantageScore, 0.03);
+  assert.equal(publicProfile.quantum?.benchmarkQualified, true);
+  assert.equal(publicProfile.quantum?.dispatchAdmissionWeight, 0.08);
+  assert.equal(publicProfile.quantum?.dispatchFeedbackConfidence, 86);
+  assert.equal(publicProfile.quantum?.dispatchPolicyOutcome, "backend_active_boosted");
+  assert.equal(publicProfile.quantum?.dispatchBoostedStepCount, 2);
+  assert.equal(publicProfile.quantum?.dispatchFeedbackQualified, true);
+  assert.equal(publicProfile.quantum?.dispatchLivenessScore, 0.82);
+  assert.equal(publicProfile.quantum?.responsivePolicyOutcome, "backend_active_responsive_boosted");
+  assert.equal(publicProfile.quantum?.dispatchLivenessQualified, true);
+  assert.equal(publicProfile.quantum?.livenessGuardActive, true);
+  assert.equal(publicProfile.quantum?.livenessGuardTimeoutRisk, "medium");
+  assert.equal(publicProfile.quantum?.livenessGuardEffectiveMaxReplans, 3);
+  assert.equal(publicProfile.quantum?.livenessRepairAttemptCount, 2);
   const publicPayload = JSON.stringify(publicProfile).toLowerCase();
   assert.equal(publicPayload.includes("openrouter"), false);
   assert.equal(publicPayload.includes("ollama"), false);
   assert.equal(publicPayload.includes("mixtral"), false);
   assert.equal(publicPayload.includes("llama3.2"), false);
+  assert.equal(publicPayload.includes("private-model"), false);
   assert.equal(publicPayload.includes("provider"), false);
 });
 

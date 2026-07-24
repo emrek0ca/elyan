@@ -96,3 +96,31 @@ test("readVerifiedQuantumBenchmark reads the persisted metrics contract", () => 
     },
   );
 });
+
+test("readVerifiedQuantumBenchmark accepts measured dispatch scheduler quality", () => {
+  assert.deepEqual(
+    readVerifiedQuantumBenchmark({
+      quantumBenchmarkAttestation: {
+        ...attestation,
+        runId: "qsched-1",
+        metric: "dispatch_schedule_quality",
+        datasetFingerprint: "d".repeat(64),
+        score: 0.92,
+        classicalBaselineScore: 0.74,
+        backend: "elyan_quantum_scheduler",
+      },
+    }),
+    {
+      ...attestation,
+      runId: "qsched-1",
+      metric: "dispatch_schedule_quality",
+      datasetFingerprint: "d".repeat(64),
+      score: 0.92,
+      source: "measured",
+      classicalBaselineScore: 0.74,
+      backend: "elyan_quantum_scheduler",
+      advantageScore: 0.18,
+      qualified: true,
+    },
+  );
+});

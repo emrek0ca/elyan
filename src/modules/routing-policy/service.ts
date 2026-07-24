@@ -69,6 +69,14 @@ export type CommandRouteDecision = {
   shouldAskClarification: boolean;
   failClosedReason: string | null;
   selectedWorkload: SharedBrainWorkload;
+  qualityGuard?: {
+    strategy: "quantum_quality_guard_v1";
+    source: "runtime_quantum_liveness_feedback";
+    applied: boolean;
+    fromWorkload: SharedBrainWorkload;
+    toWorkload: SharedBrainWorkload;
+    reason: "quantum_runtime_liveness_repair_signal";
+  };
 };
 
 export type CommandRouteInput = {
@@ -520,11 +528,14 @@ function hasDesktopActionSignal(message: string): boolean {
 
 function effectiveRequestedCapabilities(
   requestedCapabilities: string[],
-  options: { screenGlanceRequested: boolean },
+  options: { screenGlanceRequested: boolean; quantumExecutionRequested?: boolean },
 ): string[] {
   const capabilities = normalizeRuntimeCapabilities(requestedCapabilities);
   if (options.screenGlanceRequested) {
     capabilities.push("analyze_screen");
+  }
+  if (options.quantumExecutionRequested) {
+    capabilities.push(...QUANTUM_CAPABILITIES);
   }
   return uniqueSemanticCapabilities(capabilities);
 }
@@ -746,16 +757,63 @@ function isReferentialRewritePrompt(message: string): boolean {
   );
 }
 
-function deriveSelectedWorkload(input: {
+function readProfileNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function hasQuantumQualityGuardSignal(brainProfile: unknown): boolean {
+  const profile = readRecord(brainProfile);
+  const learning = readRecord(profile?.learning);
+  const quantum = readRecord(profile?.quantum);
+  const benchmarkQualified =
+    learning?.latestQuantumBenchmarkQualified === true ||
+    quantum?.benchmarkQualified === true;
+  if (!benchmarkQualified) {
+    return false;
+  }
+  const timeoutRisk =
+    readString(learning, "latestQuantumLivenessGuardTimeoutRisk") ??
+    readString(quantum, "livenessGuardTimeoutRisk");
+  const repairAttemptCount =
+    readProfileNumber(learning, "latestQuantumLivenessRepairAttemptCount") ??
+    readProfileNumber(quantum, "livenessRepairAttemptCount");
+  const feedbackConfidence =
+    readProfileNumber(learning, "latestQuantumDispatchFeedbackConfidence") ??
+    readProfileNumber(quantum, "dispatchFeedbackConfidence");
+  const policyOutcome =
+    readString(learning, "latestQuantumDispatchPolicyOutcome") ??
+    readString(quantum, "dispatchPolicyOutcome");
+  const responsivePolicyOutcome =
+    readString(learning, "latestQuantumResponsivePolicyOutcome") ??
+    readString(quantum, "responsivePolicyOutcome");
+  const strongPolicyFeedback =
+    (feedbackConfidence ?? 0) >= 80 &&
+    (policyOutcome === "backend_active_boosted" ||
+      responsivePolicyOutcome === "backend_active_responsive_boosted");
+  const livenessRepairRisk =
+    learning?.latestQuantumLivenessGuardActive === true ||
+    quantum?.livenessGuardActive === true ||
+    timeoutRisk === "medium" ||
+    timeoutRisk === "high" ||
+    (repairAttemptCount ?? 0) > 0;
+  return strongPolicyFeedback || livenessRepairRisk;
+}
+
+function deriveSelectedWorkloadWithGuard(input: {
   route: CommandRoute;
   intent: NormalizedCommandIntent;
   message: string;
   primaryIntent: UnderstandingIntent;
   brainProfile?: PlanBrainProfile | null;
+  rawBrainProfile?: unknown;
   confidence: number;
-}): SharedBrainWorkload {
+}): {
+  selectedWorkload: SharedBrainWorkload;
+  qualityGuard?: CommandRouteDecision["qualityGuard"];
+} {
   if (input.route === "desktop_runtime" || input.route === "pairing_required" || input.route === "unavailable") {
-    return "desktop_handoff";
+    return { selectedWorkload: "desktop_handoff" };
   }
   const responsePolicy = responsePolicyForPrompt(input.message);
   const toolSkillSelection = selectToolSkillForTurn({
@@ -766,38 +824,38 @@ function deriveSelectedWorkload(input: {
     toolSkillSelection.outputContract.requiresArtifact &&
     toolSkillSelection.outputContract.confidence >= 0.68
   ) {
-    return toolSkillSelection.selected.workload;
+    return { selectedWorkload: toolSkillSelection.selected.workload };
   }
   // Structured workload rules live in a data-backed policy table so examples
   // can become fixtures instead of hidden routing branches.
   const prePlanningPolicyWorkload = selectPolicyWorkload(input.message, { phase: "pre_planning" });
   if (prePlanningPolicyWorkload) {
-    return prePlanningPolicyWorkload;
+    return { selectedWorkload: prePlanningPolicyWorkload };
   }
   if (input.intent === "planning_request") {
-    return "planning";
+    return { selectedWorkload: "planning" };
   }
   const postPlanningPolicyWorkload = selectPolicyWorkload(input.message, { phase: "post_planning" });
   if (postPlanningPolicyWorkload) {
-    return postPlanningPolicyWorkload;
+    return { selectedWorkload: postPlanningPolicyWorkload };
   }
   // Research/math/analysis intents deserve deeper workloads regardless of
   // message length — a short "enflasyon analizi yap" still needs retrieval
   // grounding and reasoning depth that mobile_chat_fast can't provide.
   if (input.primaryIntent === "research") {
-    return "mobile_chat_deep_refine";
+    return { selectedWorkload: "mobile_chat_deep_refine" };
   }
   if (input.primaryIntent === "math") {
-    return "mobile_chat_balanced";
+    return { selectedWorkload: "mobile_chat_balanced" };
   }
   if (isEducationalReasoningMessage(input.message)) {
-    return "mobile_chat_balanced";
+    return { selectedWorkload: "mobile_chat_balanced" };
   }
   // C/C++ ve sistem programlama soruları fast profile düşerse yüzeysel,
   // derleme-hatalı snippet'ler üretiyor. Bellek güvenliği, UB, lifetime gibi
   // konular reasoning derinliği ister — en az balanced.
   if (isSystemsProgrammingMessage(input.message)) {
-    return "mobile_chat_balanced";
+    return { selectedWorkload: "mobile_chat_balanced" };
   }
   if (
     !responsePolicy.requestedLongForm &&
@@ -805,7 +863,7 @@ function deriveSelectedWorkload(input: {
     !isReferentialRewritePrompt(input.message) &&
     ["casual_chat", "creative_answer", "writing", "image_generation"].includes(responsePolicy.intent)
   ) {
-    return "mobile_chat_fast";
+    return { selectedWorkload: "mobile_chat_fast" };
   }
   const hybrid = selectHybridMobileChatWorkload({
     message: input.message,
@@ -824,10 +882,31 @@ function deriveSelectedWorkload(input: {
 	      input.confidence < 0.5 ||
 	      isShortFollowUpPrompt(input.message) ||
 	      isReferentialRewritePrompt(input.message))
-	  ) {
-    return "mobile_chat_balanced";
+  ) {
+    return { selectedWorkload: "mobile_chat_balanced" };
   }
-  return hybrid;
+  if (
+    hybrid === "mobile_chat_fast" &&
+    !isSocialChatPrompt(input.message) &&
+    hasQuantumQualityGuardSignal(input.rawBrainProfile)
+  ) {
+    return {
+      selectedWorkload: "mobile_chat_balanced",
+      qualityGuard: {
+        strategy: "quantum_quality_guard_v1",
+        source: "runtime_quantum_liveness_feedback",
+        applied: true,
+        fromWorkload: "mobile_chat_fast",
+        toWorkload: "mobile_chat_balanced",
+        reason: "quantum_runtime_liveness_repair_signal",
+      },
+    };
+  }
+  return { selectedWorkload: hybrid };
+}
+
+function deriveSelectedWorkload(input: Parameters<typeof deriveSelectedWorkloadWithGuard>[0]): SharedBrainWorkload {
+  return deriveSelectedWorkloadWithGuard(input).selectedWorkload;
 }
 
 function buildDecision(input: {
@@ -856,6 +935,17 @@ function buildDecision(input: {
     message: input.message,
     confidence: input.confidence,
   });
+  const workloadDecision = input.selectedWorkloadOverride
+    ? { selectedWorkload: input.selectedWorkloadOverride as SharedBrainWorkload }
+    : deriveSelectedWorkloadWithGuard({
+        route: input.route,
+        intent,
+        message: input.message,
+        primaryIntent: input.primaryIntent,
+        brainProfile: normalizePlanBrainProfile(input.brainProfile),
+        rawBrainProfile: input.brainProfile,
+        confidence: input.confidence,
+      });
 
   return {
     route: input.route,
@@ -887,16 +977,8 @@ function buildDecision(input: {
       (input.route === "pairing_required" || input.route === "unavailable"
         ? input.reason
         : null),
-    selectedWorkload:
-      input.selectedWorkloadOverride ??
-      deriveSelectedWorkload({
-        route: input.route,
-        intent,
-        message: input.message,
-        primaryIntent: input.primaryIntent,
-        brainProfile: normalizePlanBrainProfile(input.brainProfile),
-        confidence: input.confidence,
-      }),
+    selectedWorkload: workloadDecision.selectedWorkload,
+    ...(workloadDecision.qualityGuard ? { qualityGuard: workloadDecision.qualityGuard } : {}),
   };
 }
 
@@ -1196,8 +1278,11 @@ export async function decideCommandRoute(
     input.requestedCapabilities ?? [],
   ).includes("mcp.call.tool");
   const screenGlanceRequested = hasDesktopScreenGlanceSignal(message, metadata);
+  const quantumExecutionRequested =
+    matchesAny(message, QUANTUM_TOPIC_PATTERNS) && matchesAny(message, QUANTUM_EXECUTION_PATTERNS);
   const requestedCapabilities = effectiveRequestedCapabilities(input.requestedCapabilities ?? [], {
     screenGlanceRequested,
+    quantumExecutionRequested,
   });
   const userWantsDesktop = metadata.desktopDispatch === true || runtimeMcpRequested || screenGlanceRequested;
 

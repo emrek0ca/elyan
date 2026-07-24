@@ -38,7 +38,7 @@ test("evaluateBrainAnswer flags overcompressed reasoning answers for explanatory
   assert.equal(result.outputQuality.usefulness < 0.6, true);
 });
 
-test("evaluateBrainAnswer flags provider and prompt disclosure leaks", () => {
+test("evaluateBrainAnswer allows provider names but still flags prompt disclosure leaks", () => {
   const result = evaluateBrainAnswer({
     prompt: "Hangi modelsin?",
     modelAnswer:
@@ -52,7 +52,7 @@ test("evaluateBrainAnswer flags provider and prompt disclosure leaks", () => {
     retrievalUsed: false,
   });
 
-  assert.equal(result.failureTypes.includes("provider_disclosure"), true);
+  assert.equal(JSON.stringify(result.failureTypes).includes("provider_disclosure"), false);
   assert.equal(result.failureTypes.includes("prompt_disclosure"), true);
   assert.equal(result.failureTypes.includes("internal_policy_leak"), true);
   assert.equal(result.outputQuality.usefulness < 0.5, true);
@@ -73,11 +73,10 @@ test("evaluateBrainAnswer allows provider names as public research subjects", ()
     retrievalUsed: true,
   });
 
-  assert.equal(result.failureTypes.includes("provider_disclosure"), false);
   assert.equal(result.failureTypes.includes("internal_policy_leak"), false);
 });
 
-test("evaluateBrainAnswer still flags provider names when used as Elyan implementation claims", () => {
+test("evaluateBrainAnswer allows provider names in Elyan implementation claims", () => {
   const result = evaluateBrainAnswer({
     prompt: "Kendini anlat.",
     modelAnswer: "Ben Elyan, OpenAI üzerinde çalışan GPT tabanlı bir modelim.",
@@ -90,8 +89,7 @@ test("evaluateBrainAnswer still flags provider names when used as Elyan implemen
     retrievalUsed: false,
   });
 
-  assert.equal(result.failureTypes.includes("provider_disclosure"), true);
-  assert.equal(result.failureTypes.includes("internal_policy_leak"), true);
+  assert.equal(result.failureTypes.includes("internal_policy_leak"), false);
 });
 
 test("evaluateBrainAnswer pins Turkish creator phrasing that uses 'üretti'", () => {

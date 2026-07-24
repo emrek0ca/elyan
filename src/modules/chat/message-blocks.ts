@@ -11,10 +11,7 @@ import {
   isSourceWidgetBlockType,
   withCanonicalAssistantBlockEnvelope,
 } from "./block-envelope.js";
-import {
-  containsProtectedElyanDisclosure,
-  ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT,
-} from "../../lib/elyan-public-identity.js";
+import { containsProtectedElyanDisclosure } from "../../lib/elyan-public-identity.js";
 import type {
   ElyanAssistantActionableBlock,
   ElyanAssistantAttachmentAckBlock,
@@ -161,16 +158,8 @@ const reasoningDumpPattern =
   /\b(?:here'?s (?:a|the|my)?\s*(?:thinking|thought|analysis|reasoning)(?:\s+process)?|here is (?:a|the|my)?\s*(?:thinking|thought|analysis|reasoning)(?:\s+process)?|thinking process\s*:|thought process\s*:|analyze constraints\s*&\s*system\s*instructions|analyze constraints\s*&\s*systeminstructions|check constraints\s*&\s*policies|düşünme süreci\s*:|let me think through this|step-by-step reasoning\s*:|internal reasoning\s*:|reasoning trace\s*:|akıl yürütme süreci\s*:|akil yurutme sureci\s*:|iç değerlendirme\s*:|ic degerlendirme\s*:)/i;
 const finalAnswerPrefixPattern =
   /^(?:final answer|answer|cevap|son cevap)\s*:\s*/i;
-const publicProviderTopicPattern =
-  /\b(openai|anthropic|groq|ollama|openrouter|gpt|llama|claude|qwen|deepseek)\b/i;
-const selfImplementationDisclosurePattern =
-  /\b(ben|elyan|sistemim|altyapım|altyapim|arkamda|bende)\b.{0,90}\b(openai|anthropic|groq|ollama|openrouter|gpt|llama|claude|qwen|deepseek)\b/i;
-const reverseSelfImplementationDisclosurePattern =
-  /\b(openai|anthropic|groq|ollama|openrouter|gpt|llama|claude|qwen|deepseek)\b.{0,90}\b(kullanıyorum|kullaniyorum|çalışıyorum|calisiyorum|tabanlıyım|tabanliyim|altyapım|altyapim|modelim|sağlayıcım|saglayicim)\b/i;
-const englishSelfImplementationDisclosurePattern =
-  /\b(i use|i run on|i am powered by|my provider|my underlying model|elyan runs on)\b.{0,90}\b(openai|anthropic|groq|ollama|openrouter|gpt|llama|claude|qwen|deepseek)\b/i;
 const internalConfigurationDisclosurePattern =
-  /\b(system prompt|developer message|sistem promptu|geliştirici mesajı|hidden instruction|gizli talimat|iç model|ic model|underlying model|provider metadata|routeDecision|selectedWorkload|token budget)\b/i;
+  /\b(system prompt|developer message|sistem promptu|geliştirici mesajı|hidden instruction|gizli talimat|internal routing|backend policy|routeDecision|selectedWorkload|token budget)\b/i;
 const visibleInternalConfigurationTerms = [
   [/\bsystem prompt\b/gi, "iç talimat"],
   [/\bdeveloper message\b/gi, "geliştirici talimatı"],
@@ -178,6 +167,8 @@ const visibleInternalConfigurationTerms = [
   [/\bgeliştirici mesajı\b/gi, "geliştirici talimatı"],
   [/\bhidden instruction\b/gi, "gizli olmayan çalışma talimatı"],
   [/\bgizli talimat\b/gi, "çalışma talimatı"],
+  [/\binternal routing\b/gi, "yönlendirme"],
+  [/\bbackend policy\b/gi, "çalışma politikası"],
   [/\bStructured operating data\b/gi, "çalışma verisi"],
   [/\bData understanding and quality protocol\b/gi, "veri kalite protokolü"],
   [/\bconstitution\.rules\b/gi, "güvenlik kuralları"],
@@ -405,20 +396,12 @@ function withAssistantBlockDefaults<T extends Record<string, unknown>>(
 
 function shouldRedactProtectedElyanDisclosure(
   value: string,
-  options: Pick<VisibleTextSanitizerOptions, "allowPublicProviderReferences"> = {},
+  _options: Pick<VisibleTextSanitizerOptions, "allowPublicProviderReferences"> = {},
 ) {
   if (!containsProtectedElyanDisclosure(value)) {
     return false;
   }
-  if (!options.allowPublicProviderReferences || !publicProviderTopicPattern.test(value)) {
-    return true;
-  }
-  return (
-    selfImplementationDisclosurePattern.test(value) ||
-    reverseSelfImplementationDisclosurePattern.test(value) ||
-    englishSelfImplementationDisclosurePattern.test(value) ||
-    internalConfigurationDisclosurePattern.test(value)
-  );
+  return internalConfigurationDisclosurePattern.test(value);
 }
 
 function redactVisibleInternalConfigurationTerms(value: string): string {
@@ -430,12 +413,10 @@ function redactVisibleInternalConfigurationTerms(value: string): string {
 
 function sanitizeVisibleCandidate(
   value: string,
-  options: Pick<VisibleTextSanitizerOptions, "allowPublicProviderReferences"> = {},
+  _options: Pick<VisibleTextSanitizerOptions, "allowPublicProviderReferences"> = {},
 ): string {
   const redactedTerms = redactVisibleInternalConfigurationTerms(value).trim();
-  return shouldRedactProtectedElyanDisclosure(redactedTerms, options)
-    ? ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT
-    : redactedTerms;
+  return redactedTerms;
 }
 
 function normalizeMarkdown(value: string | null | undefined) {
@@ -904,7 +885,7 @@ export function sanitizeAssistantVisibleText(
   }
 
   if (shouldRedactProtectedElyanDisclosure(source, options)) {
-    return ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT;
+    return redactVisibleInternalConfigurationTerms(source).trim();
   }
   if (containsInternalAssistantSignals(source)) {
     return "";

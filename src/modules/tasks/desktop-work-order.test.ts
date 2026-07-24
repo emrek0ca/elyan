@@ -61,6 +61,80 @@ test("buildDesktopWorkOrder turns a mobile dispatch prompt into typed execution 
   assert.equal(Array.isArray(workOrder.planPreview.liveNarrationPlan), true);
 });
 
+test("buildDesktopWorkOrder carries safe quantum dispatch optimization hints", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Araştır, karşılaştır ve raporla.",
+    title: "Dispatch kalite testi",
+    routeDecision: routeDecision({ capabilities: ["web_research", "document_write"] }),
+    requestedCapabilities: [],
+    dispatchOptimization: {
+      strategy: "quantum_guided_dispatch_v1",
+      source: "backend_neural_readiness",
+      active: true,
+      score: 0.87,
+      classicalBaselineScore: 0.73,
+      advantageScore: 0.14,
+      qualified: true,
+      benchmarkSource: "measured",
+      admissionWeight: 0.07,
+      metric: "dispatch_schedule_quality",
+    },
+    responsiveExecution: {
+      strategy: "quantum_liveness_guard_v1",
+      source: "backend_neural_readiness",
+      active: true,
+      livenessScore: 0.82,
+      qualified: true,
+      benchmarkSource: "measured",
+      boostWeight: 0.06,
+      metric: "responsive_execution_liveness",
+    },
+    livenessGuard: {
+      strategy: "quantum_replan_liveness_guard_v1",
+      source: "backend_neural_readiness",
+      active: true,
+      timeoutRisk: "medium",
+      maxReplans: 3,
+      earlyProgressCheckpoint: true,
+      safeStopOnTimeout: true,
+      metric: "responsive_execution_liveness",
+    },
+  });
+
+  assert.deepEqual(workOrder.planPreview.dispatchOptimization, {
+    strategy: "quantum_guided_dispatch_v1",
+    source: "backend_neural_readiness",
+    active: true,
+    score: 0.87,
+    classicalBaselineScore: 0.73,
+    advantageScore: 0.14,
+    qualified: true,
+    benchmarkSource: "measured",
+    admissionWeight: 0.07,
+    metric: "dispatch_schedule_quality",
+  });
+  assert.deepEqual(workOrder.planPreview.responsiveExecution, {
+    strategy: "quantum_liveness_guard_v1",
+    source: "backend_neural_readiness",
+    active: true,
+    livenessScore: 0.82,
+    qualified: true,
+    benchmarkSource: "measured",
+    boostWeight: 0.06,
+    metric: "responsive_execution_liveness",
+  });
+  assert.deepEqual(workOrder.planPreview.livenessGuard, {
+    strategy: "quantum_replan_liveness_guard_v1",
+    source: "backend_neural_readiness",
+    active: true,
+    timeoutRisk: "medium",
+    maxReplans: 3,
+    earlyProgressCheckpoint: true,
+    safeStopOnTimeout: true,
+    metric: "responsive_execution_liveness",
+  });
+});
+
 test("buildDesktopWorkOrder keeps private file requests local and evidence-gated", () => {
   const workOrder = buildDesktopWorkOrder({
     message: "Masaüstündeki son PDF'i özetle.",
@@ -370,8 +444,6 @@ test("buildDesktopWorkOrder carries typed understanding without forwarding a raw
       mode: "server",
       mayUseHostedModels: true,
       maySendPrivateContextToServer: false,
-      visibleProviderNamesAllowed: true,
-      internalProviderDisclosure: "forbidden",
       reasons: ["server_safe_context"],
     },
     required_capabilities: [{ name: "document.write", executionSurface: "desktop", permission: "write", confidence: 0.96 }],

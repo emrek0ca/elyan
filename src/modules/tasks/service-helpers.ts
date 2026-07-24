@@ -798,21 +798,57 @@ function normalizeTaskQuantumSnapshot(value: unknown) {
   };
 }
 
+function normalizeTaskQuantumLivenessSnapshot(value: unknown) {
+  const record = readRecord(value);
+  if (
+    !record ||
+    readString(record, "strategy") !== "quantum_runtime_liveness_snapshot_v1" ||
+    readString(record, "source") !== "desktop_runtime_progress"
+  ) {
+    return null;
+  }
+  const timeoutRisk = readString(record, "livenessGuardTimeoutRisk");
+  return {
+    strategy: "quantum_runtime_liveness_snapshot_v1",
+    source: "desktop_runtime_progress",
+    score: readNumber(record, "score"),
+    qualified: readBoolean(record, "qualified") ?? false,
+    backendResponsiveActive: readBoolean(record, "backendResponsiveActive") ?? false,
+    responsiveBoostedStepCount: readNumber(record, "responsiveBoostedStepCount") ?? 0,
+    responsiveBoostedStepIds: readStringList(record, "responsiveBoostedStepIds").slice(0, 16),
+    livenessGuardActive: readBoolean(record, "livenessGuardActive") ?? false,
+    livenessGuardTimeoutRisk:
+      timeoutRisk === "low" || timeoutRisk === "medium" || timeoutRisk === "high"
+        ? timeoutRisk
+        : null,
+    livenessGuardEffectiveMaxReplans:
+      readNumber(record, "livenessGuardEffectiveMaxReplans") ?? null,
+    repairAttemptCount: readNumber(record, "repairAttemptCount") ?? 0,
+  };
+}
+
 function extractTaskQuantumSnapshot(task: MobileTaskFeedRow) {
   const payload = readRecord(task.payload);
   const metadata = readRecord(payload?.metadata);
   const result = readRecord(task.result);
+  const resultTrace = readRecord(result?.executionTrace);
+  const payloadTrace = readRecord(payload?.executionTrace);
+  const metadataTrace = readRecord(metadata?.executionTrace);
+  const runtimeLiveness =
+    normalizeTaskQuantumLivenessSnapshot(resultTrace?.quantumLiveness) ??
+    normalizeTaskQuantumLivenessSnapshot(payloadTrace?.quantumLiveness) ??
+    normalizeTaskQuantumLivenessSnapshot(metadataTrace?.quantumLiveness);
   const candidate =
     normalizeTaskQuantumSnapshot(result?.quantum) ??
     normalizeTaskQuantumSnapshot(payload?.quantum) ??
     normalizeTaskQuantumSnapshot(metadata?.quantum);
   if (candidate) {
-    return candidate;
+    return runtimeLiveness ? { ...candidate, runtimeLiveness } : candidate;
   }
   if (!hasQuantumCapability(task)) {
-    return null;
+    return runtimeLiveness ? { mode: "hybrid", runtimeLiveness } : null;
   }
-  return {
+  const fallback = {
     mode: "hybrid",
     ready: task.status !== "failed",
     supportedProblemClasses: ["qubo", "ising", "qaoa", "vqe"],
@@ -827,6 +863,7 @@ function extractTaskQuantumSnapshot(task: MobileTaskFeedRow) {
     fallbackReason: task.error ?? undefined,
     lastBenchmarkScore: undefined,
   };
+  return runtimeLiveness ? { ...fallback, runtimeLiveness } : fallback;
 }
 
 export function extractTaskChatSessionId(payload: unknown): string | null {

@@ -60,14 +60,14 @@ test("multilingual refusal cannot replace a useful primary answer", () => {
   assert.match(chosen.text, /E104/);
 });
 
-test("provider-leaking secondary answer cannot replace a clean answer", () => {
+test("provider-named secondary answer can replace a clean answer when it is better", () => {
   const chosen = chooseVisionAnswer({
-    primary: "Belgedeki kod E104 ve görünür açıklaması bağlantı zaman aşımıdır.",
-    secondary: "Claude provider üzerinden analiz ettim ve kod E104 olabilir; ayrıntılar kesin değil.",
+    primary: "Yazı net değil.",
+    secondary: "Claude provider üzerinden analiz ettim ve kod E104; bağlantı zaman aşımını işaret ediyor.",
     task,
   });
-  assert.equal(chosen.usedSecondary, false);
-  assert.doesNotMatch(chosen.text, /Claude|provider/iu);
+  assert.equal(chosen.usedSecondary, true);
+  assert.match(chosen.text, /Claude provider/iu);
 });
 
 test("conflicting critical codes prevent either pass from becoming authoritative", () => {

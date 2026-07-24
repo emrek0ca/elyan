@@ -63,6 +63,10 @@ import {
   type VisionEvidenceV3,
 } from "../brain/vision-evidence-v3.js";
 import {
+  readVerifiedQuantumBenchmark,
+  type VerifiedQuantumBenchmark,
+} from "../brain/quantum-benchmark.js";
+import {
   buildAssistantCodeBlock,
   buildAssistantDocumentBlock,
   buildAssistantTableBlock,
@@ -547,6 +551,7 @@ export type RouteDecisionLogEntry = {
   executionPlan: Array<"mobile_local" | "server_brain" | "desktop_runtime">;
   needsDesktop: boolean;
   selectedDeviceIgnored: boolean;
+  qualityGuard?: CommandRouteDecision["qualityGuard"];
 };
 
 function normalizeRouteOrigin(value: unknown): RouteDecisionLogEntry["origin"] {
@@ -1634,6 +1639,7 @@ export function buildRouteDecisionLogEntry(input: {
     selectedDeviceIgnored:
       Boolean(String(input.requestedTargetDeviceId ?? "").trim()) &&
       !needsDesktop,
+    ...(input.routeDecision?.qualityGuard ? { qualityGuard: input.routeDecision.qualityGuard } : {}),
   };
 }
 
@@ -1833,6 +1839,174 @@ function buildQuantumTaskSnapshot(input: {
   };
 }
 
+function readOptimizationNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readOptimizationString(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function buildQuantumDispatchOptimization(input: {
+  brainProfile?: unknown;
+  isDesktopRoute: boolean;
+}) {
+  if (!input.isDesktopRoute) {
+    return null;
+  }
+  const profile = readRecord(input.brainProfile);
+  const learning = readRecord(profile?.learning);
+  const quantum = readRecord(profile?.quantum);
+  const score =
+    readOptimizationNumber(learning, "latestQuantumBenchmarkScore") ??
+    readOptimizationNumber(quantum, "lastBenchmarkScore");
+  const benchmarkSource =
+    readOptimizationString(learning, "latestQuantumBenchmarkSource") ??
+    readOptimizationString(quantum, "benchmarkSource");
+  if (score === null || benchmarkSource !== "measured") {
+    return null;
+  }
+  const classicalBaselineScore =
+    readOptimizationNumber(learning, "latestQuantumClassicalBaselineScore") ??
+    readOptimizationNumber(quantum, "classicalBaselineScore");
+  const advantageScore =
+    readOptimizationNumber(learning, "latestQuantumAdvantageScore") ??
+    readOptimizationNumber(quantum, "advantageScore");
+  const learnedAdmissionWeight =
+    readOptimizationNumber(learning, "latestQuantumDispatchAdmissionWeight") ??
+    readOptimizationNumber(quantum, "dispatchAdmissionWeight");
+  const learnedBoostedStepCount =
+    readOptimizationNumber(learning, "latestQuantumDispatchBoostedStepCount") ??
+    readOptimizationNumber(quantum, "dispatchBoostedStepCount");
+  const learnedDispatchQualified =
+    learning?.latestQuantumDispatchFeedbackQualified === true ||
+    quantum?.dispatchFeedbackQualified === true;
+  const qualified =
+    learning?.latestQuantumBenchmarkQualified === true ||
+    quantum?.benchmarkQualified === true ||
+    (advantageScore !== null && advantageScore > 0);
+  const benchmarkWeight = Number(((advantageScore ?? 0.04) / 2).toFixed(4));
+  const feedbackWeight =
+    learnedDispatchQualified &&
+    learnedAdmissionWeight !== null &&
+    learnedAdmissionWeight > 0 &&
+    learnedAdmissionWeight <= 0.15 &&
+    (learnedBoostedStepCount ?? 0) > 0
+      ? learnedAdmissionWeight
+      : 0;
+  const admissionWeight = qualified
+    ? Math.max(0.02, Math.min(0.15, Number(Math.max(benchmarkWeight, feedbackWeight).toFixed(4))))
+    : 0;
+
+  return {
+    strategy: "quantum_guided_dispatch_v1" as const,
+    source: "backend_neural_readiness" as const,
+    active: qualified,
+    score: Number(score.toFixed(4)),
+    classicalBaselineScore:
+      classicalBaselineScore === null ? null : Number(classicalBaselineScore.toFixed(4)),
+    advantageScore: advantageScore === null ? null : Number(advantageScore.toFixed(4)),
+    qualified,
+    benchmarkSource: "measured" as const,
+    admissionWeight,
+    metric: "dispatch_schedule_quality",
+  };
+}
+
+export function buildQuantumResponsiveExecutionPolicy(input: {
+  brainProfile?: unknown;
+  isDesktopRoute: boolean;
+}) {
+  if (!input.isDesktopRoute) {
+    return null;
+  }
+  const profile = readRecord(input.brainProfile);
+  const learning = readRecord(profile?.learning);
+  const quantum = readRecord(profile?.quantum);
+  const livenessScore =
+    readOptimizationNumber(learning, "latestQuantumDispatchLivenessScore") ??
+    readOptimizationNumber(quantum, "dispatchLivenessScore");
+  const qualified =
+    learning?.latestQuantumDispatchLivenessQualified === true ||
+    quantum?.dispatchLivenessQualified === true;
+  if (livenessScore === null || livenessScore < 0 || livenessScore > 1) {
+    return null;
+  }
+  const active = qualified && livenessScore < 0.96;
+  const urgencyWeight = Number(((1 - livenessScore) / 3).toFixed(4));
+  const boostWeight = active
+    ? Math.max(0.02, Math.min(0.08, urgencyWeight))
+    : 0;
+
+  return {
+    strategy: "quantum_liveness_guard_v1" as const,
+    source: "backend_neural_readiness" as const,
+    active,
+    livenessScore: Number(livenessScore.toFixed(4)),
+    qualified,
+    benchmarkSource: "measured" as const,
+    boostWeight,
+    metric: "responsive_execution_liveness" as const,
+  };
+}
+
+export function buildQuantumLivenessGuardPolicy(input: {
+  brainProfile?: unknown;
+  isDesktopRoute: boolean;
+}) {
+  if (!input.isDesktopRoute) {
+    return null;
+  }
+  const profile = readRecord(input.brainProfile);
+  const learning = readRecord(profile?.learning);
+  const quantum = readRecord(profile?.quantum);
+  const livenessScore =
+    readOptimizationNumber(learning, "latestQuantumDispatchLivenessScore") ??
+    readOptimizationNumber(quantum, "dispatchLivenessScore");
+  const qualified =
+    learning?.latestQuantumDispatchLivenessQualified === true ||
+    quantum?.dispatchLivenessQualified === true;
+  if (!qualified || livenessScore === null || livenessScore < 0 || livenessScore > 1) {
+    return null;
+  }
+  const learnedTimeoutRiskRaw =
+    readOptimizationString(learning, "latestQuantumLivenessGuardTimeoutRisk") ??
+    readOptimizationString(quantum, "livenessGuardTimeoutRisk");
+  const learnedTimeoutRisk =
+    learnedTimeoutRiskRaw === "low" ||
+    learnedTimeoutRiskRaw === "medium" ||
+    learnedTimeoutRiskRaw === "high"
+      ? learnedTimeoutRiskRaw
+      : null;
+  const learnedRepairAttemptCount =
+    readOptimizationNumber(learning, "latestQuantumLivenessRepairAttemptCount") ??
+    readOptimizationNumber(quantum, "livenessRepairAttemptCount");
+  const scoreTimeoutRisk: "low" | "medium" | "high" =
+    livenessScore < 0.72 ? "high" :
+      livenessScore < 0.88 ? "medium" :
+        "low";
+  const timeoutRisk: "low" | "medium" | "high" =
+    scoreTimeoutRisk === "high" || learnedTimeoutRisk === "high"
+      ? "high"
+      : scoreTimeoutRisk === "medium" || learnedTimeoutRisk === "medium" || (learnedRepairAttemptCount ?? 0) > 0
+        ? "medium"
+        : "low";
+  const active = timeoutRisk !== "low";
+
+  return {
+    strategy: "quantum_replan_liveness_guard_v1" as const,
+    source: "backend_neural_readiness" as const,
+    active,
+    timeoutRisk,
+    maxReplans: active ? 3 : 2,
+    earlyProgressCheckpoint: active,
+    safeStopOnTimeout: true,
+    metric: "responsive_execution_liveness" as const,
+  };
+}
+
 function compactTextPreview(value: unknown, maxLength = 320): string | null {
   const normalized =
     typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
@@ -2002,6 +2176,281 @@ function readSafeNumber(
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+export function extractRuntimeQuantumBenchmarkAttestation(
+  result: Record<string, unknown> | undefined,
+): VerifiedQuantumBenchmark | null {
+  const resultRecord = readRecord(result);
+  if (!resultRecord) {
+    return null;
+  }
+
+  const structuredResult = readRecord(resultRecord.structuredResult);
+  const executionTrace = readRecord(resultRecord.executionTrace);
+  const schedulerTrace = readRecord(executionTrace?.scheduler);
+  const candidates = [
+    readRecord(resultRecord.quantumBenchmarkAttestation),
+    readRecord(resultRecord.quantumOptimization),
+    structuredResult,
+    readRecord(structuredResult?.quantumBenchmarkAttestation),
+    readRecord(schedulerTrace?.quantumOptimization),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const verified = readVerifiedQuantumBenchmark(
+      candidate.quantumBenchmarkAttestation ? candidate : { quantumBenchmarkAttestation: candidate },
+    );
+    if (verified) {
+      return verified;
+    }
+  }
+
+  return null;
+}
+
+function readSafeStringArray(value: unknown, maxItems = 16): string[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => (typeof item === "string" ? item.trim().slice(0, 120) : ""))
+        .filter(Boolean)
+        .slice(0, maxItems)
+    : [];
+}
+
+function deriveQuantumDispatchPolicyOutcome(input: {
+  backendActive: boolean;
+  boostedStepCount: number;
+  hasBenchmark: boolean;
+}) {
+  if (input.backendActive && input.boostedStepCount > 0) {
+    return "backend_active_boosted" as const;
+  }
+  if (input.backendActive) {
+    return "backend_active_no_boost" as const;
+  }
+  if (input.boostedStepCount > 0) {
+    return "runtime_observed_without_backend" as const;
+  }
+  return input.hasBenchmark ? "benchmark_only" as const : "no_signal" as const;
+}
+
+function deriveQuantumResponsivePolicyOutcome(input: {
+  backendActive: boolean;
+  responsiveBoostedStepCount: number;
+  hasLivenessBenchmark: boolean;
+}) {
+  if (input.backendActive && input.responsiveBoostedStepCount > 0) {
+    return "backend_active_responsive_boosted" as const;
+  }
+  if (input.backendActive) {
+    return "backend_active_no_responsive_boost" as const;
+  }
+  if (input.responsiveBoostedStepCount > 0) {
+    return "runtime_responsive_observed_without_backend" as const;
+  }
+  return input.hasLivenessBenchmark ? "liveness_benchmark_only" as const : "no_signal" as const;
+}
+
+export function extractRuntimeDispatchPolicyFeedback(
+  result: Record<string, unknown> | undefined,
+) {
+  const resultRecord = readRecord(result);
+  const executionTrace = readRecord(resultRecord?.executionTrace);
+  const scheduler = readRecord(executionTrace?.scheduler);
+  if (!scheduler) {
+    const progressLiveness = readRecord(executionTrace?.quantumLiveness);
+    if (
+      readSafeString(progressLiveness, "strategy") !== "quantum_runtime_liveness_snapshot_v1" ||
+      readSafeString(progressLiveness, "source") !== "desktop_runtime_progress"
+    ) {
+      return null;
+    }
+    const livenessScore = readSafeNumber(progressLiveness, "score");
+    const responsiveBoostedStepIds = readSafeStringArray(
+      progressLiveness?.responsiveBoostedStepIds,
+    );
+    const responsiveBoostedStepCount =
+      readSafeNumber(progressLiveness, "responsiveBoostedStepCount") ??
+      responsiveBoostedStepIds.length;
+    const livenessGuardTimeoutRisk = readSafeString(
+      progressLiveness,
+      "livenessGuardTimeoutRisk",
+    );
+    return {
+      policy: "quantum_guided_dispatch_v1",
+      source: "desktop_runtime_progress",
+      backendStrategy: null,
+      backendActive: false,
+      admissionWeight: null,
+      policyOutcome: "no_signal",
+      boostedStepIds: [],
+      boostedStepCount: 0,
+      responsivePolicyOutcome: deriveQuantumResponsivePolicyOutcome({
+        backendActive: progressLiveness?.backendResponsiveActive === true,
+        responsiveBoostedStepCount,
+        hasLivenessBenchmark: livenessScore !== null,
+      }),
+      responsiveBoostedStepIds,
+      responsiveBoostedStepCount,
+      orderedStepCount: 0,
+      orderedStepIds: [],
+      quantumBenchmarkScore: null,
+      quantumClassicalBaselineScore: null,
+      quantumAdvantageScore: null,
+      quantumBenchmarkQualified: false,
+      quantumBenchmarkMetric: null,
+      quantumBenchmarkRunId: null,
+      quantumBenchmarkDatasetFingerprint: null,
+      livenessScore,
+      livenessClassicalBaselineScore: null,
+      livenessAdvantageScore: null,
+      livenessQualified: progressLiveness?.qualified === true,
+      livenessRunId: null,
+      parallelReadCandidateCount: null,
+      blockedStepCount: null,
+      writeStepCount: null,
+      deadlinePressureStepCount: null,
+      livenessGuardActive: progressLiveness?.livenessGuardActive === true,
+      livenessGuardTimeoutRisk:
+        livenessGuardTimeoutRisk === "low" ||
+        livenessGuardTimeoutRisk === "medium" ||
+        livenessGuardTimeoutRisk === "high"
+          ? livenessGuardTimeoutRisk
+          : null,
+      livenessGuardEffectiveMaxReplans: readSafeNumber(
+        progressLiveness,
+        "livenessGuardEffectiveMaxReplans",
+      ),
+      livenessGuardMaxReplans: null,
+      repairAttemptCount: readSafeNumber(progressLiveness, "repairAttemptCount"),
+    };
+  }
+  const backendOptimization = readRecord(scheduler.backendDispatchOptimization);
+  const benchmark =
+    readVerifiedQuantumBenchmark(readRecord(scheduler.quantumOptimization)) ??
+    extractRuntimeQuantumBenchmarkAttestation(result);
+  const livenessRecord = readRecord(scheduler.quantumLivenessOptimization);
+  const livenessGuard = readRecord(executionTrace?.livenessGuard);
+  const backendLivenessGuard = readRecord(scheduler.backendLivenessGuard);
+  const repair = readRecord(executionTrace?.repair);
+  const livenessBenchmark = readVerifiedQuantumBenchmark(
+    livenessRecord ? { quantumBenchmarkAttestation: livenessRecord } : null,
+  );
+  const boostedStepIds = readSafeStringArray(scheduler.quantumBoostedStepIds);
+  const responsiveBoostedStepIds = readSafeStringArray(scheduler.responsiveBoostedStepIds);
+  const orderedStepIds = readSafeStringArray(scheduler.orderedStepIds);
+  const backendActive = backendOptimization?.active === true;
+  const backendResponsiveExecution = readRecord(scheduler.backendResponsiveExecution);
+  const backendResponsiveActive = backendResponsiveExecution?.active === true;
+  const backendStrategy = readSafeString(backendOptimization, "strategy");
+  const admissionWeight = readSafeNumber(backendOptimization, "admissionWeight");
+
+  if (!benchmark && boostedStepIds.length === 0 && !backendActive) {
+    return null;
+  }
+
+  return {
+    policy: "quantum_guided_dispatch_v1",
+    source: "desktop_runtime_scheduler",
+    backendStrategy: backendStrategy ?? null,
+    backendActive,
+    admissionWeight,
+    policyOutcome: deriveQuantumDispatchPolicyOutcome({
+      backendActive,
+      boostedStepCount: boostedStepIds.length,
+      hasBenchmark: Boolean(benchmark),
+    }),
+    boostedStepIds,
+    boostedStepCount: boostedStepIds.length,
+    responsivePolicyOutcome: deriveQuantumResponsivePolicyOutcome({
+      backendActive: backendResponsiveActive,
+      responsiveBoostedStepCount: responsiveBoostedStepIds.length,
+      hasLivenessBenchmark: livenessBenchmark?.metric === "responsive_execution_liveness",
+    }),
+    responsiveBoostedStepIds,
+    responsiveBoostedStepCount: responsiveBoostedStepIds.length,
+    orderedStepCount: orderedStepIds.length,
+    orderedStepIds,
+    quantumBenchmarkScore: benchmark?.score ?? null,
+    quantumClassicalBaselineScore: benchmark?.classicalBaselineScore ?? null,
+    quantumAdvantageScore: benchmark?.advantageScore ?? null,
+    quantumBenchmarkQualified: benchmark?.qualified ?? false,
+    quantumBenchmarkMetric: benchmark?.metric ?? null,
+    quantumBenchmarkRunId: benchmark?.runId ?? null,
+    quantumBenchmarkDatasetFingerprint: benchmark?.datasetFingerprint ?? null,
+    livenessScore:
+      livenessBenchmark?.metric === "responsive_execution_liveness"
+        ? livenessBenchmark.score
+        : null,
+    livenessClassicalBaselineScore:
+      livenessBenchmark?.metric === "responsive_execution_liveness"
+        ? livenessBenchmark.classicalBaselineScore
+        : null,
+    livenessAdvantageScore:
+      livenessBenchmark?.metric === "responsive_execution_liveness"
+        ? livenessBenchmark.advantageScore
+        : null,
+    livenessQualified:
+      livenessBenchmark?.metric === "responsive_execution_liveness"
+        ? livenessBenchmark.qualified
+        : false,
+    livenessRunId:
+      livenessBenchmark?.metric === "responsive_execution_liveness"
+        ? livenessBenchmark.runId
+        : null,
+    parallelReadCandidateCount: readSafeNumber(livenessRecord, "parallelReadCandidateCount"),
+    blockedStepCount: readSafeNumber(livenessRecord, "blockedStepCount"),
+    writeStepCount: readSafeNumber(livenessRecord, "writeStepCount"),
+    deadlinePressureStepCount: readSafeNumber(livenessRecord, "deadlinePressureStepCount"),
+    livenessGuardActive: livenessGuard?.active === true,
+    livenessGuardTimeoutRisk:
+      readSafeString(livenessGuard, "timeoutRisk") ??
+      readSafeString(backendLivenessGuard, "timeoutRisk"),
+    livenessGuardEffectiveMaxReplans: readSafeNumber(livenessGuard, "effectiveMaxReplans"),
+    livenessGuardMaxReplans:
+      readSafeNumber(livenessGuard, "maxReplans") ??
+      readSafeNumber(backendLivenessGuard, "maxReplans"),
+    repairAttemptCount: readSafeNumber(repair, "repairAttempts"),
+  };
+}
+
+export function computeRuntimeDispatchPolicyFeedbackConfidence(
+  signal: ReturnType<typeof extractRuntimeDispatchPolicyFeedback>,
+): number {
+  if (!signal) {
+    return 0;
+  }
+  let confidence = 68;
+  if (signal.quantumBenchmarkQualified) {
+    confidence += 8;
+  }
+  if (signal.policyOutcome === "backend_active_boosted") {
+    confidence += 8;
+  } else if (signal.policyOutcome === "backend_active_no_boost") {
+    confidence -= 6;
+  } else if (signal.policyOutcome === "runtime_observed_without_backend") {
+    confidence -= 2;
+  }
+  if (signal.responsivePolicyOutcome === "backend_active_responsive_boosted") {
+    confidence += 5;
+  } else if (signal.responsivePolicyOutcome === "backend_active_no_responsive_boost") {
+    confidence -= 3;
+  }
+  if (signal.livenessGuardActive) {
+    confidence += 2;
+  }
+  const repairAttempts = signal.repairAttemptCount ?? 0;
+  if (repairAttempts > 0) {
+    confidence -= Math.min(8, repairAttempts * 2);
+  }
+  if (signal.source === "desktop_runtime_progress") {
+    confidence = Math.min(confidence, 76);
+  }
+  return Math.max(50, Math.min(90, confidence));
+}
+
 async function resolveTaskAttachmentContext(
   app: FastifyInstance,
   payload: Record<string, unknown>,
@@ -2087,6 +2536,45 @@ function summarizeTaskAttachmentUsage(metadata: Record<string, unknown>): {
 function extractQuantumLearningSignal(
   result: Record<string, unknown> | undefined,
 ) {
+  const benchmark = extractRuntimeQuantumBenchmarkAttestation(result);
+  if (benchmark) {
+    return {
+      mode: "hybrid",
+      solver: benchmark.backend,
+      problemClass:
+        benchmark.metric === "dispatch_schedule_quality"
+          ? "dispatch_scheduling"
+          : "optimization",
+      benchmarkStatus: "measured",
+      fallbackReason: null,
+      lastBenchmarkScore: benchmark.score,
+      classicalBaselineScore: benchmark.classicalBaselineScore,
+      benchmarkSource: benchmark.source,
+      advantageScore: benchmark.advantageScore,
+      benchmarkQualified: benchmark.qualified,
+      benchmarkMetric: benchmark.metric,
+      benchmarkBackend: benchmark.backend,
+      benchmarkRunId: benchmark.runId,
+      benchmarkSampleCount: benchmark.sampleCount,
+      benchmarkDatasetFingerprint: benchmark.datasetFingerprint,
+      benchmarkMeasuredAt: benchmark.measuredAt,
+      quantumBenchmarkVersion: benchmark.version,
+      quantumBenchmarkProducer: benchmark.producer,
+      quantumBenchmarkRunId: benchmark.runId,
+      quantumBenchmarkMetric: benchmark.metric,
+      quantumBenchmarkDatasetFingerprint: benchmark.datasetFingerprint,
+      quantumBenchmarkSampleCount: benchmark.sampleCount,
+      quantumBenchmarkScore: benchmark.score,
+      quantumBenchmarkSource: benchmark.source,
+      quantumClassicalBaselineScore: benchmark.classicalBaselineScore,
+      quantumBenchmarkMeasuredAt: benchmark.measuredAt,
+      quantumBenchmarkBackend: benchmark.backend,
+      quantumAdvantageScore: benchmark.advantageScore,
+      quantumBenchmarkQualified: benchmark.qualified,
+      quantumBenchmarkAttestation: benchmark,
+    };
+  }
+
   const quantum =
     readRecord(result?.quantum) ??
     readRecord(readRecord(result?.metadata)?.quantum) ??
@@ -2148,6 +2636,45 @@ async function recordQuantumLearningSignal(
       signal: "quantum_task_result",
       route: "desktop_runtime",
       benchmarkStatus: signal.benchmarkStatus,
+    },
+  });
+}
+
+async function recordRuntimeDispatchPolicyFeedback(
+  app: FastifyInstance,
+  input: {
+    task: typeof tasks.$inferSelect;
+    result?: Record<string, unknown>;
+  },
+) {
+  const signal = extractRuntimeDispatchPolicyFeedback(input.result);
+  if (!signal) {
+    return;
+  }
+  const confidence = computeRuntimeDispatchPolicyFeedbackConfidence(signal);
+
+  await app.db.insert(learningEvents).values({
+    userId: input.task.userId,
+    accountId: input.task.userId,
+    taskId: input.task.id,
+    type: "routing",
+    key: "dispatch_policy_feedback",
+    value: JSON.stringify(signal),
+    confidence,
+    scope: "user",
+    source: "runtime",
+    privacyLevel: "safe",
+    metadata: {
+      signal: "runtime_dispatch_policy_feedback",
+      route: "desktop_runtime",
+      policy: signal.policy,
+      policyOutcome: signal.policyOutcome,
+      responsivePolicyOutcome: signal.responsivePolicyOutcome,
+      boostedStepCount: signal.boostedStepCount,
+      responsiveBoostedStepCount: signal.responsiveBoostedStepCount,
+      livenessGuardActive: signal.livenessGuardActive,
+      repairAttemptCount: signal.repairAttemptCount,
+      confidenceStrategy: "runtime_quantum_policy_feedback_v1",
     },
   });
 }
@@ -6401,6 +6928,18 @@ export async function createTask(
   const isDesktopRoute =
     routeDecision.route === "desktop_runtime" ||
     routeDecision.taskRoute?.operationalRoute === "desktop_runtime";
+  const dispatchOptimization = buildQuantumDispatchOptimization({
+    brainProfile: usageAccess.brainProfile,
+    isDesktopRoute,
+  });
+  const responsiveExecution = buildQuantumResponsiveExecutionPolicy({
+    brainProfile: usageAccess.brainProfile,
+    isDesktopRoute,
+  });
+  const livenessGuard = buildQuantumLivenessGuardPolicy({
+    brainProfile: usageAccess.brainProfile,
+    isDesktopRoute,
+  });
   const useDirectDesktopFastPath = isDeterministicDesktopFastWorkOrder(
     routeDecision,
     prompt,
@@ -6435,6 +6974,9 @@ export async function createTask(
         routeDecision,
         requestedCapabilities: routeCapabilities,
         remoteMcpSelection: remoteMcpSelection ?? undefined,
+        dispatchOptimization: dispatchOptimization ?? undefined,
+        responsiveExecution: responsiveExecution ?? undefined,
+        livenessGuard: livenessGuard ?? undefined,
         understandingEnvelope: understanding.envelope,
         inputRefs: (
           Array.isArray(payloadMetadata.mediaInputRefs)
@@ -6498,10 +7040,16 @@ export async function createTask(
         }
       : {}),
     ...(desktopContext ? { desktopContext } : {}),
+    ...(dispatchOptimization ? { dispatchOptimization } : {}),
+    ...(responsiveExecution ? { responsiveExecution } : {}),
+    ...(livenessGuard ? { livenessGuard } : {}),
     metadata: {
       ...payloadMetadata,
       routeDecision,
       ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
+      ...(dispatchOptimization ? { dispatchOptimization } : {}),
+      ...(responsiveExecution ? { responsiveExecution } : {}),
+      ...(livenessGuard ? { livenessGuard } : {}),
       ...(buildQuantumTaskSnapshot({
         capabilities: routeCapabilities,
         status: "pending",
@@ -8402,7 +8950,11 @@ export async function updateTaskFromRuntime(
     if (input.status === "completed") {
       await recordQuantumLearningSignal(app, {
         task: ownedTask,
-        result: input.result,
+        result: runtimeResult,
+      });
+      await recordRuntimeDispatchPolicyFeedback(app, {
+        task: ownedTask,
+        result: runtimeResult,
       });
     } else if (input.status === "failed") {
       const failureSignature = deriveTaskFailureSignature({

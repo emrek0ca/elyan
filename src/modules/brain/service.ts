@@ -1945,6 +1945,22 @@ export async function getBrainProfile(
     latestEvaluationScore: null,
     latestQualityCompositeScore: null,
     latestQuantumBenchmarkScore: null,
+    latestQuantumClassicalBaselineScore: null,
+    latestQuantumBenchmarkSource: null,
+    latestQuantumAdvantageScore: null,
+    latestQuantumBenchmarkQualified: false,
+    latestQuantumDispatchAdmissionWeight: null,
+    latestQuantumDispatchFeedbackConfidence: null,
+    latestQuantumDispatchPolicyOutcome: null,
+    latestQuantumDispatchBoostedStepCount: 0,
+    latestQuantumDispatchFeedbackQualified: false,
+    latestQuantumDispatchLivenessScore: null,
+    latestQuantumResponsivePolicyOutcome: null,
+    latestQuantumDispatchLivenessQualified: false,
+    latestQuantumLivenessGuardActive: false,
+    latestQuantumLivenessGuardTimeoutRisk: null,
+    latestQuantumLivenessGuardEffectiveMaxReplans: null,
+    latestQuantumLivenessRepairAttemptCount: null,
     mlWorkerMode: null,
     mlWorkerLastJobAt: null,
     mlWorkerLastErrorCode: null,
@@ -2063,6 +2079,37 @@ export async function getBrainProfile(
     );
   });
   const quantumReady = Boolean(quantumDesktop);
+  const latestQuantumBenchmarkScore = neural.latestQuantumBenchmarkScore ?? null;
+  const latestQuantumClassicalBaselineScore =
+    neural.latestQuantumClassicalBaselineScore ?? null;
+  const latestQuantumBenchmarkSource = neural.latestQuantumBenchmarkSource ?? null;
+  const latestQuantumAdvantageScore = neural.latestQuantumAdvantageScore ?? null;
+  const latestQuantumBenchmarkQualified =
+    neural.latestQuantumBenchmarkQualified ?? false;
+  const latestQuantumDispatchAdmissionWeight =
+    neural.latestQuantumDispatchAdmissionWeight ?? null;
+  const latestQuantumDispatchFeedbackConfidence =
+    neural.latestQuantumDispatchFeedbackConfidence ?? null;
+  const latestQuantumDispatchPolicyOutcome =
+    neural.latestQuantumDispatchPolicyOutcome ?? null;
+  const latestQuantumDispatchBoostedStepCount =
+    neural.latestQuantumDispatchBoostedStepCount ?? 0;
+  const latestQuantumDispatchFeedbackQualified =
+    neural.latestQuantumDispatchFeedbackQualified ?? false;
+  const latestQuantumDispatchLivenessScore =
+    neural.latestQuantumDispatchLivenessScore ?? null;
+  const latestQuantumResponsivePolicyOutcome =
+    neural.latestQuantumResponsivePolicyOutcome ?? null;
+  const latestQuantumDispatchLivenessQualified =
+    neural.latestQuantumDispatchLivenessQualified ?? false;
+  const latestQuantumLivenessGuardActive =
+    neural.latestQuantumLivenessGuardActive ?? false;
+  const latestQuantumLivenessGuardTimeoutRisk =
+    neural.latestQuantumLivenessGuardTimeoutRisk ?? null;
+  const latestQuantumLivenessGuardEffectiveMaxReplans =
+    neural.latestQuantumLivenessGuardEffectiveMaxReplans ?? null;
+  const latestQuantumLivenessRepairAttemptCount =
+    neural.latestQuantumLivenessRepairAttemptCount ?? null;
   const quantum = {
     mode: "hybrid",
     ready: quantumReady,
@@ -2071,9 +2118,31 @@ export async function getBrainProfile(
       : [],
     solver: quantumReady ? "qiskit_simulator" : null,
     problemClass: "optimization",
-    benchmarkStatus: quantumReady ? "ready" : "waiting_desktop",
+    benchmarkStatus:
+      latestQuantumBenchmarkScore !== null
+        ? "measured"
+        : quantumReady
+          ? "ready"
+          : "waiting_desktop",
     fallbackReason: quantumReady ? null : "quantum_desktop_runtime_unavailable",
-    lastBenchmarkScore: null,
+    lastBenchmarkScore: latestQuantumBenchmarkScore,
+    classicalBaselineScore: latestQuantumClassicalBaselineScore,
+    benchmarkSource: latestQuantumBenchmarkSource,
+    advantageScore: latestQuantumAdvantageScore,
+    benchmarkQualified: latestQuantumBenchmarkQualified,
+    dispatchAdmissionWeight: latestQuantumDispatchAdmissionWeight,
+    dispatchFeedbackConfidence: latestQuantumDispatchFeedbackConfidence,
+    dispatchPolicyOutcome: latestQuantumDispatchPolicyOutcome,
+    dispatchBoostedStepCount: latestQuantumDispatchBoostedStepCount,
+    dispatchFeedbackQualified: latestQuantumDispatchFeedbackQualified,
+    dispatchLivenessScore: latestQuantumDispatchLivenessScore,
+    responsivePolicyOutcome: latestQuantumResponsivePolicyOutcome,
+    dispatchLivenessQualified: latestQuantumDispatchLivenessQualified,
+    livenessGuardActive: latestQuantumLivenessGuardActive,
+    livenessGuardTimeoutRisk: latestQuantumLivenessGuardTimeoutRisk,
+    livenessGuardEffectiveMaxReplans:
+      latestQuantumLivenessGuardEffectiveMaxReplans,
+    livenessRepairAttemptCount: latestQuantumLivenessRepairAttemptCount,
   };
   const mobileAvailable = mobileDevices > 0;
   const sections = buildBrainProfileSections({
@@ -2557,6 +2626,35 @@ export async function getBrainProfile(
       activeTrainingJobs: neural.activeTrainingJobs,
       latestEvaluationScore: neural.latestEvaluationScore,
       latestQuantumBenchmarkScore: neural.latestQuantumBenchmarkScore,
+      latestQuantumClassicalBaselineScore:
+        neural.latestQuantumClassicalBaselineScore,
+      latestQuantumBenchmarkSource: neural.latestQuantumBenchmarkSource,
+      latestQuantumAdvantageScore: neural.latestQuantumAdvantageScore,
+      latestQuantumBenchmarkQualified: neural.latestQuantumBenchmarkQualified,
+      latestQuantumDispatchAdmissionWeight:
+        neural.latestQuantumDispatchAdmissionWeight,
+      latestQuantumDispatchFeedbackConfidence:
+        neural.latestQuantumDispatchFeedbackConfidence,
+      latestQuantumDispatchPolicyOutcome:
+        neural.latestQuantumDispatchPolicyOutcome,
+      latestQuantumDispatchBoostedStepCount:
+        neural.latestQuantumDispatchBoostedStepCount,
+      latestQuantumDispatchFeedbackQualified:
+        neural.latestQuantumDispatchFeedbackQualified,
+      latestQuantumDispatchLivenessScore:
+        neural.latestQuantumDispatchLivenessScore,
+      latestQuantumResponsivePolicyOutcome:
+        neural.latestQuantumResponsivePolicyOutcome,
+      latestQuantumDispatchLivenessQualified:
+        neural.latestQuantumDispatchLivenessQualified,
+      latestQuantumLivenessGuardActive:
+        neural.latestQuantumLivenessGuardActive,
+      latestQuantumLivenessGuardTimeoutRisk:
+        neural.latestQuantumLivenessGuardTimeoutRisk,
+      latestQuantumLivenessGuardEffectiveMaxReplans:
+        neural.latestQuantumLivenessGuardEffectiveMaxReplans,
+      latestQuantumLivenessRepairAttemptCount:
+        neural.latestQuantumLivenessRepairAttemptCount,
       mlWorkerMode: neural.mlWorkerMode,
       mlWorkerLastJobAt: neural.mlWorkerLastJobAt,
       mlWorkerLastErrorCode: neural.mlWorkerLastErrorCode,

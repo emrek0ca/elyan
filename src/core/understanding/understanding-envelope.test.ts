@@ -145,8 +145,6 @@ test("buildTypedUnderstandingEnvelope carries follow-up artifact context and too
   assert.equal(envelope.conversation_state.lastImagePrompt, "Sıcak bir odada tekir kedi portresi");
   assert.equal(envelope.output_contract?.sourceReference, "latest_artifact");
   assert.equal(envelope.tool_skill_decision?.surface, "image");
-  assert.equal(envelope.privacy_routing.internalProviderDisclosure, "forbidden");
-  assert.equal(envelope.privacy_routing.visibleProviderNamesAllowed, true);
   assert.equal(envelope.intent_graph.nodes.some((node) => node.kind === "write" || node.kind === "export"), true);
 });
 

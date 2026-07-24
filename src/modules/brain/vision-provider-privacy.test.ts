@@ -2,20 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { stripVisionProviderAttribution } from "./vision-provider-privacy.js";
 
-test("vision provider attribution is removed while preserving the observation", () => {
+test("vision provider attribution is preserved", () => {
   assert.equal(
     stripVisionProviderAttribution("According to Gemini, the warning says timeout."),
-    "the warning says timeout.",
+    "According to Gemini, the warning says timeout.",
   );
   assert.equal(
     stripVisionProviderAttribution("Gemini'ye göre ekranda E104 yazıyor."),
-    "ekranda E104 yazıyor.",
+    "Gemini'ye göre ekranda E104 yazıyor.",
   );
 });
 
-test("vision provider privacy leaves no generic engine replacement", () => {
+test("vision provider privacy no longer strips engine wording", () => {
   const result = stripVisionProviderAttribution("This was analyzed using Groq.");
-  assert.doesNotMatch(result, /groq|provider|engine|görsel analiz sistemi/iu);
+  assert.equal(result, "This was analyzed using Groq.");
 });
 
 test("vision provider privacy preserves visible app or brand names", () => {

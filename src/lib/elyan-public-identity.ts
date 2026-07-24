@@ -8,49 +8,25 @@ export const ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT =
 
 const PROTECTED_DISCLOSURE_PATTERNS = [
   unicodeWordPattern(
-    String.raw`\b(?:codex|groq|openai|anthropic|ollama|openrouter|vertex\s*ai|gpt|llama|claude|mixtral|qwen|deepseek|gemini|imagen|nano\s*banana|dall[\s.·-]?e)(?:['’]?\p{L}{0,12})?\b`,
-    "i",
-  ),
-  unicodeWordPattern(
     String.raw`\b(?:system prompt|developer message|hidden instruction|internal routing|backend policy|model id|model identifier)\b`,
     "i",
   ),
   unicodeWordPattern(
-    String.raw`\b(?:model provider|underlying model|underlying provider|provider metadata|gateway product|fallback implementation)\b`,
+    String.raw`\b(?:provider metadata|gateway product|fallback implementation)\b`,
     "i",
   ),
   unicodeWordPattern(
-    String.raw`\b(?:sistem promptu|geliştirici mesajı|gizli talimat|iç model|alttaki model|arkadaki model|model adı|model kimliği)\b`,
+    String.raw`\b(?:sistem promptu|geliştirici mesajı|gizli talimat|model kimliği)\b`,
     "i",
   ),
   unicodeWordPattern(
-    String.raw`\b(?:sağlayıcı ayrıntıları|sağlayıcı detayı|altyapı sağlayıcı|dahili yönlendirme|backend politikası)\b`,
+    String.raw`\b(?:dahili yönlendirme|backend politikası)\b`,
     "i",
   ),
   unicodeWordPattern(
-    String.raw`\b(?:güvenlik ve ürün bütünlüğü gereği paylaşılmaz|iç model ve sağlayıcı ayrıntıları)\b`,
+    String.raw`\b(?:güvenlik ve ürün bütünlüğü gereği paylaşılmaz)\b`,
     "i",
   ),
-] as const;
-
-const PROTECTED_COMPACT_TOKENS = [
-  "codex",
-  "groq",
-  "openai",
-  "anthropic",
-  "ollama",
-  "openrouter",
-  "gpt",
-  "llama",
-  "claude",
-  "mixtral",
-  "qwen",
-  "deepseek",
-  "gemini",
-  "imagen",
-  "vertexai",
-  "nanobanana",
-  "dalle",
 ] as const;
 
 const PROTECTED_COMPACT_PHRASES = [
@@ -61,22 +37,12 @@ const PROTECTED_COMPACT_PHRASES = [
   "backendpolicy",
   "modelid",
   "modelidentifier",
-  "modelprovider",
-  "underlyingmodel",
-  "underlyingprovider",
   "providermetadata",
   "sistempromptu",
   "sistempromptunu",
   "gelistiricimesaji",
   "gizlitalimat",
-  "icmodel",
-  "alttakimodel",
-  "arkadakimodel",
-  "modeladi",
   "modelkimligi",
-  "saglayiciayrintilari",
-  "saglayicidetayi",
-  "altyapisaglayici",
   "dahiliyonlendirme",
   "backendpolitikasi",
 ] as const;
@@ -111,8 +77,5 @@ export function containsProtectedElyanDisclosure(value: string | null | undefine
     return true;
   }
   const compact = compactForDisclosureDetection(normalized);
-  return (
-    PROTECTED_COMPACT_TOKENS.some((token) => compact.includes(token)) ||
-    PROTECTED_COMPACT_PHRASES.some((phrase) => compact.includes(phrase))
-  );
+  return PROTECTED_COMPACT_PHRASES.some((phrase) => compact.includes(phrase));
 }

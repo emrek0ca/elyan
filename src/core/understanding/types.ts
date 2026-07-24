@@ -288,8 +288,6 @@ export const understandingPrivacyRoutingSchema = z.object({
   mode: z.enum(["server", "desktop_private", "hybrid", "mobile_local"]).default("server"),
   mayUseHostedModels: z.boolean().default(true),
   maySendPrivateContextToServer: z.boolean().default(false),
-  visibleProviderNamesAllowed: z.boolean().default(true),
-  internalProviderDisclosure: z.literal("forbidden").default("forbidden"),
   reasons: z.array(z.string().max(160)).max(12).default([]),
 }).default({});
 

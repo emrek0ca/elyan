@@ -1,9 +1,8 @@
 import type { VisionMediaDecision } from "./vision-media-policy.js";
 import type { VisionTaskDecision } from "./vision-task-policy.js";
 import { buildVisionRecoveryMessage } from "./vision-user-messages.js";
-import { stripVisionProviderAttribution, VISION_PROVIDER_NAME_PATTERN } from "./vision-provider-privacy.js";
 
-const INTERNAL_VISION_PATTERN = /(?:vision[_ -]?(?:task|media|evidence)|cloudVisionOptIn|request_ephemeral|provider-neutral|image_url|base64)/giu;
+const INTERNAL_VISION_PATTERN = /(?:vision[_ -]?(?:task|media|evidence)|cloudVisionOptIn|request_ephemeral|image_url|base64)/giu;
 const STRONG_CERTAINTY_PATTERN = /(?<!\p{L})(kesinlikle|kesin olarak|şüphesiz|şuphesiz|definitely|certainly|without doubt)(?!\p{L})/iu;
 
 export type VisionAnswerGateResult = {
@@ -26,19 +25,9 @@ export function gateVisionAnswer(input: {
 }): VisionAnswerGateResult {
   const flags: string[] = [];
   let text = String(input.text ?? "");
-  if (text.search(VISION_PROVIDER_NAME_PATTERN) >= 0) {
-    flags.push("provider_name_removed");
-    text = stripVisionProviderAttribution(text);
-  }
   if (text.search(INTERNAL_VISION_PATTERN) >= 0) {
     flags.push("internal_vision_metadata_removed");
     text = text.replace(INTERNAL_VISION_PATTERN, "");
-  }
-  if (text.search(VISION_PROVIDER_NAME_PATTERN) >= 0) {
-    if (!flags.includes("provider_name_removed")) {
-      flags.push("provider_name_removed");
-    }
-    text = stripVisionProviderAttribution(text);
   }
   text = text.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 

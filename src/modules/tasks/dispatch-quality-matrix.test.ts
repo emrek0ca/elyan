@@ -133,8 +133,6 @@ test("dispatch quality matrix keeps 50 representative turns structured and backw
 
     assert.equal(envelope.schema_version, "2026-07-understanding-envelope-v2", scenario.message);
     assert.ok(envelope.intent_graph.nodes.length >= 1, scenario.message);
-    assert.ok(envelope.privacy_routing.internalProviderDisclosure === "forbidden", scenario.message);
-    assert.equal(envelope.privacy_routing.visibleProviderNamesAllowed, true, scenario.message);
     if (scenario.expectedReference) {
       assert.equal(envelope.source_reference, scenario.expectedReference, scenario.message);
       assert.equal(envelope.conversation_state.carryForward, true, scenario.message);

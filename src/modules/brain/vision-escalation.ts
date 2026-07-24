@@ -5,7 +5,7 @@ import { assessVisionAnswerConsistency } from "./vision-answer-consistency.js";
 
 const UNCERTAINTY_PATTERN = /(?<!\p{L})(okunmuyor|seçilemiyor|secilemiyor|emin değilim|emin degilim|net değil|net degil|göremiyorum|goremiyorum|can't read|cannot read|unclear|not visible|not sure|no se lee|no estoy seguro|borroso|no es visible|illisible|pas sûr|pas sur|flou|nicht lesbar|nicht sicher|unscharf|non leggibile|non sono sicuro|sfocato|não legível|nao legivel|não tenho certeza|nao tenho certeza|desfocado|не читается|не уверен|размыто|не видно|غير واضح|لا يمكنني قراءة|لست متأكد)(?!\p{L})/iu;
 const REFUSAL_PATTERN = /(?<!\p{L})(yardımcı olamam|yardimci olamam|bunu yapamam|i can't help|i cannot help|no puedo ayudar|no puedo hacerlo|je ne peux pas aider|je ne peux pas le faire|ich kann nicht helfen|ich kann das nicht|non posso aiutare|non posso farlo|não posso ajudar|nao posso ajudar|não posso fazer|nao posso fazer|не могу помочь|не могу это сделать|لا أستطيع المساعدة|لا يمكنني فعل ذلك)(?!\p{L})/iu;
-const INTERNAL_PATTERN = /\b(?:gemini|groq|google ai|llama(?:\s+vision)?|openai|chatgpt|claude|anthropic|provider|vision_evidence|cloudVisionOptIn|request_ephemeral|base64|image_url)\b/iu;
+const INTERNAL_PATTERN = /\b(?:vision_evidence|cloudVisionOptIn|request_ephemeral|base64|image_url)\b/iu;
 
 export type VisionEscalationDecision = {
   eligible: boolean;
@@ -72,7 +72,7 @@ export function buildVisionSecondaryReviewPrompt(input: {
     `User request: ${input.userPrompt}`,
     "Earlier draft (untrusted; correct it rather than agreeing automatically):",
     input.primaryAnswer.slice(0, 4_000),
-    "Return only the final user-facing answer. Do not mention drafts, engines, providers, confidence scores, routing, or this review.",
+    "Return only the final user-facing answer. Do not mention drafts, confidence scores, routing, or this review.",
   ].join("\n\n");
 }
 

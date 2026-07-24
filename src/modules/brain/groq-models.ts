@@ -1,6 +1,6 @@
 import type { SharedBrainWorkload } from "./workloads.js";
 
-type GroqModelConfigSource = {
+export type GroqModelConfigSource = {
   GROQ_REASONING_MODEL?: string | null;
   GROQ_FAST_MODEL?: string | null;
   GROQ_FALLBACK_MODEL?: string | null;
@@ -10,6 +10,8 @@ type GroqModelConfigSource = {
   ELYAN_SHARED_BRAIN_BALANCED_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_PLANNING_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_VISION_MODEL?: string | null;
+  GROQ_COMPOUND_MODEL?: string | null;
+  GROQ_COMPOUND_MINI_MODEL?: string | null;
 };
 
 export type GroqModelCatalog = {
@@ -17,6 +19,11 @@ export type GroqModelCatalog = {
   fastModel: string;
   fallbackModel: string;
   visionModel: string;
+  // Groq Compound ajan sistemi modelleri. `models` listesine dahil DEĞİLdir:
+  // compound ayrı bir yürütme yolu (yerleşik web/kod araçları) olduğundan
+  // gizlilik/atıf/klasik-model varsayımlarına karışmaz.
+  compoundModel: string;
+  compoundMiniModel: string;
   defaultModelByWorkload: Record<SharedBrainWorkload, string>;
   models: string[];
 };
@@ -47,12 +54,18 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
     compactText(config.GROQ_VISION_MODEL) ||
     compactText(config.ELYAN_SHARED_BRAIN_VISION_MODEL) ||
     "meta-llama/llama-4-scout-17b-16e-instruct";
+  const compoundModel =
+    compactText(config.GROQ_COMPOUND_MODEL) || "groq/compound";
+  const compoundMiniModel =
+    compactText(config.GROQ_COMPOUND_MINI_MODEL) || "groq/compound-mini";
 
   return {
     reasoningModel,
     fastModel,
     fallbackModel,
     visionModel,
+    compoundModel,
+    compoundMiniModel,
     defaultModelByWorkload: {
       // intent/routing sınıflandırması hız-kritik ve kaliteye duyarsız: küçük
       // model yeterli, düşük gecikme önemli.

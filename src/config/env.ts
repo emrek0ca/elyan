@@ -157,6 +157,19 @@ const envSchema = z.object({
   GROQ_FALLBACK_MODEL: z.string().default("qwen/qwen3.6-27b"),
   GROQ_VISION_MODEL: z.string().default("meta-llama/llama-4-scout-17b-16e-instruct"),
   GROQ_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
+  // Groq Compound: yerleşik ajan sistemi (web arama + kod yürütme). OpenAI
+  // uyumlu /chat/completions üzerinden `groq/compound` (derin) ve
+  // `groq/compound-mini` (hızlı) modelleriyle çalışır. Varsayılan KAPALI:
+  // açılınca yalnız web/güncellik ağırlıklı iş yüklerinde birincil model olur,
+  // hemen ardından mevcut gpt-oss zinciri fallback kalır (kalite gerilemez).
+  GROQ_COMPOUND_ENABLED: booleanFlag(false),
+  GROQ_COMPOUND_MODEL: z.string().default("groq/compound"),
+  GROQ_COMPOUND_MINI_MODEL: z.string().default("groq/compound-mini"),
+  // Arama davranışı ince ayarı (opsiyonel). Virgülle ayrılmış alan adı listeleri
+  // ve ISO-3166 ülke ipucu compound_custom.search_settings'e taşınır.
+  GROQ_COMPOUND_SEARCH_COUNTRY: z.string().optional(),
+  GROQ_COMPOUND_INCLUDE_DOMAINS: z.string().optional(),
+  GROQ_COMPOUND_EXCLUDE_DOMAINS: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_BASE_URL: z.string().url().default("https://generativelanguage.googleapis.com/v1beta/openai"),
   GEMINI_INTERACTIONS_BASE_URL: z.string().url().default("https://generativelanguage.googleapis.com/v1beta"),
@@ -328,6 +341,12 @@ export type AppEnv = ParsedEnv & {
   GROQ_FALLBACK_MODEL: string;
   GROQ_VISION_MODEL: string;
   GROQ_VISION_SENSITIVE_DATA_ATTESTED?: boolean;
+  GROQ_COMPOUND_ENABLED?: boolean;
+  GROQ_COMPOUND_MODEL: string;
+  GROQ_COMPOUND_MINI_MODEL: string;
+  GROQ_COMPOUND_SEARCH_COUNTRY?: string;
+  GROQ_COMPOUND_INCLUDE_DOMAINS?: string;
+  GROQ_COMPOUND_EXCLUDE_DOMAINS?: string;
   GEMINI_API_KEY: string;
   GEMINI_BASE_URL: string;
   GEMINI_INTERACTIONS_BASE_URL: string;
@@ -543,6 +562,12 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GROQ_FALLBACK_MODEL: parsed.GROQ_FALLBACK_MODEL,
     GROQ_VISION_MODEL: parsed.GROQ_VISION_MODEL,
     GROQ_VISION_SENSITIVE_DATA_ATTESTED: parsed.GROQ_VISION_SENSITIVE_DATA_ATTESTED,
+    GROQ_COMPOUND_ENABLED: parsed.GROQ_COMPOUND_ENABLED,
+    GROQ_COMPOUND_MODEL: parsed.GROQ_COMPOUND_MODEL,
+    GROQ_COMPOUND_MINI_MODEL: parsed.GROQ_COMPOUND_MINI_MODEL,
+    GROQ_COMPOUND_SEARCH_COUNTRY: parsed.GROQ_COMPOUND_SEARCH_COUNTRY,
+    GROQ_COMPOUND_INCLUDE_DOMAINS: parsed.GROQ_COMPOUND_INCLUDE_DOMAINS,
+    GROQ_COMPOUND_EXCLUDE_DOMAINS: parsed.GROQ_COMPOUND_EXCLUDE_DOMAINS,
     GEMINI_API_KEY: parsed.GEMINI_API_KEY ?? "",
     GEMINI_BASE_URL:
       parsed.GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta/openai",

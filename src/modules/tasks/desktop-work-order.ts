@@ -100,6 +100,38 @@ export type DesktopWorkOrder = {
     summary: string;
     privacyClass: "public_text" | "local_private" | "side_effect";
     steps: DesktopWorkOrderStep[];
+    dispatchOptimization?: {
+      strategy: "quantum_guided_dispatch_v1";
+      source: "backend_neural_readiness";
+      active: boolean;
+      score: number;
+      classicalBaselineScore: number | null;
+      advantageScore: number | null;
+      qualified: boolean;
+      benchmarkSource: "measured";
+      admissionWeight: number;
+      metric: string;
+    };
+    responsiveExecution?: {
+      strategy: "quantum_liveness_guard_v1";
+      source: "backend_neural_readiness";
+      active: boolean;
+      livenessScore: number;
+      qualified: boolean;
+      benchmarkSource: "measured";
+      boostWeight: number;
+      metric: "responsive_execution_liveness";
+    };
+    livenessGuard?: {
+      strategy: "quantum_replan_liveness_guard_v1";
+      source: "backend_neural_readiness";
+      active: boolean;
+      timeoutRisk: "low" | "medium" | "high";
+      maxReplans: number;
+      earlyProgressCheckpoint: boolean;
+      safeStopOnTimeout: boolean;
+      metric: "responsive_execution_liveness";
+    };
     /**
      * Planın kaynağı ve güven sınıfı. "heuristic" (varsayılan) = regex/keyword
      * work-order sentezi; desktop bu plana güvenmeyip kendi katalog+doğrulamalı
@@ -812,6 +844,9 @@ export function buildDesktopWorkOrder(input: {
   remoteMcpSelection?: RemoteMcpSelectionMetadata;
   source?: "mobile_chat_dispatch" | "backend_task_route";
   inputRefs?: string[];
+  dispatchOptimization?: DesktopWorkOrder["planPreview"]["dispatchOptimization"];
+  responsiveExecution?: DesktopWorkOrder["planPreview"]["responsiveExecution"];
+  livenessGuard?: DesktopWorkOrder["planPreview"]["livenessGuard"];
 }): DesktopWorkOrder {
   const message = compactText(input.message, 4_000);
   const kind = inferKind(input.routeDecision, message);
@@ -894,8 +929,6 @@ export function buildDesktopWorkOrder(input: {
     mode: localContextNeeded.length > 0 ? "desktop_private" : "server",
     mayUseHostedModels: localContextNeeded.length === 0,
     maySendPrivateContextToServer: false,
-    visibleProviderNamesAllowed: true,
-    internalProviderDisclosure: "forbidden",
     reasons: localContextNeeded.length > 0 ? ["local_private_context"] : ["server_safe_context"],
   };
   return {
@@ -972,6 +1005,15 @@ export function buildDesktopWorkOrder(input: {
       // Varsayılan: heuristik sentez. Dispatch worker karmaşık görevlerde bunu
       // "server_materialized" ile üzerine yazar (materialize-plan.ts).
       planSource: "heuristic",
+      ...(input.dispatchOptimization
+        ? { dispatchOptimization: input.dispatchOptimization }
+        : {}),
+      ...(input.responsiveExecution
+        ? { responsiveExecution: input.responsiveExecution }
+        : {}),
+      ...(input.livenessGuard
+        ? { livenessGuard: input.livenessGuard }
+        : {}),
       liveNarrationPlan: [
         { phase: "planning", message: "Görevi parçalara ayırıyorum." },
         { phase: "executing", message: "Masaüstünde gerekli adımları yürütüyorum." },

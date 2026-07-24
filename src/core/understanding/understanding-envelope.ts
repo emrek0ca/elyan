@@ -250,8 +250,6 @@ function buildPrivacyRouting(input: {
     mode,
     mayUseHostedModels: !input.localPrivate || input.sideEffect === false,
     maySendPrivateContextToServer: false,
-    visibleProviderNamesAllowed: true,
-    internalProviderDisclosure: "forbidden" as const,
     reasons: [
       ...(input.localPrivate ? ["local_private_context"] : ["server_safe_context"]),
       ...(input.sideEffect ? ["side_effect_present"] : []),
@@ -1083,8 +1081,6 @@ export function buildEmptyUnderstandingEnvelope(
       mode: "server",
       mayUseHostedModels: true,
       maySendPrivateContextToServer: false,
-      visibleProviderNamesAllowed: true,
-      internalProviderDisclosure: "forbidden",
       reasons: ["legacy_fallback"],
     },
     required_capabilities: [

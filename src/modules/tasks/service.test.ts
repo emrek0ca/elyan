@@ -6,6 +6,10 @@ import {
   buildRuntimeTaskDispatchEnvelope,
   buildRouteDecisionLogEntry,
   buildAssistantRevisionMetadata,
+  buildQuantumDispatchOptimization,
+  buildQuantumLivenessGuardPolicy,
+  buildQuantumResponsiveExecutionPolicy,
+  computeRuntimeDispatchPolicyFeedbackConfidence,
   createChatQueueUnavailableError,
   createDurableChatMediaInputRequiredError,
   createTask,
@@ -16,9 +20,15 @@ import {
   restoreQueuedEphemeralVisionCarrier,
   stripPromptEchoFromAssistantText,
   reconcileStaleRuntimeTasks,
+  extractRuntimeDispatchPolicyFeedback,
+  extractRuntimeQuantumBenchmarkAttestation,
   summarizeToolFlowForTrace,
   updateTaskFromRuntime,
 } from "./service.js";
+import {
+  QUANTUM_BENCHMARK_PRODUCER,
+  QUANTUM_BENCHMARK_VERSION,
+} from "../brain/quantum-benchmark.js";
 
 test("shared-brain chat uses the durable queue whenever it is configured", () => {
   const queueApp = {
@@ -95,6 +105,471 @@ test("shared-brain chat uses direct execution only when the queue flag is disabl
     retrySuggested: true,
     failureClass: "queue_unavailable",
   });
+});
+
+test("extractRuntimeQuantumBenchmarkAttestation reads scheduler dispatch quality from runtime result", () => {
+  const attestation = extractRuntimeQuantumBenchmarkAttestation({
+    executionTrace: {
+      livenessGuard: {
+        strategy: "quantum_replan_liveness_guard_v1",
+        active: true,
+        timeoutRisk: "medium",
+        maxReplans: 3,
+        effectiveMaxReplans: 3,
+        prompt: "private prompt must not be copied",
+      },
+      repair: {
+        attempted: true,
+        repairAttempts: 2,
+        lastReason: "private reason must not be copied",
+      },
+      scheduler: {
+        quantumOptimization: {
+          version: QUANTUM_BENCHMARK_VERSION,
+          producer: QUANTUM_BENCHMARK_PRODUCER,
+          runId: "qsched-task-1",
+          metric: "dispatch_schedule_quality",
+          datasetFingerprint: "e".repeat(64),
+          sampleCount: 64,
+          score: 0.88,
+          source: "measured",
+          classicalBaselineScore: 0.75,
+          measuredAt: "2030-01-01T00:00:00.000Z",
+          backend: "elyan_quantum_scheduler",
+        },
+      },
+    },
+  });
+
+  assert.equal(attestation?.metric, "dispatch_schedule_quality");
+  assert.equal(attestation?.backend, "elyan_quantum_scheduler");
+  assert.equal(attestation?.advantageScore, 0.13);
+  assert.equal(attestation?.qualified, true);
+});
+
+test("buildQuantumDispatchOptimization converts measured brain readiness into a safe dispatch hint", () => {
+  const optimization = buildQuantumDispatchOptimization({
+    isDesktopRoute: true,
+    brainProfile: {
+      learning: {
+        latestQuantumBenchmarkScore: 0.87,
+        latestQuantumClassicalBaselineScore: 0.73,
+        latestQuantumBenchmarkSource: "measured",
+        latestQuantumAdvantageScore: 0.14,
+        latestQuantumBenchmarkQualified: true,
+      },
+    },
+  });
+
+  assert.deepEqual(optimization, {
+    strategy: "quantum_guided_dispatch_v1",
+    source: "backend_neural_readiness",
+    active: true,
+    score: 0.87,
+    classicalBaselineScore: 0.73,
+    advantageScore: 0.14,
+    qualified: true,
+    benchmarkSource: "measured",
+    admissionWeight: 0.07,
+    metric: "dispatch_schedule_quality",
+  });
+
+  assert.equal(
+    buildQuantumDispatchOptimization({
+      isDesktopRoute: false,
+      brainProfile: { learning: { latestQuantumBenchmarkScore: 0.87, latestQuantumBenchmarkSource: "measured" } },
+    }),
+    null,
+  );
+});
+
+test("buildQuantumDispatchOptimization uses learned dispatch feedback within bounded admission", () => {
+  const optimization = buildQuantumDispatchOptimization({
+    isDesktopRoute: true,
+    brainProfile: {
+      learning: {
+        latestQuantumBenchmarkScore: 0.87,
+        latestQuantumClassicalBaselineScore: 0.73,
+        latestQuantumBenchmarkSource: "measured",
+        latestQuantumAdvantageScore: 0.04,
+        latestQuantumBenchmarkQualified: true,
+        latestQuantumDispatchAdmissionWeight: 0.11,
+        latestQuantumDispatchBoostedStepCount: 2,
+        latestQuantumDispatchFeedbackQualified: true,
+      },
+    },
+  });
+
+  assert.equal(optimization?.active, true);
+  assert.equal(optimization?.admissionWeight, 0.11);
+
+  const clampedOptimization = buildQuantumDispatchOptimization({
+    isDesktopRoute: true,
+    brainProfile: {
+      learning: {
+        latestQuantumBenchmarkScore: 0.92,
+        latestQuantumBenchmarkSource: "measured",
+        latestQuantumBenchmarkQualified: true,
+        latestQuantumDispatchAdmissionWeight: 0.3,
+        latestQuantumDispatchBoostedStepCount: 3,
+        latestQuantumDispatchFeedbackQualified: true,
+      },
+    },
+  });
+
+  assert.equal(clampedOptimization?.admissionWeight, 0.02);
+});
+
+test("buildQuantumResponsiveExecutionPolicy uses measured liveness without changing non-desktop routes", () => {
+  const policy = buildQuantumResponsiveExecutionPolicy({
+    isDesktopRoute: true,
+    brainProfile: {
+      learning: {
+        latestQuantumDispatchLivenessScore: 0.82,
+        latestQuantumDispatchLivenessQualified: true,
+      },
+    },
+  });
+
+  assert.deepEqual(policy, {
+    strategy: "quantum_liveness_guard_v1",
+    source: "backend_neural_readiness",
+    active: true,
+    livenessScore: 0.82,
+    qualified: true,
+    benchmarkSource: "measured",
+    boostWeight: 0.06,
+    metric: "responsive_execution_liveness",
+  });
+  assert.equal(
+    buildQuantumResponsiveExecutionPolicy({
+      isDesktopRoute: false,
+      brainProfile: {
+        learning: {
+          latestQuantumDispatchLivenessScore: 0.82,
+          latestQuantumDispatchLivenessQualified: true,
+        },
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    buildQuantumResponsiveExecutionPolicy({
+      isDesktopRoute: true,
+      brainProfile: {
+        learning: {
+          latestQuantumDispatchLivenessScore: 0.99,
+          latestQuantumDispatchLivenessQualified: true,
+        },
+      },
+    })?.active,
+    false,
+  );
+});
+
+test("buildQuantumLivenessGuardPolicy raises bounded replan guard only for risky desktop liveness", () => {
+  const policy = buildQuantumLivenessGuardPolicy({
+    isDesktopRoute: true,
+    brainProfile: {
+      learning: {
+        latestQuantumDispatchLivenessScore: 0.68,
+        latestQuantumDispatchLivenessQualified: true,
+      },
+    },
+  });
+
+  assert.deepEqual(policy, {
+    strategy: "quantum_replan_liveness_guard_v1",
+    source: "backend_neural_readiness",
+    active: true,
+    timeoutRisk: "high",
+    maxReplans: 3,
+    earlyProgressCheckpoint: true,
+    safeStopOnTimeout: true,
+    metric: "responsive_execution_liveness",
+  });
+  assert.equal(
+    buildQuantumLivenessGuardPolicy({
+      isDesktopRoute: false,
+      brainProfile: {
+        learning: {
+          latestQuantumDispatchLivenessScore: 0.68,
+          latestQuantumDispatchLivenessQualified: true,
+        },
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    buildQuantumLivenessGuardPolicy({
+      isDesktopRoute: true,
+      brainProfile: {
+        learning: {
+          latestQuantumDispatchLivenessScore: 0.94,
+          latestQuantumDispatchLivenessQualified: true,
+        },
+      },
+    })?.active,
+    false,
+  );
+  assert.deepEqual(
+    buildQuantumLivenessGuardPolicy({
+      isDesktopRoute: true,
+      brainProfile: {
+        learning: {
+          latestQuantumDispatchLivenessScore: 0.94,
+          latestQuantumDispatchLivenessQualified: true,
+          latestQuantumLivenessGuardTimeoutRisk: "medium",
+          latestQuantumLivenessRepairAttemptCount: 1,
+        },
+      },
+    }),
+    {
+      strategy: "quantum_replan_liveness_guard_v1",
+      source: "backend_neural_readiness",
+      active: true,
+      timeoutRisk: "medium",
+      maxReplans: 3,
+      earlyProgressCheckpoint: true,
+      safeStopOnTimeout: true,
+      metric: "responsive_execution_liveness",
+    },
+  );
+});
+
+test("extractRuntimeDispatchPolicyFeedback keeps only safe scheduler policy evidence", () => {
+  const feedback = extractRuntimeDispatchPolicyFeedback({
+    executionTrace: {
+      livenessGuard: {
+        strategy: "quantum_replan_liveness_guard_v1",
+        active: true,
+        timeoutRisk: "medium",
+        maxReplans: 3,
+        effectiveMaxReplans: 3,
+        prompt: "private prompt must not be copied",
+      },
+      repair: {
+        attempted: true,
+        repairAttempts: 2,
+        lastReason: "private reason must not be copied",
+      },
+      scheduler: {
+        orderedStepIds: ["safe_read", "unsafe_write"],
+        quantumBoostedStepIds: ["safe_read"],
+        responsiveBoostedStepIds: ["safe_read"],
+        backendLivenessGuard: {
+          strategy: "quantum_replan_liveness_guard_v1",
+          active: true,
+          timeoutRisk: "medium",
+          maxReplans: 3,
+        },
+        backendDispatchOptimization: {
+          strategy: "quantum_guided_dispatch_v1",
+          source: "backend_neural_readiness",
+          active: true,
+          score: 0.87,
+          classicalBaselineScore: 0.73,
+          advantageScore: 0.14,
+          qualified: true,
+          benchmarkSource: "measured",
+          admissionWeight: 0.07,
+          metric: "dispatch_schedule_quality",
+          prompt: "private prompt must not be copied",
+        },
+        backendResponsiveExecution: {
+          strategy: "quantum_liveness_guard_v1",
+          source: "backend_neural_readiness",
+          active: true,
+          livenessScore: 0.82,
+          qualified: true,
+          boostWeight: 0.06,
+        },
+        quantumOptimization: {
+          version: QUANTUM_BENCHMARK_VERSION,
+          producer: QUANTUM_BENCHMARK_PRODUCER,
+          runId: "qsched-feedback-1",
+          metric: "dispatch_schedule_quality",
+          datasetFingerprint: "a".repeat(64),
+          sampleCount: 64,
+          score: 0.88,
+          source: "measured",
+          classicalBaselineScore: 0.75,
+          measuredAt: "2030-01-01T00:00:00.000Z",
+          backend: "elyan_quantum_scheduler",
+        },
+        quantumLivenessOptimization: {
+          version: QUANTUM_BENCHMARK_VERSION,
+          producer: QUANTUM_BENCHMARK_PRODUCER,
+          runId: "qlive-feedback-1",
+          metric: "responsive_execution_liveness",
+          datasetFingerprint: "b".repeat(64),
+          sampleCount: 64,
+          score: 0.82,
+          source: "measured",
+          classicalBaselineScore: 0.74,
+          measuredAt: "2030-01-01T00:00:00.000Z",
+          backend: "elyan_quantum_liveness_scheduler",
+          parallelReadCandidateCount: 1,
+          blockedStepCount: 1,
+          writeStepCount: 1,
+          deadlinePressureStepCount: 0,
+          prompt: "private prompt must not be copied",
+        },
+      },
+      privateArgs: { filePath: "/private/user/file.txt" },
+    },
+  });
+
+  assert.deepEqual(Object.keys(feedback ?? {}).sort(), [
+    "admissionWeight",
+    "backendActive",
+    "backendStrategy",
+    "boostedStepCount",
+    "boostedStepIds",
+    "blockedStepCount",
+    "deadlinePressureStepCount",
+    "livenessAdvantageScore",
+    "livenessClassicalBaselineScore",
+    "livenessQualified",
+    "livenessRunId",
+    "livenessScore",
+    "livenessGuardActive",
+    "livenessGuardEffectiveMaxReplans",
+    "livenessGuardMaxReplans",
+    "livenessGuardTimeoutRisk",
+    "orderedStepCount",
+    "orderedStepIds",
+    "policyOutcome",
+    "parallelReadCandidateCount",
+    "policy",
+    "quantumAdvantageScore",
+    "quantumBenchmarkDatasetFingerprint",
+    "quantumBenchmarkMetric",
+    "quantumBenchmarkQualified",
+    "quantumBenchmarkRunId",
+    "quantumBenchmarkScore",
+    "quantumClassicalBaselineScore",
+    "responsiveBoostedStepCount",
+    "responsiveBoostedStepIds",
+    "responsivePolicyOutcome",
+    "repairAttemptCount",
+    "source",
+    "writeStepCount",
+  ].sort());
+  assert.equal(feedback?.policy, "quantum_guided_dispatch_v1");
+  assert.equal(feedback?.backendActive, true);
+  assert.equal(feedback?.policyOutcome, "backend_active_boosted");
+  assert.deepEqual(feedback?.boostedStepIds, ["safe_read"]);
+  assert.equal(feedback?.boostedStepCount, 1);
+  assert.deepEqual(feedback?.responsiveBoostedStepIds, ["safe_read"]);
+  assert.equal(feedback?.responsiveBoostedStepCount, 1);
+  assert.equal(feedback?.responsivePolicyOutcome, "backend_active_responsive_boosted");
+  assert.equal(feedback?.orderedStepCount, 2);
+  assert.equal(feedback?.quantumBenchmarkScore, 0.88);
+  assert.equal(feedback?.quantumAdvantageScore, 0.13);
+  assert.equal(feedback?.livenessScore, 0.82);
+  assert.equal(feedback?.livenessAdvantageScore, 0.08);
+  assert.equal(feedback?.parallelReadCandidateCount, 1);
+  assert.equal(feedback?.blockedStepCount, 1);
+  assert.equal(feedback?.writeStepCount, 1);
+  assert.equal(feedback?.livenessGuardActive, true);
+  assert.equal(feedback?.livenessGuardTimeoutRisk, "medium");
+  assert.equal(feedback?.livenessGuardEffectiveMaxReplans, 3);
+  assert.equal(feedback?.repairAttemptCount, 2);
+  assert.equal(JSON.stringify(feedback).includes("private"), false);
+});
+
+test("extractRuntimeDispatchPolicyFeedback accepts safe live quantum liveness snapshots", () => {
+  const feedback = extractRuntimeDispatchPolicyFeedback({
+    executionTrace: {
+      quantumLiveness: {
+        strategy: "quantum_runtime_liveness_snapshot_v1",
+        source: "desktop_runtime_progress",
+        score: 0.82,
+        qualified: true,
+        backendResponsiveActive: true,
+        responsiveBoostedStepCount: 1,
+        responsiveBoostedStepIds: ["safe_read"],
+        livenessGuardActive: true,
+        livenessGuardTimeoutRisk: "medium",
+        livenessGuardEffectiveMaxReplans: 3,
+        repairAttemptCount: 1,
+        prompt: "private prompt must not be copied",
+      },
+    },
+  });
+
+  assert.equal(feedback?.source, "desktop_runtime_progress");
+  assert.equal(feedback?.livenessScore, 0.82);
+  assert.equal(feedback?.responsivePolicyOutcome, "backend_active_responsive_boosted");
+  assert.deepEqual(feedback?.responsiveBoostedStepIds, ["safe_read"]);
+  assert.equal(feedback?.livenessGuardActive, true);
+  assert.equal(feedback?.livenessGuardTimeoutRisk, "medium");
+  assert.equal(feedback?.livenessGuardEffectiveMaxReplans, 3);
+  assert.equal(feedback?.repairAttemptCount, 1);
+  assert.equal(JSON.stringify(feedback).includes("private"), false);
+});
+
+test("computeRuntimeDispatchPolicyFeedbackConfidence weights safe runtime outcomes", () => {
+  const strong = extractRuntimeDispatchPolicyFeedback({
+    executionTrace: {
+      livenessGuard: {
+        strategy: "quantum_replan_liveness_guard_v1",
+        active: true,
+        timeoutRisk: "low",
+        maxReplans: 3,
+        effectiveMaxReplans: 3,
+      },
+      repair: { repairAttempts: 0 },
+      scheduler: {
+        orderedStepIds: ["safe_read"],
+        quantumBoostedStepIds: ["safe_read"],
+        responsiveBoostedStepIds: ["safe_read"],
+        backendDispatchOptimization: {
+          strategy: "quantum_guided_dispatch_v1",
+          active: true,
+          admissionWeight: 0.07,
+        },
+        backendResponsiveExecution: {
+          strategy: "quantum_liveness_guard_v1",
+          active: true,
+        },
+        quantumOptimization: {
+          version: QUANTUM_BENCHMARK_VERSION,
+          producer: QUANTUM_BENCHMARK_PRODUCER,
+          runId: "qsched-confidence-1",
+          metric: "dispatch_schedule_quality",
+          datasetFingerprint: "c".repeat(64),
+          sampleCount: 64,
+          score: 0.88,
+          source: "measured",
+          classicalBaselineScore: 0.75,
+          measuredAt: "2030-01-01T00:00:00.000Z",
+          backend: "elyan_quantum_scheduler",
+        },
+      },
+    },
+  });
+
+  const liveOnly = extractRuntimeDispatchPolicyFeedback({
+    executionTrace: {
+      quantumLiveness: {
+        strategy: "quantum_runtime_liveness_snapshot_v1",
+        source: "desktop_runtime_progress",
+        score: 0.82,
+        qualified: true,
+        backendResponsiveActive: true,
+        responsiveBoostedStepCount: 1,
+        responsiveBoostedStepIds: ["safe_read"],
+        livenessGuardActive: true,
+        repairAttemptCount: 2,
+      },
+    },
+  });
+
+  assert.equal(computeRuntimeDispatchPolicyFeedbackConfidence(strong), 90);
+  assert.equal(computeRuntimeDispatchPolicyFeedbackConfidence(liveOnly), 71);
+  assert.equal(computeRuntimeDispatchPolicyFeedbackConfidence(null), 0);
 });
 
 test("legacy V1 inline vision fails closed instead of bypassing the durable queue", () => {
@@ -596,6 +1071,14 @@ test("buildRouteDecisionLogEntry keeps route logging safe and ignores selected d
         executionPlan: ["mobile_local", "server_brain"],
         needsDesktop: false,
       },
+      qualityGuard: {
+        strategy: "quantum_quality_guard_v1",
+        source: "runtime_quantum_liveness_feedback",
+        applied: true,
+        fromWorkload: "mobile_chat_fast",
+        toWorkload: "mobile_chat_balanced",
+        reason: "quantum_runtime_liveness_repair_signal",
+      },
     } as never,
   });
 
@@ -606,6 +1089,14 @@ test("buildRouteDecisionLogEntry keeps route logging safe and ignores selected d
     executionPlan: ["mobile_local", "server_brain"],
     needsDesktop: false,
     selectedDeviceIgnored: true,
+    qualityGuard: {
+      strategy: "quantum_quality_guard_v1",
+      source: "runtime_quantum_liveness_feedback",
+      applied: true,
+      fromWorkload: "mobile_chat_fast",
+      toWorkload: "mobile_chat_balanced",
+      reason: "quantum_runtime_liveness_repair_signal",
+    },
   });
 });
 

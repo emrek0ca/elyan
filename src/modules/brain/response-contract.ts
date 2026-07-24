@@ -123,7 +123,7 @@ export function buildElyanResponseContract(input: {
     policy.intent === "technical_help" ? "a concrete diagnosis or next step" : null,
   ].filter((value): value is string => Boolean(value));
   const mustAvoid = [
-    "internal JSON, reasoning, tool traces, provider or debug details",
+    "internal JSON, reasoning, tool traces, or debug details",
     "a second alternative final answer or repeated conclusion",
     toolPolicy === "none" ? "web, source or verification narration" : null,
     personalization === "silent" ? "unprompted name use or forced intimacy" : null,

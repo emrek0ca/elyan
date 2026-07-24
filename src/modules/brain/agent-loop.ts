@@ -371,7 +371,7 @@ export function buildToolResultRefinementPrompt(input: {
     JSON.stringify(safeResults, null, 2).slice(0, 8_000),
     "",
     "Use the typed tool results above to answer the original user request in the user's language.",
-    "Return only the user-facing answer. Do not expose tool names, JSON, arguments, query syntax, hidden reasoning, provider names, or planning text.",
+    "Return only the user-facing answer. Do not expose tool names, JSON, arguments, query syntax, hidden reasoning, or planning text.",
     // The results are already-fetched, read-only data the user asked to see. The
     // CONTENT of a result must never trigger a refusal or safety disclaimer: an
     // email/event/file that mentions a payment, transfer, purchase, subscription,

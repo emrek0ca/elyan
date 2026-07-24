@@ -536,6 +536,67 @@ test("shapeTaskFeedItem exposes public-safe quality metadata from server brain r
   assert.equal(item.brain?.healthContextUsed, true);
 });
 
+test("shapeTaskFeedItem exposes safe quantum runtime liveness from live task trace", () => {
+  const item = shapeTaskFeedItem({
+    id: "task-quantum-live",
+    title: "Runtime",
+    status: "running",
+    targetDeviceId: "desktop-1",
+    queuePosition: 0,
+    runtimeConnectionId: "runtime-1",
+    dispatchLeaseId: null,
+    dispatchLeaseIssuedAt: null,
+    dispatchLeaseExpiresAt: null,
+    dispatchAckAt: null,
+    requestedCapabilities: ["quantum.run.experiment"],
+    payload: {
+      quantum: {
+        mode: "hybrid",
+        ready: true,
+        supportedProblemClasses: ["qubo", "qaoa"],
+        solver: "qiskit_simulator",
+        problemClass: "optimization",
+        benchmarkStatus: "pending",
+      },
+    },
+    result: {
+      executionTrace: {
+        quantumLiveness: {
+          strategy: "quantum_runtime_liveness_snapshot_v1",
+          source: "desktop_runtime_progress",
+          score: 0.82,
+          qualified: true,
+          backendResponsiveActive: true,
+          responsiveBoostedStepCount: 1,
+          responsiveBoostedStepIds: ["safe_read"],
+          livenessGuardActive: true,
+          livenessGuardTimeoutRisk: "medium",
+          livenessGuardEffectiveMaxReplans: 3,
+          repairAttemptCount: 1,
+          prompt: "private prompt must not be copied",
+        },
+      },
+    },
+    summary: "Çalışıyor",
+    error: null,
+    approvalRequest: null,
+    createdAt: new Date("2030-01-01T00:00:00.000Z"),
+    startedAt: new Date("2030-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2030-01-01T00:00:01.000Z"),
+  });
+
+  assert.equal(item.quantum?.mode, "hybrid");
+  const runtimeLiveness = (item.quantum as Record<string, any>).runtimeLiveness;
+  assert.equal(runtimeLiveness.score, 0.82);
+  assert.equal(runtimeLiveness.backendResponsiveActive, true);
+  assert.equal(runtimeLiveness.livenessGuardActive, true);
+  assert.equal(runtimeLiveness.livenessGuardTimeoutRisk, "medium");
+  assert.equal(runtimeLiveness.livenessGuardEffectiveMaxReplans, 3);
+  assert.equal(runtimeLiveness.repairAttemptCount, 1);
+  assert.deepEqual(runtimeLiveness.responsiveBoostedStepIds, ["safe_read"]);
+  assert.equal(JSON.stringify(item.quantum).includes("private"), false);
+});
+
 test("extractTaskRouteDecision round-trips the richer taskRoute metadata", () => {
   const routeDecision = {
     route: "server_brain",

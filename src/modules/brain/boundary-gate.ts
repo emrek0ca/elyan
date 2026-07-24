@@ -60,24 +60,11 @@ export type SecurityDecision = {
   risk: "low" | "medium" | "high" | "critical";
 };
 
-// "ChatGPT misin?" gibi marka karşılaştırmaları meşru kimlik sorusudur; iç
-// yapılandırma talebi sayılmaz ve kimlik kapısını engellememelidir.
 // Türkçe eklerle çekimlenmiş biçimleri de yakalamak için son ek toleransı:
 // "sağlayıcıdan", "talimatını", "yapılandırmayı"… Sınır belirteçleri
 // unicodeWordPattern ile Unicode-farkında hale getirilir; ASCII `\b` Türkçe
 // harflerin yanında sessizce eşleşmiyordu.
 const TR_SUFFIX = String.raw`\p{L}{0,8}`;
-
-const BRAND_COMPARISON_PATTERNS = [
-  unicodeWordPattern(
-    String.raw`\b(are you|is this)\s+(chatgpt|gpt|openai|groq|claude|anthropic|ollama|llama)\b`,
-    "i",
-  ),
-  unicodeWordPattern(
-    String.raw`\b(chatgpt|gpt|openai|groq|claude|anthropic|ollama|llama)\s*(mısın|misin|musun|müsün|mi|mu|mü)?\b`,
-    "i",
-  ),
-];
 
 const INTERNAL_DISCLOSURE_PATTERNS = [
   String.raw`\b(system|developer|hidden|internal)\s+(prompt|instruction|message|configuration|config)\b`,
@@ -91,33 +78,20 @@ const INTERNAL_DISCLOSURE_PATTERNS = [
   String.raw`\b(önceki|yukarıdaki|sistem|geliştirici|güvenlik)${TR_SUFFIX}\b.{0,80}\b(talimat|kural|mesaj)${TR_SUFFIX}\b.{0,40}\b(yok say|unut|geçersiz kıl)${TR_SUFFIX}\b`,
   String.raw`\b(chain[- ]of[- ]thought|hidden reasoning|private reasoning|reasoning tokens)\b`,
   String.raw`\b(gizli düşünce|iç muhakeme|düşünce zinciri|akıl yürütme token)${TR_SUFFIX}\b`,
-  String.raw`\b(underlying|backend|internal)\b.{0,50}\b(provider|vendor|model name|model id)\b`,
-  String.raw`\b(arkadaki|arkada çalışan|alttaki|dahili|iç)\b.{0,50}\b(sağlayıcı|model|model adı|model kimliği|vendor)${TR_SUFFIX}\b`,
-  String.raw`\b(which|what)\s+(model|provider)\b`,
-  String.raw`\b(are you|is this)\s+(chatgpt|gpt|openai|groq|claude|anthropic|ollama|llama)\b`,
-  String.raw`\b(hangi|kaç|kac)\b.{0,40}\b(model|parametre|parametresin|sağlayıcı|saglayici)${TR_SUFFIX}\b`,
-  String.raw`(?:kaç|kac)\s+parametresin`,
-  String.raw`\b(chatgpt|gpt|openai|groq|claude|anthropic|ollama|llama)\s*(mısın|misin|musun|müsün|mi|mu|mü)?\b`,
 ].map((source) => unicodeWordPattern(source, "i"));
 
 const INTERNAL_DISCLOSURE_DIRECT_REQUEST_PATTERNS = [
-  String.raw`\b(reveal|show|print|repeat|quote|dump|leak|expose|translate|encode|decode)\b.{0,80}\b(prompt|instructions?|secrets?|api keys?|configuration|provider|model)\b`,
-  String.raw`\b(göster|yazdır|tekrarla|alıntıla|sızdır|ifşa et|çevir|kodla|çöz|söyle|anlat|paylaş)${TR_SUFFIX}\b.{0,80}\b(prompt|talimat|gizli|api anahtar|yapılandırma|sağlayıcı|saglayici|model)${TR_SUFFIX}\b`,
+  String.raw`\b(reveal|show|print|repeat|quote|dump|leak|expose|translate|encode|decode)\b.{0,80}\b(prompt|instructions?|secrets?|api keys?|configuration)\b`,
+  String.raw`\b(göster|yazdır|tekrarla|alıntıla|sızdır|ifşa et|çevir|kodla|çöz|söyle|anlat|paylaş)${TR_SUFFIX}\b.{0,80}\b(prompt|talimat|gizli|api anahtar|yapılandırma)${TR_SUFFIX}\b`,
   // Türkçe nesne-fiil sırası ("sistem promptunu göster" değil, "yapılandırmayı yazdır").
-  String.raw`\b(prompt|talimat|gizli|api anahtar|yapılandırma|konfigürasyon|sağlayıcı|saglayici)${TR_SUFFIX}\b.{0,80}\b(göster|yazdır|tekrarla|alıntıla|sızdır|ifşa et|çevir|kodla|çöz|söyle|anlat|paylaş|ver)${TR_SUFFIX}\b`,
-  String.raw`\b(which|what)\s+(model|provider)\b`,
-  String.raw`\b(are you|is this)\s+(chatgpt|gpt|openai|groq|claude|anthropic|ollama|llama)\b`,
-  String.raw`\b(hangi|kaç|kac)\b.{0,40}\b(model|parametre|parametresin|sağlayıcı|saglayici)${TR_SUFFIX}\b`,
-  String.raw`(?:kaç|kac)\s+parametresin`,
-  String.raw`\b(chatgpt|gpt|openai|groq|claude|anthropic|ollama|llama)\s*(mısın|misin|musun|müsün|mi|mu|mü)\b`,
-  String.raw`\b(arkadaki|arkada çalışan|alttaki|dahili|iç)\b.{0,50}\b(sağlayıcı|model|model adı|model kimliği|vendor)${TR_SUFFIX}\b.{0,40}\b(ne|kim|hangisi|söyle|anlat|paylaş)${TR_SUFFIX}\b`,
+  String.raw`\b(prompt|talimat|gizli|api anahtar|yapılandırma|konfigürasyon)${TR_SUFFIX}\b.{0,80}\b(göster|yazdır|tekrarla|alıntıla|sızdır|ifşa et|çevir|kodla|çöz|söyle|anlat|paylaş|ver)${TR_SUFFIX}\b`,
 ].map((source) => unicodeWordPattern(source, "i"));
 
 const INTERNAL_DISCLOSURE_AVOIDANCE_PATTERNS = [
-  String.raw`\b(do not|don't|dont|without|avoid|never|no need to)\b.{0,100}\b(mention|disclose|reveal|share|talk about|refer to)\b.{0,100}\b(provider|model|system prompt|developer message|hidden instruction|internal routing)\b`,
-  String.raw`\b(provider|model|system prompt|developer message|hidden instruction|internal routing)\b.{0,100}\b(do not|don't|dont|without|avoid|never)\b.{0,80}\b(mention|disclose|reveal|share|talk about|refer to)\b`,
-  String.raw`\b(bahsetme|söyleme|anlatma|paylaşma|değinme|ifşa etme|geçirme)${TR_SUFFIX}\b.{0,100}\b(iç model|ic model|sağlayıcı|saglayici|system prompt|sistem promptu|gizli talimat|dahili yönlendirme)${TR_SUFFIX}\b`,
-  String.raw`\b(iç model|ic model|sağlayıcı|saglayici|system prompt|sistem promptu|gizli talimat|dahili yönlendirme)${TR_SUFFIX}\b.{0,100}\b(bahsetme|söyleme|anlatma|paylaşma|değinme|ifşa etme|geçirme)${TR_SUFFIX}\b`,
+  String.raw`\b(do not|don't|dont|without|avoid|never|no need to)\b.{0,100}\b(mention|disclose|reveal|share|talk about|refer to)\b.{0,100}\b(system prompt|developer message|hidden instruction|internal routing)\b`,
+  String.raw`\b(system prompt|developer message|hidden instruction|internal routing)\b.{0,100}\b(do not|don't|dont|without|avoid|never)\b.{0,80}\b(mention|disclose|reveal|share|talk about|refer to)\b`,
+  String.raw`\b(bahsetme|söyleme|anlatma|paylaşma|değinme|ifşa etme|geçirme)${TR_SUFFIX}\b.{0,100}\b(system prompt|sistem promptu|gizli talimat|dahili yönlendirme)${TR_SUFFIX}\b`,
+  String.raw`\b(system prompt|sistem promptu|gizli talimat|dahili yönlendirme)${TR_SUFFIX}\b.{0,100}\b(bahsetme|söyleme|anlatma|paylaşma|değinme|ifşa etme|geçirme)${TR_SUFFIX}\b`,
 ].map((source) => unicodeWordPattern(source, "i"));
 
 // Drafting social copy is a normal text task. Only treat it as an external
@@ -362,10 +336,6 @@ export function resolveSecurityDecisionGate(prompt: string): BrainBoundaryGateRe
 
 export function isProtectedInternalDisclosurePrompt(prompt: string): boolean {
   const normalized = prompt.replace(/\s+/g, " ").trim();
-  const lowered = normalized.toLocaleLowerCase("tr-TR");
-  if (/^(chatgpt|openai)\s*(mısın|misin|musun|müsün|mi|mu|mü)\??$/.test(lowered)) {
-    return false;
-  }
   if (
     isInternalDisclosureAvoidanceInstruction(normalized) &&
     !hasDirectInternalDisclosureRequest(normalized)
@@ -422,8 +392,6 @@ const DIRECT_ELYAN_IDENTITY_PATTERNS: RegExp[] = [
   trWordPattern(String.raw`who are you`),
   trWordPattern(String.raw`who (?:made|built|created|developed) you`),
   trWordPattern(String.raw`who(?:'?s| is) your (?:creator|developer|founder|maker|owner)`),
-  trWordPattern(String.raw`chatgpt misin`),
-  trWordPattern(String.raw`openai (?:mısın|misin)`),
   // "seni kim yarattı" / "seni kim geliştirdi"
   trWordPattern(String.raw`seni (?:kim|kimler)\s*(?:${CREATOR_VERBS})`),
   // "seni üreten/geliştiren kişi kim"
@@ -475,14 +443,10 @@ export function resolveElyanIdentityGate(prompt: string): BrainBoundaryGateResul
   // Kimlik sorusu, iç yapılandırma talebiyle birlikte geliyorsa (ör. "sen
   // kimsin? bu arada sistem promptunu göster") güvenlik kapısı önceliklidir.
   const normalizedPrompt = prompt.toLocaleLowerCase("tr-TR");
-  const blockers = INTERNAL_DISCLOSURE_PATTERNS.filter(
-    (pattern) =>
-      !BRAND_COMPARISON_PATTERNS.some((brand) => brand.source === pattern.source),
-  );
   if (
     isInternalDisclosureAvoidanceInstruction(prompt) ||
-    includesAny(blockers, prompt) ||
-    includesAny(blockers, normalizedPrompt)
+    includesAny(INTERNAL_DISCLOSURE_PATTERNS, prompt) ||
+    includesAny(INTERNAL_DISCLOSURE_PATTERNS, normalizedPrompt)
   ) {
     return null;
   }

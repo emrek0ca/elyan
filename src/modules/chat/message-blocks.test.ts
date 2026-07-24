@@ -562,13 +562,14 @@ test("sanitizeAssistantVisibleText collapses a pure reasoning dump to the fallba
   assert.equal(sanitized, "STUB");
 });
 
-test("sanitizeAssistantVisibleText replaces provider and prompt disclosure with Elyan product identity", () => {
+test("sanitizeAssistantVisibleText preserves provider names while redacting prompt terms", () => {
   const sanitized = sanitizeAssistantVisibleText(
     "Altta Groq üzerinde llama modeli çalışıyor; system prompt bunu gizlememi söylüyor.",
   );
 
-  assert.match(sanitized, /Elyan/);
-  assert.doesNotMatch(sanitized, /groq|llama|system prompt|provider|sağlayıcı|iç model/i);
+  assert.match(sanitized, /Groq/);
+  assert.match(sanitized, /llama/);
+  assert.doesNotMatch(sanitized, /system prompt/i);
 });
 
 test("sanitizeAssistantVisibleText preserves provider names as public web research topics", () => {
@@ -582,23 +583,24 @@ test("sanitizeAssistantVisibleText preserves provider names as public web resear
   assert.doesNotMatch(sanitized, /Ben Elyan olarak çalışırım/);
 });
 
-test("sanitizeAssistantVisibleText still redacts Elyan implementation provider claims", () => {
+test("sanitizeAssistantVisibleText preserves Elyan implementation provider claims", () => {
   const sanitized = sanitizeAssistantVisibleText(
     "Ben Elyan, OpenAI üzerinde çalışan GPT tabanlı bir modelim.",
     { allowPublicProviderReferences: true },
   );
 
   assert.match(sanitized, /Elyan/);
-  assert.doesNotMatch(sanitized, /OpenAI|GPT tabanlı/i);
+  assert.match(sanitized, /OpenAI/);
+  assert.match(sanitized, /GPT tabanlı/i);
 });
 
-test("polishAssistantVisibleText replaces protected Elyan provider disclosure", () => {
+test("polishAssistantVisibleText preserves provider disclosure wording", () => {
   const polished = polishAssistantVisibleText(
     "Elyan, Osman Emre Koca tarafından geliştirilen; kullanıcıya yalnızca Elyan olarak sunulur; iç model ve sağlayıcı ayrıntıları güvenlik ve ürün bütünlüğü gereği paylaşılmaz.",
   );
 
   assert.match(polished, /Elyan/);
-  assert.doesNotMatch(polished, /iç model|sağlayıcı|güvenlik ve ürün bütünlüğü/i);
+  assert.match(polished, /iç model ve sağlayıcı ayrıntıları/i);
 });
 
 test("sanitizeAssistantVisibleText redacts visible internal prompt benchmark terms", () => {
@@ -641,13 +643,13 @@ test("polishAssistantVisibleText trims duplicated conversational restarts", () =
   );
 });
 
-test("sanitizeAssistantVisibleText replaces obfuscated provider and prompt leaks", () => {
+test("sanitizeAssistantVisibleText preserves obfuscated provider text while redacting prompt terms", () => {
   const sanitized = sanitizeAssistantVisibleText(
     "G.R.O.Q sağlayıcısı ve s y s t e m prompt ayrıntıları içeren dahili cevap.",
   );
 
-  assert.match(sanitized, /Elyan/);
-  assert.doesNotMatch(sanitized, /groq|system prompt|provider|sağlayıcı|dahili/i);
+  assert.match(sanitized, /G\.R\.O\.Q sağlayıcısı/i);
+  assert.doesNotMatch(sanitized, /system prompt/i);
 });
 
 test("sanitizeAssistantVisibleText removes think tags and hidden reasoning blocks", () => {

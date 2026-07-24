@@ -436,6 +436,73 @@ test("decideCommandRoute still keeps greetings on the fast path even if short", 
   }
 });
 
+test("decideCommandRoute uses learned quantum quality guard to lift fast chat to balanced", async () => {
+  const app = createApp([]);
+  const brainProfile = {
+    learning: {
+      latestQuantumBenchmarkQualified: true,
+      latestQuantumLivenessGuardActive: true,
+      latestQuantumLivenessGuardTimeoutRisk: "medium",
+      latestQuantumLivenessRepairAttemptCount: 1,
+    },
+    quantum: {
+      benchmarkQualified: true,
+    },
+  };
+
+  const guarded = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Kısa bir ürün fikri ver",
+    source: "mobile",
+    brainProfile,
+  });
+  assert.equal(guarded.route, "server_brain");
+  assert.equal(guarded.selectedWorkload, "mobile_chat_balanced");
+  assert.deepEqual(guarded.qualityGuard, {
+    strategy: "quantum_quality_guard_v1",
+    source: "runtime_quantum_liveness_feedback",
+    applied: true,
+    fromWorkload: "mobile_chat_fast",
+    toWorkload: "mobile_chat_balanced",
+    reason: "quantum_runtime_liveness_repair_signal",
+  });
+
+  const greeting = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Merhaba",
+    source: "mobile",
+    brainProfile,
+  });
+  assert.equal(greeting.selectedWorkload, "mobile_chat_fast");
+  assert.equal(greeting.qualityGuard, undefined);
+});
+
+test("decideCommandRoute ignores weak quantum feedback without liveness risk", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Kısa bir ürün fikri ver",
+    source: "mobile",
+    brainProfile: {
+      learning: {
+        latestQuantumBenchmarkQualified: true,
+        latestQuantumDispatchFeedbackConfidence: 62,
+        latestQuantumDispatchPolicyOutcome: "backend_active_no_boost",
+        latestQuantumResponsivePolicyOutcome: "backend_active_no_responsive_boost",
+        latestQuantumLivenessGuardActive: false,
+        latestQuantumLivenessGuardTimeoutRisk: "low",
+        latestQuantumLivenessRepairAttemptCount: 0,
+      },
+      quantum: {
+        benchmarkQualified: true,
+      },
+    },
+  });
+
+  assert.equal(decision.selectedWorkload, "mobile_chat_fast");
+  assert.equal(decision.qualityGuard, undefined);
+});
+
 test("decideCommandRoute keeps vague referential prompts in clarification mode", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
@@ -881,6 +948,30 @@ test("decideCommandRoute keeps conceptual quantum chat on the shared brain", asy
   assert.equal(decision.route, "server_brain");
   assert.equal(decision.mode, "chat");
   assert.deepEqual(decision.capabilities, []);
+});
+
+test("decideCommandRoute carries quantum execution capabilities when dispatch is explicit", async () => {
+  const quantumCapabilities = [
+    "quantum_model_problem",
+    "quantum_run_experiment",
+    "quantum_compare_classical",
+    "quantum_generate_report",
+  ];
+  const app = createDesktopReadyApp(quantumCapabilities);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Kapasite 5 için QUBO modelle, QAOA çalıştır ve klasik çözümle karşılaştır.",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.mode, "executable_task");
+  assert.deepEqual(decision.capabilities, quantumCapabilities);
+  assert.deepEqual(decision.taskRoute?.requiredCapabilities, quantumCapabilities);
+  assert.equal(decision.taskRoute?.needsDesktop, true);
+  assert.equal(decision.privacyClass, "public_text");
 });
 
 test("resolveCommandTarget defaults task routing to the first ready desktop", async () => {

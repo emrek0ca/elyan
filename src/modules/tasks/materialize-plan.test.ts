@@ -89,8 +89,6 @@ test("desktop materialization prompt carries context pack for follow-up artifact
     },
     privacyRouting: {
       mode: "server",
-      internalProviderDisclosure: "forbidden",
-      visibleProviderNamesAllowed: true,
     },
   };
 

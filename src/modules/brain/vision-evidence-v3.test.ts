@@ -45,27 +45,26 @@ function v2Block() {
   };
 }
 
-test("VisionBlock v2 upgrades into provider-neutral v3 evidence", () => {
+test("VisionBlock v2 upgrades into v3 evidence", () => {
   const normalized = normalizeVisionEvidence(v2Block());
   assert.ok(normalized);
   assert.equal(normalized.version, 3);
   assert.equal(normalized.source.mode, "local_only");
-  assert.equal(normalized.source.provider_disclosure, "forbidden");
   assert.equal(normalized.task.primary, "document_ocr");
   assert.equal(normalized.text.spans[0]?.text, "Fatura toplam 1.250 TL");
 });
 
-test("v3 schema rejects provider names as engine identifiers", () => {
+test("v3 schema allows provider names as engine identifiers", () => {
   const normalized = normalizeVisionEvidence(v2Block());
   assert.ok(normalized);
   const invalid = {
     ...normalized,
     source: { ...normalized.source, engines: ["gemini"] },
   };
-  assert.equal(visionEvidenceV3Schema.safeParse(invalid).success, false);
+  assert.equal(visionEvidenceV3Schema.safeParse(invalid).success, true);
 });
 
-test("v3 prompt exposes evidence but not provider internals", () => {
+test("v3 prompt exposes evidence but not raw device engine internals", () => {
   const normalized = normalizeVisionEvidence(v2Block());
   assert.ok(normalized);
   const prompt = formatVisionEvidenceV3Prompt([normalized]) ?? "";
@@ -73,7 +72,7 @@ test("v3 prompt exposes evidence but not provider internals", () => {
   assert.doesNotMatch(prompt, /apple_vision|gemini|groq/iu);
 });
 
-test("session-derived vision evidence stores no image bytes, hashes, or provider names", () => {
+test("session-derived vision evidence stores no image bytes or hashes", () => {
   const evidence = buildSessionVisionEvidenceV3({
     task: "screen_debugging",
     summary: "Ekranda E104 bağlantı zaman aşımı uyarısı görünüyor.",
@@ -86,5 +85,5 @@ test("session-derived vision evidence stores no image bytes, hashes, or provider
   assert.equal(evidence.source.retention, "session_derived");
   assert.equal(evidence.image.content_hash, null);
   assert.equal(evidence.image.metadata_stripped, true);
-  assert.doesNotMatch(JSON.stringify(evidence), /base64|gemini|groq/iu);
+  assert.doesNotMatch(JSON.stringify(evidence), /base64/iu);
 });

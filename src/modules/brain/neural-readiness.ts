@@ -1,7 +1,10 @@
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { trainingJobs } from "../../db/schema.js";
-import { readVerifiedQuantumBenchmark } from "./quantum-benchmark.js";
+import { learningEvents, trainingJobs } from "../../db/schema.js";
+import {
+  readVerifiedQuantumBenchmark,
+type VerifiedQuantumBenchmark,
+} from "./quantum-benchmark.js";
 
 const ML_WORKER_HEARTBEAT_KEY = "elyan:ml-worker:heartbeat";
 const ML_WORKER_STALE_AFTER_MS = 90_000;
@@ -31,6 +34,199 @@ function readBooleanRecord(record: Record<string, unknown> | null, key: string):
       .filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean")
       .map(([name, ready]) => [name, ready]),
   );
+}
+
+function readJsonRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return readRecord(value);
+  }
+
+  try {
+    return readRecord(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+type RuntimeDispatchPolicyFeedback = {
+  feedbackConfidence: number | null;
+  admissionWeight: number | null;
+  policyOutcome:
+    | "backend_active_boosted"
+    | "backend_active_no_boost"
+    | "runtime_observed_without_backend"
+    | "benchmark_only"
+    | null;
+  boostedStepCount: number;
+  responsivePolicyOutcome:
+    | "backend_active_responsive_boosted"
+    | "backend_active_no_responsive_boost"
+    | "runtime_responsive_observed_without_backend"
+    | "liveness_benchmark_only"
+    | null;
+  qualified: boolean;
+  livenessScore: number | null;
+  livenessQualified: boolean;
+  livenessGuardActive: boolean;
+  livenessGuardTimeoutRisk: "low" | "medium" | "high" | null;
+  livenessGuardEffectiveMaxReplans: number | null;
+  repairAttemptCount: number | null;
+};
+
+function readLatestRuntimeDispatchFeedbackRecord(
+  value: unknown,
+  confidence?: unknown,
+): RuntimeDispatchPolicyFeedback | null {
+  const record = readJsonRecord(value);
+  const policy = readString(record, "policy");
+  const source = readString(record, "source");
+  const metric = readString(record, "quantumBenchmarkMetric");
+  const admissionWeight = readNumber(record, "admissionWeight");
+  const rawPolicyOutcome = readString(record, "policyOutcome");
+  const policyOutcome =
+    rawPolicyOutcome === "backend_active_boosted" ||
+    rawPolicyOutcome === "backend_active_no_boost" ||
+    rawPolicyOutcome === "runtime_observed_without_backend" ||
+    rawPolicyOutcome === "benchmark_only"
+      ? rawPolicyOutcome
+      : null;
+  const boostedStepCount = readNumber(record, "boostedStepCount");
+  const rawResponsivePolicyOutcome = readString(record, "responsivePolicyOutcome");
+  const responsivePolicyOutcome =
+    rawResponsivePolicyOutcome === "backend_active_responsive_boosted" ||
+    rawResponsivePolicyOutcome === "backend_active_no_responsive_boost" ||
+    rawResponsivePolicyOutcome === "runtime_responsive_observed_without_backend" ||
+    rawResponsivePolicyOutcome === "liveness_benchmark_only"
+      ? rawResponsivePolicyOutcome
+      : null;
+  const quantumBenchmarkQualified = record?.quantumBenchmarkQualified === true;
+  const livenessScore = readNumber(record, "livenessScore");
+  const livenessQualified = record?.livenessQualified === true;
+  const rawTimeoutRisk = readString(record, "livenessGuardTimeoutRisk");
+  const livenessGuardTimeoutRisk =
+    rawTimeoutRisk === "low" || rawTimeoutRisk === "medium" || rawTimeoutRisk === "high"
+      ? rawTimeoutRisk
+      : null;
+  const livenessGuardEffectiveMaxReplans = readNumber(record, "livenessGuardEffectiveMaxReplans");
+  const repairAttemptCount = readNumber(record, "repairAttemptCount");
+  const feedbackConfidence =
+    typeof confidence === "number" &&
+    Number.isFinite(confidence) &&
+    confidence >= 0 &&
+    confidence <= 100
+      ? confidence
+      : null;
+
+  if (
+    policy !== "quantum_guided_dispatch_v1" ||
+    source !== "desktop_runtime_scheduler" ||
+    metric !== "dispatch_schedule_quality" ||
+    boostedStepCount === null ||
+    !Number.isInteger(boostedStepCount) ||
+    boostedStepCount < 0 ||
+    boostedStepCount > 16 ||
+    (admissionWeight !== null && (admissionWeight < 0 || admissionWeight > 0.15)) ||
+    (livenessScore !== null && (livenessScore < 0 || livenessScore > 1)) ||
+    (livenessGuardEffectiveMaxReplans !== null &&
+      (!Number.isInteger(livenessGuardEffectiveMaxReplans) ||
+        livenessGuardEffectiveMaxReplans < 0 ||
+        livenessGuardEffectiveMaxReplans > 3)) ||
+    (repairAttemptCount !== null &&
+      (!Number.isInteger(repairAttemptCount) ||
+        repairAttemptCount < 0 ||
+        repairAttemptCount > 16))
+  ) {
+    return null;
+  }
+
+  return {
+    feedbackConfidence,
+    admissionWeight,
+    policyOutcome,
+    boostedStepCount,
+    responsivePolicyOutcome,
+    qualified: quantumBenchmarkQualified && policyOutcome === "backend_active_boosted",
+    livenessScore,
+    livenessQualified:
+      livenessQualified && responsivePolicyOutcome === "backend_active_responsive_boosted",
+    livenessGuardActive: record?.livenessGuardActive === true,
+    livenessGuardTimeoutRisk,
+    livenessGuardEffectiveMaxReplans,
+    repairAttemptCount,
+  };
+}
+
+async function readLatestRuntimeQuantumBenchmark(
+  app: FastifyInstance,
+): Promise<VerifiedQuantumBenchmark | null> {
+  const rows = await app.db
+    .select({
+      value: learningEvents.value,
+      metadata: learningEvents.metadata,
+      confidence: learningEvents.confidence,
+      createdAt: learningEvents.createdAt,
+    })
+    .from(learningEvents)
+    .where(
+      and(
+        eq(learningEvents.type, "quantum"),
+        eq(learningEvents.key, "benchmark"),
+        eq(learningEvents.source, "runtime"),
+        eq(learningEvents.privacyLevel, "safe"),
+      ),
+    )
+    .orderBy(desc(learningEvents.createdAt))
+    .limit(5)
+    .catch(() => []);
+
+  for (const row of rows) {
+    const valueRecord = readJsonRecord(row.value);
+    const verified =
+      readVerifiedQuantumBenchmark(valueRecord) ??
+      readVerifiedQuantumBenchmark(row.metadata);
+    if (verified) {
+      return verified;
+    }
+  }
+
+  return null;
+}
+
+async function readLatestRuntimeDispatchPolicyFeedback(
+  app: FastifyInstance,
+): Promise<RuntimeDispatchPolicyFeedback | null> {
+  const rows = await app.db
+    .select({
+      value: learningEvents.value,
+      metadata: learningEvents.metadata,
+      confidence: learningEvents.confidence,
+      createdAt: learningEvents.createdAt,
+    })
+    .from(learningEvents)
+    .where(
+      and(
+        eq(learningEvents.type, "routing"),
+        eq(learningEvents.key, "dispatch_policy_feedback"),
+        eq(learningEvents.source, "runtime"),
+        eq(learningEvents.privacyLevel, "safe"),
+      ),
+    )
+    .orderBy(desc(learningEvents.createdAt))
+    .limit(5)
+    .catch(() => []);
+
+  for (const row of rows) {
+    const valueFeedback = readLatestRuntimeDispatchFeedbackRecord(row.value, row.confidence);
+    if (valueFeedback) {
+      return valueFeedback;
+    }
+    const metadataFeedback = readLatestRuntimeDispatchFeedbackRecord(row.metadata, row.confidence);
+    if (metadataFeedback) {
+      return metadataFeedback;
+    }
+  }
+
+  return null;
 }
 
 async function readMlWorkerHeartbeat(app: FastifyInstance) {
@@ -79,7 +275,11 @@ export async function getNeuralBrainReadiness(app: FastifyInstance) {
     .select({ count: sql<number>`count(*)::int` })
     .from(trainingJobs)
     .where(inArray(trainingJobs.status, ["queued", "running"]))
-    .catch(() => []);
+      .catch(() => []);
+  const latestRuntimeQuantumBenchmark =
+    await readLatestRuntimeQuantumBenchmark(app);
+  const latestRuntimeDispatchPolicyFeedback =
+    await readLatestRuntimeDispatchPolicyFeedback(app);
 
   const latestMetrics = readRecord(latestRows[0]?.metrics);
   const latestMetadata = readRecord(latestRows[0]?.metadata);
@@ -94,7 +294,8 @@ export async function getNeuralBrainReadiness(app: FastifyInstance) {
     readNumber(latestMetadata, "qualityCompositeScore");
   const latestQuantumBenchmark =
     readVerifiedQuantumBenchmark(latestMetrics) ??
-    readVerifiedQuantumBenchmark(latestMetadata);
+    readVerifiedQuantumBenchmark(latestMetadata) ??
+    latestRuntimeQuantumBenchmark;
   const latestQuantumScore = latestQuantumBenchmark?.score ?? null;
   const activeTrainingJobs = Number(activeRows[0]?.count ?? 0);
   const embeddingReady = trainingWorkerReady;
@@ -123,6 +324,30 @@ export async function getNeuralBrainReadiness(app: FastifyInstance) {
     latestQuantumBenchmarkSource: latestQuantumBenchmark?.source ?? null,
     latestQuantumAdvantageScore: latestQuantumBenchmark?.advantageScore ?? null,
     latestQuantumBenchmarkQualified: latestQuantumBenchmark?.qualified ?? false,
+    latestQuantumDispatchAdmissionWeight:
+      latestRuntimeDispatchPolicyFeedback?.admissionWeight ?? null,
+    latestQuantumDispatchFeedbackConfidence:
+      latestRuntimeDispatchPolicyFeedback?.feedbackConfidence ?? null,
+    latestQuantumDispatchPolicyOutcome:
+      latestRuntimeDispatchPolicyFeedback?.policyOutcome ?? null,
+    latestQuantumDispatchBoostedStepCount:
+      latestRuntimeDispatchPolicyFeedback?.boostedStepCount ?? 0,
+    latestQuantumDispatchFeedbackQualified:
+      latestRuntimeDispatchPolicyFeedback?.qualified ?? false,
+    latestQuantumDispatchLivenessScore:
+      latestRuntimeDispatchPolicyFeedback?.livenessScore ?? null,
+    latestQuantumResponsivePolicyOutcome:
+      latestRuntimeDispatchPolicyFeedback?.responsivePolicyOutcome ?? null,
+    latestQuantumDispatchLivenessQualified:
+      latestRuntimeDispatchPolicyFeedback?.livenessQualified ?? false,
+    latestQuantumLivenessGuardActive:
+      latestRuntimeDispatchPolicyFeedback?.livenessGuardActive ?? false,
+    latestQuantumLivenessGuardTimeoutRisk:
+      latestRuntimeDispatchPolicyFeedback?.livenessGuardTimeoutRisk ?? null,
+    latestQuantumLivenessGuardEffectiveMaxReplans:
+      latestRuntimeDispatchPolicyFeedback?.livenessGuardEffectiveMaxReplans ?? null,
+    latestQuantumLivenessRepairAttemptCount:
+      latestRuntimeDispatchPolicyFeedback?.repairAttemptCount ?? null,
     mlWorkerMode,
     mlWorkerLastJobAt,
     mlWorkerLastErrorCode,
