@@ -215,6 +215,48 @@ def derive_defaults(
     return defaults
 
 
+# Durumsal varsayımın uygulanabileceği üretim yetenekleri.
+_ARTIFACT_CAPABILITIES = {
+    "document_write",
+    "canvas_write",
+    "presentation_write",
+    "spreadsheet_write",
+}
+
+
+def apply_situational_defaults(
+    capability: str,
+    args: dict[str, Any],
+    situation: SituationalContext | None,
+) -> dict[str, Any]:
+    """Belge/görsel üretiminde EKSİK alanları durumdan doldurur.
+
+    İki katı kural:
+      1. **Kullanıcının verdiği hiçbir değer ezilmez** — yalnız boş alan dolar.
+      2. Dayanak yoksa alan üretilmez (uydurma başlık atılmaz).
+
+    Böylece "sunum notunu hazırla" gibi bir istek, takvimdeki toplantının adıyla
+    isimlendirilir; kullanıcıya "hangi başlık?" diye sorulmaz."""
+    if situation is None or not isinstance(args, dict):
+        return args
+    name = str(capability or "").strip()
+    if name not in _ARTIFACT_CAPABILITIES:
+        return args
+
+    defaults = derive_defaults(situation, intent_task_type=name)
+    suggested = str(defaults.get("suggestedTitle", "") or "").strip()
+    if not suggested:
+        return args
+
+    enriched = dict(args)
+    existing = str(enriched.get("title", "") or "").strip()
+    if not existing:
+        enriched["title"] = suggested
+        # İzlenebilirlik: başlığın nereden geldiği kayıt altında kalsın.
+        enriched["_titleSource"] = "situational_calendar"
+    return enriched
+
+
 def liveness_cues(situation: SituationalContext) -> list[str]:
     """Cevabın doğal biçimde değinebileceği GERÇEK durum ipuçları.
 

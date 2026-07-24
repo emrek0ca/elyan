@@ -9398,6 +9398,20 @@ class RuntimeBridge:
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Adımı yürütür ve gerçek yürütme sonucunu (araç çalıştı mı) capability
         telemetrisine yazar — planlayıcı araç güvenilirliğini buradan öğrenir."""
+        # Durumsal varsayım: belge/görsel üretiminde başlık gibi EKSİK alanlar
+        # takvim bağlamından doldurulur. Tek huni olduğu için hem router hem
+        # ajan yolu kapsanır. Kullanıcının verdiği değer asla ezilmez.
+        try:
+            from runtime.situational_context import (
+                apply_situational_defaults,
+                gather_situation,
+            )
+
+            args = apply_situational_defaults(
+                capability, args, gather_situation(state)
+            )
+        except Exception:
+            pass
         tool_result, step_events = _execute_capability_with_preprocessing(
             capability,
             args,
