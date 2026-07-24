@@ -105,6 +105,13 @@ def normalize_portable_python_links(python_root: Path) -> None:
         candidate.symlink_to(target.name, target_is_directory=True)
 
 
+def prune_macos_notarization_blockers(payload_root: Path) -> None:
+    for path in (payload_root / "python").rglob("site-packages/speech_recognition/flac-*"):
+        if path.is_file():
+            # SpeechRecognition ships legacy helper binaries; macOS uses system encoders.
+            path.unlink()
+
+
 def prepare_payload(
     payload_root: Path,
     *,
@@ -152,6 +159,8 @@ def prepare_payload(
         )
         if result.returncode != 0 and not allow_missing_extras:
             raise RuntimeError("one or more release capability dependencies failed to install")
+    if target_platform == "macos":
+        prune_macos_notarization_blockers(payload_root)
 
 
 def write_executable(path: Path, content: str) -> None:
