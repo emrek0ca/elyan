@@ -1950,6 +1950,65 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "skillAffinity": []
   },
   {
+    "name": "shell_session_close",
+    "description": "Terminal oturumunu kapatır.",
+    "usage": "İş bitince oturumu serbest bırak.",
+    "requiredArgs": [
+      "session_id"
+    ],
+    "requiresApproval": false,
+    "whenToUse": [],
+    "whenNotToUse": [],
+    "inputContract": {},
+    "outputContract": {},
+    "artifactContract": {},
+    "verificationPlan": [],
+    "liveNarration": [],
+    "failureModes": [],
+    "fewShots": [],
+    "privacyClass": "",
+    "skillAffinity": []
+  },
+  {
+    "name": "shell_session_open",
+    "description": "Kalıcı terminal oturumu açar; çalışma dizini ve ortam sonraki komutlarda korunur.",
+    "usage": "Çok adımlı yazılım işleri için (derle/test/düzelt döngüsü). Tek komut yetiyorsa shell_run kullan.",
+    "requiredArgs": [],
+    "requiresApproval": false,
+    "whenToUse": [],
+    "whenNotToUse": [],
+    "inputContract": {},
+    "outputContract": {},
+    "artifactContract": {},
+    "verificationPlan": [],
+    "liveNarration": [],
+    "failureModes": [],
+    "fewShots": [],
+    "privacyClass": "",
+    "skillAffinity": []
+  },
+  {
+    "name": "shell_session_run",
+    "description": "Açık terminal oturumunda komut çalıştırır; cwd/ortam korunur, çıktı ve exit kodu döner.",
+    "usage": "Testi çalıştır, çıktıyı oku, düzelt, tekrar çalıştır döngüsü için.",
+    "requiredArgs": [
+      "session_id",
+      "command"
+    ],
+    "requiresApproval": false,
+    "whenToUse": [],
+    "whenNotToUse": [],
+    "inputContract": {},
+    "outputContract": {},
+    "artifactContract": {},
+    "verificationPlan": [],
+    "liveNarration": [],
+    "failureModes": [],
+    "fewShots": [],
+    "privacyClass": "",
+    "skillAffinity": []
+  },
+  {
     "name": "speech_capture",
     "description": "Yerel mikrofondan kısa ses kaydı başlatır veya durdurur.",
     "usage": "Sesli not/dikte almak için kaydı başlatıp durdurma. Kaydı metne çevirmek için speech_to_text.",
