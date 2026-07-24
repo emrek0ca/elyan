@@ -1,0 +1,540 @@
+"""Çok turlu ajan döngüsü (P0).
+
+MEVCUT MİMARİ İLE FARKI
+-----------------------
+``executor_core`` bir *workflow motoru*: plan bir kez kurulur, adımlar sırayla
+uygulanır, model yalnız HATA anında (replan_fn) tekrar düşünür. Bu, kalıba oturan
+işlerde hızlı ve güvenlidir; ancak "gerçek yazılım görevi", bilgisayarı insan gibi
+kullanma (OSWorld) ve uçtan uca otomasyon gibi NOVEL işlerde yetersizdir çünkü
+model adımlar arasında gerçek gözlem görmez.
+
+Bu modül eksik halkayı ekler:
+
+    gözlemle → düşün → TEK adım at → sonucu gözlemle → yeniden düşün → …
+
+Tasarım ilkeleri
+----------------
+* **Bağımlılık enjeksiyonu.** Model çağrısı (``decide_next``) ve araç yürütmesi
+  (``execute_step``) dışarıdan verilir. Böylece döngü saf/test edilebilirdir ve
+  backend erişimi olmadan da doğrulanabilir.
+* **Mevcut kapılar korunur.** Araçlar çağıranın ``execute_step``'i üzerinden
+  koşar; safety_policy, onay (authorize), doğrulama ve kanıt kapıları aynen
+  devrede kalır. Bu modül YENİ bir ayrıcalık yolu açmaz.
+* **Sınırlı bağlam.** Gözlemler kırpılır ve alt çizgili iç bayraklar ayıklanır;
+  bağlam şişmesi ve veri sızıntısı önlenir.
+* **Canlılık.** Adım bütçesi, süre bütçesi ve "takıldı" (aynı eylemin tekrarı)
+  dedektörü ile sonsuz döngü imkânsızdır.
+* **Öz-düzeltme.** Geçici hatalarda modele dönmeden önce deterministik onarım
+  (``error_recovery``) denenir — ucuz ve öngörülebilir.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+from runtime.capability_registry import capability_metadata, capability_names
+from runtime.error_recovery import CORRECTIVE_MAX_ATTEMPTS, plan_corrective_retry
+
+AGENT_LOOP_CONTRACT = "elyan.agent_loop.v1"
+
+# Canlılık sınırları: novel işlerde bile sonlu kalması için sert tavanlar.
+DEFAULT_MAX_STEPS = 24
+DEFAULT_DEADLINE_SECONDS = 900.0
+# Aynı (capability, args) çiftinin ardışık tekrar sayısı bu sınırı aşarsa
+# ilerleme yok kabul edilir ve döngü modele "değiştir" baskısıyla kapanır.
+STUCK_REPEAT_LIMIT = 3
+# Gözlem metinlerinin üst sınırı — bağlam şişmesini ve sızıntıyı önler.
+MAX_OBSERVATION_CHARS = 2_000
+MAX_HISTORY_OBSERVATIONS = 12
+
+
+def _clip(value: Any, limit: int = MAX_OBSERVATION_CHARS) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def public_args(args: Any) -> dict[str, Any]:
+    """Alt çizgili runtime bayraklarını (``_confirmed``, ``_previousResult`` …)
+    ayıklar. Bunlar iç güven/veri taşıyıcılarıdır; modele veya loga gitmemeli."""
+    if not isinstance(args, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in args.items()
+        if not str(key).startswith("_")
+    }
+
+
+def _action_signature(capability: str, args: dict[str, Any]) -> str:
+    try:
+        payload = json.dumps(public_args(args), sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        payload = str(sorted(public_args(args).keys()))
+    return f"{capability}::{payload}"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentAction:
+    """Modelin bir turda seçtiği tek eylem.
+
+    ``kind``:
+      * ``tool``   — bir yetenek çalıştır (capability + args)
+      * ``finish`` — iş bitti, ``summary`` teslim metnidir
+      * ``ask``    — kullanıcıdan bilgi gerekiyor (döngü güvenle durur)
+    """
+
+    kind: str
+    capability: str = ""
+    args: dict[str, Any] = field(default_factory=dict)
+    rationale: str = ""
+    summary: str = ""
+
+    @property
+    def is_tool(self) -> bool:
+        return self.kind == "tool"
+
+
+@dataclass(slots=True)
+class AgentObservation:
+    """Bir adımın modele geri beslenecek, sınırlanmış sonucu."""
+
+    index: int
+    capability: str
+    args: dict[str, Any]
+    ok: bool
+    output: str = ""
+    error_code: str = ""
+    error_message: str = ""
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    def to_context(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "step": self.index,
+            "capability": self.capability,
+            "args": self.args,
+            "ok": self.ok,
+        }
+        if self.output:
+            payload["output"] = _clip(self.output)
+        if not self.ok:
+            payload["errorCode"] = self.error_code
+            payload["error"] = _clip(self.error_message, 480)
+        if self.artifacts:
+            payload["artifacts"] = [
+                {
+                    "name": str(item.get("name", "") or ""),
+                    "path": str(item.get("path", "") or ""),
+                }
+                for item in self.artifacts[:6]
+                if isinstance(item, dict)
+            ]
+        if self.evidence:
+            payload["evidence"] = {
+                "kind": str(self.evidence.get("kind", "") or ""),
+                "verified": bool(self.evidence.get("verified", False)),
+            }
+        return payload
+
+
+@dataclass(slots=True)
+class AgentLoopResult:
+    ok: bool
+    summary: str
+    stop_reason: str
+    steps_used: int
+    observations: list[AgentObservation] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    structured_result: dict[str, Any] | None = None
+    error_code: str = ""
+    # P0.5: onay bekleyen yan etkili adım. ``stop_reason == "needs_approval"``
+    # olduğunda doldurulur; çağıran bunu plan önizlemesi + pendingPlan'a çevirir.
+    pending_action: dict[str, Any] | None = None
+
+    def trace(self) -> dict[str, Any]:
+        return {
+            "contract": AGENT_LOOP_CONTRACT,
+            "ok": self.ok,
+            "stopReason": self.stop_reason,
+            "stepsUsed": self.steps_used,
+            "errorCode": self.error_code,
+            "observations": [item.to_context() for item in self.observations],
+        }
+
+
+def build_tool_catalog(
+    allowed_capabilities: set[str] | None = None,
+    *,
+    limit: int = 80,
+) -> list[dict[str, Any]]:
+    """Modele sunulacak araç kataloğu. Tek kaynak capability_registry'dir —
+    burada elle liste tutulmaz (liste-sürüklenmesi hata sınıfı önlenir)."""
+    names = sorted(capability_names())
+    if allowed_capabilities:
+        allowed = {str(item or "").strip() for item in allowed_capabilities}
+        names = [name for name in names if name in allowed]
+    catalog: list[dict[str, Any]] = []
+    for name in names[:limit]:
+        metadata = capability_metadata(name)
+        if not metadata:
+            continue
+        catalog.append(
+            {
+                "name": name,
+                "description": _clip(metadata.get("description", ""), 240),
+                "sideEffect": bool(metadata.get("sideEffect", False)),
+                "approvalRequired": bool(metadata.get("approvalRequired", False)),
+            }
+        )
+    return catalog
+
+
+def build_decision_context(
+    *,
+    goal: str,
+    goal_context: dict[str, Any] | None,
+    observations: list[AgentObservation],
+    tool_catalog: list[dict[str, Any]],
+    steps_remaining: int,
+    stuck_hint: str = "",
+) -> dict[str, Any]:
+    """Model turuna gönderilecek sınırlanmış karar bağlamı."""
+    recent = observations[-MAX_HISTORY_OBSERVATIONS:]
+    context: dict[str, Any] = {
+        "contract": AGENT_LOOP_CONTRACT,
+        "goal": _clip(goal, 1_200),
+        "tools": tool_catalog,
+        "history": [item.to_context() for item in recent],
+        "stepsRemaining": max(0, int(steps_remaining)),
+    }
+    if isinstance(goal_context, dict) and goal_context:
+        context["goalContext"] = goal_context
+    if stuck_hint:
+        # Modele açık geri bildirim: aynı eylemi tekrarlıyorsun, stratejini değiştir.
+        context["warning"] = stuck_hint
+    return context
+
+
+def coerce_action(value: Any) -> AgentAction:
+    """Model çıktısını güvenli bir ``AgentAction``a çevirir.
+
+    Tanınmayan/bozuk çıktı ``ask``a düşer: uydurma bir araç çağrısı üretmektense
+    güvenle durmak yeğdir (fail-closed)."""
+    if isinstance(value, AgentAction):
+        return value
+    if not isinstance(value, dict):
+        return AgentAction("ask", summary="Model kararı okunamadı.")
+
+    kind = str(value.get("kind", "") or value.get("action", "") or "").strip().lower()
+    capability = str(
+        value.get("capability", "") or value.get("tool", "") or ""
+    ).strip()
+    args = value.get("args")
+    args = dict(args) if isinstance(args, dict) else {}
+    rationale = _clip(value.get("rationale", "") or value.get("reason", ""), 480)
+    summary = _clip(value.get("summary", "") or value.get("answer", ""), MAX_OBSERVATION_CHARS)
+
+    if kind in {"finish", "done", "complete"}:
+        return AgentAction("finish", rationale=rationale, summary=summary)
+    if kind in {"ask", "clarify", "question"}:
+        return AgentAction("ask", rationale=rationale, summary=summary)
+    if kind in {"tool", "act", "call"} or capability:
+        if not capability:
+            return AgentAction("ask", summary="Araç adı belirtilmedi.")
+        return AgentAction(
+            "tool",
+            capability=capability,
+            args=args,
+            rationale=rationale,
+        )
+    return AgentAction("ask", summary=summary or "Model geçerli bir eylem seçmedi.")
+
+
+def run_agent_loop(
+    *,
+    goal: str,
+    decide_next: Callable[[dict[str, Any]], Any],
+    execute_step: Callable[
+        [str, dict[str, Any], dict[str, Any], str], tuple[dict[str, Any], list[dict[str, Any]]]
+    ],
+    state_factory: Callable[[], dict[str, Any]],
+    source: str = "agent_loop",
+    goal_context: dict[str, Any] | None = None,
+    allowed_capabilities: set[str] | None = None,
+    max_steps: int = DEFAULT_MAX_STEPS,
+    deadline_seconds: float = DEFAULT_DEADLINE_SECONDS,
+    confirmed: bool = True,
+    require_approval: bool = True,
+    should_cancel: Callable[[], str | bool] | None = None,
+    on_observation: Callable[[AgentObservation], None] | None = None,
+) -> AgentLoopResult:
+    """Hedefi çok turlu gözlem/karar döngüsüyle yürütür.
+
+    Her tur: karar bağlamı kurulur → ``decide_next`` modelden TEK eylem alır →
+    eylem çalıştırılır → gerçek sonuç gözlem olarak geri beslenir. Model ``finish``
+    dediğinde ya da bütçe bittiğinde durur.
+    """
+    tool_catalog = build_tool_catalog(allowed_capabilities)
+    known_capabilities = capability_names()
+    observations: list[AgentObservation] = []
+    artifacts: list[dict[str, Any]] = []
+    structured_result: dict[str, Any] | None = None
+    started_at = time.monotonic()
+    recent_signatures: list[str] = []
+    stuck_hint = ""
+    steps_used = 0
+
+    def cancellation_reason() -> str:
+        if should_cancel is None:
+            return ""
+        try:
+            value = should_cancel()
+        except Exception:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return "agent_loop_cancelled" if value else ""
+
+    def finish(
+        ok: bool,
+        summary: str,
+        stop_reason: str,
+        error_code: str = "",
+        pending_action: dict[str, Any] | None = None,
+    ) -> AgentLoopResult:
+        return AgentLoopResult(
+            ok=ok,
+            summary=summary,
+            stop_reason=stop_reason,
+            steps_used=steps_used,
+            observations=observations,
+            artifacts=artifacts,
+            structured_result=structured_result,
+            error_code=error_code,
+            pending_action=pending_action,
+        )
+
+    bounded_max_steps = max(1, min(int(max_steps or DEFAULT_MAX_STEPS), 64))
+
+    while True:
+        cancel_reason = cancellation_reason()
+        if cancel_reason:
+            return finish(False, "Görev iptal edildi.", cancel_reason, "AGENT_LOOP_CANCELLED")
+
+        if steps_used >= bounded_max_steps:
+            return finish(
+                False,
+                "Adım bütçesi doldu; görev güvenli noktada durduruldu.",
+                "step_budget_exhausted",
+                "AGENT_LOOP_BUDGET_EXHAUSTED",
+            )
+        if time.monotonic() - started_at > max(1.0, float(deadline_seconds)):
+            return finish(
+                False,
+                "Süre bütçesi doldu; görev güvenli noktada durduruldu.",
+                "deadline_exceeded",
+                "AGENT_LOOP_TIMEOUT",
+            )
+
+        context = build_decision_context(
+            goal=goal,
+            goal_context=goal_context,
+            observations=observations,
+            tool_catalog=tool_catalog,
+            steps_remaining=bounded_max_steps - steps_used,
+            stuck_hint=stuck_hint,
+        )
+        stuck_hint = ""
+
+        try:
+            action = coerce_action(decide_next(context))
+        except Exception:
+            return finish(
+                False,
+                "Planlayıcı yanıtı alınamadı.",
+                "decider_error",
+                "AGENT_LOOP_DECIDER_FAILED",
+            )
+
+        if action.kind == "finish":
+            summary = action.summary or "İşlem tamamlandı."
+            return finish(True, summary, "completed")
+        if action.kind == "ask":
+            return finish(
+                False,
+                action.summary or "Devam etmek için ek bilgi gerekiyor.",
+                "needs_user_input",
+                "AGENT_LOOP_NEEDS_INPUT",
+            )
+
+        capability = action.capability
+        if capability not in known_capabilities:
+            # Uydurulmuş araç: gözleme yaz, modele düzeltme şansı ver.
+            steps_used += 1
+            observation = AgentObservation(
+                index=steps_used,
+                capability=capability,
+                args=public_args(action.args),
+                ok=False,
+                error_code="UNKNOWN_CAPABILITY",
+                error_message="Bu isimde bir yetenek yok. Katalogdaki adlardan birini seç.",
+            )
+            observations.append(observation)
+            if on_observation is not None:
+                on_observation(observation)
+            continue
+        if allowed_capabilities and capability not in allowed_capabilities:
+            steps_used += 1
+            observation = AgentObservation(
+                index=steps_used,
+                capability=capability,
+                args=public_args(action.args),
+                ok=False,
+                error_code="CAPABILITY_OUT_OF_SCOPE",
+                error_message="Bu yetenek görev kapsamı dışında.",
+            )
+            observations.append(observation)
+            if on_observation is not None:
+                on_observation(observation)
+            continue
+
+        # P0.5 ONAY KAPISI: yan etkili / onay gerektiren bir adım seçildiyse ve
+        # bu tur onaylı değilse, adımı ÇALIŞTIRMA — plan önizlemesi olarak
+        # kullanıcıya sun. Salt-okunur adımlar serbestçe akar, böylece döngü
+        # keşif yapabilir ama yan etki asla onaysız çalışmaz.
+        if require_approval and not confirmed:
+            step_metadata = capability_metadata(capability) or {}
+            needs_approval = bool(
+                step_metadata.get("approvalRequired", False)
+                or step_metadata.get("sideEffect", False)
+            )
+            if needs_approval:
+                return finish(
+                    False,
+                    _clip(
+                        action.rationale
+                        or f"Bu işlem için onayın gerekiyor: {capability}",
+                        480,
+                    ),
+                    "needs_approval",
+                    "AGENT_LOOP_NEEDS_APPROVAL",
+                    pending_action={
+                        "capability": capability,
+                        "args": public_args(action.args),
+                        "rationale": _clip(action.rationale, 480),
+                        "sideEffect": bool(step_metadata.get("sideEffect", False)),
+                        "approvalRequired": bool(
+                            step_metadata.get("approvalRequired", False)
+                        ),
+                        # Onaya kadar tamamlanmış keşif adımları: kullanıcı neyin
+                        # üzerine karar verdiğini görsün.
+                        "completedSteps": [item.to_context() for item in observations],
+                    },
+                )
+
+        # Takıldı dedektörü: aynı eylem üst üste tekrarlanıyorsa modele uyar.
+        signature = _action_signature(capability, action.args)
+        recent_signatures.append(signature)
+        repeat_count = sum(
+            1 for item in recent_signatures[-STUCK_REPEAT_LIMIT:] if item == signature
+        )
+        if repeat_count >= STUCK_REPEAT_LIMIT:
+            return finish(
+                False,
+                "Aynı adım ilerleme sağlamadan tekrarlandı; görev durduruldu.",
+                "no_progress",
+                "AGENT_LOOP_NO_PROGRESS",
+            )
+
+        # --- Eylemi çalıştır (mevcut güvenlik/onay/doğrulama kapılarıyla) ---
+        attempt = 0
+        tool_result: dict[str, Any] = {}
+        call_args = dict(action.args)
+        while True:
+            attempt += 1
+            steps_used += 1
+            run_args = dict(call_args)
+            run_args["_confirmed"] = bool(confirmed)
+            run_args["_retryAttempt"] = attempt
+            try:
+                tool_result, _events = execute_step(
+                    capability, run_args, state_factory(), source
+                )
+            except Exception as exc:  # araç patlarsa döngü düşmesin
+                tool_result = {
+                    "ok": False,
+                    "output": "",
+                    "error": {
+                        "code": str(getattr(exc, "code", "TOOL_EXECUTION_FAILED")),
+                        "message": str(getattr(exc, "message", "") or exc),
+                    },
+                }
+
+            if tool_result.get("ok"):
+                break
+
+            error = tool_result.get("error")
+            error = error if isinstance(error, dict) else {}
+            error_code = str(error.get("code") or "TOOL_EXECUTION_FAILED")
+            message = str(error.get("message") or tool_result.get("output") or "")
+
+            # Deterministik öz-düzeltme: geçici/onarılabilir hatada modele
+            # dönmeden ucuz bir düzeltme dene (izin hataları fail-closed).
+            corrective = plan_corrective_retry(
+                capability=capability,
+                args=public_args(call_args),
+                error_code=error_code,
+                message=message,
+                attempt=attempt,
+            )
+            if (
+                corrective is not None
+                and corrective.should_retry
+                and attempt < CORRECTIVE_MAX_ATTEMPTS
+                and steps_used < bounded_max_steps
+            ):
+                if corrective.adjusted_args:
+                    call_args.update(corrective.adjusted_args)
+                continue
+            break
+
+        error = tool_result.get("error")
+        error = error if isinstance(error, dict) else {}
+        result_payload = tool_result.get("result")
+        step_artifacts = [
+            item for item in (tool_result.get("artifacts") or []) if isinstance(item, dict)
+        ]
+        if step_artifacts:
+            artifacts.extend(step_artifacts)
+        if isinstance(result_payload, dict) and result_payload:
+            structured_result = dict(result_payload)
+
+        observation = AgentObservation(
+            index=steps_used,
+            capability=capability,
+            args=public_args(call_args),
+            ok=bool(tool_result.get("ok")),
+            output=str(tool_result.get("output", "") or ""),
+            error_code=str(error.get("code", "") or ("" if tool_result.get("ok") else "TOOL_EXECUTION_FAILED")),
+            error_message=str(error.get("message", "") or ""),
+            artifacts=step_artifacts,
+            evidence=(
+                dict(tool_result.get("stepEvidence"))
+                if isinstance(tool_result.get("stepEvidence"), dict)
+                else {}
+            ),
+        )
+        observations.append(observation)
+        if on_observation is not None:
+            on_observation(observation)
+
+        if not observation.ok and repeat_count >= 2:
+            stuck_hint = (
+                "Son denemeler aynı hatayla başarısız oldu. Aynı çağrıyı tekrar etme; "
+                "farklı bir yetenek ya da farklı argümanlar dene."
+            )

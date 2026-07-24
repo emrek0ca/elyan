@@ -5068,6 +5068,186 @@ def _deterministic_fallback_reply(text: str) -> dict[str, Any]:
     }
 
 
+def _agent_loop_enabled() -> bool:
+    """Çok turlu ajan döngüsü anahtarı (P0).
+
+    Varsayılan AÇIK; `ELYAN_AGENT_LOOP=0` ile kapatılıp eski davranışa dönülür.
+    Saf deterministik modda her hâlükârda kapalıdır (dış beyin yok)."""
+    if _deterministic_only_enabled():
+        return False
+    raw = str(os.environ.get("ELYAN_AGENT_LOOP", "") or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def _with_agent_loop_fallback(
+    result: dict[str, Any],
+    *,
+    enabled: bool,
+    run_agent_loop: Any,
+) -> dict[str, Any]:
+    """Semantik yol bir cevap üretemediyse ajan döngüsüne geri düşer.
+
+    Mevcut UX sözleşmesi (netleştirme, izin yüzeyi, plan önizlemesi) semantik
+    planlayıcıda kalır ve ÖNCE o çalışır; yalnız o BAŞARISIZ olduğunda döngü
+    devreye girer. Böylece kapsam genişler ama hiçbir mevcut davranış değişmez."""
+    if not enabled or not isinstance(result, dict):
+        return result
+    if result.get("ok"):
+        return result
+    # Netleştirme/onay isteyen sonuçlar başarısızlık DEĞİLDİR; onlara dokunma.
+    if result.get("needsConfirmation") or result.get("clarificationNeeded"):
+        return result
+    try:
+        fallback = run_agent_loop()
+    except Exception:
+        return result
+    if isinstance(fallback, dict) and fallback.get("ok"):
+        # Semantik turda toplanan retrieval/telemetri kanıtı kaybolmasın:
+        # döngü devraldı diye "kaynak kullanılmadı" demek yanlış olur.
+        carried = {
+            key: result[key]
+            for key in (
+                "retrievalUsed",
+                "retrievalStrategy",
+                "retrievalSources",
+                "retrieval",
+            )
+            if key in result
+        }
+        return {**carried, **fallback}
+    return result
+
+
+def _route_chat_agent_loop(
+    text: str,
+    *,
+    backend: "BackendClient | None",
+    execute_step: Any,
+    state_factory: Any,
+    goal_context: dict[str, Any] | None = None,
+    conversation_id: str = "",
+) -> dict[str, Any] | None:
+    """Novel/kalıba oturmayan işi çok turlu ajan döngüsüyle yürütür.
+
+    ``_route_chat`` ile AYNI sonuç sözleşmesini döndürür. Taşıma yoksa ya da
+    döngü kurulamazsa None döner → çağıran mevcut yola düşer (geriye dönük
+    uyum; wiring hiçbir koşulda canlı yolu kırmaz)."""
+    if backend is None or not _agent_loop_enabled():
+        return None
+    from runtime import agent_decider, agent_loop as agent_loop_runtime
+
+    def invoke_plan(prompt: str) -> dict[str, Any] | None:
+        return _server_brain_structured_plan(backend, prompt)
+
+    try:
+        decide_next = agent_decider.make_model_decider(
+            agent_decider.make_backend_send_prompt(invoke_plan)
+        )
+        allowed = None
+        if isinstance(goal_context, dict):
+            allowed = reasoning_policy.allowed_capabilities(goal_context) or None
+        outcome = agent_loop_runtime.run_agent_loop(
+            goal=text,
+            decide_next=decide_next,
+            execute_step=execute_step,
+            state_factory=state_factory,
+            source="conversation_agent_loop",
+            goal_context=goal_context,
+            allowed_capabilities=allowed,
+            confirmed=False,
+        )
+    except Exception:
+        return None
+
+    trace = outcome.trace()
+    if outcome.ok:
+        return {
+            "ok": True,
+            "message": outcome.summary,
+            "provider": "server_brain",
+            "toolEvents": [],
+            "intent": "agent_loop",
+            "confidence": 0.9,
+            "executionMode": "agent_loop",
+            "needsConfirmation": False,
+            "artifacts": outcome.artifacts,
+            "structuredResult": outcome.structured_result,
+            "agentLoopTrace": trace,
+        }
+    # P0.5: yan etkili adım onay bekliyor → plan önizlemesi + pendingPlan.
+    # Ajan döngüsü keşfi yaptı, şimdi kararı kullanıcıya sunuyor.
+    if outcome.stop_reason == "needs_approval" and isinstance(outcome.pending_action, dict):
+        pending = outcome.pending_action
+        capability = str(pending.get("capability", "") or "")
+        args = pending.get("args") if isinstance(pending.get("args"), dict) else {}
+        steps = [
+            {
+                "capability": capability,
+                "args": args,
+                "description": str(pending.get("rationale", "") or capability),
+            }
+        ]
+        summary = (
+            str(pending.get("rationale", "") or "").strip()
+            or f"{capability} çalıştırılacak. Onaylıyor musun?"
+        )
+        preview = _default_plan_preview(
+            "agent_loop", capability, args, steps, "local_private"
+        )
+        return {
+            "ok": True,
+            "content": summary,
+            "message": summary,
+            "provider": "server_brain",
+            "toolEvents": [],
+            "intent": "agent_loop",
+            "confidence": 0.85,
+            "executionMode": "plan_preview",
+            "needsConfirmation": True,
+            "privacyClass": "local_private",
+            "planPreview": preview,
+            "pendingPlan": {
+                "query": text,
+                "intent": "agent_loop",
+                "capability": capability,
+                "confidence": 0.85,
+                "privacyClass": "local_private",
+                "steps": steps,
+                "source": "agent_loop",
+            },
+            "agentLoopTrace": trace,
+        }
+    # Kullanıcıdan bilgi gerekiyorsa bu bir HATA değil, açıklayıcı bir turdur.
+    if outcome.stop_reason == "needs_user_input":
+        return {
+            "ok": True,
+            "message": outcome.summary,
+            "provider": "server_brain",
+            "toolEvents": [],
+            "intent": "agent_loop",
+            "confidence": 0.6,
+            "executionMode": "agent_loop_clarification",
+            "needsConfirmation": False,
+            "clarificationNeeded": True,
+            "clarificationQuestion": outcome.summary,
+            "agentLoopTrace": trace,
+        }
+    return {
+        "ok": False,
+        "error": outcome.error_code or "AGENT_LOOP_FAILED",
+        "message": outcome.summary,
+        "provider": "server_brain",
+        "toolEvents": [],
+        "intent": "agent_loop",
+        "confidence": 0.0,
+        "executionMode": "agent_loop_failed",
+        "needsConfirmation": False,
+        "agentLoopTrace": trace,
+    }
+
+
 def _route_chat(
     state: dict[str, Any],
     conversation: list[dict[str, Any]],
@@ -9866,6 +10046,65 @@ class RuntimeBridge:
         use_structured_planner = bool(
             force_structured_planning or reasoning_decision.use_structured_planner
         ) and not _deterministic_only_enabled()
+        # P0: router artık BİRİNCİL beyin değil, yüksek güvenli hızlı yol.
+        # Novel/düşük güvenli/uyumsuz rotalanmış işler çok turlu ajan döngüsüne
+        # devredilir (gözlemle → düşün → tek adım → yeniden düşün).
+        execution_mode_decision = reasoning_policy.decide_execution_mode(
+            deterministic_hit,
+            query=text,
+            plan_mode=plan_mode,
+            work_order=current_work_order,
+            deterministic_only=_deterministic_only_enabled(),
+            agent_loop_enabled=_agent_loop_enabled(),
+        )
+        # KRİTİK KAPI: ajan döngüsü yalnız GERÇEK GÖREV isteklerinde devreye
+        # girer. Düz sohbet ("nasılsın", "adım ne") deterministik router'a
+        # eşleşmez ama görev değildir; onu araç döngüsüne sokmak sohbeti bozar
+        # ve gereksiz yan etki riski yaratır. Bu yüzden eylem sinyali şarttır.
+        # KAPSAM (P0): ajan döngüsü şimdilik YALNIZ router'ın yanlış yeteneğe
+        # düşürdüğü işleri devralır — canlıda görülen hata sınıfı ("masaüstünde
+        # liste.txt oluştur" → directory_tree). Düşük güvenli / rotalanamayan
+        # işler semantik planlayıcıda KALIR: orada plan önizlemesi, onay ve izin
+        # yüzeyi var; ajan döngüsü bu UX sözleşmesini henüz üretmiyor ve
+        # devralırsa yan etkiler onaysız çalışırdı. Kapsam, döngü plan/onay
+        # yayınlamayı öğrendikçe genişletilecek.
+        # Görev/sohbet ayrımı artık intent_gate'te: varsayılan SOHBET, görev için
+        # pozitif kanıt (eylem fiili + hedef) şart. Eski keyword listesi tersine
+        # çalışıp düz sohbeti araç çağrısına çeviriyordu.
+        from runtime import agent_decider, intent_gate
+
+        # OTORİTE MODELDE: niyet semantik olarak çözülür. Backend erişilemezse
+        # desen tabanlı yedek devreye girer ve sonuç `degraded=True` işaretlenir
+        # (kalite sessizce düşmez, izlenebilir).
+        _understanding_transport = None
+        if self.backend is not None and not _deterministic_only_enabled():
+            _understanding_transport = agent_decider.make_backend_send_prompt(
+                lambda prompt: _server_brain_structured_plan(self.backend, prompt)
+            )
+        intent_decision = intent_gate.understand(
+            text,
+            send_prompt=_understanding_transport,
+            dispatch_active=bool(_ACTIVE_DISPATCH_SESSION_ID.get("")),
+            has_pending_plan=bool(active_plan_id if isinstance(active_plan, dict) else ""),
+        )
+        # P0.5 KAPSAM — iki kademeli:
+        #  (a) ÖN ALMA: router yanlış yeteneğe düşürdüyse (mismatch) semantik
+        #      yolu beklemeden ajan döngüsü devralır; çünkü rota zaten yanlış.
+        #  (b) GERİ DÜŞÜŞ: diğer novel/düşük güvenli işlerde ÖNCE semantik
+        #      planlayıcı çalışır (netleştirme + izin yüzeyi + agentPlan gibi
+        #      zengin UX orada). Yalnız o BAŞARISIZ olursa ajan döngüsü devreye
+        #      girer. Böylece mevcut UX sözleşmesi korunur, kapsam yine genişler.
+        agent_loop_ready = (
+            not force_structured_planning
+            and _agent_loop_enabled()
+            and intent_decision.is_task
+            and execution_mode_decision.mode == "agent_loop"
+        )
+        use_agent_loop = (
+            agent_loop_ready
+            and execution_mode_decision.reason == "route_capability_mismatch"
+        )
+        agent_loop_fallback = agent_loop_ready and not use_agent_loop
         execution_goal = reasoning_policy.build_goal_context(
             query=text,
             work_order=current_work_order,
@@ -9904,16 +10143,30 @@ class RuntimeBridge:
             conversation_id=conversation_id,
             task_id="",
             text=text,
-            route_fn=lambda execution_id: _route_chat(
-                state,
-                route_conversation,
-                text,
-                conversation_id=conversation_id,
-                selected_artifacts=normalized_selected,
-                backend=self.backend,
-                plan_mode=plan_mode,
-                force_structured_planning=use_structured_planner,
-                goal_context=execution_goal,
+            route_fn=lambda execution_id: _with_agent_loop_fallback(
+                (
+                    (
+                        _route_chat_agent_loop(
+                            text,
+                            backend=self.backend,
+                            execute_step=self._execute_step_with_telemetry,
+                            state_factory=STATE.snapshot,
+                            goal_context=execution_goal,
+                            conversation_id=conversation_id,
+                        )
+                        if use_agent_loop
+                        else None
+                    )
+                    or _route_chat(
+                    state,
+                    route_conversation,
+                    text,
+                    conversation_id=conversation_id,
+                    selected_artifacts=normalized_selected,
+                    backend=self.backend,
+                    plan_mode=plan_mode,
+                    force_structured_planning=use_structured_planner,
+                    goal_context=execution_goal,
                 plan_executor=lambda steps, step_source, step_goal: self._execute_plan_steps(
                     steps,
                     source=step_source,
@@ -9925,6 +10178,17 @@ class RuntimeBridge:
                     plan_preview=(current_work_order or {}).get("planPreview")
                     if isinstance((current_work_order or {}).get("planPreview"), dict)
                     else None,
+                ),
+                )
+                ),
+                enabled=agent_loop_fallback,
+                run_agent_loop=lambda: _route_chat_agent_loop(
+                    text,
+                    backend=self.backend,
+                    execute_step=self._execute_step_with_telemetry,
+                    state_factory=STATE.snapshot,
+                    goal_context=execution_goal,
+                    conversation_id=conversation_id,
                 ),
             ),
         )
@@ -10928,8 +11192,65 @@ class RuntimeBridge:
                 search_result.error or "shared_retrieval_failed"
             )
             return "", metadata, profile_data
-        prompt_context, retrieval_metadata = _shared_brain_prompt_context(search_result.data)
+        # P3: tek atış getirme yetersizse HEDEFLİ ikinci tur. Yeterlilik kanıta
+        # bakar (alt soruların kaçı karşılandı), model özgüvenine değil. Yeterliyse
+        # hiç ek çağrı yapılmaz → mevcut davranış ve gecikme aynen korunur.
+        enriched_data = self._augment_retrieval_if_insufficient(
+            query=str(text or "").strip(),
+            payload=search_result.data,
+            conversation_id=str(conversation_id or "").strip(),
+        )
+        prompt_context, retrieval_metadata = _shared_brain_prompt_context(enriched_data)
         return prompt_context, {**metadata, **retrieval_metadata}, profile_data
+
+    def _augment_retrieval_if_insufficient(
+        self,
+        *,
+        query: str,
+        payload: dict[str, Any],
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        """Kapsama düşükse karşılanmayan alt sorular için ek getirme yapar.
+
+        Sonuç, çağıranın beklediği ORİJİNAL şekilde döner (``results`` listesi);
+        böylece aşağı akıştaki hiçbir sözleşme değişmez."""
+        from runtime import retrieval_orchestrator as ro
+
+        try:
+            items = _shared_brain_search_items(payload)
+            sub_queries = ro.decompose_query(query)
+            if len(sub_queries) < 2:
+                return payload
+            existing = [
+                ro.RetrievedItem(
+                    text=str(
+                        item.get("text")
+                        or item.get("snippet")
+                        or item.get("content")
+                        or ""
+                    ),
+                    source=str(item.get("source") or ""),
+                )
+                for item in items
+            ]
+            coverage, unmet = ro.assess_sufficiency(sub_queries, existing)
+            if coverage >= ro.SUFFICIENCY_THRESHOLD or not unmet:
+                return payload
+
+            merged = [dict(item) for item in items]
+            for sub in unmet[:2]:
+                extra = self.backend.brain_retrieval_search(
+                    {"query": sub, "limit": 3, "conversationId": conversation_id}
+                )
+                if not extra.ok or not isinstance(extra.data, dict):
+                    continue
+                merged.extend(_shared_brain_search_items(extra.data))
+            if len(merged) <= len(items):
+                return payload
+            return {**payload, "results": merged}
+        except Exception:
+            # Zenginleştirme asla ana getirme yolunu düşürmesin.
+            return payload
 
     def backend_auth_me(self) -> dict[str, Any]:
         result = self.backend.auth_me()

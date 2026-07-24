@@ -340,6 +340,36 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         usage="Yalnız başka yetenek yokken. Dosya işlemleri için file_* , git için git_* yeteneklerini tercih et.",
     ),
     _tool_decl(
+        "shell_session_open",
+        "Kalıcı terminal oturumu açar; çalışma dizini ve ortam sonraki komutlarda korunur.",
+        {
+            "working_dir": {"type": "STRING", "description": "Başlangıç çalışma dizini."},
+            "root": {"type": "STRING", "description": "İzin verilen kök dizin (dışına cd engellenir)."},
+        },
+        [],
+        usage="Çok adımlı yazılım işleri için (derle/test/düzelt döngüsü). Tek komut yetiyorsa shell_run kullan.",
+        examples=[{"args": {"working_dir": "~/projeler/elyan"}}],
+    ),
+    _tool_decl(
+        "shell_session_run",
+        "Açık terminal oturumunda komut çalıştırır; cwd/ortam korunur, çıktı ve exit kodu döner.",
+        {
+            "session_id": {"type": "STRING", "description": "shell_session_open'dan dönen oturum kimliği."},
+            "command": {"type": "STRING", "description": "Çalıştırılacak komut."},
+            "timeout": {"type": "NUMBER", "description": "Saniye cinsinden zaman aşımı."},
+        },
+        ["session_id", "command"],
+        usage="Testi çalıştır, çıktıyı oku, düzelt, tekrar çalıştır döngüsü için.",
+        examples=[{"args": {"session_id": "sh_x", "command": "python -m pytest -q"}}],
+    ),
+    _tool_decl(
+        "shell_session_close",
+        "Terminal oturumunu kapatır.",
+        {"session_id": {"type": "STRING", "description": "Kapatılacak oturum kimliği."}},
+        ["session_id"],
+        usage="İş bitince oturumu serbest bırak.",
+    ),
+    _tool_decl(
         "play_media",
         "YouTube, Spotify veya Apple Music ile şarkı/çalma listesi oynatır.",
         {
@@ -985,6 +1015,9 @@ _ADAPTER_SPECS: dict[str, _AdapterSpec] = {
     "browser_control": _AdapterSpec("actions.browser", "browser_control"),
     "web_research": _AdapterSpec("actions.web_research", "web_research"),
     "shell_run": _AdapterSpec("actions.shell", "shell_run"),
+    "shell_session_open": _AdapterSpec("actions.shell_terminal", "shell_session_open"),
+    "shell_session_run": _AdapterSpec("actions.shell_terminal", "shell_session_run"),
+    "shell_session_close": _AdapterSpec("actions.shell_terminal", "shell_session_close"),
     "play_media": _AdapterSpec("actions.media", "play_media"),
     "analyze_screen": _AdapterSpec("actions.screen_vision", "analyze_screen"),
     "desktop_operator.observe_screen": _AdapterSpec("actions.desktop_operator", "observe_screen"),
@@ -1059,6 +1092,9 @@ _CAPABILITY_DISPLAY_NAMES: dict[str, str] = {
     "close_app": "Uygulama kapatma",
     "sys_info": "Sistem bilgisi",
     "shell_run": "Terminal komutu",
+    "shell_session_open": "Terminal oturumu açma",
+    "shell_session_run": "Terminal oturumunda komut",
+    "shell_session_close": "Terminal oturumu kapatma",
     "browser_control": "Tarayıcı kontrolü",
     "play_media": "Medya oynatma",
     "analyze_screen": "Ekran analizi",
@@ -1171,6 +1207,8 @@ _SIDE_EFFECT_CAPABILITIES = {
     "open_app",
     "close_app",
     "shell_run",
+    # Kalıcı oturumda komut çalıştırmak da yan etkilidir → onay kapısından geçer.
+    "shell_session_run",
     "desktop_operator.focus_window",
     "desktop_operator.execute_action",
     "desktop_operator.run",
@@ -2690,6 +2728,19 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             use_shell=bool(args.get("use_shell", False)),
             working_dir=str(args.get("working_dir", "") or args.get("workingDir", "") or ""),
             mode=str(args.get("mode", "") or "confirmed"),
+        ),
+        "shell_session_open": lambda args: _load_adapter("shell_session_open")(
+            working_dir=str(args.get("working_dir", "") or args.get("workingDir", "") or ""),
+            root=str(args.get("root", "") or ""),
+            session_id=str(args.get("session_id", "") or args.get("sessionId", "") or ""),
+        ),
+        "shell_session_run": lambda args: _load_adapter("shell_session_run")(
+            command=str(args.get("command", "") or ""),
+            session_id=str(args.get("session_id", "") or args.get("sessionId", "") or ""),
+            timeout=_as_int(args.get("timeout"), 120),
+        ),
+        "shell_session_close": lambda args: _load_adapter("shell_session_close")(
+            session_id=str(args.get("session_id", "") or args.get("sessionId", "") or ""),
         ),
         "play_media": lambda args: _load_adapter("play_media")(
             str(args.get("query", "") or ""),

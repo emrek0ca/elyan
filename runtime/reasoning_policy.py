@@ -111,6 +111,129 @@ def decide_reasoning_path(
     return ReasoningDecision(False, "atomic_fast_path")
 
 
+# ── Yürütme modu politikası (P0) ─────────────────────────────────────────────
+# Router artık BİRİNCİL beyin değil, yüksek güvenli bir HIZLI YOL önbelleğidir.
+# Kalıba oturmayan / novel işler çok turlu ajan döngüsüne gider.
+
+# Router'ın hızlı yolda kalabilmesi için asgari güven eşiği.
+FAST_PATH_MIN_CONFIDENCE = 0.9
+
+# Salt gözlem/okuma yetenekleri: kullanıcı açıkça ÜRETİM istediğinde bunlara
+# rotalanmak bir uyumsuzluktur (canlıda görülen hata sınıfı: "masaüstünde
+# liste.txt oluştur" → directory_tree).
+_OBSERVATIONAL_CAPABILITIES = {
+    "directory_tree",
+    "file_search",
+    "file_read",
+    "sys_info",
+    "document_read",
+    "retrieve_context",
+    "analyze_screen",
+    "desktop_os.status",
+    "desktop_os.processes",
+    "desktop_os.active_window",
+}
+
+# Üretim/teslim niyeti taşıyan fiiller (TR + EN, normalize edilmiş kök).
+_CREATION_MARKERS = (
+    "olustur", "oluştur", "yarat", "yaz", "kaydet", "hazirla", "hazırla",
+    "uret", "üret", "ekle", "indir", "gonder", "gönder", "duzenle", "düzenle",
+    "create", "write", "save", "generate", "make", "build", "add", "send",
+)
+
+
+def _normalize_tr(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    for source, target in (
+        ("ı", "i"), ("ğ", "g"), ("ü", "u"), ("ş", "s"), ("ö", "o"), ("ç", "c")
+    ):
+        text = text.replace(source, target)
+    return text
+
+
+def route_capability_mismatch(routed: Any, query: str = "") -> bool:
+    """Kullanıcı üretim isterken salt-gözlem yeteneğine rotalandıysa True.
+
+    Bu, güven skoru yüksek olsa bile hızlı yolu iptal ettirir; iş ajan
+    döngüsüne devredilir (yanlış yetenekle sessizce ilerlemek yerine)."""
+    if routed is None:
+        return False
+    capability = str(getattr(routed, "tool_name", "") or "").strip()
+    if capability not in _OBSERVATIONAL_CAPABILITIES:
+        return False
+    normalized = _normalize_tr(query)
+    return any(marker in normalized for marker in _CREATION_MARKERS)
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionModeDecision:
+    mode: str  # "fast_path" | "structured_plan" | "agent_loop"
+    reason: str
+
+
+def decide_execution_mode(
+    routed: Any,
+    *,
+    query: str = "",
+    plan_mode: bool = False,
+    work_order: dict[str, Any] | None = None,
+    deterministic_only: bool = False,
+    agent_loop_enabled: bool = True,
+) -> ExecutionModeDecision:
+    """Bir işin hızlı yol, yapılandırılmış plan ya da ajan döngüsüyle
+    yürütüleceğine karar verir.
+
+    Sıra bilinçlidir: güvenli/deterministik yollar önce elenir; geriye kalan
+    (novel, düşük güvenli, çok yetenekli, uyumsuz rotalanmış) işler ajan
+    döngüsüne düşer. ``agent_loop_enabled=False`` ile eski davranışa dönülür.
+    """
+    if deterministic_only:
+        return ExecutionModeDecision("fast_path", "deterministic_only")
+
+    order = work_order if isinstance(work_order, dict) else {}
+    preview = order.get("planPreview") if isinstance(order.get("planPreview"), dict) else {}
+    if _steps(preview):
+        # İmzalı iş emri açık adımlar taşıyor: otorite plandadır.
+        return ExecutionModeDecision("structured_plan", "trusted_work_order_plan")
+
+    if not agent_loop_enabled:
+        decision = decide_reasoning_path(
+            routed,
+            plan_mode=plan_mode,
+            work_order=work_order,
+            deterministic_only=deterministic_only,
+        )
+        return ExecutionModeDecision(
+            "structured_plan" if decision.use_structured_planner else "fast_path",
+            decision.reason,
+        )
+
+    if plan_mode:
+        return ExecutionModeDecision("agent_loop", "plan_mode")
+    if routed is None:
+        # Router hiçbir kalıba oturtamadı → tam da ajan döngüsünün alanı.
+        return ExecutionModeDecision("agent_loop", "unrouted_novel_task")
+    if route_capability_mismatch(routed, query):
+        return ExecutionModeDecision("agent_loop", "route_capability_mismatch")
+
+    try:
+        confidence = float(getattr(routed, "confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    routed_steps = _steps(routed)
+    multi_step = bool(getattr(routed, "is_multi_step", False)) or len(routed_steps) > 1
+
+    if confidence < FAST_PATH_MIN_CONFIDENCE:
+        return ExecutionModeDecision("agent_loop", "low_confidence_route")
+    if multi_step:
+        # Yüksek güvenli ÇOK adımlı kalıplar (araştır+yaz gibi) doğrulanmış
+        # deterministik planlardır; ajan döngüsüne gerek yok.
+        return ExecutionModeDecision("structured_plan", "validated_multi_step_route")
+    if any(step.get("forEach") is not None or step.get("dependsOn") for step in routed_steps):
+        return ExecutionModeDecision("structured_plan", "data_flow")
+    return ExecutionModeDecision("fast_path", "high_confidence_atomic_route")
+
+
 def deterministic_plan_hint(routed: Any) -> dict[str, Any] | None:
     if routed is None:
         return None

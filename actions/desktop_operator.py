@@ -1716,6 +1716,9 @@ def run(
         steps = [dict(item) for item in steps[:action_budget] if isinstance(item, dict)]
         final_payload: dict[str, Any] | None = None
         retry_counts: dict[int, int] = {}
+        # P2 ilerleme takibi (tek elemanlı liste: iç kapsamdan yazılabilsin).
+        _last_screen_signature: list[str] = [""]
+        _unchanged_screens: list[int] = [0]
         for index, step in enumerate(steps, start=1):
             if not isinstance(step, dict):
                 continue
@@ -1759,6 +1762,45 @@ def run(
                 current_observation = current_observation_payload.get("result", {}).get("observation", {})
                 current_observation = current_observation if isinstance(current_observation, dict) else {}
                 current_observation_entry = _record_observation(run_id, current_observation)
+                # P2: ilerleme kanıtı. Ekran üst üste değişmiyorsa aynı eylemi
+                # körlemesine tekrarlamak yerine güvenle dur — aksi halde
+                # operatör yanlış yerde sessizce "çalışmaya" devam ediyordu.
+                try:
+                    from runtime.computer_use_loop import (
+                        NO_CHANGE_LIMIT,
+                        build_screen_state,
+                    )
+
+                    _signature = build_screen_state(
+                        {"result": current_observation}
+                    ).signature
+                    if _signature == _last_screen_signature[0]:
+                        _unchanged_screens[0] += 1
+                    else:
+                        _unchanged_screens[0] = 0
+                        _last_screen_signature[0] = _signature
+                    if _unchanged_screens[0] >= NO_CHANGE_LIMIT:
+                        current_run["status"] = "failed"
+                        current_run["stopReason"] = "no_screen_progress"
+                        _record_run(current_run)
+                        _finalize_active_run(
+                            run_id, "failed", stop_reason="no_screen_progress"
+                        )
+                        return {
+                            "text": "Ekran son eylemlerde hiç değişmedi; görev güvenli şekilde durduruldu.",
+                            "result": {
+                                "kind": "operator_run_result",
+                                "runId": run_id,
+                                "status": "failed",
+                                "currentStep": index,
+                                "requiresApproval": False,
+                                "lastVerificationOk": False,
+                                "stopReason": "no_screen_progress",
+                                "observation": current_observation,
+                            },
+                        }
+                except ImportError:
+                    pass
                 try:
                     payload = execute_action(
                         proposed_action,

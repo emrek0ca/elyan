@@ -55,10 +55,17 @@ KNOWN_SAFE_TOOLS = {
     "desktop_operator.cancel",
     "clipboard_read",
     "clipboard_write",
+    # Oturum açma/kapama tek başına yan etkisizdir (yalnız durum tutar);
+    # asıl güç shell_session_run'dadır ve o izin sınıfındadır.
+    "shell_session_open",
+    "shell_session_close",
 }
 
 DESTRUCTIVE_OR_SENSITIVE_TOOLS = {
     "shell_run",
+    # Kalıcı oturumda komut çalıştırmak shell_run ile aynı güce sahiptir →
+    # aynı izin sınıfında tutulur (onaysız çalışmaz).
+    "shell_session_run",
     "delete_memory",
     "delete_calendar_event",
 }
@@ -230,7 +237,9 @@ def evaluate_tool(tool_name: str, args: dict[str, Any], state: dict[str, Any]) -
     if grant_error is not None:
         return PolicyDecision(False, grant_error.code, "Görev yetkisi bu adıma uymuyor; işlem durduruldu.")
 
-    if name == "shell_run":
+    # Kalıcı oturum komutu shell_run ile AYNI güce sahiptir → aynı izin dalını
+    # paylaşır (allow_shell + onay). Ayrı/gevşek bir yol açılmaz.
+    if name in {"shell_run", "shell_session_run"}:
         mode = str(args.get("mode", "") or "").strip().lower()
         risk_override = str(args.get("riskOverride", "") or args.get("risk_override", "") or "").strip().lower()
         if mode == "read_only" or _truthy(args.get("_readOnlyHint", False)):
