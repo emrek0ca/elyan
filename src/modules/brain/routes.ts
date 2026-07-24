@@ -56,6 +56,7 @@ import {
   updateBrainMemoryRecord,
   queueContinuousBrainTrainingJob,
   sanitizePublicBrainValue,
+  getRecentWorldSignalDigest,
   shapePublicBrainProfile,
   updateDatasetManifest,
   updateModelArtifact,
@@ -99,7 +100,12 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
     brainProfileQuerySchema.parse(request.query ?? {});
     const auth = getUserScopedAuth(request);
 
-    return shapePublicBrainProfile(await getBrainProfile(app, auth.sub));
+    const profile = shapePublicBrainProfile(await getBrainProfile(app, auth.sub));
+    // Masaüstünün durumsal bağlam katmanı bu digest'i okur (konum/takvim
+    // kaynaklı canlılık). Sinyal yoksa alan hiç eklenmez — masaüstü tarafı da
+    // "sinyal yoksa uydurma yok" sözleşmesiyle çalışır.
+    const worldSignals = await getRecentWorldSignalDigest(app, auth.sub);
+    return worldSignals.length > 0 ? { ...profile, worldSignals } : profile;
   });
 
   app.post("/chat", async (request, reply) => {

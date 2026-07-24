@@ -2895,6 +2895,70 @@ export async function maybeQueueAutomaticSharedBrainRefresh(
   };
 }
 
+/**
+ * Hassas sinyal türleri: masaüstüne ÖZET METNİ gönderilmez, yalnız türü
+ * bildirilir. Masaüstü katmanı da bunlardan yalnız kaba bir "yoğun gün"
+ * işareti türetir — iki uçta da ham veri taşınmaz (savunma derinliği).
+ */
+const SENSITIVE_WORLD_SIGNAL_KINDS = new Set(["health", "location_precise"]);
+
+export type PublicWorldSignalDigestItem = {
+  kind: string;
+  summary?: string;
+};
+
+/**
+ * Masaüstünün durumsal bağlam katmanı için son dünya sinyali özeti.
+ *
+ * Bu digest sohbet bağlamında zaten üretiliyordu ama masaüstüne açılmıyordu;
+ * bu yüzden konum/takvim kaynaklı "canlılık" masaüstüne hiç ulaşmıyordu.
+ */
+export async function getRecentWorldSignalDigest(
+  app: FastifyInstance,
+  userId: string,
+  { maxAgeHours = 12, limit = 12 } = {},
+): Promise<PublicWorldSignalDigestItem[]> {
+  try {
+    const rows = await app.db
+      .select({
+        kind: worldSignals.kind,
+        summary: worldSignals.summary,
+      })
+      .from(worldSignals)
+      .where(
+        and(
+          eq(worldSignals.userId, userId),
+          gte(
+            worldSignals.createdAt,
+            new Date(Date.now() - maxAgeHours * 3_600_000),
+          ),
+        ),
+      )
+      .orderBy(desc(worldSignals.createdAt))
+      .limit(limit);
+
+    return rows
+      .map((row) => {
+        const kind = String(row.kind ?? "").trim().toLowerCase();
+        if (!kind) {
+          return null;
+        }
+        if (SENSITIVE_WORLD_SIGNAL_KINDS.has(kind)) {
+          return { kind };
+        }
+        const summary = String(row.summary ?? "").trim().slice(0, 160);
+        return summary ? { kind, summary } : { kind };
+      })
+      .filter((item): item is PublicWorldSignalDigestItem => item != null);
+  } catch (error) {
+    app.log?.debug?.(
+      { userId, error: error instanceof Error ? error.message : "unknown" },
+      "world signal digest unavailable",
+    );
+    return [];
+  }
+}
+
 export function shapePublicBrainProfile(
   profile: Awaited<ReturnType<typeof getBrainProfile>>,
 ) {
