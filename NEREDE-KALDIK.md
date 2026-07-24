@@ -218,10 +218,21 @@ yoksa alan üretilmez (uydurma yok); hassas sinyal (sağlık/kesin konum) ham
 taşınmaz, yalnız kaba "yoğun gün" işareti üretir. Türetilmiş başlık
 `_titleSource` ile denetlenebilir.
 
-**Açık kalan:** backend `worldSignals` digest'i şu an sohbet bağlamında üretiliyor;
-desktop tarafı hazır (`_absorb_world_signals` profil/arama yükünden okur) ama
-backend'in bu digest'i o yüklere KOYDUĞU doğrulanmadı. Sağlık/konum canlılığı
-bu doğrulanana kadar yalnız takvim tabanlı çalışır.
+**Zincir KAPANDI (backend tarafı da bağlandı):**
+`/v1/brain/profile` artık son dünya sinyallerinin sınırlı digest'ini döndürüyor
+(`brain/service.ts::getRecentWorldSignalDigest` + `brain/routes.ts`). Tam yol:
+
+```
+world_signals tablosu → /v1/brain/profile → bridge._absorb_world_signals
+  → STATE.runtime.worldSignals → gather_situation() → niyet çözümü + belge başlığı
+```
+
+**Gizlilik KAYNAKTA uygulanır** (yalnız alıcıda değil): `health` ve
+`location_precise` yalnız TÜR olarak bildirilir, özet metni DB katmanından
+çıkmadan düşürülür. Özet 160 karakterle sınırlı; sorgu patlarsa boş digest döner
+(profil isteği düşmez); sinyal yoksa alan hiç eklenmez.
+Testler: `src/modules/brain/world-signal-digest.test.ts` (redaksiyon değişmezi,
+hata yolu, uzunluk sınırı).
 
 ---
 
@@ -234,14 +245,30 @@ bu doğrulanana kadar yalnız takvim tabanlı çalışır.
 2. **Groq Compound hiç çalışmadı** — kod hatası değil, **ops**: `GROQ_COMPOUND_ENABLED`
    varsayılan `false` ve VPS `.env`'inde yok. Ayrıca uygun workload yalnız
    `planning` + `mobile_chat_deep_refine`. Bayrağı açmadan etkisi olmaz.
-3. **VPS deploy yapılmadı.** Local'de build/test tamam, canlıya alınmadı.
-4. **Commit atılmadı.** Desktop yeni: `runtime/agent_loop.py`, `runtime/agent_decider.py`,
-   `runtime/intent_gate.py`, `runtime/understanding.py`, `runtime/shell_session.py`,
-   `runtime/computer_use_loop.py`, `runtime/retrieval_orchestrator.py`,
-   `actions/shell_terminal.py`, `NEREDE-KALDIK.md`. Desktop değişik: `runtime/bridge.py`,
-   `runtime/reasoning_policy.py`, `runtime/capability_registry.py`, `runtime/safety_policy.py`.
-   **Backend değişik:** `src/modules/tasks/desktop-capability-manifest.ts` (parite export'u —
-   desktop ile birlikte commit'lenmeli, yoksa parite testi kırılır).
+3. **VPS deploy YAPILDI** (2026-07-25, `4d71adac` dahil). Sunucuda 1591/1591 test
+   geçti, container'lar healthy, `api.elyan.dev/healthz` 200. Yeni kodun canlıda
+   olduğu doğrulandı (`getRecentWorldSignalDigest` dist'te mevcut).
+   **Deploy tuzağı:** `deploy-v1-release.sh` art arda çok SSH açtığı için sunucu
+   rate-limit'e takılıyor ve script "Remote install and test" adımında
+   `kex_exchange_identification: Connection reset` ile düşüyor. Bu ARIZA DEĞİL —
+   dosyalar zaten senkronlanmış olur. Çözüm: bekle (ban penceresi kısa), sonra
+   kalan 2 adımı keepalive ile ELLE çalıştır:
+   ```bash
+   ssh -o ServerAliveInterval=30 root@84.247.172.213 "cd /srv/elyan-backend && \
+     ONNXRUNTIME_NODE_INSTALL=skip npm ci && npm run compile:nlp && npm run build && npm test"
+   # sonra: şema bootstrap script'leri + docker compose up -d --build --remove-orphans
+   ```
+   Production bu süreçte etkilenmez; eski container'lar çalışmaya devam eder.
+4. **Commit'ler atıldı** (2026-07-25 oturumu, hepsi sıfır regresyonla):
+   Desktop — `ca196778` ajan yığını · `900869c8` zincirleme+exit kodu+teslimat ·
+   `0babc6f6` kısa liste+bütçe · `32ca3ae8` durumsal füzyon · `60c24acc` başlık
+   bağlama · `1f1b8bc8` sinyal köprüsü.
+   Backend — `fc1bb58c` manifest paritesi · `2ad9d6a0` bayat test · `4d71adac`
+   world signal digest.
+
+5. **Ölçülmemiş:** digest'in GERÇEK kullanıcı verisiyle dolduğu görülmedi
+   (`world_signals` tablosunda kaydı olan hesapla profil çağrısı yapılmadı).
+   Mantık + gizlilik testlerle sabit, canlı veri akışı ölçülmedi.
 
 ---
 
