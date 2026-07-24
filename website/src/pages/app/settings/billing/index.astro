@@ -1,0 +1,33 @@
+---
+import AppLayout from '../../../../layouts/AppLayout.astro';
+import SettingsSidebar from '../../../../components/app/SettingsSidebar.astro';
+export const prerender = false;
+---
+
+<AppLayout title="Billing - Elyan" bodyData={{ settingsPage: 'billing' }}>
+  <div class="flex min-h-screen w-full bg-[var(--color-elyan-bg)] max-md:flex-col">
+    <SettingsSidebar active="billing" />
+    <main class="flex-1 overflow-y-auto"><div class="max-w-2xl mx-auto py-12 px-8 max-md:px-4 max-md:py-8">
+      <h1 class="text-2xl font-bodoni font-medium text-[var(--color-elyan-text)] tracking-tight mb-8">Billing & Subscription</h1>
+      <p id="billing-status" aria-live="polite" class="hidden mb-5 text-sm font-medium"></p>
+      <div class="space-y-8 stagger-container">
+        <section class="stagger-item bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl overflow-hidden">
+          <div class="p-6 border-b border-[var(--color-elyan-outline)] flex items-start justify-between gap-4"><div><h2 id="current-plan-title" class="text-sm font-semibold text-[var(--color-elyan-text)] mb-1">Loading plan…</h2><p id="current-plan-detail" class="text-[13px] text-[var(--color-elyan-text-muted)]">Loading billing truth…</p></div><div id="current-plan-price" class="text-xl font-bodoni font-medium text-[var(--color-elyan-text)] tabular-nums">—</div></div>
+          <div class="p-6 bg-[var(--color-elyan-bg)] flex flex-wrap justify-end gap-3"><button id="claim-trial" type="button" class="hidden bg-[var(--color-elyan-primary)] text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50">Claim Pro Trial</button><button id="cancel-subscription" type="button" class="hidden bg-[var(--color-elyan-surface)] border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50">Cancel Subscription</button></div>
+        </section>
+        <section class="stagger-item bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6"><h2 class="text-sm font-semibold text-[var(--color-elyan-text)] mb-4">Current Usage</h2><div id="billing-usage" class="space-y-6"><p class="text-sm text-[var(--color-elyan-text-muted)]">Loading usage…</p></div></section>
+        <section class="stagger-item"><h2 class="mb-4 text-sm font-semibold">Available Plans</h2><div id="billing-plans" class="grid grid-cols-2 gap-4 max-sm:grid-cols-1" aria-live="polite"></div></section>
+        <form id="billing-profile-form" class="stagger-item bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6"><h2 class="text-sm font-semibold mb-1">Billing Profile</h2><p class="mb-4 text-[13px] text-[var(--color-elyan-text-muted)]">Required by the payment provider before checkout.</p><div class="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
+          {['fullName','email','phone','identityNumber','addressLine1','city','country','zipCode'].map((name) => <label class:list={['text-xs text-[var(--color-elyan-text-muted)]', name === 'addressLine1' && 'col-span-2 max-sm:col-span-1']}><span class="mb-1.5 block uppercase tracking-wide">{name.replace(/([A-Z])/g, ' $1')}</span><input name={name} type={name === 'email' ? 'email' : 'text'} required maxlength="255" class="w-full rounded-md border border-[var(--color-elyan-outline)] bg-[var(--color-elyan-bg)] px-3 py-2 text-[14px] text-[var(--color-elyan-text)]" /></label>)}
+        </div><div class="mt-6 flex justify-end"><button type="submit" class="rounded-lg bg-[var(--color-elyan-primary)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Save Billing Profile</button></div></form>
+      </div>
+    </div></main>
+  </div>
+</AppLayout>
+
+<script>
+  import { initBilling } from '../../../../lib/client/billing-controller';
+  import { gsap } from 'gsap';
+  gsap.fromTo('.stagger-item', { y: 15, opacity: 0 }, { y: 0, opacity: 1, duration: 0.6, stagger: 0.1, ease: 'power2.out', clearProps: 'all' });
+  void initBilling();
+</script>

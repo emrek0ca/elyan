@@ -18,12 +18,15 @@ from runtime.capability_validation import (
     precondition_error,
     readback_evidence,
 )
+from runtime.error_recovery import CORRECTIVE_MAX_ATTEMPTS, plan_corrective_retry
 from runtime.execution_journal import ExecutionJournal
 from runtime.execution_journal import plan_hash as journal_plan_hash
 from runtime.execution_scheduler import (
     MAX_PARALLEL_READS,
     SchedulerPlanError,
     parallel_read_batch,
+    quantum_liveness_benchmark,
+    quantum_schedule_benchmark,
     run_parallel,
     schedule_steps,
 )
@@ -58,6 +61,40 @@ def _safe_identifier(value: Any, *, limit: int = 80) -> str:
     text = str(value or "").strip()
     text = re.sub(r"[^A-Za-z0-9_.:-]+", "_", text)
     return text[:limit].strip("_")
+
+
+def _safe_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _safe_liveness_guard(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if value.get("strategy") != "quantum_replan_liveness_guard_v1":
+        return None
+    if value.get("metric") != "responsive_execution_liveness":
+        return None
+    raw_max_replans = value.get("maxReplans")
+    max_replans = (
+        int(raw_max_replans)
+        if isinstance(raw_max_replans, (int, float)) and not isinstance(raw_max_replans, bool)
+        else 2
+    )
+    timeout_risk = str(value.get("timeoutRisk", "low") or "low")
+    if timeout_risk not in {"low", "medium", "high"}:
+        timeout_risk = "low"
+    return {
+        "strategy": "quantum_replan_liveness_guard_v1",
+        "source": str(value.get("source", "") or "")[:80],
+        "active": value.get("active") is True,
+        "timeoutRisk": timeout_risk,
+        "maxReplans": max(0, min(3, max_replans)),
+        "earlyProgressCheckpoint": value.get("earlyProgressCheckpoint") is True,
+        "safeStopOnTimeout": value.get("safeStopOnTimeout") is not False,
+        "metric": "responsive_execution_liveness",
+    }
 
 
 def _user_facing_execution_summary(
@@ -408,9 +445,45 @@ class ExecutorCore:
                 return
             trace = current.get("executionTrace")
             trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
-            trace["stopReason"] = str(reason or "").strip()
+            safe_reason = str(reason or "").strip()
+            trace["stopReason"] = safe_reason
+            self._record_liveness_stop_policy(trace, safe_reason)
             current["executionTrace"] = trace
             self._persist()
+
+    @staticmethod
+    def _record_liveness_stop_policy(trace: dict[str, Any], reason: str) -> None:
+        liveness_guard = trace.get("livenessGuard")
+        liveness_guard = liveness_guard if isinstance(liveness_guard, dict) else {}
+        stop_policy = trace.get("livenessStopPolicy")
+        stop_policy = stop_policy if isinstance(stop_policy, dict) else {}
+        if liveness_guard.get("strategy") != "quantum_replan_liveness_guard_v1":
+            return
+        active = bool(liveness_guard.get("active", False))
+        safe_stop = bool(liveness_guard.get("safeStopOnTimeout", False))
+        timeout_risk = str(liveness_guard.get("timeoutRisk", "low") or "low")
+        if timeout_risk not in {"low", "medium", "high"}:
+            timeout_risk = "low"
+        if reason == "execution_timeout":
+            action = "safe_stop_timeout" if safe_stop else "timeout_observed"
+        elif reason == "execution_cancelled":
+            action = "user_cancel_checkpoint"
+        elif reason == "preempted_at_checkpoint":
+            action = "preempted_checkpoint"
+        elif reason:
+            action = "safe_stop_reason_recorded"
+        else:
+            action = "none"
+        trace["livenessStopPolicy"] = {
+            "strategy": "quantum_liveness_stop_policy_v1",
+            "source": "desktop_executor_core",
+            "active": active,
+            "action": action,
+            "stopReason": reason,
+            "timeoutRisk": timeout_risk,
+            "safeStopOnTimeout": safe_stop,
+            "effectiveMaxReplans": int(_safe_number(liveness_guard.get("effectiveMaxReplans")) or 0),
+        }
 
     def request_preemption(self, execution_id: str, *, reason: str = "higher_priority_ready") -> bool:
         """Request a stop that is consumed only between completed steps."""
@@ -446,10 +519,44 @@ class ExecutorCore:
             trace = current.get("executionTrace")
             trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
             self._seed_pending_step_states(trace, steps)
+            plan_preview = current.get("planPreview")
+            plan_preview = plan_preview if isinstance(plan_preview, dict) else {}
+            backend_dispatch_optimization = plan_preview.get("dispatchOptimization")
+            backend_responsive_execution = plan_preview.get("responsiveExecution")
+            backend_liveness_guard = _safe_liveness_guard(plan_preview.get("livenessGuard"))
             trace["scheduler"] = {
                 "policyVersion": "p2.v1",
                 "orderedStepIds": [str(step.get("id", "") or "") for step in steps],
                 "maxParallelReads": MAX_PARALLEL_READS,
+                "quantumBoostedStepIds": [
+                    str(step.get("id", "") or "")
+                    for step in steps
+                    if isinstance(step.get("_scheduler"), dict)
+                    and float(step["_scheduler"].get("quantumBoost", 0.0) or 0.0) > 0
+                ],
+                "responsiveBoostedStepIds": [
+                    str(step.get("id", "") or "")
+                    for step in steps
+                    if isinstance(step.get("_scheduler"), dict)
+                    and float(step["_scheduler"].get("responsiveBoost", 0.0) or 0.0) > 0
+                ],
+                "quantumOptimization": quantum_schedule_benchmark(steps),
+                "quantumLivenessOptimization": quantum_liveness_benchmark(steps),
+                **(
+                    {"backendDispatchOptimization": dict(backend_dispatch_optimization)}
+                    if isinstance(backend_dispatch_optimization, dict)
+                    else {}
+                ),
+                **(
+                    {"backendResponsiveExecution": dict(backend_responsive_execution)}
+                    if isinstance(backend_responsive_execution, dict)
+                    else {}
+                ),
+                **(
+                    {"backendLivenessGuard": dict(backend_liveness_guard)}
+                    if isinstance(backend_liveness_guard, dict)
+                    else {}
+                ),
             }
             current["executionTrace"] = trace
             self._persist()
@@ -676,9 +783,78 @@ class ExecutorCore:
             repair_attempts = int(repair.get("repairAttempts", 0) or 0)
             if repair_attempts > 0:
                 block["repairAttempts"] = repair_attempts
+        quantum_liveness = self._quantum_liveness_snapshot(trace)
+        if quantum_liveness:
+            block["quantumLiveness"] = quantum_liveness
         if stop_reason:
             block["stopReason"] = stop_reason
         return block
+
+    @staticmethod
+    def _quantum_liveness_snapshot(trace: dict[str, Any]) -> dict[str, Any] | None:
+        scheduler = trace.get("scheduler")
+        scheduler = scheduler if isinstance(scheduler, dict) else {}
+        liveness = scheduler.get("quantumLivenessOptimization")
+        liveness = liveness if isinstance(liveness, dict) else {}
+        backend_responsive = scheduler.get("backendResponsiveExecution")
+        backend_responsive = backend_responsive if isinstance(backend_responsive, dict) else {}
+        liveness_guard = trace.get("livenessGuard")
+        liveness_guard = liveness_guard if isinstance(liveness_guard, dict) else {}
+        stop_policy = trace.get("livenessStopPolicy")
+        stop_policy = stop_policy if isinstance(stop_policy, dict) else {}
+        repair = trace.get("repair")
+        repair = repair if isinstance(repair, dict) else {}
+        responsive_boosted = scheduler.get("responsiveBoostedStepIds")
+        responsive_boosted = responsive_boosted if isinstance(responsive_boosted, list) else []
+        responsive_boosted_ids = [
+            _safe_identifier(item, limit=80)
+            for item in responsive_boosted
+            if str(item or "").strip()
+        ][:16]
+        score = _safe_number(liveness.get("score"))
+        qualified = bool(liveness.get("qualified", False)) or bool(backend_responsive.get("qualified", False))
+        backend_active = bool(backend_responsive.get("active", False))
+        guard_active = bool(liveness_guard.get("active", False))
+        repair_attempts = int(_safe_number(repair.get("repairAttempts")) or 0)
+        if (
+            score is None
+            and not qualified
+            and not backend_active
+            and not guard_active
+            and not responsive_boosted_ids
+            and repair_attempts <= 0
+        ):
+            return None
+        timeout_risk = str(liveness_guard.get("timeoutRisk", "") or "")
+        if timeout_risk not in {"low", "medium", "high"}:
+            timeout_risk = ""
+        effective_max_replans = _safe_number(liveness_guard.get("effectiveMaxReplans"))
+        return {
+            "strategy": "quantum_runtime_liveness_snapshot_v1",
+            "source": "desktop_runtime_progress",
+            "score": round(score, 4) if score is not None else None,
+            "qualified": qualified,
+            "backendResponsiveActive": backend_active,
+            "responsiveBoostedStepCount": len(responsive_boosted_ids),
+            "responsiveBoostedStepIds": responsive_boosted_ids,
+            "livenessGuardActive": guard_active,
+            "livenessGuardTimeoutRisk": timeout_risk,
+            "livenessGuardEffectiveMaxReplans": int(effective_max_replans or 0),
+            "repairAttemptCount": max(0, repair_attempts),
+            **(
+                {
+                    "stopPolicy": {
+                        "strategy": "quantum_liveness_stop_policy_v1",
+                        "action": str(stop_policy.get("action", "") or ""),
+                        "stopReason": str(stop_policy.get("stopReason", "") or ""),
+                        "timeoutRisk": str(stop_policy.get("timeoutRisk", "") or ""),
+                        "safeStopOnTimeout": bool(stop_policy.get("safeStopOnTimeout", False)),
+                    }
+                }
+                if stop_policy.get("strategy") == "quantum_liveness_stop_policy_v1"
+                else {}
+            ),
+        }
 
     def _emit_progress(self, execution_id: str, *, final: bool = False) -> None:
         emitter = self._progress_emitter
@@ -1192,6 +1368,7 @@ class ExecutorCore:
         authorize_step: Callable[[str, str, dict[str, Any], str, str], dict[str, Any] | None] | None = None,
         should_cancel: Callable[[], str | bool] | None = None,
         execution_id: str | None = None,
+        plan_preview: dict[str, Any] | None = None,
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
         execution_id = self.begin_execution(
             source=source,
@@ -1203,6 +1380,7 @@ class ExecutorCore:
                 if isinstance(step, dict)
             ),
             planned_steps=steps,
+            plan_preview=plan_preview,
             execution_id=execution_id,
         )
         outputs: list[str] = []
@@ -1298,6 +1476,36 @@ class ExecutorCore:
                         ]
                         artifacts.extend(previous_artifacts)
             journal.begin(execution_id, task_id=task_id, plan_signature=plan_signature)
+            dispatch_optimization = (
+                plan_preview.get("dispatchOptimization")
+                if isinstance(plan_preview, dict) and isinstance(plan_preview.get("dispatchOptimization"), dict)
+                else None
+            )
+            responsive_execution = (
+                plan_preview.get("responsiveExecution")
+                if isinstance(plan_preview, dict) and isinstance(plan_preview.get("responsiveExecution"), dict)
+                else None
+            )
+            liveness_guard = _safe_liveness_guard(
+                plan_preview.get("livenessGuard") if isinstance(plan_preview, dict) else None
+            )
+            if liveness_guard and liveness_guard.get("active") is True:
+                max_replans = max(
+                    int(max_replans),
+                    min(3, int(liveness_guard.get("maxReplans", 2) or 2)),
+                )
+            if liveness_guard:
+                with self._lock:
+                    current = self._current.get(execution_id)
+                    if isinstance(current, dict):
+                        trace = current.get("executionTrace")
+                        trace = dict(trace) if isinstance(trace, dict) else self._initial_execution_trace()
+                        trace["livenessGuard"] = {
+                            **dict(liveness_guard),
+                            "effectiveMaxReplans": int(max_replans),
+                        }
+                        current["executionTrace"] = trace
+                        self._persist()
             # Scheduler sözleşmesi: tamamlanmış adımlar giriş listesinde yer almaz;
             # bağımlılıkları completed_step_ids üzerinden karşılanmış sayılır.
             steps = schedule_steps(
@@ -1309,6 +1517,8 @@ class ExecutorCore:
                 metadata_provider=capability_metadata,
                 readiness_provider=lambda capability: capability_readiness(capability, state=scheduler_state),
                 completed_step_ids=completed_step_ids,
+                dispatch_optimization=dispatch_optimization,
+                responsive_execution=responsive_execution,
             )
             self._record_scheduler_plan(execution_id, steps)
             replans_used = 0
@@ -1376,6 +1586,8 @@ class ExecutorCore:
                                 metadata_provider=capability_metadata,
                                 readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
                                 completed_step_ids=completed_step_ids,
+                                dispatch_optimization=dispatch_optimization,
+                                responsive_execution=responsive_execution,
                             )
                             self._record_repair_attempt(execution_id, strategy="goal_replan", reason=message)
                             self.record_stage(execution_id, "replan", detail="goal_verification")
@@ -1606,6 +1818,48 @@ class ExecutorCore:
                         error = tool_result.get("error") if isinstance(tool_result.get("error"), dict) else {}
                         error_code = str(error.get("code") or "TOOL_EXECUTION_FAILED")
                         message = str(error.get("message") or tool_result.get("output") or "").strip() or "Araç güvenli şekilde tamamlanamadı."
+                        # Deterministik öz-düzeltme: körlemesine replan'dan ÖNCE,
+                        # yalnız açıkça geçici/onarılabilir hatalarda dar kapsamlı
+                        # bir düzeltmeyle aynı adımı yeniden dene. Belirsiz veya
+                        # izin hataları None/should_retry=False döner → mevcut
+                        # replan/fail yolu aynen sürer (regresyon yok).
+                        corrective = plan_corrective_retry(
+                            capability=capability,
+                            args={
+                                key: value
+                                for key, value in (step.get("args") or {}).items()
+                                if not str(key).startswith("_")
+                            },
+                            error_code=error_code,
+                            message=message,
+                            attempt=attempt,
+                        )
+                        if (
+                            corrective is not None
+                            and corrective.should_retry
+                            and attempt < CORRECTIVE_MAX_ATTEMPTS
+                        ):
+                            if corrective.adjusted_args:
+                                base_args = (
+                                    dict(step.get("args"))
+                                    if isinstance(step.get("args"), dict)
+                                    else {}
+                                )
+                                base_args.update(corrective.adjusted_args)
+                                step["args"] = base_args
+                            self._record_repair_attempt(
+                                execution_id,
+                                strategy=corrective.strategy,
+                                reason=corrective.reason,
+                            )
+                            self.record_stage(
+                                execution_id,
+                                "self_correct",
+                                detail=f"{capability}:{corrective.strategy}",
+                            )
+                            prefetched = None
+                            error_code = ""  # düzeltiliyor; hata kodu temizlenir
+                            continue  # retry döngüsü — attempt bir sonraki turda artar
                         self._record_step_result(
                             execution_id,
                             step_id=step_id,
@@ -1656,6 +1910,8 @@ class ExecutorCore:
                                     metadata_provider=capability_metadata,
                                     readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
                                     completed_step_ids=completed_step_ids,
+                                    dispatch_optimization=dispatch_optimization,
+                                    responsive_execution=responsive_execution,
                                 )
                                 self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=message)
                                 self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")
@@ -1735,6 +1991,8 @@ class ExecutorCore:
                                     metadata_provider=capability_metadata,
                                     readiness_provider=lambda name: capability_readiness(name, state=state_factory()),
                                     completed_step_ids=completed_step_ids,
+                                    dispatch_optimization=dispatch_optimization,
+                                    responsive_execution=responsive_execution,
                                 )
                                 self._record_repair_attempt(execution_id, strategy="replan_remaining", reason=verification.message)
                                 self.record_stage(execution_id, "replan", detail=f"{capability}:{error_code}")

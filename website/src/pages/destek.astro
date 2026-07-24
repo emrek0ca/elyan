@@ -1,0 +1,64 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+export const prerender = true;
+---
+
+<AppLayout title="Destek ve İletişim - Elyan">
+  <main class="min-h-screen bg-[var(--color-elyan-bg)] py-20 px-6 md:px-12">
+    <div class="max-w-3xl mx-auto space-y-12">
+      
+      <header class="space-y-4">
+        <span class="text-[var(--color-elyan-primary)] font-semibold tracking-wider text-sm uppercase">Müşteri Desteği</span>
+        <h1 class="text-4xl font-sans font-bold text-[var(--color-elyan-text)] tracking-tight">Destek ve İletişim</h1>
+        <p class="text-[17px] text-[var(--color-elyan-text-muted)] leading-relaxed font-medium">
+          Elyan kullanımıyla ilgili tüm sorularınız, teknik destek talepleriniz ve hesap yönetimi işlemleriniz için buradayız. Aşağıdaki adımları takip ederek sorunlarınıza çözüm bulabilir veya bizimle doğrudan iletişime geçebilirsiniz.
+        </p>
+      </header>
+
+      <div class="space-y-10">
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">Bize ulaşın</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Hesap, oturum, cihaz eşleştirme, faturalandırma, abonelik, gizlilik veya güvenlik soruları için support@elyan.dev adresine yazabilirsiniz. Destek taleplerinde mümkünse hesabınızla ilişkili e-posta adresini ve sorunun kısa açıklamasını paylaşın.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">Hesap ve veri silme</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Hesabınızı uygulama içindeki Ayarlar veya Hesap bölümünden silebilirsiniz. Uygulamaya erişemiyorsanız /tr/data-deletion sayfasındaki talimatları izleyebilir ya da support@elyan.dev adresine silme talebi gönderebilirsiniz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">Cihaz eşleştirme ve görev akışı</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Desktop ve Mobile aynı hesapla giriş yapmalı, desktop runtime hazır görünmeli ve internet bağlantısı açık olmalıdır. QR eşleştirme, görev gönderme, task status veya sonuç görüntüleme sorunlarında ekran görüntüsü ve hata zamanını destek talebine ekleyin.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">Abonelik ve mağaza işlemleri</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>App Store veya Google Play üzerinden alınan abonelikler ilgili mağazanın abonelik yönetimi ekranından iptal edilir, yenilenir veya yönetilir. Elyan destek ekibi hesap durumunu inceleyebilir; mağaza tarafından işlenen ödeme yöntemlerini veya tam kart bilgilerini göremez.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">Dosya, belge ve görsel işleme</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>PDF, belge, tablo veya görsel yanıtlarında eksik okuma, yanlış tablo çıkarımı ya da hatalı özet görürseniz dosya türünü, yaklaşık boyutu ve beklenen sonucu paylaşın. Özel veri içeren örnekleri göndermeden önce gereksiz kişisel alanları çıkarmanızı öneririz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">Güvenlik bildirimi</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Hesabınızda yetkisiz erişim, şüpheli cihaz, veri sızıntısı şüphesi veya güvenlik açığı fark ederseniz support@elyan.dev adresine \"Security\" başlığıyla yazın. Güvenlik bildirimleri öncelikli değerlendirilir.</p>
+          </div>
+        </section>
+      </div>
+      
+    </div>
+  </main>
+</AppLayout>

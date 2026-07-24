@@ -71,6 +71,100 @@ def test_executor_core_retries_verification_for_artifact_outputs(
     assert runtime_state["lastExecutionTrace"]["stepStates"][0]["verificationStatus"] == "repaired"
 
 
+def test_executor_trace_includes_quantum_schedule_benchmark(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+
+    def execute_step(capability: str, _args: dict[str, object], _state: dict[str, object], _source: str):
+        return {
+            "ok": True,
+            "output": capability,
+            "result": {"kind": capability},
+            "artifacts": [],
+        }, []
+
+    ok, _content, _events, error_code, _structured_result, _artifacts = executor.execute_plan_steps(
+        steps=[
+            {"id": "blocked", "capability": "blocked_read", "priority": "urgent"},
+            {"id": "ready", "capability": "text_analyze", "priority": "high"},
+        ],
+        state_factory=lambda: {
+            "runtime": {
+                "capabilityStates": {
+                    "blocked_read": {"ready": False, "available": False, "errorCode": "DEPENDENCY_UNAVAILABLE"},
+                    "text_analyze": {"ready": True, "available": True},
+                }
+            }
+        },
+        execute_step=execute_step,
+        source="confirmed_plan",
+        plan_preview={
+            "summary": "Quantum-guided dispatch",
+            "dispatchOptimization": {
+                "strategy": "quantum_guided_dispatch_v1",
+                "source": "backend_neural_readiness",
+                "active": True,
+                "score": 0.87,
+                "classicalBaselineScore": 0.73,
+                "advantageScore": 0.14,
+                "qualified": True,
+                "benchmarkSource": "measured",
+                "admissionWeight": 0.07,
+                "metric": "dispatch_schedule_quality",
+            },
+            "responsiveExecution": {
+                "strategy": "quantum_liveness_guard_v1",
+                "source": "backend_neural_readiness",
+                "active": True,
+                "livenessScore": 0.82,
+                "qualified": True,
+                "benchmarkSource": "measured",
+                "boostWeight": 0.06,
+                "metric": "responsive_execution_liveness",
+            },
+            "livenessGuard": {
+                "strategy": "quantum_replan_liveness_guard_v1",
+                "source": "backend_neural_readiness",
+                "active": True,
+                "timeoutRisk": "medium",
+                "maxReplans": 3,
+                "earlyProgressCheckpoint": True,
+                "safeStopOnTimeout": True,
+                "metric": "responsive_execution_liveness",
+            },
+        },
+    )
+
+    trace = state_store.snapshot()["runtime"]["executor"]["lastExecutionTrace"]
+    quantum = trace["scheduler"]["quantumOptimization"]
+    liveness = trace["scheduler"]["quantumLivenessOptimization"]
+    backend_hint = trace["scheduler"]["backendDispatchOptimization"]
+    responsive_hint = trace["scheduler"]["backendResponsiveExecution"]
+    guard_hint = trace["scheduler"]["backendLivenessGuard"]
+    assert ok is False
+    assert error_code == "CAPABILITY_NOT_READY"
+    assert trace["scheduler"]["orderedStepIds"] == ["ready", "blocked"]
+    assert backend_hint["strategy"] == "quantum_guided_dispatch_v1"
+    assert backend_hint["admissionWeight"] == 0.07
+    assert responsive_hint["strategy"] == "quantum_liveness_guard_v1"
+    assert responsive_hint["boostWeight"] == 0.06
+    assert guard_hint["strategy"] == "quantum_replan_liveness_guard_v1"
+    assert trace["livenessGuard"]["effectiveMaxReplans"] == 3
+    assert trace["scheduler"]["quantumBoostedStepIds"] == ["ready"]
+    assert trace["scheduler"]["responsiveBoostedStepIds"] == ["ready"]
+    assert quantum["metric"] == "dispatch_schedule_quality"
+    assert quantum["backend"] == "elyan_quantum_scheduler"
+    assert quantum["score"] > quantum["classicalBaselineScore"]
+    assert quantum["qualified"] is True
+    assert liveness["metric"] == "responsive_execution_liveness"
+    assert liveness["backend"] == "elyan_quantum_liveness_scheduler"
+    assert liveness["parallelReadCandidateCount"] == 1
+    assert liveness["quantumBoostedStepCount"] == 1
+
+
 def test_executor_core_status_payload_exposes_router_and_capability_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -338,6 +432,51 @@ def test_executor_react_gives_up_when_replan_budget_exhausted(
     assert ok is False
     assert error_code == "NETWORK_FAILED"
     assert replan_count["n"] == 2  # bütçe kadar denendi, sonra iptal
+
+
+def test_liveness_guard_extends_replan_budget_within_safe_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    executor = ExecutorCore()
+
+    def execute_step(_capability, _args, _state, _source):
+        return {"ok": False, "error": {"code": "NETWORK_FAILED", "message": "ağ yok"}}, []
+
+    replan_count = {"n": 0}
+
+    def replan_fn(_context):
+        replan_count["n"] += 1
+        return [{"capability": "web_research", "args": {"query": "x"}}]
+
+    ok, _content, _events, error_code, _structured, _artifacts = executor.execute_plan_steps(
+        steps=[{"capability": "web_research", "args": {"query": "x"}}],
+        state_factory=state_store.snapshot,
+        execute_step=execute_step,
+        source="confirmed_plan",
+        replan_fn=replan_fn,
+        max_replans=1,
+        plan_preview={
+            "livenessGuard": {
+                "strategy": "quantum_replan_liveness_guard_v1",
+                "source": "backend_neural_readiness",
+                "active": True,
+                "timeoutRisk": "high",
+                "maxReplans": 9,
+                "earlyProgressCheckpoint": True,
+                "safeStopOnTimeout": True,
+                "metric": "responsive_execution_liveness",
+            }
+        },
+    )
+
+    trace = state_store.snapshot()["runtime"]["executor"]["lastExecutionTrace"]
+    assert ok is False
+    assert error_code == "NETWORK_FAILED"
+    assert replan_count["n"] == 3
+    assert trace["livenessGuard"]["effectiveMaxReplans"] == 3
+    assert trace["livenessGuard"]["maxReplans"] == 3
 
 
 def test_executor_react_no_replan_fn_keeps_static_abort(

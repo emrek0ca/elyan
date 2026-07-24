@@ -1621,6 +1621,67 @@ def test_quantum_model_problem_accepts_structured_optimization_payload(
     assert model["qubo"]["capacity"] == 5.0
 
 
+def test_quantum_run_experiment_uses_qiskit_aer_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("qiskit")
+    pytest.importorskip("qiskit_aer")
+    _isolate_state(monkeypatch, tmp_path)
+    import runtime.capability_registry as registry
+
+    model_result = registry.run_capability(
+        "quantum_model_problem",
+        {
+            "prompt": "A değer 10 maliyet 4; B değer 7 maliyet 3; C değer 5 maliyet 2; kapasite 5",
+            "problemClass": "optimization",
+        },
+        state_store.snapshot(),
+    )
+    assert model_result["ok"] is True
+
+    experiment = registry.run_capability(
+        "quantum_run_experiment",
+        {
+            "prompt": "A değer 10 maliyet 4; B değer 7 maliyet 3; C değer 5 maliyet 2; kapasite 5",
+            "algorithm": "qaoa",
+            "shots": 128,
+            "_previousResult": model_result["result"],
+        },
+        state_store.snapshot(),
+    )
+
+    assert experiment["ok"] is True
+    payload = experiment["result"]["experiment"]
+    assert payload["backend"] == "qiskit_aer_qaoa_simulator"
+    assert payload["measuredByAer"] is True
+    assert payload["fallbackReason"] is None
+    assert payload["optimizer"] == "bounded_grid_search"
+    assert payload["circuit"]["qubits"] == 3
+    assert payload["bestBitstring"] == "011"
+    assert payload["bestAssignment"] == {"x1": 0, "x2": 1, "x3": 1}
+
+    baseline = registry.run_capability(
+        "quantum_compare_classical",
+        {
+            "prompt": "A değer 10 maliyet 4; B değer 7 maliyet 3; C değer 5 maliyet 2; kapasite 5",
+            "_previousResult": experiment["result"],
+        },
+        state_store.snapshot(),
+    )
+
+    assert baseline["ok"] is True
+    attestation = baseline["result"]["quantumBenchmarkAttestation"]
+    assert attestation["version"] == "elyan_quantum_benchmark_v1"
+    assert attestation["producer"] == "elyan_quantum_benchmark_worker"
+    assert attestation["metric"] == "quantum_optimization_gap"
+    assert attestation["source"] == "measured"
+    assert attestation["backend"] == "qiskit_aer_qaoa_simulator"
+    assert len(attestation["datasetFingerprint"]) == 64
+    assert attestation["sampleCount"] == 128
+    assert attestation["score"] == 1.0
+
+
 def test_executor_dependency_payload_preserves_output_and_structured_result() -> None:
     from runtime.executor_core import _dependency_payload
 

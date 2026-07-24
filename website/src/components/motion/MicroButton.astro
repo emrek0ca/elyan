@@ -1,0 +1,98 @@
+---
+interface Props {
+  type?: 'magnetic' | 'slide' | 'pulse';
+  class?: string;
+  href?: string;
+  as?: 'button' | 'a';
+}
+
+const { 
+  type = 'magnetic', 
+  class: className = '', 
+  href,
+  as: Component = href ? 'a' : 'button' 
+} = Astro.props;
+
+// For component attributes
+const props = href ? { href } : {};
+---
+
+<Component 
+  {...props} 
+  class={`micro-btn micro-btn-${type} ${className}`} 
+  data-micro-type={type}
+>
+  <div class="micro-btn-content w-full h-full flex items-center justify-center">
+    <slot />
+  </div>
+</Component>
+
+<script>
+  import { gsap } from 'gsap';
+
+  // Initialize magnetic buttons
+  const initMagneticButtons = () => {
+    const magneticBtns = document.querySelectorAll('.micro-btn-magnetic');
+    
+    magneticBtns.forEach(btn => {
+      const content = btn.querySelector('.micro-btn-content');
+      if (!content) return;
+
+      btn.addEventListener('mousemove', (e) => {
+        const rect = (btn as HTMLElement).getBoundingClientRect();
+        const x = ((e as MouseEvent).clientX - rect.left) - (rect.width / 2);
+        const y = ((e as MouseEvent).clientY - rect.top) - (rect.height / 2);
+
+        // Move the button boundary slightly
+        gsap.to(btn, {
+          x: x * 0.2,
+          y: y * 0.2,
+          duration: 0.5,
+          ease: 'power2.out'
+        });
+
+        // Move the content inside slightly more for parallax
+        gsap.to(content, {
+          x: x * 0.1,
+          y: y * 0.1,
+          duration: 0.5,
+          ease: 'power2.out'
+        });
+      });
+
+      btn.addEventListener('mouseleave', () => {
+        gsap.to([btn, content], {
+          x: 0,
+          y: 0,
+          duration: 0.5,
+          ease: 'elastic.out(1, 0.3)'
+        });
+      });
+    });
+  };
+
+  // Initialize slide buttons
+  const initSlideButtons = () => {
+    // Basic CSS handles slide, but we can do it via GSAP if we want more springiness
+  };
+
+  // Run on load
+  initMagneticButtons();
+  initSlideButtons();
+</script>
+
+<style>
+  .micro-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    will-change: transform;
+    /* Eliminate generic browser focus/tap styles to keep it premium */
+    -webkit-tap-highlight-color: transparent;
+  }
+  .micro-btn-content {
+    will-change: transform;
+  }
+</style>

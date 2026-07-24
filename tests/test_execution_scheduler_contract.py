@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from runtime import state_store
-from runtime.execution_scheduler import parallel_read_batch, schedule_steps, schedule_tasks
+from runtime.execution_scheduler import (
+    parallel_read_batch,
+    quantum_liveness_benchmark,
+    quantum_schedule_benchmark,
+    schedule_steps,
+    schedule_tasks,
+)
 from runtime.executor_core import ExecutorCore
 
 
@@ -44,6 +50,132 @@ def test_scheduler_order_is_dependency_safe_and_deterministic() -> None:
         "dependent",
         "blocked",
     ]
+
+
+def test_quantum_schedule_benchmark_scores_scheduler_improvement_without_reordering() -> None:
+    steps = [
+        {"id": "blocked", "capability": "blocked_read", "priority": "urgent"},
+        {"id": "fast", "capability": "read_due", "priority": "high", "deadlineAt": "2026-07-20T00:00:00Z"},
+        {"id": "old", "capability": "read_old", "priority": "normal", "queuedAt": "2026-01-01T00:00:00Z"},
+    ]
+
+    ordered = schedule_steps(steps, metadata_provider=_metadata, readiness_provider=_ready)
+    benchmark = quantum_schedule_benchmark(ordered)
+
+    assert [step["id"] for step in ordered] == ["fast", "old", "blocked"]
+    assert benchmark["metric"] == "dispatch_schedule_quality"
+    assert benchmark["producer"] == "elyan_quantum_benchmark_worker"
+    assert benchmark["backend"] == "elyan_quantum_scheduler"
+    assert len(benchmark["datasetFingerprint"]) == 64
+    assert benchmark["sampleCount"] == 32
+    assert benchmark["score"] > benchmark["classicalBaselineScore"]
+    assert benchmark["qualified"] is True
+
+
+def test_quantum_liveness_benchmark_scores_responsive_schedule_without_private_args() -> None:
+    steps = [
+        {"id": "write_first", "capability": "write_file", "priority": "normal", "args": {"path": "/private/a.txt"}},
+        {"id": "safe_read", "capability": "read_doc", "priority": "normal", "args": {"path": "/private/b.txt"}},
+        {"id": "blocked", "capability": "blocked_read", "priority": "normal"},
+    ]
+
+    ordered = schedule_steps(
+        steps,
+        metadata_provider=_metadata,
+        readiness_provider=_ready,
+        dispatch_optimization={
+            "strategy": "quantum_guided_dispatch_v1",
+            "benchmarkSource": "measured",
+            "active": True,
+            "admissionWeight": 0.07,
+        },
+    )
+    benchmark = quantum_liveness_benchmark(ordered)
+
+    assert [step["id"] for step in ordered] == ["safe_read", "write_first", "blocked"]
+    assert benchmark["metric"] == "responsive_execution_liveness"
+    assert benchmark["backend"] == "elyan_quantum_liveness_scheduler"
+    assert benchmark["parallelReadCandidateCount"] == 1
+    assert benchmark["writeStepCount"] == 1
+    assert benchmark["blockedStepCount"] == 1
+    assert benchmark["quantumBoostedStepCount"] == 1
+    assert len(benchmark["datasetFingerprint"]) == 64
+    assert "/private" not in str(benchmark)
+
+
+def test_quantum_dispatch_optimization_boosts_only_safe_ready_read_ties() -> None:
+    optimization = {
+        "strategy": "quantum_guided_dispatch_v1",
+        "benchmarkSource": "measured",
+        "active": True,
+        "admissionWeight": 0.07,
+    }
+
+    ordered = schedule_steps(
+        [
+            {"id": "planner_first", "capability": "write_file", "priority": "normal"},
+            {"id": "safe_read", "capability": "read_doc", "priority": "normal"},
+            {"id": "blocked", "capability": "blocked_read", "priority": "normal"},
+        ],
+        metadata_provider=_metadata,
+        readiness_provider=_ready,
+        dispatch_optimization=optimization,
+    )
+
+    assert [step["id"] for step in ordered] == ["safe_read", "planner_first", "blocked"]
+    by_id = {step["id"]: step for step in ordered}
+    assert by_id["safe_read"]["_scheduler"]["quantumBoost"] == 0.07
+    assert "quantumBoost" not in by_id["planner_first"]["_scheduler"]
+    assert "quantumBoost" not in by_id["blocked"]["_scheduler"]
+
+
+def test_responsive_execution_boosts_only_safe_ready_read_ties() -> None:
+    responsive_execution = {
+        "strategy": "quantum_liveness_guard_v1",
+        "benchmarkSource": "measured",
+        "active": True,
+        "boostWeight": 0.06,
+    }
+
+    ordered = schedule_steps(
+        [
+            {"id": "planner_first", "capability": "write_file", "priority": "normal"},
+            {"id": "safe_read", "capability": "read_doc", "priority": "normal"},
+            {"id": "blocked", "capability": "blocked_read", "priority": "normal"},
+        ],
+        metadata_provider=_metadata,
+        readiness_provider=_ready,
+        responsive_execution=responsive_execution,
+    )
+
+    assert [step["id"] for step in ordered] == ["safe_read", "planner_first", "blocked"]
+    by_id = {step["id"]: step for step in ordered}
+    assert by_id["safe_read"]["_scheduler"]["responsiveBoost"] == 0.06
+    assert by_id["safe_read"]["_scheduler"]["responsiveExecution"] == "quantum_liveness_guard_v1"
+    assert "responsiveBoost" not in by_id["planner_first"]["_scheduler"]
+    assert "responsiveBoost" not in by_id["blocked"]["_scheduler"]
+
+
+def test_quantum_dispatch_optimization_does_not_cross_priority_or_dependencies() -> None:
+    optimization = {
+        "strategy": "quantum_guided_dispatch_v1",
+        "benchmarkSource": "measured",
+        "active": True,
+        "admissionWeight": 0.15,
+    }
+
+    ordered = schedule_steps(
+        [
+            {"id": "high", "capability": "read_high", "priority": "high"},
+            {"id": "base", "capability": "read_base", "priority": "normal"},
+            {"id": "dependent", "capability": "read_dep", "priority": "normal", "dependsOn": ["base"]},
+        ],
+        metadata_provider=_metadata,
+        readiness_provider=_ready,
+        dispatch_optimization=optimization,
+    )
+
+    assert [step["id"] for step in ordered] == ["high", "base", "dependent"]
 
 
 def test_template_reference_infers_implicit_dependency_without_explicit_dependson() -> None:

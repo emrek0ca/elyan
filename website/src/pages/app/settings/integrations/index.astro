@@ -1,0 +1,22 @@
+---
+import AppLayout from '../../../../layouts/AppLayout.astro';
+import SettingsSidebar from '../../../../components/app/SettingsSidebar.astro';
+export const prerender = false;
+---
+
+<AppLayout title="Integrations - Elyan" bodyData={{ settingsPage: 'integrations' }}>
+  <div class="flex min-h-screen w-full bg-[var(--color-elyan-bg)] max-md:flex-col">
+    <SettingsSidebar active="integrations" />
+    <main class="flex-1 overflow-y-auto"><div class="max-w-3xl mx-auto py-12 px-8 max-md:px-4 max-md:py-8">
+      <h1 class="text-2xl font-bodoni font-medium text-[var(--color-elyan-text)] tracking-tight mb-2">Integrations</h1>
+      <p class="mb-8 text-[13px] text-[var(--color-elyan-text-muted)]">Connect apps through Elyan. Provider credentials never enter browser storage.</p>
+      <p id="integrations-status" aria-live="polite" class="hidden mb-5 text-sm font-medium"></p>
+      <div id="integrations-list" class="grid grid-cols-2 gap-4 max-sm:grid-cols-1" aria-live="polite"><p class="text-sm text-[var(--color-elyan-text-muted)]">Loading integrations…</p></div>
+    </div></main>
+  </div>
+</AppLayout>
+
+<script>
+  import { initIntegrations } from '../../../../lib/client/integrations-controller';
+  void initIntegrations();
+</script>

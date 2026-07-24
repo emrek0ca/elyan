@@ -1,0 +1,21 @@
+---
+interface Props {
+  class?: string;
+}
+
+const { class: className = '' } = Astro.props;
+---
+
+<div class={`focus-blur-container ${className}`}>
+  <slot />
+</div>
+
+<style is:global>
+  .focus-blur-container:hover > .focus-blur-item:not(:hover) {
+    filter: blur(2px);
+    opacity: 0.6;
+  }
+  .focus-blur-item {
+    transition: filter 0.3s ease-out, opacity 0.3s ease-out;
+  }
+</style>

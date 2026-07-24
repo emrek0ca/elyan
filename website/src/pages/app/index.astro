@@ -1,0 +1,105 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro';
+import { Image } from 'astro:assets';
+import logoImage from '../../assets/logo.png';
+
+export const prerender = false;
+---
+
+<AppLayout title="Elyan Chat">
+  <div class="flex h-screen bg-[var(--color-elyan-bg)] text-[var(--color-elyan-text)] font-sans overflow-hidden">
+    <aside id="app-sidebar" class="max-md:hidden flex flex-col w-[260px] bg-transparent border-r border-[var(--color-elyan-outline)]/55 transition-transform duration-300">
+      <div class="p-3">
+        <button id="new-chat" type="button" class="w-full flex items-center justify-between px-3 py-2.5 hover:bg-[var(--color-elyan-surface-muted)] transition-colors rounded-[20px] text-[14px] font-medium text-[var(--color-elyan-text)] active:scale-[0.99]">
+          <div class="flex items-center gap-2.5">
+            <Image src={logoImage} alt="Elyan Logo" width={24} height={24} class="w-6 h-6 rounded-md object-contain" />
+            <span>New chat</span>
+          </div>
+          <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-[var(--color-elyan-text-muted)]"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>
+        </button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto px-3 py-2 custom-scrollbar">
+        <div class="text-[11px] font-semibold text-[var(--color-elyan-text-muted)] mb-2 mt-4 px-3">Today</div>
+        <div id="session-list-active" aria-live="polite"></div>
+        <div id="archived-heading" class="hidden text-[11px] font-semibold text-[var(--color-elyan-text-muted)] mb-2 mt-6 px-3">Archived</div>
+        <div id="session-list-archived" aria-live="polite"></div>
+      </div>
+
+      <div class="p-3">
+        <a id="sidebar-profile" href="/app/settings" class="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-[var(--color-elyan-surface-muted)] rounded-[20px] transition-colors active:scale-[0.99]">
+          <div id="sidebar-user-initials" class="w-8 h-8 rounded-full bg-[var(--color-elyan-primary-soft)] flex items-center justify-center text-xs font-semibold text-[var(--color-elyan-primary-dark)]">E</div>
+          <div class="flex-1 text-left truncate">
+            <div id="sidebar-user-name" class="text-[14px] font-medium text-[var(--color-elyan-text)] leading-tight">Elyan user</div>
+            <div id="sidebar-user-plan" class="text-[12px] text-[var(--color-elyan-text-muted)] truncate">Settings</div>
+          </div>
+        </a>
+      </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col relative h-screen bg-[var(--color-elyan-bg)] min-w-0">
+      <header class="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-12 items-center justify-between px-3 md:hidden">
+        <button id="mobile-menu" type="button" aria-label="Open conversations" class="pointer-events-auto p-2 text-[var(--color-elyan-text-muted)] hover:bg-[var(--color-elyan-surface-muted)] rounded-full active:scale-95">
+          <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"></line><line x1="4" x2="20" y1="6" y2="6"></line><line x1="4" x2="20" y1="18" y2="18"></line></svg>
+        </button>
+        <span id="brain-state" class="sr-only">connecting</span>
+        <div aria-hidden="true"></div>
+        <a href="/app/settings" aria-label="Open settings" class="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-elyan-text-muted)] hover:bg-[var(--color-elyan-surface-muted)] active:scale-95">
+          <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.36.36.68.65.93.3.25.68.39 1.07.4H21v4h-.09a1.7 1.7 0 0 0-1.51.67Z"></path></svg>
+        </a>
+      </header>
+
+      <div id="app-notice" role="status" aria-live="polite" class="hidden absolute top-4 left-1/2 z-40 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-[20px] border border-[var(--color-elyan-outline)] bg-[var(--color-elyan-surface)] px-4 py-3 text-sm text-[var(--color-elyan-text)] shadow-[0_8px_30px_rgba(23,23,23,0.08)] data-[tone=error]:border-red-200 data-[tone=error]:text-red-700"></div>
+
+      <div class="flex-1 min-h-0 overflow-y-auto w-full custom-scrollbar overscroll-contain" id="messages-container">
+        <div class="mx-auto w-full max-w-[1180px] px-4 sm:px-6 lg:px-10 pt-0 space-y-8 md:space-y-10 pb-8 md:pb-10" id="messages-list" aria-live="polite"></div>
+      </div>
+
+      <div class="shrink-0 w-full pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-5 pt-2 bg-transparent">
+        <div class="mx-auto w-full max-w-[1180px] px-3 sm:px-6 lg:px-10 relative">
+          <form id="chat-form" class="relative bg-[var(--color-elyan-surface-muted)] rounded-[28px] p-2 shadow-[0_1px_2px_rgba(23,23,23,0.05)] transition-colors focus-within:bg-[var(--color-elyan-surface)] focus-within:outline-none focus-within:ring-0">
+            <input id="attachment-input" type="file" multiple class="sr-only" aria-label="Attach files" />
+            <div id="attachment-tray" class="hidden px-2 pb-2" aria-live="polite"></div>
+            <div id="composer-menu" class="hidden absolute bottom-full left-0 mb-2 w-full rounded-[24px] bg-[var(--color-elyan-surface)] p-1.5 shadow-[0_14px_42px_rgba(23,23,23,0.10)] ring-1 ring-[var(--color-elyan-outline)]/80 md:w-[420px]" role="menu" aria-label="Elyan actions">
+              <button id="composer-attach-menu-button" type="button" role="menuitem" class="mb-1 flex w-full items-center gap-2 rounded-[18px] bg-[var(--color-elyan-primary-soft)] px-2.5 py-2 text-left text-[13px] font-medium text-[var(--color-elyan-primary-dark)] hover:bg-[var(--color-elyan-surface-muted)] active:scale-95">
+                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-elyan-surface)] text-[var(--color-elyan-primary-dark)]">
+                  <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                </span>
+                <span>Attach files</span>
+              </button>
+              <div class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-elyan-text-muted)]">Capabilities</div>
+              <div class="grid gap-1 sm:grid-cols-2">
+                <button type="button" role="menuitem" data-composer-capability="browser" class="rounded-[16px] px-2.5 py-1.5 text-left text-[13px] text-[var(--color-elyan-text)] hover:bg-[var(--color-elyan-surface-muted)] active:scale-95">Browser</button>
+                <button type="button" role="menuitem" data-composer-capability="documents" class="rounded-[16px] px-2.5 py-1.5 text-left text-[13px] text-[var(--color-elyan-text)] hover:bg-[var(--color-elyan-surface-muted)] active:scale-95">Documents</button>
+                <button type="button" role="menuitem" data-composer-capability="connectors" class="rounded-[16px] px-2.5 py-1.5 text-left text-[13px] text-[var(--color-elyan-text)] hover:bg-[var(--color-elyan-surface-muted)] active:scale-95">Connectors</button>
+                <button type="button" role="menuitem" data-composer-capability="desktop_runtime" class="rounded-[16px] px-2.5 py-1.5 text-left text-[13px] text-[var(--color-elyan-text)] hover:bg-[var(--color-elyan-surface-muted)] active:scale-95">Desktop</button>
+                <button type="button" role="menuitem" data-composer-capability="math" class="rounded-[16px] px-2.5 py-1.5 text-left text-[13px] text-[var(--color-elyan-text)] hover:bg-[var(--color-elyan-surface-muted)] active:scale-95">Math</button>
+                <button type="button" role="menuitem" data-composer-capability="skills" class="rounded-[16px] px-2.5 py-1.5 text-left text-[13px] text-[var(--color-elyan-text)] hover:bg-[var(--color-elyan-surface-muted)] active:scale-95">Skills</button>
+              </div>
+              <div id="composer-dynamic-capabilities" class="mt-1.5 hidden border-t border-[var(--color-elyan-outline)]/70 pt-1.5">
+                <div class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-elyan-text-muted)]">Connected</div>
+                <div id="composer-dynamic-capability-list" class="grid gap-1 sm:grid-cols-2"></div>
+              </div>
+            </div>
+            <div id="capability-tray" class="hidden px-2 pb-2" aria-live="polite"></div>
+            <div class="flex items-end gap-2 pl-1.5 md:pl-2">
+              <button id="composer-menu-button" type="button" aria-expanded="false" aria-controls="composer-menu" aria-label="Add files or capabilities" class="mb-1 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-elyan-primary-soft)] text-[var(--color-elyan-primary-dark)] transition-colors hover:bg-[var(--color-elyan-surface-muted)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9daf96]/45" title="Add files or capabilities">
+                <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+              </button>
+              <label for="chat-input" class="sr-only">Message Elyan</label>
+              <textarea id="chat-input" rows="1" maxlength="20000" class="flex-1 max-h-[170px] bg-transparent border-0 resize-none py-2.5 px-1 text-[15px] text-[var(--color-elyan-text)] placeholder:text-[var(--color-elyan-text-muted)] custom-scrollbar leading-relaxed outline-none ring-0 shadow-none focus:border-transparent focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0" placeholder="Message Elyan..." required></textarea>
+              <button id="chat-submit" type="submit" aria-label="Send message" class="w-9 h-9 flex-shrink-0 flex items-center justify-center bg-[var(--color-elyan-text)] text-white rounded-full hover:bg-[var(--color-elyan-primary-dark)] active:scale-95 transition-colors mb-1 shadow-sm disabled:cursor-wait disabled:opacity-50">
+                <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </main>
+  </div>
+</AppLayout>
+
+<script>
+  import { initChatApp } from '../../lib/client/chat-controller';
+  void initChatApp();
+</script>

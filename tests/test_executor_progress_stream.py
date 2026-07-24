@@ -64,6 +64,55 @@ def test_no_emitter_is_safe(tmp_path) -> None:
     assert ok is True
 
 
+def test_progress_includes_quantum_liveness_snapshot(tmp_path) -> None:
+    ex = ExecutorCore()
+    captured: list[dict] = []
+    ex.set_progress_emitter(lambda cid, block: captured.append(block))
+    source_file = tmp_path / "p.txt"
+    source_file.write_text("icerik", encoding="utf-8")
+
+    ex.execute_plan_steps(
+        steps=[
+            {"id": "read_a", "capability": "file_read", "args": {"path": str(source_file)}},
+            {"id": "read_b", "capability": "web_research", "args": {"query": "elyan"}},
+        ],
+        state_factory=lambda: {},
+        execute_step=_ok_step,
+        source="confirmed_plan",
+        conversation_id="conv_quantum_live",
+        plan_preview={
+            "responsiveExecution": {
+                "strategy": "quantum_liveness_guard_v1",
+                "source": "backend_neural_readiness",
+                "active": True,
+                "qualified": True,
+                "livenessScore": 0.82,
+                "boostWeight": 0.06,
+                "metric": "responsive_execution_liveness",
+            },
+            "livenessGuard": {
+                "strategy": "quantum_replan_liveness_guard_v1",
+                "source": "backend_neural_readiness",
+                "active": True,
+                "timeoutRisk": "medium",
+                "maxReplans": 3,
+                "earlyProgressCheckpoint": True,
+                "safeStopOnTimeout": True,
+                "metric": "responsive_execution_liveness",
+            },
+        },
+    )
+
+    quantum = captured[-1]["quantumLiveness"]
+    assert quantum["strategy"] == "quantum_runtime_liveness_snapshot_v1"
+    assert quantum["source"] == "desktop_runtime_progress"
+    assert quantum["backendResponsiveActive"] is True
+    assert quantum["livenessGuardActive"] is True
+    assert quantum["livenessGuardTimeoutRisk"] == "medium"
+    assert quantum["livenessGuardEffectiveMaxReplans"] == 3
+    assert quantum["qualified"] is True
+
+
 def test_progress_marks_failure() -> None:
     ex = ExecutorCore()
     captured: list[dict] = []
@@ -139,6 +188,53 @@ def test_cancel_after_last_step_checkpoint_blocks_late_success() -> None:
     assert captured[-1]["status"] == "canceled"
     assert captured[-1]["stopReason"] == "execution_cancelled"
     assert captured[-1]["steps"][0]["status"] == "canceled"
+
+
+def test_progress_records_quantum_liveness_stop_policy_on_timeout() -> None:
+    ex = ExecutorCore()
+    captured: list[dict] = []
+    ex.set_progress_emitter(lambda cid, block: captured.append(block))
+    should_timeout = {"value": False}
+
+    def _first_step_then_timeout(cap, args, state, source):
+        should_timeout["value"] = True
+        return {"ok": True, "output": "ilk adım tamam", "result": {"kind": cap}, "artifacts": []}, []
+
+    ok, content, _events, error_code, _result, _artifacts = ex.execute_plan_steps(
+        steps=[
+            {"id": "read", "capability": "document_read", "args": {"text": "x"}},
+            {"id": "write", "capability": "document_write", "args": {"prompt": "x"}, "dependsOn": ["read"]},
+        ],
+        state_factory=lambda: {},
+        execute_step=_first_step_then_timeout,
+        source="confirmed_plan",
+        conversation_id="conv_timeout",
+        should_cancel=lambda: "task_execution_timeout" if should_timeout["value"] else "",
+        plan_preview={
+            "livenessGuard": {
+                "strategy": "quantum_replan_liveness_guard_v1",
+                "source": "backend_neural_readiness",
+                "active": True,
+                "timeoutRisk": "high",
+                "maxReplans": 3,
+                "earlyProgressCheckpoint": True,
+                "safeStopOnTimeout": True,
+                "metric": "responsive_execution_liveness",
+            },
+        },
+    )
+
+    assert ok is False
+    assert content == "Görev zaman aşımı nedeniyle güvenli adım sınırında durduruldu."
+    assert error_code == "TASK_EXECUTION_TIMEOUT"
+    assert captured[-1]["status"] == "canceled"
+    assert captured[-1]["stopReason"] == "execution_timeout"
+    stop_policy = captured[-1]["quantumLiveness"]["stopPolicy"]
+    assert stop_policy["strategy"] == "quantum_liveness_stop_policy_v1"
+    assert stop_policy["action"] == "safe_stop_timeout"
+    assert stop_policy["stopReason"] == "execution_timeout"
+    assert stop_policy["timeoutRisk"] == "high"
+    assert stop_policy["safeStopOnTimeout"] is True
 
 
 def test_progress_uses_human_labels_for_professional_and_decision_steps() -> None:

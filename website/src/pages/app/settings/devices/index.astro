@@ -1,0 +1,24 @@
+---
+import AppLayout from '../../../../layouts/AppLayout.astro';
+import SettingsSidebar from '../../../../components/app/SettingsSidebar.astro';
+export const prerender = false;
+---
+
+<AppLayout title="Devices - Elyan" bodyData={{ settingsPage: 'devices' }}>
+  <div class="flex min-h-screen w-full bg-[var(--color-elyan-bg)] max-md:flex-col">
+    <SettingsSidebar active="devices" />
+    <main class="flex-1 overflow-y-auto"><div class="max-w-2xl mx-auto py-12 px-8 max-md:px-4 max-md:py-8">
+      <h1 class="text-2xl font-bodoni font-medium text-[var(--color-elyan-text)] tracking-tight mb-8">Devices & Desktop</h1>
+      <p id="settings-status" aria-live="polite" class="hidden mb-5 text-sm font-medium"></p>
+      <div class="space-y-8">
+        <section class="bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6"><h2 class="text-sm font-semibold mb-1">Pair a Desktop</h2><p class="text-[13px] text-[var(--color-elyan-text-muted)] mb-4">Enter the short code shown by the Elyan desktop runtime.</p><form id="pairing-form" class="flex gap-3 max-sm:flex-col"><label for="pairing-code" class="sr-only">Pairing code</label><input id="pairing-code" name="pairingCode" minlength="6" maxlength="24" required autocomplete="off" class="min-w-0 flex-1 uppercase tracking-[0.15em] bg-[var(--color-elyan-bg)] border border-[var(--color-elyan-outline)] rounded-md px-3 py-2 text-[14px]" placeholder="ABC123" /><button type="submit" class="rounded-lg bg-[var(--color-elyan-primary)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Pair Desktop</button></form></section>
+        <section class="bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6"><h2 class="text-sm font-semibold">Your Devices</h2><p class="mt-1 text-[13px] text-[var(--color-elyan-text-muted)]">Runtime readiness and device state come directly from Elyan.</p><div id="devices-list" class="mt-4" aria-live="polite"><p class="py-6 text-sm text-[var(--color-elyan-text-muted)]">Loading devices…</p></div></section>
+      </div>
+    </div></main>
+  </div>
+</AppLayout>
+
+<script>
+  import { initSettings } from '../../../../lib/client/settings-controller';
+  void initSettings();
+</script>

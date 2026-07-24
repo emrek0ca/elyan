@@ -1,0 +1,64 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+export const prerender = true;
+---
+
+<AppLayout title="Elyan Zeka Bildirimi - Elyan">
+  <main class="min-h-screen bg-[var(--color-elyan-bg)] py-20 px-6 md:px-12">
+    <div class="max-w-3xl mx-auto space-y-12">
+      
+      <header class="space-y-4">
+        <span class="text-[var(--color-elyan-primary)] font-semibold tracking-wider text-sm uppercase">Elyan Zeka Katmanı</span>
+        <h1 class="text-4xl font-sans font-bold text-[var(--color-elyan-text)] tracking-tight">Elyan Zeka Bildirimi</h1>
+        <p class="text-[17px] text-[var(--color-elyan-text-muted)] leading-relaxed font-medium">
+          Bu bildirim, Elyan içindeki zeka destekli özelliklerin nasıl çalıştığını, verilerinizin görev bağlamında nasıl işlendiğini ve kullanıcı kontrolünün nerede durduğunu açıklar.
+        </p>
+      </header>
+
+      <div class="space-y-10">
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">1. Rollerin dağılımı</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Mobil uygulama ve web yüzeyi görev kontrol katmanıdır. Bir görev başlattığınızda Elyan isteği güvenli control-plane üzerinden uygun yürütme yoluna taşır; özel yerel eylemler desktop runtime sınırında kalır.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">2. İşlenen bağlam</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>İstemler, görev içerikleri, sohbet devamlılığı, ek dosya özetleri ve izin verilen cihaz bağlamları yanıt üretmek için işlenebilir. Elyan mümkün olduğunda ham veri yerine sınırlı, puanlanmış ve gizlilik kontrollü bağlam paketleri kullanır.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">3. Yerel çalışma alanı</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan Desktop özel dosyalar, yerel uygulamalar ve cihaz içi yetenekler için local-first sınırı korur. Kullanıcı onayı veya açık görev bağlamı olmadan özel yerel dosyalar otomatik olarak buluta taşınmaz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">4. Eğitim ve kişisel içerik</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan kendi zeka katmanıyla tek ürün kimliği olarak geliştirilir. Kişisel komutlarınız, özel konuşmalarınız veya yerel dosyalarınız açık rıza olmadan model geliştirme amacıyla kullanılmaz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">5. Hata payı ve kullanıcı kontrolü</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan eksik, eski veya hatalı çıktı üretebilir. Kod, belge, sağlık, finans, hukuk, güvenlik veya cihaz eylemi gibi kritik sonuçlarda son kontrol kullanıcıya aittir. Elyan tıbbi tanı, hukuki danışmanlık veya finansal yatırım tavsiyesi sunmaz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">6. Güvenli otomasyon sınırı</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Dosya yazma, tarayıcı kontrolü, cihaz eylemleri, connector işlemleri veya dış sistemlerde yan etki oluşturabilecek görevler izin, güvenlik politikası ve görev izleriyle sınırlanır. Elyan gizli veya kullanıcı fark etmeden arka plan eylemi yürütmek için tasarlanmamıştır.</p>
+          </div>
+        </section>
+      </div>
+      
+    </div>
+  </main>
+</AppLayout>

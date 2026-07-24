@@ -299,6 +299,64 @@ def test_work_order_plan_hash_binds_canonical_steps_and_blocks_tamper(
     assert prepared_v2["planHash"] != prepared["planHash"]
 
 
+def test_work_order_approval_lifetime_is_not_bound_to_dispatch_lease(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    ledger = ExecutionLedger(tmp_path / "ledger.sqlite3")
+    order = _sixteen_step_order()
+    task = {
+        "id": "task-lease",
+        "userId": "user-1",
+        "targetDeviceId": "device-1",
+        "revision": 1,
+        "dispatchLeaseExpiresAt": (
+            dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=1)
+        ).isoformat().replace("+00:00", "Z"),
+    }
+
+    prepared = prepare_work_order_v2(
+        task, order, prompt="16 adım", state=_trusted_state(tmp_path), ledger=ledger
+    )
+
+    assert dt.datetime.fromisoformat(prepared["expiresAt"].replace("Z", "+00:00")) > (
+        dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10)
+    )
+
+
+def test_expired_work_order_binding_refreshes_for_same_bound_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    ledger = ExecutionLedger(tmp_path / "ledger.sqlite3")
+    order = _sixteen_step_order()
+    task = {
+        "id": "task-refresh",
+        "userId": "user-1",
+        "targetDeviceId": "device-1",
+        "revision": 1,
+    }
+    prepared = prepare_work_order_v2(
+        task, order, prompt="16 adım", state=_trusted_state(tmp_path), ledger=ledger
+    )
+    with ledger._connect() as connection:
+        connection.execute(
+            "UPDATE work_orders SET expires_at=? WHERE user_id=? AND task_id=? AND revision=?",
+            ("2020-01-01T00:00:00Z", "user-1", "task-refresh", 1),
+        )
+
+    refreshed = prepare_work_order_v2(
+        task, order, prompt="16 adım", state=_trusted_state(tmp_path), ledger=ledger
+    )
+
+    assert refreshed["expiresAt"] != "2020-01-01T00:00:00Z"
+    assert refreshed["nonce"] != prepared["nonce"]
+    assert dt.datetime.fromisoformat(refreshed["expiresAt"].replace("Z", "+00:00")) > (
+        dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10)
+    )
+    assert ledger.claim_approval(refreshed, True) is True
+
+
 def test_safe_baseline_capability_passes_scope_even_if_undeclared(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

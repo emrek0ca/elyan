@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://elyan.dev/sitemap.xml

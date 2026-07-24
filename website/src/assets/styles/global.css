@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+@theme {
+  --color-elyan-bg: #FAF7F1;
+  --color-elyan-bg-deep: #EBDFCF;
+  --color-elyan-surface: #FCF8F2;
+  --color-elyan-surface-muted: #F3EADD;
+  --color-elyan-outline: #E2D4C2;
+  --color-elyan-primary: #6F8B6D;
+  --color-elyan-primary-dark: #566A55;
+  --color-elyan-primary-soft: #E7EEE0;
+  --color-elyan-accent: #5A7D77;
+  --color-elyan-text: #171717;
+  --color-elyan-text-muted: #666666;
+  --color-elyan-success: #557E58;
+  --color-elyan-warning: #AC7A4A;
+  --color-elyan-danger: #A86148;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button,
+  a,
+  input,
+  textarea,
+  summary {
+    touch-action: manipulation;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-elyan-primary);
+    outline-offset: 2px;
+  }
+
+  .elyan-app-root {
+    background-color: var(--color-elyan-bg);
+    color: var(--color-elyan-text);
+  }
+}
+
+@layer components {
+  body[data-settings-page] main section,
+  body[data-settings-page] main form {
+    border-color: color-mix(in srgb, var(--color-elyan-outline) 72%, transparent);
+    border-radius: 24px;
+    background: var(--color-elyan-surface);
+    box-shadow: 0 1px 2px rgb(23 23 23 / 0.035);
+  }
+
+  body[data-settings-page] input,
+  body[data-settings-page] textarea,
+  body[data-settings-page] select {
+    border-radius: 16px;
+    border-color: color-mix(in srgb, var(--color-elyan-outline) 80%, transparent);
+    background: var(--color-elyan-bg);
+  }
+
+  body[data-settings-page] input:focus,
+  body[data-settings-page] textarea:focus,
+  body[data-settings-page] select:focus {
+    border-color: var(--color-elyan-primary);
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-elyan-primary) 18%, transparent);
+  }
+
+  body[data-settings-page] button {
+    border-radius: 999px;
+    transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+  }
+
+  body[data-settings-page] button:active {
+    transform: scale(0.97);
+  }
+
+  .elyan-markdown p,
+  .elyan-markdown li {
+    text-wrap: pretty;
+  }
+
+  .elyan-markdown ul {
+    list-style: disc;
+    padding-left: 1.25rem;
+  }
+
+  .elyan-markdown ol {
+    list-style: decimal;
+    padding-left: 1.25rem;
+  }
+
+  .elyan-markdown pre {
+    overflow-x: auto;
+    border-radius: 0.75rem;
+    background: #18181b;
+    color: #f4f4f5;
+    padding: 1rem;
+  }
+
+  .elyan-markdown :not(pre) > code {
+    border-radius: 0.35rem;
+    background: #f4f4f5;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.9em;
+  }
+
+  .elyan-markdown a {
+    color: var(--color-elyan-primary-dark);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .elyan-markdown blockquote {
+    border-left: 1px solid #d4d4d8;
+    padding-left: 1rem;
+    color: #52525b;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

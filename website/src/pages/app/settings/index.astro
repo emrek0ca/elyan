@@ -1,0 +1,52 @@
+---
+import AppLayout from '../../../layouts/AppLayout.astro';
+import SettingsSidebar from '../../../components/app/SettingsSidebar.astro';
+export const prerender = false;
+---
+
+<AppLayout title="Settings - Elyan" bodyData={{ settingsPage: 'profile' }}>
+  <div class="flex min-h-screen w-full bg-[var(--color-elyan-bg)] max-md:flex-col">
+    <SettingsSidebar active="profile" />
+    <main class="flex-1 overflow-y-auto">
+      <div class="max-w-2xl mx-auto py-12 px-8 max-md:px-4 max-md:py-8">
+        <h1 class="text-2xl font-bodoni font-medium text-[var(--color-elyan-text)] tracking-tight mb-8">Profile Settings</h1>
+        <p id="settings-status" aria-live="polite" class="hidden mb-5 text-sm font-medium"></p>
+        <div class="space-y-8 stagger-container">
+          <form id="profile-form" class="stagger-item bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6">
+            <h2 class="text-sm font-semibold text-[var(--color-elyan-text)] mb-4">Personal Information</h2>
+            <div class="space-y-4">
+              <div><label for="display-name" class="block text-[12px] font-medium text-[var(--color-elyan-text-muted)] mb-1.5 uppercase tracking-wide">Display Name</label><input id="display-name" name="displayName" required maxlength="120" class="w-full bg-[var(--color-elyan-bg)] border border-[var(--color-elyan-outline)] rounded-md px-3 py-2 text-[14px] focus:outline-none focus:border-[var(--color-elyan-primary-dark)] transition-colors" /></div>
+              <div><label for="profile-email" class="block text-[12px] font-medium text-[var(--color-elyan-text-muted)] mb-1.5 uppercase tracking-wide">Email Address</label><input id="profile-email" type="email" disabled class="w-full bg-[var(--color-elyan-bg-deep)] border border-[var(--color-elyan-outline)] rounded-md px-3 py-2 text-[14px] text-[var(--color-elyan-text-muted)] cursor-not-allowed" /><p class="text-[12px] text-[var(--color-elyan-text-muted)] mt-1.5">Your email address is managed through your authentication provider.</p></div>
+            </div>
+            <div class="mt-6 flex justify-end"><button type="submit" class="bg-[var(--color-elyan-primary)] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[var(--color-elyan-primary-dark)] transition-colors disabled:opacity-50">Save Changes</button></div>
+          </form>
+
+          <form id="password-form" class="stagger-item bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6">
+            <h2 class="text-sm font-semibold text-[var(--color-elyan-text)] mb-4">Change Password</h2>
+            <div class="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
+              <div><label for="current-password" class="block text-[12px] font-medium text-[var(--color-elyan-text-muted)] mb-1.5 uppercase tracking-wide">Current Password</label><input id="current-password" name="currentPassword" type="password" minlength="8" maxlength="128" required autocomplete="current-password" class="w-full bg-[var(--color-elyan-bg)] border border-[var(--color-elyan-outline)] rounded-md px-3 py-2 text-[14px]" /></div>
+              <div><label for="next-password" class="block text-[12px] font-medium text-[var(--color-elyan-text-muted)] mb-1.5 uppercase tracking-wide">New Password</label><input id="next-password" name="nextPassword" type="password" minlength="8" maxlength="128" required autocomplete="new-password" class="w-full bg-[var(--color-elyan-bg)] border border-[var(--color-elyan-outline)] rounded-md px-3 py-2 text-[14px]" /></div>
+            </div>
+            <div class="mt-6 flex justify-end"><button type="submit" class="bg-[var(--color-elyan-primary)] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[var(--color-elyan-primary-dark)] transition-colors disabled:opacity-50">Change Password</button></div>
+          </form>
+
+          <section class="stagger-item bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6">
+            <div class="flex items-center justify-between gap-4"><div><h2 class="text-sm font-semibold text-[var(--color-elyan-text)]">Two-factor Authentication</h2><p id="two-factor-state" data-enabled="false" class="mt-1 text-[13px] text-[var(--color-elyan-text-muted)]">Loading…</p></div><button id="two-factor-setup" type="button" class="rounded-lg border border-[var(--color-elyan-outline)] px-4 py-2 text-sm font-medium hover:bg-[var(--color-elyan-surface-muted)]">Set up 2FA</button></div>
+            <p id="two-factor-details" class="hidden mt-4 break-all rounded-lg bg-[var(--color-elyan-bg)] p-3 text-xs text-[var(--color-elyan-text-muted)]"></p>
+            <form id="two-factor-form" class="mt-4 flex gap-3 max-sm:flex-col"><label for="two-factor-code" class="sr-only">Authenticator code</label><input id="two-factor-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,12}" placeholder="Authenticator code" required class="min-w-0 flex-1 bg-[var(--color-elyan-bg)] border border-[var(--color-elyan-outline)] rounded-md px-3 py-2 text-[14px]" /><button id="two-factor-submit" type="submit" class="rounded-lg bg-[var(--color-elyan-primary)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50">Enable 2FA</button></form>
+          </section>
+
+          <section class="stagger-item bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6"><h2 class="text-sm font-semibold text-[var(--color-elyan-text)] mb-1">Session</h2><p class="text-[13px] text-[var(--color-elyan-text-muted)] mb-4">Signing out removes Elyan tokens from this browser.</p><button id="logout-button" type="button" class="border border-[var(--color-elyan-outline)] px-4 py-2 rounded-lg text-sm font-medium hover:bg-[var(--color-elyan-surface-muted)] transition-colors">Sign Out</button></section>
+          <section class="stagger-item bg-[var(--color-elyan-surface)] border border-[var(--color-elyan-outline)] rounded-xl p-6"><h2 class="text-sm font-semibold text-red-700 mb-1">Danger Zone</h2><p class="text-[13px] text-[var(--color-elyan-text-muted)] mb-4">Permanently delete your account and server data.</p><button id="delete-account" type="button" class="bg-transparent border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-50 transition-colors">Delete Account</button></section>
+        </div>
+      </div>
+    </main>
+  </div>
+</AppLayout>
+
+<script>
+  import { initSettings } from '../../../lib/client/settings-controller';
+  import { gsap } from 'gsap';
+  gsap.fromTo('.stagger-item', { y: 15, opacity: 0 }, { y: 0, opacity: 1, duration: 0.6, stagger: 0.1, ease: 'power2.out', clearProps: 'all' });
+  void initSettings();
+</script>

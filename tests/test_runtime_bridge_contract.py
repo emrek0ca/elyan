@@ -732,6 +732,10 @@ def test_execute_assigned_quantum_task_uses_deterministic_pipeline(
     completed = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
     assert completed["status"] == "completed"
     assert completed["result"]["quantum"]["mode"] == "hybrid"
+    attestation = completed["result"]["quantumBenchmarkAttestation"]
+    assert attestation["version"] == "elyan_quantum_benchmark_v1"
+    assert attestation["producer"] == "elyan_quantum_benchmark_worker"
+    assert attestation["source"] == "measured"
     assert completed["result"]["structuredResult"]["kind"] == "quantum_report"
     assert any(artifact["contentType"] == "text/markdown" for artifact in completed["artifacts"])
 
@@ -2421,8 +2425,8 @@ def test_explicit_route_side_effect_waits_for_approval_before_execution(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    # Doğrudan mod bile olsa geri-alınamaz/dışa dönük (blocklist) adım
-    # (email_send) açık onay ister; onaysız yürütülmez.
+    # Doğrudan mod bile olsa read-only dışı PC eylemi (email_send) açık onay
+    # ister; onaysız yürütülmez.
     _isolate_state(monkeypatch, tmp_path)
 
     class FakeBackend:
@@ -10728,12 +10732,11 @@ def test_dispatched_plan_within_work_order_capabilities_waits_for_backend_policy
     assert approval_request["idempotency"] == "non_idempotent"
 
 
-def test_dispatched_plan_with_blocklisted_capability_still_waits_for_approval(
+def test_dispatched_plan_with_non_readonly_capability_waits_for_approval(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Yıkıcı/dışa dönük adımlar (ör. email_send) dispatch kapsamında bile
-    açık onay ister."""
+    """Read-only olmayan her PC adımı dispatch kapsamında bile tek onay ister."""
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
     _arm_device_identity()
@@ -10761,7 +10764,7 @@ def test_dispatched_plan_with_blocklisted_capability_still_waits_for_approval(
     monkeypatch.setattr(
         runtime,
         "confirm_conversation_plan",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("blocklist adımı otomatik onaylanmamalı")),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("read/write adımı otomatik onaylanmamalı")),
     )
 
     result = runtime.execute_assigned_runtime_tasks()
@@ -10895,6 +10898,19 @@ def test_live_progress_routes_to_active_task_and_throttles(
             "status": "running",
             "title": "Görev",
             "activeStepId": "s1",
+            "quantumLiveness": {
+                "strategy": "quantum_runtime_liveness_snapshot_v1",
+                "source": "desktop_runtime_progress",
+                "score": 0.82,
+                "qualified": True,
+                "backendResponsiveActive": True,
+                "responsiveBoostedStepCount": 1,
+                "responsiveBoostedStepIds": ["s1"],
+                "livenessGuardActive": True,
+                "livenessGuardTimeoutRisk": "medium",
+                "livenessGuardEffectiveMaxReplans": 3,
+                "repairAttemptCount": 0,
+            },
             "steps": [
                 {"id": "s1", "status": "running", "label": "Kapatılıyor", "capability": "close_app", "role": "operator", "phase": "act"},
                 {"id": "s2", "status": "pending", "label": "Doğrula", "capability": "sys_info", "role": "observer", "phase": "gather"},
@@ -10928,6 +10944,8 @@ def test_live_progress_routes_to_active_task_and_throttles(
     assert [(s["id"], s["status"]) for s in pushed[1]["executionTrace"]["steps"]] == [("s1", "completed"), ("s2", "running")]
     assert pushed[0]["executionTrace"]["steps"][0]["role"] == "operator"
     assert pushed[0]["executionTrace"]["steps"][0]["phase"] == "act"
+    assert pushed[0]["executionTrace"]["quantumLiveness"]["backendResponsiveActive"] is True
+    assert pushed[0]["result"]["blocks"][0]["quantumLiveness"]["livenessGuardTimeoutRisk"] == "medium"
     assert pushed[0]["result"]["blocks"][0]["steps"][1]["role"] == "observer"
     assert pushed[0]["result"]["blocks"][0]["steps"][1]["phase"] == "gather"
     # Görev bittiğinde throttle durumu temizlenir.
@@ -11622,24 +11640,6 @@ def test_resume_after_clarification_rejection_cancels(
     assert runner.host.canceled == ["t1"]
 
 
-def test_plan_touches_blocklist_flags_irreversible_only() -> None:
-    from runtime import remote_task_runner as rtr
-    R = rtr.RemoteTaskRunner
-    # Blocklist (geri alınamaz/dışa dönük) → True
-    assert R._plan_touches_blocklist(
-        {"planPreview": {"steps": [{"capability": "email_send"}]}}
-    ) is True
-    assert R._plan_touches_blocklist(
-        {"planPreview": {"steps": [{"capability": "open_app"}, {"capability": "shell_run"}]}}
-    ) is True
-    # Zararsız yan etki (dosya/belge yazma, uygulama, takvim ekleme) → False
-    assert R._plan_touches_blocklist(
-        {"planPreview": {"steps": [{"capability": "document_write"}, {"capability": "add_calendar_event"}]}}
-    ) is False
-    assert R._plan_touches_blocklist({"planPreview": {"steps": []}}) is False
-    assert R._plan_touches_blocklist({}) is False
-
-
 def test_plan_requires_backend_approval_for_writes_and_unknown_capabilities() -> None:
     from runtime import remote_task_runner as rtr
     R = rtr.RemoteTaskRunner
@@ -11659,6 +11659,43 @@ def test_plan_requires_backend_approval_for_writes_and_unknown_capabilities() ->
     assert R._plan_requires_backend_approval(
         {"planPreview": {"steps": []}}
     ) is True
+
+
+def test_approval_gate_has_one_simple_decision_rule() -> None:
+    from runtime import remote_task_runner as rtr
+
+    class Host:
+        def __init__(self, permission_error: dict | None = None) -> None:
+            self.permission_error = permission_error
+
+        def _pending_plan_permission_error(self, _plan_id: str) -> dict | None:
+            return self.permission_error
+
+    runner = rtr.RemoteTaskRunner.__new__(rtr.RemoteTaskRunner)
+    runner.host = Host()
+    read_only = {
+        "pendingPlanId": "plan_read",
+        "conversationId": "conv_read",
+        "planPreview": {"steps": [{"capability": "web_research"}]},
+    }
+    write = {
+        "pendingPlanId": "plan_write",
+        "conversationId": "conv_write",
+        "planPreview": {"steps": [{"capability": "document_write"}]},
+    }
+
+    decision = runner._resolve_approval_gate(read_only, plan_mode=False, work_order={"schema": "x"})
+    assert decision.action == "run"
+    assert decision.manual_required is False
+
+    decision = runner._resolve_approval_gate(write, plan_mode=False, work_order={"schema": "x"})
+    assert decision.action == "wait"
+    assert decision.manual_required is True
+
+    runner.host = Host({"code": "OS_PERMISSION_REQUIRED", "message": "Ekran izni gerekiyor."})
+    decision = runner._resolve_approval_gate(read_only, plan_mode=False, work_order={"schema": "x"})
+    assert decision.action == "fail"
+    assert decision.permission_error["code"] == "OS_PERMISSION_REQUIRED"
 
 
 def test_recoverable_replan_web_research_falls_back_to_local(

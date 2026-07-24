@@ -1,0 +1,333 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+import MicroButton from '../components/motion/MicroButton.astro';
+import CardTimeMachine from '../components/motion/CardTimeMachine';
+import ThreeLogo from '../components/motion/ThreeLogo';
+import WaterBackground from '../components/motion/WaterBackground';
+import { Image } from 'astro:assets';
+import logoImage from '../assets/logo.png';
+
+export const prerender = true;
+
+const appStoreUrl = 'https://apps.apple.com/tr/app/elyan/id6779045459';
+const desktopInstallCommand = 'npm install -g elyan';
+const githubLatestReleaseApiUrl = 'https://api.github.com/repos/emrek0ca/elyan/releases/latest';
+const githubProfileUrl = 'https://github.com/emrek0ca';
+
+// /* Hallmark · macrostructure: 03-marquee-hero · theme: Elyan Light */
+---
+
+<AppLayout title="Elyan — Agent Control Surface">
+  <WaterBackground client:load />
+
+  <!-- 3D Background Logo -->
+  <ThreeLogo logoUrl={logoImage.src} client:load />
+
+  <!-- Standard Topbar Nav -->
+  <header class="fixed top-0 left-0 w-full z-50 bg-transparent">
+    <div class="max-w-7xl mx-auto px-5 sm:px-6 h-16 flex items-center justify-between">
+      <a href="/" class="flex min-w-0 items-center gap-2">
+        <Image src={logoImage} alt="Elyan Logo" width={24} height={24} class="w-6 h-auto shrink-0" />
+        <span class="font-sans font-bold text-lg tracking-tight text-[var(--color-elyan-text)]">Elyan</span>
+      </a>
+      <nav class="hidden items-center gap-8 sm:flex">
+        <a href="#explore" class="text-sm font-medium text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-text)] transition-colors">Yetenek</a>
+        <a href="#download" class="text-sm font-medium text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-text)] transition-colors">İndir</a>
+        <a href="#about" class="text-sm font-medium text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-text)] transition-colors">Ben kimim?</a>
+        <a href="/app/login" class="text-sm font-medium text-[var(--color-elyan-text)] transition-colors">Giriş</a>
+      </nav>
+      <nav class="flex items-center gap-5 sm:hidden">
+        <a href="#download" class="text-sm font-semibold text-[var(--color-elyan-text-muted)] transition-colors hover:text-[var(--color-elyan-text)]">İndir</a>
+        <a href="/app/login" class="text-sm font-semibold text-[var(--color-elyan-text)] transition-colors">Giriş</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="w-full flex-1 overflow-y-auto custom-scrollbar">
+    <!-- Marquee Hero -->
+    <section class="min-h-screen flex flex-col items-center justify-start pt-28 pb-16 relative overflow-hidden md:justify-center md:pt-0 md:pb-12">
+
+
+      <div class="w-full max-w-[37rem] ml-auto mr-auto pt-[24vh] md:pt-0 md:ml-[38%] md:mr-12 md:max-w-3xl text-center md:text-left relative z-10 stagger-hero px-6 sm:px-8">
+        <h1 class="text-[2.6rem] sm:text-[4.5rem] md:text-[6.25rem] font-sans font-bold text-[var(--color-elyan-text)] tracking-[-0.07em] mb-5 md:mb-8 leading-[0.96] sm:leading-[0.9] stagger-item-hero opacity-0 translate-y-8" style="overflow-wrap: anywhere; min-width: 0;">
+          İşlerin <br/>
+          <span class="text-[var(--color-elyan-primary-dark)]">akışta kalır.</span>
+        </h1>
+        
+        <p class="text-base sm:text-xl md:text-2xl text-[var(--color-elyan-text-muted)] font-sans max-w-[32rem] mx-auto md:mx-0 mb-7 md:mb-12 stagger-item-hero opacity-0 translate-y-8 font-medium leading-relaxed md:leading-normal">
+          Ben Elyan. Web, mobil ve desktop runtime arasında görevlerini sakin bir düzende taşırım. Özel bağlamın cihazında kalır; sen sadece ne yapılacağını söylersin.
+        </p>
+
+        <div class="flex flex-col sm:flex-row items-center md:items-start justify-center md:justify-start gap-4 sm:gap-5 stagger-item-hero opacity-0 translate-y-8">
+          <MicroButton type="magnetic" href="/app" class="px-7 py-3.5 sm:px-8 sm:py-4 bg-[var(--color-elyan-primary)] text-white rounded-[18px] font-bold tracking-wide shadow-sm hover:opacity-90 transition-opacity w-full sm:w-auto">
+            Dene
+          </MicroButton>
+          <a href="#download" class="inline-flex items-center justify-center gap-1.5 text-sm font-bold text-[var(--color-elyan-text)] underline decoration-[var(--color-elyan-outline)] underline-offset-4 transition-colors hover:text-[var(--color-elyan-primary-dark)] sm:min-h-14">
+            Elyan’ı indir
+            <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v11"></path>
+              <path d="m8 12 4 4 4-4"></path>
+            </svg>
+          </a>
+        </div>
+
+        <div id="download" class="mt-7 space-y-2.5 text-[13px] sm:text-sm font-semibold text-[var(--color-elyan-text-muted)] stagger-item-hero opacity-0 translate-y-8">
+          <p class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 md:justify-start">
+            <span class="inline-flex items-center gap-1.5">
+              <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="7" y="2.75" width="10" height="18.5" rx="2.4"></rect>
+                <path d="M10.5 18.25h3"></path>
+              </svg>
+              Mobil
+            </span>
+            <a href={appStoreUrl} target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-[var(--color-elyan-primary-dark)] underline decoration-[var(--color-elyan-outline)] underline-offset-4 transition-colors hover:text-[var(--color-elyan-text)]">
+              <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5.5v9"></path>
+                <path d="m8.75 11.25 3.25 3.25 3.25-3.25"></path>
+                <path d="M6.5 18.5h11"></path>
+              </svg>
+              App Store
+            </a>
+          </p>
+          <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-0.5 md:justify-start" data-latest-release-root data-release-api={githubLatestReleaseApiUrl}>
+            <span class="inline-flex items-center gap-1.5 text-[var(--color-elyan-text)]">
+              <span aria-hidden="true" class="font-mono text-[15px] leading-none">&gt;</span>
+              Desktop
+            </span>
+            <a href="/download/macos" data-release-platform="macos" class="release-download-link inline-flex items-center gap-1.5 text-[var(--color-elyan-primary-dark)] underline decoration-[var(--color-elyan-outline)] underline-offset-4 transition-colors hover:text-[var(--color-elyan-text)]" aria-label="macOS paketini indir">
+              <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15.25 3.5c-.95.62-1.55 1.52-1.45 2.55.98.08 2.03-.48 2.62-1.27.5-.67.74-1.55.62-2.3-.6.03-1.24.39-1.79 1.02Z"></path>
+                <path d="M17.65 12.35c-.04-2.04 1.62-3.03 1.7-3.08-.94-1.37-2.4-1.56-2.92-1.58-1.24-.13-2.42.73-3.05.73-.64 0-1.62-.71-2.66-.69-1.37.02-2.64.8-3.34 2.02-1.43 2.48-.37 6.15 1.02 8.15.68.98 1.49 2.09 2.55 2.05 1.02-.04 1.41-.66 2.64-.66 1.23 0 1.58.66 2.66.64 1.1-.02 1.8-1 2.47-1.98.78-1.14 1.1-2.24 1.12-2.3-.03-.01-2.15-.82-2.19-3.3Z"></path>
+              </svg>
+              macOS
+            </a>
+            <a href="/download/windows" data-release-platform="windows" class="release-download-link inline-flex items-center gap-1.5 text-[var(--color-elyan-primary-dark)] underline decoration-[var(--color-elyan-outline)] underline-offset-4 transition-colors hover:text-[var(--color-elyan-text)]" aria-label="Windows paketini indir">
+              <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 5.5 10.75 4.5v7H4z"></path>
+                <path d="M13.25 4.15 20 3.15v8.35h-6.75z"></path>
+                <path d="M4 13h6.75v6.5L4 18.55z"></path>
+                <path d="M13.25 13H20v8l-6.75-.95z"></path>
+              </svg>
+              Windows
+            </a>
+            <a href="/download/linux" data-release-platform="linux" class="release-download-link inline-flex items-center gap-1.5 text-[var(--color-elyan-primary-dark)] underline decoration-[var(--color-elyan-outline)] underline-offset-4 transition-colors hover:text-[var(--color-elyan-text)]" aria-label="Linux paketini indir">
+              <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8.5 18.5c.75-1.2 1-2.65 1-5.2 0-2.25.78-4.05 2.5-4.05s2.5 1.8 2.5 4.05c0 2.55.25 4 1 5.2"></path>
+                <path d="M10.2 8.15c0-1.8.55-3.15 1.8-3.15s1.8 1.35 1.8 3.15"></path>
+                <path d="M9 18.2 6.4 20.3"></path>
+                <path d="m15 18.2 2.6 2.1"></path>
+                <path d="M10.4 13.85h3.2"></path>
+                <path d="M10.6 10.2h.01"></path>
+                <path d="M13.4 10.2h.01"></path>
+              </svg>
+              Linux
+            </a>
+          </div>
+          <p class="flex items-center justify-center md:justify-start">
+            <code class="rounded-none bg-transparent p-0 font-mono text-[11px] font-semibold text-[var(--color-elyan-text-muted)]/75">{desktopInstallCommand}</code>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Component Playground Area / Feature Stack -->
+    <section id="explore" class="py-32 relative z-20">
+      <div class="max-w-7xl mx-auto px-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-24 items-center">
+          
+          <div class="space-y-8 order-2 lg:order-1">
+            <h2 class="text-4xl md:text-5xl font-sans font-bold text-[var(--color-elyan-text)] tracking-tight">İşi dağıtmam, işi toparlarım.</h2>
+            <p class="text-lg text-[var(--color-elyan-text-muted)] leading-relaxed max-w-md font-medium">
+              Bir görevi yazdığında onu sadece cevap metnine çevirmem. Hangi cihazın uygun olduğunu, runtime’ın hazır olup olmadığını, izin gerekip gerekmediğini ve sonucun nerede duracağını aynı sakin akışta tutarım.
+            </p>
+            <div class="space-y-5 pt-3 text-base text-[var(--color-elyan-text-muted)] leading-relaxed font-medium">
+              <p><span class="text-[var(--color-elyan-text)] font-bold">Seç.</span> Çalışacağım desktop’ı ve bağlamı netleştir.</p>
+              <p><span class="text-[var(--color-elyan-text)] font-bold">Gönder.</span> Görev control-plane üzerinden doğru runtime’a ulaşsın.</p>
+              <p><span class="text-[var(--color-elyan-text)] font-bold">İzle.</span> Mobil, web ve desktop aynı görev gerçeğini göstersin.</p>
+              <p><span class="text-[var(--color-elyan-text)] font-bold">İncele.</span> Sonuç, artifact ve geçmiş tek yerde sakin biçimde kalsın.</p>
+            </div>
+          </div>
+
+          <div class="relative h-[600px] w-full flex items-center justify-center order-1 lg:order-2">
+             <!-- The CardTimeMachine component acts as the visual proof -->
+             <CardTimeMachine client:load />
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer Archetype: Ft5 Statement -->
+    <footer id="about" class="py-24 px-6">
+      <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-end gap-12">
+        <div>
+          <div class="flex items-center gap-3 mb-6">
+            <Image src={logoImage} alt="Elyan Logo" width={48} height={48} class="w-12 h-auto" />
+            <h2 class="text-5xl font-sans font-bold text-[var(--color-elyan-text)] m-0">Elyan.</h2>
+          </div>
+          <p class="text-[var(--color-elyan-text-muted)] max-w-xs text-sm font-medium">
+            Ben yerel çalışan gücünü, web çalışma alanını ve mobil kontrol yüzeyini birbirine karıştırmadan bir arada tutarım.
+          </p>
+        </div>
+        <div class="flex gap-12 text-sm">
+          <div class="flex flex-col gap-4">
+            <span class="text-[var(--color-elyan-text)] font-semibold mb-2">Platform</span>
+            <a href="/app/login" class="text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium">Giriş</a>
+            <a href="/app/register" class="text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium">Kayıt</a>
+            <a href={appStoreUrl} target="_blank" rel="noopener noreferrer" class="text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium">App Store</a>
+            <a href={githubProfileUrl} target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium" aria-label="Elyan GitHub profilini aç">
+              <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.48 2 2 6.58 2 12.22c0 4.5 2.87 8.32 6.84 9.67.5.09.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.63.07-.63 1 .07 1.53 1.05 1.53 1.05.9 1.57 2.35 1.12 2.92.86.09-.66.35-1.12.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.31.1-2.71 0 0 .84-.28 2.75 1.05A9.36 9.36 0 0 1 12 6.9c.85 0 1.7.12 2.5.35 1.9-1.33 2.74-1.05 2.74-1.05.55 1.4.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.8-4.57 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.8 0 .27.18.59.69.49A10.04 10.04 0 0 0 22 12.22C22 6.58 17.52 2 12 2Z"></path>
+              </svg>
+              GitHub
+            </a>
+            <span class="font-mono text-xs font-bold text-[var(--color-elyan-text-muted)]">{desktopInstallCommand}</span>
+          </div>
+          <div class="flex flex-col gap-4">
+            <span class="text-[var(--color-elyan-text)] font-semibold mb-2">Sınırlar</span>
+            <a href="/gizlilik" class="text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium">Gizlilik</a>
+            <a href="/kullanim-kosullari" class="text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium">Koşullar</a>
+            <a href="/veri-silme" class="text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium">Veri silme</a>
+            <a href="/destek" class="text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium">Destek</a>
+            <a href="/yapay-zeka-bildirimi" class="text-[var(--color-elyan-text-muted)] hover:text-[var(--color-elyan-primary-dark)] transition-colors font-medium">Yapay zeka bildirimi</a>
+          </div>
+        </div>
+      </div>
+    </footer>
+  </main>
+</AppLayout>
+
+<script>
+  import { gsap } from 'gsap';
+
+  type GitHubReleaseAsset = {
+    name?: string;
+    browser_download_url?: string;
+  };
+
+  type ReleasePlatform = 'macos' | 'windows' | 'linux';
+
+  type ReleaseCandidate = {
+    asset: GitHubReleaseAsset;
+    score: number;
+  };
+
+  const initHero = () => {
+    const heroItems = document.querySelectorAll('.stagger-item-hero');
+    if (heroItems.length > 0) {
+      gsap.to(heroItems, {
+        y: 0,
+        opacity: 1,
+        duration: 1.2,
+        stagger: 0.15,
+        ease: 'power4.out',
+        delay: 0.1
+      });
+    }
+  };
+  
+  initHero();
+
+  const includesAny = (value: string, needles: string[]) => needles.some((needle) => value.includes(needle));
+
+  const scoreReleaseAsset = (asset: GitHubReleaseAsset, platform: ReleasePlatform) => {
+    const name = asset.name?.toLowerCase() ?? '';
+    if (!name || !asset.browser_download_url) return -1;
+
+    if (includesAny(name, ['.sha256', 'sha256sums', 'sbom', '.cdx.json'])) return -1;
+
+    if (platform === 'macos') {
+      if (includesAny(name, ['windows', 'win32', 'win64', 'linux', 'appimage', '.deb', '.rpm'])) return -1;
+      let score = 0;
+      if (includesAny(name, ['macos', 'darwin', 'osx', 'mac'])) score += 20;
+      if (name.endsWith('.dmg')) score += 20;
+      if (name.endsWith('.pkg')) score += 14;
+      if (name.endsWith('.app.zip') || name.endsWith('.zip')) score += 8;
+      if (includesAny(name, ['arm64', 'aarch64'])) score += 2;
+      if (includesAny(name, ['universal', 'x64', 'x86_64'])) score += 1;
+      return score > 0 ? score : -1;
+    }
+
+    if (platform === 'windows') {
+      if (includesAny(name, ['macos', 'darwin', 'osx', 'linux', 'appimage', '.deb', '.rpm'])) return -1;
+      let score = 0;
+      if (includesAny(name, ['windows', 'win32', 'win64', 'win'])) score += 20;
+      if (includesAny(name, ['setup.exe', 'installer.exe'])) score += 22;
+      else if (name.endsWith('.exe')) score += 16;
+      if (name.endsWith('.msi')) score += 15;
+      if (name.endsWith('.zip')) score += 8;
+      if (includesAny(name, ['x64', 'x86_64'])) score += 2;
+      if (includesAny(name, ['arm64'])) score += 1;
+      return score > 0 ? score : -1;
+    }
+
+    if (includesAny(name, ['macos', 'darwin', 'osx', 'windows', 'win32', 'win64', '.exe', '.msi', '.dmg', '.pkg'])) return -1;
+    let score = 0;
+    if (includesAny(name, ['linux'])) score += 20;
+    if (name.endsWith('.deb')) score += 20;
+    if (name.endsWith('.appimage')) score += 16;
+    if (name.endsWith('.rpm')) score += 12;
+    if (name.endsWith('.tar.gz') || name.endsWith('.tgz')) score += 8;
+    if (includesAny(name, ['x64', 'x86_64'])) score += 2;
+    if (includesAny(name, ['arm64', 'aarch64'])) score += 1;
+    return score > 0 ? score : -1;
+  };
+
+  const pickReleaseAsset = (assets: GitHubReleaseAsset[], platform: ReleasePlatform) => {
+    const candidates = assets
+      .map((asset): ReleaseCandidate => ({ asset, score: scoreReleaseAsset(asset, platform) }))
+      .filter((candidate) => candidate.score >= 0)
+      .sort((a, b) => b.score - a.score);
+
+    return candidates[0]?.asset ?? null;
+  };
+
+  const initLatestReleaseDownloads = async () => {
+    const root = document.querySelector<HTMLElement>('[data-latest-release-root]');
+    if (!root) return;
+
+    const releaseApi = root.dataset.releaseApi;
+    if (!releaseApi) return;
+
+    try {
+      const response = await fetch(releaseApi, {
+        headers: { Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+      });
+      if (!response.ok) return;
+
+      const release = await response.json() as { tag_name?: string; assets?: GitHubReleaseAsset[] };
+      const assets = Array.isArray(release.assets) ? release.assets : [];
+
+      (['macos', 'windows', 'linux'] as ReleasePlatform[]).forEach((platform) => {
+        const link = root.querySelector<HTMLAnchorElement>(`[data-release-platform="${platform}"]`);
+        const asset = pickReleaseAsset(assets, platform);
+        if (!link || !asset?.browser_download_url) return;
+
+        link.setAttribute('aria-label', `${link.textContent?.trim() ?? platform} paketini indir`);
+        if (release.tag_name) link.title = `${release.tag_name} · ${asset.name ?? 'Elyan'}`;
+        link.dataset.releaseAsset = asset.name ?? '';
+      });
+    } catch {
+      // Sessiz kal: download komutu zaten görünür, GitHub geçici kapalıysa UI gürültü üretmez.
+    }
+  };
+
+  initLatestReleaseDownloads();
+</script>
+
+<style>
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.1);
+    border-radius: 6px;
+  }
+  .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+  }
+</style>

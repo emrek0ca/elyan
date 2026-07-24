@@ -5,6 +5,7 @@ import datetime as dt
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from runtime import learning_store, state_store
@@ -43,20 +44,6 @@ _MCP_CANCELLATION_GRACE_SECONDS = 2.0
 # güvenle sonlandırılır (sonsuz "sor-cevapla-yine sor" döngüsünü önler).
 MAX_CLARIFICATION_ROUNDS = 2
 
-# Mobil "dispatch" açık kullanıcı iradesidir: iş emrinin bildirdiği yeteneklerle
-# sınırlı planlar ikinci onaya düşmeden yürütülür. Bu küme istisnadır — geri
-# alınamaz / dışa dönük işlemler her zaman açık onay ister.
-DISPATCH_AUTO_APPROVE_BLOCKLIST = {
-    "email_send",
-    "shell_run",
-    "file_delete",
-    "delete_calendar_event",
-    "send_whatsapp_message",
-    "save_whatsapp_contact",
-    "mcp_call_tool",
-    "desktop_operator.run",
-    "desktop_operator.execute_action",
-}
 # ⑤: Görev yaşam-döngüsü durum taksonomisi — TEK KAYNAK. Magic string yerine
 # adlandırılmış sabitler; durum kümeleri bunlardan türetilir ki taksonomi
 # tutarlı kalsın, typo/drift olmasın ve mobil ile aynı sözlüğü paylaşsın.
@@ -79,6 +66,15 @@ BACKEND_TASK_STATUSES = {
 TERMINAL_STATUSES = {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELED, "cancelled"}
 ACTIVE_STATUSES = {STATUS_QUEUED, STATUS_PLANNING, STATUS_RUNNING, STATUS_WAITING_APPROVAL}
 LOCAL_TRACE_STATUSES = {STATUS_READINESS_CHECK, STATUS_VERIFYING, STATUS_REPAIRING, STATUS_FAILED_SAFE}
+
+
+@dataclass(frozen=True)
+class ApprovalGateDecision:
+    action: str
+    pending_plan_id: str = ""
+    conversation_id: str = ""
+    manual_required: bool = False
+    permission_error: dict[str, Any] | None = None
 
 
 def _utc_now_iso() -> str:
@@ -325,10 +321,6 @@ class RemoteTaskRunner:
                         executions.append(self.resume_after_approval(task_id, True, resolution_answer))
                     elif resolution_state == "rejected":
                         executions.append(self.resume_after_approval(task_id, False))
-                    elif self._dispatch_consent_covers_pending_link(task_id):
-                        # Mobil dispatch onayı bekleyen planı zaten kapsıyor —
-                        # (ör. eski sürümde onaya takılmış görev) otomatik sürdür.
-                        executions.append(self.resume_after_approval(task_id, True))
                     elif self._approval_wait_expired(task, approval_request):
                         # Onay TTL'i doldu: kullanıcı hiç yanıtlamadı (mobil
                         # kartı görmemiş olabilir). Sonsuza dek 'onay bekliyor'
@@ -419,7 +411,8 @@ class RemoteTaskRunner:
                 )
         # Codex modeli: kullanıcı mobil composer'dan "plan modu" seçtiyse
         # metadata.planMode=true gelir → önce plan önizlemesi + onay, sonra
-        # adım adım. Seçmediyse doğrudan adım adım yürüt (yalnız blocklist onar).
+        # adım adım. Seçmediyse read-only plan otomatik yürür; read-only dışı
+        # her PC eylemi tek onay akışına düşer.
         mobile_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         plan_mode = bool(mobile_metadata.get("planMode", False))
         task_run_id = self._ensure_task_run_id(task_id)
@@ -580,11 +573,23 @@ class RemoteTaskRunner:
                     work_order=work_order,
                 )
             if local_result.get("needsConfirmation") is True and str(local_result.get("pendingPlanId", "") or "").strip():
-                # User-action writes always cross the backend approval seam.
-                # The backend can immediately release only an explicitly
-                # classified idempotent write in trusted mode; the desktop
-                # never decides from stale/mobile client state.
-                if plan_mode or self._plan_requires_backend_approval(local_result):
+                approval_gate = self._resolve_approval_gate(
+                    local_result,
+                    plan_mode=plan_mode,
+                    work_order=work_order,
+                )
+                if approval_gate.action == "fail":
+                    permission_error = approval_gate.permission_error or {}
+                    state_store.remove_pending_plan(approval_gate.pending_plan_id)
+                    return self._fail_safe(
+                        task_id,
+                        task_run_id,
+                        message=str(permission_error.get("message", "") or "Görev için açık izin gerekiyor."),
+                        error_code=str(permission_error.get("code", "") or "PERMISSION_REQUIRED"),
+                        plan_preview=local_result.get("planPreview") if isinstance(local_result.get("planPreview"), dict) else None,
+                        capability_readiness_payload=local_result.get("capabilityReadiness") if isinstance(local_result.get("capabilityReadiness"), list) else None,
+                    )
+                if approval_gate.action == "wait":
                     return self._pause_for_approval(
                         task_id,
                         task_run_id,
@@ -592,11 +597,25 @@ class RemoteTaskRunner:
                         local_result,
                         dispatched_via_websocket,
                         work_order=work_order,
-                        force_manual=plan_mode,
+                        force_manual=approval_gate.manual_required,
                     )
-                auto_result = self._auto_approve_dispatched_plan(
-                    task_id, task_run_id, local_result, work_order=work_order
-                )
+                try:
+                    auto_result = self._execute_approved_plan(
+                        task_id,
+                        task_run_id,
+                        approval_gate.conversation_id,
+                        approval_gate.pending_plan_id,
+                        work_order=work_order,
+                        message="Dispatch kapsamındaki güvenli okuma planı otomatik yürütülüyor.",
+                    )
+                except TrustError as exc:
+                    return self._fail_safe(
+                        task_id,
+                        task_run_id,
+                        message="Görev yetkisi doğrulanamadı.",
+                        error_code=exc.code,
+                        result_status="failed_closed",
+                    )
                 if auto_result is None:
                     return self._pause_for_approval(
                         task_id,
@@ -605,6 +624,7 @@ class RemoteTaskRunner:
                         local_result,
                         dispatched_via_websocket,
                         work_order=work_order,
+                        force_manual=True,
                     )
                 local_result = self._augment_local_result(
                     auto_result,
@@ -815,20 +835,15 @@ class RemoteTaskRunner:
             task_run_id = str(link.get("taskRunId", "") or "").strip() or self._ensure_task_run_id(task_id)
             return self._resume_after_clarification(task_id, task_run_id, link, approved, answer)
 
-        stored_work_order = link.get("desktopWorkOrder") if isinstance(link, dict) else None
         if not approved:
-            if isinstance(stored_work_order, dict) and str(stored_work_order.get("schema", "") or "").endswith(".v2"):
-                try:
-                    if not ExecutionLedger().claim_approval(stored_work_order, False):
-                        return {"taskId": task_id, "ok": True, "status": "skipped_duplicate_approval"}
-                except TrustError as exc:
-                    return self._fail_safe(
-                        task_id,
-                        str((link or {}).get("taskRunId", "") or "") or self._ensure_task_run_id(task_id),
-                        message="Onay kararı güvenli şekilde doğrulanamadı.",
-                        error_code=exc.code,
-                        result_status="failed_closed",
-                    )
+            rejected_claim = self._claim_approval_decision(
+                task_id,
+                str((link or {}).get("taskRunId", "") or "") or self._ensure_task_run_id(task_id),
+                (link.get("desktopWorkOrder") if isinstance(link, dict) else None),
+                False,
+            )
+            if rejected_claim is not None:
+                return rejected_claim
             self.host._cancel_remote_pending_task(task_id)
             self._mark_link_terminal(task_id, "canceled")
             return {"taskId": task_id, "ok": True, "status": "canceled"}
@@ -897,18 +912,23 @@ class RemoteTaskRunner:
                 error_code=str(getattr(exc, "code", "TASK_SCOPE_UNAVAILABLE") or "TASK_SCOPE_UNAVAILABLE"),
             )
         try:
-            trust_token = self.host._begin_trusted_work_order(work_order, "approval")
-            if isinstance(work_order, dict) and str(work_order.get("schema", "") or "").endswith(".v2"):
-                if not ExecutionLedger().claim_approval(work_order, True):
-                    return {"taskId": task_id, "ok": True, "status": "skipped_duplicate_approval"}
-            # ⑤: Onaylanan adımın yürütülmesi bir ONARIM değil, yürütmedir.
-            # Eskiden "repairing" bildiriliyordu; bu hem kullanıcıya "onarılıyor"
-            # gösteriyor hem de sahte bir "repair attempt" metadata'sı üretiyordu.
-            self._report_lifecycle(task_id, task_run_id, STATUS_RUNNING, "Onaylanan adım yürütülüyor.")
-            local_result = self.host._run_with_approved_task_access(
+            approved_claim = self._claim_approval_decision(task_id, task_run_id, work_order, True)
+            if approved_claim is not None:
+                return approved_claim
+            local_result = self._execute_approved_plan(
                 task_id,
-                lambda: self.host.confirm_conversation_plan(conversation_id, pending_plan_id, True),
+                task_run_id,
+                conversation_id,
+                pending_plan_id,
+                work_order=work_order,
             )
+            if local_result is None:
+                return self._fail_safe(
+                    task_id,
+                    task_run_id,
+                    message="Onaylanan plan güvenli şekilde yürütülemedi.",
+                    error_code="APPROVED_PLAN_EXECUTION_FAILED",
+                )
             if self._task_cancellation_reason(task_id):
                 return self._cancelled_execution_result(task_id)
             local_result = self._augment_local_result(local_result, task_id=task_id, task_run_id=task_run_id)
@@ -937,7 +957,6 @@ class RemoteTaskRunner:
                 result_status="failed_closed",
             )
         finally:
-            self.host._end_trusted_work_order(locals().get("trust_token"))
             self.host._end_active_remote_task(progress_token, task_id)
             self.host._set_runtime_task_heartbeat(False, "idle")
 
@@ -1219,43 +1238,73 @@ class RemoteTaskRunner:
             "report": report.to_dict() if report else None,
         }
 
-    def _dispatch_consent_covers_plan(
+    def _claim_approval_decision(
         self,
-        work_order: dict[str, Any] | None,
+        task_id: str,
+        task_run_id: str,
+        work_order: Any,
+        approved: bool,
+    ) -> dict[str, Any] | None:
+        if not isinstance(work_order, dict) or not str(work_order.get("schema", "") or "").endswith(".v2"):
+            return None
+        try:
+            if not ExecutionLedger().claim_approval(work_order, approved):
+                return {"taskId": task_id, "ok": True, "status": "skipped_duplicate_approval"}
+        except TrustError as exc:
+            return self._fail_safe(
+                task_id,
+                task_run_id,
+                message="Onay kararı güvenli şekilde doğrulanamadı.",
+                error_code=exc.code,
+                result_status="failed_closed",
+            )
+        return None
+
+    def _resolve_approval_gate(
+        self,
         local_result: dict[str, Any],
-    ) -> bool:
-        """Mobil dispatch onayı bu planı kapsıyor mu?
+        *,
+        plan_mode: bool,
+        work_order: dict[str, Any] | None,
+    ) -> ApprovalGateDecision:
+        """Single approval decision point for local PC execution.
 
-        Mobil "dispatch" hedefe açık kullanıcı iradesidir. Güvenlik sınırı
-        blocklist'tir (geri alınamaz / dışa dönük işlemler — e-posta gönder,
-        shell, dosya sil, WhatsApp, mcp, operator.run): bunlar dispatch'te bile
-        açık onay ister. Bunun dışındaki yerel adımlar (uygulama aç/kapat,
-        belge/tablo/sunum yaz, tarayıcı, medya…) otomatik yürütülür — plan
-        LLM tarafından üretilip iş emrinin bildirdiği yeteneklerden farklı bir
-        (yine zararsız) yetenek seçse de kullanıcıyı gereksiz onaya takmayız.
+        One rule is intentionally easy to reason about:
+        - no pending plan -> no approval gate
+        - dependency/OS permission error -> fail closed
+        - explicit plan mode or any non-read-only capability -> one user approval
+        - otherwise the original dispatch consent covers the read-only plan
         """
+        pending_plan_id = str(local_result.get("pendingPlanId", "") or "").strip()
+        conversation_id = str(local_result.get("conversationId", "") or "").strip()
+        if not pending_plan_id:
+            return ApprovalGateDecision("none")
+        permission_error = self.host._pending_plan_permission_error(pending_plan_id)
+        if permission_error is not None:
+            return ApprovalGateDecision(
+                "fail",
+                pending_plan_id=pending_plan_id,
+                conversation_id=conversation_id,
+                permission_error=permission_error if isinstance(permission_error, dict) else {},
+            )
+        if plan_mode or self._plan_requires_backend_approval(local_result):
+            return ApprovalGateDecision(
+                "wait",
+                pending_plan_id=pending_plan_id,
+                conversation_id=conversation_id,
+                manual_required=True,
+            )
         if not isinstance(work_order, dict):
-            return False
-        execution = work_order.get("execution")
-        execution = execution if isinstance(execution, dict) else {}
-        source = str(work_order.get("source", "") or "").strip().lower()
-        mode = str(execution.get("mode", "") or "").strip().lower()
-        if source != "mobile_chat_dispatch" and mode != "cowork_dispatch":
-            return False
-
-        plan_preview = local_result.get("planPreview")
-        steps = plan_preview.get("steps", []) if isinstance(plan_preview, dict) else []
-        plan_capabilities = {
-            _normalize_capability(step.get("capability"))
-            for step in steps
-            if isinstance(step, dict) and _normalize_capability(step.get("capability"))
-        }
-        if not plan_capabilities:
-            return False
-        return all(
-            capability_metadata(capability).get("approvalPermission") == "read"
-            and capability_metadata(capability).get("idempotency") == "read_only"
-            for capability in plan_capabilities
+            return ApprovalGateDecision(
+                "wait",
+                pending_plan_id=pending_plan_id,
+                conversation_id=conversation_id,
+                manual_required=True,
+            )
+        return ApprovalGateDecision(
+            "run",
+            pending_plan_id=pending_plan_id,
+            conversation_id=conversation_id,
         )
 
     @staticmethod
@@ -1276,63 +1325,22 @@ class RemoteTaskRunner:
             for capability in capabilities
         )
 
-    @staticmethod
-    def _plan_touches_blocklist(local_result: dict[str, Any]) -> bool:
-        """Plan, geri-alınamaz/dışa dönük (blocklist) bir yetenek içeriyor mu?
-
-        Doğrudan modda bile bu adımlar açık onay ister (mail gönder, shell,
-        dosya sil, WhatsApp, mcp, operator.run…).
-        """
-        plan_preview = local_result.get("planPreview")
-        steps = plan_preview.get("steps", []) if isinstance(plan_preview, dict) else []
-        plan_capabilities = {
-            _normalize_capability(step.get("capability"))
-            for step in steps
-            if isinstance(step, dict) and _normalize_capability(step.get("capability"))
-        }
-        return bool(plan_capabilities & DISPATCH_AUTO_APPROVE_BLOCKLIST)
-
-    def _dispatch_consent_covers_pending_link(self, task_id: str) -> bool:
-        """Bekleyen (waiting_approval) görevin kayıtlı linki üzerinden aynı
-        dispatch-kapsam kontrolü — yeniden başlatma/eski sürümden kalan
-        takılı görevler için."""
-        link = state_store.get_remote_task_link(task_id)
-        if not isinstance(link, dict):
-            return False
-        work_order = link.get("desktopWorkOrder")
-        pending_plan_id = str(link.get("pendingPlanId", "") or "").strip()
-        if not isinstance(work_order, dict) or not pending_plan_id:
-            return False
-        plan = state_store.get_pending_plan(pending_plan_id)
-        if not isinstance(plan, dict):
-            return False
-        plan_preview = plan.get("planPreview")
-        if not isinstance(plan_preview, dict):
-            plan_preview = {"steps": plan.get("steps", [])}
-        return self._dispatch_consent_covers_plan(work_order, {"planPreview": plan_preview})
-
-    def _auto_approve_dispatched_plan(
+    def _execute_approved_plan(
         self,
         task_id: str,
         task_run_id: str,
-        local_result: dict[str, Any],
+        conversation_id: str,
+        pending_plan_id: str,
         *,
         work_order: dict[str, Any] | None = None,
+        message: str = "Onaylanan adım yürütülüyor.",
     ) -> dict[str, Any] | None:
-        """Dispatch onayı kapsamındaki planı hemen yürüt; olmazsa None (onaya düş)."""
-        pending_plan_id = str(local_result.get("pendingPlanId", "") or "").strip()
-        conversation_id = str(local_result.get("conversationId", "") or "").strip()
-        permission_error = self.host._pending_plan_permission_error(pending_plan_id)
-        if permission_error is not None:
-            return None
         self._report_lifecycle(
             task_id,
             task_run_id,
             "running",
-            "Mobil dispatch onayı planı kapsıyor — adımlar otomatik yürütülüyor.",
+            message,
         )
-        # Only registered read-only plans reach this path. User-action writes
-        # pause and let the backend's current per-user mode decide.
         approval_token = self.host._begin_trusted_work_order(work_order, "approval")
         try:
             approved = self.host._run_with_approved_task_access(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import sys
 from pathlib import Path
 
 from actions._read_only_common import content_type_for, is_explicit_path_value, preview_text, workspace_root
@@ -12,6 +14,53 @@ DEFAULT_OUTPUT_DIRNAME = "elyan_output"
 
 def output_root(root_resolver=workspace_root) -> Path:
     return root_resolver() / DEFAULT_OUTPUT_DIRNAME
+
+
+def _linux_desktop_dir(home: Path) -> Path | None:
+    """Linux'ta XDG kullanıcı dizinlerinden masaüstünü çözer (yerelleştirilmiş
+    klasör adlarını da destekler). ~/.config/user-dirs.dirs içindeki
+    `XDG_DESKTOP_DIR="$HOME/Masaüstü"` gibi bir satırdan okur."""
+    config_home = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    config_path = (Path(config_home) if config_home else home / ".config") / "user-dirs.dirs"
+    try:
+        for line in config_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("XDG_DESKTOP_DIR"):
+                continue
+            _, _, value = stripped.partition("=")
+            value = value.strip().strip('"').strip("'")
+            value = value.replace("$HOME", str(home)).replace("${HOME}", str(home))
+            if value:
+                return Path(value).expanduser()
+    except OSError:
+        pass
+    return None
+
+
+def desktop_dir() -> Path:
+    """Tüm işletim sistemlerinde kullanıcı masaüstü klasörü.
+
+    macOS / Windows: ``~/Desktop`` (Windows'ta USERPROFILE\\Desktop). Linux:
+    XDG_DESKTOP_DIR (yerelleştirilmiş) ya da ``~/Desktop``. Ev dizini
+    çözülemezse çalışma alanı ``elyan_output`` klasörüne düşülür (fail-safe).
+    """
+    try:
+        home = Path.home()
+    except (RuntimeError, OSError):
+        return output_root()
+    if sys.platform.startswith("linux"):
+        xdg = _linux_desktop_dir(home)
+        if xdg is not None:
+            return xdg
+    return home / "Desktop"
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def slugify_filename(value: str, *, fallback: str = "untitled") -> str:
@@ -64,29 +113,34 @@ def ensure_allowed_output_path(
     overwrite: bool = False,
     hint: str = "",
     root_resolver=workspace_root,
+    desktop_resolver=None,
 ) -> Path:
+    """Çıktı yolunu çözer. Kullanıcı AÇIK bir yol verdiyse (``~``, ``/``, ``C:\\``)
+    oraya yazılır. Aksi halde VARSAYILAN olarak masaüstüne kaydedilir (tüm OS).
+    Açık olmayan göreli adlar güvenlik için masaüstü ya da çalışma alanı
+    köküyle sınırlıdır (dizin dışına taşma engellenir)."""
     suffix = extension.lower() if extension.startswith(".") else f".{extension.lower()}"
     candidate = str(raw_path or "").strip()
+    default_base = (desktop_resolver or desktop_dir)()
     if candidate:
         resolved = Path(candidate).expanduser()
         if not resolved.suffix:
             resolved = resolved.with_suffix(suffix)
         if not resolved.is_absolute():
-            resolved = (root_resolver() / resolved).resolve()
+            # Açık olmayan göreli ad artık VARSAYILAN olarak masaüstüne çözülür.
+            resolved = (default_base / resolved).resolve()
         else:
             resolved = resolved.resolve()
         if not is_explicit_path_value(candidate):
-            root = root_resolver().resolve()
-            try:
-                resolved.relative_to(root)
-            except ValueError as exc:
+            allowed_roots = [default_base.resolve(), root_resolver().resolve()]
+            if not any(_is_within(resolved, root) for root in allowed_roots):
                 raise SafeCapabilityError(
                     "ACCESS_DENIED",
-                    "Dosya yalnızca açık yol veya izinli çalışma alanı içine yazılabilir.",
-                ) from exc
+                    "Dosya yalnızca açık yol, masaüstü veya izinli çalışma alanı içine yazılabilir.",
+                )
     else:
         filename = f"{slugify_filename(hint or 'elyan-output')}{suffix}"
-        resolved = unique_output_path((output_root(root_resolver) / filename).resolve())
+        resolved = unique_output_path((default_base / filename).resolve())
 
     if resolved.suffix.lower() != suffix:
         resolved = resolved.with_suffix(suffix)

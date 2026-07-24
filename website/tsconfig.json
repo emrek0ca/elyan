@@ -1,7 +1,15 @@
 {
-  "files": [],
-  "references": [
-    { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
-  ]
+  "extends": "astro/tsconfigs/strict",
+  "include": [
+    ".astro/types.d.ts",
+    "**/*"
+  ],
+  "exclude": [
+    "dist",
+    "src/contracts/assistant-blocks.validator.mjs"
+  ],
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
+  }
 }

@@ -1,0 +1,61 @@
+---
+import '../assets/styles/global.css';
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+import 'katex/dist/katex.min.css';
+
+interface Props {
+  title?: string;
+  bodyData?: Record<string, string>;
+}
+
+const { title = 'Elyan App', bodyData = {} } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en" class="scroll-smooth overflow-x-clip light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style is:global>
+      html, body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow-x: clip;
+      }
+    </style>
+  </head>
+  <body class="elyan-app-root antialiased min-h-screen flex flex-col overflow-x-clip bg-[var(--color-elyan-bg)] text-[var(--color-elyan-text)]" data-settings-page={bodyData.settingsPage}>
+    <div id="smooth-wrapper" class="flex-1 flex flex-col">
+      <slot />
+    </div>
+    
+    <script>
+      import Lenis from 'lenis';
+      import { gsap } from 'gsap';
+
+      const lenis = new Lenis({
+        duration: 1.2,
+        easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)), 
+        orientation: 'vertical',
+        gestureOrientation: 'vertical',
+        smoothWheel: true,
+        wheelMultiplier: 1,
+        touchMultiplier: 2,
+        infinite: false,
+      });
+
+      gsap.ticker.add((time) => {
+        lenis.raf(time * 1000);
+      });
+
+      gsap.ticker.lagSmoothing(0);
+    </script>
+  </body>
+</html>

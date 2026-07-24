@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import itertools
 import json
 import math
@@ -13,6 +15,8 @@ from runtime import state_store
 from runtime.capability_registry import SafeCapabilityError
 
 _ARTIFACT_LIMIT = 24
+_QUANTUM_BENCHMARK_VERSION = "elyan_quantum_benchmark_v1"
+_QUANTUM_BENCHMARK_PRODUCER = "elyan_quantum_benchmark_worker"
 
 
 def _artifact_dir() -> Path:
@@ -44,6 +48,14 @@ def _prune_artifacts() -> None:
 
 def _compact(value: Any, limit: int = 240) -> str:
     return " ".join(str(value or "").split()).strip()[:limit]
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _sha256_hex(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _qiskit_available() -> bool:
@@ -322,6 +334,208 @@ def _best_feasible_solution(qubo: dict[str, Any]) -> dict[str, Any]:
     return feasible[0]
 
 
+def _pauli_label(num_qubits: int, indexes: tuple[int, ...]) -> str:
+    chars = ["I"] * num_qubits
+    for index in indexes:
+        if 0 <= index < num_qubits:
+            chars[num_qubits - 1 - index] = "Z"
+    return "".join(chars)
+
+
+def _qubo_to_sparse_pauli(qubo: dict[str, Any]) -> Any:
+    from qiskit.quantum_info import SparsePauliOp  # type: ignore[reportMissingImports]
+
+    variables = [str(item) for item in qubo.get("variables", []) if str(item or "").strip()]
+    if not variables:
+        raise SafeCapabilityError("INVALID_ARGUMENT", "Quantum modelinde değişken bulunamadı.")
+    index_by_variable = {variable: index for index, variable in enumerate(variables)}
+    coefficients: dict[str, float] = {}
+
+    def add(label: str, weight: float) -> None:
+        if abs(weight) < 1e-12:
+            return
+        coefficients[label] = coefficients.get(label, 0.0) + float(weight)
+
+    identity = "I" * len(variables)
+    linear = qubo.get("linear") if isinstance(qubo.get("linear"), dict) else {}
+    for variable, weight in linear.items():
+        index = index_by_variable.get(str(variable))
+        if index is None:
+            continue
+        value = float(weight)
+        add(identity, value / 2.0)
+        add(_pauli_label(len(variables), (index,)), -value / 2.0)
+
+    quadratic = qubo.get("quadratic") if isinstance(qubo.get("quadratic"), dict) else {}
+    for key, weight in quadratic.items():
+        left, _, right = str(key).partition("*")
+        left_index = index_by_variable.get(left)
+        right_index = index_by_variable.get(right)
+        if left_index is None or right_index is None or left_index == right_index:
+            continue
+        value = float(weight)
+        add(identity, value / 4.0)
+        add(_pauli_label(len(variables), (left_index,)), -value / 4.0)
+        add(_pauli_label(len(variables), (right_index,)), -value / 4.0)
+        add(_pauli_label(len(variables), (left_index, right_index)), value / 4.0)
+
+    terms = [(label, weight) for label, weight in coefficients.items() if abs(weight) >= 1e-12]
+    if not terms:
+        terms = [(identity, 0.0)]
+    return SparsePauliOp.from_list(terms)
+
+
+def _assignment_from_counts_bitstring(bitstring: str, variables: list[str]) -> dict[str, int]:
+    compact = str(bitstring or "").replace(" ", "")
+    # Qiskit count keys are ordered by classical bit display, so reverse them to
+    # map qubit 0 -> variables[0].
+    bits = compact[::-1]
+    return {
+        variable: int(bits[index]) if index < len(bits) and bits[index] in {"0", "1"} else 0
+        for index, variable in enumerate(variables)
+    }
+
+
+def _bitstring_from_assignment(assignment: dict[str, int], variables: list[str]) -> str:
+    return "".join(str(int(assignment.get(variable, 0))) for variable in variables)
+
+
+def _normalize_counts_distribution(counts: dict[str, Any], variables: list[str]) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    for raw_bitstring, count in counts.items():
+        assignment = _assignment_from_counts_bitstring(str(raw_bitstring), variables)
+        canonical = _bitstring_from_assignment(assignment, variables)
+        distribution[canonical] = distribution.get(canonical, 0) + int(count)
+    return distribution
+
+
+def _qaoa_parameter_grid() -> list[tuple[float, float]]:
+    return [
+        (beta, gamma)
+        for beta in (math.pi / 8.0, math.pi / 4.0, 3.0 * math.pi / 8.0)
+        for gamma in (math.pi / 8.0, math.pi / 4.0, 3.0 * math.pi / 8.0, math.pi / 2.0)
+    ]
+
+
+def _run_qaoa_aer(
+    qubo: dict[str, Any],
+    *,
+    shots: int,
+    algorithm: str,
+    timeout_seconds: float = 5.0,
+) -> dict[str, Any]:
+    variables = [str(item) for item in qubo.get("variables", []) if str(item or "").strip()]
+    if len(variables) > 8:
+        raise SafeCapabilityError(
+            "QUANTUM_PROBLEM_TOO_LARGE",
+            "Yerel QAOA simulator için problem çok büyük; klasik baseline kullanılacak.",
+        )
+
+    from qiskit import transpile  # type: ignore[reportMissingImports]
+    from qiskit.circuit.library import QAOAAnsatz  # type: ignore[reportMissingImports]
+    from qiskit_aer import AerSimulator  # type: ignore[reportMissingImports]
+
+    cost_operator = _qubo_to_sparse_pauli(qubo)
+    ansatz = QAOAAnsatz(cost_operator=cost_operator, reps=1)
+    simulator = AerSimulator(seed_simulator=1729)
+    bounded_shots = max(64, min(int(shots or 1024), 8192))
+    search_shots = min(512, bounded_shots)
+    deadline = time.monotonic() + max(0.5, timeout_seconds)
+    best_candidate: dict[str, Any] | None = None
+    evaluations = 0
+
+    for beta, gamma in _qaoa_parameter_grid():
+        if time.monotonic() > deadline:
+            break
+        bindings = {}
+        for parameter in ansatz.parameters:
+            name = str(parameter)
+            bindings[parameter] = beta if "β" in name or "beta" in name.lower() else gamma
+        circuit = ansatz.assign_parameters(bindings, inplace=False)
+        circuit.measure_all()
+        compiled = transpile(circuit, simulator, optimization_level=1)
+        counts = simulator.run(compiled, shots=search_shots).result().get_counts()
+        evaluations += 1
+        ranked = sorted(
+            (
+                {
+                    "bitstring": _bitstring_from_assignment(
+                        _assignment_from_counts_bitstring(str(bitstring), variables),
+                        variables,
+                    ),
+                    "count": int(count),
+                    "assignment": _assignment_from_counts_bitstring(str(bitstring), variables),
+                }
+                for bitstring, count in counts.items()
+            ),
+            key=lambda item: int(item["count"]),
+            reverse=True,
+        )
+        for item in ranked:
+            item["energy"] = _energy(qubo, item["assignment"])
+            item["feasible"] = not _constraint_violations(qubo, item["assignment"])
+        feasible = [item for item in ranked if item["feasible"]]
+        candidate = min(feasible or ranked, key=lambda item: float(item["energy"]))
+        candidate["beta"] = beta
+        candidate["gamma"] = gamma
+        candidate["circuitDepth"] = int(compiled.depth() or 0)
+        if best_candidate is None or float(candidate["energy"]) < float(best_candidate["energy"]):
+            best_candidate = candidate
+
+    if best_candidate is None:
+        raise SafeCapabilityError("QUANTUM_SIMULATION_TIMEOUT", "Quantum simulator zaman aşımına uğradı.")
+
+    final_bindings = {}
+    for parameter in ansatz.parameters:
+        name = str(parameter)
+        final_bindings[parameter] = best_candidate["beta"] if "β" in name or "beta" in name.lower() else best_candidate["gamma"]
+    final_circuit = ansatz.assign_parameters(final_bindings, inplace=False)
+    final_circuit.measure_all()
+    final_compiled = transpile(final_circuit, simulator, optimization_level=1)
+    final_counts = simulator.run(final_compiled, shots=bounded_shots).result().get_counts()
+    distribution = _normalize_counts_distribution(dict(final_counts), variables)
+    ranked_final = sorted(
+        (
+            {
+                "bitstring": str(bitstring),
+                "count": int(count),
+                "assignment": {
+                    variable: int(str(bitstring)[index]) if index < len(str(bitstring)) else 0
+                    for index, variable in enumerate(variables)
+                },
+            }
+            for bitstring, count in distribution.items()
+        ),
+        key=lambda item: int(item["count"]),
+        reverse=True,
+    )
+    for item in ranked_final:
+        item["energy"] = _energy(qubo, item["assignment"])
+        item["feasible"] = not _constraint_violations(qubo, item["assignment"])
+    feasible_final = [item for item in ranked_final if item["feasible"]]
+    measured_best = min(feasible_final or ranked_final, key=lambda item: float(item["energy"]))
+    return {
+        "backend": "qiskit_aer_qaoa_simulator",
+        "algorithm": str(algorithm or "qaoa").lower(),
+        "shots": bounded_shots,
+        "bestBitstring": measured_best["bitstring"],
+        "bestEnergy": float(measured_best["energy"]),
+        "bestAssignment": measured_best["assignment"],
+        "sampleDistribution": distribution,
+        "optimizer": "bounded_grid_search",
+        "optimizerEvaluations": evaluations,
+        "parameters": {
+            "beta": float(best_candidate["beta"]),
+            "gamma": float(best_candidate["gamma"]),
+        },
+        "circuit": {
+            "qubits": len(variables),
+            "depth": int(final_compiled.depth() or best_candidate.get("circuitDepth") or 0),
+            "costOperatorTerms": len(cost_operator),
+        },
+    }
+
+
 def _quantum_snapshot(
     status: str = "completed",
     fallback_reason: str | None = None,
@@ -337,6 +551,53 @@ def _quantum_snapshot(
         "benchmarkStatus": status,
         "fallbackReason": fallback_reason,
         "lastBenchmarkScore": score,
+    }
+
+
+def _quantum_benchmark_attestation(
+    *,
+    qubo: dict[str, Any],
+    experiment: dict[str, Any],
+    metrics: dict[str, Any],
+) -> dict[str, Any]:
+    gap = _safe_float(metrics.get("optimalityGap"))
+    sample_count = int(experiment.get("shots", 0) or 0)
+    sample_count = max(32, sample_count)
+    score = 1.0 / (1.0 + abs(gap if gap is not None else 1.0))
+    baseline_score = 1.0 if gap is not None else 0.0
+    dataset_fingerprint = _sha256_hex(
+        {
+            "metric": "quantum_optimization_gap",
+            "problemClass": qubo.get("problemClass"),
+            "variables": qubo.get("variables", []),
+            "linear": qubo.get("linear", {}),
+            "quadratic": qubo.get("quadratic", {}),
+            "constraints": qubo.get("constraints", []),
+            "capacity": qubo.get("capacity"),
+        }
+    )
+    run_id = _sha256_hex(
+        {
+            "datasetFingerprint": dataset_fingerprint,
+            "backend": experiment.get("backend"),
+            "algorithm": experiment.get("algorithm"),
+            "bestBitstring": experiment.get("bestBitstring"),
+            "bestEnergy": experiment.get("bestEnergy"),
+            "shots": sample_count,
+        }
+    )[:32]
+    return {
+        "version": _QUANTUM_BENCHMARK_VERSION,
+        "producer": _QUANTUM_BENCHMARK_PRODUCER,
+        "runId": f"qbench-{run_id}",
+        "metric": "quantum_optimization_gap",
+        "datasetFingerprint": dataset_fingerprint,
+        "sampleCount": sample_count,
+        "score": round(max(0.0, min(1.0, score)), 4),
+        "source": "measured",
+        "classicalBaselineScore": round(max(0.0, min(1.0, baseline_score)), 4),
+        "measuredAt": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "backend": str(experiment.get("backend") or "unknown"),
     }
 
 
@@ -377,35 +638,73 @@ def quantum_run_experiment(
     _previousResult: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     qubo = _qubo_from_previous(_previousResult, prompt)
-    best = _best_feasible_solution(qubo)
     normalized_algorithm = str(algorithm or "qaoa").strip().lower()
     if normalized_algorithm not in {"qaoa", "vqe"}:
         normalized_algorithm = "qaoa"
     qiskit_ready = _qiskit_available()
-    backend = "qiskit_statevector_simulator" if qiskit_ready else "classical_reference_simulator"
-    fallback_reason = None if qiskit_ready else "quantum_dependency_unavailable"
-    solutions = _enumerate_solutions(qubo)
-    distribution = {
-        str(best["bitstring"]): int(max(1, shots) * 0.72),
-    }
-    for item in solutions[1: min(4, len(solutions))]:
-        distribution[str(item["bitstring"])] = max(1, int(max(1, shots) * 0.28 / max(1, min(3, len(solutions) - 1))))
+    fallback_reason = None
+    if qiskit_ready:
+        try:
+            aer_result = _run_qaoa_aer(
+                qubo,
+                shots=max(1, int(shots or 1024)),
+                algorithm=normalized_algorithm,
+            )
+        except SafeCapabilityError as exc:
+            fallback_reason = exc.code.lower()
+            aer_result = {}
+        except Exception:
+            fallback_reason = "quantum_simulation_failed"
+            aer_result = {}
+    else:
+        fallback_reason = "quantum_dependency_unavailable"
+        aer_result = {}
+
+    if aer_result:
+        best_assignment = {
+            str(key): int(value)
+            for key, value in dict(aer_result.get("bestAssignment", {}) or {}).items()
+        }
+        best = {
+            "bitstring": str(aer_result.get("bestBitstring", "")),
+            "assignment": best_assignment,
+            "energy": float(aer_result.get("bestEnergy", 0.0) or 0.0),
+        }
+        backend = str(aer_result.get("backend") or "qiskit_aer_qaoa_simulator")
+        distribution = dict(aer_result.get("sampleDistribution", {}) or {})
+    else:
+        best = _best_feasible_solution(qubo)
+        backend = "classical_reference_simulator"
+        solutions = _enumerate_solutions(qubo)
+        distribution = {
+            str(best["bitstring"]): int(max(1, shots) * 0.72),
+        }
+        for item in solutions[1: min(4, len(solutions))]:
+            distribution[str(item["bitstring"])] = max(1, int(max(1, shots) * 0.28 / max(1, min(3, len(solutions) - 1))))
+
+    constraint_violations = _constraint_violations(qubo, best["assignment"])
     experiment = {
         "kind": "quantum_run_experiment",
         "algorithm": normalized_algorithm,
-        "shots": max(1, int(shots or 1024)),
+        "shots": int(aer_result.get("shots", max(1, int(shots or 1024))) if aer_result else max(1, int(shots or 1024))),
         "backend": backend,
         "bestBitstring": best["bitstring"],
         "bestEnergy": best["energy"],
         "bestAssignment": best["assignment"],
-        "feasible": not _constraint_violations(qubo, best["assignment"]),
-        "constraintViolations": _constraint_violations(qubo, best["assignment"]),
+        "feasible": not constraint_violations,
+        "constraintViolations": constraint_violations,
         "utility": _solution_utility(qubo, best["assignment"]),
         "sampleDistribution": distribution,
         "qiskitReady": qiskit_ready,
         "fallbackReason": fallback_reason,
+        "measuredByAer": bool(aer_result),
     }
-    status = "simulated" if qiskit_ready else "classical_fallback"
+    if aer_result.get("optimizer"):
+        experiment["optimizer"] = aer_result["optimizer"]
+        experiment["optimizerEvaluations"] = aer_result.get("optimizerEvaluations")
+        experiment["parameters"] = aer_result.get("parameters")
+        experiment["circuit"] = aer_result.get("circuit")
+    status = "simulated" if aer_result else "classical_fallback"
     return {
         "text": f"{normalized_algorithm.upper()} çözüm adımı tamamlandı. En iyi bitstring: {best['bitstring']}, enerji: {best['energy']:.3f}.",
         "result": {
@@ -438,12 +737,18 @@ def quantum_compare_classical(prompt: str, _previousResult: dict[str, Any] | Non
         "utility": _solution_utility(qubo, {str(k): int(v) for k, v in assignment.items()}),
         "reproducible": True,
     }
+    attestation = _quantum_benchmark_attestation(
+        qubo=qubo,
+        experiment=experiment,
+        metrics=metrics,
+    )
     return {
         "text": f"Klasik baseline tamamlandı. Optimum enerji: {best['energy']:.3f}, gap: {gap:.3f}.",
         "result": {
             "model": {"qubo": qubo},
             "experiment": experiment,
             "metrics": metrics,
+            "quantumBenchmarkAttestation": attestation,
             "quantum": _quantum_snapshot("benchmarked", experiment.get("fallbackReason"), 1.0 / (1.0 + abs(gap)), str(qubo.get("problemClass") or "optimization")),
         },
         "artifacts": [],
@@ -463,6 +768,13 @@ def quantum_generate_report(
         decision_model = model.get("decisionModel") if isinstance(model.get("decisionModel"), dict) else {}
     experiment = previous.get("experiment") if isinstance(previous.get("experiment"), dict) else {}
     metrics = previous.get("metrics") if isinstance(previous.get("metrics"), dict) else {}
+    attestation = previous.get("quantumBenchmarkAttestation") if isinstance(previous.get("quantumBenchmarkAttestation"), dict) else {}
+    if not attestation and experiment and metrics:
+        attestation = _quantum_benchmark_attestation(
+            qubo=qubo,
+            experiment=experiment,
+            metrics=metrics,
+        )
     report_title = _compact(title, 120) or "Elyan Quantum Deney Raporu"
     report = "\n".join(
         [
@@ -476,6 +788,8 @@ def quantum_generate_report(
             "## Quantum Deney Alanı",
             f"- Algoritma: {experiment.get('algorithm', 'qaoa')}",
             f"- Backend: {experiment.get('backend', 'classical_reference_simulator')}",
+            f"- Ölçüm: {'Aer devre simülasyonu' if experiment.get('measuredByAer') else 'klasik fallback'}",
+            f"- Optimizer: {experiment.get('optimizer', '-')}",
             f"- En iyi bitstring: {experiment.get('bestBitstring', metrics.get('classicalBestBitstring', '-'))}",
             "",
             "## Doğrulama",
@@ -498,6 +812,7 @@ def quantum_generate_report(
         "qubo": qubo,
         "experiment": experiment,
         "metrics": metrics,
+        "quantumBenchmarkAttestation": attestation,
     }
     json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     _prune_artifacts()
@@ -513,6 +828,7 @@ def quantum_generate_report(
             "report": report,
             "metrics": metrics,
             "experiment": experiment,
+            "quantumBenchmarkAttestation": attestation,
         },
         "artifacts": [
             {

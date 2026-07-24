@@ -299,6 +299,63 @@ class ExecutionLedger:
         finally:
             connection.close()
 
+    def refresh_expired_work_order(self, order: dict[str, Any]) -> None:
+        """Refresh only the local lifetime fields for the same bound order.
+
+        Runtime dispatch leases are transport leases. If a user takes longer
+        than that lease to approve a task, the already-bound work order must not
+        fail solely because the transport lease expired. The immutable binding
+        fields below still prevent task/device/plan/prompt tampering.
+        """
+        binding = _work_order_binding(order)
+        nonce_hash = sha256_value(binding["nonce"])
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM work_orders WHERE user_id=? AND task_id=? AND revision=?",
+                (binding["userId"], binding["taskId"], binding["revision"]),
+            ).fetchone()
+            if existing is None:
+                raise TrustError("WORK_ORDER_MISSING", "İş emri ledger içinde bulunamadı.")
+            immutable_current = (
+                existing["device_id"],
+                existing["prompt_hash"],
+                existing["plan_hash"],
+                existing["capability_scope"],
+            )
+            immutable_incoming = (
+                binding["deviceId"],
+                binding["promptHash"],
+                binding["planHash"],
+                _canonical_json(binding["capabilityScope"]),
+            )
+            if immutable_current != immutable_incoming:
+                raise TrustError("WORK_ORDER_REVISION_MISMATCH", "İş emri aynı revision için değiştirildi.")
+            connection.execute(
+                """UPDATE work_orders
+                   SET expires_at=?, nonce_hash=?, nonce=?, signature=?
+                   WHERE user_id=? AND task_id=? AND revision=?""",
+                (
+                    binding["expiresAt"],
+                    nonce_hash,
+                    binding["nonce"],
+                    str(order.get("signature", "") or ""),
+                    binding["userId"],
+                    binding["taskId"],
+                    binding["revision"],
+                ),
+            )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise TrustError("WORK_ORDER_NONCE_REPLAY", "İş emri nonce değeri daha önce kullanılmış.") from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def claim_delivery(self, order: dict[str, Any]) -> DeliveryClaim:
         binding = _work_order_binding(order)
         connection = self._connect()
@@ -629,12 +686,20 @@ def prepare_work_order_v2(
     persisted = store.get_work_order_binding(user_id, task_id, revision)
     if persisted is not None:
         order = {**work_order, **persisted}
+        if _parse_iso(order.get("expiresAt")) is None or _parse_iso(order.get("expiresAt")) <= _utc_now():
+            expiry = _parse_iso(work_order.get("expiresAt"))
+            if expiry is None or expiry <= _utc_now():
+                expiry = _utc_now() + dt.timedelta(seconds=DEFAULT_WORK_ORDER_TTL_SECONDS)
+            order = {
+                **work_order,
+                **persisted,
+                "expiresAt": _utc_iso(expiry),
+                "nonce": secrets.token_urlsafe(24),
+            }
+            order["signature"] = _sign(_work_order_binding(order), device_secret)
+            store.refresh_expired_work_order(order)
     else:
-        expiry = _parse_iso(
-            work_order.get("expiresAt")
-            or task.get("dispatchLeaseExpiresAt")
-            or task.get("leaseExpiresAt")
-        )
+        expiry = _parse_iso(work_order.get("expiresAt"))
         if expiry is None:
             expiry = _utc_now() + dt.timedelta(seconds=DEFAULT_WORK_ORDER_TTL_SECONDS)
         if expiry <= _utc_now():

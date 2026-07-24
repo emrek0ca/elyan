@@ -707,9 +707,24 @@ def _slugify_output_hint(value: str, fallback: str) -> str:
     return cleaned[:64] or fallback
 
 
-def _default_output_path(extension: str, hint: str) -> str:
+def _named_destination_dir(text: str) -> "Path | None":
+    """Metinde geçen adlandırılmış hedef klasörü (masaüstü/indirilenler/belgeler…)
+    açık yola çevirir. Yoksa None."""
+    q = _normalise(text)
+    for keyword, dest in _IMAGE_DEST_KEYWORDS:
+        if keyword in q:
+            return Path(dest).expanduser()
+    return None
+
+
+def _default_output_path(extension: str, hint: str, base: "Path | None" = None) -> str:
+    # VARSAYILAN çıktı hedefi artık kullanıcı masaüstü (tüm OS). Kullanıcı açık
+    # bir yol/klasör söylerse çağıran taraf `base` geçirir.
+    from actions._write_common import desktop_dir
+
+    root = base if base is not None else desktop_dir()
     filename = f"{_slugify_output_hint(hint, 'elyan-output')}{extension}"
-    path = (_workspace_root() / "elyan_output" / filename).resolve()
+    path = (root / filename).resolve()
     if not path.exists():
         return str(path)
     for index in range(2, 1000):
@@ -744,6 +759,11 @@ def _resolve_output_path(text: str, extension: str, *, hint: str) -> str:
     )
     if relative:
         return str((_workspace_root() / relative.group(1).strip()).resolve())
+    # Kullanıcı bir klasör adı söylediyse (masaüstü/indirilenler/belgeler…) oraya;
+    # aksi halde varsayılan masaüstüne.
+    named = _named_destination_dir(text)
+    if named is not None:
+        return _default_output_path(extension, hint, base=named)
     return _default_output_path(extension, hint)
 
 

@@ -1,0 +1,101 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+export const prerender = true;
+---
+
+<AppLayout title="Kullanım Koşulları - Elyan">
+  <main class="min-h-screen bg-[var(--color-elyan-bg)] py-20 px-6 md:px-12">
+    <div class="max-w-3xl mx-auto space-y-12">
+      
+      <header class="space-y-4">
+        <span class="text-[var(--color-elyan-primary)] font-semibold tracking-wider text-sm uppercase">Hizmet Şartları</span>
+        <h1 class="text-4xl font-sans font-bold text-[var(--color-elyan-text)] tracking-tight">Kullanım Koşulları</h1>
+        <p class="text-[17px] text-[var(--color-elyan-text-muted)] leading-relaxed font-medium">
+          Bu koşullar Elyan web sitesi, Elyan Mobile, Elyan Desktop ve bağlı control-plane servislerinin kullanımını düzenler. Elyan'ı kullanarak bu koşulları ve gizlilik politikasını kabul etmiş olursunuz. Yürürlük tarihi: 22 Haziran 2026.
+        </p>
+      </header>
+
+      <div class="space-y-10">
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">1. Hizmetin Kapsamı</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan; mobil görev kontrolü, desktop local runtime, cihaz eşleştirme, task routing, zeka destekli yanıt üretimi, belge/görsel işleme ve güvenli görev izleme özellikleri sunar.</p>
+            <p>Mobil ve web yüzeyleri kontrol yüzeyidir. Özel yerel eylemler Elyan Desktop runtime sınırında veya açıkça etkinleştirilen sistem entegrasyonları üzerinden yürütülür.</p>
+            <p>Bazı özellikler beta, sınırlı erişim veya platforma bağlı olabilir. Özelliklerin kesintisiz, hatasız veya her cihazda aynı şekilde çalışacağı garanti edilmez.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">2. Hesap, Cihaz ve İzin Sorumluluğu</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Hesabınızın, oturumlarınızın ve eşleştirdiğiniz cihazların güvenliğinden siz sorumlusunuz. Yetkisiz erişim veya şüpheli işlem fark ederseniz support@elyan.dev adresine bildirmelisiniz.</p>
+            <p>Cihaz izinleri yalnızca ilgili özelliği kullanmak için istenir. Takvim, bildirim, sağlık/aktivite, cihaz durumu, dosya erişimi veya benzer izinleri işletim sistemi ayarlarından kapatabilirsiniz.</p>
+            <p>Başkasına ait hesap, cihaz, dosya, bildirim, takvim veya sağlık verisini yetkisiz biçimde kullanamazsınız.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">3. Kabul Edilebilir Kullanım</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan'ı yasa dışı faaliyet, kötüye kullanım, zararlı otomasyon, yetkisiz erişim, kimlik avı, taciz, telif hakkı ihlali veya başkalarının gizlilik haklarını ihlal etmek için kullanamazsınız.</p>
+            <p>Güvenlik sınırlarını aşmaya çalışmak, gizli anahtar veya kimlik bilgisi toplamaya çalışmak, sistemleri bozmak, yoğun istekle hizmeti aksatmak veya güvenlik kontrollerini devre dışı bırakmak yasaktır.</p>
+            <p>Elyan, kötüye kullanım şüphesi olduğunda görevi reddedebilir, hesabı askıya alabilir veya gerekli güvenlik önlemlerini uygulayabilir.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">4. Elyan Çıktıları ve Profesyonel Danışmanlık</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan çıktıları eksik, hatalı, eski veya bağlama uygun olmayan bilgiler içerebilir. Kritik kararlar almadan önce çıktıları kontrol etmek kullanıcının sorumluluğundadır.</p>
+            <p>Elyan tıbbi tanı, tedavi, hukuki danışmanlık, finansal yatırım tavsiyesi veya acil durum hizmeti sunmaz. Sağlık, hukuk, finans veya güvenlik açısından yüksek riskli konularda yetkili profesyonellerden destek alınmalıdır.</p>
+            <p>Elyan'ın görev planlaması ve otomasyon önerileri kullanıcı onayı, platform izinleri ve güvenlik politikalarıyla sınırlıdır.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">5. İçerik Sahipliği</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Uygulamaya yüklediğiniz dosyalar, yazdığınız komutlar ve size ait içerikler size aittir.</p>
+            <p>Elyan'a, hizmeti sağlamak, güvenli biçimde işlemek, yanıt üretmek, senkronize etmek, hata ayıklamak ve destek vermek için gerekli sınırlı kullanım hakkını vermiş olursunuz.</p>
+            <p>Elyan markası, logosu, tasarım sistemi, yazılımı, dokümantasyonu ve mimarisi Elyan geliştiricilerine aittir.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">6. Abonelikler, İptaller ve İadeler</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Ücretli planlar App Store, Google Play veya desteklenen başka bir ödeme kanalı üzerinden sunulabilir. Mağaza üzerinden satın alınan abonelikler ilgili mağazanın abonelik, iptal ve iade kurallarına tabidir.</p>
+            <p>Aboneliğinizi App Store veya Google Play hesabınızdan yönetebilir ve iptal edebilirsiniz. İptal sonrası erişim, ödenmiş dönem sonuna kadar devam edebilir.</p>
+            <p>Fiyatlar, deneme süreleri ve plan kapsamları bölgeye ve platforma göre değişebilir.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">7. Hesap Silme ve Hizmetin Sona Ermesi</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Hesabınızı uygulama içinden veya /tr/data-deletion sayfasındaki talimatları izleyerek silebilirsiniz.</p>
+            <p>Koşulları ihlal eden, güvenliği riske atan veya yasa dışı kullanım içeren hesaplar askıya alınabilir ya da sonlandırılabilir.</p>
+            <p>Hesap silme sonrası bazı kayıtlar yasal, güvenlik, faturalandırma veya uyuşmazlık gereklilikleri nedeniyle sınırlı süre saklanabilir.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">8. Sorumluluk Reddi ve Sınırlama</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan "olduğu gibi" ve "mevcut olduğu şekilde" sunulur. Kesintisiz erişim, hatasız çalışma, belirli bir sonucun elde edilmesi veya tüm çıktılarının doğru olması garanti edilmez.</p>
+            <p>Yasaların izin verdiği en geniş ölçüde Elyan, dolaylı zararlar, veri kaybı, iş kaybı, kâr kaybı veya kullanıcı tarafından doğrulanmadan uygulanan çıktılardan doğan zararlardan sorumlu tutulamaz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">9. Değişiklikler ve İletişim</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Bu koşulları ürün, mevzuat veya mağaza gereklilikleri değiştikçe güncelleyebiliriz. Güncel sürüm her zaman bu sayfada yayınlanır.</p>
+            <p>Sorularınız için support@elyan.dev adresinden bize ulaşabilirsiniz.</p>
+          </div>
+        </section>
+      </div>
+      
+    </div>
+  </main>
+</AppLayout>

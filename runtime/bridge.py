@@ -7158,11 +7158,22 @@ class RuntimeBridge:
             result_payload["planPreview"] = dict(plan_preview)
         if isinstance(execution_trace, dict):
             result_payload["executionTrace"] = dict(execution_trace)
+            scheduler_trace = execution_trace.get("scheduler")
+            if isinstance(scheduler_trace, dict):
+                quantum_optimization = scheduler_trace.get("quantumOptimization")
+                if isinstance(quantum_optimization, dict):
+                    result_payload["quantumOptimization"] = dict(quantum_optimization)
         blocks = self._runtime_task_result_blocks(local_result)
         if blocks:
             result_payload["blocks"] = blocks
         if isinstance(structured_result, dict) and isinstance(structured_result.get("quantum"), dict):
             result_payload["quantum"] = dict(structured_result["quantum"])
+        if isinstance(structured_result, dict) and isinstance(
+            structured_result.get("quantumBenchmarkAttestation"), dict
+        ):
+            result_payload["quantumBenchmarkAttestation"] = dict(structured_result["quantumBenchmarkAttestation"])
+        elif isinstance(result_payload.get("quantumOptimization"), dict):
+            result_payload["quantumBenchmarkAttestation"] = dict(result_payload["quantumOptimization"])
         if isinstance(structured_result, dict) and isinstance(structured_result.get("operator"), dict):
             result_payload["operator"] = dict(structured_result["operator"])
         return result_payload
@@ -9325,6 +9336,7 @@ class RuntimeBridge:
         verify_goal: bool = True,
         confirmed: bool = True,
         local_replan_only: bool = False,
+        plan_preview: dict[str, Any] | None = None,
     ) -> tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
         normalized_steps = self._expand_skill_plan_steps(steps)
         # Güvenilir sunucu-materyalize plan modunda kurtarma yalnız yerel/
@@ -9352,6 +9364,7 @@ class RuntimeBridge:
                 else None
             ),
             execution_id=execution_id,
+            plan_preview=plan_preview,
         )
 
     def revise_conversation_plan(self, conversation_id: str, pending_plan_id: str, revision_text: str) -> dict[str, Any]:
@@ -9625,6 +9638,7 @@ class RuntimeBridge:
                     str(plan.get("query", "") or ""),
                     plan.get("goalContract") if isinstance(plan.get("goalContract"), dict) else None,
                 ),
+                plan_preview=plan.get("planPreview") if isinstance(plan.get("planPreview"), dict) else None,
             )
         except BaseException:
             STATE.revise_pending_plan(
@@ -9856,6 +9870,9 @@ class RuntimeBridge:
                     goal_context=step_goal or execution_goal,
                     execution_id=execution_id,
                     confirmed=False,
+                    plan_preview=(current_work_order or {}).get("planPreview")
+                    if isinstance((current_work_order or {}).get("planPreview"), dict)
+                    else None,
                 ),
             ),
         )
@@ -12338,6 +12355,10 @@ class RuntimeBridge:
         if isinstance(verification, dict) and verification:
             live_trace["verification"] = dict(verification)
             trace_block["verification"] = dict(verification)
+        quantum_liveness = block.get("quantumLiveness")
+        if isinstance(quantum_liveness, dict) and quantum_liveness:
+            live_trace["quantumLiveness"] = dict(quantum_liveness)
+            trace_block["quantumLiveness"] = dict(quantum_liveness)
         live_status = str(live_trace["status"] or "running").strip().lower()
         payload_status = live_status if live_status in {"completed", "failed", "canceled"} else "running"
         payload = {
@@ -14086,6 +14107,7 @@ class RuntimeBridge:
                 verify_goal=not approval_requested,
                 confirmed=False,
                 local_replan_only=trusted_server_plan,
+                plan_preview=plan_preview,
             )
         else:
             ok = True

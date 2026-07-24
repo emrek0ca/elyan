@@ -1,0 +1,101 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+export const prerender = true;
+---
+
+<AppLayout title="Gizlilik Politikası - Elyan">
+  <main class="min-h-screen bg-[var(--color-elyan-bg)] py-20 px-6 md:px-12">
+    <div class="max-w-3xl mx-auto space-y-12">
+      
+      <header class="space-y-4">
+        <span class="text-[var(--color-elyan-primary)] font-semibold tracking-wider text-sm uppercase">Gizlilik ve Veri Güvenliği</span>
+        <h1 class="text-4xl font-sans font-bold text-[var(--color-elyan-text)] tracking-tight">Gizlilik Politikası</h1>
+        <p class="text-[17px] text-[var(--color-elyan-text-muted)] leading-relaxed font-medium">
+          Elyan, local-first mimariyi hosted control-plane ile ayıran zeka tabanlı bir agent sistemidir. Bu politika hangi verileri neden işlediğimizi, hangi izinleri nasıl kullandığımızı, hesap silme ve destek yollarınızı açıklar. Yürürlük tarihi: 22 Haziran 2026.
+        </p>
+      </header>
+
+      <div class="space-y-10">
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">1. Kapsam ve İletişim</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Bu politika Elyan web sitesi, Elyan Mobile, Elyan Desktop ve Elyan control-plane servisleri için geçerlidir.</p>
+            <p>Gizlilik, hesap, veri erişimi, düzeltme, dışa aktarma veya silme talepleri için support@elyan.dev adresinden bize ulaşabilirsiniz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">2. İşlediğimiz Veri Kategorileri</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Hesap verileri: e-posta, kullanıcı kimliği, oturum bilgileri, kimlik doğrulama yöntemi ve güvenli hesap yönetimi için gereken kayıtlar.</p>
+            <p>Cihaz ve eşleştirme verileri: eşleştirilen cihaz tanımlayıcıları, cihaz türü, bağlantı durumu, runtime readiness, son heartbeat zamanı ve güvenli görev yönlendirme için gereken teknik metadata.</p>
+            <p>Görev ve sohbet verileri: kullanıcının yazdığı istemler, görev durumları, yanıtlar, artifact metadata'sı, hata durumları ve sohbet devamlılığı için gereken sınırlı bağlam.</p>
+            <p>Destek verileri: bize e-posta veya destek talebiyle gönderdiğiniz iletişim bilgileri, mesajlar ve sorunu çözmek için gerekli ek açıklamalar.</p>
+            <p>Abonelik verileri: App Store veya Google Play üzerinden alınan abonelik durumları, plan bilgileri ve ödeme doğrulaması için gereken mağaza tarafından sağlanan işlem metadata'sı. Tam kart bilgileri Elyan tarafından tutulmaz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">3. İzinler, World Signals ve Hassas Bağlam</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan yalnızca kullanıcının etkinleştirdiği özellikler için izin ister. Takvim, saat, cihaz durumu, bildirimler, sağlık/aktivite sinyalleri veya benzer cihaz bağlamları izin verilmedikçe kullanılmaz.</p>
+            <p>Bu sinyaller desteklendiğinde ham günlük veri yığını olarak değil, görev kalitesini artırmak için sınırlı ve özet bağlam paketleri halinde işlenir. Örneğin uyku, enerji, aktivite veya yoğunluk gibi üst seviye sinyaller sohbet bağlamına geçici destek sağlayabilir.</p>
+            <p>Sağlık ve iyi oluş sinyalleri tıbbi tanı, tedavi, acil durum değerlendirmesi veya kalıcı sağlık profili oluşturmak için kullanılmaz. Elyan bir tıbbi hizmet veya acil yardım sistemi değildir.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">4. Local-First Mimari ve Dosya İşleme</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan Desktop özel dosyalar, yerel araçlar ve cihaz içi çalışma bağlamı için local-first sınırı korur. Yerel runtime, özel bilgisayar eylemlerini kullanıcının cihazında yürütür.</p>
+            <p>Dosya, görsel, PDF, tablo veya belge eklediğinizde Elyan bunları yalnızca görevi yerine getirmek için işler. Bir dosyanın sunucuya gönderilmesi gerekiyorsa bu işlem açık görev bağlamıyla sınırlıdır; mümkün olan yerlerde özet, metadata veya işlenmiş paket kullanılır.</p>
+            <p>Özel dosyalarınız reklam, profil çıkarma veya dış pazarlama amacıyla kullanılmaz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">5. Elyan Zeka Katmanı ve Güvenli Altyapı</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan; yanıt üretimi, görev yönlendirme, kimlik doğrulama, veri tabanı, bildirim ve güvenlik süreçlerini kendi zeka katmanı ve güvenli işletim altyapısı içinde yönetir.</p>
+            <p>Veri kullanımı, hizmetin çalışması için gereken en dar kapsamla sınırlıdır. Kişisel verileriniz reklam veya dış pazarlama amacıyla satılmaz.</p>
+            <p>Elyan tek ürün kimliğiyle sunulur. Kullanıcı içerikleri, açık rıza veya hizmetin çalışması için gereken görev bağlamı dışında model geliştirme amacıyla kullanılmaz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">6. Saklama, Hesap Silme ve Veri Hakları</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Hesap verileri hesabınız aktif olduğu sürece veya yasal, güvenlik ya da faturalandırma yükümlülükleri gerektirdiği kadar saklanır. Geçici görev logları ve teknik hata kayıtları operasyonel ihtiyaç süresiyle sınırlı tutulur.</p>
+            <p>Hesabınızı uygulama içindeki Ayarlar veya Hesap alanından silebilir ya da support@elyan.dev adresinden silme talebi gönderebilirsiniz. Silme akışı için ayrıca /tr/data-deletion sayfası yayınlanmıştır.</p>
+            <p>Hesap silme sonrasında kimlik, sohbet geçmişi, eşleştirilmiş cihaz bağlantıları ve kullanıcıya bağlı görev kayıtları makul teknik süre içinde silinir veya anonimleştirilir. Yasal olarak tutulması gereken ödeme, güvenlik ve uyuşmazlık kayıtları gerekli süre boyunca saklanabilir.</p>
+            <p>Verilerinize erişme, düzeltme, dışa aktarma, işlemeyi sınırlama veya silme talebi için support@elyan.dev adresine yazabilirsiniz.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">7. Güvenlik</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan; kimlik doğrulama, yetkilendirme, güvenli cihaz eşleştirme, oturum kontrolü ve erişim sınırlarıyla verilerinizi korumaya çalışır.</p>
+            <p>Hiçbir internet hizmeti mutlak güvenlik garantisi veremez. Şüpheli erişim, güvenlik açığı veya hesabınızla ilgili olağan dışı etkinlik fark ederseniz support@elyan.dev adresine bildirin.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">8. Çocukların Gizliliği</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan 13 yaşından küçük çocuklara yönelik değildir. 13 yaşından küçük bir kullanıcıya ait kişisel verinin işlendiğini fark edersek, doğrulama sonrası ilgili verileri silmek için gerekli adımları atarız.</p>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <h3 class="text-xl font-semibold text-[var(--color-elyan-text)]">9. Uluslararası Aktarım ve Politika Güncellemeleri</h3>
+          <div class="space-y-4 text-[15px] text-[var(--color-elyan-text-muted)] leading-relaxed">
+            <p>Elyan hizmetleri farklı bölgelerde çalışan güvenli altyapı bileşenleri üzerinden sunulabilir. Bu durumda veriler, hizmetin sağlanması ve güvenliği için gerekli koruma tedbirleriyle işlenir.</p>
+            <p>Bu politikayı ürün, mevzuat veya mağaza gereklilikleri değiştikçe güncelleyebiliriz. Önemli değişiklikleri web sitesi, uygulama içi bildirim veya e-posta yoluyla duyurabiliriz.</p>
+          </div>
+        </section>
+      </div>
+      
+    </div>
+  </main>
+</AppLayout>
