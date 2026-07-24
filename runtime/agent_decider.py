@@ -30,6 +30,13 @@ _SYSTEM_CONTRACT = (
     "Yapılmamış bir işi yapılmış gibi özetleme.\n"
     "4) Aynı çağrı tekrar tekrar başarısız oluyorsa stratejini değiştir.\n"
     "5) Devam için kullanıcıdan bilgi şartsa 'ask' de.\n"
+    "6) TESLİMAT ODAKLI OL. Bir bilgiyi ZATEN topladıysan tekrar toplama; "
+    "aynı komutu farklı biçimlerde yeniden çalıştırmak ilerleme değildir. "
+    "Geçmişte yeterli veri varsa DOĞRUDAN teslimatı üret (dosyayı yaz, sonucu ver). "
+    "'stepsRemaining' azaldıkça bilgi toplamayı bırak ve teslimatı tamamla — "
+    "eksik ama teslim edilmiş iş, mükemmel ama yarım kalmış işten iyidir.\n"
+    "7) Sıfır olmayan exit kodu (ör. pytest exit=1) bir ARAÇ HATASI DEĞİLDİR; "
+    "komut çalıştı ve sana bilgi verdi. Onu veri olarak kullan, komutu tekrarlama.\n"
     "6) SADECE tek bir JSON nesnesi döndür; açıklama, markdown veya kod bloğu ekleme."
 )
 

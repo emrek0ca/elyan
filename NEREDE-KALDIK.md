@@ -158,6 +158,35 @@ için çalıştı, sonuç 1→2.
 
 ---
 
+## 4.5 GERÇEK GÖREV SINAVI — BULGULAR (2026-07-25)
+
+Görev: *"testleri çalıştır → başarısızları bul → analiz et → rapor yaz"*, gerçek
+gpt-oss-120b kararlarıyla, gerçek araçlarla.
+
+**Bulunan ve DÜZELTİLEN 2 gerçek hata:**
+1. **Yapılandırılmış sonuç geri beslenmiyordu.** Ajan döngüsü modele yalnız
+   metin çıktısını veriyordu; `result` (içinde `sessionId`, `path`, id'ler) yoktu.
+   Model önceki adımın kimliğini göremeyip **uyduruyordu** → `NOT_FOUND` → kısır
+   döngü. Düzeltme: `AgentObservation.result` + `_bounded_result()` ile geri besleme.
+   *Zincirleme gerektiren HER çok adımlı iş bundan etkileniyordu.*
+2. **Sıfır olmayan exit kodu araç hatası sayılıyordu.** `pytest` exit=1 =
+   "testler kırık" bilgisidir, arıza değil. Hataya çevirince "çalıştır → oku →
+   düzelt" döngüsü imkânsızlaşıyordu (model 5 turunu bununla harcadı).
+   Düzeltme: `shell_terminal.py` artık exit≠0'ı `commandFailed: true` ile
+   BAŞARILI gözlem olarak döndürür; yalnız TIMEOUT gerçek arızadır.
+
+**Sınavın gösterdiği yetenek seviyesi (dürüst):** görevi anlıyor, terminal açıyor,
+testleri çalıştırıyor, 50 başarısızlığı buluyor, detayları okuyor — **ama teslimatı
+güvenilir şekilde kapatmıyor.** Zayıf halka altyapı değil, **model yönlendirmesi**:
+aynı bilgiyi farklı komutlarla tekrar tekrar topluyor. Kısmi çare olarak
+`agent_decider` prompt'una teslimat-odaklılık kuralları eklendi (6. ve 7. madde).
+
+**Açık:** `json_validate_failed` (bilinen reasoning-token tuzağı — bkz.
+[[project_model_and_tone]]) düşük `max_tokens`ta tekrar üretilebiliyor; ajan
+karar çağrılarında token tabanı yeterli tutulmalı.
+
+---
+
 ## 5. AÇIK SORUNLAR
 
 1. **57 baseline test hatası (tüm suite)** — bende değil, önceden vardı. Çoğu

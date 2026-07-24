@@ -1,0 +1,1445 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0 -- /Users/emrekoca/Desktop/elyan/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/emrekoca/Desktop/elyan
+plugins: anyio-4.14.1
+collecting ... collected 961 items
+
+tests/test_agent_stack_hardening.py::test_agent_loop_survives_decider_exception PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_agent_loop_survives_execute_exception PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_agent_loop_rejects_hallucinated_tool PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_agent_loop_budget_is_hard PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_agent_loop_garbage_model_output_is_safe PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_approval_gate_blocks_side_effect PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_agent_loop_strips_internal_flags_from_context PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_json_extraction[{"kind":"finish"}-True] PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_json_extraction[```json\n{"kind":"finish"}\n```-True] PASSED [  0%]
+tests/test_agent_stack_hardening.py::test_json_extraction[bla bla {"kind":"finish","x":{"nested":1}} son-True] PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_json_extraction[{"a": "i\xe7inde } var", "kind":"finish"}-True] PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_json_extraction[d\xfcz metin-False] PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_json_extraction[-False] PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_json_extraction[{bozuk-False] PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_understanding_falls_back_when_model_dead PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_understanding_rejects_invalid_intent PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_understanding_clamps_confidence PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_chat_during_dispatch_never_becomes_task PASSED [  1%]
+tests/test_agent_stack_hardening.py::test_empty_and_huge_inputs PASSED   [  1%]
+tests/test_agent_stack_hardening.py::test_shell_session_isolation_and_errors PASSED [  2%]
+tests/test_agent_stack_hardening.py::test_shell_session_two_sessions_do_not_share_cwd PASSED [  2%]
+tests/test_agent_stack_hardening.py::test_shell_session_chained_cd_does_not_leak PASSED [  2%]
+tests/test_agent_stack_hardening.py::test_retrieval_survives_search_exception PASSED [  2%]
+tests/test_agent_stack_hardening.py::test_retrieval_handles_empty_and_weird_results PASSED [  2%]
+tests/test_agent_stack_hardening.py::test_retrieval_no_second_round_when_sufficient PASSED [  2%]
+tests/test_agent_stack_hardening.py::test_rerank_dedupes PASSED          [  2%]
+tests/test_agent_stack_hardening.py::test_computer_use_survives_observe_exception PASSED [  2%]
+tests/test_agent_stack_hardening.py::test_computer_use_survives_act_exception PASSED [  2%]
+tests/test_agent_stack_hardening.py::test_screen_state_handles_garbage PASSED [  3%]
+tests/test_agent_stack_hardening.py::test_policy_never_crashes_on_weird_routes PASSED [  3%]
+tests/test_agent_stack_hardening.py::test_tool_catalog_is_not_empty_and_bounded PASSED [  3%]
+tests/test_backend_client_contract.py::test_register_runtime_stores_connection_bound_runtime_token PASSED [  3%]
+tests/test_backend_client_contract.py::test_runtime_unauthorized_clears_runtime_without_user_session PASSED [  3%]
+tests/test_backend_client_contract.py::test_stale_runtime_unauthorized_retries_rotated_token_without_clearing_it PASSED [  3%]
+tests/test_backend_client_contract.py::test_terminal_user_refresh_failure_clears_user_tokens_but_preserves_runtime PASSED [  3%]
+tests/test_backend_client_contract.py::test_user_refresh_network_failure_preserves_retryable_session PASSED [  3%]
+tests/test_backend_client_contract.py::test_generic_refresh_rejection_preserves_session_for_retry PASSED [  3%]
+tests/test_backend_client_contract.py::test_user_request_refreshes_once_and_retries_with_rotated_token PASSED [  3%]
+tests/test_backend_client_contract.py::test_stale_concurrent_unauthorized_reuses_already_rotated_user_session PASSED [  4%]
+tests/test_backend_client_contract.py::test_auth_register_sends_required_legal_acceptance PASSED [  4%]
+tests/test_backend_client_contract.py::test_request_connection_errors_are_normalized PASSED [  4%]
+tests/test_backend_client_contract.py::test_request_timeouts_are_normalized PASSED [  4%]
+tests/test_backend_client_contract.py::test_backend_client_prefers_non_loopback_backend_url_when_available PASSED [  4%]
+tests/test_backend_client_contract.py::test_backend_client_keeps_loopback_url_when_no_remote_alternative_exists PASSED [  4%]
+tests/test_backend_client_contract.py::test_backend_client_migrates_legacy_public_ip_to_public_api PASSED [  4%]
+tests/test_backend_client_contract.py::test_pairing_poll_sends_pairing_token_and_stores_runtime_auth PASSED [  4%]
+tests/test_backend_client_contract.py::test_pairing_create_session_hydrates_canonical_qr_truth PASSED [  4%]
+tests/test_backend_client_contract.py::test_pairing_create_session_reuses_valid_pending_session PASSED [  4%]
+tests/test_backend_client_contract.py::test_pairing_terminal_error_clears_active_qr_truth PASSED [  5%]
+tests/test_backend_client_contract.py::test_pairing_local_expiry_clears_active_qr_without_backend_call PASSED [  5%]
+tests/test_backend_client_contract.py::test_heartbeat_failure_marks_runtime_reconnecting_without_clearing_user_session PASSED [  5%]
+tests/test_backend_client_contract.py::test_heartbeat_fills_missing_capabilities_with_registry_truth PASSED [  5%]
+tests/test_backend_client_contract.py::test_heartbeat_uses_dependency_aware_capability_provider PASSED [  5%]
+tests/test_backend_client_contract.py::test_runtime_session_normalizes_backend_readiness_truth PASSED [  5%]
+tests/test_backend_client_contract.py::test_runtime_session_failure_marks_runtime_reconnecting_without_clearing_identity PASSED [  5%]
+tests/test_backend_client_contract.py::test_runtime_tasks_assigned_unauthorized_clears_runtime_session PASSED [  5%]
+tests/test_backend_client_contract.py::test_logout_preserves_paired_runtime_identity PASSED [  5%]
+tests/test_backend_client_contract.py::test_register_runtime_uses_device_secret_payload_without_user_bearer PASSED [  6%]
+tests/test_backend_client_contract.py::test_register_runtime_replaces_stale_connection_bound_runtime_truth PASSED [  6%]
+tests/test_backend_client_contract.py::test_register_runtime_rejects_invalid_identity_before_backend_call PASSED [  6%]
+tests/test_backend_client_contract.py::test_runtime_register_identity_error_rejects_non_uuid_or_mismatched_pairing PASSED [  6%]
+tests/test_backend_client_contract.py::test_repair_invalid_runtime_identity_clears_stale_runtime_and_pairing_truth PASSED [  6%]
+tests/test_backend_client_contract.py::test_register_runtime_keeps_identity_on_transient_device_not_found PASSED [  6%]
+tests/test_backend_client_contract.py::test_register_runtime_wipes_identity_after_device_not_found_grace PASSED [  6%]
+tests/test_backend_client_contract.py::test_register_runtime_clears_device_not_found_streak_on_success PASSED [  6%]
+tests/test_backend_client_contract.py::test_tasks_list_uses_user_auth_surface PASSED [  6%]
+tests/test_backend_client_contract.py::test_task_detail_and_approval_use_existing_user_routes PASSED [  6%]
+tests/test_backend_client_contract.py::test_task_approval_uses_runtime_token_without_user_session PASSED [  7%]
+tests/test_backend_client_contract.py::test_brain_profile_uses_user_auth_surface PASSED [  7%]
+tests/test_backend_client_contract.py::test_health_truth_is_cached_into_control_plane_state PASSED [  7%]
+tests/test_backend_client_contract.py::test_brain_profile_truth_is_cached_into_control_plane_state PASSED [  7%]
+tests/test_backend_client_contract.py::test_subscription_truth_preserves_brain_profile_and_plan_metadata PASSED [  7%]
+tests/test_backend_client_contract.py::test_auth_oauth_login_posts_to_provider_endpoint PASSED [  7%]
+tests/test_backend_client_contract.py::test_chat_messages_uses_user_auth_surface PASSED [  7%]
+tests/test_backend_client_contract.py::test_brain_retrieval_search_uses_user_auth_surface PASSED [  7%]
+tests/test_backend_client_contract.py::test_brain_knowledge_document_uses_user_auth_surface PASSED [  7%]
+tests/test_backend_client_contract.py::test_brain_profile_network_errors_are_normalized PASSED [  8%]
+tests/test_backend_client_contract.py::test_chat_messages_falls_back_to_runtime_auth_when_no_user_token PASSED [  8%]
+tests/test_backend_client_contract.py::test_runtime_mcp_connections_uses_runtime_token_surface PASSED [  8%]
+tests/test_browser_agent_react.py::test_agent_runs_observe_act_loop_and_collects PASSED [  8%]
+tests/test_browser_agent_react.py::test_agent_fail_action_raises_honest_error PASSED [  8%]
+tests/test_browser_agent_react.py::test_agent_stops_when_decider_repeats_same_action PASSED [  8%]
+tests/test_browser_agent_react.py::test_agent_stops_after_consecutive_failures PASSED [  8%]
+tests/test_browser_agent_react.py::test_agent_budget_exhaustion_is_explicit PASSED [  8%]
+tests/test_browser_agent_react.py::test_agent_requires_decider PASSED    [  8%]
+tests/test_browser_agent_react.py::test_agent_policy_gated_by_browser_permission PASSED [  8%]
+tests/test_browser_agent_react.py::test_operator_run_fails_fast_without_permissions PASSED [  9%]
+tests/test_browser_agent_react.py::test_browser_shaped_goal_detection PASSED [  9%]
+tests/test_browser_session_and_fs.py::test_browser_session_capabilities_registered PASSED [  9%]
+tests/test_browser_session_and_fs.py::test_browser_session_policy_gated_by_browser_permission PASSED [  9%]
+tests/test_browser_session_and_fs.py::test_fs_mutations_require_confirmation PASSED [  9%]
+tests/test_browser_session_and_fs.py::test_make_directory_and_file_move_roundtrip PASSED [  9%]
+tests/test_canvas_write_contract.py::test_canvas_write_creates_pdf_with_table FAILED [  9%]
+tests/test_canvas_write_contract.py::test_canvas_write_creates_png_from_source_image FAILED [  9%]
+tests/test_canvas_write_contract.py::test_canvas_write_creates_png_with_chart_block FAILED [  9%]
+tests/test_canvas_write_contract.py::test_document_write_accepts_table_blocks PASSED [  9%]
+tests/test_canvas_write_contract.py::test_document_write_accepts_chart_blocks FAILED [ 10%]
+tests/test_canvas_write_contract.py::test_presentation_write_accepts_chart_blocks FAILED [ 10%]
+tests/test_capability_manifest_export.py::test_backend_manifest_matches_live_capability_catalog PASSED [ 10%]
+tests/test_capability_manifest_export.py::test_manifest_covers_safe_baseline_and_flags_approval PASSED [ 10%]
+tests/test_capability_manifest_export.py::test_capability_manifest_exports_v2_quality_contracts PASSED [ 10%]
+tests/test_capability_spec_contract.py::test_every_spec_derives_into_all_layers PASSED [ 10%]
+tests/test_capability_spec_contract.py::test_spec_handler_maps_aliases_and_types PASSED [ 10%]
+tests/test_capability_spec_contract.py::test_skill_recipes_carry_ids_and_foreach_to_executor FAILED [ 10%]
+tests/test_cli_mcp_commands.py::test_mcp_add_list_disable_remove_roundtrip PASSED [ 10%]
+tests/test_cli_mcp_commands.py::test_curated_app_commands_use_oauth_without_manual_urls PASSED [ 11%]
+tests/test_cli_mcp_commands.py::test_connect_rejects_untrusted_oauth_url_without_opening_browser[http://accounts.google.com/o/oauth2/v2/auth?state=safe] PASSED [ 11%]
+tests/test_cli_mcp_commands.py::test_connect_rejects_untrusted_oauth_url_without_opening_browser[https://evil.example/o/oauth2/v2/auth?state=safe] PASSED [ 11%]
+tests/test_cli_mcp_commands.py::test_connect_rejects_untrusted_oauth_url_without_opening_browser[https://accounts.google.com.evil.example/o/oauth2/v2/auth?state=safe] PASSED [ 11%]
+tests/test_cli_mcp_commands.py::test_connect_rejects_untrusted_oauth_url_without_opening_browser[https://user@accounts.google.com/o/oauth2/v2/auth?state=safe] PASSED [ 11%]
+tests/test_cli_mcp_commands.py::test_connect_rejects_untrusted_oauth_url_without_opening_browser[https://accounts.google.com:444/o/oauth2/v2/auth?state=safe] PASSED [ 11%]
+tests/test_cli_mcp_commands.py::test_connect_rejects_untrusted_oauth_url_without_opening_browser[https://accounts.google.com/o/oauth2/v2/auth?state=safe#fragment] PASSED [ 11%]
+tests/test_cli_mcp_commands.py::test_connect_rejects_untrusted_oauth_url_without_opening_browser[https://linear.app/oauth/authorize?state=safe] PASSED [ 11%]
+tests/test_compiled_plan_authority.py::test_planner_payload_stays_under_backend_limit PASSED [ 11%]
+tests/test_compiled_plan_authority.py::test_repair_payload_stays_under_backend_limit PASSED [ 11%]
+tests/test_compiled_plan_authority.py::test_replan_payload_stays_under_backend_limit PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_planning_request_sends_shortlist_not_full_catalog PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_shortlist_is_deterministic_and_bounded PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_shortlist_always_includes_hinted_capabilities PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_plan_signature_is_single_authority PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_plan_signature_ignores_private_args_but_binds_public_shape PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_tampered_steps_fail_closed[<lambda>0] PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_tampered_steps_fail_closed[<lambda>1] PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_tampered_steps_fail_closed[<lambda>2] PASSED [ 12%]
+tests/test_compiled_plan_authority.py::test_tampered_steps_fail_closed[<lambda>3] PASSED [ 13%]
+tests/test_compiled_plan_authority.py::test_pending_plan_binding_blocks_tampering PASSED [ 13%]
+tests/test_compiled_plan_authority.py::test_pending_plan_revision_bumps_on_step_change PASSED [ 13%]
+tests/test_compiled_plan_authority.py::test_work_order_supports_sixteen_steps_without_truncation PASSED [ 13%]
+tests/test_compiled_plan_authority.py::test_sixteen_step_plan_executes_all_steps PASSED [ 13%]
+tests/test_compiled_plan_authority.py::test_work_order_plan_hash_binds_canonical_steps_and_blocks_tamper PASSED [ 13%]
+tests/test_compiled_plan_authority.py::test_work_order_approval_lifetime_is_not_bound_to_dispatch_lease PASSED [ 13%]
+tests/test_compiled_plan_authority.py::test_expired_work_order_binding_refreshes_for_same_bound_task PASSED [ 13%]
+tests/test_compiled_plan_authority.py::test_safe_baseline_capability_passes_scope_even_if_undeclared PASSED [ 13%]
+tests/test_compound_dispatch_chain.py::test_research_then_document_chain PASSED [ 13%]
+tests/test_compound_dispatch_chain.py::test_research_writer_with_and_inside_topic_stays_compound PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_research_analysis_then_report_stays_compound PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_accounting_calculation_research_report_chain PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_percentage_calculation_ignores_non_currency_numbers PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_student_research_then_presentation_query_is_clean PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_research_sonra_document_chain PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_open_app_then_site_chain PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_compound_requires_confirmation_and_multi_step PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_duplicate_read_only_data_intents_collapse_to_one_profile PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_read_only_compound_math_does_not_require_confirmation PASSED [ 14%]
+tests/test_compound_dispatch_chain.py::test_duplicate_document_read_intents_collapse_to_summary PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_ve_inside_single_topic_not_split PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_time_expression_sonra_not_split PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_pronoun_continuation_document PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_continuation_report_verb PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_continuation_word_save PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_continuation_spreadsheet PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_continuation_presentation PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_continuation_self_mail PASSED [ 15%]
+tests/test_compound_dispatch_chain.py::test_continuation_explicit_mail_recipient PASSED [ 16%]
+tests/test_compound_dispatch_chain.py::test_continuation_not_applied_to_first_segment PASSED [ 16%]
+tests/test_compound_dispatch_chain.py::test_email_me_placeholder_resolves_to_account_email PASSED [ 16%]
+tests/test_compound_dispatch_chain.py::test_email_me_placeholder_errors_without_account_email PASSED [ 16%]
+tests/test_compound_dispatch_chain.py::test_writer_context_prefers_explicit_source_context PASSED [ 16%]
+tests/test_compound_dispatch_chain.py::test_writer_context_falls_back_to_previous_result PASSED [ 16%]
+tests/test_compound_dispatch_chain.py::test_writer_context_uses_requested_document_read_shape PASSED [ 16%]
+tests/test_compound_dispatch_chain.py::test_writer_context_falls_back_to_previous_output PASSED [ 16%]
+tests/test_compound_dispatch_chain.py::test_writer_context_empty_when_nothing_available PASSED [ 16%]
+tests/test_cross_platform_desktop.py::test_windows_open_app_uses_cmd_start PASSED [ 16%]
+tests/test_cross_platform_desktop.py::test_windows_open_app_maps_settings_uri PASSED [ 17%]
+tests/test_cross_platform_desktop.py::test_linux_open_app_picks_first_available_candidate PASSED [ 17%]
+tests/test_cross_platform_desktop.py::test_non_darwin_close_app_without_process_fails_safe PASSED [ 17%]
+tests/test_cross_platform_desktop.py::test_non_darwin_close_app_terminates_and_confirms PASSED [ 17%]
+tests/test_cross_platform_desktop.py::test_clipboard_command_selection_per_platform PASSED [ 17%]
+tests/test_cross_platform_desktop.py::test_desktop_core_capabilities_declared_cross_platform PASSED [ 17%]
+tests/test_cross_platform_desktop.py::test_resolve_app_name_strips_space_separated_turkish_suffix PASSED [ 17%]
+tests/test_cross_platform_desktop.py::test_resolve_app_name_preserves_multiword_names PASSED [ 17%]
+tests/test_daemon_cli_contract.py::test_runtime_status_summary_reads_real_schema PASSED [ 17%]
+tests/test_daemon_cli_contract.py::test_runtime_status_summary_does_not_report_persisted_ready_when_daemon_stopped PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_daemon_start_invalidates_transport_truth_from_previous_process PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_read_daemon_pid_ignores_dead_process PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_daemon_keeper_honors_pid_scoped_stop_marker PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_cli_parser_covers_mvp_commands PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_cli_version_uses_package_json PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_daemon_run_forever_forces_reconnect_on_wake_gap PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_daemon_run_forever_skips_reconnect_without_wake_gap PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_stop_daemon_clears_stale_pid_after_forced_shutdown PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_service_definitions_run_daemon_module PASSED [ 18%]
+tests/test_daemon_cli_contract.py::test_render_big_code_produces_seven_line_banner PASSED [ 19%]
+tests/test_daemon_cli_contract.py::test_stale_desktop_self_heal_only_removes_stale_desktops PASSED [ 19%]
+tests/test_daemon_cli_contract.py::test_self_pair_retries_after_desktop_limit PASSED [ 19%]
+tests/test_desktop_installer_builder.py::test_release_lock_is_hashed_and_sbom_has_locked_components PASSED [ 19%]
+tests/test_desktop_installer_builder.py::test_copy_sources_preserves_runtime_contract_without_cache PASSED [ 19%]
+tests/test_desktop_installer_builder.py::test_non_macos_payload_does_not_ship_native_apple_helpers PASSED [ 19%]
+tests/test_desktop_installer_builder.py::test_portable_python_alias_is_rewritten_as_relative PASSED [ 19%]
+tests/test_desktop_installer_builder.py::test_production_macos_build_requires_developer_id PASSED [ 19%]
+tests/test_desktop_installer_builder.py::test_production_macos_build_requires_notarization_credentials PASSED [ 19%]
+tests/test_desktop_installer_builder.py::test_production_windows_build_requires_authenticode_certificate PASSED [ 19%]
+tests/test_desktop_installer_builder.py::test_native_launchers_are_present_and_shell_free PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_desktop_operator_readiness_ignores_stale_native_unavailable_state PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_desktop_operator_observe_screen_defers_to_os_permission PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_screen_helper_display_capture_failure_maps_to_permission_required PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_desktop_operator_observe_screen_returns_structured_observation PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_desktop_operator_execute_action_blocks_risky_actions_without_sensitive_permission PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_runtime_bridge_capability_states_include_desktop_operator PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_build_screen_observation_prefers_browser_dom_when_available PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_execute_action_uses_browser_first_adapter_when_target_is_browser_dom PASSED [ 20%]
+tests/test_desktop_operator_contract.py::test_execute_action_accepts_planner_action_target_and_key_aliases PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_operator_run_accepts_max_actions_from_planner PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_match_target_rejects_ambiguous_near_tie PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_match_target_uses_selector_and_turkish_ui_synonyms PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_observe_screen_returns_target_suggestions_for_query PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_desktop_operator_cancel_stops_active_run PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_rank_targets_tolerates_typos_via_fuzzy_match PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_rank_targets_matches_across_languages_bidirectionally PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_query_tokens_expands_both_directions PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_fuzzy_does_not_match_unrelated_short_text PASSED [ 21%]
+tests/test_desktop_operator_contract.py::test_open_app_reports_success_without_foreground_permission PASSED [ 22%]
+tests/test_desktop_operator_contract.py::test_deterministic_operator_planner_handles_simple_goals PASSED [ 22%]
+tests/test_desktop_operator_contract.py::test_plan_operator_steps_prefers_deterministic PASSED [ 22%]
+tests/test_desktop_os_contract.py::test_desktop_os_status_returns_structured_native_snapshot PASSED [ 22%]
+tests/test_desktop_os_contract.py::test_desktop_os_uses_safe_python_fallback_without_native_snapshot PASSED [ 22%]
+tests/test_desktop_os_contract.py::test_non_macos_fallback_never_assumes_screen_capture_permission PASSED [ 22%]
+tests/test_desktop_os_contract.py::test_desktop_os_permissions_preserve_additive_metadata PASSED [ 22%]
+tests/test_desktop_os_contract.py::test_desktop_os_processes_defers_to_os_permission PASSED [ 22%]
+tests/test_desktop_os_contract.py::test_desktop_os_processes_filters_when_permission_enabled PASSED [ 22%]
+tests/test_desktop_os_contract.py::test_desktop_os_processes_filters_by_bundle_id_when_permission_enabled PASSED [ 22%]
+tests/test_desktop_os_contract.py::test_desktop_os_active_window_returns_snapshot_when_permission_enabled PASSED [ 23%]
+tests/test_desktop_os_contract.py::test_desktop_os_open_permission_settings_opens_macos_privacy_uri PASSED [ 23%]
+tests/test_desktop_work_order_contract.py::test_work_order_validation_normalizes_capabilities PASSED [ 23%]
+tests/test_desktop_work_order_contract.py::test_work_order_validation_preserves_additive_runtime_quality_metadata PASSED [ 23%]
+tests/test_desktop_work_order_contract.py::test_work_order_validation_rejects_unknown_schema PASSED [ 23%]
+tests/test_desktop_work_order_contract.py::test_work_order_verification_blocks_completion_without_required_artifact PASSED [ 23%]
+tests/test_desktop_work_order_contract.py::test_work_order_verification_accepts_tool_and_artifact_evidence PASSED [ 23%]
+tests/test_desktop_work_order_contract.py::test_work_order_verification_accepts_verified_image_fetch_as_file_update PASSED [ 23%]
+tests/test_desktop_work_order_contract.py::test_work_order_verification_rejects_failed_tool_and_unverified_artifact PASSED [ 23%]
+tests/test_desktop_work_order_contract.py::test_work_order_verification_requires_explicit_runtime_success PASSED [ 24%]
+tests/test_desktop_work_order_contract.py::test_work_order_verification_allows_completed_chat_only_runtime_without_tool_event PASSED [ 24%]
+tests/test_desktop_work_order_contract.py::test_runtime_public_payload_hides_private_paths_and_content PASSED [ 24%]
+tests/test_desktop_work_order_contract.py::test_state_readback_counts_as_evidence_for_verified_side_effect PASSED [ 24%]
+tests/test_desktop_work_order_contract.py::test_unverified_side_effect_fails_completion PASSED [ 24%]
+tests/test_deterministic_only_mode.py::test_flag_reads_env PASSED        [ 24%]
+tests/test_deterministic_only_mode.py::test_fallback_reply_shape PASSED  [ 24%]
+tests/test_deterministic_only_mode.py::test_route_chat_unmatched_stays_local_in_deterministic_mode PASSED [ 24%]
+tests/test_deterministic_only_mode.py::test_route_chat_matched_command_still_executes_in_deterministic_mode PASSED [ 24%]
+tests/test_execution_journal_contract.py::test_plan_hash_binds_arguments_dependencies_and_fanout_shape PASSED [ 24%]
+tests/test_execution_journal_contract.py::test_plan_hash_ignores_executor_internal_arguments PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_scheduler_order_is_dependency_safe_and_deterministic PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_quantum_schedule_benchmark_scores_scheduler_improvement_without_reordering PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_quantum_liveness_benchmark_scores_responsive_schedule_without_private_args PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_quantum_dispatch_optimization_boosts_only_safe_ready_read_ties PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_responsive_execution_boosts_only_safe_ready_read_ties PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_quantum_dispatch_optimization_does_not_cross_priority_or_dependencies PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_template_reference_infers_implicit_dependency_without_explicit_dependson PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_foreach_reference_infers_dependency_without_explicit_dependson PASSED [ 25%]
+tests/test_execution_scheduler_contract.py::test_unknown_template_reference_is_ignored_not_a_hard_error PASSED [ 26%]
+tests/test_execution_scheduler_contract.py::test_parallel_batch_contains_only_ready_independent_reads PASSED [ 26%]
+tests/test_execution_scheduler_contract.py::test_backend_tasks_use_goal_priority_deadline_dependency_and_wait_time PASSED [ 26%]
+tests/test_execution_scheduler_contract.py::test_unknown_task_dependency_is_deferred_without_explicit_completion PASSED [ 26%]
+tests/test_execution_scheduler_contract.py::test_executor_runs_independent_reads_with_bounded_parallelism PASSED [ 26%]
+tests/test_execution_scheduler_contract.py::test_executor_preempts_only_after_completed_step_checkpoint PASSED [ 26%]
+tests/test_execution_scheduler_contract.py::test_executor_never_runs_unready_step PASSED [ 26%]
+tests/test_execution_scheduler_contract.py::test_parallel_grants_capture_step_specific_trust_state PASSED [ 26%]
+tests/test_execution_scheduler_contract.py::test_parallel_batch_is_one_preemption_checkpoint_group PASSED [ 26%]
+tests/test_executor_core_contract.py::test_executor_core_retries_verification_for_artifact_outputs PASSED [ 26%]
+tests/test_executor_core_contract.py::test_executor_trace_includes_quantum_schedule_benchmark PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_core_status_payload_exposes_router_and_capability_summary PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_core_agent_plan_decomposes_steps_into_roles PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_core_verifies_foreground_confirmed_for_open_app PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_core_fails_when_browser_handoff_cannot_be_verified PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_core_accepts_verified_media_handoff PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_core_agent_status_maps_runtime_stage_to_simple_copy PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_react_replans_after_tool_failure PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_react_gives_up_when_replan_budget_exhausted PASSED [ 27%]
+tests/test_executor_core_contract.py::test_liveness_guard_extends_replan_budget_within_safe_cap PASSED [ 27%]
+tests/test_executor_core_contract.py::test_executor_react_no_replan_fn_keeps_static_abort PASSED [ 28%]
+tests/test_executor_core_contract.py::test_executor_fanout_aggregates_structured_results_for_writer FAILED [ 28%]
+tests/test_executor_core_contract.py::test_executor_hides_intermediate_reader_output_when_writer_creates_artifact FAILED [ 28%]
+tests/test_executor_core_contract.py::test_executor_passes_dependency_payloads_even_without_arg_templates PASSED [ 28%]
+tests/test_executor_core_contract.py::test_goal_verification_can_add_collision_free_repair_step PASSED [ 28%]
+tests/test_executor_core_contract.py::test_replan_collision_rewrites_dependencies_and_templates PASSED [ 28%]
+tests/test_executor_core_contract.py::test_journal_resume_rehydrates_outputs_results_and_artifacts PASSED [ 28%]
+tests/test_executor_progress_stream.py::test_progress_emits_task_trace_blocks PASSED [ 28%]
+tests/test_executor_progress_stream.py::test_no_emitter_is_safe PASSED   [ 28%]
+tests/test_executor_progress_stream.py::test_progress_includes_quantum_liveness_snapshot PASSED [ 29%]
+tests/test_executor_progress_stream.py::test_progress_marks_failure PASSED [ 29%]
+tests/test_executor_progress_stream.py::test_progress_marks_cancellation_as_canceled FAILED [ 29%]
+tests/test_executor_progress_stream.py::test_cancel_after_last_step_checkpoint_blocks_late_success PASSED [ 29%]
+tests/test_executor_progress_stream.py::test_progress_records_quantum_liveness_stop_policy_on_timeout PASSED [ 29%]
+tests/test_executor_progress_stream.py::test_progress_uses_human_labels_for_professional_and_decision_steps PASSED [ 29%]
+tests/test_executor_templates_foreach.py::test_step_output_templates_resolve_into_later_args FAILED [ 29%]
+tests/test_executor_templates_foreach.py::test_for_each_fans_out_over_list_output FAILED [ 29%]
+tests/test_executor_templates_foreach.py::test_unresolved_template_fails_with_clear_code FAILED [ 29%]
+tests/test_executor_templates_foreach.py::test_whole_template_preserves_list_type FAILED [ 29%]
+tests/test_file_write_tools.py::test_file_write_creates_file PASSED      [ 30%]
+tests/test_file_write_tools.py::test_file_write_refuses_overwrite_without_flag PASSED [ 30%]
+tests/test_file_write_tools.py::test_file_write_overwrites_with_flag PASSED [ 30%]
+tests/test_file_write_tools.py::test_file_write_blocks_sensitive_path PASSED [ 30%]
+tests/test_file_write_tools.py::test_file_write_blocks_outside_workspace_relative PASSED [ 30%]
+tests/test_file_write_tools.py::test_file_patch_anchored_replace PASSED  [ 30%]
+tests/test_file_write_tools.py::test_file_patch_missing_anchor PASSED    [ 30%]
+tests/test_file_write_tools.py::test_file_patch_ambiguous_anchor PASSED  [ 30%]
+tests/test_file_write_tools.py::test_file_patch_replace_all PASSED       [ 30%]
+tests/test_file_write_tools.py::test_file_patch_noop_rejected PASSED     [ 31%]
+tests/test_file_write_tools.py::test_file_patch_requires_existing_file PASSED [ 31%]
+tests/test_filesystem_tools.py::test_file_read_returns_numbered_lines PASSED [ 31%]
+tests/test_filesystem_tools.py::test_file_read_line_range PASSED         [ 31%]
+tests/test_filesystem_tools.py::test_file_read_rejects_binary PASSED     [ 31%]
+tests/test_filesystem_tools.py::test_file_read_blocks_sensitive_path PASSED [ 31%]
+tests/test_filesystem_tools.py::test_file_read_missing_file PASSED       [ 31%]
+tests/test_filesystem_tools.py::test_file_search_finds_matches_and_skips_ignored PASSED [ 31%]
+tests/test_filesystem_tools.py::test_file_search_regex PASSED            [ 31%]
+tests/test_filesystem_tools.py::test_file_search_requires_query PASSED   [ 31%]
+tests/test_filesystem_tools.py::test_directory_tree_skips_noise_and_caps PASSED [ 32%]
+tests/test_filesystem_tools.py::test_directory_tree_rejects_file_path PASSED [ 32%]
+tests/test_git_ops.py::test_git_status_clean PASSED                      [ 32%]
+tests/test_git_ops.py::test_git_status_reports_changes PASSED            [ 32%]
+tests/test_git_ops.py::test_git_diff_shows_changes PASSED                [ 32%]
+tests/test_git_ops.py::test_git_diff_staged PASSED                       [ 32%]
+tests/test_git_ops.py::test_git_status_not_a_repo PASSED                 [ 32%]
+tests/test_git_ops.py::test_git_commit_creates_commit PASSED             [ 32%]
+tests/test_git_ops.py::test_git_commit_requires_message PASSED           [ 32%]
+tests/test_git_ops.py::test_git_commit_nothing_to_commit PASSED          [ 32%]
+tests/test_git_ops.py::test_git_branch_creates_and_checks_out PASSED     [ 33%]
+tests/test_git_ops.py::test_git_branch_rejects_invalid_name PASSED       [ 33%]
+tests/test_image_fetch.py::test_resolve_destination_defaults_to_desktop PASSED [ 33%]
+tests/test_image_fetch.py::test_resolve_destination_rejects_outside_home PASSED [ 33%]
+tests/test_image_fetch.py::test_sniff_extension_magic_bytes PASSED       [ 33%]
+tests/test_image_fetch.py::test_extension_for_prefers_content_type_then_sniff_then_url PASSED [ 33%]
+tests/test_image_fetch.py::test_unique_path_avoids_collision PASSED      [ 33%]
+tests/test_image_fetch.py::test_image_fetch_saves_downloaded_image PASSED [ 33%]
+tests/test_image_fetch.py::test_image_fetch_raises_when_no_results PASSED [ 33%]
+tests/test_image_fetch.py::test_image_fetch_raises_when_download_fails PASSED [ 34%]
+tests/test_image_fetch.py::test_image_fetch_requires_query PASSED        [ 34%]
+tests/test_install_extras_contract.py::test_extras_marker_is_bound_to_dependency_manifests PASSED [ 34%]
+tests/test_install_extras_contract.py::test_extras_installer_records_failures_and_returns_nonzero PASSED [ 34%]
+tests/test_install_extras_contract.py::test_extras_installer_ignores_invalid_timeout_value PASSED [ 34%]
+tests/test_installer_bootstrap.py::test_user_runtime_root_is_platform_safe PASSED [ 34%]
+tests/test_installer_bootstrap.py::test_install_payload_is_atomic_and_idempotent PASSED [ 34%]
+tests/test_installer_bootstrap.py::test_write_cli_launcher_uses_installed_runtime PASSED [ 34%]
+tests/test_installer_bootstrap.py::test_write_cli_launcher_replaces_symlink_without_modifying_target PASSED [ 34%]
+tests/test_installer_bootstrap.py::test_launch_cli_registers_daemon_after_success PASSED [ 34%]
+tests/test_local_models_contract.py::test_ollama_status_separates_configured_and_reachable PASSED [ 35%]
+tests/test_local_models_contract.py::test_openai_compatible_chat_normalizes_timeout PASSED [ 35%]
+tests/test_local_models_contract.py::test_ollama_chat_falls_back_to_installed_model PASSED [ 35%]
+tests/test_mcp_runtime_contract.py::test_streamable_http_config_accepts_trusted_remote_endpoint PASSED [ 35%]
+tests/test_mcp_runtime_contract.py::test_planner_schema_summary_marks_required_enum_and_nested_args PASSED [ 35%]
+tests/test_mcp_runtime_contract.py::test_planner_prompt_context_uses_rich_mcp_schema_summary PASSED [ 35%]
+tests/test_mcp_runtime_contract.py::test_user_local_streamable_http_config_remains_separate_from_control_plane_catalog PASSED [ 35%]
+tests/test_mcp_runtime_contract.py::test_control_plane_rejects_untrusted_remote_mcp_urls[http://gmailmcp.googleapis.com/mcp/v1] PASSED [ 35%]
+tests/test_mcp_runtime_contract.py::test_control_plane_rejects_untrusted_remote_mcp_urls[https://127.0.0.1/mcp/v1] PASSED [ 35%]
+tests/test_mcp_runtime_contract.py::test_control_plane_rejects_untrusted_remote_mcp_urls[https://evil.example/mcp/v1] PASSED [ 36%]
+tests/test_mcp_runtime_contract.py::test_control_plane_rejects_untrusted_remote_mcp_urls[https://user@gmailmcp.googleapis.com/mcp/v1] PASSED [ 36%]
+tests/test_mcp_runtime_contract.py::test_control_plane_rejects_untrusted_remote_mcp_urls[https://gmailmcp.googleapis.com:444/mcp/v1] PASSED [ 36%]
+tests/test_mcp_runtime_contract.py::test_control_plane_rejects_untrusted_remote_mcp_urls[https://gmailmcp.googleapis.com/mcp/v1?redirect=1] PASSED [ 36%]
+tests/test_mcp_runtime_contract.py::test_control_plane_rejects_untrusted_remote_mcp_urls[https://gmailmcp.googleapis.com/mcp/v1#fragment] PASSED [ 36%]
+tests/test_mcp_runtime_contract.py::test_control_plane_rejects_trusted_hostname_resolving_to_private_network PASSED [ 36%]
+tests/test_mcp_runtime_contract.py::test_control_plane_dns_timeout_does_not_block_event_loop PASSED [ 36%]
+tests/test_mcp_runtime_contract.py::test_control_plane_session_rejects_stale_provider_generation PASSED [ 36%]
+tests/test_mcp_runtime_contract.py::test_streamable_http_client_disables_redirects SKIPPED [ 36%]
+tests/test_mcp_runtime_contract.py::test_remote_provider_auth_failure_is_visible_without_persisting_token FAILED [ 36%]
+tests/test_mcp_runtime_contract.py::test_remote_catalog_refreshes_after_bounded_ttl PASSED [ 37%]
+tests/test_mcp_runtime_contract.py::test_concurrent_refresh_keeps_remote_revision_paired_with_its_inventory PASSED [ 37%]
+tests/test_mcp_runtime_contract.py::test_remote_control_plane_failure_is_reported_as_degraded PASSED [ 37%]
+tests/test_mcp_runtime_contract.py::test_local_servers_do_not_consume_curated_remote_server_budget PASSED [ 37%]
+tests/test_mcp_runtime_contract.py::test_refresh_discovers_servers_with_bounded_concurrency PASSED [ 37%]
+tests/test_mcp_runtime_contract.py::test_refresh_overall_deadline_cancels_and_unwinds_slow_discovery PASSED [ 37%]
+tests/test_mcp_runtime_contract.py::test_remote_read_only_annotation_never_bypasses_confirmation FAILED [ 37%]
+tests/test_mcp_runtime_contract.py::test_remote_inventory_keeps_tools_beyond_planner_budget_addressable FAILED [ 37%]
+tests/test_mcp_runtime_contract.py::test_task_cancel_interrupts_scoped_mcp_call_and_closes_async_context PASSED [ 37%]
+tests/test_mcp_runtime_contract.py::test_task_scope_stays_registered_until_slow_async_cleanup_finishes PASSED [ 37%]
+tests/test_mcp_runtime_contract.py::test_owner_ended_scope_is_forced_out_without_removing_new_generation PASSED [ 38%]
+tests/test_mcp_runtime_contract.py::test_mcp_refresh_lists_stdio_tools FAILED [ 38%]
+tests/test_mcp_runtime_contract.py::test_mcp_refresh_keeps_invalid_server_truth_visible PASSED [ 38%]
+tests/test_mcp_runtime_contract.py::test_mcp_read_only_tool_executes_without_confirmation FAILED [ 38%]
+tests/test_mcp_runtime_contract.py::test_mcp_side_effect_tool_requires_confirmation_then_runs_in_confirmed_plan FAILED [ 38%]
+tests/test_mcp_runtime_contract.py::test_runtime_status_exposes_mcp_truth_surface FAILED [ 38%]
+tests/test_operator_planner_contract.py::test_operator_request_is_pure_json_data PASSED [ 38%]
+tests/test_operator_planner_contract.py::test_action_catalog_lists_allowed_actions_and_fields PASSED [ 38%]
+tests/test_operator_planner_contract.py::test_observation_is_sanitized_and_truncated PASSED [ 38%]
+tests/test_operator_planner_contract.py::test_validate_normalizes_and_prunes_unknown_fields PASSED [ 39%]
+tests/test_operator_planner_contract.py::test_validate_rejects_unknown_action PASSED [ 39%]
+tests/test_operator_planner_contract.py::test_validate_requires_text_for_type_text PASSED [ 39%]
+tests/test_operator_planner_contract.py::test_validate_requires_keys_for_hotkey PASSED [ 39%]
+tests/test_operator_planner_contract.py::test_validate_accepts_clarification_without_steps PASSED [ 39%]
+tests/test_operator_planner_contract.py::test_validate_rejects_empty_plan PASSED [ 39%]
+tests/test_operator_planner_contract.py::test_validate_step_limit_enforced PASSED [ 39%]
+tests/test_operator_planner_contract.py::test_repair_request_carries_errors_and_schema PASSED [ 39%]
+tests/test_planner_eval_contract.py::test_eval_missing_document_target_clarifies PASSED [ 39%]
+tests/test_planner_eval_contract.py::test_eval_missing_data_target_clarifies PASSED [ 39%]
+tests/test_planner_eval_contract.py::test_eval_complex_document_request_prefers_plan_preview PASSED [ 40%]
+tests/test_planner_eval_contract.py::test_eval_response_message_stays_short_for_simple_math FAILED [ 40%]
+tests/test_planner_eval_contract.py::test_eval_mcp_readonly_plan_keeps_confirmation_off FAILED [ 40%]
+tests/test_planner_eval_contract.py::test_eval_mcp_side_effect_plan_forces_confirmation PASSED [ 40%]
+tests/test_planner_eval_contract.py::test_eval_skill_route_uses_plan_for_write_skill PASSED [ 40%]
+tests/test_planner_eval_contract.py::test_eval_retrieval_clarification_keeps_retrieval_metadata PASSED [ 40%]
+tests/test_planner_eval_contract.py::test_eval_repeated_misroute_history_forces_clarification PASSED [ 40%]
+tests/test_presentation_slide_plan.py::test_requested_slide_count_parses_turkish_forms PASSED [ 40%]
+tests/test_presentation_slide_plan.py::test_derive_slide_specs_distributes_findings PASSED [ 40%]
+tests/test_presentation_slide_plan.py::test_presentation_write_honors_page_target FAILED [ 40%]
+tests/test_presentation_slide_plan.py::test_presentation_write_without_target_still_multi_slide FAILED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_route_to_multi_step_capability_chains[legal-defense-draft] PASSED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_route_to_multi_step_capability_chains[accounting-calc-research-report] PASSED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_route_to_multi_step_capability_chains[accounting-calc-spreadsheet] PASSED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_route_to_multi_step_capability_chains[student-research-presentation] PASSED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_route_to_multi_step_capability_chains[engineering-research-report] PASSED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_route_to_multi_step_capability_chains[medical-inline-report] PASSED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_route_to_multi_step_capability_chains[optimization-decision-support] PASSED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_preserve_router_plan_under_force_structured_planning[legal-defense-draft] PASSED [ 41%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_preserve_router_plan_under_force_structured_planning[accounting-calc-research-report] PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_preserve_router_plan_under_force_structured_planning[accounting-calc-spreadsheet] PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_preserve_router_plan_under_force_structured_planning[student-research-presentation] PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_preserve_router_plan_under_force_structured_planning[engineering-research-report] PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_preserve_router_plan_under_force_structured_planning[medical-inline-report] PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_professional_workflows_preserve_router_plan_under_force_structured_planning[optimization-decision-support] PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_optimization_research_report_stays_research_writer PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_professional_executor_passes_prior_outputs_into_writer FAILED [ 42%]
+tests/test_professional_workflow_matrix.py::test_inline_analysis_executor_passes_read_output_into_report_writer PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_professional_executor_passes_analysis_output_into_writer PASSED [ 42%]
+tests/test_professional_workflow_matrix.py::test_accounting_spreadsheet_executor_resolves_calculation_into_cells FAILED [ 43%]
+tests/test_professional_workflow_matrix.py::test_student_presentation_executor_resolves_research_into_prompt FAILED [ 43%]
+tests/test_reasoning_policy_contract.py::test_atomic_high_confidence_route_keeps_fast_path PASSED [ 43%]
+tests/test_reasoning_policy_contract.py::test_multi_step_and_data_flow_routes_use_structured_planner PASSED [ 43%]
+tests/test_reasoning_policy_contract.py::test_trusted_work_order_plan_is_not_replanned PASSED [ 43%]
+tests/test_reasoning_policy_contract.py::test_high_confidence_known_transform_plan_uses_validated_fast_path PASSED [ 43%]
+tests/test_reasoning_policy_contract.py::test_professional_and_optimization_intents_use_server_brain_even_when_single_step PASSED [ 43%]
+tests/test_reasoning_policy_contract.py::test_work_order_with_multiple_capabilities_requires_reasoning PASSED [ 43%]
+tests/test_reasoning_policy_contract.py::test_goal_context_normalizes_private_scope_and_invalid_step_budget PASSED [ 43%]
+tests/test_runtime_bridge_contract.py::test_user_auth_ready_accepts_refresh_token_only PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_user_auth_ready_false_with_no_tokens PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_envelope_result_contains_conversation_state PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_signed_in_new_chat_stays_local_blank_until_first_message PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_chat_messages_include_current_user_text PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_failure_still_returns_visible_state PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_model_name_active_provider_is_normalized PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_bootstrap_includes_brain_profile_surface PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_bootstrap_reconnects_process_transport_when_persisted_runtime_is_ready PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_planning_envelope_includes_native_desktop_truth_and_intelligence PASSED [ 44%]
+tests/test_runtime_bridge_contract.py::test_structured_planning_shortlist_covers_professional_tool_families[Avukat gibi \xe7al\u0131\u015f. Bu davay\u0131 analiz et, mevzuat\u0131 ara\u015ft\u0131r ve savunma dilek\xe7esi haz\u0131rla.-required_tools0] PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_structured_planning_shortlist_covers_professional_tool_families[Doktor gibi \xe7al\u0131\u015f. Bu tahlilleri yorumla ve hasta i\xe7in rapor \xe7\u0131kar.-required_tools1] PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_structured_planning_shortlist_covers_professional_tool_families[Muhasebeci gibi \xe7al\u0131\u015f. 12000 TL ve 8500 TL faturan\u0131n y\xfczde 20 KDV tutar\u0131n\u0131 hesapla, ara\u015ft\u0131r ve rapor belgesi haz\u0131rla.-required_tools2] PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_structured_planning_shortlist_covers_professional_tool_families[M\xfchendis/\xf6\u011frenci: kapasite k\u0131s\u0131tl\u0131 optimizasyon problemini karar de\u011fi\u015fkenleri ve ama\xe7 fonksiyonuyla \xe7\xf6z ve raporla.-required_tools3] PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_runtime_status_includes_operator_state PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_runtime_status_includes_full_desktop_native_snapshot PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_pending_plan_persists_agent_plan PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_reports_local_result PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_mobile_assigned_task_reuses_backend_chat_session_in_worker PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_quantum_capabilities_are_registered PASSED [ 45%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_quantum_task_uses_deterministic_pipeline PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_quantum_task_falls_back_without_qiskit PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_runtime_quantum_execution_capability_requires_qiskit_aer PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_professional_legal_workflow_uses_research_then_document PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_force_structured_planning_preserves_compound_router_plan PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_force_structured_planning_builds_medical_read_analyze_report_chain PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_force_structured_planning_builds_calculation_research_writer_chain PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_professional_medical_workflow_reads_then_reports PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_professional_read_research_workflow_feeds_all_context_to_writer PASSED [ 46%]
+tests/test_runtime_bridge_contract.py::test_professional_legal_file_workflow_reads_case_context_before_research_and_draft PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_professional_legal_workflow_can_insert_explicit_analysis_step PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_professional_student_workflow_can_target_presentation_without_document_writer PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_professional_student_file_workflow_reads_pdf_before_presentation PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_professional_accounting_workflow_can_calculate_then_write_spreadsheet PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_professional_optimization_workflow_uses_decision_support_pipeline PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_waits_for_approval_without_terminal_report PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_approval_request_payload_includes_email_context PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_approval_request_payload_classifies_only_registered_safe_writes_as_idempotent PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_remote_research_email_send_uses_backend_route_decision_without_replanning PASSED [ 47%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_uses_explicit_route_steps_without_replanning PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_typed_work_order_executes_without_redundant_route_decision PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_server_materialized_plan_preserves_output_writer_targets PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_server_materialized_plan_preserves_presentation_writer_target PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_dispatch_prefers_local_deterministic_route_over_llm_planner PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_dispatch_generic_operator_fallback_does_not_execute_public_chat PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_assigned_dispatch_generic_operator_completes_via_directory_tree_lifecycle PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_dispatch_keeps_specific_explicit_operator_step PASSED [ 48%]
+tests/test_runtime_bridge_contract.py::test_generic_operator_joker_yields_to_safe_local_route PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_screen_glance_dispatch_overrides_operator_joker PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_new_tab_dispatch_overrides_blind_browser_search PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_remote_browser_agent_route_requires_approval FAILED [ 49%]
+tests/test_runtime_bridge_contract.py::test_browser_snapshot_never_reads_form_values PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_browser_session_blocks_sensitive_fields_and_irreversible_clicks PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_remote_task_runner_adds_canonical_run_payload PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_remote_task_runner_readiness_failure_reports_safe_terminal PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_explicit_route_side_effect_waits_for_approval_before_execution PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_canonical_capability_preserves_dotted_desktop_operator_names PASSED [ 49%]
+tests/test_runtime_bridge_contract.py::test_remote_task_trace_keeps_stable_card_and_inline_approval_step PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_remote_task_trace_exposes_step_role_and_phase_from_agent_plan PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_agent_plan_roles_cover_professional_research_quantum_and_writers PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_skips_duplicate_inflight_delivery PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_skips_recent_terminal_replay PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_terminal_task_report_is_remembered_for_replay_suppression PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_tasks_reconciles_stale_active_item_to_unknown PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_tasks_preserves_waiting_approval_link_on_reconcile PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_runtime_websocket_mode_uses_poll_only_for_fallback_recovery PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_runtime_websocket_mode_periodically_polls_assigned_tasks_as_delivery_fallback PASSED [ 50%]
+tests/test_runtime_bridge_contract.py::test_remote_task_explicit_computer_control_maps_to_desktop_operator PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_fails_closed_on_capability_mismatch PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_applies_rejected_approval_resolution PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_canceled_terminal_clears_local_waiting_state PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_task_fails_closed_without_personal_action_permission PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_runtime_task_approval_resume_reports_terminal_result PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_execute_assigned_runtime_tasks_skips_recent_terminal_duplicate_approved_resume PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_runtime_task_approval_missing_link_reports_safe_failure PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_runtime_task_cancel_cleans_pending_local_plan PASSED [ 51%]
+tests/test_runtime_bridge_contract.py::test_runtime_ws_dispatch_skips_duplicate_without_second_ack PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_runtime_ws_invalid_message_log_contains_safe_diagnostics PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_runtime_ws_accepts_utf8_binary_json_frame PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_handle_normalizes_nested_backend_error_without_crashing PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_runtime_ws_dispatch_persists_local_acceptance_before_ack PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_runtime_ws_dispatch_skips_recent_terminal_without_ack PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_backend_task_wrappers_sync_task_inbox_state PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_integration_app_commands_use_bridge_and_disconnect_requires_confirmation PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_remote_mcp_unauthorized_forces_one_single_flight_registration_and_retry PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_remote_mcp_auth_retry_is_bounded_when_second_attempt_fails PASSED [ 52%]
+tests/test_runtime_bridge_contract.py::test_runtime_tasks_execute_assigned_is_available_through_handle PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_backend_auth_login_hydrates_truth_surfaces PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_backend_auth_login_stays_ok_when_bootstrap_is_partial PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_bootstrap_and_truth_refresh_share_canonical_backend_truth_surfaces PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_backend_auth_oauth_login_hydrates_truth_surfaces PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_backend_auth_login_applies_ollama_hint_only_when_local_models_are_empty PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_backend_auth_login_preserves_existing_provider_when_local_model_is_set PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_backend_auth_logout_returns_cleared_state PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_backend_auth_sync_session_hydrates_truth_surfaces PASSED [ 53%]
+tests/test_runtime_bridge_contract.py::test_backend_auth_sync_session_clears_local_truth_without_network_logout PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_runtime_handle_sanitizes_state_tokens_for_transport PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_runtime_handle_sanitizes_nested_auth_tokens_from_backend_payload PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_ensure_runtime_registered_uses_heartbeat_fallback_when_websocket_unavailable PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_runtime_transport_heartbeats_until_websocket_is_actually_open PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_runtime_transport_does_not_overwrite_websocket_opened_during_heartbeat PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_ensure_runtime_registered_rejects_invalid_runtime_identity_without_backend_call PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_runtime_register_uses_state_identity_and_advertised_capabilities PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_explicit_runtime_register_and_constructor_retry_are_single_flight PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_runtime_register_rejects_invalid_identity_without_backend_call PASSED [ 54%]
+tests/test_runtime_bridge_contract.py::test_concurrent_runtime_registration_is_single_flight PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_reconnect_registration_reuses_concurrent_explicit_token PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_ensure_runtime_registered_primes_assigned_task_fetch PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_runtime_register_retry_recovers_after_transient_failure PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_runtime_register_retry_uses_paired_device_after_qr_session_expires PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_pairing_claim_poll_recovers_claimed_session_and_registers_runtime PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_pairing_claim_poll_marks_runtime_waiting_for_phone PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_runtime_unauthorized_endpoint_starts_register_retry PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_status_registers_paired_runtime_when_offline PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_stale_bridge_background_workers_stop_after_state_store_switch PASSED [ 55%]
+tests/test_runtime_bridge_contract.py::test_runtime_register_retry_invalidation_wakes_sleeping_thread PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_relay_interval_shrinks_while_active_remote_tasks_exist PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_terminal_task_status_triggers_detail_resync PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_deterministic_router_handles_system_info_without_cloud PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_shell_route_returns_plan_preview_instead_of_direct_execution PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_direct_capability_uses_registry_policy PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_browser_route_requires_explicit_permission PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_screen_route_defers_to_os_permission_no_internal_pregate PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_browser_route_surfaces_os_permission_requirement_when_runtime_permission_is_enabled PASSED [ 56%]
+tests/test_runtime_bridge_contract.py::test_play_media_direct_capability_requires_browser_permission PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_personal_action_direct_capability_requires_confirmation PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_semantic_whatsapp_route_returns_pending_plan_with_permission PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_speech_capture_requires_direct_ui_gesture PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_speech_bridge_requests_return_structured_result PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_direct_document_write_requires_confirmation PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_pdf_report_request_routes_to_research_then_pdf_canvas PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_pdf_report_honors_location_mentioned_at_end_of_request PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_budget_pipeline_routes_to_spreadsheet_chart_and_pdf PASSED [ 57%]
+tests/test_runtime_bridge_contract.py::test_budget_spreadsheet_can_feed_chart_output FAILED [ 57%]
+tests/test_runtime_bridge_contract.py::test_spreadsheet_writer_does_not_invent_rows_from_prompt FAILED [ 58%]
+tests/test_runtime_bridge_contract.py::test_canvas_write_expands_pdf_report_prompt_to_paginated_report FAILED [ 58%]
+tests/test_runtime_bridge_contract.py::test_direct_image_generate_requires_confirmation PASSED [ 58%]
+tests/test_runtime_bridge_contract.py::test_router_handles_turkish_web_search_apostrophe PASSED [ 58%]
+tests/test_runtime_bridge_contract.py::test_router_handles_plain_google_search_spacing PASSED [ 58%]
+tests/test_runtime_bridge_contract.py::test_router_requires_specific_topic_for_web_research PASSED [ 58%]
+tests/test_runtime_bridge_contract.py::test_router_handles_youtube_spacing_and_folder_alias PASSED [ 58%]
+tests/test_runtime_bridge_contract.py::test_router_handles_app_close_commands PASSED [ 58%]
+tests/test_runtime_bridge_contract.py::test_router_strips_turkish_case_particles_for_app_open_close PASSED [ 58%]
+tests/test_runtime_bridge_contract.py::test_router_handles_short_screenshot_command PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_router_handles_youtube_ablative_suffix PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_router_handles_audio_transcription_path PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_router_uses_selected_audio_artifact_for_transcription PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_router_handles_read_aloud_command PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_router_handles_generic_close_command PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_linux_open_app_route_launches_native_file_manager PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_linux_open_app_without_binary_fails_safe PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_router_builds_calendar_plan_preview PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_router_builds_reminder_plan_preview PASSED [ 59%]
+tests/test_runtime_bridge_contract.py::test_router_builds_multi_step_browser_plan PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_router_builds_ocr_route_for_selected_image PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_router_builds_document_route_for_selected_pdf PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_router_builds_image_read_route_for_selected_image PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_selected_image_attributes_stay_single_read_only_task PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_selected_image_color_extraction_is_not_misrouted_to_ocr PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_router_builds_selected_pdf_to_presentation_pipeline PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_router_builds_data_analyze_route_for_selected_csv PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_router_builds_data_analyze_route_for_explicit_xlsx_path PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_router_builds_chart_generate_route_for_selected_csv PASSED [ 60%]
+tests/test_runtime_bridge_contract.py::test_router_builds_math_route PASSED [ 61%]
+tests/test_runtime_bridge_contract.py::test_router_builds_latex_math_route PASSED [ 61%]
+tests/test_runtime_bridge_contract.py::test_router_builds_spreadsheet_write_plan PASSED [ 61%]
+tests/test_runtime_bridge_contract.py::test_public_research_spreadsheet_uses_structured_sources PASSED [ 61%]
+tests/test_runtime_bridge_contract.py::test_npm_bootstrap_and_tool_contract_expose_structured_data_stack PASSED [ 61%]
+tests/test_runtime_bridge_contract.py::test_private_spreadsheet_report_does_not_trigger_web_research PASSED [ 61%]
+tests/test_runtime_bridge_contract.py::test_spreadsheet_write_neutralizes_formula_cells_and_preserves_numbers FAILED [ 61%]
+tests/test_runtime_bridge_contract.py::test_spreadsheet_write_infers_and_aligns_dictionary_columns FAILED [ 61%]
+tests/test_runtime_bridge_contract.py::test_router_builds_presentation_write_plan PASSED [ 61%]
+tests/test_runtime_bridge_contract.py::test_router_builds_canvas_write_plan PASSED [ 62%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_returns_pending_plan_for_side_effecting_schedule PASSED [ 62%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_passes_structured_result_to_ui_state FAILED [ 62%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_runs_latex_parse_before_math_solve FAILED [ 62%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_routes_selected_artifact_and_clears_composer_state PASSED [ 62%]
+tests/test_runtime_bridge_contract.py::test_runtime_status_includes_speech_truth_surface PASSED [ 62%]
+tests/test_runtime_bridge_contract.py::test_confirm_plan_executes_local_steps PASSED [ 62%]
+tests/test_runtime_bridge_contract.py::test_confirm_plan_injects_confirmation_for_file_write FAILED [ 62%]
+tests/test_runtime_bridge_contract.py::test_confirm_plan_fails_closed_when_capability_not_ready FAILED [ 62%]
+tests/test_runtime_bridge_contract.py::test_follow_up_closes_last_opened_app PASSED [ 62%]
+tests/test_runtime_bridge_contract.py::test_focus_app_route_uses_open_app_capability PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_focus_command_without_explicit_target_returns_clarification PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_restart_app_route_creates_confirmation_plan PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_pending_plan_revision_updates_schedule PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_pending_plan_cancel_via_follow_up PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_low_confidence_semantic_route_returns_clarification PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_semantic_route_clarifies_when_document_target_is_missing PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_semantic_route_clarifies_when_browser_url_is_missing PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_provider_lock_semantic_candidates_do_not_escape PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_public_snapshot_redacts_provider_base_urls PASSED [ 63%]
+tests/test_runtime_bridge_contract.py::test_provider_catalog_payload_hides_base_urls PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_server_brain_is_first_public_chat_candidate_when_ready PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_server_brain_is_first_public_chat_candidate_even_when_snapshot_is_stale PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_server_brain_uses_backend_chat_messages_when_no_hidden_hint PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_server_brain_reconciles_local_conversation_to_canonical_backend_session PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_server_brain_normalizes_content_blob_text_blocks_without_raw_dict PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_server_brain_waits_for_final_text_after_running_trace PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_server_brain_can_live_probe_when_snapshot_is_stale PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_local_private_without_local_provider_returns_safe_local_runtime_error PASSED [ 64%]
+tests/test_runtime_bridge_contract.py::test_public_text_chat_falls_back_to_cloud_when_local_runtime_fails PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_local_private_chat_fails_closed_when_selected_runtime_unreachable PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_semantic_route_filters_workspace_context_for_cloud_provider PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_semantic_route_never_uses_cloud_for_local_private_goal PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_operator_planner_uses_local_first_then_cloud_with_sanitized_observation PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_document_read_requires_explicit_or_workspace_target PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_clarifies_when_artifact_target_missing PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_clarifies_when_data_target_missing PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_runtime_status_exposes_dependency_truth PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_runtime_state_patch_clears_stale_pairing_realtime_ready PASSED [ 65%]
+tests/test_runtime_bridge_contract.py::test_runtime_backend_snapshot_clears_stale_ready_when_backend_not_ready PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_runtime_status_exposes_retrieval_truth_after_indexing PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_runtime_payloads_and_status_include_local_file_index_capability_state PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_runtime_payloads_publish_computed_capability_readiness PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_runtime_payloads_refresh_stale_dependency_unavailable_state PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_runtime_register_retry_does_not_start_without_backend_register_method PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_mcp_server_upsert_invalid_config_returns_safe_error PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_planner_mcp_tools_data_carries_compact_input_schema PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_mcp_tool_call_requires_discovered_metadata PASSED [ 66%]
+tests/test_runtime_bridge_contract.py::test_mcp_server_upsert_refresh_and_remove_roundtrip FAILED [ 67%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_surfaces_retrieval_metadata PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_runs_shared_retrieval_on_every_outbound_message PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_keeps_local_chat_working_when_shared_retrieval_fails PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_conversation_send_records_retrieval_metrics PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_chat_provider_candidates_respect_routing_policy PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_local_first_private_semantic_candidates_do_not_include_cloud PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_cloud_fallback_private_chat_candidates_do_not_include_cloud PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_ollama_model_probe_requires_the_configured_tag PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_state_store_normalizes_legacy_device_name PASSED [ 67%]
+tests/test_runtime_bridge_contract.py::test_rejected_plan_records_negative_intelligence PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_revised_plan_records_revision_intelligence PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_confirmed_plan_records_success_intelligence PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_confirmed_plan_stays_available_until_execution_finishes PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_confirmed_plan_rejects_duplicate_execution_while_inflight PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_interrupted_confirmed_plan_fails_closed_without_replay PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_bad_history_forces_semantic_plan_preview PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_task_intelligence_outcomes_stay_bounded PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_select_conversation_preserves_active_session_when_backend_detail_fails PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_backend_device_deactivate_removes_local_mobile_truth_when_refresh_fails PASSED [ 68%]
+tests/test_runtime_bridge_contract.py::test_append_message_stores_common_block_message_contract PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_runtime_full_access_session_is_volatile_and_shapes_effective_state PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_runtime_full_access_allows_shell_without_persistent_permission PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_runtime_task_terminal_payload_marks_private_artifacts_share_required PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_synthesize_success_summary_from_execution_trace PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_synthesize_success_summary_prefers_tool_events PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_terminal_payload_synthesizes_summary_when_assistant_message_empty PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_user_facing_plan_summary_filters_routing_variants PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_execution_timeout_extended_for_multi_step_plan PASSED [ 69%]
+tests/test_runtime_bridge_contract.py::test_pending_terminal_stashed_when_delivery_fails_and_drained_on_recovery PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_reassert_pending_task_status_resends_running_until_terminal PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_backend_truth_sync_preserves_local_only_conversations PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_backend_truth_sync_clear_all_drops_local_conversations PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_recoverable_replan_falls_back_web_research_to_local_context PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_skill_expansion_preserves_parent_dependencies_and_template_references PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_recoverable_replan_ignores_non_recoverable_failures PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_capability_execution_telemetry_and_reliability_surfacing PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_reliable_capability_not_flagged PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_execute_step_with_telemetry_records_outcome PASSED [ 70%]
+tests/test_runtime_bridge_contract.py::test_clipboard_capabilities_registered_and_run PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_billing_truth_refresh_is_throttled_and_syncs_quota PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_billing_refresh_skipped_when_not_authenticated PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_dispatched_plan_within_work_order_capabilities_waits_for_backend_policy PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_dispatched_plan_with_non_readonly_capability_waits_for_approval PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_sanitize_contradictory_steps_drops_browser_relaunch_after_close PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_sanitize_contradictory_steps_keeps_unrelated_steps PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_delegates_multicap_cowork_task_to_llm_planner PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_simple_close_app_stays_on_fast_regex_path PASSED [ 71%]
+tests/test_runtime_bridge_contract.py::test_sequential_simple_command_delegates_to_llm_planner PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_multicap_task_stays_on_regex_when_server_brain_unavailable PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_bridge_binds_live_progress_emitter PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_live_progress_routes_to_active_task_and_throttles PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_live_progress_preserves_evidence_fields PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_live_progress_reports_cancelled_terminal_status PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_ws_cancel_reaches_copied_task_scope_and_discards_late_worker_success PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_cancelled_server_materialized_writer_task_never_publishes_late_success FAILED [ 72%]
+tests/test_runtime_bridge_contract.py::test_ws_cancel_before_scope_prevents_remote_task_execution PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_cancel_first_terminal_fence_suppresses_artifacts_and_completion PASSED [ 72%]
+tests/test_runtime_bridge_contract.py::test_scope_limit_after_running_reports_safe_terminal_failure PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_websocket_approval_resume_is_idempotent_and_terminal_fenced PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_force_runtime_reconnect_requires_auth PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_force_runtime_reconnect_closes_socket_and_restarts_when_thread_dead PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_execute_local_with_timeout_returns_sentinel_on_hang PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_remote_task_timeout_failure_payload_includes_notification PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_execute_local_timeout_cancels_active_mcp_before_returning PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_execute_local_with_timeout_delegates_none_to_conversation PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_is_clarification_result_detection PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_approval_resolution_notes_extraction PASSED [ 73%]
+tests/test_runtime_bridge_contract.py::test_pause_for_clarification_persists_context PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_pause_for_clarification_loop_guard PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_resume_after_clarification_merges_answer_and_replans PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_resume_after_clarification_without_answer_fails_safe PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_resume_after_clarification_rejection_cancels PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_plan_requires_backend_approval_for_writes_and_unknown_capabilities PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_approval_gate_has_one_simple_decision_rule PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_recoverable_replan_web_research_falls_back_to_local PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_recoverable_replan_skips_failed_observer_and_continues PASSED [ 74%]
+tests/test_runtime_bridge_contract.py::test_recoverable_replan_gives_up_when_no_pattern PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_capability_display_name_friendly_and_fallback PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_readiness_error_is_friendly_and_structured PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_readiness_error_none_when_all_ready PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_fail_safe_surfaces_capability_unavailable_block PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_server_brain_circuit_breaker_opens_and_resets PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_server_brain_circuit_cooldown_expires PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_single_failure_does_not_open_circuit PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_tool_catalog_cached_per_platform PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_recoverable_replan_corrects_app_content_open_app PASSED [ 75%]
+tests/test_runtime_bridge_contract.py::test_replan_observation_includes_app_suggestions_for_app_not_found PASSED [ 76%]
+tests/test_runtime_bridge_contract.py::test_sweep_interrupted_tasks_fails_stuck_running_items PASSED [ 76%]
+tests/test_runtime_bridge_contract.py::test_status_payload_carries_task_title_for_local_inbox PASSED [ 76%]
+tests/test_runtime_bridge_contract.py::test_recoverable_replan_hands_browser_goal_from_failed_operator FAILED [ 76%]
+tests/test_runtime_bridge_contract.py::test_terminal_payload_strips_leaked_internal_envelope PASSED [ 76%]
+tests/test_runtime_bridge_contract.py::test_terminal_payload_strips_identity_deflection_from_task_result PASSED [ 76%]
+tests/test_runtime_bridge_contract.py::test_permission_required_is_not_replanned PASSED [ 76%]
+tests/test_runtime_startup_contract.py::test_capability_registry_import_is_lazy_for_actions PASSED [ 76%]
+tests/test_runtime_startup_contract.py::test_capability_registry_dependency_failures_return_safe_error PASSED [ 76%]
+tests/test_runtime_startup_contract.py::test_browser_control_requires_master_and_browser_permission PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_open_app_prefers_native_snapshot_for_frontmost_application_name PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_play_media_direct_capability_escalates_to_os_permission_required PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_personal_actions_require_confirmation_with_full_access[add_calendar_event-payload0] PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_personal_actions_require_confirmation_with_full_access[add_reminder-payload1] PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_personal_actions_require_confirmation_with_full_access[send_whatsapp_message-payload2] PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_personal_actions_require_confirmation_with_full_access[save_whatsapp_contact-payload3] PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_personal_actions_require_confirmation_even_with_permission[add_calendar_event-payload0] PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_personal_actions_require_confirmation_even_with_permission[add_reminder-payload1] PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_personal_actions_require_confirmation_even_with_permission[send_whatsapp_message-payload2] PASSED [ 77%]
+tests/test_runtime_startup_contract.py::test_personal_actions_require_confirmation_even_with_permission[save_whatsapp_contact-payload3] PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_shell_run_uses_argv_only_and_blocks_shell_metacharacters PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_shell_run_requires_confirmation_even_with_permission PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_send_whatsapp_message_does_not_persist_contact_implicitly PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_save_whatsapp_contact_persists_only_when_explicitly_confirmed PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_analyze_screen_defers_to_os_permission_not_internal_flag PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_analyze_screen_missing_api_key_returns_safe_message PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_non_darwin_desktop_capabilities_fail_closed PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_calendar_helper_missing_source_returns_capability_unavailable PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_calendar_helper_timeout_returns_time_limit_error PASSED [ 78%]
+tests/test_runtime_startup_contract.py::test_analyze_screen_permission_rejection_maps_to_safe_error PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_play_media_auto_non_darwin_falls_back_to_youtube PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_whatsapp_non_darwin_web_draft_path_is_supported PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_bridge_import_does_not_eager_load_action_or_local_model_modules PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_document_read_missing_dependency_fails_safely PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_document_read_pdf_prefers_pymupdf PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_document_read_pdf_falls_back_to_pypdf PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_document_read_docx_falls_back_to_markitdown PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_document_read_accepts_explicit_workspace_path PASSED [ 79%]
+tests/test_runtime_startup_contract.py::test_document_read_blocks_workspace_escape_path PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_document_read_allows_selected_external_path PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_ocr_read_missing_tesseract_fails_safely PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_ocr_read_accepts_explicit_image_path PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_ocr_read_prefers_easyocr_when_available PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_ocr_read_allows_selected_external_image_path PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_image_read_returns_structured_metadata PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_image_read_missing_dependency_fails_safely PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_image_generate_uses_gemini_and_writes_png PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_image_generate_defaults_to_current_gemini_preview_model PASSED [ 80%]
+tests/test_runtime_startup_contract.py::test_image_generate_status_is_provider_neutral PASSED [ 81%]
+tests/test_runtime_startup_contract.py::test_image_generate_missing_api_key_fails_safely PASSED [ 81%]
+tests/test_runtime_startup_contract.py::test_image_generate_invalid_api_key_returns_actionable_message PASSED [ 81%]
+tests/test_runtime_startup_contract.py::test_forgiving_image_generate_accepts_description_arg PASSED [ 81%]
+tests/test_runtime_startup_contract.py::test_data_analyze_csv_summary_and_preview PASSED [ 81%]
+tests/test_runtime_startup_contract.py::test_data_analyze_json_profile_and_selected_external_path PASSED [ 81%]
+tests/test_runtime_startup_contract.py::test_data_analyze_accepts_nested_dataset_payload PASSED [ 81%]
+tests/test_runtime_startup_contract.py::test_data_analyze_blocks_external_path_without_selection PASSED [ 81%]
+tests/test_runtime_startup_contract.py::test_chart_generate_creates_png_artifact FAILED [ 81%]
+tests/test_runtime_startup_contract.py::test_chart_generate_accepts_nested_chart_payload FAILED [ 81%]
+tests/test_runtime_startup_contract.py::test_chart_generate_missing_dependency_fails_safely PASSED [ 82%]
+tests/test_runtime_startup_contract.py::test_latex_parse_valid_invalid_and_missing_dependency FAILED [ 82%]
+tests/test_runtime_startup_contract.py::test_speech_to_text_blocks_external_path_without_selection FAILED [ 82%]
+tests/test_runtime_startup_contract.py::test_speech_to_text_allows_selected_external_audio_path FAILED [ 82%]
+tests/test_runtime_startup_contract.py::test_speech_to_text_requires_explicit_cloud_permission FAILED [ 82%]
+tests/test_runtime_startup_contract.py::test_speech_to_text_uses_groq_cloud_adapter_when_allowed FAILED [ 82%]
+tests/test_runtime_startup_contract.py::test_text_to_speech_uses_openai_cloud_adapter_when_allowed PASSED [ 82%]
+tests/test_runtime_startup_contract.py::test_math_solve_factor_and_evaluate FAILED [ 82%]
+tests/test_runtime_startup_contract.py::test_quantum_model_problem_accepts_structured_optimization_payload PASSED [ 82%]
+tests/test_runtime_startup_contract.py::test_quantum_run_experiment_uses_qiskit_aer_when_available PASSED [ 83%]
+tests/test_runtime_startup_contract.py::test_executor_dependency_payload_preserves_output_and_structured_result PASSED [ 83%]
+tests/test_runtime_startup_contract.py::test_executor_passes_rich_dependency_payload_to_dependent_steps PASSED [ 83%]
+tests/test_runtime_startup_contract.py::test_executor_final_cancel_trace_keeps_interrupted_step_active PASSED [ 83%]
+tests/test_runtime_startup_contract.py::test_document_write_creates_docx_in_workspace PASSED [ 83%]
+tests/test_runtime_startup_contract.py::test_forgiving_document_write_accepts_content_and_nested_sections PASSED [ 83%]
+tests/test_runtime_startup_contract.py::test_document_write_sanitizes_control_chars_from_research_context PASSED [ 83%]
+tests/test_runtime_startup_contract.py::test_spreadsheet_write_creates_xlsx_in_workspace FAILED [ 83%]
+tests/test_runtime_startup_contract.py::test_forgiving_spreadsheet_write_accepts_sheet_rows_matrix FAILED [ 83%]
+tests/test_runtime_startup_contract.py::test_forgiving_web_research_accepts_topic_arg PASSED [ 83%]
+tests/test_runtime_startup_contract.py::test_web_research_keeps_search_sources_when_fetch_fails PASSED [ 84%]
+tests/test_runtime_startup_contract.py::test_web_research_sanitizes_workflow_prompt_before_search PASSED [ 84%]
+tests/test_runtime_startup_contract.py::test_presentation_write_missing_dependency_fails_safely PASSED [ 84%]
+tests/test_runtime_startup_contract.py::test_forgiving_presentation_write_accepts_nested_deck_payload FAILED [ 84%]
+tests/test_runtime_startup_contract.py::test_retrieve_context_uses_lexical_fallback PASSED [ 84%]
+tests/test_runtime_startup_contract.py::test_retrieve_context_persists_bounded_chunk_cache PASSED [ 84%]
+tests/test_runtime_startup_contract.py::test_retrieve_context_merges_workspace_and_conversation_sources PASSED [ 84%]
+tests/test_runtime_startup_contract.py::test_retrieve_context_prefers_embedding_when_available PASSED [ 84%]
+tests/test_runtime_startup_contract.py::test_retrieve_context_includes_local_file_matches_when_native_index_ready PASSED [ 84%]
+tests/test_runtime_startup_contract.py::test_retrieve_context_falls_back_to_workspace_when_local_file_index_is_unavailable PASSED [ 85%]
+tests/test_runtime_startup_contract.py::test_shell_run_read_only_mode_skips_confirmation PASSED [ 85%]
+tests/test_runtime_startup_contract.py::test_shell_run_full_access_mode_returns_structured_result PASSED [ 85%]
+tests/test_runtime_startup_contract.py::test_full_access_does_not_unlock_critical_shell_actions_without_confirmation PASSED [ 85%]
+tests/test_runtime_startup_contract.py::test_visual_writers_block_unselected_external_images[actions.document_write-document_write-.docx-<lambda>] PASSED [ 85%]
+tests/test_runtime_startup_contract.py::test_visual_writers_block_unselected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] FAILED [ 85%]
+tests/test_runtime_startup_contract.py::test_visual_writers_allow_task_selected_external_images[actions.document_write-document_write-.docx-<lambda>] PASSED [ 85%]
+tests/test_runtime_startup_contract.py::test_visual_writers_allow_task_selected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] FAILED [ 85%]
+tests/test_runtime_startup_contract.py::test_mcp_call_tool_accepts_server_planner_argument_variants PASSED [ 85%]
+tests/test_safety_policy_write_gate.py::test_write_capabilities_require_confirmation PASSED [ 85%]
+tests/test_safety_policy_write_gate.py::test_git_mutations_require_confirmation PASSED [ 86%]
+tests/test_safety_policy_write_gate.py::test_write_side_tools_are_not_known_safe PASSED [ 86%]
+tests/test_safety_policy_write_gate.py::test_read_side_dev_tools_are_known_safe PASSED [ 86%]
+tests/test_safety_policy_write_gate.py::test_permission_tools_use_single_full_access_surface PASSED [ 86%]
+tests/test_safety_policy_write_gate.py::test_capability_metadata_exposes_only_single_full_access_permission_surface PASSED [ 86%]
+tests/test_safety_policy_write_gate.py::test_default_output_paths_are_unique FAILED [ 86%]
+tests/test_safety_policy_write_gate.py::test_default_output_targets_desktop FAILED [ 86%]
+tests/test_skill_runtime_catalog.py::test_builtin_skill_catalog_exposes_library_backed_skills PASSED [ 86%]
+tests/test_skill_runtime_catalog.py::test_builtin_skill_catalog_exposes_new_compound_skills PASSED [ 86%]
+tests/test_skill_runtime_contract.py::test_skill_refresh_lists_builtin_manifests PASSED [ 86%]
+tests/test_skill_runtime_contract.py::test_skill_refresh_fails_closed_for_invalid_manifest PASSED [ 87%]
+tests/test_skill_runtime_contract.py::test_skill_run_executes_document_summary_workflow PASSED [ 87%]
+tests/test_skill_runtime_contract.py::test_skill_run_executes_research_brief_workflow PASSED [ 87%]
+tests/test_skill_runtime_contract.py::test_skill_run_executes_source_verify_workflow PASSED [ 87%]
+tests/test_skill_runtime_contract.py::test_skill_run_executes_context_report_workflow PASSED [ 87%]
+tests/test_skill_runtime_contract.py::test_skill_run_requires_confirmation_for_docx_write PASSED [ 87%]
+tests/test_skill_runtime_contract.py::test_skill_refresh_marks_dependency_unavailable PASSED [ 87%]
+tests/test_skill_runtime_contract.py::test_skill_run_allows_only_readonly_mcp_proxy FAILED [ 87%]
+tests/test_skill_runtime_contract.py::test_runtime_status_exposes_skill_status PASSED [ 87%]
+tests/test_skill_runtime_selection.py::test_rank_skills_for_text_prefers_matching_skill PASSED [ 88%]
+tests/test_skill_runtime_selection.py::test_rank_skills_for_text_prefers_canvas_skill_for_canvas_queries PASSED [ 88%]
+tests/test_skill_runtime_selection.py::test_rank_skills_for_text_prefers_summary_save_skill_for_save_requests PASSED [ 88%]
+tests/test_skill_runtime_selection.py::test_rank_new_compound_skills_win_their_trigger_phrases PASSED [ 88%]
+tests/test_skill_runtime_selection.py::test_record_skill_usage_updates_recent_runs_and_stats PASSED [ 88%]
+tests/test_speech_contract.py::test_bridge_status_does_not_eager_load_speech_dependencies PASSED [ 88%]
+tests/test_speech_contract.py::test_speech_capture_requires_ui_gesture PASSED [ 88%]
+tests/test_speech_contract.py::test_speech_capture_start_stop_and_status_flow PASSED [ 88%]
+tests/test_speech_contract.py::test_speech_to_text_missing_dependency_fails_safely PASSED [ 88%]
+tests/test_speech_contract.py::test_speech_to_text_reads_sample_audio_path FAILED [ 88%]
+tests/test_speech_contract.py::test_text_to_speech_uses_safe_fallback_provider PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_planning_request_is_pure_json_data PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_tool_catalog_has_json_schema_and_execution_metadata PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_tool_catalog_describes_structured_results_for_data_flow PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_valid_single_step_plan PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_unknown_capability_rejected PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_unknown_args_pruned_and_types_coerced PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_model_plan_cannot_set_runtime_internal_arguments PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_enum_constraint_normalized PASSED [ 89%]
+tests/test_structured_planner_contract.py::test_plan_preserves_foreach_and_deferred_structured_writer_values PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_professional_text_analyze_plan_preserves_mode_and_source_context_reference PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_missing_required_arg_flagged PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_clarification_plan_maps_to_question PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_goal_contract_asks_only_first_blocking_question PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_multi_step_plan_maps_to_plan_preview PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_planning_request_declares_sequencing_rule PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_depends_on_preserved_through_validation PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_scheduler_fields_are_preserved_and_inherit_goal_priority PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_missing_step_dependency_is_rejected PASSED [ 90%]
+tests/test_structured_planner_contract.py::test_dependency_cycle_is_rejected_by_plan_linter PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_goal_contract_mismatch_is_rejected_fail_closed PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_missing_goal_contract_is_rejected_fail_closed PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_privacy_mismatch_is_rejected_fail_closed PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_goal_contract_prohibited_capability_is_rejected PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_single_step_without_legacy_goal_keeps_goal_contract_in_plan_preview PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_multi_step_reordered_by_depends_on PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_independent_steps_keep_original_order PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_dependency_cycle_falls_back_to_original_order PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_unknown_dependency_reference_ignored PASSED [ 91%]
+tests/test_structured_planner_contract.py::test_non_dict_payload_rejected PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_intelligence_context_is_structured_records PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_intelligence_context_empty_state PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_build_repair_request_carries_errors_and_schema PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_planning_request_includes_recent_intents PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_planning_request_keeps_mcp_call_tool_and_schema_context PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_build_cowork_context_is_structured_labeled_json PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_build_cowork_context_bounds_turns_and_text PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_build_cowork_context_minimal_when_empty PASSED [ 92%]
+tests/test_structured_planner_contract.py::test_build_replan_observation_is_structured PASSED [ 93%]
+tests/test_structured_planner_contract.py::test_tool_catalog_carries_skill_like_metadata PASSED [ 93%]
+tests/test_structured_planner_contract.py::test_tool_catalog_examples_bounded_to_three PASSED [ 93%]
+tests/test_structured_planner_contract.py::test_every_catalog_tool_is_self_documenting PASSED [ 93%]
+tests/test_task_router_document_summary_save.py::test_route_text_to_tool_prefers_summary_save_skill_for_embedded_attachment_text PASSED [ 93%]
+tests/test_task_router_document_summary_save.py::test_route_text_to_tool_uses_selected_document_path_for_summary_save PASSED [ 93%]
+tests/test_task_router_document_summary_save.py::test_document_read_accepts_provided_text PASSED [ 93%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[Safari'yi a\xe7] PASSED [ 93%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[safari a\xe7] PASSED [ 93%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[Notlar\u0131 a\xe7ar m\u0131s\u0131n] PASSED [ 93%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[Spotify'\u0131 ba\u015flat] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[hesap makinesini a\xe7] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[Finder'\u0131 \xf6ne getir] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[visual studio code a\xe7] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[whatsapp'\u0131 a\xe7 l\xfctfen] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[sistem ayarlar\u0131n\u0131 a\xe7] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[mail uygulamas\u0131n\u0131 a\xe7] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[terminali a\xe7] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[youtube'a gir] PASSED [ 94%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[github.com'u a\xe7] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[google'a git] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[hurriyet.com.tr a\xe7] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[taray\u0131c\u0131da openai sitesini a\xe7] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[\u015fu siteye git: anthropic.com] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[twitter'a gir] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[kuantum bilgisayarlar\u0131 ara\u015ft\u0131r] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[bana elektrikli araba fiyatlar\u0131n\u0131 ara\u015ft\u0131r\u0131r m\u0131s\u0131n] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[2026 asgari \xfccret ne kadar ara\u015ft\u0131r] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[yapay zeka ajanlar\u0131 hakk\u0131nda bilgi topla] PASSED [ 95%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[m5 \xe7ip hakk\u0131nda detayl\u0131 ara\u015ft\u0131rma yap] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[bitcoin fiyat\u0131n\u0131 ara\u015ft\u0131r] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[toplant\u0131 notlar\u0131n\u0131 belgele] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[bu konu\u015fmay\u0131 word belgesi yap] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[kuantum ara\u015ft\u0131rmas\u0131n\u0131 d\xf6k\xfcmante et] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[proje plan\u0131 i\xe7in bir dok\xfcman olu\u015ftur] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[bunu bir rapora d\xf6n\xfc\u015ft\xfcr] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[sat\u0131\u015f verilerinden bir word raporu haz\u0131rla] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_jarvis_command_routes[masa\xfcst\xfcne rapor.docx ad\u0131nda bir belge olu\u015ftur] PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_vague_git_falls_through_to_planner PASSED [ 96%]
+tests/test_task_router_jarvis_commands.py::test_excel_report_not_hijacked_by_document_route PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_clipboard_read_commands_route_to_clipboard_read PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_clipboard_write_commands_extract_text PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_file_copy_not_shadowed_by_clipboard_route PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_sys_info_matches_suffixed_turkish_forms PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_sys_info_does_not_false_positive_on_generic_islem PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_new_tab_phrase_not_misrouted_to_open_app PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_open_and_close_app_still_route PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_gui_actions_route_to_desktop_operator PASSED [ 97%]
+tests/test_task_router_jarvis_commands.py::test_image_find_routes_to_reliable_browser_search PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_image_save_routes_to_reliable_download PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_developer_tools_route_to_read_side_capabilities PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_git_status_diff_do_not_swallow_other_git_commands PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_write_side_git_commands_route_with_confirmation PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_operator_route_does_not_shadow_specific_capabilities PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_research_converb_splits_into_compound_presentation PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_research_converb_document_variant PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_non_research_converb_does_not_split PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_app_content_split_browser_becomes_open_plus_search PASSED [ 98%]
+tests/test_task_router_jarvis_commands.py::test_app_content_split_attached_suffix PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_app_content_split_non_browser_skips_open_app PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_plain_open_commands_stay_fast PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_web_services_open_in_browser_not_open_app PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_browser_plus_web_service_opens_url_directly PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_youtube_play_still_extracts_content_query PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_youtube_report_does_not_capture_site_navigation PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_screen_glance_routes_to_analyze_screen_not_operator PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_open_apps_routes_to_processes_not_operator PASSED [ 99%]
+tests/test_task_router_jarvis_commands.py::test_new_tab_routes_to_browser_new_tab_not_search PASSED [100%]
+
+=================================== FAILURES ===================================
+___________________ test_canvas_write_creates_pdf_with_table ___________________
+tests/test_canvas_write_contract.py:44: in test_canvas_write_creates_pdf_with_table
+    assert result["ok"] is True
+E   assert False is True
+_______________ test_canvas_write_creates_png_from_source_image ________________
+tests/test_canvas_write_contract.py:72: in test_canvas_write_creates_png_from_source_image
+    assert result["ok"] is True
+E   assert False is True
+________________ test_canvas_write_creates_png_with_chart_block ________________
+tests/test_canvas_write_contract.py:108: in test_canvas_write_creates_png_with_chart_block
+    assert result["ok"] is True
+E   assert False is True
+___________________ test_document_write_accepts_chart_blocks ___________________
+tests/test_canvas_write_contract.py:178: in test_document_write_accepts_chart_blocks
+    assert len(document.inline_shapes) >= 1
+E   assert 0 >= 1
+E    +  where 0 = len(<docx.shape.InlineShapes object at 0x10e8f88d0>)
+E    +    where <docx.shape.InlineShapes object at 0x10e8f88d0> = <docx.document.Document object at 0x10e2db950>.inline_shapes
+_________________ test_presentation_write_accepts_chart_blocks _________________
+tests/test_canvas_write_contract.py:183: in test_presentation_write_accepts_chart_blocks
+    from pptx import Presentation
+E   ModuleNotFoundError: No module named 'pptx'
+_____________ test_skill_recipes_carry_ids_and_foreach_to_executor _____________
+tests/test_capability_spec_contract.py:79: in test_skill_recipes_carry_ids_and_foreach_to_executor
+    prepared = skill_runtime.prepare_skill_run(
+runtime/skill_runtime.py:953: in prepare_skill_run
+    raise SafeCapabilityError(
+E   runtime.capability_registry.SafeCapabilityError: Playwright bu kurulumda hazır değil.
+________ test_executor_fanout_aggregates_structured_results_for_writer _________
+tests/test_executor_core_contract.py:568: in test_executor_fanout_aggregates_structured_results_for_writer
+    assert ok is True
+E   assert False is True
+_ test_executor_hides_intermediate_reader_output_when_writer_creates_artifact __
+tests/test_executor_core_contract.py:619: in test_executor_hides_intermediate_reader_output_when_writer_creates_artifact
+    assert ok is True
+E   assert False is True
+_________________ test_progress_marks_cancellation_as_canceled _________________
+tests/test_executor_progress_stream.py:157: in test_progress_marks_cancellation_as_canceled
+    assert content == "Görev iptal edildi."
+E   AssertionError: assert 'Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.' == 'Görev iptal edildi.'
+E     
+E     - Görev iptal edildi.
+E     + Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.
+______________ test_step_output_templates_resolve_into_later_args ______________
+tests/test_executor_templates_foreach.py:52: in test_step_output_templates_resolve_into_later_args
+    assert ok, error_code
+E   AssertionError: CAPABILITY_NOT_READY
+E   assert False
+___________________ test_for_each_fans_out_over_list_output ____________________
+tests/test_executor_templates_foreach.py:83: in test_for_each_fans_out_over_list_output
+    assert ok, error_code
+E   AssertionError: CAPABILITY_NOT_READY
+E   assert False
+________________ test_unresolved_template_fails_with_clear_code ________________
+tests/test_executor_templates_foreach.py:95: in test_unresolved_template_fails_with_clear_code
+    assert error_code == "TEMPLATE_UNRESOLVED"
+E   AssertionError: assert 'CAPABILITY_NOT_READY' == 'TEMPLATE_UNRESOLVED'
+E     
+E     - TEMPLATE_UNRESOLVED
+E     + CAPABILITY_NOT_READY
+___________________ test_whole_template_preserves_list_type ____________________
+tests/test_executor_templates_foreach.py:117: in test_whole_template_preserves_list_type
+    assert ok, error_code
+E   AssertionError: CAPABILITY_NOT_READY
+E   assert False
+____ test_remote_provider_auth_failure_is_visible_without_persisting_token _____
+tests/test_mcp_runtime_contract.py:338: in test_remote_provider_auth_failure_is_visible_without_persisting_token
+    assert status["servers"][0]["lastErrorCode"] == "MCP_AUTH_REQUIRED"
+E   AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'MCP_AUTH_REQUIRED'
+E     
+E     - MCP_AUTH_REQUIRED
+E     + DEPENDENCY_UNAVAILABLE
+_________ test_remote_read_only_annotation_never_bypasses_confirmation _________
+tests/test_mcp_runtime_contract.py:642: in test_remote_read_only_annotation_never_bypasses_confirmation
+    tools = asyncio.run(
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+runtime/mcp_runtime.py:1093: in _list_tools_for_server
+    raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "MCP Python SDK bu kurulumda hazır değil.")
+E   runtime.capability_registry.SafeCapabilityError: MCP Python SDK bu kurulumda hazır değil.
+_____ test_remote_inventory_keeps_tools_beyond_planner_budget_addressable ______
+tests/test_mcp_runtime_contract.py:708: in test_remote_inventory_keeps_tools_beyond_planner_budget_addressable
+    assert status["toolCount"] == 30
+E   assert 0 == 30
+______________________ test_mcp_refresh_lists_stdio_tools ______________________
+tests/test_mcp_runtime_contract.py:997: in test_mcp_refresh_lists_stdio_tools
+    assert status["sdkAvailable"] is True
+E   assert False is True
+____________ test_mcp_read_only_tool_executes_without_confirmation _____________
+tests/test_mcp_runtime_contract.py:1044: in test_mcp_read_only_tool_executes_without_confirmation
+    metadata = next(tool for tool in status["tools"] if tool["name"] == "echo_readonly")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   StopIteration
+_ test_mcp_side_effect_tool_requires_confirmation_then_runs_in_confirmed_plan __
+tests/test_mcp_runtime_contract.py:1118: in test_mcp_side_effect_tool_requires_confirmation_then_runs_in_confirmed_plan
+    assert result["chatOk"] is True
+E   assert False is True
+________________ test_runtime_status_exposes_mcp_truth_surface _________________
+tests/test_mcp_runtime_contract.py:1137: in test_runtime_status_exposes_mcp_truth_surface
+    assert status["mcpStatus"]["toolCount"] == 2
+E   assert 0 == 2
+____________ test_eval_response_message_stays_short_for_simple_math ____________
+tests/test_planner_eval_contract.py:123: in test_eval_response_message_stays_short_for_simple_math
+    assert response["result"]["assistantMessage"] == "4"
+E   AssertionError: assert 'Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.' == '4'
+E     
+E     - 4
+E     + Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.
+______________ test_eval_mcp_readonly_plan_keeps_confirmation_off ______________
+tests/test_planner_eval_contract.py:180: in test_eval_mcp_readonly_plan_keeps_confirmation_off
+    assert response["result"]["assistantMessage"] == "elyan"
+E   AssertionError: assert 'Mesaj işlendi ama içerik döndürülmedi.' == 'elyan'
+E     
+E     - elyan
+E     + Mesaj işlendi ama içerik döndürülmedi.
+__________________ test_presentation_write_honors_page_target __________________
+tests/test_presentation_slide_plan.py:48: in test_presentation_write_honors_page_target
+    outcome = presentation_write(
+actions/presentation_write.py:443: in presentation_write
+    from pptx import Presentation  # type: ignore[reportMissingImports]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ModuleNotFoundError: No module named 'pptx'
+___________ test_presentation_write_without_target_still_multi_slide ___________
+tests/test_presentation_slide_plan.py:83: in test_presentation_write_without_target_still_multi_slide
+    outcome = presentation_write(
+actions/presentation_write.py:443: in presentation_write
+    from pptx import Presentation  # type: ignore[reportMissingImports]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ModuleNotFoundError: No module named 'pptx'
+_________ test_professional_executor_passes_prior_outputs_into_writer __________
+tests/test_professional_workflow_matrix.py:165: in test_professional_executor_passes_prior_outputs_into_writer
+    assert ok is True
+E   assert False is True
+_____ test_accounting_spreadsheet_executor_resolves_calculation_into_cells _____
+tests/test_professional_workflow_matrix.py:316: in test_accounting_spreadsheet_executor_resolves_calculation_into_cells
+    assert ok is True
+E   assert False is True
+_______ test_student_presentation_executor_resolves_research_into_prompt _______
+tests/test_professional_workflow_matrix.py:375: in test_student_presentation_executor_resolves_research_into_prompt
+    assert ok is True
+E   assert False is True
+______________ test_remote_browser_agent_route_requires_approval _______________
+tests/test_runtime_bridge_contract.py:2223: in test_remote_browser_agent_route_requires_approval
+    assert [step["capability"] for step in pending["steps"]] == ["browser_agent.run"]
+E   AssertionError: assert ['browser_control'] == ['browser_agent.run']
+E     
+E     At index 0 diff: 'browser_control' != 'browser_agent.run'
+E     
+E     Full diff:
+E       [
+E     -     'browser_agent.run',
+E     ?              ^^^  - ^^
+E     +     'browser_control',
+E     ?              ^^   ^^
+E       ]
+________________ test_budget_spreadsheet_can_feed_chart_output _________________
+tests/test_runtime_bridge_contract.py:6083: in test_budget_spreadsheet_can_feed_chart_output
+    sheet = spreadsheet_write(
+actions/spreadsheet_write.py:204: in spreadsheet_write
+    from openpyxl import Workbook  # type: ignore[reportMissingImports]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ModuleNotFoundError: No module named 'openpyxl'
+___________ test_spreadsheet_writer_does_not_invent_rows_from_prompt ___________
+tests/test_runtime_bridge_contract.py:6114: in test_spreadsheet_writer_does_not_invent_rows_from_prompt
+    result = spreadsheet_write(
+actions/spreadsheet_write.py:204: in spreadsheet_write
+    from openpyxl import Workbook  # type: ignore[reportMissingImports]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ModuleNotFoundError: No module named 'openpyxl'
+_______ test_canvas_write_expands_pdf_report_prompt_to_paginated_report ________
+tests/test_runtime_bridge_contract.py:6127: in test_canvas_write_expands_pdf_report_prompt_to_paginated_report
+    result = canvas_write(
+actions/canvas_write.py:936: in canvas_write
+    _render_pdf(
+actions/canvas_write.py:605: in _render_pdf
+    from reportlab.lib.pagesizes import portrait
+E   ModuleNotFoundError: No module named 'reportlab'
+____ test_spreadsheet_write_neutralizes_formula_cells_and_preserves_numbers ____
+tests/test_runtime_bridge_contract.py:6659: in test_spreadsheet_write_neutralizes_formula_cells_and_preserves_numbers
+    from openpyxl import load_workbook
+E   ModuleNotFoundError: No module named 'openpyxl'
+_________ test_spreadsheet_write_infers_and_aligns_dictionary_columns __________
+tests/test_runtime_bridge_contract.py:6680: in test_spreadsheet_write_infers_and_aligns_dictionary_columns
+    from openpyxl import load_workbook
+E   ModuleNotFoundError: No module named 'openpyxl'
+_________ test_conversation_send_passes_structured_result_to_ui_state __________
+tests/test_runtime_bridge_contract.py:6806: in test_conversation_send_passes_structured_result_to_ui_state
+    assert result["structuredResult"]["kind"] == "math_solve"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'structuredResult'
+__________ test_conversation_send_runs_latex_parse_before_math_solve ___________
+tests/test_runtime_bridge_contract.py:6884: in test_conversation_send_runs_latex_parse_before_math_solve
+    assert response["result"]["structuredResult"]["kind"] == "math_solve"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'structuredResult'
+____________ test_confirm_plan_injects_confirmation_for_file_write _____________
+tests/test_runtime_bridge_contract.py:7098: in test_confirm_plan_injects_confirmation_for_file_write
+    assert confirmed["result"]["chatOk"] is True
+E   assert False is True
+___________ test_confirm_plan_fails_closed_when_capability_not_ready ___________
+tests/test_runtime_bridge_contract.py:7176: in test_confirm_plan_fails_closed_when_capability_not_ready
+    assert confirmed["result"]["error"]["code"] == "DEPENDENCY_UNAVAILABLE"
+E   AssertionError: assert 'CAPABILITY_NOT_READY' == 'DEPENDENCY_UNAVAILABLE'
+E     
+E     - DEPENDENCY_UNAVAILABLE
+E     + CAPABILITY_NOT_READY
+_____________ test_mcp_server_upsert_refresh_and_remove_roundtrip ______________
+tests/test_runtime_bridge_contract.py:9187: in test_mcp_server_upsert_refresh_and_remove_roundtrip
+    assert upsert["result"]["mcpStatus"]["toolCount"] == 1
+E   assert 0 == 1
+_ test_cancelled_server_materialized_writer_task_never_publishes_late_success __
+tests/test_runtime_bridge_contract.py:11233: in test_cancelled_server_materialized_writer_task_never_publishes_late_success
+    assert result["status"] == "canceled"
+E   AssertionError: assert 'failed' == 'canceled'
+E     
+E     - canceled
+E     + failed
+----------------------------- Captured stderr call -----------------------------
+runtime backend action=runtime_register status=404 request_id=req-97
+_______ test_recoverable_replan_hands_browser_goal_from_failed_operator ________
+tests/test_runtime_bridge_contract.py:11996: in test_recoverable_replan_hands_browser_goal_from_failed_operator
+    assert [s["capability"] for s in revised] == ["browser_agent.run"]
+E   AssertionError: assert [] == ['browser_agent.run']
+E     
+E     Right contains one more item: 'browser_agent.run'
+E     
+E     Full diff:
+E     + []
+E     - [
+E     -     'browser_agent.run',
+E     - ]
+----------------------------- Captured stderr call -----------------------------
+runtime replan_observation reason=verification_failure failed=desktop_operator.run errorCode=VERIFICATION_FAILED
+___________________ test_chart_generate_creates_png_artifact ___________________
+tests/test_runtime_startup_contract.py:1396: in test_chart_generate_creates_png_artifact
+    artifact_path = Path(result["result"]["artifactPath"])
+                         ^^^^^^^^^^^^^^^^
+E   KeyError: 'result'
+_______________ test_chart_generate_accepts_nested_chart_payload _______________
+tests/test_runtime_startup_contract.py:1430: in test_chart_generate_accepts_nested_chart_payload
+    artifact_path = Path(result["result"]["artifactPath"])
+                         ^^^^^^^^^^^^^^^^
+E   KeyError: 'result'
+____________ test_latex_parse_valid_invalid_and_missing_dependency _____________
+tests/test_runtime_startup_contract.py:1484: in test_latex_parse_valid_invalid_and_missing_dependency
+    assert valid["ok"] is True
+E   assert False is True
+__________ test_speech_to_text_blocks_external_path_without_selection __________
+tests/test_runtime_startup_contract.py:1523: in test_speech_to_text_blocks_external_path_without_selection
+    assert result["error"]["code"] == "ACCESS_DENIED"
+E   AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'ACCESS_DENIED'
+E     
+E     - ACCESS_DENIED
+E     + DEPENDENCY_UNAVAILABLE
+___________ test_speech_to_text_allows_selected_external_audio_path ____________
+tests/test_runtime_startup_contract.py:1558: in test_speech_to_text_allows_selected_external_audio_path
+    assert result["ok"] is True
+E   assert False is True
+____________ test_speech_to_text_requires_explicit_cloud_permission ____________
+tests/test_runtime_startup_contract.py:1583: in test_speech_to_text_requires_explicit_cloud_permission
+    assert result["error"]["code"] == "CLOUD_SPEECH_PERMISSION_REQUIRED"
+E   AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'CLOUD_SPEECH_PERMISSION_REQUIRED'
+E     
+E     - CLOUD_SPEECH_PERMISSION_REQUIRED
+E     + DEPENDENCY_UNAVAILABLE
+___________ test_speech_to_text_uses_groq_cloud_adapter_when_allowed ___________
+tests/test_runtime_startup_contract.py:1623: in test_speech_to_text_uses_groq_cloud_adapter_when_allowed
+    assert result["ok"] is True
+E   assert False is True
+_____________________ test_math_solve_factor_and_evaluate ______________________
+tests/test_runtime_startup_contract.py:1690: in test_math_solve_factor_and_evaluate
+    assert factor_result["ok"] is True
+E   assert False is True
+_______________ test_spreadsheet_write_creates_xlsx_in_workspace _______________
+tests/test_runtime_startup_contract.py:2029: in test_spreadsheet_write_creates_xlsx_in_workspace
+    assert result["ok"] is True
+E   assert False is True
+__________ test_forgiving_spreadsheet_write_accepts_sheet_rows_matrix __________
+tests/test_runtime_startup_contract.py:2042: in test_forgiving_spreadsheet_write_accepts_sheet_rows_matrix
+    from openpyxl import load_workbook
+E   ModuleNotFoundError: No module named 'openpyxl'
+________ test_forgiving_presentation_write_accepts_nested_deck_payload _________
+tests/test_runtime_startup_contract.py:2199: in test_forgiving_presentation_write_accepts_nested_deck_payload
+    from pptx import Presentation
+E   ModuleNotFoundError: No module named 'pptx'
+_ test_visual_writers_block_unselected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] _
+tests/test_runtime_startup_contract.py:2642: in test_visual_writers_block_unselected_external_images
+    getattr(module, function_name)(
+actions/presentation_write.py:443: in presentation_write
+    from pptx import Presentation  # type: ignore[reportMissingImports]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ModuleNotFoundError: No module named 'pptx'
+_ test_visual_writers_allow_task_selected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] _
+tests/test_runtime_startup_contract.py:2686: in test_visual_writers_allow_task_selected_external_images
+    result = getattr(module, function_name)(
+actions/presentation_write.py:443: in presentation_write
+    from pptx import Presentation  # type: ignore[reportMissingImports]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ModuleNotFoundError: No module named 'pptx'
+_____________________ test_default_output_paths_are_unique _____________________
+tests/test_safety_policy_write_gate.py:72: in test_default_output_paths_are_unique
+    assert first.name == "rapor.docx"
+E   AssertionError: assert 'rapor-22.docx' == 'rapor.docx'
+E     
+E     - rapor.docx
+E     + rapor-22.docx
+E     ?      +++
+_____________________ test_default_output_targets_desktop ______________________
+tests/test_safety_policy_write_gate.py:83: in test_default_output_targets_desktop
+    assert resolved.parent == fake_desktop.resolve()
+E   AssertionError: assert PosixPath('/Users/emrekoca/Desktop/elyan/elyan_output') == PosixPath('/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-869/test_default_output_targets_de0/Desktop')
+E    +  where PosixPath('/Users/emrekoca/Desktop/elyan/elyan_output') = PosixPath('/Users/emrekoca/Desktop/elyan/elyan_output/notlar.txt').parent
+E    +  and   PosixPath('/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-869/test_default_output_targets_de0/Desktop') = resolve()
+E    +    where resolve = PosixPath('/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-869/test_default_output_targets_de0/Desktop').resolve
+________________ test_skill_run_allows_only_readonly_mcp_proxy _________________
+/Users/emrekoca/Desktop/elyan/tests/test_skill_runtime_contract.py:376: in test_skill_run_allows_only_readonly_mcp_proxy
+    assert allowed["ok"] is True
+E   assert False is True
+_________________ test_speech_to_text_reads_sample_audio_path __________________
+tests/test_speech_contract.py:204: in test_speech_to_text_reads_sample_audio_path
+    assert result["ok"] is True
+E   assert False is True
+=============================== warnings summary ===============================
+tests/test_runtime_bridge_contract.py::test_execute_assigned_quantum_task_uses_deterministic_pipeline
+tests/test_runtime_startup_contract.py::test_quantum_run_experiment_uses_qiskit_aer_when_available
+  /Users/emrekoca/Desktop/elyan/.venv/lib/python3.11/site-packages/qiskit/circuit/library/n_local/evolved_operator_ansatz.py:324: DeprecationWarning: The class ``qiskit.circuit.library.n_local.n_local.NLocal`` is deprecated as of Qiskit 2.1. It will be removed in Qiskit 3.0. This applies to NLocal subclasses too. Use the corresponding function from the module qiskit.circuit.library.n_local instead.
+    super().__init__(
+
+tests/test_runtime_bridge_contract.py::test_execute_assigned_quantum_task_uses_deterministic_pipeline
+tests/test_runtime_startup_contract.py::test_quantum_run_experiment_uses_qiskit_aer_when_available
+  /Users/emrekoca/Desktop/elyan/.venv/lib/python3.11/site-packages/qiskit/circuit/library/n_local/n_local.py:379: DeprecationWarning: The class ``qiskit.circuit.library.blueprintcircuit.BlueprintCircuit`` is deprecated as of Qiskit 2.1. It will be removed in Qiskit 3.0. There is no direct replacement other than the QuantumCircuit class.
+    super().__init__(name=name)
+
+tests/test_runtime_bridge_contract.py::test_cancelled_server_materialized_writer_task_never_publishes_late_success
+  /Users/emrekoca/Desktop/elyan/.venv/lib/python3.11/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-12 (cancel_from_socket)
+  
+  Traceback (most recent call last):
+    File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/threading.py", line 1045, in _bootstrap_inner
+      self.run()
+    File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/threading.py", line 982, in run
+      self._target(*self._args, **self._kwargs)
+    File "/Users/emrekoca/Desktop/elyan/tests/test_runtime_bridge_contract.py", line 11219, in cancel_from_socket
+      assert entered.wait(1.0)
+  AssertionError: assert False
+   +  where False = wait(1.0)
+   +    where wait = <threading.Event at 0x116723190: unset>.wait
+  
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_canvas_write_contract.py::test_canvas_write_creates_pdf_with_table - assert False is True
+FAILED tests/test_canvas_write_contract.py::test_canvas_write_creates_png_from_source_image - assert False is True
+FAILED tests/test_canvas_write_contract.py::test_canvas_write_creates_png_with_chart_block - assert False is True
+FAILED tests/test_canvas_write_contract.py::test_document_write_accepts_chart_blocks - assert 0 >= 1
+ +  where 0 = len(<docx.shape.InlineShapes object at 0x10e8f88d0>)
+ +    where <docx.shape.InlineShapes object at 0x10e8f88d0> = <docx.document.Document object at 0x10e2db950>.inline_shapes
+FAILED tests/test_canvas_write_contract.py::test_presentation_write_accepts_chart_blocks - ModuleNotFoundError: No module named 'pptx'
+FAILED tests/test_capability_spec_contract.py::test_skill_recipes_carry_ids_and_foreach_to_executor - runtime.capability_registry.SafeCapabilityError: Playwright bu kurulumda hazır değil.
+FAILED tests/test_executor_core_contract.py::test_executor_fanout_aggregates_structured_results_for_writer - assert False is True
+FAILED tests/test_executor_core_contract.py::test_executor_hides_intermediate_reader_output_when_writer_creates_artifact - assert False is True
+FAILED tests/test_executor_progress_stream.py::test_progress_marks_cancellation_as_canceled - AssertionError: assert 'Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.' == 'Görev iptal edildi.'
+  
+  - Görev iptal edildi.
+  + Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.
+FAILED tests/test_executor_templates_foreach.py::test_step_output_templates_resolve_into_later_args - AssertionError: CAPABILITY_NOT_READY
+assert False
+FAILED tests/test_executor_templates_foreach.py::test_for_each_fans_out_over_list_output - AssertionError: CAPABILITY_NOT_READY
+assert False
+FAILED tests/test_executor_templates_foreach.py::test_unresolved_template_fails_with_clear_code - AssertionError: assert 'CAPABILITY_NOT_READY' == 'TEMPLATE_UNRESOLVED'
+  
+  - TEMPLATE_UNRESOLVED
+  + CAPABILITY_NOT_READY
+FAILED tests/test_executor_templates_foreach.py::test_whole_template_preserves_list_type - AssertionError: CAPABILITY_NOT_READY
+assert False
+FAILED tests/test_mcp_runtime_contract.py::test_remote_provider_auth_failure_is_visible_without_persisting_token - AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'MCP_AUTH_REQUIRED'
+  
+  - MCP_AUTH_REQUIRED
+  + DEPENDENCY_UNAVAILABLE
+FAILED tests/test_mcp_runtime_contract.py::test_remote_read_only_annotation_never_bypasses_confirmation - runtime.capability_registry.SafeCapabilityError: MCP Python SDK bu kurulumda hazır değil.
+FAILED tests/test_mcp_runtime_contract.py::test_remote_inventory_keeps_tools_beyond_planner_budget_addressable - assert 0 == 30
+FAILED tests/test_mcp_runtime_contract.py::test_mcp_refresh_lists_stdio_tools - assert False is True
+FAILED tests/test_mcp_runtime_contract.py::test_mcp_read_only_tool_executes_without_confirmation - StopIteration
+FAILED tests/test_mcp_runtime_contract.py::test_mcp_side_effect_tool_requires_confirmation_then_runs_in_confirmed_plan - assert False is True
+FAILED tests/test_mcp_runtime_contract.py::test_runtime_status_exposes_mcp_truth_surface - assert 0 == 2
+FAILED tests/test_planner_eval_contract.py::test_eval_response_message_stays_short_for_simple_math - AssertionError: assert 'Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.' == '4'
+  
+  - 4
+  + Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.
+FAILED tests/test_planner_eval_contract.py::test_eval_mcp_readonly_plan_keeps_confirmation_off - AssertionError: assert 'Mesaj işlendi ama içerik döndürülmedi.' == 'elyan'
+  
+  - elyan
+  + Mesaj işlendi ama içerik döndürülmedi.
+FAILED tests/test_presentation_slide_plan.py::test_presentation_write_honors_page_target - ModuleNotFoundError: No module named 'pptx'
+FAILED tests/test_presentation_slide_plan.py::test_presentation_write_without_target_still_multi_slide - ModuleNotFoundError: No module named 'pptx'
+FAILED tests/test_professional_workflow_matrix.py::test_professional_executor_passes_prior_outputs_into_writer - assert False is True
+FAILED tests/test_professional_workflow_matrix.py::test_accounting_spreadsheet_executor_resolves_calculation_into_cells - assert False is True
+FAILED tests/test_professional_workflow_matrix.py::test_student_presentation_executor_resolves_research_into_prompt - assert False is True
+FAILED tests/test_runtime_bridge_contract.py::test_remote_browser_agent_route_requires_approval - AssertionError: assert ['browser_control'] == ['browser_agent.run']
+  
+  At index 0 diff: 'browser_control' != 'browser_agent.run'
+  
+  Full diff:
+    [
+  -     'browser_agent.run',
+  ?              ^^^  - ^^
+  +     'browser_control',
+  ?              ^^   ^^
+    ]
+FAILED tests/test_runtime_bridge_contract.py::test_budget_spreadsheet_can_feed_chart_output - ModuleNotFoundError: No module named 'openpyxl'
+FAILED tests/test_runtime_bridge_contract.py::test_spreadsheet_writer_does_not_invent_rows_from_prompt - ModuleNotFoundError: No module named 'openpyxl'
+FAILED tests/test_runtime_bridge_contract.py::test_canvas_write_expands_pdf_report_prompt_to_paginated_report - ModuleNotFoundError: No module named 'reportlab'
+FAILED tests/test_runtime_bridge_contract.py::test_spreadsheet_write_neutralizes_formula_cells_and_preserves_numbers - ModuleNotFoundError: No module named 'openpyxl'
+FAILED tests/test_runtime_bridge_contract.py::test_spreadsheet_write_infers_and_aligns_dictionary_columns - ModuleNotFoundError: No module named 'openpyxl'
+FAILED tests/test_runtime_bridge_contract.py::test_conversation_send_passes_structured_result_to_ui_state - KeyError: 'structuredResult'
+FAILED tests/test_runtime_bridge_contract.py::test_conversation_send_runs_latex_parse_before_math_solve - KeyError: 'structuredResult'
+FAILED tests/test_runtime_bridge_contract.py::test_confirm_plan_injects_confirmation_for_file_write - assert False is True
+FAILED tests/test_runtime_bridge_contract.py::test_confirm_plan_fails_closed_when_capability_not_ready - AssertionError: assert 'CAPABILITY_NOT_READY' == 'DEPENDENCY_UNAVAILABLE'
+  
+  - DEPENDENCY_UNAVAILABLE
+  + CAPABILITY_NOT_READY
+FAILED tests/test_runtime_bridge_contract.py::test_mcp_server_upsert_refresh_and_remove_roundtrip - assert 0 == 1
+FAILED tests/test_runtime_bridge_contract.py::test_cancelled_server_materialized_writer_task_never_publishes_late_success - AssertionError: assert 'failed' == 'canceled'
+  
+  - canceled
+  + failed
+FAILED tests/test_runtime_bridge_contract.py::test_recoverable_replan_hands_browser_goal_from_failed_operator - AssertionError: assert [] == ['browser_agent.run']
+  
+  Right contains one more item: 'browser_agent.run'
+  
+  Full diff:
+  + []
+  - [
+  -     'browser_agent.run',
+  - ]
+FAILED tests/test_runtime_startup_contract.py::test_chart_generate_creates_png_artifact - KeyError: 'result'
+FAILED tests/test_runtime_startup_contract.py::test_chart_generate_accepts_nested_chart_payload - KeyError: 'result'
+FAILED tests/test_runtime_startup_contract.py::test_latex_parse_valid_invalid_and_missing_dependency - assert False is True
+FAILED tests/test_runtime_startup_contract.py::test_speech_to_text_blocks_external_path_without_selection - AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'ACCESS_DENIED'
+  
+  - ACCESS_DENIED
+  + DEPENDENCY_UNAVAILABLE
+FAILED tests/test_runtime_startup_contract.py::test_speech_to_text_allows_selected_external_audio_path - assert False is True
+FAILED tests/test_runtime_startup_contract.py::test_speech_to_text_requires_explicit_cloud_permission - AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'CLOUD_SPEECH_PERMISSION_REQUIRED'
+  
+  - CLOUD_SPEECH_PERMISSION_REQUIRED
+  + DEPENDENCY_UNAVAILABLE
+FAILED tests/test_runtime_startup_contract.py::test_speech_to_text_uses_groq_cloud_adapter_when_allowed - assert False is True
+FAILED tests/test_runtime_startup_contract.py::test_math_solve_factor_and_evaluate - assert False is True
+FAILED tests/test_runtime_startup_contract.py::test_spreadsheet_write_creates_xlsx_in_workspace - assert False is True
+FAILED tests/test_runtime_startup_contract.py::test_forgiving_spreadsheet_write_accepts_sheet_rows_matrix - ModuleNotFoundError: No module named 'openpyxl'
+FAILED tests/test_runtime_startup_contract.py::test_forgiving_presentation_write_accepts_nested_deck_payload - ModuleNotFoundError: No module named 'pptx'
+FAILED tests/test_runtime_startup_contract.py::test_visual_writers_block_unselected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] - ModuleNotFoundError: No module named 'pptx'
+FAILED tests/test_runtime_startup_contract.py::test_visual_writers_allow_task_selected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] - ModuleNotFoundError: No module named 'pptx'
+FAILED tests/test_safety_policy_write_gate.py::test_default_output_paths_are_unique - AssertionError: assert 'rapor-22.docx' == 'rapor.docx'
+  
+  - rapor.docx
+  + rapor-22.docx
+  ?      +++
+FAILED tests/test_safety_policy_write_gate.py::test_default_output_targets_desktop - AssertionError: assert PosixPath('/Users/emrekoca/Desktop/elyan/elyan_output') == PosixPath('/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-869/test_default_output_targets_de0/Desktop')
+ +  where PosixPath('/Users/emrekoca/Desktop/elyan/elyan_output') = PosixPath('/Users/emrekoca/Desktop/elyan/elyan_output/notlar.txt').parent
+ +  and   PosixPath('/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-869/test_default_output_targets_de0/Desktop') = resolve()
+ +    where resolve = PosixPath('/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-869/test_default_output_targets_de0/Desktop').resolve
+FAILED tests/test_skill_runtime_contract.py::test_skill_run_allows_only_readonly_mcp_proxy - assert False is True
+FAILED tests/test_speech_contract.py::test_speech_to_text_reads_sample_audio_path - assert False is True
+============ 57 failed, 903 passed, 1 skipped, 5 warnings in 22.57s ============

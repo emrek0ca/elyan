@@ -1,0 +1,116 @@
+100:tests/test_canvas_write_contract.py::test_canvas_write_creates_pdf_with_table FAILED [  9%]
+101:tests/test_canvas_write_contract.py::test_canvas_write_creates_png_from_source_image FAILED [  9%]
+102:tests/test_canvas_write_contract.py::test_canvas_write_creates_png_with_chart_block FAILED [  9%]
+104:tests/test_canvas_write_contract.py::test_document_write_accepts_chart_blocks FAILED [ 10%]
+105:tests/test_canvas_write_contract.py::test_presentation_write_accepts_chart_blocks FAILED [ 10%]
+111:tests/test_capability_spec_contract.py::test_skill_recipes_carry_ids_and_foreach_to_executor FAILED [ 10%]
+278:tests/test_executor_core_contract.py::test_executor_fanout_aggregates_structured_results_for_writer FAILED [ 28%]
+279:tests/test_executor_core_contract.py::test_executor_hides_intermediate_reader_output_when_writer_creates_artifact FAILED [ 28%]
+288:tests/test_executor_progress_stream.py::test_progress_marks_cancellation_as_canceled FAILED [ 29%]
+292:tests/test_executor_templates_foreach.py::test_step_output_templates_resolve_into_later_args FAILED [ 29%]
+293:tests/test_executor_templates_foreach.py::test_for_each_fans_out_over_list_output FAILED [ 29%]
+294:tests/test_executor_templates_foreach.py::test_unresolved_template_fails_with_clear_code FAILED [ 29%]
+295:tests/test_executor_templates_foreach.py::test_whole_template_preserves_list_type FAILED [ 29%]
+362:tests/test_mcp_runtime_contract.py::test_remote_provider_auth_failure_is_visible_without_persisting_token FAILED [ 36%]
+369:tests/test_mcp_runtime_contract.py::test_remote_read_only_annotation_never_bypasses_confirmation FAILED [ 37%]
+370:tests/test_mcp_runtime_contract.py::test_remote_inventory_keeps_tools_beyond_planner_budget_addressable FAILED [ 37%]
+374:tests/test_mcp_runtime_contract.py::test_mcp_refresh_lists_stdio_tools FAILED [ 38%]
+376:tests/test_mcp_runtime_contract.py::test_mcp_read_only_tool_executes_without_confirmation FAILED [ 38%]
+377:tests/test_mcp_runtime_contract.py::test_mcp_side_effect_tool_requires_confirmation_then_runs_in_confirmed_plan FAILED [ 38%]
+378:tests/test_mcp_runtime_contract.py::test_runtime_status_exposes_mcp_truth_surface FAILED [ 38%]
+393:tests/test_planner_eval_contract.py::test_eval_response_message_stays_short_for_simple_math FAILED [ 40%]
+394:tests/test_planner_eval_contract.py::test_eval_mcp_readonly_plan_keeps_confirmation_off FAILED [ 40%]
+401:tests/test_presentation_slide_plan.py::test_presentation_write_honors_page_target FAILED [ 40%]
+402:tests/test_presentation_slide_plan.py::test_presentation_write_without_target_still_multi_slide FAILED [ 41%]
+418:tests/test_professional_workflow_matrix.py::test_professional_executor_passes_prior_outputs_into_writer FAILED [ 42%]
+421:tests/test_professional_workflow_matrix.py::test_accounting_spreadsheet_executor_resolves_calculation_into_cells FAILED [ 43%]
+422:tests/test_professional_workflow_matrix.py::test_student_presentation_executor_resolves_research_into_prompt FAILED [ 43%]
+481:tests/test_runtime_bridge_contract.py::test_remote_browser_agent_route_requires_approval FAILED [ 49%]
+564:tests/test_runtime_bridge_contract.py::test_budget_spreadsheet_can_feed_chart_output FAILED [ 57%]
+565:tests/test_runtime_bridge_contract.py::test_spreadsheet_writer_does_not_invent_rows_from_prompt FAILED [ 58%]
+566:tests/test_runtime_bridge_contract.py::test_canvas_write_expands_pdf_report_prompt_to_paginated_report FAILED [ 58%]
+600:tests/test_runtime_bridge_contract.py::test_spreadsheet_write_neutralizes_formula_cells_and_preserves_numbers FAILED [ 61%]
+601:tests/test_runtime_bridge_contract.py::test_spreadsheet_write_infers_and_aligns_dictionary_columns FAILED [ 61%]
+605:tests/test_runtime_bridge_contract.py::test_conversation_send_passes_structured_result_to_ui_state FAILED [ 62%]
+606:tests/test_runtime_bridge_contract.py::test_conversation_send_runs_latex_parse_before_math_solve FAILED [ 62%]
+610:tests/test_runtime_bridge_contract.py::test_confirm_plan_injects_confirmation_for_file_write FAILED [ 62%]
+611:tests/test_runtime_bridge_contract.py::test_confirm_plan_fails_closed_when_capability_not_ready FAILED [ 62%]
+651:tests/test_runtime_bridge_contract.py::test_mcp_server_upsert_refresh_and_remove_roundtrip FAILED [ 67%]
+706:tests/test_runtime_bridge_contract.py::test_cancelled_server_materialized_writer_task_never_publishes_late_success FAILED [ 72%]
+741:tests/test_runtime_bridge_contract.py::test_recoverable_replan_hands_browser_goal_from_failed_operator FAILED [ 76%]
+794:tests/test_runtime_startup_contract.py::test_chart_generate_creates_png_artifact FAILED [ 81%]
+795:tests/test_runtime_startup_contract.py::test_chart_generate_accepts_nested_chart_payload FAILED [ 81%]
+797:tests/test_runtime_startup_contract.py::test_latex_parse_valid_invalid_and_missing_dependency FAILED [ 82%]
+798:tests/test_runtime_startup_contract.py::test_speech_to_text_blocks_external_path_without_selection FAILED [ 82%]
+799:tests/test_runtime_startup_contract.py::test_speech_to_text_allows_selected_external_audio_path FAILED [ 82%]
+800:tests/test_runtime_startup_contract.py::test_speech_to_text_requires_explicit_cloud_permission FAILED [ 82%]
+801:tests/test_runtime_startup_contract.py::test_speech_to_text_uses_groq_cloud_adapter_when_allowed FAILED [ 82%]
+803:tests/test_runtime_startup_contract.py::test_math_solve_factor_and_evaluate FAILED [ 82%]
+812:tests/test_runtime_startup_contract.py::test_spreadsheet_write_creates_xlsx_in_workspace FAILED [ 83%]
+813:tests/test_runtime_startup_contract.py::test_forgiving_spreadsheet_write_accepts_sheet_rows_matrix FAILED [ 83%]
+818:tests/test_runtime_startup_contract.py::test_forgiving_presentation_write_accepts_nested_deck_payload FAILED [ 84%]
+829:tests/test_runtime_startup_contract.py::test_visual_writers_block_unselected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] FAILED [ 85%]
+831:tests/test_runtime_startup_contract.py::test_visual_writers_allow_task_selected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] FAILED [ 85%]
+839:tests/test_safety_policy_write_gate.py::test_default_output_paths_are_unique FAILED [ 86%]
+840:tests/test_safety_policy_write_gate.py::test_default_output_targets_desktop FAILED [ 86%]
+851:tests/test_skill_runtime_contract.py::test_skill_run_allows_only_readonly_mcp_proxy FAILED [ 87%]
+862:tests/test_speech_contract.py::test_speech_to_text_reads_sample_audio_path FAILED [ 88%]
+970:=================================== FAILURES ===================================
+1210:runtime replan_observation reason=verification_failure failed=desktop_operator.run errorCode=VERIFICATION_FAILED
+1331:FAILED tests/test_canvas_write_contract.py::test_canvas_write_creates_pdf_with_table - assert False is True
+1332:FAILED tests/test_canvas_write_contract.py::test_canvas_write_creates_png_from_source_image - assert False is True
+1333:FAILED tests/test_canvas_write_contract.py::test_canvas_write_creates_png_with_chart_block - assert False is True
+1334:FAILED tests/test_canvas_write_contract.py::test_document_write_accepts_chart_blocks - assert 0 >= 1
+1337:FAILED tests/test_canvas_write_contract.py::test_presentation_write_accepts_chart_blocks - ModuleNotFoundError: No module named 'pptx'
+1338:FAILED tests/test_capability_spec_contract.py::test_skill_recipes_carry_ids_and_foreach_to_executor - runtime.capability_registry.SafeCapabilityError: Playwright bu kurulumda hazır değil.
+1339:FAILED tests/test_executor_core_contract.py::test_executor_fanout_aggregates_structured_results_for_writer - assert False is True
+1340:FAILED tests/test_executor_core_contract.py::test_executor_hides_intermediate_reader_output_when_writer_creates_artifact - assert False is True
+1341:FAILED tests/test_executor_progress_stream.py::test_progress_marks_cancellation_as_canceled - AssertionError: assert 'Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.' == 'Görev iptal edildi.'
+1345:FAILED tests/test_executor_templates_foreach.py::test_step_output_templates_resolve_into_later_args - AssertionError: CAPABILITY_NOT_READY
+1347:FAILED tests/test_executor_templates_foreach.py::test_for_each_fans_out_over_list_output - AssertionError: CAPABILITY_NOT_READY
+1349:FAILED tests/test_executor_templates_foreach.py::test_unresolved_template_fails_with_clear_code - AssertionError: assert 'CAPABILITY_NOT_READY' == 'TEMPLATE_UNRESOLVED'
+1353:FAILED tests/test_executor_templates_foreach.py::test_whole_template_preserves_list_type - AssertionError: CAPABILITY_NOT_READY
+1355:FAILED tests/test_mcp_runtime_contract.py::test_remote_provider_auth_failure_is_visible_without_persisting_token - AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'MCP_AUTH_REQUIRED'
+1359:FAILED tests/test_mcp_runtime_contract.py::test_remote_read_only_annotation_never_bypasses_confirmation - runtime.capability_registry.SafeCapabilityError: MCP Python SDK bu kurulumda hazır değil.
+1360:FAILED tests/test_mcp_runtime_contract.py::test_remote_inventory_keeps_tools_beyond_planner_budget_addressable - assert 0 == 30
+1361:FAILED tests/test_mcp_runtime_contract.py::test_mcp_refresh_lists_stdio_tools - assert False is True
+1362:FAILED tests/test_mcp_runtime_contract.py::test_mcp_read_only_tool_executes_without_confirmation - StopIteration
+1363:FAILED tests/test_mcp_runtime_contract.py::test_mcp_side_effect_tool_requires_confirmation_then_runs_in_confirmed_plan - assert False is True
+1364:FAILED tests/test_mcp_runtime_contract.py::test_runtime_status_exposes_mcp_truth_surface - assert 0 == 2
+1365:FAILED tests/test_planner_eval_contract.py::test_eval_response_message_stays_short_for_simple_math - AssertionError: assert 'Capability henüz yürütmeye hazır değil; görev güvenli şekilde ertelendi.' == '4'
+1369:FAILED tests/test_planner_eval_contract.py::test_eval_mcp_readonly_plan_keeps_confirmation_off - AssertionError: assert 'Mesaj işlendi ama içerik döndürülmedi.' == 'elyan'
+1373:FAILED tests/test_presentation_slide_plan.py::test_presentation_write_honors_page_target - ModuleNotFoundError: No module named 'pptx'
+1374:FAILED tests/test_presentation_slide_plan.py::test_presentation_write_without_target_still_multi_slide - ModuleNotFoundError: No module named 'pptx'
+1375:FAILED tests/test_professional_workflow_matrix.py::test_professional_executor_passes_prior_outputs_into_writer - assert False is True
+1376:FAILED tests/test_professional_workflow_matrix.py::test_accounting_spreadsheet_executor_resolves_calculation_into_cells - assert False is True
+1377:FAILED tests/test_professional_workflow_matrix.py::test_student_presentation_executor_resolves_research_into_prompt - assert False is True
+1378:FAILED tests/test_runtime_bridge_contract.py::test_remote_browser_agent_route_requires_approval - AssertionError: assert ['browser_control'] == ['browser_agent.run']
+1389:FAILED tests/test_runtime_bridge_contract.py::test_budget_spreadsheet_can_feed_chart_output - ModuleNotFoundError: No module named 'openpyxl'
+1390:FAILED tests/test_runtime_bridge_contract.py::test_spreadsheet_writer_does_not_invent_rows_from_prompt - ModuleNotFoundError: No module named 'openpyxl'
+1391:FAILED tests/test_runtime_bridge_contract.py::test_canvas_write_expands_pdf_report_prompt_to_paginated_report - ModuleNotFoundError: No module named 'reportlab'
+1392:FAILED tests/test_runtime_bridge_contract.py::test_spreadsheet_write_neutralizes_formula_cells_and_preserves_numbers - ModuleNotFoundError: No module named 'openpyxl'
+1393:FAILED tests/test_runtime_bridge_contract.py::test_spreadsheet_write_infers_and_aligns_dictionary_columns - ModuleNotFoundError: No module named 'openpyxl'
+1394:FAILED tests/test_runtime_bridge_contract.py::test_conversation_send_passes_structured_result_to_ui_state - KeyError: 'structuredResult'
+1395:FAILED tests/test_runtime_bridge_contract.py::test_conversation_send_runs_latex_parse_before_math_solve - KeyError: 'structuredResult'
+1396:FAILED tests/test_runtime_bridge_contract.py::test_confirm_plan_injects_confirmation_for_file_write - assert False is True
+1397:FAILED tests/test_runtime_bridge_contract.py::test_confirm_plan_fails_closed_when_capability_not_ready - AssertionError: assert 'CAPABILITY_NOT_READY' == 'DEPENDENCY_UNAVAILABLE'
+1401:FAILED tests/test_runtime_bridge_contract.py::test_mcp_server_upsert_refresh_and_remove_roundtrip - assert 0 == 1
+1402:FAILED tests/test_runtime_bridge_contract.py::test_cancelled_server_materialized_writer_task_never_publishes_late_success - AssertionError: assert 'failed' == 'canceled'
+1406:FAILED tests/test_runtime_bridge_contract.py::test_recoverable_replan_hands_browser_goal_from_failed_operator - AssertionError: assert [] == ['browser_agent.run']
+1415:FAILED tests/test_runtime_startup_contract.py::test_chart_generate_creates_png_artifact - KeyError: 'result'
+1416:FAILED tests/test_runtime_startup_contract.py::test_chart_generate_accepts_nested_chart_payload - KeyError: 'result'
+1417:FAILED tests/test_runtime_startup_contract.py::test_latex_parse_valid_invalid_and_missing_dependency - assert False is True
+1418:FAILED tests/test_runtime_startup_contract.py::test_speech_to_text_blocks_external_path_without_selection - AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'ACCESS_DENIED'
+1422:FAILED tests/test_runtime_startup_contract.py::test_speech_to_text_allows_selected_external_audio_path - assert False is True
+1423:FAILED tests/test_runtime_startup_contract.py::test_speech_to_text_requires_explicit_cloud_permission - AssertionError: assert 'DEPENDENCY_UNAVAILABLE' == 'CLOUD_SPEECH_PERMISSION_REQUIRED'
+1427:FAILED tests/test_runtime_startup_contract.py::test_speech_to_text_uses_groq_cloud_adapter_when_allowed - assert False is True
+1428:FAILED tests/test_runtime_startup_contract.py::test_math_solve_factor_and_evaluate - assert False is True
+1429:FAILED tests/test_runtime_startup_contract.py::test_spreadsheet_write_creates_xlsx_in_workspace - assert False is True
+1430:FAILED tests/test_runtime_startup_contract.py::test_forgiving_spreadsheet_write_accepts_sheet_rows_matrix - ModuleNotFoundError: No module named 'openpyxl'
+1431:FAILED tests/test_runtime_startup_contract.py::test_forgiving_presentation_write_accepts_nested_deck_payload - ModuleNotFoundError: No module named 'pptx'
+1432:FAILED tests/test_runtime_startup_contract.py::test_visual_writers_block_unselected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] - ModuleNotFoundError: No module named 'pptx'
+1433:FAILED tests/test_runtime_startup_contract.py::test_visual_writers_allow_task_selected_external_images[actions.presentation_write-presentation_write-.pptx-<lambda>] - ModuleNotFoundError: No module named 'pptx'
+1434:FAILED tests/test_safety_policy_write_gate.py::test_default_output_paths_are_unique - AssertionError: assert 'rapor-22.docx' == 'rapor.docx'
+1439:FAILED tests/test_safety_policy_write_gate.py::test_default_output_targets_desktop - AssertionError: assert PosixPath('/Users/emrekoca/Desktop/elyan/elyan_output') == PosixPath('/private/var/folders/jn/7k6gmff11v990pzy40fmclgc0000gn/T/pytest-of-emrekoca/pytest-869/test_default_output_targets_de0/Desktop')
+1443:FAILED tests/test_skill_runtime_contract.py::test_skill_run_allows_only_readonly_mcp_proxy - assert False is True
+1444:FAILED tests/test_speech_contract.py::test_speech_to_text_reads_sample_audio_path - assert False is True

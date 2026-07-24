@@ -70,6 +70,28 @@ def public_args(args: Any) -> dict[str, Any]:
     }
 
 
+def _bounded_result(result: dict[str, Any], *, max_keys: int = 14) -> dict[str, Any]:
+    """Yapılandırılmış sonucu modele güvenle geri beslenebilecek boyuta indirir.
+
+    Skalerler ve kısa listeler korunur (kimlikler burada yaşar); büyük/iç içe
+    gövdeler özetlenir. Amaç: zincirleme için gereken kimlikleri kaybetmeden
+    bağlamı şişirmemek."""
+    bounded: dict[str, Any] = {}
+    for key, value in list(result.items())[:max_keys]:
+        name = str(key)
+        if name.startswith("_"):
+            continue
+        if isinstance(value, (bool, int, float)) or value is None:
+            bounded[name] = value
+        elif isinstance(value, str):
+            bounded[name] = value[:400]
+        elif isinstance(value, list):
+            bounded[name] = f"<{len(value)} öğe>"
+        elif isinstance(value, dict):
+            bounded[name] = f"<nesne: {', '.join(list(value)[:6])}>"
+    return bounded
+
+
 def _action_signature(capability: str, args: dict[str, Any]) -> str:
     try:
         payload = json.dumps(public_args(args), sort_keys=True, ensure_ascii=False)
@@ -112,6 +134,9 @@ class AgentObservation:
     error_message: str = ""
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
+    # Adımın yapılandırılmış çıktısı. Zincirleme için ŞARTTIR: bir sonraki adım
+    # çoğu zaman buradaki kimliklere/yollara ihtiyaç duyar (ör. sessionId).
+    result: dict[str, Any] = field(default_factory=dict)
 
     def to_context(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -122,6 +147,10 @@ class AgentObservation:
         }
         if self.output:
             payload["output"] = _clip(self.output)
+        # Yapılandırılmış sonucu da geri besle — aksi halde model önceki adımın
+        # ürettiği kimliği (sessionId, path, id…) göremez ve uydurur.
+        if self.result:
+            payload["result"] = _bounded_result(self.result)
         if not self.ok:
             payload["errorCode"] = self.error_code
             payload["error"] = _clip(self.error_message, 480)
@@ -194,6 +223,42 @@ def build_tool_catalog(
     return catalog
 
 
+# Salt bilgi toplayan (yan etkisiz) yetenekler: bunlar üst üste tekrarlanıyorsa
+# ajan "araştırma"da takılmış demektir.
+_GATHERING_CAPABILITIES = {
+    "file_read", "file_search", "directory_tree", "sys_info", "document_read",
+    "retrieve_context", "web_research", "ocr_read", "image_read", "data_analyze",
+    "text_analyze", "analyze_screen", "desktop_os.status", "desktop_os.processes",
+}
+
+
+def _is_gathering(capability: str, result: dict[str, Any] | None = None) -> bool:
+    name = str(capability or "").strip()
+    if name in _GATHERING_CAPABILITIES:
+        return True
+    # Salt-okunur kabuk komutları da bilgi toplamadır (exit kodu ne olursa olsun).
+    return name == "shell_session_run"
+
+
+def _delivery_pressure(
+    *, steps_remaining: int, total_steps: int, gathering_streak: int
+) -> str:
+    """Bütçe/streak durumuna göre sertleşen teslimat direktifi."""
+    if total_steps > 0 and steps_remaining <= max(2, total_steps // 4):
+        return (
+            "SON ADIMLAR. Yeni bilgi TOPLAMA. Elindeki verilerle teslimatı ŞİMDİ üret "
+            "(dosyayı yaz / sonucu ver), sonra 'finish' de. Eksik ama teslim edilmiş iş, "
+            "mükemmel ama yarım kalmış işten iyidir."
+        )
+    if gathering_streak >= 3:
+        return (
+            f"UYARI: {gathering_streak} turdur yalnız bilgi topluyorsun ve ilerleme yok. "
+            "Aynı veriyi farklı komutlarla yeniden toplamayı BIRAK. Elindekiler yeterli — "
+            "teslimatı üretmeye geç."
+        )
+    return ""
+
+
 def build_decision_context(
     *,
     goal: str,
@@ -202,6 +267,8 @@ def build_decision_context(
     tool_catalog: list[dict[str, Any]],
     steps_remaining: int,
     stuck_hint: str = "",
+    gathering_streak: int = 0,
+    total_steps: int = 0,
 ) -> dict[str, Any]:
     """Model turuna gönderilecek sınırlanmış karar bağlamı."""
     recent = observations[-MAX_HISTORY_OBSERVATIONS:]
@@ -212,6 +279,17 @@ def build_decision_context(
         "history": [item.to_context() for item in recent],
         "stepsRemaining": max(0, int(steps_remaining)),
     }
+    # TESLİMAT BASKISI: model bilgi toplamada takılıp bütçeyi tüketmesin.
+    # Prompt'taki statik kural yetmiyor (canlı sınavda model aynı veriyi farklı
+    # komutlarla tekrar tekrar topladı); bu yüzden DURUMA bağlı, sertleşen bir
+    # direktif enjekte edilir.
+    pressure = _delivery_pressure(
+        steps_remaining=steps_remaining,
+        total_steps=total_steps,
+        gathering_streak=gathering_streak,
+    )
+    if pressure:
+        context["deliveryDirective"] = pressure
     if isinstance(goal_context, dict) and goal_context:
         context["goalContext"] = goal_context
     if stuck_hint:
@@ -288,6 +366,7 @@ def run_agent_loop(
     recent_signatures: list[str] = []
     stuck_hint = ""
     steps_used = 0
+    gathering_streak = 0
 
     def cancellation_reason() -> str:
         if should_cancel is None:
@@ -348,6 +427,8 @@ def run_agent_loop(
             tool_catalog=tool_catalog,
             steps_remaining=bounded_max_steps - steps_used,
             stuck_hint=stuck_hint,
+            gathering_streak=gathering_streak,
+            total_steps=bounded_max_steps,
         )
         stuck_hint = ""
 
@@ -528,10 +609,15 @@ def run_agent_loop(
                 if isinstance(tool_result.get("stepEvidence"), dict)
                 else {}
             ),
+            result=dict(result_payload) if isinstance(result_payload, dict) else {},
         )
         observations.append(observation)
         if on_observation is not None:
             on_observation(observation)
+        # Bilgi toplama streak'i: üretim/teslimat adımı gelince sıfırlanır.
+        gathering_streak = (
+            gathering_streak + 1 if _is_gathering(capability) else 0
+        )
 
         if not observation.ok and repeat_count >= 2:
             stuck_hint = (

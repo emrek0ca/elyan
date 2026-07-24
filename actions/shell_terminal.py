@@ -69,17 +69,28 @@ def shell_session_run(
         body = f"{body}\n[stderr]\n{stderr}" if body else f"[stderr]\n{stderr}"
     summary = body.strip() or f"(çıktı yok, exit={outcome.get('exitCode')})"
 
-    if not outcome.get("ok"):
-        # Hata bir ARIZA değil, döngünün okuyup düzelteceği gözlemdir; yine de
-        # ok=False dönerek doğrulama/öz-düzeltme katmanlarını doğru tetikler.
+    # Zaman aşımı GERÇEK bir arızadır: komut tamamlanmadı, çıktı güvenilmez.
+    if outcome.get("timedOut"):
         raise SafeCapabilityError(
-            "COMMAND_FAILED" if not outcome.get("timedOut") else "TIMEOUT",
-            f"exit={outcome.get('exitCode')} · {summary[:1200]}",
+            "TIMEOUT",
+            f"Komut zaman aşımına uğradı · {summary[:800]}",
         )
 
+    # SIFIR OLMAYAN EXIT KODU ARIZA DEĞİLDİR.
+    # `pytest`/`tsc`/`grep` gibi araçlar başarısızlığı exit≠0 ile bildirir; bu
+    # ajan için BİLGİDİR ("2 test kırık"), araç hatası değil. Hataya çevirirsek
+    # "testi çalıştır → çıktıyı oku → düzelt → tekrar" döngüsü imkânsızlaşır:
+    # ajan gerçek işi yapmak yerine aracı yeniden denemekle uğraşır.
+    exit_code = int(outcome.get("exitCode", 0) or 0)
+    header = f"exit={exit_code}" + (" (komut başarısız bildirdi)" if exit_code else "")
     return {
-        "text": summary[:4000],
-        "result": {"kind": "shell_session_run", **outcome},
+        "text": f"{header}\n{summary}"[:4000],
+        "result": {
+            "kind": "shell_session_run",
+            **outcome,
+            # Model bunu açıkça görsün: komut çalıştı ama başarısız bildirdi.
+            "commandFailed": exit_code != 0,
+        },
         "artifacts": [],
     }
 
