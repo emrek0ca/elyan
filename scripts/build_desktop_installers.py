@@ -36,6 +36,25 @@ def run(command: Sequence[str], *, cwd: Path | None = None, env: dict[str, str] 
     subprocess.run(list(command), cwd=str(cwd or ROOT), env=env, check=True)
 
 
+def run_captured(command: Sequence[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        list(command),
+        cwd=str(cwd or ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+def echo_completed_process(completed: subprocess.CompletedProcess[str]) -> None:
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+
+
 def package_version() -> str:
     payload = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     return str(payload.get("version", "") or "").strip()
@@ -231,11 +250,53 @@ def macos_notary_arguments() -> list[str] | None:
     return None
 
 
+def notary_submission_id(output: str) -> str:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        payload = {}
+    if isinstance(payload, dict):
+        identifier = str(payload.get("id") or "").strip()
+        if identifier:
+            return identifier
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("id:"):
+            return line.partition(":")[2].strip()
+    return ""
+
+
+def print_notary_log(submission_id: str, arguments: list[str]) -> None:
+    if not submission_id:
+        return
+    print(f"Fetching Apple notarization log for submission {submission_id}...", file=sys.stderr)
+    completed = run_captured(["xcrun", "notarytool", "log", submission_id, *arguments, "--output-format", "json"])
+    echo_completed_process(completed)
+    if completed.returncode != 0:
+        fallback = run_captured(["xcrun", "notarytool", "log", submission_id, *arguments])
+        echo_completed_process(fallback)
+
+
 def notarize_macos_path(path: Path, *, staple: bool = True) -> None:
     arguments = macos_notary_arguments()
     if not arguments:
         return
-    run(["xcrun", "notarytool", "submit", str(path), *arguments, "--wait"])
+    completed = run_captured(
+        ["xcrun", "notarytool", "submit", str(path), *arguments, "--wait", "--output-format", "json"]
+    )
+    echo_completed_process(completed)
+    submission_id = notary_submission_id(completed.stdout)
+    if completed.returncode != 0:
+        print_notary_log(submission_id, arguments)
+        raise RuntimeError(f"Apple notarization failed for {path}")
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        payload = {}
+    status = str(payload.get("status") or "").strip() if isinstance(payload, dict) else ""
+    if status and status.lower() != "accepted":
+        print_notary_log(submission_id, arguments)
+        raise RuntimeError(f"Apple notarization returned {status!r} for {path}")
     if staple:
         run(["xcrun", "stapler", "staple", str(path)])
         run(["xcrun", "stapler", "validate", str(path)])
