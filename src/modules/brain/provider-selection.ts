@@ -19,9 +19,18 @@ export type SharedBrainProviderCandidate = {
   hosted: boolean;
 };
 
+export type ModelRouteDecision = {
+  provider: SharedBrainProvider;
+  modelFamily: "gpt_oss" | "groq_compound" | "openai_frontier" | "gemini" | "local" | "other";
+  workload: SharedBrainWorkload;
+  compoundUsed: boolean;
+  privacyGate: "public_safe" | "local_private" | "sensitive_vision" | "restricted" | "none";
+  fallbackUsed: boolean;
+};
+
 export function getConfiguredProviderApiKey(
   app: FastifyInstance,
-  provider: "groq" | "gemini",
+  provider: "groq" | "gemini" | "openai",
 ): string {
   const normalize = (value: unknown) => {
     if (typeof value !== "string") {
@@ -38,6 +47,8 @@ export function getConfiguredProviderApiKey(
       return normalize(app.config.GROQ_API_KEY);
     case "gemini":
       return normalize(app.config.GEMINI_API_KEY);
+    case "openai":
+      return normalize(app.config.OPENAI_API_KEY);
     default:
       return "";
   }
@@ -45,7 +56,7 @@ export function getConfiguredProviderApiKey(
 
 function getConfiguredProviderBaseUrl(
   app: FastifyInstance,
-  provider: "groq" | "gemini",
+  provider: "groq" | "gemini" | "openai",
 ): string | null {
   const normalize = (value: unknown) => {
     const trimmed = typeof value === "string" ? value.trim() : "";
@@ -56,6 +67,8 @@ function getConfiguredProviderBaseUrl(
       return normalize(app.config.GROQ_BASE_URL);
     case "gemini":
       return normalize(app.config.GEMINI_BASE_URL);
+    case "openai":
+      return normalize(app.config.OPENAI_BASE_URL);
     default:
       return null;
   }
@@ -63,6 +76,57 @@ function getConfiguredProviderBaseUrl(
 
 function isVisionWorkload(workload: SharedBrainWorkload): boolean {
   return workload === "vision_reasoning" || workload === "image_analyze";
+}
+
+function isPublicResearchWorkload(workload: SharedBrainWorkload): boolean {
+  return (
+    workload === "public_research" ||
+    workload === "public_deep_research" ||
+    workload === "public_quantum_research"
+  );
+}
+
+function compactText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function modelFamilyFor(provider: SharedBrainProvider, model: string): ModelRouteDecision["modelFamily"] {
+  const normalized = model.toLowerCase();
+  if (provider === "groq" && normalized.startsWith("openai/gpt-oss")) return "gpt_oss";
+  if (provider === "groq" && normalized.startsWith("groq/compound")) return "groq_compound";
+  if (provider === "openai") return "openai_frontier";
+  if (provider === "gemini") return "gemini";
+  if (["ollama", "vllm", "llamacpp"].includes(provider)) return "local";
+  return "other";
+}
+
+export function buildModelRouteDecision(input: {
+  provider: SharedBrainProvider;
+  model: string;
+  workload: SharedBrainWorkload;
+  hosted: boolean;
+  fallbackUsed?: boolean;
+  visionSensitivity?: VisionMediaDecision["sensitivity"];
+}): ModelRouteDecision {
+  const compoundUsed = input.provider === "groq" && input.model.toLowerCase().startsWith("groq/compound");
+  const privacyGate =
+    input.visionSensitivity === "restricted"
+      ? "restricted"
+      : input.visionSensitivity === "sensitive"
+        ? "sensitive_vision"
+        : input.hosted && !isPublicResearchWorkload(input.workload) && input.workload === "document_analysis"
+          ? "local_private"
+          : input.hosted
+            ? "public_safe"
+            : "none";
+  return {
+    provider: input.provider,
+    modelFamily: modelFamilyFor(input.provider, input.model),
+    workload: input.workload,
+    compoundUsed,
+    privacyGate,
+    fallbackUsed: input.fallbackUsed === true,
+  };
 }
 
 export function isHostedVisionProviderPrivacyEligible(
@@ -124,6 +188,24 @@ function buildHostedProviderCandidates(
         (model, index, values): model is string =>
           Boolean(model) && values.indexOf(model) === index,
       ),
+      hosted: true,
+    });
+  }
+
+  const openAiApiKey = getConfiguredProviderApiKey(app, "openai");
+  const openAiBaseUrl = getConfiguredProviderBaseUrl(app, "openai");
+  const openAiFrontierModel = compactText(app.config.OPENAI_FRONTIER_MODEL);
+  if (
+    openAiApiKey &&
+    openAiBaseUrl &&
+    openAiFrontierModel &&
+    workload === "public_deep_research" &&
+    (!visionSensitivity || visionSensitivity === "none")
+  ) {
+    hostedCandidates.push({
+      provider: "openai",
+      baseUrl: openAiBaseUrl,
+      preferredModels: [openAiFrontierModel],
       hosted: true,
     });
   }
@@ -295,7 +377,7 @@ export function buildProviderHeaders(
     "content-type": "application/json",
   };
 
-  if (provider !== "groq" && provider !== "gemini") {
+  if (provider !== "groq" && provider !== "gemini" && provider !== "openai") {
     return headers;
   }
 

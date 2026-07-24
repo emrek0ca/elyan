@@ -15,6 +15,8 @@ import type { SharedBrainWorkload } from "./workloads.js";
 
 export type GroqCompoundConfigSource = GroqModelConfigSource & {
   GROQ_COMPOUND_ENABLED?: boolean | null;
+  GROQ_COMPOUND_RESEARCH_ENABLED?: boolean | null;
+  GROQ_COMPOUND_DEEP_ENABLED?: boolean | null;
   GROQ_COMPOUND_SEARCH_COUNTRY?: string | null;
   GROQ_COMPOUND_INCLUDE_DOMAINS?: string | null;
   GROQ_COMPOUND_EXCLUDE_DOMAINS?: string | null;
@@ -27,6 +29,9 @@ export type GroqCompoundConfigSource = GroqModelConfigSource & {
 const COMPOUND_ELIGIBLE_WORKLOADS: ReadonlySet<SharedBrainWorkload> = new Set([
   "planning",
   "mobile_chat_deep_refine",
+  "public_research",
+  "public_deep_research",
+  "public_quantum_research",
 ]);
 
 function compactText(value: unknown): string {
@@ -60,6 +65,21 @@ export function shouldUseGroqCompound(input: {
   liveWebSignal?: boolean;
 }): boolean {
   if (input.config.GROQ_COMPOUND_ENABLED !== true) return false;
+  if (
+    (input.workload === "public_research" ||
+      input.workload === "public_quantum_research") &&
+    input.config.GROQ_COMPOUND_RESEARCH_ENABLED !== true
+  ) {
+    return false;
+  }
+  if (
+    (input.workload === "planning" ||
+      input.workload === "mobile_chat_deep_refine" ||
+      input.workload === "public_deep_research") &&
+    input.config.GROQ_COMPOUND_DEEP_ENABLED !== true
+  ) {
+    return false;
+  }
   if (input.liveWebSignal === true) return true;
   return COMPOUND_ELIGIBLE_WORKLOADS.has(input.workload);
 }
@@ -77,7 +97,8 @@ export function resolveGroqCompoundModel(
     workload === "intent" ||
     workload === "fast_route" ||
     workload === "mobile_chat_fast" ||
-    workload === "desktop_handoff";
+    workload === "desktop_handoff" ||
+    workload === "public_research";
   return fast ? catalog.compoundMiniModel : catalog.compoundModel;
 }
 

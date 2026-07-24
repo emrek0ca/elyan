@@ -185,6 +185,19 @@ const QUANTUM_CAPABILITIES = [
   "quantum_compare_classical",
   "quantum_generate_report",
 ];
+const PUBLIC_FRESH_RESEARCH_PATTERNS = [
+  /\b(güncel|guncel|son durum|latest|recent|today|bugün|bugun|şu an|su an|canlı|canli|fresh|current|doğrula|dogrula)\b/i,
+  /\b(kaynaklı|kaynaklarla|source-backed|sources?|atıf|atif|citation|araştır|arastir|research|web)\b/i,
+];
+const PUBLIC_DEEP_RESEARCH_PATTERNS = [
+  /\b(derin|deep|kapsamlı|kapsamli|literatür|literature|rapor|report|plan|strateji|strategy|karşılaştır|karsilastir|analiz et|analyze)\b/i,
+];
+const COMPOUND_UNSAFE_SUBJECT_PATTERNS = [
+  /\b(sağlık|saglik|health|medical|doktor|doctor|ilaç|ilac|diagnosis|teşhis|teshis)\b/i,
+  /\b(connector|gmail|mailim|emailim|drive|notion|slack|github hesabım|github hesabim)\b/i,
+  /\b(ekran|screen|dosya|file|document|klasör|klasor|local|yerel|private)\b/i,
+  /(?:belge|özel|ozel)[\p{L}'’]*/iu,
+];
 
 function normalizeMessage(value: string): string {
   return String(value ?? "")
@@ -536,6 +549,18 @@ function hasDesktopActionSignal(message: string): boolean {
   );
 }
 
+function hasPublicFreshResearchSignal(message: string): boolean {
+  return matchesAny(message, PUBLIC_FRESH_RESEARCH_PATTERNS);
+}
+
+function hasPublicDeepResearchSignal(message: string): boolean {
+  return matchesAny(message, PUBLIC_DEEP_RESEARCH_PATTERNS);
+}
+
+function isCompoundUnsafeSubject(message: string): boolean {
+  return matchesAny(message, COMPOUND_UNSAFE_SUBJECT_PATTERNS);
+}
+
 function effectiveRequestedCapabilities(
   requestedCapabilities: string[],
   options: { screenGlanceRequested: boolean; quantumExecutionRequested?: boolean },
@@ -843,6 +868,9 @@ function deriveSelectedWorkloadWithGuard(input: {
     return { selectedWorkload: prePlanningPolicyWorkload };
   }
   if (input.intent === "planning_request") {
+    if (hasPublicFreshResearchSignal(input.message) && !isCompoundUnsafeSubject(input.message)) {
+      return { selectedWorkload: hasPublicDeepResearchSignal(input.message) ? "public_deep_research" : "public_research" };
+    }
     return { selectedWorkload: "planning" };
   }
   const postPlanningPolicyWorkload = selectPolicyWorkload(input.message, { phase: "post_planning" });
@@ -853,6 +881,16 @@ function deriveSelectedWorkloadWithGuard(input: {
   // message length — a short "enflasyon analizi yap" still needs retrieval
   // grounding and reasoning depth that mobile_chat_fast can't provide.
   if (input.primaryIntent === "research") {
+    if (
+      matchesAny(input.message, QUANTUM_TOPIC_PATTERNS) &&
+      !matchesAny(input.message, QUANTUM_EXECUTION_PATTERNS) &&
+      !isCompoundUnsafeSubject(input.message)
+    ) {
+      return { selectedWorkload: "public_quantum_research" };
+    }
+    if (hasPublicFreshResearchSignal(input.message) && !isCompoundUnsafeSubject(input.message)) {
+      return { selectedWorkload: hasPublicDeepResearchSignal(input.message) ? "public_deep_research" : "public_research" };
+    }
     return { selectedWorkload: "mobile_chat_deep_refine" };
   }
   if (input.primaryIntent === "math") {
@@ -956,13 +994,20 @@ function buildDecision(input: {
         rawBrainProfile: input.brainProfile,
         confidence: input.confidence,
       });
+  const publicResearchWorkload =
+    workloadDecision.selectedWorkload === "public_research" ||
+    workloadDecision.selectedWorkload === "public_deep_research" ||
+    workloadDecision.selectedWorkload === "public_quantum_research";
+  const capabilities = publicResearchWorkload
+    ? uniqueSemanticCapabilities([...input.capabilities, "web_research"])
+    : input.capabilities;
 
   return {
     route: input.route,
     targetDeviceId: input.targetDeviceId,
     taskRoute: input.taskRoute ?? undefined,
     mode: input.mode,
-    capabilities: input.capabilities,
+    capabilities,
     privacyClass: input.privacyClass,
     requiresApproval: input.requiresApproval,
     reason: input.reason,

@@ -950,6 +950,48 @@ test("decideCommandRoute keeps conceptual quantum chat on the shared brain", asy
   assert.deepEqual(decision.capabilities, []);
 });
 
+test("decideCommandRoute uses public quantum research workload for literature questions", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "QAOA literatüründe güncel kaynaklarla yaklaşım farklarını araştır.",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.mode, "chat");
+  assert.equal(decision.selectedWorkload, "public_quantum_research");
+  assert.deepEqual(decision.capabilities, ["web_research"]);
+});
+
+test("decideCommandRoute uses deep public research workload for current source-backed reports", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "2026 AI çip pazarını güncel kaynaklarla kapsamlı rapor olarak araştır.",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.selectedWorkload, "public_deep_research");
+});
+
+test("decideCommandRoute keeps private current document prompts off public research workload", async () => {
+  const app = createApp([]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Bu özel belgeyi güncel kaynaklarla araştır ve özetle.",
+    source: "mobile",
+    metadata: {
+      attachments: [{ name: "private.pdf", text: "private text" }],
+    },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.notEqual(decision.selectedWorkload, "public_research");
+  assert.notEqual(decision.selectedWorkload, "public_deep_research");
+});
+
 test("decideCommandRoute carries quantum execution capabilities when dispatch is explicit", async () => {
   const quantumCapabilities = [
     "quantum_model_problem",

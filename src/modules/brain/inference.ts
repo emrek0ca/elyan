@@ -274,7 +274,10 @@ import {
   type SharedBrainConversationMessage,
   type SharedBrainRequestAttempt,
 } from "./provider-request.js";
-import { buildInferenceProviderCandidates } from "./provider-selection.js";
+import {
+  buildInferenceProviderCandidates,
+  buildModelRouteDecision,
+} from "./provider-selection.js";
 import {
   buildGroqCompoundRequestExtensions,
   extractGroqCompoundEvidence,
@@ -6264,6 +6267,7 @@ export async function generateSharedBrainReply(
       const attemptFailures: ProviderAttemptFailure[] = [];
       let successfulProvider: SharedBrainProvider | null = null;
       let successfulModel = baseModel;
+      let successfulHosted = false;
       let payload: unknown = null;
       let successfulTurnEnvelopeMode = false;
       let firstDeltaMs: number | null = null;
@@ -6870,6 +6874,7 @@ export async function generateSharedBrainReply(
                       firstDeltaMs = deltaPublisher.firstDeltaMs;
                       successfulProvider = candidate.provider;
                       successfulModel = attemptedModel;
+                      successfulHosted = candidate.hosted;
                       successfulTurnEnvelopeMode =
                         attempt.turnEnvelopeMode === true;
                       fallbackUsed =
@@ -7084,6 +7089,7 @@ export async function generateSharedBrainReply(
                       }
                       successfulProvider = candidate.provider;
                       successfulModel = attemptedModel;
+                      successfulHosted = candidate.hosted;
                       successfulTurnEnvelopeMode =
                         attempt.turnEnvelopeMode === true;
                       fallbackUsed =
@@ -7876,6 +7882,14 @@ export async function generateSharedBrainReply(
         }),
         ...lowConfidenceBlocks,
       ];
+      const modelRoute = buildModelRouteDecision({
+        provider: successfulProvider,
+        model: successfulModel,
+        workload,
+        hosted: successfulHosted,
+        fallbackUsed,
+        visionSensitivity: visionMediaDecision.sensitivity,
+      });
       const result: SharedBrainInferenceResult = {
         text: finalText,
         provider: successfulProvider,
@@ -7887,6 +7901,7 @@ export async function generateSharedBrainReply(
         metadata: {
           route: input.route ?? "shared_brain",
           workload,
+          modelRoute,
           provider: successfulProvider,
           model: successfulModel,
           billableTokens: billableAiCredits,

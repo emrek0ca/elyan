@@ -614,6 +614,23 @@ function clipPublicString(value: string, maxLength: number): string {
     : `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
+function sanitizePublicModelRoute(value: unknown): Record<string, unknown> | null {
+  const route = readRecord(value);
+  if (!route) return null;
+  const provider = readString(route, "provider");
+  const modelFamily = readString(route, "modelFamily");
+  const workload = readString(route, "workload");
+  const privacyGate = readString(route, "privacyGate");
+  return {
+    ...(provider ? { provider } : {}),
+    ...(modelFamily ? { modelFamily } : {}),
+    ...(workload ? { workload } : {}),
+    compoundUsed: Boolean(route.compoundUsed),
+    ...(privacyGate ? { privacyGate } : {}),
+    fallbackUsed: Boolean(route.fallbackUsed),
+  };
+}
+
 function sanitizeBoundedPublicJson(
   value: unknown,
   internalKeys: Set<string>,
@@ -649,6 +666,9 @@ function sanitizeBoundedPublicJson(
       .filter(([key]) => !isInternalInferenceKey(key, internalKeys))
       .slice(0, 80)
       .map(([key, nestedValue]) => {
+        if (normalizePublicInferenceKey(key) === "modelroute") {
+          return [key, sanitizePublicModelRoute(nestedValue)];
+        }
         if (
           normalizePublicInferenceKey(key) === "blocks" &&
           Array.isArray(nestedValue)

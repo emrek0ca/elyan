@@ -908,6 +908,7 @@ export function readServerBrainCompletionMetadata(
 
   return {
     firstDeltaMs: readInferenceNumber(metadata, "firstDeltaMs"),
+    modelRoute: readRecord(metadata.modelRoute) ?? null,
     fallbackUsed: Boolean(metadata.fallbackUsed),
     fallbackState: readInferenceString(metadata, "fallbackState"),
     groundingUsed,
@@ -4127,6 +4128,7 @@ async function completeServerBrainTask(
     model: string;
     route: string;
     workload: string;
+    modelRoute?: Record<string, unknown> | null;
     latencyMs: number;
     promptTokens: number;
     completionTokens: number;
@@ -4468,6 +4470,7 @@ async function completeServerBrainTask(
     text: visibleResponseText,
     route: input.route,
     workload: input.workload,
+    modelRoute: input.modelRoute ?? null,
     latencyMs: input.latencyMs,
     promptTokens: input.promptTokens,
     completionTokens: input.completionTokens,

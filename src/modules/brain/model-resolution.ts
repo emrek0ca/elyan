@@ -84,6 +84,27 @@ const OLLAMA_MODEL_PREFERENCES_BY_WORKLOAD: Record<SharedBrainWorkload, string[]
     "llama3.1:8b",
     "qwen2.5-coder:3b",
   ],
+  public_research: [
+    "qwen2.5:7b-instruct-q5_K_M",
+    "qwen2.5:7b-instruct",
+    "deepseek-r1:8b",
+    "llama3:8b",
+    "llama3.1:8b",
+  ],
+  public_deep_research: [
+    "qwen2.5:7b-instruct-q5_K_M",
+    "qwen2.5:7b-instruct",
+    "deepseek-r1:8b",
+    "llama3:8b",
+    "llama3.1:8b",
+  ],
+  public_quantum_research: [
+    "qwen2.5:7b-instruct-q5_K_M",
+    "qwen2.5:7b-instruct",
+    "deepseek-r1:8b",
+    "llama3:8b",
+    "llama3.1:8b",
+  ],
   document_generate: [
     "qwen2.5:7b-instruct-q5_K_M",
     "qwen2.5:7b-instruct",
@@ -135,7 +156,13 @@ function getConfiguredModelForWorkload(
   const defaultFastModel = "qwen2.5-coder:3b";
   const defaultBalancedModel = "qwen2.5:7b-instruct-q5_K_M";
 
-  if (workload === "planning" || workload === "mobile_chat_deep_refine") {
+  if (
+    workload === "planning" ||
+    workload === "mobile_chat_deep_refine" ||
+    workload === "public_research" ||
+    workload === "public_deep_research" ||
+    workload === "public_quantum_research"
+  ) {
     return trimOr(app.config.ELYAN_SHARED_BRAIN_PLANNING_MODEL, defaultBalancedModel);
   }
   if (workload === "mobile_chat_balanced" || workload === "document_analysis") {

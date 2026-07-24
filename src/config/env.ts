@@ -148,6 +148,9 @@ const envSchema = z.object({
   GOOGLE_PLAY_PRIVATE_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().url().optional(),
+  OPENAI_FRONTIER_MODEL: z.string().default("gpt-5.6-terra"),
+  OPENAI_TRANSCRIBE_MODEL: z.string().default("gpt-4o-transcribe"),
+  OPENAI_TTS_MODEL: z.string().default("gpt-4o-mini-tts"),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_BASE_URL: z.string().url().optional(),
   GROQ_API_KEY: z.string().optional(),
@@ -163,6 +166,8 @@ const envSchema = z.object({
   // yalnız public planning/deep-refine iş yüklerinde birincil model olur,
   // hemen ardından mevcut gpt-oss zinciri fallback kalır (kalite gerilemez).
   GROQ_COMPOUND_ENABLED: booleanFlag(true),
+  GROQ_COMPOUND_RESEARCH_ENABLED: booleanFlag(true),
+  GROQ_COMPOUND_DEEP_ENABLED: booleanFlag(true),
   GROQ_COMPOUND_MODEL: z.string().default("groq/compound"),
   GROQ_COMPOUND_MINI_MODEL: z.string().default("groq/compound-mini"),
   // Arama davranışı ince ayarı (opsiyonel). Virgülle ayrılmış alan adı listeleri
@@ -332,6 +337,9 @@ export type AppEnv = ParsedEnv & {
   GOOGLE_PLAY_PRIVATE_KEY: string;
   OPENAI_API_KEY: string;
   OPENAI_BASE_URL: string;
+  OPENAI_FRONTIER_MODEL: string;
+  OPENAI_TRANSCRIBE_MODEL: string;
+  OPENAI_TTS_MODEL: string;
   ANTHROPIC_API_KEY: string;
   ANTHROPIC_BASE_URL: string;
   GROQ_API_KEY: string;
@@ -342,6 +350,8 @@ export type AppEnv = ParsedEnv & {
   GROQ_VISION_MODEL: string;
   GROQ_VISION_SENSITIVE_DATA_ATTESTED?: boolean;
   GROQ_COMPOUND_ENABLED?: boolean;
+  GROQ_COMPOUND_RESEARCH_ENABLED?: boolean;
+  GROQ_COMPOUND_DEEP_ENABLED?: boolean;
   GROQ_COMPOUND_MODEL: string;
   GROQ_COMPOUND_MINI_MODEL: string;
   GROQ_COMPOUND_SEARCH_COUNTRY?: string;
@@ -553,6 +563,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     BLOB_HMAC_SECRET: parsed.BLOB_HMAC_SECRET ?? "",
     OPENAI_API_KEY: parsed.OPENAI_API_KEY ?? "",
     OPENAI_BASE_URL: parsed.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
+    OPENAI_FRONTIER_MODEL: parsed.OPENAI_FRONTIER_MODEL,
+    OPENAI_TRANSCRIBE_MODEL: parsed.OPENAI_TRANSCRIBE_MODEL,
+    OPENAI_TTS_MODEL: parsed.OPENAI_TTS_MODEL,
     ANTHROPIC_API_KEY: parsed.ANTHROPIC_API_KEY ?? "",
     ANTHROPIC_BASE_URL: parsed.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com/v1",
     GROQ_API_KEY: parsed.GROQ_API_KEY ?? "",
@@ -563,6 +576,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GROQ_VISION_MODEL: parsed.GROQ_VISION_MODEL,
     GROQ_VISION_SENSITIVE_DATA_ATTESTED: parsed.GROQ_VISION_SENSITIVE_DATA_ATTESTED,
     GROQ_COMPOUND_ENABLED: parsed.GROQ_COMPOUND_ENABLED,
+    GROQ_COMPOUND_RESEARCH_ENABLED: parsed.GROQ_COMPOUND_RESEARCH_ENABLED,
+    GROQ_COMPOUND_DEEP_ENABLED: parsed.GROQ_COMPOUND_DEEP_ENABLED,
     GROQ_COMPOUND_MODEL: parsed.GROQ_COMPOUND_MODEL,
     GROQ_COMPOUND_MINI_MODEL: parsed.GROQ_COMPOUND_MINI_MODEL,
     GROQ_COMPOUND_SEARCH_COUNTRY: parsed.GROQ_COMPOUND_SEARCH_COUNTRY,

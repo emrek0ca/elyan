@@ -759,6 +759,34 @@ test("sanitizePublicTaskEventPayload removes compound provider keys from SSE dat
   });
 });
 
+test("sanitizePublicInferenceValue preserves safe model route metadata only", () => {
+  const sanitized = sanitizePublicInferenceValue({
+    text: "Hazır",
+    modelRoute: {
+      provider: "groq",
+      model: "groq/compound",
+      modelFamily: "groq_compound",
+      workload: "public_research",
+      compoundUsed: true,
+      privacyGate: "public_safe",
+      fallbackUsed: false,
+      rawProviderResponse: { executed_tools: ["private"] },
+    },
+  });
+
+  assert.deepEqual(sanitized, {
+    text: "Hazır",
+    modelRoute: {
+      provider: "groq",
+      modelFamily: "groq_compound",
+      workload: "public_research",
+      compoundUsed: true,
+      privacyGate: "public_safe",
+      fallbackUsed: false,
+    },
+  });
+});
+
 test("sanitizePublicInferenceValue bounds public JSON and strips internal variants", () => {
   const sanitized = sanitizePublicInferenceValue({
     text: "x".repeat(9_000),

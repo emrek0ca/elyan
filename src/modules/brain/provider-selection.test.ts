@@ -22,8 +22,13 @@ function appWithConfig(config: Record<string, unknown>): FastifyInstance {
       GROQ_API_KEY: "",
       GROQ_BASE_URL: "https://api.groq.com/openai/v1",
       GROQ_COMPOUND_ENABLED: false,
+      GROQ_COMPOUND_RESEARCH_ENABLED: true,
+      GROQ_COMPOUND_DEEP_ENABLED: true,
       GROQ_COMPOUND_MODEL: "groq/compound",
       GROQ_COMPOUND_MINI_MODEL: "groq/compound-mini",
+      OPENAI_API_KEY: "",
+      OPENAI_BASE_URL: "https://api.openai.com/v1",
+      OPENAI_FRONTIER_MODEL: "openai-frontier",
       GEMINI_API_KEY: "",
       GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai",
       ...config,
@@ -160,6 +165,78 @@ test("buildInferenceProviderCandidates uses Groq Compound for planning when enab
     "groq-reasoning",
     "groq-fallback",
   ]);
+});
+
+test("buildInferenceProviderCandidates uses Compound mini for public fresh research", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_COMPOUND_ENABLED: true,
+    GROQ_COMPOUND_RESEARCH_ENABLED: true,
+    GROQ_REASONING_MODEL: "groq-reasoning",
+    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FALLBACK_MODEL: "groq-fallback",
+  });
+
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "public_research",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+  });
+
+  assert.equal(candidates[0]?.provider, "groq");
+  assert.deepEqual(candidates[0]?.preferredModels, [
+    "groq/compound-mini",
+    "groq-reasoning",
+    "groq-fast",
+  ]);
+});
+
+test("buildInferenceProviderCandidates keeps Compound off when research flag is disabled", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_COMPOUND_ENABLED: true,
+    GROQ_COMPOUND_RESEARCH_ENABLED: false,
+    GROQ_REASONING_MODEL: "groq-reasoning",
+    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FALLBACK_MODEL: "groq-fallback",
+  });
+
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "public_research",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+  });
+
+  assert.deepEqual(candidates[0]?.preferredModels, [
+    "groq-reasoning",
+    "groq-fast",
+  ]);
+});
+
+test("buildInferenceProviderCandidates adds OpenAI frontier after Groq for deep public research", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_COMPOUND_ENABLED: true,
+    GROQ_COMPOUND_DEEP_ENABLED: true,
+    GROQ_REASONING_MODEL: "groq-reasoning",
+    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FALLBACK_MODEL: "groq-fallback",
+    OPENAI_API_KEY: "openai-key",
+    OPENAI_FRONTIER_MODEL: "frontier-model",
+  });
+
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "public_deep_research",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+  });
+
+  assert.equal(candidates[0]?.provider, "groq");
+  assert.equal(candidates[1]?.provider, "openai");
+  assert.deepEqual(candidates[1]?.preferredModels, ["frontier-model"]);
 });
 
 test("buildInferenceProviderCandidates does not use Groq Compound for document analysis", () => {

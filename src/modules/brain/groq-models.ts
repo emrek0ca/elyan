@@ -5,6 +5,7 @@ export type GroqModelConfigSource = {
   GROQ_FAST_MODEL?: string | null;
   GROQ_FALLBACK_MODEL?: string | null;
   GROQ_VISION_MODEL?: string | null;
+  OPENAI_FRONTIER_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_FAST_MODEL?: string | null;
   ELYAN_SHARED_BRAIN_BALANCED_MODEL?: string | null;
@@ -19,6 +20,7 @@ export type GroqModelCatalog = {
   fastModel: string;
   fallbackModel: string;
   visionModel: string;
+  frontierModel: string;
   // Groq Compound ajan sistemi modelleri. `models` listesine dahil DEĞİLdir:
   // compound ayrı bir yürütme yolu (yerleşik web/kod araçları) olduğundan
   // gizlilik/atıf/klasik-model varsayımlarına karışmaz.
@@ -54,6 +56,7 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
     compactText(config.GROQ_VISION_MODEL) ||
     compactText(config.ELYAN_SHARED_BRAIN_VISION_MODEL) ||
     "meta-llama/llama-4-scout-17b-16e-instruct";
+  const frontierModel = compactText(config.OPENAI_FRONTIER_MODEL) || "gpt-5.6-terra";
   const compoundModel =
     compactText(config.GROQ_COMPOUND_MODEL) || "groq/compound";
   const compoundMiniModel =
@@ -64,6 +67,7 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
     fastModel,
     fallbackModel,
     visionModel,
+    frontierModel,
     compoundModel,
     compoundMiniModel,
     defaultModelByWorkload: {
@@ -84,6 +88,9 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       table_generate: reasoningModel,
       image_analyze: visionModel,
       planning: reasoningModel,
+      public_research: reasoningModel,
+      public_deep_research: reasoningModel,
+      public_quantum_research: reasoningModel,
       desktop_handoff: fastModel,
       vision_reasoning: visionModel,
     },
@@ -112,10 +119,14 @@ export function resolveGroqFallbackModel(
     workload === "mobile_chat_fast" ||
     workload === "fast_route" ||
     workload === "mobile_chat_balanced" ||
-    workload === "mobile_chat_deep_refine";
+    workload === "mobile_chat_deep_refine" ||
+    workload === "public_research" ||
+    workload === "public_quantum_research";
   const preferredOrder =
     workload === "document_analysis"
       ? [catalog.fastModel, catalog.reasoningModel, catalog.fallbackModel]
+      : workload === "public_deep_research"
+        ? [catalog.reasoningModel, catalog.fastModel, catalog.fallbackModel]
       : chatWorkload
         ? [catalog.fastModel, catalog.reasoningModel, catalog.fallbackModel]
         : [catalog.fallbackModel, catalog.reasoningModel, catalog.fastModel];

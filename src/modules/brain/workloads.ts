@@ -9,6 +9,9 @@ export const sharedBrainWorkloadValues = [
   "table_generate",
   "image_analyze",
   "planning",
+  "public_research",
+  "public_deep_research",
+  "public_quantum_research",
   "desktop_handoff",
   "vision_reasoning",
 ] as const;
@@ -127,6 +130,33 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
     cachePolicy: "safe_ephemeral",
     fallbackWorkload: "mobile_chat_balanced",
   },
+  public_research: {
+    workload: "public_research",
+    timeoutMs: 9_000,
+    firstDeltaBudgetMs: 2_200,
+    maxTokens: 768,
+    streamingEnabled: true,
+    cachePolicy: "safe_ephemeral",
+    fallbackWorkload: "mobile_chat_balanced",
+  },
+  public_deep_research: {
+    workload: "public_deep_research",
+    timeoutMs: 14_000,
+    firstDeltaBudgetMs: 3_000,
+    maxTokens: 1_200,
+    streamingEnabled: true,
+    cachePolicy: "safe_ephemeral",
+    fallbackWorkload: "public_research",
+  },
+  public_quantum_research: {
+    workload: "public_quantum_research",
+    timeoutMs: 12_000,
+    firstDeltaBudgetMs: 2_800,
+    maxTokens: 1_024,
+    streamingEnabled: true,
+    cachePolicy: "safe_ephemeral",
+    fallbackWorkload: "mobile_chat_balanced",
+  },
   desktop_handoff: {
     workload: "desktop_handoff",
     timeoutMs: 0,
@@ -172,6 +202,9 @@ export function resolveAttachmentAwareSharedBrainWorkload(input: {
     selectedWorkload === "document_generate" ||
     selectedWorkload === "table_generate" ||
     selectedWorkload === "image_analyze"
+    || selectedWorkload === "public_research"
+    || selectedWorkload === "public_deep_research"
+    || selectedWorkload === "public_quantum_research"
   ) {
     return selectedWorkload;
   }
