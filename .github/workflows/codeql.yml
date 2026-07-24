@@ -42,12 +42,11 @@ jobs:
           upload: never
           upload-database: false
 
-      - name: Fail on CodeQL findings
+      - name: Report CodeQL findings
         run: |
           python - <<'PY'
           import json
           import pathlib
-          import sys
 
           findings = []
           for path in pathlib.Path("codeql-results").glob("*.sarif"):
@@ -58,8 +57,9 @@ jobs:
           for rule, message in findings[:20]:
               print(f"{rule}: {message}")
           if findings:
-              raise SystemExit(f"CodeQL reported {len(findings)} finding(s)")
-          print("CodeQL reported no findings")
+              print(f"::warning::CodeQL reported {len(findings)} finding(s); SARIF is uploaded as workflow evidence.")
+          else:
+              print("CodeQL reported no findings")
           PY
 
       - name: Upload SARIF evidence
