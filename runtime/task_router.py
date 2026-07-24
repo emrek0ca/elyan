@@ -2094,7 +2094,13 @@ def _pdf_report_route(text: str) -> RoutedTask | None:
 
 def _relocate_to_requested_folder(text: str, output_path: str) -> str:
     candidate = Path(output_path)
-    default_parents = {_workspace_root(), _workspace_root() / "elyan_output"}
+    from actions._write_common import desktop_dir
+
+    default_parents = {
+        _workspace_root(),
+        _workspace_root() / "elyan_output",
+        desktop_dir().resolve(),
+    }
     if _mentions_location(text) and candidate.parent in default_parents:
         return str((Path(_resolve_location_path(text)) / candidate.name).resolve())
     return output_path

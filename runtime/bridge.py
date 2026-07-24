@@ -1870,6 +1870,58 @@ def _approve_like_request(text: str) -> bool:
     return normalized in {"onayla", "approve", "tamam", "devam et", "uygula", "gonder", "gönder"}
 
 
+def _looks_like_desktop_execution_request(text: str) -> bool:
+    normalized = _normalise_text(text)
+    if not normalized:
+        return False
+    desktop_nouns = (
+        "masaustu",
+        "desktop",
+        "bilgisayar",
+        "ekran",
+        "pencere",
+        "window",
+        "chrome",
+        "safari",
+        "firefox",
+        "browser",
+        "tarayici",
+        "terminal",
+        "finder",
+        "uygulama",
+        "app",
+        "dosya",
+        "klasor",
+        "folder",
+        "downloads",
+        "indirilenler",
+    )
+    action_verbs = (
+        "ac",
+        "open",
+        "baslat",
+        "launch",
+        "kapat",
+        "close",
+        "quit",
+        "tikla",
+        "click",
+        "yaz",
+        "type",
+        "oku",
+        "listele",
+        "kaydet",
+        "indir",
+        "sil",
+        "navigate",
+        "sekme",
+        "tab",
+    )
+    return any(noun in normalized for noun in desktop_nouns) and any(
+        verb in normalized for verb in action_verbs
+    )
+
+
 def _cancel_like_request(text: str) -> bool:
     normalized = _normalise_text(text)
     return normalized in {"iptal et", "iptal", "cancel", "vazgec", "vazgeç", "hayir", "hayır"}
@@ -13649,6 +13701,18 @@ class RuntimeBridge:
                         }
                     )
                     return local_steps, local_preview
+                if not _looks_like_desktop_execution_request(prompt):
+                    self._runtime_diag(
+                        "generic_operator_fallback_suppressed",
+                        task_id=str(task.get("id", "") or ""),
+                        reason="public_chat_turn",
+                    )
+                    return [], {
+                        "summary": "Bu istek masaüstü yürütme gerektirmiyor; sohbet sunucu beyninde yanıtlanmalı.",
+                        "steps": [],
+                        "privacyClass": "public_text",
+                        "planSource": "runtime_dispatch_chat_guard",
+                    }
             return explicit_steps, explicit_preview
         if decision_route == "desktop_runtime" and decision:
             quantum_requested = bool(capabilities.intersection(REMOTE_QUANTUM_CAPABILITIES))

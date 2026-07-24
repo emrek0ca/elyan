@@ -1913,6 +1913,49 @@ def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
     assert "desktop_operator.run" not in dumped
 
 
+def test_dispatch_generic_operator_fallback_does_not_execute_public_chat(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dispatch açık kalsa bile normal sohbet/hafıza sorusu operator jokerine
+    çevrilmemeli; eski kuyruktan hatalı zarf gelirse runtime yürütmeyi keser."""
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "adım ne benim"
+    route_decision = {
+        "route": "desktop_runtime",
+        "capabilities": ["desktop_operator.run"],
+        "reason": "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+        "planPreview": {
+            "summary": "Kullanıcı dispatch butonu ile bu görevi masaüstüne yönlendirdi.",
+            "steps": [
+                {
+                    "id": "step_1",
+                    "capability": "desktop_operator.run",
+                    "description": "Masaüstü görevi yürütülecek.",
+                    "args": {},
+                }
+            ],
+        },
+    }
+    task = {
+        "id": "task-public-chat-joker",
+        "title": prompt,
+        "payload": {"prompt": prompt, "metadata": {"routeDecision": route_decision}},
+    }
+
+    steps, preview = runtime._remote_task_steps_from_route(
+        task,
+        prompt,
+        {"desktop_operator.run"},
+        route_decision,
+    )
+
+    assert steps == []
+    assert preview["planSource"] == "runtime_dispatch_chat_guard"
+    assert preview["privacyClass"] == "public_text"
+
+
 def test_assigned_dispatch_generic_operator_completes_via_directory_tree_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
