@@ -26,6 +26,10 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
     table_generate: "openai/gpt-oss-120b",
     image_analyze: "meta-llama/llama-4-scout-17b-16e-instruct",
     planning: "openai/gpt-oss-120b",
+    // Public research yolları kalite-öncelikli: büyük reasoning modelinde.
+    public_research: "openai/gpt-oss-120b",
+    public_deep_research: "openai/gpt-oss-120b",
+    public_quantum_research: "openai/gpt-oss-120b",
     desktop_handoff: "openai/gpt-oss-20b",
     vision_reasoning: "meta-llama/llama-4-scout-17b-16e-instruct",
   });
