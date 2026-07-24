@@ -11218,7 +11218,32 @@ class RuntimeBridge:
             conversation_id=str(conversation_id or "").strip(),
         )
         prompt_context, retrieval_metadata = _shared_brain_prompt_context(enriched_data)
+        # world_signals köprüsü: backend digest'i (takvim/konum/sağlık işaretleri)
+        # profil ya da arama yükünde geliyorsa state'e yazılır; durumsal bağlam
+        # katmanı (situational_context) oradan okur. Sinyal yoksa hiçbir şey
+        # yazılmaz — uydurma bağlam üretilmez.
+        self._absorb_world_signals(profile_data, search_result.data)
         return prompt_context, {**metadata, **retrieval_metadata}, profile_data
+
+    @staticmethod
+    def _absorb_world_signals(*payloads: Any) -> None:
+        """Backend yüklerindeki world_signals digest'ini runtime state'e taşır."""
+        signals: list[dict[str, Any]] = []
+        for payload in payloads:
+            if not isinstance(payload, dict):
+                continue
+            for key in ("worldSignals", "world_signals"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    signals.extend(
+                        item for item in value if isinstance(item, dict)
+                    )
+        if not signals:
+            return
+        try:
+            STATE.update_state({"runtime": {"worldSignals": signals[:24]}})
+        except Exception:
+            pass
 
     def _augment_retrieval_if_insufficient(
         self,

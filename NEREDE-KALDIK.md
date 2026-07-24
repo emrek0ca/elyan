@@ -187,6 +187,44 @@ karar çağrılarında token tabanı yeterli tutulmalı.
 
 ---
 
+## 4.6 CANLILIK + İSRAF KESME (2026-07-25, son tur)
+
+**İsraf kesildi, SONRA bütçe artırıldı** (sıra önemliydi):
+- Katalog kısaltma: her turda ~80 araç yerine hedefe göre 8-15 (~%90 tasarruf),
+  `capability_shortlist` üzerinden. **Tuzak:** kısa liste terminal araçlarını
+  içermiyordu → P1'i sessizce öldürecekti; yazılım/terminal keyword grubu eklendi.
+- Bütçe: adım 24→**32**, süre 900s→**1200s**.
+- Token tabanı: ajan karar çağrılarında düşük `max_tokens` → `json_validate_failed`
+  (bilinen reasoning tuzağı). Tabanı yüksek tut.
+
+**Durumsal bağlam füzyonu** — `runtime/situational_context.py` (YENİ)
+"Robot hissi"nin teknik kaynağı: takvim/konum/aktif uygulama/son dosyalar
+sinyalleri vardı ama anlama katmanına HİÇ ulaşmıyordu; Elyan bilebileceğini
+soruyordu. Şimdi:
+- `gather_situation()` → sınırlanmış durum özeti
+- `derive_defaults()` → soru yerine varsayım (başlık = yaklaşan toplantı)
+- `liveness_cues()` → uydurma samimiyet değil, doğrulanabilir gerçek
+  ("Yatırımcı sunumu için 30 dakikan var")
+
+**Bağlantılar (hepsi canlı):**
+| Hat | Nerede |
+|---|---|
+| Durum → niyet çözümü | `intent_gate.understand` → `understanding.analyze` |
+| Durum → belge başlığı | `bridge._execute_step_with_telemetry` (tek huni: router + ajan) |
+| Backend digest → state | `bridge._absorb_world_signals` |
+
+**Değişmez kurallar (bozma):** kullanıcının verdiği başlık asla ezilmez; sinyal
+yoksa alan üretilmez (uydurma yok); hassas sinyal (sağlık/kesin konum) ham
+taşınmaz, yalnız kaba "yoğun gün" işareti üretir. Türetilmiş başlık
+`_titleSource` ile denetlenebilir.
+
+**Açık kalan:** backend `worldSignals` digest'i şu an sohbet bağlamında üretiliyor;
+desktop tarafı hazır (`_absorb_world_signals` profil/arama yükünden okur) ama
+backend'in bu digest'i o yüklere KOYDUĞU doğrulanmadı. Sağlık/konum canlılığı
+bu doğrulanana kadar yalnız takvim tabanlı çalışır.
+
+---
+
 ## 5. AÇIK SORUNLAR
 
 1. **57 baseline test hatası (tüm suite)** — bende değil, önceden vardı. Çoğu
