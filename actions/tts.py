@@ -15,6 +15,7 @@ _LOCK = threading.RLock()
 _ACTIVE_PROCESS: subprocess.Popen[str] | None = None
 _ACTIVE_PROVIDER = ""
 _MACOS_DEFAULT_VOICE = "Yelda"
+_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 
 def _tts_root() -> Path:
@@ -52,6 +53,23 @@ def _preferred_provider(voice: str = "") -> str:
     if _say_available():
         return "say"
     return ""
+
+
+def _cloud_tts_enabled(explicit: bool = False) -> bool:
+    value = str(os.environ.get("ELYAN_CLOUD_TTS_ENABLED", "") or "").strip().lower()
+    return explicit or value in {"1", "true", "yes", "on"}
+
+
+def _openai_api_key() -> str:
+    return str(os.environ.get("OPENAI_API_KEY", "") or "").split(",")[0].strip()
+
+
+def _openai_base_url() -> str:
+    return str(os.environ.get("OPENAI_BASE_URL", _OPENAI_BASE_URL) or _OPENAI_BASE_URL).rstrip("/")
+
+
+def _openai_tts_model() -> str:
+    return str(os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts") or "gpt-4o-mini-tts")
 
 
 def _stop_active_playback() -> None:
@@ -219,17 +237,86 @@ def _run_say(text: str, language_hint: str, voice: str) -> str:
     return "say"
 
 
+def _run_openai_tts(text: str, voice: str, instructions: str = "", cloud_allowed: bool = False) -> Path:
+    api_key = _openai_api_key()
+    if not api_key:
+        raise SafeCapabilityError("CLOUD_TTS_UNAVAILABLE", "Bulut ses sentezi anahtarı yapılandırılmamış.")
+    if not _cloud_tts_enabled(cloud_allowed):
+        raise SafeCapabilityError("CLOUD_TTS_PERMISSION_REQUIRED", "Bulut ses sentezi için açık izin gerekli.")
+    try:
+        import requests
+    except ModuleNotFoundError as exc:
+        raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "Bulut ses sentezi istemcisi hazır değil.") from exc
+
+    directory = _tts_root()
+    directory.mkdir(parents=True, exist_ok=True)
+    audio_path = directory / f"tts_{uuid.uuid4().hex[:10]}.mp3"
+    payload = {
+        "model": _openai_tts_model(),
+        "voice": str(voice or "").strip() or "marin",
+        "input": text,
+    }
+    if instructions.strip():
+        payload["instructions"] = instructions.strip()[:800]
+    response = requests.post(
+        f"{_openai_base_url()}/audio/speech",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=120,
+    )
+    if response.status_code >= 400:
+        raise SafeCapabilityError("CLOUD_TTS_FAILED", "Bulut ses sentezi tamamlanamadı.")
+    audio_path.write_bytes(response.content)
+    _cleanup_old_audio_files()
+    return audio_path
+
+
 def text_to_speech(
     text: str,
     language_hint: str = "tr",
     voice: str = "",
     interrupt: bool = False,
+    provider: str = "local",
+    cloud_allowed: bool = False,
+    instructions: str = "",
 ) -> dict[str, Any]:
     payload = _truncate_text(text)
     if not payload:
         raise SafeCapabilityError("INVALID_ARGUMENT", "Okunacak metin gerekli.")
     if interrupt:
         _stop_active_playback()
+
+    provider_family = str(provider or "local").strip().lower()
+    if provider_family == "openai":
+        if not _cloud_tts_enabled(cloud_allowed):
+            raise SafeCapabilityError("CLOUD_TTS_PERMISSION_REQUIRED", "Bulut ses sentezi için açık izin gerekli.")
+        audio_path = _run_openai_tts(payload, voice, instructions, cloud_allowed)
+        return {
+            "text": "Ses dosyası hazırlandı.",
+            "result": {
+                "kind": "text_to_speech",
+                "spoken": False,
+                "providerFamily": "openai",
+                "model": _openai_tts_model(),
+                "voice": voice.strip() or "marin",
+                "audioPath": str(audio_path),
+                "durationMs": 0,
+                "artifacts": [
+                    {
+                        "kind": "audio",
+                        "path": str(audio_path),
+                        "contentType": "audio/mpeg",
+                    }
+                ],
+            },
+            "artifacts": [
+                {
+                    "kind": "audio",
+                    "path": str(audio_path),
+                    "contentType": "audio/mpeg",
+                }
+            ],
+        }
 
     provider = _preferred_provider(voice)
     if not provider:
@@ -252,8 +339,11 @@ def text_to_speech(
         "result": {
             "kind": "text_to_speech",
             "spoken": True,
+            "providerFamily": "local",
             "provider": used_provider,
             "voice": voice.strip() or (_macos_voice(language_hint, voice) if used_provider == "say" else ""),
+            "durationMs": 0,
+            "artifacts": [],
         },
         "artifacts": [],
     }

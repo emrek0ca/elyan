@@ -116,23 +116,23 @@ def ensure_allowed_output_path(
     desktop_resolver=None,
 ) -> Path:
     """Çıktı yolunu çözer. Kullanıcı AÇIK bir yol verdiyse (``~``, ``/``, ``C:\\``)
-    oraya yazılır. Aksi halde VARSAYILAN olarak masaüstüne kaydedilir (tüm OS).
-    Açık olmayan göreli adlar güvenlik için masaüstü ya da çalışma alanı
-    köküyle sınırlıdır (dizin dışına taşma engellenir)."""
+    oraya yazılır. Göreli yollar çalışma alanı köküne çözülür; hedef verilmezse
+    çalışma alanındaki ``elyan_output`` klasörüne güvenli bir ad üretilir."""
     suffix = extension.lower() if extension.startswith(".") else f".{extension.lower()}"
     candidate = str(raw_path or "").strip()
-    default_base = (desktop_resolver or desktop_dir)()
+    workspace_base = root_resolver().resolve()
+    default_base = output_root(root_resolver).resolve()
     if candidate:
         resolved = Path(candidate).expanduser()
         if not resolved.suffix:
             resolved = resolved.with_suffix(suffix)
         if not resolved.is_absolute():
-            # Açık olmayan göreli ad artık VARSAYILAN olarak masaüstüne çözülür.
-            resolved = (default_base / resolved).resolve()
+            resolved = (workspace_base / resolved).resolve()
         else:
             resolved = resolved.resolve()
         if not is_explicit_path_value(candidate):
-            allowed_roots = [default_base.resolve(), root_resolver().resolve()]
+            desktop_base = (desktop_resolver or desktop_dir)().resolve()
+            allowed_roots = [workspace_base, default_base, desktop_base]
             if not any(_is_within(resolved, root) for root in allowed_roots):
                 raise SafeCapabilityError(
                     "ACCESS_DENIED",

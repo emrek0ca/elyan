@@ -704,12 +704,42 @@ def quantum_run_experiment(
         experiment["optimizerEvaluations"] = aer_result.get("optimizerEvaluations")
         experiment["parameters"] = aer_result.get("parameters")
         experiment["circuit"] = aer_result.get("circuit")
+    classical_best = _best_feasible_solution(qubo)
+    classical_baseline = {
+        "bestBitstring": classical_best["bitstring"],
+        "bestEnergy": classical_best["energy"],
+        "bestAssignment": classical_best["assignment"],
+        "feasible": not _constraint_violations(qubo, classical_best["assignment"]),
+        "utility": _solution_utility(qubo, classical_best["assignment"]),
+    }
+    run_metrics = {
+        "classicalBestBitstring": classical_best["bitstring"],
+        "classicalBestEnergy": classical_best["energy"],
+        "experimentBestEnergy": best["energy"],
+        "optimalityGap": float(best["energy"]) - float(classical_best["energy"]),
+        "solutionCount": len(_enumerate_solutions(qubo)),
+        "feasible": not constraint_violations,
+        "constraintViolations": constraint_violations,
+        "utility": _solution_utility(qubo, best["assignment"]),
+        "reproducible": True,
+    }
+    attestation = _quantum_benchmark_attestation(
+        qubo=qubo,
+        experiment=experiment,
+        metrics=run_metrics,
+    )
     status = "simulated" if aer_result else "classical_fallback"
     return {
         "text": f"{normalized_algorithm.upper()} çözüm adımı tamamlandı. En iyi bitstring: {best['bitstring']}, enerji: {best['energy']:.3f}.",
         "result": {
+            "kind": "quantum_report",
             "model": {"qubo": qubo},
+            "run": experiment,
             "experiment": experiment,
+            "classicalBaseline": classical_baseline,
+            "metrics": run_metrics,
+            "quantumBenchmarkAttestation": attestation,
+            "fallbackReason": fallback_reason,
             "quantum": _quantum_snapshot(status, fallback_reason, abs(float(best["energy"])), str(qubo.get("problemClass") or "optimization")),
         },
         "artifacts": [],
@@ -745,10 +775,20 @@ def quantum_compare_classical(prompt: str, _previousResult: dict[str, Any] | Non
     return {
         "text": f"Klasik baseline tamamlandı. Optimum enerji: {best['energy']:.3f}, gap: {gap:.3f}.",
         "result": {
+            "kind": "quantum_report",
             "model": {"qubo": qubo},
+            "run": experiment,
             "experiment": experiment,
+            "classicalBaseline": {
+                "bestBitstring": best["bitstring"],
+                "bestEnergy": best["energy"],
+                "bestAssignment": best["assignment"],
+                "feasible": not _constraint_violations(qubo, best["assignment"]),
+                "utility": _solution_utility(qubo, best["assignment"]),
+            },
             "metrics": metrics,
             "quantumBenchmarkAttestation": attestation,
+            "fallbackReason": experiment.get("fallbackReason"),
             "quantum": _quantum_snapshot("benchmarked", experiment.get("fallbackReason"), 1.0 / (1.0 + abs(gap)), str(qubo.get("problemClass") or "optimization")),
         },
         "artifacts": [],
@@ -823,6 +863,15 @@ def quantum_generate_report(
         "text": "Quantum deney raporu hazırlandı.",
         "result": {
             "kind": "quantum_report",
+            "model": {"qubo": qubo, "decisionModel": decision_model},
+            "run": experiment,
+            "classicalBaseline": {
+                "bestBitstring": metrics.get("classicalBestBitstring"),
+                "bestEnergy": metrics.get("classicalBestEnergy"),
+                "feasible": metrics.get("feasible", True),
+                "utility": metrics.get("utility"),
+            },
+            "fallbackReason": experiment.get("fallbackReason"),
             "quantum": quantum,
             "decisionModel": decision_model,
             "report": report,

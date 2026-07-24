@@ -2954,6 +2954,8 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             session_id=str(args.get("sessionId", "") or args.get("session_id", "") or ""),
             language_hint=str(args.get("languageHint", "") or args.get("language_hint", "") or ""),
             task_id=str(args.get("taskId", "") or args.get("task_id", "") or ""),
+            provider=str(args.get("provider", "") or args.get("providerFamily", "") or "local"),
+            cloud_allowed=bool(args.get("cloudAllowed", False) or args.get("cloud_allowed", False)),
             _selectedPaths=list(args.get("_selectedPaths", []) or []),
         ),
         "text_to_speech": lambda args: _load_adapter("text_to_speech")(
@@ -2961,6 +2963,9 @@ def _handlers() -> dict[str, Callable[[dict[str, Any]], str]]:
             str(args.get("languageHint", "") or args.get("language_hint", "") or ""),
             str(args.get("voice", "") or ""),
             bool(args.get("interrupt", False)),
+            str(args.get("provider", "") or args.get("providerFamily", "") or "local"),
+            bool(args.get("cloudAllowed", False) or args.get("cloud_allowed", False)),
+            str(args.get("instructions", "") or ""),
         ),
         "mcp_call_tool": _run_mcp_call_tool,
         "desktop_os.status": lambda args: _load_adapter("desktop_os_status")(),

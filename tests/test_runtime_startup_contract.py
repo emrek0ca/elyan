@@ -425,27 +425,30 @@ def test_analyze_screen_defers_to_os_permission_not_internal_flag(
     de bloklanıyordu."""
     _isolate_state(monkeypatch, tmp_path)
     import actions.screen_vision as screen_vision
+    from actions import desktop_operator
     import runtime.capability_registry as registry
 
     image_path = tmp_path / "screen.png"
     image_path.write_bytes(_ONE_PIXEL_PNG)
-    helper_payload = json.dumps(
-        {
-            "ok": True,
-            "image_path": str(image_path),
-            "owner_name": "Finder",
-            "window_title": "Desktop",
-        }
-    )
     invoked = False
 
-    def fake_run_helper(*args: object, **kwargs: object) -> tuple[bool, str]:
+    def fake_observe_screen(*args: object, **kwargs: object) -> dict[str, object]:
         nonlocal invoked
         invoked = True
-        return True, helper_payload
+        return {
+            "text": "Ekran gozlemi hazir.",
+            "result": {
+                "observation": {
+                    "screenshotPath": str(image_path),
+                    "activeApp": "Finder",
+                    "activeWindow": "Desktop",
+                }
+            },
+        }
 
-    monkeypatch.setattr(screen_vision, "_run_helper", fake_run_helper)
+    monkeypatch.setattr(desktop_operator, "observe_screen", fake_observe_screen)
     monkeypatch.setattr(screen_vision, "_image_looks_blank", lambda _path: False)
+    monkeypatch.setattr(screen_vision, "_analyze_with_gemini", lambda *_args, **_kwargs: "Ekran okunabildi.")
 
     # İç flag KAPALI, tehlikeli alan KAPALI — yine de yardımcı çalışmalı.
     result = registry.run_capability(
@@ -468,20 +471,25 @@ def test_analyze_screen_missing_api_key_returns_safe_message(
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     import actions.screen_vision as screen_vision
+    from actions import desktop_operator
     import runtime.capability_registry as registry
 
     image_path = tmp_path / "screen.png"
     image_path.write_bytes(_ONE_PIXEL_PNG)
-
-    helper_payload = json.dumps(
-        {
-            "ok": True,
-            "image_path": str(image_path),
-            "owner_name": "Finder",
-            "window_title": "Desktop",
-        }
+    monkeypatch.setattr(
+        desktop_operator,
+        "observe_screen",
+        lambda *_args, **_kwargs: {
+            "text": "Ekran gozlemi hazir.",
+            "result": {
+                "observation": {
+                    "screenshotPath": str(image_path),
+                    "activeApp": "Finder",
+                    "activeWindow": "Desktop",
+                }
+            },
+        },
     )
-    monkeypatch.setattr(screen_vision, "_run_helper", lambda *_args, **_kwargs: (True, helper_payload))
     monkeypatch.setattr(screen_vision, "_image_looks_blank", lambda _path: False)
     monkeypatch.setattr(screen_vision, "get_app_config_value", lambda key, default="": "" if key == "gemini_api_key" else default)
     monkeypatch.setattr(screen_vision, "genai", object())
@@ -1549,6 +1557,111 @@ def test_speech_to_text_allows_selected_external_audio_path(
 
     assert result["ok"] is True
     assert result["result"]["audioPath"] == str(file_path.resolve())
+    assert result["result"]["providerFamily"] == "local"
+
+
+def test_speech_to_text_requires_explicit_cloud_permission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.speech as speech
+    import runtime.capability_registry as registry
+
+    file_path = tmp_path / "meeting.wav"
+    file_path.write_bytes(b"RIFF")
+    monkeypatch.setattr(speech, "_workspace_root", lambda: tmp_path)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+
+    result = registry.run_capability(
+        "speech_to_text",
+        {"audioPath": str(file_path), "provider": "groq-fast"},
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "CLOUD_SPEECH_PERMISSION_REQUIRED"
+
+
+def test_speech_to_text_uses_groq_cloud_adapter_when_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.speech as speech
+    import runtime.capability_registry as registry
+
+    file_path = tmp_path / "meeting.wav"
+    file_path.write_bytes(b"RIFF")
+    monkeypatch.setattr(speech, "_workspace_root", lambda: tmp_path)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+
+    def fake_cloud(path: Path, provider: str, language_hint: str):
+        assert path == file_path.resolve()
+        assert provider == "groq-fast"
+        assert language_hint == "tr"
+        return (
+            "Merhaba",
+            "tr",
+            900,
+            [{"start": 0.0, "end": 0.9, "text": "Merhaba"}],
+            [],
+            "whisper-large-v3-turbo",
+        )
+
+    monkeypatch.setattr(speech, "_transcribe_cloud", fake_cloud)
+    result = registry.run_capability(
+        "speech_to_text",
+        {
+            "audioPath": str(file_path),
+            "provider": "groq-fast",
+            "cloudAllowed": True,
+        },
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["text"] == "Merhaba"
+    assert result["result"]["providerFamily"] == "groq"
+    assert result["result"]["model"] == "whisper-large-v3-turbo"
+
+
+def test_text_to_speech_uses_openai_cloud_adapter_when_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    import actions.tts as tts
+    import runtime.capability_registry as registry
+
+    audio_path = tmp_path / "tts.mp3"
+    audio_path.write_bytes(b"mp3")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(tts, "_run_openai_tts", lambda *_args, **_kwargs: audio_path)
+
+    blocked = registry.run_capability(
+        "text_to_speech",
+        {"text": "Merhaba", "provider": "openai"},
+        state_store.snapshot(),
+    )
+    assert blocked["ok"] is False
+    assert blocked["error"]["code"] == "CLOUD_TTS_PERMISSION_REQUIRED"
+
+    result = registry.run_capability(
+        "text_to_speech",
+        {
+            "text": "Merhaba",
+            "provider": "openai",
+            "cloudAllowed": True,
+            "voice": "marin",
+        },
+        state_store.snapshot(),
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["providerFamily"] == "openai"
+    assert result["result"]["audioPath"] == str(audio_path)
+    assert result["result"]["artifacts"][0]["contentType"] == "audio/mpeg"
 
 
 def test_math_solve_factor_and_evaluate(
@@ -1660,6 +1773,12 @@ def test_quantum_run_experiment_uses_qiskit_aer_when_available(
     assert payload["circuit"]["qubits"] == 3
     assert payload["bestBitstring"] == "011"
     assert payload["bestAssignment"] == {"x1": 0, "x2": 1, "x3": 1}
+    assert experiment["result"]["kind"] == "quantum_report"
+    assert experiment["result"]["run"]["backend"] == "qiskit_aer_qaoa_simulator"
+    assert experiment["result"]["classicalBaseline"]["bestBitstring"] == "011"
+    run_attestation = experiment["result"]["quantumBenchmarkAttestation"]
+    assert run_attestation["version"] == "elyan_quantum_benchmark_v1"
+    assert run_attestation["backend"] == "qiskit_aer_qaoa_simulator"
 
     baseline = registry.run_capability(
         "quantum_compare_classical",

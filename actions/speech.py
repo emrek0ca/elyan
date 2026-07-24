@@ -19,6 +19,8 @@ _CHANNELS = 1
 _MAX_DURATION_SECONDS = 45
 _DEFAULT_LANGUAGE = "tr"
 _DEFAULT_MODEL = "base"
+_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+_OPENAI_BASE_URL = "https://api.openai.com/v1"
 _AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".mp4", ".mpeg", ".webm"}
 _MAX_CAPTURE_HISTORY = 12
 
@@ -61,6 +63,42 @@ def _soundfile_module() -> Any:
 
 def _stt_model_name() -> str:
     return str(os.environ.get("ELYAN_FASTER_WHISPER_MODEL", _DEFAULT_MODEL) or _DEFAULT_MODEL)
+
+
+def _cloud_speech_enabled(explicit: bool = False) -> bool:
+    value = str(os.environ.get("ELYAN_CLOUD_SPEECH_ENABLED", "") or "").strip().lower()
+    return explicit or value in {"1", "true", "yes", "on"}
+
+
+def _provider_family(provider: str) -> str:
+    normalized = str(provider or "local").strip().lower().replace("_", "-")
+    if normalized in {"groq", "groq-fast", "groq-accurate"}:
+        return "groq"
+    if normalized in {"openai", "openai-diarize", "diarize"}:
+        return "openai"
+    return "local"
+
+
+def _cloud_model(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized == "groq-accurate":
+        return str(os.environ.get("GROQ_TRANSCRIBE_ACCURATE_MODEL", "whisper-large-v3") or "whisper-large-v3")
+    if normalized.startswith("groq"):
+        return str(os.environ.get("GROQ_TRANSCRIBE_FAST_MODEL", "whisper-large-v3-turbo") or "whisper-large-v3-turbo")
+    if normalized in {"openai-diarize", "diarize"}:
+        return str(os.environ.get("OPENAI_TRANSCRIBE_DIARIZE_MODEL", "gpt-4o-transcribe-diarize") or "gpt-4o-transcribe-diarize")
+    return str(os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-transcribe") or "gpt-4o-transcribe")
+
+
+def _cloud_base_url(provider_family: str) -> str:
+    if provider_family == "groq":
+        return str(os.environ.get("GROQ_BASE_URL", _GROQ_BASE_URL) or _GROQ_BASE_URL).rstrip("/")
+    return str(os.environ.get("OPENAI_BASE_URL", _OPENAI_BASE_URL) or _OPENAI_BASE_URL).rstrip("/")
+
+
+def _cloud_api_key(provider_family: str) -> str:
+    name = "GROQ_API_KEY" if provider_family == "groq" else "OPENAI_API_KEY"
+    return str(os.environ.get(name, "") or "").split(",")[0].strip()
 
 
 @lru_cache(maxsize=1)
@@ -354,15 +392,84 @@ def _transcribe_audio(path: Path, language_hint: str) -> tuple[str, str, int, li
     return transcript, detected_language, duration_ms, chunk_list
 
 
+def _normalize_cloud_segments(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    segments: list[dict[str, Any]] = []
+    speakers: list[dict[str, Any]] = []
+    raw_segments = payload.get("segments")
+    if isinstance(raw_segments, list):
+        for item in raw_segments:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text", "") or "").strip()
+            if not text:
+                continue
+            segment = {
+                "start": round(float(item.get("start", 0.0) or 0.0), 2),
+                "end": round(float(item.get("end", 0.0) or 0.0), 2),
+                "text": text,
+            }
+            speaker = str(item.get("speaker", "") or item.get("speaker_label", "") or "").strip()
+            if speaker:
+                segment["speaker"] = speaker
+                speakers.append({"id": speaker, "label": speaker})
+            segments.append(segment)
+    return segments, list({str(item["id"]): item for item in speakers}.values())
+
+
+def _transcribe_cloud(path: Path, provider: str, language_hint: str) -> tuple[str, str, int, list[dict[str, Any]], list[dict[str, Any]], str]:
+    family = _provider_family(provider)
+    api_key = _cloud_api_key(family)
+    if not api_key:
+        raise SafeCapabilityError("CLOUD_SPEECH_UNAVAILABLE", "Bulut transkripsiyon anahtarı yapılandırılmamış.")
+    try:
+        import requests
+    except ModuleNotFoundError as exc:
+        raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "Bulut transkripsiyon istemcisi hazır değil.") from exc
+    model = _cloud_model(provider)
+    data = {
+        "model": model,
+        "response_format": "verbose_json",
+    }
+    language = str(language_hint or "").strip()
+    if language:
+        data["language"] = language.split("_")[0].split("-")[0]
+    if model == "gpt-4o-transcribe-diarize":
+        data["chunking_strategy"] = "auto"
+    with path.open("rb") as handle:
+        response = requests.post(
+            f"{_cloud_base_url(family)}/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            data=data,
+            files={"file": (path.name, handle)},
+            timeout=120,
+        )
+    if response.status_code >= 400:
+        raise SafeCapabilityError("CLOUD_TRANSCRIPTION_FAILED", "Bulut transkripsiyon tamamlanamadı.")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise SafeCapabilityError("CLOUD_TRANSCRIPTION_FAILED", "Bulut transkripsiyon yanıtı okunamadı.") from exc
+    transcript = str(payload.get("text", "") or "").strip()
+    if not transcript:
+        raise SafeCapabilityError("EMPTY_TRANSCRIPT", "Ses kaydından metin çıkarılamadı.")
+    segments, speakers = _normalize_cloud_segments(payload)
+    duration_ms = int(round(float(payload.get("duration", 0.0) or 0.0) * 1000))
+    detected_language = str(payload.get("language", "") or language_hint or _DEFAULT_LANGUAGE)
+    return transcript, detected_language, duration_ms, segments, speakers, model
+
+
 def speech_to_text(
     audio_path: str = "",
     session_id: str = "",
     language_hint: str = _DEFAULT_LANGUAGE,
     task_id: str = "",
+    provider: str = "local",
+    cloud_allowed: bool = False,
     _selectedPaths: list[str] | None = None,
 ) -> dict[str, Any]:
     del task_id
-    if not _stt_dependencies_available():
+    provider_family = _provider_family(provider)
+    if provider_family == "local" and not _stt_dependencies_available():
         _set_last_error("DEPENDENCY_UNAVAILABLE")
         raise SafeCapabilityError("DEPENDENCY_UNAVAILABLE", "Bu özellik bu kurulumda hazır değil.")
     if str(session_id or "").strip():
@@ -387,10 +494,21 @@ def speech_to_text(
                 raise SafeCapabilityError("ACCESS_DENIED", "Dosya yalnızca seçilmiş hedef veya izinli çalışma alanı içinden okunabilir.") from exc
             resolved = candidate
     try:
-        transcript, detected_language, duration_ms, segments = _transcribe_audio(
-            resolved,
-            str(language_hint or _DEFAULT_LANGUAGE).strip() or _DEFAULT_LANGUAGE,
-        )
+        if provider_family == "local":
+            transcript, detected_language, duration_ms, segments = _transcribe_audio(
+                resolved,
+                str(language_hint or _DEFAULT_LANGUAGE).strip() or _DEFAULT_LANGUAGE,
+            )
+            speakers: list[dict[str, Any]] = []
+            model_name = _stt_model_name()
+        else:
+            if not _cloud_speech_enabled(cloud_allowed):
+                raise SafeCapabilityError("CLOUD_SPEECH_PERMISSION_REQUIRED", "Bulut transkripsiyon için açık izin gerekli.")
+            transcript, detected_language, duration_ms, segments, speakers, model_name = _transcribe_cloud(
+                resolved,
+                provider,
+                str(language_hint or _DEFAULT_LANGUAGE).strip() or _DEFAULT_LANGUAGE,
+            )
     except Exception as exc:
         code = str(getattr(exc, "code", "") or "").strip()
         if code:
@@ -409,9 +527,12 @@ def speech_to_text(
             "language": detected_language,
             "durationMs": duration_ms,
             "segments": segments,
+            "speakers": speakers,
             "audioPath": str(resolved),
             "sessionId": str(session_id or "").strip(),
-            "model": _stt_model_name(),
+            "providerFamily": provider_family,
+            "model": model_name,
+            "artifacts": [],
         },
         "artifacts": [],
     }
@@ -424,6 +545,7 @@ def speech_runtime_status() -> dict[str, Any]:
         "recording": capture["status"] == "recording",
         "captureSessionId": capture["sessionId"],
         "transcriptionModel": _stt_model_name(),
+        "cloudTranscriptionAvailable": bool(_cloud_api_key("groq") or _cloud_api_key("openai")),
         "ttsProvider": "",
         "lastErrorCode": _LAST_ERROR_CODE,
     }
