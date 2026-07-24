@@ -10086,6 +10086,9 @@ class RuntimeBridge:
             send_prompt=_understanding_transport,
             dispatch_active=bool(_ACTIVE_DISPATCH_SESSION_ID.get("")),
             has_pending_plan=bool(active_plan_id if isinstance(active_plan, dict) else ""),
+            # Durumsal sinyaller (takvim/konum/aktif uygulama/son dosyalar):
+            # niyet bunlarla çözülür → bariz sorular sorulmaz, canlı his artar.
+            state=STATE.snapshot(),
         )
         # P0.5 KAPSAM — iki kademeli:
         #  (a) ÖN ALMA: router yanlış yeteneğe düşürdüyse (mismatch) semantik

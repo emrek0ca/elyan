@@ -204,6 +204,8 @@ def understand(
     dispatch_active: bool = False,
     has_pending_plan: bool = False,
     recent_turns: list[str] | None = None,
+    state: dict | None = None,
+    calendar_events: list | None = None,
 ):
     """Semantik anlama (birincil) + desen tabanlı yedek.
 
@@ -233,11 +235,24 @@ def understand(
             signals=[decision.reason],
         )
 
+    # Durumsal bağlam: takvim/konum/aktif uygulama. Niyeti bununla çözmek,
+    # "hangi toplantı?" gibi bariz soruları ortadan kaldırır.
+    situational: dict | None = None
+    try:
+        from runtime.situational_context import gather_situation
+
+        moment = gather_situation(state, calendar_events=calendar_events)
+        if not moment.is_empty:
+            situational = moment.to_prompt_context()
+    except Exception:
+        situational = None
+
     return understanding_module.analyze(
         text,
         send_prompt=send_prompt,
         dispatch_active=dispatch_active,
         has_pending_plan=has_pending_plan,
         recent_turns=recent_turns,
+        situational_context=situational,
         fallback=_pattern_fallback,
     )

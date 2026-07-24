@@ -117,7 +117,13 @@ _SYSTEM_CONTRACT = (
     "3) deliverables: kullanıcının elinde ne kalmalı (ör. 'masaüstünde rapor.docx').\n"
     "4) missingInformation: iş için ŞART olan ama verilmemiş bilgiler.\n"
     "5) risk: low|medium|high — geri alınamaz/dışa gönderim/silme varsa yüksek.\n"
-    "6) SADECE tek JSON nesnesi döndür."
+    "6) DURUMU KULLAN. 'currentSituation' verildiyse (takvim, konum, aktif uygulama, "
+    "son dosyalar) niyeti onunla çöz: 'toplantı notu hazırla' derken hangi toplantı "
+    "olduğunu takvim söyler. Bağlamdan çıkarılabilecek şeyi missingInformation'a YAZMA — "
+    "iyi bir asistan bariz olanı sormaz, makul varsayar. Yalnız GERÇEKTEN belirsiz ve "
+    "kritik olanı sor (ör. kime gönderilecek).\n"
+    "7) Varsayımların sinyale DAYANSIN. Durum verisi yoksa uydurma; sessizce genel kal.\n"
+    "8) SADECE tek JSON nesnesi döndür."
 )
 
 _SCHEMA_HINT = (
@@ -134,12 +140,18 @@ def build_understanding_prompt(
     dispatch_active: bool = False,
     has_pending_plan: bool = False,
     recent_turns: list[str] | None = None,
+    situational_context: dict[str, Any] | None = None,
 ) -> str:
     situation: dict[str, Any] = {
         "message": str(text or "")[:2_000],
         "dispatchActive": bool(dispatch_active),
         "hasPendingPlan": bool(has_pending_plan),
     }
+    # DURUMSAL BAĞLAM: takvim/konum/aktif uygulama/son dosyalar. Bunlar niyeti
+    # çözerken kullanılır — "sunum hazırla" derken hangi sunum olduğunu bağlam
+    # söyler. Bariz olanı sormak yerine varsaymayı mümkün kılar.
+    if isinstance(situational_context, dict) and situational_context:
+        situation["currentSituation"] = situational_context
     if recent_turns:
         situation["recentTurns"] = [str(item)[:240] for item in recent_turns[-4:]]
     if dispatch_active:
@@ -213,6 +225,7 @@ def analyze(
     dispatch_active: bool = False,
     has_pending_plan: bool = False,
     recent_turns: list[str] | None = None,
+    situational_context: dict[str, Any] | None = None,
     fallback: Callable[[], SemanticUnderstanding] | None = None,
 ) -> SemanticUnderstanding:
     """Mesajı anlamlandırır.
@@ -227,6 +240,7 @@ def analyze(
             dispatch_active=dispatch_active,
             has_pending_plan=has_pending_plan,
             recent_turns=recent_turns,
+            situational_context=situational_context,
         )
         try:
             raw = send_prompt(prompt)
