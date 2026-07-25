@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 import re
 import sys
 import threading
@@ -102,6 +103,47 @@ def _safe_liveness_guard(value: Any) -> dict[str, Any] | None:
         "metric": "responsive_execution_liveness",
     }
 
+
+def _record_recent_outputs(
+    step_outputs: dict[str, dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+) -> None:
+    """Son üretilenleri (dosya/klasör yolları) duruma yazar.
+
+    Bir sonraki turda "o klasörü sil", "onu paylaş" gibi göndermeler bu kayıttan
+    çözülür. Yol taşımayan çıktılar kaydedilmez — uydurma referans üretmemek
+    için yalnız GERÇEKTEN üretilmiş şeyler tutulur."""
+    entries: list[dict[str, str]] = []
+
+    def _add(path_value: Any, kind: str, name: Any = "") -> None:
+        path = str(path_value or "").strip()
+        if not path or any(item["path"] == path for item in entries):
+            return
+        entries.append(
+            {
+                "path": path,
+                "name": str(name or "").strip() or Path(path).name,
+                "kind": kind,
+            }
+        )
+
+    for item in artifacts or []:
+        if isinstance(item, dict):
+            _add(item.get("path"), str(item.get("kind", "") or "file"), item.get("name"))
+    for payload in (step_outputs or {}).values():
+        if not isinstance(payload, dict):
+            continue
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            continue
+        _add(result.get("path"), str(result.get("kind", "") or "file"))
+        _add(result.get("outputPath"), str(result.get("kind", "") or "file"))
+    if not entries:
+        return
+    try:
+        state_store.update_state({"runtime": {"recentArtifacts": entries[:6]}})
+    except Exception:  # pragma: no cover - süreklilik kaydı yürütmeyi düşürmesin
+        pass
 
 def _user_facing_execution_summary(
     outputs: list[str],
@@ -2159,6 +2201,12 @@ class ExecutorCore:
                     return cancelled_result(cancel_reason)
 
             summary = _user_facing_execution_summary(outputs, step_outputs)
+            # SÜREKLİLİK: ne ürettiğimizi hatırla. Canlı arıza: "Masaüstüne yeni
+            # klasör oluştur" çalıştı, ardından "sil geri o klasörü" dendiğinde
+            # sistem "o klasör"ün ne olduğunu bilemedi — üretilen hiçbir şey
+            # kaydedilmiyordu (recentArtifacts hep null). Durumsal bağlam katmanı
+            # bu alanı zaten OKUYORdu; yazan yoktu.
+            _record_recent_outputs(step_outputs, artifacts)
             self.record_stage(execution_id, "finalize", detail=summary, status="completed")
             self._set_stop_reason(execution_id, "completed")
             self.finish_execution(execution_id, ok=True, detail=summary)

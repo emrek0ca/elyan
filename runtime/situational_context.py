@@ -64,6 +64,9 @@ class SituationalContext:
     location_hint: str = ""
     active_app: str = ""
     recent_artifacts: list[str] = field(default_factory=list)
+    # Son üretilenler (ad + yol). Göndermeleri ("o klasör", "onu sil") eyleme
+    # çevirebilmek için yol şarttır.
+    recent_outputs: list[dict[str, str]] = field(default_factory=list)
     load_hint: str = ""  # "yoğun" | "sakin" | "" (hassas veriden TÜRETİLMİŞ)
     signal_kinds: list[str] = field(default_factory=list)
 
@@ -99,7 +102,11 @@ class SituationalContext:
             payload["location"] = self.location_hint
         if self.active_app:
             payload["activeApp"] = self.active_app
-        if self.recent_artifacts:
+        if self.recent_outputs:
+            # Model bunlara "o dosya/klasör" diye gönderme yapılırsa doğrudan
+            # kullanabilsin.
+            payload["recentOutputs"] = self.recent_outputs[:4]
+        elif self.recent_artifacts:
             payload["recentFiles"] = self.recent_artifacts[:4]
         if self.load_hint:
             payload["dayLoad"] = self.load_hint
@@ -184,9 +191,21 @@ def gather_situation(
     situation.active_app = _clip(active.get("app") or active.get("name"), 60)
     artifacts = runtime.get("recentArtifacts")
     if isinstance(artifacts, list):
+        # Ad + YOL birlikte taşınır: "o klasörü sil" gibi göndermeler ancak yol
+        # bilinirse eyleme çevrilebilir. Yalnız ad verilirse model hedefi tahmin
+        # etmek zorunda kalır ve yanlış yeri siler.
         situation.recent_artifacts = [
             _clip(item.get("name") if isinstance(item, dict) else item, 80)
             for item in artifacts[:4]
+        ]
+        situation.recent_outputs = [
+            {
+                "name": _clip(item.get("name"), 80),
+                "path": _clip(item.get("path"), 240),
+                "kind": _clip(item.get("kind"), 24),
+            }
+            for item in artifacts[:4]
+            if isinstance(item, dict) and str(item.get("path", "") or "").strip()
         ]
     return situation
 
