@@ -267,6 +267,42 @@ düzeltmek" yanlış katman olur.
 
 ---
 
+## 4.8 ⚑ BİR HAFTALIK TIKANIKLIĞIN KÖK NEDENİ — ÇÖZÜLDÜ (2026-07-25)
+
+**Belirti:** mobilden ne yazılsa "İsteğini aldım. Yanıt katmanı bu tur
+tamamlanamadı…" yedek metni geliyordu. Desktop/mobil tarafında yapılan HİÇBİR
+düzeltme fark etmiyordu.
+
+**Kök neden (production logundan):**
+```
+reason: "required_connector_tool_missing"   ← 4 denemenin HEPSİ
+attemptedModels: [gpt-oss-120b ×2, gpt-oss-20b ×2] → hepsi reddedildi
+→ "shared brain inference unavailable" → continuity fallback
+```
+`requiredConnectorReadHint.enforcement === "require"` iken model connector
+çağırmazsa cevap geçersiz sayılıyordu. "Zaman yönetimi için 30 maddelik kontrol
+listesi yaz" gibi DÜZ bir yazma isteğinde model haklı olarak connector
+çağırmıyor, geçerli cevabını üretiyor — ve o cevap dört kez çöpe atılıp
+sağlayıcı zinciri tükeniyordu.
+
+**Düzeltme** (`b3fc21ca`, `inference.ts` — streaming + non-streaming iki yol):
+zorlama artık YALNIZ ilk denemede (`retryIndex === 0`). Aracı bir kez teşvik et,
+sonra dürüst cevabı teslim et.
+
+**KORUNAN AYRIM (bozma):** uydurma iddiası (`fabricatedConnectorRead` —
+"mailini okudum" derken aracı çağırmamak) HER denemede reddedilmeye devam eder.
+Fark: *aracı kullanmamak* ile *kullandığını iddia etmek* aynı şey değildir.
+
+**Ders:** istemci tarafında haftalarca düzeltme yapmak, cevabın backend'de
+üretilip çöpe atıldığı bir kapı varken hiçbir şeyi değiştirmiyordu. Belirti
+istemcide, sebep sunucudaydı. **Önce üretim hattının cevabı TESLİM ettiğini
+doğrula, sonra istemciyi iyileştir.**
+
+Doğrulandı: deploy sonrası "30 maddelik kontrol listesi" isteği ekrana doğrudan
+30 maddeyle cevaplandı.
+
+---
+
 ## 5. AÇIK SORUNLAR
 
 1. **57 baseline test hatası (tüm suite)** — bende değil, önceden vardı. Çoğu
