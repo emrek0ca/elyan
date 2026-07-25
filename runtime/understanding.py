@@ -150,8 +150,18 @@ _SYSTEM_CONTRACT = (
     "mesaj, arama+üretim, kod). Gerçek dünyada bir DEĞİŞİKLİK ya da ÜRETİM bekleniyor.\n"
     "  task_control — yürüyen işe müdahale (iptal, onay, durum sorma).\n"
     "  clarify      — iş istiyor ama kritik bilgi eksik (hangi dosya? kime?).\n"
+    "AYRIM İLKESİ (önce bunu uygula):\n"
+    "  Kullanıcı bu turun sonunda ELİNDE BİR ŞEY olmasını mı bekliyor "
+    "(oluşmuş dosya, değişmiş sistem, çalışmış komut, üretilmiş belge/tablo) "
+    "yoksa BİLGİ mi? Elinde bir şey kalacaksa → task. Yalnız bilgi/yorum "
+    "istiyorsa → chat. 'Anlat/açıkla/nedir/nasıl olur' bilgidir; "
+    "'oluştur/sil/çalıştır/derle/kaydet/hazırla' üretimdir.\n"
     "KURALLAR:\n"
-    "1) Emin değilsen 'chat' seç. Yanlışlıkla iş çalıştırmak, gereksiz soru sormaktan pahalıdır.\n"
+    "1) Emin değilsen 'chat' seç — ama bu kural GERÇEK belirsizlik içindir. "
+    "Açık bir emir + somut hedef varsa (ör. tam dosya yolu verilmiş bir silme, "
+    "adı verilmiş bir klasör oluşturma, tabloya dökülmesi istenen bir derleme) "
+    "belirsizlik YOKTUR: 'task' seç. Yıkıcı işi 'chat'e çevirmek onu güvenli "
+    "yapmaz — onay kapısı zaten ayrı katmandadır ve her zaman çalışır.\n"
     "2) entities: somut varlıkları çıkar (file/app/url/person/date/topic). "
     "İşin uygulanacağı şeye role='target' ver.\n"
     "3) deliverables: kullanıcının elinde ne kalmalı (ör. 'masaüstünde rapor.docx').\n"
@@ -167,10 +177,12 @@ _SYSTEM_CONTRACT = (
     "bir iş istenirse 'yapabilirim' deme — eksik izni söyle (intent='chat'). "
     "currentSituation.environment BU MAKİNENİN gerçeğidir: komut/araç "
     "varsayımlarını buna dayandır (olmayan paket yöneticisini önerme).\n"
-    "   currentSituation.selfState verildiyse bu SENİN durumundur: taskRunning "
-    "→ bir görev şu an yürüyor ('ne durumda', 'oldu mu' → task_control); "
-    "lastTask.ok=false → son görev başarısız ('neden olmadı' buna bakar). "
-    "Bilmiyormuş gibi davranma.\n"
+    "   currentSituation.selfState SENİN o anki durumundur. taskRunning=true "
+    "iken kullanıcının ilerleme/sonuç sorusu ('ne durumda', 'bitti mi', "
+    "'oldu mu', 'daha ne kadar') YÜRÜYEN İŞE müdahaledir → task_control. "
+    "Bu bir sohbet sorusu DEĞİLDİR: cevabı yürüyen işin durumudur, genel "
+    "bilgi değil. lastTask.ok=false ise 'neden olmadı' o başarısızlığa "
+    "bakar. Durumunu biliyorken bilmiyormuş gibi davranma.\n"
     "8) KAYNAĞI SINIFLA, sonra karar ver — 'sourceKind' alanını doldur:\n"
     "   • user_private → içerik KULLANICIYA ait ve elimizde yok ('benim notlarım', "
     "'şu dosyayı', 'attığım rapor'). Bunu uydurmak yasak: intent='clarify' seç, "
@@ -182,15 +194,25 @@ _SYSTEM_CONTRACT = (
     "   Ayrım şu: kullanıcının ÖZEL verisi mi (soramazsan uydurursun), yoksa "
     "herkesin erişebileceği bilgi mi (araştırılabilir)? Kamuya açık bilgi için soru "
     "sormak gereksiz sürtünmedir; özel içerik için sormamak uydurmadır.\n"
+    "   public_external + somut teslimat (tablo/belge/liste) = 'task'. "
+    "Kaynağı araştırmayla getirilebilen bir üretim işini 'chat'e düşürme; "
+    "kullanıcı cevabı değil ÜRÜNÜ istiyor.\n"
     "   Kaynağı olmayan belgeyi ASLA genel bilgiyle doldurup 'task' deme.\n"
-    "9) GÖNDERME ÇÖZÜMÜ: mesaj daha önce üretilen bir çıktıya gönderme yapıyorsa "
+    "9) ÖNCE ŞUNU SOR: mesaj hedefini ADIYLA mı veriyor, yoksa başka bir şeye "
+    "GÖNDERME mi yapıyor? Gönderme varsa ve currentSituation.recentOutputs "
+    "boşsa ya da eşleşen kayıt yoksa, hedef BİLİNMİYOR demektir: "
+    'resolvedTarget={"status":"unresolved"} yaz ve intent="clarify" seç. '
+    "8. kuraldaki 'açık emir → task' istisnası burada GEÇMEZ: emir açık olsa "
+    "bile hedef belirsizse yanlış şeye yan etki üretilir. Somut ad/yol "
+    "verilmişse gönderme yoktur, normal task akışı geçerlidir.\n"
+    "10) GÖNDERME ÇÖZÜMÜ: mesaj daha önce üretilen bir çıktıya gönderme yapıyorsa "
     "('o dosya', 'onu sil', 'az önceki klasör', 'bir tane daha'), 'resolvedTarget' "
     "alanını currentSituation.recentOutputs içindeki kaydın TAM path'iyle doldur. "
     "Kullanıcı yolu mesajda açıkça verdiyse onu kullan. Listede karşılığı olmayan "
     "path UYDURMA: gönderme var ama hedef bilinmiyorsa "
     '{"status":"unresolved"} yaz ve missingInformation\'a hangi dosya/klasör '
     "olduğunu sorulacak şekilde ekle. Gönderme yoksa resolvedTarget=null.\n"
-    "10) SADECE tek JSON nesnesi döndür."
+    "11) SADECE tek JSON nesnesi döndür."
 )
 
 _SCHEMA_HINT = (
@@ -309,13 +331,22 @@ def _ground_resolved_target(
         and understanding.resolved_target.get("status") == "unresolved"
         and understanding.intent == INTENT_TASK
     ):
-        # Hedefi bilinmeyen gönderme ile görev çalıştırılmaz: tek soru sorulur.
-        understanding.intent = INTENT_CLARIFY
-        understanding.signals.append("unresolved_reference_clarify")
-        if not understanding.missing_information:
-            understanding.missing_information = [
-                "Gönderme yapılan hedef (hangi dosya/klasör?) belirlenemedi"
-            ]
+        # Kapı YALNIZ gerçekten çözülemeyen gönderme içindir. Model bazen
+        # gönderme olmayan isteklerde de ("masaüstüne Faturalar klasörü
+        # oluştur") unresolved işaretliyor; zarf ZATEN somut bir hedef
+        # taşıyorsa sorulacak bir şey yoktur — işi netleştirmeye düşürmek
+        # gereksiz sürtünmedir. Karar kanıta bakar: hedef varlığı var mı?
+        if understanding.targets():
+            understanding.resolved_target = None
+            understanding.signals.append("unresolved_ignored_concrete_target")
+        else:
+            # Hedefi bilinmeyen gönderme ile görev çalıştırılmaz: tek soru sorulur.
+            understanding.intent = INTENT_CLARIFY
+            understanding.signals.append("unresolved_reference_clarify")
+            if not understanding.missing_information:
+                understanding.missing_information = [
+                    "Gönderme yapılan hedef (hangi dosya/klasör?) belirlenemedi"
+                ]
 
 
 def parse_understanding(payload: Any) -> SemanticUnderstanding | None:
