@@ -409,7 +409,11 @@ export function buildPlanningPrompt(
     "- Steps marked [needs approval] are allowed; the desktop asks the user before running them — plan them normally.",
     "- Approval is surfaced to the user as one Full Computer Access task approval. Do not split one workflow into repeated approvals unless a later step is irreversible/non-idempotent such as sending email, payment, deletion, or overwriting a user file.",
     "- Only use capabilities from the CATALOG above.",
-    '- If the goal cannot be split into >=2 steps from these capabilities, return {"steps":[]}.',
+    // Tek adımlık iş de geçerli bir plandır. Eskiden ">=2 adıma bölünemiyorsa
+    // boş döndür" deniyordu; "Masaüstünde ne var" gibi tek yetenekli görevler
+    // ADIMSIZ gidiyor, masaüstü hiçbir şey yürütmüyor ve plan etiketini cevap
+    // sanıp geri yansıtıyordu. Yalnız hiçbir yetenek uymuyorsa boş dönülür.
+    '- A single-step plan is valid; return it. Only return {"steps":[]} when no capability in the catalog can serve the goal at all.',
     "",
     renderPlanningFewShots(),
   ].join("\n");
@@ -466,7 +470,9 @@ export function normalizeMaterializedSteps(
     })].filter((d) => validIds.has(d) && d !== step.id);
     step.dependsOn = [...new Set([...explicit, ...inferred])];
   }
-  return normalized.length >= 2 ? normalized : null;
+  // Tek adım da plandır: kod kapısı da prompt ile aynı hizaya getirildi.
+  // Aksi halde model doğru tek adımı üretse bile burada atılıyordu.
+  return normalized.length >= 1 ? normalized : null;
 }
 
 /**

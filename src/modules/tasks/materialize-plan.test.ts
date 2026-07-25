@@ -378,3 +378,31 @@ test("desktop materialization normalizer infers dependencies from step templates
   assert.deepEqual(steps?.[1]?.dependsOn, ["s1"]);
   assert.deepEqual(steps?.[2]?.dependsOn, ["s2"]);
 });
+
+test("a single-step plan is materialized, not discarded", () => {
+  // Canlı arıza: "Masaüstünde ne var" tek yetenek (directory_tree) gerektiriyor.
+  // Eskiden hem prompt hem kod ">=2 adım" dayattığı için plan BOŞ gidiyordu;
+  // masaüstü hiçbir şey yürütmüyor, plan etiketini cevap sanıp yansıtıyordu.
+  const steps = normalizeMaterializedSteps({
+    steps: [{ id: "s1", capability: "directory_tree", args: { path: "~/Desktop" } }],
+  });
+  assert.ok(steps, "tek adımlı plan atıldı");
+  assert.equal(steps?.length, 1);
+  assert.equal(steps?.[0]?.capability, "directory_tree");
+});
+
+test("planning prompt no longer demands two steps", () => {
+  const prompt = buildPlanningPrompt(workOrder("Masaüstünde ne var"), [
+    "directory_tree",
+  ]);
+  assert.ok(!prompt.includes(">=2 steps"), "iki adım dayatması geri gelmiş");
+  assert.ok(prompt.includes("single-step plan is valid"));
+});
+
+test("a plan with no usable capability still returns nothing", () => {
+  assert.equal(normalizeMaterializedSteps({ steps: [] }), null);
+  assert.equal(
+    normalizeMaterializedSteps({ steps: [{ capability: "uydurma_yetenek" }] }),
+    null,
+  );
+});
