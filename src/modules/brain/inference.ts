@@ -288,6 +288,7 @@ import {
   EMPTY_GROQ_COMPOUND_EVIDENCE,
   type GroqCompoundEvidence,
 } from "./groq-compound.js";
+import { buildEcosystemContextBlock } from "./ecosystem-context.js";
 import {
   buildGeminiFreePublicOperationFrame,
   isGeminiFreeResourceExhausted,
@@ -6081,6 +6082,12 @@ export async function generateSharedBrainReply(
               }).catch(() => null)
             : Promise.resolve(null),
         ]);
+      // Ekosistem farkındalığı: model Elyan'ın mobil+sunucu+masaüstü TEK
+      // sistem olduğunu ve elindeki yetenekleri BİLSİN. Liste manifest'ten
+      // türetilir; elle tutulsa yeni yetenek eklenince prompt yalan söylerdi.
+      const ecosystemContextBlock = buildEcosystemContextBlock({
+        desktopPaired: null,
+      });
       const systemPrompt = buildStructuredSystemPrompt(
         retrievalBlock == null &&
           memoryBlock == null &&
@@ -6099,6 +6106,7 @@ export async function generateSharedBrainReply(
           ? app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT
           : [
               app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
+              ecosystemContextBlock,
               continuityBlock,
               behaviorLearningBlock,
               corpusGuidanceBlock,
