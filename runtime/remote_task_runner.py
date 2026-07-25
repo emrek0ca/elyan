@@ -81,6 +81,28 @@ def _utc_now_iso() -> str:
     return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
 
+def _user_facing_message(value: Any) -> str:
+    """Yetenek adı/etiketi cevap yerine geçmesin.
+
+    Canlı arıza: "Masaüstünde alışverişlistesi.txt oluştur" isteğine cevap
+    olarak yalnız "Belge okuma" yazıldı — bu bir yetenek ETİKETİ, cevap değil.
+    Araç kullanıcıya dönük metin üretmediğinde etiket mesaj yerine geçiyordu.
+    Executor tarafındaki koruma bu mobil yayın yolunu kapsamıyordu; kullanıcının
+    gördüğü son nokta burası olduğu için denetim burada da tekrarlanır."""
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return text
+    try:
+        from runtime.executor_core import _is_user_facing_summary
+
+        if not _is_user_facing_summary(text):
+            return "İşlem tamamlandı."
+    except Exception:
+        # Denetim kurulamıyorsa metni olduğu gibi geçir; sansür riski alma.
+        return text
+    return text
+
+
 def _safe_text(value: Any, limit: int = 1000) -> str:
     text = " ".join(str(value or "").split()).strip()
     if len(text) > limit:
@@ -1066,7 +1088,12 @@ class RemoteTaskRunner:
     ) -> dict[str, Any]:
         preview = dict(plan_preview) if isinstance(plan_preview, dict) else {}
         trace = self._trace_for_status(task_id, task_run_id, status, preview)
-        safe_summary = _safe_text(message, 1000)
+        # SON KAPI: mobil yayın sınırı. Yetenek adı/etiketi ("Belge okuma",
+        # "desktop_operator.run") buraya kadar gelebiliyordu ve doğrudan cevap
+        # olarak yayınlanıyordu; executor'daki koruma bu yolu kapsamıyor.
+        # Kullanıcının gördüğü son nokta burası olduğu için denetim burada da
+        # yapılır — sızıntının kaynağı ne olursa olsun kapanır.
+        safe_summary = _safe_text(_user_facing_message(message), 1000)
         canonical = {
             "taskId": task_id,
             "taskRunId": task_run_id,
