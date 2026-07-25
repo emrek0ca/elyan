@@ -245,6 +245,32 @@ def build_tool_catalog(
     return catalog
 
 
+def _undelivered(
+    deliverables: list[str] | None,
+    artifacts: list[dict[str, Any]],
+    observations: list[Any],
+) -> list[str]:
+    """Beyan edilen teslimatlardan hangileri KANITSIZ kaldı?
+
+    Kanıt tanımı kasıtlı olarak geniştir: bir artifact üretildiyse ya da
+    herhangi bir adım yol/çıktı taşıyan yapılandırılmış sonuç döndürdüyse
+    teslimat gerçekleşmiş sayılır. Amaç mükemmel eşleme değil, **hiçbir şey
+    üretmeden 'bitti' demeyi** yakalamak: dar bir eşleme kuralı yanlış
+    pozitif üretir ve gerçek işi engeller (bu, kural yazma tuzağıdır)."""
+    wanted = [str(item or "").strip() for item in (deliverables or []) if str(item or "").strip()]
+    if not wanted:
+        return []
+    if artifacts:
+        return []
+    for observation in observations:
+        result = getattr(observation, "result", None)
+        if isinstance(result, dict) and (
+            result.get("path") or result.get("outputPath") or result.get("artifacts")
+        ):
+            return []
+    return wanted[:3]
+
+
 def _tool_guidance(metadata: dict[str, Any]) -> list[str]:
     """Aracın ANLAMSAL kullanım rehberi — kayıt metadata'sından TÜRETİLİR.
 
@@ -317,6 +343,7 @@ def build_decision_context(
     stuck_hint: str = "",
     gathering_streak: int = 0,
     total_steps: int = 0,
+    deliverables: list[str] | None = None,
 ) -> dict[str, Any]:
     """Model turuna gönderilecek sınırlanmış karar bağlamı."""
     recent = observations[-MAX_HISTORY_OBSERVATIONS:]
@@ -343,6 +370,10 @@ def build_decision_context(
     if stuck_hint:
         # Modele açık geri bildirim: aynı eylemi tekrarlıyorsun, stratejini değiştir.
         context["warning"] = stuck_hint
+    if deliverables:
+        # Model her turda "elinde ne kalmalı"yı görür; teslimat kapısı da
+        # bunu ölçer. İkisi aynı sözleşmeye bakar.
+        context["deliverables"] = deliverables[:3]
     # DENEYİMDEN DERS: bu turun araç kümesiyle örtüşen geçmiş dersler. Alaka
     # kapısı lesson_store'dadır — örtüşme yoksa hiçbir şey eklenmez.
     try:
@@ -413,6 +444,7 @@ def run_agent_loop(
     require_approval: bool = True,
     should_cancel: Callable[[], str | bool] | None = None,
     on_observation: Callable[[AgentObservation], None] | None = None,
+    deliverables: list[str] | None = None,
 ) -> AgentLoopResult:
     """Hedefi çok turlu gözlem/karar döngüsüyle yürütür.
 
@@ -431,6 +463,7 @@ def run_agent_loop(
     stuck_hint = ""
     steps_used = 0
     gathering_streak = 0
+    delivery_warned = False
 
     def cancellation_reason() -> str:
         if should_cancel is None:
@@ -493,6 +526,7 @@ def run_agent_loop(
             stuck_hint=stuck_hint,
             gathering_streak=gathering_streak,
             total_steps=bounded_max_steps,
+            deliverables=deliverables,
         )
         stuck_hint = ""
 
@@ -508,6 +542,21 @@ def run_agent_loop(
 
         if action.kind == "finish":
             summary = action.summary or "İşlem tamamlandı."
+            # TESLİMAT KAPISI: kullanıcı somut bir çıktı bekliyorduysa ("elinde
+            # ne kalmalı"), o çıktının GERÇEKTEN üretildiğini kanıtla. Model
+            # "bitti" diyebilir ama hiçbir şey üretmemiş olabilir — canlıda
+            # görülen en pahalı hata sınıfı budur ("yaptım" uydurması).
+            # Kapı bir kez uyarır ve döngüye geri döner: teslim et, sonra bitir.
+            missing = _undelivered(deliverables, artifacts, observations)
+            if missing and not delivery_warned:
+                delivery_warned = True
+                stuck_hint = (
+                    "TESLİMAT EKSİK: şu beklenen çıktı(lar) henüz üretilmedi: "
+                    + "; ".join(missing[:3])
+                    + ". Bitirme — önce üret. Üretemiyorsan 'ask' ile neyin "
+                    "engellediğini söyle; yaptığını İDDİA ETME."
+                )
+                continue
             return finish(True, summary, "completed")
         if action.kind == "ask":
             return finish(

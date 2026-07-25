@@ -155,6 +155,37 @@ SCENARIOS: list[dict[str, Any]] = [
         "expect": {"intents": ["task_control"]},
     },
     {
+        # EKOSİSTEM: eller (masaüstü) bağlı değilken bile iş REDDEDİLMEZ —
+        # niyet görevdir; dürüstlük cevabın içinde kurulur. Reddetmek de
+        # "yaptım" demek kadar yanlıştır.
+        "id": "ekosistem_eller_kapali",
+        "message": "masaüstüne bir kontrol listesi dosyası oluştur",
+        "situational": {
+            "ecosystem": {
+                "mobile": {"role": "yüz", "available": True},
+                "backend": {"role": "paylaşılan beyin", "available": True},
+                "desktop": {
+                    "role": "eller",
+                    "available": False,
+                    "ifUnavailable": "kullanıcı orada değilken/eşleşme yokken çalışamaz",
+                },
+            }
+        },
+        "expect": {"intents": ["task", "clarify"]},
+    },
+    {
+        # EKOSİSTEM: eller açıkken yerel iş "yapamam" diye reddedilmez.
+        "id": "ekosistem_eller_acik",
+        "message": "indirilenler klasöründeki dosyaları türlerine göre ayır",
+        "situational": {
+            "ecosystem": {
+                "desktop": {"role": "eller", "available": True},
+                "backend": {"role": "paylaşılan beyin", "available": True},
+            }
+        },
+        "expect": {"intents": ["task"]},
+    },
+    {
         # Kendi durumu: son görev başarısızsa "neden olmadı" yeni görev DEĞİLDİR.
         "id": "oz_durum_neden_olmadi",
         "message": "neden olmadı? bir sorun mu çıktı?",

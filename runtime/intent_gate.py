@@ -270,6 +270,18 @@ def understand(
             situational["environment"] = facts
     except Exception:
         pass
+    # EKOSİSTEM: Elyan üç yüzeyli tek organizmadır (mobil/backend/masaüstü).
+    # Hangi yüzeyin ŞU AN açık olduğunu bilmek, "yaptım" uydurmasının ve
+    # "yapamam" gereksiz reddinin ortak panzehiridir.
+    try:
+        from runtime import ecosystem_model
+
+        topology = ecosystem_model.to_prompt_context(ecosystem_model.assess(state))
+        if topology:
+            situational = dict(situational or {})
+            situational["ecosystem"] = topology
+    except Exception:
+        pass
 
     return understanding_module.analyze(
         text,

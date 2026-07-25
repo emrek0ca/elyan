@@ -59,6 +59,11 @@ def build_decision_prompt(context: dict[str, Any]) -> str:
     lessons = context.get("lessons")
     if isinstance(lessons, list) and lessons:
         payload["lessonsFromExperience"] = lessons[:3]
+    # TESLİMAT SÖZLEŞMESİ: kullanıcının elinde ne kalmalı. Döngü bunu üretmeden
+    # bitiremez; model de neyi hedeflediğini her turda görür.
+    deliverables = context.get("deliverables")
+    if isinstance(deliverables, list) and deliverables:
+        payload["mustDeliver"] = deliverables[:3]
     body = json.dumps(payload, ensure_ascii=False)
     schema = (
         '{"kind":"tool|finish|ask","capability":"<katalogdan ad>",'

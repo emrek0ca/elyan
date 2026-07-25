@@ -5210,6 +5210,7 @@ def _route_chat_agent_loop(
     goal_context: dict[str, Any] | None = None,
     conversation_id: str = "",
     emit_progress: Any = None,
+    deliverables: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Novel/kalıba oturmayan işi çok turlu ajan döngüsüyle yürütür.
 
@@ -5275,6 +5276,9 @@ def _route_chat_agent_loop(
             allowed_capabilities=allowed,
             confirmed=False,
             on_observation=publish,
+            # Anlama zarfının "kullanıcının elinde ne kalmalı" beyanı: döngü
+            # hiçbir şey üretmeden "bitti" diyemesin (uydurma teslimat kapısı).
+            deliverables=deliverables,
         )
     except Exception:
         return None
@@ -10349,6 +10353,7 @@ class RuntimeBridge:
                             goal_context=execution_goal,
                             conversation_id=conversation_id,
                             emit_progress=self.executor_core._progress_emitter,
+                            deliverables=intent_decision.deliverables,
                         )
                         if use_agent_loop
                         else None
@@ -10386,6 +10391,7 @@ class RuntimeBridge:
                     goal_context=execution_goal,
                     conversation_id=conversation_id,
                     emit_progress=self.executor_core._progress_emitter,
+                    deliverables=intent_decision.deliverables,
                 ),
             ),
         )
