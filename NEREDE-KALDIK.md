@@ -236,6 +236,37 @@ hata yolu, uzunluk sınırı).
 
 ---
 
+## 4.7 CANLI MOBİL ARIZA — TEŞHİS (2026-07-25, 14:07)
+
+Kullanıcı mobilden 3 komut verdi, üçü de başarısız:
+
+| Girdi | Çıktı | Ne demek |
+|---|---|---|
+| "Terminali aç" | "Terminal açıldı." | Plan/onay/UI yok — fast-path'ten geçmiş |
+| "off device komutu çalıştır" | "Yanıt katmanı bu tur tamamlanamadı…" | **Yedek metin** (`tasks/service-helpers.ts:1199`) |
+| "Kapat terminali" | `desktop_operator.run` | Ham yetenek adı sızdı → **DÜZELTİLDİ** (`0e86f440`) |
+
+**LOG KANITI (kritik — teşhisi değiştirir):** `chat-worker` loglarında saatler
+boyunca `inference_total.count = 2`, restart sonrası `stages: {}`. Yani **chat
+generation neredeyse hiç çağrılmıyor.** Worker ayakta ("chat generation worker
+ready") ama trafik ona ulaşmıyor.
+
+→ **Arıza modelde/generation'da DEĞİL, ondan ÖNCE.** Mobil istekler inference'a
+varmadan düşüyor (routing/dispatch/kuyruk katmanı). Bu yüzden "modeli/prompt'u
+düzeltmek" yanlış katman olur.
+
+**SIRADAKİ OTURUMUN İLK İŞİ** (tahmin değil, bu sırayla):
+1. Mobil isteğin hangi yolda düştüğünü bul — `chat` kuyruğa giriyor mu?
+   ```bash
+   ssh root@84.247.172.213 'docker logs --since 15m elyan-backend-backend-1 2>&1 | grep -iE "chat|dispatch|route|queue|enqueue" | tail -40'
+   ```
+   Sonra mobilden TEK mesaj at, aynı komutu tekrar çalıştır, farkı karşılaştır.
+2. Kuyruğa girmiyorsa: route kararı / cihaz eşleşmesi. Giriyor ama işlenmiyorsa:
+   worker claim / lease. İşleniyor ama yanıt dönmüyorsa: SSE/stream fence.
+3. Katman bulunmadan mobil UI'a DOKUNMA.
+
+---
+
 ## 5. AÇIK SORUNLAR
 
 1. **57 baseline test hatası (tüm suite)** — bende değil, önceden vardı. Çoğu
