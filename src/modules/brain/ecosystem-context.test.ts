@@ -37,6 +37,15 @@ test("desktop pairing is never claimed when unknown", () => {
   assert.ok(unpaired.includes("YAPTIĞINI"));
 });
 
+test("block does not prime self-description", () => {
+  const block = buildEcosystemContextBlock({ desktopPaired: true });
+  // İlk sürüm "SEN KİMSİN — ELYAN:" ile başlıyordu ve model belirsiz sorulara
+  // kendini tanıtarak cevap vermeye başladı. Başlık kimlik değil ortam olmalı.
+  assert.ok(!block.includes("SEN KİMSİN"), "kimlik başlığı geri gelmiş");
+  assert.ok(block.includes("ÇALIŞMA ORTAMIN"));
+  assert.ok(block.includes("KENDİNİ ANLATMA"));
+});
+
 test("block instructs behaviour, not performed warmth", () => {
   const block = buildEcosystemContextBlock({ desktopPaired: true });
   assert.ok(block.includes("Kısa konuş"));
