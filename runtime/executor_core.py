@@ -15,6 +15,7 @@ from runtime.capability_registry import (
     capability_display_name,
     capability_metadata,
     capability_metadata_summary,
+    capability_names,
     capability_readiness,
 )
 from runtime.capability_validation import (
@@ -118,7 +119,36 @@ def _user_facing_execution_summary(
             seen.add(output)
             artifact_outputs.append(output)
     visible_outputs = artifact_outputs or [output for output in outputs if output]
-    return "\n".join(visible_outputs).strip() or "İşlem tamamlandı."
+    summary = "\n".join(visible_outputs).strip()
+    return summary if _is_user_facing_summary(summary) else "İşlem tamamlandı."
+
+
+def _is_user_facing_summary(summary: str) -> bool:
+    """Özetin gerçekten kullanıcıya söylenecek bir şey olup olmadığını denetler.
+
+    Canlı arıza: cevap olarak tek başına "Belge okuma" ya da
+    "desktop_operator.run" gidiyordu — bunlar yetenek ETİKETİ, cevap değil.
+    Araç kullanıcıya dönük metin üretmediğinde iz özeti (yetenek adları)
+    mesaj yerine geçiyordu. Etiketten ibaret bir özet asla teslim edilmez;
+    bu kontrol sızıntı sınıfını kaynağı ne olursa olsun kapatır."""
+    text = " ".join(str(summary or "").split()).strip()
+    if not text:
+        return False
+    parts = [part.strip() for part in re.split(r"[;,\n]+", text) if part.strip()]
+    if not parts:
+        return False
+    try:
+        names = set(capability_names())
+        # Hem ham adlar hem görünen adlar reddedilir; ikisi de etikettir.
+        labels = {name.casefold() for name in names}
+        labels |= {capability_display_name(name).casefold() for name in names}
+    except Exception:
+        # Kayıt okunamıyorsa engelleme yapma — yanlış yere sansür uygulamaktansa
+        # geçirmek yeğdir (özet zaten araç çıktısından geliyor).
+        return True
+    # Yalnız TAM eşleşme reddedilir: "open_app:spotify" gibi gerçek araç çıktıları
+    # slug'a benzese de yetenek adı DEĞİLdir ve teslim edilmelidir.
+    return not all(part.casefold() in labels for part in parts)
 
 
 # ── Adım çıktısı şablonları + forEach ────────────────────────────────────────
