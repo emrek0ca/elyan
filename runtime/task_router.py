@@ -3127,6 +3127,18 @@ def _mkdir_route(text: str) -> RoutedTask | None:
     )
 
 
+def _word_starts(haystack: str, needle: str) -> bool:
+    """``needle`` bir SÖZCÜK başında geçiyor mu?
+
+    Alt dizge eşleşmesi ("list" ⊂ "alışverişlistesi") Türkçede yanlış rota
+    üretir. Sonda sınır aranmaz ki ekler ("listele", "listeleyebilir misin")
+    yakalanmaya devam etsin."""
+    token = str(needle or "").strip()
+    if not token:
+        return False
+    return re.search(rf"(?<![^\W\d_]){re.escape(token)}", haystack) is not None
+
+
 def _list_dir_route(text: str) -> RoutedTask | None:
     q = _normalise(text)
     triggers = (
@@ -3139,8 +3151,21 @@ def _list_dir_route(text: str) -> RoutedTask | None:
         "listele", "list",
     )
     location_triggers = _LOCATION_TRIGGER_PATTERNS
-    has_trigger = any(tok in q for tok in triggers)
-    has_location = any(tok in q for tok in location_triggers)
+    # KELİME SINIRI ŞART. Canlı arıza: "Masaüstünde alışverişlistesi.txt oluştur"
+    # listeleme sanılıyordu, çünkü tetikleyici "list" sözcüğü
+    # "alışveriş·list·esi" içinde KELİME ORTASINDA eşleşiyordu. Alt dizge
+    # eşleşmesi Türkçede sürekli yanlış rota üretir; sınır kontrolü bu bug
+    # sınıfını kapatır. Başta sınır arar, sonda aramaz → Türkçe ekleri
+    # ("listele", "listeleyebilir") yine yakalanır.
+    has_trigger = any(_word_starts(q, tok) for tok in triggers)
+    has_location = any(_word_starts(q, tok) for tok in location_triggers)
+    # Somut bir dosya adı (uzantılı) geçiyorsa istek O DOSYAYA dairdir; dizin
+    # listeleme değildir. Üretim fiili varsa kesinlikle listeleme değil.
+    if re.search(r"[\w\-]+\.[A-Za-z0-9]{2,5}\b", q) and any(
+        _word_starts(q, verb)
+        for verb in ("olustur", "oluştur", "yarat", "yaz", "kaydet", "ekle")
+    ):
+        return None
 
     if not (has_trigger and has_location):
         # Also match "masaüstünü göster" / "indirilenler klasörü"
