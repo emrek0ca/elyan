@@ -31,6 +31,7 @@ from runtime.backend_client import BackendClient, BackendResult
 from runtime.capability_registry import (
     TOOL_DECLARATIONS as REGISTRY_TOOL_DECLARATIONS,
     SafeCapabilityError,
+    capability_display_name,
     capability_metadata,
     capability_readiness,
     capability_metadata_summary,
@@ -5198,6 +5199,7 @@ def _route_chat_agent_loop(
     state_factory: Any,
     goal_context: dict[str, Any] | None = None,
     conversation_id: str = "",
+    emit_progress: Any = None,
 ) -> dict[str, Any] | None:
     """Novel/kalıba oturmayan işi çok turlu ajan döngüsüyle yürütür.
 
@@ -5218,6 +5220,41 @@ def _route_chat_agent_loop(
         allowed = None
         if isinstance(goal_context, dict):
             allowed = reasoning_policy.allowed_capabilities(goal_context) or None
+        # Canlı ilerleme: ajan döngüsü her adımda gözlem üretiyordu ama bu veri
+        # yayınlanmıyordu — kullanıcı tek satır cevap görüyordu. Artık executor
+        # ile AYNI task_trace bloğuna akıyor (mobilde yeni sözleşme gerekmez).
+        observed: list[dict[str, Any]] = []
+
+        def publish(observation: Any) -> None:
+            if emit_progress is None or not conversation_id:
+                return
+            observed.append(
+                {
+                    "id": f"agent_{observation.index}",
+                    "label": capability_display_name(observation.capability),
+                    "status": "completed" if observation.ok else "failed",
+                    "detail": " ".join(
+                        str(observation.output or observation.error_message or "").split()
+                    )[:120],
+                }
+            )
+            try:
+                emit_progress(
+                    conversation_id,
+                    {
+                        "type": "task_trace",
+                        "stableBlockId": "tasktrace_agent_loop",
+                        "taskId": "agent_loop",
+                        "status": "running",
+                        "title": " ".join(str(text or "").split())[:80]
+                        or "Görev yürütülüyor",
+                        "activeStepId": observed[-1]["id"],
+                        "steps": list(observed),
+                    },
+                )
+            except Exception:
+                pass
+
         outcome = agent_loop_runtime.run_agent_loop(
             goal=text,
             decide_next=decide_next,
@@ -5227,6 +5264,7 @@ def _route_chat_agent_loop(
             goal_context=goal_context,
             allowed_capabilities=allowed,
             confirmed=False,
+            on_observation=publish,
         )
     except Exception:
         return None
@@ -10290,6 +10328,7 @@ class RuntimeBridge:
                             state_factory=STATE.snapshot,
                             goal_context=execution_goal,
                             conversation_id=conversation_id,
+                            emit_progress=self.executor_core._progress_emitter,
                         )
                         if use_agent_loop
                         else None
@@ -10326,6 +10365,7 @@ class RuntimeBridge:
                     state_factory=STATE.snapshot,
                     goal_context=execution_goal,
                     conversation_id=conversation_id,
+                    emit_progress=self.executor_core._progress_emitter,
                 ),
             ),
         )

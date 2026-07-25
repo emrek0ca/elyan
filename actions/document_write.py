@@ -157,6 +157,59 @@ def _add_blocks(document: Any, blocks: list[dict[str, Any]], temp_paths: list[Pa
             document.add_paragraph("")
 
 
+def _collect_citations(kwargs: dict[str, Any]) -> list[dict[str, str]]:
+    """Atıfları argümanlardan ve bağımlılık sonuçlarından toplar.
+
+    Kaynaklar iki yoldan gelir: doğrudan ``citations`` argümanı ya da önceki
+    adımların (web araştırması / Compound) yapılandırılmış çıktısı. URL'e göre
+    tekilleştirilir."""
+    found: list[dict[str, str]] = []
+
+    def _absorb(value: Any) -> None:
+        if not isinstance(value, list):
+            return
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or item.get("link") or "").strip()
+            if not url:
+                continue
+            title = str(item.get("title") or item.get("name") or "").strip() or url
+            found.append({"title": title[:200], "url": url[:500]})
+
+    _absorb(kwargs.get("citations"))
+    _absorb(kwargs.get("sources"))
+    for payload in (kwargs.get("_dependencyResults") or {}).values() if isinstance(
+        kwargs.get("_dependencyResults"), dict
+    ) else ():
+        if not isinstance(payload, dict):
+            continue
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+        for key in ("citations", "sources", "results", "webSources"):
+            _absorb(result.get(key) if isinstance(result, dict) else None)
+
+    seen: set[str] = set()
+    unique: list[dict[str, str]] = []
+    for item in found:
+        if item["url"] in seen:
+            continue
+        seen.add(item["url"])
+        unique.append(item)
+    return unique[:20]
+
+
+def _add_sources_section(document: Any, citations: list[dict[str, str]]) -> None:
+    """Belgenin sonuna numaralı 'Kaynaklar' bölümü ekler (atıf varsa)."""
+    if not citations:
+        return
+    document.add_paragraph("")
+    document.add_heading("Kaynaklar", level=1)
+    for index, citation in enumerate(citations, start=1):
+        document.add_paragraph(
+            f"{index}. {sanitize_xml_text(citation['title'], max_chars=200)} — {citation['url']}"
+        )
+
+
 def document_write(
     prompt: str = "",
     output_path: str = "",
@@ -225,6 +278,10 @@ def document_write(
             root_resolver=_workspace_root,
         )
         _add_blocks(document, normalized_blocks, temp_paths=temp_paths)
+        # Kaynaklar belgenin İÇİNE yazılır. Atıf bir sohbet süsü değil, çıktının
+        # denetlenebilirliğidir: kullanıcı belgeyi paylaştığında dayanağı da
+        # yanında gider. Atıf yoksa bölüm hiç eklenmez (boş başlık bırakılmaz).
+        _add_sources_section(document, _collect_citations(kwargs))
 
         document.save(str(resolved_output))
     finally:
