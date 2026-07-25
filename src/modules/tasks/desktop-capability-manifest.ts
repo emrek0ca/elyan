@@ -7,6 +7,7 @@
 
 export type DesktopCapabilityManifestEntry = {
   name: string;
+  displayName: string;
   description: string;
   usage: string;
   requiredArgs: string[];
@@ -27,6 +28,7 @@ export type DesktopCapabilityManifestEntry = {
 export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "add_calendar_event",
+    "displayName": "Takvim etkinliği ekleme",
     "description": "Apple Calendar takvimine yeni etkinlik ekler.",
     "usage": "Takvime etkinlik eklerken. Tarihi HER ZAMAN mutlak ISO'ya çevir; belirsizse netleştir.",
     "requiredArgs": [
@@ -48,6 +50,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "add_reminder",
+    "displayName": "Hatırlatıcı ekleme",
     "description": "Apple Reminders'a yeni hatırlatıcı ekler.",
     "usage": "Hatırlatıcı/yapılacak eklerken. Tarih varsa mutlak ISO'ya çevir.",
     "requiredArgs": [
@@ -68,6 +71,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "analyze_screen",
+    "displayName": "Ekran analizi",
     "description": "Aktif pencereyi kullanıcı sorusuna göre görsel olarak analiz eder; basit 'ekranda ne var' cevabı üretir.",
     "usage": "Kullanıcı ekranda ne olduğunu, aktif pencerede ne yazdığını veya görünen hata/uyarıyı sorduğunda. Tıklama/yazma için desktop_operator.run.",
     "requiredArgs": [
@@ -117,6 +121,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_agent.run",
+    "displayName": "Tarayıcı ajanı",
     "description": "Tarayıcıda hedefi KENDİ gözleyip karar vererek adım adım gerçekleştiren ajan: sayfayı gözler, tıklar, yazar, veri toplar, dosya indirir; hedef bitince özet ve toplanan verileri döndürür.",
     "usage": "Sayfa yapısı önceden bilinmeyen çok adımlı tarayıcı görevlerinde TEK adım olarak kullan. Adımları kendin yazabiliyorsan browser_session.* daha hızlıdır; buradaki ajan keşif gerektiren işler içindir.",
     "requiredArgs": [
@@ -137,6 +142,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_control",
+    "displayName": "Tarayıcı kontrolü",
     "description": "Tarayıcıda bir URL açar, web araması yapar, YouTube'da video açar veya yeni sekme açar.",
     "usage": "Web adresi açma/arama/YouTube/yeni sekme için. 'Yeni sekme aç' isteği action='new_tab'tır — 'yeni sekme' metnini ASLA aramaya çevirme. Uygulamanın kendisini açmak için open_app kullan.",
     "requiredArgs": [
@@ -157,6 +163,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_session.click",
+    "displayName": "Tarayıcı oturumu — tıkla",
     "description": "Oturumdaki sayfada bir öğeye tıklar (CSS selector, görünür metin ya da rol+metin ile).",
     "usage": "browser_session.snapshot ile öğeleri gördükten sonra hedefe tıklamak.",
     "requiredArgs": [],
@@ -175,6 +182,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_session.close",
+    "displayName": "Tarayıcı oturumu — kapat",
     "description": "Kalıcı tarayıcı oturumunu kapatır.",
     "usage": "Çok adımlı tarayıcı işi bittiğinde temizlik.",
     "requiredArgs": [],
@@ -193,6 +201,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_session.download",
+    "displayName": "Tarayıcı oturumu — dosya indir",
     "description": "Sayfadan dosya indirir (indirme başlatan öğeye tıklayarak ya da doğrudan URL ile) ve dosya yolunu döndürür.",
     "usage": "Transcript/rapor/dosya indirme adımlarında; dönen outputPath sonraki file_move adımına verilir.",
     "requiredArgs": [],
@@ -211,6 +220,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_session.extract",
+    "displayName": "Tarayıcı oturumu — veri çıkar",
     "description": "Sayfadan yapılandırılmış veri çıkarır: selector eşleşmelerinin metni ve istenirse bir attribute'u (ör. href). Selector verilmezse sayfanın okunur metnini döndürür.",
     "usage": "Liste toplama işlerinde: video linkleri, başlıklar, tablo hücreleri. Sonuç result.items listesindedir; sonraki adımlar {{steps.<id>.result.items}} ile kullanır.",
     "requiredArgs": [],
@@ -229,6 +239,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_session.goto",
+    "displayName": "Tarayıcı oturumu — sayfaya git",
     "description": "Kalıcı tarayıcı oturumunda bir adrese gider; sonraki adımlar AYNI sayfada devam eder.",
     "usage": "Çok adımlı tarayıcı işlerinde (gez → tıkla → çıkar → indir) ilk adım. Tek seferlik 'URL aç ve bırak' için browser_control kullan.",
     "requiredArgs": [
@@ -249,6 +260,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_session.snapshot",
+    "displayName": "Tarayıcı oturumu — sayfa gözlemi",
     "description": "Sayfanın etkileşimli öğelerini (link/buton/alan, metinleriyle) listeler — sonraki tıklama/yazma adımını doğru hedefe yöneltmek için gözlem.",
     "usage": "Sayfanın yapısı bilinmiyorken tıklamadan ÖNCE gözlem almak.",
     "requiredArgs": [],
@@ -267,6 +279,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "browser_session.type",
+    "displayName": "Tarayıcı oturumu — yaz",
     "description": "Oturumdaki sayfada bir alana metin yazar; submit=true ile Enter'a basar. Şifre alanlarına yazmaz.",
     "usage": "Arama kutusu doldurma, form alanına URL yapıştırma gibi işlerde.",
     "requiredArgs": [
@@ -287,6 +300,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "canvas_write",
+    "displayName": "Görsel pano oluşturma",
     "description": "PDF/PNG canvas çıktısı üretir; metin, bölüm, tablo, grafik ve görsel bloklarını sayfalı veya tek görsel artifact'a dönüştürür.",
     "usage": "Kullanıcı PDF, tasarımlı belge, poster, rapor PDF'i veya tablo+metin+grafik birleşik çıktı istediğinde. Word için document_write, Excel için spreadsheet_write, sunum için presentation_write.",
     "requiredArgs": [
@@ -363,6 +377,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "chart_generate",
+    "displayName": "Grafik oluşturma",
     "description": "Veri dosyası veya yapılandırılmış veri üzerinden PNG grafik üretir.",
     "usage": "Kullanıcı grafik/plot/histogram istediğinde; önce veri okuma/analiz, sonra chart_generate, gerekirse canvas/document içine göm.",
     "requiredArgs": [
@@ -413,6 +428,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "clipboard_read",
+    "displayName": "Panoyu okuma",
     "description": "Panodaki (clipboard) metni okur.",
     "usage": "Kullanıcı 'panodakini/kopyaladığımı' işleme dediğinde.",
     "requiredArgs": [],
@@ -431,6 +447,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "clipboard_write",
+    "displayName": "Panoya yazma",
     "description": "Verilen metni panoya (clipboard) kopyalar.",
     "usage": "Bir sonucu/metni kullanıcının yapıştırabilmesi için panoya koymak.",
     "requiredArgs": [
@@ -451,6 +468,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "close_app",
+    "displayName": "Uygulama kapatma",
     "description": "Çalışan bir masaüstü uygulamasını kapatır.",
     "usage": "Kullanıcı bir uygulamayı kapatmak istediğinde.",
     "requiredArgs": [
@@ -471,6 +489,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "data_analyze",
+    "displayName": "Veri analizi",
     "description": "CSV, JSON veya Excel verisini yerel olarak analiz eder (özet/profil/önizleme).",
     "usage": "Bir veri dosyasını anlamak/özetlemek için. Grafik çizmek için chart_generate.",
     "requiredArgs": [
@@ -491,6 +510,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "delete_calendar_event",
+    "displayName": "Takvim etkinliği silme",
     "description": "Apple Calendar takviminden etkinlik siler (geri alınamaz — onay gerekir).",
     "usage": "Etkinlik silmek için. Yanlış silmemek için start_iso ile daralt.",
     "requiredArgs": [
@@ -511,6 +531,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "delete_memory",
+    "displayName": "Hafızadan silme",
     "description": "Kalıcı hafızadan bir kaydı siler.",
     "usage": "Kullanıcı 'şunu unut/hatırlama' dediğinde.",
     "requiredArgs": [],
@@ -529,6 +550,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_operator.cancel",
+    "displayName": "Otomasyonu iptal",
     "description": "Aktif ekran otomasyonu çalışmasını güvenli şekilde durdurur.",
     "usage": "Takılan/istenmeyen bir operator çalışmasını durdurmak için.",
     "requiredArgs": [],
@@ -547,6 +569,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_operator.execute_action",
+    "displayName": "Ekran eylemi",
     "description": "Gözlemlenmiş ekranda tek bir güvenli click/type/key/scroll eylemi uygular.",
     "usage": "Önce observe_screen ile hedef görüldüyse tek UI eylemi için. Belirsiz/çok adımlı UI hedefinde desktop_operator.run kullan.",
     "requiredArgs": [
@@ -592,6 +615,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_operator.focus_window",
+    "displayName": "Pencere odaklama",
     "description": "Bir masaüstü uygulamasını öne alır.",
     "usage": "Bir uygulamayı öne getirmek için. Uygulamayı açmak için open_app.",
     "requiredArgs": [],
@@ -610,6 +634,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_operator.locate",
+    "displayName": "Ekranda konum bulma",
     "description": "Metin veya öğe tipine göre ekrandaki hedef öğeyi bulur (operator alt-adımı).",
     "usage": "İleri ekran otomasyonu alt-adımı; genelde desktop_operator.run içinde.",
     "requiredArgs": [],
@@ -628,6 +653,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_operator.observe_screen",
+    "displayName": "Ekran gözlemi",
     "description": "Operator için yapılandırılmış ekran gözlemi üretir; sonraki UI eylemini güvenli seçmek için kullanılır.",
     "usage": "Ekran-eylem planında her kritik tıklama/yazma öncesi ve sonrası durum görmek için.",
     "requiredArgs": [],
@@ -666,6 +692,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_operator.run",
+    "displayName": "Ekran otomasyonu",
     "description": "Çok adımlı observe→decide→act→verify ekran otomasyonu hedefini yürütür.",
     "usage": "Yerel uygulama veya belirsiz UI üzerinde ardışık tıklama/yazma/kaydırma gerektiğinde; stop condition içeren somut goal ver.",
     "requiredArgs": [
@@ -714,6 +741,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_os.active_window",
+    "displayName": "Aktif pencere",
     "description": "Şu an öndeki (aktif) pencere bilgisini döndürür.",
     "usage": "Kullanıcının o an hangi uygulamada olduğunu öğrenmek için.",
     "requiredArgs": [],
@@ -732,6 +760,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_os.open_permission_settings",
+    "displayName": "İzin ayarlarını açma",
     "description": "İlgili sistem izin ekranını güvenli şekilde açar.",
     "usage": "Bir izin eksikse kullanıcıyı doğru sistem ayar ekranına yönlendirmek için.",
     "requiredArgs": [],
@@ -750,6 +779,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_os.permissions",
+    "displayName": "İzin durumu",
     "description": "Masaüstü izin modelini ve izin hazırlık (readiness) durumunu döndürür.",
     "usage": "Hangi sistem izinlerinin verildiğini görmek için. İzin ekranını açmak için desktop_os.open_permission_settings.",
     "requiredArgs": [],
@@ -768,6 +798,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_os.processes",
+    "displayName": "Çalışan uygulamalar",
     "description": "Çalışan uygulamaları/prosesleri güvenli şekilde listeler.",
     "usage": "Hangi uygulamaların açık olduğunu görmek için. Genel sistem bilgisi için sys_info.",
     "requiredArgs": [],
@@ -786,6 +817,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "desktop_os.status",
+    "displayName": "Masaüstü durumu",
     "description": "Masaüstü OS yetenek ve native entegrasyon durumunu döndürür.",
     "usage": "Masaüstünün hangi yeteneklerinin hazır olduğunu kontrol ederken (tanılama).",
     "requiredArgs": [],
@@ -804,6 +836,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "directory_tree",
+    "displayName": "Klasör ağacı",
     "description": "Klasör/proje yapısını güvenli, sınırlı ağaç olarak listeler.",
     "usage": "Klasörde ne var, proje yapısı nasıl, hangi dosyalar mevcut sorularında.",
     "requiredArgs": [],
@@ -844,6 +877,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "document_read",
+    "displayName": "Belge okuma",
     "description": "PDF, DOCX, PPTX ve desteklenen belgelerden metin/özet çıkarır.",
     "usage": "Kullanıcının verdiği belgeyi okumadan analiz/yazım yapma. PDF içeriği okunacaksa önce document_read, PDF üretilecekse canvas_write.",
     "requiredArgs": [
@@ -893,6 +927,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "document_write",
+    "displayName": "Belge oluşturma",
     "description": "DOCX/Word belgesi üretir; metin, bölüm, tablo, grafik ve görsel bloklarını düzenli belgeye yazar.",
     "usage": "Word/DOCX, dilekçe, rapor, yazı, taslak, not veya profesyonel belge istendiğinde. PDF için canvas_write, Excel için spreadsheet_write, sunum için presentation_write.",
     "requiredArgs": [],
@@ -954,6 +989,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "email_draft",
+    "displayName": "E-posta taslağı",
     "description": "E-posta taslağı hazırlar (göndermez — kullanıcı onayına sunulur).",
     "usage": "E-posta yazmak için. Taslak onaydan sonra email_send ile gönderilir. Alıcı belirsizse netleştir.",
     "requiredArgs": [
@@ -974,6 +1010,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "email_send",
+    "displayName": "E-posta gönderme",
     "description": "Onaylı e-postayı GÖNDERİR (geri alınamaz — açık onay gerekir).",
     "usage": "Genelde email_draft ile taslak hazırlanıp onaydan sonra gönderilir. Doğrudan gönderim geri alınamaz.",
     "requiredArgs": [
@@ -996,6 +1033,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "file_move",
+    "displayName": "Dosya taşıma",
     "description": "Dosyayı başka bir konuma taşır (hedef klasörse içine).",
     "usage": "İndirilen dosyaları kullanıcının istediği klasöre toplamak.",
     "requiredArgs": [
@@ -1017,6 +1055,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "file_patch",
+    "displayName": "Dosya düzenleme",
     "description": "Var olan bir dosyada çıpalı bul/değiştir uygular (old_string → new_string).",
     "usage": "Bir dosyanın küçük bir bölümünü değiştirmek için. Tüm dosyayı yeniden yazmak için file_write.",
     "requiredArgs": [
@@ -1038,6 +1077,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "file_read",
+    "displayName": "Dosya okuma",
     "description": "Düz metin/kod dosyasını güvenli şekilde okur; satır aralığı ve boyut sınırı destekler.",
     "usage": "Kod, txt, md, json gibi düz dosyalar için. PDF/DOCX için document_read.",
     "requiredArgs": [
@@ -1081,6 +1121,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "file_search",
+    "displayName": "Dosya arama",
     "description": "Dosya içeriklerinde metin/regex arar; kod ve metin araştırması için hızlı indeksli arama kullanır.",
     "usage": "Kullanıcı bir repo/klasör içinde geçen metni, fonksiyonu, hatayı veya belge parçasını aradığında.",
     "requiredArgs": [
@@ -1126,6 +1167,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "file_write",
+    "displayName": "Dosya yazma",
     "description": "Düz metin/kod dosyası oluşturur veya açık overwrite ile değiştirir.",
     "usage": "TXT/MD/JSON/kod dosyası yazmak için. DOCX/PDF/XLSX/PPTX için ilgili writer capability'yi kullan.",
     "requiredArgs": [
@@ -1177,6 +1219,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "get_calendar_events",
+    "displayName": "Takvim etkinliklerini görme",
     "description": "Apple Calendar takvimini okur (etkinlikleri listeler).",
     "usage": "Kullanıcı takvimini/programını sorduğunda. Yeni etkinlik için add_calendar_event.",
     "requiredArgs": [
@@ -1197,6 +1240,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "get_reminders",
+    "displayName": "Hatırlatıcıları görme",
     "description": "Apple Reminders listesini okur.",
     "usage": "Hatırlatıcıları/yapılacakları görüntülerken. Yeni öğe için add_reminder.",
     "requiredArgs": [
@@ -1217,6 +1261,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "get_weather",
+    "displayName": "Hava durumu",
     "description": "Anlık hava durumunu özetler.",
     "usage": "Hava durumu sorulduğunda.",
     "requiredArgs": [],
@@ -1235,6 +1280,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "get_youtube_channel_report",
+    "displayName": "YouTube kanal raporu",
     "description": "YouTube kanal istatistiklerini ve son video performansını raporlar.",
     "usage": "Bir YouTube kanalının performansını özetlerken.",
     "requiredArgs": [],
@@ -1253,6 +1299,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "git_branch",
+    "displayName": "Git dal",
     "description": "Yeni bir git branch'i oluşturur (varsayılan: oluşturup geçer).",
     "usage": "Ana dalda çalışmadan önce yeni bir dal açarken.",
     "requiredArgs": [
@@ -1273,6 +1320,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "git_commit",
+    "displayName": "Git commit",
     "description": "Değişiklikleri commit'ler (opsiyonel git add -A). PUSH YAPMAZ.",
     "usage": "Değişiklikleri kaydederken. Push YAPMAZ (güvenlik). Yeni dal için git_branch.",
     "requiredArgs": [
@@ -1293,6 +1341,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "git_diff",
+    "displayName": "Git değişiklikleri",
     "description": "Bir git deposundaki çalışma ağacı veya staged farkını (diff) döndürür.",
     "usage": "Kod değişikliklerinin detayını görmek için.",
     "requiredArgs": [],
@@ -1311,6 +1360,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "git_status",
+    "displayName": "Git durumu",
     "description": "Bir git deposunun durumunu (branch + staged/unstaged/untracked) döndürür.",
     "usage": "Bir repoda hangi değişiklikler var diye bakarken.",
     "requiredArgs": [],
@@ -1329,6 +1379,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "image_edit",
+    "displayName": "Görsel düzenleme",
     "description": "Mevcut görseli kullanıcı düzeltmesine göre değiştirir; son görsel artefact/prompt bağlamını korur.",
     "usage": "'bunu beyaz yap', 'daha sinematik yap', 'arka planı değiştir' gibi follow-up görsel düzenlemelerinde.",
     "requiredArgs": [
@@ -1382,6 +1433,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "image_fetch",
+    "displayName": "Görsel indirme",
     "description": "Herkese açık bir kaynaktan (Openverse/Wikimedia) bir konu için görsel indirir ve kullanıcının klasörüne (varsayılan masaüstü) kaydeder.",
     "usage": "Web'den hazır/telifsiz görsel indirmek için. Sıfırdan görsel üretmek için image_generate.",
     "requiredArgs": [
@@ -1402,6 +1454,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "image_generate",
+    "displayName": "Görsel üretme",
     "description": "Yeni görsel üretir; prompt önceki görsel/artefact takiplerini ve kullanıcının düzeltmesini taşımalıdır.",
     "usage": "Sıfırdan görsel/resim çizmek/üretmek için. Mevcut görseli değiştirmek için image_edit.",
     "requiredArgs": [
@@ -1453,6 +1506,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "image_read",
+    "displayName": "Görsel inceleme",
     "description": "Görseli okur, içerik/etiket/metin/özet çıkarır.",
     "usage": "Paylaşılan fotoğraf/görsel/screenshot dosyasını anlamak için. Canlı aktif ekran için analyze_screen.",
     "requiredArgs": [
@@ -1496,6 +1550,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "latex_parse",
+    "displayName": "LaTeX işleme",
     "description": "LaTeX matematik ifadesini yerel sembolik forma çevirir/normalize eder.",
     "usage": "LaTeX'i işlerken. Sayısal çözüm için math_solve.",
     "requiredArgs": [
@@ -1516,6 +1571,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "make_directory",
+    "displayName": "Klasör oluşturma",
     "description": "Klasör oluşturur (üst klasörler dahil; varsa hata vermez).",
     "usage": "İndirilen/üretilen dosyaları toplamadan önce hedef klasörü hazırlamak veya kullanıcının istediği klasörü açmak.",
     "requiredArgs": [
@@ -1536,6 +1592,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "math_solve",
+    "displayName": "Matematik çözümü",
     "description": "Somut matematiksel ifadeyi çözer, sadeleştirir veya hesaplar; açıklama değil ifade alır.",
     "usage": "Hesaplama, denklem, oran, vergi/KDV, optimizasyon alt hesabı için. expression her zaman rakamlı/sembolik ifade olmalı.",
     "requiredArgs": [
@@ -1586,6 +1643,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "mcp_call_tool",
+    "displayName": "MCP aracı",
     "description": "Bağlı bir MCP sunucusundaki aracı çağırır (harici entegrasyonlar).",
     "usage": "Yerleşik yeteneklerin karşılamadığı, kullanıcının bağladığı bir MCP aracı gerektiğinde.",
     "requiredArgs": [
@@ -1607,6 +1665,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "ocr_read",
+    "displayName": "Görüntüden metin (OCR)",
     "description": "Görsel veya taranmış PDF sayfasındaki metni OCR ile çıkarır.",
     "usage": "Fotoğraf/ekran görüntüsü/taranmış belgedeki YAZIYI okumak için. Seçilebilir metinli belge için document_read.",
     "requiredArgs": [
@@ -1627,6 +1686,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "open_app",
+    "displayName": "Uygulama açma",
     "description": "Yerel bir masaüstü uygulamasını açar (Safari, Chrome, Notlar, Spotify…).",
     "usage": "Kullanıcı bir uygulamayı açmak istediğinde. URL/arama için browser_control, medya için play_media kullan.",
     "requiredArgs": [
@@ -1647,6 +1707,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "play_media",
+    "displayName": "Medya oynatma",
     "description": "YouTube, Spotify veya Apple Music ile şarkı/çalma listesi oynatır.",
     "usage": "Müzik/video çalmak için. Sadece uygulamayı açmak için open_app kullan.",
     "requiredArgs": [
@@ -1667,6 +1728,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "presentation_write",
+    "displayName": "Sunum oluşturma",
     "description": "PPTX/PowerPoint sunum üretir; araştırma/analiz çıktısını slaytlara böler.",
     "usage": "Sunum, slayt, pptx, ders/proje sunumu veya konuşma deck'i istendiğinde.",
     "requiredArgs": [],
@@ -1723,6 +1785,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "quantum_compare_classical",
+    "displayName": "Kuantum karşılaştırma",
     "description": "Kuantum demo sonucunu klasik baseline ile karşılaştırır.",
     "usage": "Kuantum sonucunu klasik yöntemle kıyaslarken.",
     "requiredArgs": [
@@ -1743,6 +1806,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "quantum_generate_report",
+    "displayName": "Kuantum raporu",
     "description": "Kuantum deney akışı için teknik rapor ve metrik artifact üretir.",
     "usage": "Kuantum deney akışının sonunda özet rapor üretmek için.",
     "requiredArgs": [
@@ -1763,6 +1827,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "quantum_model_problem",
+    "displayName": "Kuantum modelleme",
     "description": "Optimizasyon problemini QUBO/Ising demo modeline dönüştürür.",
     "usage": "Kuantum/optimizasyon demo akışının ilk adımı; ardından quantum_run_experiment.",
     "requiredArgs": [
@@ -1783,6 +1848,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "quantum_run_experiment",
+    "displayName": "Kuantum deneyi",
     "description": "QAOA/VQE simülatör demo deneyini yürütür.",
     "usage": "Kuantum demo deneyi çalıştırmak için (Qiskit/Aer gerekir).",
     "requiredArgs": [
@@ -1803,6 +1869,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "retrieve_context",
+    "displayName": "Yerel bağlam getirme",
     "description": "Yerel çalışma alanı ve konuşmalardan bağlam eşleşmeleri döndürür (çevrimdışı).",
     "usage": "Yerel/geçmiş bilgi gerektiğinde veya web erişilemediğinde. Güncel dış bilgi için web_research.",
     "requiredArgs": [
@@ -1823,6 +1890,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "run_skill",
+    "displayName": "Beceri çalıştırma",
     "description": "Hazır local skill workflow'unu exact skillId ve payload ile çalıştırır.",
     "usage": "Skill kataloğunda kullanıcının isteğine bire bir uyan hazırlanmış workflow varsa kullan. Skill id'sini capability adı gibi uydurma; yalnız katalogdaki exact id geçerlidir.",
     "requiredArgs": [
@@ -1869,6 +1937,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "save_memory",
+    "displayName": "Hafızaya kaydetme",
     "description": "Kullanıcı hakkında kalıcı bir tercih/olgu kaydeder (sonraki oturumlarda hatırlanır).",
     "usage": "Kullanıcı 'bunu hatırla/aklında tut' dediğinde kalıcı tercih/olgu kaydetmek için.",
     "requiredArgs": [
@@ -1890,6 +1959,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "save_whatsapp_contact",
+    "displayName": "WhatsApp kişi kaydı",
     "description": "WhatsApp kişisini kalıcı kaydeder (sonraki mesajlarda adla çözülür).",
     "usage": "Bir kişiyi ilerideki WhatsApp mesajları için kaydetmek üzere.",
     "requiredArgs": [
@@ -1911,6 +1981,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "send_whatsapp_message",
+    "displayName": "WhatsApp mesajı",
     "description": "WhatsApp Desktop/Web üzerinden mesaj hazırlar veya gönderir (gönderim dışa dönük — onay gerekir).",
     "usage": "WhatsApp mesajı için. Alıcı belirsiz/numara bilinmiyorsa netleştir, uydurma. Kişi kaydı için save_whatsapp_contact.",
     "requiredArgs": [
@@ -1931,6 +2002,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "shell_run",
+    "displayName": "Terminal komutu",
     "description": "Yerel terminal komutu çalıştırır (güçlü — açık onay gerekir).",
     "usage": "Yalnız başka yetenek yokken. Dosya işlemleri için file_* , git için git_* yeteneklerini tercih et.",
     "requiredArgs": [
@@ -1951,6 +2023,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "shell_session_close",
+    "displayName": "Terminal oturumu kapatma",
     "description": "Terminal oturumunu kapatır.",
     "usage": "İş bitince oturumu serbest bırak.",
     "requiredArgs": [
@@ -1971,6 +2044,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "shell_session_open",
+    "displayName": "Terminal oturumu açma",
     "description": "Kalıcı terminal oturumu açar; çalışma dizini ve ortam sonraki komutlarda korunur.",
     "usage": "Çok adımlı yazılım işleri için (derle/test/düzelt döngüsü). Tek komut yetiyorsa shell_run kullan.",
     "requiredArgs": [],
@@ -1989,6 +2063,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "shell_session_run",
+    "displayName": "Terminal oturumunda komut",
     "description": "Açık terminal oturumunda komut çalıştırır; cwd/ortam korunur, çıktı ve exit kodu döner.",
     "usage": "Testi çalıştır, çıktıyı oku, düzelt, tekrar çalıştır döngüsü için.",
     "requiredArgs": [
@@ -2010,6 +2085,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "speech_capture",
+    "displayName": "Ses kaydı",
     "description": "Yerel mikrofondan kısa ses kaydı başlatır veya durdurur.",
     "usage": "Sesli not/dikte almak için kaydı başlatıp durdurma. Kaydı metne çevirmek için speech_to_text.",
     "requiredArgs": [
@@ -2030,6 +2106,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "speech_to_text",
+    "displayName": "Sesten metne",
     "description": "Yerel ses kaydını metne çevirir (dikte).",
     "usage": "Ses kaydını yazıya dökmek için. Yazıyı sese çevirmek için text_to_speech.",
     "requiredArgs": [],
@@ -2048,6 +2125,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "spreadsheet_write",
+    "displayName": "Tablo oluşturma",
     "description": "XLSX/Excel çalışma kitabı üretir; satır, sütun, sheet ve hesap sonuçlarını yapılandırılmış tabloya yazar.",
     "usage": "Excel, xlsx, tablo, bütçe, hesap dökümü, karşılaştırma matrisi veya satır/sütunlu çıktı istendiğinde.",
     "requiredArgs": [],
@@ -2105,6 +2183,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "sys_info",
+    "displayName": "Sistem bilgisi",
     "description": "Sistem bilgisi alır: pil, CPU, RAM, disk, saat, tarih, ağ.",
     "usage": "Bilgisayarın anlık durumunu/saati sorulduğunda. Çalışan uygulamalar için desktop_os.processes.",
     "requiredArgs": [
@@ -2125,6 +2204,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "text_analyze",
+    "displayName": "Metin analizi",
     "description": "Okunan/araştırılan/hesaplanan içeriği profesyonel muhakeme özeti, karar, risk veya rapor planına dönüştürür.",
     "usage": "read/research/math çıktılarını belge/tablo/sunum yazmadan önce analiz etmek için. Sadece format export için writer yeterliyse atlanabilir.",
     "requiredArgs": [
@@ -2169,6 +2249,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "text_to_speech",
+    "displayName": "Metinden sese",
     "description": "Metni yerel olarak sesli okur.",
     "usage": "Bir metni/cevabı sesli okutmak için.",
     "requiredArgs": [
@@ -2189,6 +2270,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   },
   {
     "name": "web_research",
+    "displayName": "Web araştırması",
     "description": "Public web kaynaklarından araştırma özeti ve kaynak listesi üretir.",
     "usage": "Güncel/dış/public bilgi gerektiğinde. Özel dosya/metin içeriğini query'ye koyma; önce public arama, sonra private analiz/yazımda birleştir.",
     "requiredArgs": [

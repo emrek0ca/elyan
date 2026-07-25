@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
+import { ensureUserFacingMessage } from "../brain/capability-label-guard.js";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { ArtifactInput, TaskStatus } from "../../contracts/domain.js";
@@ -5858,8 +5859,9 @@ async function processSharedBrainChatTask(
                   policy: visibleTextPolicy,
                 })
               : "";
-            const visibleContent =
-              nonEchoVisibleContent || lastVisibleStreamingContent;
+            const visibleContent = ensureUserFacingMessage(
+              nonEchoVisibleContent || lastVisibleStreamingContent,
+            );
             const contentChanged =
               visibleContent !== lastVisibleStreamingContent;
             if (!contentChanged) {
@@ -6047,7 +6049,12 @@ async function processSharedBrainChatTask(
       });
       // Use the cleaned text everywhere so the inline prose doesn't repeat a
       // table/code/document that a widget block is already rendering.
-      const visibleText = inferenceResolved.text || completedResultText;
+      // TEK KAPI: yetenek etiketi ("Klasör ağacı", "Belge okuma") cevap olarak
+      // teslim edilemez. Masaüstü tarafında bu metin onlarca yoldan üretilebiliyor;
+      // denetim mobilin okuduğu mesajın MUTLAKA geçtiği bu sınırda yapılır.
+      const visibleText = ensureUserFacingMessage(
+        inferenceResolved.text || completedResultText,
+      );
       // Deterministik hedef bloğu: model kendi goal_progress bloğunu ürettiyse
       // duplike etme — aynı goalId için tek kart.
       const goalBlock =
