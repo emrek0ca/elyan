@@ -2,7 +2,8 @@
 
 > **Yeni oturum buradan başlasın.** Bu dosya, durumu yeniden keşfetmek için
 > harcanan token'ı sıfırlamak içindir. Önce bunu oku, kod taramaya sonra başla.
-> Son güncelleme: 2026-07-25 · Branch: `codex/quantum-runtime-brain`
+> Son güncelleme: 2026-07-25 (gece) · Branch: `codex/quantum-runtime-brain`
+> **Bugünkü durum + ileri plan için §4.9'a bak.**
 
 ---
 
@@ -300,6 +301,80 @@ doğrula, sonra istemciyi iyileştir.**
 
 Doğrulandı: deploy sonrası "30 maddelik kontrol listesi" isteği ekrana doğrudan
 30 maddeyle cevaplandı.
+
+---
+
+## 4.9 DURUM ÖZETİ + İLERİ PLAN (2026-07-25 sonu)
+
+### ŞU AN NE ÇALIŞIYOR
+
+Bugün üç katmanda birbirine bağlı arızalar kapandı ve **dispatch gerçekten iş
+yapıyor** (canlı kanıt: "Masaüstüne yeni klasör oluştur" → `/Users/emrekoca/
+Desktop/Yeni Klasör` gerçekten oluştu).
+
+| Katman | Neydi | Ne oldu |
+|---|---|---|
+| Backend plan | ">=2 adıma bölünemiyorsa boş plan" → tek yetenekli görevler ADIMSIZ gidiyordu | Tek adımlı plan geçerli (`materialize-plan.ts`) |
+| Desktop yürütme | Adımsız görevde hiç yürütmüyor, plan etiketini cevap sanıp yansıtıyordu | Adımsızsa YERELDE planlayıp yürütüyor (`bridge._execute_deterministic_remote_task`) |
+| Cevap teslimi | Yetenek etiketi ("Klasör ağacı") cevap olarak gidiyordu | Backend sınırında tek kapı (`capability-label-guard.ts`) |
+| Üretim hattı | `required_connector_tool_missing` geçerli cevabı 4 kez çöpe atıyordu | Zorlama yalnız ilk denemede (`inference.ts`) |
+| Süreklilik | `recentArtifacts` HEP null — "o klasörü sil" çözülemiyordu | Yürütme ürettiği yolları kaydediyor + kural promptta |
+
+**Değişmezler (bozma):** uydurma iddiası her denemede reddedilir · kullanıcının
+verdiği başlık ezilmez · sinyal yoksa alan üretilmez · hassas sinyal ham taşınmaz
+· etiket cevap olamaz · kaynak yoksa sorulur.
+
+### İLERİ PLAN — "doğru zamanda doğru şeyi hatırlamak"
+
+Hedef **her şeyi hatırlamak değil**; alakalı olanı, alakalı olduğu anda
+yüzeye çıkarmak. Sıra önem/maliyet dengesine göre:
+
+**1. Alaka kapılı hatırlama (en yüksek değer)**
+Bugün bağlam *itiliyor* (var olan her şey prompt'a giriyor). Olması gereken:
+*çekilen* bağlam — o turun ihtiyacına göre skorlanmış. Skor = alaka × tazelik ×
+görev-tipi uyumu. Alakasız hatırlatma, hatırlamamaktan kötüdür: modeli dağıtır.
+→ `situational_context.gather_situation()` + `understanding` arasına bir seçici
+katman; her alan "neden dahil edildi" gerekçesiyle girsin (izlenebilirlik).
+
+**2. Çalışma belleği ≠ uzun süreli bellek**
+Farklı ömür, farklı kural:
+- **Çalışma belleği** (bu görev): son çıktılar, çözülmemiş göndermeler, aktif
+  plan durumu → agresif dahil et, iş bitince TEMİZLE.
+- **Uzun süreli**: tercihler, tekrar eden kalıplar → yalnız eşleşince çağır.
+`recentOutputs` şu an ikisinin arasında duruyor; ayrılmalı.
+
+**3. Unutma (eksik olan yarısı)**
+`recentOutputs` süresiz duruyor. Bayat referans, referans yokluğundan TEHLİKELİ:
+"onu sil" bir hafta önceki dosyayı silebilir. Gerekli: TTL + varlık doğrulaması
+(yol artık yoksa kayıttan düş) + görev bitince çalışma belleğini boşalt.
+
+**4. Gönderme çözümü birinci sınıf adım olsun**
+"o/onu/şunu/bir tane daha" şu an prompt kuralıyla çözülüyor. Daha sağlamı:
+`understanding` çıktısında **çözülmüş hedef** alanı (`resolvedTarget: {path,
+kind, source}`) — planlayıcı tahmin etmesin, çözülmüş hedefi alsın. Çözülemezse
+açıkça `unresolved` desin ve tek soru sorulsun.
+
+**5. Canlılık: hak edilmiş olsun**
+`liveness_cues()` yazıldı ama cevaplara BAĞLANMADI — bilinçliydi: her turda
+"toplantına 30 dk var" demek yapmacıktır. Doğrusu: ipucu ancak o turun işiyle
+ALAKALIYSA yüzeye çıksın (ör. belge üretilirken yaklaşan toplantı adı). Bağlama
+kuralı: alaka yoksa sus.
+
+**6. Kendi durumunun farkındalığı**
+Model şu an "masaüstü bağlı mı"yı biliyor (`desktopPaired`). Eksik: "şu an bir
+görev yürüyor", "son görev başarısız oldu", "izin eksik". Bunlar bilinirse
+kaçamak cevap yerine dürüst durum cümlesi kurar.
+
+**7. ÖLÇÜM (bunsuz gerisi tahmin)**
+Bugüne kadar hiçbir iyileştirme uçtan uca ÖLÇÜLMEDİ. Küçük bir senaryo seti
+(10-15 gerçek görev) + geçti/kaldı tablosu kurulmalı. Aksi halde her oturum
+"düzelttim sanıyorum" ile geçiyor — bu oturumda üç kez böyle oldu.
+
+### BU OTURUMUN DERSİ
+Aynı belirti (etiket cevabı) **üç ayrı katmandan** besleniyordu ve her seferinde
+tek katmanı düzeltip "bitti" sandım. Kullanıcı haklı olarak "hiçbir şey
+değişmiyor" dedi. **Belirtiyi değil, belirtinin ulaştığı TÜM yolları kapat;
+kapattığını da o yolun kendisiyle doğrula.**
 
 ---
 
