@@ -503,6 +503,13 @@ type SharedBrainInferenceInput = {
    * (fail-closed, behavior unchanged).
    */
   gatePromptOverride?: string;
+  /**
+   * Sınıflandırma / şema doldurma turlarında gizli muhakemeyi sınırlar.
+   * Yüksek effort uzun zarflarda tüm token bütçesini yiyip görünür çıktıyı boş
+   * bırakıyor (Groq `json_validate_failed`, `failed_generation: ""`).
+   * Verilmezse workload politikası aynen geçerlidir.
+   */
+  reasoningEffortOverride?: "low" | "medium" | "high";
   /** Original user query used by skill-authorized knowledge adapters. */
   knowledgeQueryOverride?: string;
   /** Present only for skill execution; deny-by-default when empty. */
@@ -5584,6 +5591,12 @@ export async function generateSharedBrainReply(
           ? initialVisionMediaDecision.sensitivity
           : undefined,
         allowedProviders: input.providerAllowlist,
+        // Plan zarfı ve şema zorunlu turlar katı JSON bekler; araç-ajanı
+        // modeller (groq/compound) burada düzyazı döndürüp zinciri harcıyor.
+        structuredOutputRequired:
+          input.route === "desktop_plan" ||
+          input.route === "desktop_plan_repair" ||
+          Boolean(input.responseSchemaOverride),
       });
       const primaryCandidate = providerCandidates[0] ?? null;
       const servingProvider =
@@ -6238,7 +6251,14 @@ export async function generateSharedBrainReply(
       const connectorToolsAdvertised =
         app.config?.ELYAN_CONNECTOR_TOOLS_ENABLED === true &&
         (input.connectorToolContracts?.length ?? 0) > 0;
+      // Turn envelope SOHBET protokolüdür (message + tool_requests + bloklar).
+      // Masaüstü planlama/anlama rotası KENDİ şemasını ister; envelope'un katı
+      // json_schema'sı dayatılınca model iki şema arasında sıkışıp hiçbir şey
+      // üretemiyor (Groq `json_validate_failed`, `failed_generation: ""`).
+      const machineJsonRoute =
+        input.route === "desktop_plan" || input.route === "desktop_plan_repair";
       const turnEnvelopeEnabled =
+        !machineJsonRoute &&
         !input.responseSchemaOverride &&
         (app.config.ELYAN_TURN_ENVELOPE_ENABLED === true ||
           connectorToolsAdvertised ||
@@ -6301,10 +6321,12 @@ export async function generateSharedBrainReply(
       // Depth dial: harder questions reason at "high" effort (deeper, less
       // shallow), chit-chat stays "low" (fast). Independent of whether the
       // reasoning trace is shown.
-      const reasoningEffort = resolveReasoningEffort(
-        input.workload,
-        input.understandingContext?.taskFrame?.reasoningMode,
-      );
+      const reasoningEffort =
+        input.reasoningEffortOverride ??
+        resolveReasoningEffort(
+          input.workload,
+          input.understandingContext?.taskFrame?.reasoningMode,
+        );
       // Canlılık dial'i: sohbet turlarında daha yüksek temperature (doğal,
       // çeşitli, sıcak), analitik/kod/math turlarında 0.25 (kesin). reasoning
       // effort'tan bağımsız — biri derinlik, öteki ifade çeşitliliği.

@@ -148,6 +148,13 @@ export async function generateDesktopPlan(
     meteringSurface: "task",
     maxCompletionTokensOverride: PLAN_MAX_COMPLETION_TOKENS,
     timeoutMsOverride: PLAN_TIMEOUT_MS,
+    // REASONING TUZAĞI (canlı kanıt): planning workload'u "high" effort'a
+    // eşleniyor; uzun zarfla birlikte gizli düşünme turu tüm bütçeyi yiyor ve
+    // model GÖRÜNÜR çıktıyı hiç üretemiyor → Groq `json_validate_failed` +
+    // `failed_generation: ""`. Plan/anlama zarfı sınıflandırma işidir, derin
+    // muhakeme değil: burada effort "medium"da tutulur, bütçe görünür JSON'a
+    // kalır. Kalite kaybı yok — şemayı doldurmak muhakeme derinliği istemez.
+    reasoningEffortOverride: "medium",
     // Kapılar zarf ŞABLONUNU değil kullanıcının GERÇEK cümlesini denetlesin:
     // zarf metni ("mesaj, arama+üretim", "dışa gönderim" gibi şema açıklamaları)
     // external_send_request kalıplarına takılıyor ve HER anlama/planlama

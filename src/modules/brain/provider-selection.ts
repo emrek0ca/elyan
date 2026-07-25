@@ -156,6 +156,7 @@ function buildHostedProviderCandidates(
   workload: SharedBrainWorkload,
   visionProfile?: VisionMediaProfile,
   visionSensitivity?: VisionMediaDecision["sensitivity"],
+  structuredOutputRequired?: boolean,
 ): SharedBrainProviderCandidate[] {
   const hostedCandidates: SharedBrainProviderCandidate[] = [];
 
@@ -170,7 +171,14 @@ function buildHostedProviderCandidates(
   // duyarlı DEĞİLse compound birincil olarak denenir. Ardından mevcut gpt-oss
   // zinciri fallback kalır — compound boş/başarısız dönerse kalite gerilemez,
   // başarılı olursa canlı web + kod yürütmeyle grounding artar.
+  // Compound bir ARAÇ KULLANAN ajan modelidir: canlı web/kod turu koşar ve
+  // düzyazı + araç izi döndürür. Katı JSON isteyen rotalarda (desktop planlama,
+  // response schema zorunlu turlar) her çağrıda boş/geçersiz çıktı verip
+  // zinciri tüketiyordu — canlı kanıt: `groq/compound ... invalid_output:
+  // empty_response` iki denemede, ardından gerçek modele sıra gelmeden gecikme.
+  // Yapısal çıktı gerektiğinde compound zincire HİÇ girmez; gpt-oss birincil olur.
   const compoundEligible =
+    structuredOutputRequired !== true &&
     (!visionSensitivity || visionSensitivity === "none") &&
     shouldUseGroqCompound({ config: app.config, workload });
   const groqCompoundModel = compoundEligible
@@ -320,6 +328,9 @@ export function buildInferenceProviderCandidates(input: {
   visionProfile?: VisionMediaProfile;
   visionSensitivity?: VisionMediaDecision["sensitivity"];
   allowedProviders?: readonly SharedBrainProvider[];
+  /** Katı JSON bekleniyor (plan zarfı / response schema): araç-ajanı modeller
+   * zincire alınmaz — düzyazı döndürüp turu boşa harcarlar. */
+  structuredOutputRequired?: boolean;
 }) {
   const localCandidates = listSharedBrainProviderCandidates(input.app).map(
     (candidate) => ({
@@ -338,6 +349,7 @@ export function buildInferenceProviderCandidates(input: {
     input.workload,
     input.visionProfile,
     input.visionSensitivity,
+    input.structuredOutputRequired,
   );
   const preferredLocalCandidate = input.runtime.ready
     ? {
