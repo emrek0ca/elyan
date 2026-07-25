@@ -1810,6 +1810,28 @@ class RemoteTaskRunner:
                 )
             except Exception:
                 pass
+            # DERS DAMITMA: sayaç "ne kadar sık başarısız" der, ders "bir
+            # dahakine ne yap" der. Yalnız GERÇEK bir hata sınıfı varken
+            # üretilir — her turdan ders çıkarmak belleği gürültüyle doldurur.
+            try:
+                from runtime import lesson_store
+
+                lesson = lesson_store.distill_lesson(
+                    goal=str(work_order.get("goal", "") or work_order.get("title", "") or ""),
+                    outcome_summary=str(status or ""),
+                    capabilities=scope if isinstance(scope, list) else [],
+                    error_class=error_code,
+                    ok=normalized_status == "completed",
+                )
+                if lesson:
+                    lesson_store.record_lesson(
+                        lesson,
+                        capabilities=scope if isinstance(scope, list) else [],
+                        error_class=error_code,
+                        ok=normalized_status == "completed",
+                    )
+            except Exception:
+                pass
         state_store.update_remote_task_link(
             task_id,
             {

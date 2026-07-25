@@ -232,15 +232,43 @@ def build_tool_catalog(
         metadata = capability_metadata(name)
         if not metadata:
             continue
-        catalog.append(
-            {
-                "name": name,
-                "description": _clip(metadata.get("description", ""), 240),
-                "sideEffect": bool(metadata.get("sideEffect", False)),
-                "approvalRequired": bool(metadata.get("approvalRequired", False)),
-            }
-        )
+        entry = {
+            "name": name,
+            "description": _clip(metadata.get("description", ""), 240),
+            "sideEffect": bool(metadata.get("sideEffect", False)),
+            "approvalRequired": bool(metadata.get("approvalRequired", False)),
+        }
+        guidance = _tool_guidance(metadata)
+        if guidance:
+            entry["guidance"] = guidance
+        catalog.append(entry)
     return catalog
+
+
+def _tool_guidance(metadata: dict[str, Any]) -> list[str]:
+    """Aracın ANLAMSAL kullanım rehberi — kayıt metadata'sından TÜRETİLİR.
+
+    Amaç seçimi kelime eşleşmesinden çıkarıp anlama taşımak: model "ne zaman
+    uygun, neyi gerektirir, tekrarı güvenli mi" bilgisini görür ve kendi karar
+    verir. Burada araca özel elle yazılmış kural YOKTUR — her madde spec'te
+    zaten duran bir alandan çıkar, dolayısıyla kod değişince bayatlamaz."""
+    hints: list[str] = []
+    permissions = metadata.get("requiredPermissions")
+    if isinstance(permissions, (list, tuple)) and permissions:
+        hints.append("izin gerekir: " + ", ".join(str(item) for item in permissions[:3]))
+    if str(metadata.get("idempotency", "")) == "non_idempotent":
+        # Tekrar çağrı yeni yan etki üretir: model aynı adımı "emin olmak için"
+        # tekrarlamasın (canlı sınavda görülen israf sınıfı).
+        hints.append("tekrarı güvenli değil; sonucu doğrula, yeniden çalıştırma")
+    if metadata.get("retryable") is True:
+        hints.append("geçici hatada yeniden denenebilir")
+    dependencies = metadata.get("dependencyKeys")
+    if isinstance(dependencies, (list, tuple)) and dependencies:
+        hints.append("ön koşul: " + ", ".join(str(item) for item in dependencies[:3]))
+    platforms = metadata.get("supportedPlatforms")
+    if isinstance(platforms, (list, tuple)) and 0 < len(platforms) < 3:
+        hints.append("yalnız şu platformlarda: " + ", ".join(str(p) for p in platforms))
+    return hints[:4]
 
 
 # Salt bilgi toplayan (yan etkisiz) yetenekler: bunlar üst üste tekrarlanıyorsa
@@ -315,6 +343,21 @@ def build_decision_context(
     if stuck_hint:
         # Modele açık geri bildirim: aynı eylemi tekrarlıyorsun, stratejini değiştir.
         context["warning"] = stuck_hint
+    # DENEYİMDEN DERS: bu turun araç kümesiyle örtüşen geçmiş dersler. Alaka
+    # kapısı lesson_store'dadır — örtüşme yoksa hiçbir şey eklenmez.
+    try:
+        from runtime.lesson_store import relevant_lessons
+
+        names = [
+            str(tool.get("name", "") or "")
+            for tool in (tool_catalog or [])
+            if isinstance(tool, dict)
+        ]
+        lessons = relevant_lessons(capabilities=names)
+        if lessons:
+            context["lessons"] = lessons
+    except Exception:
+        pass
     return context
 
 

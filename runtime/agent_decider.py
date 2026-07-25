@@ -54,6 +54,11 @@ def build_decision_prompt(context: dict[str, Any]) -> str:
     warning = str(context.get("warning", "") or "").strip()
     if warning:
         payload["warning"] = warning
+    # GEÇMİŞ DENEYİM: yalnız bu turun araçlarıyla ÖRTÜŞEN dersler taşınır
+    # (alaka kapısı lesson_store'da). Alakasız ders modeli dağıtır.
+    lessons = context.get("lessons")
+    if isinstance(lessons, list) and lessons:
+        payload["lessonsFromExperience"] = lessons[:3]
     body = json.dumps(payload, ensure_ascii=False)
     schema = (
         '{"kind":"tool|finish|ask","capability":"<katalogdan ad>",'
