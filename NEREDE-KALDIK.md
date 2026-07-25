@@ -416,6 +416,54 @@ açık çalışma-belleği temizliği yok (TTL dolaylı karşılıyor); "izin ek
 sinyali selfState'te yok; backend cevap-üretimi selfState'i henüz almıyor
 (şimdilik yalnız niyet çözümü görüyor).
 
+### 4.11 ZEKÂ EĞİTİMİ TURU ✅ (2026-07-25 gece, ikinci blok)
+
+**Kural teyidi:** hiçbir maddede desen/keyword eklenmedi. Yöntem: bağlam
+üretimi, kanıt kapıları, metadata türetimi, ölçüm.
+
+**1. Eval seti** — `runtime/intelligence_eval.py` (14 senaryo) +
+`scripts/run_intelligence_eval.py`. Model erişilemezse `degraded_skip`
+(sahte hüküm yok). Testler: `tests/test_intelligence_eval_contract.py`.
+> **İLK KOŞU 4 CANLI P0 BULDU** (hepsi backend, hepsi düzeltildi + deploy):
+> (a) anlama zarfının şablon metni `external_send_request` kalıbına takılıp
+> HER `/desktop/plan` çağrısını kapıda blokluyordu → `userText` eklendi,
+> kapılar kullanıcının cümlesini denetliyor (`gatePromptOverride`);
+> (b) skill router zarfı kullanıcı isteği sanıp iç içe üretim başlatıyordu →
+> desktop_plan skill yönlendirmesini atlıyor; (c) `planning` workload'ının
+> 560 token tabanı reasoning modelinin gizli turunu kesiyordu →
+> `json_validate_failed(boş)`; taban 30s/2400 (2400 override'ı `Math.min`
+> ile tabana EZİLİYORDU); (d) sohbet sanitizasyonu plan JSON'unu silip
+> "doğrulanmış veri alamadım" yedeğini koyuyordu → planning muaf.
+> Backend 1605/1605 test geçti. **Kanıt: eval önce 0/14, düzeltmelerden sonra
+> senaryo geçmeye başladı (1 geçti / 13 atlandı).**
+> **Kalan (ops):** sağlayıcı zinciri — `groq/compound` boş yanıt,
+> gemini `data_sharing_consent_required`. Anlama katmanı değil, sağlayıcı
+> yapılandırması. Eval yeşile ancak bu çözülünce döner.
+
+**2. Öz-model** — `runtime/self_model.py`: yetenek sayısı/grupları
+`capability_registry`den, izinler state'ten TÜRETİLİR (elle liste yok →
+bayatlamaz). **Kapalı izinler açıkça bildirilir** → model "yaparım" deyip
+izin duvarına çarpmaz.
+
+**3. Dünya modeli** — `runtime/environment_model.py`: platform/kabuk/paket
+yöneticisi/mevcut araçlar bir kez keşfedilir (12s TTL cache). Terminal
+komutları artık bu makinenin gerçeğine dayanır.
+(2 ve 3 `intent_gate.understand` üzerinden anlamaya bağlı;
+testler: `tests/test_self_and_environment_model.py`.)
+
+**4. Ders damıtma** — `runtime/lesson_store.py`: biten işten TEK cümlelik ders
+damıtılır, **yalnız o turun yetenek/hata bağlamıyla örtüşürse** geri çağrılır
+(alaka kapısı). Ham içerik yok, en çok 24 kayıt, tekrar yazılmaz. Bağlantı:
+`remote_task_runner` (terminal sonuç) → kayıt; `agent_loop` → karar bağlamına
+enjeksiyon.
+
+**5. Anlamsal araç seçimi** — `agent_loop._tool_guidance()`: her araç için
+izin/idempotency/retry/ön koşul/platform ipuçları **spec metadata'sından
+türetilir**. Araca özel elle yazılmış kural yok; keyword kısa listesi kaba
+ön-filtre olarak kalır, otorite olmaz.
+
+Hepsi sıfır regresyonla (17 baseline hata sabit, `comm` yöntemi).
+
 ### BU OTURUMUN DERSİ
 Aynı belirti (etiket cevabı) **üç ayrı katmandan** besleniyordu ve her seferinde
 tek katmanı düzeltip "bitti" sandım. Kullanıcı haklı olarak "hiçbir şey
