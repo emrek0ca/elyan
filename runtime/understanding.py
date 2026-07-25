@@ -83,6 +83,32 @@ class SemanticUnderstanding:
     def targets(self) -> list[Entity]:
         return [item for item in self.entities if item.role == "target"]
 
+    def artifact_subject(self) -> str:
+        """Üretilecek dosyanın KONUSU — komut cümlesi değil.
+
+        Canlı arıza: "Ceza hukuku 3.sınıf ders notlarını özetle ve masaüstünde
+        belge oluştur" isteği, tüm cümle slug'lanarak
+        `ceza-hukuku-3-sinif-ders-notlarini-ozetle-ve-masaustunde-belge-o.docx`
+        adıyla kaydedilmişti. Dosya adı komutu değil İÇERİĞİ anlatmalı.
+
+        Konu, anlaşılan varlıklardan çıkarılır (önce hedef, sonra konu/kaynak);
+        hiçbiri yoksa boş döner ve çağıran mevcut davranışını sürdürür — uydurma
+        başlık atılmaz."""
+        preferred_roles = ("target", "source", "")
+        for role in preferred_roles:
+            for entity in self.entities:
+                if entity.role != role:
+                    continue
+                # Dosya/URL gibi teknik varlıklar başlık olmaz; konu olanları al.
+                if entity.type in {"topic", "person", "date"} or role == "target":
+                    value = entity.value.strip()
+                    # Tek kelimelik jenerik hedefler ("belge", "dosya") konu değildir.
+                    if value and value.lower() not in {
+                        "belge", "dosya", "rapor", "not", "notlar", "document", "file",
+                    }:
+                        return value[:120]
+        return ""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "contract": UNDERSTANDING_CONTRACT,
@@ -123,7 +149,13 @@ _SYSTEM_CONTRACT = (
     "iyi bir asistan bariz olanı sormaz, makul varsayar. Yalnız GERÇEKTEN belirsiz ve "
     "kritik olanı sor (ör. kime gönderilecek).\n"
     "7) Varsayımların sinyale DAYANSIN. Durum verisi yoksa uydurma; sessizce genel kal.\n"
-    "8) SADECE tek JSON nesnesi döndür."
+    "8) KAYNAK YOKSA SOR — bu KURALI ATLAMA. Kullanıcı var olan bir içeriği "
+    "işlemeni istiyorsa (özetle, çevir, analiz et, düzelt, karşılaştır) ama o içerik "
+    "ne mesajda ne ekli dosyada ne de bağlamda VARSA: intent='clarify' seç ve "
+    "missingInformation'a neyin gerektiğini yaz (ör. 'özetlenecek ders notları "
+    "dosyası'). Kaynak olmadan üretilen belge UYDURMADIR — asla 'task' deyip "
+    "boş içerikle dosya üretme. Konu hakkında genel bilgiyle doldurmak da uydurmadır.\n"
+    "9) SADECE tek JSON nesnesi döndür."
 )
 
 _SCHEMA_HINT = (

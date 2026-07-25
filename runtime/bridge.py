@@ -3221,6 +3221,14 @@ _ACTIVE_DISPATCH_SESSION_ID: contextvars.ContextVar[str] = contextvars.ContextVa
     default="",
 )
 
+# Turun semantik anlaması. Yürütme hunisi bunu okuyup üretilen dosyanın adını
+# KOMUT cümlesinden değil anlaşılan KONUDAN türetir (canlı arıza: dosya adı
+# "...-ozetle-ve-masaustunde-belge-o.docx" olmuştu).
+_CURRENT_ARTIFACT_SUBJECT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "elyan_current_artifact_subject",
+    default="",
+)
+
 
 def _invoke_provider_chat_with_context(
     state: dict[str, Any],
@@ -5079,6 +5087,68 @@ def _agent_loop_enabled() -> bool:
     if raw in {"0", "false", "no", "off"}:
         return False
     return True
+
+
+def _missing_source_question(missing: list[str]) -> str:
+    """Eksik kaynak için tek, net bir soru üretir.
+
+    Amaç kullanıcıyı sorgulamak değil, işi doğru yapabilmek: neyin eksik olduğunu
+    söyler ve nasıl verebileceğini gösterir."""
+    items = [str(item).strip() for item in missing if str(item or "").strip()]
+    if not items:
+        return "Bu işi yapabilmem için eksik bir bilgi var; paylaşabilir misin?"
+    if len(items) == 1:
+        need = items[0]
+    else:
+        need = ", ".join(items[:2]) + (" ve " + items[2] if len(items) > 2 else "")
+    return (
+        f"Bunu yapabilmem için {need} gerekiyor — elimde henüz yok. "
+        "Dosyayı ekleyebilir ya da içeriği buraya yapıştırabilirsin; "
+        "hemen devam ederim."
+    )
+
+
+_ARTIFACT_WRITE_CAPABILITIES = {
+    "document_write",
+    "canvas_write",
+    "presentation_write",
+    "spreadsheet_write",
+}
+
+
+def _retitle_artifact_from_subject(
+    capability: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Üretilecek dosyanın adını/başlığını anlaşılan konuya göre düzeltir.
+
+    Router deterministiktir ve modelden ÖNCE çalışır; bu yüzden dosya adını
+    kullanıcının cümlesini olduğu gibi slug'layarak üretiyordu. Anlama katmanı
+    konuyu çıkardıysa hem `title` hem `outputPath`in dosya adı kısmı bununla
+    yenilenir. Konu yoksa hiçbir şey değişmez (uydurma yok)."""
+    if capability not in _ARTIFACT_WRITE_CAPABILITIES or not isinstance(args, dict):
+        return args
+    subject = str(_CURRENT_ARTIFACT_SUBJECT.get("") or "").strip()
+    if not subject:
+        return args
+
+    updated = dict(args)
+    updated["title"] = subject
+    updated["_titleSource"] = "understood_subject"
+
+    raw_path = str(updated.get("outputPath", "") or "").strip()
+    if raw_path:
+        from pathlib import Path as _Path
+
+        from runtime.task_router import _slugify_output_hint
+
+        original = _Path(raw_path)
+        slug = _slugify_output_hint(subject, "elyan-output")
+        if slug:
+            updated["outputPath"] = str(
+                original.with_name(f"{slug}{original.suffix}")
+            )
+    return updated
 
 
 def _with_agent_loop_fallback(
@@ -9412,6 +9482,13 @@ class RuntimeBridge:
             )
         except Exception:
             pass
+        # Dosya adı/başlık ANLAŞILAN KONUdan türetilir. Router modelden önce
+        # çalıştığı için adı cümlenin tamamını slug'layarak üretiyordu; burada
+        # anlama sonucu varsa onunla düzeltilir.
+        try:
+            args = _retitle_artifact_from_subject(capability, args)
+        except Exception:
+            pass
         tool_result, step_events = _execute_capability_with_preprocessing(
             capability,
             args,
@@ -10104,6 +10181,49 @@ class RuntimeBridge:
             # niyet bunlarla çözülür → bariz sorular sorulmaz, canlı his artar.
             state=STATE.snapshot(),
         )
+        # Anlaşılan konuyu tur boyunca taşı: dosya adı/başlık bundan türetilir.
+        try:
+            _CURRENT_ARTIFACT_SUBJECT.set(intent_decision.artifact_subject())
+        except Exception:
+            pass
+        # KAYNAK KAPISI: kullanıcı var olan bir içeriği işlemek istiyor ama içerik
+        # yok (ne mesajda, ne ekte, ne bağlamda). Boş içerikle dosya üretmek
+        # uydurmadır — üretmek yerine SOR. Cevap geldiğinde normal akış devam
+        # eder (soru turu plan/onay üretmez, sadece eksik bilgiyi ister).
+        if (
+            intent_decision.intent == "clarify"
+            and intent_decision.missing_information
+            and not normalized_selected
+        ):
+            question = _missing_source_question(intent_decision.missing_information)
+            STATE.append_message(
+                conversation_id,
+                "assistant",
+                question,
+                {
+                    "clarificationNeeded": True,
+                    "intent": "clarify",
+                    "understanding": intent_decision.to_dict(),
+                },
+            )
+            return {
+                "ok": True,
+                "chatOk": True,
+                "capability": "conversation.send",
+                "conversationId": conversation_id,
+                "assistantMessage": question,
+                "provider": "understanding",
+                "toolEvents": [],
+                "intent": "clarify",
+                "confidence": intent_decision.confidence,
+                "executionMode": "clarification",
+                "needsConfirmation": False,
+                "clarificationNeeded": True,
+                "clarificationQuestion": question,
+                "planPreview": None,
+                "pendingPlanId": None,
+                "state": STATE.snapshot(),
+            }
         # P0.5 KAPSAM — iki kademeli:
         #  (a) ÖN ALMA: router yanlış yeteneğe düşürdüyse (mismatch) semantik
         #      yolu beklemeden ajan döngüsü devralır; çünkü rota zaten yanlış.
