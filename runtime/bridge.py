@@ -3634,20 +3634,28 @@ def _server_brain_structured_plan(
     prompt: str,
     *,
     repair: bool = False,
+    user_text: str = "",
 ) -> dict[str, Any] | None:
     """Planlama zarfını adanmış /v1/brain/desktop/plan endpoint'ine gönderir.
 
     Başarıda `_invoke_provider_chat` ile aynı şekle sahip {"ok": True,
     "content": <plan JSON metni>} döner; endpoint yoksa/başarısızsa None →
-    çağıran eski chat yoluna düşer (geriye dönük uyum)."""
+    çağıran eski chat yoluna düşer (geriye dönük uyum).
+
+    ``user_text``: zarfın içindeki HAM kullanıcı cümlesi. Backend güvenlik
+    kapıları bunu denetler — verilmezse tüm zarf denetlenir ve zarf şablonu
+    ("mesaj gönder" gibi şema örnekleri) external_send kalıbına takılıp HER
+    çağrıyı bloklayabilir (canlıda semantik anlamayı tamamen öldüren buydu)."""
     try:
-        plan_result = backend.desktop_plan(
-            {
-                "contract": structured_planner.PLAN_CONTRACT,
-                "prompt": prompt,
-                "repair": bool(repair),
-            }
-        )
+        payload: dict[str, Any] = {
+            "contract": structured_planner.PLAN_CONTRACT,
+            "prompt": prompt,
+            "repair": bool(repair),
+        }
+        clean_user_text = str(user_text or "").strip()
+        if clean_user_text:
+            payload["userText"] = clean_user_text[:4_000]
+        plan_result = backend.desktop_plan(payload)
     except Exception:
         return None
     if not getattr(plan_result, "ok", False):
@@ -3801,7 +3809,7 @@ def _semantic_route(
         # plan JSON'u döner. Eski backend'lerde (404/hata) chat yoluna düşer.
         result: dict[str, Any] | None = None
         if provider == "server_brain" and backend is not None and hasattr(backend, "desktop_plan"):
-            result = _server_brain_structured_plan(backend, prompt)
+            result = _server_brain_structured_plan(backend, prompt, user_text=text)
         if result is None:
             result = _invoke_provider_chat_with_context(
                 state,
@@ -3838,7 +3846,9 @@ def _semantic_route(
             repair_prompt = structured_planner.planning_prompt(repair_request)
             repair_result: dict[str, Any] | None = None
             if provider == "server_brain" and backend is not None and hasattr(backend, "desktop_plan"):
-                repair_result = _server_brain_structured_plan(backend, repair_prompt, repair=True)
+                repair_result = _server_brain_structured_plan(
+                    backend, repair_prompt, repair=True, user_text=text
+                )
             if repair_result is None:
                 repair_result = _invoke_provider_chat_with_context(
                     state,
@@ -10207,8 +10217,14 @@ class RuntimeBridge:
         # (kalite sessizce düşmez, izlenebilir).
         _understanding_transport = None
         if self.backend is not None and not _deterministic_only_enabled():
+            # userText ŞART: backend güvenlik kapıları zarf şablonunu değil
+            # kullanıcının gerçek cümlesini denetler. Bu olmadan anlama
+            # prompt'u external_send kalıbına takılıp HER çağrıda bloklanıyor
+            # ve semantik anlama sessizce deterministik yedeğe düşüyordu.
             _understanding_transport = agent_decider.make_backend_send_prompt(
-                lambda prompt: _server_brain_structured_plan(self.backend, prompt)
+                lambda prompt: _server_brain_structured_plan(
+                    self.backend, prompt, user_text=text
+                )
             )
         intent_decision = intent_gate.understand(
             text,
