@@ -473,6 +473,40 @@ transport değil **anlama** hataları çıktı. Üç turda ölçerek düzeltildi
    olursa olsun `clarify`. Böylece task yolunu gevşetmek "onu sil"i tahminle
    çalıştırmıyor.
 
+### 4.13 EKOSİSTEM FARKINDALIĞI + TESLİMAT SÖZLEŞMESİ (`a530a7a0`)
+
+**`runtime/ecosystem_model.py` (YENİ)** — Elyan üç yüzeyli TEK organizmadır:
+mobil = yüz, backend = paylaşılan beyin, masaüstü = eller. Anatomi mimari
+bilgidir (desen değil); **durum canlı sinyalden** okunur (`pairing.
+connectedDevices`, `runtime.ready/lifecycleState`, runtime token/ws) — "bağlı"
+asla varsayılmaz. `delivery_outlook()` gereken yüzey kapalıysa dürüstlük
+direktifi üretir.
+
+> **KAPSAM KURALI (bozma):** ekosistem bilgisi NİYETİ DEĞİŞTİRMEZ. İlk
+> denemede değiştirdi ve "selam nasılsın" → `task` çıktı. Sözleşmede artık
+> açıkça yazılı: ekosistem yalnız işin NEREDE yapılacağını ve nasıl
+> konuşulacağını belirler. Eller kapalıysa iş reddedilmez ama "yaptım" da
+> denmez; açıksa "yapamam" denmez.
+
+**Teslimat sözleşmesi** — `agent_loop`: anlama zarfının `deliverables` beyanı
+döngüye taşınır (`bridge` iki çağrı yerinde de besliyor) ve `finish` KAPIDAN
+geçer: hiçbir şey üretilmemişse bir kez uyarır ("önce üret; üretemiyorsan
+neyin engellediğini söyle, iddia etme") ve döngüye döner. Kanıt tanımı
+KASITLI geniş (herhangi bir artifact ya da yol taşıyan adım sonucu) — dar
+eşleme yanlış pozitif üretir, o da kural yazma tuzağının aynısıdır.
+
+Eval'e iki ekosistem senaryosu eklendi (`ekosistem_eller_kapali/acik`) →
+toplam 16.
+
+**AÇIK (deploy bekliyor):** anlama prompt'u büyüdükçe `medium` effort +
+2400 token tavanı da yetmemeye başladı (`empty_response`). Tavan yerelde
+**4096**'ya çıkarıldı (`workloads.ts`, `workload-policy.ts`,
+`desktop-plan.ts` + testi) ama **VPS'e deploy EDİLMEDİ**. Deploy komutu:
+```bash
+cd /Users/emrekoca/elyan-backend && npm run build && scp src/modules/brain/workloads.ts src/modules/brain/workload-policy.ts src/modules/brain/workload-policy.test.ts src/modules/brain/desktop-plan.ts root@84.247.172.213:/srv/elyan-backend/src/modules/brain/ && ssh root@84.247.172.213 "cd /srv/elyan-backend && docker compose -f compose.server.yaml up -d --build backend brain-worker chat-worker"
+```
+Deploy edilene kadar eval koşuları yüksek `degraded_skip` verir.
+
 **Değişkenlik uyarısı (dürüst):** tek eval koşusu gürültülüdür — sağlayıcı
 tökezlemesi `degraded_skip` üretir (son koşuda 1). Bir düzeltmeyi tek koşuya
 bakarak "oldu/olmadı" diye yargılama; en az iki koşu ya da `--only` ile
