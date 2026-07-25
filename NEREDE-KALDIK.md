@@ -436,9 +436,47 @@ sinyali selfState'te yok; backend cevap-üretimi selfState'i henüz almıyor
 > "doğrulanmış veri alamadım" yedeğini koyuyordu → planning muaf.
 > Backend 1605/1605 test geçti. **Kanıt: eval önce 0/14, düzeltmelerden sonra
 > senaryo geçmeye başladı (1 geçti / 13 atlandı).**
-> **Kalan (ops):** sağlayıcı zinciri — `groq/compound` boş yanıt,
-> gemini `data_sharing_consent_required`. Anlama katmanı değil, sağlayıcı
-> yapılandırması. Eval yeşile ancak bu çözülünce döner.
+> **Sağlayıcı zinciri ÇÖZÜLDÜ** (aynı gece, `c536946a`) — üç ayrı sebep
+> üst üsteydi: (i) `groq/compound` bir ARAÇ-AJANI modeli; katı JSON
+> döndürmez, zincirin başında iki kez boş dönüp gerçek modele sıra
+> bırakmıyordu → yapısal çıktı isteyen rotalarda zincire hiç alınmıyor
+> (`structuredOutputRequired`); (ii) sohbetin **turn envelope** katı şeması
+> planlama rotasına dayatılıyordu, model iki şema arasında sıkışıp hiçbir
+> şey üretmiyordu → makine-JSON rotalarında envelope kapalı; (iii) `planning`
+> workload'u `high` reasoning effort'a eşleniyor, uzun zarfla gizli düşünme
+> tüm bütçeyi yiyip görünür çıktıyı boş bırakıyordu (Groq
+> `json_validate_failed`, `failed_generation:""`) → `reasoningEffortOverride:
+> "medium"`. Gemini'nin `data_sharing_consent_required` reddi KASITLI
+> gizlilik kapısıdır, dokunulmadı.
+
+### 4.12 ⚑ EVAL-GÜDÜMLÜ ZEKÂ TURU — 0/14 → 13/14 (2026-07-26)
+
+Sağlayıcı zinciri açılınca eval GERÇEKTEN ölçmeye başladı ve kalan hatalar
+transport değil **anlama** hataları çıktı. Üç turda ölçerek düzeltildi
+(`07b440a9`), **hiç desen eklenmeden**:
+
+| Tur | Sonuç | Ne düzeltildi |
+|---|---|---|
+| 1 | 9 geçti / 4 kaldı | (başlangıç ölçümü) |
+| 2 | 11 geçti / 1 kaldı | grounding kapısı + ayrım ilkesi |
+| 3 | **13 geçti / 0 kaldı** | gönderme kuralı zorunlu kılındı |
+
+1. **Grounding kapısı yanlış tetikleniyordu:** model gönderme OLMAYAN
+   isteklerde de `unresolved` işaretleyince görev netleştirmeye düşüyordu
+   ("masaüstüne Faturalar klasörü oluştur" → gereksiz soru). Artık zarfın
+   KENDİ kanıtına bakıyor: somut hedef varlığı varsa sorulacak şey yoktur.
+2. **Ayrım ilkesi öne alındı:** "kullanıcı bu turun sonunda ELİNDE BİR ŞEY
+   mi bekliyor, yoksa BİLGİ mi?" Belirsizlik kuralının açık emirleri sohbete
+   çekmesi bitti — *yıkıcı işi chat'e çevirmek onu güvenli yapmaz; onay
+   kapısı ayrı katmandadır.*
+3. **Gönderme kuralı üstün:** hedefi çözülemeyen gönderme, emir ne kadar açık
+   olursa olsun `clarify`. Böylece task yolunu gevşetmek "onu sil"i tahminle
+   çalıştırmıyor.
+
+**Değişkenlik uyarısı (dürüst):** tek eval koşusu gürültülüdür — sağlayıcı
+tökezlemesi `degraded_skip` üretir (son koşuda 1). Bir düzeltmeyi tek koşuya
+bakarak "oldu/olmadı" diye yargılama; en az iki koşu ya da `--only` ile
+hedefli tekrar kullan.
 
 **2. Öz-model** — `runtime/self_model.py`: yetenek sayısı/grupları
 `capability_registry`den, izinler state'ten TÜRETİLİR (elle liste yok →
