@@ -6794,6 +6794,16 @@ export async function generateSharedBrainReply(
                       attempt.turnEnvelopeMode &&
                       ((
                         requiredConnectorReadHint?.enforcement === "require" &&
+                        // Yalnız İLK denemede zorla. Canlı arıza: "Zaman
+                        // yönetimi için 30 maddelik kontrol listesi yaz"
+                        // isteğinde connector ipucu "zorunlu" dedi, model
+                        // (haklı olarak) hiçbir connector çağırmadı ve dürüst
+                        // cevap her modelde reddedildi → tüm sağlayıcılar
+                        // tükendi → kullanıcı yedek metni gördü. Aracı bir kez
+                        // teşvik etmek doğru; ısrar edip GEÇERLİ cevabı çöpe
+                        // atmak değil. Uydurma iddiası (aşağıdaki koşul) her
+                        // denemede reddedilmeye devam eder.
+                        retryIndex === 0 &&
                         !turnEnvelopeSatisfiesConnectorReadHint(
                           streamEnvelope,
                           requiredConnectorReadHint,
@@ -7043,8 +7053,14 @@ export async function generateSharedBrainReply(
                         visibleText,
                       );
                     const missingRequiredConnectorTool =
+                      // Uydurma iddiası HER denemede reddedilir.
                       fabricatedConnectorRead ||
+                      // Araç kullanılmadı ama yalan da söylenmedi: yalnız ilk
+                      // denemede zorla, sonra dürüst cevabı teslim et. Israr
+                      // etmek tüm sağlayıcıları tüketip kullanıcıyı yedek
+                      // metne mahkûm ediyordu.
                       (attempt.turnEnvelopeMode &&
+                        retryIndex === 0 &&
                         requiredConnectorReadHint?.enforcement === "require" &&
                         !turnEnvelopeSatisfiesConnectorReadHint(
                           envelope,
