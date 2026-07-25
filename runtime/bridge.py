@@ -14700,13 +14700,58 @@ class RuntimeBridge:
                 local_replan_only=trusted_server_plan,
                 plan_preview=plan_preview,
             )
-        else:
+        elif approval_requested:
+            # Tüm adımlar onay gerektiriyor: bu meşru bir onay turudur, cevap değil.
             ok = True
             content = str(plan_preview.get("summary", "") or "Görev için açık onay gerekiyor.")
             tool_events = []
             error_code = ""
             structured_result = None
             artifacts = []
+        else:
+            # ADIMSIZ GÖREV — dispatch'in gerçek boşluğu buradaydı. Backend
+            # yürütülebilir adım göndermediğinde masaüstü hiçbir şey yapmıyor,
+            # plan ÖZETİNİ (yetenek etiketi: "Klasör ağacı") cevap diye geri
+            # yansıtıyordu. Kullanıcı iş yapıldığını sanıyordu; oysa yürütme hiç
+            # başlamamıştı. Artık istek YERELDE planlanıp yürütülür.
+            local_steps: list[dict[str, Any]] = []
+            try:
+                routed_local = route_text_to_tool(prompt)
+                if routed_local is not None:
+                    local_steps = [
+                        dict(step)
+                        for step in (getattr(routed_local, "steps", ()) or ())
+                        if isinstance(step, dict)
+                    ]
+                    if not local_steps and str(getattr(routed_local, "tool_name", "") or "").strip():
+                        local_steps = [
+                            {
+                                "capability": str(routed_local.tool_name),
+                                "args": dict(getattr(routed_local, "args", {}) or {}),
+                            }
+                        ]
+            except Exception:
+                local_steps = []
+            if local_steps:
+                ok, content, tool_events, error_code, structured_result, artifacts = self._execute_plan_steps(
+                    local_steps,
+                    source="runtime_task",
+                    task_id=str(task.get("id", "") or ""),
+                    conversation_id=conversation_id,
+                    confirmed=False,
+                    plan_preview=plan_preview,
+                )
+            else:
+                # Yerelde de plan çıkmadı: uydurma yapma, dürüst söyle.
+                ok = False
+                content = (
+                    "Bu isteği yürütülebilir bir adıma çeviremedim. Biraz daha "
+                    "açık yazar mısın (ne yapılsın, nerede)?"
+                )
+                tool_events = []
+                error_code = "NO_EXECUTABLE_PLAN"
+                structured_result = None
+                artifacts = []
         if conversation_id:
             STATE.append_message(
                 conversation_id,
