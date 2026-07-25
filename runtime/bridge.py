@@ -10228,9 +10228,13 @@ class RuntimeBridge:
         # yok (ne mesajda, ne ekte, ne bağlamda). Boş içerikle dosya üretmek
         # uydurmadır — üretmek yerine SOR. Cevap geldiğinde normal akış devam
         # eder (soru turu plan/onay üretmez, sadece eksik bilgiyi ister).
+        # Kamuya açık bilgi için SORMA — araştırma adımı kaynağı sağlar. Soru
+        # yalnız kullanıcının ÖZEL içeriği eksikse anlamlıdır; aksi halde
+        # gereksiz sürtünme yaratır ("2026 KDV oranlarını tablola" → sorulmamalı).
         if (
             intent_decision.intent == "clarify"
             and intent_decision.missing_information
+            and intent_decision.source_kind != "public_external"
             and not normalized_selected
         ):
             question = _missing_source_question(intent_decision.missing_information)

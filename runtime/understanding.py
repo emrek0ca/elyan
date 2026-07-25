@@ -67,6 +67,11 @@ class SemanticUnderstanding:
     risk: str = "low"
     degraded: bool = False
     signals: list[str] = field(default_factory=list)
+    # İşlenecek içeriğin kaynağı NEREDE:
+    #   user_private    — kullanıcının kendi içeriği (notları, dosyası) → SOR
+    #   public_external — kamuya açık/güncel bilgi → GETİR (web/Compound), sorma
+    #   none            — işin kaynağa ihtiyacı yok
+    source_kind: str = "none"
 
     @property
     def is_task(self) -> bool:
@@ -122,6 +127,7 @@ class SemanticUnderstanding:
             "constraints": self.constraints,
             "missingInformation": self.missing_information,
             "risk": self.risk,
+            "sourceKind": self.source_kind,
             "reasoning": self.reasoning[:480],
             "signals": self.signals,
         }
@@ -149,12 +155,18 @@ _SYSTEM_CONTRACT = (
     "iyi bir asistan bariz olanı sormaz, makul varsayar. Yalnız GERÇEKTEN belirsiz ve "
     "kritik olanı sor (ör. kime gönderilecek).\n"
     "7) Varsayımların sinyale DAYANSIN. Durum verisi yoksa uydurma; sessizce genel kal.\n"
-    "8) KAYNAK YOKSA SOR — bu KURALI ATLAMA. Kullanıcı var olan bir içeriği "
-    "işlemeni istiyorsa (özetle, çevir, analiz et, düzelt, karşılaştır) ama o içerik "
-    "ne mesajda ne ekli dosyada ne de bağlamda VARSA: intent='clarify' seç ve "
-    "missingInformation'a neyin gerektiğini yaz (ör. 'özetlenecek ders notları "
-    "dosyası'). Kaynak olmadan üretilen belge UYDURMADIR — asla 'task' deyip "
-    "boş içerikle dosya üretme. Konu hakkında genel bilgiyle doldurmak da uydurmadır.\n"
+    "8) KAYNAĞI SINIFLA, sonra karar ver — 'sourceKind' alanını doldur:\n"
+    "   • user_private → içerik KULLANICIYA ait ve elimizde yok ('benim notlarım', "
+    "'şu dosyayı', 'attığım rapor'). Bunu uydurmak yasak: intent='clarify' seç, "
+    "missingInformation'a neyin gerektiğini yaz.\n"
+    "   • public_external → içerik KAMUYA AÇIK bilgi ('2026 KDV oranları', 'X "
+    "şirketinin son bilançosu', 'Python asyncio nasıl çalışır'). Bunu SORMA — "
+    "araştırılıp getirilebilir. intent='task' seç; araştırma adımı kaynağı sağlar.\n"
+    "   • none → işin dış kaynağa ihtiyacı yok.\n"
+    "   Ayrım şu: kullanıcının ÖZEL verisi mi (soramazsan uydurursun), yoksa "
+    "herkesin erişebileceği bilgi mi (araştırılabilir)? Kamuya açık bilgi için soru "
+    "sormak gereksiz sürtünmedir; özel içerik için sormamak uydurmadır.\n"
+    "   Kaynağı olmayan belgeyi ASLA genel bilgiyle doldurup 'task' deme.\n"
     "9) SADECE tek JSON nesnesi döndür."
 )
 
@@ -162,7 +174,8 @@ _SCHEMA_HINT = (
     '{"intent":"chat|task|task_control|clarify","confidence":0.0,'
     '"taskType":"<kısa etiket>","reasoning":"<neden>",'
     '"entities":[{"type":"file|app|url|person|date|topic","value":"","role":"target|source|constraint"}],'
-    '"deliverables":[],"constraints":[],"missingInformation":[],"risk":"low|medium|high"}'
+    '"deliverables":[],"constraints":[],"missingInformation":[],"risk":"low|medium|high",'
+    '"sourceKind":"user_private|public_external|none"}'
 )
 
 
@@ -236,6 +249,11 @@ def parse_understanding(payload: Any) -> SemanticUnderstanding | None:
     except (TypeError, ValueError):
         confidence = 0.0
     risk = str(payload.get("risk", "") or "low").strip().lower()
+    source_kind = str(
+        payload.get("sourceKind", "") or payload.get("source_kind", "") or "none"
+    ).strip().lower()
+    if source_kind not in {"user_private", "public_external", "none"}:
+        source_kind = "none"
     return SemanticUnderstanding(
         intent=intent,
         confidence=max(0.0, min(1.0, confidence)),
@@ -247,6 +265,7 @@ def parse_understanding(payload: Any) -> SemanticUnderstanding | None:
         constraints=_coerce_texts(payload.get("constraints")),
         missing_information=_coerce_texts(payload.get("missingInformation")),
         risk=risk if risk in {"low", "medium", "high"} else "low",
+        source_kind=source_kind,
     )
 
 
