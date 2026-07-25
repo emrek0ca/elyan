@@ -247,6 +247,30 @@ def understand(
     except Exception:
         situational = None
 
+    # ÖZ-MODEL + DÜNYA MODELİ: "ben neyim / bu makinede ne var" bilgisi koddan
+    # türetilir. İkisi de niyet çözümünü doğrudan etkiler: izni kapalı bir işi
+    # "yaparım" diye görev sayma; bu makinede olmayan aracı varsayma.
+    try:
+        from runtime.self_model import build_self_card, self_card_is_informative
+
+        card = build_self_card(state)
+        if self_card_is_informative(card):
+            situational = dict(situational or {})
+            situational["selfModel"] = card
+    except Exception:
+        pass
+    try:
+        from runtime import environment_model
+
+        facts = environment_model.to_prompt_context(
+            environment_model.environment_facts(state)
+        )
+        if facts:
+            situational = dict(situational or {})
+            situational["environment"] = facts
+    except Exception:
+        pass
+
     return understanding_module.analyze(
         text,
         send_prompt=send_prompt,
