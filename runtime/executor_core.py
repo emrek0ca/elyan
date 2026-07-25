@@ -11,7 +11,12 @@ from typing import Any, Callable
 
 from runtime import state_store
 from runtime.agent_planning import build_agent_plan
-from runtime.capability_registry import capability_metadata, capability_metadata_summary, capability_readiness
+from runtime.capability_registry import (
+    capability_display_name,
+    capability_metadata,
+    capability_metadata_summary,
+    capability_readiness,
+)
 from runtime.capability_validation import (
     attach_step_evidence,
     pre_execution_state,
@@ -1374,10 +1379,13 @@ class ExecutorCore:
             source=source,
             task_id=task_id,
             conversation_id=conversation_id,
+            # Özet HAM yetenek adlarından kurulmaz. Canlı arıza: tek adımlık
+            # planlarda bu string ("desktop_operator.run") kullanıcıya cevap
+            # olarak sızıyordu. Dostane ad kullanılır → sızsa bile okunabilir.
             summary="; ".join(
-                str(step.get("capability", "") or "").strip()
+                capability_display_name(str(step.get("capability", "") or "").strip())
                 for step in steps
-                if isinstance(step, dict)
+                if isinstance(step, dict) and str(step.get("capability", "") or "").strip()
             ),
             planned_steps=steps,
             plan_preview=plan_preview,
