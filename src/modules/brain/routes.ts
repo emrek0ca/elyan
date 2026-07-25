@@ -229,6 +229,7 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
       contract: body.contract,
       repair: body.repair,
       taskId: body.taskId,
+      userText: body.userText,
       requestId: requestContext.requestId,
     });
 

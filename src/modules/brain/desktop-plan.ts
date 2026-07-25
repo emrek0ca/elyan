@@ -28,6 +28,8 @@ export type DesktopPlanInput = {
   /** Onarım turu: geçersiz yanıt + doğrulama hataları veri olarak gelir. */
   repair?: boolean;
   taskId?: string;
+  /** Zarfın içindeki ham kullanıcı cümlesi — güvenlik kapıları bunu denetler. */
+  userText?: string;
   requestId?: string;
 };
 
@@ -146,6 +148,14 @@ export async function generateDesktopPlan(
     meteringSurface: "task",
     maxCompletionTokensOverride: PLAN_MAX_COMPLETION_TOKENS,
     timeoutMsOverride: PLAN_TIMEOUT_MS,
+    // Kapılar zarf ŞABLONUNU değil kullanıcının GERÇEK cümlesini denetlesin:
+    // zarf metni ("mesaj, arama+üretim", "dışa gönderim" gibi şema açıklamaları)
+    // external_send_request kalıplarına takılıyor ve HER anlama/planlama
+    // çağrısını blokluyordu. userText verilmediyse davranış değişmez —
+    // tüm zarf denetlenir (fail-closed). Güvenlik dengesi: bu endpoint yalnız
+    // plan JSON'u üretir; yan etkiler masaüstünde safety_policy + açık onay
+    // kapısından geçmeden asla çalışmaz.
+    gatePromptOverride: input.userText,
     requestMetadata: {
       desktopPlan: true,
       contract: DESKTOP_PLAN_CONTRACT,

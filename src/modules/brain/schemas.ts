@@ -91,6 +91,11 @@ export const desktopPlanBodySchema = z.object({
   prompt: z.string().trim().min(1).max(48_000),
   repair: z.boolean().default(false),
   taskId: z.string().trim().max(120).optional(),
+  // Zarfın İÇİNDEKİ ham kullanıcı cümlesi. Güvenlik kapıları bunu denetler;
+  // yoksa tüm zarf denetlenir (fail-closed). Zarf şablonu "mesaj gönder" gibi
+  // ifadeler içerdiğinden kapılar zarfı kullanıcı isteği sanıp HER planlama/
+  // anlama çağrısını bloklayabiliyordu (canlıda semantik anlama hiç çalışmadı).
+  userText: z.string().trim().max(4_000).optional(),
 });
 
 export const connectorWriteApprovalParamsSchema = z.object({

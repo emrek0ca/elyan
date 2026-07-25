@@ -495,6 +495,14 @@ type SharedBrainInferenceInput = {
   responseSchemaOverride?: Record<string, unknown>;
   /** Original user wording when an internal skill prompt replaces `prompt`. */
   mediaIntentPrompt?: string;
+  /**
+   * Original user wording for BOUNDARY GATES when `prompt` is an internal
+   * envelope (desktop planning/understanding). Gates evaluate this text
+   * instead of the envelope so schema instructions ("mesaj gönder" örnekleri)
+   * are not mistaken for user requests. Absent → gates see the full prompt
+   * (fail-closed, behavior unchanged).
+   */
+  gatePromptOverride?: string;
   /** Original user query used by skill-authorized knowledge adapters. */
   knowledgeQueryOverride?: string;
   /** Present only for skill execution; deny-by-default when empty. */
@@ -10077,13 +10085,19 @@ export async function generateGovernedSharedBrainReply(
   // sorular aksi halde system_prompt_extraction_attempt sanılıp kaçamak
   // metinle savuşturuluyordu. Kapı yalnızca dar kimlik kalıplarında tetiklenir
   // ve sabit, onaylı metni döndürür; sızdıracak bir içeriği yoktur.
+  // Kapı metni: iç zarf (planlama/anlama) gönderildiyse kapılar zarf şablonunu
+  // değil kullanıcının gerçek cümlesini denetler. Override yoksa tam prompt
+  // denetlenir — davranış birebir eski hali (fail-closed).
+  const gatePrompt = input.gatePromptOverride?.trim() || input.prompt;
+  const gateInput =
+    gatePrompt === input.prompt ? input : { ...input, prompt: gatePrompt };
   const gate =
-    resolveElyanIdentityGate(input.prompt) ??
-    resolveSecurityDecisionGate(input.prompt) ??
-    resolvePromptSecurityGate(input.prompt) ??
-    resolveCurrentUserIdentityGate(input) ??
-    (routeDecision ? resolveBoundaryGate(routeDecision, input.prompt) : null) ??
-    resolveUnavailableRequestedUserContextGate(input);
+    resolveElyanIdentityGate(gatePrompt) ??
+    resolveSecurityDecisionGate(gatePrompt) ??
+    resolvePromptSecurityGate(gatePrompt) ??
+    resolveCurrentUserIdentityGate(gateInput) ??
+    (routeDecision ? resolveBoundaryGate(routeDecision, gatePrompt) : null) ??
+    resolveUnavailableRequestedUserContextGate(gateInput);
   const routeToolUseRequired = Boolean(
     routeDecision &&
     (routeDecision.mode !== "chat" ||
