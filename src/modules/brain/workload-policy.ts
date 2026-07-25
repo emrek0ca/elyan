@@ -17,7 +17,9 @@ export function getMaxTokensForWorkload(
   const scaledTokens = Math.round(baseTokens * brainProfile.maxTokenScale);
   const maxTokensByWorkload =
     workload === "planning"
-      ? 900
+      // Reasoning taban artışıyla hizalı (workloads.ts): taban 2400'ün altında
+      // bir premium tavanı anlamsız — Math.max(base, …) zaten tabanı korur.
+      ? 2400
       : workload === "mobile_chat_deep_refine"
         ? 1200
         : workload === "mobile_chat_balanced"

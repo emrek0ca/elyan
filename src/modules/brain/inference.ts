@@ -9730,6 +9730,13 @@ async function tryGenerateSkillReply(
   routeDecision: CommandRouteDecision | null,
   attachmentContext: ResolvedAttachmentContext | null,
 ): Promise<GovernedSharedBrainReplyResult | null> {
+  // Planlama zarfı bir SKILL girdisi değildir: skill yönlendiricisi zarf
+  // metnini kullanıcı isteği sanıp (ör. "belge analizi") iç içe bir üretim
+  // başlatıyor ve saf plan-JSON beklentisi bozuluyordu — desktop_plan
+  // çağrıları doğrudan modele gider.
+  if (input.route === "desktop_plan" || input.route === "desktop_plan_repair") {
+    return null;
+  }
   const skills = await listActiveSkillSummaries();
   if (skills.length === 0) {
     return null;

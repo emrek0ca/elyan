@@ -123,9 +123,16 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
   },
   planning: {
     workload: "planning",
-    timeoutMs: 9_000,
+    // 30 sn + 2400 token: planlama reasoning modeliyle (gpt-oss) çalışır ve
+    // gizli düşünme turu max_tokens'a SAYILIR. Önceki 560 token tabanında model
+    // düşünmede tükenip görünür JSON'u hiç üretemiyordu → Groq her çağrıda
+    // json_validate_failed(boş) → /desktop/plan HİÇ başarılı olamıyordu.
+    // Ayrıca desktop-plan'ın 2400 override'ı Math.min ile bu tabana EZİLİR —
+    // override tabanı yükseltemez, o yüzden taban burada doğru olmak zorunda.
+    // max_tokens bir TAVANdır: kısa plan erken durur, fatura gerçek kullanıma.
+    timeoutMs: 30_000,
     firstDeltaBudgetMs: 2_200,
-    maxTokens: 560,
+    maxTokens: 2_400,
     streamingEnabled: true,
     cachePolicy: "safe_ephemeral",
     fallbackWorkload: "mobile_chat_balanced",

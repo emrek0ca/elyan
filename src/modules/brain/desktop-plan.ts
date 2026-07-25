@@ -156,6 +156,15 @@ export async function generateDesktopPlan(
     // plan JSON'u üretir; yan etkiler masaüstünde safety_policy + açık onay
     // kapısından geçmeden asla çalışmaz.
     gatePromptOverride: input.userText,
+    // Bilgi zenginleştirme (retrieval/web) sorguları da zarf şablonundan değil
+    // kullanıcının cümlesinden türesin — zarf metniyle web araması anlamsız.
+    knowledgeQueryOverride: input.userText,
+    // Planlama çağrısında sunucu tarafı bilgi zenginleştirme TAMAMEN kapalı
+    // (deny-by-default): zarf kendi bağlamını masaüstünden getirir. Aksi halde
+    // web-grounding kanıt politikası, kanıt yetersiz bulunca modelin plan
+    // JSON'unun yerine "doğrulanmış veri alamadım" metnini koyuyor ve plan
+    // hiçbir zaman teslim edilmiyordu.
+    skillToolAllowlist: [],
     requestMetadata: {
       desktopPlan: true,
       contract: DESKTOP_PLAN_CONTRACT,

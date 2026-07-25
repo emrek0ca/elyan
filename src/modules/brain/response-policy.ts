@@ -374,6 +374,13 @@ export function sanitizeFinalAssistantResponse(input: {
     evidence: { sufficient: boolean };
   } | null;
 }): string {
+  // Planlama çıktısı KULLANICI METNİ DEĞİL, makine JSON'udur: cümle kırpma /
+  // güncel-iddia söküm kuralları plan gövdesini (sayı dolu adımlar) boşaltıp
+  // yerine "doğrulanmış veri alamadım" yedeğini koyuyordu → /desktop/plan
+  // hiçbir zaman plan teslim edemiyordu. Sohbet sanitizasyonu sohbete özgüdür.
+  if (input.workload === "planning") {
+    return String(input.text ?? "").trim();
+  }
   const policy = responsePolicyForPrompt(input.prompt);
   const allowVerificationLanguage =
     input.allowVerificationLanguage === true || policy.webRequired;

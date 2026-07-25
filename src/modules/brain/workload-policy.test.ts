@@ -34,7 +34,7 @@ test("getMaxTokensForWorkload keeps standard workloads at base budget", () => {
 
 test("getMaxTokensForWorkload caps premium workload expansion", () => {
   assert.equal(getMaxTokensForWorkload("mobile_chat_fast", premiumProfile), 384);
-  assert.equal(getMaxTokensForWorkload("planning", premiumProfile), 900);
+  assert.equal(getMaxTokensForWorkload("planning", premiumProfile), 2400);
 });
 
 test("getLoadSheddingOptions derives stable namespace ttl and salt", () => {
