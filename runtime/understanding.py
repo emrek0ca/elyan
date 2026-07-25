@@ -72,6 +72,13 @@ class SemanticUnderstanding:
     #   public_external — kamuya açık/güncel bilgi → GETİR (web/Compound), sorma
     #   none            — işin kaynağa ihtiyacı yok
     source_kind: str = "none"
+    # GÖNDERME ÇÖZÜMÜ ("o dosya", "onu sil", "az önceki klasör"):
+    #   {"path","kind","name","source"} — çözüldü; planlayıcı tahmin etmesin,
+    #     bu hedefi alsın. source: "recent_output" | "user_message".
+    #   {"status": "unresolved"}        — gönderme var ama hedef bilinmiyor;
+    #     çağıran tek soru sorar, tahminle yan etki üretmez.
+    #   None                            — mesajda gönderme yok.
+    resolved_target: dict[str, str] | None = None
 
     @property
     def is_task(self) -> bool:
@@ -128,6 +135,7 @@ class SemanticUnderstanding:
             "missingInformation": self.missing_information,
             "risk": self.risk,
             "sourceKind": self.source_kind,
+            "resolvedTarget": self.resolved_target,
             "reasoning": self.reasoning[:480],
             "signals": self.signals,
         }
@@ -167,7 +175,14 @@ _SYSTEM_CONTRACT = (
     "herkesin erişebileceği bilgi mi (araştırılabilir)? Kamuya açık bilgi için soru "
     "sormak gereksiz sürtünmedir; özel içerik için sormamak uydurmadır.\n"
     "   Kaynağı olmayan belgeyi ASLA genel bilgiyle doldurup 'task' deme.\n"
-    "9) SADECE tek JSON nesnesi döndür."
+    "9) GÖNDERME ÇÖZÜMÜ: mesaj daha önce üretilen bir çıktıya gönderme yapıyorsa "
+    "('o dosya', 'onu sil', 'az önceki klasör', 'bir tane daha'), 'resolvedTarget' "
+    "alanını currentSituation.recentOutputs içindeki kaydın TAM path'iyle doldur. "
+    "Kullanıcı yolu mesajda açıkça verdiyse onu kullan. Listede karşılığı olmayan "
+    "path UYDURMA: gönderme var ama hedef bilinmiyorsa "
+    '{"status":"unresolved"} yaz ve missingInformation\'a hangi dosya/klasör '
+    "olduğunu sorulacak şekilde ekle. Gönderme yoksa resolvedTarget=null.\n"
+    "10) SADECE tek JSON nesnesi döndür."
 )
 
 _SCHEMA_HINT = (
@@ -175,7 +190,8 @@ _SCHEMA_HINT = (
     '"taskType":"<kısa etiket>","reasoning":"<neden>",'
     '"entities":[{"type":"file|app|url|person|date|topic","value":"","role":"target|source|constraint"}],'
     '"deliverables":[],"constraints":[],"missingInformation":[],"risk":"low|medium|high",'
-    '"sourceKind":"user_private|public_external|none"}'
+    '"sourceKind":"user_private|public_external|none",'
+    '"resolvedTarget":{"path":"","kind":"","name":""}}'
 )
 
 
@@ -237,6 +253,63 @@ def _coerce_texts(value: Any, limit: int = 8) -> list[str]:
     return [str(item).strip()[:240] for item in value if str(item or "").strip()][:limit]
 
 
+def _coerce_resolved_target(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    if str(value.get("status", "") or "").strip().lower() == "unresolved":
+        return {"status": "unresolved"}
+    path = str(value.get("path", "") or "").strip()[:240]
+    if not path:
+        return None
+    return {
+        "path": path,
+        "kind": str(value.get("kind", "") or "").strip()[:24],
+        "name": str(value.get("name", "") or "").strip()[:80],
+    }
+
+
+def _ground_resolved_target(
+    understanding: SemanticUnderstanding,
+    situational_context: dict[str, Any] | None,
+    text: str,
+) -> None:
+    """Modelin çözdüğü hedefi KANITA bağlar — uydurma yol asla geçmez.
+
+    Kabul edilen iki dayanak: (1) yol `currentSituation.recentOutputs`
+    listesinde (source=recent_output); (2) kullanıcı yolu mesajda açıkça yazdı
+    (source=user_message). İkisi de yoksa hedef `unresolved`a düşürülür ve
+    görev niyeti netleştirmeye çevrilir — tahminle yan etki üretilmez."""
+    resolved = understanding.resolved_target
+    if resolved is None or resolved.get("status") == "unresolved":
+        pass
+    else:
+        path = resolved["path"]
+        allowed = {
+            str(item.get("path", "") or "").strip()
+            for item in (situational_context or {}).get("recentOutputs", [])
+            if isinstance(item, dict)
+        }
+        if path in allowed:
+            resolved["source"] = "recent_output"
+        elif path.lower() in str(text or "").lower():
+            resolved["source"] = "user_message"
+        else:
+            understanding.resolved_target = {"status": "unresolved"}
+            understanding.signals.append("resolved_target_ungrounded")
+    if (
+        isinstance(understanding.resolved_target, dict)
+        and understanding.resolved_target.get("status") == "unresolved"
+        and understanding.intent == INTENT_TASK
+    ):
+        # Hedefi bilinmeyen gönderme ile görev çalıştırılmaz: tek soru sorulur.
+        understanding.intent = INTENT_CLARIFY
+        understanding.signals.append("unresolved_reference_clarify")
+        if not understanding.missing_information:
+            understanding.missing_information = [
+                "Gönderme yapılan hedef (hangi dosya/klasör?) belirlenemedi"
+            ]
+
+
 def parse_understanding(payload: Any) -> SemanticUnderstanding | None:
     """Model çıktısını doğrulanmış bir anlama zarfına çevirir."""
     if not isinstance(payload, dict):
@@ -266,6 +339,9 @@ def parse_understanding(payload: Any) -> SemanticUnderstanding | None:
         missing_information=_coerce_texts(payload.get("missingInformation")),
         risk=risk if risk in {"low", "medium", "high"} else "low",
         source_kind=source_kind,
+        resolved_target=_coerce_resolved_target(
+            payload.get("resolvedTarget") or payload.get("resolved_target")
+        ),
     )
 
 
@@ -302,6 +378,8 @@ def analyze(
 
             parsed = parse_understanding(extract_json_object(raw))
             if parsed is not None:
+                # Çözülmüş hedef kanıt kapısından geçmeden dışarı çıkmaz.
+                _ground_resolved_target(parsed, situational_context, text)
                 return parsed
 
     if fallback is not None:

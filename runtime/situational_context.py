@@ -28,12 +28,57 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 SITUATION_CONTRACT = "elyan.situation.v1"
 
 # Hassas sinyaller: modele ham gitmez, yalnız türetilmiş işaret üretir.
 _SENSITIVE_KINDS = {"health", "saglik", "medical", "location_precise"}
+
+# UNUTMA: bayat referans, referans yokluğundan TEHLİKELİDİR — "onu sil" bir
+# hafta önceki dosyayı silebilir. Bu yüzden son-üretilenler bir çalışma
+# oturumu kadar yaşar; süresi dolan ya da diskte artık var olmayan kayıt
+# bağlama girmez.
+RECENT_OUTPUT_TTL_MINUTES = 240
+
+
+def recent_output_is_fresh(
+    entry: Any,
+    *,
+    now: dt.datetime | None = None,
+    check_disk: bool = True,
+) -> bool:
+    """Bir son-üretilen kaydının hâlâ güvenle referans alınabilir olduğunu söyler.
+
+    Üç kapı: (1) kayıt zamanı VAR ve TTL içinde — zamansız kayıt yaşı
+    bilinemeyeceği için bayat sayılır (fail-closed); (2) yol boş değil;
+    (3) yol diskte hâlâ mevcut (silinmiş dosyaya gönderme çözülmez)."""
+    if not isinstance(entry, dict):
+        return False
+    path = str(entry.get("path", "") or "").strip()
+    if not path:
+        return False
+    raw_recorded = str(entry.get("recordedAt", "") or "").strip()
+    if not raw_recorded:
+        return False
+    try:
+        recorded = dt.datetime.fromisoformat(raw_recorded.replace("Z", "+00:00"))
+        if recorded.tzinfo is not None:
+            recorded = recorded.replace(tzinfo=None)
+    except ValueError:
+        return False
+    moment = now or dt.datetime.now()
+    age_minutes = (moment - recorded).total_seconds() / 60
+    if age_minutes < -5 or age_minutes > RECENT_OUTPUT_TTL_MINUTES:
+        return False
+    if check_disk:
+        try:
+            if not Path(path).exists():
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def _clip(value: Any, limit: int = 160) -> str:
@@ -194,18 +239,21 @@ def gather_situation(
         # Ad + YOL birlikte taşınır: "o klasörü sil" gibi göndermeler ancak yol
         # bilinirse eyleme çevrilebilir. Yalnız ad verilirse model hedefi tahmin
         # etmek zorunda kalır ve yanlış yeri siler.
-        situation.recent_artifacts = [
-            _clip(item.get("name") if isinstance(item, dict) else item, 80)
-            for item in artifacts[:4]
-        ]
+        # UNUTMA KAPISI: süresi dolmuş ya da diskte artık olmayan kayıt bağlama
+        # GİRMEZ — bayat referans üzerinden yanlış hedefe yan etki üretilmesin.
+        fresh = [
+            item
+            for item in artifacts
+            if recent_output_is_fresh(item, now=moment)
+        ][:4]
+        situation.recent_artifacts = [_clip(item.get("name"), 80) for item in fresh]
         situation.recent_outputs = [
             {
                 "name": _clip(item.get("name"), 80),
                 "path": _clip(item.get("path"), 240),
                 "kind": _clip(item.get("kind"), 24),
             }
-            for item in artifacts[:4]
-            if isinstance(item, dict) and str(item.get("path", "") or "").strip()
+            for item in fresh
         ]
     return situation
 

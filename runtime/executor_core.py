@@ -112,7 +112,14 @@ def _record_recent_outputs(
 
     Bir sonraki turda "o klasörü sil", "onu paylaş" gibi göndermeler bu kayıttan
     çözülür. Yol taşımayan çıktılar kaydedilmez — uydurma referans üretmemek
-    için yalnız GERÇEKTEN üretilmiş şeyler tutulur."""
+    için yalnız GERÇEKTEN üretilmiş şeyler tutulur.
+
+    UNUTMA: her kayıt ``recordedAt`` taşır; okuma tarafı
+    (``situational_context.recent_output_is_fresh``) TTL + diskte-varlık
+    kapısı uygular. Yazarken önceki TAZE kayıtlar korunur (yeni önce, yol
+    bazında tekilleştirilmiş, en çok 6) — böylece "bir önceki dosya" gibi
+    göndermeler yeni bir görev çalışınca kaybolmaz, bayatlar ise düşer."""
+    recorded_at = dt.datetime.now().isoformat(timespec="seconds")
     entries: list[dict[str, str]] = []
 
     def _add(path_value: Any, kind: str, name: Any = "") -> None:
@@ -124,6 +131,7 @@ def _record_recent_outputs(
                 "path": path,
                 "name": str(name or "").strip() or Path(path).name,
                 "kind": kind,
+                "recordedAt": recorded_at,
             }
         )
 
@@ -141,6 +149,20 @@ def _record_recent_outputs(
     if not entries:
         return
     try:
+        from runtime.situational_context import recent_output_is_fresh
+
+        existing = (
+            state_store.load_state().get("runtime", {}).get("recentArtifacts", [])
+        )
+        seen = {item["path"] for item in entries}
+        for item in existing if isinstance(existing, list) else []:
+            if (
+                isinstance(item, dict)
+                and str(item.get("path", "") or "").strip() not in seen
+                and recent_output_is_fresh(item)
+            ):
+                seen.add(str(item.get("path")))
+                entries.append(item)
         state_store.update_state({"runtime": {"recentArtifacts": entries[:6]}})
     except Exception:  # pragma: no cover - süreklilik kaydı yürütmeyi düşürmesin
         pass

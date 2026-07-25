@@ -343,16 +343,14 @@ Farklı ömür, farklı kural:
 - **Uzun süreli**: tercihler, tekrar eden kalıplar → yalnız eşleşince çağır.
 `recentOutputs` şu an ikisinin arasında duruyor; ayrılmalı.
 
-**3. Unutma (eksik olan yarısı)**
-`recentOutputs` süresiz duruyor. Bayat referans, referans yokluğundan TEHLİKELİ:
-"onu sil" bir hafta önceki dosyayı silebilir. Gerekli: TTL + varlık doğrulaması
-(yol artık yoksa kayıttan düş) + görev bitince çalışma belleğini boşalt.
+**3. Unutma ✅ (2026-07-25 gece — bkz. §4.10)**
+TTL + varlık doğrulaması uygulandı. Kalan parça: görev bitince çalışma
+belleğini açıkça boşaltma (TTL şimdilik bunu dolaylı karşılıyor).
 
-**4. Gönderme çözümü birinci sınıf adım olsun**
-"o/onu/şunu/bir tane daha" şu an prompt kuralıyla çözülüyor. Daha sağlamı:
-`understanding` çıktısında **çözülmüş hedef** alanı (`resolvedTarget: {path,
-kind, source}`) — planlayıcı tahmin etmesin, çözülmüş hedefi alsın. Çözülemezse
-açıkça `unresolved` desin ve tek soru sorulsun.
+**4. Gönderme çözümü birinci sınıf adım ✅ (2026-07-25 gece — bkz. §4.10)**
+`resolvedTarget` alanı + kanıt kapısı uygulandı. Kalan parça: planlayıcıların
+(structured_planner / agent_loop) zarfa gelen çözülmüş yolu doğrudan
+TÜKETMESİ — şu an alan zarfla taşınıyor, unresolved→clarify canlı.
 
 **5. Canlılık: hak edilmiş olsun**
 `liveness_cues()` yazıldı ama cevaplara BAĞLANMADI — bilinçliydi: her turda
@@ -369,6 +367,41 @@ kaçamak cevap yerine dürüst durum cümlesi kurar.
 Bugüne kadar hiçbir iyileştirme uçtan uca ÖLÇÜLMEDİ. Küçük bir senaryo seti
 (10-15 gerçek görev) + geçti/kaldı tablosu kurulmalı. Aksi halde her oturum
 "düzelttim sanıyorum" ile geçiyor — bu oturumda üç kez böyle oldu.
+
+### 4.10 UNUTMA + GÖNDERME ÇÖZÜMÜ ✅ (2026-07-25 gece)
+
+İleri planın 3. ve 4. maddeleri uygulandı, sıfır regresyonla (17 baseline
+hata değişmedi, `comm` yöntemiyle ölçüldü):
+
+**Unutma (bayat referans tehlikesi kapandı):**
+- `situational_context.recent_output_is_fresh()` — üç kapı: `recordedAt` VAR ve
+  TTL (240 dk) içinde; yol boş değil; yol diskte hâlâ mevcut. Zamansız kayıt
+  bayat sayılır (**fail-closed**).
+- `executor_core._record_recent_outputs` artık `recordedAt` yazar ve önceki
+  TAZE kayıtları korur (yeni önce, yol bazında tekil, en çok 6) — "bir önceki
+  dosya" göndermesi yeni görev çalışınca kaybolmaz, bayatlar düşer.
+- `gather_situation` okurken aynı filtreyi uygular → silinmiş/eski dosya
+  bağlama hiç girmez.
+
+**Gönderme çözümü (`understanding.py`):**
+- Zarfa `resolvedTarget` alanı eklendi: `{path,kind,name,source}` |
+  `{"status":"unresolved"}` | `null`. Prompt kuralı 9 + şema güncellendi.
+- **KANIT KAPISI** (`_ground_resolved_target`): modelin verdiği yol yalnız
+  (a) `recentOutputs` listesindeyse (`source="recent_output"`) ya da
+  (b) kullanıcı mesajında açıkça geçiyorsa (`source="user_message"`) kabul
+  edilir. İkisi de değilse → `unresolved` + `resolved_target_ungrounded`
+  sinyali. **Uydurma yol asla geçmez.**
+- Hedefi çözülemeyen gönderme ile görev ÇALIŞMAZ: intent `clarify`ya düşürülür,
+  `missingInformation` doldurulur → bridge'in mevcut netleştirme kapısı tek
+  soru sorar. (Bu davranış CANLI — bridge'de ek wiring gerekmedi.)
+
+Testler: `tests/test_reference_memory_contract.py` (9 senaryo — TTL, silinmiş
+yol, zamansız kayıt, kanıt kapısının üç dalı, unresolved→clarify, gönderme
+yokken dokunulmama).
+
+**Bitmedi (dürüst):** planlayıcılar `resolvedTarget`'ı henüz doğrudan
+tüketmiyor (zarf taşıyor, tüketici backend/planner tarafında); görev sonunda
+açık çalışma-belleği temizliği yok (TTL dolaylı karşılıyor).
 
 ### BU OTURUMUN DERSİ
 Aynı belirti (etiket cevabı) **üç ayrı katmandan** besleniyordu ve her seferinde
