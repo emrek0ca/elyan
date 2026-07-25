@@ -772,7 +772,7 @@ class ExecutorCore:
             "stableBlockId": f"tasktrace_{exec_id}",
             "taskId": exec_id,
             "status": overall,
-            "title": _safe_text(str(current.get("summary", "") or ""), limit=80) or "Görev yürütülüyor",
+            "title": _safe_text(str(current.get("summary", "") or ""), limit=80) or "",
             "activeStepId": active_step_id,
             "steps": steps,
         }

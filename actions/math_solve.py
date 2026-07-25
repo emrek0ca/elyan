@@ -55,6 +55,8 @@ def _parse_expression(raw_expression: str) -> tuple[Any, Any, Any]:
 def _solve_equation(expression: str) -> tuple[str, dict[str, Any]]:
     from sympy import Eq, latex, simplify, solve  # type: ignore[reportMissingImports]
 
+    from sympy import N, expand, factor, latex, simplify  # type: ignore[reportMissingImports]
+
     parse_expr, transformations, raw = _parse_expression(expression)
     if "=" in raw:
         lhs_raw, rhs_raw = raw.split("=", 1)
@@ -130,8 +132,6 @@ def math_solve(expression: str = "", mode: str = "solve", **kwargs: Any) -> dict
     if normalized_mode not in _ALLOWED_MODES:
         raise SafeCapabilityError("INVALID_ARGUMENT", "Geçersiz matematik modu.")
 
-    from sympy import N, expand, factor, latex, simplify  # type: ignore[reportMissingImports]
-
     # İfadede hiç sayı yoksa (planlayıcı rakam yerine açıklama geçmiş — "faturaların
     # toplamı") sympy'yi zorlamadan NET, okunaklı hata döndür (çökme/opak
     # TOOL_EXECUTION_FAILED yerine ReAct replan'in düzeltebileceği yönlendirici
@@ -142,6 +142,29 @@ def math_solve(expression: str = "", mode: str = "solve", **kwargs: Any) -> dict
             "INVALID_ARGUMENT",
             "Matematik ifadesi sayısal olmalı; açıklama değil rakamlı ifade ver "
             "(ör. '12000+8500+15000+9200' veya '(sum)*(20/100)').",
+        )
+    # DÜZ METİN KORUMASI. Rakam kontrolü tek başına yetmiyor: "2026 Türkiye'de
+    # geçerli KDV oranlarını araştır" rakam taşıdığı için geçiyor, sonra sympy
+    # her kelimeyi sembol sanıp "2026.0DKTVa*6bde*8g*2i..." gibi anlamsız bir
+    # sonuç üretiyordu ve bu kullanıcıya cevap olarak gidiyordu.
+    # Matematik ifadeleri kısa semboller kullanır (x, y, dx) ve bilinen
+    # fonksiyon adları taşır; düz metin ise çok harfli SÖZCÜKLERden oluşur.
+    _MATH_WORDS = {
+        "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "sqrt",
+        "abs", "pi", "e", "inf", "oo", "mod", "sum", "diff", "int", "integrate",
+        "min", "max", "avg", "pow", "root", "factorial", "asin", "acos", "atan",
+    }
+    prose_words = [
+        word
+        for word in re.findall(r"[^\W\d_]{3,}", sanitized_preview, flags=re.UNICODE)
+        if word.lower() not in _MATH_WORDS
+    ]
+    if prose_words:
+        raise SafeCapabilityError(
+            "INVALID_ARGUMENT",
+            "Bu bir matematik ifadesi değil, düz metin: "
+            f"{', '.join(prose_words[:3])}. Hesaplanacak ifadeyi rakam ve "
+            "işlemlerle ver (ör. '2026*0.20').",
         )
 
     parse_expr, transformations, raw = _parse_expression(expression)

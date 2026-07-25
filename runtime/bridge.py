@@ -5247,7 +5247,7 @@ def _route_chat_agent_loop(
                         "taskId": "agent_loop",
                         "status": "running",
                         "title": " ".join(str(text or "").split())[:80]
-                        or "Görev yürütülüyor",
+                        or "",
                         "activeStepId": observed[-1]["id"],
                         "steps": list(observed),
                     },
@@ -12923,7 +12923,7 @@ class RuntimeBridge:
             "stableBlockId": f"tasktrace_{task_id}",
             "taskId": task_id,
             "status": live_trace["status"],
-            "title": live_trace["title"] or "Görev yürütülüyor",
+            "title": live_trace["title"] or "",
             "activeStepId": live_trace["activeStepId"],
             "progressLabel": active_label,
             "steps": live_trace["steps"],
@@ -12942,7 +12942,7 @@ class RuntimeBridge:
         payload_status = live_status if live_status in {"completed", "failed", "canceled"} else "running"
         payload = {
             "status": payload_status,
-            "summary": active_label or str(block.get("title", "") or "Görev yürütülüyor."),
+            "summary": active_label or str(block.get("title", "") or ""),
             "executionTrace": live_trace,
             "taskRunId": task_run_id,
             "result": {
@@ -13649,7 +13649,7 @@ class RuntimeBridge:
         # metni üretmeden biterse bu cümle chat'e asistan cevabı gibi sızıyordu.
         summary = str(
             _user_facing_plan_summary(plan_preview.get("summary", ""))
-            or "Görev yürütülüyor."
+            or ""
         ).strip()
         privacy_class = str(
             plan_preview.get("privacyClass", "")
@@ -13741,7 +13741,7 @@ class RuntimeBridge:
             "stableBlockId": f"task_trace_{str(task_id or '').strip()}",
             "taskId": str(task_id or "").strip(),
             "status": normalized_status,
-            "title": self._truncate_text(plan_preview.get("summary", "") or "Görev yürütülüyor.", 220),
+            "title": self._truncate_text(plan_preview.get("summary", "") or "", 220),
             "steps": safe_steps,
             "visibility": "user_visible",
             "agentPlan": dict(agent_plan) if isinstance(agent_plan, dict) else build_agent_plan(
@@ -14633,7 +14633,7 @@ class RuntimeBridge:
         if not steps and mobile_intent_category:
             return None
         if plan_preview and not str(plan_preview.get("summary", "") or "").strip() and mobile_intent_category:
-            plan_preview = {**plan_preview, "summary": "Görev yürütülüyor."}
+            plan_preview = {**plan_preview, "summary": ""}
         if not steps:
             return None
         if not isinstance(plan_preview.get("agentPlan"), dict):

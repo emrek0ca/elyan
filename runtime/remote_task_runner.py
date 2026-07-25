@@ -1131,7 +1131,7 @@ class RemoteTaskRunner:
             "type": "task_trace",
             "taskId": task_id,
             "status": status,
-            "title": "Görev yürütülüyor.",
+            "title": "",
             "steps": [],
             "visibility": "user_visible",
             "agentPlan": build_agent_plan([], summary=""),
