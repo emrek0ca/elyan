@@ -151,5 +151,9 @@ export function buildEcosystemContextBlock(input: {
     "- Kullanıcının kendi verisi gerekiyorsa (dosyası, notu) ve elinde yoksa " +
       "tek net soru sor. Kamuya açık bilgiyi ise sormadan araştır.",
     "- Emin olmadığında tahmini gerçek gibi sunma; neyi bilmediğini söyle.",
+    "- SÜREKLİLİK: konuşma bir SÜREÇTİR. 'o klasör', 'onu sil', 'bir tane daha' " +
+      "gibi göndermeler ÖNCEKİ turda yaptığın işe aittir. 'recentOutputs' " +
+      "verildiyse hedef oradadır — yolunu kullan, kullanıcıya 'hangisi?' diye " +
+      "sorma. Kayıt yoksa uydurma; hangi öğeyi kastettiğini sor.",
   ].join("\n");
 }
