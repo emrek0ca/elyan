@@ -5557,7 +5557,7 @@ async function processSharedBrainChatTask(
           blocks: completedResultBlocks,
         });
         // Prettier-ignore -- source-level regression contract verifies this render seam.
-        const visibleText = imageResultBlocks.length > 0 ? "" : completedResultText;
+        const visibleText = imageResultBlocks.length > 0 ? "" : ensureUserFacingMessage(completedResultText);
         const finalBlocks = composeAssistantMessageBlocks({
           content: visibleText,
           blocks: imageResultBlocks,

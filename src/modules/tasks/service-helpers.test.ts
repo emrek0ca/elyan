@@ -45,7 +45,13 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
   assert.ok(imageBranch.includes('reset: true'));
   assert.ok(imageBranch.includes('event: "heartbeat"'));
   assert.ok(imageBranch.includes('event: "message.completed"'));
-  assert.ok(imageBranch.includes('const visibleText = imageResultBlocks.length > 0 ? "" : completedResultText;'));
+  // Niyet aynı: görüntü dalı metin çıkarımını ATLAR. Tek fark, çıkan metnin
+  // etiket denetiminden geçmesi (yetenek adı cevap olarak gidemez).
+  assert.ok(
+    imageBranch.includes(
+      'const visibleText = imageResultBlocks.length > 0 ? "" : ensureUserFacingMessage(completedResultText);',
+    ),
+  );
   assert.equal(imageBranch.includes('title: ""'), false);
   assert.equal(imageBranch.includes('summary: ""'), false);
   assert.equal(imageBranch.includes('preview: ""'), false);
