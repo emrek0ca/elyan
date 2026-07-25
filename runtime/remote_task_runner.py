@@ -1240,7 +1240,9 @@ class RemoteTaskRunner:
             capability_readiness_payload=capability_readiness_payload,
             error_code=str(error_code or "remote_task_failed"),
         )
-        payload["result"]["assistantMessage"] = message
+        # Mobilin GÖSTERDİĞİ alan burası; safe_summary değil. Etiket denetimi
+        # bu çıkışa da uygulanmalı, yoksa "Belge okuma" cevap olarak gider.
+        payload["result"]["assistantMessage"] = _user_facing_message(message)
         payload["result"]["provider"] = "remote_task_runner"
         # Graceful degrade: yetenek kullanılamıyorsa yapılandırılmış blok +
         # sonuç alanı — mobil "X şu an kullanılamıyor" kartını net gösterir.
@@ -1411,7 +1413,9 @@ class RemoteTaskRunner:
         if force_manual:
             approval_request["manualApprovalRequired"] = True
         waiting_result = {
-            "assistantMessage": str(local_result.get("assistantMessage", "") or "").strip(),
+            "assistantMessage": _user_facing_message(
+                str(local_result.get("assistantMessage", "") or "").strip()
+            ),
             "provider": str(local_result.get("provider", "") or ""),
             "toolEvents": local_result.get("toolEvents", []) if isinstance(local_result.get("toolEvents"), list) else [],
             "conversationId": conversation_id,
@@ -1707,7 +1711,7 @@ class RemoteTaskRunner:
                 )
                 error_code = "WORK_ORDER_EVIDENCE_MISSING"
             result["chatOk"] = False
-            result["assistantMessage"] = message
+            result["assistantMessage"] = _user_facing_message(message)
             result["error"] = {"code": error_code, "message": message}
         return result
 
