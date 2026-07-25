@@ -26,7 +26,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from runtime.bridge import REMOTE_APPROVAL_CAPABILITIES  # noqa: E402
-from runtime.capability_registry import TOOL_DECLARATIONS  # noqa: E402
+from runtime.capability_registry import (  # noqa: E402
+    TOOL_DECLARATIONS,
+    capability_display_name,
+)
 from runtime.capability_spec import enriched_tool_declaration  # noqa: E402
 from runtime.skill_catalog import builtin_skill_manifests  # noqa: E402
 
@@ -62,6 +65,10 @@ def build_capability_manifest() -> list[dict[str, object]]:
         entries.append(
             {
                 "name": name,
+                # Kullanıcıya gösterilen etiket ("Klasör ağacı"). Backend bunu
+                # bilmek ZORUNDA: etiketin cevap metni olarak sızmasını orada
+                # tek kapıda engelliyor. Tek kaynak yine capability_registry.
+                "displayName": capability_display_name(name),
                 "description": _clip(decl.get("description", ""), 200),
                 "usage": _clip(decl.get("usage", ""), 200),
                 "requiredArgs": required,
@@ -206,6 +213,7 @@ def render_capability_typescript(entries: list[dict[str, object]]) -> str:
         "// sınırı desktop'tadır — manifest yalnız planlama kelime dağarcığıdır).\n\n"
         "export type DesktopCapabilityManifestEntry = {\n"
         "  name: string;\n"
+        "  displayName: string;\n"
         "  description: string;\n"
         "  usage: string;\n"
         "  requiredArgs: string[];\n"
