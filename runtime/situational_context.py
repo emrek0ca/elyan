@@ -114,6 +114,13 @@ class SituationalContext:
     recent_outputs: list[dict[str, str]] = field(default_factory=list)
     load_hint: str = ""  # "yoğun" | "sakin" | "" (hassas veriden TÜRETİLMİŞ)
     signal_kinds: list[str] = field(default_factory=list)
+    # KENDİ DURUMUNUN FARKINDALIĞI: "şu an bir görev yürüyor", "son görev
+    # başarısız oldu" bilinirse model kaçamak cevap yerine dürüst durum
+    # cümlesi kurar. Yalnız TAZE bilgi taşınır (bkz. gather_situation).
+    active_task_count: int = 0
+    last_task_ok: bool | None = None
+    last_task_detail: str = ""
+    last_task_minutes_ago: int | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -124,6 +131,8 @@ class SituationalContext:
                 self.active_app,
                 self.recent_artifacts,
                 self.load_hint,
+                self.active_task_count > 0,
+                self.last_task_ok is not None,
             ]
         )
 
@@ -155,6 +164,20 @@ class SituationalContext:
             payload["recentFiles"] = self.recent_artifacts[:4]
         if self.load_hint:
             payload["dayLoad"] = self.load_hint
+        self_state: dict[str, Any] = {}
+        if self.active_task_count > 0:
+            self_state["taskRunning"] = True
+            if self.active_task_count > 1:
+                self_state["taskCount"] = self.active_task_count
+        if self.last_task_ok is not None:
+            last_task: dict[str, Any] = {"ok": self.last_task_ok}
+            if self.last_task_minutes_ago is not None:
+                last_task["minutesAgo"] = self.last_task_minutes_ago
+            if self.last_task_detail:
+                last_task["detail"] = self.last_task_detail
+            self_state["lastTask"] = last_task
+        if self_state:
+            payload["selfState"] = self_state
         return payload
 
 
@@ -234,6 +257,27 @@ def gather_situation(
     runtime = runtime if isinstance(runtime, dict) else {}
     active = runtime.get("activeWindow") if isinstance(runtime.get("activeWindow"), dict) else {}
     situation.active_app = _clip(active.get("app") or active.get("name"), 60)
+
+    # Kendi durumu: yürüyen görev + son görev sonucu. Bayat sonuç taşınmaz —
+    # bir hafta önceki "başarısız" bugünün sorusuna gürültüdür (tazelik: 60 dk).
+    executor = runtime.get("executor") if isinstance(runtime.get("executor"), dict) else {}
+    try:
+        situation.active_task_count = max(0, int(executor.get("activeExecutionCount", 0) or 0))
+    except (TypeError, ValueError):
+        situation.active_task_count = 0
+    raw_last_at = str(executor.get("lastExecutionAt", "") or "").strip()
+    if raw_last_at:
+        try:
+            last_at = dt.datetime.fromisoformat(raw_last_at.replace("Z", "+00:00"))
+            if last_at.tzinfo is not None:
+                last_at = last_at.replace(tzinfo=None)
+            minutes_ago = int((moment - last_at).total_seconds() // 60)
+            if 0 <= minutes_ago <= 60:
+                situation.last_task_ok = bool(executor.get("lastExecutionOk"))
+                situation.last_task_minutes_ago = minutes_ago
+                situation.last_task_detail = _clip(executor.get("lastExecutionDetail"), 120)
+        except ValueError:
+            pass
     artifacts = runtime.get("recentArtifacts")
     if isinstance(artifacts, list):
         # Ad + YOL birlikte taşınır: "o klasörü sil" gibi göndermeler ancak yol

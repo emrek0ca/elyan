@@ -358,10 +358,10 @@ TÜKETMESİ — şu an alan zarfla taşınıyor, unresolved→clarify canlı.
 ALAKALIYSA yüzeye çıksın (ör. belge üretilirken yaklaşan toplantı adı). Bağlama
 kuralı: alaka yoksa sus.
 
-**6. Kendi durumunun farkındalığı**
-Model şu an "masaüstü bağlı mı"yı biliyor (`desktopPaired`). Eksik: "şu an bir
-görev yürüyor", "son görev başarısız oldu", "izin eksik". Bunlar bilinirse
-kaçamak cevap yerine dürüst durum cümlesi kurar.
+**6. Kendi durumunun farkındalığı ✅ kısmen (2026-07-25 gece — bkz. §4.10)**
+`selfState` (taskRunning + lastTask{ok,detail,minutesAgo}) durumsal bağlama
+bağlandı; niyet çözümü artık bunu görüyor. Kalan parça: "izin eksik" sinyali
+ve backend cevap-üretim tarafının selfState'i alması.
 
 **7. ÖLÇÜM (bunsuz gerisi tahmin)**
 Bugüne kadar hiçbir iyileştirme uçtan uca ÖLÇÜLMEDİ. Küçük bir senaryo seti
@@ -399,9 +399,22 @@ Testler: `tests/test_reference_memory_contract.py` (9 senaryo — TTL, silinmiş
 yol, zamansız kayıt, kanıt kapısının üç dalı, unresolved→clarify, gönderme
 yokken dokunulmama).
 
+**Kendi durumunun farkındalığı (madde 6, aynı gece):**
+- `SituationalContext`'e `active_task_count` + `last_task_ok/detail/minutes_ago`
+  eklendi; kaynak `runtime.executor.{activeExecutionCount,lastExecutionAt,
+  lastExecutionOk,lastExecutionDetail}` (executor_core zaten yazıyordu).
+- `to_prompt_context()` → `selfState: {taskRunning, taskCount?, lastTask?}`.
+  **Tazelik kapısı:** 60 dakikadan eski son-görev sonucu taşınmaz (bayat
+  "başarısız" bugünün sorusuna gürültü olurdu).
+- Anlama sözleşmesine kural eklendi: selfState SENİN durumundur — "ne durumda"
+  → task_control, "neden olmadı" → lastTask'a bakar; bilmiyormuş gibi davranma.
+- Testler: `tests/test_self_state_context.py` (4 senaryo).
+
 **Bitmedi (dürüst):** planlayıcılar `resolvedTarget`'ı henüz doğrudan
 tüketmiyor (zarf taşıyor, tüketici backend/planner tarafında); görev sonunda
-açık çalışma-belleği temizliği yok (TTL dolaylı karşılıyor).
+açık çalışma-belleği temizliği yok (TTL dolaylı karşılıyor); "izin eksik"
+sinyali selfState'te yok; backend cevap-üretimi selfState'i henüz almıyor
+(şimdilik yalnız niyet çözümü görüyor).
 
 ### BU OTURUMUN DERSİ
 Aynı belirti (etiket cevabı) **üç ayrı katmandan** besleniyordu ve her seferinde
