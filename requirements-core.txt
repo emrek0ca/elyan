@@ -1,17 +1,40 @@
 # Elyan çekirdek bağımlılıklar — `elyan` komutunun ve daemon'un çalışması için
 # yeterli asgari küme. Ağır/opsiyonel paketler requirements.txt'te kalır ve
 # ilk kurulumdan sonra arka planda kurulur (scripts/install_extras.py).
-requests
-httpx
-websocket-client
-psutil
-Pillow
-pystray>=0.19
-customtkinter>=5.2
-qrcode>=7.4
-litellm
-langgraph
-google-genai
-mcp
+#
+# ── NEDEN SÜRÜMLER SABİT ─────────────────────────────────────────────────────
+# Sabitlenmemiş bağımlılık, kullanıcının makinesinde bizim hiç denemediğimiz bir
+# sürümü kurar. Canlı arıza (Windows 11, `npm install -g elyan` sonrası):
+#
+#     × Preparing metadata (pyproject.toml) did not run successfully.
+#     ╰─> litellm
+#     Cargo, the Rust package manager, is not installed or is not on PATH.
+#
+# Sebep: litellm 1.92.0 ve sonrası PyPI'ye YALNIZ sdist yayınlıyor (wheel yok).
+# Sabitleme olmayınca pip en yeniyi seçiyor, wheel bulamayıp kaynaktan derlemeye
+# kalkıyor ve derleme Rust toolchain'i istiyor. macOS'ta clang hazır olduğu için
+# sessizce derleniyordu — "bende çalışıyor" tuzağının tam örneği; Windows'ta
+# kurulum tamamen çöküyordu.
+#
+# KURAL: buraya eklenen her paket WHEEL'İ OLAN bir sürüme sabitlenir. Kurulum
+# `--only-binary=:all:` ile yapılır (bkz. bin/elyan.js): pip asla kaynaktan
+# derlemez, dolayısıyla kullanıcıdan Rust/MSVC/Xcode istenmez. Sürüm
+# yükseltirken şunu çalıştır — sessizce sdist'e düşülmediğini kanıtlar:
+#
+#     python scripts/verify_wheels.py
+#
+requests==2.34.2
+httpx==0.28.1
+websocket-client==1.9.0
+psutil==7.2.2
+Pillow==12.3.0
+pystray==0.19.5
+customtkinter==6.0.0
+qrcode==8.2
+# 1.92.0+ sdist-only → Windows'ta Rust ister. Wheel'i olan en son sürüm budur.
+litellm==1.91.4
+langgraph==1.2.9
+google-genai==2.14.0
+mcp==1.28.1
 openpyxl==3.1.5
-setproctitle>=1.3
+setproctitle==1.3.7

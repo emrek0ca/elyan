@@ -80,7 +80,18 @@ def main(*, force: bool = False) -> int:
         print(f"--- pip install {package}", flush=True)
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", package],
+                # --only-binary=:all: — opsiyonel yetenekler için de derleme YOK.
+                # pyaudio/qiskit-aer gibi paketler kaynaktan kurulmaya
+                # kalkınca dakikalarca derleyip sonunda derleyici bulunamadığı
+                # için düşüyordu; kullanıcı bu sırada kurulumun donduğunu
+                # sanıyordu. Wheel'i olmayan opsiyonel paket sessizce atlanır
+                # (zaten atlanabilir olduğu için "opsiyonel") ve
+                # `elyan doctor` çıktısında görünür.
+                [
+                    sys.executable, "-m", "pip", "install", "--quiet",
+                    "--disable-pip-version-check", "--no-input",
+                    "--only-binary=:all:", package,
+                ],
                 timeout=timeout_seconds,
                 check=False,
             )

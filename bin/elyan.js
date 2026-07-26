@@ -20,6 +20,8 @@ const VENV_PY = IS_WIN
   ? path.join(VENV, 'Scripts', 'python.exe')
   : path.join(VENV, 'bin', 'python3');
 const READY_MARKER = path.join(ELYAN_HOME, '.core-ready');
+// pip'in sürüm reklamı ve gereksiz çıktısı kullanıcıyı korkutan gürültü üretiyordu.
+const PIP_BASE = ['-m', 'pip', '--disable-pip-version-check', '--no-input'];
 const PACKAGE_VERSION = String(require(path.join(ROOT, 'package.json')).version || '0.0.0');
 const REQUIRED_CORE_MODULES = [
   'requests',
@@ -137,10 +139,19 @@ function bootstrap({ recreateVenv = false } = {}) {
   }
 
   console.log('• Çekirdek paketler kuruluyor…');
-  run(VENV_PY, ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip']);
+  run(VENV_PY, [...PIP_BASE, 'install', '--quiet', '--upgrade', 'pip']);
   const coreReq = path.join(ROOT, 'requirements-core.txt');
-  if (!run(VENV_PY, ['-m', 'pip', 'install', '--quiet', '-r', coreReq])) {
-    console.error('Paket kurulumu başarısız. İnterneti kontrol edip tekrar `elyan` yaz.');
+  // --only-binary=:all: KRİTİK: pip asla kaynaktan DERLEMEZ.
+  // Canlı arıza (Windows 11): litellm sabitlenmemişti, pip wheel'i olmayan bir
+  // sürüm seçti, sdist'ten kurmaya kalktı ve kullanıcıdan Rust toolchain
+  // istedi — kurulum tamamen çöktü. Kullanıcıdan derleyici istemek kabul
+  // edilebilir değil; wheel yoksa bu bir PAKETLEME hatasıdır, kullanıcının
+  // çözmesi gereken bir sorun değil (bkz. scripts/verify_wheels.py).
+  if (!run(VENV_PY, [...PIP_BASE, 'install', '--quiet', '--only-binary=:all:', '-r', coreReq])) {
+    console.error('');
+    console.error('Çekirdek paketler kurulamadı.');
+    console.error('En sık sebep geçici ağ hatasıdır — tekrar `elyan` yaz.');
+    console.error('Sorun sürerse: elyan doctor');
     process.exit(1);
   }
   console.log('• Ek yetenek paketleri doğrulanıyor…');
