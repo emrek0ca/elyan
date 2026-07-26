@@ -86,10 +86,36 @@ def normalize_portable_python_links(python_root: Path) -> None:
         candidate.symlink_to(target.name, target_is_directory=True)
 
 
+# Hedef platform/mimari → uv'nin gömülü Python ve wheel seçicileri.
+# NEDEN: `uv python install 3.11` HOST mimarisini indirir, hedefinkini değil.
+# Ölçüldü: Apple Silicon üzerinde üretilen "x64" paketinin başlatıcısı doğru
+# (swiftc çapraz derliyor) ama GÖMÜLÜ PYTHON arm64 çıkıyordu — paket Intel
+# Mac'te hiç çalışmazdı. Aynı şekilde wheel'ler de host'a göre çözülüyordu.
+# Hedef açıkça istenince uv doğru derlemeyi indiriyor.
+_UV_PYTHON_BUILD = {
+    ("macos", "arm64"): "cpython-3.11-macos-aarch64",
+    ("macos", "x64"): "cpython-3.11-macos-x86_64",
+    ("windows", "x64"): "cpython-3.11-windows-x86_64",
+    ("windows", "arm64"): "cpython-3.11-windows-aarch64",
+    ("linux", "x64"): "cpython-3.11-linux-x86_64",
+    ("linux", "arm64"): "cpython-3.11-linux-aarch64",
+}
+
+_UV_WHEEL_PLATFORM = {
+    ("macos", "arm64"): "aarch64-apple-darwin",
+    ("macos", "x64"): "x86_64-apple-darwin",
+    ("windows", "x64"): "x86_64-pc-windows-msvc",
+    ("windows", "arm64"): "aarch64-pc-windows-msvc",
+    ("linux", "x64"): "x86_64-unknown-linux-gnu",
+    ("linux", "arm64"): "aarch64-unknown-linux-gnu",
+}
+
+
 def prepare_payload(
     payload_root: Path,
     *,
     target_platform: str,
+    target_arch: str,
     core_only: bool,
     allow_missing_extras: bool,
 ) -> None:
@@ -103,8 +129,9 @@ def prepare_payload(
     if not uv:
         raise RuntimeError("uv is required to build the portable Python payload")
     python_root = payload_root / "python"
+    python_request = _UV_PYTHON_BUILD.get((target_platform, target_arch), "3.11")
     run(
-        [uv, "python", "install", "3.11", "--managed-python", "--install-dir", str(python_root), "--no-bin"]
+        [uv, "python", "install", python_request, "--managed-python", "--install-dir", str(python_root), "--no-bin"]
     )
     normalize_portable_python_links(python_root)
     python_executable = portable_python(payload_root, target_platform=target_platform)
@@ -119,6 +146,11 @@ def prepare_payload(
         "-r",
         str(dependency_manifest),
     ]
+    # Wheel'ler de hedefe göre çözülür; aksi halde host mimarisinin ikili
+    # paketleri (pydantic-core, cryptography…) yanlış pakete girer.
+    wheel_platform = _UV_WHEEL_PLATFORM.get((target_platform, target_arch), "")
+    if wheel_platform:
+        install_command[3:3] = ["--python-platform", wheel_platform]
     if dependency_manifest != RELEASE_LOCK:
         install_command.insert(-2, "pip")
     run(install_command)
@@ -574,6 +606,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare_payload(
         payload_root,
         target_platform=args.platform,
+        target_arch=args.arch,
         core_only=args.core_only,
         allow_missing_extras=args.allow_missing_extras,
     )
