@@ -55,8 +55,6 @@ def _parse_expression(raw_expression: str) -> tuple[Any, Any, Any]:
 def _solve_equation(expression: str) -> tuple[str, dict[str, Any]]:
     from sympy import Eq, latex, simplify, solve  # type: ignore[reportMissingImports]
 
-    from sympy import N, expand, factor, latex, simplify  # type: ignore[reportMissingImports]
-
     parse_expr, transformations, raw = _parse_expression(expression)
     if "=" in raw:
         lhs_raw, rhs_raw = raw.split("=", 1)
@@ -178,6 +176,8 @@ def math_solve(expression: str = "", mode: str = "solve", **kwargs: Any) -> dict
             },
             "artifacts": [],
         }
+
+    from sympy import N, expand, factor, latex, simplify  # type: ignore[reportMissingImports]
 
     expr = parse_expr(raw, transformations=transformations)
     if normalized_mode == "simplify":

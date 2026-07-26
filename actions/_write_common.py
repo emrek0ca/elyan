@@ -117,7 +117,7 @@ def ensure_allowed_output_path(
 ) -> Path:
     """Çıktı yolunu çözer. Kullanıcı AÇIK bir yol verdiyse (``~``, ``/``, ``C:\\``)
     oraya yazılır. Göreli yollar çalışma alanı köküne çözülür; hedef verilmezse
-    çalışma alanındaki ``elyan_output`` klasörüne güvenli bir ad üretilir."""
+    platformun masaüstü klasöründe güvenli bir ad üretilir."""
     suffix = extension.lower() if extension.startswith(".") else f".{extension.lower()}"
     candidate = str(raw_path or "").strip()
     workspace_base = root_resolver().resolve()
@@ -139,6 +139,7 @@ def ensure_allowed_output_path(
                     "Dosya yalnızca açık yol, masaüstü veya izinli çalışma alanı içine yazılabilir.",
                 )
     else:
+        default_base = (desktop_resolver or desktop_dir)().resolve()
         filename = f"{slugify_filename(hint or 'elyan-output')}{suffix}"
         resolved = unique_output_path((default_base / filename).resolve())
 
