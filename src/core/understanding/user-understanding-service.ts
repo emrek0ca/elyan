@@ -14,6 +14,7 @@ import {
   buildEmptyUnderstandingEnvelope,
   buildTypedUnderstandingEnvelope,
 } from "./understanding-envelope.js";
+import type { UnderstandingEnvelope } from "./types.js";
 import { buildModelFallbackUnderstandingEnvelope } from "./understanding-model-fallback.js";
 import { extractFeedbackSignals, extractPreferenceSignals } from "./preference-extractor.js";
 import { filterLearningSignals } from "./personalization-policy.js";
@@ -252,6 +253,29 @@ export async function buildTaskUnderstanding(
 
     if (envelope) {
       context.understandingEnvelope = envelope;
+      // ANLAŞILMIŞ BELLEK: modelin çıkardığı açık adaylar artık gerçekten
+      // yazılıyor. Önceden yalnız sayılıp atılıyordu; hatırlama sabit bir
+      // anahtar listesine (SYNCHRONOUS_MEMORY_KEYS) hapsolmuştu.
+      // Fail-open: bellek yazımı anlama akışını asla düşürmez.
+      const understoodMemoryOps = buildMemoryOpsFromUnderstandingCandidates(
+        envelope.memory_candidates,
+      );
+      if (understoodMemoryOps.length) {
+        void recordTurnMemoryOps(app, {
+          userId: input.userId,
+          sessionId: input.taskId ?? null,
+          envelope: buildMemoryOnlyEnvelope(understoodMemoryOps),
+        }).catch((error) => {
+          app.log.warn(
+            {
+              requestId: input.metadata?.requestId,
+              userId: input.userId,
+              reason: error instanceof Error ? error.message : "unknown",
+            },
+            "understood memory candidates not persisted",
+          );
+        });
+      }
       app.log.info(
         {
           requestId: input.metadata?.requestId,
@@ -453,6 +477,53 @@ export function buildSynchronousMemoryOpsFromLearningSignals(
     });
   }
 
+  return memoryOps;
+}
+
+/**
+ * Anlama zarfının `memory_candidates` alanını gerçek bellek yazımına çevirir.
+ *
+ * NEDEN: iki ayrı çıkarım yolu vardı ve yalnız zayıf olanı yazıyordu.
+ *  - Öğrenme sinyalleri → `SYNCHRONOUS_MEMORY_KEYS` adlı SABİT ANAHTAR
+ *    LİSTESİnden geçenler kaydediliyordu. Liste dışındaki her şey (kullanıcının
+ *    açıkça söylediği alerjisi, çalıştığı şirket, kullandığı editör…) düşüyordu.
+ *  - `memory_candidates` → model tarafından ANLAŞILARAK çıkarılıyor, şemada
+ *    tipli (op/kind/key/value/confidence/explicit/source/ttlDays) ve zarfla
+ *    birlikte taşınıyordu — ama yalnız SAYILIP loglanıyor, hiçbir yere
+ *    yazılmıyordu. Yazıcı (`recordTurnMemoryOps`) zaten mevcuttu.
+ *
+ * Yani hatırlama yeteneği bir kelime listesine hapsedilmişti. Bu adaptör,
+ * anlaşılmış adayları var olan lavaboya bağlar; anahtar listesi bir sonraki
+ * sürümde tamamen kaldırılabilir hale gelir.
+ *
+ * DEĞİŞMEZ: yalnız `explicit` adaylar yazılır — çıkarım/tahmin hatırlanmaz.
+ * Bu, sinyal yolundaki `metadata.explicit !== true` kuralının aynısıdır.
+ */
+export function buildMemoryOpsFromUnderstandingCandidates(
+  candidates: UnderstandingEnvelope["memory_candidates"],
+): TurnEnvelope["memory_ops"] {
+  const memoryOps: TurnEnvelope["memory_ops"] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates ?? []) {
+    if (candidate.op === "none") continue;
+    // Kullanıcı açıkça söylemediyse hatırlama: çıkarılmış "tercih" uydurmadır.
+    if (!candidate.explicit) continue;
+    const key = candidate.key.trim();
+    const value = candidate.value.trim();
+    if (!key || !value) continue;
+    // Aynı anahtar için tek yazım: aday listesi kendi içinde çelişirse ilki kazanır.
+    if (seen.has(key)) continue;
+    seen.add(key);
+    memoryOps.push({
+      op: candidate.op,
+      kind: candidate.kind,
+      key,
+      value,
+      confidence: candidate.confidence,
+      ...(candidate.ttlDays ? { ttl_days: candidate.ttlDays } : {}),
+    });
+    if (memoryOps.length >= 20) break;
+  }
   return memoryOps;
 }
 

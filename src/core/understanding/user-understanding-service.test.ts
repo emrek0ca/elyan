@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildMemoryOpsFromUnderstandingCandidates,
   buildSynchronousMemoryOpsFromLearningSignals,
   buildTaskUnderstanding,
   emptyUnderstanding,
@@ -430,4 +431,71 @@ test("recordTaskFeedback stores a compact workflow outcome signal", async () => 
   assert.equal(count, inserted.length);
   assert.ok(inserted.some((item) => (item as { key?: string }).key === "feedback_outcome"));
   assert.ok(inserted.some((item) => (item as { key?: string }).key === "negative_feedback"));
+});
+
+test("understood memory candidates become real memory writes", () => {
+  // İki çıkarım yolu vardı, yalnız zayıfı yazıyordu: öğrenme sinyalleri SABİT
+  // BİR ANAHTAR LİSTESİnden (SYNCHRONOUS_MEMORY_KEYS) geçenlerle sınırlıydı;
+  // modelin ANLAYARAK çıkardığı memory_candidates ise yalnız sayılıp
+  // atılıyordu. Yani hatırlama bir kelime listesine hapsedilmişti.
+  const ops = buildMemoryOpsFromUnderstandingCandidates([
+    {
+      op: "write",
+      kind: "fact",
+      key: "employer",
+      value: "Acme A.Ş.",
+      confidence: 0.9,
+      explicit: true,
+      source: "user_statement",
+    },
+    {
+      op: "update",
+      kind: "preference",
+      key: "preferred_editor",
+      value: "Neovim",
+      confidence: 0.8,
+      explicit: true,
+      source: "preference_request",
+      ttlDays: 90,
+    },
+  ]);
+
+  assert.equal(ops.length, 2);
+  // Anahtar listesinde OLMAYAN bilgiler artık kaydediliyor.
+  assert.equal(ops[0]?.key, "employer");
+  assert.equal(ops[1]?.ttl_days, 90);
+});
+
+test("only explicit statements are remembered", () => {
+  // Değişmez: çıkarılmış/tahmin edilmiş tercih hatırlanmaz — uydurma olur.
+  const ops = buildMemoryOpsFromUnderstandingCandidates([
+    {
+      op: "write",
+      kind: "preference",
+      key: "tone",
+      value: "resmi",
+      confidence: 0.9,
+      explicit: false,
+      source: "user_statement",
+    },
+    {
+      op: "none",
+      kind: "fact",
+      key: "ignored",
+      value: "x",
+      confidence: 0.9,
+      explicit: true,
+      source: "user_statement",
+    },
+  ]);
+  assert.deepEqual(ops, []);
+});
+
+test("conflicting candidates for one key collapse to a single write", () => {
+  const ops = buildMemoryOpsFromUnderstandingCandidates([
+    { op: "write", kind: "fact", key: "name", value: "Emre", confidence: 0.9, explicit: true, source: "user_statement" },
+    { op: "write", kind: "fact", key: "name", value: "Başkası", confidence: 0.4, explicit: true, source: "user_statement" },
+  ]);
+  assert.equal(ops.length, 1);
+  assert.equal(ops[0]?.value, "Emre");
 });
