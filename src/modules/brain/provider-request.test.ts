@@ -165,3 +165,73 @@ test("TurnEnvelope format degrades to json_object for Groq models without json_s
   const qwenSystem = (qwen.body.messages as Array<Record<string, unknown>>)[0];
   assert.match(String(qwenSystem?.content ?? ""), /must contain exactly these keys/u);
 });
+
+test("buildRequestBody forbids prose on machine-JSON routes without imposing a schema", () => {
+  // Masaüstü plan/anlama rotasında turn envelope KAPALIdır ve şema override
+  // yoktur; bu ikisi birleşince hiç `response_format` kalmıyordu ve model
+  // soruyu sınıflamak yerine CEVAPLIYORDU (ölçüldü: soru biçimli mesajlarda
+  // ~%40 düzyazı → masaüstü ayrıştıramaz → desen tabanlı bozulmuş mod).
+  const body = buildRequestBody(
+    "groq",
+    "openai/gpt-oss-120b",
+    [{ role: "user", content: "selam" }],
+    512,
+    undefined,
+    false,
+    [],
+    "hidden",
+    "low",
+    0.2,
+    undefined,
+    true,
+  ) as Record<string, unknown>;
+
+  assert.deepEqual(body.response_format, { type: "json_object" });
+
+  // Şema verildiğinde katı şema kazanır; json_object onu EZMEZ.
+  const schema = { type: "object", properties: {} };
+  const schemaBody = buildRequestBody(
+    "groq",
+    "openai/gpt-oss-120b",
+    [{ role: "user", content: "selam" }],
+    512,
+    undefined,
+    false,
+    [],
+    "hidden",
+    "low",
+    0.2,
+    schema,
+    true,
+  ) as Record<string, unknown>;
+  assert.equal(
+    (schemaBody.response_format as Record<string, unknown>).type,
+    "json_schema",
+  );
+
+  // Bayrak kapalıyken davranış hiç değişmez (mevcut sohbet yolu korunur).
+  const plainBody = buildRequestBody(
+    "groq",
+    "openai/gpt-oss-120b",
+    [{ role: "user", content: "selam" }],
+    512,
+  ) as Record<string, unknown>;
+  assert.equal("response_format" in plainBody, false);
+
+  // json_object'i desteklemeyen sağlayıcıya gövde eklenmez.
+  const ollamaBody = buildRequestBody(
+    "ollama",
+    "llama3",
+    [{ role: "user", content: "selam" }],
+    512,
+    undefined,
+    false,
+    [],
+    "hidden",
+    "low",
+    0.2,
+    undefined,
+    true,
+  ) as Record<string, unknown>;
+  assert.equal("response_format" in ollamaBody, false);
+});

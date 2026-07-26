@@ -120,6 +120,12 @@ export function buildRequestBody(
   reasoningEffort: "low" | "medium" | "high" = "low",
   temperature: number = ANALYTICAL_GENERATION_TEMPERATURE,
   responseSchema?: Record<string, unknown>,
+  // Makine-JSON rotaları (masaüstü plan/anlama) için: şema DAYATMADAN düzyazıyı
+  // yasakla. Şema dayatmak §4.11'de modeli iki şema arasında sıkıştırıp boş
+  // üretime sokmuştu; json_object ise biçim serbest bırakır, yalnız "bu bir
+  // JSON nesnesi olacak" der. Bunsuz model soruyu CEVAPLIYOR (ölçüldü: soru
+  // biçimli mesajlarda ~%40 düzyazı → sınıflandırma kaybı → degraded).
+  jsonObjectMode = false,
 ) {
   if (provider === "ollama") {
     return {
@@ -156,7 +162,10 @@ export function buildRequestBody(
             },
           },
         }
-      : {}),
+      : jsonObjectMode &&
+          ["gemini", "groq", "openai", "openrouter"].includes(provider)
+        ? { response_format: { type: "json_object" } }
+        : {}),
     ...(isReasoningChannelModel(model)
       ? {
           reasoning_format: reasoningPolicy === "visible" ? "parsed" : "hidden",

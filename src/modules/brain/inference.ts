@@ -6358,6 +6358,9 @@ export async function generateSharedBrainReply(
             reasoningEffort,
             generationTemperature,
             input.responseSchemaOverride,
+            // Makine-JSON rotasında düzyazı bir cevap DEĞİL, kayıp demektir:
+            // masaüstü onu ayrıştıramaz ve desen tabanlı bozulmuş moda düşer.
+            machineJsonRoute,
           ),
           // Model bir Groq Compound modeli DEĞİLse boş nesne (no-op); değilse
           // yapılandırılmış arama ayarlarını (alan/ülke filtresi) gövdeye ekler.
