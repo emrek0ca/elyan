@@ -141,19 +141,26 @@ def recent_turns(
 
 
 def describe_for_context(source: ConversationSource | None) -> dict[str, Any] | None:
-    """Durumsal bağlama girecek özet.
+    """Durumsal bağlama girecek özet — İÇERİĞİN KENDİSİ DEĞİL, VARLIĞI.
 
-    Modelin bilmesi gereken tek şey: "elimde şu konuda, şu kadar uzunlukta
-    HAZIR bir içerik var." Gövdenin tamamı prompt'a konmaz (bütçe), ama
-    varlığı bildirilir ki model "hangi içerik?" diye sormasın.
+    Modelin bilmesi gereken tek şey: "elimde hazır bir içerik VAR, dolayısıyla
+    'hangi içerik?' diye sormaya gerek yok." Gövdeyi buraya koymak ÖZNEYİ
+    ÇALIYOR: ölçüldü — içeriğin ilk 240 karakteri bağlama konduğunda model
+    "bunu belge yap" mesajını değil o metni sınıflamaya başladı ve 5/5 'chat'
+    dedi ("mesaj bilgi veriyor, eylem talebi yok"). Bu, mesajı zarfa gömmenin
+    yarattığı özne karışıklığının aynısıdır.
+
+    Bu yüzden burada yalnız ölçü ve KONU taşınır. Gövdenin tamamı ayrı yoldan
+    (yürütme hunisi → yazıcının ``sourceContext``i) gider; modelin onu okuması
+    gerekmez.
     """
     if source is None or not source.is_usable:
         return None
     payload: dict[str, Any] = {
         "available": True,
         "chars": len(source.text),
-        "preview": source.text[:_TURN_PREVIEW_CHARS],
     }
     if source.prompt_text:
-        payload["answering"] = source.prompt_text
+        # Konu başlığı: "ne hakkında" bilgisi niyeti çözmeye yeter, gövde değil.
+        payload["topic"] = source.prompt_text
     return payload

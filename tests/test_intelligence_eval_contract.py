@@ -62,12 +62,36 @@ def test_analyzed_message_is_fenced_outside_the_context_envelope() -> None:
     prompt = understanding.build_understanding_prompt(
         "selam, nasılsın bugün?",
         situational_context={"partOfDay": "sabah"},
+        recent_turns=["kullanıcı: pomodoro tekniği nasıl çalışıyor?"],
     )
-    assert understanding.fence_message("selam, nasılsın bugün?") in prompt
-    context_block = prompt.split("ÇEVRESEL BAĞLAM", 1)[1]
-    assert "selam, nasılsın bugün?" not in context_block
+    fence = understanding.fence_message("selam, nasılsın bugün?")
+    assert fence in prompt
+    # Mesaj, arka plan JSON'unun İÇİNDE geçmemeli.
+    background = prompt.split("ARKA PLAN", 1)[1].split("ŞİMDİ SINIFLA", 1)[0]
+    assert "selam, nasılsın bugün?" not in background
     # Şema, sınıflandırılan teslimat DEĞİLDİR — bu ayrım prompt'ta yazılı kalmalı.
     assert "iş ürünün" in prompt
+
+
+def test_background_precedes_the_classified_message() -> None:
+    """SIRA değişmezi: arka plan ÖNCE, sınıflanacak mesaj SONRA.
+
+    Mesaj arka plandan önce konduğunda bağlamdaki metinler (önceki turlar, konu
+    başlığı) daha yakın konumda kalıp özneyi çalıyordu — ölçüldü: "bunu belge
+    yap" isteği 5/5 `chat` çıktı ve gerekçede önceki turun SORUSU sınıflanmıştı.
+    Sıra bozulursa bu test düşmeli.
+    """
+    prompt = understanding.build_understanding_prompt(
+        "bunu belge yap",
+        recent_turns=["kullanıcı: pomodoro tekniği nasıl çalışıyor?"],
+    )
+    assert prompt.index("ARKA PLAN") < prompt.index(
+        understanding.fence_message("bunu belge yap")
+    )
+    # Sınıflanacak metin, çıktı şemasının hemen öncesinde durmalı.
+    assert prompt.index(understanding.fence_message("bunu belge yap")) < prompt.index(
+        "ÇIKTI ŞEMASI"
+    )
 
 
 def test_wrong_intent_is_caught() -> None:

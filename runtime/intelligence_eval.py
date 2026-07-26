@@ -186,6 +186,35 @@ SCENARIOS: list[dict[str, Any]] = [
         "expect": {"intents": ["task"]},
     },
     {
+        # BELGE ZİNCİRİ: kullanıcı sordu, Elyan cevapladı, şimdi "bunu belge
+        # yap" diyor. Belgelenecek şey ÖNCEKİ CEVAPtır; sorulacak bir şey yok.
+        # Tarihî hata: bağlamdaki metin özneyi çalıyor ve model önceki turun
+        # SORUSUNU sınıflayıp 'chat' diyordu (5/5).
+        "id": "belge_onceki_turdan",
+        "message": "bunu belge yap",
+        "situational": {
+            "conversationContent": {
+                "available": True,
+                "chars": 209,
+                "topic": "pomodoro tekniği nasıl çalışıyor?",
+            }
+        },
+        "expect": {"intents": ["task"], "noMissingInfo": True},
+    },
+    {
+        # Aynı zincir, farklı format: kap adı değişince davranış değişmemeli.
+        "id": "belge_onceki_turdan_pdf",
+        "message": "bunu pdf yap",
+        "situational": {
+            "conversationContent": {
+                "available": True,
+                "chars": 209,
+                "topic": "pomodoro tekniği nasıl çalışıyor?",
+            }
+        },
+        "expect": {"intents": ["task"], "noMissingInfo": True},
+    },
+    {
         # Kendi durumu: son görev başarısızsa "neden olmadı" yeni görev DEĞİLDİR.
         "id": "oz_durum_neden_olmadi",
         "message": "neden olmadı? bir sorun mu çıktı?",
