@@ -627,9 +627,15 @@ kapattığını da o yolun kendisiyle doğrula.**
      doğrulanması ve mobil blok render'ı **açık kaldı**.
    - Sağlayıcı tökezlemesi sürüyor: yoğun eval koşularında bazı turlar
      tamamen `degraded_skip` dönüyor (rate-limit şüphesi, ölçülmedi).
-   - `_fill_writer_source_from_conversation` yalnız `send_conversation`
-     yolunda besleniyor; uzak iş emri (mobil→backend→masaüstü) yolunda
-     ContextVar set edilmiyor — **mobil akış için bağlanması gereken yer bu.**
+   - **SIRADAKİ İŞ (mobil akış için tek eksik halka):**
+     `_fill_writer_source_from_conversation` yalnız `send_conversation`
+     yolunda besleniyor. Uzak iş emri yolunda
+     (`_execute_deterministic_remote_task`) `_CURRENT_CONVERSATION_SOURCE`
+     set EDİLMİYOR, çünkü mobil konuşma geçmişi masaüstünde değil
+     **backend'de** duruyor. Yapılacak: backend iş emri payload'ına önceki
+     turun içeriğini (gövde + konu) koyacak, masaüstü onu okuyup ContextVar'a
+     yazacak. Bu bağlanmadan "bunu belge yap" MOBİLDEN çalışmaz — masaüstü
+     sohbetinden çalışır (ölçüldü).
 
 1. **Baseline test hatası: 57 → 38** — eksik opsiyonel bağımlılıklar kurulunca
    19 test düzeldi (`reportlab openpyxl python-pptx markitdown mammoth
