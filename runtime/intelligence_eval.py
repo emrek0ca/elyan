@@ -236,6 +236,7 @@ def run_intelligence_eval(
     *,
     send_prompt_factory: Callable[[str], Callable[[str], str]] | None = None,
     only: list[str] | None = None,
+    state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Senaryoları canlı taşıma ile koşturur.
 
@@ -243,6 +244,8 @@ def run_intelligence_eval(
     kurulur (backend güvenlik kapıları userText'i denetleyebilsin diye).
     Model erişilemeyen turlar `degraded_skip` olarak raporlanır — eval asla
     "model yoktu ama geçti/kaldı" yalanı üretmez."""
+    from runtime import intent_gate
+
     cases: list[dict[str, Any]] = []
     passed = failed = skipped = 0
     for scenario in SCENARIOS:
@@ -253,10 +256,15 @@ def run_intelligence_eval(
             if send_prompt_factory is not None
             else send_prompt
         )
-        envelope = understanding.analyze(
+        # ÜRETİM YOLUNU ÖLÇ: `understanding.analyze` doğrudan çağrılırsa
+        # selfModel/environment/ecosystem hiç enjekte edilmez ve eval, canlıda
+        # var olmayan bir körlüğü ölçer. Senaryonun sentetik bağlamı üretim
+        # payload'ının ÜSTÜNE bindirilir.
+        envelope = intent_gate.understand(
             scenario["message"],
             send_prompt=transport,
-            situational_context=scenario.get("situational"),
+            state=state,
+            situational_extra=scenario.get("situational"),
         )
         if envelope.degraded:
             skipped += 1

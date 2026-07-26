@@ -3230,6 +3230,15 @@ _CURRENT_ARTIFACT_SUBJECT: contextvars.ContextVar[str] = contextvars.ContextVar(
     default="",
 )
 
+# Bu turda KONUŞMADAN taşınabilir içerik (bir önceki cevabın gövdesi). Yürütme
+# hunisi, yazıcı araç elinde içerik olmadan çalışmak üzereyken bunu enjekte
+# eder — "bunu belge yap" isteği o zaman KOMUT cümlesini değil gerçek cevabı
+# belgeler. İçerik yoksa boştur ve hiçbir şey değişmez (uydurma yok).
+_CURRENT_CONVERSATION_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "elyan_current_conversation_source",
+    default="",
+)
+
 
 def _invoke_provider_chat_with_context(
     state: dict[str, Any],
@@ -5159,6 +5168,45 @@ def _retitle_artifact_from_subject(
             updated["outputPath"] = str(
                 original.with_name(f"{slug}{original.suffix}")
             )
+    return updated
+
+
+def _fill_writer_source_from_conversation(
+    capability: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Yazıcı aracın BOŞ olan içerik kaynağını bu turun konuşmasından doldurur.
+
+    KAPI (üç koşul birden): (1) yetenek bir artifact yazıcısı; (2) adımın
+    elinde ZATEN içerik yok — ne `sourceContext`, ne kaynak dosya, ne
+    yapılandırılmış gövde, ne de zincirdeki önceki adımın çıktısı; (3) bu turda
+    konuşmadan taşınabilir gerçek bir metin var.
+
+    Üçü birden sağlanmazsa hiçbir şey değişmez. Yani mevcut davranış (plan içi
+    zincirleme, kullanıcının verdiği içerik) asla ezilmez; yalnız yazıcının
+    aksi halde komut cümlesini gövde sanacağı durum kapatılır.
+    """
+    if capability not in _ARTIFACT_WRITE_CAPABILITIES or not isinstance(args, dict):
+        return args
+    has_content = any(
+        str(args.get(key, "") or "").strip()
+        for key in ("sourceContext", "source_context", "sourcePath", "source_path")
+    ) or any(
+        isinstance(args.get(key), list) and args.get(key)
+        for key in ("blocks", "sections", "slides", "rows", "sheets")
+    )
+    if has_content:
+        return args
+    dependency_results = args.get("_dependencyResults")
+    if isinstance(dependency_results, dict) and dependency_results:
+        return args
+    carried = str(_CURRENT_CONVERSATION_SOURCE.get("") or "").strip()
+    if not carried:
+        return args
+    updated = dict(args)
+    updated["sourceContext"] = carried
+    # İzlenebilirlik: gövdenin nereden geldiği denetlenebilir kalsın.
+    updated["_sourceContextOrigin"] = "conversation_turn"
     return updated
 
 
@@ -9541,6 +9589,14 @@ class RuntimeBridge:
             args = _retitle_artifact_from_subject(capability, args)
         except Exception:
             pass
+        # TURLAR ARASI İÇERİK: yazıcı elinde içerik olmadan çalışmak üzereyse
+        # ve konuşmada gerçek bir cevap varsa, gövde ondan gelir. Bunsuz
+        # "bunu belge yap" isteği kullanıcının KOMUT cümlesini belgeliyordu
+        # (`_resolve_source_text` sırası: sourceContext → sourcePath → prompt).
+        try:
+            args = _fill_writer_source_from_conversation(capability, args)
+        except Exception:
+            pass
         tool_result, step_events = _execute_capability_with_preprocessing(
             capability,
             args,
@@ -10230,15 +10286,36 @@ class RuntimeBridge:
                     self.backend, prompt, user_text=text
                 )
             )
+        # SÜREKLİLİK: "bunu belge yap" derken "bunu"nun ne olduğu ancak önceki
+        # turlar görülürse çözülür. `recent_turns` parametresi yıllardır vardı
+        # ve prompt'ta işleniyordu ama HİÇBİR çağıran doldurmuyordu — alan
+        # ölüydü (aynı sınıf: `recentOutputs`). Gövdenin tamamı ayrı yoldan
+        # yazıcıya gider; buradaki özet yalnız gönderme çözümü içindir.
+        from runtime import conversation_source as _conversation_source
+
+        _prior_source = _conversation_source.latest_reference_content(messages)
+        _conversation_extra = _conversation_source.describe_for_context(_prior_source)
         intent_decision = intent_gate.understand(
             text,
             send_prompt=_understanding_transport,
             dispatch_active=bool(_ACTIVE_DISPATCH_SESSION_ID.get("")),
             has_pending_plan=bool(active_plan_id if isinstance(active_plan, dict) else ""),
+            recent_turns=_conversation_source.recent_turns(messages),
             # Durumsal sinyaller (takvim/konum/aktif uygulama/son dosyalar):
             # niyet bunlarla çözülür → bariz sorular sorulmaz, canlı his artar.
             state=STATE.snapshot(),
+            situational_extra=(
+                {"conversationContent": _conversation_extra}
+                if _conversation_extra
+                else None
+            ),
         )
+        try:
+            _CURRENT_CONVERSATION_SOURCE.set(
+                _prior_source.text if _prior_source is not None else ""
+            )
+        except Exception:
+            pass
         # Anlaşılan konuyu tur boyunca taşı: dosya adı/başlık bundan türetilir.
         try:
             _CURRENT_ARTIFACT_SUBJECT.set(intent_decision.artifact_subject())
@@ -10255,6 +10332,9 @@ class RuntimeBridge:
             intent_decision.intent == "clarify"
             and intent_decision.missing_information
             and intent_decision.source_kind != "public_external"
+            # İçerik BU KONUŞMADA duruyorsa sormak gereksiz sürtünmedir:
+            # "bunu belge yap" → belgelenecek şey bir önceki cevaptır.
+            and intent_decision.source_kind != "conversation"
             and not normalized_selected
         ):
             question = _missing_source_question(intent_decision.missing_information)

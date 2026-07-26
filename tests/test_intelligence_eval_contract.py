@@ -30,11 +30,11 @@ def _ideal_payload(scenario: dict) -> dict:
 
 
 def test_ideal_answers_pass_every_scenario() -> None:
-    # Eşleşme anahtarı JSON-kodlanmış "message" alanıdır: sözleşme metni
-    # örnek olarak "onu sil" gibi kısa cümleler içerdiğinden ham substring
-    # eşleşmesi yanlış senaryonun cevabını döndürür.
+    # Eşleşme anahtarı MESAJ ÇİTİdir: sözleşme metni örnek olarak "onu sil"
+    # gibi kısa cümleler içerdiğinden ham substring eşleşmesi yanlış senaryonun
+    # cevabını döndürür. Çit, analiz edilen mesajı tam sınırıyla verir.
     answers = {
-        f'"message": {json.dumps(scenario["message"], ensure_ascii=False)}': _ideal_payload(scenario)
+        understanding.fence_message(scenario["message"]): _ideal_payload(scenario)
         for scenario in intelligence_eval.SCENARIOS
     }
 
@@ -48,6 +48,26 @@ def test_ideal_answers_pass_every_scenario() -> None:
     assert report["failed"] == 0
     assert report["skipped"] == 0
     assert report["passed"] == len(intelligence_eval.SCENARIOS)
+
+
+def test_analyzed_message_is_fenced_outside_the_context_envelope() -> None:
+    """ÖZNE AYRIMI değişmezi.
+
+    Mesaj, çevresel bağlam JSON'unun İÇİNE gömülmemelidir. Gömüldüğünde model
+    özneyi karıştırıp kendi iş ürününü ("şema uyumlu JSON üret") kullanıcının
+    teslimatı sayıyor ve düşük sinyalli sohbeti göreve çeviriyordu — ölçüldü:
+    "selam, nasılsın bugün?" 5 koşunun 4'ünde `task`. Çit kaldırılırsa bu
+    testin düşmesi gerekir.
+    """
+    prompt = understanding.build_understanding_prompt(
+        "selam, nasılsın bugün?",
+        situational_context={"partOfDay": "sabah"},
+    )
+    assert understanding.fence_message("selam, nasılsın bugün?") in prompt
+    context_block = prompt.split("ÇEVRESEL BAĞLAM", 1)[1]
+    assert "selam, nasılsın bugün?" not in context_block
+    # Şema, sınıflandırılan teslimat DEĞİLDİR — bu ayrım prompt'ta yazılı kalmalı.
+    assert "iş ürünün" in prompt
 
 
 def test_wrong_intent_is_caught() -> None:

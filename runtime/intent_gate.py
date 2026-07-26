@@ -197,44 +197,23 @@ def should_run_task(
     ).is_task
 
 
-def understand(
-    text: str,
-    *,
-    send_prompt=None,
-    dispatch_active: bool = False,
-    has_pending_plan: bool = False,
-    recent_turns: list[str] | None = None,
+def assemble_situational_context(
     state: dict | None = None,
+    *,
     calendar_events: list | None = None,
-):
-    """Semantik anlama (birincil) + desen tabanlı yedek.
+    extra: dict | None = None,
+) -> dict | None:
+    """Anlama katmanına gidecek durumsal bağlamı kurar.
 
-    OTORİTE MODELDEDİR. Bu dosyadaki desenler yalnız model erişilemediğinde
-    devreye girer ve sonuç ``degraded=True`` ile işaretlenir. Yani "şu kelime
-    geçerse şu" mantığı artık ana karar yolu DEĞİL, yalnız bozulmuş mod
-    emniyet ağıdır.
+    TEK KAYNAK: canlı yol da, eval de bu payload'ı kullanır. Ayrı kurulursa
+    eval production'ı değil kendi kurgusunu ölçer — nitekim ölçtü: ``environment``
+    hiç enjekte edilmediği için "projedeki testleri çalıştır" isteği 5 koşunun
+    3'ünde "hangi proje dizini?" diye sorulup ``clarify``ye düşüyordu; canlı
+    yolda o bilgi zaten vardı.
+
+    ``extra`` sentetik/çağıran-tarafı bağlamı üstüne bindirir (eval senaryoları
+    kendi takvim/recentOutputs kurgularını böyle verir); üretimde boştur.
     """
-    from runtime import understanding as understanding_module
-
-    def _pattern_fallback():
-        decision = classify_message(
-            text,
-            dispatch_active=dispatch_active,
-            has_pending_plan=has_pending_plan,
-        )
-        mapping = {
-            CHAT: understanding_module.INTENT_CHAT,
-            TASK: understanding_module.INTENT_TASK,
-            TASK_CONTROL: understanding_module.INTENT_TASK_CONTROL,
-        }
-        return understanding_module.SemanticUnderstanding(
-            intent=mapping.get(decision.kind, understanding_module.INTENT_CHAT),
-            confidence=decision.confidence,
-            source="deterministic_fallback",
-            reasoning=decision.reason,
-            signals=[decision.reason],
-        )
-
     # Durumsal bağlam: takvim/konum/aktif uygulama. Niyeti bununla çözmek,
     # "hangi toplantı?" gibi bariz soruları ortadan kaldırır.
     situational: dict | None = None
@@ -282,6 +261,53 @@ def understand(
             situational["ecosystem"] = topology
     except Exception:
         pass
+    if isinstance(extra, dict) and extra:
+        situational = {**(situational or {}), **extra}
+    return situational
+
+
+def understand(
+    text: str,
+    *,
+    send_prompt=None,
+    dispatch_active: bool = False,
+    has_pending_plan: bool = False,
+    recent_turns: list[str] | None = None,
+    state: dict | None = None,
+    calendar_events: list | None = None,
+    situational_extra: dict | None = None,
+):
+    """Semantik anlama (birincil) + desen tabanlı yedek.
+
+    OTORİTE MODELDEDİR. Bu dosyadaki desenler yalnız model erişilemediğinde
+    devreye girer ve sonuç ``degraded=True`` ile işaretlenir. Yani "şu kelime
+    geçerse şu" mantığı artık ana karar yolu DEĞİL, yalnız bozulmuş mod
+    emniyet ağıdır.
+    """
+    from runtime import understanding as understanding_module
+
+    def _pattern_fallback():
+        decision = classify_message(
+            text,
+            dispatch_active=dispatch_active,
+            has_pending_plan=has_pending_plan,
+        )
+        mapping = {
+            CHAT: understanding_module.INTENT_CHAT,
+            TASK: understanding_module.INTENT_TASK,
+            TASK_CONTROL: understanding_module.INTENT_TASK_CONTROL,
+        }
+        return understanding_module.SemanticUnderstanding(
+            intent=mapping.get(decision.kind, understanding_module.INTENT_CHAT),
+            confidence=decision.confidence,
+            source="deterministic_fallback",
+            reasoning=decision.reason,
+            signals=[decision.reason],
+        )
+
+    situational = assemble_situational_context(
+        state, calendar_events=calendar_events, extra=situational_extra
+    )
 
     return understanding_module.analyze(
         text,

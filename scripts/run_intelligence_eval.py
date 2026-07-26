@@ -23,9 +23,14 @@ def main() -> int:
     parser.add_argument("--only", nargs="*", default=None, help="yalnız bu senaryo id'leri")
     args = parser.parse_args()
 
-    from runtime import agent_decider, intelligence_eval
+    from runtime import agent_decider, intelligence_eval, state_store
     from runtime.backend_client import BackendClient
     from runtime.bridge import _server_brain_structured_plan
+
+    try:
+        live_state = state_store.load_state()
+    except Exception:
+        live_state = None
 
     backend = BackendClient(os.environ.get("APP_BASE_URL"))
     if not backend.configured:
@@ -44,7 +49,7 @@ def main() -> int:
         )
 
     report = intelligence_eval.run_intelligence_eval(
-        send_prompt_factory=send_prompt_factory, only=args.only
+        send_prompt_factory=send_prompt_factory, only=args.only, state=live_state
     )
 
     if args.json:
