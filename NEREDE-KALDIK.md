@@ -640,6 +640,60 @@ Blokaj yaratan tek alan `lastAssistantSummary`ydi; o bağlandı.
 > alınan denemeler). Bir alanı ancak onu talep eden SOMUT bir arıza varken
 > bağla ve bağladığını 5 koşuyla ölç.
 
+### 4.16 RAG + BELLEK SAĞLAMLAŞTIRMA (2026-07-26)
+
+Yöntem her maddede aynı: **desen ekleme, altyapıyı düzelt.** Eklenen kodda
+kelime eşleştirmesi yok; üstelik var olan bir desen listesi KALDIRILDI.
+
+**1. Getirme eklemeli dile kördü (ölçüldü).** Kapsama ve yeniden sıralama
+birebir sözcük eşleşmesine dayanıyordu. Türkçede "enflasyon"≠"enflasyonun",
+"oranı"≠"oranları" → soruyu gerçekten cevaplayan belge elde dururken
+**kapsama 0.0** çıkıyordu; sistem "kanıtım yok" sanıp gereksiz ikinci tur
+atıyor ya da kaynaksız kalıyordu. Artık ortak KÖK karşılaştırılıyor
+(uzunluk + kısa terime oran ölçütü) — ek listesi değil, dilden bağımsız
+ölçüt; Türkçe eki de İngilizce çekimi de tek kuralla karşılanır.
+> **Takas (bilinçli):** ölçüt ara sıra yakın yazımlı ayrı kelimeleri
+> eşleştirebilir. Zarar sınırlı — bu skor yalnız *ikinci tur gerekli mi* ve
+> *hangi belge önce* sorularını etkiler, hiçbir yan etki kapısına bağlı
+> değildir. Sistematik eksik eşleşme ise kaynaksız cevap üretir; yanlış yön
+> çok daha pahalıdır.
+
+**2. Sorgu ayrıştırma bir BAĞLAÇ LİSTESİYDİ** (`ve|ayrıca|bir de`) — tam da
+kaldırmaya çalıştığımız kural tipi, ve kullanıcı bağlacı yazmayınca çöküyordu.
+Artık bölme yalnız NOKTALAMAdan (yapısal), kapsama ise **terim düzeyinde**
+ölçülüyor. Sonuç daha ince: "faiz kararı ve enflasyon oranı" ile bağlaçsız
+hâli **aynı** ölçümü veriyor ve ikinci tur karşılanmayan TERİMLERİ hedefliyor.
+
+**3. Episodik bellekte unutma yoktu.** `lesson_store` sınırlıydı (24) ve alaka
+kapısı vardı ama YAŞ kapısı yoktu: düzeltilmiş bir hata hakkında öğrenilen
+ders sonsuza dek hatırlatılıyordu. `LESSON_TTL_DAYS=30` + zamansız kayıt bayat
+(fail-closed) — `situational_context.recent_output_is_fresh` ile aynı ilke.
+Ayrıca çift sıralama yüzünden **eşitlikte EN ESKİ ders kazanıyordu**; sistem
+öğrendikçe ilk gözlemini tekrarlıyordu. Düzeltildi (yeni kazanır).
+
+**4. Genel bellek bir kelime listesine hapsedilmişti (backend).** İki çıkarım
+yolu vardı, yalnız zayıf olanı yazıyordu:
+- Öğrenme sinyalleri → `SYNCHRONOUS_MEMORY_KEYS` adlı **sabit 8 anahtarlık
+  liste**den geçenler kaydediliyordu. Kullanıcının açıkça söylediği başka her
+  şey (işvereni, editörü, alerjisi) düşüyordu.
+- `memory_candidates` → model tarafından ANLAŞILARAK çıkarılıyor, tipli
+  (`op/kind/key/value/confidence/explicit/source/ttlDays`), zarfla taşınıyordu
+  — ama yalnız **sayılıp loglanıyor**, hiçbir yere yazılmıyordu. Lavabo
+  (`recordTurnMemoryOps`) zaten mevcuttu.
+
+Adaptör yazıldı: açık adaylar gerçek bellek yazımına gidiyor. Türler birebir
+eşleştiği için yeni mekanizma değil, **bağlantı**. Değişmez korundu: yalnız
+`explicit` adaylar yazılır (çıkarılmış tercih uydurmadır). Fail-open.
+
+Testler: `tests/test_retrieval_stem_matching.py` (7),
+`tests/test_lesson_memory_contract.py` (5), backend 1612/1612.
+Sıfır regresyon (desktop 38 = baseline alt kümesi). Backend deploy edildi,
+`dist`te doğrulandı.
+
+**Açık:** `SYNCHRONOUS_MEMORY_KEYS` listesi hâlâ duruyor (sinyal yolu için).
+Aday yolu kanıtlandıkça o liste tamamen kaldırılabilir — ama önce canlı veriyle
+adayların gerçekten yazıldığı doğrulanmalı (ölçülmedi).
+
 ### BU OTURUMUN DERSİ
 Aynı belirti (etiket cevabı) **üç ayrı katmandan** besleniyordu ve her seferinde
 tek katmanı düzeltip "bitti" sandım. Kullanıcı haklı olarak "hiçbir şey
