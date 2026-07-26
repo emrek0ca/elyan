@@ -536,6 +536,71 @@ türetilir**. Araca özel elle yazılmış kural yok; keyword kısa listesi kaba
 
 Hepsi sıfır regresyonla (17 baseline hata sabit, `comm` yöntemi).
 
+### 4.14 ⚑ ÖZNE HIRSIZLIĞI + TURLAR ARASI İÇERİK (2026-07-26)
+
+**Kök teşhis — tek bir yapısal hata, üç ayrı belirti.** Anlama prompt'unda
+sınıflanacak mesaj, bağlam zarfının İÇİNE bir JSON anahtarı olarak gömülüydü.
+Model "kullanıcı" sözcüğünün kime işaret ettiğini yanlış çözüp **kendi iş
+ürününü** (şema uyumlu JSON) kullanıcının teslimatı sayıyordu.
+
+| Belirti | Ölçüm (önce) | Ölçüm (sonra) |
+|---|---|---|
+| "selam, nasılsın bugün?" → `task` | **1/5** | **5/5** |
+| "bunu belge yap" → `chat` (önceki turun SORUSU sınıflanıyordu) | **0/5** | **4/5** |
+| "ne durumda, bitti mi?" → `chat`/`clarify` | **0/5** | **4/4** |
+
+**Üç kademeli düzeltme (sıra önemliydi):**
+1. **Çit** — mesaj kendi sınırına alındı (`fence_message`), sözleşmeye "şema
+   SENİN iş ürünün, sınıflanan teslimat değil" yazıldı.
+2. **`json_object` kipi** (backend) — çit mesajı belirginleştirince model onu
+   *cevaplamaya* başladı; düzyazı masaüstünde ayrıştırılamayıp sessizce desen
+   yedeğine düşüyordu (soru biçimli mesajlarda ~%40). Makine-JSON rotalarında
+   artık `response_format: {type:"json_object"}` isteniyor — **şema
+   dayatmadan** düzyazıyı yasaklar, dolayısıyla §4.11'deki "iki şema arasında
+   sıkışma" arızasını yeniden üretemez.
+3. **SIRA** — çit tek başına yetmedi: bağlam bloğu mesajdan SONRA geldiği için
+   önceki turlar daha yakın konumda kalıp özneyi geri çalıyordu. Artık
+   `ARKA PLAN → ŞİMDİ SINIFLA(çit) → ÇIKTI ŞEMASI`.
+
+> **KURAL (bozma):** taşınan içeriğin METNİ bağlama konmaz — yalnız VARLIĞI
+> (`available`, `chars`, `topic`). Önizleme koymak denendi: 240 karakterlik
+> alıntı özneyi yeniden çaldı ve "bunu belge yap" 5/5 `chat` oldu. Gövde ayrı
+> yoldan yazıcıya gider; modelin onu okuması gerekmez.
+
+**Turlar arası içerik — `runtime/conversation_source.py` (YENİ).** İki ölü alan
+bağlandı: (a) `recent_turns` her iki imzada VARDI ve prompt'ta işleniyordu ama
+**hiçbir çağıran doldurmuyordu** (`recentOutputs` ile aynı sınıf); (b) yazıcılar
+yalnız AYNI plandaki adımları görüyordu (`_dependencyResults`), turlar arası
+içerik hiç taşınmıyordu — bu yüzden "bunu belge yap" kullanıcının KOMUT
+cümlesini belgeliyordu.
+
+Artık: `sourceKind` kapalı kümesine **`conversation`** eklendi; yürütme hunisi
+(`bridge._fill_writer_source_from_conversation`) yazıcının BOŞ gövdesini o turun
+konuşmasından doldurur. **Üç koşul birden** aranır (yetenek yazıcı + elde hiç
+içerik yok + konuşmada gerçek metin var); biri tutmazsa hiçbir şey değişmez —
+plan içi zincirleme ve kullanıcının verdiği içerik asla ezilmez. Metin yoksa
+**sorma davranışı aynen sürer** (uydurma yok).
+
+**Sınıflandırma kapsamı — izin niyeti değiştirmiyor.** `permissionsDenied`
+görev isteğini `chat`e çeviriyordu ("terminal kapalı, yapamam"). Bu, §4.13'te
+ekosistem için bir kez düzeltilmiş hatanın aynısıydı: yetenek durumu **ne
+söyleyeceğini** belirler, **kullanıcının ne istediğini** değil. İzin kapısı ayrı
+katmandadır.
+
+**Diğer ilkeler:** `missingInformation` artık ENGEL listesidir (makul
+varsayılanı olan hiçbir şey girmez); `clarify` SON ÇAREdir (iki koşul birden);
+keşfedilebilir bilgi eksik bilgi değildir — **sınırı**: bakılacak bir yerin
+gerçekten var olması (elimizde olmayan içerik hâlâ `user_private` → sorulur).
+Rule 8'deki `tablo/belge/liste` isim listesi **kaldırıldı**, yerine ilke geldi.
+
+**Ölçüm (18 senaryo × 5 koşu, `scripts/run_eval_stability.py` YENİ):**
+`17/18` senaryo ≥4/5. Orijinal 16 senaryonun **tamamı** eşiği tutturuyor.
+Tek koşuya bakarak yargı verme — bu araç tam bunun için yazıldı.
+
+**Format matrisi 12/12:** docx/pdf/xlsx/pptx/txt/md — her biri için bir yazma +
+bir okuma. Not: eksik opsiyonel bağımlılıklar kuruldu (`reportlab openpyxl
+python-pptx markitdown mammoth pymupdf`) → desktop baseline **57 → 38** hata.
+
 ### BU OTURUMUN DERSİ
 Aynı belirti (etiket cevabı) **üç ayrı katmandan** besleniyordu ve her seferinde
 tek katmanı düzeltip "bitti" sandım. Kullanıcı haklı olarak "hiçbir şey
@@ -546,9 +611,29 @@ kapattığını da o yolun kendisiyle doğrula.**
 
 ## 5. AÇIK SORUNLAR
 
-1. **57 baseline test hatası (tüm suite)** — bende değil, önceden vardı. Çoğu
-   eksik opsiyonel bağımlılık (sympy/matplotlib/ses/latex). Hedef suite'lerde
-   (bridge+policy+executor) bu sayı 15. Komut:
+0. **BİTMEDİ (2026-07-26, dürüst liste):**
+   - `belge_onceki_turdan_pdf` **1/4** — "bunu pdf yap" isteğinde model
+     `conversationContent`i kaynak saymayıp "hangi içerik/dosya?" diye soruyor
+     ("pdf" isteği onu *dosya dönüştürme* çerçevesine sokuyor). Kardeşi
+     `belge_onceki_turdan` geçiyor (3/3), yani zincir çalışıyor; takılan tek
+     şey bu biçim.
+     > **DENENDİ, GERİ ALINDI (tekrarlama):** rule 4'ü "ENGEL listesi" diye
+     > yeniden yazmak ve "çıktı yolu eksik bilgi değildir" cümlesini eklemek
+     > bu senaryoyu düzeltmedi, üstelik **ask-gate'i zayıflattı**:
+     > `ozel_kaynak_sorulur` 5/5 → 3/5 (`task`) — yani uydurma koruması
+     > gevşedi. Toplam 17/18 → 14/18. Ölçülüp geri alındı.
+   - **Mobil cihazdan uçtan uca DENENMEDİ.** Zincir masaüstünde ölçüldü
+     (anlama → huni → yazıcı → geri okuma); gerçek telefondan üç akışın
+     doğrulanması ve mobil blok render'ı **açık kaldı**.
+   - Sağlayıcı tökezlemesi sürüyor: yoğun eval koşularında bazı turlar
+     tamamen `degraded_skip` dönüyor (rate-limit şüphesi, ölçülmedi).
+   - `_fill_writer_source_from_conversation` yalnız `send_conversation`
+     yolunda besleniyor; uzak iş emri (mobil→backend→masaüstü) yolunda
+     ContextVar set edilmiyor — **mobil akış için bağlanması gereken yer bu.**
+
+1. **Baseline test hatası: 57 → 38** — eksik opsiyonel bağımlılıklar kurulunca
+   19 test düzeldi (`reportlab openpyxl python-pptx markitdown mammoth
+   pymupdf`). Kalan 38 hâlâ bizden değil (sympy/ses/latex).
    `PYTHONPATH=. python -m pytest tests/ -q`
 2. **Groq Compound hiç çalışmadı** — kod hatası değil, **ops**: `GROQ_COMPOUND_ENABLED`
    varsayılan `false` ve VPS `.env`'inde yok. Ayrıca uygun workload yalnız
