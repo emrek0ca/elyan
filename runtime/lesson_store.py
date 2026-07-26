@@ -33,6 +33,31 @@ LESSON_CONTRACT = "elyan.lesson.v1"
 _MAX_LESSONS = 24
 _MAX_LESSON_CHARS = 180
 
+# UNUTMA: bir ders operasyonel bir gözlemdir, ebedi bir doğru değil. Aylar önce
+# "şu araç şu hatayı veriyor" diye öğrenilen ders, hata düzeltildikten sonra
+# modeli YANLIŞ yönlendirir — bayat hatırlatma, hatırlamamaktan kötüdür.
+# Bu, `situational_context.recent_output_is_fresh` ile aynı ilkedir; episodik
+# bellekte eksikti. Zamansız kayıt bayat sayılır (fail-closed).
+LESSON_TTL_DAYS = 30
+
+
+def lesson_is_fresh(entry: Any, *, now: dt.datetime | None = None) -> bool:
+    """Bir dersin hâlâ güvenle hatırlatılabilir olduğunu söyler."""
+    if not isinstance(entry, dict):
+        return False
+    raw_recorded = str(entry.get("recordedAt", "") or "").strip()
+    if not raw_recorded:
+        # Yaşı bilinemeyen kayıt bayat sayılır — sessizce eskimiş ders taşımayız.
+        return False
+    try:
+        recorded = dt.datetime.fromisoformat(raw_recorded.replace("Z", "+00:00"))
+        if recorded.tzinfo is not None:
+            recorded = recorded.replace(tzinfo=None)
+    except ValueError:
+        return False
+    age_days = ((now or dt.datetime.now()) - recorded).total_seconds() / 86_400
+    return -1 <= age_days <= LESSON_TTL_DAYS
+
 _DISTILL_PROMPT = (
     "Aşağıda bir görev yürütmesinin SONUCU var. Bir sonraki benzer işte işe "
     "yarayacak TEK cümlelik ders çıkar.\n"
@@ -176,6 +201,9 @@ def relevant_lessons(
         text = str(entry.get("lesson", "") or "").strip()
         if not text:
             continue
+        # UNUTMA KAPISI: süresi geçmiş ders hatırlatılmaz.
+        if not lesson_is_fresh(entry):
+            continue
         entry_caps = set(_normalize_keys(entry.get("capabilities")))
         overlap = len(entry_caps & wanted)
         if wanted_error and str(entry.get("errorClass", "") or "") == wanted_error:
@@ -183,7 +211,8 @@ def relevant_lessons(
         if overlap <= 0:
             continue
         scored.append((overlap, str(entry.get("recordedAt", "") or ""), text))
-    # Alaka birinci, tazelik ikinci ölçüt.
-    scored.sort(key=lambda item: (-item[0], item[1]), reverse=False)
-    scored.sort(key=lambda item: item[0], reverse=True)
+    # Alaka birinci, tazelik ikinci ölçüt. Eşit alakada YENİ ders kazanır:
+    # önceki sürüm iki ayrı sort yüzünden eskiyi öne alıyordu — sistem
+    # öğrendikçe eski gözlemi tekrarlıyordu.
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return [text for _score, _at, text in scored[: max(0, int(limit or 0))]]

@@ -71,16 +71,78 @@ def _tokens(text: str) -> set[str]:
     return {word for word in words if len(word) > 2 and word not in _STOPWORDS}
 
 
-def decompose_query(query: str, *, limit: int = 4) -> list[str]:
-    """Bileşik soruyu alt sorulara ayırır.
+# Ortak kökün sayılması için asgari uzunluk ve kısa terime oranı. İkisi birden
+# aranır: yalnız uzunluk bakılırsa "karar"/"kara" eşleşir, yalnız oran bakılırsa
+# üç harfli kökler her şeye eşleşir.
+_MIN_STEM_CHARS = 4
+_MIN_STEM_RATIO = 0.6
 
-    Deterministik ve ucuzdur: bağlaç/noktalama sınırlarından böler. Amaç mükemmel
-    ayrıştırma değil, KAPSAMA ÖLÇÜMÜ için ayrı bilgi taleplerini görünür kılmak.
+
+def _common_prefix_len(left: str, right: str) -> int:
+    limit = min(len(left), len(right))
+    index = 0
+    while index < limit and left[index] == right[index]:
+        index += 1
+    return index
+
+
+def _covers(needle: str, corpus: set[str]) -> bool:
+    """Bir terimin KÖKÜ külliyatta geçiyor mu?
+
+    NEDEN: Türkçe eklemeli bir dildir. Birebir sözcük karşılaştırması
+    "enflasyon" ile "enflasyonun"u, "oranı" ile "oranları"nı FARKLI sayar.
+    Ölçüldü: soruyu gerçekten cevaplayan belge elde dururken kapsama 0.0
+    çıkıyordu — sistem "kanıtım yok" sanıp gereksiz ikinci tur arama yapıyor,
+    bazen de yetersiz sayıp kaynaksız kalıyordu.
+
+    Çözüm bir EK LİSTESİ DEĞİL — o, projenin kök hatasının tekrarı olurdu.
+    Dilden bağımsız bir ölçüt kullanılır: iki terimin ortak ön eki yeterince
+    uzunsa ve kısa terimin çoğunu kaplıyorsa aynı kökten sayılır. Türkçe
+    ekleri de ("oran|ları"), İngilizce çekimleri de ("report|ing") tek kuralla
+    karşılanır.
+
+    TAKAS (bilinçli): bu ölçüt ara sıra yakın yazımlı ayrı kelimeleri de
+    eşleştirebilir. Zararı sınırlıdır — bu skor yalnız İKİNCİ TUR gerekli mi ve
+    hangi belge önce sıralanmalı sorularını etkiler; hiçbir yan etki kapısı
+    buna bağlı değildir. Sistematik eksik eşleşme ise kaynaksız cevap üretir,
+    yani yanlış yön çok daha pahalıdır.
+    """
+    if needle in corpus:
+        return True
+    for word in corpus:
+        shorter = min(len(needle), len(word))
+        if shorter < _MIN_STEM_CHARS:
+            continue
+        common = _common_prefix_len(needle, word)
+        if common >= _MIN_STEM_CHARS and common / shorter >= _MIN_STEM_RATIO:
+            return True
+    return False
+
+
+def _overlap_ratio(needed: set[str], corpus: set[str]) -> float:
+    """Gövde-duyarlı örtüşme oranı."""
+    if not needed:
+        return 1.0
+    return sum(1 for term in needed if _covers(term, corpus)) / len(needed)
+
+
+def decompose_query(query: str, *, limit: int = 4) -> list[str]:
+    """Bileşik soruyu ayrı bilgi taleplerine ayırır.
+
+    YAPISAL, SÖZLÜKSEL DEĞİL. Önceki sürüm bağlaç listesiyle bölüyordu
+    (``ve|ayrıca|bir de``) — bu, "şu kelimeyi görünce şunu yap" kuralının ta
+    kendisiydi ve dil değiştiğinde ya da kullanıcı bağlacı yazmadığında
+    çalışmıyordu. Şimdi yalnız NOKTALAMA sınırları kullanılır: soru işareti,
+    noktalı virgül, virgül — bunlar dilden bağımsız yapı işaretleridir.
+
+    Noktalama yoksa sorgu tek parça kalır; kapsama ölçümü zaten terim
+    düzeyinde çalıştığı için (bkz. ``assess_sufficiency``) çok konulu ama
+    noktalamasız sorgular da ölçülebilir durumda kalır.
     """
     raw = str(query or "").strip()
     if not raw:
         return []
-    parts = re.split(r"\s*(?:\?|;|\bve\b|\bayrıca\b|\bayrica\b|\bbir de\b|,)\s*", raw)
+    parts = re.split(r"\s*[?;,]\s*", raw)
     cleaned = [part.strip() for part in parts if len(part.strip()) > 8]
     unique: list[str] = []
     for part in cleaned:
@@ -93,31 +155,34 @@ def assess_sufficiency(
     sub_queries: list[str],
     items: list[RetrievedItem],
 ) -> tuple[float, list[str]]:
-    """Alt soruların kaçının kanıtla karşılandığını ölçer.
+    """Sorgunun bilgi taleplerinin kaçının kanıtla karşılandığını ölçer.
 
-    Model özgüvenine değil, getirilen metinlerdeki terim örtüşmesine bakar.
-    Döner: (kapsama oranı, karşılanmayan alt sorular)."""
+    TERİM DÜZEYİNDE ölçer, cümle düzeyinde değil. Sebep: cümle düzeyi ölçüm
+    çok konulu sorgularda maskeleme yapıyordu — "faiz kararı ve enflasyon
+    oranı" tek parça kaldığında terimlerin yarısı karşılanınca eşik aşılıyor ve
+    enflasyon kanıtının hiç bulunmadığı görülmüyordu. Eskiden bunu bağlaç
+    listesiyle bölerek telafi ediyorduk; o bir kelime deseniydi ve kullanıcı
+    bağlacı yazmadığında çökerdi.
+
+    Terim düzeyi ölçüm hem daha ince hem dilden bağımsızdır: karşılanmayan
+    TERİMLER doğrudan ikinci turun hedefi olur.
+
+    Model özgüvenine değil getirilen metinlere bakar.
+    Döner: (kapsama oranı, karşılanmayan terimler)."""
     # KRİTİK: hiç kanıt yoksa kapsama SIFIRDIR. Aksi halde arama çöktüğünde
     # (ya da boş döndüğünde) sistem "yeterli kanıtım var" sanır ve model
     # kaynaksız cevap üretir — uydurma riskinin ta kendisi.
     if not items:
         return 0.0, list(sub_queries)
-    if not sub_queries:
+    needed: set[str] = set()
+    for sub in sub_queries:
+        needed |= _tokens(sub)
+    if not needed:
         return 1.0, []
     corpus = _tokens(" ".join(item.text for item in items))
-    unmet: list[str] = []
-    covered = 0
-    for sub in sub_queries:
-        needed = _tokens(sub)
-        if not needed:
-            covered += 1
-            continue
-        overlap = len(needed & corpus) / max(1, len(needed))
-        if overlap >= 0.34:
-            covered += 1
-        else:
-            unmet.append(sub)
-    return covered / len(sub_queries), unmet
+    unmet = sorted(term for term in needed if not _covers(term, corpus))
+    covered = len(needed) - len(unmet)
+    return covered / len(needed), unmet
 
 
 def rerank(items: list[RetrievedItem], query: str, *, limit: int) -> list[RetrievedItem]:
@@ -134,7 +199,7 @@ def rerank(items: list[RetrievedItem], query: str, *, limit: int) -> list[Retrie
             continue
         seen.add(fingerprint)
         item_tokens = _tokens(item.text)
-        overlap = len(query_tokens & item_tokens) / max(1, len(query_tokens))
+        overlap = _overlap_ratio(query_tokens, item_tokens)
         scored.append((overlap * 0.7 + float(item.score) * 0.3, item))
     scored.sort(key=lambda pair: pair[0], reverse=True)
     ranked: list[RetrievedItem] = []
