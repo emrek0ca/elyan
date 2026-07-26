@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { chatMessages, chatSessions, tasks } from "../../db/schema.js";
 import type { TaskStatus } from "../../contracts/domain.js";
@@ -663,4 +663,49 @@ export async function syncChatTaskLifecycle(
       task: shapeTaskFeedItem(input.updatedTask),
     },
   });
+}
+
+/**
+ * Bir sohbet oturumundaki son ASİSTAN cevabının metnini döndürür.
+ *
+ * NEDEN: mobilde "bunu belge yap" dendiğinde belgelenecek içerik önceki
+ * cevaptır — ama o cevap mobilde de masaüstünde de değil, BURADA durur.
+ * `understanding_envelope.conversation_state.lastAssistantSummary` alanı
+ * yıllardır şemada vardı, `contextPack` ile masaüstüne dispatch ediliyordu ve
+ * masaüstü artık onu okuyor; fakat alanı DOLDURAN kimse yoktu — ne mobil
+ * istemci gönderiyordu ne backend türetiyordu. Zincirin kaynak ucu buydu.
+ *
+ * Uydurma yok: gerçekten kaydedilmiş bir asistan mesajı yoksa null döner ve
+ * çağıran mevcut davranışını (sorma) sürdürür.
+ */
+export async function getLastAssistantMessageText(
+  app: FastifyInstance,
+  input: { userId: string; sessionId: string },
+): Promise<string | null> {
+  const sessionId = String(input.sessionId ?? "").trim();
+  const userId = String(input.userId ?? "").trim();
+  if (!sessionId || !userId) return null;
+  try {
+    const rows = await app.db
+      .select({ content: chatMessages.content, preview: chatMessages.preview })
+      .from(chatMessages)
+      .where(
+        and(
+          eq(chatMessages.sessionId, sessionId),
+          eq(chatMessages.userId, userId),
+          eq(chatMessages.role, "assistant"),
+          eq(chatMessages.status, "completed"),
+        ),
+      )
+      .orderBy(desc(chatMessages.createdAt))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    const text = String(row.content ?? "").trim() || String(row.preview ?? "").trim();
+    return text ? text : null;
+  } catch {
+    // Süreklilik bir kolaylıktır, bir bağımlılık değil: sorgu patlarsa görev
+    // oluşturma düşmez, yalnız taşınan içerik olmaz.
+    return null;
+  }
 }

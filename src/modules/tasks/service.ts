@@ -134,6 +134,7 @@ import { chatMessages } from "../../db/schema.js";
 import {
   syncChatTaskLifecycle,
   compactMessagePreview,
+  getLastAssistantMessageText,
 } from "../chat/task-sync.js";
 import { buildTaskTraceBlock, advanceTaskTraceApproval, enrichTaskTraceWithAgentPlan } from "../chat/task-trace.js";
 import {
@@ -6954,6 +6955,21 @@ export async function createTask(
     routeDecision,
     prompt,
   );
+  // SÜREKLİLİK KAYNAĞI: "bunu belge yap" derken belgelenecek içerik önceki
+  // asistan cevabıdır. O cevap ne mobilde ne masaüstünde durur — burada durur.
+  // `conversation_state.lastAssistantSummary` şemada vardı ve contextPack ile
+  // masaüstüne gidiyordu ama DOLDURAN yoktu (mobil göndermiyor, backend
+  // türetmiyordu). Oturumdan türetiyoruz; yoksa alan hiç eklenmez (uydurma yok).
+  const activeChatSessionId =
+    typeof payloadMetadata.chat === "object" && payloadMetadata.chat !== null
+      ? String((payloadMetadata.chat as Record<string, unknown>).sessionId ?? "").trim()
+      : "";
+  const carriedAssistantText = activeChatSessionId
+    ? await getLastAssistantMessageText(app, {
+        userId: input.userId,
+        sessionId: activeChatSessionId,
+      })
+    : null;
   const understandingInput = {
     userId: input.userId,
     accountId: input.userId,
@@ -6967,6 +6983,10 @@ export async function createTask(
     deviceId: targetDeviceId,
     metadata: {
       ...payloadMetadata,
+      // İstemci açıkça göndermişse onunki kazanır; biz yalnız BOŞLUĞU doldururuz.
+      ...(carriedAssistantText && !payloadMetadata.lastAssistantSummary
+        ? { lastAssistantSummary: carriedAssistantText }
+        : {}),
       routeDecision,
       requestId: input.requestId,
       ...(remoteMcpSelection ? { remoteMcpSelection } : {}),

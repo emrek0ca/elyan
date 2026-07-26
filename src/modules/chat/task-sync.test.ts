@@ -1,10 +1,80 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  getLastAssistantMessageText,
   isInternalRoutingSummary,
   isTransientChatProgressMessage,
   syncChatTaskLifecycle,
 } from "./task-sync.js";
+
+function selectStub(rows: Array<Record<string, unknown>>) {
+  return {
+    db: {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({ limit: async () => rows }),
+          }),
+        }),
+      }),
+    },
+  };
+}
+
+test("getLastAssistantMessageText carries the previous answer for the mobile chain", async () => {
+  // ZİNCİRİN KAYNAK UCU: lastAssistantSummary şemada vardı ve contextPack ile
+  // masaüstüne dispatch ediliyordu, ama DOLDURAN kimse yoktu — ne mobil
+  // istemci gönderiyordu ne backend türetiyordu. Bu olmadan mobilde
+  // "bunu belge yap" belgelenecek içeriği bulamıyordu.
+  const app = selectStub([{ content: "Pomodoro tekniği 25 dakikalık bloklara dayanır.", preview: null }]);
+  const text = await getLastAssistantMessageText(app as never, {
+    userId: "u1",
+    sessionId: "s1",
+  });
+  assert.equal(text, "Pomodoro tekniği 25 dakikalık bloklara dayanır.");
+});
+
+test("getLastAssistantMessageText falls back to preview, then yields null", async () => {
+  const previewOnly = selectStub([{ content: "   ", preview: "Kısa özet" }]);
+  assert.equal(
+    await getLastAssistantMessageText(previewOnly as never, { userId: "u1", sessionId: "s1" }),
+    "Kısa özet",
+  );
+
+  const empty = selectStub([]);
+  assert.equal(
+    await getLastAssistantMessageText(empty as never, { userId: "u1", sessionId: "s1" }),
+    null,
+  );
+
+  // Kimlik eksikse sorgu hiç yapılmaz.
+  const exploding = {
+    db: {
+      select() {
+        throw new Error("sorgulanmamalıydı");
+      },
+    },
+  };
+  assert.equal(
+    await getLastAssistantMessageText(exploding as never, { userId: "", sessionId: "s1" }),
+    null,
+  );
+});
+
+test("getLastAssistantMessageText fails open so task creation never breaks", async () => {
+  // Süreklilik bir kolaylıktır, bağımlılık değil.
+  const broken = {
+    db: {
+      select() {
+        throw new Error("db down");
+      },
+    },
+  };
+  assert.equal(
+    await getLastAssistantMessageText(broken as never, { userId: "u1", sessionId: "s1" }),
+    null,
+  );
+});
 
 test("isInternalRoutingSummary catches dispatch routing-phrase variants", () => {
   // Kullanıcının #1 şikâyeti: "…desktopa yönlendirildi" gibi iç yönlendirme
