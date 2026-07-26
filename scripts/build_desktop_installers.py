@@ -111,6 +111,71 @@ _UV_WHEEL_PLATFORM = {
 }
 
 
+# python-build-standalone hedef üçlüleri (uv de aynı kaynağı kullanır).
+_STANDALONE_TRIPLE = {
+    ("windows", "x64"): "x86_64-pc-windows-msvc",
+    ("windows", "arm64"): "aarch64-pc-windows-msvc",
+    ("macos", "x64"): "x86_64-apple-darwin",
+    ("macos", "arm64"): "aarch64-apple-darwin",
+    ("linux", "x64"): "x86_64-unknown-linux-gnu",
+    ("linux", "arm64"): "aarch64-unknown-linux-gnu",
+}
+_STANDALONE_PYTHON_VERSION = "3.11.15"
+
+
+def _install_standalone_python(python_root: Path, target_platform: str, target_arch: str) -> None:
+    """Hedef platformun gömülü Python'unu doğrudan indirip açar.
+
+    Çapraz derlemede kullanılır; host'a özel kurulum adımı yoktur.
+    """
+    import json as _json
+    import tarfile
+    import urllib.request
+
+    triple = _STANDALONE_TRIPLE.get((target_platform, target_arch))
+    if not triple:
+        raise RuntimeError(f"portable python target is not mapped: {target_platform}/{target_arch}")
+
+    with urllib.request.urlopen(
+        "https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest",
+        timeout=60,
+    ) as response:
+        release = _json.loads(response.read().decode("utf-8"))
+    wanted = f"cpython-{_STANDALONE_PYTHON_VERSION}+{release['tag_name']}-{triple}-install_only.tar.gz"
+    url = next(
+        (
+            asset["browser_download_url"]
+            for asset in release.get("assets", [])
+            if asset.get("name") == wanted
+        ),
+        "",
+    )
+    if not url:
+        raise RuntimeError(f"portable python archive not found in release: {wanted}")
+
+    python_root.mkdir(parents=True, exist_ok=True)
+    archive_path = python_root / "python.tar.gz"
+    urllib.request.urlretrieve(url, archive_path)
+    # Arşiv tek bir `python/` kökü taşır; yerleşimi uv'ninkiyle hizala ki
+    # `portable_python()` çözücüsü değişmeden çalışsın.
+    target_dir = python_root / f"cpython-{_STANDALONE_PYTHON_VERSION}-{target_platform}-{target_arch}-none"
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    with tarfile.open(archive_path, "r:gz") as archive:
+        archive.extractall(python_root)
+    extracted = python_root / "python"
+    extracted.rename(target_dir)
+    archive_path.unlink(missing_ok=True)
+
+
+def _target_site_packages(python_executable: Path, target_platform: str) -> Path:
+    """Gömülü Python'un site-packages dizini (hedef yerleşimine göre)."""
+    root = python_executable.parent
+    if target_platform == "windows":
+        return root / "Lib" / "site-packages"
+    return root.parent / "lib" / "python3.11" / "site-packages"
+
+
 def prepare_payload(
     payload_root: Path,
     *,
@@ -130,22 +195,42 @@ def prepare_payload(
         raise RuntimeError("uv is required to build the portable Python payload")
     python_root = payload_root / "python"
     python_request = _UV_PYTHON_BUILD.get((target_platform, target_arch), "3.11")
-    run(
-        [uv, "python", "install", python_request, "--managed-python", "--install-dir", str(python_root), "--no-bin"]
-    )
+    host_platform = {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}.get(platform.system())
+    if host_platform == target_platform:
+        run(
+            [uv, "python", "install", python_request, "--managed-python", "--install-dir", str(python_root), "--no-bin"]
+        )
+    else:
+        # ÇAPRAZ HEDEF: `uv python install` doğru arşivi indirir ama kurulum
+        # sonrası HOST'a göre davranır — Windows dağıtımında olmayan
+        # `bin/python` sembolik bağını kurmaya çalışıp düşer. Arşivi doğrudan
+        # açmak aynı kaynağı (python-build-standalone) host varsayımı olmadan
+        # kullanır.
+        _install_standalone_python(python_root, target_platform, target_arch)
     normalize_portable_python_links(python_root)
     python_executable = portable_python(payload_root, target_platform=target_platform)
     dependency_manifest = RELEASE_LOCK if RELEASE_LOCK.is_file() and not core_only else app_root / "requirements-core.txt"
-    install_command = [
-        uv,
-        "pip",
-        "install",
-        "--python",
-        str(python_executable),
-        "--break-system-packages",
-        "-r",
-        str(dependency_manifest),
-    ]
+    host_platform_now = {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}.get(platform.system())
+    if host_platform_now == target_platform:
+        install_command = [
+            uv, "pip", "install",
+            "--python", str(python_executable),
+            "--break-system-packages",
+            "-r", str(dependency_manifest),
+        ]
+    else:
+        # ÇAPRAZ HEDEF: uv, hedefin yorumlayıcısını ÇALIŞTIRARAK inceleyemez
+        # (Windows python.exe macOS'ta çalışmaz, exit 126). `--target` ile
+        # paketler doğrudan site-packages dizinine açılır; yorumlayıcı hiç
+        # çalıştırılmaz, sürüm ve platform açıkça bildirilir.
+        site_packages = _target_site_packages(python_executable, target_platform)
+        site_packages.mkdir(parents=True, exist_ok=True)
+        install_command = [
+            uv, "pip", "install",
+            "--target", str(site_packages),
+            "--python-version", _STANDALONE_PYTHON_VERSION,
+            "-r", str(dependency_manifest),
+        ]
     # Wheel'ler de hedefe göre çözülür; aksi halde host mimarisinin ikili
     # paketleri (pydantic-core, cryptography…) yanlış pakete girer.
     wheel_platform = _UV_WHEEL_PLATFORM.get((target_platform, target_arch), "")
@@ -436,7 +521,17 @@ def build_windows(payload_root: Path, output_dir: Path, *, version: str, arch: s
         default = Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe")
         iscc = str(default) if default.exists() else ""
     if not iscc:
-        raise RuntimeError("Inno Setup 6 compiler (ISCC) was not found")
+        # Inno Setup yalnız Windows'ta bulunur. Yokluğu KURULUM SİHİRBAZINI
+        # engeller ama portable ZIP zaten üretildi ve tek başına kullanılabilir
+        # (aç-çalıştır). Üretim sürümü imza/kurulum isterse ELYAN_REQUIRE_SIGNING
+        # ile zorlanır; aksi halde eksik olanı söyleyip elimizdekini teslim et.
+        if os.environ.get("ELYAN_REQUIRE_SIGNING") == "1":
+            raise RuntimeError("Inno Setup 6 compiler (ISCC) was not found")
+        print(
+            "ISCC bulunamadı: kurulum sihirbazı atlandı, portable ZIP üretildi.",
+            flush=True,
+        )
+        return [portable_zip]
     setup_name = f"Elyan-{version}-Windows-{arch}-Setup"
     iss = output_dir / "elyan-installer.iss"
     source = str(staging).replace("\\", "\\\\")
@@ -590,6 +685,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=ROOT / "release")
     parser.add_argument("--core-only", action="store_true")
     parser.add_argument("--allow-missing-extras", action="store_true")
+    parser.add_argument(
+        "--allow-cross-build",
+        action="store_true",
+        help="hedef platformdan farklı bir host'ta derlemeye izin ver (portable çıktı)",
+    )
     return parser
 
 
@@ -598,8 +698,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.version != package_version():
         raise SystemExit(f"version mismatch: package.json={package_version()} requested={args.version}")
     host_platform = {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}.get(platform.system())
-    if host_platform != args.platform:
+    if host_platform != args.platform and not args.allow_cross_build:
         raise SystemExit(f"{args.platform} artifacts must be built on {args.platform}, host is {host_platform}")
+    if host_platform != args.platform:
+        # Çapraz derleme AÇIK istendi. Gömülü Python ve wheel'ler hedefe göre
+        # seçilir (bkz. _UV_PYTHON_BUILD / _UV_WHEEL_PLATFORM); host'a özel
+        # adımlar (imzalama, kurulum sihirbazı) sessizce atlanır ve çıktı
+        # portable pakettir. Bunu üretim imzası yerine koyma.
+        print(
+            f"ÇAPRAZ DERLEME: hedef {args.platform}/{args.arch}, host {host_platform}. "
+            "Host'a özel adımlar (imza, kurulum sihirbazı) atlanabilir.",
+            flush=True,
+        )
     output_dir = args.output.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     payload_root = output_dir / "payload"
