@@ -21,6 +21,7 @@ from actions._platform_common import (
     is_timeout_detail,
     permission_required,
     require_macos,
+    require_screen_capture_platform,
     timeout_error,
 )
 from actions import browser_operator, desktop_os, screen_vision
@@ -1199,7 +1200,10 @@ def _plan_operator_steps(goal: str, observation: dict[str, Any]) -> dict[str, An
 
 
 def observe_screen(query: str = "", target: str = "active_window", preserve_screenshot: bool = True) -> dict[str, Any]:
-    require_macos("Visual Desktop Operator")
+    # GÖZLEM Windows'ta da çalışır (yerel yakalama arka ucu). Eylem/otomasyon
+    # kapıları (tıkla, yaz, sürükle) macOS'a özel kalır: onlar Erişilebilirlik
+    # helper'ına dayanıyor ve Windows karşılığı henüz yok.
+    require_screen_capture_platform("Visual Desktop Operator")
     if str(target or "active_window").strip().lower() != "active_window":
         raise invalid_argument("Visual operator v1 şu anda yalnız aktif pencere gözlemliyor.")
     ok, raw = screen_vision._run_helper("capture_active_window", timeout=20)

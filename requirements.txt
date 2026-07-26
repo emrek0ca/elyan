@@ -30,3 +30,10 @@ soundfile
 mcp
 pystray>=0.19
 qrcode>=7.4
+
+# Windows takvim erişimi — resmi Windows SDK projeksiyonu (PyWinRT).
+# Yalnız Windows'ta kurulur; wheel'i vardır, derleyici istemez. Kurulu değilse
+# takvim katmanı "kullanılamıyor" der (uydurma yok).
+winrt-Windows.ApplicationModel.Appointments; sys_platform == "win32"
+winrt-Windows.Foundation; sys_platform == "win32"
+winrt-Windows.Foundation.Collections; sys_platform == "win32"

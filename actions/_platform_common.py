@@ -34,6 +34,25 @@ def require_macos(feature_name: str) -> None:
         raise unsupported_platform(f"{feature_name} su anda yalnizca macOS'ta destekleniyor.")
 
 
+def require_screen_capture_platform(feature_name: str) -> None:
+    """Ekran okuma için platform kapısı.
+
+    Ekran yakalama artık macOS'a özel DEĞİL: Windows'ta yerel bir arka uç
+    (ctypes + Pillow) aynı sözleşmeyi üretiyor. Bu kapı `require_macos`ten
+    ayrıldı, çünkü o kapı Windows'u yakalama denenmeden reddediyordu — yani
+    çalışabilecek bir yetenek platform adına kapatılıyordu.
+
+    Linux hâlâ dışarıda: orada yakalama arka ucu yok ve olmayan bir şeyi
+    "destekleniyor" saymak, sessizce boş görüntü döndürmekten daha kötüdür.
+    """
+    import sys
+
+    if sys.platform not in {"darwin", "win32"}:
+        raise unsupported_platform(
+            f"{feature_name} su anda yalnizca macOS ve Windows'ta destekleniyor."
+        )
+
+
 def unsupported_platform(message: str) -> SafeCapabilityError:
     return SafeCapabilityError("UNSUPPORTED_PLATFORM", message)
 

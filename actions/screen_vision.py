@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ from actions._platform_common import (
     is_timeout_detail,
     permission_required,
     require_macos,
+    require_screen_capture_platform,
     timeout_error,
 )
 from app_config import get_app_config_value
@@ -154,6 +156,16 @@ def _codesign_app(app_path: Path) -> None:
 
 
 def _run_helper(mode: str, timeout: int = 20) -> tuple[bool, str]:
+    # PLATFORM AYRIMI: ekran yakalama tek bir dikiş noktasıdır. macOS'ta Swift
+    # helper, Windows'ta yerel ctypes+Pillow arka ucu aynı JSON sözleşmesini
+    # üretir; üst katmanlar (desktop_operator, analyze_screen) değişmez.
+    # `helpers/` klasörü Windows derlemesinde zaten silindiği için burada mac
+    # yoluna düşmek "yakalama hiç çalışmıyor" demekti.
+    if sys.platform == "win32":
+        from actions import _screen_capture_windows
+
+        return True, _screen_capture_windows.capture_active_window_raw()
+
     ok, detail = _ensure_helper_binary()
     if not ok:
         return False, detail
@@ -425,7 +437,7 @@ def _analyze_with_gemini(query: str, image_path: Path, owner_name: str, window_t
 
 
 def analyze_screen(query: str, target: str = "active_window") -> dict[str, object]:
-    require_macos("Ekran analizi")
+    require_screen_capture_platform("Ekran analizi")
     from actions import desktop_operator
 
     target = (target or "active_window").strip().lower()

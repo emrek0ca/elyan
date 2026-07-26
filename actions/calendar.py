@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -231,7 +232,48 @@ def _ensure_helper_binary() -> tuple[bool, str]:
     return True, ""
 
 
+def _windows_range_for_mode(mode: str, payload: dict | None) -> tuple[dt.datetime, dt.datetime]:
+    """Helper modunu somut bir tarih aralığına çevirir.
+
+    macOS helper'ı bu mantığı Swift tarafında taşıyor; Windows arka ucu ham
+    aralık istediği için burada aynı anlam yeniden kurulur.
+    """
+    now = dt.datetime.now()
+    if payload:
+        try:
+            start = dt.datetime.fromisoformat(str(payload.get("start_iso", "")))
+            end = dt.datetime.fromisoformat(str(payload.get("end_iso", "")))
+            if end > start:
+                return start, end
+        except (TypeError, ValueError):
+            pass
+    if mode == "tomorrow":
+        base = (now + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return base, base + dt.timedelta(days=1)
+    if mode == "week":
+        base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return base, base + dt.timedelta(days=7)
+    if mode in {"next", "agenda"}:
+        # Yaklaşan ajanda: üst katman zaten geçmişi eliyor ve limitliyor.
+        return now, now + dt.timedelta(days=30)
+    base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return base, base + dt.timedelta(days=1)
+
+
 def _run_helper(mode: str, payload: dict | None = None, timeout: int = 20) -> tuple[bool, str]:
+    # PLATFORM AYRIMI: takvim artık macOS'a özel değil. Windows'ta resmi WinRT
+    # AppointmentStore projeksiyonu aynı JSON sözleşmesini üretir; `_parse_payload`
+    # ve üstündeki tüm biçimlendirme değişmeden çalışır.
+    if sys.platform == "win32":
+        from actions import _calendar_windows
+
+        if mode in {"create_event", "delete_event"}:
+            return True, _calendar_windows.unsupported_write_raw(
+                "ekleme" if mode == "create_event" else "silme"
+            )
+        start, end = _windows_range_for_mode(mode, payload)
+        return True, _calendar_windows.read_events_raw(start, end)
+
     require_macos("Takvim")
     ok, detail = _ensure_helper_binary()
     if not ok:
