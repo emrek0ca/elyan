@@ -14678,6 +14678,24 @@ class RuntimeBridge:
         if route != "desktop_runtime" and not mobile_desktop_required and not has_work_order:
             return None
 
+        # MOBİL SÜREKLİLİK HALKASI: mobilde konuşma masaüstünde durmaz, backend'de
+        # durur. Backend önceki cevabın özetini ZATEN gönderiyor
+        # (`contextPack.conversationState.lastAssistantSummary`); masaüstü bu alanı
+        # hiç okumuyordu. Okununca "bunu belge yap" mobilden de gövdeyi doğru
+        # kaynaktan alır — yazıcı hunisi kalanı zaten yapıyor. İçerik yoksa boş
+        # kalır ve davranış değişmez (uydurma yok).
+        try:
+            from runtime import conversation_source as _conversation_source
+
+            _remote_source = _conversation_source.from_work_order(
+                self._remote_task_work_order(payload)
+            )
+            _CURRENT_CONVERSATION_SOURCE.set(
+                _remote_source.text if _remote_source is not None else ""
+            )
+        except Exception:
+            pass
+
         capabilities = self._remote_task_capabilities(task, payload)
 
         # Sunucu-materyalize güvenilir plan: dispatch worker karmaşık görevi

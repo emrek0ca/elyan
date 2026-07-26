@@ -127,3 +127,40 @@ def test_writer_is_untouched_when_conversation_has_nothing() -> None:
     finally:
         bridge._CURRENT_CONVERSATION_SOURCE.reset(token)
     assert args == {}
+
+
+def test_work_order_context_pack_carries_the_previous_answer() -> None:
+    """MOBİL HALKA: backend zaten gönderiyordu, masaüstü hiç okumuyordu.
+
+    `contextPack.conversationState.lastAssistantSummary` alanı anlama zarfından
+    iş emrine konup dispatch ediliyor; masaüstündeki `contextPack` kullanım
+    sayısı 0'dı. Bu bağlanmadan "bunu belge yap" MOBİLDEN çalışmıyordu.
+    """
+    work_order = {
+        "schema": "elyan.desktop_work_order.v1",
+        "contextPack": {
+            "sourceReference": "previous_answer",
+            "conversationState": {
+                "turnKind": "follow_up",
+                "currentGoal": "pomodoro tekniğini belgele",
+                "lastAssistantSummary": _ANSWER,
+            },
+        },
+    }
+    source = conversation_source.from_work_order(work_order)
+    assert source is not None
+    assert source.text == _ANSWER
+    assert source.prompt_text == "pomodoro tekniğini belgele"
+
+
+def test_work_order_without_carried_content_yields_nothing() -> None:
+    for work_order in (
+        None,
+        {},
+        {"contextPack": {}},
+        {"contextPack": {"conversationState": {}}},
+        {"contextPack": {"conversationState": {"lastAssistantSummary": ""}}},
+        # Eşiğin altındaki teyit cümlesi belge gövdesi olamaz.
+        {"contextPack": {"conversationState": {"lastAssistantSummary": "Tamam."}}},
+    ):
+        assert conversation_source.from_work_order(work_order) is None

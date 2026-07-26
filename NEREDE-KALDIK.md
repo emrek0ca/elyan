@@ -601,6 +601,45 @@ Tek koşuya bakarak yargı verme — bu araç tam bunun için yazıldı.
 bir okuma. Not: eksik opsiyonel bağımlılıklar kuruldu (`reportlab openpyxl
 python-pptx markitdown mammoth pymupdf`) → desktop baseline **57 → 38** hata.
 
+### 4.15 MOBİL SÜREKLİLİK HALKASI BAĞLANDI (2026-07-26)
+
+**Boru döşenmişti, iki UCU birden bağlı değildi.**
+`understanding_envelope.conversation_state.lastAssistantSummary` alanı şemada
+vardı; zarf kurucusu okuyordu, `buildDesktopWorkOrder` onu `contextPack`e
+koyuyordu, iş emri masaüstüne dispatch ediliyordu. Ama:
+
+| Uç | Durum (önce) |
+|---|---|
+| Alanı YAZAN | **yok** — mobil istemci göndermiyor (0 eşleşme), backend türetmiyor |
+| Alanı OKUYAN | **yok** — masaüstünde `contextPack` kullanım sayısı **0** |
+
+Yani ara segmentler yıllardır duruyordu, iki uç boştu. Bağlanan:
+- **Kaynak ucu** (`chat/task-sync.ts::getLastAssistantMessageText`): önceki
+  cevap sohbet oturumundan **sunucu tarafında** türetilir — istemcinin bir şey
+  göndermesine bağlı değil. İstemci açıkça verirse onunki kazanır. Sorgu
+  patlarsa `null` döner: süreklilik bir kolaylıktır, görev oluşturmayı düşürmez.
+- **Alıcı ucu** (`bridge._execute_deterministic_remote_task`):
+  `conversation_source.from_work_order()` ile `_CURRENT_CONVERSATION_SOURCE`
+  doldurulur; yazıcı hunisi zaten kalanını yapıyordu.
+
+Doğrulama: gerçek `validate_payload`tan geçirilen iş emrinde `contextPack`
+hayatta kalıyor → içerik çıkarılıyor → yazıcıya `_sourceContextOrigin=
+conversation_turn` olarak giriyor. Backend 1609/1609, `dist`te doğrulandı.
+
+**Kalan ölü alanlar (tarandı, KASITLI bırakıldı).** `contextPack`in diğer
+alanlarının masaüstü kullanımı 0: `toolSkillDecision`, `privacyRouting`,
+`intentGraph`, `executionPlan`, `failurePolicy`, `localContextNeeded`,
+`workType`, `turnKind`, `carryForward`, `userCorrection`,
+`lastArtifactSummary`, `lastImagePrompt`. Bunlar **engelleyici değil**: her
+birinin masaüstünde kendi otoritesi var (`safety_policy`, `reasoning_policy`,
+`error_recovery`, `task_router`) ve o otoriteler canlı yolda çalışıyor.
+Blokaj yaratan tek alan `lastAssistantSummary`ydi; o bağlandı.
+
+> **UYARI:** kalanları "boş duruyor" diye toplu bağlama. Bugün ölçüldü:
+> ölçmeden yapılan her ek bağlama sınıflandırmayı bozdu (bkz. §4.14 geri
+> alınan denemeler). Bir alanı ancak onu talep eden SOMUT bir arıza varken
+> bağla ve bağladığını 5 koşuyla ölç.
+
 ### BU OTURUMUN DERSİ
 Aynı belirti (etiket cevabı) **üç ayrı katmandan** besleniyordu ve her seferinde
 tek katmanı düzeltip "bitti" sandım. Kullanıcı haklı olarak "hiçbir şey
@@ -627,15 +666,12 @@ kapattığını da o yolun kendisiyle doğrula.**
      doğrulanması ve mobil blok render'ı **açık kaldı**.
    - Sağlayıcı tökezlemesi sürüyor: yoğun eval koşularında bazı turlar
      tamamen `degraded_skip` dönüyor (rate-limit şüphesi, ölçülmedi).
-   - **SIRADAKİ İŞ (mobil akış için tek eksik halka):**
-     `_fill_writer_source_from_conversation` yalnız `send_conversation`
-     yolunda besleniyor. Uzak iş emri yolunda
-     (`_execute_deterministic_remote_task`) `_CURRENT_CONVERSATION_SOURCE`
-     set EDİLMİYOR, çünkü mobil konuşma geçmişi masaüstünde değil
-     **backend'de** duruyor. Yapılacak: backend iş emri payload'ına önceki
-     turun içeriğini (gövde + konu) koyacak, masaüstü onu okuyup ContextVar'a
-     yazacak. Bu bağlanmadan "bunu belge yap" MOBİLDEN çalışmaz — masaüstü
-     sohbetinden çalışır (ölçüldü).
+   - **Mobil halka BAĞLANDI** (bkz. §4.15) ama **gerçek cihazda denenmedi**:
+     kod yolu birim+entegrasyon testleriyle doğrulandı, telefondan uçtan uca
+     akış ve mobil blok render'ı hâlâ açık.
+   - `useDirectDesktopFastPath` yolunda anlama zarfı `emptyUnderstanding`
+     olduğu için `contextPack` boş kalır → o hızlı yolda süreklilik taşınmaz.
+     Ölçülmedi; deterministik hızlı yol zaten kısa/net işler içindir.
 
 1. **Baseline test hatası: 57 → 38** — eksik opsiyonel bağımlılıklar kurulunca
    19 test düzeldi (`reportlab openpyxl python-pptx markitdown mammoth

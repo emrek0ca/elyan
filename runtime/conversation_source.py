@@ -115,6 +115,39 @@ def latest_reference_content(
     return None
 
 
+def from_work_order(work_order: Any) -> ConversationSource | None:
+    """Uzak iş emrinin `contextPack`inden taşınabilir içeriği çıkarır.
+
+    MOBİL HALKA. Masaüstü sohbetinde önceki tur yerelde durur; mobilde durmaz —
+    konuşma backend'dedir. Backend bunu ZATEN gönderiyordu: anlama zarfının
+    `conversation_state.lastAssistantSummary` alanı `contextPack`e konup
+    `desktopWorkOrder` ile masaüstüne dispatch ediliyordu. Masaüstü `contextPack`i
+    HİÇ okumuyordu (kullanım sayısı: 0) — yani alan uçtan uca döşenmiş ama son
+    santimi bağlanmamıştı. Bu fonksiyon o santimi bağlar.
+
+    Taşınan metin bir ÖZETtir (backend'de 800 karakterle sınırlı), tam gövde
+    değil; yine de gerçek içeriktir — uydurma değil. İçerik yoksa ``None``.
+    """
+    if not isinstance(work_order, dict):
+        return None
+    context_pack = work_order.get("contextPack")
+    if not isinstance(context_pack, dict):
+        return None
+    conversation_state = context_pack.get("conversationState")
+    if not isinstance(conversation_state, dict):
+        return None
+    text = str(conversation_state.get("lastAssistantSummary", "") or "").strip()
+    if not text:
+        return None
+    # Konu: o turun hedefi varsa belgenin başlığı için kullanılır.
+    topic = str(conversation_state.get("currentGoal", "") or "").strip()
+    source = ConversationSource(
+        text=text[:_MAX_BODY_CHARS],
+        prompt_text=topic[:_TURN_PREVIEW_CHARS],
+    )
+    return source if source.is_usable else None
+
+
 def recent_turns(
     messages: list[dict[str, Any]] | None,
     *,
