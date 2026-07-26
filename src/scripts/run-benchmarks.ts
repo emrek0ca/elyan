@@ -1,6 +1,7 @@
 import path from "node:path";
 import { buildApp } from "../app/build-app.js";
 import { runJsonlBenchmarks, type BenchmarkRunSummary } from "../modules/brain/jsonl-benchmark.js";
+import { configureBenchmarkRuntimeEnv } from "./benchmark-runtime.js";
 
 /**
  * CLI for the JSONL agent benchmark. Usage (local dev via tsx):
@@ -59,6 +60,7 @@ let app: Awaited<ReturnType<typeof buildApp>> | null = null;
 let exitCode = 0;
 
 try {
+  configureBenchmarkRuntimeEnv();
   app = await buildApp();
   const summary = await runJsonlBenchmarks(app, {
     dir: path.resolve(process.cwd(), "benchmarks"),

@@ -149,3 +149,18 @@ test("classifyIntent recovers intent semantically when no regex rule matches", (
   assert.equal(result.primaryIntent, "planning");
   assert.match(result.reason, /^(matched_planning_rules|semantic_planning)$/);
 });
+
+test("classifyIntent uses semantic subject intent for debugging and advanced math prompts", () => {
+  const debugging = classifyIntent({
+    userId: "user_1",
+    message: "Bu fonksiyon neden yanlış sonuç veriyor: `return total / items.length`",
+  });
+  const math = classifyIntent({
+    userId: "user_1",
+    message: "Bana ileri analiz dersinden örnek soru yaz",
+  });
+
+  assert.equal(debugging.primaryIntent, "debugging");
+  assert.equal(math.primaryIntent, "math");
+  assert.equal(math.secondaryIntents.includes("writing"), true);
+});

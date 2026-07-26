@@ -896,6 +896,9 @@ function deriveSelectedWorkloadWithGuard(input: {
   if (input.primaryIntent === "math") {
     return { selectedWorkload: "mobile_chat_balanced" };
   }
+  if (input.primaryIntent === "debugging") {
+    return { selectedWorkload: "mobile_chat_balanced" };
+  }
   if (isEducationalReasoningMessage(input.message)) {
     return { selectedWorkload: "mobile_chat_balanced" };
   }

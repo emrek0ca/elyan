@@ -94,6 +94,42 @@ const INTERNAL_DISCLOSURE_AVOIDANCE_PATTERNS = [
   String.raw`\b(system prompt|sistem promptu|gizli talimat|dahili yönlendirme)${TR_SUFFIX}\b.{0,100}\b(bahsetme|söyleme|anlatma|paylaşma|değinme|ifşa etme|geçirme)${TR_SUFFIX}\b`,
 ].map((source) => unicodeWordPattern(source, "i"));
 
+const MODEL_DISCLOSURE_REQUEST_PATTERNS = [
+  String.raw`\b(?:arkada|altta|alttaki|dahili|iç)\s+(?:çalışan\s+)?(?:model|sağlayıcı|provider|altyapı)`,
+  String.raw`\b(?:model|sağlayıcı|provider|altyapı)\s+(?:ad[ıi]|kimli[ğg]i|bilgisi|detay[ıi])`,
+  String.raw`\b(?:hangi|ne|kaç)\s+(?:model|sağlayıcı|provider|parametre)`,
+  String.raw`\b(?:groq|openai|anthropic|ollama|llama|gpt)\b.{0,48}\b(?:kullan[ıi]yor|çalış[ıi]yor|m[ıi]|misin|musun)`,
+].map((source) => unicodeWordPattern(source, "i"));
+
+const MODEL_DISCLOSURE_COMPACT_PATTERNS = [
+  /(?:groq|openai|anthropic|ollama|llama|gpt).{0,32}(?:kullaniyormusun|kullaniyorsun|altyapisinimikullaniyorsun|modeladinisoyle)/i,
+  /(?:modelprovider|modelkimligi|modeladi|saglayiciadi).{0,32}(?:ver|soyle|paylas)/i,
+] as const;
+
+function compactForModelDisclosure(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i")
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .replace(/0/g, "o")
+    .replace(/1/g, "i")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function isProtectedModelDisclosurePrompt(prompt: string): boolean {
+  if (MODEL_DISCLOSURE_REQUEST_PATTERNS.some((pattern) => pattern.test(prompt))) {
+    return true;
+  }
+  const compact = compactForModelDisclosure(prompt);
+  return MODEL_DISCLOSURE_COMPACT_PATTERNS.some((pattern) => pattern.test(compact));
+}
+
 // Drafting social copy is a normal text task. Only treat it as an external
 // side effect when the prompt also contains a publish/send/share action.
 const EXTERNAL_PUBLISH_ACTION_PATTERN =
@@ -345,6 +381,7 @@ export function isProtectedInternalDisclosurePrompt(prompt: string): boolean {
   return (
     normalized.length > 0 &&
     (INTERNAL_DISCLOSURE_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+      isProtectedModelDisclosurePrompt(normalized) ||
       containsProtectedElyanDisclosure(normalized))
   );
 }

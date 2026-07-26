@@ -10,6 +10,6 @@
 {"id":"workload-010","message":"Kuantum dolanıklığı nedir, iki kısa örnekle açıkla","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
 {"id":"workload-011","message":"Bana ileri analiz dersinden örnek soru yaz","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
 {"id":"workload-012","message":"Z = x^5 - y^2 fonksiyonunun 3 boyutlu grafiğini çiz","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
-{"id":"workload-013","message":"Bir startup için pazara giriş stratejisini değerlendir ve öner","primaryIntent":"chat","expectedWorkload":"mobile_chat_balanced"}
+{"id":"workload-013","message":"Bir startup için pazara giriş stratejisini değerlendir ve öner","primaryIntent":"research","expectedWorkload":"mobile_chat_deep_refine"}
 {"id":"workload-014","message":"Bugün hava güzel","primaryIntent":"chat","expectedWorkload":"mobile_chat_fast"}
 {"id":"workload-015","message":"Bir e-ticaret uygulaması için veritabanı şeması nasıl tasarlanır, adımları planla","primaryIntent":"planning","expectedWorkload":"planning"}

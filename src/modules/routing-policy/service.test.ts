@@ -381,7 +381,13 @@ test("decideCommandRoute upgrades short follow-ups to balanced so prior turn is 
 
 test("decideCommandRoute upgrades compact educational reasoning prompts to balanced", async () => {
   const app = createApp([]);
-  for (const message of ["Bana bir mat teoremi söyle", "Teorem söyle", "x^2 türevini al"]) {
+  for (const message of [
+    "Bana bir mat teoremi söyle",
+    "Teorem söyle",
+    "x^2 türevini al",
+    "Bana ileri analiz dersinden örnek soru yaz",
+    "Bu fonksiyon neden yanlış sonuç veriyor: `return total / items.length`",
+  ]) {
     const decision = await decideCommandRoute(app as never, {
       userId: "user-1",
       message,

@@ -35,6 +35,8 @@ const INTENT_SEED_PHRASES: Partial<Record<UnderstandingIntent, string[]>> = {
     "uygulama crash oluyor neden",
     "fix this failing build",
     "why does this throw a stack trace",
+    "bu fonksiyon yanlış sonuç veriyor neden",
+    "kodun sonucu beklediğimden farklı, sebebini bul",
   ],
   research: [
     "bunu araştır ve kaynak göster",
@@ -56,6 +58,8 @@ const INTENT_SEED_PHRASES: Partial<Record<UnderstandingIntent, string[]>> = {
     "şu problemi adım adım çöz",
     "solve this equation",
     "compute the derivative",
+    "ileri analiz dersinden örnek soru hazırla",
+    "kalkülüs dersi için problem üret",
   ],
   document: [
     "bu pdf'i oku ve özetle",
@@ -253,7 +257,7 @@ export async function rankSemanticTextCandidates(
  */
 export function classifyIntentSemantic(
   text: string,
-  minScore = 0.18,
+  minScore = 0.28,
 ): { intent: UnderstandingIntent; score: number } | null {
   const trimmed = text.trim();
   if (trimmed.length === 0) {

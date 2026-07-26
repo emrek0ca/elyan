@@ -33,7 +33,7 @@ const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = 
     intent: "research",
     patterns: [
       /\b(research|sources?|cite|citation|latest|compare|look up|verify|fact check|validate|investigate|analyze|analysis|evaluate|assessment|review|survey|overview)\b/i,
-      /\b(araştır|kaynak|alıntı|güncel|karsilastir|karşılaştır|doğrula|dogrula|kanıtla|kanitla|incele|analiz|değerlendir|degerlendir|anket|genel bakış|genel bakis)\b/i,
+      /\b(araştır|kaynak|alıntı|güncel|karsilastir|karşılaştır|doğrula|dogrula|kanıtla|kanitla|incele|anket|genel bakış|genel bakis)\b/i,
       /\b(türk dünyası|turkic|oğuz|oguz|kıpçak|kipchak|karluk|qipchak|qarluq|azerbaijani|kazakh|kyrgyz|uzbek|turkmen|uyghur|tatar|bashkir|gagauz|karakalpak|sakha|chuvash)\b.*\b(araştır|arastir|incele|study|learn|öğren|ogren|compare|karşılaştır|karsilastir|gramer|grammar|lehçe|lehce|etimoloji|etymology|kaynak|source)\b/i,
       /\b(tarih|tarihsel|tarihçe|tarihce|historical|kronoloji|chronolog)\b/i,
       /\b(nüfus|nufus|population|gdp|gsyih|ekonomi|economy|istatistik|statistic|trend|büyüme|buyume|growth)\b/i,
@@ -320,18 +320,18 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
       matched.splice(0, matched.length);
     }
 
-    // Semantic fallback: when no regex rule matched, a paraphrased prompt would
-    // otherwise collapse to "chat"/"unknown" and lose its real intent. Recover it
-    // from the nearest prototype embedding (cheap, synchronous, only on this path).
+    // Semantic fallback recovers paraphrases that would otherwise collapse to
+    // chat, and lets a strong subject intent outrank a generic writing action.
     let semanticIntent: UnderstandingIntent | null = null;
     let semanticScore = 0;
     if (
       explicitMobileContextKinds.length === 0 &&
-      matched.length === 0 &&
+      (matched.length === 0 ||
+        (matched.length === 1 && matched[0] === "writing")) &&
       text.trim().length > 0
     ) {
       const semantic = classifyIntentSemantic(text);
-      if (semantic) {
+      if (semantic && (matched.length === 0 || semantic.intent !== "writing")) {
         semanticIntent = semantic.intent;
         semanticScore = semantic.score;
       }
@@ -340,7 +340,7 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     const primaryIntent =
       explicitMobileContextKinds.length > 0
         ? "chat"
-        : matched[0] ?? semanticIntent ?? (text.trim().length > 0 ? "chat" : "unknown");
+        : semanticIntent ?? matched[0] ?? (text.trim().length > 0 ? "chat" : "unknown");
     const secondaryIntents = unique(matched.filter((intent) => intent !== primaryIntent));
     const requiresLocalRuntime =
       ["automation", "browser", "computer"].includes(primaryIntent) ||
@@ -367,10 +367,10 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
         ? 0.96
         : explicitMobileContextKinds.length > 0
           ? 0.95
-        : matched.length > 0
-        ? Math.min(0.95, 0.62 + matched.length * 0.1)
         : semanticIntent
           ? Math.min(0.6, 0.4 + semanticScore)
+        : matched.length > 0
+          ? Math.min(0.95, 0.62 + matched.length * 0.1)
           : primaryIntent === "chat"
             ? 0.55
             : 0.2;
