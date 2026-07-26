@@ -16,7 +16,7 @@ export const DESKTOP_PLAN_CONTRACT = "elyan.plan.v2";
 export const DESKTOP_COWORK_CONTRACT = "elyan.cowork.v1";
 
 const MAX_PROMPT_CHARS = 48_000;
-const PLAN_MAX_COMPLETION_TOKENS = 2_400;
+const PLAN_MAX_COMPLETION_TOKENS = 4_096;
 const PLAN_TIMEOUT_MS = 30_000;
 
 export type DesktopPlanInput = {

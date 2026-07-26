@@ -132,7 +132,7 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
     // max_tokens bir TAVANdır: kısa plan erken durur, fatura gerçek kullanıma.
     timeoutMs: 30_000,
     firstDeltaBudgetMs: 2_200,
-    maxTokens: 2_400,
+    maxTokens: 4_096,
     streamingEnabled: true,
     cachePolicy: "safe_ephemeral",
     fallbackWorkload: "mobile_chat_balanced",

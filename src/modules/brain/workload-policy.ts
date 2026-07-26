@@ -19,7 +19,7 @@ export function getMaxTokensForWorkload(
     workload === "planning"
       // Reasoning taban artışıyla hizalı (workloads.ts): taban 2400'ün altında
       // bir premium tavanı anlamsız — Math.max(base, …) zaten tabanı korur.
-      ? 2400
+      ? 4096
       : workload === "mobile_chat_deep_refine"
         ? 1200
         : workload === "mobile_chat_balanced"
