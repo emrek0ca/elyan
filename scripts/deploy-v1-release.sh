@@ -28,6 +28,29 @@ need scp
 need curl
 need openssl
 
+run_remote() {
+  local command="$1"
+  local attempt=1
+  local max_attempts=5
+  local delay_seconds=5
+  local status=0
+
+  while (( attempt <= max_attempts )); do
+    if ssh -o ConnectTimeout=15 "${REMOTE_HOST}" "${command}"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "${status}" -ne 255 || "${attempt}" -eq "${max_attempts}" ]]; then
+      return "${status}"
+    fi
+    echo "SSH transport failed (attempt ${attempt}/${max_attempts}); retrying in ${delay_seconds}s." >&2
+    sleep "${delay_seconds}"
+    attempt=$((attempt + 1))
+    delay_seconds=$((delay_seconds < 30 ? delay_seconds * 2 : 30))
+  done
+}
+
 cleanup() {
   if [[ "${TEMP_ENV_CREATED}" == "true" ]]; then
     rm -f .env
@@ -71,13 +94,13 @@ provision_private_key() {
       echo "${label} private key is not a valid private key: ${source}" >&2
       exit 1
     fi
-    ssh "${REMOTE_HOST}" "install -d -m 700 '${REMOTE_DIR}/secrets' && rm -f -- '${remote_tmp}'"
+    run_remote "install -d -m 700 '${REMOTE_DIR}/secrets' && rm -f -- '${remote_tmp}'"
     scp -q "${source}" "${REMOTE_HOST}:${remote_tmp}"
-    ssh "${REMOTE_HOST}" "if test -d '${remote_path}'; then rmdir -- '${remote_path}'; fi && install -m 600 '${remote_tmp}' '${remote_path}' && rm -f -- '${remote_tmp}' && test -f '${remote_path}' && test -s '${remote_path}'"
+    run_remote "if test -d '${remote_path}'; then rmdir -- '${remote_path}'; fi && install -m 600 '${remote_tmp}' '${remote_path}' && rm -f -- '${remote_tmp}' && test -f '${remote_path}' && test -s '${remote_path}'"
     return
   fi
 
-  ssh "${REMOTE_HOST}" "test -f '${remote_path}' && test -s '${remote_path}'" || {
+  run_remote "test -f '${remote_path}' && test -s '${remote_path}'" || {
     echo "${label} private key is missing on the server. Provide its deploy source." >&2
     exit 1
   }
@@ -93,7 +116,7 @@ npm run build
 npm test
 
 echo "==> Remote backup to ${BACKUP_DIR}"
-ssh "${REMOTE_HOST}" "umask 077 && install -d -m 700 '${BACKUP_DIR}' && cd '${REMOTE_DIR}' && tar --exclude='./.codex-backups' --exclude='./.codex-worktrees' --exclude='./node_modules' --exclude='./dist' --exclude='./.blob-store' --exclude='./.git' --exclude='./docs/release/evidence' --exclude='./.claude' --exclude='./.DS_Store' --exclude='*/__pycache__' -czf '${BACKUP_DIR}/release-source.tgz' . && sha256sum '${BACKUP_DIR}/release-source.tgz' > '${BACKUP_DIR}/release-source.tgz.sha256'"
+run_remote "umask 077 && install -d -m 700 '${BACKUP_DIR}' && cd '${REMOTE_DIR}' && tar --exclude='./.codex-backups' --exclude='./.codex-worktrees' --exclude='./node_modules' --exclude='./dist' --exclude='./.blob-store' --exclude='./.git' --exclude='./docs/release/evidence' --exclude='./.claude' --exclude='./.DS_Store' --exclude='*/__pycache__' -czf '${BACKUP_DIR}/release-source.tgz' . && sha256sum '${BACKUP_DIR}/release-source.tgz' > '${BACKUP_DIR}/release-source.tgz.sha256'"
 
 echo "==> Sync release candidate"
 rsync -az --delete \
@@ -115,17 +138,17 @@ rsync -az --delete \
   ./ "${REMOTE_HOST}:${REMOTE_DIR}/"
 
 echo "==> Remove stale generated and deployment-only files"
-ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && rm -rf -- dist docs/release/evidence .claude ml-worker/__pycache__ && rm -f -- .DS_Store"
+run_remote "cd '${REMOTE_DIR}' && rm -rf -- dist docs/release/evidence .claude ml-worker/__pycache__ && rm -f -- .DS_Store"
 
 echo "==> Provision Apple signing keys"
 provision_private_key "Apple IAP" "${APPLE_IAP_PRIVATE_KEY_SOURCE}" "${REMOTE_APPLE_PRIVATE_KEY}"
 provision_private_key "APNs" "${APNS_PRIVATE_KEY_SOURCE}" "${REMOTE_APNS_PRIVATE_KEY}"
 
 echo "==> Remote install and test"
-ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && ONNXRUNTIME_NODE_INSTALL=skip npm ci && npm run compile:nlp && npm run build && npm test"
+run_remote "cd '${REMOTE_DIR}' && ONNXRUNTIME_NODE_INSTALL=skip npm ci && npm run compile:nlp && npm run build && npm test"
 
 echo "==> Remote schema bootstrap and restart"
-ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d postgres redis && bash scripts/bootstrap-v1-social-auth-schema.sh && bash scripts/bootstrap-v1-device-schema.sh && bash scripts/bootstrap-v2-apple-billing-schema.sh && bash scripts/bootstrap-v3-blob-memory-schema.sh && bash scripts/bootstrap-v4-identity-quota-schema.sh && bash scripts/bootstrap-v5-world-signals-schema.sh && bash scripts/bootstrap-v6-operator-schema.sh && bash scripts/bootstrap-v7-subscription-lifecycle-schema.sh && bash scripts/bootstrap-v8-session-goals-schema.sh && bash scripts/bootstrap-v9-agent-foundation-schema.sh && bash scripts/bootstrap-v10-cognitive-foundation-schema.sh && bash scripts/bootstrap-v11-integration-apps-schema.sh && bash scripts/bootstrap-v12-approval-policy-schema.sh && bash scripts/bootstrap-v13-web-schema.sh && bash scripts/bootstrap-v14-multichannel-schema.sh && docker compose -f '${COMPOSE_FILE}' up -d --build --remove-orphans"
+run_remote "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d postgres redis && bash scripts/bootstrap-v1-social-auth-schema.sh && bash scripts/bootstrap-v1-device-schema.sh && bash scripts/bootstrap-v2-apple-billing-schema.sh && bash scripts/bootstrap-v3-blob-memory-schema.sh && bash scripts/bootstrap-v4-identity-quota-schema.sh && bash scripts/bootstrap-v5-world-signals-schema.sh && bash scripts/bootstrap-v6-operator-schema.sh && bash scripts/bootstrap-v7-subscription-lifecycle-schema.sh && bash scripts/bootstrap-v8-session-goals-schema.sh && bash scripts/bootstrap-v9-agent-foundation-schema.sh && bash scripts/bootstrap-v10-cognitive-foundation-schema.sh && bash scripts/bootstrap-v11-integration-apps-schema.sh && bash scripts/bootstrap-v12-approval-policy-schema.sh && bash scripts/bootstrap-v13-web-schema.sh && bash scripts/bootstrap-v14-multichannel-schema.sh && docker compose -f '${COMPOSE_FILE}' up -d --build --remove-orphans"
 
 echo "==> Post-deploy probe"
 probe_with_retry 6 5
