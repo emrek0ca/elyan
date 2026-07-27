@@ -5428,18 +5428,34 @@ def _route_chat(
     backend: BackendClient | None = None,
     plan_mode: bool = False,
     force_structured_planning: bool = False,
+    semantic_task: bool = False,
     goal_context: dict[str, Any] | None = None,
     plan_executor: Callable[..., tuple[bool, str, list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]] | None = None,
 ) -> dict[str, Any]:
-    routed = route_text_to_tool(text, selected_artifacts=selected_artifacts)
+    # Remote/structured execution is model-planned. The lexical router remains
+    # only as a degraded local CLI compatibility path and never selects a
+    # backend-assigned desktop task.
+    routed = (
+        None
+        if force_structured_planning
+        else route_text_to_tool(text, selected_artifacts=selected_artifacts)
+    )
     deterministic_fallback: RoutedTask | None = None
-    contextual = _contextual_route(conversation_id, conversation, text)
+    contextual = (
+        None
+        if force_structured_planning
+        else _contextual_route(conversation_id, conversation, text)
+    )
     if contextual is not None and (
         routed is None
         or (routed.tool_name in {"open_app", "close_app"} and not str(routed.args.get("app_name", "") or "").strip())
     ):
         routed = contextual
-    clarification = artifact_target_clarification(text, selected_artifacts)
+    clarification = (
+        None
+        if force_structured_planning
+        else artifact_target_clarification(text, selected_artifacts)
+    )
     if clarification is not None and routed is None and contextual is None:
         try:
             STATE.increment_clarification_count()
@@ -5458,7 +5474,11 @@ def _route_chat(
             intent=str(clarification.get("kind", "") or "clarification"),
             privacy_class="local_private",
         )
-    app_clarification = _deterministic_app_clarification(text)
+    app_clarification = (
+        None
+        if force_structured_planning
+        else _deterministic_app_clarification(text)
+    )
     if app_clarification and routed is None and contextual is None:
         try:
             STATE.increment_clarification_count()
@@ -5651,7 +5671,7 @@ def _route_chat(
             planner_hint=reasoning_policy.deterministic_plan_hint(deterministic_fallback),
             goal_context=goal_context,
         )
-        if tool_capable_request or local_private_request or force_structured_planning
+        if semantic_task or tool_capable_request or local_private_request or force_structured_planning
         else None
     )
     if semantic and not semantic.get("capability"):
@@ -8058,6 +8078,8 @@ class RuntimeBridge:
             return "missing_task_id"
         if self._is_recent_terminal_assigned_task(normalized_task_id):
             return "skipped_recent_terminal"
+        if self.remote_task_runner.is_draining():
+            return "runtime_executor_draining"
         # Daemon yeniden başladığında bellek içi TTL sıfırlanır; kalıcı
         # inbox terminal gerçeği yine de gecikmiş dispatch/approval sinyalinin
         # failed -> running geçişi denemesini engellemelidir.
@@ -10447,6 +10469,7 @@ class RuntimeBridge:
                     backend=self.backend,
                     plan_mode=plan_mode,
                     force_structured_planning=use_structured_planner,
+                    semantic_task=intent_decision.is_task,
                     goal_context=execution_goal,
                 plan_executor=lambda steps, step_source, step_goal: self._execute_plan_steps(
                     steps,
@@ -13469,9 +13492,14 @@ class RuntimeBridge:
         payload = payload if isinstance(payload, dict) else {}
         metadata = payload.get("metadata", {})
         metadata = metadata if isinstance(metadata, dict) else {}
+        work_order = self._remote_task_work_order(payload)
+        if work_order:
+            preview = work_order.get("planPreview")
+            preview = preview if isinstance(preview, dict) else {}
+            work_order_steps = preview.get("steps")
+            return [work_order_steps] if isinstance(work_order_steps, list) and work_order_steps else []
         sources: list[Any] = []
         for container in (
-            self._remote_task_work_order_plan_preview(payload),
             route_decision,
             route_decision.get("planPreview") if isinstance(route_decision.get("planPreview"), dict) else None,
             route_decision.get("plan") if isinstance(route_decision.get("plan"), dict) else None,
@@ -13860,7 +13888,8 @@ class RuntimeBridge:
         work_order_preview = self._remote_task_work_order_plan_preview(payload)
         mobile_metadata = _map_from(payload.get("metadata") or {})
         mobile_desktop_required = bool(mobile_metadata.get("desktopRequired", False))
-        has_work_order = bool(self._remote_task_work_order(payload))
+        work_order = self._remote_task_work_order(payload)
+        has_work_order = bool(work_order)
         route = str(route_decision.get("route", "") or "").strip()
         # A validated typed work order is itself an authoritative desktop route.
         if route != "desktop_runtime" and not mobile_desktop_required and not has_work_order:
@@ -13881,7 +13910,13 @@ class RuntimeBridge:
                             plan_preview["agentPlan"] = build_agent_plan(routed_steps, summary=str(plan_preview.get("summary", "") or ""))
                         return plan_preview
             return {}
-        steps, plan_preview = self._remote_task_steps_from_route(task, prompt, capabilities, route_decision)
+        steps, plan_preview = self._remote_task_steps_from_route(
+            task,
+            prompt,
+            capabilities,
+            route_decision,
+            authoritative_work_order=has_work_order,
+        )
         if not steps:
             return work_order_preview
         if not isinstance(plan_preview.get("agentPlan"), dict):
@@ -14277,6 +14312,8 @@ class RuntimeBridge:
         prompt: str,
         capabilities: set[str],
         route_decision: dict[str, Any] | None = None,
+        *,
+        authoritative_work_order: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         decision = dict(route_decision or {})
         decision_route = str(decision.get("route", "") or "").strip()
@@ -14291,7 +14328,10 @@ class RuntimeBridge:
             # üretiyordu (canlı arıza: "masaüstündeki dosyaları listele").
             # Yüksek-güvenli onaysız yerel rota varsa o kazanır; çok-adımlı ya
             # da operator-dışı explicit planlara dokunulmaz.
-            if self._explicit_steps_are_generic_operator_fallback(explicit_steps, prompt):
+            if (
+                not authoritative_work_order
+                and self._explicit_steps_are_generic_operator_fallback(explicit_steps, prompt)
+            ):
                 local_routed = route_text_to_tool(prompt)
                 local_steps = _plan_steps_from_routed_task(local_routed) if local_routed is not None else []
                 local_steps = [dict(step) for step in local_steps if isinstance(step, dict)]
@@ -14706,31 +14746,33 @@ class RuntimeBridge:
         # (_normalize_remote_task_step); geçmezse steps boş kalır ve mevcut
         # delegasyon davranışına düşülür.
         work_order_preview = self._remote_task_work_order_plan_preview(payload)
-        trusted_server_plan = (
-            str(work_order_preview.get("planSource", "") or "").strip().lower() == "server_materialized"
-            or str(work_order_preview.get("contract", "") or "").strip() == "elyan.compiled_plan.v1"
+        preparation = work_order_preview.get("planPreparation")
+        preparation = preparation if isinstance(preparation, dict) else {}
+        trusted_server_plan = bool(
+            has_work_order
+            and str(work_order_preview.get("planSource", "") or "").strip().lower() == "server_materialized"
+            and str(work_order_preview.get("contract", "") or "").strip() == "elyan.compiled_plan.v1"
+            and str(preparation.get("status", "") or "").strip().lower() == "ready"
+            and str(preparation.get("outcome", "") or "").strip().lower() == "materialized"
+            and isinstance(work_order_preview.get("steps"), list)
+            and bool(work_order_preview.get("steps"))
         )
-
-        # LLM-ÖNCE: serbest-metin cowork görevlerinde backend'in regex planına
-        # körlemesine güvenme. Runtime'ın kataloglu + doğrulamalı LLM planlayıcısı
-        # (send_conversation → _semantic_route) gerçek yetenek kataloğuyla plan
-        # üretsin. None döndürmek çağıranı (execute_runtime_task) LLM yoluna
-        # düşürür. Basit doğrudan komutlar hız için regex yolunda kalır; LLM
-        # erişilemezse yine regex planı çalışır (çevrimdışı çalışabilirlik).
-        # Güvenilir sunucu planında bu kapı ATLANIR (plan zaten LLM ürünü).
-        if not trusted_server_plan and self._remote_task_should_delegate_to_llm(capabilities, prompt):
-            # Yüksek-güvenli yerel rota varsa LLM'e HİÇ gitme: "masaüstündeki
-            # dosyaları listele" gibi bariz tek-adım işlerde LLM planlayıcı
-            # daha yavaş VE yanlış seçebiliyor (operator'a kör hedef → doğrulama
-            # hatası → replan/onay çıkmazı). Onay isteyen rotalar (shell vb.)
-            # eski akışta kalır — bu hız yolu yalnız zararsız kesin eşleşmeler.
-            local_routed = route_text_to_tool(prompt)
-            if (
-                local_routed is None
-                or local_routed.confidence < 0.8
-                or local_routed.requires_confirmation
-            ):
-                return None
+        if not trusted_server_plan:
+            return {
+                "ok": True,
+                "chatOk": False,
+                "assistantMessage": "Sunucu planı doğrulanamadı; görev güvenli şekilde durduruldu.",
+                "provider": "remote_task_adapter",
+                "needsConfirmation": False,
+                "planPreview": work_order_preview,
+                "executionTrace": self._remote_task_trace_payload(
+                    work_order_preview, status="failed", task_id=task_id
+                ),
+                "error": {
+                    "code": "SERVER_PLAN_NOT_READY",
+                    "message": "Sunucu planı doğrulanamadı; görev güvenli şekilde durduruldu.",
+                },
+            }
 
         has_explicit_steps = bool(self._remote_task_step_sources(task, route_decision))
         # Typed work-order steps also bypass the older route metadata gate.
@@ -14742,7 +14784,13 @@ class RuntimeBridge:
         ):
             return None
 
-        steps, plan_preview = self._remote_task_steps_from_route(task, prompt, capabilities, route_decision)
+        steps, plan_preview = self._remote_task_steps_from_route(
+            task,
+            prompt,
+            capabilities,
+            route_decision,
+            authoritative_work_order=True,
+        )
         steps = _sanitize_contradictory_plan_steps(steps)
         if isinstance(plan_preview, dict) and isinstance(plan_preview.get("steps"), list):
             plan_preview = {
@@ -14788,24 +14836,38 @@ class RuntimeBridge:
                     planHash=compiled.planHash,
                 )
             except Exception as exc:
-                trusted_server_plan = False
                 self._runtime_diag(
                     "trusted_server_plan_bind_failed",
                     task_id=task_id,
                     error=type(exc).__name__,
                 )
+                return {
+                    "ok": True,
+                    "chatOk": False,
+                    "assistantMessage": "Sunucu planı yürütme bağına alınamadı; görev durduruldu.",
+                    "provider": "remote_task_adapter",
+                    "needsConfirmation": False,
+                    "planPreview": plan_preview,
+                    "executionTrace": self._remote_task_trace_payload(
+                        plan_preview, status="failed", task_id=task_id
+                    ),
+                    "error": {
+                        "code": "COMPILED_PLAN_BINDING_FAILED",
+                        "message": "Sunucu planı yürütme bağına alınamadı; görev durduruldu.",
+                    },
+                }
 
-        approval_steps = [
-            step
-            for step in steps
-            if _canonical_capability_name(step.get("capability")) in REMOTE_APPROVAL_CAPABILITIES
-        ]
-        approval_requested = bool(approval_steps)
-        pre_approval_steps = [
-            step
-            for step in steps
-            if _canonical_capability_name(step.get("capability")) not in REMOTE_APPROVAL_CAPABILITIES
-        ] if approval_requested else steps
+        first_approval_index = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if _canonical_capability_name(step.get("capability")) in REMOTE_APPROVAL_CAPABILITIES
+            ),
+            None,
+        )
+        approval_requested = first_approval_index is not None
+        pre_approval_steps = steps[:first_approval_index] if first_approval_index is not None else steps
+        approval_steps = steps[first_approval_index:] if first_approval_index is not None else []
         conversation = STATE.create_conversation(title or "Remote task")
         conversation_id = str(conversation.get("id", "") or "")
         if pre_approval_steps:
@@ -15039,158 +15101,6 @@ class RuntimeBridge:
 
     def _execute_runtime_task(self, task: dict[str, Any], dispatched_via_websocket: bool = False) -> dict[str, Any]:
         return self.remote_task_runner.execute_runtime_task(task, dispatched_via_websocket=dispatched_via_websocket)
-        task_id = str(task.get("id", "") or "")
-        payload = task.get("payload", {})
-        payload = payload if isinstance(payload, dict) else {}
-        title = str(task.get("title", "") or payload.get("title", "") or "Elyan görevi")
-        prompt = str(payload.get("prompt", "") or payload.get("message", "") or title).strip()
-        if not task_id:
-            return {"taskId": "", "ok": False, "status": "missing_task_id"}
-
-        preflight_error = self._runtime_task_preflight_error(task, payload)
-        if preflight_error is not None:
-            report = self._report_runtime_task_status(
-                task_id,
-                {
-                    "status": "failed",
-                    "message": preflight_error["message"],
-                    "summary": preflight_error["message"],
-                    "approvalRequest": {},
-                    "artifacts": [],
-                    "error": preflight_error["code"],
-                },
-            )
-            return {
-                "taskId": task_id,
-                "ok": False,
-                "status": "failed_closed",
-                "report": report.to_dict() if report else None,
-            }
-
-        if not prompt:
-            failed = self._report_runtime_task_status(
-                task_id,
-                {
-                    "status": "failed",
-                    "message": "Görev metni boş.",
-                    "error": "task_prompt_missing",
-                    "artifacts": [],
-                },
-            )
-            return {"taskId": task_id, "ok": False, "status": "failed", "report": failed.to_dict() if failed else None}
-
-        self._set_runtime_task_heartbeat(dispatched_via_websocket, "busy", task_id)
-
-        running_payload: dict[str, Any] = {
-            "status": "running",
-            "message": "Desktop runtime görevi yürütüyor.",
-            "artifacts": [],
-        }
-        running_plan_preview = self._remote_task_running_plan_preview(task, prompt, payload)
-        if running_plan_preview:
-            running_payload["summary"] = str(running_plan_preview.get("summary", "") or running_payload["message"])[:1000]
-            running_payload["planPreview"] = running_plan_preview
-            running_payload["result"] = {
-                "executionTrace": self._remote_task_trace_payload(running_plan_preview, status="running", task_id=task_id),
-            }
-        running = self._report_runtime_task_status(
-            task_id,
-            running_payload,
-        )
-        if running is None or not running.ok:
-            self._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
-            return {"taskId": task_id, "ok": False, "status": "running_rejected", "report": running.to_dict() if running else None}
-
-        local_result = self._execute_deterministic_remote_task(task, prompt, title)
-        if local_result is None:
-            local_result = self.send_conversation("", prompt, title)
-        chat_ok = local_result.get("chatOk", True) is not False
-        assistant_message = str(local_result.get("assistantMessage", "") or "").strip()
-        tool_events = local_result.get("toolEvents", [])
-        provider = str(local_result.get("provider", "") or "")
-        if local_result.get("needsConfirmation") is True and str(local_result.get("pendingPlanId", "") or "").strip():
-            pending_plan_id = str(local_result.get("pendingPlanId", "") or "").strip()
-            conversation_id = str(local_result.get("conversationId", "") or "").strip()
-            permission_error = self._pending_plan_permission_error(pending_plan_id)
-            if permission_error is not None:
-                STATE.remove_pending_plan(pending_plan_id)
-                failed_payload = {
-                    "status": "failed",
-                    "message": str(permission_error.get("message", "") or "Görev için açık izin gerekiyor."),
-                    "summary": assistant_message[:1000],
-                    "result": {
-                        "assistantMessage": str(permission_error.get("message", "") or assistant_message),
-                        "provider": provider,
-                        "toolEvents": tool_events if isinstance(tool_events, list) else [],
-                        "conversationId": conversation_id,
-                    },
-                    "artifacts": [],
-                    "approvalRequest": {},
-                    "error": str(permission_error.get("code", "") or "PERMISSION_REQUIRED"),
-                }
-                report = self._report_runtime_task_status(task_id, failed_payload)
-                self._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
-                return {
-                    "taskId": task_id,
-                    "ok": bool(report and report.ok),
-                    "status": "failed",
-                    "report": report.to_dict() if report else None,
-                    "local": {
-                        "conversationId": conversation_id,
-                        "provider": provider,
-                        "pendingPlanId": pending_plan_id,
-                    },
-                }
-            approval_request = self._approval_request_payload(local_result)
-            waiting_result = {
-                "assistantMessage": assistant_message,
-                "provider": provider,
-                "toolEvents": tool_events if isinstance(tool_events, list) else [],
-                "conversationId": conversation_id,
-            }
-            local_plan_preview = local_result.get("planPreview")
-            if isinstance(local_plan_preview, dict):
-                waiting_result["planPreview"] = dict(local_plan_preview)
-            local_execution_trace = local_result.get("executionTrace")
-            if isinstance(local_execution_trace, dict):
-                waiting_result["executionTrace"] = dict(local_execution_trace)
-            STATE.save_remote_task_link(
-                task_id,
-                pending_plan_id,
-                conversation_id,
-                title=title,
-                status="waiting_approval",
-                expires_at=str(approval_request.get("expiresAt", "") or ""),
-            )
-            waiting_payload = {
-                "status": "waiting_approval",
-                "message": "Yerel onay bekleniyor.",
-                "summary": approval_request.get("summary", assistant_message) or assistant_message[:1000],
-                "approvalRequest": approval_request,
-                "result": waiting_result,
-                "artifacts": [],
-            }
-            report = self._report_runtime_task_status(task_id, waiting_payload)
-            self._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
-            return {
-                "taskId": task_id,
-                "ok": bool(report and report.ok),
-                "status": "waiting_approval",
-                "report": report.to_dict() if report else None,
-                "local": {
-                    "conversationId": conversation_id,
-                    "provider": provider,
-                    "pendingPlanId": pending_plan_id,
-                },
-            }
-
-        result = self._report_runtime_task_terminal_result(
-            task_id,
-            local_result,
-            dispatched_via_websocket=dispatched_via_websocket,
-        )
-        self._set_runtime_task_heartbeat(dispatched_via_websocket, "idle")
-        return result
 
     def _approval_resolution_state(self, approval_request: dict[str, Any]) -> str:
         request_payload = dict(approval_request) if isinstance(approval_request, dict) else {}
@@ -15224,6 +15134,25 @@ class RuntimeBridge:
                 "code": str(first_error.get("code", "WORK_ORDER_INVALID") or "WORK_ORDER_INVALID").lower(),
                 "message": "Görev verisi doğrulanamadı. İşlem güvenli şekilde durduruldu.",
             }
+        work_order = validation.work_order if isinstance(validation.work_order, dict) else None
+        if work_order is not None:
+            preview = work_order.get("planPreview")
+            preview = preview if isinstance(preview, dict) else {}
+            preparation = preview.get("planPreparation")
+            preparation = preparation if isinstance(preparation, dict) else {}
+            ready = (
+                str(preview.get("planSource", "") or "").strip().lower() == "server_materialized"
+                and str(preview.get("contract", "") or "").strip() == "elyan.compiled_plan.v1"
+                and str(preparation.get("status", "") or "").strip().lower() == "ready"
+                and str(preparation.get("outcome", "") or "").strip().lower() == "materialized"
+                and isinstance(preview.get("steps"), list)
+                and bool(preview.get("steps"))
+            )
+            if not ready:
+                return {
+                    "code": "server_plan_not_ready",
+                    "message": "Sunucu planı henüz doğrulanmadı. Görev güvenli şekilde durduruldu.",
+                }
         runtime = _map_from(STATE.snapshot().get("runtime"))
         runtime_device_id = str(runtime.get("deviceId", "") or "").strip()
         target_device_id = str(task.get("targetDeviceId", "") or "").strip()

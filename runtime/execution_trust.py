@@ -435,6 +435,13 @@ class ExecutionLedger:
     ) -> dict[str, Any]:
         binding = _work_order_binding(order)
         _assert_not_expired(binding["expiresAt"], "WORK_ORDER_EXPIRED")
+        with self._connect() as connection:
+            delivery = connection.execute(
+                "SELECT status FROM deliveries WHERE user_id=? AND task_id=? AND revision=?",
+                (binding["userId"], binding["taskId"], binding["revision"]),
+            ).fetchone()
+        if delivery is None or str(delivery["status"]) != "executing":
+            raise TrustError("WORK_ORDER_NOT_EXECUTING", "Görev yürütme yetkisi sona ermiş.")
         normalized_capability = canonical_capability(capability)
         # Zararsız taban kapsam kontrol ANINDA da birleşir: baseline'a sonradan
         # eklenen bir yetenek, daha eski persisted binding'lerde de geçerli olur
@@ -511,6 +518,12 @@ class ExecutionLedger:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            delivery = connection.execute(
+                "SELECT status FROM deliveries WHERE user_id=? AND task_id=? AND revision=?",
+                (binding["userId"], binding["taskId"], binding["revision"]),
+            ).fetchone()
+            if delivery is None or str(delivery["status"]) != "executing":
+                raise TrustError("WORK_ORDER_NOT_EXECUTING", "Görev yürütme yetkisi sona ermiş.")
             row = connection.execute(
                 "SELECT status FROM capability_grants WHERE grant_id=? AND user_id=? AND task_id=? AND revision=?",
                 (binding["grantId"], binding["userId"], binding["taskId"], binding["revision"]),
@@ -600,11 +613,10 @@ def _assert_not_expired(expires_at: Any, code: str) -> None:
         raise TrustError(code, "Görev yetkisi sona ermiş.")
 
 
-# Her iş emri kapsamına dahil edilen zararsız, salt-yerel yetenekler.
-# Backend'in sezgisel yetenek listesi çoğu zaman eksik (ör. "klasör oluştur"
-# isteğinde make_directory yok); yüksek-güvenli yerel rota jenerik planı
-# değiştirdiğinde CAPABILITY_SCOPE_MISMATCH ile ölmesin. Riskli yetenekler
-# (shell, mail, silme...) bilinçli olarak LİSTEDE YOK — fail-closed korunur.
+# Her iş emri kapsamına dahil edilen verisiz veya salt-yerel dönüşüm
+# yetenekleri. Dosya okuma/yazma, shell, mail ve bilgisayar eylemleri burada
+# yer almaz; backend WorkOrder bunları açıkça istemedikçe model planı yetkiyi
+# genişletemez.
 #
 # TEK KAYNAK: bridge._SAFE_LOCAL_OVERRIDE bu sabiti kullanır. İki listenin
 # ayrı yaşaması canlı arıza üretti: yerel rota "ekranda ne var"ı
@@ -612,31 +624,36 @@ def _assert_not_expired(expires_at: Any, code: str) -> None:
 # "Capability iş emri kapsamı dışında." ile kesti. Yeni zararsız yetenek
 # eklerken YALNIZ burayı güncelle.
 SAFE_BASELINE_CAPABILITIES = (
-    "make_directory",
-    "directory_tree",
-    "file_read",
-    "file_search",
     "sys_info",
-    # Basit masaüstü bakışları + zararsız tarayıcı eylemi (yeni sekme/URL):
-    # salt-okunur ekran analizi, süreç listesi, sekme açma.
-    "analyze_screen",
-    "desktop_os.processes",
-    "browser_control",
+    "text_analyze",
+    "math_solve",
+    "latex_parse",
 )
 # Geriye dönük ad (modül içi kullanım).
 _SAFE_BASELINE_SCOPE = SAFE_BASELINE_CAPABILITIES
 
+_CAPABILITY_SCOPE_EQUIVALENTS = {
+    "document_read": {"file_read", "file_search", "directory_tree", "text_analyze"},
+    "ocr_read": {"file_read", "text_analyze"},
+    "image_read": {"file_read"},
+}
+
 
 def _capability_scope(work_order: dict[str, Any]) -> list[str]:
     values: list[Any] = list(_SAFE_BASELINE_SCOPE)
-    raw_scope = work_order.get("requiredCapabilities")
+    materialized_scope = work_order.get("materializedCapabilityScope")
+    raw_scope = (
+        materialized_scope
+        if isinstance(materialized_scope, list) and materialized_scope
+        else work_order.get("requiredCapabilities")
+    )
     if isinstance(raw_scope, list):
         values.extend(raw_scope)
-    preview = work_order.get("planPreview")
-    steps = preview.get("steps", []) if isinstance(preview, dict) else []
-    for step in steps if isinstance(steps, list) else []:
-        if isinstance(step, dict):
-            values.append(step.get("capability"))
+        if raw_scope is not materialized_scope:
+            for capability in raw_scope:
+                values.extend(
+                    _CAPABILITY_SCOPE_EQUIVALENTS.get(canonical_capability(capability), set())
+                )
     return sorted({canonical_capability(value) for value in values if canonical_capability(value)})
 
 

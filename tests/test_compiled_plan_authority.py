@@ -357,20 +357,16 @@ def test_expired_work_order_binding_refreshes_for_same_bound_task(
     assert ledger.claim_approval(refreshed, True) is True
 
 
-def test_safe_baseline_capability_passes_scope_even_if_undeclared(
+def test_safe_baseline_transform_passes_scope_even_if_undeclared(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Canlı arıza: yerel rota "ekranda ne var"ı analyze_screen'e çevirdi ama
-    güven katmanı iş emri kapsamında bulamayıp 'Capability iş emri kapsamı
-    dışında.' ile kesti. SAFE_BASELINE_CAPABILITIES tek kaynak: hem override
-    hem kapsam kontrolü aynı listeyi kullanır; riskli yetenek yine fail-closed."""
+    """Verisiz yerel dönüşümler tabanda kalır; cihaz/dosya yetkileri kalmaz."""
     from runtime.execution_trust import SAFE_BASELINE_CAPABILITIES
 
     _isolate_state(monkeypatch, tmp_path)
     ledger = ExecutionLedger(tmp_path / "ledger.sqlite3")
     order = _sixteen_step_order()
-    # İş emri analyze_screen BİLDİRMİYOR (backend sezgisel listesi eksikti).
-    assert "analyze_screen" not in (order.get("requiredCapabilities") or [])
+    assert "text_analyze" not in (order.get("requiredCapabilities") or [])
     task = {
         "id": "task-baseline",
         "userId": "user-1",
@@ -383,20 +379,21 @@ def test_safe_baseline_capability_passes_scope_even_if_undeclared(
     prepared = prepare_work_order_v2(
         task, order, prompt="ekranda ne var", state=_trusted_state(tmp_path), ledger=ledger
     )
+    assert ledger.claim_delivery(prepared).claimed is True
 
-    # Zararsız taban yetenek: kapsamda bildirilmese de grant verilir.
+    # Zararsız yerel dönüşüm: kapsamda bildirilmese de grant verilir.
     grant = ledger.issue_grant(
         prepared,
-        step_id="step_glance",
-        capability="analyze_screen",
-        args={"query": "ekranda ne var", "target": "active_window"},
+        step_id="step_transform",
+        capability="text_analyze",
+        args={"text": "yerel metin"},
         device_secret="s" * 32,
     )
     assert isinstance(grant, dict)
 
-    # Bridge'in yerel override listesi de aynı tek kaynaktan gelir.
-    assert "analyze_screen" in SAFE_BASELINE_CAPABILITIES
-    assert "desktop_os.processes" in SAFE_BASELINE_CAPABILITIES
+    assert "text_analyze" in SAFE_BASELINE_CAPABILITIES
+    assert "file_read" not in SAFE_BASELINE_CAPABILITIES
+    assert "analyze_screen" not in SAFE_BASELINE_CAPABILITIES
 
     # Riskli yetenek hâlâ fail-closed.
     with pytest.raises(TrustError) as exc:
@@ -408,3 +405,104 @@ def test_safe_baseline_capability_passes_scope_even_if_undeclared(
             device_secret="s" * 32,
         )
     assert exc.value.code == "CAPABILITY_SCOPE_MISMATCH"
+
+
+def test_model_plan_cannot_expand_the_signed_capability_scope(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    ledger = ExecutionLedger(tmp_path / "ledger.sqlite3")
+    order = _sixteen_step_order()
+    order["planPreview"]["steps"] = [
+        {"id": "model_added", "capability": "email_send", "args": {"to": ["x@example.test"]}}
+    ]
+    task = {
+        "id": "task-model-scope",
+        "userId": "user-1",
+        "targetDeviceId": "device-1",
+        "revision": 1,
+    }
+
+    prepared = prepare_work_order_v2(
+        task, order, prompt="16 adım", state=_trusted_state(tmp_path), ledger=ledger
+    )
+
+    assert "email_send" not in prepared["capabilityScope"]
+    assert "make_directory" in prepared["capabilityScope"]
+
+
+def test_server_materialized_scope_replaces_heuristic_capability_hints(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    ledger = ExecutionLedger(tmp_path / "ledger.sqlite3")
+    order = _sixteen_step_order()
+    order["planPreview"]["steps"] = [
+        {"id": "write", "capability": "document_write", "args": {"prompt": "rapor"}}
+    ]
+    order["materializedCapabilityScope"] = ["document_write"]
+    task = {
+        "id": "task-server-scope",
+        "userId": "user-1",
+        "targetDeviceId": "device-1",
+        "revision": 1,
+    }
+
+    prepared = prepare_work_order_v2(
+        task, order, prompt="16 adım", state=_trusted_state(tmp_path), ledger=ledger
+    )
+
+    assert "document_write" in prepared["capabilityScope"]
+    assert "make_directory" not in prepared["capabilityScope"]
+
+
+def test_timed_out_delivery_rejects_new_and_preissued_grants(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    ledger = ExecutionLedger(tmp_path / "ledger.sqlite3")
+    order = _sixteen_step_order()
+    task = {
+        "id": "task-timeout-authority",
+        "userId": "user-1",
+        "targetDeviceId": "device-1",
+        "revision": 1,
+    }
+    prepared = prepare_work_order_v2(
+        task, order, prompt="16 adım", state=_trusted_state(tmp_path), ledger=ledger
+    )
+    assert ledger.claim_delivery(prepared).claimed is True
+    args = {"path": "~/Desktop/test"}
+    grant = ledger.issue_grant(
+        prepared,
+        step_id="step_1",
+        capability="make_directory",
+        args=args,
+        device_secret="s" * 32,
+    )
+    ledger.set_delivery_status("user-1", "task-timeout-authority", 1, "timed_out")
+
+    with pytest.raises(TrustError) as new_grant_error:
+        ledger.issue_grant(
+            prepared,
+            step_id="step_2",
+            capability="make_directory",
+            args={"path": "~/Desktop/test-2"},
+            device_secret="s" * 32,
+        )
+    assert new_grant_error.value.code == "WORK_ORDER_NOT_EXECUTING"
+
+    with pytest.raises(TrustError) as consume_error:
+        ledger.consume_grant(
+            grant,
+            capability="make_directory",
+            args=args,
+            trust_context={
+                "userId": "user-1",
+                "taskId": "task-timeout-authority",
+                "revision": 1,
+                "stepId": "step_1",
+            },
+            device_secret="s" * 32,
+        )
+    assert consume_error.value.code == "WORK_ORDER_NOT_EXECUTING"

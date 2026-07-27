@@ -193,6 +193,8 @@ class RemoteTaskRunner:
 
     def __init__(self, host: Any) -> None:
         self.host = host
+        self._lingering_worker: threading.Thread | None = None
+        self._lingering_worker_lock = threading.Lock()
 
     # Bu süreçte gerçekten yürütülüyor olabilecek durumlar; daemon yeni
     # başladıysa bunlarda kalmış bir görev kesinlikle yarıda kalmıştır.
@@ -272,6 +274,16 @@ class RemoteTaskRunner:
         return str(task.get("status", "") or "").strip().lower() not in {"blocked", "waiting_dependency"}
 
     def execute_assigned_runtime_tasks(self, limit: int = 1) -> dict[str, Any]:
+        if self.is_draining():
+            return {
+                "ok": False,
+                "error": {
+                    "code": "RUNTIME_EXECUTOR_DRAINING",
+                    "message": "Önceki görev güvenli şekilde sonlandırılıyor. Yeni görev kısa süre sonra çalışacak.",
+                },
+                "executions": [],
+                "fetched": 0,
+            }
         self.host._assigned_task_fetch_requested.clear()
         self.host._last_assigned_task_fetch_at = time.monotonic()
         assigned = self.host.backend.runtime_tasks_assigned()
@@ -721,11 +733,9 @@ class RemoteTaskRunner:
 
                     session_token = bridge_module._ACTIVE_DISPATCH_SESSION_ID.set(session_id)
                 try:
-                    # Plan modunda deterministik hız-yolunu atla: LLM planlayıcı
-                    # her görev için (tek adım bile) plan önizlemesi + onay üretsin.
-                    result = None
-                    if not plan_mode:
-                        result = self.host._execute_deterministic_remote_task(task, prompt, title)
+                    # Backend'in doğrulanmış planı tek planlama kaynağıdır.
+                    # Plan modu ikinci bir LLM çağrısı veya ikinci plan üretmez.
+                    result = self.host._execute_deterministic_remote_task(task, prompt, title)
                     if result is None:
                         result = self.host.send_conversation(
                             "",
@@ -764,7 +774,22 @@ class RemoteTaskRunner:
                     cancelled_calls = 0
             if cancelled_calls > 0:
                 worker.join(_MCP_CANCELLATION_GRACE_SECONDS)
-                return _EXECUTION_CANCELLED
+                if not worker.is_alive():
+                    return _EXECUTION_CANCELLED
+            payload = task.get("payload", {})
+            payload = payload if isinstance(payload, dict) else {}
+            work_order = payload.get("desktopWorkOrder")
+            if isinstance(work_order, dict):
+                try:
+                    ExecutionLedger().set_delivery_status(
+                        str(work_order.get("userId", task.get("userId", "")) or ""),
+                        task_id,
+                        int(work_order.get("revision", 1) or 1),
+                        "timed_out",
+                    )
+                except Exception:
+                    pass
+            self._remember_lingering_worker(worker)
             return _EXECUTION_TIMEOUT
         if self._task_cancellation_reason(task_id):
             # Discard even a successful worker result when task.cancel won the
@@ -773,6 +798,24 @@ class RemoteTaskRunner:
         if "error" in box:
             raise box["error"]
         return box.get("result")
+
+    def _remember_lingering_worker(self, worker: threading.Thread) -> None:
+        with self._lingering_worker_lock:
+            self._lingering_worker = worker
+
+    def _has_lingering_worker(self) -> bool:
+        with self._lingering_worker_lock:
+            worker = self._lingering_worker
+            if worker is None:
+                return False
+            if worker.is_alive():
+                return True
+            self._lingering_worker = None
+            return False
+
+    def is_draining(self) -> bool:
+        """Return true while a timed-out worker still owns runtime resources."""
+        return self._has_lingering_worker()
 
     def _task_cancellation_reason(self, task_id: str) -> str:
         cancellation_reason = getattr(
@@ -1301,7 +1344,7 @@ class RemoteTaskRunner:
         One rule is intentionally easy to reason about:
         - no pending plan -> no approval gate
         - dependency/OS permission error -> fail closed
-        - explicit plan mode or any non-read-only capability -> one user approval
+        - any non-read-only capability -> one user approval
         - otherwise the original dispatch consent covers the read-only plan
         """
         pending_plan_id = str(local_result.get("pendingPlanId", "") or "").strip()
@@ -1316,7 +1359,14 @@ class RemoteTaskRunner:
                 conversation_id=conversation_id,
                 permission_error=permission_error if isinstance(permission_error, dict) else {},
             )
-        if plan_mode or self._plan_requires_backend_approval(local_result):
+        if plan_mode:
+            return ApprovalGateDecision(
+                "wait",
+                pending_plan_id=pending_plan_id,
+                conversation_id=conversation_id,
+                manual_required=True,
+            )
+        if self._plan_requires_backend_approval(local_result):
             return ApprovalGateDecision(
                 "wait",
                 pending_plan_id=pending_plan_id,

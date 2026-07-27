@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from runtime import bridge, state_store
+from runtime import bridge, intent_gate, state_store, understanding
 from runtime.executor_core import ExecutorCore
 from runtime.task_router import route_text_to_tool
 
@@ -89,6 +89,49 @@ def test_professional_workflows_preserve_router_plan_under_force_structured_plan
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(
+        intent_gate,
+        "understand",
+        lambda *_args, **_kwargs: understanding.SemanticUnderstanding(
+            intent=understanding.INTENT_TASK,
+            confidence=0.99,
+            source="model",
+            task_type="compound_task",
+        ),
+    )
+    model_steps = [
+        {
+            "id": f"step_{index + 1}",
+            "capability": capability,
+            "args": {},
+            "dependsOn": [] if index == 0 else [f"step_{index}"],
+            "description": capability,
+        }
+        for index, capability in enumerate(expected)
+    ]
+    first_args = {
+        "math_solve": {"expression": "(12000+8500)*0.2"},
+        "document_read": {"path": "/tmp/input.txt"},
+        "web_research": {"query": name},
+    }.get(expected[0], {})
+    model_steps[0]["args"] = first_args
+    monkeypatch.setattr(
+        bridge,
+        "_semantic_route",
+        lambda *_args, **_kwargs: {
+            "capability": expected[0],
+            "args": first_args,
+            "intent": "compound_task",
+            "confidence": 0.99,
+            "privacyClass": "public_text",
+            "requiresConfirmation": True,
+            "isMultiStep": True,
+            "planPreview": {
+                "summary": name,
+                "steps": model_steps,
+            },
+        },
+    )
 
     result = runtime.send_conversation(
         "",

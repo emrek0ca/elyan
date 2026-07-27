@@ -1,7 +1,7 @@
 {
   "name": "elyan",
   "productName": "Elyan",
-  "version": "1.6.11",
+  "version": "1.7.0",
   "description": "Elyan masaüstü ajanı — npm install -g elyan && elyan. Mobilden gelen görevleri bilgisayarında yürütür.",
   "bin": {
     "elyan": "bin/elyan.js"

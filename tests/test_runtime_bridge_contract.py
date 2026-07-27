@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from actions import browser_session
-from runtime import bridge, state_store, task_router
+from runtime import bridge, intent_gate, state_store, task_router, understanding
 from runtime.backend_client import BackendResult
 from runtime.capability_registry import SafeCapabilityError
 
@@ -71,7 +71,17 @@ def _work_order_envelope(
             {"id": "runtime_completed", "description": "Runtime completes.", "evidence": "runtime_status"},
         ],
         "execution": {"mode": "cowork_dispatch", "approvalPolicy": "capability_policy", "maxSteps": 8},
-        "planPreview": {"summary": prompt, "privacyClass": "local_private", "steps": steps},
+        "planPreview": {
+            "summary": prompt,
+            "privacyClass": "local_private",
+            "steps": steps,
+            "planSource": "server_materialized",
+            "contract": "elyan.compiled_plan.v1",
+            "planPreparation": {
+                "status": "ready",
+                "outcome": "materialized",
+            },
+        },
     }
 
 
@@ -689,6 +699,14 @@ def test_execute_assigned_quantum_task_uses_deterministic_pipeline(
                                         "privacyClass": "public_text",
                                         "requiresApproval": False,
                                         "reason": "quantum test",
+                                        "planPreview": {
+                                            "steps": [
+                                                {"id": "q1", "capability": "quantum_model_problem", "args": {"prompt": "İki değişkenli QUBO problemi oluştur."}, "dependsOn": []},
+                                                {"id": "q2", "capability": "quantum_run_experiment", "args": {}, "dependsOn": ["q1"]},
+                                                {"id": "q3", "capability": "quantum_compare_classical", "args": {}, "dependsOn": ["q2"]},
+                                                {"id": "q4", "capability": "quantum_generate_report", "args": {}, "dependsOn": ["q3"]},
+                                            ]
+                                        },
                                     }
                                 },
                             },
@@ -697,7 +715,12 @@ def test_execute_assigned_quantum_task_uses_deterministic_pipeline(
                             "quantum_run_experiment",
                             "quantum_compare_classical",
                             "quantum_generate_report",
-                        ], steps=[])
+                            ], steps=[
+                                {"id": "q1", "capability": "quantum_model_problem", "args": {"prompt": "İki değişkenli QUBO problemi oluştur."}, "dependsOn": []},
+                                {"id": "q2", "capability": "quantum_run_experiment", "args": {}, "dependsOn": ["q1"]},
+                                {"id": "q3", "capability": "quantum_compare_classical", "args": {}, "dependsOn": ["q2"]},
+                                {"id": "q4", "capability": "quantum_generate_report", "args": {}, "dependsOn": ["q3"]},
+                            ])
                     ]
                 },
             )
@@ -784,6 +807,14 @@ def test_execute_assigned_quantum_task_falls_back_without_qiskit(
                                         ],
                                         "privacyClass": "public_text",
                                         "requiresApproval": False,
+                                        "planPreview": {
+                                            "steps": [
+                                                {"id": "q1", "capability": "quantum_model_problem", "args": {}, "dependsOn": []},
+                                                {"id": "q2", "capability": "quantum_run_experiment", "args": {}, "dependsOn": ["q1"]},
+                                                {"id": "q3", "capability": "quantum_compare_classical", "args": {}, "dependsOn": ["q2"]},
+                                                {"id": "q4", "capability": "quantum_generate_report", "args": {}, "dependsOn": ["q3"]},
+                                            ]
+                                        },
                                     }
                                 },
                             },
@@ -792,7 +823,12 @@ def test_execute_assigned_quantum_task_falls_back_without_qiskit(
                             "quantum_run_experiment",
                             "quantum_compare_classical",
                             "quantum_generate_report",
-                        ], steps=[])
+                            ], steps=[
+                                {"id": "q1", "capability": "quantum_model_problem", "args": {"prompt": "QUBO modelle ve QAOA çalıştır."}, "dependsOn": []},
+                                {"id": "q2", "capability": "quantum_run_experiment", "args": {}, "dependsOn": ["q1"]},
+                                {"id": "q3", "capability": "quantum_compare_classical", "args": {}, "dependsOn": ["q2"]},
+                                {"id": "q4", "capability": "quantum_generate_report", "args": {}, "dependsOn": ["q3"]},
+                            ])
                     ]
                 },
             )
@@ -880,6 +916,34 @@ def test_force_structured_planning_preserves_compound_router_plan(
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(
+        intent_gate,
+        "understand",
+        lambda *_args, **_kwargs: understanding.SemanticUnderstanding(
+            intent=understanding.INTENT_TASK,
+            confidence=0.99,
+            source="model",
+            task_type="compound_task",
+        ),
+    )
+    steps = [
+        {"id": "research", "capability": "web_research", "args": {"query": "kira uyuşmazlığı"}, "dependsOn": []},
+        {"id": "analyze", "capability": "text_analyze", "args": {"mode": "legal"}, "dependsOn": ["research"]},
+        {"id": "write", "capability": "document_write", "args": {"format": "docx"}, "dependsOn": ["analyze"]},
+    ]
+    monkeypatch.setattr(
+        bridge,
+        "_semantic_route",
+        lambda *_args, **_kwargs: {
+            "capability": "web_research",
+            "intent": "compound_task",
+            "confidence": 0.99,
+            "privacyClass": "public_text",
+            "requiresConfirmation": True,
+            "isMultiStep": True,
+            "planPreview": {"summary": "Savunma planı", "steps": steps},
+        },
+    )
 
     result = runtime.send_conversation(
         "",
@@ -905,6 +969,35 @@ def test_force_structured_planning_builds_medical_read_analyze_report_chain(
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(
+        intent_gate,
+        "understand",
+        lambda *_args, **_kwargs: understanding.SemanticUnderstanding(
+            intent=understanding.INTENT_TASK,
+            confidence=0.99,
+            source="model",
+            task_type="compound_task",
+        ),
+    )
+    model_steps = [
+        {"id": "read_input", "capability": "document_read", "args": {"mode": "read", "path": str(tmp_path / "input.txt")}, "dependsOn": []},
+        {"id": "analyze", "capability": "text_analyze", "args": {"mode": "medical"}, "dependsOn": ["read_input"]},
+        {"id": "write", "capability": "document_write", "args": {"format": "docx"}, "dependsOn": ["analyze"]},
+    ]
+    monkeypatch.setattr(
+        bridge,
+        "_semantic_route",
+        lambda *_args, **_kwargs: {
+            "capability": "document_read",
+            "args": model_steps[0]["args"],
+            "intent": "compound_task",
+            "confidence": 0.99,
+            "privacyClass": "local_private",
+            "requiresConfirmation": True,
+            "isMultiStep": True,
+            "planPreview": {"summary": "Tahlil planı", "steps": model_steps},
+        },
+    )
 
     result = runtime.send_conversation(
         "",
@@ -931,6 +1024,41 @@ def test_force_structured_planning_builds_calculation_research_writer_chain(
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(
+        intent_gate,
+        "understand",
+        lambda *_args, **_kwargs: understanding.SemanticUnderstanding(
+            intent=understanding.INTENT_TASK,
+            confidence=0.99,
+            source="model",
+            task_type="compound_task",
+        ),
+    )
+    model_steps = [
+        {"id": "calculate", "capability": "math_solve", "args": {"expression": "(12000+8500)*0.2"}, "dependsOn": []},
+        {"id": "research", "capability": "web_research", "args": {"query": "KDV kurallarını"}, "dependsOn": []},
+        {"id": "analyze", "capability": "text_analyze", "args": {"mode": "accounting"}, "dependsOn": ["calculate", "research"]},
+        {
+            "id": "write",
+            "capability": "document_write",
+            "args": {"sourceContext": "Analiz bağlamı: {{steps.analyze.output}}"},
+            "dependsOn": ["analyze"],
+        },
+    ]
+    monkeypatch.setattr(
+        bridge,
+        "_semantic_route",
+        lambda *_args, **_kwargs: {
+            "capability": "math_solve",
+            "args": model_steps[0]["args"],
+            "intent": "compound_task",
+            "confidence": 0.99,
+            "privacyClass": "public_text",
+            "requiresConfirmation": True,
+            "isMultiStep": True,
+            "planPreview": {"summary": "KDV planı", "steps": model_steps},
+        },
+    )
 
     result = runtime.send_conversation(
         "",
@@ -1115,12 +1243,12 @@ def test_professional_optimization_workflow_uses_decision_support_pipeline() -> 
     assert preview["planSource"] == "runtime_decision_support_template"
 
 
-def test_execute_assigned_runtime_task_waits_for_approval_without_terminal_report(
+def test_execute_assigned_runtime_task_does_not_request_approval_when_base_permission_is_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    # Plan modu (composer'dan planMode=true): zararsız görev bile plan
-    # önizlemesi + onay ile ilerler; onaysız yürütülmez.
+    # Plan modu eksik bir takvim/kişisel veri iznini onay bildirimiyle
+    # maskeleyemez. Çalıştırılamayan görev tek terminal hata üretir.
     _isolate_state(monkeypatch, tmp_path)
 
     class FakeBackend:
@@ -1195,15 +1323,12 @@ def test_execute_assigned_runtime_task_waits_for_approval_without_terminal_repor
     result = runtime.execute_assigned_runtime_tasks()
 
     assert result["ok"] is True
-    assert result["executions"][0]["status"] == "waiting_approval"
-    statuses = [payload["status"] for _, payload in runtime.backend.status_updates]  # type: ignore[attr-defined]
-    assert statuses[0] == "running"
-    assert statuses[-1] == "waiting_approval"
-    assert runtime.backend.status_updates[-1][1]["approvalRequest"]["summary"]  # type: ignore[attr-defined]
-    assert runtime.backend.status_updates[-1][1]["approvalRequest"]["manualApprovalRequired"] is True  # type: ignore[attr-defined]
-    link = state_store.get_remote_task_link("task-waiting")
-    assert link is not None
-    assert link["pendingPlanId"] == "plan_waiting"
+    assert result["executions"][0]["status"] == "failed"
+    terminal = runtime.backend.status_updates[-1][1]  # type: ignore[attr-defined]
+    assert terminal["status"] == "failed"
+    assert terminal["error"] == "PERMISSION_REQUIRED"
+    assert terminal["approvalRequest"] == {}
+    assert state_store.get_remote_task_link("task-waiting") is None
 
 
 def test_approval_request_payload_includes_email_context() -> None:
@@ -1617,6 +1742,9 @@ def test_typed_work_order_executes_without_redundant_route_decision(
             "planPreview": {
                 "summary": "Hesap Makinesi açılacak.",
                 "privacyClass": "local_private",
+                "planSource": "server_materialized",
+                "contract": "elyan.compiled_plan.v1",
+                "planPreparation": {"status": "ready", "outcome": "materialized"},
                 "steps": [
                     {
                         "id": "step_open_app",
@@ -1802,14 +1930,12 @@ def test_server_materialized_plan_preserves_presentation_writer_target(
     assert "{{steps.s1.output}}" in preview["steps"][1]["args"]["prompt"]
 
 
-def test_dispatch_prefers_local_deterministic_route_over_llm_planner(
+def test_dispatch_executes_server_materialized_single_step_plan(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Bariz tek-adım iş ("masaüstündeki dosyaları listele") backend geniş
-    capability önerse ve server_brain hazır olsa bile LLM planlayıcıya
-    DELEGE EDİLMEZ — yerel yüksek-güven rota (directory_tree) kazanır.
-    (Canlı arıza: LLM operator.run seçti → doğrulama hatası → onay çıkmazı.)"""
+    """Tek adımlı görev de backend modelinin materyalize WorkOrder planından
+    yürür; desktop ikinci bir plan üretmez."""
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
     monkeypatch.setattr(bridge, "_server_brain_ready", lambda _state: True)
@@ -1819,7 +1945,7 @@ def test_dispatch_prefers_local_deterministic_route_over_llm_planner(
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("yerel rota varken LLM'e delege edilmemeli")),
     )
     prompt = "Masaüstündeki dosyaları listele"
-    task = {
+    task = _trusted_task({
         "id": "task-local-route-wins",
         "title": "Masaüstü cowork görevi",
         "status": "queued",
@@ -1830,25 +1956,31 @@ def test_dispatch_prefers_local_deterministic_route_over_llm_planner(
                         "route": "desktop_runtime",
                         "capabilities": ["desktop_operator.run", "directory_tree"],
                         "reason": "Masaüstü görevi.",
-                }
+                    }
+                },
             },
-        },
-    }
+        }
+        , capabilities=["directory_tree"], steps=[{
+            "id": "list_files",
+            "capability": "directory_tree",
+            "args": {"path": "~/Desktop"},
+            "dependsOn": [],
+        }])
+    task["payload"]["desktopWorkOrder"]["planPreview"]["planSource"] = "server_materialized"
 
     result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
 
-    assert result is not None, "deterministik yol LLM'e düşmemeli"
+    assert result is not None, "materyalize plan ikinci planlayıcıya düşmemeli"
     dumped = json.dumps(result, ensure_ascii=False, default=str)
     assert "directory_tree" in dumped
     assert "desktop_operator" not in dumped
 
 
-def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
+def test_dispatch_generic_explicit_operator_never_yields_to_unsigned_local_route(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Gerçek mobil dispatch zarfındaki jenerik tek operator adımı, bariz
-    ve onaysız yerel directory_tree rotasını ezmemeli."""
+    """Yetkili WorkOrder varken desktop, prompttan ikincil plan üretmez."""
     _isolate_state(monkeypatch, tmp_path)
     _arm_device_identity()
     (tmp_path / "rapor.txt").write_text("yerel", encoding="utf-8")
@@ -1906,11 +2038,55 @@ def test_dispatch_generic_explicit_operator_fallback_yields_to_safe_local_route(
 
     assert result is not None
     assert result["chatOk"] is True
-    assert result["needsConfirmation"] is False
+    assert result["needsConfirmation"] is True
     dumped = json.dumps(result, ensure_ascii=False, default=str)
-    assert "directory_tree" in dumped
-    assert "rapor.txt" in dumped
-    assert "desktop_operator.run" not in dumped
+    assert "directory_tree" not in dumped
+    assert "rapor.txt" not in dumped
+    assert "desktop_operator.run" in dumped
+
+
+def test_approval_gate_preserves_the_remaining_dependency_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    prompt = "Kaynağı araştır, raporu yaz ve sonucu analiz et."
+    steps = [
+        {"id": "research", "capability": "web_research", "args": {"query": "kaynak"}},
+        {
+            "id": "write",
+            "capability": "document_write",
+            "args": {"prompt": "{{steps.research.text}}", "outputPath": "~/Desktop/rapor.docx"},
+            "dependsOn": ["research"],
+        },
+        {
+            "id": "analyze",
+            "capability": "text_analyze",
+            "args": {"text": "{{steps.write.text}}"},
+            "dependsOn": ["write"],
+        },
+    ]
+    task = _trusted_task(
+        {"id": "task-approval-dag", "title": prompt, "payload": {"prompt": prompt}},
+        capabilities=["web_research", "document_write", "text_analyze"],
+        steps=steps,
+    )
+    captured: list[list[str]] = []
+
+    def fake_execute(plan_steps, **_kwargs):
+        captured.append([str(step.get("id", "")) for step in plan_steps])
+        return True, "Araştırma tamamlandı.", [], "", {"text": "kaynak"}, []
+
+    monkeypatch.setattr(runtime, "_execute_plan_steps", fake_execute)
+    result = runtime._execute_deterministic_remote_task(task, prompt, prompt)
+
+    assert result is not None
+    assert result["needsConfirmation"] is True
+    assert captured == [["research"]]
+    pending = state_store.get_pending_plan(result["pendingPlanId"])
+    assert [step["id"] for step in pending["steps"]] == ["write", "analyze"]
+    assert pending["steps"][1]["dependsOn"] == ["write"]
 
 
 def test_dispatch_generic_operator_fallback_does_not_execute_public_chat(
@@ -1956,12 +2132,11 @@ def test_dispatch_generic_operator_fallback_does_not_execute_public_chat(
     assert preview["privacyClass"] == "public_text"
 
 
-def test_assigned_dispatch_generic_operator_completes_via_directory_tree_lifecycle(
+def test_assigned_materialized_directory_tree_completes_full_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Canlı backend zarfının tam runner yolu: jenerik explicit operator
-    queued/running sonrası onaysız directory_tree ile completed olmalı."""
+    """Materyalize salt-okunur plan queued/running sonrası tamamlanır."""
     _isolate_state(monkeypatch, tmp_path)
     _arm_device_identity()
     (tmp_path / "dispatch-proof.txt").write_text("ok", encoding="utf-8")
@@ -1994,12 +2169,12 @@ def test_assigned_dispatch_generic_operator_completes_via_directory_tree_lifecyc
                 },
             },
         },
-    }, capabilities=["desktop_operator.run", "directory_tree"], steps=[
+    }, capabilities=["directory_tree"], steps=[
         {
             "id": "step_1",
-            "capability": "desktop_operator.run",
-            "description": "Masaüstü görevi yürütülecek.",
-            "args": {},
+            "capability": "directory_tree",
+            "description": "Masaüstü dosyaları listelenecek.",
+            "args": {"path": str(tmp_path), "max_depth": 1},
         }
     ])
 
@@ -2090,16 +2265,11 @@ def test_dispatch_keeps_specific_explicit_operator_step(
     assert steps[0]["args"]["targetApp"] == "Finder"
 
 
-def test_generic_operator_joker_yields_to_safe_local_route(
+def test_generic_operator_route_is_not_rewritten_into_file_authority(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Backend'in jenerik operator jokerini yüksek-güvenli yerel rota ezer.
-
-    Eski sözleşme jokerin aynen yürümesini bekliyordu; canlı arıza bunun tam
-    tersini kanıtladı: "masaüstündeki dosyaları listele" operator'a kör hedef
-    olarak gidip doğrulama+onay çıkmazı üretiyordu. Salt-okunur/zararsız yerel
-    eşleşme (directory_tree) artık kazanır (_SAFE_LOCAL_OVERRIDE)."""
+    """Unsigned route metadata cannot synthesize file-read authority."""
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
     prompt = "Masaüstündeki dosyaları listele"
@@ -2130,15 +2300,14 @@ def test_generic_operator_joker_yields_to_safe_local_route(
         decision,
     )
 
-    assert [step["capability"] for step in steps] == ["directory_tree"]
+    assert [step["capability"] for step in steps] == ["desktop_operator.run"]
 
 
-def test_screen_glance_dispatch_overrides_operator_joker(
+def test_screen_glance_route_does_not_synthesize_screen_authority(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Canlı arıza: "Ekranda ne var" operator jokerine gidip 'Operator
-    doğrulaması başarısız oldu.' üretiyordu — analyze_screen kazanmalı."""
+    """Unsigned route metadata cannot synthesize screen-read authority."""
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
     prompt = "Ekranda ne var"
@@ -2157,7 +2326,7 @@ def test_screen_glance_dispatch_overrides_operator_joker(
     steps, _preview = runtime._remote_task_steps_from_route(
         task, prompt, {"desktop_operator.run"}, decision
     )
-    assert [step["capability"] for step in steps] == ["analyze_screen"]
+    assert steps == []
 
 
 def test_new_tab_dispatch_overrides_blind_browser_search(
@@ -2198,7 +2367,7 @@ def test_remote_browser_agent_route_requires_approval(
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
     prompt = "İnternetten Example Domain başlığını bul ve söyle"
-    task = {
+    task = _trusted_task({
         "id": "task-browser-agent-approval",
         "title": prompt,
         "payload": {
@@ -2209,10 +2378,17 @@ def test_remote_browser_agent_route_requires_approval(
                     "route": "desktop_runtime",
                     "capabilities": ["browser_control"],
                     "reason": "Tarayıcı görevi.",
+                    },
                 },
             },
-        },
-    }
+        }
+        , capabilities=["browser_control"], steps=[{
+            "id": "browse",
+            "capability": "browser_agent.run",
+            "args": {"task": prompt},
+            "dependsOn": [],
+        }])
+    task["payload"]["desktopWorkOrder"]["planPreview"]["planSource"] = "server_materialized"
 
     result = runtime._execute_deterministic_remote_task(task, prompt, task["title"])
 
@@ -7288,6 +7464,34 @@ def test_restart_app_route_creates_confirmation_plan(
 ) -> None:
     _isolate_state(monkeypatch, tmp_path)
     runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(
+        intent_gate,
+        "understand",
+        lambda *_args, **_kwargs: understanding.SemanticUnderstanding(
+            intent=understanding.INTENT_TASK,
+            confidence=0.99,
+            source="model",
+            task_type="restart_app",
+        ),
+    )
+    model_steps = [
+        {"id": "close", "capability": "close_app", "args": {"app_name": "Chrome"}, "dependsOn": []},
+        {"id": "open", "capability": "open_app", "args": {"app_name": "Chrome"}, "dependsOn": ["close"]},
+    ]
+    monkeypatch.setattr(
+        bridge,
+        "_semantic_route",
+        lambda *_args, **_kwargs: {
+            "capability": "close_app",
+            "args": model_steps[0]["args"],
+            "intent": "restart_app",
+            "confidence": 0.99,
+            "privacyClass": "local_private",
+            "requiresConfirmation": True,
+            "isMultiStep": True,
+            "planPreview": {"summary": "Chrome yeniden başlatılacak.", "steps": model_steps},
+        },
+    )
 
     response = runtime.handle(
         {
@@ -10659,6 +10863,9 @@ def _dispatch_work_order(required_capabilities: list[str]) -> dict:
         "planPreview": {
             "summary": "Chrome kapatılacak",
             "privacyClass": "local_private",
+            "planSource": "server_materialized",
+            "contract": "elyan.compiled_plan.v1",
+            "planPreparation": {"status": "ready", "outcome": "materialized"},
             "steps": [
                 {
                     "id": "step_1",
@@ -11451,6 +11658,23 @@ def test_execute_local_with_timeout_returns_sentinel_on_hang(
     result = runner._execute_local_with_timeout({}, "prompt", "title", task_id="task-xyz")
 
     assert result is rtr._EXECUTION_TIMEOUT
+    draining = runner.execute_assigned_runtime_tasks()
+    assert draining["ok"] is False
+    assert draining["error"]["code"] == "RUNTIME_EXECUTOR_DRAINING"
+
+
+def test_websocket_dispatch_does_not_accept_work_while_executor_is_draining(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_state(monkeypatch, tmp_path)
+    runtime = bridge.RuntimeBridge()
+    monkeypatch.setattr(runtime.remote_task_runner, "is_draining", lambda: True)
+
+    state = runtime._begin_assigned_task_execution("task-after-timeout")
+
+    assert state == "runtime_executor_draining"
+    assert "task-after-timeout" not in runtime._assigned_task_inflight
 
 
 def test_remote_task_timeout_failure_payload_includes_notification(
@@ -11730,6 +11954,9 @@ def test_approval_gate_has_one_simple_decision_rule() -> None:
     decision = runner._resolve_approval_gate(read_only, plan_mode=False, work_order={"schema": "x"})
     assert decision.action == "run"
     assert decision.manual_required is False
+    decision = runner._resolve_approval_gate(read_only, plan_mode=True, work_order={"schema": "x"})
+    assert decision.action == "wait"
+    assert decision.manual_required is True
 
     decision = runner._resolve_approval_gate(write, plan_mode=False, work_order={"schema": "x"})
     assert decision.action == "wait"
