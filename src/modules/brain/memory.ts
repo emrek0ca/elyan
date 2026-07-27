@@ -37,6 +37,10 @@ import {
   buildContinuityEnrichmentBaseline,
   refineContinuityEnrichmentWithPython,
 } from "../../lib/python-continuity-enricher.js";
+import {
+  readCanonicalMemoryCache,
+  writeCanonicalMemoryCache,
+} from "./memory-context-cache.js";
 
 const MEMORY_VECTOR_DIMENSIONS = 256;
 const MEMORY_EXTRACTION_BATCH = 120;
@@ -681,6 +685,32 @@ export async function readCanonicalMemoryState(
       deletedReason: null,
     }),
   );
+}
+
+export async function readCachedCanonicalMemoryState(
+  app: FastifyInstance,
+  userId: string,
+): Promise<MemorySearchHit[]> {
+  const cached = await readCanonicalMemoryCache(app, userId);
+  if (Array.isArray(cached)) {
+    const rows = cached.filter(
+      (item): item is MemorySearchHit =>
+        Boolean(
+          item &&
+            typeof item === "object" &&
+            !Array.isArray(item) &&
+            typeof (item as MemorySearchHit).id === "string" &&
+            typeof (item as MemorySearchHit).title === "string" &&
+            typeof (item as MemorySearchHit).content === "string",
+        ),
+    );
+    if (rows.length === cached.length) {
+      return rows;
+    }
+  }
+  const rows = await readCanonicalMemoryState(app, userId);
+  await writeCanonicalMemoryCache(app, userId, rows);
+  return rows;
 }
 
 function dedupeMemoryHits(results: MemorySearchHit[]): MemorySearchHit[] {
@@ -3002,36 +3032,46 @@ async function synthesizeSelfModelAndReflectiveMemory(
  * Pure aggregation over learning_events; no LLM, no external service. Runs as
  * part of the in-process memory extraction job so it costs no extra resources.
  */
-async function aggregateCommunicationStyleSnapshot(
-  app: FastifyInstance,
-  userId: string,
-  sourceRunId: string,
-): Promise<boolean> {
-  const lookback = new Date(Date.now() - 30 * 86_400_000);
-  const rows = await app.db
-    .select({
-      key: learningEvents.key,
-      value: learningEvents.value,
-      confidence: learningEvents.confidence,
-    })
-    .from(learningEvents)
-    .where(
-      and(
-        eq(learningEvents.userId, userId),
-        eq(learningEvents.privacyLevel, "safe"),
-        gt(learningEvents.createdAt, lookback),
-      ),
-    )
-    .limit(500);
-
-  if (rows.length < 4) {
-    // Not enough evidence yet — better no profile than a noisy one.
-    return false;
-  }
-
-  const tallies = new Map<string, Map<string, { count: number; confidence: number }>>();
+export function summarizeUserProfileSignals(
+  rows: Array<{
+    key: string;
+    value: string;
+    confidence: number;
+    source?: string;
+    metadata?: unknown;
+  }>,
+): {
+  communicationStyle: {
+    value: string;
+    confidence: number;
+    evidenceCount: number;
+    derivedFrom: string[];
+  } | null;
+  interests: {
+    value: string;
+    confidence: number;
+    evidenceCount: number;
+    keywordCounts: Record<string, number>;
+  } | null;
+} {
+  const tallies = new Map<
+    string,
+    Map<string, { count: number; weight: number; confidence: number }>
+  >();
+  const interestCounts = new Map<string, number>();
+  let interestObservationCount = 0;
   for (const row of rows) {
     const key = row.key;
+    if (key === "message_keywords") {
+      interestObservationCount += 1;
+      for (const rawKeyword of row.value.split(",")) {
+        const keyword = compactText(rawKeyword).toLocaleLowerCase("tr").slice(0, 80);
+        if (keyword.length >= 3) {
+          interestCounts.set(keyword, (interestCounts.get(keyword) ?? 0) + 1);
+        }
+      }
+      continue;
+    }
     if (
       key !== "preferred_language" &&
       key !== "answer_length" &&
@@ -3042,29 +3082,43 @@ async function aggregateCommunicationStyleSnapshot(
       continue;
     }
     const bucket = tallies.get(key) ?? new Map();
-    const slot = bucket.get(row.value) ?? { count: 0, confidence: 0 };
+    const explicit =
+      row.metadata != null &&
+      typeof row.metadata === "object" &&
+      !Array.isArray(row.metadata) &&
+      (row.metadata as Record<string, unknown>).explicit === true;
+    const evidenceWeight = row.source === "feedback" || explicit ? 4 : 1;
+    const slot = bucket.get(row.value) ?? {
+      count: 0,
+      weight: 0,
+      confidence: 0,
+    };
     slot.count += 1;
-    slot.confidence += row.confidence;
+    slot.weight += evidenceWeight;
+    slot.confidence += row.confidence * evidenceWeight;
     bucket.set(row.value, slot);
     tallies.set(key, bucket);
   }
-
-  if (tallies.size === 0) return false;
 
   // Pick the dominant value per dimension (count first, then average confidence).
   function dominant(key: string): string | null {
     const bucket = tallies.get(key);
     if (!bucket) return null;
     let bestValue: string | null = null;
+    let bestWeight = 0;
     let bestCount = 0;
     let bestConf = 0;
     for (const [value, slot] of bucket) {
-      const avgConf = slot.confidence / slot.count;
+      const avgConf = slot.confidence / slot.weight;
       if (
-        slot.count > bestCount ||
-        (slot.count === bestCount && avgConf > bestConf)
+        slot.weight > bestWeight ||
+        (slot.weight === bestWeight && slot.count > bestCount) ||
+        (slot.weight === bestWeight &&
+          slot.count === bestCount &&
+          avgConf > bestConf)
       ) {
         bestValue = value;
+        bestWeight = slot.weight;
         bestCount = slot.count;
         bestConf = avgConf;
       }
@@ -3082,29 +3136,102 @@ async function aggregateCommunicationStyleSnapshot(
     .filter(([, value]) => Boolean(value))
     .map(([label, value]) => `${label}: ${value}`);
 
-  if (profile.length === 0) return false;
-
   const totalEvidence = Array.from(tallies.values())
     .flatMap((bucket) => Array.from(bucket.values()))
     .reduce((sum, slot) => sum + slot.count, 0);
-  const confidence = Math.min(95, 45 + Math.min(40, totalEvidence));
+  const communicationStyle =
+    profile.length > 0 && totalEvidence >= 4
+      ? {
+          value: profile.join("; "),
+          confidence: Math.min(95, 45 + Math.min(40, totalEvidence)),
+          evidenceCount: totalEvidence,
+          derivedFrom: Array.from(tallies.keys()),
+        }
+      : null;
 
-  await upsertMemoryFact(app, {
-    userId,
-    key: "self_model_communication_style",
-    value: profile.join("; "),
-    scope: "user",
-    factType: "self_model",
-    confidence,
-    importanceScore: 70,
-    metadata: {
-      evidenceCount: totalEvidence,
-      lookbackDays: 30,
-      derivedFrom: Array.from(tallies.keys()),
-    },
-    sourceRunId,
-  });
-  return true;
+  const repeatedInterests = [...interestCounts.entries()]
+    .filter(([, count]) => count >= 2)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 8);
+  const interests =
+    interestObservationCount >= 3 && repeatedInterests.length > 0
+      ? {
+          value: repeatedInterests.map(([keyword]) => keyword).join(", "),
+          confidence: Math.min(92, 55 + interestObservationCount * 3),
+          evidenceCount: interestObservationCount,
+          keywordCounts: Object.fromEntries(repeatedInterests),
+        }
+      : null;
+
+  return { communicationStyle, interests };
+}
+
+async function aggregateUserProfileSnapshots(
+  app: FastifyInstance,
+  userId: string,
+  sourceRunId: string,
+): Promise<{ communicationStyleApplied: boolean; interestsApplied: boolean }> {
+  const lookback = new Date(Date.now() - 30 * 86_400_000);
+  const rows = await app.db
+    .select({
+      key: learningEvents.key,
+      value: learningEvents.value,
+      confidence: learningEvents.confidence,
+      source: learningEvents.source,
+      metadata: learningEvents.metadata,
+    })
+    .from(learningEvents)
+    .where(
+      and(
+        eq(learningEvents.userId, userId),
+        eq(learningEvents.privacyLevel, "safe"),
+        gt(learningEvents.createdAt, lookback),
+      ),
+    )
+    .orderBy(desc(learningEvents.createdAt))
+    .limit(500);
+  const snapshots = summarizeUserProfileSignals(rows);
+
+  if (snapshots.communicationStyle) {
+    await upsertMemoryFact(app, {
+      userId,
+      key: "self_model_communication_style",
+      value: snapshots.communicationStyle.value,
+      scope: "user",
+      factType: "self_model",
+      confidence: snapshots.communicationStyle.confidence,
+      importanceScore: 70,
+      metadata: {
+        evidenceCount: snapshots.communicationStyle.evidenceCount,
+        lookbackDays: 30,
+        derivedFrom: snapshots.communicationStyle.derivedFrom,
+      },
+      sourceRunId,
+    });
+  }
+
+  if (snapshots.interests) {
+    await upsertMemoryFact(app, {
+      userId,
+      key: "self_model_interests",
+      value: snapshots.interests.value,
+      scope: "user",
+      factType: "self_model",
+      confidence: snapshots.interests.confidence,
+      importanceScore: 66,
+      metadata: {
+        evidenceCount: snapshots.interests.evidenceCount,
+        lookbackDays: 30,
+        keywordCounts: snapshots.interests.keywordCounts,
+      },
+      sourceRunId,
+    });
+  }
+
+  return {
+    communicationStyleApplied: snapshots.communicationStyle != null,
+    interestsApplied: snapshots.interests != null,
+  };
 }
 
 async function processMemoryExtractionJob(app: FastifyInstance, job: typeof trainingJobs.$inferSelect) {
@@ -3207,23 +3334,31 @@ async function processMemoryExtractionJob(app: FastifyInstance, job: typeof trai
 
   // Roll per-event style signals into a stable user style snapshot. Best-
   // effort: failure here doesn't fail the whole extraction job.
-  const styleApplied = await aggregateCommunicationStyleSnapshot(
+  const profileSnapshots = await aggregateUserProfileSnapshots(
     app,
     userId,
     job.id,
-  ).catch(() => false);
+  ).catch(() => ({
+    communicationStyleApplied: false,
+    interestsApplied: false,
+  }));
 
   await queueFollowUpMemoryJobs(app, userId);
 
   return {
     status: "completed" as const,
-    processedCount: factCount + episodeCount + (styleApplied ? 1 : 0),
+    processedCount:
+      factCount +
+      episodeCount +
+      (profileSnapshots.communicationStyleApplied ? 1 : 0) +
+      (profileSnapshots.interestsApplied ? 1 : 0),
     metadata: {
       sourceEventCount: extracted.sourceEventCount,
       extractedFactCount: factCount,
       extractedEpisodeCount: episodeCount,
       linkedMemoryCount: linkedPairs.length,
-      communicationStyleApplied: styleApplied,
+      communicationStyleApplied: profileSnapshots.communicationStyleApplied,
+      interestsApplied: profileSnapshots.interestsApplied,
       promotedSemanticFacts: extracted.facts.filter((fact) => fact.factType === "semantic" && fact.count >= 2).length,
     },
   };

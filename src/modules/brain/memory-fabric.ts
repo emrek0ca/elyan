@@ -11,6 +11,7 @@ import {
   resolveCanonicalMemoryKey,
 } from "./memory-key-policy.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
+import { invalidateCanonicalMemoryCache } from "./memory-context-cache.js";
 
 type MemoryOp = TurnEnvelope["memory_ops"][number];
 export type MemoryDb = FastifyInstance["db"];
@@ -528,12 +529,20 @@ export async function recordTurnMemoryOps(
   if (ops.length === 0) return summary;
 
   const now = input.now ?? new Date();
-  return executeWithDb(app, async (db) => {
+  const result = await executeWithDb(app, async (db) => {
     return recordTurnMemoryOpsOnDb(db, {
       ...input,
       now,
     });
   });
+  if (
+    result.factsWritten > 0 ||
+    result.contested > 0 ||
+    result.forgotten > 0
+  ) {
+    await invalidateCanonicalMemoryCache(app, input.userId);
+  }
+  return result;
 }
 
 export async function recordTurnMemoryOpsOnDb(

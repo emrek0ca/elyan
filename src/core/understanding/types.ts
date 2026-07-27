@@ -77,7 +77,11 @@ export type FeedbackReasonTag =
   | "too_long"
   | "misunderstood"
   | "not_warm_enough"
-  | "too_playful";
+  | "too_playful"
+  | "too_formal"
+  | "too_casual"
+  | "incorrect"
+  | "irrelevant";
 
 export type RoutingHints = {
   mode: "fast" | "research" | "task" | "local_private";
@@ -530,6 +534,8 @@ export type UserUnderstandingContext = {
   relationshipContextDigest: string[];
   clarificationDiagnostics: ClarificationDiagnostics;
   memoryEnabled: boolean;
+  interactionContext: import("./interaction-context.js").InteractionContext;
+  currentAffect?: import("./affective-turn.js").AffectiveTurnSignal;
   personalizationPrompt: string | null;
   memoryRelevanceSummary: string[];
   contextPackets: ContextPacket[];

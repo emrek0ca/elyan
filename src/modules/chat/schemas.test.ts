@@ -5,6 +5,16 @@ import { createChatMessageBodySchema } from "./schemas.js";
 const sessionId = "11111111-1111-4111-8111-111111111111";
 const otherSessionId = "22222222-2222-4222-8222-222222222222";
 
+test("createChatMessageBodySchema accepts email and WhatsApp channel sources", () => {
+  for (const source of ["email", "whatsapp"] as const) {
+    const parsed = createChatMessageBodySchema.parse({
+      source,
+      content: "Merhaba",
+    });
+    assert.equal(parsed.source, source);
+  }
+});
+
 test("createChatMessageBodySchema accepts chatSessionId as a sessionId alias", () => {
   const parsed = createChatMessageBodySchema.parse({
     chatSessionId: sessionId,

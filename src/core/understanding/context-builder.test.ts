@@ -1547,6 +1547,48 @@ test("buildUserContextFromMemory carries explicit user personalization prompt fr
   );
 });
 
+test("buildUserContextFromMemory applies current affect and channel provenance without making them routing authority", () => {
+  const intent = classifyIntent({
+    userId: "user_1",
+    message: "Bu çalışmıyor, çok yoruldum.",
+  });
+  const context = buildUserContextFromMemory({
+    userId: "user_1",
+    accountId: "user_1",
+    intent,
+    task: {
+      userId: "user_1",
+      message: "Bu çalışmıyor, çok yoruldum.",
+      source: "whatsapp",
+      metadata: {},
+    },
+    memory: [],
+    currentAffect: {
+      mood: "tired",
+      energy: "low",
+      confidence: 0.82,
+      source: "typed_fallback",
+      responseDirective:
+        "Keep cognitive load low: short sentences and clear ordering.",
+    },
+  });
+
+  assert.equal(context.interactionContext.channel, "whatsapp");
+  assert.equal(context.interactionContext.profileScope, "canonical_user");
+  assert.equal(context.currentAffect?.mood, "tired");
+  assert.ok(
+    context.speakingStyleDirectives?.some((item) =>
+      item.includes("cognitive load low"),
+    ),
+  );
+  assert.equal(
+    context.behavioralHints.some((item) =>
+      item.includes("Current-turn affect: tired"),
+    ),
+    false,
+  );
+});
+
 test("clarificationDiagnostics: short follow-up with prior turn context resolves silently", () => {
   // "onu düzelt" tek başına belirsiz, ama önceki turun userGoal +
   // assistantState + openLoops'u varsa cevap iyi tanımlı (önceki çıktıyı

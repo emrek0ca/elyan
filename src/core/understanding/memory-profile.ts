@@ -41,6 +41,9 @@ const PROJECT_LABELS: Record<string, string> = {
 };
 
 const DERIVED_LABELS: Record<string, string> = {
+  self_model_communication_style: "İletişim stili",
+  self_model_interests: "İlgi alanları",
+  self_model_recent_topics: "Yakın konular",
   energy_rhythm: "Enerji ritmi",
   planning_style: "Planlama stili",
   schedule_pressure_pattern: "Program baskısı",

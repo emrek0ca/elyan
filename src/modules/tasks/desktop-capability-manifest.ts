@@ -36,16 +36,77 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "start_iso"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Takvime etkinlik eklerken. Tarihi HER ZAMAN mutlak ISO'ya çevir; belirsizse netleştir."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (title, start_iso) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "title",
+        "start_iso"
+      ],
+      "properties": {
+        "title": {
+          "type": "STRING",
+          "description": "Etkinlik başlığı."
+        },
+        "start_iso": {
+          "type": "STRING",
+          "description": "Başlangıç, ISO 8601 yerel saat: 'YYYY-MM-DDTHH:MM:SS'. Göreli ifadeyi ('yarın 14:00') mutlak tarihe çevir."
+        },
+        "end_iso": {
+          "type": "STRING",
+          "description": "Bitiş, ISO 8601. Boşsa başlangıçtan 1 saat sonrası."
+        },
+        "location": {
+          "type": "STRING",
+          "description": "Konum (varsa)."
+        },
+        "notes": {
+          "type": "STRING",
+          "description": "Ek not."
+        },
+        "calendar_name": {
+          "type": "STRING",
+          "description": "Hedef takvim adı (varsa)."
+        },
+        "all_day": {
+          "type": "BOOLEAN",
+          "description": "Tüm gün etkinliği."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "add_calendar_event",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "title": "Diş randevusu",
+          "start_iso": "2026-07-15T09:30:00"
+        }
+      }
+    ],
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -57,16 +118,73 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "title"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Hatırlatıcı/yapılacak eklerken. Tarih varsa mutlak ISO'ya çevir."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (title) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "title": {
+          "type": "STRING",
+          "description": "Hatırlatıcı metni."
+        },
+        "due_iso": {
+          "type": "STRING",
+          "description": "Son tarih, ISO 8601: 'YYYY-MM-DDTHH:MM:SS'. Göreli ifadeyi mutlaka çevir."
+        },
+        "notes": {
+          "type": "STRING",
+          "description": "Ek not."
+        },
+        "list_name": {
+          "type": "STRING",
+          "description": "Hedef liste adı (varsa)."
+        },
+        "priority": {
+          "type": "STRING",
+          "description": "Öncelik: 'low', 'medium', 'high'."
+        },
+        "all_day": {
+          "type": "BOOLEAN",
+          "description": "Saatsiz, gün bazlı."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "add_reminder",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "title": "Faturayı öde",
+          "due_iso": "2026-07-13T18:00:00",
+          "priority": "high"
+        }
+      }
+    ],
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -128,16 +246,49 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "goal"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Sayfa yapısı önceden bilinmeyen çok adımlı tarayıcı görevlerinde TEK adım olarak kullan. Adımları kendin yazabiliyorsan browser_session.* daha hızlıdır; buradaki ajan keşif gerektiren işler içindir."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (goal) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "goal"
+      ],
+      "properties": {
+        "goal": {
+          "type": "STRING",
+          "description": "Doğal dille hedef (ör. 'YouTube kanalımdaki son 5 uzun videonun linkini topla')."
+        },
+        "max_turns": {
+          "type": "NUMBER",
+          "description": "En fazla gözlem-eylem turu (varsayılan 12, üst sınır 24)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_agent.run",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -149,16 +300,76 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "action"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Web adresi açma/arama/YouTube/yeni sekme için. 'Yeni sekme aç' isteği action='new_tab'tır — 'yeni sekme' metnini ASLA aramaya çevirme. Uygulamanın kendisini açmak için open_app kullan."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (action) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "type": "STRING",
+          "description": "İşlem türü: 'open_url' (belirli adres), 'search' (web araması), 'play_youtube' (YouTube video), 'new_tab' (yeni boş sekme — ARAMA DEĞİLDİR)."
+        },
+        "url": {
+          "type": "STRING",
+          "description": "action='open_url' için açılacak tam adres (https://…)."
+        },
+        "query": {
+          "type": "STRING",
+          "description": "action='search'/'play_youtube' için arama metni."
+        },
+        "browser": {
+          "type": "STRING",
+          "description": "action='new_tab' için tarayıcı adı (chrome/safari/brave/edge; boşsa Chrome)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_control",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "action": "open_url",
+          "url": "https://github.com"
+        }
+      },
+      {
+        "args": {
+          "action": "search",
+          "query": "hava durumu istanbul"
+        }
+      },
+      {
+        "args": {
+          "action": "play_youtube",
+          "query": "lo-fi çalışma müziği"
+        }
+      }
+    ],
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -168,16 +379,50 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "browser_session.snapshot ile öğeleri gördükten sonra hedefe tıklamak.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "browser_session.snapshot ile öğeleri gördükten sonra hedefe tıklamak."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "selector": {
+          "type": "STRING",
+          "description": "CSS selector (en kesin yol)."
+        },
+        "text": {
+          "type": "STRING",
+          "description": "Öğenin görünür metni."
+        },
+        "role": {
+          "type": "STRING",
+          "description": "ARIA rolü (button, link, tab...)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_session.click",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -187,16 +432,37 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Çok adımlı tarayıcı işi bittiğinde temizlik.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Çok adımlı tarayıcı işi bittiğinde temizlik."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_session.close",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -206,16 +472,54 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Transcript/rapor/dosya indirme adımlarında; dönen outputPath sonraki file_move adımına verilir.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Transcript/rapor/dosya indirme adımlarında; dönen outputPath sonraki file_move adımına verilir."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "selector": {
+          "type": "STRING",
+          "description": "İndirmeyi başlatan öğenin CSS selector'ı."
+        },
+        "text": {
+          "type": "STRING",
+          "description": "İndirme öğesinin görünür metni."
+        },
+        "url": {
+          "type": "STRING",
+          "description": "Doğrudan indirme adresi."
+        },
+        "output_dir": {
+          "type": "STRING",
+          "description": "Hedef klasör (varsayılan Elyan indirmeleri)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_session.download",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -225,16 +529,50 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Liste toplama işlerinde: video linkleri, başlıklar, tablo hücreleri. Sonuç result.items listesindedir; sonraki adımlar {{steps.<id>.result.items}} ile kullanır.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Liste toplama işlerinde: video linkleri, başlıklar, tablo hücreleri. Sonuç result.items listesindedir; sonraki adımlar {{steps.<id>.result.items}} ile kullanır."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "selector": {
+          "type": "STRING",
+          "description": "CSS selector (ör. 'a#video-title')."
+        },
+        "attribute": {
+          "type": "STRING",
+          "description": "Çıkarılacak attribute (ör. 'href')."
+        },
+        "limit": {
+          "type": "NUMBER",
+          "description": "En fazla öğe sayısı (varsayılan 20)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_session.extract",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -246,16 +584,44 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "url"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Çok adımlı tarayıcı işlerinde (gez → tıkla → çıkar → indir) ilk adım. Tek seferlik 'URL aç ve bırak' için browser_control kullan."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (url) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "STRING",
+          "description": "Gidilecek http/https adresi."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_session.goto",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -265,16 +631,42 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Sayfanın yapısı bilinmiyorken tıklamadan ÖNCE gözlem almak.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Sayfanın yapısı bilinmiyorken tıklamadan ÖNCE gözlem almak."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "limit": {
+          "type": "NUMBER",
+          "description": "En fazla öğe (varsayılan 80)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_session.snapshot",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -286,16 +678,56 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "value"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Arama kutusu doldurma, form alanına URL yapıştırma gibi işlerde."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (value) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "type": "STRING",
+          "description": "Yazılacak metin."
+        },
+        "selector": {
+          "type": "STRING",
+          "description": "Hedef alanın CSS selector'ı."
+        },
+        "text": {
+          "type": "STRING",
+          "description": "Alanın görünür etiketi/placeholder metni."
+        },
+        "submit": {
+          "type": "BOOLEAN",
+          "description": "Yazdıktan sonra Enter'a bas."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "browser_session.type",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -422,7 +854,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "INVALID_COLUMNS",
       "DEPENDENCY_UNAVAILABLE"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "path": "/Users/x/veri.csv",
+          "chartType": "bar",
+          "xColumn": "ay",
+          "yColumn": "gelir"
+        }
+      }
+    ],
     "privacyClass": "local_private_write",
     "skillAffinity": []
   },
@@ -433,16 +874,42 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Kullanıcı 'panodakini/kopyaladığımı' işleme dediğinde.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kullanıcı 'panodakini/kopyaladığımı' işleme dediğinde."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "İsteğe bağlı bağlam/filtre."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "clipboard_read",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -454,16 +921,44 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "text"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir sonucu/metni kullanıcının yapıştırabilmesi için panoya koymak."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (text) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "STRING",
+          "description": "Panoya kopyalanacak metin."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "clipboard_write",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -475,16 +970,51 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "app_name"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kullanıcı bir uygulamayı kapatmak istediğinde."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (app_name) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "app_name"
+      ],
+      "properties": {
+        "app_name": {
+          "type": "STRING",
+          "description": "Kapatılacak uygulamanın tam adı, eksiz: 'Google Chrome', 'Spotify'."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "close_app",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "app_name": "Spotify"
+        }
+      }
+    ],
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -496,16 +1026,52 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "path"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir veri dosyasını anlamak/özetlemek için. Grafik çizmek için chart_generate."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (path) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Veri dosyası yolu (.csv/.json/.xlsx/.xls)."
+        },
+        "mode": {
+          "type": "STRING",
+          "description": "'summary', 'profile' veya 'preview'."
+        },
+        "columns": {
+          "type": "ARRAY",
+          "description": "Odaklanılacak sütun adları (varsa)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "data_analyze",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -517,16 +1083,57 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "title"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Etkinlik silmek için. Yanlış silmemek için start_iso ile daralt."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (title) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "title": {
+          "type": "STRING",
+          "description": "Silinecek etkinliğin başlığı."
+        },
+        "start_iso": {
+          "type": "STRING",
+          "description": "Etkinliğin başlangıcı (ISO) — doğru eşleşme için."
+        },
+        "calendar_name": {
+          "type": "STRING",
+          "description": "Takvim adı (varsa)."
+        },
+        "delete_all_matches": {
+          "type": "BOOLEAN",
+          "description": "Aynı başlıklı tüm etkinlikleri sil."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "delete_calendar_event",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -536,16 +1143,50 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Kullanıcı 'şunu unut/hatırlama' dediğinde.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kullanıcı 'şunu unut/hatırlama' dediğinde."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "category": {
+          "type": "STRING",
+          "description": "Kategori (varsa)."
+        },
+        "key": {
+          "type": "STRING",
+          "description": "Silinecek kaydın anahtarı."
+        },
+        "match_text": {
+          "type": "STRING",
+          "description": "Anahtar yoksa içerikle eşleştir."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "delete_memory",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -555,16 +1196,50 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Takılan/istenmeyen bir operator çalışmasını durdurmak için.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Takılan/istenmeyen bir operator çalışmasını durdurmak için."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "runId": {
+          "type": "STRING",
+          "description": "Durdurulacak çalışma kimliği (varsa)."
+        },
+        "reason": {
+          "type": "STRING",
+          "description": "İptal nedeni."
+        },
+        "source": {
+          "type": "STRING",
+          "description": "İptali başlatan kaynak."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_operator.cancel",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -620,16 +1295,47 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Bir uygulamayı öne getirmek için. Uygulamayı açmak için open_app.",
     "requiredArgs": [],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir uygulamayı öne getirmek için. Uygulamayı açmak için open_app."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "appName": {
+          "type": "STRING",
+          "description": "Öne alınacak uygulama adı."
+        },
+        "bundleId": {
+          "type": "STRING",
+          "description": "Uygulama bundle kimliği (varsa)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_operator.focus_window",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -639,16 +1345,46 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "İleri ekran otomasyonu alt-adımı; genelde desktop_operator.run içinde.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "İleri ekran otomasyonu alt-adımı; genelde desktop_operator.run içinde."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "text": {
+          "type": "STRING",
+          "description": "Aranan görünür metin."
+        },
+        "elementType": {
+          "type": "STRING",
+          "description": "Öğe tipi, örn. 'button', 'field'."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_operator.locate",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -735,7 +1471,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "OS_PERMISSION_REQUIRED",
       "UNSAFE_ACTION"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "goal": "System Settings'te karanlık modu aç",
+          "appName": "System Settings"
+        }
+      }
+    ],
     "privacyClass": "local_private_action",
     "skillAffinity": []
   },
@@ -746,16 +1489,37 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Kullanıcının o an hangi uygulamada olduğunu öğrenmek için.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kullanıcının o an hangi uygulamada olduğunu öğrenmek için."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_os.active_window",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -765,16 +1529,42 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Bir izin eksikse kullanıcıyı doğru sistem ayar ekranına yönlendirmek için.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir izin eksikse kullanıcıyı doğru sistem ayar ekranına yönlendirmek için."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "permission": {
+          "type": "STRING",
+          "description": "Açılacak izin türü, örn. 'accessibility', 'screen'."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_os.open_permission_settings",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -784,16 +1574,37 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Hangi sistem izinlerinin verildiğini görmek için. İzin ekranını açmak için desktop_os.open_permission_settings.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Hangi sistem izinlerinin verildiğini görmek için. İzin ekranını açmak için desktop_os.open_permission_settings."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_os.permissions",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -803,16 +1614,46 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Hangi uygulamaların açık olduğunu görmek için. Genel sistem bilgisi için sys_info.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Hangi uygulamaların açık olduğunu görmek için. Genel sistem bilgisi için sys_info."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "Filtre/arama (varsa)."
+        },
+        "limit": {
+          "type": "NUMBER",
+          "description": "En fazla sonuç."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_os.processes",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -822,16 +1663,37 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Masaüstünün hangi yeteneklerinin hazır olduğunu kontrol ederken (tanılama).",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Masaüstünün hangi yeteneklerinin hazır olduğunu kontrol ederken (tanılama)."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {},
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_os.status",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -980,7 +1842,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "INVALID_OUTPUT_PATH",
       "DEPENDENCY_UNAVAILABLE"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "title": "Pazar Raporu",
+          "prompt": "Elektrikli araç pazarı hakkında 1 sayfalık özet"
+        }
+      }
+    ],
     "privacyClass": "local_private_write",
     "skillAffinity": [
       "document.docx_from_context",
@@ -996,16 +1865,71 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "to"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "E-posta yazmak için. Taslak onaydan sonra email_send ile gönderilir. Alıcı belirsizse netleştir."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (to) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "to"
+      ],
+      "properties": {
+        "to": {
+          "type": "ARRAY",
+          "description": "Alıcı e-posta adresleri listesi. Bilinmiyorsa netleştirme iste, uydurma."
+        },
+        "subject": {
+          "type": "STRING",
+          "description": "E-posta konusu."
+        },
+        "topic": {
+          "type": "STRING",
+          "description": "İçeriğin kısa konusu (gövde bundan üretilir)."
+        },
+        "prompt": {
+          "type": "STRING",
+          "description": "Gövde için ayrıntılı yönlendirme/talimat."
+        },
+        "tone": {
+          "type": "STRING",
+          "description": "Üslup: 'resmi', 'samimi', 'kısa' vb."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "email_draft",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "to": [
+            "ali@ornek.com"
+          ],
+          "subject": "Toplantı",
+          "topic": "cuma 14:00 toplantı daveti",
+          "tone": "resmi"
+        }
+      }
+    ],
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1019,16 +1943,71 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "body"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Genelde email_draft ile taslak hazırlanıp onaydan sonra gönderilir. Doğrudan gönderim geri alınamaz."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (to, subject, body) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "to",
+        "subject",
+        "body"
+      ],
+      "properties": {
+        "to": {
+          "type": "ARRAY",
+          "description": "Alıcı adresleri. Gerçek adres yoksa gönderme, netleştir."
+        },
+        "subject": {
+          "type": "STRING",
+          "description": "Konu."
+        },
+        "body": {
+          "type": "STRING",
+          "description": "Gövde (tam metin)."
+        },
+        "connectionId": {
+          "type": "STRING",
+          "description": "Gönderen hesap bağlantı kimliği (varsa)."
+        },
+        "cc": {
+          "type": "ARRAY",
+          "description": "CC adresleri."
+        },
+        "bcc": {
+          "type": "ARRAY",
+          "description": "BCC adresleri."
+        },
+        "replyTo": {
+          "type": "STRING",
+          "description": "Yanıt adresi."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "email_send",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -1041,16 +2020,53 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "destination"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "İndirilen dosyaları kullanıcının istediği klasöre toplamak."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (source, destination) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "source",
+        "destination"
+      ],
+      "properties": {
+        "source": {
+          "type": "STRING",
+          "description": "Taşınacak dosyanın yolu."
+        },
+        "destination": {
+          "type": "STRING",
+          "description": "Hedef yol ya da klasör."
+        },
+        "overwrite": {
+          "type": "BOOLEAN",
+          "description": "Hedef varsa üzerine yaz (varsayılan hayır)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "file_move",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1063,16 +2079,57 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "old_string"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir dosyanın küçük bir bölümünü değiştirmek için. Tüm dosyayı yeniden yazmak için file_write."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (path, old_string) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "path",
+        "old_string"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Düzenlenecek dosyanın tam yolu."
+        },
+        "old_string": {
+          "type": "STRING",
+          "description": "Değiştirilecek TAM mevcut metin (benzersiz olmalı)."
+        },
+        "new_string": {
+          "type": "STRING",
+          "description": "Yerine yazılacak yeni metin."
+        },
+        "replace_all": {
+          "type": "BOOLEAN",
+          "description": "Tüm eşleşmeleri değiştir."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "file_patch",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1115,7 +2172,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "READ_BLOCKED",
       "TOO_LARGE"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "path": "/Users/x/Desktop/notlar.txt"
+        }
+      }
+    ],
     "privacyClass": "local_private_read",
     "skillAffinity": []
   },
@@ -1161,7 +2224,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "SEARCH_TIMEOUT",
       "PATH_BLOCKED"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "query": "TODO",
+          "glob": "*.py"
+        }
+      }
+    ],
     "privacyClass": "local_private_read",
     "skillAffinity": []
   },
@@ -1226,16 +2296,55 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "query"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kullanıcı takvimini/programını sorduğunda. Yeni etkinlik için add_calendar_event."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (query) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "Aranan aralık/konu, örn. 'bu hafta', 'yarın', 'toplantı'."
+        },
+        "limit": {
+          "type": "NUMBER",
+          "description": "Döndürülecek en fazla etkinlik sayısı."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "get_calendar_events",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "query": "bu hafta",
+          "limit": 10
+        }
+      }
+    ],
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1247,16 +2356,52 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "query"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Hatırlatıcıları/yapılacakları görüntülerken. Yeni öğe için add_reminder."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (query) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "Aranan konu/liste, örn. 'bugün', 'alışveriş'."
+        },
+        "limit": {
+          "type": "NUMBER",
+          "description": "En fazla öğe sayısı."
+        },
+        "list_name": {
+          "type": "STRING",
+          "description": "Belirli liste adı (varsa)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "get_reminders",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1266,16 +2411,48 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Hava durumu sorulduğunda.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Hava durumu sorulduğunda."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "location": {
+          "type": "STRING",
+          "description": "Şehir/konum adı, örn. 'İstanbul'. Boşsa mevcut konum."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "get_weather",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "location": "Ankara"
+        }
+      }
+    ],
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1285,16 +2462,50 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Bir YouTube kanalının performansını özetlerken.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir YouTube kanalının performansını özetlerken."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "Kanal adı/araması."
+        },
+        "handle": {
+          "type": "STRING",
+          "description": "Kanal @handle'ı (varsa)."
+        },
+        "video_limit": {
+          "type": "NUMBER",
+          "description": "Raporlanacak son video sayısı."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "get_youtube_channel_report",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1306,16 +2517,52 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "name"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Ana dalda çalışmadan önce yeni bir dal açarken."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (name) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Depo yolu."
+        },
+        "name": {
+          "type": "STRING",
+          "description": "Yeni dal adı."
+        },
+        "checkout": {
+          "type": "BOOLEAN",
+          "description": "Oluşturduktan sonra dala geç (varsayılan true)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "git_branch",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1327,16 +2574,52 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "message"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Değişiklikleri kaydederken. Push YAPMAZ (güvenlik). Yeni dal için git_branch."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (message) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Depo yolu."
+        },
+        "message": {
+          "type": "STRING",
+          "description": "Commit mesajı — kısa ve açıklayıcı."
+        },
+        "add_all": {
+          "type": "BOOLEAN",
+          "description": "Commit'ten önce tüm değişiklikleri sahnele (git add -A)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "git_commit",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1346,16 +2629,50 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Kod değişikliklerinin detayını görmek için.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kod değişikliklerinin detayını görmek için."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Depo yolu."
+        },
+        "staged": {
+          "type": "BOOLEAN",
+          "description": "true → staged (index) farkı; false → çalışma ağacı."
+        },
+        "target_file": {
+          "type": "STRING",
+          "description": "Yalnız bu dosyanın farkı (varsa)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "git_diff",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1365,16 +2682,42 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Bir repoda hangi değişiklikler var diye bakarken.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir repoda hangi değişiklikler var diye bakarken."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Depo yolu (boşsa çalışma dizini)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "git_status",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1427,7 +2770,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "GENERATION_UNAVAILABLE",
       "SAFETY_BLOCKED"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "prompt": "Arka planı gün batımı yap, kişiyi değiştirme",
+          "sourcePath": "portrait.png",
+          "imageSize": "2K"
+        }
+      }
+    ],
     "privacyClass": "external_model_optional",
     "skillAffinity": []
   },
@@ -1440,16 +2791,56 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "query"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Web'den hazır/telifsiz görsel indirmek için. Sıfırdan görsel üretmek için image_generate."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (query) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "İndirilecek görselin konusu/araması."
+        },
+        "destination": {
+          "type": "STRING",
+          "description": "Kaydedilecek klasör (varsayılan masaüstü)."
+        },
+        "count": {
+          "type": "INTEGER",
+          "description": "İndirilecek görsel sayısı."
+        },
+        "overwrite": {
+          "type": "BOOLEAN",
+          "description": "Var olanın üzerine yaz."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "image_fetch",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1500,7 +2891,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "SAFETY_BLOCKED",
       "TIMEOUT"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "prompt": "minimalist dağ manzarası, düz renkler",
+          "aspectRatio": "1:1",
+          "imageSize": "2K"
+        }
+      }
+    ],
     "privacyClass": "external_model_optional",
     "skillAffinity": []
   },
@@ -1557,16 +2956,48 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "expression"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "LaTeX'i işlerken. Sayısal çözüm için math_solve."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (expression) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "expression"
+      ],
+      "properties": {
+        "expression": {
+          "type": "STRING",
+          "description": "LaTeX ifadesi, örn. '\\frac{a}{b}'."
+        },
+        "mode": {
+          "type": "STRING",
+          "description": "'parse' veya 'normalize'."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "latex_parse",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1578,16 +3009,44 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "path"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "İndirilen/üretilen dosyaları toplamadan önce hedef klasörü hazırlamak veya kullanıcının istediği klasörü açmak."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (path) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Oluşturulacak klasör yolu (ör. ~/Desktop/youtube-transkript)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "make_directory",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1635,7 +3094,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "INVALID_EXPRESSION",
       "NO_NUMERIC_EXPRESSION"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "expression": "12 * (3 + 4)"
+        }
+      }
+    ],
     "privacyClass": "local_safe_compute",
     "skillAffinity": [
       "math.solve"
@@ -1651,16 +3116,54 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "toolName"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Yerleşik yeteneklerin karşılamadığı, kullanıcının bağladığı bir MCP aracı gerektiğinde."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (serverId, toolName) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "serverId",
+        "toolName"
+      ],
+      "properties": {
+        "serverId": {
+          "type": "STRING",
+          "description": "MCP sunucu kimliği."
+        },
+        "toolName": {
+          "type": "STRING",
+          "description": "Çağrılacak araç adı."
+        },
+        "arguments": {
+          "type": "OBJECT",
+          "description": "Araca geçilecek argümanlar (araç şemasına uygun)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "mcp_call_tool",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -1672,16 +3175,52 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "path"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Fotoğraf/ekran görüntüsü/taranmış belgedeki YAZIYI okumak için. Seçilebilir metinli belge için document_read."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (path) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Görsel/PDF yolu."
+        },
+        "mode": {
+          "type": "STRING",
+          "description": "OCR modu (varsa)."
+        },
+        "languageHint": {
+          "type": "STRING",
+          "description": "Metin dili ipucu, örn. 'tr'."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "ocr_read",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1693,16 +3232,56 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "app_name"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kullanıcı bir uygulamayı açmak istediğinde. URL/arama için browser_control, medya için play_media kullan."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (app_name) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "app_name"
+      ],
+      "properties": {
+        "app_name": {
+          "type": "STRING",
+          "description": "Uygulamanın TAM adı, eksiz: 'Google Chrome', 'Safari', 'Notes'. Türkçe ekleri ('Chrome'u') çıkar."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "open_app",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "app_name": "Google Chrome"
+        }
+      },
+      {
+        "args": {
+          "app_name": "Notes"
+        }
+      }
+    ],
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -1714,16 +3293,60 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "query"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Müzik/video çalmak için. Sadece uygulamayı açmak için open_app kullan."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (query) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "Çalınacak şarkı, sanatçı veya çalma listesi adı."
+        },
+        "provider": {
+          "type": "STRING",
+          "description": "Kaynak: 'youtube', 'spotify' veya 'music'. Belirtilmezse akıllı seçilir."
+        },
+        "autoplay": {
+          "type": "BOOLEAN",
+          "description": "Bulunan ilk sonucu otomatik çal (varsayılan true)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "play_media",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "query": "Tarkan Kuzu Kuzu",
+          "provider": "spotify"
+        }
+      }
+    ],
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -1777,7 +3400,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "INVALID_OUTPUT_PATH",
       "DEPENDENCY_UNAVAILABLE"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "title": "Ürün Tanıtımı",
+          "prompt": "5 slaytlık ürün sunumu"
+        }
+      }
+    ],
     "privacyClass": "local_private_write",
     "skillAffinity": [
       "presentation.deck_from_context"
@@ -1792,16 +3422,44 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "prompt"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kuantum sonucunu klasik yöntemle kıyaslarken."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (prompt) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "STRING",
+          "description": "Karşılaştırılacak problem/sonuç bağlamı."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "quantum_compare_classical",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1813,16 +3471,48 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "prompt"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kuantum deney akışının sonunda özet rapor üretmek için."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (prompt) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "STRING",
+          "description": "Rapor konusu/kapsamı."
+        },
+        "title": {
+          "type": "STRING",
+          "description": "Rapor başlığı."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "quantum_generate_report",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1834,16 +3524,48 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "prompt"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kuantum/optimizasyon demo akışının ilk adımı; ardından quantum_run_experiment."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (prompt) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "STRING",
+          "description": "Modellemek istenen optimizasyon problemi."
+        },
+        "problemClass": {
+          "type": "STRING",
+          "description": "Problem sınıfı (varsa)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "quantum_model_problem",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1855,16 +3577,52 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "prompt"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kuantum demo deneyi çalıştırmak için (Qiskit/Aer gerekir)."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (prompt) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "STRING",
+          "description": "Deney tanımı/hedefi."
+        },
+        "algorithm": {
+          "type": "STRING",
+          "description": "Algoritma: 'qaoa' veya 'vqe'."
+        },
+        "shots": {
+          "type": "NUMBER",
+          "description": "Ölçüm sayısı."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "quantum_run_experiment",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1876,16 +3634,56 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "query"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Yerel/geçmiş bilgi gerektiğinde veya web erişilemediğinde. Güncel dış bilgi için web_research."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (query) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "Aranan konu/soru."
+        },
+        "sources": {
+          "type": "STRING",
+          "description": "Kaynaklar, virgüllü: 'workspace,conversations'."
+        },
+        "limit": {
+          "type": "NUMBER",
+          "description": "En fazla eşleşme."
+        },
+        "conversationId": {
+          "type": "STRING",
+          "description": "Belirli konuşma bağlamı (varsa)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "retrieve_context",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1945,16 +3743,61 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "value"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Kullanıcı 'bunu hatırla/aklında tut' dediğinde kalıcı tercih/olgu kaydetmek için."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (key, value) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "category": {
+          "type": "STRING",
+          "description": "Kategori, örn. 'tercih', 'kişi', 'proje'."
+        },
+        "key": {
+          "type": "STRING",
+          "description": "Kısa anahtar/etiket."
+        },
+        "value": {
+          "type": "STRING",
+          "description": "Hatırlanacak bilgi."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "save_memory",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "category": "tercih",
+          "key": "kahve",
+          "value": "sütlü, şekersiz"
+        }
+      }
+    ],
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -1967,16 +3810,54 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "phone_number"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir kişiyi ilerideki WhatsApp mesajları için kaydetmek üzere."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (display_name, phone_number) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "display_name",
+        "phone_number"
+      ],
+      "properties": {
+        "display_name": {
+          "type": "STRING",
+          "description": "Kişinin görünen adı."
+        },
+        "phone_number": {
+          "type": "STRING",
+          "description": "Uluslararası numara (+90…)."
+        },
+        "aliases": {
+          "type": "STRING",
+          "description": "Alternatif adlar, virgüllü (varsa)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "save_whatsapp_contact",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -1988,16 +3869,61 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "message"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "WhatsApp mesajı için. Alıcı belirsiz/numara bilinmiyorsa netleştir, uydurma. Kişi kaydı için save_whatsapp_contact."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (message) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "recipient_name": {
+          "type": "STRING",
+          "description": "Alıcının kayıtlı adı. Numarası yoksa kişi rehberinden çözülür."
+        },
+        "phone_number": {
+          "type": "STRING",
+          "description": "Uluslararası numara (+90…). recipient_name yeterliyse boş bırak."
+        },
+        "message": {
+          "type": "STRING",
+          "description": "Gönderilecek mesaj metni."
+        },
+        "app_target": {
+          "type": "STRING",
+          "description": "Hedef: 'desktop' veya 'web'."
+        },
+        "send_now": {
+          "type": "BOOLEAN",
+          "description": "true → hemen gönder; false → yalnız hazırla."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "send_whatsapp_message",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -2009,16 +3935,65 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "command"
     ],
     "requiresApproval": true,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Yalnız başka yetenek yokken. Dosya işlemleri için file_* , git için git_* yeteneklerini tercih et."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (command) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "STRING",
+          "description": "Çalıştırılacak tam komut. Yıkıcı/geri alınamaz komutlardan kaçın."
+        },
+        "mode": {
+          "type": "STRING",
+          "description": "Yürütme modu (varsa)."
+        },
+        "timeout": {
+          "type": "NUMBER",
+          "description": "Saniye cinsinden zaman aşımı."
+        },
+        "use_shell": {
+          "type": "BOOLEAN",
+          "description": "Kabuk (shell) üzerinden çalıştır."
+        },
+        "working_dir": {
+          "type": "STRING",
+          "description": "Çalışma dizini."
+        },
+        "riskOverride": {
+          "type": "STRING",
+          "description": "Risk onayı geçişi (yalnız gerekli olduğunda)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "shell_run",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "permission_gated",
     "skillAffinity": []
   },
   {
@@ -2030,16 +4005,44 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "session_id"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "İş bitince oturumu serbest bırak."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (session_id) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "STRING",
+          "description": "Kapatılacak oturum kimliği."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "shell_session_close",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -2049,16 +4052,52 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Çok adımlı yazılım işleri için (derle/test/düzelt döngüsü). Tek komut yetiyorsa shell_run kullan.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Çok adımlı yazılım işleri için (derle/test/düzelt döngüsü). Tek komut yetiyorsa shell_run kullan."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "working_dir": {
+          "type": "STRING",
+          "description": "Başlangıç çalışma dizini."
+        },
+        "root": {
+          "type": "STRING",
+          "description": "İzin verilen kök dizin (dışına cd engellenir)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "shell_session_open",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "working_dir": "~/projeler/elyan"
+        }
+      }
+    ],
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -2071,16 +4110,60 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "command"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Testi çalıştır, çıktıyı oku, düzelt, tekrar çalıştır döngüsü için."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (session_id, command) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "session_id",
+        "command"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "STRING",
+          "description": "shell_session_open'dan dönen oturum kimliği."
+        },
+        "command": {
+          "type": "STRING",
+          "description": "Çalıştırılacak komut."
+        },
+        "timeout": {
+          "type": "NUMBER",
+          "description": "Saniye cinsinden zaman aşımı."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "shell_session_run",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "session_id": "sh_x",
+          "command": "python -m pytest -q"
+        }
+      }
+    ],
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -2092,16 +4175,48 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "action"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Sesli not/dikte almak için kaydı başlatıp durdurma. Kaydı metne çevirmek için speech_to_text."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (action) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "type": "STRING",
+          "description": "'start' (kaydı başlat) veya 'stop' (durdur)."
+        },
+        "_uiGesture": {
+          "type": "BOOLEAN",
+          "description": "Kullanıcı jestiyle tetiklendi (dahili)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "speech_capture",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -2111,16 +4226,54 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "usage": "Ses kaydını yazıya dökmek için. Yazıyı sese çevirmek için text_to_speech.",
     "requiredArgs": [],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Ses kaydını yazıya dökmek için. Yazıyı sese çevirmek için text_to_speech."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "audioPath": {
+          "type": "STRING",
+          "description": "Çevrilecek ses dosyası yolu (varsa)."
+        },
+        "sessionId": {
+          "type": "STRING",
+          "description": "Kayıt oturumu kimliği (varsa)."
+        },
+        "languageHint": {
+          "type": "STRING",
+          "description": "Konuşma dili ipucu, örn. 'tr'."
+        },
+        "taskId": {
+          "type": "STRING",
+          "description": "İlişkili görev kimliği (varsa)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "speech_to_text",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -2175,7 +4328,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "INVALID_OUTPUT_PATH",
       "DEPENDENCY_UNAVAILABLE"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "title": "Aylık Bütçe",
+          "prompt": "Gelir-gider tablosu, 3 aylık"
+        }
+      }
+    ],
     "privacyClass": "local_private_write",
     "skillAffinity": [
       "spreadsheet.table_from_context"
@@ -2190,16 +4350,50 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "query"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bilgisayarın anlık durumunu/saati sorulduğunda. Çalışan uygulamalar için desktop_os.processes."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (query) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "query"
+      ],
+      "properties": {
+        "query": {
+          "type": "STRING",
+          "description": "Hangi bilgi: 'pil', 'saat', 'disk', 'ram', 'ağ' vb."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "sys_info",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
-    "fewShots": [],
-    "privacyClass": "",
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "query": "pil durumu"
+        }
+      }
+    ],
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -2256,16 +4450,56 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "text"
     ],
     "requiresApproval": false,
-    "whenToUse": [],
-    "whenNotToUse": [],
-    "inputContract": {},
-    "outputContract": {},
+    "whenToUse": [
+      "Bir metni/cevabı sesli okutmak için."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (text) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "STRING",
+          "description": "Sesli okunacak metin."
+        },
+        "languageHint": {
+          "type": "STRING",
+          "description": "Dil ipucu, örn. 'tr'."
+        },
+        "voice": {
+          "type": "STRING",
+          "description": "Ses/tını adı (varsa)."
+        },
+        "interrupt": {
+          "type": "BOOLEAN",
+          "description": "Süren okumayı kesip yeniden başla."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "text_to_speech",
+      "requiresOk": true
+    },
     "artifactContract": {},
-    "verificationPlan": [],
-    "liveNarration": [],
-    "failureModes": [],
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
     "fewShots": [],
-    "privacyClass": "",
+    "privacyClass": "local_runtime",
     "skillAffinity": []
   },
   {
@@ -2314,7 +4548,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "NO_SOURCES",
       "TIMEOUT"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "args": {
+          "query": "2025 elektrikli araç pazar payı",
+          "language_hint": "tr"
+        }
+      }
+    ],
     "privacyClass": "public_web",
     "skillAffinity": []
   }

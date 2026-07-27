@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { authIdentities, learningEvents, subscriptions, users } from "../../db/schema.js";
 import {
   prioritizeCanonicalMemoryState,
-  readCanonicalMemoryState,
+  readCachedCanonicalMemoryState,
   searchBrainMemory,
 } from "../../modules/brain/memory.js";
 import {
@@ -45,6 +45,11 @@ import {
   isCognitiveShadowReadEnabled,
   recordCognitiveFoundationSignal,
 } from "../../modules/brain/cognitive-foundation-policy.js";
+import { detectAffectiveTurn, type AffectiveTurnSignal } from "./affective-turn.js";
+import {
+  resolveInteractionContext,
+  type InteractionContext,
+} from "./interaction-context.js";
 
 const MAX_HINTS = 12;
 const MAX_CHARS = 4000;
@@ -401,6 +406,7 @@ function buildRelationshipContextDigest(input: {
     "preferred_tone",
   ]);
   const recentTopics = readSnapshotFact(input.memorySnapshot, ["self_model_recent_topics"]);
+  const interests = readSnapshotFact(input.memorySnapshot, ["self_model_interests"]);
 
   if (preferredName) {
     pushDigestLine(digest, `Use the user's name naturally and sparingly: ${preferredName}.`);
@@ -419,6 +425,12 @@ function buildRelationshipContextDigest(input: {
   }
   if (recentTopics) {
     pushDigestLine(digest, recentTopics.value);
+  }
+  if (interests) {
+    pushDigestLine(
+      digest,
+      `Stable interests inferred from repeated interactions: ${interests.value}.`,
+    );
   }
   if (input.continuityBoundary.carryContinuity && input.continuitySummary.userGoal) {
     pushDigestLine(digest, `Continuing user goal: ${input.continuitySummary.userGoal}`);
@@ -713,6 +725,7 @@ function buildSpeakingStyleDirectives(input: {
   userProfile?: UserProfileSnapshot;
   memorySnapshot?: MemoryProfileSnapshot;
   continuityBoundary: ContinuityBoundary;
+  currentAffect?: AffectiveTurnSignal;
 }): string[] {
   const directives: string[] = [];
   const answerLength = readSnapshotFact(input.memorySnapshot, ["answer_length", "brevity_preference"])?.value.toLowerCase() ?? "";
@@ -723,6 +736,13 @@ function buildSpeakingStyleDirectives(input: {
   const continuityStyle = readSnapshotFact(input.memorySnapshot, ["reflective_continuity_style"])?.value ?? "";
   const preferredLanguage = input.userProfile?.preferredLanguage ?? null;
 
+  if (
+    input.currentAffect &&
+    input.currentAffect.mood !== "neutral" &&
+    input.currentAffect.confidence >= 0.55
+  ) {
+    directives.push(input.currentAffect.responseDirective);
+  }
   if (preferredLanguage) {
     directives.push(`Answer in ${preferredLanguage} unless the user clearly requests another language.`);
   }
@@ -1380,6 +1400,8 @@ export function buildUserContextFromMemory(input: {
   profile?: Partial<UserProfileSnapshot> | null;
   contextPackets?: ContextPacket[];
   activeGoal?: ActiveGoalContext | null;
+  interactionContext?: InteractionContext;
+  currentAffect?: AffectiveTurnSignal;
 }): UserUnderstandingContext {
   const eligibleMemory = filterRetrievedMemory(input.memory);
   // World signals are short-lived request context, not durable profile facts.
@@ -1427,6 +1449,8 @@ export function buildUserContextFromMemory(input: {
   });
   const memoryEnabled = resolveMemoryEnabled(input.task.metadata);
   const personalizationPrompt = readPersonalizationPrompt(input.task.metadata);
+  const interactionContext =
+    input.interactionContext ?? resolveInteractionContext(input.task);
   const contextPackets = (input.contextPackets ?? []).slice(0, 10);
   const packetKinds = Array.from(new Set(contextPackets.map((packet) => packet.kind)));
   const healthContextUsed = packetKinds.includes("health_context");
@@ -1600,6 +1624,7 @@ export function buildUserContextFromMemory(input: {
     userProfile,
     memorySnapshot,
     continuityBoundary,
+    currentAffect: input.currentAffect,
   });
   const reasoningDirectives = buildReasoningDirectives({
     intent: input.intent,
@@ -1633,6 +1658,8 @@ export function buildUserContextFromMemory(input: {
     relationshipContextDigest,
     clarificationDiagnostics,
     memoryEnabled,
+    interactionContext,
+    ...(input.currentAffect ? { currentAffect: input.currentAffect } : {}),
     personalizationPrompt,
     memoryRelevanceSummary: buildMemoryRelevanceSummary({
       memory: profileMemory,
@@ -1693,12 +1720,21 @@ export async function buildUserContext(
 
   /* Run all async ops in parallel for minimum latency */
   const cognitiveReadStartedAt = Date.now();
-  const [memorySearch, canonicalMemory, userProfile, quickFacts, freshWorldSignals, cognitiveContext] = await Promise.all([
+  const [
+    memorySearch,
+    canonicalMemory,
+    userProfile,
+    quickFacts,
+    freshWorldSignals,
+    cognitiveContext,
+    currentAffect,
+    activeGoal,
+  ] = await Promise.all([
     memoryEnabled && !isSocialTurn && !foundationEnabled
       ? searchBrainMemory(app, { userId: input.userId, query, limit: MAX_HINTS }).catch(() => ({ results: [] }))
       : Promise.resolve({ results: [] }),
     memoryEnabled && !foundationEnabled
-      ? readCanonicalMemoryState(app, input.userId).catch(() => [])
+      ? readCachedCanonicalMemoryState(app, input.userId).catch(() => [])
       : Promise.resolve([]),
     loadCachedSafeUserProfile(app, input.userId),
     /* Quick C-based fact extraction from the current message */
@@ -1720,9 +1756,18 @@ export async function buildUserContext(
           semanticLimit: MAX_HINTS,
           episodicLimit: 8,
           maxChars: MAX_CHARS,
+          includeEpisodes: !isSocialTurn,
+          includeContested: !isSocialTurn,
           now,
         }).catch(() => null)
       : Promise.resolve(null),
+    detectAffectiveTurn(input.message).catch(() => null),
+    isSocialTurn
+      ? Promise.resolve(null)
+      : getActiveGoalForContext(app, {
+          userId: input.userId,
+          sessionId,
+        }).catch(() => null),
   ]);
 
   /* Enrich profile only from explicit self-identification, never from arbitrary message fragments. */
@@ -1803,7 +1848,10 @@ export async function buildUserContext(
   const stableMemory = foundationEnabled ? cognitiveStableMemory : legacyStableMemory;
 
   const fallbackRows =
-    foundationEnabled || !memoryEnabled || stableMemory.length >= Math.min(4, MAX_HINTS)
+    foundationEnabled ||
+    !memoryEnabled ||
+    isSocialTurn ||
+    stableMemory.length >= Math.min(4, MAX_HINTS)
       ? []
       : await app.db
           .select({
@@ -1974,11 +2022,6 @@ export async function buildUserContext(
     .slice(0, 3);
   const promptMemory = [...selectedContinuityMemory, ...derivedPromptMemory];
 
-  const activeGoal = await getActiveGoalForContext(app, {
-    userId: input.userId,
-    sessionId,
-  }).catch(() => null);
-
   const ctx = buildUserContextFromMemory({
     userId:      input.userId,
     accountId,
@@ -1988,6 +2031,8 @@ export async function buildUserContext(
     profile:     enrichedProfile,
     contextPackets,
     activeGoal,
+    interactionContext: resolveInteractionContext(input),
+    ...(currentAffect ? { currentAffect } : {}),
   });
   if (cognitiveContext) {
     ctx.cognitiveReadMs = Date.now() - cognitiveReadStartedAt;

@@ -165,6 +165,10 @@ function normalizeFeedbackReasonTags(input: string[] | undefined): FeedbackReaso
       case "misunderstood":
       case "not_warm_enough":
       case "too_playful":
+      case "too_formal":
+      case "too_casual":
+      case "incorrect":
+      case "irrelevant":
         normalized.add(value);
         break;
     }
@@ -763,6 +767,11 @@ export function extractFeedbackSignals(input: {
           scope: "user",
           source: "feedback",
           ttlDays: 90,
+          metadata: {
+            explicit: true,
+            reason: "feedback_requested_warmer_tone",
+            ...(input.taskId ? { sourceTurnId: input.taskId } : {}),
+          },
         }),
       );
     } else if (tag === "too_playful") {
@@ -786,6 +795,45 @@ export function extractFeedbackSignals(input: {
           scope: "user",
           source: "feedback",
           ttlDays: 90,
+        }),
+      );
+    } else if (tag === "too_formal" || tag === "too_casual") {
+      const preferredTone =
+        tag === "too_formal" ? "warm_natural" : "calm_professional";
+      signals.push(
+        baseSignal({
+          type: "style",
+          key: "preferred_tone",
+          value: preferredTone,
+          confidence: 0.88,
+          scope: "user",
+          source: "feedback",
+          ttlDays: 180,
+          metadata: {
+            explicit: true,
+            reason: `feedback_${tag}`,
+            ...(input.taskId ? { sourceTurnId: input.taskId } : {}),
+          },
+        }),
+      );
+    } else if (tag === "incorrect" || tag === "irrelevant") {
+      signals.push(
+        baseSignal({
+          type: "correction",
+          key: "answer_quality_correction",
+          value:
+            tag === "incorrect"
+              ? "prioritize factual correctness and verification"
+              : "stay directly relevant to the user request",
+          confidence: 0.88,
+          scope: "user",
+          source: "feedback",
+          ttlDays: 90,
+          metadata: {
+            explicit: true,
+            reason: `feedback_${tag}`,
+            ...(input.taskId ? { sourceTurnId: input.taskId } : {}),
+          },
         }),
       );
     }

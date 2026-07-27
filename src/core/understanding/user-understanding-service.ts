@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
 import { maybeQueueMemoryExtractionJob } from "../../modules/brain/memory.js";
@@ -29,6 +30,10 @@ import type {
   TaskUnderstandingInput,
   UserUnderstandingResult,
 } from "./types.js";
+import {
+  buildLearningProvenance,
+  resolveInteractionContext,
+} from "./interaction-context.js";
 
 const fallbackIntent: IntentClassification = {
   primaryIntent: "unknown",
@@ -133,6 +138,7 @@ export function emptyUnderstanding(
       relationshipContextDigest: [],
       clarificationDiagnostics: fallbackClarificationDiagnostics,
       memoryEnabled: true,
+      interactionContext: resolveInteractionContext(input),
       personalizationPrompt: null,
       memoryRelevanceSummary: [],
       contextPackets: [],
@@ -329,13 +335,44 @@ export async function persistLearningSignals(
     taskId?: string;
     signals: LearningSignal[];
     requestId?: string;
+    source?: string;
+    metadata?: Record<string, unknown>;
   },
 ): Promise<number> {
   if (!app.config.ELYAN_LEARNING_EXTRACTION_ENABLED) {
     return 0;
   }
 
-  const signals = filterLearningSignals(input.signals);
+  const interaction = resolveInteractionContext({
+    source: input.source,
+    metadata: input.metadata,
+  });
+  const normalizedSignals = filterLearningSignals(input.signals).map(
+    (signal) => ({
+      ...signal,
+      metadata: {
+        ...signal.metadata,
+        provenance: buildLearningProvenance({
+          interaction,
+          evidenceBasis:
+            signal.source === "feedback"
+              ? "user_feedback"
+              : signal.metadata?.explicit === true
+                ? "explicit_user"
+                : signal.source === "runtime"
+                  ? "runtime_observation"
+                  : signal.source === "system"
+                    ? "system_evaluation"
+                    : "behavioral_inference",
+        }),
+      },
+    }),
+  );
+  const signals = await suppressRepeatedImplicitSignals(
+    app,
+    input.userId,
+    normalizedSignals,
+  );
 
   if (!signals.length) {
     return 0;
@@ -449,6 +486,50 @@ export async function persistLearningSignals(
     );
     return 0;
   }
+}
+
+async function suppressRepeatedImplicitSignals(
+  app: FastifyInstance,
+  userId: string,
+  signals: LearningSignal[],
+): Promise<LearningSignal[]> {
+  const store = app.services?.reliability?.store as
+    | {
+        increment?: (key: string, ttlMs?: number) => Promise<number>;
+      }
+    | undefined;
+  if (!store || typeof store.increment !== "function") {
+    return signals;
+  }
+
+  const accepted = await Promise.all(
+    signals.map(async (signal) => {
+      if (
+        signal.source !== "interaction" ||
+        signal.metadata?.explicit === true
+      ) {
+        return signal;
+      }
+      const digest = createHash("sha256")
+        .update(
+          [
+            userId,
+            signal.scope,
+            signal.type,
+            signal.key,
+            signal.value.toLocaleLowerCase("tr"),
+          ].join("\u001f"),
+        )
+        .digest("hex")
+        .slice(0, 32);
+      const count = await store
+        .increment!(`learning:implicit:v2:${digest}`, 6 * 60 * 60 * 1_000)
+        .catch(() => 1);
+      return count === 1 ? signal : null;
+    }),
+  );
+
+  return accepted.filter((signal): signal is LearningSignal => signal != null);
 }
 
 export function buildSynchronousMemoryOpsFromLearningSignals(
@@ -576,6 +657,8 @@ export async function recordTaskLearningFromCreation(
     taskId: input.taskId,
     signals: extracted.signals,
     requestId: input.requestId,
+    source: input.source,
+    metadata: input.metadata,
   });
 }
 
@@ -592,6 +675,8 @@ export async function recordConversationExchangeLearning(
     intent: string;
     requestId?: string;
     volatileExternalData?: boolean;
+    source?: string;
+    metadata?: Record<string, unknown>;
   },
 ): Promise<number> {
   const signals: LearningSignal[] = [];
@@ -642,7 +727,7 @@ export async function recordConversationExchangeLearning(
       type: "preference",
       key: "answer_length",
       value: "concise",
-      confidence: 0.55,
+      confidence: 0.7,
       scope: "user",
       source: "interaction",
       ttlDays: 60,
@@ -653,7 +738,7 @@ export async function recordConversationExchangeLearning(
       type: "preference",
       key: "answer_length",
       value: "detailed",
-      confidence: 0.6,
+      confidence: 0.72,
       scope: "user",
       source: "interaction",
       ttlDays: 60,
@@ -667,7 +752,7 @@ export async function recordConversationExchangeLearning(
       type: "style",
       key: "vocabulary_richness",
       value: "high",
-      confidence: 0.58,
+      confidence: 0.7,
       scope: "user",
       source: "interaction",
       ttlDays: 90,
@@ -773,7 +858,7 @@ export async function recordConversationExchangeLearning(
       type: "project_context",
       key: "message_keywords",
       value: keywordsResult.slice(0, 5).join(", "),
-      confidence: 0.50,
+      confidence: 0.7,
       scope: "user",
       source: "interaction",
       ttlDays: 14,
@@ -802,6 +887,8 @@ export async function recordConversationExchangeLearning(
     taskId: input.taskId,
     signals,
     requestId: input.requestId,
+    source: input.source,
+    metadata: input.metadata,
   });
 }
 
@@ -990,6 +1077,8 @@ export async function recordTaskFeedback(
     correction?: string;
     preferredAnswer?: string;
     requestId?: string;
+    source?: string;
+    metadata?: Record<string, unknown>;
   },
 ): Promise<number> {
   const extracted = extractFeedbackSignals(input);
@@ -1009,6 +1098,8 @@ export async function recordTaskFeedback(
     taskId: input.taskId,
     signals: [...extracted.signals, feedbackOutcomeSignal],
     requestId: input.requestId,
+    source: input.source,
+    metadata: input.metadata,
   });
 }
 

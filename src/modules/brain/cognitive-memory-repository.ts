@@ -19,6 +19,7 @@ import {
   type DialogueStateTurnInput,
 } from "./dialogue-state.js";
 import { recordCognitiveFoundationSignal } from "./cognitive-foundation-policy.js";
+import { invalidateCanonicalMemoryCache } from "./memory-context-cache.js";
 
 const evidenceSchema = z.object({
   type: z.string().trim().min(1).max(64),
@@ -210,7 +211,14 @@ export class CognitiveMemoryRepository {
         factIds: factRefs.map((row) => row.id),
         episodeIds: episodeRefs.map((row) => row.id),
       };
-    }).then((result) => {
+    }).then(async (result) => {
+      if (
+        result.factsWritten > 0 ||
+        result.contested > 0 ||
+        result.forgotten > 0
+      ) {
+        await invalidateCanonicalMemoryCache(this.app, input.userId);
+      }
       recordCognitiveFoundationSignal({ ok: true });
       return result;
     }).catch((error) => {

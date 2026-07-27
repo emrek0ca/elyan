@@ -174,6 +174,89 @@ test("persistLearningSignals stores only policy-approved safe events", async () 
   assert.equal(count, 1);
   assert.equal(inserted.length, 1);
   assert.equal((inserted[0] as { key: string }).key, "answer_length");
+  assert.equal(
+    (
+      (inserted[0] as { metadata: Record<string, unknown> }).metadata
+        .provenance as Record<string, unknown>
+    ).profileScope,
+    "canonical_user",
+  );
+});
+
+test("persistLearningSignals suppresses repeated implicit observations but keeps explicit preferences", async () => {
+  const inserted: unknown[] = [];
+  const counters = new Map<string, number>();
+  const app = {
+    config: {
+      ELYAN_LEARNING_EXTRACTION_ENABLED: true,
+      ELYAN_MEMORY_FABRIC_V2_ENABLED: false,
+    },
+    services: {
+      reliability: {
+        store: {
+          async increment(key: string) {
+            const next = (counters.get(key) ?? 0) + 1;
+            counters.set(key, next);
+            return next;
+          },
+        },
+      },
+    },
+    db: {
+      insert: () => ({
+        values: async (values: unknown[]) => {
+          inserted.push(...values);
+        },
+      }),
+    },
+    log: {
+      info: () => undefined,
+      warn: () => undefined,
+      debug: () => undefined,
+    },
+  };
+  const implicit = {
+    type: "preference" as const,
+    key: "preferred_language",
+    value: "turkish",
+    confidence: 0.9,
+    scope: "user" as const,
+    source: "interaction" as const,
+    ttlDays: 180,
+  };
+
+  assert.equal(
+    await persistLearningSignals(app as never, {
+      userId: "00000000-0000-0000-0000-000000000001",
+      signals: [implicit],
+      source: "mobile",
+    }),
+    1,
+  );
+  assert.equal(
+    await persistLearningSignals(app as never, {
+      userId: "00000000-0000-0000-0000-000000000001",
+      signals: [implicit],
+      source: "mobile",
+    }),
+    0,
+  );
+  assert.equal(
+    await persistLearningSignals(app as never, {
+      userId: "00000000-0000-0000-0000-000000000001",
+      signals: [
+        {
+          ...implicit,
+          key: "preferred_tone",
+          value: "warm_natural",
+          metadata: { explicit: true },
+        },
+      ],
+      source: "whatsapp",
+    }),
+    1,
+  );
+  assert.equal(inserted.length, 2);
 });
 
 test("buildSynchronousMemoryOpsFromLearningSignals keeps explicit durable profile and style facts", () => {
@@ -431,6 +514,26 @@ test("recordTaskFeedback stores a compact workflow outcome signal", async () => 
   assert.equal(count, inserted.length);
   assert.ok(inserted.some((item) => (item as { key?: string }).key === "feedback_outcome"));
   assert.ok(inserted.some((item) => (item as { key?: string }).key === "negative_feedback"));
+});
+
+test("explicit warmth feedback updates synchronous preferred tone memory", async () => {
+  const fake = createLearningMemoryFakeApp();
+
+  await recordTaskFeedback(fake.app, {
+    userId: "00000000-0000-0000-0000-000000000001",
+    taskId: "00000000-0000-0000-0000-000000000002",
+    feedbackType: "thumbs_down",
+    reasonTags: ["not_warm_enough"],
+    source: "email",
+  });
+
+  assert.ok(
+    fake.memoryFacts.some(
+      (item) =>
+        item.canonicalKey === "preferred_tone" &&
+        item.value === "warm_professional",
+    ),
+  );
 });
 
 test("understood memory candidates become real memory writes", () => {

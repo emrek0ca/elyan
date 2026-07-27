@@ -74,6 +74,10 @@ export const feedbackBodySchema = z.object({
         "misunderstood",
         "not_warm_enough",
         "too_playful",
+        "too_formal",
+        "too_casual",
+        "incorrect",
+        "irrelevant",
       ]),
     )
     .max(5)

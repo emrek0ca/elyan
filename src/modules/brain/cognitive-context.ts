@@ -92,6 +92,8 @@ export async function buildCognitiveContextPacket(
     semanticLimit?: number;
     episodicLimit?: number;
     maxChars?: number;
+    includeEpisodes?: boolean;
+    includeContested?: boolean;
     now?: Date;
   },
 ): Promise<CognitiveContextPacket> {
@@ -108,6 +110,8 @@ async function buildCognitiveContextPacketOnDb(
     semanticLimit?: number;
     episodicLimit?: number;
     maxChars?: number;
+    includeEpisodes?: boolean;
+    includeContested?: boolean;
     now?: Date;
   },
 ): Promise<CognitiveContextPacket> {
@@ -146,26 +150,30 @@ async function buildCognitiveContextPacketOnDb(
       ))
       .orderBy(desc(brainMemoryFacts.importanceScore), desc(brainMemoryFacts.observedAt))
       .limit(semanticLimit),
-    db
-      .select({
-        id: brainMemoryEpisodes.id,
-        topic: brainMemoryEpisodes.episodeType,
-        summary: brainMemoryEpisodes.summary,
-        confidence: brainMemoryEpisodes.confidence,
-        revision: brainMemoryEpisodes.revision,
-        observedAt: brainMemoryEpisodes.observedAt,
-        expiresAt: brainMemoryEpisodes.expiresAt,
-      })
-      .from(brainMemoryEpisodes)
-      .where(and(
-        eq(brainMemoryEpisodes.userId, input.userId),
-        eq(brainMemoryEpisodes.lifecycleStatus, "active"),
-        isNull(brainMemoryEpisodes.deletedAt),
-        gt(brainMemoryEpisodes.expiresAt, now),
-      ))
-      .orderBy(desc(brainMemoryEpisodes.importanceScore), desc(brainMemoryEpisodes.observedAt))
-      .limit(episodicLimit),
-    db
+    input.includeEpisodes === false
+      ? Promise.resolve([])
+      : db
+        .select({
+          id: brainMemoryEpisodes.id,
+          topic: brainMemoryEpisodes.episodeType,
+          summary: brainMemoryEpisodes.summary,
+          confidence: brainMemoryEpisodes.confidence,
+          revision: brainMemoryEpisodes.revision,
+          observedAt: brainMemoryEpisodes.observedAt,
+          expiresAt: brainMemoryEpisodes.expiresAt,
+        })
+        .from(brainMemoryEpisodes)
+        .where(and(
+          eq(brainMemoryEpisodes.userId, input.userId),
+          eq(brainMemoryEpisodes.lifecycleStatus, "active"),
+          isNull(brainMemoryEpisodes.deletedAt),
+          gt(brainMemoryEpisodes.expiresAt, now),
+        ))
+        .orderBy(desc(brainMemoryEpisodes.importanceScore), desc(brainMemoryEpisodes.observedAt))
+        .limit(episodicLimit),
+    input.includeContested === false
+      ? Promise.resolve([])
+      : db
       .select({ key: brainMemoryFacts.canonicalKey, count: sql<number>`count(*)` })
       .from(brainMemoryFacts)
       .where(and(

@@ -5542,6 +5542,13 @@ async function processSharedBrainChatTask(
         assistantReply: completedResultText,
         intent: input.understanding.intent.primaryIntent,
         requestId: input.requestId,
+        source:
+          typeof readRecord(input.currentTask.payload)?.source === "string"
+            ? String(readRecord(input.currentTask.payload)?.source)
+            : undefined,
+        metadata: getPayloadMetadata(
+          readRecord(input.currentTask.payload) ?? {},
+        ),
       }).catch(() => undefined);
 
       if (chatStreaming?.sessionId) {
@@ -5991,6 +5998,13 @@ async function processSharedBrainChatTask(
       }),
       intent: input.understanding.intent.primaryIntent,
       requestId: input.requestId,
+      source:
+        typeof readRecord(input.currentTask.payload)?.source === "string"
+          ? String(readRecord(input.currentTask.payload)?.source)
+          : undefined,
+      metadata: getPayloadMetadata(
+        readRecord(input.currentTask.payload) ?? {},
+      ),
       volatileExternalData:
         typeof inference.metadata.freshDataDomain === "string" &&
         !["general", "url_review"].includes(inference.metadata.freshDataDomain),
@@ -9051,6 +9065,11 @@ export async function submitTaskFeedback(
     correction: input.correction,
     preferredAnswer: input.preferredAnswer,
     requestId: input.requestId,
+    source:
+      typeof readRecord(task.payload)?.source === "string"
+        ? String(readRecord(task.payload)?.source)
+        : undefined,
+    metadata: getPayloadMetadata(readRecord(task.payload) ?? {}),
   });
   void maybeQueueAutomaticSharedBrainRefresh(app, {
     userId: input.userId,

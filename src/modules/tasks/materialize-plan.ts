@@ -149,7 +149,10 @@ function compactCatalogValue(value: unknown, max = 420): string {
   return normalized.length > max ? `${normalized.slice(0, max - 1).trim()}…` : normalized;
 }
 
-function renderCapabilityCatalog(allowed: Set<string>): string {
+function renderCapabilityCatalog(
+  allowed: Set<string>,
+  detailed: Set<string> = allowed,
+): string {
   // Manifest'ten yalnız izinli olanları, her yeteneğin ne zaman kullanılacağı
   // (usage) + gerekli argümanları + onay bayrağı ile listele. Bu, modelin
   // doğru yeteneği doğru argümanla seçmesinin kaldıracıdır (skill-benzeri
@@ -162,6 +165,10 @@ function renderCapabilityCatalog(allowed: Set<string>): string {
           : "";
       const approval = entry.requiresApproval ? " [needs user approval]" : "";
       const usage = entry.usage ? ` — ${entry.usage}` : "";
+      const privacy = entry.privacyClass ? ` [privacy: ${entry.privacyClass}]` : "";
+      if (!detailed.has(entry.name)) {
+        return `- ${entry.name}: ${entry.description}${usage}${req}${approval}${privacy}`;
+      }
       const when = entry.whenToUse.length > 0 ? ` | use: ${compactCatalogValue(entry.whenToUse, 260)}` : "";
       const avoid = entry.whenNotToUse.length > 0 ? ` | avoid: ${compactCatalogValue(entry.whenNotToUse, 220)}` : "";
       const input = Object.keys(entry.inputContract).length > 0 ? ` | input: ${compactCatalogValue(entry.inputContract, 280)}` : "";
@@ -169,14 +176,21 @@ function renderCapabilityCatalog(allowed: Set<string>): string {
       const artifact = Object.keys(entry.artifactContract).length > 0 ? ` | artifact: ${compactCatalogValue(entry.artifactContract, 220)}` : "";
       const verify = entry.verificationPlan.length > 0 ? ` | verify: ${compactCatalogValue(entry.verificationPlan, 260)}` : "";
       const live = entry.liveNarration.length > 0 ? ` | live: ${compactCatalogValue(entry.liveNarration, 180)}` : "";
-      const privacy = entry.privacyClass ? ` | privacy: ${entry.privacyClass}` : "";
+      const privacyDetail = entry.privacyClass ? ` | privacy: ${entry.privacyClass}` : "";
       const skills = entry.skillAffinity.length > 0 ? ` | related skills: ${entry.skillAffinity.join(", ")}` : "";
-      return `- ${entry.name}: ${entry.description}${usage}${req}${approval}${when}${avoid}${input}${output}${artifact}${verify}${live}${privacy}${skills}`;
+      const example =
+        entry.fewShots.length > 0
+          ? ` | example: ${compactCatalogValue(entry.fewShots[0], 260)}`
+          : "";
+      return `- ${entry.name}: ${entry.description}${usage}${req}${approval}${when}${avoid}${input}${output}${artifact}${verify}${live}${privacyDetail}${skills}${example}`;
     })
     .join("\n");
 }
 
-function renderSkillCatalog(allowed: Set<string>): string {
+function renderSkillCatalog(
+  allowed: Set<string>,
+  detailedCapabilities: Set<string> = allowed,
+): string {
   if (!allowed.has("run_skill")) {
     return "(run_skill is not allowed for this work order)";
   }
@@ -194,6 +208,13 @@ function renderSkillCatalog(allowed: Set<string>): string {
         ? ` [internal chain: ${entry.stepCapabilities.join(" -> ")}]`
         : "";
     const confirmation = entry.requiresConfirmation ? " [may need user approval]" : "";
+    const related =
+      entry.stepCapabilities.some((capability) =>
+        detailedCapabilities.has(capability),
+      ) || detailedCapabilities.has("run_skill");
+    if (!related) {
+      return `- ${entry.id} (${entry.name}, ${entry.category}): ${entry.description}${steps}${confirmation}`;
+    }
     const expected =
       entry.expectedInputs.length > 0
         ? ` [best inputs: ${entry.expectedInputs.join(", ")}]`
@@ -343,6 +364,11 @@ export function buildPlanningPrompt(
     .slice(0, 8)
     .map((e) => `- ${e.type}: ${e.value}`)
     .join("\n");
+  const detailedCapabilities = new Set(
+    (workOrder.requiredCapabilities ?? []).filter((value) =>
+      allowed.includes(value),
+    ),
+  );
   return [
     "You are the Elyan desktop task planner. Decompose the user's goal into an ordered,",
     "dependency-linked plan of desktop capability steps that the desktop runtime executes step by step.",
@@ -358,10 +384,10 @@ export function buildPlanningPrompt(
     renderWorkOrderContextPack(workOrder),
     "",
     "TOOL CAPABILITY CATALOG (use ONLY these exact capability names; each line: name: what it does — when to use [required args][needs approval]):",
-    renderCapabilityCatalog(new Set(allowed)),
+    renderCapabilityCatalog(new Set(allowed), detailedCapabilities),
     "",
     "SKILL CATALOG (prepared local workflows; execute them ONLY through capability run_skill with args.skillId and args.payload):",
-    renderSkillCatalog(new Set(allowed)),
+    renderSkillCatalog(new Set(allowed), detailedCapabilities),
     "",
     "PLAN MODE DECISION:",
     `- Existing backend work type hint: ${String(workOrder.workType ?? "unknown")}. Use it as a hint, but override it when the goal clearly requires another mode.`,
@@ -519,7 +545,14 @@ async function critiqueAndRevisePlan(
       "6) Smallest correct plan (2..16 steps).",
       "",
       "CAPABILITY CATALOG (allowed names only):",
-      renderCapabilityCatalog(new Set(allowed)),
+      renderCapabilityCatalog(
+        new Set(allowed),
+        new Set(
+          (workOrder.requiredCapabilities ?? []).filter((value) =>
+            allowed.includes(value),
+          ),
+        ),
+      ),
       "",
       'Output EXACTLY ONE JSON object {"steps":[...]} with the corrected plan. If the draft is already optimal, return it unchanged. No prose, no markdown fences.',
     ].join("\n");

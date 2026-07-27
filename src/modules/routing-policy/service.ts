@@ -82,7 +82,7 @@ export type CommandRouteDecision = {
 export type CommandRouteInput = {
   userId: string;
   message: string;
-  source: "web" | "mobile" | "desktop";
+  source: "web" | "mobile" | "desktop" | "email" | "whatsapp";
   activeChatSessionId?: string;
   selectedDeviceId?: string;
   metadata?: Record<string, unknown>;

@@ -103,6 +103,28 @@ test("desktop materialization prompt carries context pack for follow-up artifact
   assert.match(prompt, /PDF\/DOCX\/XLSX\/image\/chart requests must produce a matching artifact step/);
 });
 
+test("desktop materialization keeps full catalog awareness but expands only required capability contracts", () => {
+  const order = workOrder("Bir rapor hazırla", ["document_write"]);
+  const prompt = buildPlanningPrompt(order, [
+    "document_write",
+    "spreadsheet_write",
+    "open_app",
+    "run_skill",
+  ]);
+
+  const documentLine = prompt
+    .split("\n")
+    .find((line) => line.startsWith("- document_write:"));
+  const spreadsheetLine = prompt
+    .split("\n")
+    .find((line) => line.startsWith("- spreadsheet_write:"));
+  assert.match(documentLine ?? "", /\| input:/);
+  assert.ok(spreadsheetLine);
+  assert.doesNotMatch(spreadsheetLine ?? "", /\| input:/);
+  assert.match(prompt, /open_app:/);
+  assert.ok(prompt.length < 50_000);
+});
+
 test("desktop materialization prompt keeps research queries public and writer args contextual", () => {
   const fewShots = renderPlanningFewShots();
 

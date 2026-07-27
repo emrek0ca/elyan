@@ -10,9 +10,60 @@ import {
   prioritizeCanonicalMemoryState,
   readCanonicalMemoryState,
   softDeleteBrainMemory,
+  summarizeUserProfileSignals,
   updateBrainMemory,
   upsertMemoryFact,
 } from "./memory.js";
+
+test("profile signal aggregation requires repeated evidence and remains deterministic", () => {
+  const result = summarizeUserProfileSignals([
+    { key: "preferred_language", value: "tr", confidence: 0.72 },
+    { key: "answer_length", value: "short", confidence: 0.7 },
+    { key: "answer_length", value: "short", confidence: 0.74 },
+    { key: "preferred_tone", value: "warm_natural", confidence: 0.8 },
+    { key: "message_keywords", value: "quantum, python", confidence: 0.7 },
+    { key: "message_keywords", value: "quantum, optimization", confidence: 0.7 },
+    { key: "message_keywords", value: "quantum, python", confidence: 0.7 },
+  ]);
+
+  assert.equal(
+    result.communicationStyle?.value,
+    "language: tr; response length: short; tone: warm_natural",
+  );
+  assert.equal(result.communicationStyle?.evidenceCount, 4);
+  assert.equal(result.interests?.value, "quantum, python");
+  assert.deepEqual(result.interests?.keywordCounts, { quantum: 3, python: 2 });
+});
+
+test("profile signal aggregation rejects sparse style and one-off interests", () => {
+  const result = summarizeUserProfileSignals([
+    { key: "answer_length", value: "short", confidence: 0.7 },
+    { key: "preferred_tone", value: "warm_natural", confidence: 0.8 },
+    { key: "message_keywords", value: "quantum, python", confidence: 0.7 },
+    { key: "message_keywords", value: "optimization, rust", confidence: 0.7 },
+    { key: "message_keywords", value: "security, flutter", confidence: 0.7 },
+  ]);
+
+  assert.equal(result.communicationStyle, null);
+  assert.equal(result.interests, null);
+});
+
+test("profile signal aggregation gives explicit feedback authority over repeated inference", () => {
+  const result = summarizeUserProfileSignals([
+    { key: "answer_length", value: "concise", confidence: 70 },
+    { key: "answer_length", value: "concise", confidence: 72 },
+    { key: "answer_length", value: "concise", confidence: 71 },
+    {
+      key: "answer_length",
+      value: "detailed",
+      confidence: 90,
+      source: "feedback",
+      metadata: { explicit: true },
+    },
+  ]);
+
+  assert.equal(result.communicationStyle?.value, "response length: detailed");
+});
 
 test("async memory extraction cannot resurrect an explicitly forgotten key", async () => {
   let insertCalls = 0;
