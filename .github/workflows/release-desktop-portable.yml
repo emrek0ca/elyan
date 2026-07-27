@@ -45,7 +45,7 @@ jobs:
         run: |
           python -m pip install uv==0.10.12
           brew untap aws/tap || true
-          brew install portaudio
+          brew install portaudio ffmpeg
 
       - name: Build macOS portable package
         run: python scripts/build_desktop_installers.py --platform macos --arch "${{ matrix.arch }}" --output "release/macos-${{ matrix.arch }}"
