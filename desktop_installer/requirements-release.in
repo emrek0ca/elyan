@@ -17,5 +17,8 @@ latex2sympy2_extended
 python-docx
 python-pptx
 faster-whisper
+# 1.24+ raises the macOS arm64 wheel floor to macOS 14. Keep the newest
+# CPython 3.11 release that still ships macOS 13, Windows, and Linux wheels.
+onnxruntime==1.23.2
 sounddevice
 soundfile
