@@ -69,6 +69,17 @@ def test_manifest_covers_safe_baseline_and_flags_approval() -> None:
 def test_capability_manifest_exports_v2_quality_contracts() -> None:
     live = {entry["name"]: entry for entry in build_manifest()}
 
+    for cap, entry in live.items():
+        assert entry["description"], cap
+        assert entry["whenToUse"], cap
+        assert entry["whenNotToUse"], cap
+        assert entry["inputContract"], cap
+        assert entry["outputContract"], cap
+        assert entry["verificationPlan"], cap
+        assert entry["liveNarration"], cap
+        assert entry["failureModes"], cap
+        assert entry["privacyClass"], cap
+
     for cap in {
         "canvas_write",
         "document_write",
@@ -107,3 +118,4 @@ def test_capability_manifest_exports_v2_quality_contracts() -> None:
     assert live["presentation_write"]["artifactContract"]["extension"] == ".pptx"
     assert live["analyze_screen"]["outputContract"]["kind"] == "screen_analysis"
     assert live["run_skill"]["inputContract"]["skillIdMustExistInCatalog"] is True
+    assert live["open_app"]["fewShots"][0]["args"]["app_name"] == "Google Chrome"

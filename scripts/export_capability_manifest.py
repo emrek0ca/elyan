@@ -49,6 +49,33 @@ def _object_value(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _default_input_contract(
+    parameters: dict[str, object],
+    required: list[str],
+) -> dict[str, object]:
+    properties = parameters.get("properties")
+    safe_properties = dict(properties) if isinstance(properties, dict) else {}
+    return {
+        "required": required,
+        "properties": safe_properties,
+        "additionalProperties": False,
+    }
+
+
+def _default_verification_plan(
+    *,
+    requires_approval: bool,
+) -> list[str]:
+    steps = [
+        "Structured result must return ok=true before success is reported.",
+    ]
+    if requires_approval:
+        steps.append(
+            "Permission or approval must be verified before the side effect runs."
+        )
+    return steps
+
+
 def build_capability_manifest() -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     seen: set[str] = set()
@@ -62,6 +89,42 @@ def build_capability_manifest() -> list[dict[str, object]]:
         parameters = parameters if isinstance(parameters, dict) else {}
         required = parameters.get("required")
         required = [str(item) for item in required] if isinstance(required, list) else []
+        requires_approval = name in REMOTE_APPROVAL_CAPABILITIES
+        description = _clip(decl.get("description", ""), 200)
+        usage = _clip(decl.get("usage", ""), 200)
+        when_to_use = _string_list(decl.get("whenToUse"), 8) or [
+            usage or description
+        ]
+        when_not_to_use = _string_list(decl.get("whenNotToUse"), 6)
+        if not when_not_to_use:
+            missing_input = (
+                f"Do not use when required inputs ({', '.join(required)}) "
+                "are missing or ambiguous."
+                if required
+                else "Do not use when this capability does not directly advance the requested outcome."
+            )
+            when_not_to_use = [missing_input]
+        input_contract = _object_value(decl.get("inputContract")) or (
+            _default_input_contract(parameters, required)
+        )
+        output_contract = _object_value(decl.get("outputContract")) or {
+            "kind": "structured_result",
+            "capability": name,
+            "requiresOk": True,
+        }
+        verification_plan = _string_list(decl.get("verificationPlan"), 6) or (
+            _default_verification_plan(requires_approval=requires_approval)
+        )
+        live_narration = _string_list(decl.get("liveNarration"), 6) or [
+            "Capability is running.",
+            "Result is being verified.",
+        ]
+        failure_modes = _string_list(decl.get("failureModes"), 8, 80) or [
+            "INVALID_INPUT",
+            "DEPENDENCY_UNAVAILABLE",
+            "TIMEOUT",
+        ]
+        examples = decl.get("fewShots") or decl.get("examples") or []
         entries.append(
             {
                 "name": name,
@@ -69,24 +132,28 @@ def build_capability_manifest() -> list[dict[str, object]]:
                 # bilmek ZORUNDA: etiketin cevap metni olarak sızmasını orada
                 # tek kapıda engelliyor. Tek kaynak yine capability_registry.
                 "displayName": capability_display_name(name),
-                "description": _clip(decl.get("description", ""), 200),
-                "usage": _clip(decl.get("usage", ""), 200),
+                "description": description,
+                "usage": usage,
                 "requiredArgs": required,
-                "requiresApproval": name in REMOTE_APPROVAL_CAPABILITIES,
-                "whenToUse": _string_list(decl.get("whenToUse"), 8),
-                "whenNotToUse": _string_list(decl.get("whenNotToUse"), 6),
-                "inputContract": _object_value(decl.get("inputContract")),
-                "outputContract": _object_value(decl.get("outputContract")),
+                "requiresApproval": requires_approval,
+                "whenToUse": when_to_use,
+                "whenNotToUse": when_not_to_use,
+                "inputContract": input_contract,
+                "outputContract": output_contract,
                 "artifactContract": _object_value(decl.get("artifactContract")),
-                "verificationPlan": _string_list(decl.get("verificationPlan"), 6),
-                "liveNarration": _string_list(decl.get("liveNarration"), 6),
-                "failureModes": _string_list(decl.get("failureModes"), 8, 80),
+                "verificationPlan": verification_plan,
+                "liveNarration": live_narration,
+                "failureModes": failure_modes,
                 "fewShots": [
                     dict(item)
-                    for item in (decl.get("fewShots", []) or [])
+                    for item in examples
                     if isinstance(item, dict)
                 ][:3],
-                "privacyClass": _clip(decl.get("privacyClass", ""), 80),
+                "privacyClass": _clip(
+                    decl.get("privacyClass", "")
+                    or ("permission_gated" if requires_approval else "local_runtime"),
+                    80,
+                ),
                 "skillAffinity": _string_list(decl.get("skillAffinity"), 8, 120),
             }
         )
