@@ -665,11 +665,19 @@ export async function readCanonicalMemoryState(
           "preferred_tone",
           "response_style_preference",
           "timezone",
+          "job_title",
+          "company",
+          "location",
+          "project",
+          "active_project",
+          "primary_repo",
+          "working_boundary",
+          "implementation_boundary",
         ]),
       ),
     )
     .orderBy(desc(brainMemoryFacts.updatedAt))
-    .limit(8);
+    .limit(16);
 
   return rows.map((row) =>
     buildMemoryHit({
@@ -761,6 +769,11 @@ function isHighValueLearningKey(key: string): boolean {
     "preferred_language",
     "preferred_tone",
     "response_style_preference",
+    "project",
+    "active_project",
+    "primary_repo",
+    "working_boundary",
+    "implementation_boundary",
     "humor_level",
     "humor_feedback",
     "task_handoff_helpfulness",
@@ -842,6 +855,14 @@ function computeLearningValueScore(input: {
     "preferred_language",
     "preferred_tone",
     "response_style_preference",
+    "job_title",
+    "company",
+    "location",
+    "timezone",
+    "project",
+    "active_project",
+    "primary_repo",
+    "working_boundary",
     "project_constraint",
     "implementation_boundary",
     "privacy_boundary",
@@ -907,6 +928,16 @@ function shouldPromoteLearningEvent(input: {
     "name",
     "preferred_name",
     "preferred_language",
+    "preferred_tone",
+    "response_style_preference",
+    "job_title",
+    "company",
+    "location",
+    "timezone",
+    "project",
+    "active_project",
+    "primary_repo",
+    "working_boundary",
     "project_constraint",
     "privacy_boundary",
     "implementation_boundary",
@@ -928,6 +959,8 @@ function computeImportanceScore(input: { key: string; count: number; confidence:
         ? 84
         : input.key === "preferred_tone" || input.key === "response_style_preference"
       ? 82
+      : ["project", "active_project", "primary_repo", "working_boundary", "implementation_boundary"].includes(input.key)
+        ? 82
       : input.key === "task_handoff_helpfulness" || input.key === "mobile_sync_quality"
         ? 76
         : input.key === "emotional_signal" || input.key === "user_mood" || input.key === "user_frustration"
@@ -1007,6 +1040,11 @@ function requiresRepeatedEvidenceForSemanticFact(key: string): boolean {
     "preferred_language",
     "preferred_tone",
     "response_style_preference",
+    "project",
+    "active_project",
+    "primary_repo",
+    "working_boundary",
+    "implementation_boundary",
     "project_constraint",
   ].includes(key);
 }
@@ -1364,7 +1402,7 @@ export async function searchBrainMemory(
         and lifecycle_status = 'active'
         and deleted_at is null
       order by
-        case when canonical_key in ('name', 'preferred_name', 'preferred_language', 'preferred_tone', 'response_style_preference', 'timezone') then 0 else 1 end,
+        case when canonical_key in ('name', 'preferred_name', 'preferred_language', 'preferred_tone', 'response_style_preference', 'timezone', 'job_title', 'company', 'location', 'project', 'active_project', 'primary_repo', 'working_boundary', 'implementation_boundary') then 0 else 1 end,
         updated_at desc
       limit ${Math.max(input.limit * 4, 20)}
     `);

@@ -8,6 +8,7 @@ import {
 } from "../../db/schema.js";
 import { withTenantTransaction, type TenantDb } from "../../db/tenant-context.js";
 import { readDialogueStateOnDb } from "./dialogue-state.js";
+import { isSingleValueMemoryKey } from "./memory-key-policy.js";
 
 const workingSchema = z.object({
   sessionId: z.string().uuid().nullable(),
@@ -84,11 +85,33 @@ function clip(value: string, max: number): string {
   return compact.length <= max ? compact : `${compact.slice(0, max - 1).trimEnd()}…`;
 }
 
+function tokenize(value: string): Set<string> {
+  return new Set(
+    value
+      .toLocaleLowerCase("tr")
+      .replace(/[^a-z0-9çğıöşü_.-]+/gi, " ")
+      .split(/\s+/)
+      .filter((token) => token.length >= 3)
+      .slice(0, 80),
+  );
+}
+
+function lexicalOverlap(queryTokens: Set<string>, value: string): number {
+  if (queryTokens.size === 0) return 0;
+  const haystack = tokenize(value);
+  let overlap = 0;
+  for (const token of queryTokens) {
+    if (haystack.has(token)) overlap += 1;
+  }
+  return overlap;
+}
+
 export async function buildCognitiveContextPacket(
   app: FastifyInstance,
   input: {
     userId: string;
     sessionId?: string | null;
+    query?: string;
     semanticLimit?: number;
     episodicLimit?: number;
     maxChars?: number;
@@ -107,6 +130,7 @@ async function buildCognitiveContextPacketOnDb(
   input: {
     userId: string;
     sessionId?: string | null;
+    query?: string;
     semanticLimit?: number;
     episodicLimit?: number;
     maxChars?: number;
@@ -119,6 +143,9 @@ async function buildCognitiveContextPacketOnDb(
   const semanticLimit = Math.max(1, Math.min(input.semanticLimit ?? 16, 32));
   const episodicLimit = Math.max(1, Math.min(input.episodicLimit ?? 8, 16));
   const maxChars = Math.max(1_000, Math.min(input.maxChars ?? 6_000, 12_000));
+  const queryTokens = tokenize(input.query ?? "");
+  const semanticFetchLimit =
+    queryTokens.size > 0 ? Math.min(96, semanticLimit * 4) : semanticLimit;
 
   const [dialogue, revisionRows, factRows, episodeRows, contestedRows] = await Promise.all([
     input.sessionId
@@ -135,6 +162,7 @@ async function buildCognitiveContextPacketOnDb(
         key: brainMemoryFacts.canonicalKey,
         value: brainMemoryFacts.value,
         confidence: brainMemoryFacts.confidence,
+        importanceScore: brainMemoryFacts.importanceScore,
         revision: brainMemoryFacts.revision,
         sourceKind: brainMemoryFacts.sourceKind,
         observedAt: brainMemoryFacts.observedAt,
@@ -149,7 +177,7 @@ async function buildCognitiveContextPacketOnDb(
         isNull(brainMemoryFacts.validTo),
       ))
       .orderBy(desc(brainMemoryFacts.importanceScore), desc(brainMemoryFacts.observedAt))
-      .limit(semanticLimit),
+      .limit(semanticFetchLimit),
     input.includeEpisodes === false
       ? Promise.resolve([])
       : db
@@ -187,7 +215,22 @@ async function buildCognitiveContextPacketOnDb(
 
   let usedChars = 0;
   const semantic: CognitiveContextPacket["semantic"] = [];
-  for (const row of factRows) {
+  const rankedFactRows = [...factRows]
+    .map((row) => ({
+      ...row,
+      isCanonical: isSingleValueMemoryKey(row.key),
+      overlap: lexicalOverlap(queryTokens, `${row.key} ${row.value}`),
+    }))
+    .filter((row) => row.isCanonical || queryTokens.size === 0 || row.overlap > 0)
+    .sort(
+      (left, right) =>
+        Number(right.isCanonical) - Number(left.isCanonical) ||
+        right.overlap - left.overlap ||
+        Number(right.importanceScore ?? 0) - Number(left.importanceScore ?? 0) ||
+        right.observedAt.getTime() - left.observedAt.getTime(),
+    )
+    .slice(0, semanticLimit);
+  for (const row of rankedFactRows) {
     const value = clip(row.value, 800);
     const cost = row.key.length + value.length;
     if (usedChars + cost > maxChars) break;

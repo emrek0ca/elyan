@@ -3,11 +3,20 @@ import type { LearningSignal, RetrievedMemory } from "./types.js";
 const MIN_CONFIDENCE = 0.68;
 const MAX_VALUE_LENGTH = 240;
 const SINGLE_VALUE_MEMORY_KEYS = new Set([
+  "name",
   "preferred_name",
   "preferred_language",
   "preferred_tone",
   "response_style_preference",
   "timezone",
+  "job_title",
+  "company",
+  "location",
+  "project",
+  "active_project",
+  "primary_repo",
+  "working_boundary",
+  "implementation_boundary",
 ]);
 
 const SINGLE_VALUE_KEY_ALIASES: Record<string, string> = {
@@ -23,6 +32,9 @@ const SINGLE_VALUE_KEY_ALIASES: Record<string, string> = {
   hitap_şekli: "preferred_name",
   language: "preferred_language",
   response_style: "response_style_preference",
+  current_project: "active_project",
+  repo: "primary_repo",
+  repository: "primary_repo",
 };
 
 const sensitivePatterns = [
@@ -66,6 +78,10 @@ function canonicalSingleValueKey(value: string): string | null {
   const normalized = normalizeMemoryKey(value);
   const canonical = SINGLE_VALUE_KEY_ALIASES[normalized] ?? normalized;
   return SINGLE_VALUE_MEMORY_KEYS.has(canonical) ? canonical : null;
+}
+
+export function canonicalPromptSingleValueKey(value: string): string | null {
+  return canonicalSingleValueKey(value);
 }
 
 function memoryUpdatedAt(item: RetrievedMemory): number {

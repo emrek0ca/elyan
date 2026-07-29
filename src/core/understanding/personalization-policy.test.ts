@@ -123,3 +123,71 @@ test("filterRetrievedMemory prefers verified fresh corrections and drops contest
   assert.equal(filtered.length, 1);
   assert.equal(filtered[0]?.id, "2");
 });
+
+test("filterRetrievedMemory treats project and profile facts as single-value prompt truth", () => {
+  const filtered = filterRetrievedMemory([
+    {
+      id: "old-company",
+      type: "identity",
+      key: "company",
+      value: "OldCo",
+      confidence: 0.98,
+      scope: "user",
+      source: "semantic_memory",
+      createdAt: new Date("2030-01-01T00:00:00.000Z"),
+      staleness: "fresh",
+      conflictStatus: "active",
+      lastVerifiedAt: new Date("2030-01-01T00:00:00.000Z"),
+      importanceScore: 95,
+      isPinned: true,
+    },
+    {
+      id: "new-company",
+      type: "identity",
+      key: "company",
+      value: "NewCo",
+      confidence: 0.9,
+      scope: "user",
+      source: "explicit_user",
+      createdAt: new Date("2030-01-02T00:00:00.000Z"),
+      staleness: "fresh",
+      conflictStatus: "active",
+      lastVerifiedAt: new Date("2030-01-02T00:00:00.000Z"),
+      importanceScore: 70,
+      isPinned: false,
+    },
+    {
+      id: "old-repo",
+      type: "project_context",
+      key: "repo",
+      value: "legacy/backend",
+      confidence: 0.92,
+      scope: "user",
+      source: "semantic_memory",
+      createdAt: new Date("2030-01-01T00:00:00.000Z"),
+      staleness: "fresh",
+      conflictStatus: "active",
+      lastVerifiedAt: new Date("2030-01-01T00:00:00.000Z"),
+      importanceScore: 90,
+      isPinned: true,
+    },
+    {
+      id: "new-repo",
+      type: "project_context",
+      key: "primary_repo",
+      value: "elyan-backend",
+      confidence: 0.9,
+      scope: "user",
+      source: "explicit_user",
+      createdAt: new Date("2030-01-02T00:00:00.000Z"),
+      staleness: "fresh",
+      conflictStatus: "active",
+      lastVerifiedAt: new Date("2030-01-02T00:00:00.000Z"),
+      importanceScore: 70,
+      isPinned: false,
+    },
+  ]);
+
+  assert.deepEqual(filtered.map((item) => item.id), ["new-company", "new-repo"]);
+  assert.equal(filtered[1]?.key, "primary_repo");
+});

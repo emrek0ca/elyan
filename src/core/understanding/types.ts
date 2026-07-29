@@ -553,6 +553,7 @@ export type UserUnderstandingContext = {
     legacyFactCount: number;
     cognitiveFactCount: number;
     keyMismatchCount: number;
+    mismatchKeys?: string[];
     cognitiveRevision: number;
   };
   cognitiveReadMs?: number;

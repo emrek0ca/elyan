@@ -177,6 +177,41 @@ test("recordTurnMemoryOps update supersedes prior same-key facts", async () => {
   assert.equal(fake.updates.some((row) => row.lifecycleStatus === "superseded"), true);
 });
 
+test("recordTurnMemoryOps replaces project and profile single-value facts", async () => {
+  const fake = createFakeApp();
+  await recordTurnMemoryOps(fake.app, {
+    userId: "user-1",
+    envelope: envelope([
+      {
+        op: "write",
+        kind: "fact",
+        key: "company",
+        value: "OldCo",
+        confidence: 0.95,
+      },
+    ]),
+  });
+  await recordTurnMemoryOps(fake.app, {
+    userId: "user-1",
+    envelope: envelope([
+      {
+        op: "write",
+        kind: "fact",
+        key: "company",
+        value: "NewCo",
+        confidence: 0.9,
+      },
+    ]),
+  });
+
+  assert.equal(
+    fake.updates.some(
+      (row) => row.conflictStatus === "superseded" && row.lifecycleStatus === "superseded",
+    ),
+    true,
+  );
+});
+
 test("recordTurnMemoryOps writes episode ops to episodic memory", async () => {
   const fake = createFakeApp();
   const result = await recordTurnMemoryOps(fake.app, {

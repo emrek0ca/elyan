@@ -1145,7 +1145,7 @@ export const brainMemoryFacts = pgTable(
     canonicalIdx: index("brain_memory_facts_canonical_idx").on(table.userId, table.canonicalKey),
     singleValueActiveIdx: uniqueIndex("brain_memory_facts_single_value_active_uidx")
       .on(table.userId, table.canonicalKey, table.factType)
-      .where(sql`${table.conflictStatus} = 'active' and ${table.lifecycleStatus} = 'active' and ${table.deletedAt} is null and ${table.canonicalKey} in ('name', 'preferred_name', 'preferred_language', 'preferred_tone', 'response_style_preference', 'timezone')`),
+      .where(sql`${table.conflictStatus} = 'active' and ${table.lifecycleStatus} = 'active' and ${table.deletedAt} is null and ${table.canonicalKey} in ('name', 'preferred_name', 'preferred_language', 'preferred_tone', 'response_style_preference', 'timezone', 'job_title', 'company', 'location', 'project', 'active_project', 'primary_repo', 'working_boundary', 'implementation_boundary')`),
     conflictIdx: index("brain_memory_facts_conflict_idx").on(table.conflictStatus),
     staleIdx: index("brain_memory_facts_stale_idx").on(table.staleAt),
     pinnedIdx: index("brain_memory_facts_pinned_idx").on(table.isPinned),

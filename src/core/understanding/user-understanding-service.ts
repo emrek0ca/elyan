@@ -20,7 +20,10 @@ import {
 import type { UnderstandingEnvelope } from "./types.js";
 import { buildModelFallbackUnderstandingEnvelope } from "./understanding-model-fallback.js";
 import { extractFeedbackSignals, extractPreferenceSignals } from "./preference-extractor.js";
-import { filterLearningSignals } from "./personalization-policy.js";
+import {
+  canonicalPromptSingleValueKey,
+  filterLearningSignals,
+} from "./personalization-policy.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import { startStage } from "../../lib/perf-telemetry.js";
 import { enhanceIntentWithGeminiFree } from "../../modules/brain/gemini-intent-router.js";
@@ -269,7 +272,7 @@ export async function buildTaskUnderstanding(
         envelope.memory_candidates,
       );
       if (understoodMemoryOps.length) {
-        void recordTurnMemoryOps(app, {
+        await recordTurnMemoryOps(app, {
           userId: input.userId,
           sessionId: input.taskId ?? null,
           envelope: buildMemoryOnlyEnvelope(understoodMemoryOps),
@@ -415,26 +418,28 @@ export async function persistLearningSignals(
       return signals.length;
     }
 
-    // Identity is single-valued: a new "my name is X" statement *replaces* the
-    // old fact, it does not sit beside it. Without this sweep the stale row
-    // ("En") stays live indefinitely and competes with the correction at read
-    // time — recency scoring only papers over that race, expiry ends it.
-    const identityKeysBeingWritten = [
+    // Prompt-facing single-value facts must not sit beside old values in the
+    // legacy learning_events store. Canonical brain_memory_facts is the durable
+    // authority, but legacy fallback still reads learning_events for migration
+    // and weak-context recovery, so expire older same-key rows here.
+    const singleValueKeysBeingWritten = [
       ...new Set(
         signals
-          .filter((signal) => signal.type === "identity")
-          .map((signal) => signal.key),
+          .map((signal) => canonicalPromptSingleValueKey(signal.key) ?? null)
+          .filter((key): key is string => key != null),
       ),
     ];
-    if (identityKeysBeingWritten.length > 0) {
+    if (
+      singleValueKeysBeingWritten.length > 0 &&
+      typeof (app.db as { update?: unknown }).update === "function"
+    ) {
       await app.db
         .update(learningEvents)
         .set({ expiresAt: new Date(now) })
         .where(
           and(
             eq(learningEvents.userId, input.userId),
-            eq(learningEvents.type, "identity"),
-            inArray(learningEvents.key, identityKeysBeingWritten),
+            inArray(learningEvents.key, singleValueKeysBeingWritten),
           ),
         )
         .catch(() => undefined);

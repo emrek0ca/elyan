@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { normalizePersonalName } from "./identity-name.js";
 import { authIdentities, learningEvents, subscriptions, users } from "../../db/schema.js";
@@ -13,7 +13,10 @@ import {
   summarizeContextFreshness,
 } from "./context-packets.js";
 import { buildMemoryProfileSnapshot, EPISODIC_LABELS } from "./memory-profile.js";
-import { filterRetrievedMemory } from "./personalization-policy.js";
+import {
+  canonicalPromptSingleValueKey,
+  filterRetrievedMemory,
+} from "./personalization-policy.js";
 import { extractProjectHints } from "./project-context.js";
 import { buildDerivedHintBuckets, deriveLearningSignalsFromWorldSignals, toDerivedSignalInput } from "./world-signal-derived.js";
 import { isShortFollowUpPrompt } from "../../modules/brain/chat-heuristics.js";
@@ -530,6 +533,46 @@ function buildMemoryRelevanceSummary(input: {
 function isWorldDerivedMemory(item: RetrievedMemory): boolean {
   const metadata = readRecord(item.metadata);
   return readStringValue(metadata, "sourceCategory") === "world_signal_derived";
+}
+
+function isCanonicalPromptMemoryKey(key: string): boolean {
+  return canonicalPromptSingleValueKey(key) != null;
+}
+
+function learningEventToRetrievedMemory(
+  row: {
+    id: string;
+    type: string;
+    key: string;
+    value: string;
+    confidence: number;
+    scope: string;
+    source: string;
+    metadata: unknown;
+    createdAt: Date;
+  },
+): RetrievedMemory | null {
+  const key = compactText(row.key);
+  const value = compactText(row.value);
+  if (!key || !value || isCanonicalPromptMemoryKey(key)) {
+    return null;
+  }
+  return {
+    id: row.id,
+    type: row.type,
+    key,
+    value,
+    confidence: Math.max(0, Math.min(1, row.confidence / 100)),
+    scope: row.scope === "shared" ? "shared" : "user",
+    source: row.source,
+    createdAt: row.createdAt,
+    staleness: "fresh",
+    conflictStatus: "active",
+    lastVerifiedAt: null,
+    importanceScore: 45,
+    isPinned: false,
+    metadata: readRecord(row.metadata) ?? {},
+  };
 }
 
 function continuityBucketForMemory(item: RetrievedMemory):
@@ -1776,7 +1819,7 @@ export async function buildUserContext(
     memoryEnabled && !isSocialTurn && !foundationEnabled
       ? searchBrainMemory(app, { userId: input.userId, query, limit: MAX_HINTS }).catch(() => ({ results: [] }))
       : Promise.resolve({ results: [] }),
-    memoryEnabled && !foundationEnabled
+    memoryEnabled
       ? readCachedCanonicalMemoryState(app, input.userId).catch(() => [])
       : Promise.resolve([]),
     loadCachedSafeUserProfile(app, input.userId),
@@ -1796,6 +1839,7 @@ export async function buildUserContext(
       ? buildCognitiveContextPacket(app, {
           userId: input.userId,
           sessionId,
+          query,
           semanticLimit: MAX_HINTS,
           episodicLimit: 8,
           maxChars: MAX_CHARS,
@@ -1984,48 +2028,38 @@ export async function buildUserContext(
       }));
 
   const durableFallbackMemory = fallbackRows
-    .map((row) => ({ ...row, confidence: row.confidence / 100 }))
-    .filter((row) => !isWorldDerivedMemory(row as RetrievedMemory));
+    .map((row) => learningEventToRetrievedMemory(row))
+    .filter((row): row is RetrievedMemory => row != null)
+    .filter((row) => !isWorldDerivedMemory(row));
 
-  // Identity is read on every turn, including social ones and including turns
-  // where `stableMemory` already filled the fallback budget. This is the query
-  // that makes "benim adım Emre" survive into the next conversation.
-  const identityAnchorRows = !memoryEnabled
-    ? []
-    : await app.db
-        .select({
-          id:         learningEvents.id,
-          type:       learningEvents.type,
-          key:        learningEvents.key,
-          value:      learningEvents.value,
-          confidence: learningEvents.confidence,
-          scope:      learningEvents.scope,
-          source:     learningEvents.source,
-          metadata:   learningEvents.metadata,
-          expiresAt:  learningEvents.expiresAt,
-          createdAt:  learningEvents.createdAt,
-        })
-        .from(learningEvents)
-        .where(
-          and(
-            eq(learningEvents.userId, input.userId),
-            eq(learningEvents.type, "identity"),
-            inArray(learningEvents.key, [...IDENTITY_ANCHOR_KEYS]),
-            or(isNull(learningEvents.expiresAt), gt(learningEvents.expiresAt, now)),
-          ),
-        )
-        .orderBy(desc(learningEvents.createdAt))
-        .limit(12)
-        .catch(() => []);
-
+  // Identity is read on every turn, including social and cognitive-foundation
+  // turns, but only from canonical brain_memory_facts. learning_events can be
+  // stale after canonical correction and must not anchor prompt identity.
   const identityAnchorMemory = dedupeIdentityAnchors(
-    identityAnchorRows.map((row) => ({
-      ...row,
-      confidence: row.confidence / 100,
-      // Marked pinned so any downstream consumer that honours pinning keeps
-      // these too, not just the ranking bypass below.
-      isPinned: true,
-    })),
+    canonicalMemory
+      .filter(
+        (row) =>
+          row.memorySource !== "episodic_memory" &&
+          row.conflictStatus === "active" &&
+          row.lifecycleStatus === "active" &&
+          IDENTITY_ANCHOR_KEY_SET.has(row.title),
+      )
+      .map((row) => ({
+        id: row.id,
+        type: row.memoryType,
+        key: row.title,
+        value: row.content,
+        confidence: row.confidence / 100,
+        scope: row.scope,
+        source: row.memorySource,
+        createdAt: new Date(row.updatedAt),
+        staleness: row.staleness,
+        conflictStatus: row.conflictStatus,
+        lastVerifiedAt: row.lastVerifiedAt ? new Date(row.lastVerifiedAt) : null,
+        importanceScore: row.importanceScore,
+        isPinned: true,
+        metadata: row.metadata,
+      })),
   );
   const identityAnchorIds = new Set(identityAnchorMemory.map((row) => row.id));
 
@@ -2149,14 +2183,16 @@ export async function buildUserContext(
     } else {
       const legacyKeys = new Set(legacyStableMemory.map((item) => item.key));
       const cognitiveKeys = new Set(cognitiveContext.semantic.map((item) => item.key));
+      const mismatchKeys = [...new Set(
+        [...legacyKeys, ...cognitiveKeys].filter(
+          (key) => !legacyKeys.has(key) || !cognitiveKeys.has(key),
+        ),
+      )].sort();
       ctx.cognitiveShadow = {
         legacyFactCount: legacyStableMemory.length,
         cognitiveFactCount: cognitiveContext.semantic.length,
-        keyMismatchCount: new Set(
-          [...legacyKeys, ...cognitiveKeys].filter(
-            (key) => !legacyKeys.has(key) || !cognitiveKeys.has(key),
-          ),
-        ).size,
+        keyMismatchCount: mismatchKeys.length,
+        mismatchKeys: mismatchKeys.slice(0, 12),
         cognitiveRevision: cognitiveContext.working.memoryRevision,
       };
       recordCognitiveFoundationSignal({

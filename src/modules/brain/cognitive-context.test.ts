@@ -88,3 +88,76 @@ test("social-turn context keeps semantic facts while skipping episodic and conte
   assert.deepEqual(packet.episodic, []);
   assert.equal(packet.uncertainty.contestedFactCount, 0);
 });
+
+test("query-aware cognitive context keeps canonical facts and drops unrelated semantic facts", async () => {
+  let selectCalls = 0;
+  const selectedRows = [
+    [{ revision: 5 }],
+    [
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        key: "favorite_color",
+        value: "green",
+        confidence: 95,
+        importanceScore: 100,
+        revision: 5,
+        sourceKind: "turn_envelope",
+        observedAt: new Date("2026-07-01T12:00:00.000Z"),
+        validFrom: new Date("2026-07-01T12:00:00.000Z"),
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        key: "preferred_name",
+        value: "Emre",
+        confidence: 95,
+        importanceScore: 70,
+        revision: 5,
+        sourceKind: "turn_envelope",
+        observedAt: new Date("2026-07-01T12:01:00.000Z"),
+        validFrom: new Date("2026-07-01T12:01:00.000Z"),
+      },
+      {
+        id: "55555555-5555-4555-8555-555555555555",
+        key: "project_context",
+        value: "Elyan backend memory cleanup",
+        confidence: 90,
+        importanceScore: 60,
+        revision: 5,
+        sourceKind: "turn_envelope",
+        observedAt: new Date("2026-07-01T12:02:00.000Z"),
+        validFrom: new Date("2026-07-01T12:02:00.000Z"),
+      },
+    ],
+  ];
+  const db = {
+    execute: async () => ({ rows: [] }),
+    transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db),
+    select() {
+      const rows = selectedRows[selectCalls++] ?? [];
+      const builder = {
+        from() { return builder; },
+        where() { return builder; },
+        orderBy() { return builder; },
+        limit: async () => rows,
+      };
+      return builder;
+    },
+  };
+
+  const packet = await buildCognitiveContextPacket(
+    { db } as never,
+    {
+      userId: "11111111-1111-4111-8111-111111111111",
+      query: "backend hafıza temizliği",
+      semanticLimit: 4,
+      includeEpisodes: false,
+      includeContested: false,
+      now: new Date("2026-07-27T12:00:00.000Z"),
+    },
+  );
+
+  assert.deepEqual(
+    packet.semantic.map((item) => item.key),
+    ["preferred_name", "project_context"],
+  );
+});

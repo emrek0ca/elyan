@@ -109,6 +109,8 @@ with open(sys.argv[1], "w", encoding="utf-8") as handle:
         "email": sys.argv[2],
         "password": sys.argv[3],
         "displayName": "V1 Smoke User",
+        "termsAccepted": True,
+        "privacyAccepted": True,
     }, handle)
 PY
 request_json "auth-register" POST "/v1/auth/register" "${register_body}"
